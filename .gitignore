@@ -1,0 +1,58 @@
+# ===== Private dev tooling (not for public repo) =====
+.aragorn/
+aragorn*/
+*.aragorn.*
+.aragorn.*
+**/aragorn.config.*
+**/aragorn.json
+**/aragorn.yaml
+**/aragorn.yml
+.claude/aragorn/
+
+# Project workflow docs (local only, contains private tooling references)
+doc/
+
+# ===== Dependencies =====
+node_modules/
+.pnp
+.pnp.js
+
+# ===== Build =====
+.next/
+out/
+build/
+dist/
+.turbo/
+
+# ===== Environment =====
+.env
+.env*.local
+.env.development
+.env.test
+.env.production
+
+# ===== IDE / Editor =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== Debug =====
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===== TypeScript =====
+*.tsbuildinfo
+next-env.d.ts
+
+# ===== Testing =====
+coverage/
+.nyc_output/
+
+# ===== Misc =====
+*.pem
+vercel.json

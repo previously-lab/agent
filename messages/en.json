@@ -1,0 +1,30 @@
+{
+  "HomePage": {
+    "title": "Next.js + shadcn/ui Template",
+    "subtitle": "A Modern Full-Stack Template",
+    "description": "This template includes Next.js 15, shadcn/ui, Zustand, next-themes, and next-intl internationalization. Perfect for kickstarting your next project with powerful i18n support.",
+    "features": {
+      "title": "Included Features",
+      "theming": "Dark/Light theming with next-themes",
+      "i18n": "Internationalization with next-intl",
+      "state": "Zustand state management",
+      "ui": "shadcn/ui components",
+      "typescript": "TypeScript support",
+      "tailwind": "Tailwind CSS"
+    },
+    "demo": {
+      "title": "Zustand Store Demo",
+      "description": "Test the state management:",
+      "increment": "Increment",
+      "decrement": "Decrement"
+    },
+    "creator": {
+      "title": "About Creator",
+      "name": "Alan Yuan",
+      "role": "Full-stack Engineer",
+      "homepage": "Homepage",
+      "github": "GitHub Profile",
+      "repository": "Repository"
+    }
+  }
+}

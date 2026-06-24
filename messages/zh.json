@@ -1,0 +1,30 @@
+{
+  "HomePage": {
+    "title": "Next.js + shadcn/ui 模板",
+    "subtitle": "现代化全栈模板",
+    "description": "本模板集成了 Next.js 15、shadcn/ui、Zustand、next-themes 和 next-intl 国际化。是启动您下一个项目的完美选择。",
+    "features": {
+      "title": "包含功能",
+      "theming": "基于 next-themes 的深色/浅色主题",
+      "i18n": "基于 next-intl 的国际化支持",
+      "state": "Zustand 状态管理",
+      "ui": "shadcn/ui 组件库",
+      "typescript": "TypeScript 支持",
+      "tailwind": "Tailwind CSS 样式"
+    },
+    "demo": {
+      "title": "Zustand 状态管理演示",
+      "description": "测试状态管理功能：",
+      "increment": "增加",
+      "decrement": "减少"
+    },
+    "creator": {
+      "title": "关于作者",
+      "name": "Alan Yuan",
+      "role": "全栈工程师",
+      "homepage": "个人主页",
+      "github": "GitHub 主页",
+      "repository": "项目地址"
+    }
+  }
+}
