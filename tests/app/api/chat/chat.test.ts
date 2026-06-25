@@ -1,0 +1,106 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+
+// Mock dependencies before importing the route
+const mockReadFile = "mock-read-result";
+const mockWriteFile = { path: "test.md", created: true };
+const mockListFiles = [{ name: "test.md", type: "file" as const, path: "test.md" }];
+
+let mockToolExecute: Record<string, () => Promise<unknown>> = {};
+
+vi.mock("ai", () => ({
+  streamText: vi.fn(({ tools }: { tools: Record<string, { execute?: () => Promise<unknown> }> }) => {
+    // Capture execute functions for testing
+    for (const [name, t] of Object.entries(tools)) {
+      if (t.execute) mockToolExecute[name] = t.execute;
+    }
+    return {
+      toUIMessageStreamResponse: () =>
+        new Response("mocked-ui-stream", { headers: { "Content-Type": "text/event-stream" } }),
+    };
+  }),
+  tool: vi.fn((def: { execute?: () => Promise<unknown> }) => def),
+}));
+
+vi.mock("@ai-sdk/anthropic", () => ({
+  anthropic: vi.fn(() => "mock-anthropic-model"),
+}));
+
+vi.mock("@/lib/tools/readFile", () => ({
+  readFile: () => Promise.resolve(mockReadFile),
+}));
+
+vi.mock("@/lib/tools/writeFile", () => ({
+  writeFile: () => Promise.resolve(mockWriteFile),
+}));
+
+vi.mock("@/lib/tools/listFiles", () => ({
+  listFiles: () => Promise.resolve(mockListFiles),
+}));
+
+import { POST } from "@/app/api/chat/route";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockToolExecute = {};
+  process.env.GITHUB_REPO_OWNER = "test-owner";
+  process.env.GITHUB_REPO_NAME = "test-repo";
+});
+
+afterEach(() => {
+  delete process.env.GITHUB_REPO_OWNER;
+  delete process.env.GITHUB_REPO_NAME;
+});
+
+function createRequest(body: unknown): Request {
+  return new Request("http://localhost:3000/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+describe("POST /api/chat validation", () => {
+  it("rejects empty messages array", async () => {
+    const req = createRequest({ messages: [] });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("must not be empty");
+  });
+
+  it("rejects missing messages field", async () => {
+    const req = createRequest({});
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("required");
+  });
+
+  it("rejects invalid JSON body", async () => {
+    const req = new Request("http://localhost:3000/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "not json",
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 200 with valid messages", async () => {
+    const req = createRequest({
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+  });
+
+  it("returns 500 when env vars are missing", async () => {
+    delete process.env.GITHUB_REPO_OWNER;
+    const req = createRequest({
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(500);
+  });
+});
