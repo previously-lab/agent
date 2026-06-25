@@ -59,7 +59,10 @@ export function isPathAllowed(rawPath: string): boolean {
   }
 
   // Must match one of the allowed prefixes
-  return ALLOWED_PATHS.some((prefix) => normalized.startsWith(prefix));
+  // Also check with trailing slash for bare directory names (e.g. "memory" → "memory/")
+  return ALLOWED_PATHS.some(
+    (prefix) => normalized.startsWith(prefix) || (normalized + "/").startsWith(prefix)
+  );
 }
 
 /**

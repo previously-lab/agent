@@ -1,0 +1,110 @@
+import { describe, it, expect } from "vitest";
+import { normalizePath, isPathAllowed, getAllowedPaths } from "@/lib/whitelist";
+
+describe("normalizePath", () => {
+  it("passes through a clean path", () => {
+    expect(normalizePath("memory/test.md")).toBe("memory/test.md");
+  });
+
+  it("converts Windows backslashes to forward slashes", () => {
+    expect(normalizePath("memory\\tasks\\file.md")).toBe("memory/tasks/file.md");
+  });
+
+  it("decodes URI-encoded characters", () => {
+    expect(normalizePath("memory%2Ftest%2E%6D%64")).toBe("memory/test.md");
+  });
+
+  it("resolves dot segments", () => {
+    expect(normalizePath("memory/./tasks/./file.md")).toBe("memory/tasks/file.md");
+  });
+
+  it("resolves parent directory traversal", () => {
+    expect(normalizePath("memory/subdir/../file.md")).toBe("memory/file.md");
+  });
+
+  it("blocks traversal that escapes allowed paths via parent refs", () => {
+    // After normalization this becomes "src/app/layout.tsx"
+    // which is not in allowed paths
+    const result = normalizePath("memory/../../src/app/layout.tsx");
+    expect(isPathAllowed(result)).toBe(false);
+  });
+
+  it("strips leading slashes", () => {
+    expect(normalizePath("/memory/test.md")).toBe("memory/test.md");
+  });
+
+  it("returns empty string for root traversal", () => {
+    expect(normalizePath("../../../")).toBe("");
+  });
+});
+
+describe("isPathAllowed", () => {
+  it("allows paths under memory/", () => {
+    expect(isPathAllowed("memory/test.md")).toBe(true);
+  });
+
+  it("allows paths under tasks/", () => {
+    expect(isPathAllowed("tasks/status.md")).toBe(true);
+  });
+
+  it("allows paths under sessions/", () => {
+    expect(isPathAllowed("sessions/2025-06-25.md")).toBe(true);
+  });
+
+  it("allows nested paths", () => {
+    expect(isPathAllowed("memory/projects/deep/file.md")).toBe(true);
+  });
+
+  it("allows bare directory name without trailing slash", () => {
+    expect(isPathAllowed("memory")).toBe(true);
+    expect(isPathAllowed("tasks")).toBe(true);
+    expect(isPathAllowed("sessions")).toBe(true);
+  });
+
+  it("rejects paths in src/", () => {
+    expect(isPathAllowed("src/app/layout.tsx")).toBe(false);
+  });
+
+  it("rejects paths in src/ with traversal", () => {
+    expect(isPathAllowed("memory/../../src/app/layout.tsx")).toBe(false);
+  });
+
+  it("rejects URL-encoded path to src/", () => {
+    expect(isPathAllowed("memory%2F..%2F..%2Fsrc%2Fapp%2Flayout%2Etsx")).toBe(
+      false
+    );
+  });
+
+  it("rejects Windows-style path to src/", () => {
+    expect(isPathAllowed("memory\\..\\..\\src\\app\\layout.tsx")).toBe(false);
+  });
+
+  it("rejects empty path", () => {
+    expect(isPathAllowed("")).toBe(false);
+  });
+
+  it("rejects absolute Unix path", () => {
+    expect(isPathAllowed("/etc/passwd")).toBe(false);
+  });
+
+  it("rejects absolute Windows path", () => {
+    expect(isPathAllowed("C:\\Windows\\system32")).toBe(false);
+  });
+
+  it("rejects paths to .env files", () => {
+    expect(isPathAllowed(".env")).toBe(false);
+  });
+
+  it("rejects paths to node_modules", () => {
+    expect(isPathAllowed("node_modules/evil.js")).toBe(false);
+  });
+});
+
+describe("getAllowedPaths", () => {
+  it("returns the allowed path list", () => {
+    const paths = getAllowedPaths();
+    expect(paths).toContain("memory/");
+    expect(paths).toContain("tasks/");
+    expect(paths).toContain("sessions/");
+  });
+});
