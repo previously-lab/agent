@@ -1,0 +1,123 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import {
+  LayoutDashboard,
+  MessageSquare,
+  Brain,
+  Target,
+  Archive,
+  Settings,
+  ChevronLeft,
+  ChevronRight,
+  Menu,
+  X,
+} from "lucide-react";
+import { NavItem } from "./nav-item";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+
+const NAV_ITEMS = [
+  { href: "/", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
+  { href: "/memory", label: "Memory", icon: Brain },
+  { href: "/missions", label: "Missions", icon: Target },
+  { href: "/archive", label: "Archive", icon: Archive },
+  { href: "/settings", label: "Settings", icon: Settings },
+] as const;
+
+export function AppSidebar() {
+  const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768);
+    check();
+    window.addEventListener("resize", check);
+    return () => window.removeEventListener("resize", check);
+  }, []);
+
+  // Close mobile sidebar on navigation
+  const handleNav = () => {
+    if (isMobile) setMobileOpen(false);
+  };
+
+  const sidebarContent = (
+    <div
+      className={cn(
+        "flex flex-col h-full bg-background border-r border-border transition-all duration-200",
+        collapsed && !isMobile ? "w-16" : "w-60"
+      )}
+    >
+      {/* Header */}
+      <div
+        className={cn(
+          "flex items-center h-14 px-3 border-b border-border",
+          collapsed && !isMobile ? "justify-center" : "justify-between"
+        )}
+      >
+        {(!collapsed || isMobile) && (
+          <span className="font-semibold text-sm">Aftrbrez</span>
+        )}
+        {!isMobile && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setCollapsed(!collapsed)}
+            className="h-8 w-8"
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            {collapsed ? (
+              <ChevronRight className="h-4 w-4" />
+            ) : (
+              <ChevronLeft className="h-4 w-4" />
+            )}
+          </Button>
+        )}
+      </div>
+
+      {/* Nav items */}
+      <nav className="flex-1 px-2 py-4 space-y-1">
+        {NAV_ITEMS.map((item) => (
+          <div key={item.href} onClick={handleNav}>
+            <NavItem
+              href={item.href}
+              label={item.label}
+              icon={item.icon}
+              collapsed={collapsed && !isMobile}
+            />
+          </div>
+        ))}
+      </nav>
+    </div>
+  );
+
+  // Mobile: render as overlay
+  if (isMobile) {
+    return (
+      <>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setMobileOpen(true)}
+          className="fixed top-2 left-2 z-50 md:hidden"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+        {mobileOpen && (
+          <div className="fixed inset-0 z-40 flex">
+            <div
+              className="fixed inset-0 bg-black/50"
+              onClick={() => setMobileOpen(false)}
+            />
+            <div className="relative z-50">{sidebarContent}</div>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // Desktop: always visible
+  return sidebarContent;
+}

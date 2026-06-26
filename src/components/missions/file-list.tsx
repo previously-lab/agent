@@ -1,0 +1,71 @@
+"use client";
+
+import { useState } from "react";
+import { File, FolderOpen, Target } from "lucide-react";
+
+interface FileEntry {
+  name: string;
+  type: "file" | "dir";
+  path: string;
+}
+
+const STATUS_COLORS: Record<string, string> = {
+  done: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+  "in-progress": "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400",
+  pending: "bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-400",
+  blocked: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+};
+
+export function FileList({
+  files,
+  directory,
+}: {
+  files: FileEntry[];
+  directory: string;
+}) {
+  if (files.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-muted/30 p-8 text-center">
+        <Target className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
+        <h3 className="font-medium mb-1">No missions yet</h3>
+        <p className="text-sm text-muted-foreground">
+          Use Chat to create task files in tasks/. The agent can help you track mission status.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      {files.map((file) => (
+        <FileRow key={file.path} file={file} />
+      ))}
+    </div>
+  );
+}
+
+function FileRow({ file }: { file: FileEntry }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div>
+      <button
+        onClick={() => file.type === "file" && setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 rounded-md px-4 py-2 text-sm hover:bg-accent transition-colors text-left"
+      >
+        {file.type === "dir" ? (
+          <FolderOpen className="h-4 w-4 text-blue-500 shrink-0" />
+        ) : (
+          <File className="h-4 w-4 text-muted-foreground shrink-0" />
+        )}
+        <span className="flex-1 truncate">{file.name}</span>
+        <span className="text-xs text-muted-foreground uppercase">{file.type}</span>
+      </button>
+      {expanded && (
+        <div className="ml-8 mr-4 my-2 rounded-md bg-muted/50 p-3 text-xs font-mono text-muted-foreground">
+          Task content will load from GitHub. (Frontmatter parsing coming soon.)
+        </div>
+      )}
+    </div>
+  );
+}
