@@ -1,5 +1,5 @@
 import { setRequestLocale } from "next-intl/server";
-import { DemoCard } from "@/components/demo-card";
+import { Chat } from "@/components/chat";
 
 export default async function HomePage({
   params,
@@ -11,8 +11,8 @@ export default async function HomePage({
   setRequestLocale(locale);
 
   return (
-    <main>
-      <DemoCard />
+    <main className="h-screen flex flex-col">
+      <Chat />
     </main>
   );
 }
