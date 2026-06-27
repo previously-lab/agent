@@ -1,15 +1,6 @@
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { deepseek } from "@ai-sdk/deepseek";
-import { z } from "zod/v4";
 import { matchKeywords, type IntentStrategy } from "./speed-index";
-
-const intentResultSchema = z.object({
-  intent: z.string().describe("The classified intent label"),
-  confidence: z.number().min(0).max(1).describe("Confidence score 0-1"),
-  intent_switched: z.boolean().describe("Whether intent changed from previous session intent"),
-  needs_more_turns: z.boolean().describe("Whether more conversation history is needed to classify accurately"),
-  reasoning: z.string().describe("One-line reasoning for the classification"),
-});
 
 export interface FlashResult {
   intent: string;
@@ -27,8 +18,8 @@ export interface FlashInput {
 }
 
 /**
- * Classify user intent using a lightweight model call (generateObject).
- * Flash is told: you are a classifier, not a reasoning agent.
+ * Classify user intent using generateText (no JSON schema compat warning).
+ * Flash is told: you are a classifier outputting JSON only, not a reasoning agent.
  */
 export async function classifyWithFlash(input: FlashInput): Promise<FlashResult> {
   const turnsSummary = input.recentTurns
@@ -36,7 +27,7 @@ export async function classifyWithFlash(input: FlashInput): Promise<FlashResult>
     .map((t) => `${t.role}: ${t.content.slice(0, 150)}`)
     .join("\n");
 
-  const prompt = `Classify the user's intent based on their latest message and conversation context.
+  const prompt = `You are an intent classifier. Output ONLY raw JSON — no markdown, no explanation.
 
 Available intents: code_debug, code_write, explain, chat, review, clarify
 
@@ -46,27 +37,40 @@ Context:
 - Recent turns:
 ${turnsSummary || "none"}
 
-User's latest message: "${input.currentInput}"
+User message: "${input.currentInput}"
 
-Classify the intent. If the context is insufficient to confidently classify (e.g., user message is ambiguous and there's not enough history), set needs_more_turns: true.`;
+Output this exact JSON shape:
+{"intent":"<one of the above>","confidence":0.0-1.0,"intent_switched":true/false,"needs_more_turns":true/false,"reasoning":"one line"}`;
 
   try {
-    const result = await generateObject({
+    const result = await generateText({
       model: deepseek("deepseek-chat"),
-      schema: intentResultSchema,
       prompt,
-      temperature: 0.1, // low temperature for classification
+      temperature: 0.1,
     });
 
-    return result.object;
+    const text = result.text.trim();
+    // Extract JSON from response (handle possible markdown wrapping)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("No JSON found in Flash response");
+    }
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      intent: parsed.intent ?? "clarify",
+      confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0.5)),
+      intent_switched: Boolean(parsed.intent_switched),
+      needs_more_turns: Boolean(parsed.needs_more_turns),
+      reasoning: String(parsed.reasoning || ""),
+    };
   } catch {
-    // Flash unavailable — return low-confidence fallback
     return {
       intent: "clarify",
       confidence: 0.3,
       intent_switched: false,
       needs_more_turns: false,
-      reasoning: "Flash model unavailable, fell back to clarify",
+      reasoning: "Flash unavailable, fell back to clarify",
     };
   }
 }

@@ -90,10 +90,15 @@ async function buildDynamicSystemPrompt(
   const referenceNodes = ranked.slice(8);
 
   const baseSystemPrompt = `You are Aftrbrez, a personal AI commander platform agent.
-Your role: assist the user with coding, debugging, architecture, and general questions.
-You have access to the user's knowledge base (memory nodes) and can read/write files in the repository.
-Only access files under memory/, tasks/, or sessions/ directories.
-Be concise, direct, and helpful.
+Assist the user with coding, debugging, architecture, and general questions.
+
+Tool usage rules:
+- Use tools ONLY when the user explicitly asks you to read/write/list files
+- Do NOT call tools just to "check" or "explore" — answer from your knowledge first
+- If the user is just chatting or asking questions, do NOT call any tools
+- When you do call a tool, be specific about the path
+
+File access: only memory/, tasks/, sessions/ directories.
 
 Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, source: ${intent.source})
 `;
@@ -145,16 +150,18 @@ export async function POST(request: Request) {
       ?? "";
 
     // Build dynamic context via M3 pipeline (Flash + Memory + Assembler)
-    const { prompt: dynamicSystemPrompt } = await buildDynamicSystemPrompt(
-      lastUserMessage,
-      recentTurns
+    const t0 = Date.now();
+    const { prompt: dynamicSystemPrompt, intent, source, confidence } =
+      await buildDynamicSystemPrompt(lastUserMessage, recentTurns);
+    console.log(
+      `[M3] intent=${intent} source=${source} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`
     );
 
     const result = streamText({
       model: deepseek("deepseek-chat"),
       system: dynamicSystemPrompt,
       messages: modelMessages,
-      stopWhen: stepCountIs(5),
+      stopWhen: stepCountIs(20),
       tools: {
         readFile: tool({
           description: "Read the content of a file from the GitHub repository. Only paths under memory/, tasks/, or sessions/ are accessible.",
