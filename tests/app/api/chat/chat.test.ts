@@ -21,8 +21,32 @@ vi.mock("ai", () => ({
   tool: vi.fn((def: { execute?: () => Promise<unknown> }) => def),
 }));
 
-vi.mock("@ai-sdk/anthropic", () => ({
-  anthropic: vi.fn(() => "mock-anthropic-model"),
+vi.mock("@ai-sdk/deepseek", () => ({
+  deepseek: vi.fn(() => "mock-deepseek-model"),
+}));
+
+// Mock M3 pipeline modules
+vi.mock("@/lib/router", () => ({
+  resolveIntent: () => ({
+    intent: { intent: "chat", confidence: 1.0, source: "keyword" as const, switched: false },
+    strategy: { max_nodes: 3, include_recent_turns: 2, loop_mode: false, max_iterations: 1 },
+  }),
+}));
+
+vi.mock("@/lib/memory/manager", () => ({
+  listNodes: () => [],
+}));
+
+vi.mock("@/lib/memory/scorer", () => ({
+  rankNodes: () => [],
+}));
+
+vi.mock("@/lib/context/assembler", () => ({
+  assembleContext: ({ systemPrompt, userInput }: { systemPrompt: string; userInput: string }) => ({
+    prompt: systemPrompt + "\n" + userInput,
+    tokenEstimate: 100,
+    layers: { system: 50, core: 0, session: 0, extended: 0, reference: 0, input: 50 },
+  }),
 }));
 
 vi.mock("@/lib/tools/readFile", () => ({
