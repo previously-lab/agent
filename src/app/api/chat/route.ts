@@ -5,7 +5,7 @@ import { readFile } from "@/lib/tools/readFile";
 import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import { readFileLocal, writeFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
-import { resolveIntent } from "@/lib/router";
+import { resolveIntent, classifyIntentKeywords } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
@@ -54,16 +54,26 @@ function loadNodeOnDisk(meta: { path: string }): MemoryNode | null {
 
 /**
  * Build a dynamic system prompt using the M3 context assembly pipeline.
+ * Uses Flash for intent classification + keyword rules as override.
  */
-function buildDynamicSystemPrompt(userInput: string): string {
-  // 1. Classify intent
-  const { intent, strategy } = resolveIntent(userInput);
+async function buildDynamicSystemPrompt(
+  userInput: string,
+  recentTurns: Array<{ role: string; content: string }> = [],
+  sessionIntent: string = "clarify"
+): Promise<{ prompt: string; intent: string; source: string; confidence: number }> {
+  // 1. Classify intent (Flash + keyword hybrid)
+  const { intent, strategy } = await resolveIntent({
+    currentInput: userInput,
+    lastTurnSummary: "",
+    sessionIntent,
+    recentTurns,
+  });
 
   // 2. Query memory index for relevant nodes
   const candidates = listNodes({
     types: (strategy.memory_types as Array<"concept" | "experience" | "project" | "people" | "personality">) ?? [],
     tags: strategy.tags,
-    limit: strategy.max_nodes * 3, // oversample for scoring
+    limit: strategy.max_nodes * 3,
   });
 
   // 3. Score and rank
@@ -81,7 +91,7 @@ function buildDynamicSystemPrompt(userInput: string): string {
 
   const baseSystemPrompt = `You are Aftrbrez, a personal AI commander platform agent.
 Your role: assist the user with coding, debugging, architecture, and general questions.
-You have access to the user's knowledge base (memory nodes) and can read/write files in their GitHub repository.
+You have access to the user's knowledge base (memory nodes) and can read/write files in the repository.
 Only access files under memory/, tasks/, or sessions/ directories.
 Be concise, direct, and helpful.
 
@@ -94,11 +104,16 @@ Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, s
     extendedNodes,
     referenceNodes,
     sessionSummary: "",
-    recentTurns: [],
+    recentTurns: recentTurns.slice(-3),
     userInput,
   });
 
-  return assembled.prompt;
+  return {
+    prompt: assembled.prompt,
+    intent: intent.intent,
+    source: intent.source,
+    confidence: intent.confidence,
+  };
 }
 
 export async function POST(request: Request) {
@@ -114,7 +129,14 @@ export async function POST(request: Request) {
 
     const { owner, repo } = getRepoConfig();
 
-    // Get the user's latest message for M3 pipeline (v7 format: parts array)
+    // Extract recent conversation for Flash context
+    const modelMessages = await convertToModelMessages(messages);
+    const recentTurns = modelMessages.slice(-6).map((m) => ({
+      role: m.role as string,
+      content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+    }));
+
+    // Get the user's latest message for M3 pipeline
     const userMessages = messages.filter((m: { role: string }) => m.role === "user");
     const lastMsg = userMessages[userMessages.length - 1];
     const lastUserMessage =
@@ -122,13 +144,16 @@ export async function POST(request: Request) {
       ?? lastMsg?.content
       ?? "";
 
-    // Build dynamic context via M3 pipeline
-    const dynamicSystemPrompt = buildDynamicSystemPrompt(lastUserMessage);
+    // Build dynamic context via M3 pipeline (Flash + Memory + Assembler)
+    const { prompt: dynamicSystemPrompt } = await buildDynamicSystemPrompt(
+      lastUserMessage,
+      recentTurns
+    );
 
     const result = streamText({
       model: deepseek("deepseek-chat"),
       system: dynamicSystemPrompt,
-      messages: await convertToModelMessages(messages),
+      messages: modelMessages,
       stopWhen: stepCountIs(5),
       tools: {
         readFile: tool({

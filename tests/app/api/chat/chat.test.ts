@@ -26,12 +26,13 @@ vi.mock("@ai-sdk/deepseek", () => ({
   deepseek: vi.fn(() => "mock-deepseek-model"),
 }));
 
-// Mock M3 pipeline modules
+// Mock M3 pipeline modules (async for Flash)
 vi.mock("@/lib/router", () => ({
-  resolveIntent: () => ({
+  resolveIntent: async () => ({
     intent: { intent: "chat", confidence: 1.0, source: "keyword" as const, switched: false },
     strategy: { max_nodes: 3, include_recent_turns: 2, loop_mode: false, max_iterations: 1 },
   }),
+  classifyIntentKeywords: () => ({ intent: "chat", source: "keyword" as const }),
 }));
 
 vi.mock("@/lib/memory/manager", () => ({

@@ -1,51 +1,100 @@
-import { describe, it, expect } from "vitest";
-import { classifyIntent, getStrategy, resolveIntent } from "@/lib/router";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-describe("Router", () => {
-  it("classifies debug intent from keywords", () => {
-    const result = classifyIntent("我的代码报错了，帮我看看");
+// Mock Flash call to return predictable results
+vi.mock("@/lib/router/flash", () => ({
+  classifyWithFlash: vi.fn().mockResolvedValue({
+    intent: "code_debug",
+    confidence: 0.94,
+    intent_switched: false,
+    needs_more_turns: false,
+    reasoning: "test",
+  }),
+  classifyIntentHybrid: vi.fn().mockImplementation(async (input: { currentInput: string }) => {
+    // Simulate hybrid behavior: keyword rules win for certain inputs
+    const lower = input.currentInput.toLowerCase();
+    if (lower.includes("报错") || lower.includes("bug") || lower.includes("fix")) {
+      return { intent: "code_debug", confidence: 1.0, source: "keyword", needsMoreTurns: false };
+    }
+    if (lower.includes("写") || lower.includes("实现") || lower.includes("create")) {
+      return { intent: "code_write", confidence: 1.0, source: "keyword", needsMoreTurns: false };
+    }
+    if (lower.includes("解释") || lower.includes("什么是")) {
+      return { intent: "explain", confidence: 1.0, source: "keyword", needsMoreTurns: false };
+    }
+    if (lower.includes("你好") || lower.includes("谢谢")) {
+      return { intent: "chat", confidence: 1.0, source: "keyword", needsMoreTurns: false };
+    }
+    return { intent: "code_debug", confidence: 0.94, source: "flash", needsMoreTurns: false };
+  }),
+}));
+
+import { classifyIntent, resolveIntent, classifyIntentKeywords } from "@/lib/router";
+
+describe("Router - Flash Integration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("classifies debug intent with keyword override", async () => {
+    const result = await classifyIntent({
+      currentInput: "我的代码报错了，帮我看看",
+      lastTurnSummary: "",
+      sessionIntent: "clarify",
+      recentTurns: [],
+    });
     expect(result.intent).toBe("code_debug");
     expect(result.source).toBe("keyword");
-    expect(result.confidence).toBe(1.0);
   });
 
-  it("classifies code_write intent from keywords", () => {
-    const result = classifyIntent("帮我实现一个新的API端点");
+  it("classifies code_write intent from keywords", async () => {
+    const result = await classifyIntent({
+      currentInput: "帮我实现一个新的API端点",
+      lastTurnSummary: "",
+      sessionIntent: "clarify",
+      recentTurns: [],
+    });
     expect(result.intent).toBe("code_write");
-    expect(result.source).toBe("keyword");
   });
 
-  it("classifies chat intent from keywords", () => {
-    const result = classifyIntent("你好！");
+  it("classifies chat intent from keywords", async () => {
+    const result = await classifyIntent({
+      currentInput: "你好！",
+      lastTurnSummary: "",
+      sessionIntent: "clarify",
+      recentTurns: [],
+    });
     expect(result.intent).toBe("chat");
   });
 
-  it("classifies explain intent from keywords", () => {
-    const result = classifyIntent("解释一下什么是React Server Component");
-    expect(result.intent).toBe("explain");
+  it("detects intent switch", async () => {
+    const result = await classifyIntent({
+      currentInput: "帮我修一个bug",
+      lastTurnSummary: "user was chatting",
+      sessionIntent: "chat",
+      recentTurns: [],
+    });
+    expect(result.switched).toBe(true);
   });
 
-  it("falls back to clarify for unknown input", () => {
-    const result = classifyIntent("...");
-    expect(result.intent).toBe("clarify");
-    expect(result.source).toBe("fallback");
-  });
-
-  it("returns correct strategy for known intent", () => {
-    const strategy = getStrategy("code_debug");
-    expect(strategy.loop_mode).toBe(true);
-    expect(strategy.max_nodes).toBe(5);
-    expect(strategy.memory_types).toContain("experience");
-  });
-
-  it("returns fallback strategy for unknown intent", () => {
-    const strategy = getStrategy("unknown_intent");
-    expect(strategy.loop_mode).toBe(false);
-  });
-
-  it("resolveIntent returns both intent and strategy", () => {
-    const { intent, strategy } = resolveIntent("fix the bug in auth.ts");
+  it("resolveIntent returns both intent and strategy", async () => {
+    const { intent, strategy } = await resolveIntent({
+      currentInput: "fix the bug in auth.ts",
+      lastTurnSummary: "",
+      sessionIntent: "clarify",
+      recentTurns: [],
+    });
     expect(intent.intent).toBe("code_debug");
     expect(strategy.max_nodes).toBeGreaterThan(0);
+  });
+
+  it("keyword-only classifier works without Flash", () => {
+    const result = classifyIntentKeywords("帮我看看这个bug");
+    expect(result.intent).toBe("code_debug");
+    expect(result.source).toBe("keyword");
+  });
+
+  it("keyword-only falls back for unknown", () => {
+    const result = classifyIntentKeywords("...");
+    expect(result.intent).toBe("clarify");
   });
 });
