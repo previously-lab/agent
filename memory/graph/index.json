@@ -1,0 +1,59 @@
+{
+  "nodes": {
+    "github-file-state": {
+      "path": "memory/nodes/concepts/github-file-state.md",
+      "type": "concept",
+      "tags": ["github", "state-machine", "file-driven", "serverless"],
+      "links": ["file-driven-loop", "context-assembly"],
+      "backlinks": ["task-001"],
+      "priority": 9,
+      "access_count": 5,
+      "last_accessed": "2026-06-27",
+      "status": "active"
+    },
+    "context-assembly": {
+      "path": "memory/nodes/concepts/context-assembly.md",
+      "type": "concept",
+      "tags": ["context", "prompt-engineering", "token-budget", "layered-loading"],
+      "links": ["github-file-state", "memory-scoring", "flash-intent"],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 3,
+      "last_accessed": "2026-06-27",
+      "status": "active"
+    },
+    "no-vector-db": {
+      "path": "memory/nodes/concepts/no-vector-db.md",
+      "type": "concept",
+      "tags": ["memory", "scoring", "no-vector", "transparent", "file-system"],
+      "links": ["memory-scoring", "github-file-state"],
+      "backlinks": [],
+      "priority": 7,
+      "access_count": 2,
+      "last_accessed": "2026-06-27",
+      "status": "active"
+    },
+    "aftrbrez-mvp-build": {
+      "path": "memory/nodes/experience/aftrbrez-mvp-build.md",
+      "type": "experience",
+      "tags": ["aftrbrez", "nextjs", "vercel", "MVP", "ai-sdk"],
+      "links": ["github-file-state", "context-assembly"],
+      "backlinks": ["task-001"],
+      "priority": 9,
+      "access_count": 8,
+      "last_accessed": "2026-06-27",
+      "status": "active"
+    },
+    "aftrbrez-architecture": {
+      "path": "memory/nodes/projects/aftrbrez-architecture.md",
+      "type": "project",
+      "tags": ["aftrbrez", "c2", "agent-platform", "three-layer"],
+      "links": ["github-file-state", "file-driven-loop"],
+      "backlinks": ["task-001"],
+      "priority": 10,
+      "access_count": 10,
+      "last_accessed": "2026-06-27",
+      "status": "active"
+    }
+  }
+}
