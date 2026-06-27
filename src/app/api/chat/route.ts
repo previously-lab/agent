@@ -1,5 +1,5 @@
 import { deepseek } from "@ai-sdk/deepseek";
-import { streamText, tool } from "ai";
+import { streamText, tool, convertToModelMessages } from "ai";
 import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
 import { writeFile } from "@/lib/tools/writeFile";
@@ -114,9 +114,13 @@ export async function POST(request: Request) {
 
     const { owner, repo } = getRepoConfig();
 
-    // Get the user's latest message for M3 pipeline
+    // Get the user's latest message for M3 pipeline (v7 format: parts array)
     const userMessages = messages.filter((m: { role: string }) => m.role === "user");
-    const lastUserMessage = userMessages[userMessages.length - 1]?.content ?? "";
+    const lastMsg = userMessages[userMessages.length - 1];
+    const lastUserMessage =
+      lastMsg?.parts?.find((p: { type: string }) => p.type === "text")?.text
+      ?? lastMsg?.content
+      ?? "";
 
     // Build dynamic context via M3 pipeline
     const dynamicSystemPrompt = buildDynamicSystemPrompt(lastUserMessage);
@@ -124,7 +128,7 @@ export async function POST(request: Request) {
     const result = streamText({
       model: deepseek("deepseek-chat"),
       system: dynamicSystemPrompt,
-      messages,
+      messages: await convertToModelMessages(messages),
       tools: {
         readFile: tool({
           description: "Read the content of a file from the GitHub repository. Only paths under memory/, tasks/, or sessions/ are accessible.",

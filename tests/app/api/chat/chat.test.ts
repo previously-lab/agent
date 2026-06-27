@@ -9,7 +9,6 @@ let mockToolExecute: Record<string, () => Promise<unknown>> = {};
 
 vi.mock("ai", () => ({
   streamText: vi.fn(({ tools }: { tools: Record<string, { execute?: () => Promise<unknown> }> }) => {
-    // Capture execute functions for testing
     for (const [name, t] of Object.entries(tools)) {
       if (t.execute) mockToolExecute[name] = t.execute;
     }
@@ -19,6 +18,7 @@ vi.mock("ai", () => ({
     };
   }),
   tool: vi.fn((def: { execute?: () => Promise<unknown> }) => def),
+  convertToModelMessages: vi.fn((msgs: unknown[]) => msgs),
 }));
 
 vi.mock("@ai-sdk/deepseek", () => ({
@@ -119,12 +119,12 @@ describe("POST /api/chat validation", () => {
     expect(res.headers.get("Content-Type")).toContain("text/event-stream");
   });
 
-  it("returns 500 when env vars are missing", async () => {
+  it("works without GitHub env vars using local FS fallback", async () => {
     delete process.env.GITHUB_REPO_OWNER;
     const req = createRequest({
       messages: [{ role: "user", content: "hello" }],
     });
     const res = await POST(req);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(200);
   });
 });
