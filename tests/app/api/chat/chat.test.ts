@@ -19,6 +19,7 @@ vi.mock("ai", () => ({
   }),
   tool: vi.fn((def: { execute?: () => Promise<unknown> }) => def),
   convertToModelMessages: vi.fn((msgs: unknown[]) => msgs),
+  stepCountIs: vi.fn(() => vi.fn()),
 }));
 
 vi.mock("@ai-sdk/deepseek", () => ({

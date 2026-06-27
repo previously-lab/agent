@@ -1,5 +1,5 @@
 import { deepseek } from "@ai-sdk/deepseek";
-import { streamText, tool, convertToModelMessages } from "ai";
+import { streamText, tool, convertToModelMessages, stepCountIs } from "ai";
 import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
 import { writeFile } from "@/lib/tools/writeFile";
@@ -129,6 +129,7 @@ export async function POST(request: Request) {
       model: deepseek("deepseek-chat"),
       system: dynamicSystemPrompt,
       messages: await convertToModelMessages(messages),
+      stopWhen: stepCountIs(5),
       tools: {
         readFile: tool({
           description: "Read the content of a file from the GitHub repository. Only paths under memory/, tasks/, or sessions/ are accessible.",

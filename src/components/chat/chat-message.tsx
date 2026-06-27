@@ -25,11 +25,11 @@ export function ChatMessage({ message }: ChatMessageProps) {
                 className="mb-2 rounded bg-background/50 px-2 py-1 text-xs font-mono"
               >
                 <span className="text-muted-foreground">
-                  {p.state === "result"
+                  {p.state === "output-available"
                     ? `✓ ${p.toolName ?? "tool"}`
                     : `⚙ ${p.toolName ?? "tool"}...`}
                 </span>
-                {p.state === "result" && p.output != null && (
+                {p.state === "output-available" && p.output != null && (
                   <pre className="mt-1 text-xs opacity-75 max-h-20 overflow-hidden">
                     {typeof p.output === "string"
                       ? p.output.slice(0, 200)
