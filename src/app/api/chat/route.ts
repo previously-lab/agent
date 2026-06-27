@@ -4,24 +4,21 @@ import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
 import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
+import { readFileLocal, writeFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
 import { resolveIntent } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
-import { getSession, updateTurn } from "@/lib/session/manager";
 import type { MemoryNode } from "@/lib/memory/types";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import matter from "gray-matter";
 
+const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+
 function getRepoConfig(): { owner: string; repo: string } {
-  const owner = process.env.GITHUB_REPO_OWNER;
-  const repo = process.env.GITHUB_REPO_NAME;
-  if (!owner || !repo) {
-    throw new Error(
-      "GITHUB_REPO_OWNER and GITHUB_REPO_NAME environment variables must be set"
-    );
-  }
+  const owner = process.env.GITHUB_REPO_OWNER ?? "local";
+  const repo = process.env.GITHUB_REPO_NAME ?? "local";
   return { owner, repo };
 }
 
@@ -135,17 +132,21 @@ export async function POST(request: Request) {
             path: z.string().describe("The file path to read, e.g. 'memory/test.md'"),
           }),
           execute: async ({ path }) => {
-            return await readFile(path, repo, owner);
+            return USE_GITHUB
+              ? await readFile(path, repo, owner)
+              : await readFileLocal(path);
           },
         }),
         writeFile: tool({
-          description: "Create or update a file in the GitHub repository. Only paths under memory/, tasks/, or sessions/ are writable.",
+          description: "Create or update a file in the repository. Only paths under memory/, tasks/, or sessions/ are writable.",
           inputSchema: z.object({
             path: z.string().describe("The file path to write, e.g. 'memory/note.md'"),
             content: z.string().describe("The content to write to the file"),
           }),
           execute: async ({ path, content }) => {
-            return await writeFile(path, content, repo, owner);
+            return USE_GITHUB
+              ? await writeFile(path, content, repo, owner)
+              : await writeFileLocal(path, content);
           },
         }),
         listFiles: tool({
@@ -154,7 +155,9 @@ export async function POST(request: Request) {
             path: z.string().describe("The directory path to list, e.g. 'memory/'"),
           }),
           execute: async ({ path }) => {
-            return await listFiles(path, repo, owner);
+            return USE_GITHUB
+              ? await listFiles(path, repo, owner)
+              : await listFilesLocal(path);
           },
         }),
       },
