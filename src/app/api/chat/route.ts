@@ -125,7 +125,8 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { messages } = body;
-    const model = (body.model as string) ?? "deepseek-reasoner";
+    const model = (body.model as string) ?? "deepseek-chat";
+    const thinking = body.thinking !== false; // default: enabled
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(
@@ -161,6 +162,9 @@ export async function POST(request: Request) {
 
     const result = streamText({
       model: deepseek(model),
+      providerOptions: thinking
+        ? { deepseek: { thinking: { type: "enabled" as const }, reasoningEffort: "medium" as const } }
+        : undefined,
       system: dynamicSystemPrompt,
       messages: modelMessages,
       stopWhen: stepCountIs(20),

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 export function SettingsForm() {
   const [mounted, setMounted] = useState(false);
   const [model, setModel] = useState("deepseek-chat");
+  const [thinking, setThinking] = useState(true);
   const [deploying, setDeploying] = useState(false);
   const [deployMsg, setDeployMsg] = useState("");
   const [checkingVersion, setCheckingVersion] = useState(false);
@@ -18,7 +19,8 @@ export function SettingsForm() {
 
   useEffect(() => {
     setMounted(true);
-    setModel(localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-reasoner");
+    setModel(localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-chat");
+    setThinking(localStorage.getItem("AFTRBREZ_THINKING") !== "false");
     setRepoOwner(localStorage.getItem("GITHUB_REPO_OWNER") ?? "");
     setRepoName(localStorage.getItem("GITHUB_REPO_NAME") ?? "");
   }, []);
@@ -26,6 +28,11 @@ export function SettingsForm() {
   const handleModelChange = (m: string) => {
     setModel(m);
     localStorage.setItem("AFTRBREZ_MODEL", m);
+  };
+
+  const handleThinkingChange = (v: boolean) => {
+    setThinking(v);
+    localStorage.setItem("AFTRBREZ_THINKING", String(v));
   };
 
   const handleDeploy = async () => {
@@ -95,15 +102,37 @@ export function SettingsForm() {
 
       {/* Model Selector */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">Model</h3>
+        <h3 className="text-sm font-medium mb-3">Model & Reasoning</h3>
         <select
           value={model}
           onChange={(e) => handleModelChange(e.target.value)}
           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="deepseek-reasoner">DeepSeek Reasoner (default)</option>
-          <option value="deepseek-chat">DeepSeek Chat (fast)</option>
+          <option value="deepseek-chat">DeepSeek Chat (default)</option>
+          <option value="deepseek-reasoner">DeepSeek Reasoner</option>
         </select>
+
+        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
+          <div>
+            <span className="text-sm">Thinking</span>
+            <p className="text-xs text-muted-foreground">Show model reasoning in chat</p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={thinking}
+            onClick={() => handleThinkingChange(!thinking)}
+            className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+              thinking ? "bg-primary" : "bg-muted"
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                thinking ? "translate-x-4" : "translate-x-0"
+              }`}
+            />
+          </button>
+        </div>
       </section>
 
       {/* Repo Hub */}

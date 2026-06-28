@@ -7,18 +7,21 @@ import { ChatMessage } from "./chat-message";
 import { useEffect, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 
-function getSelectedModel(): string {
-  if (typeof window === "undefined") return "deepseek-chat";
-  return localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-chat";
+function getClientSetting(key: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  return localStorage.getItem(key) ?? fallback;
 }
 
 export function Chat() {
-  const [model] = useState(getSelectedModel);
+  const [settings] = useState(() => ({
+    model: getClientSetting("AFTRBREZ_MODEL", "deepseek-chat"),
+    thinking: getClientSetting("AFTRBREZ_THINKING", "true") !== "false",
+  }));
 
   const { messages, sendMessage, status, stop, error, regenerate } = useChat({
     transport: new DefaultChatTransport({
       api: "/api/chat",
-      body: { model },
+      body: settings,
     }),
   });
 
