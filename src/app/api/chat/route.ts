@@ -123,7 +123,9 @@ Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, s
 
 export async function POST(request: Request) {
   try {
-    const { messages } = await request.json();
+    const body = await request.json();
+    const { messages } = body;
+    const model = (body.model as string) ?? "deepseek-chat";
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(
@@ -158,7 +160,7 @@ export async function POST(request: Request) {
     );
 
     const result = streamText({
-      model: deepseek("deepseek-chat"),
+      model: deepseek(model),
       system: dynamicSystemPrompt,
       messages: modelMessages,
       stopWhen: stepCountIs(20),
