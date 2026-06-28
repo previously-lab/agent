@@ -125,7 +125,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { messages } = body;
-    const model = (body.model as string) ?? "deepseek-chat";
+    const model = (body.model as string) ?? "deepseek-reasoner";
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(

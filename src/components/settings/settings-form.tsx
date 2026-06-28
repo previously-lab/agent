@@ -18,7 +18,7 @@ export function SettingsForm() {
 
   useEffect(() => {
     setMounted(true);
-    setModel(localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-chat");
+    setModel(localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-reasoner");
     setRepoOwner(localStorage.getItem("GITHUB_REPO_OWNER") ?? "");
     setRepoName(localStorage.getItem("GITHUB_REPO_NAME") ?? "");
   }, []);
@@ -101,8 +101,8 @@ export function SettingsForm() {
           onChange={(e) => handleModelChange(e.target.value)}
           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="deepseek-chat">DeepSeek Chat (default)</option>
-          <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          <option value="deepseek-reasoner">DeepSeek Reasoner (default)</option>
+          <option value="deepseek-chat">DeepSeek Chat (fast)</option>
         </select>
       </section>
 
