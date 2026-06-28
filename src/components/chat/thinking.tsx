@@ -42,7 +42,7 @@ export function ThinkingSteps({ content, isStreaming }: ThinkingStepsProps) {
           <ChevronRight className="h-3.5 w-3.5 shrink-0" />
         )}
         <Brain className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0">
+        <span className="min-w-0 tabular-nums">
           {isStreaming
             ? `Thinking${elapsed > 0 ? ` · ${formatElapsedTime(elapsed)}` : ""}`
             : hasContent

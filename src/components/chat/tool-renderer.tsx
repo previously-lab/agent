@@ -21,49 +21,60 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
   const renderState = extractRenderState(state, isStreaming);
   const statusColor = getStatusColor(renderState);
 
+  const isExpandable = renderState === "done" || renderState === "error";
+
   return (
-    <div className="my-2">
+    <div className="-mx-1.5 rounded-md border border-transparent bg-transparent">
       <button
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2.5 rounded-lg border border-border/60 bg-muted/20 hover:bg-muted/40 px-3 py-2 text-xs transition-colors group"
+        onClick={() => isExpandable && setOpen(!open)}
+        className="group flex min-w-0 select-none items-center gap-2 rounded-md px-1.5 py-1 text-sm cursor-pointer transition-colors hover:bg-muted/50 w-full text-left"
       >
-        {/* Status */}
-        <span className={`shrink-0 ${statusColor}`}>
+        {/* Status icon */}
+        <span className={`flex size-4 shrink-0 items-center justify-center ${renderState === "error" ? "text-red-500" : statusColor}`}>
           {renderState === "running" ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           ) : renderState === "error" ? (
-            <AlertCircle className="h-3.5 w-3.5" />
+            <AlertCircle className="h-3.5 w-3.5 text-red-500" />
           ) : (
             <Check className="h-3.5 w-3.5" />
           )}
         </span>
 
-        {/* Tool name + summary */}
-        <span className="font-medium text-muted-foreground">{toolName}</span>
-        <span className="flex-1 text-left text-muted-foreground truncate">
+        {/* Tool name */}
+        <span className={`min-w-0 shrink truncate font-medium leading-none ${renderState === "error" ? "text-red-500" : "text-muted-foreground/70"}`}>
+          {toolName}
+        </span>
+
+        {/* Summary */}
+        <span className={`min-w-0 shrink truncate font-mono text-[13px] leading-none ${renderState === "error" ? "text-red-400/80" : "text-muted-foreground"}`}>
           {getSummary(toolName, input, output)}
         </span>
 
-        {/* Expand toggle */}
-        <span className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
-          {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        </span>
+        {/* Chevron — only on expandable states */}
+        {isExpandable && (
+          <span className={`shrink-0 transition-transform duration-200 ease-out ${open ? "rotate-90" : ""}`}>
+            <ChevronRight className="size-3 text-muted-foreground/50" />
+          </span>
+        )}
       </button>
 
       {/* Expanded content */}
       {open && (
-        <div
-          className="mt-1 ml-6 pl-4 border-l-2 border-border/60 overflow-hidden"
+        <div className="pl-[22px] overflow-hidden"
           style={{
             display: "grid",
-            gridTemplateRows: open ? "1fr" : "0fr",
+            gridTemplateRows: "1fr",
             transition: "grid-template-rows 200ms ease",
           }}
         >
-          <div className="overflow-hidden">
-            <div className="py-1">
-              {renderToolContent(toolName, input, output)}
-            </div>
+          <div className="overflow-hidden py-1">
+            {renderState === "error" ? (
+              <div className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md border border-red-500/20 bg-red-500/5 px-3 py-2 font-mono text-xs leading-relaxed text-red-400">
+                {typeof output === "string" ? output : JSON.stringify(output, null, 2)}
+              </div>
+            ) : (
+              renderToolContent(toolName, input, output)
+            )}
           </div>
         </div>
       )}

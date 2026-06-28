@@ -10,7 +10,6 @@ interface ChatMessageProps {
   message: UIMessage;
   onRegenerate?: () => void;
   isStreaming?: boolean;
-  /** Timestamp when this message started generating (for elapsed timer) */
   startedAt?: number;
 }
 
@@ -25,12 +24,11 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
 
   const toolParts = message.parts?.filter((p) => p.type?.startsWith("tool-")) ?? [];
   const toolCount = toolParts.length;
-  const isCollapsed = false; // controlled by SummaryBar
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-5 group`}>
-      <div className="max-w-[92%] sm:max-w-[80%] min-w-0">
-        {/* SummaryBar — collapsible wrapper for assistant messages with tools */}
+    <div className="flex min-w-0 py-2 group">
+      <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
+        {/* SummaryBar — OA-style collapsible wrapper for assistant messages with tools */}
         {isAssistant && toolCount > 0 && (
           <SummaryBar
             messageId={message.id}
@@ -42,14 +40,13 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
 
         {/* Message bubble */}
         <div
-          className={`rounded-3xl px-4 py-3 text-sm leading-relaxed ${
+          className={`rounded-3xl px-4 py-2 text-sm leading-relaxed ${
             isUser
-              ? "bg-primary text-primary-foreground rounded-br-md"
-              : "bg-card border border-border rounded-bl-md shadow-sm"
+              ? "bg-secondary text-foreground rounded-br-md"
+              : "bg-card border rounded-bl-md"
           }`}
         >
           {message.parts?.map((part, i) => {
-            // Reasoning/thinking
             if (part.type === "reasoning") {
               return (
                 <ThinkingSteps
@@ -60,7 +57,6 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
               );
             }
 
-            // Tool calls — use per-tool renderer
             if (part.type?.startsWith("tool-")) {
               const p = part as {
                 type: string;
@@ -82,7 +78,6 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
               );
             }
 
-            // Text — Markdown for assistant, plain for user
             if (part.type === "text") {
               const text = (part as { text: string }).text;
               if (isUser) {
@@ -107,7 +102,7 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
           )}
         </div>
 
-        {/* Message actions — only on non-empty completed assistant messages */}
+        {/* Message actions — copy + regenerate on completed assistant messages */}
         {isAssistant && textContent && !isStreaming && (
           <MessageActions content={textContent} onRegenerate={onRegenerate} />
         )}

@@ -4,8 +4,8 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { ChatInput } from "./chat-input";
 import { ChatMessage } from "./chat-message";
-import { useState } from "react";
-import { Sparkles, Loader2 } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Sparkles, Loader2, ChevronDown, RefreshCw } from "lucide-react";
 import { useScrollToBottom } from "@/hooks/use-scroll-to-bottom";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
 
@@ -46,12 +46,21 @@ export function Chat() {
   const lastMessage = messages[messages.length - 1];
   const isLastStreaming = isStreaming && lastMessage?.role === "assistant";
 
+  const scrollToBottom = useCallback(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [containerRef]);
+
+  const showScrollBtn = messages.length > 0;
+
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full bg-background relative">
       {/* Messages */}
-      <div ref={containerRef} className="flex-1 overflow-y-auto px-4 sm:px-6">
-        <div className="max-w-3xl mx-auto">
+      <div ref={containerRef} className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-4xl px-4 py-8">
           {messages.length === 0 ? (
+            /* Empty state — OA style */
             <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
               <div className="rounded-full bg-muted p-4 mb-4">
                 <Sparkles className="h-6 w-6 text-muted-foreground" />
@@ -62,7 +71,7 @@ export function Chat() {
               </p>
             </div>
           ) : (
-            <div className="py-4 space-y-1">
+            <>
               {messages.map((message, i) => {
                 const isLast = i === messages.length - 1;
                 return (
@@ -82,30 +91,39 @@ export function Chat() {
                   <span>Thinking...</span>
                 </div>
               )}
-            </div>
+
+              {/* Scroll to bottom */}
+              {showScrollBtn && (
+                <button
+                  onClick={scrollToBottom}
+                  className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary text-secondary-foreground hover:bg-accent p-2 shadow-sm transition-colors z-10"
+                  title="Scroll to bottom"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </button>
+              )}
+            </>
           )}
 
-          {/* Error */}
+          {/* Error banner — OA style */}
           {error && (
-            <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 mb-4">
-              <p className="text-sm font-medium text-destructive">Error</p>
-              <p className="text-xs text-destructive/80 mt-1">{error.message}</p>
+            <div className="flex items-center justify-between gap-3 border-b border-destructive/20 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+              <span>{error.message}</span>
               <button
                 onClick={() => window.location.reload()}
-                className="text-xs text-destructive underline mt-2"
+                className="flex items-center gap-1 text-xs underline hover:no-underline"
               >
-                Reload to retry
+                <RefreshCw className="h-3 w-3" />
+                Retry
               </button>
             </div>
           )}
-
-          <div className="h-2" />
         </div>
       </div>
 
-      {/* Input */}
-      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-4">
-        <div className="max-w-3xl mx-auto">
+      {/* Input — sticky at bottom */}
+      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-4 px-4 pb-4">
+        <div className="max-w-4xl mx-auto">
           <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
         </div>
       </div>
