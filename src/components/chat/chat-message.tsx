@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import type { UIMessage } from "ai";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
@@ -10,10 +13,11 @@ interface ChatMessageProps {
   message: UIMessage;
   onRegenerate?: () => void;
   isStreaming?: boolean;
-  startedAt?: number;
+  startedAt?: string;
 }
 
 export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: ChatMessageProps) {
+  const [isExpanded, setIsExpanded] = useState(true);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
 
@@ -28,81 +32,85 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
   return (
     <div className="flex min-w-0 py-2 group">
       <div className="max-w-[85%] sm:max-w-[75%] min-w-0">
-        {/* SummaryBar — OA-style collapsible wrapper for assistant messages with tools */}
-        {isAssistant && toolCount > 0 && (
+        {/* SummaryBar — OA-style collapsible wrapper */}
+        {isAssistant && (toolCount > 0 || isStreaming) && (
           <SummaryBar
             messageId={message.id}
-            toolCount={toolCount}
+            toolCallCount={toolCount}
             isStreaming={isStreaming ?? false}
-            startedAt={startedAt}
+            isExpanded={isExpanded}
+            onToggle={() => setIsExpanded(!isExpanded)}
+            startedAt={startedAt ?? null}
           />
         )}
 
-        {/* Message bubble */}
-        <div
-          className={`rounded-3xl px-4 py-2 text-sm leading-relaxed ${
-            isUser
-              ? "bg-secondary text-foreground rounded-br-md"
-              : "bg-card border rounded-bl-md"
-          }`}
-        >
-          {message.parts?.map((part, i) => {
-            if (part.type === "reasoning") {
-              return (
-                <ThinkingSteps
-                  key={i}
-                  content={(part as { text: string }).text}
-                  isStreaming={isStreaming}
-                />
-              );
-            }
-
-            if (part.type?.startsWith("tool-")) {
-              const p = part as {
-                type: string;
-                toolCallId: string;
-                toolName?: string;
-                state: string;
-                input?: unknown;
-                output?: unknown;
-              };
-              return (
-                <ToolRenderer
-                  key={p.toolCallId ?? i}
-                  toolName={p.toolName ?? "tool"}
-                  state={p.state}
-                  input={p.input}
-                  output={p.output}
-                  isStreaming={isStreaming ?? false}
-                />
-              );
-            }
-
-            if (part.type === "text") {
-              const text = (part as { text: string }).text;
-              if (isUser) {
-                return <span key={i} className="whitespace-pre-wrap">{text}</span>;
+        {/* Collapsible message body */}
+        {isExpanded && (
+          <div
+            className={`rounded-3xl px-4 py-2 text-sm leading-relaxed ${
+              isUser
+                ? "bg-secondary text-foreground rounded-br-md"
+                : "bg-card border rounded-bl-md"
+            }`}
+          >
+            {message.parts?.map((part, i) => {
+              if (part.type === "reasoning") {
+                return (
+                  <ThinkingSteps
+                    key={i}
+                    text={(part as { text: string }).text}
+                    isStreaming={isStreaming}
+                  />
+                );
               }
-              return <MarkdownRenderer key={i} content={text} />;
-            }
 
-            return null;
-          })}
+              if (part.type?.startsWith("tool-")) {
+                const p = part as {
+                  type: string;
+                  toolCallId: string;
+                  toolName?: string;
+                  state: string;
+                  input?: unknown;
+                  output?: unknown;
+                };
+                return (
+                  <ToolRenderer
+                    key={p.toolCallId ?? i}
+                    toolName={p.toolName ?? "tool"}
+                    state={p.state}
+                    input={p.input}
+                    output={p.output}
+                    isStreaming={isStreaming ?? false}
+                  />
+                );
+              }
 
-          {/* Streaming cursor */}
-          {isStreaming && isAssistant && (
-            <span className="inline-block w-1.5 h-4 bg-primary animate-pulse rounded-sm ml-0.5 align-text-bottom" />
-          )}
+              if (part.type === "text") {
+                const text = (part as { text: string }).text;
+                if (isUser) {
+                  return <span key={i} className="whitespace-pre-wrap">{text}</span>;
+                }
+                return <MarkdownRenderer key={i} content={text} />;
+              }
 
-          {/* Model pill on hover */}
-          {isAssistant && !isStreaming && (
-            <div className="mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <ModelPill model="deepseek" reasoningEffort="medium" />
-            </div>
-          )}
-        </div>
+              return null;
+            })}
 
-        {/* Message actions — copy + regenerate on completed assistant messages */}
+            {/* Streaming cursor */}
+            {isStreaming && isAssistant && (
+              <span className="inline-block w-1.5 h-4 bg-primary animate-pulse rounded-sm ml-0.5 align-text-bottom" />
+            )}
+
+            {/* Model pill */}
+            {isAssistant && !isStreaming && (
+              <div className="mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <ModelPill model="deepseek" reasoningEffort="medium" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Message actions */}
         {isAssistant && textContent && !isStreaming && (
           <MessageActions content={textContent} onRegenerate={onRegenerate} />
         )}

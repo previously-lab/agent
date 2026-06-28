@@ -20,6 +20,8 @@ export function Chat() {
     thinking: getClientSetting("AFTRBREZ_THINKING", "true") !== "false",
   }));
 
+  const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
+
   const { messages, sendMessage, status, stop, error, regenerate } = useChat({
     transport: new DefaultChatTransport({
       api: "/api/chat",
@@ -35,6 +37,7 @@ export function Chat() {
 
   const handleSubmit = (message: string) => {
     onNewUserMessage();
+    setLastUserMessageAt(new Date().toISOString());
     sendMessage({ role: "user", parts: [{ type: "text", text: message }] });
   };
 
@@ -79,6 +82,7 @@ export function Chat() {
                     key={message.id}
                     message={message}
                     isStreaming={isLast && isStreaming}
+                    startedAt={isLast ? (lastUserMessageAt ?? undefined) : undefined}
                     onRegenerate={isLast && !isStreaming ? handleRegenerate : undefined}
                   />
                 );

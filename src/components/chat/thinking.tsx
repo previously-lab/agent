@@ -1,67 +1,91 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { ChevronDown, ChevronRight, Brain } from "lucide-react";
-import { formatElapsedTime } from "@/lib/chat/tool-state";
+import { useEffect, useRef, useState } from "react";
+import { Brain } from "lucide-react";
+import type { ToolRenderState } from "@/lib/chat/tool-state";
+import { ToolLayout } from "./tool-layout";
 
-interface ThinkingStepsProps {
-  content: string;
+interface ThinkingBlockProps {
+  text: string;
   isStreaming?: boolean;
+  partCount?: number;
 }
 
-export function ThinkingSteps({ content, isStreaming }: ThinkingStepsProps) {
-  const [open, setOpen] = useState(false);
+const COMPLETED_STATE: ToolRenderState = {
+  running: false,
+  interrupted: false,
+  denied: false,
+  approvalRequested: false,
+  isActiveApproval: false,
+};
+
+const STREAMING_STATE: ToolRenderState = {
+  running: true,
+  interrupted: false,
+  denied: false,
+  approvalRequested: false,
+  isActiveApproval: false,
+};
+
+export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: ThinkingBlockProps) {
   const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    startRef.current = Date.now();
-    setElapsed(0);
-    if (isStreaming) {
-      timerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
-      }, 1000);
+    if (!isStreaming) {
+      if (startTimeRef.current !== null) {
+        setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      return () => {
+        if (intervalRef.current) clearInterval(intervalRef.current);
+      };
     }
+
+    if (startTimeRef.current === null) {
+      startTimeRef.current = Date.now();
+    }
+
+    intervalRef.current = setInterval(() => {
+      setElapsed(
+        Math.floor((Date.now() - (startTimeRef.current ?? Date.now())) / 1000),
+      );
+    }, 1000);
+
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
   }, [isStreaming]);
 
-  const hasContent = content.length > 0;
+  const hasContent = text.trim().length > 0;
+  const thoughtLabel =
+    partCount === 1 ? "Thought" : `${partCount} thought${partCount !== 1 ? "s" : ""}`;
+  const name = isStreaming ? "Thinking..." : thoughtLabel;
+  const summary =
+    !isStreaming && elapsed > 0 ? `${elapsed} second${elapsed !== 1 ? "s" : ""}` : "";
+
+  const expandedContent = hasContent ? (
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
+      <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
+        {text}
+      </p>
+    </div>
+  ) : undefined;
 
   return (
-    <details
-      className="mb-3 border border-border/60 rounded-lg bg-muted/20 overflow-hidden group"
-      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-    >
-      <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
-        {open ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-        )}
-        <Brain className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 tabular-nums">
-          {isStreaming
-            ? `Thinking${elapsed > 0 ? ` · ${formatElapsedTime(elapsed)}` : ""}`
-            : hasContent
-              ? `Thought for ${formatElapsedTime(elapsed)}`
-              : "Thought for a moment"}
-        </span>
-        {isStreaming && (
-          <span className="flex gap-0.5 ml-1 shrink-0">
-            <span className="w-1 h-1 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }} />
-            <span className="w-1 h-1 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }} />
-            <span className="w-1 h-1 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }} />
-          </span>
-        )}
-      </summary>
-      {hasContent && (
-        <div className="px-3 pb-3 text-xs text-muted-foreground whitespace-pre-wrap leading-relaxed border-t border-border/30 pt-2">
-          {content}
-        </div>
-      )}
-    </details>
+    <ToolLayout
+      name={name}
+      icon={<Brain className="h-3.5 w-3.5" />}
+      summary={summary}
+      state={isStreaming ? STREAMING_STATE : COMPLETED_STATE}
+      expandedContent={expandedContent}
+    />
   );
 }
