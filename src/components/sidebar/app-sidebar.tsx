@@ -11,10 +11,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Menu,
-  X,
 } from "lucide-react";
 import { NavItem } from "./nav-item";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
@@ -30,8 +28,10 @@ export function AppSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    setMounted(true);
     const check = () => setIsMobile(window.innerWidth < 768);
     check();
     window.addEventListener("resize", check);
@@ -43,17 +43,19 @@ export function AppSidebar() {
     if (isMobile) setMobileOpen(false);
   };
 
+  if (!mounted) return null;
+
   const sidebarContent = (
     <div
       className={cn(
-        "flex flex-col h-full bg-background border-r border-border transition-all duration-200",
-        collapsed && !isMobile ? "w-16" : "w-60"
+        "flex flex-col h-full border-r border-border bg-sidebar transition-all duration-200",
+        collapsed && !isMobile ? "w-[3rem]" : "w-60"
       )}
     >
       {/* Header */}
       <div
         className={cn(
-          "flex items-center h-14 px-3 border-b border-border",
+          "flex items-center h-12 px-3 border-b border-border",
           collapsed && !isMobile ? "justify-center" : "justify-between"
         )}
       >
@@ -61,24 +63,22 @@ export function AppSidebar() {
           <span className="font-semibold text-sm">Aftrbrez</span>
         )}
         {!isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
+          <button
             onClick={() => setCollapsed(!collapsed)}
-            className="h-8 w-8"
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 flex items-center justify-center transition-colors"
+            title={collapsed ? "Expand" : "Collapse"}
           >
             {collapsed ? (
-              <ChevronRight className="h-4 w-4" />
+              <ChevronRight className="h-3.5 w-3.5" />
             ) : (
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-3.5 w-3.5" />
             )}
-          </Button>
+          </button>
         )}
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 px-2 py-4 space-y-1">
+      <nav className="flex-1 px-2 py-3 space-y-0.5">
         {NAV_ITEMS.map((item) => (
           <div key={item.href} onClick={handleNav}>
             <NavItem
@@ -97,14 +97,12 @@ export function AppSidebar() {
   if (isMobile) {
     return (
       <>
-        <Button
-          variant="ghost"
-          size="icon"
+        <button
           onClick={() => setMobileOpen(true)}
-          className="fixed top-2 left-2 z-50 md:hidden"
+          className="fixed top-2 left-2 z-50 h-8 w-8 rounded-full bg-background border border-border flex items-center justify-center shadow-sm md:hidden"
         >
-          <Menu className="h-5 w-5" />
-        </Button>
+          <Menu className="h-4 w-4" />
+        </button>
         {mobileOpen && (
           <div className="fixed inset-0 z-40 flex">
             <div
