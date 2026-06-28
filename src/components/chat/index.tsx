@@ -7,7 +7,7 @@ import { ChatMessage } from "./chat-message";
 import { useEffect, useRef } from "react";
 
 export function Chat() {
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, stop } = useChat({
     transport: new DefaultChatTransport({
       api: "/api/chat",
     }),
@@ -26,9 +26,8 @@ export function Chat() {
   };
 
   return (
-    <div className="flex flex-col h-full max-w-2xl mx-auto">
-      {/* Message list */}
-      <div className="flex-1 overflow-y-auto p-4">
+    <div className="flex flex-col h-full">
+      <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             Send a message to get started.
@@ -39,9 +38,7 @@ export function Chat() {
         ))}
         <div ref={bottomRef} />
       </div>
-
-      {/* Input area */}
-      <ChatInput onSubmit={handleSubmit} isLoading={isLoading} />
+      <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
     </div>
   );
 }

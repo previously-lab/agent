@@ -1,4 +1,6 @@
 import type { UIMessage } from "ai";
+import { MarkdownRenderer } from "./markdown";
+import { ThinkingSteps } from "./thinking";
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -10,15 +12,33 @@ export function ChatMessage({ message }: ChatMessageProps) {
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
       <div
-        className={`max-w-[80%] rounded-lg px-4 py-2 text-sm ${
+        className={`max-w-[85%] sm:max-w-[75%] rounded-lg px-4 py-2.5 text-sm ${
           isUser
             ? "bg-primary text-primary-foreground"
             : "bg-muted text-foreground"
         }`}
       >
         {message.parts?.map((part, i) => {
+          // Reasoning/thinking parts
+          if (part.type === "reasoning") {
+            return (
+              <ThinkingSteps
+                key={i}
+                content={(part as { text: string }).text}
+              />
+            );
+          }
+
+          // Tool call parts
           if (part.type?.startsWith("tool-")) {
-            const p = part as { type: string; toolCallId: string; toolName?: string; state: string; input?: unknown; output?: unknown };
+            const p = part as {
+              type: string;
+              toolCallId: string;
+              toolName?: string;
+              state: string;
+              input?: unknown;
+              output?: unknown;
+            };
             return (
               <div
                 key={i}
@@ -39,9 +59,17 @@ export function ChatMessage({ message }: ChatMessageProps) {
               </div>
             );
           }
+
+          // Text parts — use Markdown for assistant, plain for user
           if (part.type === "text") {
-            return <span key={i}>{(part as { text: string }).text}</span>;
+            const text = (part as { text: string }).text;
+            return isUser ? (
+              <span key={i}>{text}</span>
+            ) : (
+              <MarkdownRenderer key={i} content={text} />
+            );
           }
+
           return null;
         })}
       </div>
