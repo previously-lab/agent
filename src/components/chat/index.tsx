@@ -68,6 +68,7 @@ export function Chat() {
           <MessageScrollerViewport>
             <MessageScrollerContent
               aria-busy={isStreaming}
+              className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8"
             >
               {/* Timeline panel — past memories at top */}
               <MessageScrollerItem messageId="timeline-panel">
@@ -130,8 +131,8 @@ export function Chat() {
       </MessageScrollerProvider>
 
       {/* Input — sticky at bottom */}
-      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-4 px-4 pb-4">
-        <div className="max-w-4xl mx-auto">
+      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-4 pb-4">
+        <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
         </div>
       </div>
