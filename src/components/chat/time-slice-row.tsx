@@ -16,8 +16,8 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
       <div
         className={`max-w-[85%] sm:max-w-[75%] min-w-0 rounded-3xl px-4 py-2 text-sm leading-relaxed
           ${isUser
-            ? "bg-secondary text-foreground/60 rounded-br-md"
-            : "bg-card/50 border rounded-bl-md text-foreground/60"
+            ? "bg-secondary text-foreground/80 rounded-br-md"
+            : "bg-card/70 border rounded-bl-md text-foreground/80"
           }`}
       >
         <span className="whitespace-pre-wrap">{display}</span>
@@ -81,7 +81,7 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
       >
         {/* Expanded content */}
         {expanded && (
-          <div className="opacity-60 saturate-50">
+          <div className="opacity-90">
             {loadingContent ? (
               <div className="flex items-center justify-center gap-1.5 py-4 text-xs text-muted-foreground">
                 <Loader2 className="h-3 w-3 animate-spin" />
