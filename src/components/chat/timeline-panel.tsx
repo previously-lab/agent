@@ -1,12 +1,24 @@
 "use client";
 
 import { useTimeline } from "@/hooks/use-timeline";
-import { TimeSliceRow } from "./time-slice-row";
+import { TimeSliceRow, formatSliceDate } from "./time-slice-row";
 import { Loader2 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
+import type { SliceSummary } from "@/hooks/use-timeline";
+import dayjs from "dayjs";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
+}
+
+function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
+  const groups = new Map<string, SliceSummary[]>();
+  for (const s of slices) {
+    const label = formatSliceDate(s.start);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(s);
+  }
+  return groups;
 }
 
 export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
@@ -17,6 +29,8 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
     onLoadedIdsChange(loadedIds);
   }, [loadedIds, onLoadedIdsChange]);
 
+  const groups = useMemo(() => groupByDate(slices), [slices]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -25,9 +39,7 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
     );
   }
 
-  // Latest slice is first in the array (sorted by start DESC)
-  const latest = slices[0];
-  const pastSlices = latest ? slices.slice(1) : [];
+  const groupEntries = [...groups.entries()];
 
   return (
     <div>
@@ -35,7 +47,7 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
       <button
         onClick={loadMore}
         disabled={loadingMore || !hasMore}
-        className="w-full py-3 text-center text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors disabled:cursor-default"
+        className="w-full py-3 text-center text-xs text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors disabled:cursor-default"
       >
         {loadingMore ? (
           <span className="inline-flex items-center gap-1.5">
@@ -49,24 +61,29 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         )}
       </button>
 
-      {/* Past slices (older at top, newer at bottom) */}
-      {[...pastSlices].reverse().map((slice) => (
-        <TimeSliceRow key={slice.slice_id} slice={slice} />
+      {/* Groups of slices by date */}
+      {groupEntries.map(([dateLabel, dateSlices], groupIdx) => (
+        <div key={dateLabel}>
+          {/* Date separator */}
+          <div className="flex items-center justify-center py-2">
+            <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider">
+              ── {dateLabel} ──
+            </span>
+          </div>
+
+          {/* Slices within this date group (oldest at top) */}
+          {[...dateSlices].reverse().map((slice) => (
+            <TimeSliceRow key={slice.slice_id} slice={slice} />
+          ))}
+
+          {/* Gap between groups */}
+          {groupIdx < groupEntries.length - 1 && (
+            <div className="pb-1" />
+          )}
+        </div>
       ))}
 
-      {/* Latest slice (current) */}
-      {latest && (
-        <>
-          {pastSlices.length > 0 && (
-            <div className="px-4 py-3">
-              <div className="border-t border-border/20" />
-            </div>
-          )}
-          <TimeSliceRow slice={latest} />
-        </>
-      )}
-
-      {/* Divider */}
+      {/* Divider between timeline and current messages */}
       {slices.length > 0 && (
         <div className="px-4 py-3">
           <div className="border-t border-border/20" />
