@@ -4,25 +4,25 @@ import { useState } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
 import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
+import { Message, MessageContent } from "@/components/ui/message";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import dayjs from "dayjs";
 
-// ─── Memory turn preview — reuses ChatMessage bubble styles ───────────────
+// ─── Memory turn — reuses shadcn Message + Bubble ───────────────────────
 
 function MemoryTurn({ content, role }: { content: string; role: string }) {
   const isUser = role === "user";
   const display = content.length > 300 ? content.slice(0, 300) + "…" : content;
   return (
-    <div className={`flex min-w-0 py-1 ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] sm:max-w-[75%] min-w-0 rounded-3xl px-4 py-2 text-sm leading-relaxed
-          ${isUser
-            ? "bg-secondary text-foreground/80 rounded-br-md"
-            : "bg-card/70 border rounded-bl-md text-foreground/80"
-          }`}
-      >
-        <span className="whitespace-pre-wrap">{display}</span>
-      </div>
-    </div>
+    <Message align={isUser ? "end" : "start"} className="gap-1 py-0.5">
+      <MessageContent className="min-w-0">
+        <Bubble variant={isUser ? "default" : "secondary"}>
+          <BubbleContent>
+            <span className="whitespace-pre-wrap text-sm">{display}</span>
+          </BubbleContent>
+        </Bubble>
+      </MessageContent>
+    </Message>
   );
 }
 

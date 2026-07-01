@@ -8,6 +8,8 @@ import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { SummaryBar } from "./summary-bar";
 import { ModelPill } from "./model-pill";
+import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -30,91 +32,89 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
   const toolCount = toolParts.length;
 
   return (
-    <div className={`flex min-w-0 py-2 group ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`max-w-[85%] sm:max-w-[75%] min-w-0 ${isUser ? "items-end" : "items-start"}`}>
-        {/* SummaryBar — OA-style collapsible wrapper */}
-        {isAssistant && (toolCount > 0 || isStreaming) && (
-          <SummaryBar
-            messageId={message.id}
-            toolCallCount={toolCount}
-            isStreaming={isStreaming ?? false}
-            isExpanded={isExpanded}
-            onToggle={() => setIsExpanded(!isExpanded)}
-            startedAt={startedAt ?? null}
-          />
-        )}
+    <div className="py-1">
+      <Message align={isUser ? "end" : "start"} className="gap-1">
+        <MessageContent className="min-w-0">
+          {/* SummaryBar — collapsible wrapper for tool calls */}
+          {isAssistant && (toolCount > 0 || isStreaming) && (
+            <SummaryBar
+              messageId={message.id}
+              toolCallCount={toolCount}
+              isStreaming={isStreaming ?? false}
+              isExpanded={isExpanded}
+              onToggle={() => setIsExpanded(!isExpanded)}
+              startedAt={startedAt ?? null}
+            />
+          )}
 
-        {/* Collapsible message body */}
-        {isExpanded && (
-          <div
-            className={`rounded-3xl px-4 py-2 text-sm leading-relaxed ${
-              isUser
-                ? "bg-secondary text-foreground rounded-br-md"
-                : "bg-card border rounded-bl-md"
-            }`}
-          >
-            {message.parts?.map((part, i) => {
-              if (part.type === "reasoning") {
-                return (
-                  <ThinkingSteps
-                    key={i}
-                    text={(part as { text: string }).text}
-                    isStreaming={isStreaming}
-                  />
-                );
-              }
+          {/* Collapsible message body */}
+          {isExpanded && (
+            <Bubble variant={isUser ? "default" : "secondary"}>
+              <BubbleContent>
+                {message.parts?.map((part, i) => {
+                  if (part.type === "reasoning") {
+                    return (
+                      <ThinkingSteps
+                        key={i}
+                        text={(part as { text: string }).text}
+                        isStreaming={isStreaming}
+                      />
+                    );
+                  }
 
-              if (part.type?.startsWith("tool-")) {
-                const p = part as {
-                  type: string;
-                  toolCallId: string;
-                  toolName?: string;
-                  state: string;
-                  input?: unknown;
-                  output?: unknown;
-                };
-                return (
-                  <ToolRenderer
-                    key={p.toolCallId ?? i}
-                    toolName={p.toolName ?? "tool"}
-                    state={p.state}
-                    input={p.input}
-                    output={p.output}
-                    isStreaming={isStreaming ?? false}
-                  />
-                );
-              }
+                  if (part.type?.startsWith("tool-")) {
+                    const p = part as {
+                      type: string;
+                      toolCallId: string;
+                      toolName?: string;
+                      state: string;
+                      input?: unknown;
+                      output?: unknown;
+                    };
+                    return (
+                      <ToolRenderer
+                        key={p.toolCallId ?? i}
+                        toolName={p.toolName ?? "tool"}
+                        state={p.state}
+                        input={p.input}
+                        output={p.output}
+                        isStreaming={isStreaming ?? false}
+                      />
+                    );
+                  }
 
-              if (part.type === "text") {
-                const text = (part as { text: string }).text;
-                if (isUser) {
-                  return <span key={i} className="whitespace-pre-wrap">{text}</span>;
-                }
-                return <MarkdownRenderer key={i} content={text} />;
-              }
+                  if (part.type === "text") {
+                    const text = (part as { text: string }).text;
+                    if (isUser) {
+                      return <span key={i} className="whitespace-pre-wrap">{text}</span>;
+                    }
+                    return <MarkdownRenderer key={i} content={text} />;
+                  }
 
-              return null;
-            })}
+                  return null;
+                })}
 
-            {/* Streaming cursor */}
-            {isStreaming && isAssistant && (
-              <span className="inline-block w-1.5 h-4 bg-primary animate-pulse rounded-sm ml-0.5 align-text-bottom" />
-            )}
+                {/* Streaming cursor */}
+                {isStreaming && isAssistant && (
+                  <span className="inline-block w-1.5 h-4 bg-primary/50 animate-pulse rounded-sm ml-0.5 align-text-bottom" />
+                )}
+              </BubbleContent>
+            </Bubble>
+          )}
 
-            {/* Model pill */}
-            {isAssistant && !isStreaming && (
-              <div className="mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <ModelPill model="deepseek" reasoningEffort="medium" />
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Message actions */}
-        {isAssistant && textContent && !isStreaming && (
-          <MessageActions content={textContent} onRegenerate={onRegenerate} />
-        )}
-      </div>
+          {/* Footer: model pill + actions */}
+          {isAssistant && textContent && !isStreaming && (
+            <MessageFooter className="mt-0.5 opacity-0 group-hover/message:opacity-100 transition-opacity">
+              <ModelPill model="deepseek" reasoningEffort="medium" />
+            </MessageFooter>
+          )}
+          {isAssistant && textContent && !isStreaming && onRegenerate && (
+            <MessageFooter>
+              <MessageActions content={textContent} onRegenerate={onRegenerate} />
+            </MessageFooter>
+          )}
+        </MessageContent>
+      </Message>
     </div>
   );
 }

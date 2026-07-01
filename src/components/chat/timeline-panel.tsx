@@ -5,6 +5,7 @@ import { TimeSliceRow, formatSliceDate } from "./time-slice-row";
 import { Loader2 } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
+import { Separator } from "@/components/ui/separator";
 import dayjs from "dayjs";
 
 interface TimelinePanelProps {
@@ -64,11 +65,13 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
       {/* Groups of slices by date */}
       {groupEntries.map(([dateLabel, dateSlices], groupIdx) => (
         <div key={dateLabel}>
-          {/* Date separator */}
-          <div className="flex items-center justify-center py-2">
-            <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider">
-              ── {dateLabel} ──
+          {/* Date separator — full width */}
+          <div className="flex items-center gap-3 py-2">
+            <Separator className="flex-1" />
+            <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider shrink-0">
+              {dateLabel}
             </span>
+            <Separator className="flex-1" />
           </div>
 
           {/* Slices within this date group (oldest at top) */}
@@ -83,12 +86,14 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         </div>
       ))}
 
-      {/* "Now" separator between memory and current conversation */}
+      {/* "Now" separator — full width */}
       {slices.length > 0 && (
-        <div className="flex items-center justify-center py-3">
-          <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider">
-            ── 现在 ──
+        <div className="flex items-center gap-3 py-3">
+          <Separator className="flex-1" />
+          <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider shrink-0">
+            现在
           </span>
+          <Separator className="flex-1" />
         </div>
       )}
     </div>
