@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
 import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
@@ -53,27 +53,23 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
   const [content, setContent] = useState<SliceContent | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
 
-  const handleToggle = async () => {
-    if (expanded) {
-      setExpanded(false);
-      return;
-    }
-    setExpanded(true);
-    if (content) return;
+  // Auto-load content on mount so last turn is always visible
+  useEffect(() => {
+    let cancelled = false;
     setLoadingContent(true);
-    try {
-      const data = await getSliceContent(slice.slice_id);
-      setContent(data);
-    } catch {
-      // silently fail
-    } finally {
-      setLoadingContent(false);
-    }
-  };
+    getSliceContent(slice.slice_id)
+      .then((data) => { if (!cancelled) setContent(data); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoadingContent(false); });
+    return () => { cancelled = true; };
+  }, [slice.slice_id]);
+
+  const handleToggle = () => setExpanded(!expanded);
 
   const allTurns = content?.turns ?? [];
-  const lastTurn = allTurns[allTurns.length - 1];
-  const olderTurns = allTurns.slice(0, -1);
+  // Default: show last exchange (user + agent pair), not just one turn
+  const lastExchange = allTurns.slice(-2);
+  const olderTurns = allTurns.slice(0, -2);
   const hasMore = olderTurns.length > 0;
   const totalChars = content?.totalChars ?? 0;
 
@@ -115,10 +111,12 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
           ))
         }
 
-        {/* Last turn — always visible */}
-        {!loadingContent && lastTurn && (
-          <MemoryTurn content={lastTurn.content} role={lastTurn.role} />
-        )}
+        {/* Last exchange — always visible (user message + agent reply) */}
+        {!loadingContent && lastExchange.length > 0 &&
+          lastExchange.map((t, i) => (
+            <MemoryTurn key={i} content={t.content} role={t.role} />
+          ))
+        }
 
         {/* Large slice: collapsed hint */}
         {!expanded && !loadingContent && totalChars > 3000 && content && (
