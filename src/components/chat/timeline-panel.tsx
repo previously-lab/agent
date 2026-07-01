@@ -83,10 +83,12 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         </div>
       ))}
 
-      {/* Divider between timeline and current messages */}
+      {/* "Now" separator between memory and current conversation */}
       {slices.length > 0 && (
-        <div className="px-4 py-3">
-          <div className="border-t border-border/20" />
+        <div className="flex items-center justify-center py-3">
+          <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider">
+            ── 现在 ──
+          </span>
         </div>
       )}
     </div>
