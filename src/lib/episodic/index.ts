@@ -1,0 +1,55 @@
+export {
+  getActiveSlice,
+  createSlice,
+  closeSlice,
+  getSlicePath,
+  getIndexPath,
+  getTagIndexPath,
+  serializeSlice,
+  parseSlice,
+  serializeIndex,
+  serializeTagIndex,
+  appendTurn,
+  readSliceIndex,
+  readTagIndex,
+  readSliceBody,
+  toIndexEntry,
+  updateMonthlyIndex,
+  updateTagIndex,
+  setActiveSlice,
+  clearActiveSlice,
+  saveSliceSnapshot,
+  ensureIndexEntries,
+  updateDynamicSummary,
+  freezeSliceSummary,
+} from "./manager";
+
+export {
+  TIME_SILENCE_THRESHOLD_MINUTES,
+  MAX_TURNS_PER_SLICE,
+  MAX_TOKENS_PER_SLICE,
+  FLASH_SPLIT_CONFIDENCE_THRESHOLD,
+  estimateTokens,
+  checkTimeSilence,
+  checkCapacity,
+  shouldSplit,
+  checkContinuity,
+} from "./slicer";
+
+export type { SplitDecision } from "./slicer";
+
+export type {
+  SliceStatus,
+  SlicingSignal,
+  EmotionalTone,
+  Turn,
+  SliceFrontmatter,
+  TimeSlice,
+  SliceIndexEntry,
+  MonthlyIndex,
+  TagIndex,
+  FlashSplitInput,
+  FlashSplitOutput,
+  RecallHint,
+  MismatchLogEntry,
+} from "./types";

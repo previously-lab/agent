@@ -8,6 +8,11 @@ export interface FlashResult {
   intent_switched: boolean;
   needs_more_turns: boolean;
   reasoning: string;
+  recall_hint?: {
+    suggested_tags: string[];
+    suggested_time_range: string; // e.g. "last_7_days", "last_30_days"
+    reason: string;
+  };
 }
 
 export interface FlashInput {
@@ -40,7 +45,12 @@ ${turnsSummary || "none"}
 User message: "${input.currentInput}"
 
 Output this exact JSON shape:
-{"intent":"<one of the above>","confidence":0.0-1.0,"intent_switched":true/false,"needs_more_turns":true/false,"reasoning":"one line"}`;
+{"intent":"<one of the above>","confidence":0.0-1.0,"intent_switched":true/false,"needs_more_turns":true/false,"reasoning":"one line"}
+
+Optionally, you may include a recall_hint to suggest where Pro should look in the time slice timeline. This is purely directional — do NOT perform any search or say what you found, only suggest WHERE to look:
+"recall_hint":{"suggested_tags":["tag1","tag2"],"suggested_time_range":"last_7_days | last_30_days | last_90_days | all_time","reason":"one line why"}
+
+Include recall_hint only when you have a genuine suggestion. Omit it entirely otherwise.`;
 
   try {
     const result = await generateText({
@@ -57,12 +67,28 @@ Output this exact JSON shape:
     }
 
     const parsed = JSON.parse(jsonMatch[0]);
+
+    // Parse recall_hint if Flash provided one
+    let recall_hint: FlashResult["recall_hint"] = undefined;
+    if (parsed.recall_hint && typeof parsed.recall_hint === "object") {
+      recall_hint = {
+        suggested_tags: Array.isArray(parsed.recall_hint.suggested_tags)
+          ? parsed.recall_hint.suggested_tags.filter((t: unknown) => typeof t === "string")
+          : [],
+        suggested_time_range: String(
+          parsed.recall_hint.suggested_time_range || ""
+        ),
+        reason: String(parsed.recall_hint.reason || ""),
+      };
+    }
+
     return {
       intent: parsed.intent ?? "clarify",
       confidence: Math.min(1, Math.max(0, Number(parsed.confidence) || 0.5)),
       intent_switched: Boolean(parsed.intent_switched),
       needs_more_turns: Boolean(parsed.needs_more_turns),
       reasoning: String(parsed.reasoning || ""),
+      ...(recall_hint ? { recall_hint } : {}),
     };
   } catch {
     return {
@@ -87,6 +113,7 @@ export async function classifyIntentHybrid(
   confidence: number;
   source: "flash" | "keyword" | "flash_expanded" | "fallback";
   needsMoreTurns: boolean;
+  recall_hint?: FlashResult["recall_hint"];
 }> {
   // Step 1: Try Flash with current context
   let flashResult = await classifyWithFlash(input);
@@ -108,6 +135,7 @@ export async function classifyIntentHybrid(
       confidence: 1.0,
       source: "keyword",
       needsMoreTurns: false,
+      recall_hint: flashResult.recall_hint,
     };
   }
 
@@ -117,5 +145,6 @@ export async function classifyIntentHybrid(
     confidence: flashResult.confidence,
     source: expansions > 0 ? "flash_expanded" : "flash",
     needsMoreTurns: flashResult.needs_more_turns,
+    recall_hint: flashResult.recall_hint,
   };
 }

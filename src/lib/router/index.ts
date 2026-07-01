@@ -1,12 +1,19 @@
 import { matchKeywords, getStrategy, type IntentStrategy } from "./speed-index";
 import { classifyIntentHybrid, type FlashInput } from "./flash";
 
+export interface RecallHint {
+  suggested_tags: string[];
+  suggested_time_range: string;
+  reason: string;
+}
+
 export interface IntentResult {
   intent: string;
   switched: boolean;
   confidence: number;
   source: "flash" | "flash_expanded" | "keyword" | "fallback";
   needsMoreTurns?: boolean;
+  recall_hint?: RecallHint;
 }
 
 /**
@@ -24,6 +31,7 @@ export async function classifyIntent(
     confidence: result.confidence,
     source: result.source,
     needsMoreTurns: result.needsMoreTurns,
+    recall_hint: result.recall_hint,
   };
 }
 
