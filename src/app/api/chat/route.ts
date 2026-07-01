@@ -1,10 +1,9 @@
 import { deepseek } from "@ai-sdk/deepseek";
-import { streamText, tool, convertToModelMessages, stepCountIs } from "ai";
+import { streamText, tool, convertToModelMessages, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
-import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
-import { readFileLocal, writeFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
+import { readFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
 import { resolveIntent, classifyIntentKeywords } from "@/lib/router";
 import type { RecallHint } from "@/lib/router";
 import { classifyWithFlash } from "@/lib/router/flash";
@@ -321,113 +320,132 @@ export async function POST(request: Request) {
 
     const finalSystemPrompt = dynamicSystemPrompt + episodicContext;
 
-    // Recall phase text for system prompt (engineering layer derives from Flash structured output)
-    const recallNote = flashRecallHint
-      ? `\n\n## 🧠 Recall Phase\n${buildRecallText(flashRecallHint)}\n*Flash has recalled potentially relevant past conversations. Use readMemory/listMemory/readIndex tools if you need more context.*`
-      : "";
+    // Build recall text for data-flash (engineering layer, not Flash output)
+    const recallText = flashRecallHint ? buildRecallText(flashRecallHint) : null;
 
-    const finalPromptWithRecall = finalSystemPrompt + recallNote;
-
-    const result = streamText({
-      model: deepseek(model),
-      providerOptions: thinking
-        ? { deepseek: { thinking: { type: "enabled" as const }, reasoningEffort: "medium" as const } }
-        : undefined,
-      system: finalPromptWithRecall,
-      messages: modelMessages,
-      stopWhen: stepCountIs(20),
-      onFinish: async ({ text, finishReason }) => {
-        const normalCompletion = finishReason === "stop";
-
-        if (normalCompletion) {
-          appendTurn(slice, {
-            timestamp: new Date().toISOString(),
-            role: "agent",
-            content: text,
+    // ─── Multi-phase streaming (M7.1b) ──────────────────────────────────────
+    // Phase 1: Flash recall (data-flash) → Phase 2: Pro thinking → Phase 3: Pro text
+    // All phases appear in a single message bubble on the client.
+    // Uses AI SDK v7 canonical pattern: createUIMessageStream + createUIMessageStreamResponse.
+    const uiStream = createUIMessageStream({
+      execute: async ({ writer }) => {
+        // Phase 1: Recall — Flash hint as data-flash custom part
+        if (recallText && flashRecallHint) {
+          writer.write({
+            type: "data-flash",
+            id: `flash-recall-${Date.now()}`,
+            data: {
+              phase: "recall",
+              text: recallText,
+              tags: flashRecallHint.suggested_tags,
+              time_range: flashRecallHint.suggested_time_range,
+            },
           });
-
-          // Flash dynamic summary update every 6 turns (3 rounds)
-          if (slice.turns.length % 6 === 0 && slice.turns.length > 0) {
-            try {
-              const summaryResult = await classifyWithFlash({
-                currentInput: `Summarize in one sentence (≤100 chars): what are we working on?`,
-                lastTurnSummary: slice.summary,
-                sessionIntent: slice.focus,
-                recentTurns: slice.turns.slice(-6).map(t => ({ role: t.role, content: t.content.slice(0, 300) })),
-              });
-              if (summaryResult.reasoning && summaryResult.reasoning.length > 10) {
-                slice.summary = summaryResult.reasoning.slice(0, 100);
-              }
-            } catch { /* best-effort */ }
-          }
-
-          await saveSliceSnapshot(slice);
-          await ensureIndexEntries(slice);
-
-          if (pendingSplit) {
-            slice.summary = slice.summary || `${slice.turns.length} turns about ${slice.focus || "general chat"}`;
-            await closeSlice(slice, pendingSplit.source);
-            console.log(`[Episodic] Slice closed: ${pendingSplit.source}`);
-          }
-        } else {
-          if (text) {
-            appendTurn(slice, {
-              timestamp: new Date().toISOString(),
-              role: "agent",
-              content: `[partial] ${text}`,
-            });
-            saveSliceSnapshot(slice).catch(() => {});
-          }
-          console.log(`[Episodic] Pro interrupted (${finishReason}), split discarded`);
         }
-      },
-      tools: {
-        // ─── Categorized memory tools (M7.1d) ──────────────────────────
-        readMemory: tool({
-          description: "Read a file from memory (time slices or semantic nodes). Only memory/ paths are accessible.",
-          inputSchema: z.object({
-            path: z.string().describe("Path within memory/, e.g. 'memory/episodic/slices/2026/07/01.md'"),
-          }),
-          execute: async ({ path }) => {
-            return USE_GITHUB
-              ? await readFile(path, repo, owner)
-              : await readFileLocal(path);
-          },
-        }),
-        listMemory: tool({
-          description: "List directories under memory/ to explore available time slices.",
-          inputSchema: z.object({
-            path: z.string().describe("Directory path within memory/, e.g. 'memory/episodic/slices/2026/'"),
-          }),
-          execute: async ({ path }) => {
-            return USE_GITHUB
-              ? await listFiles(path, repo, owner)
-              : await listFilesLocal(path);
-          },
-        }),
-        readIndex: tool({
-          description: "Read a monthly _index.json to browse time slices in a given month.",
-          inputSchema: z.object({
-            year: z.number().describe("UTC year, e.g. 2026"),
-            month: z.number().min(1).max(12).describe("UTC month, 1-12"),
-          }),
-          execute: async ({ year, month }) => {
-            const mm = String(month).padStart(2, "0");
-            const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
-            try {
-              const raw = USE_GITHUB
-                ? await readFile(path, repo, owner)
-                : await readFileLocal(path);
-              return JSON.parse(raw);
-            } catch {
-              return { exists: false, month: `${year}-${mm}`, slices: [] };
+
+        // Phase 2 + 3: Pro — thinking + text via streamText
+        const result = streamText({
+          model: deepseek(model),
+          providerOptions: thinking
+            ? { deepseek: { thinking: { type: "enabled" as const }, reasoningEffort: "medium" as const } }
+            : undefined,
+          system: finalSystemPrompt,
+          messages: modelMessages,
+          stopWhen: stepCountIs(20),
+          onFinish: async ({ text, finishReason }) => {
+            const normalCompletion = finishReason === "stop";
+
+            if (normalCompletion) {
+              appendTurn(slice, {
+                timestamp: new Date().toISOString(),
+                role: "agent",
+                content: text,
+              });
+
+              if (slice.turns.length % 6 === 0 && slice.turns.length > 0) {
+                try {
+                  const summaryResult = await classifyWithFlash({
+                    currentInput: `Summarize in one sentence (≤100 chars): what are we working on?`,
+                    lastTurnSummary: slice.summary,
+                    sessionIntent: slice.focus,
+                    recentTurns: slice.turns.slice(-6).map(t => ({ role: t.role, content: t.content.slice(0, 300) })),
+                  });
+                  if (summaryResult.reasoning && summaryResult.reasoning.length > 10) {
+                    slice.summary = summaryResult.reasoning.slice(0, 100);
+                  }
+                } catch { /* best-effort */ }
+              }
+
+              await saveSliceSnapshot(slice);
+              await ensureIndexEntries(slice);
+
+              if (pendingSplit) {
+                slice.summary = slice.summary || `${slice.turns.length} turns about ${slice.focus || "general chat"}`;
+                await closeSlice(slice, pendingSplit.source);
+                console.log(`[Episodic] Slice closed: ${pendingSplit.source}`);
+              }
+            } else {
+              if (text) {
+                appendTurn(slice, {
+                  timestamp: new Date().toISOString(),
+                  role: "agent",
+                  content: `[partial] ${text}`,
+                });
+                saveSliceSnapshot(slice).catch(() => {});
+              }
+              console.log(`[Episodic] Pro interrupted (${finishReason}), split discarded`);
             }
           },
-        }),
+          tools: {
+            readMemory: tool({
+              description: "Read a file from memory (time slices or semantic nodes). Only memory/ paths are accessible.",
+              inputSchema: z.object({
+                path: z.string().describe("Path within memory/, e.g. 'memory/episodic/slices/2026/07/01.md'"),
+              }),
+              execute: async ({ path }) => {
+                return USE_GITHUB
+                  ? await readFile(path, repo, owner)
+                  : await readFileLocal(path);
+              },
+            }),
+            listMemory: tool({
+              description: "List directories under memory/ to explore available time slices.",
+              inputSchema: z.object({
+                path: z.string().describe("Directory path within memory/, e.g. 'memory/episodic/slices/2026/'"),
+              }),
+              execute: async ({ path }) => {
+                return USE_GITHUB
+                  ? await listFiles(path, repo, owner)
+                  : await listFilesLocal(path);
+              },
+            }),
+            readIndex: tool({
+              description: "Read a monthly _index.json to browse time slices in a given month.",
+              inputSchema: z.object({
+                year: z.number().describe("UTC year, e.g. 2026"),
+                month: z.number().min(1).max(12).describe("UTC month, 1-12"),
+              }),
+              execute: async ({ year, month }) => {
+                const mm = String(month).padStart(2, "0");
+                const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
+                try {
+                  const raw = USE_GITHUB
+                    ? await readFile(path, repo, owner)
+                    : await readFileLocal(path);
+                  return JSON.parse(raw);
+                } catch {
+                  return { exists: false, month: `${year}-${mm}`, slices: [] };
+                }
+              },
+            }),
+          },
+        });
+
+        writer.merge(result.toUIMessageStream());
       },
     });
 
-    return result.toUIMessageStreamResponse();
+    return createUIMessageStreamResponse({ stream: uiStream });
   } catch (error) {
     if (error instanceof SyntaxError) {
       return new Response(
