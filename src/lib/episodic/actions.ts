@@ -121,9 +121,13 @@ export async function getSliceContent(
 ): Promise<SliceContent | null> {
   try {
     const [yearMonth, day] = sliceId.split("/");
-    const path = `memory/episodic/slices/${yearMonth}/${day}.md`;
+    const [year, month] = yearMonth.split("-");
+    const path = `memory/episodic/slices/${year}/${month}/${day}.md`;
+    console.log(`[Episodic] getSliceContent: sliceId=${sliceId} → path=${path}`);
     const raw = await readSliceBody(path);
+    console.log(`[Episodic] getSliceContent: read ${raw.length} bytes`);
     const slice = parseSlice(raw);
+    console.log(`[Episodic] getSliceContent: parsed ${slice.turns.length} turns, ${slice.turns.reduce((s,t) => s + t.content.length, 0)} chars`);
 
     const totalChars = slice.turns.reduce(
       (sum, t) => sum + t.content.length,
@@ -142,7 +146,8 @@ export async function getSliceContent(
       open_loops: slice.open_loops,
       decisions: slice.decisions,
     };
-  } catch {
+  } catch (err) {
+    console.error(`[Episodic] getSliceContent failed for ${sliceId}:`, err instanceof Error ? err.message : err);
     return null;
   }
 }
