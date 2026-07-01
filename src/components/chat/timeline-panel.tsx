@@ -10,7 +10,7 @@ interface TimelinePanelProps {
 }
 
 export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
-  const { active, slices, loading, loadingMore, hasMore, loadMore, loadedIds } =
+  const { slices, loading, loadingMore, hasMore, loadMore, loadedIds } =
     useTimeline();
 
   useEffect(() => {
@@ -25,7 +25,9 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
     );
   }
 
-  const closedSlices = slices.filter((s) => s.status !== "active");
+  // Latest slice is first in the array (sorted by start DESC)
+  const latest = slices[0];
+  const pastSlices = latest ? slices.slice(1) : [];
 
   return (
     <div>
@@ -43,29 +45,29 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         ) : hasMore ? (
           "═══ 加载更多记忆 ═══"
         ) : (
-          "── 没有更早的记忆了 ──"
+          slices.length > 0 ? "── 没有更早的记忆了 ──" : null
         )}
       </button>
 
       {/* Past slices (older at top, newer at bottom) */}
-      {[...closedSlices].reverse().map((slice) => (
+      {[...pastSlices].reverse().map((slice) => (
         <TimeSliceRow key={slice.slice_id} slice={slice} />
       ))}
 
-      {/* Active slice (current) — at bottom of timeline */}
-      {active && active.turnCount && active.turnCount > 0 && (
+      {/* Latest slice (current) */}
+      {latest && (
         <>
-          {closedSlices.length > 0 && (
+          {pastSlices.length > 0 && (
             <div className="px-4 py-3">
               <div className="border-t border-border/20" />
             </div>
           )}
-          <TimeSliceRow slice={{ ...active, status: "active" as const }} />
+          <TimeSliceRow slice={latest} />
         </>
       )}
 
-      {/* Divider between timeline and messages — only if there's any timeline content */}
-      {(closedSlices.length > 0 || (active && active.turnCount && active.turnCount > 0)) && (
+      {/* Divider */}
+      {slices.length > 0 && (
         <div className="px-4 py-3">
           <div className="border-t border-border/20" />
         </div>

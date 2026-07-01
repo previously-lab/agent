@@ -1,6 +1,6 @@
 "use server";
 
-import { getActiveSlice, readSliceIndex, readSliceBody, parseSlice } from "./manager";
+import { readSliceIndex, readSliceBody, parseSlice } from "./manager";
 import type { Turn } from "./types";
 
 export interface SliceSummary {
@@ -22,8 +22,6 @@ export interface EpisodicState {
 }
 
 export async function getEpisodicState(): Promise<EpisodicState> {
-  const active = getActiveSlice();
-
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
@@ -35,27 +33,24 @@ export async function getEpisodicState(): Promise<EpisodicState> {
     readSliceIndex(prevYear, prevMonth),
   ]);
 
+  // Just return recent slices from disk — no active/closed filtering
   const allSlices = [...prevIndex, ...currentIndex]
-    .filter((s) => {
-      const activeDay = active?.slice_id.split("-")[2];
-      return s.id !== activeDay || s.status === "closed";
-    })
     .sort((a, b) => b.start.localeCompare(a.start))
     .slice(0, 10);
 
+  const first = allSlices[0];
+
   return {
-    hasActiveSlice: active !== null,
-    active: active
+    hasActiveSlice: allSlices.length > 0,
+    active: first
       ? {
-          slice_id: active.slice_id,
-          focus: active.focus,
-          summary: active.summary,
-          start: active.start,
-          timezone: active.timezone,
-          turnCount: active.turns.length,
-          open_loops: active.open_loops,
-          decisions: active.decisions,
-          status: "active" as const,
+          slice_id: `${first.start.slice(0, 7)}/${first.id}`,
+          focus: first.focus,
+          summary: first.summary,
+          start: first.start,
+          status: first.status as "active" | "closed",
+          open_loops: first.open_loops,
+          decisions: first.decisions,
         }
       : null,
     recent: allSlices.map((s) => ({
