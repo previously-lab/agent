@@ -6,7 +6,6 @@ import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
 import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import dayjs from "dayjs";
 
 // ─── Memory turn — reuses shadcn Message + Bubble ───────────────────────
 
@@ -26,15 +25,21 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
   );
 }
 
-// ─── Time distance helper (dayjs) ────────────────────────────────────────
+// ─── Date formatting ────────────────────────────────────────────────────
 
 export function formatSliceDate(start: string): string {
-  const d = dayjs(start);
-  const now = dayjs();
-  if (d.isSame(now, "day")) return "今天";
-  if (d.isSame(now.subtract(1, "day"), "day")) return "昨天";
-  if (d.isSame(now, "year")) return d.format("M月D日");
-  return d.format("YYYY年M月D日");
+  const now = new Date();
+  const d = new Date(start);
+  const diffDays = Math.floor(
+    (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24)
+  );
+  if (diffDays === 0) return "今天";
+  if (diffDays === 1) return "昨天";
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  if (year === now.getFullYear()) return `${month}月${day}日`;
+  return `${year}年${month}月${day}日`;
 }
 
 // ─── Main component ──────────────────────────────────────────────────────
@@ -47,12 +52,10 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [content, setContent] = useState<SliceContent | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
-  const [showAllTurns, setShowAllTurns] = useState(false);
 
   const handleToggle = async () => {
     if (expanded) {
       setExpanded(false);
-      setShowAllTurns(false);
       return;
     }
     setExpanded(true);
@@ -68,12 +71,11 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
     }
   };
 
-  const totalChars = content?.totalChars ?? 0;
-  const isMedium = totalChars >= 500 && totalChars <= 3000;
-  const isLarge = totalChars > 3000;
   const allTurns = content?.turns ?? [];
   const lastTurn = allTurns[allTurns.length - 1];
-  const olderTurns = allTurns.slice(0, -1); // everything except the last
+  const olderTurns = allTurns.slice(0, -1);
+  const hasMore = olderTurns.length > 0;
+  const totalChars = content?.totalChars ?? 0;
 
   return (
     <div className="px-4 py-2">
@@ -86,67 +88,47 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
           </div>
         )}
 
-        {/* Older turns — shown when expanded, ABOVE the last turn */}
-        {expanded && !loadingContent && content && (
-          <>
-            {!isLarge && olderTurns.map((t, i) => (
-              <MemoryTurn key={i} content={t.content} role={t.role} />
-            ))}
-            {isLarge && showAllTurns &&
-              allTurns.map((t, i) => (
-                <MemoryTurn key={i} content={t.content} role={t.role} />
-              ))}
-          </>
+        {/* "查看更多" — at top, above older turns */}
+        {!loadingContent && hasMore && (
+          <button
+            onClick={handleToggle}
+            className="w-full text-center py-1 text-[0.65rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+          >
+            {expanded ? (
+              <span className="inline-flex items-center gap-1">
+                <ChevronUp className="h-3 w-3" />
+                收起
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <ChevronDown className="h-3 w-3" />
+                查看更多
+              </span>
+            )}
+          </button>
         )}
+
+        {/* Older turns — appear above when expanded */}
+        {expanded && !loadingContent && olderTurns.length > 0 &&
+          olderTurns.map((t, i) => (
+            <MemoryTurn key={i} content={t.content} role={t.role} />
+          ))
+        }
 
         {/* Last turn — always visible */}
         {!loadingContent && lastTurn && (
           <MemoryTurn content={lastTurn.content} role={lastTurn.role} />
         )}
 
-        {/* Large slice: collapsed state */}
-        {!expanded && isLarge && content && (
+        {/* Large slice: collapsed hint */}
+        {!expanded && !loadingContent && totalChars > 3000 && content && (
           <div className="text-center py-1 text-[0.65rem] text-muted-foreground/40">
             {content.totalTurns} 轮 · {Math.round(totalChars / 1000)}k 字
           </div>
         )}
       </div>
 
-      {/* Toggle + summary */}
-      <div className="flex items-center gap-2 mt-1">
-        <button
-          onClick={handleToggle}
-          className="inline-flex items-center gap-1 text-[0.65rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
-        >
-          {expanded ? (
-            <><ChevronUp className="h-3 w-3" /> 收起</>
-          ) : (
-            <><ChevronDown className="h-3 w-3" /> 展开{slice.turnCount ? ` ${slice.turnCount} 轮` : ""}</>
-          )}
-        </button>
-
-        {/* Show more within slice (medium) */}
-        {expanded && isMedium && !showAllTurns && content && (
-          <button
-            onClick={() => setShowAllTurns(true)}
-            className="text-[0.65rem] text-muted-foreground/40 hover:text-muted-foreground/60 ml-auto"
-          >
-            查看更多
-          </button>
-        )}
-
-        {/* Show all within slice (large) */}
-        {expanded && isLarge && !showAllTurns && content && (
-          <button
-            onClick={() => setShowAllTurns(true)}
-            className="text-[0.65rem] text-muted-foreground/40 hover:text-muted-foreground/60 ml-auto"
-          >
-            展开全部 {content.totalTurns} 轮
-          </button>
-        )}
-      </div>
-
-      {/* Summary caption — always at bottom */}
+      {/* Summary caption — at bottom */}
       {slice.summary && (
         <p className="text-[0.7rem] text-muted-foreground/50 italic mt-0.5 leading-relaxed">
           {slice.summary}
