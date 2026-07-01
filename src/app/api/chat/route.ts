@@ -6,6 +6,7 @@ import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import { readFileLocal, writeFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
 import { resolveIntent, classifyIntentKeywords } from "@/lib/router";
+import type { RecallHint } from "@/lib/router";
 import { classifyWithFlash } from "@/lib/router/flash";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
@@ -134,6 +135,21 @@ Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, s
     confidence: intent.confidence,
     recall_hint: intent.recall_hint,
   };
+}
+
+// ─── Recall phase text builder ──────────────────────────────────────────
+
+const TIME_RANGE_LABELS: Record<string, string> = {
+  last_7_days: "最近一周",
+  last_30_days: "最近一个月",
+  last_90_days: "最近三个月",
+  all_time: "过往",
+};
+
+function buildRecallText(hint: RecallHint): string {
+  const tags = hint.suggested_tags.join("、");
+  const time = TIME_RANGE_LABELS[hint.suggested_time_range] ?? hint.suggested_time_range;
+  return `想起和 ${tags} 相关的交流 · ${time}`;
 }
 
 export async function POST(request: Request) {
@@ -305,97 +321,72 @@ export async function POST(request: Request) {
 
     const finalSystemPrompt = dynamicSystemPrompt + episodicContext;
 
+    // Recall phase text for system prompt (engineering layer derives from Flash structured output)
+    const recallNote = flashRecallHint
+      ? `\n\n## 🧠 Recall Phase\n${buildRecallText(flashRecallHint)}\n*Flash has recalled potentially relevant past conversations. Use readMemory/listMemory/readIndex tools if you need more context.*`
+      : "";
+
+    const finalPromptWithRecall = finalSystemPrompt + recallNote;
+
     const result = streamText({
       model: deepseek(model),
       providerOptions: thinking
         ? { deepseek: { thinking: { type: "enabled" as const }, reasoningEffort: "medium" as const } }
         : undefined,
-      system: finalSystemPrompt,
+      system: finalPromptWithRecall,
       messages: modelMessages,
       stopWhen: stepCountIs(20),
       onFinish: async ({ text, finishReason }) => {
         const normalCompletion = finishReason === "stop";
 
         if (normalCompletion) {
-          // Append agent response to current slice
           appendTurn(slice, {
             timestamp: new Date().toISOString(),
             role: "agent",
             content: text,
           });
 
-          // Flash dynamic summary update every 3 turns
+          // Flash dynamic summary update every 6 turns (3 rounds)
           if (slice.turns.length % 6 === 0 && slice.turns.length > 0) {
             try {
               const summaryResult = await classifyWithFlash({
-                currentInput: `Summarize the last few exchanges in 1-2 sentences. Focus: what are we working on?`,
+                currentInput: `Summarize in one sentence (≤100 chars): what are we working on?`,
                 lastTurnSummary: slice.summary,
                 sessionIntent: slice.focus,
                 recentTurns: slice.turns.slice(-6).map(t => ({ role: t.role, content: t.content.slice(0, 300) })),
               });
-              // Use Flash's reasoning (the actual summary text) as the new dynamic summary
               if (summaryResult.reasoning && summaryResult.reasoning.length > 10) {
                 slice.summary = summaryResult.reasoning.slice(0, 100);
               }
-              if (summaryResult.intent && summaryResult.intent !== "clarify") {
-                slice.focus = summaryResult.intent.replace(/_/g, " ");
-              }
-            } catch {
-              // Summary update is best-effort — don't block on failure
-            }
+            } catch { /* best-effort */ }
           }
 
-          // Save snapshot after every turn — ensures data survives refresh/crash
           await saveSliceSnapshot(slice);
           await ensureIndexEntries(slice);
 
           if (pendingSplit) {
-            // Freeze summary before closing
-            try {
-              const freezeInput = `Time slice "${slice.focus || slice.slice_id}" with ${slice.turns.length} turns. Generate: 1) one-line summary (≤100 chars) 2) open_loops (array) 3) decisions (array) 4) tags (array) 5) emotional_tone (exploratory|frustrated|decisive|neutral). Return ONLY raw JSON.`;
-              const freezeResult = await classifyWithFlash({
-                currentInput: freezeInput,
-                lastTurnSummary: slice.summary,
-                sessionIntent: slice.focus,
-                recentTurns: slice.turns.slice(-10).map(t => ({ role: t.role, content: t.content.slice(0, 200) })),
-              });
-              // Use Flash output to populate frozen fields
-              try {
-                const frozenData = JSON.parse(freezeResult.reasoning || "{}");
-                slice.summary = frozenData.summary || slice.summary;
-                slice.open_loops = frozenData.open_loops || [];
-                slice.decisions = frozenData.decisions || [];
-                slice.tags = frozenData.tags || [];
-                slice.emotional_tone = frozenData.emotional_tone || "neutral";
-              } catch { /* keep existing values */ }
-            } catch { /* best-effort */ }
-
+            slice.summary = slice.summary || `${slice.turns.length} turns about ${slice.focus || "general chat"}`;
             await closeSlice(slice, pendingSplit.source);
-            console.log(
-              `[Episodic] Slice closed: ${pendingSplit.source} — ${pendingSplit.reason}`
-            );
+            console.log(`[Episodic] Slice closed: ${pendingSplit.source}`);
           }
         } else {
-          // Interrupted or error — discard split, append partial if any
           if (text) {
             appendTurn(slice, {
               timestamp: new Date().toISOString(),
               role: "agent",
               content: `[partial] ${text}`,
             });
-            // Save partial state even on interruption
             saveSliceSnapshot(slice).catch(() => {});
           }
-          console.log(
-            `[Episodic] Pro interrupted (${finishReason}), split discarded`
-          );
+          console.log(`[Episodic] Pro interrupted (${finishReason}), split discarded`);
         }
       },
       tools: {
-        readFile: tool({
-          description: "Read the content of a file from the GitHub repository. Only paths under memory/, tasks/, or sessions/ are accessible.",
+        // ─── Categorized memory tools (M7.1d) ──────────────────────────
+        readMemory: tool({
+          description: "Read a file from memory (time slices or semantic nodes). Only memory/ paths are accessible.",
           inputSchema: z.object({
-            path: z.string().describe("The file path to read, e.g. 'memory/test.md'"),
+            path: z.string().describe("Path within memory/, e.g. 'memory/episodic/slices/2026/07/01.md'"),
           }),
           execute: async ({ path }) => {
             return USE_GITHUB
@@ -403,27 +394,34 @@ export async function POST(request: Request) {
               : await readFileLocal(path);
           },
         }),
-        writeFile: tool({
-          description: "Create or update a file in the repository. Only paths under memory/, tasks/, or sessions/ are writable.",
+        listMemory: tool({
+          description: "List directories under memory/ to explore available time slices.",
           inputSchema: z.object({
-            path: z.string().describe("The file path to write, e.g. 'memory/note.md'"),
-            content: z.string().describe("The content to write to the file"),
-          }),
-          execute: async ({ path, content }) => {
-            return USE_GITHUB
-              ? await writeFile(path, content, repo, owner)
-              : await writeFileLocal(path, content);
-          },
-        }),
-        listFiles: tool({
-          description: "List files and directories in a given path. Only paths under memory/, tasks/, or sessions/ are listable.",
-          inputSchema: z.object({
-            path: z.string().describe("The directory path to list, e.g. 'memory/'"),
+            path: z.string().describe("Directory path within memory/, e.g. 'memory/episodic/slices/2026/'"),
           }),
           execute: async ({ path }) => {
             return USE_GITHUB
               ? await listFiles(path, repo, owner)
               : await listFilesLocal(path);
+          },
+        }),
+        readIndex: tool({
+          description: "Read a monthly _index.json to browse time slices in a given month.",
+          inputSchema: z.object({
+            year: z.number().describe("UTC year, e.g. 2026"),
+            month: z.number().min(1).max(12).describe("UTC month, 1-12"),
+          }),
+          execute: async ({ year, month }) => {
+            const mm = String(month).padStart(2, "0");
+            const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
+            try {
+              const raw = USE_GITHUB
+                ? await readFile(path, repo, owner)
+                : await readFileLocal(path);
+              return JSON.parse(raw);
+            } catch {
+              return { exists: false, month: `${year}-${mm}`, slices: [] };
+            }
           },
         }),
       },
