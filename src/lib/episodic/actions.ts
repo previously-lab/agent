@@ -1,6 +1,7 @@
 "use server";
 
-import { getActiveSlice, readSliceIndex } from "./manager";
+import { getActiveSlice, readSliceIndex, readSliceBody, parseSlice } from "./manager";
+import type { Turn } from "./types";
 
 export interface SliceSummary {
   slice_id: string;
@@ -105,4 +106,48 @@ export async function getMoreSlices(
     })),
     hasMore: filtered.length === Math.min(limit, 50),
   };
+}
+
+export interface SliceContent {
+  slice_id: string;
+  focus: string;
+  summary: string;
+  start: string;
+  status: string;
+  turns: Turn[];
+  totalTurns: number;
+  totalChars: number;
+  open_loops: string[];
+  decisions: string[];
+}
+
+export async function getSliceContent(
+  sliceId: string
+): Promise<SliceContent | null> {
+  try {
+    const [yearMonth, day] = sliceId.split("/");
+    const path = `memory/episodic/slices/${yearMonth}/${day}.md`;
+    const raw = await readSliceBody(path);
+    const slice = parseSlice(raw);
+
+    const totalChars = slice.turns.reduce(
+      (sum, t) => sum + t.content.length,
+      0
+    );
+
+    return {
+      slice_id: slice.slice_id,
+      focus: slice.focus,
+      summary: slice.summary,
+      start: slice.start,
+      status: slice.status,
+      turns: slice.turns,
+      totalTurns: slice.turns.length,
+      totalChars,
+      open_loops: slice.open_loops,
+      decisions: slice.decisions,
+    };
+  } catch {
+    return null;
+  }
 }

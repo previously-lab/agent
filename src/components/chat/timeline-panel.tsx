@@ -52,8 +52,20 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         <TimeSliceRow key={slice.slice_id} slice={slice} />
       ))}
 
-      {/* Divider between past and present */}
-      {closedSlices.length > 0 && (
+      {/* Active slice (current) — at bottom of timeline */}
+      {active && active.turnCount && active.turnCount > 0 && (
+        <>
+          {closedSlices.length > 0 && (
+            <div className="px-4 py-3">
+              <div className="border-t border-border/20" />
+            </div>
+          )}
+          <TimeSliceRow slice={{ ...active, status: "active" as const }} />
+        </>
+      )}
+
+      {/* Divider between timeline and messages — only if there's any timeline content */}
+      {(closedSlices.length > 0 || (active && active.turnCount && active.turnCount > 0)) && (
         <div className="px-4 py-3">
           <div className="border-t border-border/20" />
         </div>
