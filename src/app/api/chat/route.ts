@@ -158,6 +158,7 @@ export async function POST(request: Request) {
     const model = (body.model as string) ?? "deepseek-chat";
     const thinking = body.thinking !== false; // default: enabled
     const clientTimezone = (body.timezone as string) ?? "UTC";
+    const loadedSliceIds = (body.loadedSliceIds as string[]) ?? [];
 
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return new Response(
@@ -281,7 +282,7 @@ export async function POST(request: Request) {
         .join(", ")}\n`;
     }
 
-    // Recent closed slices from monthly index files
+    // Recent closed slices — load from monthly index + any slices the client has in its timeline
     const now = new Date();
     const currentYear = now.getUTCFullYear();
     const currentMonth = now.getUTCMonth() + 1;
@@ -293,17 +294,22 @@ export async function POST(request: Request) {
       readSliceIndex(prevMonthYear, prevMonth),
     ]);
 
-    const recentClosed = [...prevMonthIndex, ...currentMonthIndex]
+    const allRecent = [...prevMonthIndex, ...currentMonthIndex]
       .filter(
         (e) =>
           e.status === "closed" &&
           e.id !== slice.slice_id.split("-")[2]
-      )
-      .slice(-5);
+      );
 
-    if (recentClosed.length > 0) {
+    // Merge with client-loaded slice IDs (M7.2e: timeline browsing drives context)
+    const loadedSet = new Set(loadedSliceIds);
+    const mergedClosed = allRecent.filter(
+      (e) => loadedSet.has(`${e.start.slice(0, 7)}/${e.id}`) || allRecent.indexOf(e) >= allRecent.length - 5
+    ).slice(-10);
+
+    if (mergedClosed.length > 0) {
       episodicContext += "\n### Recent Sessions\n";
-      for (const entry of recentClosed) {
+      for (const entry of mergedClosed) {
         episodicContext += `- [${entry.id}] ${entry.focus || entry.summary || "(untitled)"}\n`;
       }
     }
