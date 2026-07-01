@@ -75,15 +75,11 @@ export function Chat() {
               </MessageScrollerItem>
 
               {messages.length === 0 ? (
-                /* Empty state */
+                /* Subtle prompt when no messages yet — memory is already visible above */
                 <MessageScrollerItem messageId="empty-state">
-                  <div className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4">
-                    <div className="rounded-full bg-muted p-4 mb-4">
-                      <Sparkles className="h-6 w-6 text-muted-foreground" />
-                    </div>
-                    <h2 className="text-lg font-semibold mb-1">How can I help?</h2>
-                    <p className="text-sm text-muted-foreground max-w-sm">
-                      I can read and write files, search your memory, and help with coding tasks.
+                  <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+                    <p className="text-sm text-muted-foreground/50">
+                      💬 输入你想做的事...
                     </p>
                   </div>
                 </MessageScrollerItem>

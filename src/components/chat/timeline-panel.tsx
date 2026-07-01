@@ -25,43 +25,38 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
     );
   }
 
+  const closedSlices = slices.filter((s) => s.status !== "active");
+
   return (
     <div>
-      {/* Load more button at TOP (scroll up to load older memories) */}
-      {hasMore && (
-        <button
-          onClick={loadMore}
-          disabled={loadingMore}
-          className="w-full py-2 text-center text-xs text-muted-foreground/50 hover:text-muted-foreground/70 transition-colors border-b border-border/50"
-        >
-          {loadingMore ? (
-            <span className="inline-flex items-center gap-1.5">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              加载更早的记忆...
-            </span>
-          ) : (
-            "═══ 加载更多记忆 ═══"
-          )}
-        </button>
-      )}
+      {/* Load more — always visible at top */}
+      <button
+        onClick={loadMore}
+        disabled={loadingMore || !hasMore}
+        className="w-full py-3 text-center text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors disabled:cursor-default"
+      >
+        {loadingMore ? (
+          <span className="inline-flex items-center gap-1.5">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            加载更早的记忆...
+          </span>
+        ) : hasMore ? (
+          "═══ 加载更多记忆 ═══"
+        ) : (
+          "── 没有更早的记忆了 ──"
+        )}
+      </button>
 
-      {/* Past slices (older → newer, top → bottom) */}
-      {[...slices].reverse().map((slice) => (
+      {/* Past slices (older at top, newer at bottom) */}
+      {[...closedSlices].reverse().map((slice) => (
         <TimeSliceRow key={slice.slice_id} slice={slice} />
       ))}
 
-      {/* Divider */}
-      {slices.length > 0 && (
-        <div className="px-4 py-2">
-          <div className="border-t border-border/30" />
+      {/* Divider between past and present */}
+      {closedSlices.length > 0 && (
+        <div className="px-4 py-3">
+          <div className="border-t border-border/20" />
         </div>
-      )}
-
-      {/* Active slice (current) */}
-      {active && (
-        <TimeSliceRow
-          slice={{ ...active, status: "active" as const }}
-        />
       )}
     </div>
   );
