@@ -18,6 +18,7 @@ export {
   updateTagIndex,
   setActiveSlice,
   clearActiveSlice,
+  tryLoadTodaySlice,
   saveSliceSnapshot,
   ensureIndexEntries,
   updateDynamicSummary,

@@ -25,6 +25,8 @@ import {
   checkContinuity,
   saveSliceSnapshot,
   ensureIndexEntries,
+  tryLoadTodaySlice,
+  setActiveSlice,
 } from "@/lib/episodic";
 import type { FlashSplitInput, SplitDecision, SlicingSignal } from "@/lib/episodic";
 
@@ -192,20 +194,46 @@ export async function POST(request: Request) {
       `[M3] intent=${intent} source=${source} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`
     );
 
-    // ─── Episodic slice management ────────────────────────────────────────
-    // Get or create the active time slice
-    const existingSlice = getActiveSlice();
-    const slice = existingSlice ?? createSlice(lastUserMessage, clientTimezone);
-    if (existingSlice) {
-      // Append the current user message as a turn on the existing slice
+    // ─── Episodic slice management (M7.3a: lazy close) ────────────────────
+    let slice = getActiveSlice();
+
+    if (!slice) {
+      // Memory empty — check disk/GitHub for today's slice (page refresh recovery)
+      const diskSlice = await tryLoadTodaySlice();
+      if (diskSlice && diskSlice.status === "active") {
+        const lastTurn = diskSlice.turns[diskSlice.turns.length - 1];
+        const lastActivity = new Date(lastTurn.timestamp).getTime();
+        const minutesAgo = (Date.now() - lastActivity) / 60000;
+
+        if (minutesAgo > 30) {
+          // Left long enough — close old slice, create new
+          await closeSlice(diskSlice, "time_silence");
+          console.log(`[Episodic] Recovered & closed stale slice: ${diskSlice.slice_id}`);
+          slice = createSlice(lastUserMessage, clientTimezone);
+        } else {
+          // Just a refresh — restore the active slice
+          setActiveSlice(diskSlice);
+          slice = diskSlice;
+          console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
+        }
+      } else {
+        slice = createSlice(lastUserMessage, clientTimezone);
+        console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
+      }
+    }
+
+    // Append user turn — but skip if createSlice just added it (recovery restores without adding)
+    const isNewSlice = slice.turns.length === 1 && slice.turns[0].content === lastUserMessage;
+    if (!isNewSlice) {
       appendTurn(slice, {
         timestamp: new Date().toISOString(),
         role: "user",
         content: lastUserMessage,
       });
-    } else {
-      console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
-      // Save initial snapshot so the slice file exists immediately
+    }
+
+    // Save initial snapshot for new slices
+    if (isNewSlice) {
       saveSliceSnapshot(slice).then(() => ensureIndexEntries(slice)).catch(() => {});
     }
 

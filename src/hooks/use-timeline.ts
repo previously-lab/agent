@@ -1,18 +1,9 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
+import { getEpisodicState, getMoreSlices, type SliceSummary } from "@/lib/episodic/actions";
 
-export interface SliceSummary {
-  slice_id: string;
-  focus: string;
-  summary: string;
-  start: string;
-  status: "active" | "closed";
-  open_loops: string[];
-  decisions: string[];
-  turnCount?: number;
-  timezone?: string;
-}
+export type { SliceSummary };
 
 interface TimelineState {
   active: SliceSummary | null;
@@ -31,26 +22,21 @@ export function useTimeline() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Initial load
   useEffect(() => {
-    fetch("/api/episodic/state")
-      .then((r) => r.json())
+    getEpisodicState()
       .then((data) => {
         setState({
           active: data.hasActiveSlice ? data.active : null,
           slices: data.recent ?? [],
           hasMore: (data.recent ?? []).length >= 10,
           loadedIds:
-            data.recent?.map(
-              (s: SliceSummary) => s.slice_id
-            ) ?? [],
+            data.recent?.map((s) => s.slice_id) ?? [],
         });
         setLoading(false);
       })
       .catch(() => setLoading(false));
   }, []);
 
-  // Load more (scroll up)
   const loadMore = useCallback(async () => {
     if (loadingMore || !state.hasMore) return;
 
@@ -59,10 +45,7 @@ export function useTimeline() {
 
     setLoadingMore(true);
     try {
-      const res = await fetch(
-        `/api/episodic/slices?before=${oldest.start}&limit=10`
-      );
-      const data = await res.json();
+      const data = await getMoreSlices(oldest.start, 10);
 
       setState((prev) => ({
         ...prev,
@@ -70,7 +53,7 @@ export function useTimeline() {
         hasMore: data.hasMore ?? false,
         loadedIds: [
           ...prev.loadedIds,
-          ...(data.slices ?? []).map((s: SliceSummary) => s.slice_id),
+          ...(data.slices ?? []).map((s) => s.slice_id),
         ],
       }));
     } catch {

@@ -118,6 +118,27 @@ export function createSlice(userMessage: string, timezone: string): TimeSlice {
 }
 
 /**
+ * Try to load today's time slice from disk/GitHub.
+ * Used on page refresh — recovers the active slice that was in memory.
+ * Returns null if no slice exists for today.
+ */
+export async function tryLoadTodaySlice(): Promise<TimeSlice | null> {
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const path = `memory/episodic/slices/${year}/${month}/${day}.md`;
+
+  try {
+    const raw = await fsReadFile(path);
+    const slice = parseSlice(raw);
+    return slice;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Close the active time slice, persisting it to disk and running
  * index maintenance. Returns the closed slice.
  */
