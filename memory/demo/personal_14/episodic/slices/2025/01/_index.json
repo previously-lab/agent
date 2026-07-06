@@ -2,23 +2,31 @@
   "month": "2025-01",
   "slices": [
     {
-      "id": "08",
-      "focus": "I appreciate that you are taking the time.",
-      "summary": "My name is Caleb Martin Hebert",
+      "id": "17",
+      "focus": "Brief Lafayette weekend trip expands sense of what's possible",
+      "summary": "Traveled to Lafayette with Lena for a cousin's gathering — a short regional trip that felt steadier than expected thanks to thorough planning (weather monitoring, house check, fixed return date, reflux management). Recognizes brief regional weekend travel is now genuinely possible where it wasn't before. Plans to build a short destination list and a repeatable travel template, then schedule another trip within a couple months to reinforce the progress.",
       "tags": [
-        "work",
-        "family",
-        "health",
-        "finance",
-        "relationship",
         "travel",
-        "education",
-        "housing"
+        "anxiety",
+        "personal-growth",
+        "planning",
+        "marriage",
+        "weekend-trip",
+        "self-knowledge",
+        "louisiana"
       ],
       "status": "closed",
-      "start": "2025-01-08T11:30:00.000Z",
-      "open_loops": [],
-      "decisions": []
+      "start": "2025-01-17T01:15:00.000Z",
+      "open_loops": [
+        "Whether the weekend destination list will stay simple and fun or become its own stressor to manage",
+        "Whether a second trip will feel as manageable as this well-planned first one did",
+        "Whether travel ambition will naturally stay at brief regional trips or gradually expand further"
+      ],
+      "decisions": [
+        "Create a short list of three to four easy weekend destinations with minimal logistics",
+        "Use the successful conditions (fixed return date, house check, weather monitoring, reflux prep) as a repeatable travel template",
+        "Plan another short regional trip within a couple months to reinforce the progress before it fades"
+      ]
     }
   ]
 }

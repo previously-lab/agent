@@ -1,0 +1,31 @@
+{
+  "month": "2022-07",
+  "slices": [
+    {
+      "id": "12",
+      "focus": "Smoked turkey as a safer cookout default for reflux",
+      "summary": "At a baseball fundraiser cookout on a hot summer day, chose smoked turkey over spicier options and noticed significantly less nighttime reflux discomfort. Discussed establishing safe defaults for community eating — milder meats, light sauce on the side, and less prideful decision-making. Partner Lena affirmed the pattern from home observations.",
+      "tags": [
+        "health",
+        "diet-adjustment",
+        "reflux",
+        "community-events",
+        "self-awareness",
+        "family",
+        "cookout"
+      ],
+      "status": "closed",
+      "start": "2022-07-12T03:50:00.000Z",
+      "open_loops": [
+        "Track whether calmer nights correlate with milder plates to reinforce the habit",
+        "Observe sauce and side dishes' specific impact on reflux symptoms over time",
+        "Determine whether same dietary adjustments are needed at home or mainly for events"
+      ],
+      "decisions": [
+        "Establish smoked turkey as the default cookout choice when reflux is active",
+        "Keep sauce light and on the side instead of drowning food",
+        "Stop being stubborn and actively choose milder options at community events"
+      ]
+    }
+  ]
+}

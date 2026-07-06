@@ -1,0 +1,32 @@
+{
+  "month": "2022-05",
+  "slices": [
+    {
+      "id": "18",
+      "focus": "Formal division of family caregiving duties",
+      "summary": "Caleb and Lena formally divided caregiving for his mother Dorothy. Caleb takes full ownership of Friday medical transport instead of ad-hoc splitting. Discussed strategies for managing Dorothy's resistance (coffee stops, one-page process sheet), protecting evening decompression time together, and building a post-task ritual. Relief mixed with concern about long-term sustainability.",
+      "tags": [
+        "family",
+        "health",
+        "caregiving",
+        "marriage",
+        "parents",
+        "stress-management",
+        "boundaries",
+        "elder-care"
+      ],
+      "status": "closed",
+      "start": "2022-05-18T05:25:00.000Z",
+      "open_loops": [
+        "Dorothy may still resist the new arrangement despite careful framing",
+        "Whether Caleb will resent sole Friday responsibility long-term; needs periodic check-ins",
+        "Need to periodically assess whether arrangement actually reduces damage vs merely shifting pressure"
+      ],
+      "decisions": [
+        "Take sole ownership of mother's Friday medical transport, no longer splitting ad hoc with Lena",
+        "Create a one-page Friday process sheet recording appointment time, changes, next steps, and confirmation",
+        "Build a decompression ritual (sit in truck or breakfast stop) after Friday tasks before coming home"
+      ]
+    }
+  ]
+}

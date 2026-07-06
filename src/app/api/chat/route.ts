@@ -143,16 +143,16 @@ Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, s
 // ─── Recall phase text builder ──────────────────────────────────────────
 
 const TIME_RANGE_LABELS: Record<string, string> = {
-  last_7_days: "最近一周",
-  last_30_days: "最近一个月",
-  last_90_days: "最近三个月",
-  all_time: "过往",
+  last_7_days: "last 7 days",
+  last_30_days: "last 30 days",
+  last_90_days: "last 90 days",
+  all_time: "all time",
 };
 
 function buildRecallText(hint: RecallHint): string {
-  const tags = hint.suggested_tags.join("、");
+  const tags = hint.suggested_tags.join(", ");
   const time = TIME_RANGE_LABELS[hint.suggested_time_range] ?? hint.suggested_time_range;
-  return `想起和 ${tags} 相关的交流 · ${time}`;
+  return `Recalled conversations about ${tags} · ${time}`;
 }
 
 export async function POST(request: Request) {
@@ -400,7 +400,7 @@ export async function POST(request: Request) {
 
     // Build recall text for data-flash from Recall Agent results
     const recallText = (flashTopics && flashTopics.length > 0 && recallHitsCount > 0)
-      ? `想起和 ${flashTopics.slice(0, 3).join("、")} 相关的 ${recallHitsCount} 段交流`
+      ? `Recalled ${recallHitsCount} conversations related to ${flashTopics.slice(0, 3).join(", ")}`
       : null;
 
     // ─── Multi-phase streaming (M7.1b) ──────────────────────────────────────

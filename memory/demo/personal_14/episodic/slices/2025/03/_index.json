@@ -2,26 +2,30 @@
   "month": "2025-03",
   "slices": [
     {
-      "id": "02",
-      "focus": "Things have been pretty full lately, and I had one of those small weekends that ",
-      "summary": "Yeah, exactly, I do better when I can point at something real instead of just saying I'm frustrated",
+      "id": "09",
+      "focus": "Presenting corridor results to senior leadership",
+      "summary": "Briefed senior staff on corridor program results, showing that reducing post-approval dropout — not increasing workshop attendance — was what actually drove mitigation adoption. Used dropout-stage data and resident photos to reframe success from activity counts to completion outcomes. Felt tired but vindicated after years of meticulous work finally validated. Plans to write a one-page internal note to preserve the core lesson before it gets flattened into a simplified headline.",
       "tags": [
         "work",
-        "family",
-        "education",
-        "housing",
-        "leisure",
-        "environment",
-        "civic",
-        "event-memory",
-        "relationship-memory",
-        "persona-memory"
+        "presentation",
+        "professional-growth",
+        "program-metrics",
+        "retention",
+        "corridor-results",
+        "evidence-based",
+        "data-storytelling"
       ],
       "status": "closed",
-      "start": "2025-03-02T08:40:00.000Z",
-      "open_loops": [],
+      "start": "2025-03-09T11:40:00.000Z",
+      "open_loops": [
+        "Whether the one-pager will effectively prevent the story from being flattened or diluted over time",
+        "How to share credit with Sharon and Miguel without diluting the core operational lesson that made the difference",
+        "What this new visibility and standing means internally for career trajectory — is this a one-off or a role shift"
+      ],
       "decisions": [
-        "Terrence Guidry became an even steadier sounding board for Caleb about outreach politics, repetitive public meetings, ma"
+        "Draft a one-page internal note while the briefing is fresh to preserve the core operational lesson",
+        "Use dropout-stage reduction as the opening frame for future presentations rather than burying it mid-slide",
+        "Keep the explanation plain and jargon-free so the insight travels beyond the briefing room"
       ]
     }
   ]

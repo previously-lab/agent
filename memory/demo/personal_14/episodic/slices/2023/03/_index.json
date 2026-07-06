@@ -1,0 +1,31 @@
+{
+  "month": "2023-03",
+  "slices": [
+    {
+      "id": "04",
+      "focus": "Storm damage repairs and deepened empathy for client costs",
+      "summary": "Heavy rain caused subfloor damage requiring repair and yard drainage regrading, thinning already strained savings and delaying vacation plans. The experience deepened empathy for clients hesitating on uncertain mitigation costs — the fear of an open-ended expense is the real barrier. Plans to use a known/variable/unknown cost categorization approach in workshops to help clients frame the uncertainty rather than freeze on it.",
+      "tags": [
+        "home-repair",
+        "family-finances",
+        "storm-damage",
+        "empathy",
+        "budget-tightening",
+        "work-methodology",
+        "cost-uncertainty"
+      ],
+      "status": "closed",
+      "start": "2023-03-04T12:05:00.000Z",
+      "open_loops": [
+        "Check for other hidden water damage in the house beyond the visible subfloor",
+        "Preserve some quality of life within the tighter budget rather than cutting everything to bare obligations",
+        "Build a cost-range reference page for clients — idea noted but not yet implemented"
+      ],
+      "decisions": [
+        "Tighten household spending, prioritize rebuilding the savings buffer first",
+        "Postpone the long trip; substitute a nearby overnight to preserve some relief without the cost",
+        "Use known/variable/unknown cost categories in workshops to help clients understand and act despite uncertainty"
+      ]
+    }
+  ]
+}

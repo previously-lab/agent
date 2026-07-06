@@ -2,27 +2,30 @@
   "month": "2025-05",
   "slices": [
     {
-      "id": "18",
-      "focus": "A lot has shifted lately, mostly at home. We finally had one of those sit-down c",
-      "summary": "Honestly, both",
+      "id": "28",
+      "focus": "Hurricane anxiety management with a structured storm-week protocol",
+      "summary": "Facing a new round of hurricane threats, responded differently this time: maintained reflux treatment routine, limited forecast checking to fixed times, delegated public meetings to Miguel, and planned a five-item storm-week checklist (forecast window, food control, medication, pre-delegation, evening offline). Anxiety is still present but contained rather than consuming. Plans to share a simplified version of the plan with Lena and Miguel ahead of time.",
       "tags": [
-        "work",
-        "family",
-        "relationship",
-        "travel",
-        "education",
-        "housing",
-        "goals",
-        "event-memory",
-        "relationship-memory",
-        "persona-memory"
+        "hurricane-anxiety",
+        "reflux-management",
+        "mental-health",
+        "delegation",
+        "health-habits",
+        "self-awareness",
+        "emotional-boundaries",
+        "storm-preparedness"
       ],
       "status": "closed",
-      "start": "2025-05-18T05:25:00.000Z",
-      "open_loops": [],
+      "start": "2025-05-28T05:05:00.000Z",
+      "open_loops": [
+        "Whether the formal storm-week protocol will actually hold up when a real storm threat arrives",
+        "The specific alternative activity for evening offline time still needs to be defined beyond 'not checking weather'",
+        "Whether the delegation pattern (handing public meetings to Miguel) can be sustained across future storm seasons"
+      ],
       "decisions": [
-        "Caleb and Lena formally agreed that Caleb would handle all of Dorothy's Friday medical transport to reduce the recurring",
-        "Caleb now takes over Friday medical transport for his mother Dorothy because her cancellations and arguments became too "
+        "Create a five-item storm-week checklist: forecast window, food control, medication adherence, pre-delegation, evening offline",
+        "Share a simplified version of the plan with Lena and Miguel ahead of time to avoid explaining during anxiety spikes",
+        "Use 'catching it early is part of doing well' as an internal self-talk anchor when warning signs appear"
       ]
     }
   ]

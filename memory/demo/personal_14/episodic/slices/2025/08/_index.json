@@ -2,27 +2,29 @@
   "month": "2025-08",
   "slices": [
     {
-      "id": "19",
-      "focus": "A lot has shifted lately, and this past stretch kind of got away from me. Work w",
-      "summary": "It took me a few days, honestly",
+      "id": "06",
+      "focus": "Corridor tracking work validated, pattern solidified for handoff",
+      "summary": "At the annual corridor review, a complete evidence chain validated the mitigation adoption model. Shifted from being a pattern defender to a recognized professional with a documented chain-of-custody approach. Decided to write an internal guide protecting the core elements — chain of custody, designated contacts, and transparent case tracking — while clarifying which parts are transferable and which still require personal participation. Protecting the pattern from being simplified into hollow slogans.",
       "tags": [
         "work",
-        "health",
-        "travel",
-        "housing",
-        "goals",
-        "environment",
-        "civic",
-        "event-memory",
-        "relationship-memory",
-        "persona-memory"
+        "corridor-review",
+        "disaster-mitigation-adoption",
+        "internal-guide",
+        "community-engagement",
+        "validation",
+        "pattern-solidification"
       ],
       "status": "closed",
-      "start": "2025-08-19T09:40:00.000Z",
-      "open_loops": [],
+      "start": "2025-08-06T23:10:00.000Z",
+      "open_loops": [
+        "Whether the guide draft can be completed before the holiday break or will be pushed into next year",
+        "How to redefine personal role — from firefighter putting out individual cases to pattern builder and mentor",
+        "How to prevent management from stripping core elements under pressure while still being seen as collaborative"
+      ],
       "decisions": [
-        "Caleb's reflux flared harder than usual during the Gulf storm watch and callback crunch, bringing several weeks of poor ",
-        "Caleb became visibly more storm-anxious and brittle under the combined pressure of Gulf weather and applicant follow-thr"
+        "Write an internal guide centered on chain-of-custody, designated contacts, and transparent case tracking as core elements",
+        "Clarify which parts of the model are transferable to others and which still require personal participation",
+        "Protect the pattern core from being stripped down to empty slogans under leadership or budget pressure"
       ]
     }
   ]

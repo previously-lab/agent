@@ -1,0 +1,31 @@
+{
+  "month": "2022-12",
+  "slices": [
+    {
+      "id": "14",
+      "focus": "Audiobook discovery eases truck commutes",
+      "summary": "Discovered that library-app Gulf Coast history audiobooks during truck commutes between site visits are more calming than default AM weather radio. Partner Lena noticed less tension when he gets home. Plans to make audiobooks the default and reserve weather radio for severe conditions only. Will track book, narrator, and post-drive mood to validate the preference.",
+      "tags": [
+        "audiobooks",
+        "commute",
+        "gulf-coast-history",
+        "mental-calm",
+        "daily-routine",
+        "library-app",
+        "regional-nonfiction"
+      ],
+      "status": "closed",
+      "start": "2022-12-14T10:20:00.000Z",
+      "open_loops": [
+        "Whether to thank the friend whose library-app recommendation unexpectedly improved daily mood",
+        "Whether storm history titles would help process anxiety or erode the calmer headspace gained from audiobooks",
+        "Whether the habit will sustain after the novelty wears off in a few weeks"
+      ],
+      "decisions": [
+        "Borrow two more Gulf Coast titles plus one adjacent topic to validate whether the preference is stable",
+        "Jot title, narrator, and post-drive mood after each book to build a light listening log",
+        "Make weather radio situational rather than the daily default, only during severe conditions"
+      ]
+    }
+  ]
+}

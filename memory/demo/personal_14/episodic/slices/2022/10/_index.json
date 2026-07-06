@@ -1,0 +1,32 @@
+{
+  "month": "2022-10",
+  "slices": [
+    {
+      "id": "28",
+      "focus": "Shift from broad outreach to concentrated case tracking",
+      "summary": "Persuaded supervisor Sharon with cluster maps and deed records to narrow from corridor-wide clinics to concentrated tracking in a repeat-loss subsection. Building a milestone-based tracker with owner column to follow households from workshop attendance through signed scope. Grappling with depth-versus-coverage tradeoffs and the discomfort of measurable accountability that comes with visibility into outcomes rather than just activity counts.",
+      "tags": [
+        "work-transition",
+        "case-management",
+        "data-driven",
+        "strategic-focus",
+        "tracking-system",
+        "depth-over-breadth",
+        "accountability",
+        "pilot-program"
+      ],
+      "status": "closed",
+      "start": "2022-10-28T02:30:00.000Z",
+      "open_loops": [
+        "Whether concentrated focus will actually move more households to signed scope, or just feel more orderly",
+        "How to avoid making the rest of the corridor feel neglected while focusing deeply on one zone",
+        "Whether the tracker can hold facts without absorbing personal anxiety and over-identification"
+      ],
+      "decisions": [
+        "Narrow work scope to repeat-loss subsection after proving efficiency with cluster map and deed records",
+        "Build milestone-based tracking system prioritizing clarity over completeness, with a designated owner per file",
+        "Establish weekly review rhythm and defined cooling-off rules to avoid emotional file triage"
+      ]
+    }
+  ]
+}

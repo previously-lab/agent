@@ -1,8 +1,10 @@
 import { getActiveSlice, readSliceIndex } from "@/lib/episodic";
 
 const DEMO_MODE = process.env.DEMO_MODE === "true";
-/** In demo mode, scan this many months back to surface historical slices. */
+/** In demo mode, scan further back (demo data is sparse: ~1 slice/month). */
 const DEMO_SCAN_MONTHS = 48;
+/** Max recent slices to return in one response. */
+const PAGE_SIZE = 3;
 
 export async function GET() {
   try {
@@ -12,9 +14,10 @@ export async function GET() {
     const year = now.getUTCFullYear();
     const month = now.getUTCMonth() + 1;
 
-    // Collect slices from recent months (demo mode scans much further back)
+    // Collect slices by scanning months backward
     const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 2;
-    const allSlices: Awaited<ReturnType<typeof readSliceIndex>> = [];
+    const collected: Awaited<ReturnType<typeof readSliceIndex>> = [];
+    let exhausted = true; // true if we scanned all months without hitting page limit
 
     for (let i = 0; i < monthsToScan; i++) {
       let m = month - i;
@@ -26,22 +29,30 @@ export async function GET() {
       try {
         const index = await readSliceIndex(y, m);
         for (const entry of index) {
-          allSlices.push(entry);
+          collected.push(entry);
         }
       } catch {
         // Month index may not exist — skip
       }
-      // Stop early if we have enough
-      if (allSlices.length >= 30) break;
+      // Stop early once we have a full page + buffer (to detect hasMore reliably)
+      if (collected.length >= PAGE_SIZE + 2) {
+        exhausted = false;
+        break;
+      }
     }
 
-    const recent = allSlices
-      .filter((s) => s.status === "closed" || s.id !== active?.slice_id.split("-")[2])
-      .sort((a, b) => b.start.localeCompare(a.start))
-      .slice(0, DEMO_MODE ? 30 : 10);
+    // Filter out the active slice from the closed list, sort, paginate
+    const activeDay = active?.slice_id.split("-")[2];
+    const closed = collected
+      .filter((s) => s.status === "closed" || s.id !== activeDay)
+      .sort((a, b) => b.start.localeCompare(a.start));
+
+    const recent = closed.slice(0, PAGE_SIZE);
+    const hasMore = closed.length > PAGE_SIZE || !exhausted;
 
     return Response.json({
       hasActiveSlice: active !== null,
+      hasMore,
       active: active
         ? {
             slice_id: active.slice_id,
@@ -54,7 +65,7 @@ export async function GET() {
             decisions: active.decisions,
           }
         : null,
-      recent: allSlices.map((s) => ({
+      recent: recent.map((s) => ({
         slice_id: `${s.start.slice(0, 7)}/${s.id}`,
         focus: s.focus,
         summary: s.summary,

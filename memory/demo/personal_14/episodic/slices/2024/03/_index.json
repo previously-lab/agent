@@ -1,0 +1,32 @@
+{
+  "month": "2024-03",
+  "slices": [
+    {
+      "id": "16",
+      "focus": "Fall scare unlocks home safety progress with mother",
+      "summary": "After mother Dorothy bruised her hip missing a step, the scare finally got her to agree to a home safety assessment and grab bar installation. User and partner Lena cleared hazards, labeled medications, and carefully navigated the tension between safety needs and Dorothy's resistance to feeling managed. Separated urgent safety fixes from non-urgent preference changes to avoid overwhelming her.",
+      "tags": [
+        "family",
+        "caregiving",
+        "elderly-safety",
+        "home-modification",
+        "fall-prevention",
+        "family-dynamics",
+        "role-division",
+        "aging-parents"
+      ],
+      "status": "closed",
+      "start": "2024-03-16T09:55:00.000Z",
+      "open_loops": [
+        "Dorothy's deeper resistance to being 'managed' remains fundamentally unchanged despite this progress",
+        "Need to establish a clearer ongoing coordination mechanism with Lena to prevent pressure from accumulating again",
+        "Whether a third-party assessment can break the family argument cycle in a way internal persuasion never could"
+      ],
+      "decisions": [
+        "Schedule the home health assessment this week and push grab bar installation through while momentum holds",
+        "Divide roles clearly: user handles scheduling and follow-up, Lena handles on-site evaluation with Dorothy",
+        "Separate urgent safety modifications from non-urgent preference changes to avoid triggering Dorothy's resistance"
+      ]
+    }
+  ]
+}

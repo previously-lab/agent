@@ -66,7 +66,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       slices: filtered.map((s) => ({
-        slice_id: `${before.slice(0, 7)}/${s.id}`,
+        slice_id: `${s.start.slice(0, 7)}/${s.id}`,
         focus: s.focus,
         summary: s.summary,
         start: s.start,

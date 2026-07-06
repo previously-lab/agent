@@ -54,10 +54,10 @@ export function RecallPhase({ text, tags, timeRange, isStreaming = false }: Reca
   }, [isStreaming]);
 
   const hasContent = text.trim().length > 0;
-  const name = isStreaming ? "正在回忆..." : "回忆";
+  const name = isStreaming ? "Recalling..." : "Recalled";
   const summary = !isStreaming && elapsed > 0
     ? `${elapsed}s`
-    : (tags && tags.length > 0 ? tags.slice(0, 3).join("、") : "");
+    : (tags && tags.length > 0 ? tags.slice(0, 3).join(", ") : "");
 
   const expandedContent = hasContent ? (
     <div className="space-y-2">

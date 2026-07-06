@@ -1,0 +1,31 @@
+{
+  "month": "2024-01",
+  "slices": [
+    {
+      "id": "30",
+      "focus": "Corridor walkthroughs: rebuilding trust with visible progress",
+      "summary": "Shifted from relying solely on scoreboard data to organizing physical corridor walkthroughs where residents could see construction markers, signed scopes, and hear directly from participating homeowners. A signed-up homeowner speaking candidly about their experience proved more convincing than any official presentation. Felt genuine hope for the first time in months and plans to document the walkthrough format while it's still fresh.",
+      "tags": [
+        "work",
+        "housing",
+        "community-engagement",
+        "flood-mitigation",
+        "trust-rebuilding",
+        "walkthrough",
+        "peer-testimony"
+      ],
+      "status": "closed",
+      "start": "2024-01-30T01:35:00.000Z",
+      "open_loops": [
+        "Whether asking signed-up homeowners to write testimonials would undermine their authentic in-person impact",
+        "How to standardize the walkthrough structure into a reusable template without making it feel scripted or inauthentic",
+        "Which early-adopter homeowners are suitable as long-term demonstration cases without over-burdening them"
+      ],
+      "decisions": [
+        "Position corridor walkthroughs as milestone events, keeping them scarce to maintain credibility and impact",
+        "Document the full walkthrough process and details immediately while memory is fresh",
+        "Write internal notes first, then distill into a concise version for upward reporting"
+      ]
+    }
+  ]
+}

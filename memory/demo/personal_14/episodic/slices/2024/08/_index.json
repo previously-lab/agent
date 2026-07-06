@@ -1,0 +1,32 @@
+{
+  "month": "2024-08",
+  "slices": [
+    {
+      "id": "31",
+      "focus": "Home drainage overhaul reshapes perspective on client costs",
+      "summary": "User and Lena chose a major drainage and gutter overhaul over repeated patch jobs — the first truly preventive home investment they've made. The large expense stung despite stable finances, thinning savings and delaying other plans. The experience deepened understanding of why clients freeze on mitigation costs. Plans to revise workshop language with honest tradeoff framing and create a personal list of what the project actually protects.",
+      "tags": [
+        "home-improvement",
+        "financial-margin",
+        "prevention",
+        "empathy",
+        "housing-work",
+        "workshop-development",
+        "household-decisions",
+        "partnership"
+      ],
+      "status": "closed",
+      "start": "2024-08-31T00:40:00.000Z",
+      "open_loops": [
+        "How to balance frustration at the cost with relief at finally making the right long-term call",
+        "Whether to use personal experience directly in workshops or keep it as indirect background framing",
+        "How to avoid sounding bitter about costs while still honestly naming the real financial burden residents face"
+      ],
+      "decisions": [
+        "Choose prevention spending (full drainage and gutter overhaul) over repeated temporary repairs",
+        "Revise workshop notes with realistic language about financial tradeoffs that clients actually face",
+        "Create a personal list of specific protections the project provides before translating into workshop revisions"
+      ]
+    }
+  ]
+}
