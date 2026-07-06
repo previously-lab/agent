@@ -11,17 +11,32 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 
 function MemoryTurn({ content, role }: { content: string; role: string }) {
   const isUser = role === "user";
-  const display = content.length > 300 ? content.slice(0, 300) + "…" : content;
+  const isTruncated = content.length > 300;
+  const [expanded, setExpanded] = useState(false);
+  const display = !isTruncated || expanded ? content : content.slice(0, 300) + "…";
+
   return (
-    <Message align={isUser ? "end" : "start"} className="gap-1 py-0.5">
-      <MessageContent className="min-w-0">
-        <Bubble variant={isUser ? "default" : "secondary"}>
-          <BubbleContent>
-            <span className="whitespace-pre-wrap text-sm">{display}</span>
-          </BubbleContent>
-        </Bubble>
-      </MessageContent>
-    </Message>
+    <div>
+      <Message align={isUser ? "end" : "start"} className="gap-1 py-0.5">
+        <MessageContent className="min-w-0">
+          <Bubble variant={isUser ? "default" : "secondary"}>
+            <BubbleContent>
+              <span className="whitespace-pre-wrap text-sm">{display}</span>
+            </BubbleContent>
+          </Bubble>
+        </MessageContent>
+      </Message>
+      {isTruncated && (
+        <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+          <button
+            onClick={() => setExpanded(!expanded)}
+            className="text-[0.6rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors px-2"
+          >
+            {expanded ? "收起" : `展开全部 (${Math.round(content.length / 1000)}k 字)`}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

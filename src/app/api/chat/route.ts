@@ -383,16 +383,16 @@ export async function POST(request: Request) {
     // Uses AI SDK v7 canonical pattern: createUIMessageStream + createUIMessageStreamResponse.
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        // Phase 1: Recall — Flash hint as data-flash custom part
-        if (recallText && flashRecallHint) {
+        // Phase 1: Recall — Recall Agent results as data-flash custom part
+        if (recallText) {
           writer.write({
             type: "data-flash",
             id: `flash-recall-${Date.now()}`,
             data: {
               phase: "recall",
               text: recallText,
-              tags: flashRecallHint.suggested_tags,
-              time_range: flashRecallHint.suggested_time_range,
+              tags: flashTopics ?? [],
+              time_range: flashRecallHint?.suggested_time_range ?? "",
             },
           });
         }
