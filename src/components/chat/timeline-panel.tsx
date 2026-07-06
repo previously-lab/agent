@@ -70,8 +70,8 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
         <DashedSeparator className="flex-1" />
       </div>
 
-      {/* Groups of slices by date */}
-      {groupEntries.map(([dateLabel, dateSlices], groupIdx) => (
+      {/* Groups of slices by date — reversed for chronological order (oldest top → newest bottom) */}
+      {[...groupEntries].reverse().map(([dateLabel, dateSlices], groupIdx) => (
         <div key={dateLabel}>
           {/* Date separator — full width */}
           <div className="flex items-center gap-3 py-2">
