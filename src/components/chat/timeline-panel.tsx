@@ -44,10 +44,10 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
 
   return (
     <div>
-      {/* Load more / no-more indicator — full-width dashed separator */}
-      <div className="flex items-center gap-3 py-3">
-        <DashedSeparator className="flex-1" />
-        {hasMore ? (
+      {/* Load more — only visible when there are more slices to fetch */}
+      {hasMore && (
+        <div className="flex items-center gap-3 py-3">
+          <DashedSeparator className="flex-1" />
           <button
             onClick={loadMore}
             disabled={loadingMore}
@@ -62,13 +62,9 @@ export function TimelinePanel({ onLoadedIdsChange }: TimelinePanelProps) {
               "加载更多记忆"
             )}
           </button>
-        ) : slices.length > 0 ? (
-          <span className="text-[0.65rem] text-muted-foreground/30 shrink-0">
-            没有更早的记忆了
-          </span>
-        ) : null}
-        <DashedSeparator className="flex-1" />
-      </div>
+          <DashedSeparator className="flex-1" />
+        </div>
+      )}
 
       {/* Groups of slices by date — reversed for chronological order (oldest top → newest bottom) */}
       {[...groupEntries].reverse().map(([dateLabel, dateSlices], groupIdx) => (
