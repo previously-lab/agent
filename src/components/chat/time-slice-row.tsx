@@ -6,6 +6,7 @@ import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
 import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { MarkdownRenderer } from "./markdown";
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -28,7 +29,11 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
         <MessageContent className="min-w-0">
           <Bubble variant={isUser ? "default" : "secondary"}>
             <BubbleContent>
-              <span className="whitespace-pre-wrap text-sm">{display}</span>
+              {isUser ? (
+                <span className="whitespace-pre-wrap text-sm">{display}</span>
+              ) : (
+                <MarkdownRenderer content={display} />
+              )}
             </BubbleContent>
           </Bubble>
         </MessageContent>
