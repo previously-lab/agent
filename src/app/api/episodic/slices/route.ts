@@ -1,5 +1,9 @@
 import { readSliceIndex } from "@/lib/episodic";
 
+const DEMO_MODE = process.env.DEMO_MODE === "true";
+/** In demo mode, scan this many months back when browsing slices. */
+const DEMO_SCAN_MONTHS = 48;
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -21,17 +25,42 @@ export async function GET(request: Request) {
       );
     }
 
-    const year = beforeDate.getUTCFullYear();
-    const month = beforeDate.getUTCMonth() + 1;
-
-    const index = await readSliceIndex(year, month);
-
     const beforeDay = beforeDate.getUTCDate();
-    const filtered = index
-      .filter((s) => {
-        const day = parseInt(s.id, 10);
-        return !isNaN(day) && day < beforeDay;
-      })
+    const beforeYear = beforeDate.getUTCFullYear();
+    const beforeMonth = beforeDate.getUTCMonth() + 1;
+
+    // In demo mode, scan back through multiple months to find slices
+    // (demo data is sparse: ~1 slice per month across 4 years)
+    const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 1;
+    const allEntries: Awaited<ReturnType<typeof readSliceIndex>> = [];
+
+    for (let i = 0; i < monthsToScan; i++) {
+      let m = beforeMonth - i;
+      let y = beforeYear;
+      while (m <= 0) {
+        m += 12;
+        y -= 1;
+      }
+      try {
+        const index = await readSliceIndex(y, m);
+        for (const entry of index) {
+          // For the target month, filter by beforeDay; include all from earlier months
+          if (i === 0) {
+            const day = parseInt(entry.id, 10);
+            if (!isNaN(day) && day < beforeDay) {
+              allEntries.push(entry);
+            }
+          } else {
+            allEntries.push(entry);
+          }
+        }
+      } catch {
+        // Month index may not exist — skip
+      }
+      if (allEntries.length >= limit) break;
+    }
+
+    const filtered = allEntries
       .sort((a, b) => b.start.localeCompare(a.start))
       .slice(0, limit);
 
