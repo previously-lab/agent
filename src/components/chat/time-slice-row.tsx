@@ -7,6 +7,13 @@ import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+function formatCharCount(len: number): string {
+  if (len < 1000) return `${len} 字`;
+  return `${(len / 1000).toFixed(1)}k 字`;
+}
+
 // ─── Memory turn — reuses shadcn Message + Bubble ───────────────────────
 
 function MemoryTurn({ content, role }: { content: string; role: string }) {
@@ -32,7 +39,7 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
             onClick={() => setExpanded(!expanded)}
             className="text-[0.6rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors px-2"
           >
-            {expanded ? "收起" : `展开全部 (${Math.round(content.length / 1000)}k 字)`}
+            {expanded ? "收起" : `展开全部 (${formatCharCount(content.length)})`}
           </button>
         </div>
       )}
@@ -136,7 +143,7 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
         {/* Large slice: collapsed hint */}
         {!expanded && !loadingContent && totalChars > 3000 && content && (
           <div className="text-center py-1 text-[0.65rem] text-muted-foreground/40">
-            {content.totalTurns} 轮 · {Math.round(totalChars / 1000)}k 字
+            {content.totalTurns} 轮 · {formatCharCount(totalChars)}
           </div>
         )}
       </div>
