@@ -28,7 +28,7 @@ export function useTimeline() {
         setState({
           active: data.hasActiveSlice ? data.active : null,
           slices: data.recent ?? [],
-          hasMore: (data.recent ?? []).length >= 10,
+          hasMore: data.hasMore ?? false,
           loadedIds:
             data.recent?.map((s) => s.slice_id) ?? [],
         });

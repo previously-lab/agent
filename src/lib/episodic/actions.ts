@@ -17,31 +17,46 @@ export interface SliceSummary {
 
 export interface EpisodicState {
   hasActiveSlice: boolean;
+  hasMore: boolean;
   active: SliceSummary | null;
   recent: SliceSummary[];
 }
 
-export async function getEpisodicState(): Promise<EpisodicState> {
+export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boolean }> {
+  const DEMO_MODE = process.env.DEMO_MODE === "true";
+  const DEMO_SCAN_MONTHS = 48;
+  const PAGE_SIZE = 3;
+
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
-  const prevMonth = month === 1 ? 12 : month - 1;
-  const prevYear = month === 1 ? year - 1 : year;
 
-  const [currentIndex, prevIndex] = await Promise.all([
-    readSliceIndex(year, month),
-    readSliceIndex(prevYear, prevMonth),
-  ]);
+  const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 2;
+  const allSlices: Awaited<ReturnType<typeof readSliceIndex>> = [];
+  let exhausted = true;
 
-  // Just return recent slices from disk — no active/closed filtering
-  const allSlices = [...prevIndex, ...currentIndex]
-    .sort((a, b) => b.start.localeCompare(a.start))
-    .slice(0, 10);
+  for (let i = 0; i < monthsToScan; i++) {
+    let m = month - i;
+    let y = year;
+    while (m <= 0) { m += 12; y -= 1; }
+    try {
+      const index = await readSliceIndex(y, m);
+      for (const entry of index) allSlices.push(entry);
+    } catch { /* month index may not exist */ }
+    if (allSlices.length >= PAGE_SIZE + 2) { exhausted = false; break; }
+  }
 
-  const first = allSlices[0];
+  const sorted = allSlices
+    .filter((s) => s.status === "closed")
+    .sort((a, b) => b.start.localeCompare(a.start));
+
+  const recent = sorted.slice(0, PAGE_SIZE);
+  const hasMore = sorted.length > PAGE_SIZE || !exhausted;
+  const first = recent[0];
 
   return {
-    hasActiveSlice: allSlices.length > 0,
+    hasActiveSlice: recent.length > 0,
+    hasMore,
     active: first
       ? {
           slice_id: `${first.start.slice(0, 7)}/${first.id}`,
@@ -53,7 +68,7 @@ export async function getEpisodicState(): Promise<EpisodicState> {
           decisions: first.decisions,
         }
       : null,
-    recent: allSlices.map((s) => ({
+    recent: recent.map((s) => ({
       slice_id: `${s.start.slice(0, 7)}/${s.id}`,
       focus: s.focus,
       summary: s.summary,
@@ -74,18 +89,36 @@ export async function getMoreSlices(
   before: string,
   limit: number = 10
 ): Promise<SlicePage> {
+  const DEMO_MODE = process.env.DEMO_MODE === "true";
+  const DEMO_SCAN_MONTHS = 48;
+
   const beforeDate = new Date(before);
-  const year = beforeDate.getUTCFullYear();
-  const month = beforeDate.getUTCMonth() + 1;
+  const beforeYear = beforeDate.getUTCFullYear();
+  const beforeMonth = beforeDate.getUTCMonth() + 1;
   const beforeDay = beforeDate.getUTCDate();
 
-  const index = await readSliceIndex(year, month);
+  const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 1;
+  const allEntries: Awaited<ReturnType<typeof readSliceIndex>> = [];
 
-  const filtered = index
-    .filter((s) => {
-      const day = parseInt(s.id, 10);
-      return !isNaN(day) && day < beforeDay;
-    })
+  for (let i = 0; i < monthsToScan; i++) {
+    let m = beforeMonth - i;
+    let y = beforeYear;
+    while (m <= 0) { m += 12; y -= 1; }
+    try {
+      const index = await readSliceIndex(y, m);
+      for (const entry of index) {
+        if (i === 0) {
+          const day = parseInt(entry.id, 10);
+          if (!isNaN(day) && day < beforeDay) allEntries.push(entry);
+        } else {
+          allEntries.push(entry);
+        }
+      }
+    } catch { /* month index may not exist */ }
+    if (allEntries.length >= limit) break;
+  }
+
+  const filtered = allEntries
     .sort((a, b) => b.start.localeCompare(a.start))
     .slice(0, Math.min(limit, 50));
 

@@ -316,7 +316,33 @@ export async function POST(request: Request) {
     let recallHitsCount = 0;
     if (flashTopics && flashTopics.length > 0) {
       const hits = await scanTopics(flashTopics.slice(0, 3));
-      if (hits.length > 0) {
+
+      // Fallback: when parallel-timeline index is empty, build from recent slices' metadata
+      if (hits.length === 0) {
+        const recentIndex = await readSliceIndex(
+          new Date().getUTCFullYear(),
+          new Date().getUTCMonth() + 1
+        );
+        const matched = recentIndex
+          .filter((s) =>
+            flashTopics.some(
+              (t) =>
+                s.tags?.some((tag: string) => tag.includes(t)) ||
+                s.focus?.toLowerCase().includes(t) ||
+                s.summary?.toLowerCase().includes(t)
+            )
+          )
+          .slice(0, 3);
+        for (const s of matched) {
+          episodicContext += `- \`${s.start.slice(0, 7)}/${s.id}\` (focus: ${s.focus || s.summary || "untitled"})\n`;
+          if (s.open_loops?.length) episodicContext += `  Open: ${s.open_loops.map((l: string) => `"${l}"`).join(", ")}\n`;
+          if (s.decisions?.length) episodicContext += `  Decided: ${s.decisions.map((d: string) => `"${d}"`).join(", ")}\n`;
+        }
+        if (matched.length > 0) {
+          episodicContext = episodicContext || "\n### Recall Results\n";
+          recallHitsCount = matched.length;
+        }
+      } else {
         episodicContext += "\n### Recall Results\n";
         episodicContext += "Recall Agent found these potentially relevant slices. Use readMemory to read specific slices if needed.\n\n";
         for (const hit of hits.slice(0, 5)) {
