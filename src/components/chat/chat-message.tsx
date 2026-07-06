@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { UIMessage } from "ai";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
+import { RecallPhase } from "./recall-phase";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { SummaryBar } from "./summary-bar";
@@ -23,13 +24,31 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
 
-  const textContent = message.parts
-    ?.filter((p) => p.type === "text")
+  // ── Grouped parts ──────────────────────────────────────────────────────
+
+  const { recallParts, reasoningText, toolParts, textParts } = useMemo(() => {
+    const parts = message.parts ?? [];
+
+    const recallParts = parts.filter((p) => p.type === "data-flash");
+    const reasoningParts = parts.filter((p) => p.type === "reasoning");
+    const toolParts = parts.filter((p) => p.type?.startsWith("tool-"));
+    const textParts = parts.filter((p) => p.type === "text");
+
+    // Concatenate all reasoning chunks into one string
+    const reasoningText = reasoningParts
+      .map((p) => (p as { text: string }).text)
+      .join("\n");
+
+    return { recallParts, reasoningText, toolParts, textParts };
+  }, [message.parts]);
+
+  const textContent = textParts
     .map((p) => (p as { text: string }).text)
     .join("\n") ?? "";
 
-  const toolParts = message.parts?.filter((p) => p.type?.startsWith("tool-")) ?? [];
   const toolCount = toolParts.length;
+  const hasReasoning = reasoningText.trim().length > 0;
+  const hasRecall = recallParts.length > 0;
 
   return (
     <div className="py-1">
@@ -51,47 +70,59 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
           {isExpanded && (
             <Bubble variant={isUser ? "default" : "secondary"}>
               <BubbleContent>
-                {message.parts?.map((part, i) => {
-                  if (part.type === "reasoning") {
+                {/* Phase 1: Recall — data-flash from Recall Agent */}
+                {isAssistant && hasRecall &&
+                  recallParts.map((part, i) => {
+                    const p = part as { type: string; data?: { phase?: string; text?: string; tags?: string[]; time_range?: string } };
                     return (
-                      <ThinkingSteps
+                      <RecallPhase
                         key={i}
-                        text={(part as { text: string }).text}
+                        text={p.data?.text ?? ""}
+                        tags={p.data?.tags}
+                        timeRange={p.data?.time_range}
                         isStreaming={isStreaming}
                       />
                     );
-                  }
+                  })
+                }
 
-                  if (part.type?.startsWith("tool-")) {
-                    const p = part as {
-                      type: string;
-                      toolCallId: string;
-                      toolName?: string;
-                      state: string;
-                      input?: unknown;
-                      output?: unknown;
-                    };
-                    return (
-                      <ToolRenderer
-                        key={p.toolCallId ?? i}
-                        toolName={p.toolName ?? "tool"}
-                        state={p.state}
-                        input={p.input}
-                        output={p.output}
-                        isStreaming={isStreaming ?? false}
-                      />
-                    );
-                  }
+                {/* Phase 2: Reasoning — grouped into one block */}
+                {isAssistant && hasReasoning && (
+                  <ThinkingSteps
+                    text={reasoningText}
+                    isStreaming={isStreaming}
+                  />
+                )}
 
-                  if (part.type === "text") {
-                    const text = (part as { text: string }).text;
-                    if (isUser) {
-                      return <span key={i} className="whitespace-pre-wrap">{text}</span>;
-                    }
-                    return <MarkdownRenderer key={i} content={text} />;
-                  }
+                {/* Phase 3: Tool calls */}
+                {toolParts.map((part) => {
+                  const p = part as {
+                    type: string;
+                    toolCallId: string;
+                    toolName?: string;
+                    state: string;
+                    input?: unknown;
+                    output?: unknown;
+                  };
+                  return (
+                    <ToolRenderer
+                      key={p.toolCallId ?? p.type}
+                      toolName={p.toolName ?? "tool"}
+                      state={p.state}
+                      input={p.input}
+                      output={p.output}
+                      isStreaming={isStreaming ?? false}
+                    />
+                  );
+                })}
 
-                  return null;
+                {/* Phase 4: Text content */}
+                {textParts.map((part, i) => {
+                  const text = (part as { text: string }).text;
+                  if (isUser) {
+                    return <span key={i} className="whitespace-pre-wrap">{text}</span>;
+                  }
+                  return <MarkdownRenderer key={i} content={text} />;
                 })}
 
                 {/* Streaming cursor */}
