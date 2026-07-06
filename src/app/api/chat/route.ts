@@ -7,6 +7,7 @@ import { readFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
 import { resolveIntent, classifyIntentKeywords } from "@/lib/router";
 import type { RecallHint } from "@/lib/router";
 import { classifyWithFlash } from "@/lib/router/flash";
+import { scanTopics, updateTopicSources } from "@/lib/episodic/parallel-timeline";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
@@ -76,7 +77,7 @@ async function buildDynamicSystemPrompt(
   userInput: string,
   recentTurns: Array<{ role: string; content: string }> = [],
   sessionIntent: string = "clarify"
-): Promise<{ prompt: string; intent: string; source: string; confidence: number; recall_hint?: import("@/lib/router").RecallHint }> {
+): Promise<{ prompt: string; intent: string; source: string; confidence: number; recall_hint?: import("@/lib/router").RecallHint; suggested_topics?: string[] }> {
   // 1. Classify intent (Flash + keyword hybrid)
   const { intent, strategy } = await resolveIntent({
     currentInput: userInput,
@@ -135,6 +136,7 @@ Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, s
     source: intent.source,
     confidence: intent.confidence,
     recall_hint: intent.recall_hint,
+    suggested_topics: intent.suggested_topics,
   };
 }
 
@@ -188,7 +190,7 @@ export async function POST(request: Request) {
 
     // Build dynamic context via M3 pipeline (Flash + Memory + Assembler)
     const t0 = Date.now();
-    const { prompt: dynamicSystemPrompt, intent, source, confidence, recall_hint: flashRecallHint } =
+    const { prompt: dynamicSystemPrompt, intent, source, confidence, recall_hint: flashRecallHint, suggested_topics: flashTopics } =
       await buildDynamicSystemPrompt(lastUserMessage, recentTurns);
     console.log(
       `[M3] intent=${intent} source=${source} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`
@@ -310,6 +312,22 @@ export async function POST(request: Request) {
         .join(", ")}\n`;
     }
 
+    // Recall Agent: scan parallel-timeline (indices only, no slice bodies)
+    let recallHitsCount = 0;
+    if (flashTopics && flashTopics.length > 0) {
+      const hits = await scanTopics(flashTopics.slice(0, 3));
+      if (hits.length > 0) {
+        episodicContext += "\n### Recall Results\n";
+        episodicContext += "Recall Agent found these potentially relevant slices. Use readMemory to read specific slices if needed.\n\n";
+        for (const hit of hits.slice(0, 5)) {
+          episodicContext += `- \`${hit.slice}\` turns ${hit.turns.join(",")} (relevance ${hit.relevance.toFixed(2)})\n`;
+          if (hit.open_loops?.length) episodicContext += `  Open: ${hit.open_loops.map(l => `"${l}"`).join(", ")}\n`;
+          if (hit.decisions?.length) episodicContext += `  Decided: ${hit.decisions.map(d => `"${d}"`).join(", ")}\n`;
+        }
+        recallHitsCount = hits.length;
+      }
+    }
+
     // Recent closed slices — load from monthly index + any slices the client has in its timeline
     const now = new Date();
     const currentYear = now.getUTCFullYear();
@@ -417,6 +435,23 @@ export async function POST(request: Request) {
                 slice.summary = slice.summary || `${slice.turns.length} turns about ${slice.focus || "general chat"}`;
                 await closeSlice(slice, pendingSplit.source);
                 console.log(`[Episodic] Slice closed: ${pendingSplit.source}`);
+
+                // Update parallel-timeline with topics from this slice
+                if (flashTopics && flashTopics.length > 0) {
+                  const slicePath = `${slice.slice_id.slice(0, 4)}/${slice.slice_id.slice(5, 7)}/${slice.slice_id.slice(8, 10)}`;
+                  const allTurns = slice.turns.map((_, i) => i + 1);
+                  updateTopicSources(
+                    flashTopics[0], // primary topic
+                    [{ slice: slicePath, turns: allTurns, relevance: 0.9 }]
+                  ).catch(() => {});
+                  // If there are secondary topics, add them with lower relevance
+                  for (const topic of flashTopics.slice(1, 3)) {
+                    updateTopicSources(
+                      topic,
+                      [{ slice: slicePath, turns: allTurns, relevance: 0.7 }]
+                    ).catch(() => {});
+                  }
+                }
               }
             } else {
               if (text) {

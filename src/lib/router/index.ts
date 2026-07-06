@@ -14,12 +14,9 @@ export interface IntentResult {
   source: "flash" | "flash_expanded" | "keyword" | "fallback";
   needsMoreTurns?: boolean;
   recall_hint?: RecallHint;
+  suggested_topics?: string[];
 }
 
-/**
- * Classify intent using hybrid approach: Flash + keyword rules.
- * This is the main entry point — used by the Chat API.
- */
 export async function classifyIntent(
   input: FlashInput
 ): Promise<IntentResult> {
@@ -32,6 +29,7 @@ export async function classifyIntent(
     source: result.source,
     needsMoreTurns: result.needsMoreTurns,
     recall_hint: result.recall_hint,
+    suggested_topics: result.suggested_topics,
   };
 }
 

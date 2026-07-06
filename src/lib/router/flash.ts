@@ -9,6 +9,8 @@ export interface FlashResult {
   intent_switched: boolean;
   needs_more_turns: boolean;
   reasoning: string;
+  /** Topic names for parallel-timeline lookup (e.g. ["rust", "async"]) */
+  suggested_topics?: string[];
   recall_hint?: {
     suggested_tags: string[];
     suggested_time_range: string;
@@ -41,6 +43,10 @@ const flashOutputSchema = tool({
     intent_switched: z.boolean(),
     needs_more_turns: z.boolean(),
     reasoning: z.string(),
+    suggested_topics: z
+      .array(z.string())
+      .optional()
+      .describe("Topic names this conversation relates to. Lowercase, dash-separated. Ex: ['rust', 'borrow-checker']"),
     recall_hint: z
       .object({
         suggested_tags: z.array(z.string()),
@@ -133,6 +139,7 @@ Omit recall_hint if you have no relevant suggestion.`;
         intent_switched: boolean;
         needs_more_turns: boolean;
         reasoning: string;
+        suggested_topics?: string[];
         recall_hint?: FlashResult["recall_hint"];
       };
       return {
@@ -141,6 +148,7 @@ Omit recall_hint if you have no relevant suggestion.`;
         intent_switched: input.intent_switched,
         needs_more_turns: input.needs_more_turns,
         reasoning: input.reasoning,
+        suggested_topics: input.suggested_topics,
         recall_hint: input.recall_hint,
       };
     }
@@ -181,20 +189,16 @@ export async function classifyIntentHybrid(
   source: "flash" | "keyword" | "flash_expanded" | "fallback";
   needsMoreTurns: boolean;
   recall_hint?: FlashResult["recall_hint"];
+  suggested_topics?: string[];
 }> {
-  // Step 1: Try Flash with current context
   let flashResult = await classifyWithFlash(input);
   let expansions = 0;
 
-  // Step 2: If Flash needs more context, expand turns and retry
   while (flashResult.needs_more_turns && expansions < maxExpansions && input.recentTurns.length > 0) {
-    // The engineering layer already has all turns — Flash already saw all available turns
-    // If it still needs more, that means we don't have more to give
     flashResult = await classifyWithFlash(input);
     expansions++;
   }
 
-  // Step 3: Keyword rules override low-confidence Flash
   const keywordIntent = matchKeywords(input.currentInput);
   if (keywordIntent && flashResult.confidence < 0.8) {
     return {
@@ -203,15 +207,16 @@ export async function classifyIntentHybrid(
       source: "keyword",
       needsMoreTurns: false,
       recall_hint: flashResult.recall_hint,
+      suggested_topics: flashResult.suggested_topics,
     };
   }
 
-  // Step 4: Use Flash result
   return {
     intent: flashResult.intent,
     confidence: flashResult.confidence,
     source: expansions > 0 ? "flash_expanded" : "flash",
     needsMoreTurns: flashResult.needs_more_turns,
     recall_hint: flashResult.recall_hint,
+    suggested_topics: flashResult.suggested_topics,
   };
 }
