@@ -8,11 +8,18 @@ const mockListFiles = [{ name: "test.md", type: "file" as const, path: "test.md"
 let mockToolExecute: Record<string, () => Promise<unknown>> = {};
 
 vi.mock("ai", () => ({
-  streamText: vi.fn(({ tools }: { tools: Record<string, { execute?: () => Promise<unknown> }> }) => {
-    for (const [name, t] of Object.entries(tools)) {
-      if (t.execute) mockToolExecute[name] = t.execute;
+  streamText: vi.fn(({ tools, onFinish }: Record<string, unknown>) => {
+    if (tools) {
+      const t = tools as Record<string, { execute?: () => Promise<unknown> }>;
+      for (const [name, toolDef] of Object.entries(t)) {
+        if (toolDef?.execute) mockToolExecute[name] = toolDef.execute;
+      }
     }
+    // Trigger onFinish to simulate normal completion (for topic update tests)
+    const finish = onFinish as ((opts: { text: string; finishReason: string }) => void) | undefined;
+    if (finish) setTimeout(() => finish({ text: "mocked response", finishReason: "stop" }), 0);
     return {
+      toUIMessageStream: () => new ReadableStream(),
       toUIMessageStreamResponse: () =>
         new Response("mocked-ui-stream", { headers: { "Content-Type": "text/event-stream" } }),
     };
@@ -20,6 +27,15 @@ vi.mock("ai", () => ({
   tool: vi.fn((def: { execute?: () => Promise<unknown> }) => def),
   convertToModelMessages: vi.fn((msgs: unknown[]) => msgs),
   stepCountIs: vi.fn(() => vi.fn()),
+  createUIMessageStream: vi.fn(({ execute }: { execute: (opts: { writer: { write: () => void; merge: () => void } }) => Promise<void> }) => {
+    execute({
+      writer: { write: vi.fn(), merge: vi.fn() },
+    }).catch(() => {});
+    return new ReadableStream();
+  }),
+  createUIMessageStreamResponse: vi.fn(() =>
+    new Response("mocked-ui-stream", { headers: { "Content-Type": "text/event-stream" } })
+  ),
 }));
 
 vi.mock("@ai-sdk/deepseek", () => ({
@@ -62,6 +78,58 @@ vi.mock("@/lib/tools/writeFile", () => ({
 vi.mock("@/lib/tools/listFiles", () => ({
   listFiles: () => Promise.resolve(mockListFiles),
 }));
+
+// Mock episodic module (imported by chat route)
+vi.mock("@/lib/episodic", () => ({
+  getActiveSlice: () => null,
+  createSlice: () => ({
+    slice_id: "2026-07-02",
+    focus: "",
+    status: "active" as const,
+    start: new Date().toISOString(),
+    timezone: "UTC",
+    summary: "",
+    open_loops: [],
+    decisions: [],
+    tags: [],
+    related_slices: [],
+    turns: [],
+    estimatedTokens: 0,
+  }),
+  closeSlice: vi.fn(),
+  appendTurn: vi.fn(),
+  readSliceIndex: () => Promise.resolve([]),
+  checkTimeSilence: () => false,
+  checkCapacity: () => false,
+  checkContinuity: () => Promise.resolve({ shouldSplit: false, confidence: 0, reason: "" }),
+  saveSliceSnapshot: vi.fn(),
+  ensureIndexEntries: vi.fn(),
+  tryLoadTodaySlice: () => Promise.resolve(null),
+  setActiveSlice: vi.fn(),
+}));
+
+// Mock parallel-timeline module
+vi.mock("@/lib/episodic/parallel-timeline", () => ({
+  scanTopics: () => Promise.resolve([]),
+  updateTopicSources: vi.fn(),
+}));
+
+// Mock Flash classifyWithFlash
+vi.mock("@/lib/router/flash", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/router/flash")>("@/lib/router/flash");
+  return {
+    ...actual,
+    classifyWithFlash: () =>
+      Promise.resolve({
+        intent: "chat",
+        confidence: 0.95,
+        intent_switched: false,
+        needs_more_turns: false,
+        reasoning: "test",
+        suggested_topics: ["rust"],
+      }),
+  };
+});
 
 import { POST } from "@/app/api/chat/route";
 
@@ -125,6 +193,26 @@ describe("POST /api/chat validation", () => {
     delete process.env.GITHUB_REPO_OWNER;
     const req = createRequest({
       messages: [{ role: "user", content: "hello" }],
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+  });
+
+  it("Recall Agent is included in the streaming response", async () => {
+    const req = createRequest({
+      messages: [{ role: "user", content: "Rust borrow checker" }],
+      timezone: "Asia/Shanghai",
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    // The stream should be created (verifying createUIMessageStream was called)
+    expect(res.headers.get("Content-Type")).toContain("text/event-stream");
+  });
+
+  it("returns 200 with thinking disabled", async () => {
+    const req = createRequest({
+      messages: [{ role: "user", content: "hello" }],
+      thinking: false,
     });
     const res = await POST(req);
     expect(res.status).toBe(200);

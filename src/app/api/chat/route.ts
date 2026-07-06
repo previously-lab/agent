@@ -372,8 +372,10 @@ export async function POST(request: Request) {
 
     const finalSystemPrompt = dynamicSystemPrompt + episodicContext;
 
-    // Build recall text for data-flash (engineering layer, not Flash output)
-    const recallText = flashRecallHint ? buildRecallText(flashRecallHint) : null;
+    // Build recall text for data-flash from Recall Agent results
+    const recallText = (flashTopics && flashTopics.length > 0 && recallHitsCount > 0)
+      ? `想起和 ${flashTopics.slice(0, 3).join("、")} 相关的 ${recallHitsCount} 段交流`
+      : null;
 
     // ─── Multi-phase streaming (M7.1b) ──────────────────────────────────────
     // Phase 1: Flash recall (data-flash) → Phase 2: Pro thinking → Phase 3: Pro text
