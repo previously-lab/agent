@@ -1,0 +1,28 @@
+{
+  "month": "2025-09",
+  "slices": [
+    {
+      "id": "06",
+      "focus": "Things have been a little ragged lately, so this was a small thing, but it actua",
+      "summary": "Honestly, probably all three",
+      "tags": [
+        "work",
+        "health",
+        "relationship",
+        "housing",
+        "goals",
+        "environment",
+        "civic",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2025-09-06T07:15:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "One of the new contacts was Nadine Louise Carver, a retired nearby neighbor Caleb met at the neighborhood pet blessing i"
+      ]
+    }
+  ]
+}

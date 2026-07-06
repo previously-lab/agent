@@ -1,0 +1,29 @@
+{
+  "month": "2027-01",
+  "slices": [
+    {
+      "id": "30",
+      "focus": "A lot has shifted lately, and one thing at work finally clicked into place in a ",
+      "summary": "She locked onto it pretty fast, honestly",
+      "tags": [
+        "work",
+        "health",
+        "travel",
+        "education",
+        "housing",
+        "leisure",
+        "goals",
+        "environment",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2027-01-30T01:35:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb added a corridor performance scoreboard that tracks completed applications, signed scopes, and active project star"
+      ]
+    }
+  ]
+}

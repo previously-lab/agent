@@ -1,0 +1,29 @@
+{
+  "month": "2026-10",
+  "slices": [
+    {
+      "id": "03",
+      "focus": "A lot has shifted lately, and one thing at work finally feels like it moved from",
+      "summary": "Honestly, the status sheets made the pattern impossible to ignore",
+      "tags": [
+        "work",
+        "family",
+        "travel",
+        "housing",
+        "goals",
+        "environment",
+        "civic",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2026-10-03T02:20:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb expanded the corridor support model beyond status sheets and office hours by adding specialized Saturday clinics f",
+        "Caleb felt hard-earned relief because the new clinic support was finally clearing the paperwork failures that had been f"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "month": "2025-07",
+  "slices": [
+    {
+      "id": "12",
+      "focus": "Things have been pretty packed lately, just that sticky middle-of-summer kind of",
+      "summary": "Yeah, that is exactly it, I do not want to become the guy who acts like barbecue is off limits forev",
+      "tags": [
+        "work",
+        "family",
+        "health",
+        "education",
+        "housing",
+        "leisure",
+        "goals",
+        "environment",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2025-07-12T03:50:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb's reflux-driven food preference shifted more clearly toward milder cookout options after smoked turkey sat better "
+      ]
+    }
+  ]
+}

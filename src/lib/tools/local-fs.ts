@@ -10,12 +10,31 @@ const DATA_ROOT = join(process.cwd());
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
+/** Demo mode: redirect memory/ reads to a pre-seeded persona dataset. */
+const DEMO_MODE = process.env.DEMO_MODE === "true";
+const DEMO_PATH_PREFIX = "memory/demo/personal_14";
+
+/**
+ * Resolve a path for demo mode.
+ * When DEMO_MODE is set, all memory/ paths are redirected to the demo persona data.
+ * Other allowed paths (tasks/, sessions/) continue to use real directories.
+ */
+function resolveDemoPath(originalPath: string): string {
+  if (!DEMO_MODE) return originalPath;
+  if (originalPath.startsWith("memory/")) {
+    return originalPath.replace("memory/", DEMO_PATH_PREFIX + "/");
+  }
+  return originalPath;
+}
+
 export async function readFileLocal(path: string): Promise<string> {
+  const resolvedPath = resolveDemoPath(path);
+
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
 
-  const fullPath = join(DATA_ROOT, path);
+  const fullPath = join(DATA_ROOT, resolvedPath);
   if (!existsSync(fullPath)) {
     throw new Error(`File not found: "${path}"`);
   }
@@ -35,6 +54,8 @@ export async function writeFileLocal(
   path: string,
   content: string
 ): Promise<{ path: string; created: boolean }> {
+  const resolvedPath = resolveDemoPath(path);
+
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
@@ -43,7 +64,7 @@ export async function writeFileLocal(
     throw new Error(`Content too large. Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`);
   }
 
-  const fullPath = join(DATA_ROOT, path);
+  const fullPath = join(DATA_ROOT, resolvedPath);
   const dir = dirname(fullPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -58,11 +79,13 @@ export async function writeFileLocal(
 export async function listFilesLocal(
   path: string
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+  const resolvedPath = resolveDemoPath(path);
+
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
 
-  const fullPath = join(DATA_ROOT, path);
+  const fullPath = join(DATA_ROOT, resolvedPath);
   if (!existsSync(fullPath)) {
     throw new Error(`Directory not found: "${path}"`);
   }

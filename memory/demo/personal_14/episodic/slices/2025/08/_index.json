@@ -1,0 +1,29 @@
+{
+  "month": "2025-08",
+  "slices": [
+    {
+      "id": "19",
+      "focus": "A lot has shifted lately, and this past stretch kind of got away from me. Work w",
+      "summary": "It took me a few days, honestly",
+      "tags": [
+        "work",
+        "health",
+        "travel",
+        "housing",
+        "goals",
+        "environment",
+        "civic",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2025-08-19T09:40:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb's reflux flared harder than usual during the Gulf storm watch and callback crunch, bringing several weeks of poor ",
+        "Caleb became visibly more storm-anxious and brittle under the combined pressure of Gulf weather and applicant follow-thr"
+      ]
+    }
+  ]
+}

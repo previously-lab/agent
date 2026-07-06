@@ -1,0 +1,29 @@
+{
+  "month": "2028-05",
+  "slices": [
+    {
+      "id": "28",
+      "focus": "A lot has shifted lately, or maybe it is more that a long stretch of slow work f",
+      "summary": "That was the whole thing, I did not want it to become one more talk about turnout or awareness",
+      "tags": [
+        "work",
+        "health",
+        "travel",
+        "housing",
+        "goals",
+        "environment",
+        "civic",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2028-05-28T05:05:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb became the lead presenter of the corridor's adoption results to senior staff, framing progress around reduced post",
+        "Caleb felt tired but vindicated because the corridor finally had enough measurable movement for him to defend years of t"
+      ]
+    }
+  ]
+}

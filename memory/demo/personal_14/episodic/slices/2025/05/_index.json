@@ -1,0 +1,29 @@
+{
+  "month": "2025-05",
+  "slices": [
+    {
+      "id": "18",
+      "focus": "A lot has shifted lately, mostly at home. We finally had one of those sit-down c",
+      "summary": "Honestly, both",
+      "tags": [
+        "work",
+        "family",
+        "relationship",
+        "travel",
+        "education",
+        "housing",
+        "goals",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2025-05-18T05:25:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb and Lena formally agreed that Caleb would handle all of Dorothy's Friday medical transport to reduce the recurring",
+        "Caleb now takes over Friday medical transport for his mother Dorothy because her cancellations and arguments became too "
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "month": "2026-01",
+  "slices": [
+    {
+      "id": "26",
+      "focus": "A lot has shifted lately, at least in how my work feels day to day. The big thin",
+      "summary": "Honestly I think it is the combination, but if I had to pick, that missing-paperwork page is doing a",
+      "tags": [
+        "work",
+        "family",
+        "health",
+        "travel",
+        "education",
+        "goals",
+        "environment",
+        "civic",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2026-01-26T01:45:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb began using address-specific homeowner packets with a plain-language drainage sketch, likely mitigation path, and ",
+        "Caleb felt steadier once residents had a concrete packet to act on, even though he still worried some would drop off lat"
+      ]
+    }
+  ]
+}

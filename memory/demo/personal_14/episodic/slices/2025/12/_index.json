@@ -1,0 +1,29 @@
+{
+  "month": "2025-12",
+  "slices": [
+    {
+      "id": "14",
+      "focus": "It has been a pretty full stretch lately, and I finally stumbled into one small ",
+      "summary": "Probably both, but the calmer drive part surprised me more",
+      "tags": [
+        "work",
+        "finance",
+        "travel",
+        "education",
+        "housing",
+        "leisure",
+        "goals",
+        "environment",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2025-12-14T10:20:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb got into Gulf Coast history audiobooks for long drives between site visits, adding audio listening to his usual no"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "month": "2028-03",
+  "slices": [
+    {
+      "id": "09",
+      "focus": "It has been a little while, and life has felt a touch calmer than it did for a s",
+      "summary": "Probably all three, but mostly the planning",
+      "tags": [
+        "work",
+        "family",
+        "health",
+        "relationship",
+        "travel",
+        "housing",
+        "goals",
+        "environment",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2028-03-09T11:40:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb now feels a little more comfortable leaving home briefly outside peak storm season, while still preferring short r"
+      ]
+    }
+  ]
+}

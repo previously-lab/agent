@@ -1,0 +1,25 @@
+{
+  "month": "2026-07",
+  "slices": [
+    {
+      "id": "07",
+      "focus": "A lot has shifted lately, and I finally changed how I'm handling this corridor m",
+      "summary": "Mixed, but better than what I had before",
+      "tags": [
+        "work",
+        "family",
+        "housing",
+        "goals",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2026-07-07T00:55:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb rebuilt the stalled corridor effort around a blunt weekly address-level status sheet that showed whether each dela"
+      ]
+    }
+  ]
+}

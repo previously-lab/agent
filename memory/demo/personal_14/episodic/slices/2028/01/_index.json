@@ -1,0 +1,26 @@
+{
+  "month": "2028-01",
+  "slices": [
+    {
+      "id": "17",
+      "focus": "A lot has shifted since we last talked, in a good way for once. I came into the ",
+      "summary": "Honestly, I got tired of watching a file look healthy on paper and then stall out because a homeowne",
+      "tags": [
+        "work",
+        "health",
+        "housing",
+        "environment",
+        "civic",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2028-01-17T01:15:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Caleb formalized a retention-focused follow-through routine for approved corridor households with scheduled 30, 60, and "
+      ]
+    }
+  ]
+}

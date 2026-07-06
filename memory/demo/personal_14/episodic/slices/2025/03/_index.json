@@ -1,0 +1,28 @@
+{
+  "month": "2025-03",
+  "slices": [
+    {
+      "id": "02",
+      "focus": "Things have been pretty full lately, and I had one of those small weekends that ",
+      "summary": "Yeah, exactly, I do better when I can point at something real instead of just saying I'm frustrated",
+      "tags": [
+        "work",
+        "family",
+        "education",
+        "housing",
+        "leisure",
+        "environment",
+        "civic",
+        "event-memory",
+        "relationship-memory",
+        "persona-memory"
+      ],
+      "status": "closed",
+      "start": "2025-03-02T08:40:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "Terrence Guidry became an even steadier sounding board for Caleb about outreach politics, repetitive public meetings, ma"
+      ]
+    }
+  ]
+}

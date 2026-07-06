@@ -1,0 +1,24 @@
+{
+  "month": "2025-01",
+  "slices": [
+    {
+      "id": "08",
+      "focus": "I appreciate that you are taking the time.",
+      "summary": "My name is Caleb Martin Hebert",
+      "tags": [
+        "work",
+        "family",
+        "health",
+        "finance",
+        "relationship",
+        "travel",
+        "education",
+        "housing"
+      ],
+      "status": "closed",
+      "start": "2025-01-08T11:30:00.000Z",
+      "open_loops": [],
+      "decisions": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "month": "2026-03",
+  "slices": [
+    {
+      "id": "04",
+      "focus": "Things have been shifting again lately, and this time it hit at home more than a",
+      "summary": "Yeah, that is exactly it",
+      "tags": [
+        "work",
+        "family",
+        "health",
+        "finance",
+        "travel",
+        "education",
+        "housing",
+        "goals",
+        "event-memory",
+        "persona-memory",
+        "relationship-memory"
+      ],
+      "status": "closed",
+      "start": "2026-03-04T12:05:00.000Z",
+      "open_loops": [],
+      "decisions": [
+        "A new round of subfloor repair and yard regrading after heavy rain thinned Caleb and Lena's savings further and made dis"
+      ]
+    }
+  ]
+}
