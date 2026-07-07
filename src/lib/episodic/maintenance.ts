@@ -133,38 +133,21 @@ const unifiedFlashSchema = tool({
   }),
 });
 
-// ─── Timeout + retry ───────────────────────────────────────────────────
+// ─── Flash call ────────────────────────────────────────────────────────
+// No timeout — Flash is reliability-critical. Model slowness is tolerated.
 
-const FLASH_TIMEOUT_MS = 2000; // unified call is heavier, give it more time
 const FLASH_RETRY_DELAY_MS = 300;
-
-async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("Flash timeout")), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
-}
 
 async function attemptUnifiedFlash(
   prompt: string
 ): Promise<MaintenanceOutput> {
-  const result = await withTimeout(
-    generateText({
-      model: deepseek("deepseek-chat"),
-      prompt,
-      temperature: 0.1,
-      tools: { flashOutput: unifiedFlashSchema },
-      toolChoice: "required",
-      // Note: deepseek-chat does not support thinking mode with toolChoice:required.
-      // Flash reasoning is optional — we run without thinking for reliability.
-    }),
-    FLASH_TIMEOUT_MS
-  );
+  const result = await generateText({
+    model: deepseek("deepseek-chat"),
+    prompt,
+    temperature: 0.1,
+    tools: { flashOutput: unifiedFlashSchema },
+    toolChoice: "required",
+  });
 
   const toolCall = result.toolCalls?.[0];
   if (toolCall?.toolName === "flashOutput" && (toolCall as Record<string, unknown>).input) {
@@ -330,7 +313,7 @@ export async function readRecentSummaries(
 
 /**
  * Run the unified Flash call: intent + recall + maintenance in one pass.
- * Includes 2s timeout + 1 retry on failure.
+ * No timeout — Flash reliability is more important than latency.
  */
 export async function runUnifiedFlash(
   input: MaintenanceInput
