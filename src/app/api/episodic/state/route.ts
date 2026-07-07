@@ -66,7 +66,7 @@ export async function GET() {
           }
         : null,
       recent: recent.map((s) => ({
-        slice_id: `${s.start.slice(0, 7)}/${s.id}`,
+        slice_id: s.id,
         focus: s.focus,
         summary: s.summary,
         start: s.start,

@@ -4,10 +4,7 @@ import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import { readFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
-import { resolveIntent, classifyIntentKeywords } from "@/lib/router";
-import type { RecallHint } from "@/lib/router";
-import { classifyWithFlash } from "@/lib/router/flash";
-import { scanTopics, updateTopicSources } from "@/lib/episodic/parallel-timeline";
+import { classifyIntentKeywords } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
@@ -20,16 +17,19 @@ import {
   createSlice,
   closeSlice,
   appendTurn,
-  readSliceIndex,
-  checkTimeSilence,
-  checkCapacity,
-  checkContinuity,
   saveSliceSnapshot,
   ensureIndexEntries,
   tryLoadTodaySlice,
   setActiveSlice,
 } from "@/lib/episodic";
-import type { FlashSplitInput, SplitDecision, SlicingSignal } from "@/lib/episodic";
+import { checkTimeSilence } from "@/lib/episodic/slicer";
+import {
+  runUnifiedFlash,
+  readRecentSummaries,
+  applyMetadataUpdates,
+  type MaintenanceOutput,
+  type RecentSummary,
+} from "@/lib/episodic/maintenance";
 
 const USE_GITHUB = process.env.GITHUB_TOKEN != null;
 
@@ -39,9 +39,6 @@ function getRepoConfig(): { owner: string; repo: string } {
   return { owner, repo };
 }
 
-/**
- * Load a full memory node from disk (content + frontmatter).
- */
 function loadNodeOnDisk(meta: { path: string }): MemoryNode | null {
   try {
     const filePath = join(process.cwd(), meta.path);
@@ -49,62 +46,39 @@ function loadNodeOnDisk(meta: { path: string }): MemoryNode | null {
     const raw = readFileSync(filePath, "utf-8");
     const { data, content } = matter(raw);
     return {
-      id: data.id ?? "",
-      type: data.type ?? "concept",
-      domain: data.domain ?? "general",
-      tags: data.tags ?? [],
-      related: data.related ?? [],
-      backlinks: data.backlinks ?? [],
-      priority: data.priority ?? 5,
-      access_count: data.access_count ?? 0,
-      last_accessed: data.last_accessed ?? "",
-      recall_conditions: data.recall_conditions ?? [],
-      status: data.status ?? "active",
-      superseded_by: data.superseded_by,
-      title: data.title ?? "",
-      content: content.trim(),
+      id: data.id ?? "", type: data.type ?? "concept", domain: data.domain ?? "general",
+      tags: data.tags ?? [], related: data.related ?? [], backlinks: data.backlinks ?? [],
+      priority: data.priority ?? 5, access_count: data.access_count ?? 0,
+      last_accessed: data.last_accessed ?? "", recall_conditions: data.recall_conditions ?? [],
+      status: data.status ?? "active", superseded_by: data.superseded_by,
+      title: data.title ?? "", content: content.trim(),
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-/**
- * Build a dynamic system prompt using the M3 context assembly pipeline.
- * Uses Flash for intent classification + keyword rules as override.
- */
+// ─── M3 Context Assembly ────────────────────────────────────────────────
+
 async function buildDynamicSystemPrompt(
   userInput: string,
   recentTurns: Array<{ role: string; content: string }> = [],
-  sessionIntent: string = "clarify"
-): Promise<{ prompt: string; intent: string; source: string; confidence: number; recall_hint?: import("@/lib/router").RecallHint; suggested_topics?: string[] }> {
-  // 1. Classify intent (Flash + keyword hybrid)
-  const { intent, strategy } = await resolveIntent({
-    currentInput: userInput,
-    lastTurnSummary: "",
-    sessionIntent,
-    recentTurns,
-  });
+  precomputedIntent?: { intent: string; confidence: number; source?: string }
+): Promise<{ prompt: string; intent: string; source: string; confidence: number }> {
+  let intent: string, source: string, confidence: number;
 
-  // 2. Query memory index for relevant nodes
-  const candidates = listNodes({
-    types: (strategy.memory_types as Array<"concept" | "experience" | "project" | "people" | "personality">) ?? [],
-    tags: strategy.tags,
-    limit: strategy.max_nodes * 3,
-  });
+  if (precomputedIntent) {
+    intent = precomputedIntent.intent;
+    confidence = precomputedIntent.confidence;
+    source = precomputedIntent.source ?? "flash";
+  } else {
+    const kw = classifyIntentKeywords(userInput);
+    intent = kw.intent; source = kw.source; confidence = 0.5;
+  }
 
-  // 3. Score and rank
-  const ranked = rankNodes(candidates, userInput, intent.intent, strategy.max_nodes);
-
-  // 4. Load full node content from disk
-  const loadedNodes = ranked
-    .map((meta) => loadNodeOnDisk(meta))
-    .filter((n): n is MemoryNode => n !== null);
-
-  // 5. Assemble context
-  const coreNodes = loadedNodes.slice(0, 3);
-  const extendedNodes = loadedNodes.slice(3, 8);
-  const referenceNodes = ranked.slice(8);
+  const memoryTypes: Array<"concept" | "experience" | "project" | "people" | "personality"> = ["concept", "experience"];
+  const strategy = { memory_types: memoryTypes, tags: [] as string[], max_nodes: 8 };
+  const candidates = listNodes({ types: strategy.memory_types, tags: strategy.tags, limit: strategy.max_nodes * 3 });
+  const ranked = rankNodes(candidates, userInput, intent, strategy.max_nodes);
+  const loadedNodes = ranked.map((meta) => loadNodeOnDisk(meta)).filter((n): n is MemoryNode => n !== null);
 
   const baseSystemPrompt = `You are Aftrbrez, a personal AI commander platform agent.
 Assist the user with coding, debugging, architecture, and general questions.
@@ -117,50 +91,124 @@ Tool usage rules:
 
 File access: only memory/, tasks/, sessions/ directories.
 
-Current intent: ${intent.intent} (confidence: ${intent.confidence.toFixed(2)}, source: ${intent.source})
+Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})
 `;
 
   const assembled = assembleContext({
     systemPrompt: baseSystemPrompt,
-    coreNodes,
-    extendedNodes,
-    referenceNodes,
+    coreNodes: loadedNodes.slice(0, 3),
+    extendedNodes: loadedNodes.slice(3, 8),
+    referenceNodes: ranked.slice(8),
     sessionSummary: "",
     recentTurns: recentTurns.slice(-3),
     userInput,
   });
 
-  return {
-    prompt: assembled.prompt,
-    intent: intent.intent,
-    source: intent.source,
-    confidence: intent.confidence,
-    recall_hint: intent.recall_hint,
-    suggested_topics: intent.suggested_topics,
-  };
+  return { prompt: assembled.prompt, intent, source, confidence };
 }
 
-// ─── Recall phase text builder ──────────────────────────────────────────
+// ─── Timeline context builder (M8) ──────────────────────────────────────
 
-const TIME_RANGE_LABELS: Record<string, string> = {
-  last_7_days: "last 7 days",
-  last_30_days: "last 30 days",
-  last_90_days: "last 90 days",
-  all_time: "all time",
-};
+function formatRelativeTime(iso: string): string {
+  // Accept both ISO timestamp and YYYY-MM-DD date
+  const dateStr = iso.includes("T") ? iso : `${iso}T12:00:00.000Z`;
+  const then = new Date(dateStr).getTime();
+  const now = Date.now();
+  const diffMs = now - then;
+  const minutes = Math.floor(diffMs / 60_000);
+  const hours = Math.floor(diffMs / 3_600_000);
+  const days = Math.floor(diffMs / 86_400_000);
+  const months = Math.floor(days / 30);
+  const years = Math.floor(days / 365);
 
-function buildRecallText(hint: RecallHint): string {
-  const tags = hint.suggested_tags.join(", ");
-  const time = TIME_RANGE_LABELS[hint.suggested_time_range] ?? hint.suggested_time_range;
-  return `Recalled conversations about ${tags} · ${time}`;
+  if (minutes < 2) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days}d ago`;
+  if (days < 14) return "last week";
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  if (months < 2) return "last month";
+  if (months < 12) return `${months}mo ago`;
+  if (years < 2) return "last year";
+  return `${years}y ago`;
 }
+
+function buildTimelineEpisodicContext(
+  slice: ReturnType<typeof getActiveSlice>,
+  flashOutput: MaintenanceOutput | null
+): string {
+  let ctx = "\n\n## Episodic Memory Timeline\n\n";
+
+  // Now: Current Session
+  if (slice) {
+    ctx += "### Now — Current Session\n";
+    ctx += `- Slice: \`${slice.slice_id}\` · ${slice.turns.length} turns\n`;
+    if (slice.focus) ctx += `- Focus: ${slice.focus}\n`;
+    if (slice.summary) ctx += `- Summary: ${slice.summary}\n`;
+    if (slice.open_loops.length > 0)
+      ctx += `- Open loops: ${slice.open_loops.map(l => `"${l}"`).join("; ")}\n`;
+    if (slice.decisions.length > 0)
+      ctx += `- Decisions: ${slice.decisions.map(d => `"${d}"`).join("; ")}\n`;
+    ctx += "\n";
+  }
+
+  // Recall Results — timeline format
+  if (flashOutput && flashOutput.recall_hits.length > 0) {
+    const hits = [...flashOutput.recall_hits];
+    const buckets: Record<string, typeof hits> = {
+      "Today / This Week": [],
+      "This Month": [],
+      "A Few Months Ago": [],
+      "Last Year": [],
+      "Earlier": [],
+    };
+
+    for (const h of hits) {
+      const parts = h.slice_id.split("-");
+      if (parts.length === 3) {
+        const sliceDate = new Date(`${parts[0]}-${parts[1]}-${parts[2]}`).getTime();
+        const daysAgo = Math.floor((Date.now() - sliceDate) / 86_400_000);
+        if (daysAgo <= 7) buckets["Today / This Week"].push(h);
+        else if (daysAgo <= 30) buckets["This Month"].push(h);
+        else if (daysAgo <= 180) buckets["A Few Months Ago"].push(h);
+        else if (daysAgo <= 365) buckets["Last Year"].push(h);
+        else buckets["Earlier"].push(h);
+      } else {
+        buckets["Earlier"].push(h);
+      }
+    }
+
+    ctx += "### Recall Results\n";
+    ctx += "Flash found these potentially relevant past conversations:\n\n";
+
+    for (const [label, items] of Object.entries(buckets)) {
+      if (items.length === 0) continue;
+      ctx += `**${label}**\n`;
+      for (const h of items) {
+        const timeLabel = formatRelativeTime(h.slice_id);
+        ctx += `- \`${h.slice_id}\` (${timeLabel}) — ${h.reason} (relevance ${h.relevance.toFixed(2)})\n`;
+      }
+      ctx += "\n";
+    }
+    ctx += "Use readMemory to read specific slice bodies for deeper context.\n\n";
+  } else if (flashOutput) {
+    ctx += "### Recall Results\n";
+    ctx += "Flash scanned recent conversation history and found no directly relevant past conversations.\n";
+    ctx += "Use readMemory to explore `memory/episodic/tag-index.json` if deeper context is needed.\n\n";
+  }
+
+  return ctx;
+}
+
+// ─── POST handler (M8 refactored) ──────────────────────────────────────
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { messages } = body;
     const model = (body.model as string) ?? "deepseek-chat";
-    const thinking = body.thinking !== false; // default: enabled
+    const thinking = body.thinking !== false;
     const clientTimezone = (body.timezone as string) ?? "UTC";
     const loadedSliceIds = (body.loadedSliceIds as string[]) ?? [];
 
@@ -173,14 +221,13 @@ export async function POST(request: Request) {
 
     const { owner, repo } = getRepoConfig();
 
-    // Extract recent conversation for Flash context
+    // Extract recent conversation context
     const modelMessages = await convertToModelMessages(messages);
-    const recentTurns = modelMessages.slice(-6).map((m) => ({
+    const recentTurns = modelMessages.slice(-8).map((m) => ({
       role: m.role as string,
       content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
     }));
 
-    // Get the user's latest message for M3 pipeline
     const userMessages = messages.filter((m: { role: string }) => m.role === "user");
     const lastMsg = userMessages[userMessages.length - 1];
     const lastUserMessage =
@@ -188,32 +235,20 @@ export async function POST(request: Request) {
       ?? lastMsg?.content
       ?? "";
 
-    // Build dynamic context via M3 pipeline (Flash + Memory + Assembler)
-    const t0 = Date.now();
-    const { prompt: dynamicSystemPrompt, intent, source, confidence, recall_hint: flashRecallHint, suggested_topics: flashTopics } =
-      await buildDynamicSystemPrompt(lastUserMessage, recentTurns);
-    console.log(
-      `[M3] intent=${intent} source=${source} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`
-    );
-
-    // ─── Episodic slice management (M7.3a: lazy close) ────────────────────
+    // ─── Step 1: Housekeeping (M8: moved to request start, time-only) ───
     let slice = getActiveSlice();
 
     if (!slice) {
-      // Memory empty — check disk/GitHub for today's slice (page refresh recovery)
+      // Try disk recovery (page refresh scenario)
       const diskSlice = await tryLoadTodaySlice();
       if (diskSlice && diskSlice.status === "active") {
         const lastTurn = diskSlice.turns[diskSlice.turns.length - 1];
         const lastActivity = new Date(lastTurn.timestamp).getTime();
-        const minutesAgo = (Date.now() - lastActivity) / 60000;
-
-        if (minutesAgo > 30) {
-          // Left long enough — close old slice, create new
+        if (checkTimeSilence(lastActivity)) {
           await closeSlice(diskSlice, "time_silence");
           console.log(`[Episodic] Recovered & closed stale slice: ${diskSlice.slice_id}`);
           slice = createSlice(lastUserMessage, clientTimezone);
         } else {
-          // Just a refresh — restore the active slice
           setActiveSlice(diskSlice);
           slice = diskSlice;
           console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
@@ -222,208 +257,113 @@ export async function POST(request: Request) {
         slice = createSlice(lastUserMessage, clientTimezone);
         console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
       }
+    } else {
+      // Check time silence on active slice
+      const lastTurnTs = slice.turns.length > 0
+        ? new Date(slice.turns[slice.turns.length - 1].timestamp).getTime()
+        : Date.now();
+      if (checkTimeSilence(lastTurnTs)) {
+        await closeSlice(slice, "time_silence");
+        console.log(`[Episodic] Closed stale slice: ${slice.slice_id}`);
+        slice = createSlice(lastUserMessage, clientTimezone);
+      }
     }
 
-    // Append user turn — but skip if createSlice just added it (recovery restores without adding)
+    // Append user message (skip if createSlice already added it)
     const isNewSlice = slice.turns.length === 1 && slice.turns[0].content === lastUserMessage;
     if (!isNewSlice) {
-      appendTurn(slice, {
-        timestamp: new Date().toISOString(),
-        role: "user",
-        content: lastUserMessage,
-      });
+      appendTurn(slice, { timestamp: new Date().toISOString(), role: "user", content: lastUserMessage });
     }
-
-    // Save initial snapshot for new slices
     if (isNewSlice) {
       saveSliceSnapshot(slice).then(() => ensureIndexEntries(slice)).catch(() => {});
     }
 
-    // Deterministic split checks (time silence, capacity) — no Flash calls
-    let pendingSplit: SplitDecision | null = null;
-    const lastTurnTs =
-      slice.turns.length > 1
-        ? new Date(slice.turns[slice.turns.length - 2].timestamp).getTime()
-        : Date.now();
+    // ─── Step 2: Unified Flash (M8: one call, three outputs) ────────────
+    const t0 = Date.now();
+    let flashOutput: MaintenanceOutput | null = null;
 
-    if (checkTimeSilence(lastTurnTs)) {
-      pendingSplit = {
-        shouldSplit: true,
-        source: "time_silence" as SlicingSignal,
-        confidence: 1.0,
-        reason: "Time silence threshold exceeded",
-      };
-    } else if (checkCapacity(slice)) {
-      pendingSplit = {
-        shouldSplit: true,
-        source: "capacity" as SlicingSignal,
-        confidence: 1.0,
-        reason: `Capacity limit: ${slice.turns.length} turns, ~${slice.estimatedTokens} tokens`,
-      };
-    }
-
-    // Flash continuity check — only called when deterministic didn't fire
-    let flashSplitResult: {
-      shouldSplit: boolean;
-      confidence: number;
-      reason: string;
-      suggestedFocus?: string;
-    } | null = null;
-    if (!pendingSplit) {
-      const flashInput: FlashSplitInput = {
-        timeSinceLastMessage: Math.round((Date.now() - lastTurnTs) / 1000),
-        currentSliceFocus: slice.focus,
-        currentSliceTopics: slice.tags,
-        recentHistory: slice.turns.slice(-5),
+    try {
+      const recentSummaries = await readRecentSummaries(15);
+      flashOutput = await runUnifiedFlash({
+        slice: {
+          slice_id: slice.slice_id,
+          focus: slice.focus || "",
+          summary: slice.summary || "",
+          open_loops: slice.open_loops || [],
+          decisions: slice.decisions || [],
+          tags: slice.tags || [],
+          emotional_tone: slice.emotional_tone || "neutral",
+        },
+        recentTurns,
         newMessage: lastUserMessage,
-      };
-      flashSplitResult = await checkContinuity(flashInput);
-      if (flashSplitResult.shouldSplit) {
-        pendingSplit = {
-          shouldSplit: true,
-          source: "flash_high_confidence" as SlicingSignal,
-          confidence: flashSplitResult.confidence,
-          reason: flashSplitResult.reason,
-          suggestedFocus: flashSplitResult.suggestedFocus,
-        };
-      }
-    }
+        recentSummaries,
+      });
 
-    if (pendingSplit) {
       console.log(
-        `[Episodic] Split pending: ${pendingSplit.source} — ${pendingSplit.reason}`
-      );
-    }
-
-    // ─── Inject episodic context into the system prompt ───────────────────
-    let episodicContext = "\n\n## Episodic Memory\n\n### Current Session\n";
-    episodicContext += `- Slice ID: ${slice.slice_id}\n`;
-    episodicContext += `- Turns so far: ${slice.turns.length}\n`;
-    if (slice.focus) episodicContext += `- Focus: ${slice.focus}\n`;
-    if (slice.summary) episodicContext += `- Summary: ${slice.summary}\n`;
-    if (slice.open_loops.length > 0) {
-      episodicContext += `- Open loops: ${slice.open_loops
-        .map((l: string) => `"${l}"`)
-        .join(", ")}\n`;
-    }
-    if (slice.decisions.length > 0) {
-      episodicContext += `- Decisions: ${slice.decisions
-        .map((d: string) => `"${d}"`)
-        .join(", ")}\n`;
-    }
-
-    // Recall Agent: scan parallel-timeline (indices only, no slice bodies)
-    let recallHitsCount = 0;
-    if (flashTopics && flashTopics.length > 0) {
-      const hits = await scanTopics(flashTopics.slice(0, 3));
-
-      // Fallback: when parallel-timeline index is empty, build from recent slices' metadata
-      if (hits.length === 0) {
-        const recentIndex = await readSliceIndex(
-          new Date().getUTCFullYear(),
-          new Date().getUTCMonth() + 1
-        );
-        const matched = recentIndex
-          .filter((s) =>
-            flashTopics.some(
-              (t) =>
-                s.tags?.some((tag: string) => tag.includes(t)) ||
-                s.focus?.toLowerCase().includes(t) ||
-                s.summary?.toLowerCase().includes(t)
-            )
-          )
-          .slice(0, 3);
-        for (const s of matched) {
-          episodicContext += `- \`${s.start.slice(0, 7)}/${s.id}\` (focus: ${s.focus || s.summary || "untitled"})\n`;
-          if (s.open_loops?.length) episodicContext += `  Open: ${s.open_loops.map((l: string) => `"${l}"`).join(", ")}\n`;
-          if (s.decisions?.length) episodicContext += `  Decided: ${s.decisions.map((d: string) => `"${d}"`).join(", ")}\n`;
-        }
-        if (matched.length > 0) {
-          episodicContext = episodicContext || "\n### Recall Results\n";
-          recallHitsCount = matched.length;
-        }
-      } else {
-        episodicContext += "\n### Recall Results\n";
-        episodicContext += "Recall Agent found these potentially relevant slices. Use readMemory to read specific slices if needed.\n\n";
-        for (const hit of hits.slice(0, 5)) {
-          episodicContext += `- \`${hit.slice}\` turns ${hit.turns.join(",")} (relevance ${hit.relevance.toFixed(2)})\n`;
-          if (hit.open_loops?.length) episodicContext += `  Open: ${hit.open_loops.map(l => `"${l}"`).join(", ")}\n`;
-          if (hit.decisions?.length) episodicContext += `  Decided: ${hit.decisions.map(d => `"${d}"`).join(", ")}\n`;
-        }
-        recallHitsCount = hits.length;
-      }
-    }
-
-    // Recent closed slices — load from monthly index + any slices the client has in its timeline
-    const now = new Date();
-    const currentYear = now.getUTCFullYear();
-    const currentMonth = now.getUTCMonth() + 1;
-    const prevMonth = currentMonth === 1 ? 12 : currentMonth - 1;
-    const prevMonthYear = currentMonth === 1 ? currentYear - 1 : currentYear;
-
-    const [currentMonthIndex, prevMonthIndex] = await Promise.all([
-      readSliceIndex(currentYear, currentMonth),
-      readSliceIndex(prevMonthYear, prevMonth),
-    ]);
-
-    const allRecent = [...prevMonthIndex, ...currentMonthIndex]
-      .filter(
-        (e) =>
-          e.status === "closed" &&
-          e.id !== slice.slice_id.split("-")[2]
+        `[Flash] intent=${flashOutput.intent} confidence=${flashOutput.confidence.toFixed(2)} ` +
+        `recall=${flashOutput.recall_hits.length} updates=${flashOutput.needs_metadata_update} ` +
+        `time=${Date.now() - t0}ms`
       );
 
-    // Merge with client-loaded slice IDs (M7.2e: timeline browsing drives context)
-    const loadedSet = new Set(loadedSliceIds);
-    const mergedClosed = allRecent.filter(
-      (e) => loadedSet.has(`${e.start.slice(0, 7)}/${e.id}`) || allRecent.indexOf(e) >= allRecent.length - 5
-    ).slice(-10);
-
-    if (mergedClosed.length > 0) {
-      episodicContext += "\n### Recent Sessions\n";
-      for (const entry of mergedClosed) {
-        episodicContext += `- [${entry.id}] ${entry.focus || entry.summary || "(untitled)"}\n`;
+      // Apply metadata updates from Flash (M8: per-round maintenance)
+      if (flashOutput.needs_metadata_update && flashOutput.metadata_updates) {
+        const meta: { slice_id: string; focus: string; summary: string; open_loops: string[]; decisions: string[]; tags: string[]; emotional_tone: string } = {
+          slice_id: slice.slice_id,
+          focus: slice.focus || "",
+          summary: slice.summary || "",
+          open_loops: slice.open_loops || [],
+          decisions: slice.decisions || [],
+          tags: slice.tags || [],
+          emotional_tone: slice.emotional_tone || "neutral",
+        };
+        applyMetadataUpdates(meta, flashOutput.metadata_updates);
+        slice.focus = meta.focus;
+        slice.summary = meta.summary;
+        slice.open_loops = meta.open_loops;
+        slice.decisions = meta.decisions;
+        slice.tags = meta.tags;
+        slice.emotional_tone = meta.emotional_tone as typeof slice.emotional_tone;
       }
+    } catch (err) {
+      console.warn("[Flash] Unified call failed, continuing without Flash:", err instanceof Error ? err.message : err);
     }
 
-    // Flash recall hint — directional suggestion for Pro's memory exploration
-    if (flashRecallHint) {
-      const hint = flashRecallHint;
-      episodicContext += `\n### Flash Hint\n`;
-      episodicContext += `The Flash classifier suggests you might find relevant context in time slices tagged: ${hint.suggested_tags.join(", ")} (${hint.suggested_time_range}). ${hint.reason}\n`;
-      episodicContext += `You can browse time slices with readFile("memory/episodic/tag-index.json") to find matching entries.\n`;
-    } else if (flashSplitResult?.reason && !flashSplitResult.shouldSplit) {
-      episodicContext += `\n### Continuity Note\n${flashSplitResult.reason}\n`;
-    }
+    // ─── Step 3: M3 Context Assembly ────────────────────────────────────
+    const { prompt: dynamicSystemPrompt, intent, confidence } =
+      await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
+        ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
+        : undefined);
 
+    console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
+
+    // ─── Step 4: Episodic Context (M8: timeline format) ─────────────────
+    const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
     const finalSystemPrompt = dynamicSystemPrompt + episodicContext;
 
-    // Build recall text for data-flash from Recall Agent results
-    const recallText = (flashTopics && flashTopics.length > 0 && recallHitsCount > 0)
-      ? `Recalled ${recallHitsCount} conversations related to ${flashTopics.slice(0, 3).join(", ")}`
+    // ─── Step 5: Recall text for data-flash ─────────────────────────────
+    const recallHits = flashOutput?.recall_hits ?? [];
+    const recallText = recallHits.length > 0
+      ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
       : null;
 
-    // ─── Multi-phase streaming (M7.1b) ──────────────────────────────────────
-    // Phase 1: Flash recall (data-flash) → Phase 2: Pro thinking → Phase 3: Pro text
-    // All phases appear in a single message bubble on the client.
-    // Uses AI SDK v7 canonical pattern: createUIMessageStream + createUIMessageStreamResponse.
+    // ─── Step 6: Multi-phase streaming ──────────────────────────────────
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        // Phase 1: Recall — Recall Agent results as data-flash custom part
-        if (recallText) {
+        // Phase 1: data-flash (recall results + Flash reasoning if available)
+        if (recallText || flashOutput?.reasoning) {
           writer.write({
             type: "data-flash",
             id: `flash-recall-${Date.now()}`,
             data: {
               phase: "recall",
-              text: recallText,
-              tags: flashTopics ?? [],
-              time_range: flashRecallHint?.suggested_time_range ?? "",
+              text: recallText || "",
+              tags: flashOutput?.suggested_topics ?? [],
+              reasoning: flashOutput?.reasoning ?? "",
             },
           });
         }
 
-        // Phase 2 + 3: Pro — thinking + text via streamText
+        // Phase 2 + 3: Pro — thinking + text
         const result = streamText({
           model: deepseek(model),
           providerOptions: thinking
@@ -433,64 +373,16 @@ export async function POST(request: Request) {
           messages: modelMessages,
           stopWhen: stepCountIs(20),
           onFinish: async ({ text, finishReason }) => {
-            const normalCompletion = finishReason === "stop";
-
-            if (normalCompletion) {
-              appendTurn(slice, {
-                timestamp: new Date().toISOString(),
-                role: "agent",
-                content: text,
-              });
-
-              if (slice.turns.length % 6 === 0 && slice.turns.length > 0) {
-                try {
-                  const summaryResult = await classifyWithFlash({
-                    currentInput: `Summarize in one sentence (≤100 chars): what are we working on?`,
-                    lastTurnSummary: slice.summary,
-                    sessionIntent: slice.focus,
-                    recentTurns: slice.turns.slice(-6).map(t => ({ role: t.role, content: t.content.slice(0, 300) })),
-                  });
-                  if (summaryResult.reasoning && summaryResult.reasoning.length > 10) {
-                    slice.summary = summaryResult.reasoning.slice(0, 100);
-                  }
-                } catch { /* best-effort */ }
-              }
-
+            if (finishReason === "stop") {
+              appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: text });
               await saveSliceSnapshot(slice);
               await ensureIndexEntries(slice);
-
-              if (pendingSplit) {
-                slice.summary = slice.summary || `${slice.turns.length} turns about ${slice.focus || "general chat"}`;
-                await closeSlice(slice, pendingSplit.source);
-                console.log(`[Episodic] Slice closed: ${pendingSplit.source}`);
-
-                // Update parallel-timeline with topics from this slice
-                if (flashTopics && flashTopics.length > 0) {
-                  const slicePath = `${slice.slice_id.slice(0, 4)}/${slice.slice_id.slice(5, 7)}/${slice.slice_id.slice(8, 10)}`;
-                  const allTurns = slice.turns.map((_, i) => i + 1);
-                  updateTopicSources(
-                    flashTopics[0], // primary topic
-                    [{ slice: slicePath, turns: allTurns, relevance: 0.9 }]
-                  ).catch(() => {});
-                  // If there are secondary topics, add them with lower relevance
-                  for (const topic of flashTopics.slice(1, 3)) {
-                    updateTopicSources(
-                      topic,
-                      [{ slice: slicePath, turns: allTurns, relevance: 0.7 }]
-                    ).catch(() => {});
-                  }
-                }
-              }
             } else {
               if (text) {
-                appendTurn(slice, {
-                  timestamp: new Date().toISOString(),
-                  role: "agent",
-                  content: `[partial] ${text}`,
-                });
+                appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: `[partial] ${text}` });
                 saveSliceSnapshot(slice).catch(() => {});
               }
-              console.log(`[Episodic] Pro interrupted (${finishReason}), split discarded`);
+              console.log(`[Episodic] Pro interrupted (${finishReason})`);
             }
           },
           tools: {
@@ -500,9 +392,7 @@ export async function POST(request: Request) {
                 path: z.string().describe("Path within memory/, e.g. 'memory/episodic/slices/2026/07/01.md'"),
               }),
               execute: async ({ path }) => {
-                return USE_GITHUB
-                  ? await readFile(path, repo, owner)
-                  : await readFileLocal(path);
+                return USE_GITHUB ? await readFile(path, repo, owner) : await readFileLocal(path);
               },
             }),
             listMemory: tool({
@@ -511,24 +401,19 @@ export async function POST(request: Request) {
                 path: z.string().describe("Directory path within memory/, e.g. 'memory/episodic/slices/2026/'"),
               }),
               execute: async ({ path }) => {
-                return USE_GITHUB
-                  ? await listFiles(path, repo, owner)
-                  : await listFilesLocal(path);
+                return USE_GITHUB ? await listFiles(path, repo, owner) : await listFilesLocal(path);
               },
             }),
             readIndex: tool({
               description: "Read a monthly _index.json to browse time slices in a given month.",
               inputSchema: z.object({
-                year: z.number().describe("UTC year, e.g. 2026"),
-                month: z.number().min(1).max(12).describe("UTC month, 1-12"),
+                year: z.number(), month: z.number().min(1).max(12),
               }),
               execute: async ({ year, month }) => {
                 const mm = String(month).padStart(2, "0");
                 const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
                 try {
-                  const raw = USE_GITHUB
-                    ? await readFile(path, repo, owner)
-                    : await readFileLocal(path);
+                  const raw = USE_GITHUB ? await readFile(path, repo, owner) : await readFileLocal(path);
                   return JSON.parse(raw);
                 } catch {
                   return { exists: false, month: `${year}-${mm}`, slices: [] };
@@ -545,16 +430,10 @@ export async function POST(request: Request) {
     return createUIMessageStreamResponse({ stream: uiStream });
   } catch (error) {
     if (error instanceof SyntaxError) {
-      return new Response(
-        JSON.stringify({ error: "Invalid JSON in request body" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "Invalid JSON in request body" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
     if (error instanceof Error && error.message.includes("environment variables")) {
-      return new Response(
-        JSON.stringify({ error: error.message }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
     }
     throw error;
   }

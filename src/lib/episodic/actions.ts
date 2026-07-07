@@ -59,7 +59,7 @@ export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boo
     hasMore,
     active: first
       ? {
-          slice_id: `${first.start.slice(0, 7)}/${first.id}`,
+          slice_id: first.id,
           focus: first.focus,
           summary: first.summary,
           start: first.start,
@@ -69,7 +69,7 @@ export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boo
         }
       : null,
     recent: recent.map((s) => ({
-      slice_id: `${s.start.slice(0, 7)}/${s.id}`,
+      slice_id: s.id,
       focus: s.focus,
       summary: s.summary,
       start: s.start,
@@ -124,7 +124,7 @@ export async function getMoreSlices(
 
   return {
     slices: filtered.map((s) => ({
-      slice_id: `${s.start.slice(0, 7)}/${s.id}`,
+      slice_id: s.id,
       focus: s.focus,
       summary: s.summary,
       start: s.start,
@@ -153,8 +153,7 @@ export async function getSliceContent(
   sliceId: string
 ): Promise<SliceContent | null> {
   try {
-    const [yearMonth, day] = sliceId.split("/");
-    const [year, month] = yearMonth.split("-");
+    const [year, month, day] = sliceId.split("-");
     const path = `memory/episodic/slices/${year}/${month}/${day}.md`;
     console.log(`[Episodic] getSliceContent: sliceId=${sliceId} → path=${path}`);
     const raw = await readSliceBody(path);

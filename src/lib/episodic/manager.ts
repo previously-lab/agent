@@ -407,9 +407,8 @@ export async function readSliceBody(path: string): Promise<string> {
  * Build a SliceIndexEntry from a TimeSlice for storage in a monthly index.
  */
 export function toIndexEntry(slice: TimeSlice): SliceIndexEntry {
-  const day = slice.slice_id.split("-")[2] ?? slice.slice_id;
   return {
-    id: day,
+    id: slice.slice_id,
     focus: slice.focus,
     summary: slice.summary,
     tags: slice.tags,
@@ -440,8 +439,8 @@ export async function updateMonthlyIndex(slice: TimeSlice): Promise<void> {
     existing.push(entry);
   }
 
-  // Sort by day (id) ascending
-  existing.sort((a, b) => parseInt(a.id, 10) - parseInt(b.id, 10));
+  // Sort by id ascending (YYYY-MM-DD format sorts correctly as string)
+  existing.sort((a, b) => a.id.localeCompare(b.id));
 
   const indexPath = getIndexPath(year, month);
   const json = serializeIndex(existing, `${yearStr}-${monthStr}`);

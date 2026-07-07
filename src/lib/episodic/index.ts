@@ -22,22 +22,12 @@ export {
   saveSliceSnapshot,
   ensureIndexEntries,
   updateDynamicSummary,
-  freezeSliceSummary,
 } from "./manager";
 
 export {
-  TIME_SILENCE_THRESHOLD_MINUTES,
-  MAX_TURNS_PER_SLICE,
-  MAX_TOKENS_PER_SLICE,
-  FLASH_SPLIT_CONFIDENCE_THRESHOLD,
-  estimateTokens,
+  TIME_SILENCE_THRESHOLD_MS,
   checkTimeSilence,
-  checkCapacity,
-  shouldSplit,
-  checkContinuity,
 } from "./slicer";
-
-export type { SplitDecision } from "./slicer";
 
 export type {
   SliceStatus,
@@ -49,8 +39,6 @@ export type {
   SliceIndexEntry,
   MonthlyIndex,
   TagIndex,
-  FlashSplitInput,
-  FlashSplitOutput,
   RecallHint,
   MismatchLogEntry,
 } from "./types";
