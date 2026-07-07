@@ -108,8 +108,7 @@ export async function getMoreSlices(
       const index = await readSliceIndex(y, m);
       for (const entry of index) {
         if (i === 0) {
-          const day = parseInt(entry.id, 10);
-          if (!isNaN(day) && day < beforeDay) allEntries.push(entry);
+          if (entry.start < before) allEntries.push(entry);
         } else {
           allEntries.push(entry);
         }

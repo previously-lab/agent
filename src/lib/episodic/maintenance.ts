@@ -160,9 +160,8 @@ async function attemptUnifiedFlash(
       temperature: 0.1,
       tools: { flashOutput: unifiedFlashSchema },
       toolChoice: "required",
-      providerOptions: {
-        deepseek: { thinking: { type: "enabled" as const } },
-      },
+      // Note: deepseek-chat does not support thinking mode with toolChoice:required.
+      // Flash reasoning is optional — we run without thinking for reliability.
     }),
     FLASH_TIMEOUT_MS
   );
