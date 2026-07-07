@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Brain } from "lucide-react";
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { ToolLayout } from "./tool-layout";
+import { MarkdownRenderer } from "./markdown";
 
 interface ThinkingBlockProps {
   text: string;
@@ -72,10 +73,8 @@ export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: Thin
     !isStreaming && elapsed > 0 ? `${elapsed} second${elapsed !== 1 ? "s" : ""}` : "";
 
   const expandedContent = hasContent ? (
-    <div className="rounded-md border border-border bg-muted/40 px-3 py-2">
-      <p className="whitespace-pre-wrap break-words text-xs text-muted-foreground">
-        {text}
-      </p>
+    <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+      <MarkdownRenderer content={text} />
     </div>
   ) : undefined;
 

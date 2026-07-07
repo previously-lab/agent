@@ -4,6 +4,7 @@ import { extractRenderState } from "@/lib/chat/tool-state";
 import { ReadFileRenderer } from "./tool-renderers/read-file";
 import { WriteFileRenderer } from "./tool-renderers/write-file";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
+import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
 import { DefaultRenderer } from "./tool-renderers/default";
 
 interface ToolRendererProps {
@@ -14,8 +15,23 @@ interface ToolRendererProps {
   isStreaming: boolean;
 }
 
+/** Human-friendly outer labels — the user sees these, not raw tool names. */
+function friendlyName(toolName: string): string {
+  switch (toolName) {
+    case "readMemory":
+      return "Recalling in detail...";
+    case "listMemory":
+      return "Recalling more...";
+    case "readIndex":
+      return "Scanning timeline...";
+    default:
+      return toolName.charAt(0).toUpperCase() + toolName.slice(1);
+  }
+}
+
 export function ToolRenderer({ toolName, state, input, output, isStreaming }: ToolRendererProps) {
   const renderState = extractRenderState({ state }, null, isStreaming);
+  const displayName = friendlyName(toolName);
 
   switch (toolName) {
     case "readFile":
@@ -42,10 +58,22 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
           state={renderState}
         />
       );
+    case "readMemory":
+    case "listMemory":
+    case "readIndex":
+      return (
+        <MemoryToolRenderer
+          toolName={toolName}
+          displayName={displayName}
+          input={input}
+          output={output}
+          state={renderState}
+        />
+      );
     default:
       return (
         <DefaultRenderer
-          toolName={toolName}
+          toolName={displayName}
           input={input}
           state={renderState}
         />
