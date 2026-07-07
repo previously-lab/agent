@@ -47,7 +47,6 @@ export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boo
   }
 
   const sorted = allSlices
-    .filter((s) => s.status === "closed")
     .sort((a, b) => b.start.localeCompare(a.start));
 
   const recent = sorted.slice(0, PAGE_SIZE);
