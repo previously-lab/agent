@@ -344,21 +344,24 @@ export async function POST(request: Request) {
     const recallHits = flashOutput?.recall_hits ?? [];
     const recallText = recallHits.length > 0
       ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
-      : null;
+      : flashOutput
+        ? "Scanned recent conversations — no directly relevant matches found"
+        : null;
 
     // ─── Step 6: Multi-phase streaming ──────────────────────────────────
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        // Phase 1: data-flash (recall results + Flash reasoning if available)
-        if (recallText || flashOutput?.reasoning) {
+        // Phase 1: data-flash — always send if Flash ran (even with no hits)
+        if (flashOutput) {
           writer.write({
             type: "data-flash",
             id: `flash-recall-${Date.now()}`,
             data: {
               phase: "recall",
               text: recallText || "",
-              tags: flashOutput?.suggested_topics ?? [],
-              reasoning: flashOutput?.reasoning ?? "",
+              tags: flashOutput.suggested_topics ?? [],
+              reasoning: flashOutput.reasoning ?? "",
+              recall_hits: recallHits,
             },
           });
         }

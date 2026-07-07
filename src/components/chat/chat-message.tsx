@@ -34,7 +34,6 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
     const toolParts = parts.filter((p) => p.type?.startsWith("tool-"));
     const textParts = parts.filter((p) => p.type === "text");
 
-    // Concatenate all reasoning chunks into one string
     const reasoningText = reasoningParts
       .map((p) => (p as { text: string }).text)
       .join("\n");
@@ -49,13 +48,48 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
   const toolCount = toolParts.length;
   const hasReasoning = reasoningText.trim().length > 0;
   const hasRecall = recallParts.length > 0;
+  const hasProContent = toolCount > 0 || textContent.length > 0;
 
   return (
     <div className="py-1">
       <Message align={isUser ? "end" : "start"} className="gap-1">
         <MessageContent className="min-w-0">
-          {/* SummaryBar — collapsible wrapper for tool calls */}
-          {isAssistant && (toolCount > 0 || isStreaming) && (
+          {/* ── Phase 1: Recall (M8: always visible, independent collapse) ── */}
+          {isAssistant && hasRecall &&
+            recallParts.map((part, i) => {
+              const p = part as {
+                type: string;
+                data?: {
+                  phase?: string;
+                  text?: string;
+                  tags?: string[];
+                  reasoning?: string;
+                  recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
+                };
+              };
+              return (
+                <RecallPhase
+                  key={i}
+                  text={p.data?.text ?? ""}
+                  tags={p.data?.tags}
+                  reasoning={p.data?.reasoning}
+                  recallHits={p.data?.recall_hits}
+                  isStreaming={isStreaming}
+                />
+              );
+            })
+          }
+
+          {/* ── Phase 2: Reasoning (always visible) ── */}
+          {isAssistant && hasReasoning && (
+            <ThinkingSteps
+              text={reasoningText}
+              isStreaming={isStreaming}
+            />
+          )}
+
+          {/* ── SummaryBar: only when there are tool calls ── */}
+          {isAssistant && toolCount > 0 && (
             <SummaryBar
               messageId={message.id}
               toolCallCount={toolCount}
@@ -66,34 +100,10 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
             />
           )}
 
-          {/* Collapsible message body */}
+          {/* ── Phase 3+4: Tool calls + Text (collapsible via SummaryBar) ── */}
           {isExpanded && (
             <Bubble variant={isUser ? "default" : "secondary"}>
               <BubbleContent>
-                {/* Phase 1: Recall — data-flash from Recall Agent */}
-                {isAssistant && hasRecall &&
-                  recallParts.map((part, i) => {
-                    const p = part as { type: string; data?: { phase?: string; text?: string; tags?: string[]; time_range?: string } };
-                    return (
-                      <RecallPhase
-                        key={i}
-                        text={p.data?.text ?? ""}
-                        tags={p.data?.tags}
-                        timeRange={p.data?.time_range}
-                        isStreaming={isStreaming}
-                      />
-                    );
-                  })
-                }
-
-                {/* Phase 2: Reasoning — grouped into one block */}
-                {isAssistant && hasReasoning && (
-                  <ThinkingSteps
-                    text={reasoningText}
-                    isStreaming={isStreaming}
-                  />
-                )}
-
                 {/* Phase 3: Tool calls */}
                 {toolParts.map((part) => {
                   const p = part as {
@@ -133,7 +143,7 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
             </Bubble>
           )}
 
-          {/* Footer: model pill + actions */}
+          {/* ── Footer ── */}
           {isAssistant && textContent && !isStreaming && (
             <MessageFooter className="mt-0.5 opacity-0 group-hover/message:opacity-100 transition-opacity">
               <ModelPill model="deepseek" reasoningEffort="medium" />

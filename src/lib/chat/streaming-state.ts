@@ -16,18 +16,21 @@ export function getLastAssistantMessage(messages: UIMessage[]): UIMessage | null
 
 export function hasRenderableContent(message: UIMessage): boolean {
   return message.parts?.some(
-    (p) => p.type === "text" || (p.type?.startsWith("tool-") && (p as { state?: string }).state === "output-available")
+    (p) =>
+      p.type === "text" ||
+      p.type === "data-flash" ||
+      p.type === "reasoning" ||
+      (p.type?.startsWith("tool-") && (p as { state?: string }).state === "output-available")
   ) ?? false;
 }
 
+// Removed M8: outside "Thinking..." indicator is redundant with bubble-internal
+// recall phase + reasoning display. Kept as no-op for backward compat.
 export function shouldShowThinkingIndicator(
-  status: string,
-  messages: UIMessage[]
+  _status: string,
+  _messages: UIMessage[]
 ): boolean {
-  if (!isChatInFlight(status)) return false;
-  const last = getLastAssistantMessage(messages);
-  if (!last) return false;
-  return !hasRenderableContent(last);
+  return false;
 }
 
 export function shouldKeepCollapsedReasoningStreaming(
