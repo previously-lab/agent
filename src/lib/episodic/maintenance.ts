@@ -348,17 +348,32 @@ export async function runUnifiedFlash(
 
 /**
  * Apply metadata updates from Flash to the slice object.
- * Only updates fields that are present and non-null in the update payload.
+ * undefined = no change (omit the field).
+ * null = clear the field (set to empty string/array).
+ * Any other value = update.
  */
+type NullableUpdates = {
+  focus?: string | null;
+  summary?: string | null;
+  open_loops?: string[] | null;
+  decisions?: string[] | null;
+  tags?: string[] | null;
+  emotional_tone?: string | null;
+};
+
 export function applyMetadataUpdates(
   slice: SliceMetadata,
-  updates: Partial<SliceMetadata> | null
+  updates: NullableUpdates | null
 ): void {
   if (!updates) return;
-  if (updates.focus !== undefined && updates.focus !== null) slice.focus = updates.focus;
-  if (updates.summary !== undefined && updates.summary !== null) slice.summary = updates.summary;
-  if (updates.decisions !== undefined && updates.decisions !== null) slice.decisions = updates.decisions;
-  if (updates.open_loops !== undefined && updates.open_loops !== null) slice.open_loops = updates.open_loops;
-  if (updates.tags !== undefined && updates.tags !== null) slice.tags = updates.tags;
-  if (updates.emotional_tone !== undefined && updates.emotional_tone !== null) slice.emotional_tone = updates.emotional_tone;
+
+  // String fields: null clears, undefined skips
+  if (updates.focus !== undefined) slice.focus = updates.focus ?? "";
+  if (updates.summary !== undefined) slice.summary = updates.summary ?? "";
+  if (updates.emotional_tone !== undefined) slice.emotional_tone = updates.emotional_tone ?? "";
+
+  // Array fields: null clears, undefined skips
+  if (updates.decisions !== undefined) slice.decisions = updates.decisions ?? [];
+  if (updates.open_loops !== undefined) slice.open_loops = updates.open_loops ?? [];
+  if (updates.tags !== undefined) slice.tags = updates.tags ?? [];
 }

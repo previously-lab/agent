@@ -8,12 +8,12 @@ export type SlicingSignal =
   | "flash_high_confidence"
   | "capacity";
 
-/** Emotional tone of a time slice, set by Flash on freeze */
+/** Emotional tone of a time slice, maintained by Flash */
 export type EmotionalTone =
-  | "exploratory"
-  | "frustrated"
-  | "decisive"
-  | "neutral";
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "mixed";
 
 // ─── Turn ────────────────────────────────────────────────────────────
 
@@ -89,7 +89,7 @@ export interface TimeSlice {
 
 /** One entry in a monthly _index.json */
 export interface SliceIndexEntry {
-  /** Day-of-month identifier, e.g. "22" */
+  /** Slice identifier in YYYY-MM-DD format, e.g. "2026-07-02" */
   id: string;
   focus: string;
   summary: string;

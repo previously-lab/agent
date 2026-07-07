@@ -59,18 +59,18 @@ Aftrbrez (Afterbreeze) — a personal AI commander platform (C2). Human is the c
 
 ### Chat Component Architecture
 
-Pattern adapted from Open Agents:
+Three-phase message rendering (M8). See `src/components/chat/CLAUDE.md` for full details.
 
-1. **`Chat`** (`index.tsx`) — Main container, useChat hook, streaming state
-2. **`ChatMessage`** — Message bubble with collapsible SummaryBar
-3. **`ChatInput`** — Text area with image attachments + submit/stop
-4. **`ThinkingSteps`** — Reasoning block using ToolLayout
-5. **`SummaryBar`** — Tool count + elapsed timer + collapse toggle
-6. **`ToolRenderer`** — Dispatches to per-tool renderers
-7. **`ToolLayout`** — Shared expandable card with status icon/name/summary/expanded content
-8. **`FileNamePill`** — File path pill with icon (used by tool renderers)
-9. **`SlashCommandDropdown`** — / command autocomplete
-10. **`ModelPill`** — Model name badge
+1. **`Chat`** (`index.tsx`) — Main container, useChat hook, TimelinePanel, MessageScroller
+2. **`ChatMessage`** — Three-phase rendering: Recall → Reasoning → Response
+3. **`RecallPhase`** — Flash recall results with expandable matched slices (ToolLayout + History icon)
+4. **`ThinkingSteps`** — Pro reasoning block (ToolLayout + Brain icon, MarkdownRenderer)
+5. **`ToolRenderer`** — Dispatches to per-tool renderers (MemoryToolRenderer, DefaultRenderer, etc.)
+6. **`ToolLayout`** — Shared expandable card with status icon/name/summary/expanded content
+7. **`ChatInput`** — Text area + submit/stop
+8. **`MarkdownRenderer`** — `react-markdown` + `remark-gfm` + `rehype-highlight`
+9. **`FileNamePill`** — File path pill with icon (used by tool renderers)
+10. **`SlashCommandDropdown`** — / command autocomplete
 
 ### Skills System
 
@@ -104,6 +104,25 @@ Pattern adapted from Open Agents:
 | Archive Sync | `src/lib/archive/` | GitHub archive push with retry/backoff |
 | Model Registry | `src/lib/models/` | DeepSeek model routing + thinking toggle |
 
+### Episodic Memory (M8 — Time-Slice System)
+
+The episodic memory subsystem (`src/lib/episodic/`, see `src/lib/episodic/CLAUDE.md`) is the L2 memory layer:
+
+- **Structure**: `memory/episodic/slices/YYYY/MM/DD.md` — one file per day, YAML frontmatter + conversation turns
+- **Flash/Pro split**: Flash (DeepSeek-chat) handles per-request recall scanning + metadata maintenance. Pro (main model) handles deep recall via `readMemory` tool.
+- **Slicing**: Pure time-driven — 30 minutes of inactivity closes the current slice. No capacity or topic-shift rules.
+- **DEMO_MODE**: `DEMO_MODE=true` redirects `memory/` reads to `memory/demo/personal_14/` (Caleb persona, 30+ slices). Writes go to real `memory/`.
+
+### Chat Rendering
+
+The chat component tree (`src/components/chat/`, see `src/components/chat/CLAUDE.md`) renders messages in three phases:
+
+1. **Recall Phase** — `RecallPhase` (History icon, ToolLayout). Shows Flash recall results with matched slices, reasoning, and tags.
+2. **Reasoning Phase** — `ThinkingSteps` (Brain icon, ToolLayout). Pro's internal reasoning before responding.
+3. **Response Phase** — `Bubble` containing tool calls (ToolRenderer, inline order) + Markdown text.
+
+Tool calls use friendly outer labels (`Recalling in detail...`, `Recalling more...`) with real tool names in expanded view.
+
 ## Project Documentation
 
 | File | Purpose |
@@ -117,11 +136,11 @@ Pattern adapted from Open Agents:
 | `doc/dev.md` | Dev commands, references, and development log |
 | `doc/progress.md` | Current task status and history |
 
-## Current Phase (M6)
+## Current Phase (M8)
 
-**Goal**: Adopt Open Agents generic capabilities — UI component system, chat rendering patterns, skills discovery, route state coverage, shared utilities — while preserving Aftrbrez's unique file-driven architecture.
+**Goal**: Flash overhaul — unified Flash call (intent + recall + maintenance in one round-trip), per-round metadata maintenance, time-only slicing, recall layering (Flash scans summaries, Pro deep-reads files), timeline episodic context, memory tool rendering.
 
-Reference: `doc/design/M6-open-agents-adoption.md`
+Reference: `doc/design/M8-flash-overhaul.md`
 
 ## Constraints
 
