@@ -1,25 +1,4 @@
 {
   "month": "2026-07",
-  "slices": [
-    {
-      "id": "2026-07-06",
-      "focus": "",
-      "summary": "Flash unavailable, fell back to clarify",
-      "tags": [],
-      "status": "active",
-      "start": "2026-07-06T19:32:05.587Z",
-      "open_loops": [],
-      "decisions": []
-    },
-    {
-      "id": "2026-07-07",
-      "focus": "",
-      "summary": "",
-      "tags": [],
-      "status": "active",
-      "start": "2026-07-07T09:26:02.066Z",
-      "open_loops": [],
-      "decisions": []
-    }
-  ]
+  "slices": []
 }

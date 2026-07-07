@@ -2,16 +2,6 @@
   "month": "2023-07",
   "slices": [
     {
-      "id": "2023-07-06",
-      "focus": "",
-      "summary": "Flash unavailable, fell back to clarify",
-      "tags": [],
-      "status": "active",
-      "start": "2023-07-06T19:32:05.587Z",
-      "open_loops": [],
-      "decisions": []
-    },
-    {
       "id": "2023-07-07",
       "focus": "Rebuilding project trust via weekly address-level status sheets",
       "summary": "Switched from vague reassurance to weekly address-level status sheets breaking delays into three buckets: county approval, homeowner documents, and contractor. Handing them out during office hours so residents leave with clear next steps instead of vague frustration. Transparency is gradually rebuilding trust, though there's internal resistance to publicly exposing county-level approval bottlenecks.",
