@@ -68,24 +68,14 @@ export function Chat() {
           <MessageScrollerViewport>
             <MessageScrollerContent
               aria-busy={isStreaming}
-              className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8"
+              className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-24"
             >
               {/* Timeline panel — past memories at top */}
               <MessageScrollerItem messageId="timeline-panel">
                 <TimelinePanel onLoadedIdsChange={handleLoadedIdsChange} />
               </MessageScrollerItem>
 
-              {messages.length === 0 ? (
-                /* Subtle prompt when no messages yet — memory is already visible above */
-                <MessageScrollerItem messageId="empty-state">
-                  <div className="flex flex-col items-center justify-center py-12 text-center px-4">
-                    <p className="text-sm text-muted-foreground/50">
-                      💬 输入你想做的事...
-                    </p>
-                  </div>
-                </MessageScrollerItem>
-              ) : (
-                messages.map((message) => (
+              {messages.map((message) => (
                   <MessageScrollerItem
                     key={message.id}
                     messageId={message.id}
@@ -103,8 +93,7 @@ export function Chat() {
                       }
                     />
                   </MessageScrollerItem>
-                ))
-              )}
+                ))}
 
               {/* Thinking indicator */}
               {showThinking && (

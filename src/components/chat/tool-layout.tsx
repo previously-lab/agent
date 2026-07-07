@@ -99,7 +99,7 @@ export function ToolLayout({
   );
 
   return (
-    <div className="-mx-1.5 rounded-md border border-transparent bg-transparent">
+    <div className="rounded-md border border-transparent bg-transparent">
       <div
         className={cn(
           "group flex min-w-0 select-none items-center gap-2 rounded-md px-1.5 py-1 text-sm",
