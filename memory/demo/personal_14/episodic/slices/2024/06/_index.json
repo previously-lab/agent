@@ -3,28 +3,28 @@
   "slices": [
     {
       "id": "2024-06-23",
-      "focus": "Defending concentrated outreach model with data evidence",
-      "summary": "Faced county budget pressure and defended the concentrated follow-through model using scoreboard data, callback logs, and a wall-mounted status map proving drop-off reduction. Successfully kept the model intact. Shifted from field executor to internal advocate for the approach. Decided to create a one-page standing summary document to institutionalize the argument so it doesn't need to be re-won each budget cycle.",
+      "focus": "Paper scorekeeping at an Astros game as mental reset",
+      "summary": "Spontaneously went to an Astros game with coworker Miguel after a late meeting. He taught simple paper scorekeeping — a structured, bounded activity that held attention and kept work thoughts away for three hours. Realized genuine rest comes from low-pressure social connection, tactile focus, and a clear endpoint.",
       "tags": [
-        "work",
-        "budget-pressure",
-        "data-driven-advocacy",
-        "evidence-based-argument",
-        "concentrated-model",
-        "professional-growth",
-        "internal-politics"
+        "personal",
+        "rest-and-recovery",
+        "work-life-balance",
+        "social-connection",
+        "baseball",
+        "scorekeeping",
+        "mindfulness"
       ],
       "status": "closed",
       "start": "2024-06-23T12:30:00.000Z",
       "open_loops": [
-        "Budget pressure will return — whether the concentrated model is truly protected or just bought another round",
-        "How to institutionalize the argument beyond winning the room once with a single presentation",
-        "Whether the new role of internal defender is sustainable or an additional burden layered onto existing work"
+        "Whether a second game will feel as grounding as the first",
+        "Whether bounded activities with a built-in frame can apply to other areas beyond baseball",
+        "Whether the pencil in the truck will actually turn into a second scorecard"
       ],
       "decisions": [
-        "Create a one-page standing summary with conversion rates, drop-off rates, and follow-through touchpoints",
-        "Keep the wall status map and evidence logs current for rapid deployment when budget pressure returns",
-        "Frame the core argument as 'concentrated follow-through lowers drop-off and protects outcomes' using data not sentiment"
+        "Keep this first scorecard as a meaningful marker of a restorative evening",
+        "Keep a simple pencil in the truck for spontaneous future games",
+        "Go to games only when already downtown, max once or twice a season"
       ]
     }
   ]

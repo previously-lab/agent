@@ -3,28 +3,27 @@
   "slices": [
     {
       "id": "2023-11-19",
-      "focus": "Corridor scoreboard to defend concentrated strategy with data",
-      "summary": "Built a block-level corridor scoreboard tracking completed applications, signed scopes, and visible project starts per block to shift the narrative from proving effort to proving outcomes. The spatial momentum data successfully convinced leadership to maintain the concentrated strategy. Keeping the front page spare with trend markers and an appendix for definitions. Both strong and weak blocks shown together to maintain honest communication.",
+      "focus": "Rediscovering old legal and civic procedurals",
+      "summary": "Rediscovered love for older legal and civic procedurals after a backyard movie night with Lena. Discussed how this signals widening mental space and how to sustain the interest without over-engineering leisure into another optimization project.",
       "tags": [
-        "work",
-        "housing",
-        "community-development",
-        "flood-mitigation",
-        "data-tools",
-        "strategy",
-        "leadership"
+        "personal",
+        "movies",
+        "taste",
+        "rediscovery",
+        "habits",
+        "leisure"
       ],
       "status": "closed",
       "start": "2023-11-19T11:10:00.000Z",
       "open_loops": [
-        "How to politely decline other departments' requests to add columns and agendas to the scoreboard",
-        "Whether a single month of weak data would trigger premature calls to abandon the concentrated approach",
-        "How to protect the tool from being mistaken for a countywide performance dashboard rather than a project-specific tool"
+        "Whether this new interest will stick or become another abandoned phase",
+        "Need to curate a list of older procedurals sorted by mood categories",
+        "Avoid turning leisure into another solo optimization project"
       ],
       "decisions": [
-        "Keep the scoreboard front page spare; add directional trend markers and an optional backup appendix",
-        "Show both strong and weak blocks together, framing weaker pockets as next-step management opportunities",
-        "Add an intended-use sentence to prevent scope creep from other departments wanting to add metrics"
+        "Declare older legal and civic procedurals an active preference, not a fluke",
+        "Create a short mood-sorted list of procedurals to bypass decision fatigue",
+        "Set up a home movie night and leave the door open for another neighbor outing"
       ]
     }
   ]
