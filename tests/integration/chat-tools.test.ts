@@ -103,7 +103,7 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
 
   it("allowed paths work for all three directories", () => {
     expect(isPathAllowed("memory/note.md")).toBe(true);
-    expect(isPathAllowed("memory/projects/aftrbrez/context.md")).toBe(true);
+    expect(isPathAllowed("memory/projects/previously/context.md")).toBe(true);
     expect(isPathAllowed("tasks/status.md")).toBe(true);
     expect(isPathAllowed("sessions/2025-06-25.md")).toBe(true);
     expect(isPathAllowed("memory")).toBe(true);

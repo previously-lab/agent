@@ -24,8 +24,8 @@ function getClientSetting(key: string, fallback: string): string {
 
 export function Chat() {
   const [settings] = useState(() => ({
-    model: getClientSetting("AFTRBREZ_MODEL", "deepseek-chat"),
-    thinking: getClientSetting("AFTRBREZ_THINKING", "true") !== "false",
+    model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
+    thinking: getClientSetting("PREVIOUSLY_THINKING", "true") !== "false",
   }));
 
   const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);

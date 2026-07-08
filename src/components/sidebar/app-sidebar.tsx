@@ -60,7 +60,7 @@ export function AppSidebar() {
         )}
       >
         {(!collapsed || isMobile) && (
-          <span className="font-semibold text-sm">Aftrbrez</span>
+          <span className="font-semibold text-sm">Previously</span>
         )}
         {!isMobile && (
           <button

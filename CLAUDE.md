@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## About
 
-Aftrbrez (Afterbreeze) — a personal AI commander platform (C2). Human is the commander, cloud agents are the staff. Agents don't initiate contact; they work while you're away, results waiting when you return.
+Previously On — a personal AI commander platform (C2). Human is the commander, cloud agents are the staff. Agents don't initiate contact; they work while you're away, results waiting when you return.
 
 **Core narrative**: Not "I'm always with you" but "I come after you're done."
 
@@ -90,7 +90,7 @@ Three-phase message rendering (M8). See `src/components/chat/CLAUDE.md` for full
 
 - `@/*` → `./src/*`
 
-## Core Modules (Aftrbrez unique designs — not from Open Agents)
+## Core Modules (Previously On unique designs — not from Open Agents)
 
 | Module | Path | Purpose |
 |--------|------|---------|

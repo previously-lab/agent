@@ -2,7 +2,7 @@
 
 ## Overview
 
-The episodic memory subsystem records, indexes, and recalls conversation history as discrete **time slices** -- one per calendar day, stored as Markdown files with YAML frontmatter. It is the L2 memory layer in Aftrbrez's three-tier memory architecture (L0/L1 bundled at build time, L2 fetched on-demand at runtime).
+The episodic memory subsystem records, indexes, and recalls conversation history as discrete **time slices** -- one per calendar day, stored as Markdown files with YAML frontmatter. It is the L2 memory layer in Previously On's three-tier memory architecture (L0/L1 bundled at build time, L2 fetched on-demand at runtime).
 
 The subsystem is designed around a **Flash/Pro split**: Flash (a fast, fallible DeepSeek call) handles slicing decisions, intent classification, and metadata maintenance in one round-trip per request. Pro (the main agent) performs deeper recall by reading full slice bodies when Flash finds nothing or the query requires richer context.
 

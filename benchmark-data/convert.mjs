@@ -1,5 +1,5 @@
 /**
- * WorldMemArena → Aftrbrez Time Slice + Memory Node converter
+ * WorldMemArena → Previously On Time Slice + Memory Node converter
  *
  * Reads WorldMemArena lifelong/personal JSON files and produces:
  *   1. Time slice .md files (YAML frontmatter + turn body)
@@ -80,7 +80,7 @@ function extractSimpleTags(text) {
   return [...tags].slice(0, 6);
 }
 
-/** Map WorldMemArena memory_type → Aftrbrez NodeType */
+/** Map WorldMemArena memory_type → Previously On NodeType */
 function mapMemoryType(wmType) {
   const mapping = {
     "Event Memory": "experience",
@@ -425,7 +425,7 @@ function buildGraphIndex(memoryNodes) {
 // ─── Main ───────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("=== WorldMemArena → Aftrbrez Converter ===\n");
+  console.log("=== WorldMemArena → Previously On Converter ===\n");
 
   // Find all JSON files
   const files = fs

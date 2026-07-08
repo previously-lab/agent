@@ -193,7 +193,7 @@ function buildUnifiedPrompt(input: MaintenanceInput): string {
   const { slice, recentTurns, newMessage, recentSummaries } = input;
 
   // Current slice context
-  let prompt = `You are the Flash memory layer for Aftrbrez, a personal AI platform.
+  let prompt = `You are the Flash memory layer for Previously, a personal AI platform.
 You have three jobs. Do them all in one pass.
 
 ## Current Time Slice

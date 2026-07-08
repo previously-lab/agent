@@ -24,7 +24,7 @@ export function RepoHub() {
   useEffect(() => {
     setMounted(true);
     // Load from localStorage
-    const saved = localStorage.getItem("AFTRBREZ_REPOS");
+    const saved = localStorage.getItem("PREVIOUSLY_REPOS");
     const manual: RepoEntry[] = saved ? JSON.parse(saved) : [];
     setRepos(manual);
 
@@ -65,7 +65,7 @@ export function RepoHub() {
 
       const updated = [...repos, entry];
       setRepos(updated);
-      localStorage.setItem("AFTRBREZ_REPOS", JSON.stringify(updated));
+      localStorage.setItem("PREVIOUSLY_REPOS", JSON.stringify(updated));
       setUrlInput("");
     } catch {
       setError("Failed to add repository");
@@ -77,7 +77,7 @@ export function RepoHub() {
   const handleRemove = (id: string) => {
     const updated = repos.filter((r) => r.id !== id);
     setRepos(updated);
-    localStorage.setItem("AFTRBREZ_REPOS", JSON.stringify(updated));
+    localStorage.setItem("PREVIOUSLY_REPOS", JSON.stringify(updated));
   };
 
   if (!mounted) {

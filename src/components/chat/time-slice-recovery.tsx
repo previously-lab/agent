@@ -85,10 +85,10 @@ function FirstTimeWelcome({ className }: { className?: string }) {
         </span>
 
         <div>
-          <p className="text-sm font-medium text-foreground">Afterbreeze</p>
+          <p className="text-sm font-medium text-foreground">Previously On</p>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            I&rsquo;m your Agent. Our relationship is continuous — every
-            interaction becomes a memory.
+            I&rsquo;m your Agent. Every interaction is an episode
+            &mdash; when you return, your story picks up where you left off.
           </p>
         </div>
       </CardContent>

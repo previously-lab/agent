@@ -1,5 +1,5 @@
 /**
- * Seed Demo Persona — extract a single WorldMemArena persona into Aftrbrez format.
+ * Seed Demo Persona — extract a single WorldMemArena persona into Previously On format.
  *
  * Usage: node scripts/seed-demo-persona.mjs [persona_id]
  * Default: personal_14 (Caleb Martin Hebert)

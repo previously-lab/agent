@@ -19,20 +19,20 @@ export function SettingsForm() {
 
   useEffect(() => {
     setMounted(true);
-    setModel(localStorage.getItem("AFTRBREZ_MODEL") ?? "deepseek-chat");
-    setThinking(localStorage.getItem("AFTRBREZ_THINKING") !== "false");
+    setModel(localStorage.getItem("PREVIOUSLY_MODEL") ?? "deepseek-chat");
+    setThinking(localStorage.getItem("PREVIOUSLY_THINKING") !== "false");
     setRepoOwner(localStorage.getItem("GITHUB_REPO_OWNER") ?? "");
     setRepoName(localStorage.getItem("GITHUB_REPO_NAME") ?? "");
   }, []);
 
   const handleModelChange = (m: string) => {
     setModel(m);
-    localStorage.setItem("AFTRBREZ_MODEL", m);
+    localStorage.setItem("PREVIOUSLY_MODEL", m);
   };
 
   const handleThinkingChange = (v: boolean) => {
     setThinking(v);
-    localStorage.setItem("AFTRBREZ_THINKING", String(v));
+    localStorage.setItem("PREVIOUSLY_THINKING", String(v));
   };
 
   const handleDeploy = async () => {
@@ -155,7 +155,7 @@ export function SettingsForm() {
             type="text"
             value={repoName}
             onChange={(e) => setRepoName(e.target.value)}
-            placeholder="GitHub Repo Name (e.g. Aftrbrez)"
+            placeholder="GitHub Repo Name (e.g. previously)"
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <Button onClick={handleSave} disabled={!repoOwner || !repoName} className="w-full">
