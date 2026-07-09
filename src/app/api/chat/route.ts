@@ -8,6 +8,7 @@ import { classifyIntentKeywords } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
+import { buildAgentIdentityPrompt, loadUserProfile } from "@/lib/identity";
 import type { MemoryNode } from "@/lib/memory/types";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -80,15 +81,11 @@ async function buildDynamicSystemPrompt(
   const ranked = rankNodes(candidates, userInput, intent, strategy.max_nodes);
   const loadedNodes = ranked.map((meta) => loadNodeOnDisk(meta)).filter((n): n is MemoryNode => n !== null);
 
-  const baseSystemPrompt = `You are Previously, a personal AI agent that remembers everything you do. Previously scans your past conversations (time slices) and surfaces what matters — like a "previously on…" recap before every new episode of your work.
-
-Tool usage rules:
-- Use tools ONLY when the user explicitly asks you to read/write/list files
-- Do NOT call tools just to "check" or "explore" — answer from your knowledge first
-- If the user is just chatting or asking questions, do NOT call any tools
-- When you do call a tool, be specific about the path
-
-File access: only memory/, tasks/, sessions/ directories.
+  // Agent identity + directives are bundled from identity/agent/*.md (immutable
+  // at runtime). The user profile is loaded live from memory/ (latest version,
+  // agent-editable) and woven in here.
+  const userProfile = await loadUserProfile();
+  const baseSystemPrompt = `${buildAgentIdentityPrompt(userProfile)}
 
 Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})
 `;

@@ -49,9 +49,15 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# ===== Generated (codegen from identity/agent/*.md) =====
+src/lib/identity/*.generated.ts
+
 # ===== Testing =====
 coverage/
 .nyc_output/
+
+# ===== Benchmark data (local only, large files) =====
+benchmark-data/
 
 # ===== Misc =====
 *.pem

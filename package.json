@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "generate:identity": "node scripts/generate-identity.mjs",
+    "predev": "node scripts/generate-identity.mjs",
     "dev": "next dev --turbopack",
+    "prebuild": "node scripts/generate-identity.mjs",
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
