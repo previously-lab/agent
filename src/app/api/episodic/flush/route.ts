@@ -10,6 +10,7 @@
 import { readFile, writeFile } from "@/lib/tools";
 import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
 import { sliceIdToFilePath } from "@/lib/episodic/manager";
+import { z } from "zod";
 
 // ─── Environment detection ───────────────────────────────────────────────
 
@@ -23,10 +24,20 @@ function getRepoConfig(): { owner: string; repo: string } {
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
-interface FlushRequest {
-  sliceId: string;
-  turns: Array<{ role: string; content: string; timestamp: string }>;
-}
+const flushRequestSchema = z.object({
+  sliceId: z.string().min(1).max(64),
+  turns: z
+    .array(
+      z.object({
+        role: z.enum(["user", "agent"]),
+        content: z.string().max(100_000),
+        timestamp: z.string().max(64),
+      })
+    )
+    .min(1),
+});
+
+type FlushRequest = z.infer<typeof flushRequestSchema>;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
@@ -75,23 +86,14 @@ function buildFreshFrontmatter(sliceId: string): string {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as FlushRequest;
-    const { sliceId, turns } = body;
-
-    // Validate required fields
-    if (!sliceId || typeof sliceId !== "string") {
+    const parsed = flushRequestSchema.safeParse(await request.json());
+    if (!parsed.success) {
       return Response.json(
-        { error: "sliceId is required and must be a string" },
+        { error: "Invalid request body" },
         { status: 400 }
       );
     }
-
-    if (!turns || !Array.isArray(turns) || turns.length === 0) {
-      return Response.json(
-        { error: "turns must be a non-empty array" },
-        { status: 400 }
-      );
-    }
+    const { sliceId, turns } = parsed.data;
 
     // Compute the slice file path (matching getSlicePath in the episodic manager)
     const slicePath = sliceIdToFilePath(sliceId);
@@ -137,7 +139,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("[episodic/flush] Persist failed:", error);
     return Response.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
+      { error: "Internal error" },
       { status: 500 }
     );
   }

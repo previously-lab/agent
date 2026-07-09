@@ -417,7 +417,7 @@ export async function POST(request: Request) {
             readIndex: tool({
               description: "Read a monthly _index.json to browse time slices in a given month.",
               inputSchema: z.object({
-                year: z.number(), month: z.number().min(1).max(12),
+                year: z.number().int().min(2000).max(2100), month: z.number().min(1).max(12),
               }),
               execute: async ({ year, month }) => {
                 const mm = String(month).padStart(2, "0");
@@ -443,7 +443,8 @@ export async function POST(request: Request) {
       return new Response(JSON.stringify({ error: "Invalid JSON in request body" }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
     if (error instanceof Error && error.message.includes("environment variables")) {
-      return new Response(JSON.stringify({ error: error.message }), { status: 500, headers: { "Content-Type": "application/json" } });
+      console.error("[chat] Configuration error:", error.message);
+      return new Response(JSON.stringify({ error: "Server configuration error" }), { status: 500, headers: { "Content-Type": "application/json" } });
     }
     throw error;
   }

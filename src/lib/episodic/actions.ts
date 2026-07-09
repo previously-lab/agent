@@ -152,11 +152,8 @@ export async function getSliceContent(
 ): Promise<SliceContent | null> {
   try {
     const path = sliceIdToFilePath(sliceId);
-    console.log(`[Episodic] getSliceContent: sliceId=${sliceId} → path=${path}`);
     const raw = await readSliceBody(path);
-    console.log(`[Episodic] getSliceContent: read ${raw.length} bytes`);
     const slice = parseSlice(raw);
-    console.log(`[Episodic] getSliceContent: parsed ${slice.turns.length} turns, ${slice.turns.reduce((s,t) => s + t.content.length, 0)} chars`);
 
     const totalChars = slice.turns.reduce(
       (sum, t) => sum + t.content.length,

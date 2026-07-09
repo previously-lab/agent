@@ -285,7 +285,10 @@ export async function readRecentSummaries(
     }
     try {
       const index = await readSliceIndex(y, m);
-      for (const entry of index) {
+      // Monthly index is stored ascending (oldest → newest); iterate
+      // newest-first so we collect the genuinely recent slices, not the
+      // oldest `limit` of the month.
+      for (const entry of [...index].reverse()) {
         if (entry.status !== "closed") continue;
         // Construct full slice_id from the index entry
         const sliceId = entry.id?.includes("-")

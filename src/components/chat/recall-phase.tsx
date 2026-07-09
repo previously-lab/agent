@@ -86,7 +86,7 @@ export function RecallPhase({
 
   const name = isStreaming ? "Recalling..." : "Recalled";
   const summary =
-    !isStreaming && elapsed > 0 ? `${elapsed / 1000}s` : "";
+    !isStreaming && elapsed > 0 ? `${elapsed}s` : "";
 
   const expandedContent = hasDetails ? (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-2 text-xs text-muted-foreground leading-relaxed">
