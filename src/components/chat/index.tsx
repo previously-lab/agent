@@ -5,7 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { ChatInput } from "./chat-input";
 import { ChatMessage } from "./chat-message";
 import { useState, useCallback, useRef } from "react";
-import { Loader2, MessageSquare, Clock, Settings } from "lucide-react";
+import { Loader2, MessageSquare, Clock } from "lucide-react";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
 import {
   MessageScroller,
@@ -15,10 +15,11 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { SettingsForm } from "@/components/settings/settings-form";
 import { TimelinePanel } from "./timeline-panel";
-import { Link, usePathname } from "@/i18n/navigation";
+import { Link } from "@/i18n/navigation";
+import { cn } from "@/lib/utils";
+
+type ChatMode = "chat" | "timeline";
 
 function getClientSetting(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -26,9 +27,7 @@ function getClientSetting(key: string, fallback: string): string {
 }
 
 export function Chat() {
-  const pathname = usePathname();
-  const isTimeline = pathname?.endsWith("/timeline");
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mode, setMode] = useState<ChatMode>("chat");
 
   const [settings] = useState(() => ({
     model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
@@ -76,22 +75,22 @@ export function Chat() {
               aria-busy={isStreaming}
               className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-24"
             >
-              {/* Timeline panel — always visible at top */}
-              {!isTimeline && (
+              {/* ── Timeline panel — chat mode ── */}
+              {mode === "chat" && (
                 <MessageScrollerItem messageId="timeline-panel">
                   <TimelinePanel onLoadedIdsChange={handleLoadedIdsChange} />
                 </MessageScrollerItem>
               )}
 
-              {/* Timeline reading mode — full page vertical diary */}
-              {isTimeline && (
+              {/* ── Timeline reading mode ── */}
+              {mode === "timeline" && (
                 <MessageScrollerItem messageId="timeline-page">
                   <TimelinePanel mode="page" onLoadedIdsChange={handleLoadedIdsChange} />
                 </MessageScrollerItem>
               )}
 
-              {/* Messages — only in chat mode */}
-              {!isTimeline && messages.map((message) => (
+              {/* ── Messages — chat mode only ── */}
+              {mode === "chat" && messages.map((message) => (
                 <MessageScrollerItem
                   key={message.id}
                   messageId={message.id}
@@ -139,43 +138,42 @@ export function Chat() {
           <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
         </div>
 
-        {/* Bottom nav row */}
-        <div className="flex items-center justify-center gap-6 pt-1.5 pb-1">
-          <Link
-            href="/"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            Chat
-          </Link>
-          <Link
-            href="/timeline"
-            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
-          >
-            <Clock className="h-3.5 w-3.5" />
-            Timeline
-          </Link>
+        {/* Mode toggle — small bubble-like chips below input */}
+        <div className="flex items-center justify-center gap-2 pt-2 pb-1">
           <button
-            onClick={() => setSettingsOpen(true)}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+            onClick={() => setMode("chat")}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors",
+              mode === "chat"
+                ? "bg-muted text-foreground/80"
+                : "text-muted-foreground/30 hover:text-muted-foreground/50"
+            )}
           >
-            <Settings className="h-3.5 w-3.5" />
-            Settings
+            <MessageSquare className="h-3 w-3" />
+            Chat
           </button>
+
+          <button
+            onClick={() => setMode("timeline")}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors",
+              mode === "timeline"
+                ? "bg-muted text-foreground/80"
+                : "text-muted-foreground/30 hover:text-muted-foreground/50"
+            )}
+          >
+            <Clock className="h-3 w-3" />
+            Timeline
+          </button>
+
+          <Link
+            href="/settings"
+            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors"
+          >
+            ⚙️ Settings
+          </Link>
         </div>
       </div>
-
-      {/* Settings Sheet */}
-      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <SheetContent side="right">
-          <SheetHeader>
-            <SheetTitle>Settings</SheetTitle>
-          </SheetHeader>
-          <div className="mt-4">
-            <SettingsForm />
-          </div>
-        </SheetContent>
-      </Sheet>
     </div>
   );
 }
