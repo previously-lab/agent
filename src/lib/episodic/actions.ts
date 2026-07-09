@@ -1,6 +1,6 @@
 "use server";
 
-import { readSliceIndex, readSliceBody, parseSlice } from "./manager";
+import { readSliceIndex, readSliceBody, parseSlice, sliceIdToFilePath } from "./manager";
 import type { Turn } from "./types";
 
 export interface SliceSummary {
@@ -151,8 +151,7 @@ export async function getSliceContent(
   sliceId: string
 ): Promise<SliceContent | null> {
   try {
-    const [year, month, day] = sliceId.split("-");
-    const path = `memory/episodic/slices/${year}/${month}/${day}.md`;
+    const path = sliceIdToFilePath(sliceId);
     console.log(`[Episodic] getSliceContent: sliceId=${sliceId} → path=${path}`);
     const raw = await readSliceBody(path);
     console.log(`[Episodic] getSliceContent: read ${raw.length} bytes`);

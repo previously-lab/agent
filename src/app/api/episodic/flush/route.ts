@@ -9,6 +9,7 @@
  */
 import { readFile, writeFile } from "@/lib/tools";
 import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
+import { sliceIdToFilePath } from "@/lib/episodic/manager";
 
 // ─── Environment detection ───────────────────────────────────────────────
 
@@ -93,8 +94,7 @@ export async function POST(request: Request) {
     }
 
     // Compute the slice file path (matching getSlicePath in the episodic manager)
-    const [year, month, day] = sliceId.split("-");
-    const slicePath = `memory/episodic/slices/${year}/${month}/${day}.md`;
+    const slicePath = sliceIdToFilePath(sliceId);
 
     // ── Read the existing slice body (if any) ──────────────────────────
     let existingContent = "";

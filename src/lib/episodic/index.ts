@@ -3,6 +3,8 @@ export {
   createSlice,
   closeSlice,
   getSlicePath,
+  sliceIdToRelPath,
+  sliceIdToFilePath,
   getIndexPath,
   getTagIndexPath,
   serializeSlice,

@@ -89,7 +89,9 @@ export function createSlice(userMessage: string, timezone: string): TimeSlice {
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
-  const sliceId = `${year}-${month}-${day}`;
+  const hh = String(now.getUTCHours()).padStart(2, "0");
+  const mm = String(now.getUTCMinutes()).padStart(2, "0");
+  const sliceId = `${year}-${month}-${day}-${hh}${mm}`;
   const start = now.toISOString();
 
   const firstTurn: Turn = {
@@ -118,21 +120,30 @@ export function createSlice(userMessage: string, timezone: string): TimeSlice {
 }
 
 /**
- * Try to load today's time slice from disk/GitHub.
- * Used on page refresh — recovers the active slice that was in memory.
- * Returns null if no slice exists for today.
+ * Try to recover today's active time slice from disk/GitHub.
+ * Used on page refresh — a day is a directory of slice files (DD/HHMM.md),
+ * so we scan today's directory and return the most recent slice that is still
+ * `active`. Returns null if the directory is missing or holds no active slice.
  */
 export async function tryLoadTodaySlice(): Promise<TimeSlice | null> {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
-  const path = `memory/episodic/slices/${year}/${month}/${day}.md`;
+  const dir = `memory/episodic/slices/${year}/${month}/${day}`;
 
   try {
-    const raw = await fsReadFile(path);
-    const slice = parseSlice(raw);
-    return slice;
+    const entries = await fsListFiles(dir);
+    const files = entries
+      .filter((e) => e.type === "file" && e.name.endsWith(".md"))
+      .sort((a, b) => b.name.localeCompare(a.name)); // newest HHMM first
+
+    for (const f of files) {
+      const raw = await fsReadFile(f.path);
+      const slice = parseSlice(raw);
+      if (slice.status === "active") return slice;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -170,12 +181,30 @@ export async function closeSlice(
 // ─── Path computation ────────────────────────────────────────────────────
 
 /**
+ * Derive the slices-relative path (no `slices/` prefix, no `.md`) from a slice_id.
+ * New format:  `YYYY-MM-DD-HHMM` → `YYYY/MM/DD/HHMM`
+ * Legacy:      `YYYY-MM-DD`      → `YYYY/MM/DD`   (kept for robustness)
+ */
+export function sliceIdToRelPath(sliceId: string): string {
+  const p = sliceId.split("-");
+  return p.length >= 4
+    ? `${p[0]}/${p[1]}/${p[2]}/${p[3]}`
+    : `${p[0]}/${p[1]}/${p[2]}`;
+}
+
+/**
  * Compute the file path for a time slice .md file.
- * Format: memory/episodic/slices/YYYY/MM/DD.md
+ * New format: memory/episodic/slices/YYYY/MM/DD/HHMM.md
+ */
+export function sliceIdToFilePath(sliceId: string): string {
+  return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}.md`;
+}
+
+/**
+ * Compute the file path for a time slice .md file.
  */
 export function getSlicePath(slice: TimeSlice): string {
-  const [year, month, day] = slice.slice_id.split("-");
-  return `memory/episodic/slices/${year}/${month}/${day}.md`;
+  return sliceIdToFilePath(slice.slice_id);
 }
 
 /**
@@ -439,7 +468,7 @@ export async function updateMonthlyIndex(slice: TimeSlice): Promise<void> {
     existing.push(entry);
   }
 
-  // Sort by id ascending (YYYY-MM-DD format sorts correctly as string)
+  // Sort by id ascending (YYYY-MM-DD-HHMM format sorts correctly as string)
   existing.sort((a, b) => a.id.localeCompare(b.id));
 
   const indexPath = getIndexPath(year, month);
@@ -471,12 +500,11 @@ export async function updateTagIndex(slice: TimeSlice): Promise<void> {
 }
 
 /**
- * Extract the relative path segment from a slice's full file path.
- * Example: "memory/episodic/slices/2026/06/30.md" → "2026/06/30"
+ * Extract the relative path segment from a slice's id (used by the tag index).
+ * Example: "2026-06-30-1430" → "2026/06/30/1430"
  */
 function extractRelativePath(slice: TimeSlice): string {
-  const [year, month, day] = slice.slice_id.split("-");
-  return `${year}/${month}/${day}`;
+  return sliceIdToRelPath(slice.slice_id);
 }
 
 // ─── Testing utilities ───────────────────────────────────────────────────

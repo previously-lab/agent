@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { parseSlice, serializeSlice, toIndexEntry } from "../manager";
+import {
+  parseSlice,
+  serializeSlice,
+  toIndexEntry,
+  sliceIdToRelPath,
+  sliceIdToFilePath,
+} from "../manager";
 import type { TimeSlice, Turn } from "../types";
 
 // ─── Sample data ───────────────────────────────────────────────────────
@@ -11,7 +17,7 @@ const sampleTurns: Turn[] = [
 ];
 
 const sampleSlice: TimeSlice = {
-  slice_id: "2024-03-15",
+  slice_id: "2024-03-15-1000",
   focus: "Project planning discussion",
   status: "closed",
   start: "2024-03-15T10:00:00.000Z",
@@ -236,9 +242,9 @@ Here is a **bold** statement and a [link](https://example.com).
 // ─── toIndexEntry ──────────────────────────────────────────────────────
 
 describe("toIndexEntry", () => {
-  it("uses full slice_id as id (YYYY-MM-DD format)", () => {
+  it("uses full slice_id as id (YYYY-MM-DD-HHMM format)", () => {
     const entry = toIndexEntry(sampleSlice);
-    expect(entry.id).toBe("2024-03-15");
+    expect(entry.id).toBe("2024-03-15-1000");
   });
 
   it("copies metadata fields correctly", () => {
@@ -250,5 +256,31 @@ describe("toIndexEntry", () => {
     expect(entry.start).toBe(sampleSlice.start);
     expect(entry.open_loops).toEqual(sampleSlice.open_loops);
     expect(entry.decisions).toEqual(sampleSlice.decisions);
+  });
+});
+
+// ─── sliceIdToRelPath / sliceIdToFilePath ──────────────────────────────
+
+describe("sliceIdToRelPath", () => {
+  it("maps a time-bearing id to a day-directory + HHMM path", () => {
+    expect(sliceIdToRelPath("2026-07-10-1430")).toBe("2026/07/10/1430");
+  });
+
+  it("falls back to the legacy day path for a date-only id", () => {
+    expect(sliceIdToRelPath("2026-07-10")).toBe("2026/07/10");
+  });
+});
+
+describe("sliceIdToFilePath", () => {
+  it("builds the full .md path under slices/ for a time-bearing id", () => {
+    expect(sliceIdToFilePath("2026-07-10-1430")).toBe(
+      "memory/episodic/slices/2026/07/10/1430.md"
+    );
+  });
+
+  it("builds the legacy path for a date-only id", () => {
+    expect(sliceIdToFilePath("2026-07-10")).toBe(
+      "memory/episodic/slices/2026/07/10.md"
+    );
   });
 });

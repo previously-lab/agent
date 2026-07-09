@@ -2,7 +2,7 @@
 
 ## Overview
 
-The episodic memory subsystem records, indexes, and recalls conversation history as discrete **time slices** -- one per calendar day, stored as Markdown files with YAML frontmatter. It is the L2 memory layer in Previously On's three-tier memory architecture (L0/L1 bundled at build time, L2 fetched on-demand at runtime).
+The episodic memory subsystem records, indexes, and recalls conversation history as discrete **time slices** -- one per real conversation session (closed after 30 minutes of inactivity), stored as Markdown files with YAML frontmatter. A calendar day is a *directory* that may hold multiple slice files. It is the L2 memory layer in Previously On's three-tier memory architecture (L0/L1 bundled at build time, L2 fetched on-demand at runtime).
 
 The subsystem is designed around a **Flash/Pro split**: Flash (a fast, fallible DeepSeek call) handles slicing decisions, intent classification, and metadata maintenance in one round-trip per request. Pro (the main agent) performs deeper recall by reading full slice bodies when Flash finds nothing or the query requires richer context.
 
@@ -24,10 +24,10 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 
 ### 1. Time slice lifecycle
 
-1. **Create** -- `createSlice()` in `manager.ts` is called when the chat route receives a message with no active slice. Derives `slice_id` from UTC date (e.g. `2026-07-07`), creates an in-memory `TimeSlice` with the first turn.
+1. **Create** -- `createSlice()` in `manager.ts` is called when the chat route receives a message with no active slice. Derives `slice_id` from the UTC date+time of the first message (e.g. `2026-07-07-1558`), creates an in-memory `TimeSlice` with the first turn.
 2. **Extend** -- `appendTurn()` adds subsequent turns to the in-memory slice. `saveSliceSnapshot()` writes the slice to disk as a checkpoint every N turns and on `beforeunload`.
 3. **Close** -- `checkTimeSilence()` in `slicer.ts` checks whether 30 minutes have elapsed since the last turn. When `true`, `closeSlice()` in `manager.ts` sets `status: "closed"`, writes the MD file, updates `_index.json` and `tag-index.json`. The cycle repeats with a new slice.
-4. **Recover** -- `tryLoadTodaySlice()` re-hydrates the active slice from disk on page refresh.
+4. **Recover** -- `tryLoadTodaySlice()` scans today's directory (`slices/YYYY/MM/DD/`) and re-hydrates the most recent slice still marked `active` on page refresh.
 
 ### 2. Unified Flash maintenance (per request)
 
@@ -65,8 +65,9 @@ memory/episodic/
   slices/
     YYYY/
       MM/
-        DD.md                   -- time slice body (YAML frontmatter + turns as ## Turn N)
-        _index.json              -- monthly index of all slices in this month
+        DD/
+          HHMM.md              -- time slice body (YAML frontmatter + turns as ## Turn N)
+        _index.json            -- monthly index of all slices in this month
   tag-index.json                 -- global tag -> slice path mapping
   parallel-timelines/
     topic-name.md               -- one per topic (YAML frontmatter: sources[], body: summary)

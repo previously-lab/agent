@@ -109,8 +109,19 @@ Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${sourc
 // ─── Timeline context builder (M8) ──────────────────────────────────────
 
 function formatRelativeTime(iso: string): string {
-  // Accept both ISO timestamp and YYYY-MM-DD date
-  const dateStr = iso.includes("T") ? iso : `${iso}T12:00:00.000Z`;
+  // Accept ISO timestamps, YYYY-MM-DD, and YYYY-MM-DD-HHMM slice ids
+  let dateStr: string;
+  if (iso.includes("T")) {
+    dateStr = iso;
+  } else {
+    const p = iso.split("-");
+    const ymd = `${p[0]}-${p[1]}-${p[2]}`;
+    const time =
+      p.length >= 4
+        ? `${p[3].slice(0, 2)}:${p[3].slice(2, 4)}:00.000Z`
+        : "12:00:00.000Z";
+    dateStr = `${ymd}T${time}`;
+  }
   const then = new Date(dateStr).getTime();
   const now = Date.now();
   const diffMs = now - then;
@@ -165,7 +176,7 @@ function buildTimelineEpisodicContext(
 
     for (const h of hits) {
       const parts = h.slice_id.split("-");
-      if (parts.length === 3) {
+      if (parts.length >= 3) {
         const sliceDate = new Date(`${parts[0]}-${parts[1]}-${parts[2]}`).getTime();
         const daysAgo = Math.floor((Date.now() - sliceDate) / 86_400_000);
         if (daysAgo <= 7) buckets["Today / This Week"].push(h);

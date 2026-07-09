@@ -79,7 +79,7 @@ const unifiedFlashSchema = tool({
     recall_hits: z
       .array(
         z.object({
-          slice_id: z.string().describe("Slice ID in YYYY-MM-DD format"),
+          slice_id: z.string().describe("Slice ID in YYYY-MM-DD-HHMM format"),
           relevance: z.number().min(0).max(1).describe("How relevant this slice is, 0-1"),
           reason: z.string().describe("One-line explanation of why relevant"),
         })

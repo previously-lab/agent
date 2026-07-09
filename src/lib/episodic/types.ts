@@ -31,7 +31,7 @@ export interface Turn {
 
 /** YAML frontmatter stored at the top of every time slice .md file */
 export interface SliceFrontmatter {
-  /** Unique identifier, format YYYY-MM-DD (UTC date of first user message) */
+  /** Unique identifier, format YYYY-MM-DD-HHMM (UTC date+time of first user message) */
   slice_id: string;
   /** Core topic, one sentence */
   focus: string;
@@ -89,7 +89,7 @@ export interface TimeSlice {
 
 /** One entry in a monthly _index.json */
 export interface SliceIndexEntry {
-  /** Slice identifier in YYYY-MM-DD format, e.g. "2026-07-02" */
+  /** Slice identifier in YYYY-MM-DD-HHMM format, e.g. "2026-07-02-1430" */
   id: string;
   focus: string;
   summary: string;

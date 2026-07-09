@@ -108,7 +108,7 @@ Three-phase message rendering (M8). See `src/components/chat/CLAUDE.md` for full
 
 The episodic memory subsystem (`src/lib/episodic/`, see `src/lib/episodic/CLAUDE.md`) is the L2 memory layer:
 
-- **Structure**: `memory/episodic/slices/YYYY/MM/DD.md` — one file per day, YAML frontmatter + conversation turns
+- **Structure**: `memory/episodic/slices/YYYY/MM/DD/HHMM.md` — one file per time slice (a day is a directory), YAML frontmatter + conversation turns
 - **Flash/Pro split**: Flash (DeepSeek-chat) handles per-request recall scanning + metadata maintenance. Pro (main model) handles deep recall via `readMemory` tool.
 - **Slicing**: Pure time-driven — 30 minutes of inactivity closes the current slice. No capacity or topic-shift rules.
 - **DEMO_MODE**: `DEMO_MODE=true` redirects `memory/` reads to `memory/demo/personal_14/` (Caleb persona, 30+ slices). Writes go to real `memory/`.
