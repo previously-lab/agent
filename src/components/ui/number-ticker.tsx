@@ -11,6 +11,8 @@ interface NumberTickerProps extends ComponentPropsWithoutRef<"span"> {
   direction?: "up" | "down"
   delay?: number
   decimalPlaces?: number
+  /** Pad the integer part to at least this many digits (e.g. 2 → "09") */
+  minIntegerDigits?: number
 }
 
 export function NumberTicker({
@@ -20,6 +22,7 @@ export function NumberTicker({
   delay = 0,
   className,
   decimalPlaces = 0,
+  minIntegerDigits,
   ...props
 }: NumberTickerProps) {
   const ref = useRef<HTMLSpanElement>(null)
@@ -53,11 +56,12 @@ export function NumberTicker({
           ref.current.textContent = Intl.NumberFormat("en-US", {
             minimumFractionDigits: decimalPlaces,
             maximumFractionDigits: decimalPlaces,
+            minimumIntegerDigits: minIntegerDigits ?? 1,
             useGrouping: false,
           }).format(Number(latest.toFixed(decimalPlaces)))
         }
       }),
-    [springValue, decimalPlaces]
+    [springValue, decimalPlaces, minIntegerDigits]
   )
 
   return (
@@ -69,7 +73,7 @@ export function NumberTicker({
       )}
       {...props}
     >
-      {startValue}
+      {minIntegerDigits ? String(startValue).padStart(minIntegerDigits, "0") : startValue}
     </span>
   )
 }

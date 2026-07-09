@@ -1,14 +1,17 @@
 "use client";
 
 import { useTimeline } from "@/hooks/use-timeline";
-import { TimeSliceRow, formatSliceDate, formatDateGroup } from "./time-slice-row";
+import {
+  TimeSliceRow,
+  formatSliceDate,
+  formatDateGroup,
+  formatSliceTime,
+} from "./time-slice-row";
 import { Loader2, ChevronDown } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
-import { DashedSeparator } from "./dashed-separator";
-import { DateGroupHeader } from "./date-group-header";
+import { DateGroupHeader, SliceTimeMarker } from "./date-group-header";
 import { useLocale } from "next-intl";
-import dayjs from "dayjs";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
@@ -30,7 +33,11 @@ function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
   return groups;
 }
 
-export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }: TimelinePanelProps) {
+export function TimelinePanel({
+  onLoadedIdsChange,
+  mode = "panel",
+  initialData,
+}: TimelinePanelProps) {
   const { slices, loading, loadingMore, hasMore, loadMore, loadedIds } =
     useTimeline(initialData);
   const locale = useLocale();
@@ -59,11 +66,9 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }
         <div className="text-center pb-4">
           <p className="text-sm text-muted-foreground italic">
             {slices.length > 0
-              ? `${slices.length} conversations spanning ${
-                  formatSliceDate(slices[slices.length - 1]?.start ?? "")
-                } to ${
-                  formatSliceDate(slices[0]?.start ?? "")
-                }`
+              ? `${slices.length} conversations spanning ${formatSliceDate(
+                  slices[slices.length - 1]?.start ?? "",
+                )} to ${formatSliceDate(slices[0]?.start ?? "")}`
               : "No memories yet"}
           </p>
         </div>
@@ -71,7 +76,10 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }
         {/* Slices in chronological order — oldest first */}
         {[...groupEntries].reverse().map(([dateLabel, dateSlices]) =>
           [...dateSlices].reverse().map((slice) => (
-            <div key={slice.slice_id} className="border-b border-border/30 pb-6">
+            <div
+              key={slice.slice_id}
+              className="border-b border-border/30 pb-6"
+            >
               <p className="text-xs text-muted-foreground mb-3 tracking-wider">
                 {dateLabel}
               </p>
@@ -82,7 +90,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }
                 </p>
               )}
             </div>
-          ))
+          )),
         )}
 
         {/* Load more */}
@@ -101,17 +109,24 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }
     );
   }
 
-  // ── Panel mode: chronological, left-aligned date headers ───────────
+  // ── Panel mode: vertical timeline; dots sit inline with their labels ──
   return (
     <div>
-      {/* Load more — at top, subtle */}
-      {hasMore && (
-        <div className="py-2">
+      <div className="relative pl-4">
+        {/* Continuous spine line — dots overlay it, both centered on left-4 */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-4 top-3 bottom-3 w-px -translate-x-1/2 bg-border/60"
+        />
+
+        {/* Load more — older slices load in above */}
+        {hasMore && (
           <button
             onClick={loadMore}
             disabled={loadingMore}
-            className="text-[0.65rem] text-muted-foreground/60 hover:text-muted-foreground transition-colors disabled:cursor-default"
+            className="mb-1 flex items-center gap-2 py-1 text-[0.65rem] text-muted-foreground/60 hover:text-muted-foreground transition-colors disabled:cursor-default"
           >
+            <span className="relative z-10 -ml-[3px] h-1.5 w-1.5 shrink-0 rounded-full bg-border" />
             {loadingMore ? (
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -124,42 +139,64 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }
               </span>
             )}
           </button>
-        </div>
-      )}
+        )}
 
-      {/* Groups of slices by date — chronological order (oldest top → newest bottom) */}
-      {[...groupEntries].reverse().map(([dateLabel, dateSlices], groupIdx) => {
-        const firstSlice = dateSlices[0];
-        const dateParts = firstSlice ? formatDateGroup(firstSlice.start, locale) : null;
+        {/* Timeline — oldest at top → newest at bottom */}
+        {[...groupEntries].reverse().map(([dateLabel, dateSlices]) => {
+          const firstSlice = dateSlices[0];
+          const dateParts = firstSlice
+            ? formatDateGroup(firstSlice.start, locale)
+            : null;
 
-        return (
-          <div key={dateLabel}>
-            {/* Date header — DateGroupHeader component */}
-            {dateParts ? (
-              <DateGroupHeader
-                yearNumber={dateParts.yearNumber}
-                monthNumber={dateParts.monthNumber}
-                monthName={dateParts.monthName}
-                day={dateParts.day}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground pt-6 pb-2">
-                {dateLabel}
-              </p>
-            )}
-            <DashedSeparator className="mb-3" />
+          return (
+            <div key={dateLabel}>
+              {/* Chapter node — date, dot inline with the header */}
+              <div className="flex items-center gap-2 pt-6 pb-1">
+                <span className="relative z-10 -ml-[4px] h-2 w-2 shrink-0 rounded-full bg-foreground" />
+                {dateParts ? (
+                  <DateGroupHeader
+                    yearNumber={dateParts.yearNumber}
+                    monthNumber={dateParts.monthNumber}
+                    monthName={dateParts.monthName}
+                    day={dateParts.day}
+                    className="py-0"
+                  />
+                ) : (
+                  <span className="text-xs font-bold font-mono text-foreground">
+                    {dateLabel}
+                  </span>
+                )}
+              </div>
 
-            {/* Slices within this date group (oldest at top) */}
-            {[...dateSlices].reverse().map((slice) => (
-              <TimeSliceRow key={slice.slice_id} slice={slice} />
-            ))}
+              {/* Slice nodes — oldest at top */}
+              {[...dateSlices].reverse().map((slice) => {
+                const { hour, minute } = formatSliceTime(slice.start);
+                return (
+                  <div key={slice.slice_id}>
+                    {/* time node — dot inline with the time (flex items-center) */}
+                    <div className="flex items-center gap-2 pt-2">
+                      <span className="relative z-10 -ml-[3px] h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground" />
+                      <SliceTimeMarker hour={hour} minute={minute} />
+                    </div>
+                    {/* content — indented clear of the spine */}
+                    <div className="pl-3">
+                      <TimeSliceRow slice={slice} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
 
-            {/* Gap between groups */}
-            {groupIdx < groupEntries.length - 1 && <div className="pb-1" />}
-          </div>
-        );
-      })}
-
+      {/* "现在" — a centered echo of the hero; the timeline runs down and
+          hands off here to the present, then live chat continues below */}
+      <div className="py-12 text-center mt-12">
+        <p className="text-4xl font-medium tracking-tight text-foreground">
+          现在
+        </p>
+      </div>
     </div>
   );
 }

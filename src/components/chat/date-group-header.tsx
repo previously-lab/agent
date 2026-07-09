@@ -2,12 +2,14 @@
 
 import { useLocale } from "next-intl";
 import { NumberTicker } from "@/components/ui/number-ticker";
+import { cn } from "@/lib/utils";
 
 interface DateGroupHeaderProps {
   yearNumber?: number;
   monthNumber: number;
   monthName: string;
   day: number;
+  className?: string;
 }
 
 const ITEM_CLASS =
@@ -22,12 +24,13 @@ export function DateGroupHeader({
   monthNumber,
   monthName,
   day,
+  className,
 }: DateGroupHeaderProps) {
   const locale = useLocale();
 
   if (locale === "zh") {
     return (
-      <div className="flex items-baseline gap-1 pt-6 pb-2 font-mono">
+      <div className={cn("flex items-baseline gap-1 pt-6 pb-2 font-mono", className)}>
         {yearNumber != null && (
           <span className="inline-flex items-baseline gap-0.5">
             <NumberTicker
@@ -52,7 +55,7 @@ export function DateGroupHeader({
 
   // English / other locales
   return (
-    <div className="flex items-baseline gap-2 pt-6 pb-2 font-mono">
+    <div className={cn("flex items-baseline gap-2 pt-6 pb-2 font-mono", className)}>
       <span className={ITEM_CLASS}>{monthName}</span>
       <NumberTicker value={day} className={ITEM_CLASS} />
       {yearNumber != null && (
@@ -63,5 +66,24 @@ export function DateGroupHeader({
         />
       )}
     </div>
+  );
+}
+
+interface SliceTimeMarkerProps {
+  hour: number;
+  minute: number;
+}
+
+/**
+ * A slice's time-of-day (HH:MM) rendered with the same animated NumberTicker
+ * style as DateGroupHeader — the "dynamic time" family extended to minutes.
+ */
+export function SliceTimeMarker({ hour, minute }: SliceTimeMarkerProps) {
+  return (
+    <span className="inline-flex items-baseline font-mono tabular-nums leading-none">
+      <NumberTicker value={hour} minIntegerDigits={2} className={ITEM_CLASS} />
+      <span className={ITEM_CLASS}>:</span>
+      <NumberTicker value={minute} minIntegerDigits={2} className={ITEM_CLASS} />
+    </span>
   );
 }

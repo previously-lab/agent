@@ -102,6 +102,15 @@ export function formatDateGroup(
   return result;
 }
 
+/**
+ * Slice time-of-day in the viewer's current (browser) timezone.
+ * Returns raw numbers for the NumberTicker-based SliceTimeMarker.
+ */
+export function formatSliceTime(start: string): { hour: number; minute: number } {
+  const d = new Date(start);
+  return { hour: d.getHours(), minute: d.getMinutes() };
+}
+
 // ─── Main component ──────────────────────────────────────────────────────
 
 interface TimeSliceRowProps {
@@ -129,14 +138,13 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
   const handleToggleMeta = () => setExpandedMeta(!expandedMeta);
 
   const allTurns = content?.turns ?? [];
-  // Default: show last exchange (user + agent pair), not just one turn
-  const lastExchange = allTurns.slice(-2);
-  const olderTurns = allTurns.slice(0, -2);
-  const hasMore = olderTurns.length > 0;
-  const totalChars = content?.totalChars ?? 0;
+  // Default: show first exchange (user + agent pair), expand downward for the rest
+  const firstExchange = allTurns.slice(0, 2);
+  const laterTurns = allTurns.slice(2);
+  const hasMore = laterTurns.length > 0;
 
   return (
-    <div className="px-4 py-2">
+    <div className="py-1">
       <div className="opacity-80">
         {/* Loading */}
         {loadingContent && (
@@ -146,7 +154,21 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
           </div>
         )}
 
-        {/* "查看更多" — at top, above older turns */}
+        {/* First exchange — always visible (user message + agent reply) */}
+        {!loadingContent && firstExchange.length > 0 &&
+          firstExchange.map((t, i) => (
+            <MemoryTurn key={i} content={t.content} role={t.role} />
+          ))
+        }
+
+        {/* Later turns — appear below when expanded */}
+        {expandedTurns && !loadingContent && laterTurns.length > 0 &&
+          laterTurns.map((t, i) => (
+            <MemoryTurn key={i} content={t.content} role={t.role} />
+          ))
+        }
+
+        {/* "查看更多" — at bottom, below the first exchange; expands downward */}
         {!loadingContent && hasMore && (
           <button
             onClick={handleToggleTurns}
@@ -164,27 +186,6 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
               </span>
             )}
           </button>
-        )}
-
-        {/* Older turns — appear above when expanded */}
-        {expandedTurns && !loadingContent && olderTurns.length > 0 &&
-          olderTurns.map((t, i) => (
-            <MemoryTurn key={i} content={t.content} role={t.role} />
-          ))
-        }
-
-        {/* Last exchange — always visible (user message + agent reply) */}
-        {!loadingContent && lastExchange.length > 0 &&
-          lastExchange.map((t, i) => (
-            <MemoryTurn key={i} content={t.content} role={t.role} />
-          ))
-        }
-
-        {/* Large slice: collapsed hint */}
-        {!expandedTurns && !loadingContent && totalChars > 3000 && content && (
-          <div className="text-center py-1 text-[0.65rem] text-muted-foreground">
-            {content.totalTurns} 轮 · {formatCharCount(totalChars)}
-          </div>
         )}
       </div>
 
