@@ -87,6 +87,7 @@ export function ChatPage({ children, initialData }: ChatPageProps) {
               <MessageScrollerItem messageId="memory-section">
                 <MemorySection
                   onLoadedIdsChange={handleLoadedIdsChange}
+                  chatEmpty={messages.length === 0}
                   initialData={initialData}
                 />
               </MessageScrollerItem>

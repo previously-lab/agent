@@ -8,7 +8,7 @@ import {
   formatSliceTime,
 } from "./time-slice-row";
 import { Loader2, ChevronDown } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { DateGroupHeader, SliceTimeMarker } from "./date-group-header";
 import { useLocale } from "next-intl";
@@ -16,6 +16,8 @@ import { useLocale } from "next-intl";
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
   mode?: "panel" | "page";
+  /** True when the live chat below has no messages yet — shows a cue to speak. */
+  chatEmpty?: boolean;
   initialData?: {
     active: SliceSummary | null;
     slices: SliceSummary[];
@@ -33,12 +35,33 @@ function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
   return groups;
 }
 
+/**
+ * A cinematic "N later" title-card label — the gap between the last recorded
+ * moment and now, in the show's own time vocabulary. Anchored on the last
+ * slice's `start` (slices carry no end time); the ≤30-min imprecision is
+ * invisible at hour/day granularity. Returns null when the gap can't be read.
+ */
+function formatGapToNow(fromISO: string, now: number): string | null {
+  const from = new Date(fromISO).getTime();
+  if (Number.isNaN(from) || now < from) return null;
+  const minutes = Math.floor((now - from) / 60_000);
+  if (minutes < 5) return "片刻之后";
+  if (minutes < 60) return `${minutes} 分钟后`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时后`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} 天后`;
+  if (days < 35) return `${Math.floor(days / 7)} 周后`;
+  return `${Math.floor(days / 30)} 个月后`;
+}
+
 export function TimelinePanel({
   onLoadedIdsChange,
   mode = "panel",
+  chatEmpty = false,
   initialData,
 }: TimelinePanelProps) {
-  const { slices, loading, loadingMore, hasMore, loadMore, loadedIds } =
+  const { slices, active, loading, loadingMore, hasMore, loadMore, loadedIds } =
     useTimeline(initialData);
   const locale = useLocale();
 
@@ -47,6 +70,16 @@ export function TimelinePanel({
   }, [loadedIds, onLoadedIdsChange]);
 
   const groups = useMemo(() => groupByDate(slices), [slices]);
+
+  // "N later" title-card. Computed after mount only — it depends on the
+  // current wall clock, so rendering it during SSR would mismatch on hydration.
+  const gapAnchor = active?.start ?? slices[0]?.start ?? null;
+  const [gapLabel, setGapLabel] = useState<string | null>(null);
+  useEffect(() => {
+    setGapLabel(
+      chatEmpty && gapAnchor ? formatGapToNow(gapAnchor, Date.now()) : null,
+    );
+  }, [chatEmpty, gapAnchor]);
 
   if (loading) {
     return (
@@ -190,10 +223,17 @@ export function TimelinePanel({
         })}
       </div>
 
-      {/* "现在" — a centered echo of the hero; the timeline runs down and
-          hands off here to the present, then live chat continues below */}
-      <div className="py-12 text-center mt-12">
-        <p className="text-4xl font-medium tracking-tight text-foreground">
+      {/* "现在" — the timeline runs down and hands off here to the present.
+          On a cold open (chat still empty) a "N later" title-card sits above
+          it, cutting forward from the last recorded moment to now — the same
+          time vocabulary the rest of the timeline speaks. */}
+      <div className="flex flex-col items-center pt-24 pb-20 mt-16 text-center">
+        {gapLabel && (
+          <p className="mb-5 font-mono text-xs tracking-[0.25em] text-muted-foreground/60">
+            {gapLabel}
+          </p>
+        )}
+        <p className="text-5xl sm:text-6xl font-light tracking-tighter leading-none text-foreground">
           现在
         </p>
       </div>
