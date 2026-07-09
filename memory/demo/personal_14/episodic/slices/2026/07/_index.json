@@ -1,4 +1,49 @@
 {
   "month": "2026-07",
-  "slices": []
+  "slices": [
+    {
+      "id": "2026-07-07-1558",
+      "focus": "User is trying to recall what they did in 2024 and 2025",
+      "summary": "User asked for a recap of their activities in 2024 and 2025, expressing memory loss about those years.",
+      "tags": [
+        "memory-recall",
+        "personal-history",
+        "year-in-review"
+      ],
+      "status": "active",
+      "start": "2026-07-07T15:58:13.707Z",
+      "open_loops": [
+        "Recall what happened in 2024 and 2025"
+      ],
+      "decisions": []
+    },
+    {
+      "id": "2026-07-09-1551",
+      "focus": "Chinese-language greeting exchange",
+      "summary": "User greeted in Chinese (你好), then said 测试 (\"test\"). Still an opening exchange — user appears to be testing the assistant's Chinese language capability.",
+      "tags": [
+        "chinese-language",
+        "greeting",
+        "testing"
+      ],
+      "status": "closed",
+      "start": "2026-07-09T15:51:07.117Z",
+      "open_loops": [],
+      "decisions": []
+    },
+    {
+      "id": "2026-07-09-1718",
+      "focus": "User asking about previous conversation history in Chinese",
+      "summary": "User asks 'what did we talk about before?' in Chinese. Only prior Chinese-language slice is a greeting exchange from 2026-07-09-1551.",
+      "tags": [
+        "chinese-language",
+        "conversation-history",
+        "recall"
+      ],
+      "status": "active",
+      "start": "2026-07-09T17:18:23.786Z",
+      "open_loops": [],
+      "decisions": []
+    }
+  ]
 }

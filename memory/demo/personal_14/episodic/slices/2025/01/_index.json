@@ -2,7 +2,7 @@
   "month": "2025-01",
   "slices": [
     {
-      "id": "2025-01-17",
+      "id": "2025-01-17-0115",
       "focus": "Building a 30/60/90 day post-approval retention system",
       "summary": "Built a formal retention system for approved households — 30/60/90 day intervals with named contacts per file. Shifted from treating approval as a finish line to treating it as an active support case. Plans to present it as a practice standard via a one-pager.",
       "tags": [
