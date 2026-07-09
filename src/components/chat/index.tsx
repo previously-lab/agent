@@ -5,7 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { ChatInput } from "./chat-input";
 import { ChatMessage } from "./chat-message";
 import { useState, useCallback, useRef } from "react";
-import { Sparkles, Loader2 } from "lucide-react";
+import { Loader2, MessageSquare, Clock, Settings } from "lucide-react";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
 import {
   MessageScroller,
@@ -15,7 +15,10 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { SettingsForm } from "@/components/settings/settings-form";
 import { TimelinePanel } from "./timeline-panel";
+import { Link, usePathname } from "@/i18n/navigation";
 
 function getClientSetting(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -23,6 +26,10 @@ function getClientSetting(key: string, fallback: string): string {
 }
 
 export function Chat() {
+  const pathname = usePathname();
+  const isTimeline = pathname?.endsWith("/timeline");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const [settings] = useState(() => ({
     model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
     thinking: getClientSetting("PREVIOUSLY_THINKING", "true") !== "false",
@@ -59,10 +66,9 @@ export function Chat() {
   };
 
   const lastMessage = messages[messages.length - 1];
-  const isLastStreaming = isStreaming && lastMessage?.role === "assistant";
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full w-full bg-background">
       <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor">
         <MessageScroller className="flex-1">
           <MessageScrollerViewport>
@@ -70,30 +76,38 @@ export function Chat() {
               aria-busy={isStreaming}
               className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-24"
             >
-              {/* Timeline panel — past memories at top */}
-              <MessageScrollerItem messageId="timeline-panel">
-                <TimelinePanel onLoadedIdsChange={handleLoadedIdsChange} />
-              </MessageScrollerItem>
+              {/* Timeline panel — always visible at top */}
+              {!isTimeline && (
+                <MessageScrollerItem messageId="timeline-panel">
+                  <TimelinePanel onLoadedIdsChange={handleLoadedIdsChange} />
+                </MessageScrollerItem>
+              )}
 
-              {messages.map((message) => (
-                  <MessageScrollerItem
-                    key={message.id}
-                    messageId={message.id}
-                    scrollAnchor={message.role === "user"}
-                  >
-                    <ChatMessage
-                      message={message}
-                      isStreaming={
-                        message.id === lastMessage?.id && isStreaming
-                      }
-                      startedAt={
-                        message.id === lastMessage?.id
-                          ? (lastUserMessageAt ?? undefined)
-                          : undefined
-                      }
-                    />
-                  </MessageScrollerItem>
-                ))}
+              {/* Timeline reading mode — full page vertical diary */}
+              {isTimeline && (
+                <MessageScrollerItem messageId="timeline-page">
+                  <TimelinePanel mode="page" onLoadedIdsChange={handleLoadedIdsChange} />
+                </MessageScrollerItem>
+              )}
+
+              {/* Messages — only in chat mode */}
+              {!isTimeline && messages.map((message) => (
+                <MessageScrollerItem
+                  key={message.id}
+                  messageId={message.id}
+                  scrollAnchor={message.role === "user"}
+                >
+                  <ChatMessage
+                    message={message}
+                    isStreaming={message.id === lastMessage?.id && isStreaming}
+                    startedAt={
+                      message.id === lastMessage?.id
+                        ? (lastUserMessageAt ?? undefined)
+                        : undefined
+                    }
+                  />
+                </MessageScrollerItem>
+              ))}
 
               {/* Thinking indicator */}
               {showThinking && (
@@ -120,11 +134,48 @@ export function Chat() {
       </MessageScrollerProvider>
 
       {/* Input — sticky at bottom */}
-      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-4 pb-4">
+      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-2 pb-2">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
           <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
         </div>
+
+        {/* Bottom nav row */}
+        <div className="flex items-center justify-center gap-6 pt-1.5 pb-1">
+          <Link
+            href="/"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+          >
+            <MessageSquare className="h-3.5 w-3.5" />
+            Chat
+          </Link>
+          <Link
+            href="/timeline"
+            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Timeline
+          </Link>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Settings
+          </button>
+        </div>
       </div>
+
+      {/* Settings Sheet */}
+      <Sheet open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <SheetContent side="right">
+          <SheetHeader>
+            <SheetTitle>Settings</SheetTitle>
+          </SheetHeader>
+          <div className="mt-4">
+            <SettingsForm />
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

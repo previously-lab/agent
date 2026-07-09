@@ -2,7 +2,7 @@ import { NextIntlClientProvider, hasLocale } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
-import { AppSidebar } from "@/components/sidebar";
+import { ChatLayout } from "@/components/chat/chat-layout";
 
 type Props = {
   children: React.ReactNode;
@@ -25,12 +25,7 @@ export default async function LocaleLayout({ children, params }: Props) {
 
   return (
     <NextIntlClientProvider messages={messages} locale={locale}>
-      <div className="flex h-screen overflow-hidden">
-        <AppSidebar />
-        <main className="flex-1 overflow-auto">
-          {children}
-        </main>
-      </div>
+      <ChatLayout>{children}</ChatLayout>
     </NextIntlClientProvider>
   );
 }
