@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
-import { ArrowUp, Square, Paperclip, X } from "lucide-react";
+import { ArrowUp, Square, Paperclip, X, MessageSquare, Clock, Settings } from "lucide-react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
+import { Link, usePathname } from "@/i18n/navigation";
+import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ChatInputProps {
   onSubmit: (message: string) => void;
@@ -11,6 +14,8 @@ interface ChatInputProps {
 }
 
 export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
+  const pathname = usePathname();
+  const isTimeline = pathname?.endsWith("/timeline");
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -134,14 +139,19 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
       <div className="flex items-center justify-between gap-2 px-3 pb-2">
         {/* Left side */}
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground transition-colors flex items-center justify-center"
-            title="Attach files"
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
+          {/* Attach */}
+          <Tooltip>
+            <TooltipTrigger >
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Attach files</TooltipContent>
+          </Tooltip>
           <input
             ref={fileInputRef}
             type="file"
@@ -150,6 +160,60 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
             className="hidden"
             accept="image/*"
           />
+
+          {/* Divider */}
+          <span className="w-px h-4 bg-border/50" />
+
+          {/* Chat view link */}
+          <Tooltip>
+            <TooltipTrigger>
+              <Link
+                href="/"
+                className={cn(
+                  "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                  !isTimeline
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
+                )}
+              >
+                <MessageSquare className="h-3 w-3" />
+                Chat
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="top">Chat view</TooltipContent>
+          </Tooltip>
+
+          {/* Timeline view link */}
+          <Tooltip>
+            <TooltipTrigger>
+              <Link
+                href="/timeline"
+                className={cn(
+                  "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                  isTimeline
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
+                )}
+              >
+                <Clock className="h-3 w-3" />
+                Timeline
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="top">Timeline view</TooltipContent>
+          </Tooltip>
+
+          {/* Settings */}
+          <Tooltip>
+            <TooltipTrigger >
+              <Link
+                href="/settings"
+                className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+              >
+                <Settings className="h-3.5 w-3.5" />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="top">Settings</TooltipContent>
+          </Tooltip>
         </div>
 
         {/* Right side */}

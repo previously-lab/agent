@@ -5,7 +5,7 @@ import { DefaultChatTransport } from "ai";
 import { ChatInput } from "./chat-input";
 import { ChatMessage } from "./chat-message";
 import { useState, useCallback, useRef } from "react";
-import { Loader2, MessageSquare, Clock } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
 import {
   MessageScroller,
@@ -16,10 +16,8 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { TimelinePanel } from "./timeline-panel";
-import { Link } from "@/i18n/navigation";
-import { cn } from "@/lib/utils";
-
-type ChatMode = "chat" | "timeline";
+import { DashedSeparator } from "./dashed-separator";
+import { usePathname } from "@/i18n/navigation";
 
 function getClientSetting(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
@@ -27,7 +25,8 @@ function getClientSetting(key: string, fallback: string): string {
 }
 
 export function Chat() {
-  const [mode, setMode] = useState<ChatMode>("chat");
+  const pathname = usePathname();
+  const isTimeline = pathname?.endsWith("/timeline");
 
   const [settings] = useState(() => ({
     model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
@@ -76,21 +75,34 @@ export function Chat() {
               className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-24"
             >
               {/* ── Timeline panel — chat mode ── */}
-              {mode === "chat" && (
+              {!isTimeline && (
                 <MessageScrollerItem messageId="timeline-panel">
                   <TimelinePanel onLoadedIdsChange={handleLoadedIdsChange} />
                 </MessageScrollerItem>
               )}
 
               {/* ── Timeline reading mode ── */}
-              {mode === "timeline" && (
+              {isTimeline && (
                 <MessageScrollerItem messageId="timeline-page">
                   <TimelinePanel mode="page" onLoadedIdsChange={handleLoadedIdsChange} />
                 </MessageScrollerItem>
               )}
 
+              {/* ── Previously on... divider ── */}
+              {!isTimeline && (
+                <MessageScrollerItem messageId="previously-divider">
+                  <div className="flex items-center gap-3 py-3">
+                    <DashedSeparator className="flex-1" />
+                    <span className="text-[0.7rem] text-muted-foreground/30 tracking-wider italic shrink-0">
+                      Previously on...
+                    </span>
+                    <DashedSeparator className="flex-1" />
+                  </div>
+                </MessageScrollerItem>
+              )}
+
               {/* ── Messages — chat mode only ── */}
-              {mode === "chat" && messages.map((message) => (
+              {!isTimeline && messages.map((message) => (
                 <MessageScrollerItem
                   key={message.id}
                   messageId={message.id}
@@ -135,43 +147,11 @@ export function Chat() {
       {/* Input — sticky at bottom */}
       <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-2 pb-2">
         <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
-          <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
-        </div>
-
-        {/* Mode toggle — small bubble-like chips below input */}
-        <div className="flex items-center justify-center gap-2 pt-2 pb-1">
-          <button
-            onClick={() => setMode("chat")}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors",
-              mode === "chat"
-                ? "bg-muted text-foreground/80"
-                : "text-muted-foreground/30 hover:text-muted-foreground/50"
-            )}
-          >
-            <MessageSquare className="h-3 w-3" />
-            Chat
-          </button>
-
-          <button
-            onClick={() => setMode("timeline")}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors",
-              mode === "timeline"
-                ? "bg-muted text-foreground/80"
-                : "text-muted-foreground/30 hover:text-muted-foreground/50"
-            )}
-          >
-            <Clock className="h-3 w-3" />
-            Timeline
-          </button>
-
-          <Link
-            href="/settings"
-            className="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors"
-          >
-            ⚙️ Settings
-          </Link>
+          <ChatInput
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+            onStop={stop}
+          />
         </div>
       </div>
     </div>
