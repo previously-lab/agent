@@ -2,6 +2,7 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { FolderOpen } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 
 interface ListFilesRendererProps {
@@ -11,6 +12,7 @@ interface ListFilesRendererProps {
 }
 
 export function ListFilesRenderer({ input, output, state }: ListFilesRendererProps) {
+  const t = useTranslations("chat.tool");
   const dirPath = input?.path ?? "...";
   const files = Array.isArray(output) ? output : [];
 
@@ -32,7 +34,7 @@ export function ListFilesRenderer({ input, output, state }: ListFilesRendererPro
       {dirPath}
       {files.length > 0 && (
         <span className="ml-1.5 text-muted-foreground">
-          ({files.length} items)
+          ({t("items", { count: files.length })})
         </span>
       )}
     </span>
@@ -40,10 +42,10 @@ export function ListFilesRenderer({ input, output, state }: ListFilesRendererPro
 
   return (
     <ToolLayout
-      name="List"
+      name={t("listFiles")}
       icon={<FolderOpen className="h-3.5 w-3.5" />}
       summary={summary}
-      meta={files.length > 0 ? `${files.length} items` : undefined}
+      meta={files.length > 0 ? t("items", { count: files.length }) : undefined}
       state={state}
       expandedContent={expandedContent}
     />

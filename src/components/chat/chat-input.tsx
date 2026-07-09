@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
+import { useTranslations } from "next-intl";
 import { ArrowUp, Square, Paperclip, X, Settings } from "lucide-react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Link } from "@/i18n/navigation";
@@ -13,6 +14,7 @@ interface ChatInputProps {
 }
 
 export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
+  const t = useTranslations("chat.input");
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -124,7 +126,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Send a message..."
+          placeholder={t("placeholder")}
           disabled={isLoading}
           rows={1}
           className="w-full resize-none overflow-y-auto bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none text-sm"
@@ -149,7 +151,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
                 </button>
               }
             />
-            <TooltipContent side="top">Attach files</TooltipContent>
+            <TooltipContent side="top">{t("attach")}</TooltipContent>
           </Tooltip>
           <input
             ref={fileInputRef}
@@ -175,7 +177,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
                 </Link>
               }
             />
-            <TooltipContent side="top">Settings</TooltipContent>
+            <TooltipContent side="top">{t("settingsTooltip")}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -186,7 +188,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
               type="button"
               onClick={onStop}
               className="h-8 w-8 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center justify-center"
-              title="Stop generation"
+              title={t("stopTooltip")}
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
@@ -196,7 +198,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
               onClick={(e) => handleSubmit(e as unknown as FormEvent)}
               disabled={!hasContent}
               className="h-8 w-8 rounded-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-30 flex items-center justify-center transition-colors"
-              title="Send message"
+              title={t("sendTooltip")}
             >
               <ArrowUp className="h-4 w-4" />
             </button>

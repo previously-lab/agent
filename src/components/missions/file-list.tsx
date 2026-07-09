@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { File, FolderOpen, Target } from "lucide-react";
 
 interface FileEntry {
@@ -23,13 +24,14 @@ export function FileList({
   files: FileEntry[];
   directory: string;
 }) {
+  const t = useTranslations("missions");
   if (files.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-8 text-center">
         <Target className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
-        <h3 className="font-medium mb-1">No missions yet</h3>
+        <h3 className="font-medium mb-1">{t("emptyTitle")}</h3>
         <p className="text-sm text-muted-foreground">
-          Use Chat to create task files in tasks/. The agent can help you track mission status.
+          {t("emptyDesc")}
         </p>
       </div>
     );
@@ -45,6 +47,7 @@ export function FileList({
 }
 
 function FileRow({ file }: { file: FileEntry }) {
+  const t = useTranslations("missions");
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -63,7 +66,7 @@ function FileRow({ file }: { file: FileEntry }) {
       </button>
       {expanded && (
         <div className="ml-8 mr-4 my-2 rounded-md bg-muted/50 p-3 text-xs font-mono text-muted-foreground">
-          Task content will load from GitHub. (Frontmatter parsing coming soon.)
+          {t("placeholderPreview")}
         </div>
       )}
     </div>

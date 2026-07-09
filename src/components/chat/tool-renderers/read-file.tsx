@@ -2,6 +2,7 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { FileText } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 import { FileNamePill } from "../file-name-pill";
 
@@ -12,6 +13,7 @@ interface ReadFileRendererProps {
 }
 
 export function ReadFileRenderer({ input, output, state }: ReadFileRendererProps) {
+  const t = useTranslations("chat.tool");
   const filePath = input?.path ?? "...";
   const content = typeof output === "string" ? output : undefined;
   const lines = content?.split("\n").length ?? 0;
@@ -26,13 +28,13 @@ export function ReadFileRenderer({ input, output, state }: ReadFileRendererProps
 
   return (
     <ToolLayout
-      name="Read"
+      name={t("readFile")}
       icon={<FileText className="h-3.5 w-3.5" />}
       summary={
         <FileNamePill filePath={filePath} error={state.error != null} />
       }
-      meta={lines > 0 ? `${lines} lines` : undefined}
-      errorMeta={state.error ? "failed" : undefined}
+      meta={lines > 0 ? t("lines", { count: lines }) : undefined}
+      errorMeta={state.error ? t("failed") : undefined}
       state={state}
       expandedContent={expandedContent}
     />

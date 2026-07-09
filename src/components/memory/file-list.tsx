@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { File, FolderOpen, Brain } from "lucide-react";
 
 interface FileEntry {
@@ -16,13 +17,14 @@ export function FileList({
   files: FileEntry[];
   directory: string;
 }) {
+  const t = useTranslations("memory");
   if (files.length === 0) {
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-8 text-center">
         <Brain className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
-        <h3 className="font-medium mb-1">No memories yet</h3>
+        <h3 className="font-medium mb-1">{t("emptyTitle")}</h3>
         <p className="text-sm text-muted-foreground">
-          Use Chat to create your first memory file. Ask the agent to write something to memory/.
+          {t("emptyDesc")}
         </p>
       </div>
     );
@@ -38,6 +40,7 @@ export function FileList({
 }
 
 function FileRow({ file }: { file: FileEntry }) {
+  const t = useTranslations("memory");
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -56,7 +59,7 @@ function FileRow({ file }: { file: FileEntry }) {
       </button>
       {expanded && (
         <div className="ml-8 mr-4 my-2 rounded-md bg-muted/50 p-3 text-xs font-mono text-muted-foreground">
-          Select a file to view its content. (Content preview will load from GitHub.)
+          {t("placeholderPreview")}
         </div>
       )}
     </div>

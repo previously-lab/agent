@@ -1,6 +1,6 @@
 "use client";
 
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +27,7 @@ export function DateGroupHeader({
   className,
 }: DateGroupHeaderProps) {
   const locale = useLocale();
+  const t = useTranslations("common.date");
 
   if (locale === "zh") {
     return (
@@ -38,16 +39,16 @@ export function DateGroupHeader({
               startValue={yearStart(yearNumber)}
               className={ITEM_CLASS}
             />
-            <span className={ITEM_CLASS}>年</span>
+            <span className={ITEM_CLASS}>{t("year")}</span>
           </span>
         )}
         <span className="inline-flex items-baseline gap-0.5">
           <NumberTicker value={monthNumber} className={ITEM_CLASS} />
-          <span className={ITEM_CLASS}>月</span>
+          <span className={ITEM_CLASS}>{t("month")}</span>
         </span>
         <span className="inline-flex items-baseline gap-0.5">
           <NumberTicker value={day} className={ITEM_CLASS} />
-          <span className={ITEM_CLASS}>日</span>
+          <span className={ITEM_CLASS}>{t("day")}</span>
         </span>
       </div>
     );

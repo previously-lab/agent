@@ -2,6 +2,7 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { FilePlus, FilePen } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 import { FileNamePill } from "../file-name-pill";
 
@@ -12,6 +13,7 @@ interface WriteFileRendererProps {
 }
 
 export function WriteFileRenderer({ input, output, state }: WriteFileRendererProps) {
+  const t = useTranslations("chat.tool");
   const filePath = input?.path ?? "...";
   const content = input?.content ?? "";
   const isUpdate = typeof output === "string" && output.includes("updated");
@@ -36,13 +38,13 @@ export function WriteFileRenderer({ input, output, state }: WriteFileRendererPro
 
   return (
     <ToolLayout
-      name={isUpdate ? "Update" : "Create"}
+      name={isUpdate ? t("updateFile") : t("createFile")}
       icon={isUpdate ? <FilePen className="h-3.5 w-3.5" /> : <FilePlus className="h-3.5 w-3.5" />}
       summary={
         <FileNamePill filePath={filePath} error={state.error != null} />
       }
       meta={meta}
-      errorMeta={state.error ? "failed" : undefined}
+      errorMeta={state.error ? t("failed") : undefined}
       state={state}
       expandedContent={expandedContent}
     />

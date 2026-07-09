@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Brain } from "lucide-react";
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { ToolLayout } from "./tool-layout";
@@ -29,6 +30,7 @@ const STREAMING_STATE: ToolRenderState = {
 };
 
 export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: ThinkingBlockProps) {
+  const t = useTranslations("chat.thinking");
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -66,11 +68,9 @@ export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: Thin
   }, [isStreaming]);
 
   const hasContent = text.trim().length > 0;
-  const thoughtLabel =
-    partCount === 1 ? "Thought" : `${partCount} thought${partCount !== 1 ? "s" : ""}`;
-  const name = isStreaming ? "Thinking..." : thoughtLabel;
+  const name = isStreaming ? t("streaming") : t("completed", { count: partCount });
   const summary =
-    !isStreaming && elapsed > 0 ? `${elapsed} second${elapsed !== 1 ? "s" : ""}` : "";
+    !isStreaming && elapsed > 0 ? t("elapsed", { count: elapsed }) : "";
 
   const expandedContent = hasContent ? (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">

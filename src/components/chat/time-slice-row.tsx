@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
 import { Loader2, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
@@ -10,14 +11,16 @@ import { MarkdownRenderer } from "./markdown";
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
+/** Compact char-count value (no unit) — the unit is applied by the translator. */
 function formatCharCount(len: number): string {
-  if (len < 1000) return `${len} 字`;
-  return `${(len / 1000).toFixed(1)}k 字`;
+  if (len < 1000) return `${len}`;
+  return `${(len / 1000).toFixed(1)}k`;
 }
 
 // ─── Memory turn — reuses shadcn Message + Bubble ───────────────────────
 
 function MemoryTurn({ content, role }: { content: string; role: string }) {
+  const t = useTranslations("timeline.row");
   const isUser = role === "user";
   const isTruncated = content.length > 300;
   const [expanded, setExpanded] = useState(false);
@@ -44,7 +47,11 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
             onClick={() => setExpanded(!expanded)}
             className="text-[0.6rem] text-muted-foreground hover:text-muted-foreground transition-colors px-2"
           >
-            {expanded ? "收起" : `展开全部 (${formatCharCount(content.length)})`}
+            {expanded
+              ? t("collapse")
+              : t("expandAll", {
+                  value: t("charCount", { value: formatCharCount(content.length) }),
+                })}
           </button>
         </div>
       )}
@@ -54,19 +61,30 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
 
 // ─── Date formatting ────────────────────────────────────────────────────
 
-export function formatSliceDate(start: string): string {
+/**
+ * Group label for a slice's date. Returns a translated "today"/"yesterday"
+ * for the most recent days, else a locale-formatted date. Used both as the
+ * grouping key and the fallback header when no animated DateGroupHeader shows.
+ */
+export function formatSliceDate(
+  start: string,
+  t: (key: string) => string,
+  locale: string,
+): string {
   const now = new Date();
   const d = new Date(start);
   const diffDays = Math.floor(
     (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24)
   );
-  if (diffDays === 0) return "今天";
-  if (diffDays === 1) return "昨天";
-  const year = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
-  if (year === now.getFullYear()) return `${month}月${day}日`;
-  return `${year}年${month}月${day}日`;
+  if (diffDays === 0) return t("date.today");
+  if (diffDays === 1) return t("date.yesterday");
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return new Intl.DateTimeFormat(
+    locale,
+    sameYear
+      ? { month: "long", day: "numeric" }
+      : { year: "numeric", month: "long", day: "numeric" },
+  ).format(d);
 }
 
 export function formatDateGroup(
@@ -118,6 +136,7 @@ interface TimeSliceRowProps {
 }
 
 export function TimeSliceRow({ slice }: TimeSliceRowProps) {
+  const t = useTranslations("timeline.row");
   const [expandedTurns, setExpandedTurns] = useState(false);
   const [expandedMeta, setExpandedMeta] = useState(false);
   const [content, setContent] = useState<SliceContent | null>(null);
@@ -150,7 +169,7 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
         {loadingContent && (
           <div className="flex items-center justify-center gap-1.5 py-4 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
-            加载中…
+            {t("loading")}
           </div>
         )}
 
@@ -177,12 +196,12 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
             {expandedTurns ? (
               <span className="inline-flex items-center gap-1">
                 <ChevronUp className="h-3 w-3" />
-                收起
+                {t("collapse")}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1">
                 <ChevronDown className="h-3 w-3" />
-                查看更多
+                {t("viewMore")}
               </span>
             )}
           </button>
@@ -202,9 +221,9 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
           onClick={handleToggleMeta}
           className="text-[0.65rem] text-muted-foreground hover:text-muted-foreground transition-colors mt-0.5"
         >
-          {slice.open_loops.length > 0 && `↗ ${slice.open_loops.length} ongoing`}
+          {slice.open_loops.length > 0 && `↗ ${t("ongoing", { count: slice.open_loops.length })}`}
           {slice.open_loops.length > 0 && slice.decisions.length > 0 && " · "}
-          {slice.decisions.length > 0 && `✓ ${slice.decisions.length} decided`}
+          {slice.decisions.length > 0 && `✓ ${t("decided", { count: slice.decisions.length })}`}
           <ChevronRight className="h-2.5 w-2.5 inline ml-0.5" />
         </button>
       )}
@@ -237,7 +256,7 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
           className="text-[0.6rem] text-muted-foreground hover:text-muted-foreground transition-colors mt-0.5"
         >
           <ChevronUp className="h-2.5 w-2.5 inline mr-0.5" />
-          collapse
+          {t("collapseMeta")}
         </button>
       )}
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Check, Copy } from "lucide-react";
 
 interface CodeBlockProps {
@@ -9,6 +10,7 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ language, code }: CodeBlockProps) {
+  const t = useTranslations("chat.code");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -22,12 +24,12 @@ export function CodeBlock({ language, code }: CodeBlockProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-muted/50 border-b border-border">
         <span className="text-xs text-muted-foreground font-mono">
-          {language ?? "code"}
+          {language ?? t("fallbackLanguage")}
         </span>
         <button
           onClick={handleCopy}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors min-h-[28px] min-w-[28px] justify-center"
-          title={copied ? "Copied!" : "Copy code"}
+          title={copied ? t("copiedTooltip") : t("copyTooltip")}
         >
           {copied ? (
             <Check className="h-3.5 w-3.5 text-green-500" />

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Copy, Check, RefreshCw } from "lucide-react";
 
 interface MessageActionsProps {
@@ -9,6 +10,7 @@ interface MessageActionsProps {
 }
 
 export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
+  const t = useTranslations("chat.actions");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -22,23 +24,23 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
       <button
         onClick={handleCopy}
         className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[28px]"
-        title={copied ? "Copied!" : "Copy message"}
+        title={copied ? t("copiedTooltip") : t("copyTooltip")}
       >
         {copied ? (
           <Check className="h-3 w-3 text-green-500" />
         ) : (
           <Copy className="h-3 w-3" />
         )}
-        <span>{copied ? "Copied" : "Copy"}</span>
+        <span>{copied ? t("copied") : t("copy")}</span>
       </button>
       {onRegenerate && (
         <button
           onClick={onRegenerate}
           className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-accent transition-colors min-h-[28px]"
-          title="Regenerate response"
+          title={t("regenerateTooltip")}
         >
           <RefreshCw className="h-3 w-3" />
-          <span>Regenerate</span>
+          <span>{t("regenerate")}</span>
         </button>
       )}
     </div>

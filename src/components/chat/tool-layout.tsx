@@ -2,6 +2,7 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { CircleX, Loader2, Minus, OctagonPause, Plus } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type React from "react";
 import { type ReactNode, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ export function ToolLayout({
   icon,
   nameClassName,
 }: ToolLayoutProps) {
+  const t = useTranslations("chat.tool");
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const errorMessage =
     state.error && !state.denied ? trimErrorPrefix(state.error) : undefined;
@@ -211,7 +213,7 @@ export function ToolLayout({
 
       {state.denied && (
         <div className="mt-2 text-sm text-red-500">
-          Denied{state.denialReason ? `: ${state.denialReason}` : ""}
+          {t("denied")}{state.denialReason ? `: ${state.denialReason}` : ""}
         </div>
       )}
 
@@ -236,7 +238,7 @@ export function ToolLayout({
                 )}
                 {isInterrupted && (
                   <pre className="rounded-md border border-yellow-500/20 bg-yellow-500/5 px-3 py-2 font-mono text-xs leading-relaxed text-yellow-500">
-                    interrupted
+                    {t("interrupted")}
                   </pre>
                 )}
                 {expandedContent}

@@ -1,6 +1,7 @@
 "use client";
 
 import { extractRenderState } from "@/lib/chat/tool-state";
+import { useTranslations } from "next-intl";
 import { ReadFileRenderer } from "./tool-renderers/read-file";
 import { WriteFileRenderer } from "./tool-renderers/write-file";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
@@ -16,22 +17,26 @@ interface ToolRendererProps {
 }
 
 /** Human-friendly outer labels — the user sees these, not raw tool names. */
-function friendlyName(toolName: string): string {
+function friendlyName(
+  toolName: string,
+  t: ReturnType<typeof useTranslations>,
+): string {
   switch (toolName) {
     case "readMemory":
-      return "Recalling in detail...";
+      return t("readMemory");
     case "listMemory":
-      return "Recalling more...";
+      return t("listMemory");
     case "readIndex":
-      return "Scanning timeline...";
+      return t("readIndex");
     default:
       return toolName.charAt(0).toUpperCase() + toolName.slice(1);
   }
 }
 
 export function ToolRenderer({ toolName, state, input, output, isStreaming }: ToolRendererProps) {
+  const t = useTranslations("chat.tool");
   const renderState = extractRenderState({ state }, null, isStreaming);
-  const displayName = friendlyName(toolName);
+  const displayName = friendlyName(toolName, t);
 
   switch (toolName) {
     case "readFile":

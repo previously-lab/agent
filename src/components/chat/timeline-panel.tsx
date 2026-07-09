@@ -11,7 +11,7 @@ import { Loader2, ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { DateGroupHeader, SliceTimeMarker } from "./date-group-header";
-import { useLocale } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
@@ -24,10 +24,14 @@ interface TimelinePanelProps {
   };
 }
 
-function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
+function groupByDate(
+  slices: SliceSummary[],
+  t: (key: string) => string,
+  locale: string,
+): Map<string, SliceSummary[]> {
   const groups = new Map<string, SliceSummary[]>();
   for (const s of slices) {
-    const label = formatSliceDate(s.start);
+    const label = formatSliceDate(s.start, t, locale);
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label)!.push(s);
   }
@@ -40,18 +44,22 @@ function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
  * slice's `start` (slices carry no end time); the ≤30-min imprecision is
  * invisible at hour/day granularity. Returns null when the gap can't be read.
  */
-function formatGapToNow(fromISO: string, now: number): string | null {
+function formatGapToNow(
+  fromISO: string,
+  now: number,
+  t: (key: string, values?: Record<string, number>) => string,
+): string | null {
   const from = new Date(fromISO).getTime();
   if (Number.isNaN(from) || now < from) return null;
   const minutes = Math.floor((now - from) / 60_000);
-  if (minutes < 5) return "片刻之后";
-  if (minutes < 60) return `${minutes} 分钟后`;
+  if (minutes < 5) return t("moments");
+  if (minutes < 60) return t("minutes", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时后`;
+  if (hours < 24) return t("hours", { count: hours });
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days} 天后`;
-  if (days < 35) return `${Math.floor(days / 7)} 周后`;
-  return `${Math.floor(days / 30)} 个月后`;
+  if (days < 7) return t("days", { count: days });
+  if (days < 35) return t("weeks", { count: Math.floor(days / 7) });
+  return t("months", { count: Math.floor(days / 30) });
 }
 
 export function TimelinePanel({
@@ -62,12 +70,18 @@ export function TimelinePanel({
   const { slices, active, loading, loadingMore, hasMore, loadMore, loadedIds } =
     useTimeline(initialData);
   const locale = useLocale();
+  const tRow = useTranslations("timeline.row");
+  const tPanel = useTranslations("timeline.panel");
+  const tGap = useTranslations("timeline.gap");
 
   useEffect(() => {
     onLoadedIdsChange(loadedIds);
   }, [loadedIds, onLoadedIdsChange]);
 
-  const groups = useMemo(() => groupByDate(slices), [slices]);
+  const groups = useMemo(
+    () => groupByDate(slices, tRow, locale),
+    [slices, tRow, locale],
+  );
 
   // "N later" title-card. Computed after mount only — it depends on the
   // current wall clock, so rendering it during SSR would mismatch on hydration.
@@ -75,9 +89,9 @@ export function TimelinePanel({
   const [gapLabel, setGapLabel] = useState<string | null>(null);
   useEffect(() => {
     setGapLabel(
-      chatEmpty && gapAnchor ? formatGapToNow(gapAnchor, Date.now()) : null,
+      chatEmpty && gapAnchor ? formatGapToNow(gapAnchor, Date.now(), tGap) : null,
     );
-  }, [chatEmpty, gapAnchor]);
+  }, [chatEmpty, gapAnchor, tGap]);
 
   if (loading) {
     return (
@@ -110,12 +124,12 @@ export function TimelinePanel({
             {loadingMore ? (
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                Loading...
+                {tRow("loading")}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1">
                 <ChevronDown className="h-3 w-3" />
-                更早的记忆
+                {tPanel("earlier")}
               </span>
             )}
           </button>
@@ -181,7 +195,7 @@ export function TimelinePanel({
           </p>
         )}
         <p className="text-5xl sm:text-6xl font-light tracking-tighter leading-none text-foreground">
-          现在
+          {tPanel("now")}
         </p>
       </div>
     </div>

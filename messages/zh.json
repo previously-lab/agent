@@ -1,15 +1,159 @@
 {
-  "Chat": {
-    "placeholder": "发送消息...",
-    "send": "发送",
-    "empty": "发送消息开始对话。"
+  "common": {
+    "loading": "加载中…",
+    "retry": "重试",
+    "date": {
+      "year": "年",
+      "month": "月",
+      "day": "日"
+    }
   },
-  "HomePage": {
-    "title": "Previously On",
-    "subtitle": "你的 agent 在你离开时回顾一切。"
+  "nav": {
+    "dashboard": "仪表盘",
+    "chat": "聊天",
+    "memory": "记忆",
+    "missions": "任务",
+    "archive": "存档",
+    "settings": "设置",
+    "expand": "展开",
+    "collapse": "收起"
   },
-  "DateGroup": {
-    "yearSuffix": "年",
-    "monthSuffix": "月"
+  "chat": {
+    "input": {
+      "placeholder": "发送消息…",
+      "attach": "附件",
+      "settingsTooltip": "设置",
+      "stopTooltip": "停止生成",
+      "sendTooltip": "发送消息"
+    },
+    "thinking": {
+      "indicator": "思考中…",
+      "streaming": "思考中…",
+      "completed": "{count, plural, other {# 次思考}}",
+      "elapsed": "{count, plural, other {# 秒}}"
+    },
+    "actions": {
+      "copy": "复制",
+      "copied": "已复制",
+      "copyTooltip": "复制消息",
+      "copiedTooltip": "已复制",
+      "regenerate": "重新生成",
+      "regenerateTooltip": "重新生成回复"
+    },
+    "recall": {
+      "streaming": "回忆中…",
+      "completed": "已回忆"
+    },
+    "tool": {
+      "denied": "已拒绝",
+      "interrupted": "已中断",
+      "readMemory": "详细回忆…",
+      "listMemory": "更多回忆…",
+      "readIndex": "扫描时间线…",
+      "readFile": "读取",
+      "updateFile": "更新",
+      "createFile": "创建",
+      "listFiles": "列表",
+      "lines": "{count} 行",
+      "items": "{count} 项",
+      "failed": "失败",
+      "expandedLabel": "工具：",
+      "conversations": "{count} 次对话"
+    },
+    "code": {
+      "fallbackLanguage": "代码",
+      "copyTooltip": "复制代码",
+      "copiedTooltip": "已复制"
+    }
+  },
+  "timeline": {
+    "row": {
+      "charCount": "{value} 字",
+      "collapse": "收起",
+      "expandAll": "展开全部 ({value})",
+      "loading": "加载中…",
+      "viewMore": "查看更多",
+      "ongoing": "{count} 进行中",
+      "decided": "{count} 已决定",
+      "collapseMeta": "收起",
+      "date": {
+        "today": "今天",
+        "yesterday": "昨天"
+      }
+    },
+    "panel": {
+      "now": "现在",
+      "earlier": "更早的记忆"
+    },
+    "gap": {
+      "moments": "片刻之后",
+      "minutes": "{count, plural, other {# 分钟后}}",
+      "hours": "{count, plural, other {# 小时后}}",
+      "days": "{count, plural, other {# 天后}}",
+      "weeks": "{count, plural, other {# 周后}}",
+      "months": "{count, plural, other {# 个月后}}"
+    }
+  },
+  "settings": {
+    "pageTitle": "设置",
+    "pageSubtitle": "配置你的 GitHub 仓库连接。",
+    "form": {
+      "apiStatus": "API 状态",
+      "connected": "已连接",
+      "notConfigured": "未配置",
+      "modelSection": "模型与推理",
+      "modelChat": "DeepSeek Chat（默认）",
+      "modelReasoner": "DeepSeek Reasoner",
+      "thinkingLabel": "推理思考",
+      "thinkingDesc": "在聊天中显示模型推理",
+      "repoConfig": "仓库配置",
+      "ownerPlaceholder": "GitHub 所有者（例如 LikeDreamwalker）",
+      "repoPlaceholder": "GitHub 仓库名（例如 previously）",
+      "save": "保存",
+      "saved": "已保存 ✓",
+      "deployment": "部署",
+      "deployDesc": "提交信息中包含 <code>[deploy]</code> 时触发部署。",
+      "deploy": "部署",
+      "deploying": "部署中…",
+      "deployFailed": "部署失败。请确保仓库已连接且 git 可用。",
+      "version": "版本",
+      "checkUpdates": "检查更新",
+      "checkingUpdates": "检查中…",
+      "versionAvailable": "新版本 v{version} 可用（当前：v{current}）。使用 `git merge upstream/main` 更新。",
+      "versionUpToDate": "已是最新版本（v{version}）。",
+      "versionCheckFailed": "无法检查更新，请确认网络连接。"
+    },
+    "repo": {
+      "heading": "已连接仓库",
+      "vercelSource": "主要（Vercel）",
+      "empty": "尚未连接仓库。请在下方添加。",
+      "addedDate": "添加于 {date}",
+      "removeTooltip": "移除仓库",
+      "addHeading": "添加仓库",
+      "addPlaceholder": "github.com/所有者/仓库 或 所有者/仓库",
+      "addButton": "添加",
+      "addHelp": "添加你的 agent 可以访问的仓库。每个仓库都会被登记进你的记忆。",
+      "invalidUrl": "请输入有效的 GitHub 链接或 所有者/仓库（例如 github.com/owner/repo）",
+      "addFailed": "添加仓库失败"
+    },
+    "error": {
+      "title": "加载设置失败",
+      "message": "无法加载设置。"
+    }
+  },
+  "memory": {
+    "emptyTitle": "暂无记忆",
+    "emptyDesc": "使用聊天创建你的第一个记忆文件。让 agent 写入 memory/。",
+    "placeholderPreview": "选择文件查看内容。（内容预览将从 GitHub 加载。）"
+  },
+  "archive": {
+    "emptyTitle": "暂无会话",
+    "emptyDesc": "与 agent 聊天后，会话历史将出现在这里。",
+    "placeholderPreview": "会话内容将在连接 GitHub 后加载。"
+  },
+  "missions": {
+    "emptyTitle": "暂无任务",
+    "emptyDesc": "使用聊天在 tasks/ 中创建任务文件。agent 可以帮你跟踪任务状态。",
+    "placeholderPreview": "任务内容将从 GitHub 加载。（frontmatter 解析即将推出。）"
   }
 }

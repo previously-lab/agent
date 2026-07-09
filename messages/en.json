@@ -1,15 +1,159 @@
 {
-  "Chat": {
-    "placeholder": "Send a message...",
-    "send": "Send",
-    "empty": "Send a message to get started."
+  "common": {
+    "loading": "Loading...",
+    "retry": "Try again",
+    "date": {
+      "year": "",
+      "month": "",
+      "day": ""
+    }
   },
-  "HomePage": {
-    "title": "Previously On",
-    "subtitle": "Your agents recap what happened while you were away."
+  "nav": {
+    "dashboard": "Dashboard",
+    "chat": "Chat",
+    "memory": "Memory",
+    "missions": "Missions",
+    "archive": "Archive",
+    "settings": "Settings",
+    "expand": "Expand",
+    "collapse": "Collapse"
   },
-  "DateGroup": {
-    "yearSuffix": "",
-    "monthSuffix": ""
+  "chat": {
+    "input": {
+      "placeholder": "Send a message...",
+      "attach": "Attach files",
+      "settingsTooltip": "Settings",
+      "stopTooltip": "Stop generation",
+      "sendTooltip": "Send message"
+    },
+    "thinking": {
+      "indicator": "Thinking...",
+      "streaming": "Thinking...",
+      "completed": "{count, plural, one {Thought} other {# thoughts}}",
+      "elapsed": "{count, plural, one {# second} other {# seconds}}"
+    },
+    "actions": {
+      "copy": "Copy",
+      "copied": "Copied",
+      "copyTooltip": "Copy message",
+      "copiedTooltip": "Copied!",
+      "regenerate": "Regenerate",
+      "regenerateTooltip": "Regenerate response"
+    },
+    "recall": {
+      "streaming": "Recalling...",
+      "completed": "Recalled"
+    },
+    "tool": {
+      "denied": "Denied",
+      "interrupted": "interrupted",
+      "readMemory": "Recalling in detail...",
+      "listMemory": "Recalling more...",
+      "readIndex": "Scanning timeline...",
+      "readFile": "Read",
+      "updateFile": "Update",
+      "createFile": "Create",
+      "listFiles": "List",
+      "lines": "{count} lines",
+      "items": "{count} items",
+      "failed": "failed",
+      "expandedLabel": "Tool:",
+      "conversations": "{count} conversations"
+    },
+    "code": {
+      "fallbackLanguage": "code",
+      "copyTooltip": "Copy code",
+      "copiedTooltip": "Copied!"
+    }
+  },
+  "timeline": {
+    "row": {
+      "charCount": "{value} chars",
+      "collapse": "Collapse",
+      "expandAll": "Expand all ({value})",
+      "loading": "Loading...",
+      "viewMore": "View more",
+      "ongoing": "{count} ongoing",
+      "decided": "{count} decided",
+      "collapseMeta": "collapse",
+      "date": {
+        "today": "Today",
+        "yesterday": "Yesterday"
+      }
+    },
+    "panel": {
+      "now": "Now",
+      "earlier": "Earlier memories"
+    },
+    "gap": {
+      "moments": "Moments later",
+      "minutes": "{count, plural, one {# minute later} other {# minutes later}}",
+      "hours": "{count, plural, one {# hour later} other {# hours later}}",
+      "days": "{count, plural, one {# day later} other {# days later}}",
+      "weeks": "{count, plural, one {# week later} other {# weeks later}}",
+      "months": "{count, plural, one {# month later} other {# months later}}"
+    }
+  },
+  "settings": {
+    "pageTitle": "Settings",
+    "pageSubtitle": "Configure your GitHub repository connection.",
+    "form": {
+      "apiStatus": "API Status",
+      "connected": "Connected",
+      "notConfigured": "Not configured",
+      "modelSection": "Model & Reasoning",
+      "modelChat": "DeepSeek Chat (default)",
+      "modelReasoner": "DeepSeek Reasoner",
+      "thinkingLabel": "Thinking",
+      "thinkingDesc": "Show model reasoning in chat",
+      "repoConfig": "Repository Config",
+      "ownerPlaceholder": "GitHub Owner (e.g. LikeDreamwalker)",
+      "repoPlaceholder": "GitHub Repo Name (e.g. previously)",
+      "save": "Save",
+      "saved": "Saved ✓",
+      "deployment": "Deployment",
+      "deployDesc": "Deploys are triggered by commits with <code>[deploy]</code> in the message.",
+      "deploy": "Deploy",
+      "deploying": "Deploying...",
+      "deployFailed": "Deploy failed. Make sure the repo is connected and git is available.",
+      "version": "Version",
+      "checkUpdates": "Check for Updates",
+      "checkingUpdates": "Checking...",
+      "versionAvailable": "v{version} available (current: v{current}). Use `git merge upstream/main` to update.",
+      "versionUpToDate": "Up to date (v{version}).",
+      "versionCheckFailed": "Could not check for updates. Are you online?"
+    },
+    "repo": {
+      "heading": "Connected Repositories",
+      "vercelSource": "Primary (Vercel)",
+      "empty": "No repositories connected. Add one below.",
+      "addedDate": "Added {date}",
+      "removeTooltip": "Remove repository",
+      "addHeading": "Add Repository",
+      "addPlaceholder": "github.com/owner/repo or owner/repo",
+      "addButton": "Add",
+      "addHelp": "Add repositories your agent can access. Each repo will be registered in your memory.",
+      "invalidUrl": "Enter a valid GitHub URL or owner/repo (e.g. github.com/owner/repo)",
+      "addFailed": "Failed to add repository"
+    },
+    "error": {
+      "title": "Failed to load settings",
+      "message": "Could not load settings."
+    }
+  },
+  "memory": {
+    "emptyTitle": "No memories yet",
+    "emptyDesc": "Use Chat to create your first memory file. Ask the agent to write something to memory/.",
+    "placeholderPreview": "Select a file to view its content. (Content preview will load from GitHub.)"
+  },
+  "archive": {
+    "emptyTitle": "No sessions yet",
+    "emptyDesc": "Session history will appear here after you chat with agents.",
+    "placeholderPreview": "Session content will load from GitHub when connected."
+  },
+  "missions": {
+    "emptyTitle": "No missions yet",
+    "emptyDesc": "Use Chat to create task files in tasks/. The agent can help you track mission status.",
+    "placeholderPreview": "Task content will load from GitHub. (Frontmatter parsing coming soon.)"
   }
 }

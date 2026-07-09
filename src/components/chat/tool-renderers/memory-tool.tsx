@@ -2,6 +2,7 @@
 
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { Search } from "lucide-react";
+import { useLocale, useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 
 interface MemoryToolRendererProps {
@@ -19,6 +20,8 @@ export function MemoryToolRenderer({
   output,
   state,
 }: MemoryToolRendererProps) {
+  const t = useTranslations("chat.tool");
+  const locale = useLocale();
   const showToolName = toolName !== displayName.toLowerCase().replace(/\s+/g, "-");
 
   // Extract short summary for collapsed display
@@ -28,7 +31,7 @@ export function MemoryToolRenderer({
   const year = typeof inp?.year === "number" ? inp.year : null;
   const month = typeof inp?.month === "number" ? inp.month : null;
   const indexLabel = year && month
-    ? new Date(year, month - 1, 1).toLocaleString("en", { month: "long", year: "numeric" })
+    ? new Date(year, month - 1, 1).toLocaleString(locale, { month: "long", year: "numeric" })
     : null;
 
   const summary = shortPath ? (
@@ -44,7 +47,7 @@ export function MemoryToolRenderer({
   const expandedContent = hasOutput ? (
     <div className="space-y-2">
       <p className="text-[10px] text-muted-foreground">
-        Tool: <span className="font-mono">{toolName}</span>
+        {t("expandedLabel")} <span className="font-mono">{toolName}</span>
       </p>
       {typeof output === "string" ? (
         <div className="max-h-80 overflow-auto rounded-md border border-border">
@@ -67,8 +70,8 @@ export function MemoryToolRenderer({
               ? (() => {
                   const d = output as { month: string; slices: Array<{ id: string; focus: string }> };
                   const [y, m] = (d.month || "").split("-");
-                  const name = new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleString("en", { month: "long", year: "numeric" });
-                  return `${name} · ${d.slices?.length ?? 0} conversations`;
+                  const name = new Date(parseInt(y), parseInt(m) - 1, 1).toLocaleString(locale, { month: "long", year: "numeric" });
+                  return `${name} · ${t("conversations", { count: d.slices?.length ?? 0 })}`;
                 })()
               : JSON.stringify(output, null, 2).slice(0, 2000)}
         </div>

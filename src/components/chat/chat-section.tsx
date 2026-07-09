@@ -1,6 +1,7 @@
 "use client";
 
 import type { UIMessage } from "ai";
+import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { ChatMessage } from "./chat-message";
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
@@ -20,6 +21,7 @@ export function ChatSection({
   error,
   lastUserMessageAt,
 }: ChatSectionProps) {
+  const t = useTranslations("chat.thinking");
   const lastMessage = messages[messages.length - 1];
 
   return (
@@ -46,7 +48,7 @@ export function ChatSection({
         <MessageScrollerItem messageId="thinking-indicator">
           <div className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
-            <span>Thinking...</span>
+            <span>{t("indicator")}</span>
           </div>
         </MessageScrollerItem>
       )}

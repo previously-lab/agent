@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -16,15 +17,16 @@ import { NavItem } from "./nav-item";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/chat", label: "Chat", icon: MessageSquare },
-  { href: "/memory", label: "Memory", icon: Brain },
-  { href: "/missions", label: "Missions", icon: Target },
-  { href: "/archive", label: "Archive", icon: Archive },
-  { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/", labelKey: "dashboard", icon: LayoutDashboard },
+  { href: "/chat", labelKey: "chat", icon: MessageSquare },
+  { href: "/memory", labelKey: "memory", icon: Brain },
+  { href: "/missions", labelKey: "missions", icon: Target },
+  { href: "/archive", labelKey: "archive", icon: Archive },
+  { href: "/settings", labelKey: "settings", icon: Settings },
 ] as const;
 
 export function AppSidebar() {
+  const t = useTranslations("nav");
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -66,7 +68,7 @@ export function AppSidebar() {
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 flex items-center justify-center transition-colors"
-            title={collapsed ? "Expand" : "Collapse"}
+            title={collapsed ? t("expand") : t("collapse")}
           >
             {collapsed ? (
               <ChevronRight className="h-3.5 w-3.5" />
@@ -83,7 +85,7 @@ export function AppSidebar() {
           <div key={item.href} onClick={handleNav}>
             <NavItem
               href={item.href}
-              label={item.label}
+              label={t(item.labelKey)}
               icon={item.icon}
               collapsed={collapsed && !isMobile}
             />

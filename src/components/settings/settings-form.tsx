@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { Rocket, RefreshCw, CheckCircle2, Circle } from "lucide-react";
 import { RepoHub } from "./repo-hub";
 import { Button } from "@/components/ui/button";
 import { deploy } from "@/lib/deploy/actions";
 
 export function SettingsForm() {
+  const t = useTranslations("settings.form");
   const [mounted, setMounted] = useState(false);
   const [model, setModel] = useState("deepseek-chat");
   const [thinking, setThinking] = useState(true);
@@ -43,7 +45,7 @@ export function SettingsForm() {
       const data = await deploy();
       setDeployMsg(data.message);
     } catch {
-      setDeployMsg("Deploy failed. Make sure the repo is connected and git is available.");
+      setDeployMsg(t("deployFailed"));
     } finally {
       setDeploying(false);
     }
@@ -57,12 +59,12 @@ export function SettingsForm() {
       const upstream = await res.json();
       const current = "0.1.0"; // from package.json
       if (upstream.version !== current) {
-        setVersionMsg(`v${upstream.version} available (current: v${current}). Use \`git merge upstream/main\` to update.`);
+        setVersionMsg(t("versionAvailable", { version: upstream.version, current }));
       } else {
-        setVersionMsg(`Up to date (v${current}).`);
+        setVersionMsg(t("versionUpToDate", { version: current }));
       }
     } catch {
-      setVersionMsg("Could not check for updates. Are you online?");
+      setVersionMsg(t("versionCheckFailed"));
     } finally {
       setCheckingVersion(false);
     }
@@ -83,18 +85,18 @@ export function SettingsForm() {
     <div className="space-y-8">
       {/* API Key Status */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">API Status</h3>
+        <h3 className="text-sm font-medium mb-3">{t("apiStatus")}</h3>
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-sm">DeepSeek</span>
             <span className="flex items-center gap-1.5 text-sm text-green-600">
-              <CheckCircle2 className="h-4 w-4" /> Connected
+              <CheckCircle2 className="h-4 w-4" /> {t("connected")}
             </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm">GitHub</span>
             <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <Circle className="h-4 w-4" /> Not configured
+              <Circle className="h-4 w-4" /> {t("notConfigured")}
             </span>
           </div>
         </div>
@@ -102,20 +104,20 @@ export function SettingsForm() {
 
       {/* Model Selector */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">Model & Reasoning</h3>
+        <h3 className="text-sm font-medium mb-3">{t("modelSection")}</h3>
         <select
           value={model}
           onChange={(e) => handleModelChange(e.target.value)}
           className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         >
-          <option value="deepseek-chat">DeepSeek Chat (default)</option>
-          <option value="deepseek-reasoner">DeepSeek Reasoner</option>
+          <option value="deepseek-chat">{t("modelChat")}</option>
+          <option value="deepseek-reasoner">{t("modelReasoner")}</option>
         </select>
 
         <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
           <div>
-            <span className="text-sm">Thinking</span>
-            <p className="text-xs text-muted-foreground">Show model reasoning in chat</p>
+            <span className="text-sm">{t("thinkingLabel")}</span>
+            <p className="text-xs text-muted-foreground">{t("thinkingDesc")}</p>
           </div>
           <button
             type="button"
@@ -142,47 +144,49 @@ export function SettingsForm() {
 
       {/* Manual Repo Config */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">Repository Config</h3>
+        <h3 className="text-sm font-medium mb-3">{t("repoConfig")}</h3>
         <div className="space-y-3">
           <input
             type="text"
             value={repoOwner}
             onChange={(e) => setRepoOwner(e.target.value)}
-            placeholder="GitHub Owner (e.g. LikeDreamwalker)"
+            placeholder={t("ownerPlaceholder")}
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <input
             type="text"
             value={repoName}
             onChange={(e) => setRepoName(e.target.value)}
-            placeholder="GitHub Repo Name (e.g. previously)"
+            placeholder={t("repoPlaceholder")}
             className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <Button onClick={handleSave} disabled={!repoOwner || !repoName} className="w-full">
-            {saved ? "Saved ✓" : "Save"}
+            {saved ? t("saved") : t("save")}
           </Button>
         </div>
       </section>
 
       {/* Deploy */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">Deployment</h3>
+        <h3 className="text-sm font-medium mb-3">{t("deployment")}</h3>
         <p className="text-xs text-muted-foreground mb-3">
-          Deploys are triggered by commits with <code className="bg-muted px-1 rounded">[deploy]</code> in the message.
+          {t.rich("deployDesc", {
+            code: (chunks) => <code className="bg-muted px-1 rounded">{chunks}</code>,
+          })}
         </p>
         <Button onClick={handleDeploy} disabled={deploying} variant="outline" className="w-full">
           <Rocket className="h-4 w-4 mr-2" />
-          {deploying ? "Deploying..." : "Deploy"}
+          {deploying ? t("deploying") : t("deploy")}
         </Button>
         {deployMsg && <p className="text-xs text-muted-foreground mt-2">{deployMsg}</p>}
       </section>
 
       {/* Version Check */}
       <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">Version</h3>
+        <h3 className="text-sm font-medium mb-3">{t("version")}</h3>
         <Button onClick={handleVersionCheck} disabled={checkingVersion} variant="outline" className="w-full">
           <RefreshCw className={`h-4 w-4 mr-2 ${checkingVersion ? "animate-spin" : ""}`} />
-          {checkingVersion ? "Checking..." : "Check for Updates"}
+          {checkingVersion ? t("checkingUpdates") : t("checkUpdates")}
         </Button>
         {versionMsg && <p className="text-xs text-muted-foreground mt-2">{versionMsg}</p>}
       </section>
