@@ -141,15 +141,17 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
         <div className="flex min-w-0 items-center gap-2 overflow-hidden">
           {/* Attach */}
           <Tooltip>
-            <TooltipTrigger >
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
-              >
-                <Paperclip className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+                >
+                  <Paperclip className="h-3.5 w-3.5" />
+                </button>
+              }
+            />
             <TooltipContent side="top">Attach files</TooltipContent>
           </Tooltip>
           <input
@@ -166,52 +168,58 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
 
           {/* Chat view link */}
           <Tooltip>
-            <TooltipTrigger>
-              <Link
-                href="/"
-                className={cn(
-                  "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                  !isTimeline
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
-                )}
-              >
-                <MessageSquare className="h-3 w-3" />
-                Chat
-              </Link>
-            </TooltipTrigger>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/"
+                  className={cn(
+                    "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                    !isTimeline
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
+                  )}
+                >
+                  <MessageSquare className="h-3 w-3" />
+                  Chat
+                </Link>
+              }
+            />
             <TooltipContent side="top">Chat view</TooltipContent>
           </Tooltip>
 
           {/* Timeline view link */}
           <Tooltip>
-            <TooltipTrigger>
-              <Link
-                href="/timeline"
-                className={cn(
-                  "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                  isTimeline
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
-                )}
-              >
-                <Clock className="h-3 w-3" />
-                Timeline
-              </Link>
-            </TooltipTrigger>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/timeline"
+                  className={cn(
+                    "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                    isTimeline
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
+                  )}
+                >
+                  <Clock className="h-3 w-3" />
+                  Timeline
+                </Link>
+              }
+            />
             <TooltipContent side="top">Timeline view</TooltipContent>
           </Tooltip>
 
           {/* Settings */}
           <Tooltip>
-            <TooltipTrigger >
-              <Link
-                href="/settings"
-                className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
-              >
-                <Settings className="h-3.5 w-3.5" />
-              </Link>
-            </TooltipTrigger>
+            <TooltipTrigger
+              render={
+                <Link
+                  href="/settings"
+                  className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+                >
+                  <Settings className="h-3.5 w-3.5" />
+                </Link>
+              }
+            />
             <TooltipContent side="top">Settings</TooltipContent>
           </Tooltip>
         </div>
