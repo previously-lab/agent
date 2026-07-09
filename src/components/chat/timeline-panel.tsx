@@ -142,16 +142,6 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
         </div>
       ))}
 
-      {/* "Now" separator — full width */}
-      {slices.length > 0 && (
-        <div className="flex items-center gap-3 py-3">
-          <DashedSeparator className="flex-1" />
-          <span className="text-[0.65rem] text-muted-foreground tracking-wider shrink-0">
-            现在
-          </span>
-          <DashedSeparator className="flex-1" />
-        </div>
-      )}
     </div>
   );
 }

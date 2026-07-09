@@ -16,7 +16,6 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { TimelinePanel } from "./timeline-panel";
-import { DashedSeparator } from "./dashed-separator";
 import { usePathname } from "@/i18n/navigation";
 
 function getClientSetting(key: string, fallback: string): string {
@@ -33,7 +32,9 @@ export function Chat() {
     thinking: getClientSetting("PREVIOUSLY_THINKING", "true") !== "false",
   }));
 
-  const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
+  const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(
+    null,
+  );
   const loadedSliceIdsRef = useRef<string[]>([]);
 
   const handleLoadedIdsChange = useCallback((ids: string[]) => {
@@ -84,41 +85,48 @@ export function Chat() {
               {/* ── Timeline reading mode ── */}
               {isTimeline && (
                 <MessageScrollerItem messageId="timeline-page">
-                  <TimelinePanel mode="page" onLoadedIdsChange={handleLoadedIdsChange} />
+                  <TimelinePanel
+                    mode="page"
+                    onLoadedIdsChange={handleLoadedIdsChange}
+                  />
                 </MessageScrollerItem>
               )}
 
-              {/* ── Previously on... divider ── */}
+              {/* ── Previously on title ── */}
               {!isTimeline && (
-                <MessageScrollerItem messageId="previously-divider">
-                  <div className="flex items-center gap-3 py-3">
-                    <DashedSeparator className="flex-1" />
-                    <span className="text-[0.7rem] text-muted-foreground tracking-wider italic shrink-0">
-                      Previously on...
-                    </span>
-                    <DashedSeparator className="flex-1" />
+                <MessageScrollerItem messageId="previously-title">
+                  <div className="text-center py-8">
+                    <p className="text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-light text-foreground leading-none tracking-tighter">
+                      Previously on
+                    </p>
+                    <p className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground mt-3">
+                      You
+                    </p>
                   </div>
                 </MessageScrollerItem>
               )}
 
               {/* ── Messages — chat mode only ── */}
-              {!isTimeline && messages.map((message) => (
-                <MessageScrollerItem
-                  key={message.id}
-                  messageId={message.id}
-                  scrollAnchor={message.role === "user"}
-                >
-                  <ChatMessage
-                    message={message}
-                    isStreaming={message.id === lastMessage?.id && isStreaming}
-                    startedAt={
-                      message.id === lastMessage?.id
-                        ? (lastUserMessageAt ?? undefined)
-                        : undefined
-                    }
-                  />
-                </MessageScrollerItem>
-              ))}
+              {!isTimeline &&
+                messages.map((message) => (
+                  <MessageScrollerItem
+                    key={message.id}
+                    messageId={message.id}
+                    scrollAnchor={message.role === "user"}
+                  >
+                    <ChatMessage
+                      message={message}
+                      isStreaming={
+                        message.id === lastMessage?.id && isStreaming
+                      }
+                      startedAt={
+                        message.id === lastMessage?.id
+                          ? (lastUserMessageAt ?? undefined)
+                          : undefined
+                      }
+                    />
+                  </MessageScrollerItem>
+                ))}
 
               {/* Thinking indicator */}
               {showThinking && (
