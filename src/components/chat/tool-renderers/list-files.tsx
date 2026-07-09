@@ -18,7 +18,7 @@ export function ListFilesRenderer({ input, output, state }: ListFilesRendererPro
     <div className="max-h-64 overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-xs leading-relaxed text-muted-foreground">
       {files.map((f, i) => (
         <div key={i} className="flex items-center gap-2">
-          <span className="text-muted-foreground/50">
+          <span className="text-muted-foreground">
             {f.type === "dir" ? "📁" : "📄"}
           </span>
           <span>{f.name}</span>
@@ -31,7 +31,7 @@ export function ListFilesRenderer({ input, output, state }: ListFilesRendererPro
     <span className="font-mono text-muted-foreground">
       {dirPath}
       {files.length > 0 && (
-        <span className="ml-1.5 text-muted-foreground/60">
+        <span className="ml-1.5 text-muted-foreground">
           ({files.length} items)
         </span>
       )}

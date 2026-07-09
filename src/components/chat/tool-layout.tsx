@@ -120,7 +120,7 @@ export function ToolLayout({
         })}
       >
         {/* Icon */}
-        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground/70">
+        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
           {showErrorHeader ? (
             <>
               <CircleX className="h-3.5 w-3.5 text-red-500 group-hover:hidden" />
@@ -196,7 +196,7 @@ export function ToolLayout({
             </span>
           )}
           {hasTrailingMeta && (
-            <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[12px] leading-none text-muted-foreground/60">
+            <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[12px] leading-none text-muted-foreground">
               {meta}
             </span>
           )}

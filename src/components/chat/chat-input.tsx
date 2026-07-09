@@ -138,7 +138,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-2 px-3 pb-2">
         {/* Left side */}
-        <div className="flex min-w-0 items-center gap-2 overflow-hidden">
+        <div className="flex min-w-0 items-center gap-2">
           {/* Attach */}
           <Tooltip>
             <TooltipTrigger
@@ -146,7 +146,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                 </button>
@@ -166,47 +166,33 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
           {/* Divider */}
           <span className="w-px h-4 bg-border/50" />
 
-          {/* Chat view link */}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Link
-                  href="/"
-                  className={cn(
-                    "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                    !isTimeline
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
-                  )}
-                >
-                  <MessageSquare className="h-3 w-3" />
-                  Chat
-                </Link>
-              }
-            />
-            <TooltipContent side="top">Chat view</TooltipContent>
-          </Tooltip>
-
-          {/* Timeline view link */}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Link
-                  href="/timeline"
-                  className={cn(
-                    "h-7 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                    isTimeline
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10"
-                  )}
-                >
-                  <Clock className="h-3 w-3" />
-                  Timeline
-                </Link>
-              }
-            />
-            <TooltipContent side="top">Timeline view</TooltipContent>
-          </Tooltip>
+          {/* View toggle — segmented pill */}
+          <div className="flex h-7 items-center rounded-full bg-muted-foreground/8 p-0.5">
+            <Link
+              href="/"
+              className={cn(
+                "h-6 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                !isTimeline
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-muted-foreground"
+              )}
+            >
+              <MessageSquare className="h-3 w-3" />
+              Chat
+            </Link>
+            <Link
+              href="/timeline"
+              className={cn(
+                "h-6 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
+                isTimeline
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-muted-foreground"
+              )}
+            >
+              <Clock className="h-3 w-3" />
+              Timeline
+            </Link>
+          </div>
 
           {/* Settings */}
           <Tooltip>
@@ -214,7 +200,7 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
               render={
                 <Link
                   href="/settings"
-                  className="h-7 w-7 rounded-full text-muted-foreground/50 hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
+                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-muted-foreground/10 transition-colors flex items-center justify-center"
                 >
                   <Settings className="h-3.5 w-3.5" />
                 </Link>

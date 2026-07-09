@@ -95,11 +95,11 @@ export function RecallPhase({
         <div className="space-y-1.5">
           {recallHits!.map((hit, i) => (
             <div key={i} className="flex items-start gap-2 text-xs">
-              <span className="font-mono text-[10px] text-muted-foreground/50 mt-0.5 shrink-0">
+              <span className="font-mono text-[10px] text-muted-foreground mt-0.5 shrink-0">
                 {hit.slice_id}
               </span>
-              <span className="text-muted-foreground/70 leading-relaxed">{hit.reason}</span>
-              <span className="text-[10px] text-muted-foreground/40 ml-auto shrink-0">
+              <span className="text-muted-foreground leading-relaxed">{hit.reason}</span>
+              <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
                 {Math.round(hit.relevance * 100)}%
               </span>
             </div>
@@ -107,7 +107,7 @@ export function RecallPhase({
         </div>
       )}
       {hasReasoning && (
-        <p className="text-[10px] text-muted-foreground/50 italic leading-relaxed">
+        <p className="text-[10px] text-muted-foreground italic leading-relaxed">
           {reasoning}
         </p>
       )}
@@ -116,7 +116,7 @@ export function RecallPhase({
           {tags.map((tag, i) => (
             <span
               key={i}
-              className="inline-flex items-center rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground/60"
+              className="inline-flex items-center rounded-full bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground"
             >
               {tag}
             </span>

@@ -49,7 +49,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
       <div className="py-8 space-y-8">
         {/* "Previously on..." intro */}
         <div className="text-center pb-4">
-          <p className="text-sm text-muted-foreground/40 italic">
+          <p className="text-sm text-muted-foreground italic">
             {slices.length > 0
               ? `${slices.length} conversations spanning ${
                   formatSliceDate(slices[slices.length - 1]?.start ?? "")
@@ -64,12 +64,12 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
         {[...groupEntries].reverse().map(([dateLabel, dateSlices]) =>
           [...dateSlices].reverse().map((slice) => (
             <div key={slice.slice_id} className="border-b border-border/30 pb-6">
-              <p className="text-xs text-muted-foreground/30 mb-3 tracking-wider">
+              <p className="text-xs text-muted-foreground mb-3 tracking-wider">
                 {dateLabel}
               </p>
               <TimeSliceRow slice={slice} />
               {slice.summary && (
-                <p className="text-[0.7rem] text-muted-foreground/40 italic mt-2 leading-relaxed">
+                <p className="text-[0.7rem] text-muted-foreground italic mt-2 leading-relaxed">
                   {slice.summary}
                 </p>
               )}
@@ -83,7 +83,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
             <button
               onClick={loadMore}
               disabled={loadingMore}
-              className="text-sm text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors"
+              className="text-sm text-muted-foreground hover:text-muted-foreground transition-colors"
             >
               {loadingMore ? "Loading..." : "Load earlier memories"}
             </button>
@@ -103,7 +103,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
           <button
             onClick={loadMore}
             disabled={loadingMore}
-            className="text-[0.65rem] text-muted-foreground/30 hover:text-muted-foreground/50 transition-colors shrink-0 disabled:cursor-default"
+            className="text-[0.65rem] text-muted-foreground hover:text-muted-foreground transition-colors shrink-0 disabled:cursor-default"
           >
             {loadingMore ? (
               <span className="inline-flex items-center gap-1.5">
@@ -124,7 +124,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
           {/* Date separator — full width */}
           <div className="flex items-center gap-3 py-2">
             <DashedSeparator className="flex-1" />
-            <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider shrink-0">
+            <span className="text-[0.65rem] text-muted-foreground tracking-wider shrink-0">
               {dateLabel}
             </span>
             <DashedSeparator className="flex-1" />
@@ -146,7 +146,7 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
       {slices.length > 0 && (
         <div className="flex items-center gap-3 py-3">
           <DashedSeparator className="flex-1" />
-          <span className="text-[0.65rem] text-muted-foreground/30 tracking-wider shrink-0">
+          <span className="text-[0.65rem] text-muted-foreground tracking-wider shrink-0">
             现在
           </span>
           <DashedSeparator className="flex-1" />

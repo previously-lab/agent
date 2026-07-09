@@ -117,7 +117,7 @@ export function SummaryBar({
             <span className="hidden sm:inline">
               {segments.map((s, i) => (
                 <span key={i}>
-                  <span className="text-muted-foreground/40"> · </span>
+                  <span className="text-muted-foreground"> · </span>
                   {s}
                 </span>
               ))}
@@ -126,7 +126,7 @@ export function SummaryBar({
         </span>
         <ChevronRight
           className={cn(
-            "size-3 shrink-0 text-muted-foreground/50 transition-transform duration-200 ease-out",
+            "size-3 shrink-0 text-muted-foreground transition-transform duration-200 ease-out",
             isExpanded && "rotate-90",
           )}
         />

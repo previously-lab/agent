@@ -72,7 +72,7 @@ export function Chat() {
           <MessageScrollerViewport>
             <MessageScrollerContent
               aria-busy={isStreaming}
-              className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 pb-24"
+              className="mx-auto max-w-5xl xl:max-w-7xl px-4 sm:px-6 lg:px-8 pb-24"
             >
               {/* ── Timeline panel — chat mode ── */}
               {!isTimeline && (
@@ -93,7 +93,7 @@ export function Chat() {
                 <MessageScrollerItem messageId="previously-divider">
                   <div className="flex items-center gap-3 py-3">
                     <DashedSeparator className="flex-1" />
-                    <span className="text-[0.7rem] text-muted-foreground/30 tracking-wider italic shrink-0">
+                    <span className="text-[0.7rem] text-muted-foreground tracking-wider italic shrink-0">
                       Previously on...
                     </span>
                     <DashedSeparator className="flex-1" />
@@ -146,7 +146,7 @@ export function Chat() {
 
       {/* Input — sticky at bottom */}
       <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-2 pb-2">
-        <div className="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-5xl xl:max-w-7xl px-4 sm:px-6 lg:px-8">
           <ChatInput
             onSubmit={handleSubmit}
             isLoading={isLoading}

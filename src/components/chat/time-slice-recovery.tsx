@@ -149,7 +149,7 @@ function RecoveryCard({
         </div>
 
         {/* Footer: relative time + turn count */}
-        <p className="text-[0.7rem] text-muted-foreground/70">
+        <p className="text-[0.7rem] text-muted-foreground">
           {activityLine}
         </p>
       </CardContent>

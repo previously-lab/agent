@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { getSliceContent, type SliceContent } from "@/lib/episodic/actions";
-import { Loader2, ChevronUp, ChevronDown } from "lucide-react";
+import { Loader2, ChevronUp, ChevronDown, ChevronRight } from "lucide-react";
 import { Message, MessageContent } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { MarkdownRenderer } from "./markdown";
@@ -42,7 +42,7 @@ function MemoryTurn({ content, role }: { content: string; role: string }) {
         <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-[0.6rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors px-2"
+            className="text-[0.6rem] text-muted-foreground hover:text-muted-foreground transition-colors px-2"
           >
             {expanded ? "收起" : `展开全部 (${formatCharCount(content.length)})`}
           </button>
@@ -76,7 +76,8 @@ interface TimeSliceRowProps {
 }
 
 export function TimeSliceRow({ slice }: TimeSliceRowProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expandedTurns, setExpandedTurns] = useState(false);
+  const [expandedMeta, setExpandedMeta] = useState(false);
   const [content, setContent] = useState<SliceContent | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
 
@@ -91,7 +92,8 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
     return () => { cancelled = true; };
   }, [slice.slice_id]);
 
-  const handleToggle = () => setExpanded(!expanded);
+  const handleToggleTurns = () => setExpandedTurns(!expandedTurns);
+  const handleToggleMeta = () => setExpandedMeta(!expandedMeta);
 
   const allTurns = content?.turns ?? [];
   // Default: show last exchange (user + agent pair), not just one turn
@@ -114,10 +116,10 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
         {/* "查看更多" — at top, above older turns */}
         {!loadingContent && hasMore && (
           <button
-            onClick={handleToggle}
-            className="w-full text-center py-1 text-[0.65rem] text-muted-foreground/40 hover:text-muted-foreground/60 transition-colors"
+            onClick={handleToggleTurns}
+            className="w-full text-center py-1 text-[0.65rem] text-muted-foreground hover:text-muted-foreground transition-colors"
           >
-            {expanded ? (
+            {expandedTurns ? (
               <span className="inline-flex items-center gap-1">
                 <ChevronUp className="h-3 w-3" />
                 收起
@@ -132,7 +134,7 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
         )}
 
         {/* Older turns — appear above when expanded */}
-        {expanded && !loadingContent && olderTurns.length > 0 &&
+        {expandedTurns && !loadingContent && olderTurns.length > 0 &&
           olderTurns.map((t, i) => (
             <MemoryTurn key={i} content={t.content} role={t.role} />
           ))
@@ -146,8 +148,8 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
         }
 
         {/* Large slice: collapsed hint */}
-        {!expanded && !loadingContent && totalChars > 3000 && content && (
-          <div className="text-center py-1 text-[0.65rem] text-muted-foreground/40">
+        {!expandedTurns && !loadingContent && totalChars > 3000 && content && (
+          <div className="text-center py-1 text-[0.65rem] text-muted-foreground">
             {content.totalTurns} 轮 · {formatCharCount(totalChars)}
           </div>
         )}
@@ -155,31 +157,54 @@ export function TimeSliceRow({ slice }: TimeSliceRowProps) {
 
       {/* Summary caption — at bottom */}
       {slice.summary && (
-        <p className="text-[0.7rem] text-muted-foreground/50 italic mt-0.5 leading-relaxed">
+        <p className="text-[0.7rem] text-muted-foreground italic mt-0.5 leading-relaxed">
           {slice.summary}
         </p>
       )}
 
-      {/* Open loops */}
-      {slice.open_loops.length > 0 && (
+      {/* Open loops + Decisions: counts collapsed, full pills expanded */}
+      {!expandedMeta && (slice.open_loops.length > 0 || slice.decisions.length > 0) && (
+        <button
+          onClick={handleToggleMeta}
+          className="text-[0.65rem] text-muted-foreground hover:text-muted-foreground transition-colors mt-0.5"
+        >
+          {slice.open_loops.length > 0 && `↗ ${slice.open_loops.length} ongoing`}
+          {slice.open_loops.length > 0 && slice.decisions.length > 0 && " · "}
+          {slice.decisions.length > 0 && `✓ ${slice.decisions.length} decided`}
+          <ChevronRight className="h-2.5 w-2.5 inline ml-0.5" />
+        </button>
+      )}
+
+      {expandedMeta && slice.open_loops.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-1">
           {slice.open_loops.map((loop, i) => (
-            <span key={i} className="inline-flex items-center rounded-full bg-red-500/5 px-1.5 py-0.5 text-[0.6rem] text-red-400/60">
-              🔴 {loop}
+            <span key={i} className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-[0.6rem] text-muted-foreground">
+              <span className="text-[0.55rem] opacity-60">↗</span>
+              {loop}
             </span>
           ))}
         </div>
       )}
 
-      {/* Decisions */}
-      {slice.decisions.length > 0 && (
+      {expandedMeta && slice.decisions.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-0.5">
           {slice.decisions.map((d, i) => (
-            <span key={i} className="inline-flex items-center rounded-full bg-green-500/5 px-1.5 py-0.5 text-[0.6rem] text-green-400/60">
-              ✅ {d}
+            <span key={i} className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-1.5 py-0.5 text-[0.6rem] text-muted-foreground">
+              <span className="text-[0.55rem] opacity-60">✓</span>
+              {d}
             </span>
           ))}
         </div>
+      )}
+
+      {expandedMeta && (slice.open_loops.length > 0 || slice.decisions.length > 0) && (
+        <button
+          onClick={handleToggleMeta}
+          className="text-[0.6rem] text-muted-foreground hover:text-muted-foreground transition-colors mt-0.5"
+        >
+          <ChevronUp className="h-2.5 w-2.5 inline mr-0.5" />
+          collapse
+        </button>
       )}
     </div>
   );

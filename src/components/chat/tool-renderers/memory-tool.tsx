@@ -43,7 +43,7 @@ export function MemoryToolRenderer({
   const hasOutput = output != null;
   const expandedContent = hasOutput ? (
     <div className="space-y-2">
-      <p className="text-[10px] text-muted-foreground/50">
+      <p className="text-[10px] text-muted-foreground">
         Tool: <span className="font-mono">{toolName}</span>
       </p>
       {typeof output === "string" ? (
@@ -57,7 +57,7 @@ export function MemoryToolRenderer({
           {Array.isArray(output)
             ? (output as Array<{ name?: string; type?: string }>).map((item, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <span className="text-muted-foreground/50">
+                  <span className="text-muted-foreground">
                     {item.type === "dir" ? "📁" : "📄"}
                   </span>
                   <span>{item.name ?? JSON.stringify(item)}</span>
