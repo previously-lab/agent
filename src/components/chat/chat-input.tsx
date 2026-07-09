@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
-import { ArrowUp, Square, Paperclip, X, MessageSquare, Clock, Settings } from "lucide-react";
+import { ArrowUp, Square, Paperclip, X, Settings } from "lucide-react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
-import { Link, usePathname } from "@/i18n/navigation";
-import { cn } from "@/lib/utils";
+import { Link } from "@/i18n/navigation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ChatInputProps {
@@ -14,8 +13,6 @@ interface ChatInputProps {
 }
 
 export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
-  const pathname = usePathname();
-  const isTimeline = pathname?.endsWith("/timeline");
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -165,34 +162,6 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
 
           {/* Divider */}
           <span className="w-px h-4 bg-border/50" />
-
-          {/* View toggle — segmented pill */}
-          <div className="flex h-7 items-center rounded-full bg-muted-foreground/8 p-0.5">
-            <Link
-              href="/"
-              className={cn(
-                "h-6 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                !isTimeline
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-muted-foreground"
-              )}
-            >
-              <MessageSquare className="h-3 w-3" />
-              Chat
-            </Link>
-            <Link
-              href="/timeline"
-              className={cn(
-                "h-6 flex items-center gap-1 rounded-full px-2.5 text-[0.6rem] font-medium transition-colors",
-                isTimeline
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-muted-foreground"
-              )}
-            >
-              <Clock className="h-3 w-3" />
-              Timeline
-            </Link>
-          </div>
 
           {/* Settings */}
           <Tooltip>

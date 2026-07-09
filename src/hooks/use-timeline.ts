@@ -12,17 +12,19 @@ interface TimelineState {
   loadedIds: string[];
 }
 
-export function useTimeline() {
+export function useTimeline(initialData?: Partial<TimelineState> | null) {
+  const hasInitialData = !!initialData?.slices?.length;
   const [state, setState] = useState<TimelineState>({
-    active: null,
-    slices: [],
-    hasMore: false,
-    loadedIds: [],
+    active: initialData?.active ?? null,
+    slices: initialData?.slices ?? [],
+    hasMore: initialData?.hasMore ?? false,
+    loadedIds: initialData?.loadedIds ?? initialData?.slices?.map((s) => s.slice_id) ?? [],
   });
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!hasInitialData);
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
+    if (hasInitialData) return;
     getEpisodicState()
       .then((data) => {
         setState({
@@ -35,7 +37,7 @@ export function useTimeline() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, []);
+  }, [hasInitialData]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !state.hasMore) return;

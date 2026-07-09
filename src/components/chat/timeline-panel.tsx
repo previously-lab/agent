@@ -1,16 +1,23 @@
 "use client";
 
 import { useTimeline } from "@/hooks/use-timeline";
-import { TimeSliceRow, formatSliceDate } from "./time-slice-row";
-import { Loader2 } from "lucide-react";
+import { TimeSliceRow, formatSliceDate, formatDateGroup } from "./time-slice-row";
+import { Loader2, ChevronDown } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { DashedSeparator } from "./dashed-separator";
+import { DateGroupHeader } from "./date-group-header";
+import { useLocale } from "next-intl";
 import dayjs from "dayjs";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
   mode?: "panel" | "page";
+  initialData?: {
+    active: SliceSummary | null;
+    slices: SliceSummary[];
+    hasMore: boolean;
+  };
 }
 
 function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
@@ -23,9 +30,10 @@ function groupByDate(slices: SliceSummary[]): Map<string, SliceSummary[]> {
   return groups;
 }
 
-export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePanelProps) {
+export function TimelinePanel({ onLoadedIdsChange, mode = "panel", initialData }: TimelinePanelProps) {
   const { slices, loading, loadingMore, hasMore, loadMore, loadedIds } =
-    useTimeline();
+    useTimeline(initialData);
+  const locale = useLocale();
 
   useEffect(() => {
     onLoadedIdsChange(loadedIds);
@@ -93,54 +101,64 @@ export function TimelinePanel({ onLoadedIdsChange, mode = "panel" }: TimelinePan
     );
   }
 
-  // ── Panel mode: compact sidebar-style ─────────────────────────────
+  // ── Panel mode: chronological, left-aligned date headers ───────────
   return (
     <div>
-      {/* Load more — only visible when there are more slices to fetch */}
+      {/* Load more — at top, subtle */}
       {hasMore && (
-        <div className="flex items-center gap-3 py-3">
-          <DashedSeparator className="flex-1" />
+        <div className="py-2">
           <button
             onClick={loadMore}
             disabled={loadingMore}
-            className="text-[0.65rem] text-muted-foreground hover:text-muted-foreground transition-colors shrink-0 disabled:cursor-default"
+            className="text-[0.65rem] text-muted-foreground/60 hover:text-muted-foreground transition-colors disabled:cursor-default"
           >
             {loadingMore ? (
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                加载更早的记忆...
+                Loading...
               </span>
             ) : (
-              "加载更多记忆"
+              <span className="inline-flex items-center gap-1">
+                <ChevronDown className="h-3 w-3" />
+                更早的记忆
+              </span>
             )}
           </button>
-          <DashedSeparator className="flex-1" />
         </div>
       )}
 
-      {/* Groups of slices by date — reversed for chronological order (oldest top → newest bottom) */}
-      {[...groupEntries].reverse().map(([dateLabel, dateSlices], groupIdx) => (
-        <div key={dateLabel}>
-          {/* Date separator — full width */}
-          <div className="flex items-center gap-3 py-2">
-            <DashedSeparator className="flex-1" />
-            <span className="text-[0.65rem] text-muted-foreground tracking-wider shrink-0">
-              {dateLabel}
-            </span>
-            <DashedSeparator className="flex-1" />
+      {/* Groups of slices by date — chronological order (oldest top → newest bottom) */}
+      {[...groupEntries].reverse().map(([dateLabel, dateSlices], groupIdx) => {
+        const firstSlice = dateSlices[0];
+        const dateParts = firstSlice ? formatDateGroup(firstSlice.start, locale) : null;
+
+        return (
+          <div key={dateLabel}>
+            {/* Date header — DateGroupHeader component */}
+            {dateParts ? (
+              <DateGroupHeader
+                yearNumber={dateParts.yearNumber}
+                monthNumber={dateParts.monthNumber}
+                monthName={dateParts.monthName}
+                day={dateParts.day}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground pt-6 pb-2">
+                {dateLabel}
+              </p>
+            )}
+            <DashedSeparator className="mb-3" />
+
+            {/* Slices within this date group (oldest at top) */}
+            {[...dateSlices].reverse().map((slice) => (
+              <TimeSliceRow key={slice.slice_id} slice={slice} />
+            ))}
+
+            {/* Gap between groups */}
+            {groupIdx < groupEntries.length - 1 && <div className="pb-1" />}
           </div>
-
-          {/* Slices within this date group (oldest at top) */}
-          {[...dateSlices].reverse().map((slice) => (
-            <TimeSliceRow key={slice.slice_id} slice={slice} />
-          ))}
-
-          {/* Gap between groups */}
-          {groupIdx < groupEntries.length - 1 && (
-            <div className="pb-1" />
-          )}
-        </div>
-      ))}
+        );
+      })}
 
     </div>
   );

@@ -69,6 +69,39 @@ export function formatSliceDate(start: string): string {
   return `${year}年${month}月${day}日`;
 }
 
+export function formatDateGroup(
+  start: string,
+  locale: string,
+): {
+  yearNumber?: number;
+  monthNumber: number;
+  monthName: string;
+  day: number;
+} | null {
+  const now = new Date();
+  const d = new Date(start);
+  const diffDays = Math.floor(
+    (now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  if (diffDays <= 1) return null;
+
+  const monthNumber = d.getMonth() + 1;
+  const year = d.getFullYear();
+  const isCrossYear = year !== now.getFullYear();
+  const monthName = new Intl.DateTimeFormat(locale, { month: "long" }).format(d);
+
+  const result: {
+    yearNumber?: number;
+    monthNumber: number;
+    monthName: string;
+    day: number;
+  } = { monthNumber, monthName, day: d.getDate() };
+
+  if (isCrossYear) result.yearNumber = year;
+
+  return result;
+}
+
 // ─── Main component ──────────────────────────────────────────────────────
 
 interface TimeSliceRowProps {

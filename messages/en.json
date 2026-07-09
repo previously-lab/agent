@@ -7,5 +7,9 @@
   "HomePage": {
     "title": "Previously On",
     "subtitle": "Your agents recap what happened while you were away."
+  },
+  "DateGroup": {
+    "yearSuffix": "",
+    "monthSuffix": ""
   }
 }

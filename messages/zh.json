@@ -7,5 +7,9 @@
   "HomePage": {
     "title": "Previously On",
     "subtitle": "你的 agent 在你离开时回顾一切。"
+  },
+  "DateGroup": {
+    "yearSuffix": "年",
+    "monthSuffix": "月"
   }
 }
