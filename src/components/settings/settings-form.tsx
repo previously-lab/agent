@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Rocket, RefreshCw, CheckCircle2, Circle } from "lucide-react";
 import { RepoHub } from "./repo-hub";
 import { Button } from "@/components/ui/button";
+import { deploy } from "@/lib/deploy/actions";
 
 export function SettingsForm() {
   const [mounted, setMounted] = useState(false);
@@ -39,8 +40,7 @@ export function SettingsForm() {
     setDeploying(true);
     setDeployMsg("");
     try {
-      const res = await fetch("/api/deploy", { method: "POST" });
-      const data = await res.json();
+      const data = await deploy();
       setDeployMsg(data.message);
     } catch {
       setDeployMsg("Deploy failed. Make sure the repo is connected and git is available.");

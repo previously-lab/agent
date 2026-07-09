@@ -15,7 +15,6 @@ import { useLocale } from "next-intl";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
-  mode?: "panel" | "page";
   /** True when the live chat below has no messages yet — shows a cue to speak. */
   chatEmpty?: boolean;
   initialData?: {
@@ -57,7 +56,6 @@ function formatGapToNow(fromISO: string, now: number): string | null {
 
 export function TimelinePanel({
   onLoadedIdsChange,
-  mode = "panel",
   chatEmpty = false,
   initialData,
 }: TimelinePanelProps) {
@@ -90,57 +88,6 @@ export function TimelinePanel({
   }
 
   const groupEntries = [...groups.entries()];
-
-  // ── Page mode: full diary-style reading ───────────────────────────
-  if (mode === "page") {
-    return (
-      <div className="py-8 space-y-8">
-        {/* "Previously on..." intro */}
-        <div className="text-center pb-4">
-          <p className="text-sm text-muted-foreground italic">
-            {slices.length > 0
-              ? `${slices.length} conversations spanning ${formatSliceDate(
-                  slices[slices.length - 1]?.start ?? "",
-                )} to ${formatSliceDate(slices[0]?.start ?? "")}`
-              : "No memories yet"}
-          </p>
-        </div>
-
-        {/* Slices in chronological order — oldest first */}
-        {[...groupEntries].reverse().map(([dateLabel, dateSlices]) =>
-          [...dateSlices].reverse().map((slice) => (
-            <div
-              key={slice.slice_id}
-              className="border-b border-border/30 pb-6"
-            >
-              <p className="text-xs text-muted-foreground mb-3 tracking-wider">
-                {dateLabel}
-              </p>
-              <TimeSliceRow slice={slice} />
-              {slice.summary && (
-                <p className="text-[0.7rem] text-muted-foreground italic mt-2 leading-relaxed">
-                  {slice.summary}
-                </p>
-              )}
-            </div>
-          )),
-        )}
-
-        {/* Load more */}
-        {hasMore && (
-          <div className="text-center pt-4">
-            <button
-              onClick={loadMore}
-              disabled={loadingMore}
-              className="text-sm text-muted-foreground hover:text-muted-foreground transition-colors"
-            >
-              {loadingMore ? "Loading..." : "Load earlier memories"}
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
 
   // ── Panel mode: vertical timeline; dots sit inline with their labels ──
   return (

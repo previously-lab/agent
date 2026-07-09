@@ -23,7 +23,6 @@ export {
   tryLoadTodaySlice,
   saveSliceSnapshot,
   ensureIndexEntries,
-  updateDynamicSummary,
 } from "./manager";
 
 export {
@@ -41,6 +40,4 @@ export type {
   SliceIndexEntry,
   MonthlyIndex,
   TagIndex,
-  RecallHint,
-  MismatchLogEntry,
 } from "./types";
