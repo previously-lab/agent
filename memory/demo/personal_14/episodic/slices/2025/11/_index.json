@@ -1,0 +1,32 @@
+{
+  "month": "2025-11",
+  "slices": [
+    {
+      "id": "2025-11-21-0825",
+      "focus": "Year-end review validates the full corridor program arc",
+      "summary": "Year-end corridor review with Sharon and Miguel validated the full program arc from workshops through clinics to case tracking. Completed applications, signed scopes, and visible project starts across multiple blocks proved the slow hand-holding phase was essential infrastructure, not extra overhead. The concentrated follow-through model that started as an experiment has become the recognized standard. Exhausted but deeply confirmed — the evidence chain held.",
+      "tags": [
+        "housing",
+        "community-development",
+        "process-design",
+        "resident-retention",
+        "post-approval-followup",
+        "standardization",
+        "mitigation-adoption",
+        "year-end-review"
+      ],
+      "status": "closed",
+      "start": "2025-11-21T08:25:00.000Z",
+      "open_loops": [
+        "Prevent the retention process from becoming neglected paperwork by linking it directly to real decisions and funding outcomes",
+        "Team culture still defaults to viewing approval as the finish line; cultural shift from completion to continuity needs ongoing reinforcement",
+        "One-page standard needs to be completed this week with practical, plain language that others will actually use"
+      ],
+      "decisions": [
+        "Establish graduated retention follow-up as the recognized program standard, no longer an experiment",
+        "Assign dedicated contacts per household with clear referral and support boundaries to sustain the model",
+        "Draft a one-page standard to codify the retention process so it outlasts any single person's memory"
+      ]
+    }
+  ]
+}

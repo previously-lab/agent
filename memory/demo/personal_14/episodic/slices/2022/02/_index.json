@@ -1,0 +1,32 @@
+{
+  "month": "2022-02",
+  "slices": [
+    {
+      "id": "2022-02-11-0020",
+      "focus": "First corridor-level workshop leadership role",
+      "summary": "After a near-miss storm season debrief, Caleb's corridor homeowner workshop series was approved — his first direct leadership role with accountability for outcomes, not just attendance. Discussed designing a checkpoint-based follow-through system, building trust with skeptical homeowners, and locking a pragmatic core strategy before iterating on details.",
+      "tags": [
+        "work",
+        "housing",
+        "environment",
+        "community",
+        "disaster-prevention",
+        "education",
+        "goals",
+        "leadership"
+      ],
+      "status": "closed",
+      "start": "2022-02-11T00:20:00.000Z",
+      "open_loops": [
+        "Whether skeptical homeowners' trust in the improved process can be established",
+        "Need to finalize with Sharon on participation rate vs attendance as the success standard",
+        "Whether first workshop content is simple enough or needs further streamlining"
+      ],
+      "decisions": [
+        "Lock core framework: sign-in fields, checkpoint definitions, one-page handout, and first follow-up timeline",
+        "Align with Miguel on consistent plain-language explanations to build resident trust across sessions",
+        "Use post-workshop contact rate and first-document-step completion as early success metrics"
+      ]
+    }
+  ]
+}

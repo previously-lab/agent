@@ -1,0 +1,31 @@
+{
+  "month": "2023-07",
+  "slices": [
+    {
+      "id": "2023-07-07-0055",
+      "focus": "Rebuilding project trust via weekly address-level status sheets",
+      "summary": "Switched from vague reassurance to weekly address-level status sheets breaking delays into three buckets: county approval, homeowner documents, and contractor. Handing them out during office hours so residents leave with clear next steps instead of vague frustration. Transparency is gradually rebuilding trust, though there's internal resistance to publicly exposing county-level approval bottlenecks.",
+      "tags": [
+        "work",
+        "housing-project",
+        "trust-rebuilding",
+        "transparency",
+        "communication-strategy",
+        "process-improvement",
+        "office-hours"
+      ],
+      "status": "closed",
+      "start": "2023-07-07T00:55:00.000Z",
+      "open_loops": [
+        "Internal resistance to publicly exposing county approval bottlenecks needs more data to overcome",
+        "Homeowner document category wording still needs refinement to avoid triggering defensiveness",
+        "Whether to create a simplified version of the sheet for straightforward single-delay cases"
+      ],
+      "decisions": [
+        "Create and distribute weekly address-level status sheets with three delay categories and last-updated dates",
+        "Begin logging resident reactions and behavior changes after each office-hours handoff to track trust recovery",
+        "Tighten the wording on sheets for clarity and consistency across all households"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "month": "2023-04",
+  "slices": [
+    {
+      "id": "2023-04-21-0610",
+      "focus": "Housing project delays and trust crisis management",
+      "summary": "Contractor qualification and property deed mismatches stalled multiple household files, triggering a community trust crisis. After two difficult public meetings absorbing resident frustration, developed a structured communication approach: brief timeline apology without full admission, prioritized phone calls to affected households, and a shift from defensive retrospective to clear next-step framing for each stalled case.",
+      "tags": [
+        "work-pressure",
+        "housing-project",
+        "trust-crisis",
+        "community-communication",
+        "timeline-delay",
+        "emotional-management"
+      ],
+      "status": "closed",
+      "start": "2023-04-21T06:10:00.000Z",
+      "open_loops": [
+        "Whether overall community trust can recover after the cumulative timeline delays",
+        "How to balance individual household calls and collective meetings under tight resource constraints",
+        "Whether the defensive emotional tendency triggered by public criticism will affect future work judgment"
+      ],
+      "decisions": [
+        "Give a brief timeline apology without making a full admission of fault that could escalate liability",
+        "Prioritize direct phone calls to scope-recheck households before holding public meetings",
+        "Use 'real blocker plus specific next step' frame instead of retrospective defense in public communication"
+      ]
+    }
+  ]
+}

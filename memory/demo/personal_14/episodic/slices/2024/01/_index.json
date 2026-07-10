@@ -1,0 +1,31 @@
+{
+  "month": "2024-01",
+  "slices": [
+    {
+      "id": "2024-01-30-0135",
+      "focus": "Corridor scoreboard defending focused flood mitigation strategy",
+      "summary": "Built a corridor scoreboard by block to prove the concentrated model is converting. It defends the focused strategy from being diluted. Recognized strength for translating field mess into tools that make the work legible to leadership.",
+      "tags": [
+        "work",
+        "housing",
+        "data-tools",
+        "community-outreach",
+        "strategy-defense",
+        "conversion-metrics",
+        "professional-growth"
+      ],
+      "status": "closed",
+      "start": "2024-01-30T01:35:00.000Z",
+      "open_loops": [
+        "Whether the scoreboard should include trend lines or stay as point-in-time block counts",
+        "How to refuse additional columns from other departments without sounding territorial",
+        "Whether a slow month will trigger a pullback to broad county-wide outreach"
+      ],
+      "decisions": [
+        "Keep scoreboard front page spare with direction markers; draft backup with definitions and caveats",
+        "Include both strong and slower blocks to ground the story and preempt criticism",
+        "Add intended-use sentence to scoreboard to head off feature creep from other departments"
+      ]
+    }
+  ]
+}

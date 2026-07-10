@@ -1,0 +1,32 @@
+{
+  "month": "2023-08",
+  "slices": [
+    {
+      "id": "2023-08-18-1045",
+      "focus": "Health routines and mother's home safety planning",
+      "summary": "After a long-overdue doctor visit for chronic reflux and stress symptoms, began consistent medication and earlier, lighter dinners. Set a fixed evening cutoff for weather alerts to reduce hypervigilance. Planned a Friday walkthrough of mother Dorothy's home for slip hazards and lighting — the first concrete safety step she's agreed to. Shift from passive endurance to active management.",
+      "tags": [
+        "health",
+        "anxiety",
+        "family",
+        "doctor-visit",
+        "lifestyle-habits",
+        "parental-care",
+        "stress-management",
+        "reflux"
+      ],
+      "status": "closed",
+      "start": "2023-08-18T10:45:00.000Z",
+      "open_loops": [
+        "Mother's long-term safety living alone requires continued assessment and action beyond this first walkthrough",
+        "How to genuinely recover from chronic hypervigilance and anxiety rather than just managing symptoms",
+        "Partner Lena's burden from household strain and caregiving needs attention and sharing"
+      ],
+      "decisions": [
+        "Follow doctor's medication regimen consistently and shift dinner to earlier, lighter meals",
+        "Set a fixed evening cutoff time after which weather alerts are not checked and phone is put away",
+        "Inspect mother's kitchen and bathroom for slip hazards and lighting on Friday as a concrete first safety step"
+      ]
+    }
+  ]
+}

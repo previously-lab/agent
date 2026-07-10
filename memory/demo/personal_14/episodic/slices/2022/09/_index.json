@@ -1,0 +1,30 @@
+{
+  "month": "2022-09",
+  "slices": [
+    {
+      "id": "2022-09-06-0715",
+      "focus": "Pet blessing outing and neighborhood connection",
+      "summary": "A neighborhood pet blessing event with dog Roux provided a much-needed break during a rough month. Met retired neighbor Nadine Louise Carver, now a friendly source of local drainage updates on evening dog walks. The outing reset the dynamic with Lena, who needed a break from logistics-only conversation. Plans simple walks together without an agenda.",
+      "tags": [
+        "neighborhood",
+        "mental-health",
+        "partner-relationship",
+        "small-good-things",
+        "community",
+        "stress-management",
+        "pet"
+      ],
+      "status": "closed",
+      "start": "2022-09-06T07:15:00.000Z",
+      "open_loops": [
+        "The month's overall difficulties remain unresolved — need low-effort resets that don't add burden",
+        "Whether the relationship with Lena can sustain non-operational time together beyond this one outing"
+      ],
+      "decisions": [
+        "Plan a simple evening walk with Lena this week with no agenda, just being together",
+        "Keep interactions with Nadine at casual porch-level acquaintance without turning it into a project",
+        "Classify small positive moments as 'small good things' without inflating expectations"
+      ]
+    }
+  ]
+}

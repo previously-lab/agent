@@ -1,0 +1,31 @@
+{
+  "month": "2025-05",
+  "slices": [
+    {
+      "id": "2025-05-28-0505",
+      "focus": "Presenting corridor program results to senior leadership",
+      "summary": "Briefed senior staff on corridor program results, arguing that reduced post-approval dropout — not larger public meetings — drove adoption gains. Used dropout-stage data, resident photos, and a marked map to reframe success from attendance to completion. Felt tired but vindicated after years of methodical work finally showed.",
+      "tags": [
+        "work",
+        "presentation",
+        "professional-growth",
+        "program-metrics",
+        "retention",
+        "corridor-results",
+        "data-storytelling"
+      ],
+      "status": "closed",
+      "start": "2025-05-28T05:05:00.000Z",
+      "open_loops": [
+        "Whether the one-pager will effectively prevent the story from being flattened over time",
+        "How to share credit with collaborators without diluting the core operational lesson",
+        "What this new visibility means for career trajectory long-term"
+      ],
+      "decisions": [
+        "Draft a one-page internal note while the briefing is fresh to preserve the core operational lesson",
+        "Make dropout-stage reduction the opening frame in future presentations rather than burying it",
+        "Keep explanations plain and jargon-free so the insight travels beyond the briefing room"
+      ]
+    }
+  ]
+}

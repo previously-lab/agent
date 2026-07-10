@@ -1,0 +1,30 @@
+{
+  "month": "2022-06",
+  "slices": [
+    {
+      "id": "2022-06-24-0105",
+      "focus": "Corridor paperwork clinics launch planning",
+      "summary": "Proved the new workshop format doubled application rates, earning approval for monthly paperwork clinics at a church fellowship hall. Planned triage sheets, bring-lists, three outcome categories, and sustainable engineer hours with Miguel. Adopted an evidence-driven controlled-expansion mindset — let the first clinic expose real bottlenecks before pushing further.",
+      "tags": [
+        "work",
+        "community-service",
+        "process-design",
+        "project-planning",
+        "collaboration",
+        "data-driven"
+      ],
+      "status": "closed",
+      "start": "2022-06-24T01:05:00.000Z",
+      "open_loops": [
+        "Which aspects of the first clinic will reveal unforeseen bottlenecks",
+        "Appointment-to-walk-in slot ratio needs real-world adjustment after the first sessions",
+        "How to bound Miguel's hours so they don't become a permanent dependency on one engineer"
+      ],
+      "decisions": [
+        "Build triage sheet, bring-list, and three outcome categories as the clinic's backbone tools",
+        "Reserve Miguel for technical-judgment questions only; compile common answers into a handbook to reduce dependency",
+        "Use hybrid appointment plus walk-in model to guarantee time for high-complexity cases"
+      ]
+    }
+  ]
+}

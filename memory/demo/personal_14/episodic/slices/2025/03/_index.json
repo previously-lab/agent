@@ -1,0 +1,32 @@
+{
+  "month": "2025-03",
+  "slices": [
+    {
+      "id": "2025-03-09-1140",
+      "focus": "Brief weekend trip to Lafayette with Lena",
+      "summary": "Short weekend trip to Lafayette for a cousins gathering with Lena. Careful planning, a locked-in return date, and house-check coverage made leaving home feel manageable for the first time. Stayed present during the trip rather than mentally at home. Realized brief regional travel is workable with the right conditions.",
+      "tags": [
+        "travel",
+        "anxiety-management",
+        "planning",
+        "marriage",
+        "weekend-trip",
+        "self-awareness",
+        "personal-growth",
+        "family"
+      ],
+      "status": "closed",
+      "start": "2025-03-09T11:40:00.000Z",
+      "open_loops": [
+        "Whether a second short trip in the coming months will feel as manageable",
+        "Whether the travel template generalizes beyond family-gathering purposes",
+        "How to keep the weekend list simple enough to avoid becoming a project"
+      ],
+      "decisions": [
+        "Create a short list of 3-4 driveable weekend options for future travel",
+        "Lock in a fixed return date before every trip",
+        "Include a bedtime house-check confirmation as a standard travel condition"
+      ]
+    }
+  ]
+}

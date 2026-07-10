@@ -1,0 +1,32 @@
+{
+  "month": "2025-08",
+  "slices": [
+    {
+      "id": "2025-08-07-2310",
+      "focus": "Storm anxiety: building guardrails not white-knuckling",
+      "summary": "Faced a Gulf tropical threat with a real shift in approach. Kept reflux routine steady, limited forecast checking to set windows, and delegated a meeting to Miguel early. Still edgy, but anxiety felt contained instead of endless. Planning a short storm-week checklist to share with Lena and Miguel.",
+      "tags": [
+        "storm-anxiety",
+        "tropical-storm",
+        "stress-management",
+        "reflux-health",
+        "delegation",
+        "boundaries",
+        "self-awareness",
+        "health-routine"
+      ],
+      "status": "closed",
+      "start": "2025-08-06T23:10:00.000Z",
+      "open_loops": [
+        "Write the storm-week checklist with 5 items and an evening replacement activity",
+        "Share the storm plan with Lena and Miguel before next threat",
+        "Formalize a nighttime phone cutoff with a replacement routine"
+      ],
+      "decisions": [
+        "Maintained reflux medication and meal timing despite storm stress",
+        "Limited forecast checking to set windows instead of compulsive monitoring",
+        "Delegated a public meeting to Miguel early instead of taking full load"
+      ]
+    }
+  ]
+}

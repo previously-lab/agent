@@ -1,0 +1,4974 @@
+{
+  "nodes": {
+    "demo-personal_14-mp_s01_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-the-lead-staffer-for-a-corridor-focused-homeown.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_2": {
+      "path": "memory/demo/personal_14/nodes/experience/after-a-near-miss-storm-season-debrief-sharon-reopened-mitig.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-workshop-series-is-designed-around-one-repeatedly-floode.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_4": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-wants-the-workshops-to-track-homeowners-from-attendanc.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-is-expected-to-attend-the-workshops-to-explain-elevat.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-workshop-format-emphasizes-plain-language-mitigation.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_7": {
+      "path": "memory/demo/personal_14/nodes/experience/this-approval-gives-caleb-his-first-clearly-defined-corridor.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-felt-newly-energized-because-the-corridor-plan-turned-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/even-with-the-new-momentum-caleb-is-keyed-up-about-whether-s.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-s-support-matters-to-caleb-because-she-converted-his-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-remains-one-of-caleb-s-key-collaborators-for-translat.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_12": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-workshop-series-directly-advances-caleb-s-stand.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s01_13": {
+      "path": "memory/demo/personal_14/nodes/experience/because-he-works-in-county-government-disaster-mitigation-an.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s01"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-02-11",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_1": {
+      "path": "memory/demo/personal_14/nodes/experience/a-sunday-in-baytown-with-terrence-comparing-old-hurricane-tr.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_2": {
+      "path": "memory/demo/personal_14/nodes/concepts/terrence-guidry-became-an-even-steadier-sounding-board-for-c.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-habit-started-during-the-early-build-out-of-caleb-s-new-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_4": {
+      "path": "memory/demo/personal_14/nodes/experience/public-meetings-for-the-corridor-focused-workshop-series-wer.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-processes-stress-by-sharing-concrete-artifacts-like-ma.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_6": {
+      "path": "memory/demo/personal_14/nodes/experience/comparing-old-hurricane-track-atlases-with-terrence-reinforc.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/terrence-s-baytown-gis-background-makes-him-a-uniquely-usefu.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_8": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-texting-habit-gave-caleb-an-informal-release-valve-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-values-friendships-that-can-hold-both-technical-map-ta.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-baytown-sunday-was-not-a-one-off-hangout-it-established-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s02_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-the-lead-staffer-for-the-corridor-focused-homeo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s02"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-03-02",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-expanded-the-corridor-workshop-series-from-presentatio.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-first-two-evening-workshops-filled-the-room-but-produced.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-concluded-that-his-usual-slide-deck-was-not-converting.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_4": {
+      "path": "memory/demo/personal_14/nodes/experience/he-replaced-the-standard-presentation-format-with-kitchen-ta.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-packet-format-included-call-back-sheets-so-caleb-cou.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_6": {
+      "path": "memory/demo/personal_14/nodes/experience/he-added-a-color-coded-application-checklist-designed-for-re.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-redesign-showed-a-practical-bias-toward-tools-reside.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-treated-weak-completion-rates-as-a-format-problem-he-coul.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-elise-boudreaux-let-caleb-test-the-new-packet-based-f.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-s-support-gave-caleb-room-to-iterate-quickly-based-on.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_11": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-stayed-the-same-so-caleb-could-compare-whether-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_12": {
+      "path": "memory/demo/personal_14/nodes/experience/this-session-marked-a-shift-in-caleb-s-role-from-leading-wor.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s03_13": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-avoids-late-night-spicy-food-mainly-because-his-acid-r.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s03"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-04-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-formally-agreed-that-caleb-would-handle-all-o.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_2": {
+      "path": "memory/demo/personal_14/nodes/experience/dorothy-refused-another-endocrinology-appointment-which-trig.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_3": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-now-takes-over-friday-medical-transport-for-his-mother.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-had-already-rearranged-her-school-week-schedule-again-b.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-decision-was-made-at-the-dining-table-while-caleb-and-le.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 4,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-friday-arrangement-was-meant-to-keep-dorothy-related.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-and-lena-s-marriage-stayed-stable-but-caregiving-press.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-still-lives-alone-in-atascocita-with-diabetes-and-wo.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-s-mistrust-of-doctors-and-dislike-of-feeling-managed.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-responds-to-family-strain-by-turning-it-into-a-concret.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/protecting-lena-s-weekday-bandwidth-matters-to-caleb-and-he-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s04_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-expanded-workshop-follow-through-program-uses-docume.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s04"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-05-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-showed-sharon-that-the-corridor-s-workshop-to-applicat.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-used-sign-in-sheets-call-logs-and-a-whiteboard-convers.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-took-on-monthly-corridor-paperwork-clinics-in-addition.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-gave-caleb-permission-to-formalize-the-next-phase-of-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-clinics-will-be-held-at-a-church-fellowship-hall-so-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_6": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-planned-to-equip-the-clinics-with-laptops-and-deed-cop.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-agreed-to-provide-engineer-office-hours-during-the-cl.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_8": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-outreach-effort-evolved-from-workshops-into-a-m.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-felt-cautiously-encouraged-because-the-new-workshop-fo.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-relies-on-visible-tracking-and-practical-proof-not-jus.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-growing-responsibility-now-includes-not-only-homeown.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s05_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-chose-their-one-story-ranch-near-the-san-jaci.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s05"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-06-24",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-reflux-driven-food-preference-shifted-more-clearly-t.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_2": {
+      "path": "memory/demo/personal_14/nodes/experience/at-a-neighbor-kid-s-high-school-baseball-fundraiser-caleb-un.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-choice-happened-during-a-humid-stretch-when-caleb-was-al.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 4,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_4": {
+      "path": "memory/demo/personal_14/nodes/experience/feeling-the-difference-afterward-made-caleb-more-deliberate-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_5": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-now-treats-smoked-turkey-as-a-safer-cookout-option-whe.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_6": {
+      "path": "memory/demo/personal_14/nodes/experience/this-food-adjustment-was-about-avoiding-paying-for-spicy-foo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-fundraiser-stop-fits-caleb-s-habit-of-showing-up-for-nei.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-tends-to-make-practical-body-aware-adjustments-when-st.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-remains-the-person-at-home-most-likely-to-notice-and-su.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_10": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-was-fitting-this-small-personal-adjustment-into-a-peri.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 4,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s06_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-angel-trevino-is-caleb-s-longtime-gis-friend-in-bayto.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s06"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-07-12",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-reflux-flared-harder-than-usual-during-the-gulf-stor.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-visibly-more-storm-anxious-and-brittle-under-th.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_3": {
+      "path": "memory/demo/personal_14/nodes/experience/a-tropical-system-lingering-in-the-gulf-during-the-same-week.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_4": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-had-been-trying-to-personally-call-back-many-residents.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-chest-tight-worry-was-tied-to-stress-and-reflux-rather-t.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_6": {
+      "path": "memory/demo/personal_14/nodes/experience/because-the-symptoms-and-poor-sleep-kept-building-caleb-scal.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-pushed-caleb-to-stop-taking-every-resident-voicemail-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-urged-caleb-to-use-a-shared-callback-board-so-applica.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/this-episode-exposed-a-weak-point-in-caleb-s-corridor-proces.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-stress-spikes-when-gulf-weather-risk-overlaps-with-d.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_11": {
+      "path": "memory/demo/personal_14/nodes/experience/the-session-reinforced-that-the-corridor-clinics-and-worksho.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s07_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-owns-a-one-story-ranch-house-near-the-san-jacinto-wate.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s07"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-08-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-took-roux-to-a-low-key-neighborhood-pet-blessing-durin.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_2": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-wanted-the-pet-blessing-partly-so-they-could-have-a-bre.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-outing-was-intentionally-low-key-fitting-caleb-s-limited.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_4": {
+      "path": "memory/demo/personal_14/nodes/experience/at-the-pet-blessing-caleb-ended-up-chatting-with-two-older-l.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/one-of-the-new-contacts-was-nadine-louise-carver-a-retired-n.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/nadine-became-a-casual-evening-walk-acquaintance-who-now-wav.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_7": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-dog-walk-contacts-gave-caleb-a-friendlier-informal-s.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/because-caleb-lives-in-a-flood-prone-neighborhood-near-the-s.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_9": {
+      "path": "memory/demo/personal_14/nodes/experience/the-pet-blessing-gave-caleb-and-lena-a-small-social-reset-at.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-is-more-open-than-he-sounds-to-modest-neighborhood-eve.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-new-evening-walk-connection-with-nadine-may-become-a-rec.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-s-outing-with-their-older-black-lab-roux-rein.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s08_13": {
+      "path": "memory/demo/personal_14/nodes/experience/their-household-finances-felt-comfortable-enough-that-caleb-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s08"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-09-06",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-shifted-from-broad-corridor-paperwork-clinics-into-a-t.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_2": {
+      "path": "memory/demo/personal_14/nodes/experience/his-new-outreach-approach-was-to-track-each-household-from-w.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-convinced-sharon-by-assembling-scanned-deed-packets-ha.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_4": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-decision-was-driven-by-applications-bunching-in.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_5": {
+      "path": "memory/demo/personal_14/nodes/experience/he-argued-that-spreading-calls-across-too-broad-an-area-was-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_6": {
+      "path": "memory/demo/personal_14/nodes/experience/this-narrower-corridor-strategy-built-directly-on-the-worksh.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-approved-caleb-s-request-to-concentrate-county-outrea.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_8": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-role-is-becoming-more-ownership-heavy-with-responsib.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-relies-on-documentation-and-mapping-evidence-to-make-oper.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-prefers-a-practical-measurable-outreach-strategy-that-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_11": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-subsection-focus-gives-caleb-a-cleaner-way-to-monito.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s09_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-now-takes-his-mother-dorothy-to-saturday-medical-appoi.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s09"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-10-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-got-into-gulf-coast-history-audiobooks-for-long-drives.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_2": {
+      "path": "memory/demo/personal_14/nodes/concepts/terrence-recommended-a-gulf-coast-history-audiobook-through-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_3": {
+      "path": "memory/demo/personal_14/nodes/experience/after-a-fall-spent-staring-at-parcel-maps-and-signatures-cal.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-discovered-he-likes-regional-nonfiction-audio-during-work.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-listening-habit-fits-his-corridor-case-tracking-job-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-book-interests-now-span-gulf-coast-history-mapping-s.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_7": {
+      "path": "memory/demo/personal_14/nodes/experience/he-borrowed-the-audiobook-from-the-county-library-app-rather.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_8": {
+      "path": "memory/demo/personal_14/nodes/experience/this-side-habit-gave-caleb-a-calmer-truck-routine-during-sit.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/terrence-continues-to-shape-caleb-s-off-the-clock-interests-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-responds-well-to-formats-that-let-him-keep-learning-ab.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s10_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-storm-anxiety-had-actually-become-a-simple-practical.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s10"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2025-12-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-began-using-address-specific-homeowner-packets-with-a-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_2": {
+      "path": "memory/demo/personal_14/nodes/concepts/at-the-start-of-the-new-grant-cycle-caleb-and-miguel-built-t.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-packet-paired-each-address-with-a-simple-drainage-sketch.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_4": {
+      "path": "memory/demo/personal_14/nodes/experience/including-a-likely-mitigation-path-for-each-property-helped-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_5": {
+      "path": "memory/demo/personal_14/nodes/experience/a-one-page-list-of-missing-paperwork-became-a-key-part-of-ca.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-clearer-packet-finally-got-several-fence-sitting-homeown.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_7": {
+      "path": "memory/demo/personal_14/nodes/experience/this-session-marked-a-shift-in-caleb-s-corridor-work-from-wo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_8": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-felt-steadier-once-residents-had-a-concrete-packet-to-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-success-of-the-packet-reinforced-caleb-s-preference-for-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-s-role-remained-translating-drainage-engineering-deta.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-corridor-strategy-now-depends-on-giving-each-househo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_12": {
+      "path": "memory/demo/personal_14/nodes/experience/the-packet-s-early-traction-gave-caleb-a-morale-boost-becaus.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s11_13": {
+      "path": "memory/demo/personal_14/nodes/experience/their-household-is-basically-stable-on-roughly-122-000-combi.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s11"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-01-26",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-paid-for-subfloor-repair-and-a-small-regradin.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_2": {
+      "path": "memory/demo/personal_14/nodes/experience/a-new-round-of-subfloor-repair-and-yard-regrading-after-heav.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-repair-invoices-forced-caleb-and-lena-to-delay-a-vacatio.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_4": {
+      "path": "memory/demo/personal_14/nodes/experience/the-fresh-damage-came-from-heavy-rain-hitting-caleb-s-own-fl.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/seeing-open-ended-costs-on-his-own-house-reminded-caleb-why-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/this-home-repair-episode-deepened-caleb-s-empathy-for-homeow.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-handled-practical-repair-logistics-with-caleb-but-anoth.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_8": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-travel-plans-stay-vulnerable-to-home-repair-costs-re.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_9": {
+      "path": "memory/demo/personal_14/nodes/experience/because-repeated-repairs-and-support-for-his-mother-had-alre.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_10": {
+      "path": "memory/demo/personal_14/nodes/experience/the-house-problem-centered-on-the-back-door-area-where-water.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-remained-in-his-address-specific-outreach-role-while-t.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s12_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-elise-boudreaux-manages-community-outreach-for-the-di.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s12"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-03-04",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-was-pulled-into-corridor-damage-control-work-after-con.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-stall-hit-several-corridor-households-at-once-rather-tha.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_3": {
+      "path": "memory/demo/personal_14/nodes/experience/residents-started-telling-each-other-the-county-had-overprom.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_4": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-went-through-two-bruising-church-hall-meetings-where-h.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_5": {
+      "path": "memory/demo/personal_14/nodes/experience/he-also-had-to-tell-residents-that-some-property-scopes-woul.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_6": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-discouraged-and-defensive-once-the-contractor-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_7": {
+      "path": "memory/demo/personal_14/nodes/experience/the-setback-was-tied-to-both-contractor-side-qualification-i.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_8": {
+      "path": "memory/demo/personal_14/nodes/experience/this-episode-links-directly-to-caleb-s-earlier-corridor-stra.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-elise-boudreaux-who-had-backed-caleb-s-more-practical.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-angel-trevino-remains-a-useful-engineer-counterpart-b.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-tends-to-absorb-public-facing-fallout-personally-when-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-values-being-candid-with-residents-even-when-the-message-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s13_13": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-owns-a-one-story-ranch-house-with-lena-near-the-san-ja.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s13"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-04-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-developed-a-small-stress-relief-hobby-of-taking-quick-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_2": {
+      "path": "memory/demo/personal_14/nodes/experience/he-first-wandered-into-the-native-plants-lunch-talk-mainly-b.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_3": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-plant-photo-habit-started-as-a-way-to-let-his-brain-go-o.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_4": {
+      "path": "memory/demo/personal_14/nodes/experience/he-especially-noticed-and-photographed-bioswale-plantings-an.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_5": {
+      "path": "memory/demo/personal_14/nodes/experience/this-new-hobby-emerged-while-he-was-still-stuck-in-corridor-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-lunch-talk-gave-caleb-a-low-pressure-county-adjacent-out.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/his-interest-in-native-plants-fit-his-broader-tendency-to-en.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_8": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-photo-habit-was-lightweight-and-cheap-which-mattered.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-was-still-married-to-lena-and-carrying-friday-medical-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_10": {
+      "path": "memory/demo/personal_14/nodes/experience/the-native-plant-lunch-talk-happened-inside-county-employee-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-longtime-gis-friend-terrence-in-baytown-became-a-ste.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s14_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-longtime-gis-friend-terrence-in-baytown-became-someo.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s14"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-05-29",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-rebuilt-the-stalled-corridor-effort-around-a-blunt-wee.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_2": {
+      "path": "memory/demo/personal_14/nodes/experience/he-started-hand-delivering-the-weekly-status-sheets-during-c.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-status-sheet-deliberately-split-hold-ups-into-three-buck.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_4": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-goal-was-to-stop-the-slide-in-resident-trust-after-e.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-tracking-method-was-a-damage-control-response-to-the.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_6": {
+      "path": "memory/demo/personal_14/nodes/experience/this-move-extended-caleb-s-earlier-address-specific-packet-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-chose-radical-transparency-over-vague-reassurance-pref.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-office-hours-handoff-shows-caleb-works-best-when-he-can-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/residents-in-the-corridor-were-directly-affected-because-cal.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_10": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-office-hours-became-a-key-delivery-channel-for-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-remained-under-pressure-from-earlier-resident-skeptici.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s15_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-was-relieved-that-caleb-s-wife-had-enthusiastically-pus.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s15"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-07-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_1": {
+      "path": "memory/demo/personal_14/nodes/experience/after-another-gulf-storm-watch-and-weeks-of-bad-nights-caleb.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-reflux-stayed-stress-sensitive-but-after-the-doctor-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-doctor-gave-caleb-more-direct-reflux-guidance-which-push.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-admitted-he-had-been-carrying-a-constant-low-grade-sto.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_5": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-was-still-anxious-and-easily-keyed-up-during-storm-sea.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-emotional-strain-this-time-centered-more-on-storm-vigila.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-had-a-fall-in-her-kitchen-without-major-injury-which.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-is-caleb-s-widowed-mother-in-atascocita-and-her-diab.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-still-handles-dorothy-s-friday-medical-transport-a-dut.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-remains-worn-down-by-the-mix-of-house-maintenance-and-d.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-tends-to-minimize-his-own-distress-until-a-combined-pr.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-s-finances-stayed-basically-stable-but-tighte.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s16_13": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-s-finances-stayed-basically-stable-but-tighte.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s16"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-08-18",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-expanded-the-corridor-support-model-beyond-status-shee.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-saturday-clinic-support-cleared-a-significant-share-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-used-the-breathing-room-created-by-putting-delay-categ.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/a-title-company-contact-became-part-of-caleb-s-saturday-clin.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-also-recruited-a-bilingual-intake-volunteer-for-the-sa.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-clinic-model-targeted-paperwork-traps-before-formal-revi.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_7": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-felt-hard-earned-relief-because-the-new-clinic-support.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_8": {
+      "path": "memory/demo/personal_14/nodes/experience/this-session-continued-caleb-s-main-arc-pattern-of-turning-r.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-outreach-style-favors-practical-interventions-that-r.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_10": {
+      "path": "memory/demo/personal_14/nodes/experience/he-is-in-his-eighth-year-at-harris-county-flood-control-dist.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-elise-boudreaux-had-recently-backed-caleb-s-more-prac.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-household-finances-remained-basically-stable-but-a-n.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s17_13": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-household-finances-remained-basically-stable-but-his.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s17"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-10-03",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-renewed-a-taste-for-older-legal-and-civic-procedurals-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-movie-night-happened-after-a-calmer-month-at-work-giving.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_3": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-was-the-one-who-pushed-caleb-to-attend-the-neighbor-s-b.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_4": {
+      "path": "memory/demo/personal_14/nodes/experience/an-older-legal-thriller-unexpectedly-worked-for-caleb-reinfo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_5": {
+      "path": "memory/demo/personal_14/nodes/experience/after-the-movie-night-caleb-started-actively-looking-for-pro.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-default-screen-habit-had-been-weather-coverage-and-f.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_7": {
+      "path": "memory/demo/personal_14/nodes/experience/this-preference-shift-was-a-leisure-side-change-only-his-wor.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-movie-taste-still-centers-on-grounded-dramas-and-pro.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-outing-suggested-that-a-little-social-nudging-from-lena-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_10": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-renewed-interest-was-not-in-flashy-new-releases-but-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-angel-trevino-is-a-county-drainage-engineer-who-respe.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s18_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-angel-trevino-helps-caleb-with-resident-explanations-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s18"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2026-11-19",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-added-a-corridor-performance-scoreboard-that-tracks-co.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-scoreboard-let-caleb-tie-his-outreach-work-directly-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_3": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-built-the-corridor-scoreboard-for-sharon-boudreaux-to-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_4": {
+      "path": "memory/demo/personal_14/nodes/experience/the-numbers-on-caleb-s-scoreboard-were-strong-enough-to-just.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_5": {
+      "path": "memory/demo/personal_14/nodes/experience/this-scoreboard-came-after-title-and-document-choke-points-h.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_6": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-block-level-counts-focused-on-three-milestone-catego.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_7": {
+      "path": "memory/demo/personal_14/nodes/experience/by-measuring-progress-by-block-caleb-gave-leadership-a-simpl.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_8": {
+      "path": "memory/demo/personal_14/nodes/experience/the-scoreboard-effectively-defended-caleb-s-targeted-corrido.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-boudreaux-remained-an-important-internal-sponsor-for-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-tends-to-build-plain-usable-tracking-tools-that-conver.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-values-concentrated-follow-through-over-broad-but-dilu.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_12": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-effort-had-advanced-from-reducing-paperwork-los.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s19_13": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-works-in-aldine-isd-as-a-public-school-occupational-the.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s19"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-01-30",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_1": {
+      "path": "memory/demo/personal_14/nodes/concepts/after-bruising-her-hip-by-missing-the-front-step-dorothy-rel.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_2": {
+      "path": "memory/demo/personal_14/nodes/experience/dorothy-s-near-fall-intensified-caregiving-again-and-caleb-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-spent-a-saturday-making-dorothy-s-home-safer-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_4": {
+      "path": "memory/demo/personal_14/nodes/experience/they-also-labeled-dorothy-s-medication-bins-during-the-safet.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-family-argued-again-about-dorothy-s-independence-before-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-remains-resistant-to-care-that-makes-her-feel-contro.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-took-a-practical-lead-on-the-home-safety-response-consi.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-is-willing-to-push-through-uncomfortable-family-confli.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_9": {
+      "path": "memory/demo/personal_14/nodes/experience/a-concrete-incident-was-what-finally-moved-dorothy-more-than.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_10": {
+      "path": "memory/demo/personal_14/nodes/experience/the-agreed-next-steps-after-dorothy-s-fall-scare-were-a-home.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/this-episode-reinforced-that-caleb-and-lena-s-marriage-is-st.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s20_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-wife-is-a-public-school-occupational-therapy-assista.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s20"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-03-16",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-shifted-corridor-outreach-from-scoreboard-only-trackin.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_2": {
+      "path": "memory/demo/personal_14/nodes/experience/he-organized-a-corridor-walk-once-residents-could-finally-se.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-brought-before-and-after-flood-photos-on-the-corridor-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-had-homeowners-already-in-the-buyout-process-explain-to-n.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-walk-turned-resident-testimony-into-a-trust-bui.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_6": {
+      "path": "memory/demo/personal_14/nodes/experience/visible-project-markers-gave-caleb-a-way-to-show-neighborhoo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_7": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-felt-more-hopeful-than-he-had-in-months-because-the-co.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_8": {
+      "path": "memory/demo/personal_14/nodes/experience/this-milestone-built-directly-on-the-earlier-saturday-clinic.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_9": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-effort-also-built-on-the-block-by-block-perform.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-outreach-style-favors-concrete-visible-proof-over-ab.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-uses-peer-examples-and-practical-demonstrations-to-help-n.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/resident-participation-had-advanced-enough-by-this-point-tha.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s21_13": {
+      "path": "memory/demo/personal_14/nodes/experience/their-household-repairs-after-heavy-rain-felt-like-a-managea.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s21"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-05-05",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_1": {
+      "path": "memory/demo/personal_14/nodes/experience/after-a-late-downtown-meeting-caleb-went-to-an-astros-game-w.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_2": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-taught-caleb-how-to-keep-a-compact-paper-scorecard-at.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-discovered-he-liked-keeping-a-simple-paper-scorecard-d.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/the-scorecard-appealed-to-caleb-because-it-gave-him-a-struct.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_5": {
+      "path": "memory/demo/personal_14/nodes/experience/this-game-happened-during-a-more-hopeful-stretch-for-caleb-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/going-to-the-game-after-a-late-meeting-showed-caleb-was-will.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-remained-one-of-the-few-coworkers-caleb-could-comfort.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/because-miguel-often-translates-technical-flood-control-deta.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_9": {
+      "path": "memory/demo/personal_14/nodes/experience/the-outing-mattered-to-caleb-partly-because-discretionary-sp.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_10": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-sports-interest-now-included-occasionally-enjoying-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-works-for-harris-county-flood-control-district.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s22_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-works-for-harris-county-community-outreach-under-sharo.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s22"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-06-23",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-the-internal-defender-of-a-concentrated-corrido.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_2": {
+      "path": "memory/demo/personal_14/nodes/experience/a-fresh-round-of-county-budget-pressure-threatened-to-spread.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-argued-against-dilution-by-combining-the-corridor-scor.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_4": {
+      "path": "memory/demo/personal_14/nodes/experience/his-case-was-that-concentrated-follow-through-was-exactly-wh.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-new-argument-built-directly-on-the-measurable-block-leve.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-translated-outreach-work-into-operational-evidence-by-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-tends-to-defend-focused-visible-follow-through-over-broad.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-boudreaux-remained-an-important-internal-ally-for-cal.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_9": {
+      "path": "memory/demo/personal_14/nodes/experience/the-wall-map-with-household-status-dots-became-a-key-visual-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_10": {
+      "path": "memory/demo/personal_14/nodes/experience/call-back-logs-mattered-because-caleb-could-show-that-outrea.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_11": {
+      "path": "memory/demo/personal_14/nodes/experience/this-budget-defense-moment-sharpened-caleb-s-role-from-corri.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_12": {
+      "path": "memory/demo/personal_14/nodes/experience/the-pressure-to-justify-focused-staff-time-showed-that-corri.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s23_13": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-started-managing-his-reflux-more-consistently-mainly-b.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s23"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-08-31",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-and-lena-paid-for-a-larger-drainage-and-gutter-overhau.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-still-owns-the-same-one-story-ranch-house-with-lena-ne.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-drainage-and-gutter-project-kept-caleb-and-lena-s-saving.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_4": {
+      "path": "memory/demo/personal_14/nodes/experience/writing-the-check-left-caleb-grateful-they-could-cover-the-w.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/doing-expensive-prevention-work-on-his-own-house-sharpened-c.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-prefers-spending-money-on-preventive-flood-protection-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-was-directly-involved-in-the-house-overhaul-decision-an.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_8": {
+      "path": "memory/demo/personal_14/nodes/experience/the-overhaul-was-driven-by-repeated-rain-intrusion-at-caleb-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_9": {
+      "path": "memory/demo/personal_14/nodes/experience/even-while-work-was-more-hopeful-household-repair-costs-cont.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_10": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-own-house-remains-a-lived-example-of-the-same-flood-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_11": {
+      "path": "memory/demo/personal_14/nodes/experience/the-expense-reinforced-caleb-s-frustration-with-how-mitigati.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s24_12": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-accepted-the-home-health-assessment-and-grab-bar-ins.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s24"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2027-10-14",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-formalized-a-retention-focused-follow-through-routine-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_2": {
+      "path": "memory/demo/personal_14/nodes/experience/he-built-the-new-routine-around-a-lesson-from-the-corridor-a.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-retention-system-tightened-his-earlier-corridor-strategy.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-now-treats-approved-files-as-active-support-cases-rath.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_5": {
+      "path": "memory/demo/personal_14/nodes/experience/assigning-one-named-contact-per-household-was-meant-to-reduc.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_6": {
+      "path": "memory/demo/personal_14/nodes/experience/the-30-60-and-90-day-schedule-gave-caleb-a-standardized-rete.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_7": {
+      "path": "memory/demo/personal_14/nodes/experience/this-change-carried-forward-lessons-from-the-corridor-s-visi.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_8": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-work-remained-shaped-by-practical-homeowner-barriers.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-elise-boudreaux-had-already-backed-caleb-s-push-for-m.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-angel-trevino-remained-one-of-the-coworkers-caleb-rel.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-new-year-priority-was-not-expanding-broadly-but-impr.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_12": {
+      "path": "memory/demo/personal_14/nodes/experience/he-remained-more-hopeful-than-he-had-been-months-earlier-bec.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_13": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-remained-married-and-stable-with-lena-and-the-new-foll.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s25_14": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-and-lena-remained-married-and-stable-though-the-house-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s25"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-01-17",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_1": {
+      "path": "memory/demo/personal_14/nodes/experience/after-a-calmer-winter-following-their-house-drainage-work-ca.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_2": {
+      "path": "memory/demo/personal_14/nodes/experience/the-lafayette-weekend-showed-caleb-he-could-tolerate-a-brief.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_3": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-now-feels-a-little-more-comfortable-leaving-home-brief.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_4": {
+      "path": "memory/demo/personal_14/nodes/concepts/for-caleb-travel-feels-manageable-when-he-can-monitor-weathe.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_5": {
+      "path": "memory/demo/personal_14/nodes/experience/a-clear-return-date-is-one-of-caleb-s-key-conditions-for-tak.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_6": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-is-more-willing-to-travel-briefly-when-someone-is-chec.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_7": {
+      "path": "memory/demo/personal_14/nodes/experience/the-recent-drainage-and-gutter-overhaul-at-caleb-s-house-mad.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/lena-took-the-lafayette-weekend-with-caleb-reinforcing-that-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/a-cousin-s-gathering-in-lafayette-was-enough-family-motivati.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 4,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-travel-comfort-improved-through-a-successful-short-t.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_11": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-still-does-best-with-brief-regional-travel-instead-of-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s26_12": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-still-owned-the-same-one-story-ranch-house-with-lena-n.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s26"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-03-09",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_1": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-became-the-lead-presenter-of-the-corridor-s-adoption-r.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-argued-that-the-corridor-s-biggest-gain-came-from-keep.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_3": {
+      "path": "memory/demo/personal_14/nodes/experience/his-briefing-relied-on-resident-photos-a-marked-corridor-map.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_4": {
+      "path": "memory/demo/personal_14/nodes/experience/by-late-spring-the-corridor-dashboard-showed-enough-complete.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_5": {
+      "path": "memory/demo/personal_14/nodes/experience/the-presentation-tied-together-earlier-corridor-tactics-such.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_6": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-results-emphasized-that-tedious-follow-through-after.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_7": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-felt-tired-but-vindicated-because-the-corridor-finally.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-boudreaux-asked-caleb-to-brief-senior-staff-signaling.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_9": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-translated-corridor-performance-into-a-story-senior-st.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_10": {
+      "path": "memory/demo/personal_14/nodes/experience/this-milestone-reinforced-caleb-s-standing-inside-the-distri.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s27_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-s-widowed-mother-reluctantly-accepted-a-home-health-as.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s27"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-05-28",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_1": {
+      "path": "memory/demo/personal_14/nodes/experience/during-a-new-gulf-tropical-threat-caleb-still-slept-lightly-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_2": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-storm-season-anxiety-became-more-deliberate-and-mana.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_3": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-stuck-to-his-reflux-routine-during-the-tropical-threat.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_4": {
+      "path": "memory/demo/personal_14/nodes/experience/by-2028-caleb-s-reflux-was-still-stress-sensitive-during-gul.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_5": {
+      "path": "memory/demo/personal_14/nodes/experience/he-intentionally-limited-doom-scrolling-when-the-gulf-threat.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_6": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-let-miguel-cover-one-public-meeting-so-he-would-not-fe.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-trevino-was-trusted-enough-to-take-over-a-public-faci.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_8": {
+      "path": "memory/demo/personal_14/nodes/experience/this-session-showed-caleb-applying-coping-changes-in-real-ti.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_9": {
+      "path": "memory/demo/personal_14/nodes/concepts/caleb-values-stepping-back-early-when-he-notices-himself-spi.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/storm-threats-still-trigger-hypervigilance-for-caleb-but-he-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s28_11": {
+      "path": "memory/demo/personal_14/nodes/concepts/dorothy-accepted-a-home-health-assessment-and-grab-bar-insta.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s28"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-08-07",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_1": {
+      "path": "memory/demo/personal_14/nodes/experience/by-late-2028-caleb-became-the-county-s-go-to-corridor-follow.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 6,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_2": {
+      "path": "memory/demo/personal_14/nodes/experience/at-the-year-end-corridor-review-caleb-could-point-to-a-meani.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_3": {
+      "path": "memory/demo/personal_14/nodes/experience/the-corridor-s-progress-gave-caleb-county-level-proof-that-r.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_4": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-s-evidence-now-extended-beyond-interest-and-approvals-.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_5": {
+      "path": "memory/demo/personal_14/nodes/concepts/he-closed-the-year-convinced-that-transparent-case-tracking-.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_6": {
+      "path": "memory/demo/personal_14/nodes/experience/this-review-marked-the-payoff-of-caleb-s-long-corridor-strat.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_7": {
+      "path": "memory/demo/personal_14/nodes/concepts/sharon-was-part-of-the-year-end-review-that-validated-caleb-.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_8": {
+      "path": "memory/demo/personal_14/nodes/concepts/miguel-was-part-of-the-year-end-review-that-confirmed-the-co.md",
+      "type": "concept",
+      "tags": [
+        "relationship-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_9": {
+      "path": "memory/demo/personal_14/nodes/experience/caleb-left-the-review-feeling-that-years-of-tedious-homeowne.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_10": {
+      "path": "memory/demo/personal_14/nodes/concepts/a-core-lesson-caleb-carried-forward-was-that-mitigation-adop.md",
+      "type": "concept",
+      "tags": [
+        "persona-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 10,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_11": {
+      "path": "memory/demo/personal_14/nodes/experience/the-once-stalled-corridor-had-become-caleb-s-strongest-inter.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    },
+    "demo-personal_14-mp_s29_12": {
+      "path": "memory/demo/personal_14/nodes/experience/at-harris-county-flood-control-district-caleb-s-documented-c.md",
+      "type": "experience",
+      "tags": [
+        "event-memory",
+        "session-s29"
+      ],
+      "links": [],
+      "backlinks": [],
+      "priority": 8,
+      "access_count": 0,
+      "last_accessed": "2028-11-21",
+      "status": "active"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "month": "2024-10",
+  "slices": [
+    {
+      "id": "2024-10-14-0600",
+      "focus": "Funding a home drainage overhaul — cost and professional empathy",
+      "summary": "Funded a substantial gutter and drainage overhaul before winter rains — a financially painful but necessary prevention decision. The experience reshaped perspective on what mitigation systems ask of people vs. what people can realistically absorb. Resolved to revise workshop notes to name real tradeoffs rather than detached engineering logic.",
+      "tags": [
+        "housing",
+        "home-maintenance",
+        "mitigation",
+        "prevention",
+        "personal-finance",
+        "empathy",
+        "workshop-redesign"
+      ],
+      "status": "closed",
+      "start": "2024-10-14T06:00:00.000Z",
+      "open_loops": [
+        "How to translate personal frustration into useful framing for workshop audiences",
+        "Whether naming the financial weight openly helps people or discourages them"
+      ],
+      "decisions": [
+        "Choose permanent prevention spend over continued temporary repairs",
+        "Reframe the expense as successful prevention spend and hardening the house rather than a loss",
+        "Revise workshop notes to use grounded language that names real tradeoffs without being bitter"
+      ]
+    }
+  ]
+}
