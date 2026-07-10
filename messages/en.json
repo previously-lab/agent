@@ -18,6 +18,15 @@
     "expand": "Expand",
     "collapse": "Collapse"
   },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System",
+    "toggleTooltip": "Toggle theme"
+  },
+  "locale": {
+    "switchTooltip": "Switch language"
+  },
   "chat": {
     "input": {
       "placeholder": "Send a message...",
@@ -96,45 +105,29 @@
   },
   "settings": {
     "pageTitle": "Settings",
-    "pageSubtitle": "Configure your GitHub repository connection.",
-    "form": {
-      "apiStatus": "API Status",
-      "connected": "Connected",
-      "notConfigured": "Not configured",
-      "modelSection": "Model & Reasoning",
-      "modelChat": "DeepSeek Chat (default)",
-      "modelReasoner": "DeepSeek Reasoner",
-      "thinkingLabel": "Thinking",
-      "thinkingDesc": "Show model reasoning in chat",
-      "repoConfig": "Repository Config",
-      "ownerPlaceholder": "GitHub Owner (e.g. LikeDreamwalker)",
-      "repoPlaceholder": "GitHub Repo Name (e.g. previously)",
-      "save": "Save",
+    "pageSubtitle": "Your profile and chat preferences.",
+    "profile": {
+      "heading": "Profile",
+      "desc": "Who the agent is assisting. Your name shows on the home screen; the rest helps the agent know you.",
+      "name": "Name",
+      "namePlaceholder": "How you'd like to be shown (e.g. your full name)",
+      "pronouns": "Pronouns",
+      "pronounsPlaceholder": "e.g. she/her",
+      "addressAs": "Address as",
+      "addressAsPlaceholder": "What the agent should call you",
+      "timezone": "Timezone",
+      "timezonePlaceholder": "e.g. America/Chicago",
+      "about": "About you",
+      "aboutPlaceholder": "Anything the agent should know about you, your work, or preferences.",
+      "save": "Save profile",
+      "saving": "Saving...",
       "saved": "Saved ✓",
-      "deployment": "Deployment",
-      "deployDesc": "Deploys are triggered by commits with <code>[deploy]</code> in the message.",
-      "deploy": "Deploy",
-      "deploying": "Deploying...",
-      "deployFailed": "Deploy failed. Make sure the repo is connected and git is available.",
-      "version": "Version",
-      "checkUpdates": "Check for Updates",
-      "checkingUpdates": "Checking...",
-      "versionAvailable": "v{version} available (current: v{current}). Use `git merge upstream/main` to update.",
-      "versionUpToDate": "Up to date (v{version}).",
-      "versionCheckFailed": "Could not check for updates. Are you online?"
+      "saveFailed": "Couldn't save. Try again."
     },
-    "repo": {
-      "heading": "Connected Repositories",
-      "vercelSource": "Primary (Vercel)",
-      "empty": "No repositories connected. Add one below.",
-      "addedDate": "Added {date}",
-      "removeTooltip": "Remove repository",
-      "addHeading": "Add Repository",
-      "addPlaceholder": "github.com/owner/repo or owner/repo",
-      "addButton": "Add",
-      "addHelp": "Add repositories your agent can access. Each repo will be registered in your memory.",
-      "invalidUrl": "Enter a valid GitHub URL or owner/repo (e.g. github.com/owner/repo)",
-      "addFailed": "Failed to add repository"
+    "form": {
+      "modelSection": "Chat model",
+      "thinkingLabel": "Thinking",
+      "thinkingDesc": "Show model reasoning in chat"
     },
     "error": {
       "title": "Failed to load settings",

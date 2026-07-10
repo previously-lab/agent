@@ -1,5 +1,6 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { loadUserProfile } from "@/lib/identity";
 
 export default async function SettingsPage({
   params,
@@ -9,6 +10,7 @@ export default async function SettingsPage({
   const { locale } = await params;
   setRequestLocale(locale);
   const t = await getTranslations("settings");
+  const profile = await loadUserProfile();
 
   return (
     <div className="p-6 max-w-xl mx-auto">
@@ -16,7 +18,7 @@ export default async function SettingsPage({
       <p className="text-muted-foreground text-sm mb-8">
         {t("pageSubtitle")}
       </p>
-      <SettingsForm />
+      <SettingsForm initialProfile={profile} />
     </div>
   );
 }

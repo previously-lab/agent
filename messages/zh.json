@@ -18,6 +18,15 @@
     "expand": "展开",
     "collapse": "收起"
   },
+  "theme": {
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统",
+    "toggleTooltip": "切换主题"
+  },
+  "locale": {
+    "switchTooltip": "切换语言"
+  },
   "chat": {
     "input": {
       "placeholder": "发送消息…",
@@ -96,45 +105,29 @@
   },
   "settings": {
     "pageTitle": "设置",
-    "pageSubtitle": "配置你的 GitHub 仓库连接。",
-    "form": {
-      "apiStatus": "API 状态",
-      "connected": "已连接",
-      "notConfigured": "未配置",
-      "modelSection": "模型与推理",
-      "modelChat": "DeepSeek Chat（默认）",
-      "modelReasoner": "DeepSeek Reasoner",
-      "thinkingLabel": "推理思考",
-      "thinkingDesc": "在聊天中显示模型推理",
-      "repoConfig": "仓库配置",
-      "ownerPlaceholder": "GitHub 所有者（例如 LikeDreamwalker）",
-      "repoPlaceholder": "GitHub 仓库名（例如 previously）",
+    "pageSubtitle": "你的个人信息与对话偏好。",
+    "profile": {
+      "heading": "个人信息",
+      "desc": "agent 在为谁服务。你的名字会显示在首页;其余信息帮助 agent 更了解你。",
+      "name": "名字",
+      "namePlaceholder": "希望被如何显示（例如你的全名）",
+      "pronouns": "代词",
+      "pronounsPlaceholder": "例如 he/him",
+      "addressAs": "称呼",
+      "addressAsPlaceholder": "agent 该怎么称呼你",
+      "timezone": "时区",
+      "timezonePlaceholder": "例如 America/Chicago",
+      "about": "关于你",
+      "aboutPlaceholder": "任何你希望 agent 了解的信息：你是谁、在做什么、偏好如何。",
       "save": "保存",
+      "saving": "保存中…",
       "saved": "已保存 ✓",
-      "deployment": "部署",
-      "deployDesc": "提交信息中包含 <code>[deploy]</code> 时触发部署。",
-      "deploy": "部署",
-      "deploying": "部署中…",
-      "deployFailed": "部署失败。请确保仓库已连接且 git 可用。",
-      "version": "版本",
-      "checkUpdates": "检查更新",
-      "checkingUpdates": "检查中…",
-      "versionAvailable": "新版本 v{version} 可用（当前：v{current}）。使用 `git merge upstream/main` 更新。",
-      "versionUpToDate": "已是最新版本（v{version}）。",
-      "versionCheckFailed": "无法检查更新，请确认网络连接。"
+      "saveFailed": "保存失败，请重试。"
     },
-    "repo": {
-      "heading": "已连接仓库",
-      "vercelSource": "主要（Vercel）",
-      "empty": "尚未连接仓库。请在下方添加。",
-      "addedDate": "添加于 {date}",
-      "removeTooltip": "移除仓库",
-      "addHeading": "添加仓库",
-      "addPlaceholder": "github.com/所有者/仓库 或 所有者/仓库",
-      "addButton": "添加",
-      "addHelp": "添加你的 agent 可以访问的仓库。每个仓库都会被登记进你的记忆。",
-      "invalidUrl": "请输入有效的 GitHub 链接或 所有者/仓库（例如 github.com/owner/repo）",
-      "addFailed": "添加仓库失败"
+    "form": {
+      "modelSection": "对话模型",
+      "thinkingLabel": "推理思考",
+      "thinkingDesc": "在聊天中显示模型推理"
     },
     "error": {
       "title": "加载设置失败",
