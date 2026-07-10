@@ -51,7 +51,11 @@
     },
     "recall": {
       "streaming": "回忆中…",
-      "completed": "已回忆"
+      "completed": "已回忆",
+      "group": {
+        "timeline": "阅读了 {count} 条时间线记录",
+        "browse": "回忆了额外的 {count} 条记忆"
+      }
     },
     "tool": {
       "denied": "已拒绝",

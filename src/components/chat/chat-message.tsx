@@ -7,6 +7,7 @@ import { ThinkingSteps } from "./thinking";
 import { RecallPhase } from "./recall-phase";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
+import { RecallGroup, type RecallCategory, type RecallToolPart } from "./recall-group";
 import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 
@@ -15,6 +16,104 @@ interface ChatMessageProps {
   onRegenerate?: () => void;
   isStreaming?: boolean;
   startedAt?: string;
+}
+
+// ── Inline-part grouping ────────────────────────────────────────────────
+// Consecutive memory-read tool calls are collapsed into a single "act of
+// recall" so a dozen readMemory calls don't render as a mechanical log.
+
+type AnyPart = {
+  type?: string;
+  toolCallId?: string;
+  toolName?: string;
+  state?: string;
+  input?: unknown;
+  output?: unknown;
+  text?: string;
+};
+
+const RECALL_CATEGORY: Record<string, RecallCategory> = {
+  readMemory: "timeline",
+  readIndex: "timeline",
+  listMemory: "browse",
+};
+
+function resolveToolName(p: AnyPart): string {
+  return p.toolName ?? p.type?.replace("tool-", "") ?? "tool";
+}
+
+type RenderItem =
+  | { kind: "text"; key: string; content: string }
+  | { kind: "tool"; key: string; toolName: string; state: string; input?: unknown; output?: unknown }
+  | { kind: "recallGroup"; key: string; category: RecallCategory; parts: RecallToolPart[] };
+
+function groupInlineParts(parts: readonly AnyPart[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let buffer: { category: RecallCategory; parts: RecallToolPart[]; startIndex: number } | null = null;
+
+  const flush = () => {
+    if (!buffer) return;
+    if (buffer.parts.length >= 2) {
+      items.push({
+        kind: "recallGroup",
+        key: `recall-${buffer.category}-${buffer.startIndex}`,
+        category: buffer.category,
+        parts: buffer.parts,
+      });
+    } else {
+      // A lone memory read renders as a normal tool card, not a group.
+      const p = buffer.parts[0];
+      items.push({
+        kind: "tool",
+        key: p.toolCallId ?? `tool-${buffer.startIndex}`,
+        toolName: p.toolName,
+        state: p.state,
+        input: p.input,
+        output: p.output,
+      });
+    }
+    buffer = null;
+  };
+
+  parts.forEach((part, i) => {
+    if (part.type?.startsWith("tool-")) {
+      const toolName = resolveToolName(part);
+      const toolPart: RecallToolPart = {
+        toolCallId: part.toolCallId,
+        toolName,
+        state: part.state ?? "",
+        input: part.input,
+        output: part.output,
+      };
+      const category = RECALL_CATEGORY[toolName];
+      if (category) {
+        if (buffer && buffer.category === category) {
+          buffer.parts.push(toolPart);
+        } else {
+          flush();
+          buffer = { category, parts: [toolPart], startIndex: i };
+        }
+        return;
+      }
+      flush();
+      items.push({
+        kind: "tool",
+        key: part.toolCallId ?? `tool-${i}`,
+        toolName,
+        state: toolPart.state,
+        input: part.input,
+        output: part.output,
+      });
+      return;
+    }
+    flush();
+    if (part.type === "text") {
+      items.push({ kind: "text", key: `text-${i}`, content: part.text ?? "" });
+    }
+  });
+
+  flush();
+  return items;
 }
 
 export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: ChatMessageProps) {
@@ -49,6 +148,11 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
   const hasRecall = recallParts.length > 0;
   const hasReasoning = reasoningText.trim().length > 0;
   const hasInline = inlineParts.length > 0;
+
+  const renderItems = useMemo(
+    () => groupInlineParts(inlineParts as AnyPart[]),
+    [inlineParts],
+  );
 
   // Full text for footer display
   const textContent = inlineParts
@@ -98,32 +202,30 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
           {hasInline && (
             <Bubble variant={isUser ? "default" : "secondary"}>
               <BubbleContent>
-                {inlineParts.map((part, i) => {
-                  if (part.type?.startsWith("tool-")) {
-                    const p = part as {
-                      type: string;
-                      toolCallId: string;
-                      toolName?: string;
-                      state: string;
-                      input?: unknown;
-                      output?: unknown;
-                    };
+                {renderItems.map((item) => {
+                  if (item.kind === "text") {
+                    return <MarkdownRenderer key={item.key} content={item.content} />;
+                  }
+                  if (item.kind === "recallGroup") {
                     return (
-                      <ToolRenderer
-                        key={p.toolCallId ?? `tool-${i}`}
-                        toolName={p.toolName ?? p.type?.replace("tool-", "") ?? "tool"}
-                        state={p.state}
-                        input={p.input}
-                        output={p.output}
+                      <RecallGroup
+                        key={item.key}
+                        category={item.category}
+                        parts={item.parts}
                         isStreaming={isStreaming ?? false}
                       />
                     );
                   }
-                  if (part.type === "text") {
-                    const text = (part as { text: string }).text;
-                    return <MarkdownRenderer key={`text-${i}`} content={text} />;
-                  }
-                  return null;
+                  return (
+                    <ToolRenderer
+                      key={item.key}
+                      toolName={item.toolName}
+                      state={item.state}
+                      input={item.input}
+                      output={item.output}
+                      isStreaming={isStreaming ?? false}
+                    />
+                  );
                 })}
 
                 {/* Streaming cursor */}

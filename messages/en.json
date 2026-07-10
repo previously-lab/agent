@@ -51,7 +51,11 @@
     },
     "recall": {
       "streaming": "Recalling...",
-      "completed": "Recalled"
+      "completed": "Recalled",
+      "group": {
+        "timeline": "Read {count} timeline records",
+        "browse": "Recalled {count} more"
+      }
     },
     "tool": {
       "denied": "Denied",
