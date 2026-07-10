@@ -1,5 +1,6 @@
 import { getOctokit } from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
+import { resolveDemoPath, demoRef } from "@/lib/demo/paths";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
 
@@ -25,8 +26,8 @@ export async function readFile(
     const response = await octokit.rest.repos.getContent({
       owner,
       repo,
-      path,
-      ref,
+      path: resolveDemoPath(path),
+      ref: ref ?? demoRef(),
     });
 
     // GitHub returns an array for directories, single object for files

@@ -3,6 +3,7 @@
  * Same whitelist constraints, same error handling, just reads from disk.
  */
 import { isPathAllowed } from "@/lib/whitelist";
+import { resolveDemoPath } from "@/lib/demo/paths";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 
@@ -10,22 +11,8 @@ const DATA_ROOT = join(process.cwd());
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
-/** Demo mode: redirect memory/ reads to a pre-seeded persona dataset. */
+/** Demo mode is read-only; writes are accepted but never persisted. */
 const DEMO_MODE = process.env.DEMO_MODE === "true";
-const DEMO_PATH_PREFIX = "memory/demo/personal_14";
-
-/**
- * Resolve a path for demo mode.
- * When DEMO_MODE is set, all memory/ paths are redirected to the demo persona data.
- * Other allowed paths (tasks/, sessions/) continue to use real directories.
- */
-function resolveDemoPath(originalPath: string): string {
-  if (!DEMO_MODE) return originalPath;
-  if (originalPath.startsWith("memory/")) {
-    return originalPath.replace("memory/", DEMO_PATH_PREFIX + "/");
-  }
-  return originalPath;
-}
 
 export async function readFileLocal(path: string): Promise<string> {
   const resolvedPath = resolveDemoPath(path);
