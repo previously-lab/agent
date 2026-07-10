@@ -88,15 +88,19 @@ export async function getMoreSlices(
   before: string,
   limit: number = 10
 ): Promise<SlicePage> {
-  const DEMO_MODE = process.env.DEMO_MODE === "true";
-  const DEMO_SCAN_MONTHS = 48;
+  // Walk back through monthly indexes (skipping empty months) until we fill a
+  // page or run out of history. Breaks early once `limit` is reached, so the
+  // cost is bounded by "months until enough found", not a flat scan. (The
+  // non-demo path used to scan only 1 month, so load-more stalled at the month
+  // boundary — you couldn't page into earlier months even with years of history.
+  // This matches the local/demo behavior we develop against.)
+  const MAX_MONTHS_BACK = 48;
 
   const beforeDate = new Date(before);
   const beforeYear = beforeDate.getUTCFullYear();
   const beforeMonth = beforeDate.getUTCMonth() + 1;
-  const beforeDay = beforeDate.getUTCDate();
 
-  const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 1;
+  const monthsToScan = MAX_MONTHS_BACK;
   const allEntries: Awaited<ReturnType<typeof readSliceIndex>> = [];
 
   for (let i = 0; i < monthsToScan; i++) {
