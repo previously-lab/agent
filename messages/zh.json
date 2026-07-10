@@ -59,6 +59,8 @@
       "readMemory": "详细回忆…",
       "listMemory": "更多回忆…",
       "readIndex": "扫描时间线…",
+      "writeMemory": "写入记忆…",
+      "updateUserProfile": "更新你的信息…",
       "readFile": "读取",
       "updateFile": "更新",
       "createFile": "创建",

@@ -2,13 +2,16 @@ import { deepseek } from "@ai-sdk/deepseek";
 import { streamText, tool, convertToModelMessages, stepCountIs, createUIMessageStream, createUIMessageStreamResponse } from "ai";
 import { z } from "zod";
 import { readFile } from "@/lib/tools/readFile";
+import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
-import { readFileLocal, listFilesLocal } from "@/lib/tools/local-fs";
+import { readFileLocal, listFilesLocal, writeFileLocal } from "@/lib/tools/local-fs";
+import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 import { classifyIntentKeywords } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
 import { buildAgentIdentityPrompt, loadUserProfile } from "@/lib/identity";
+import { applyProfilePatch } from "@/lib/identity/profile-writer";
 import type { MemoryNode } from "@/lib/memory/types";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -428,6 +431,45 @@ export async function POST(request: Request) {
                 } catch {
                   return { exists: false, month: `${year}-${mm}`, slices: [] };
                 }
+              },
+            }),
+            writeMemory: tool({
+              description:
+                "Create or update a memory file (notes or semantic nodes under memory/) when the user asks you to remember or record something. Cannot touch episodic slices/indexes or the user profile — use updateUserProfile for the profile.",
+              inputSchema: z.object({
+                path: z.string().describe("Path under memory/, e.g. 'memory/nodes/<id>.md'"),
+                content: z.string().describe("Full file content to write"),
+                reason: z.string().describe("Short note explaining the write (used as the commit message)"),
+              }),
+              execute: async ({ path, content, reason }) => {
+                if (!isPathAllowed(path) || isProtectedSystemPath(path)) {
+                  return { ok: false, error: `Write denied: "${path}" is outside the writable area or is system-managed.` };
+                }
+                try {
+                  const res = USE_GITHUB
+                    ? await writeFile(path, content, repo, owner, `[agent] ${reason}`)
+                    : await writeFileLocal(path, content);
+                  return { ok: true, path: res.path, created: res.created };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : "write failed" };
+                }
+              },
+            }),
+            updateUserProfile: tool({
+              description:
+                "Update the user's profile (memory/user/profile.md) when they tell you who they are or ask you to remember something about them. Patch individual fields; omitted fields are left unchanged.",
+              inputSchema: z.object({
+                name: z.string().optional(),
+                pronouns: z.string().optional(),
+                timezone: z.string().optional(),
+                locale: z.string().optional(),
+                addressAs: z.string().optional().describe("What to call the user (frontmatter address_as)"),
+                body: z.string().optional().describe("Free-form 'about you' markdown"),
+                reason: z.string().describe("Why this change is being made (used as the commit message)"),
+              }),
+              execute: async ({ reason, ...patch }) => {
+                const res = await applyProfilePatch(patch, `[agent] ${reason}`);
+                return res.ok ? { ok: true } : { ok: false, error: res.error };
               },
             }),
           },

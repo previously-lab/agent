@@ -59,6 +59,8 @@
       "readMemory": "Recalling in detail...",
       "listMemory": "Recalling more...",
       "readIndex": "Scanning timeline...",
+      "writeMemory": "Saving to memory...",
+      "updateUserProfile": "Updating your profile...",
       "readFile": "Read",
       "updateFile": "Update",
       "createFile": "Create",

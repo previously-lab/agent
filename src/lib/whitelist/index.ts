@@ -71,3 +71,26 @@ export function isPathAllowed(rawPath: string): boolean {
 export function getAllowedPaths(): readonly string[] {
   return ALLOWED_PATHS;
 }
+
+/**
+ * System-managed paths that agent WRITE tools must not touch, even though they
+ * live inside the whitelist and remain readable. These files have a strict
+ * schema/contract the app maintains (episodic slices + indexes) or feed the
+ * system prompt (the user profile — updated only via the dedicated
+ * updateUserProfile tool, never a generic write).
+ */
+const PROTECTED_WRITE_PATTERNS: RegExp[] = [
+  /^memory\/episodic\//, // system-owned slices + indexes
+  /(^|\/)_index\.json$/, // any monthly/day index
+  /(^|\/)tag-index\.json$/, // the tag index
+  /^memory\/user\/profile\.md$/, // profile: dedicated tool only
+];
+
+/**
+ * True if a path is inside the whitelist but is system-managed and must not be
+ * written by the generic write tool. Always normalize before checking.
+ */
+export function isProtectedSystemPath(rawPath: string): boolean {
+  const normalized = normalizePath(rawPath);
+  return PROTECTED_WRITE_PATTERNS.some((pattern) => pattern.test(normalized));
+}

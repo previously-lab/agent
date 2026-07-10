@@ -28,6 +28,10 @@ function friendlyName(
       return t("listMemory");
     case "readIndex":
       return t("readIndex");
+    case "writeMemory":
+      return t("writeMemory");
+    case "updateUserProfile":
+      return t("updateUserProfile");
     default:
       return toolName.charAt(0).toUpperCase() + toolName.slice(1);
   }
@@ -48,6 +52,14 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
         />
       );
     case "writeFile":
+      return (
+        <WriteFileRenderer
+          input={input as { path?: string; content?: string } | undefined}
+          output={typeof output === "string" ? output : undefined}
+          state={renderState}
+        />
+      );
+    case "writeMemory":
       return (
         <WriteFileRenderer
           input={input as { path?: string; content?: string } | undefined}
