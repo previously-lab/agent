@@ -129,9 +129,9 @@ for (const idxPath of indexFiles) {
 }
 console.log(`Updated ${idxUpdated} _index.json files`);
 
-// ─── Step 4: Update tag-index.json paths YYYY/MM/DD → YYYY/MM/DD/HHMM ─────
+// ─── Step 4: Update strands.json paths YYYY/MM/DD → YYYY/MM/DD/HHMM ─────
 
-const tagIndexPath = join(EPISODIC, "tag-index.json");
+const tagIndexPath = join(EPISODIC, "strands.json");
 if (existsSync(tagIndexPath)) {
   const tagIndex = JSON.parse(readFileSync(tagIndexPath, "utf-8"));
   let remapped = 0;
@@ -157,13 +157,13 @@ if (existsSync(tagIndexPath)) {
         return `${monthKey}/${s.day}/${s.hhmm}`;
       }
       missing++;
-      console.error(`  tag-index: no HHMM for ${p} (tag "${tag}")`);
+      console.error(`  strands: no HHMM for ${p} (tag "${tag}")`);
       return p;
     });
   }
   writeFileSync(tagIndexPath, JSON.stringify(tagIndex, null, 2) + "\n", "utf-8");
   console.log(
-    `Updated tag-index.json (${remapped} remapped, ${repaired} dangling repaired, ${missing} unresolved)`
+    `Updated strands.json (${remapped} remapped, ${repaired} dangling repaired, ${missing} unresolved)`
   );
 }
 

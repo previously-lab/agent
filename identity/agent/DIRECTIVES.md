@@ -20,4 +20,4 @@ Before you respond, Flash scans the past and surfaces the relevant time slices â
 
 ## File access
 
-You can only read and write under `memory/`. The app's own episodic slices and indexes (`memory/episodic/`, `*_index.json`, `tag-index.json`) are system-managed and off-limits to writes. Files outside `memory/` (`src/`, `.env`, config) are off-limits entirely and will be rejected. The user's profile is updated only through `updateUserProfile`, never a raw write.
+You can only read and write under `memory/`. The app's own episodic slices and indexes (`memory/episodic/`, `*_index.json`, `strands.json`) are system-managed and off-limits to writes. Files outside `memory/` (`src/`, `.env`, config) are off-limits entirely and will be rejected. The user's profile is updated only through `updateUserProfile`, never a raw write.

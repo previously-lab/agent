@@ -210,7 +210,7 @@ function buildTimelineEpisodicContext(
   } else if (flashOutput) {
     ctx += "### Recall Results\n";
     ctx += "Flash scanned recent conversation history and found no directly relevant past conversations.\n";
-    ctx += "Use readMemory to explore `memory/episodic/tag-index.json` if deeper context is needed.\n\n";
+    ctx += "Use readMemory to explore `memory/episodic/strands.json` if deeper context is needed.\n\n";
   }
 
   return ctx;

@@ -107,10 +107,14 @@ export interface MonthlyIndex {
 }
 
 /**
- * Global tag-index.json structure.
- * Maps each tag to the relative slice paths that carry it.
- * Example: { "rust": ["2026/06/22"], "async": ["2026/06/22"] }
+ * Global strands.json structure — the keyword→slice index.
+ *
+ * A **strand** is a keyword woven through the time slices that carry it: this
+ * maps each strand (a tag) to the relative slice paths threaded under it, so a
+ * strand is "the whole history of that thing" across time. Slices carry `tags`
+ * (the keywords); those tags weave into strands here.
+ * Example: { "rust": ["2026/06/22/1400"], "async": ["2026/06/22/1400"] }
  */
-export interface TagIndex {
-  [tag: string]: string[];
+export interface StrandIndex {
+  [strand: string]: string[];
 }

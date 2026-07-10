@@ -191,9 +191,9 @@ for (const indexPath of indexFiles) {
 
 console.log(`Updated ${idxCount} index files.`);
 
-// ─── Step 5: Update tag-index.json ──────────────────────────────────────
+// ─── Step 5: Update strands.json ──────────────────────────────────────
 
-const tagIndexPath = join(ROOT, "memory", "demo", "personal_14", "episodic", "tag-index.json");
+const tagIndexPath = join(ROOT, "memory", "demo", "personal_14", "episodic", "strands.json");
 if (existsSync(tagIndexPath)) {
   const tagIndex = JSON.parse(readFileSync(tagIndexPath, "utf-8"));
   for (const [tag, paths] of Object.entries(tagIndex)) {
@@ -204,7 +204,7 @@ if (existsSync(tagIndexPath)) {
     });
   }
   writeFileSync(tagIndexPath, JSON.stringify(tagIndex, null, 2) + "\n", "utf-8");
-  console.log("Updated tag-index.json");
+  console.log("Updated strands.json");
 }
 
 // ─── Step 6: Clean up empty old-year directories ────────────────────────

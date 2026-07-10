@@ -82,7 +82,7 @@ export function getAllowedPaths(): readonly string[] {
 const PROTECTED_WRITE_PATTERNS: RegExp[] = [
   /^memory\/episodic\//, // system-owned slices + indexes
   /(^|\/)_index\.json$/, // any monthly/day index
-  /(^|\/)tag-index\.json$/, // the tag index
+  /(^|\/)strands\.json$/, // the strand (keyword→slice) index
   /^memory\/user\/profile\.md$/, // profile: dedicated tool only
 ];
 

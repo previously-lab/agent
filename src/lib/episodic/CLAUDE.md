@@ -12,7 +12,7 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 
 | File | Role |
 |------|------|
-| `types.ts` | All type definitions: `TimeSlice`, `Turn`, `SliceFrontmatter`, `SlicingSignal`, `EmotionalTone`, `SliceIndexEntry`, `MonthlyIndex`, `TagIndex`, `FlashSplitInput`/`Output`, `RecallHint`, `MismatchLogEntry` |
+| `types.ts` | All type definitions: `TimeSlice`, `Turn`, `SliceFrontmatter`, `SlicingSignal`, `EmotionalTone`, `SliceIndexEntry`, `MonthlyIndex`, `StrandIndex` |
 | `index.ts` | Barrel export -- re-exports from `manager.ts` and `slicer.ts` |
 | `manager.ts` | Core CRUD: in-memory active slice, path helpers, gray-matter serialization/parsing, turn append, snapshot saves, monthly index and tag index maintenance |
 | `slicer.ts` | Slicing decision engine -- single rule: time silence after 30 minutes of inactivity |
@@ -26,7 +26,7 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 
 1. **Create** -- `createSlice()` in `manager.ts` is called when the chat route receives a message with no active slice. Derives `slice_id` from the UTC date+time of the first message (e.g. `2026-07-07-1558`), creates an in-memory `TimeSlice` with the first turn.
 2. **Extend** -- `appendTurn()` adds subsequent turns to the in-memory slice. `saveSliceSnapshot()` writes the slice to disk as a checkpoint every N turns and on `beforeunload`.
-3. **Close** -- `checkTimeSilence()` in `slicer.ts` checks whether 30 minutes have elapsed since the last turn. When `true`, `closeSlice()` in `manager.ts` sets `status: "closed"`, writes the MD file, updates `_index.json` and `tag-index.json`. The cycle repeats with a new slice.
+3. **Close** -- `checkTimeSilence()` in `slicer.ts` checks whether 30 minutes have elapsed since the last turn. When `true`, `closeSlice()` in `manager.ts` sets `status: "closed"`, writes the MD file, updates `_index.json` and `strands.json` (via `updateStrands`). The cycle repeats with a new slice.
 4. **Recover** -- `tryLoadTodaySlice()` scans today's directory (`slices/YYYY/MM/DD/`) and re-hydrates the most recent slice still marked `active` on page refresh.
 
 ### 2. Unified Flash maintenance (per request)
@@ -68,10 +68,16 @@ memory/episodic/
         DD/
           HHMM.md              -- time slice body (YAML frontmatter + turns as ## Turn N)
         _index.json            -- monthly index of all slices in this month
-  tag-index.json                 -- global tag -> slice path mapping
-  parallel-timelines/
-    topic-name.md               -- one per topic (YAML frontmatter: sources[], body: summary)
+  strands.json                 -- the strand index: strand (keyword) -> slice paths
 ```
+
+**Strands.** A slice carries `tags` (keywords). A **strand** is a keyword woven
+through all the slices that carry it — one entry in `strands.json` maps a strand
+to its slice paths, i.e. "the whole history of that thing" across time. It's the
+thin, lossless semantic-memory layer over the episodic slices (built at
+slice-close via `updateStrands`; not yet read for recall). Tags weave into
+strands; a richer first-class strand (with its own rolling summary + recall
+integration) is a future milestone.
 
 ## Design Decisions
 

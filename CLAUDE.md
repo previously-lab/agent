@@ -111,6 +111,7 @@ The episodic memory subsystem (`src/lib/episodic/`, see `src/lib/episodic/CLAUDE
 - **Structure**: `memory/episodic/slices/YYYY/MM/DD/HHMM.md` — one file per time slice (a day is a directory), YAML frontmatter + conversation turns
 - **Flash/Pro split**: Flash (DeepSeek-chat) handles per-request recall scanning + metadata maintenance. Pro (main model) handles deep recall via `readMemory` tool.
 - **Slicing**: Pure time-driven — 30 minutes of inactivity closes the current slice. No capacity or topic-shift rules.
+- **Strands** (semantic layer): a slice carries `tags` (keywords); a **strand** is a keyword woven through all the slices that carry it. `memory/episodic/strands.json` maps each strand → its slice paths ("the whole history of that thing" across time) — the thin, lossless semantic-memory index over the episodic slices. Built at slice-close via `updateStrands`; a richer first-class strand (rolling summary + recall integration) is a future milestone.
 - **DEMO_MODE**: `DEMO_MODE=true` redirects `memory/` reads to `memory/demo/personal_14/` (Caleb persona, 30+ slices). Writes go to real `memory/`.
 
 ### Chat Rendering

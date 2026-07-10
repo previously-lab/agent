@@ -24,7 +24,7 @@ import type {
   SliceIndexEntry,
   SliceFrontmatter,
   MonthlyIndex,
-  TagIndex,
+  StrandIndex,
 } from "./types";
 
 // ─── Environment detection ───────────────────────────────────────────────
@@ -168,7 +168,7 @@ export async function closeSlice(
 
   // Run index maintenance
   await updateMonthlyIndex(slice);
-  await updateTagIndex(slice);
+  await updateStrands(slice);
 
   // Clear active if this was the active slice
   if (activeSlice?.slice_id === slice.slice_id) {
@@ -217,10 +217,10 @@ export function getIndexPath(year: number, month: number): string {
 }
 
 /**
- * Get the path to the global tag-index.json file.
+ * Get the path to the global strands.json file (the keyword→slice index).
  */
-export function getTagIndexPath(): string {
-  return "memory/episodic/tag-index.json";
+export function getStrandsPath(): string {
+  return "memory/episodic/strands.json";
 }
 
 // ─── Serialization ───────────────────────────────────────────────────────
@@ -367,9 +367,9 @@ export function serializeIndex(
 }
 
 /**
- * Serialize a TagIndex to a JSON string.
+ * Serialize a StrandIndex to a JSON string.
  */
-export function serializeTagIndex(index: TagIndex): string {
+export function serializeStrands(index: StrandIndex): string {
   return JSON.stringify(index, null, 2);
 }
 
@@ -410,14 +410,14 @@ export async function readSliceIndex(
 }
 
 /**
- * Read the global tag-index.json.
- * Returns an empty object if the tag index does not exist.
+ * Read the global strands.json (keyword→slice index).
+ * Returns an empty object if the strand index does not exist.
  */
-export async function readTagIndex(): Promise<TagIndex> {
-  const tagIndexPath = getTagIndexPath();
+export async function readStrands(): Promise<StrandIndex> {
+  const strandsPath = getStrandsPath();
   try {
-    const raw = await fsReadFile(tagIndexPath);
-    return JSON.parse(raw) as TagIndex;
+    const raw = await fsReadFile(strandsPath);
+    return JSON.parse(raw) as StrandIndex;
   } catch {
     return {};
   }
@@ -477,26 +477,26 @@ export async function updateMonthlyIndex(slice: TimeSlice): Promise<void> {
 }
 
 /**
- * Update the global tag-index.json with the slice's tags.
- * For each tag on the slice, registers the slice's relative path.
+ * Weave the slice's tags into the global strands.json (keyword→slice index).
+ * Each tag on the slice is a strand; register the slice's relative path under it.
  */
-export async function updateTagIndex(slice: TimeSlice): Promise<void> {
-  const tagIndex = await readTagIndex();
+export async function updateStrands(slice: TimeSlice): Promise<void> {
+  const strands = await readStrands();
   const relativePath = extractRelativePath(slice);
 
   for (const tag of slice.tags) {
-    if (!tagIndex[tag]) {
-      tagIndex[tag] = [];
+    if (!strands[tag]) {
+      strands[tag] = [];
     }
     // Deduplicate: only add if not already present
-    if (!tagIndex[tag].includes(relativePath)) {
-      tagIndex[tag].push(relativePath);
+    if (!strands[tag].includes(relativePath)) {
+      strands[tag].push(relativePath);
     }
   }
 
-  const tagIndexPath = getTagIndexPath();
-  const json = serializeTagIndex(tagIndex);
-  await fsWriteFile(tagIndexPath, json);
+  const strandsPath = getStrandsPath();
+  const json = serializeStrands(strands);
+  await fsWriteFile(strandsPath, json);
 }
 
 /**
@@ -537,12 +537,12 @@ export async function saveSliceSnapshot(slice: TimeSlice): Promise<void> {
 }
 
 /**
- * Persist _index.json and tag-index.json for an active slice.
+ * Persist _index.json and strands.json for an active slice.
  * Called on snapshot save so browseSlices has entries even for active slices.
  */
 export async function ensureIndexEntries(slice: TimeSlice): Promise<void> {
   await updateMonthlyIndex(slice);
   if (slice.tags.length > 0) {
-    await updateTagIndex(slice);
+    await updateStrands(slice);
   }
 }

@@ -7,7 +7,7 @@
  * Output: memory/demo/{persona_id}/
  *   episodic/slices/YYYY/MM/DD.md   — time slices with YAML frontmatter
  *   episodic/slices/YYYY/MM/_index.json
- *   episodic/tag-index.json
+ *   episodic/strands.json
  *   nodes/{type}/{slug}.md          — memory nodes
  *   graph/index.json
  */
@@ -395,26 +395,26 @@ for (const [month, monthSlices] of Object.entries(byMonth)) {
 }
 console.log(`  Wrote ${Object.keys(byMonth).length} monthly _index.json files`);
 
-// ── Write tag index ───────────────────────────────────────────
-const tagIndex = {};
+// ── Write strand index (keyword→slice) ────────────────────────
+const strands = {};
 for (const slice of allSlices) {
   const [year, month, day] = slice.slice_id.split("-");
   const relPath = `${year}/${month}/${day}`;
   for (const tag of slice.tags) {
-    if (!tagIndex[tag]) tagIndex[tag] = [];
-    if (!tagIndex[tag].includes(relPath)) {
-      tagIndex[tag].push(relPath);
+    if (!strands[tag]) strands[tag] = [];
+    if (!strands[tag].includes(relPath)) {
+      strands[tag].push(relPath);
     }
   }
 }
-const tagIndexDir = path.join(OUTPUT_DIR, "episodic");
-fs.mkdirSync(tagIndexDir, { recursive: true });
+const strandsDir = path.join(OUTPUT_DIR, "episodic");
+fs.mkdirSync(strandsDir, { recursive: true });
 fs.writeFileSync(
-  path.join(tagIndexDir, "tag-index.json"),
-  JSON.stringify(tagIndex, null, 2),
+  path.join(strandsDir, "strands.json"),
+  JSON.stringify(strands, null, 2),
   "utf-8"
 );
-console.log(`  Wrote tag-index.json (${Object.keys(tagIndex).length} tags)`);
+console.log(`  Wrote strands.json (${Object.keys(strands).length} strands)`);
 
 // ── Write memory nodes ────────────────────────────────────────
 console.log(`Writing ${allNodes.length} memory nodes...`);
