@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -79,7 +80,12 @@ interface MarkdownRendererProps {
   content: string;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+/**
+ * Memoized on `content` — react-markdown + rehype-highlight is expensive and
+ * synchronous, so without this it re-highlights on every parent re-render
+ * (every streaming delta / tool-state change). Stable text never re-highlights.
+ */
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
     <div className="prose-sm dark:prose-invert max-w-none break-words [&_h1]:text-lg [&_h1]:font-bold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2">
       <ReactMarkdown
@@ -91,4 +97,4 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
       </ReactMarkdown>
     </div>
   );
-}
+});

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { UIMessage } from "ai";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
@@ -17,7 +17,7 @@ interface ChatMessageProps {
   startedAt?: string;
 }
 
-export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: ChatMessageProps) {
+export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const parts = message.parts ?? [];
@@ -144,4 +144,4 @@ export function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: C
       </Message>
     </div>
   );
-}
+});
