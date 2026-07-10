@@ -30,7 +30,7 @@ export function HeroText({ name }: { name: string }) {
           <span>Previously</span>
           <span className="text-muted-foreground/20">·</span>
           <a
-            href="https://github.com/LikeDreamwalker/Aftrbrez"
+            href="https://github.com/LikeDreamwalker/previously"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1 hover:text-muted-foreground/60 transition-colors"

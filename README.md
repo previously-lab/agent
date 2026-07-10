@@ -261,7 +261,7 @@ See the [Roadmap](#roadmap) below for the full plan.
 ### Installation
 
 ```bash
-git clone https://github.com/LikeDreamwalker/Aftrbrez.git
+git clone https://github.com/LikeDreamwalker/previously.git
 cd Aftrbrez
 pnpm install
 ```
@@ -297,7 +297,7 @@ pnpm test         # Run vitest
 
 The easiest deployment path is Vercel:
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LikeDreamwalker/Aftrbrez)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LikeDreamwalker/previously)
 
 Set the same environment variables in your Vercel project settings.
 
@@ -417,7 +417,7 @@ A few principles that guide every decision in this project:
 
 ## Contributing
 
-This is a personal research project in its early stages. Bug reports, ideas, and discussions are welcome via [GitHub Issues](https://github.com/LikeDreamwalker/Aftrbrez/issues).
+This is a personal research project in its early stages. Bug reports, ideas, and discussions are welcome via [GitHub Issues](https://github.com/LikeDreamwalker/previously/issues).
 
 If you want to contribute code, please open an issue first to discuss what you'd like to change — the architecture is evolving quickly and some areas may already be in flux.
 
