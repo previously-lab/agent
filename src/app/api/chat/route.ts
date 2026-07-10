@@ -293,10 +293,13 @@ export async function POST(request: Request) {
       saveSliceSnapshot(slice).then(() => ensureIndexEntries(slice)).catch(() => {});
     }
 
-    // ─── Step 2: Unified Flash (M8: one call, three outputs) ────────────
+    // ─── Unified Flash (intent + recall + metadata), then context ───────
+    // Flash runs BEFORE the stream so the whole response streams as ONE
+    // message (splitting the stream around Flash created a stray message). The
+    // pre-stream wait shows a "recalling…" placeholder client-side; Flash's
+    // duration is passed to the UI so the recall card can show the time.
     const t0 = Date.now();
     let flashOutput: MaintenanceOutput | null = null;
-
     try {
       const recentSummaries = await readRecentSummaries(15);
       flashOutput = await runUnifiedFlash({
@@ -320,7 +323,6 @@ export async function POST(request: Request) {
         `time=${Date.now() - t0}ms`
       );
 
-      // Apply metadata updates from Flash (M8: per-round maintenance)
       if (flashOutput.needs_metadata_update && flashOutput.metadata_updates) {
         const meta: { slice_id: string; focus: string; summary: string; open_loops: string[]; decisions: string[]; tags: string[]; emotional_tone: string } = {
           slice_id: slice.slice_id,
@@ -342,39 +344,32 @@ export async function POST(request: Request) {
     } catch (err) {
       console.warn("[Flash] Unified call failed, continuing without Flash:", err instanceof Error ? err.message : err);
     }
+    const flashMs = Date.now() - t0;
 
-    // ─── Step 3: M3 Context Assembly ────────────────────────────────────
-    // ─── Step 3+4: Episodic recall grounding, then context assembly ─────
-    // Build the episodic timeline first so it can be woven into the system
-    // prompt as grounding (before memory nodes), not appended after the request.
     const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
-
     const { prompt: finalSystemPrompt, intent, confidence } =
       await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
         ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
         : undefined, episodicContext);
-
     console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
 
-    // ─── Step 5: Recall text for data-flash ─────────────────────────────
     const recallHits = flashOutput?.recall_hits ?? [];
     const recallText = recallHits.length > 0
       ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
-      : flashOutput
-        ? "Scanned recent conversations — no directly relevant matches found"
-        : null;
+      : "Scanned recent conversations — no directly relevant matches found";
 
-    // ─── Step 6: Multi-phase streaming ──────────────────────────────────
+    // ─── Multi-phase streaming (one message: recall → thinking → text) ──
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        // Phase 1: data-flash — always send if Flash ran (even with no hits)
         if (flashOutput) {
           writer.write({
             type: "data-flash",
             id: `flash-recall-${Date.now()}`,
             data: {
               phase: "recall",
-              text: recallText || "",
+              done: true,
+              durationMs: flashMs,
+              text: recallText,
               tags: flashOutput.suggested_topics ?? [],
               reasoning: flashOutput.reasoning ?? "",
               recall_hits: recallHits,
@@ -382,7 +377,13 @@ export async function POST(request: Request) {
           });
         }
 
-        // Phase 2 + 3: Pro — thinking + text
+        // Phase 2 + 3: Pro — thinking + text. Reasoning duration is measured
+        // server-side (first reasoning chunk → first text chunk) and emitted as
+        // a data part, so the "Thought · Ns" timer survives re-renders instead
+        // of relying on the client catching the streaming→done transition.
+        let reasoningStartedAt: number | null = null;
+        let reasoningMsSent = false;
+
         const result = streamText({
           model: deepseek(model),
           providerOptions: thinking
@@ -391,6 +392,25 @@ export async function POST(request: Request) {
           system: finalSystemPrompt,
           messages: modelMessages,
           stopWhen: stepCountIs(20),
+          onChunk: ({ chunk }) => {
+            if (
+              (chunk.type === "reasoning-start" || chunk.type === "reasoning-delta") &&
+              reasoningStartedAt === null
+            ) {
+              reasoningStartedAt = Date.now();
+            } else if (
+              (chunk.type === "text-start" || chunk.type === "text-delta") &&
+              reasoningStartedAt !== null &&
+              !reasoningMsSent
+            ) {
+              reasoningMsSent = true;
+              writer.write({
+                type: "data-reasoning",
+                id: `reasoning-${Date.now()}`,
+                data: { done: true, durationMs: Date.now() - reasoningStartedAt },
+              });
+            }
+          },
           onFinish: async ({ text, finishReason }) => {
             if (finishReason === "stop") {
               appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: text });

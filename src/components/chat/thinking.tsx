@@ -11,6 +11,9 @@ interface ThinkingBlockProps {
   text: string;
   isStreaming?: boolean;
   partCount?: number;
+  /** Server-measured reasoning duration (ms) — preferred over the local timer,
+      which is lost when the finished message re-renders from scratch. */
+  durationMs?: number;
 }
 
 const COMPLETED_STATE: ToolRenderState = {
@@ -29,7 +32,7 @@ const STREAMING_STATE: ToolRenderState = {
   isActiveApproval: false,
 };
 
-export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: ThinkingBlockProps) {
+export function ThinkingSteps({ text, isStreaming = false, partCount = 1, durationMs }: ThinkingBlockProps) {
   const t = useTranslations("chat.thinking");
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
@@ -69,8 +72,9 @@ export function ThinkingSteps({ text, isStreaming = false, partCount = 1 }: Thin
 
   const hasContent = text.trim().length > 0;
   const name = isStreaming ? t("streaming") : t("completed", { count: partCount });
-  const summary =
-    !isStreaming && elapsed > 0 ? t("elapsed", { count: elapsed }) : "";
+  const seconds =
+    durationMs != null ? Math.max(1, Math.round(durationMs / 1000)) : elapsed;
+  const summary = !isStreaming && seconds > 0 ? `${seconds}s` : "";
 
   const expandedContent = hasContent ? (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">

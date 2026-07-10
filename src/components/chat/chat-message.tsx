@@ -123,14 +123,18 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
 
   // ── Separate phase-level from inline parts ────────────────────────────
 
-  const { recallParts, reasoningText, inlineParts } = useMemo(() => {
+  const { recallParts, reasoningText, reasoningDurationMs, inlineParts } = useMemo(() => {
     const recall: typeof parts = [];
     const reasoning: string[] = [];
     const inline: typeof parts = [];
+    let durationMs: number | undefined;
 
     for (const p of parts) {
       if (p.type === "data-flash") {
         recall.push(p);
+      } else if (p.type === "data-reasoning") {
+        const d = (p as { data?: { durationMs?: number } }).data;
+        if (d?.durationMs != null) durationMs = d.durationMs;
       } else if (p.type === "reasoning") {
         reasoning.push((p as { text: string }).text);
       } else {
@@ -141,6 +145,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
     return {
       recallParts: recall,
       reasoningText: reasoning.join("\n"),
+      reasoningDurationMs: durationMs,
       inlineParts: inline,
     };
   }, [parts]);
@@ -148,6 +153,23 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
   const hasRecall = recallParts.length > 0;
   const hasReasoning = reasoningText.trim().length > 0;
   const hasInline = inlineParts.length > 0;
+
+  // A recall phase is one logical act, but it arrives as two data-flash updates
+  // (recalling → recalled). Merge them (last-write-wins) so it renders ONCE and
+  // the single component transitions streaming→done (keeping its timer).
+  const recallData = hasRecall
+    ? recallParts.reduce<{
+        done?: boolean;
+        durationMs?: number;
+        text?: string;
+        tags?: string[];
+        reasoning?: string;
+        recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
+      }>((acc, part) => {
+        const d = (part as { data?: typeof acc }).data;
+        return d ? { ...acc, ...d } : acc;
+      }, {})
+    : null;
 
   const renderItems = useMemo(
     () => groupInlineParts(inlineParts as AnyPart[]),
@@ -164,36 +186,24 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
     <div className="py-1">
       <Message align={isUser ? "end" : "start"} className="gap-1">
         <MessageContent className="min-w-0">
-          {/* Phase 1: Recall — always visible */}
-          {isAssistant && hasRecall &&
-            recallParts.map((part, i) => {
-              const p = part as {
-                type: string;
-                data?: {
-                  phase?: string;
-                  text?: string;
-                  tags?: string[];
-                  reasoning?: string;
-                  recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
-                };
-              };
-              return (
-                <RecallPhase
-                  key={i}
-                  text={p.data?.text ?? ""}
-                  tags={p.data?.tags}
-                  reasoning={p.data?.reasoning}
-                  recallHits={p.data?.recall_hits}
-                  isStreaming={false}
-                />
-              );
-            })
-          }
+          {/* Phase 1: Recall — one act, rendered from the merged state */}
+          {isAssistant && recallData && (
+            <RecallPhase
+              key="recall"
+              text={recallData.text ?? ""}
+              tags={recallData.tags}
+              reasoning={recallData.reasoning}
+              recallHits={recallData.recall_hits}
+              durationMs={recallData.durationMs}
+              isStreaming={recallData.done === false}
+            />
+          )}
 
           {/* Phase 2: Reasoning — always visible */}
           {isAssistant && hasReasoning && (
             <ThinkingSteps
               text={reasoningText}
+              durationMs={reasoningDurationMs}
               isStreaming={isStreaming && !hasInline}
             />
           )}

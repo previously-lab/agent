@@ -1,9 +1,8 @@
 "use client";
 
 import type { UIMessage } from "ai";
-import { useTranslations } from "next-intl";
-import { Loader2 } from "lucide-react";
 import { ChatMessage } from "./chat-message";
+import { RecallPhase } from "./recall-phase";
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 
 interface ChatSectionProps {
@@ -21,7 +20,6 @@ export function ChatSection({
   error,
   lastUserMessageAt,
 }: ChatSectionProps) {
-  const t = useTranslations("chat.thinking");
   const lastMessage = messages[messages.length - 1];
 
   return (
@@ -44,11 +42,11 @@ export function ChatSection({
         </MessageScrollerItem>
       ))}
 
+      {/* Pre-stream wait: show "recalling…" so activity is visible from send */}
       {showThinking && (
-        <MessageScrollerItem messageId="thinking-indicator">
-          <div className="flex items-center gap-2 px-4 py-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            <span>{t("indicator")}</span>
+        <MessageScrollerItem messageId="recalling-indicator">
+          <div className="py-1">
+            <RecallPhase text="" isStreaming />
           </div>
         </MessageScrollerItem>
       )}
