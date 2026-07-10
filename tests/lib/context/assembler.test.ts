@@ -35,7 +35,7 @@ function makeMeta(id: string): NodeMeta {
 }
 
 describe("Context Assembler", () => {
-  it("assembles all 6 layers in order", () => {
+  it("assembles system, memory, session and reference layers in order", () => {
     const core = [makeNode({ id: "core-1", title: "Core Node" })];
     const extended = [makeNode({ id: "ext-1", title: "Extended Node" })];
     const reference = [makeMeta("ref-1"), makeMeta("ref-2")];
@@ -47,7 +47,6 @@ describe("Context Assembler", () => {
       referenceNodes: reference,
       sessionSummary: "Working on a test.",
       recentTurns: [{ role: "user", content: "Hello" }],
-      userInput: "What is this?",
     });
 
     expect(result.prompt).toContain("You are a helpful assistant");
@@ -55,9 +54,23 @@ describe("Context Assembler", () => {
     expect(result.prompt).toContain("Extended Node");
     expect(result.prompt).toContain("Session Summary");
     expect(result.prompt).toContain("Hello");
-    expect(result.prompt).toContain("What is this?");
     expect(result.prompt).toContain("ref-1");
     expect(result.prompt).toContain("ref-2");
+  });
+
+  it("does not embed the user request in the system prompt", () => {
+    // The user's turn is passed to the model as the last chat message, not
+    // duplicated into the assembled system prompt.
+    const result = assembleContext({
+      systemPrompt: "System",
+      coreNodes: [],
+      extendedNodes: [],
+      referenceNodes: [],
+      sessionSummary: "",
+      recentTurns: [],
+    });
+
+    expect(result.prompt).not.toContain("Current Request");
   });
 
   it("includes related topics section for reference nodes", () => {
@@ -68,7 +81,6 @@ describe("Context Assembler", () => {
       referenceNodes: [makeMeta("rust-ownership")],
       sessionSummary: "",
       recentTurns: [],
-      userInput: "test",
     });
 
     expect(result.prompt).toContain("Related Topics");
@@ -83,13 +95,11 @@ describe("Context Assembler", () => {
       referenceNodes: [],
       sessionSummary: "",
       recentTurns: [],
-      userInput: "test",
     });
 
     expect(result.tokenEstimate).toBeGreaterThan(0);
     expect(result.layers.system).toBeGreaterThan(0);
     expect(result.layers.core).toBeGreaterThan(0);
-    expect(result.layers.input).toBeGreaterThan(0);
   });
 
   it("truncates extended nodes when budget exceeded", () => {
@@ -105,7 +115,6 @@ describe("Context Assembler", () => {
       referenceNodes: [],
       sessionSummary: "",
       recentTurns: [],
-      userInput: "test",
       tokenBudget: 1000,
     });
 

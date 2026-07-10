@@ -65,7 +65,8 @@ function loadNodeOnDisk(meta: { path: string }): MemoryNode | null {
 async function buildDynamicSystemPrompt(
   userInput: string,
   recentTurns: Array<{ role: string; content: string }> = [],
-  precomputedIntent?: { intent: string; confidence: number; source?: string }
+  precomputedIntent?: { intent: string; confidence: number; source?: string },
+  episodicContext = ""
 ): Promise<{ prompt: string; intent: string; source: string; confidence: number }> {
   let intent: string, source: string, confidence: number;
 
@@ -85,13 +86,13 @@ async function buildDynamicSystemPrompt(
   const loadedNodes = ranked.map((meta) => loadNodeOnDisk(meta)).filter((n): n is MemoryNode => n !== null);
 
   // Agent identity + directives are bundled from identity/agent/*.md (immutable
-  // at runtime). The user profile is loaded live from memory/ (latest version,
-  // agent-editable) and woven in here.
+  // at runtime). The user profile is loaded live from memory/. The episodic
+  // recall timeline is woven in here — as grounding that precedes the memory
+  // nodes — rather than stapled on after the request.
   const userProfile = await loadUserProfile();
   const baseSystemPrompt = `${buildAgentIdentityPrompt(userProfile)}
 
-Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})
-`;
+Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}`;
 
   const assembled = assembleContext({
     systemPrompt: baseSystemPrompt,
@@ -100,7 +101,6 @@ Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${sourc
     referenceNodes: ranked.slice(8),
     sessionSummary: "",
     recentTurns: recentTurns.slice(-3),
-    userInput,
   });
 
   return { prompt: assembled.prompt, intent, source, confidence };
@@ -165,7 +165,12 @@ function buildTimelineEpisodicContext(
 
   // Recall Results — timeline format
   if (flashOutput && flashOutput.recall_hits.length > 0) {
-    const hits = [...flashOutput.recall_hits];
+    // Cap the list so an over-eager Flash can't blow the context budget:
+    // keep the most relevant hits.
+    const MAX_RECALL_HITS = 12;
+    const hits = [...flashOutput.recall_hits]
+      .sort((a, b) => b.relevance - a.relevance)
+      .slice(0, MAX_RECALL_HITS);
     const buckets: Record<string, typeof hits> = {
       "Today / This Week": [],
       "This Month": [],
@@ -339,16 +344,17 @@ export async function POST(request: Request) {
     }
 
     // ─── Step 3: M3 Context Assembly ────────────────────────────────────
-    const { prompt: dynamicSystemPrompt, intent, confidence } =
+    // ─── Step 3+4: Episodic recall grounding, then context assembly ─────
+    // Build the episodic timeline first so it can be woven into the system
+    // prompt as grounding (before memory nodes), not appended after the request.
+    const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
+
+    const { prompt: finalSystemPrompt, intent, confidence } =
       await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
         ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
-        : undefined);
+        : undefined, episodicContext);
 
     console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
-
-    // ─── Step 4: Episodic Context (M8: timeline format) ─────────────────
-    const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
-    const finalSystemPrompt = dynamicSystemPrompt + episodicContext;
 
     // ─── Step 5: Recall text for data-flash ─────────────────────────────
     const recallHits = flashOutput?.recall_hits ?? [];
