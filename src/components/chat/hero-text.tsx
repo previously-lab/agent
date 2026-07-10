@@ -24,8 +24,8 @@ export function HeroText({ name }: { name: string }) {
         />
       </div>
 
-      {/* Credits line — fades in after the title */}
-      <div className="mt-12 opacity-0 animate-[fadeIn_0.6s_ease-out_2s_forwards]">
+      {/* Credits line */}
+      <div className="mt-12">
         <div className="flex items-center gap-2 text-xs text-muted-foreground/50 tracking-wide">
           <span>Previously</span>
           <span className="text-muted-foreground/25">·</span>
