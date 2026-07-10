@@ -22,32 +22,60 @@ export interface EpisodicState {
   recent: SliceSummary[];
 }
 
+const SCAN_BATCH = 6;
+
+/**
+ * Scan monthly indexes backwards from (startYear, startMonth), reading each
+ * batch of months CONCURRENTLY (not one round-trip at a time — that's what made
+ * the timeline slow over the GitHub API). Stops early once `enough` entries are
+ * collected, so cost is bounded by "batches until enough found".
+ */
+async function scanMonthsBack(
+  startYear: number,
+  startMonth: number,
+  maxMonths: number,
+  enough: number,
+): Promise<{ entries: Awaited<ReturnType<typeof readSliceIndex>>; exhausted: boolean }> {
+  const entries: Awaited<ReturnType<typeof readSliceIndex>> = [];
+  let scanned = 0;
+  let exhausted = true;
+
+  while (scanned < maxMonths) {
+    const size = Math.min(SCAN_BATCH, maxMonths - scanned);
+    const batch: Array<{ y: number; m: number }> = [];
+    for (let j = 0; j < size; j++) {
+      let m = startMonth - (scanned + j);
+      let y = startYear;
+      while (m <= 0) { m += 12; y -= 1; }
+      batch.push({ y, m });
+    }
+    const results = await Promise.all(
+      batch.map(({ y, m }) => readSliceIndex(y, m).catch(() => [])),
+    );
+    for (const idx of results) for (const e of idx) entries.push(e);
+    scanned += size;
+    if (entries.length >= enough) { exhausted = false; break; }
+  }
+
+  return { entries, exhausted };
+}
+
 export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boolean }> {
   const DEMO_MODE = process.env.DEMO_MODE === "true";
-  const DEMO_SCAN_MONTHS = 48;
   const PAGE_SIZE = 3;
 
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
 
-  const monthsToScan = DEMO_MODE ? DEMO_SCAN_MONTHS : 2;
-  const allSlices: Awaited<ReturnType<typeof readSliceIndex>> = [];
-  let exhausted = true;
+  const { entries, exhausted } = await scanMonthsBack(
+    year,
+    month,
+    DEMO_MODE ? 48 : 2,
+    PAGE_SIZE + 2,
+  );
 
-  for (let i = 0; i < monthsToScan; i++) {
-    let m = month - i;
-    let y = year;
-    while (m <= 0) { m += 12; y -= 1; }
-    try {
-      const index = await readSliceIndex(y, m);
-      for (const entry of index) allSlices.push(entry);
-    } catch { /* month index may not exist */ }
-    if (allSlices.length >= PAGE_SIZE + 2) { exhausted = false; break; }
-  }
-
-  const sorted = allSlices
-    .sort((a, b) => b.start.localeCompare(a.start));
+  const sorted = entries.sort((a, b) => b.start.localeCompare(a.start));
 
   const recent = sorted.slice(0, PAGE_SIZE);
   const hasMore = sorted.length > PAGE_SIZE || !exhausted;
@@ -88,41 +116,20 @@ export async function getMoreSlices(
   before: string,
   limit: number = 10
 ): Promise<SlicePage> {
-  // Walk back through monthly indexes (skipping empty months) until we fill a
-  // page or run out of history. Breaks early once `limit` is reached, so the
-  // cost is bounded by "months until enough found", not a flat scan. (The
-  // non-demo path used to scan only 1 month, so load-more stalled at the month
-  // boundary — you couldn't page into earlier months even with years of history.
-  // This matches the local/demo behavior we develop against.)
-  const MAX_MONTHS_BACK = 48;
-
+  // Walk back through monthly indexes (batched + concurrent) until we fill a
+  // page or run out of history — up to 48 months so load-more can page across
+  // month/year boundaries.
+  const cap = Math.min(limit, 50);
   const beforeDate = new Date(before);
   const beforeYear = beforeDate.getUTCFullYear();
   const beforeMonth = beforeDate.getUTCMonth() + 1;
 
-  const monthsToScan = MAX_MONTHS_BACK;
-  const allEntries: Awaited<ReturnType<typeof readSliceIndex>> = [];
+  const { entries } = await scanMonthsBack(beforeYear, beforeMonth, 48, cap);
 
-  for (let i = 0; i < monthsToScan; i++) {
-    let m = beforeMonth - i;
-    let y = beforeYear;
-    while (m <= 0) { m += 12; y -= 1; }
-    try {
-      const index = await readSliceIndex(y, m);
-      for (const entry of index) {
-        if (i === 0) {
-          if (entry.start < before) allEntries.push(entry);
-        } else {
-          allEntries.push(entry);
-        }
-      }
-    } catch { /* month index may not exist */ }
-    if (allEntries.length >= limit) break;
-  }
-
-  const filtered = allEntries
+  const filtered = entries
+    .filter((e) => e.start < before)
     .sort((a, b) => b.start.localeCompare(a.start))
-    .slice(0, Math.min(limit, 50));
+    .slice(0, cap);
 
   return {
     slices: filtered.map((s) => ({
@@ -134,7 +141,7 @@ export async function getMoreSlices(
       open_loops: s.open_loops,
       decisions: s.decisions,
     })),
-    hasMore: filtered.length === Math.min(limit, 50),
+    hasMore: filtered.length === cap,
   };
 }
 
