@@ -293,94 +293,95 @@ export async function POST(request: Request) {
       saveSliceSnapshot(slice).then(() => ensureIndexEntries(slice)).catch(() => {});
     }
 
-    // ─── Step 2: Unified Flash (M8: one call, three outputs) ────────────
+    // ─── Multi-phase streaming ──────────────────────────────────────────
+    // Flash (recall) + context assembly run INSIDE the stream so the client
+    // shows "recalling…" live from the moment the message is sent — not a stall
+    // followed by an already-completed state. A stable data-flash id lets the
+    // second write UPDATE the first (recalling → recalled).
     const t0 = Date.now();
-    let flashOutput: MaintenanceOutput | null = null;
+    const recallId = `flash-recall-${slice.slice_id}-${slice.turns.length}`;
 
-    try {
-      const recentSummaries = await readRecentSummaries(15);
-      flashOutput = await runUnifiedFlash({
-        slice: {
-          slice_id: slice.slice_id,
-          focus: slice.focus || "",
-          summary: slice.summary || "",
-          open_loops: slice.open_loops || [],
-          decisions: slice.decisions || [],
-          tags: slice.tags || [],
-          emotional_tone: slice.emotional_tone || "neutral",
-        },
-        recentTurns,
-        newMessage: lastUserMessage,
-        recentSummaries,
-      });
-
-      console.log(
-        `[Flash] intent=${flashOutput.intent} confidence=${flashOutput.confidence.toFixed(2)} ` +
-        `recall=${flashOutput.recall_hits.length} updates=${flashOutput.needs_metadata_update} ` +
-        `time=${Date.now() - t0}ms`
-      );
-
-      // Apply metadata updates from Flash (M8: per-round maintenance)
-      if (flashOutput.needs_metadata_update && flashOutput.metadata_updates) {
-        const meta: { slice_id: string; focus: string; summary: string; open_loops: string[]; decisions: string[]; tags: string[]; emotional_tone: string } = {
-          slice_id: slice.slice_id,
-          focus: slice.focus || "",
-          summary: slice.summary || "",
-          open_loops: slice.open_loops || [],
-          decisions: slice.decisions || [],
-          tags: slice.tags || [],
-          emotional_tone: slice.emotional_tone || "neutral",
-        };
-        applyMetadataUpdates(meta, flashOutput.metadata_updates);
-        slice.focus = meta.focus;
-        slice.summary = meta.summary;
-        slice.open_loops = meta.open_loops;
-        slice.decisions = meta.decisions;
-        slice.tags = meta.tags;
-        slice.emotional_tone = meta.emotional_tone as typeof slice.emotional_tone;
-      }
-    } catch (err) {
-      console.warn("[Flash] Unified call failed, continuing without Flash:", err instanceof Error ? err.message : err);
-    }
-
-    // ─── Step 3: M3 Context Assembly ────────────────────────────────────
-    // ─── Step 3+4: Episodic recall grounding, then context assembly ─────
-    // Build the episodic timeline first so it can be woven into the system
-    // prompt as grounding (before memory nodes), not appended after the request.
-    const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
-
-    const { prompt: finalSystemPrompt, intent, confidence } =
-      await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
-        ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
-        : undefined, episodicContext);
-
-    console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
-
-    // ─── Step 5: Recall text for data-flash ─────────────────────────────
-    const recallHits = flashOutput?.recall_hits ?? [];
-    const recallText = recallHits.length > 0
-      ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
-      : flashOutput
-        ? "Scanned recent conversations — no directly relevant matches found"
-        : null;
-
-    // ─── Step 6: Multi-phase streaming ──────────────────────────────────
     const uiStream = createUIMessageStream({
       execute: async ({ writer }) => {
-        // Phase 1: data-flash — always send if Flash ran (even with no hits)
-        if (flashOutput) {
-          writer.write({
-            type: "data-flash",
-            id: `flash-recall-${Date.now()}`,
-            data: {
-              phase: "recall",
-              text: recallText || "",
-              tags: flashOutput.suggested_topics ?? [],
-              reasoning: flashOutput.reasoning ?? "",
-              recall_hits: recallHits,
+        // Phase 1a — announce recall is in progress (before Flash runs)
+        writer.write({
+          type: "data-flash",
+          id: recallId,
+          data: { phase: "recall", done: false, text: "", tags: [], reasoning: "", recall_hits: [] },
+        });
+
+        // ── Unified Flash: intent + recall + metadata, one round-trip ──
+        let flashOutput: MaintenanceOutput | null = null;
+        try {
+          const recentSummaries = await readRecentSummaries(15);
+          flashOutput = await runUnifiedFlash({
+            slice: {
+              slice_id: slice.slice_id,
+              focus: slice.focus || "",
+              summary: slice.summary || "",
+              open_loops: slice.open_loops || [],
+              decisions: slice.decisions || [],
+              tags: slice.tags || [],
+              emotional_tone: slice.emotional_tone || "neutral",
             },
+            recentTurns,
+            newMessage: lastUserMessage,
+            recentSummaries,
           });
+
+          console.log(
+            `[Flash] intent=${flashOutput.intent} confidence=${flashOutput.confidence.toFixed(2)} ` +
+            `recall=${flashOutput.recall_hits.length} updates=${flashOutput.needs_metadata_update} ` +
+            `time=${Date.now() - t0}ms`
+          );
+
+          if (flashOutput.needs_metadata_update && flashOutput.metadata_updates) {
+            const meta: { slice_id: string; focus: string; summary: string; open_loops: string[]; decisions: string[]; tags: string[]; emotional_tone: string } = {
+              slice_id: slice.slice_id,
+              focus: slice.focus || "",
+              summary: slice.summary || "",
+              open_loops: slice.open_loops || [],
+              decisions: slice.decisions || [],
+              tags: slice.tags || [],
+              emotional_tone: slice.emotional_tone || "neutral",
+            };
+            applyMetadataUpdates(meta, flashOutput.metadata_updates);
+            slice.focus = meta.focus;
+            slice.summary = meta.summary;
+            slice.open_loops = meta.open_loops;
+            slice.decisions = meta.decisions;
+            slice.tags = meta.tags;
+            slice.emotional_tone = meta.emotional_tone as typeof slice.emotional_tone;
+          }
+        } catch (err) {
+          console.warn("[Flash] Unified call failed, continuing without Flash:", err instanceof Error ? err.message : err);
         }
+
+        // ── Context assembly (episodic grounding woven into the system prompt) ──
+        const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
+        const { prompt: finalSystemPrompt, intent, confidence } =
+          await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
+            ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
+            : undefined, episodicContext);
+        console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
+
+        // Phase 1b — recall done: update the SAME part (recalling → recalled)
+        const recallHits = flashOutput?.recall_hits ?? [];
+        const recallText = recallHits.length > 0
+          ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
+          : "Scanned recent conversations — no directly relevant matches found";
+        writer.write({
+          type: "data-flash",
+          id: recallId,
+          data: {
+            phase: "recall",
+            done: true,
+            text: flashOutput ? recallText : "",
+            tags: flashOutput?.suggested_topics ?? [],
+            reasoning: flashOutput?.reasoning ?? "",
+            recall_hits: recallHits,
+          },
+        });
 
         // Phase 2 + 3: Pro — thinking + text
         const result = streamText({

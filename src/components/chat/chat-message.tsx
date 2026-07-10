@@ -171,6 +171,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
                 type: string;
                 data?: {
                   phase?: string;
+                  done?: boolean;
                   text?: string;
                   tags?: string[];
                   reasoning?: string;
@@ -184,7 +185,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
                   tags={p.data?.tags}
                   reasoning={p.data?.reasoning}
                   recallHits={p.data?.recall_hits}
-                  isStreaming={false}
+                  isStreaming={p.data?.done === false}
                 />
               );
             })
