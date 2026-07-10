@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Previously" src="https://raw.githubusercontent.com/LikeDreamwalker/Aftrbrez/main/public/previously-on-you.png" width="600">
+  <img alt="Previously" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/previously-on-you.png" width="600">
 </p>
 
 <p align="center">
@@ -62,11 +62,11 @@ A **strand** is a keyword — like `work`, `family`, `health`, `housing` — tha
 > Slice = what happened. Strand = what it was about. Together they give you both episodic and semantic memory — remembering by time, and remembering by topic.
 
 <p align="center">
-  <img alt="Timeline view" src="https://raw.githubusercontent.com/LikeDreamwalker/Aftrbrez/main/public/timeline-screenshot.png" width="700">
+  <img alt="Timeline view" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/timeline-screenshot.png" width="700">
 </p>
 
 <p align="center">
-  <img alt="Timeline detail — Now marker, time gaps, and active slice" src="https://raw.githubusercontent.com/LikeDreamwalker/Aftrbrez/main/public/timeline-detail.png" width="700">
+  <img alt="Timeline detail — Now marker, time gaps, and active slice" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/timeline-detail.png" width="700">
 </p>
 
 <p align="center">
@@ -170,11 +170,11 @@ When you send a message, three things happen in sequence:
 3. **Metadata maintenance** — every round, Flash updates the active slice's summary, focus, open loops, decisions, and emotional tone. The index stays fresh without expensive post-processing.
 
 <p align="center">
-  <img alt="Recall phase — Flash found matching slices" src="https://raw.githubusercontent.com/LikeDreamwalker/Aftrbrez/main/public/recall-phase.png" width="700">
+  <img alt="Recall phase — Flash found matching slices" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/recall-phase.png" width="700">
 </p>
 
 <p align="center">
-  <img alt="Agent response after recall" src="https://raw.githubusercontent.com/LikeDreamwalker/Aftrbrez/main/public/recall-response.png" width="700">
+  <img alt="Agent response after recall" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/recall-response.png" width="700">
 </p>
 
 <p align="center">
