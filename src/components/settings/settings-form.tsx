@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
-import { DEFAULT_MODELS, modelSupportsThinking } from "@/lib/models/registry";
 import { saveUserProfile } from "@/lib/identity/actions";
 import type { UserProfile } from "@/lib/identity";
 
@@ -19,24 +18,6 @@ export function SettingsForm({ initialProfile }: { initialProfile: UserProfile }
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
 
-  // ── Chat model (client-only: localStorage) ──
-  const [model, setModel] = useState("deepseek-chat");
-  const [thinking, setThinking] = useState(true);
-
-  useEffect(() => {
-    setModel(localStorage.getItem("PREVIOUSLY_MODEL") ?? "deepseek-chat");
-    setThinking(localStorage.getItem("PREVIOUSLY_THINKING") !== "false");
-  }, []);
-
-  const handleModelChange = (m: string) => {
-    setModel(m);
-    localStorage.setItem("PREVIOUSLY_MODEL", m);
-  };
-  const handleThinkingChange = (v: boolean) => {
-    setThinking(v);
-    localStorage.setItem("PREVIOUSLY_THINKING", String(v));
-  };
-  const thinkingSupported = modelSupportsThinking(model);
 
   const handleProfileSave = async () => {
     setSaving(true);
@@ -88,38 +69,6 @@ export function SettingsForm({ initialProfile }: { initialProfile: UserProfile }
         </div>
       </section>
 
-      {/* Chat model */}
-      <section className="rounded-lg border border-border p-4">
-        <h3 className="text-sm font-medium mb-3">{t("form.modelSection")}</h3>
-        <select value={model} onChange={(e) => handleModelChange(e.target.value)} className={inputClass}>
-          {DEFAULT_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>{m.name}</option>
-          ))}
-        </select>
-
-        <div className="flex items-center justify-between mt-3 pt-3 border-t border-border">
-          <div>
-            <span className="text-sm">{t("form.thinkingLabel")}</span>
-            <p className="text-xs text-muted-foreground">{t("form.thinkingDesc")}</p>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={thinking && thinkingSupported}
-            disabled={!thinkingSupported}
-            onClick={() => handleThinkingChange(!thinking)}
-            className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors ${
-              thinking && thinkingSupported ? "bg-primary" : "bg-muted"
-            } ${thinkingSupported ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
-          >
-            <span
-              className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
-                thinking && thinkingSupported ? "translate-x-4" : "translate-x-0"
-              }`}
-            />
-          </button>
-        </div>
-      </section>
     </div>
   );
 }

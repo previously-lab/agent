@@ -1,6 +1,7 @@
 "use client";
 
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
+import { Github } from "lucide-react";
 
 export function HeroText({ name }: { name: string }) {
   return (
@@ -22,6 +23,32 @@ export function HeroText({ name }: { name: string }) {
           delay={1.1}
           staggerDelay={0.4}
         />
+      </div>
+
+      {/* Credits line — fades in after the title */}
+      <div className="mt-12 opacity-0 animate-[fadeIn_0.6s_ease-out_2s_forwards]">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground/50 tracking-wide">
+          <span>Previously</span>
+          <span className="text-muted-foreground/25">·</span>
+          <a
+            href="https://likedreamwalker.space"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-muted-foreground/70 transition-colors"
+          >
+            LikeDreamwalker
+          </a>
+          <span className="text-muted-foreground/25">·</span>
+          <a
+            href="https://github.com/LikeDreamwalker/Aftrbrez"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 hover:text-muted-foreground/70 transition-colors"
+          >
+            <Github className="h-3 w-3" />
+            <span>GitHub</span>
+          </a>
+        </div>
       </div>
     </div>
   );
