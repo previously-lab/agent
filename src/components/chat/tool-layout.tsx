@@ -165,7 +165,7 @@ export function ToolLayout({
                 ? "text-yellow-500"
                 : state.denied
                   ? "text-red-500"
-                  : "text-foreground",
+                  : "text-muted-foreground",
             nameClassName,
           )}
         >
