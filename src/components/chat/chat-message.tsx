@@ -149,6 +149,22 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
   const hasReasoning = reasoningText.trim().length > 0;
   const hasInline = inlineParts.length > 0;
 
+  // A recall phase is one logical act, but it arrives as two data-flash updates
+  // (recalling → recalled). Merge them (last-write-wins) so it renders ONCE and
+  // the single component transitions streaming→done (keeping its timer).
+  const recallData = hasRecall
+    ? recallParts.reduce<{
+        done?: boolean;
+        text?: string;
+        tags?: string[];
+        reasoning?: string;
+        recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
+      }>((acc, part) => {
+        const d = (part as { data?: typeof acc }).data;
+        return d ? { ...acc, ...d } : acc;
+      }, {})
+    : null;
+
   const renderItems = useMemo(
     () => groupInlineParts(inlineParts as AnyPart[]),
     [inlineParts],
@@ -164,32 +180,17 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
     <div className="py-1">
       <Message align={isUser ? "end" : "start"} className="gap-1">
         <MessageContent className="min-w-0">
-          {/* Phase 1: Recall — always visible */}
-          {isAssistant && hasRecall &&
-            recallParts.map((part, i) => {
-              const p = part as {
-                type: string;
-                data?: {
-                  phase?: string;
-                  done?: boolean;
-                  text?: string;
-                  tags?: string[];
-                  reasoning?: string;
-                  recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
-                };
-              };
-              return (
-                <RecallPhase
-                  key={i}
-                  text={p.data?.text ?? ""}
-                  tags={p.data?.tags}
-                  reasoning={p.data?.reasoning}
-                  recallHits={p.data?.recall_hits}
-                  isStreaming={p.data?.done === false}
-                />
-              );
-            })
-          }
+          {/* Phase 1: Recall — one act, rendered from the merged state */}
+          {isAssistant && recallData && (
+            <RecallPhase
+              key="recall"
+              text={recallData.text ?? ""}
+              tags={recallData.tags}
+              reasoning={recallData.reasoning}
+              recallHits={recallData.recall_hits}
+              isStreaming={recallData.done === false}
+            />
+          )}
 
           {/* Phase 2: Reasoning — always visible */}
           {isAssistant && hasReasoning && (
