@@ -23,41 +23,25 @@
 
 ## Previously — an agent that always remembers
 
-Previously is a lightweight cloud agent built on one conviction: **your context shouldn't live inside someone else's platform.**
+Previously is a lightweight cloud agent that lives on the edge — always available, never forgetting. Open a browser tab and it's there. It can read, write, reason, and act on your behalf. What makes it different isn't any single feature — it's that there are no "conversations." Just one continuous relationship, organized on a timeline.
 
-### The problem
-
-Ask yourself: where do your AI conversations actually live?
-
-They're inside ChatGPT's database. Or Claude's. Or Kimi's. Each platform holds a fragment of your thinking — decisions you made, questions you asked, problems you worked through over months of conversation. But you can't export them in a useful form. You can't pass them between tools. You can't even search across them without logging into each service individually.
-
-This isn't just inconvenient. It means:
-
-**Your context is locked up.** Years of conversations — your intellectual history with AI — sit in proprietary databases you can't access, in formats you can't read, behind APIs that could change or disappear tomorrow.
-
-**Every new tool starts from zero.** Claude Code doesn't know what you discussed with ChatGPT. Codex has no idea what Kimi remembers about you. Each agent is amnesiac outside its own silo. The result is that you keep repeating yourself — re-explaining your preferences, re-establishing context, starting fresh in every new chat thread.
-
-**The conversation itself is the wrong container.** Chat threads are an artifact of messaging apps, not a cognitive model. Humans don't organize their memories into "Chat #47 with Mom." They remember by *when* something happened and *what it was about*. But the AI industry adopted the conversation list as the default — and built everything on top of it.
-
-### What I set out to build
-
-Not a better chatbot. A different relationship with AI altogether.
-
-An agent that has **no concept of conversations** — just one continuous timeline stretching back to the first time you spoke. An agent whose memory lives in **your own GitHub repository** as plain Markdown files — readable by any tool, portable anywhere, fully under your control. An agent you can reach from any browser tab, on any device, without installing anything.
-
-Three specific things no other AI agent does in quite this way:
-
-- **No conversations, just a timeline.** Chat threads are replaced by time slices — one file per conversation burst, organized by date. Scroll up to revisit years ago. Scroll down to continue where you left off.
-
-- **Memory as Markdown, not vectors.** Every conversation is a file with YAML frontmatter. Tags woven across slices form strands — "the whole history of that thing." No embeddings you can't read back. No black-box indexes.
-
-- **Your GitHub repo is the database.** Previously writes memories. Claude Code reads them. Codex extends them. Git is your version control for your relationship with AI.
+Most AI agents split your life into chat threads. Each new thread starts cold. Memory exists but is siloed, fragile, lossy. The conversation list — an artifact of messaging apps — became the default interaction model for AI, even though human relationships don't work that way.
 
 Previously replaces chat threads with **time slices**: episodic memory organized the way human memory actually works. You don't manage conversations. You just show up and talk. The agent figures out what's relevant — scanning *when* something happened, then retrieving *what* was said.
 
 And because context is assembled dynamically from the timeline rather than crammed into a growing prompt window, there's no point where the agent suddenly "forgets" the beginning of a long exchange. The timeline grows, but what's loaded into each request stays bounded and relevant.
 
 The name comes from how TV series recap previous episodes: *"Previously on…"* — a brief reminder of what happened last time, just enough context to pick up where you left off.
+
+### Why this matters
+
+Two problems that are really one:
+
+1. **Memory across conversations is broken.** AI agents have memory, but it's siloed per chat thread. Cross-conversation recall requires hacking together vector databases, RAG pipelines, and fragile prompt engineering — and it still feels like talking to someone with amnesia.
+
+2. **The conversation is not the right container.** Humans don't organize their memories into "Chat #47 with Mom." They remember by *when* something happened and *what it was about*. The conversation list is a UI artifact — not a cognitive model.
+
+Fixing the memory model also fixes the interaction model. If an agent genuinely remembers you across time and topics, you don't need conversation management. You just show up and talk.
 
 ---
 
@@ -91,21 +75,11 @@ A **strand** is a keyword — like `work`, `family`, `health`, `housing` — tha
 
 ---
 
-## What the demo proves
+## Try the demo
 
-The public demo at **[previously-demo.ldwid.com](https://previously-demo.ldwid.com)** is seeded with a fictional persona spanning 30+ conversations across four years. Here's what it validates:
+A read-only demo is live at **[previously-demo.ldwid.com](https://previously-demo.ldwid.com)**. It's seeded with a fictional persona spanning several years of conversations — you can browse the timeline, scroll through past slices, and chat freely. All memory writes are disabled so everyone shares the same clean starting point; refresh the page and the slate resets.
 
-- **Timeline navigation works at scale.** Four years of conversations, browsable as a vertical feed with date-grouped headers and natural time-gap labels ("Now," "Seven months later"). No pagination fatigue. No search-box dependency.
-
-- **Flash recall is fast and accurate.** Ask a question that spans multiple strands ("How has the flood mitigation program been going?") and the recall phase surfaces relevant slices from 2022 through 2025 in under a second — pointers to the right conversations, not a keyword dump.
-
-- **Deep recall reads the full context.** The agent reads the actual conversation content from matched slices and writes responses grounded in years of history — not generic advice, but answers that reference specific past decisions and open loops.
-
-- **Pure cloud, no database.** The entire thing runs as serverless functions on edge infrastructure. State lives entirely in Markdown files. No PostgreSQL. No vector store. No Redis.
-
-The demo is read-only — all writes are accepted but never persisted, so every visitor starts from the same clean slate. Refresh the page and reset.
-
-The demo runs on two models: **DeepSeek V4 Flash** for recall scanning and metadata maintenance, and **DeepSeek V4 Pro** for deep reasoning and response generation.
+The demo runs on two models: **DeepSeek V4 Flash** handles the fast recall scan and metadata maintenance, and **DeepSeek V4 Pro** handles the deep reasoning and response generation. Same two-tier architecture described above, running live.
 
 ---
 
