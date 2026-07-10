@@ -52,6 +52,9 @@ next-env.d.ts
 # ===== Generated (codegen from identity/agent/*.md) =====
 src/lib/identity/*.generated.ts
 
+# ===== Runtime memory (local dev writes; real data lives via GitHub API) =====
+memory/episodic/
+
 # ===== Testing =====
 coverage/
 .nyc_output/
