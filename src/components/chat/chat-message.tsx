@@ -155,6 +155,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
   const recallData = hasRecall
     ? recallParts.reduce<{
         done?: boolean;
+        durationMs?: number;
         text?: string;
         tags?: string[];
         reasoning?: string;
@@ -188,6 +189,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
               tags={recallData.tags}
               reasoning={recallData.reasoning}
               recallHits={recallData.recall_hits}
+              durationMs={recallData.durationMs}
               isStreaming={recallData.done === false}
             />
           )}

@@ -19,6 +19,9 @@ interface RecallPhaseProps {
   reasoning?: string;
   recallHits?: RecallHit[];
   isStreaming?: boolean;
+  /** Server-measured recall duration (ms) — preferred over the local timer
+      since the recall arrives already complete. */
+  durationMs?: number;
 }
 
 const COMPLETED_STATE: ToolRenderState = {
@@ -43,6 +46,7 @@ export function RecallPhase({
   reasoning,
   recallHits,
   isStreaming = false,
+  durationMs,
 }: RecallPhaseProps) {
   const t = useTranslations("chat.recall");
   const [elapsed, setElapsed] = useState(0);
@@ -87,8 +91,13 @@ export function RecallPhase({
   const hasDetails = hasContent || hasHits || hasReasoning;
 
   const name = isStreaming ? t("streaming") : t("completed");
-  const summary =
-    !isStreaming && elapsed > 0 ? `${elapsed}s` : "";
+  const summary = isStreaming
+    ? ""
+    : durationMs != null
+      ? `${Math.max(1, Math.round(durationMs / 1000))}s`
+      : elapsed > 0
+        ? `${elapsed}s`
+        : "";
 
   const expandedContent = hasDetails ? (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-2 text-xs text-muted-foreground leading-relaxed">

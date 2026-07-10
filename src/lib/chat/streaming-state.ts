@@ -24,12 +24,18 @@ export function hasRenderableContent(message: UIMessage): boolean {
   ) ?? false;
 }
 
-// Removed M8: outside "Thinking..." indicator is redundant with bubble-internal
-// recall phase + reasoning display. Kept as no-op for backward compat.
+// Shows a "recalling…" placeholder while the request is in flight but no
+// assistant content has rendered yet — i.e. during the pre-stream Flash window,
+// so the user sees activity from the moment they send.
 export function shouldShowThinkingIndicator(
-  _status: string,
-  _messages: UIMessage[]
+  status: string,
+  messages: UIMessage[]
 ): boolean {
+  if (!isChatInFlight(status)) return false;
+  const last = messages[messages.length - 1];
+  if (!last) return false;
+  if (last.role === "user") return true;
+  if (last.role === "assistant") return !hasRenderableContent(last);
   return false;
 }
 
