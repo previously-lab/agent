@@ -206,7 +206,7 @@ function buildTimelineEpisodicContext(
       }
       ctx += "\n";
     }
-    ctx += "Use readMemory to read specific slice bodies for deeper context.\n\n";
+    ctx += "These summaries are usually enough — only readMemory a specific slice if you need a detail they don't carry.\n\n";
   } else if (flashOutput) {
     ctx += "### Recall Results\n";
     ctx += "Flash scanned recent conversation history and found no directly relevant past conversations.\n";
