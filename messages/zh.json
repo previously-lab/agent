@@ -106,7 +106,14 @@
       "hours": "{count, plural, other {# 小时后}}",
       "days": "{count, plural, other {# 天后}}",
       "weeks": "{count, plural, other {# 周后}}",
-      "months": "{count, plural, other {# 个月后}}"
+      "months": "{count, plural, other {# 个月后}}",
+      "unit": {
+        "minute": "分钟后",
+        "hour": "小时后",
+        "day": "天后",
+        "week": "周后",
+        "month": "个月后"
+      }
     }
   },
   "settings": {

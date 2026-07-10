@@ -106,7 +106,14 @@
       "hours": "{count, plural, one {# hour later} other {# hours later}}",
       "days": "{count, plural, one {# day later} other {# days later}}",
       "weeks": "{count, plural, one {# week later} other {# weeks later}}",
-      "months": "{count, plural, one {# month later} other {# months later}}"
+      "months": "{count, plural, one {# month later} other {# months later}}",
+      "unit": {
+        "minute": "{count, plural, one {minute later} other {minutes later}}",
+        "hour": "{count, plural, one {hour later} other {hours later}}",
+        "day": "{count, plural, one {day later} other {days later}}",
+        "week": "{count, plural, one {week later} other {weeks later}}",
+        "month": "{count, plural, one {month later} other {months later}}"
+      }
     }
   },
   "settings": {

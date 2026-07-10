@@ -12,6 +12,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { SliceSummary } from "@/hooks/use-timeline";
 import { DateGroupHeader, SliceTimeMarker } from "./date-group-header";
 import { useLocale, useTranslations } from "next-intl";
+import { NumberTicker } from "@/components/ui/number-ticker";
+import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
 
 interface TimelinePanelProps {
   onLoadedIdsChange: (ids: string[]) => void;
@@ -43,23 +45,25 @@ function groupByDate(
  * moment and now, in the show's own time vocabulary. Anchored on the last
  * slice's `start` (slices carry no end time); the ≤30-min imprecision is
  * invisible at hour/day granularity. Returns null when the gap can't be read.
+ *
+ * Returns structured data so the number can be rendered with NumberTicker
+ * while the unit text comes from i18n (with correct pluralisation).
  */
-function formatGapToNow(
+function getGapInfo(
   fromISO: string,
   now: number,
-  t: (key: string, values?: Record<string, number>) => string,
-): string | null {
+): { count: number; unitKey: string } | { special: string } | null {
   const from = new Date(fromISO).getTime();
   if (Number.isNaN(from) || now < from) return null;
   const minutes = Math.floor((now - from) / 60_000);
-  if (minutes < 5) return t("moments");
-  if (minutes < 60) return t("minutes", { count: minutes });
+  if (minutes < 5) return { special: "moments" };
+  if (minutes < 60) return { count: minutes, unitKey: "minute" };
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return t("hours", { count: hours });
+  if (hours < 24) return { count: hours, unitKey: "hour" };
   const days = Math.floor(hours / 24);
-  if (days < 7) return t("days", { count: days });
-  if (days < 35) return t("weeks", { count: Math.floor(days / 7) });
-  return t("months", { count: Math.floor(days / 30) });
+  if (days < 7) return { count: days, unitKey: "day" };
+  if (days < 35) return { count: Math.floor(days / 7), unitKey: "week" };
+  return { count: Math.floor(days / 30), unitKey: "month" };
 }
 
 export function TimelinePanel({
@@ -86,12 +90,12 @@ export function TimelinePanel({
   // "N later" title-card. Computed after mount only — it depends on the
   // current wall clock, so rendering it during SSR would mismatch on hydration.
   const gapAnchor = active?.start ?? slices[0]?.start ?? null;
-  const [gapLabel, setGapLabel] = useState<string | null>(null);
+  const [gapInfo, setGapInfo] = useState<ReturnType<typeof getGapInfo>>(null);
   useEffect(() => {
-    setGapLabel(
-      chatEmpty && gapAnchor ? formatGapToNow(gapAnchor, Date.now(), tGap) : null,
+    setGapInfo(
+      chatEmpty && gapAnchor ? getGapInfo(gapAnchor, Date.now()) : null,
     );
-  }, [chatEmpty, gapAnchor, tGap]);
+  }, [chatEmpty, gapAnchor]);
 
   if (loading) {
     return (
@@ -189,14 +193,31 @@ export function TimelinePanel({
           it, cutting forward from the last recorded moment to now — the same
           time vocabulary the rest of the timeline speaks. */}
       <div className="flex flex-col items-center pt-24 pb-20 mt-16 text-center">
-        {gapLabel && (
+        {gapInfo && ("special" in gapInfo ? (
           <p className="mb-5 font-mono text-xs tracking-[0.25em] text-muted-foreground/60">
-            {gapLabel}
+            {tGap(gapInfo.special)}
           </p>
-        )}
-        <p className="text-5xl sm:text-6xl font-light tracking-tighter leading-none text-foreground">
-          {tPanel("now")}
-        </p>
+        ) : (
+          <p className="mb-5 font-mono text-xs tracking-[0.25em] text-muted-foreground/60">
+            <NumberTicker
+              value={gapInfo.count}
+              className="text-muted-foreground/60"
+            />
+            {" "}
+            {(tGap as (key: string, values?: Record<string, number>) => string)(
+              `unit.${gapInfo.unitKey}`,
+              { count: gapInfo.count },
+            )}
+          </p>
+        ))}
+        <TextGenerateEffect
+          words={tPanel("now")}
+          className="text-5xl sm:text-6xl font-light tracking-tighter leading-none text-foreground"
+          filter={false}
+          duration={0.3}
+          delay={0.2}
+          animateOnView
+        />
       </div>
     </div>
   );

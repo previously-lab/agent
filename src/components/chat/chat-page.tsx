@@ -106,9 +106,11 @@ export function ChatPage({ children, initialData }: ChatPageProps) {
         </MessageScroller>
       </MessageScrollerProvider>
 
-      {/* Input — sticky at bottom */}
-      <div className="sticky bottom-0 bg-gradient-to-t from-background via-background to-transparent pt-2 pb-2">
-        <div className="mx-auto max-w-5xl xl:max-w-7xl px-4 sm:px-6 lg:px-8">
+      {/* Input — sticky at bottom.
+          Responsive width: full-width on mobile, constrained on desktop
+          so the input doesn't stretch awkwardly across the screen. */}
+      <div className="sticky bottom-0 pt-2 pb-2">
+        <div className="mx-auto w-full md:max-w-2xl px-4 sm:px-6 lg:px-8">
           <ChatInput
             onSubmit={handleSubmit}
             isLoading={isLoading}
