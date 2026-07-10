@@ -74,7 +74,7 @@ export function ThinkingSteps({ text, isStreaming = false, partCount = 1, durati
   const name = isStreaming ? t("streaming") : t("completed", { count: partCount });
   const seconds =
     durationMs != null ? Math.max(1, Math.round(durationMs / 1000)) : elapsed;
-  const summary = !isStreaming && seconds > 0 ? t("elapsed", { count: seconds }) : "";
+  const summary = !isStreaming && seconds > 0 ? `${seconds}s` : "";
 
   const expandedContent = hasContent ? (
     <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
