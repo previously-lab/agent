@@ -27,6 +27,9 @@
   "locale": {
     "switchTooltip": "切换语言"
   },
+  "demo": {
+    "banner": "演示模式 · 所有更改不会被保存"
+  },
   "chat": {
     "input": {
       "placeholder": "发送消息…",

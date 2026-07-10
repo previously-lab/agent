@@ -27,6 +27,9 @@
   "locale": {
     "switchTooltip": "Switch language"
   },
+  "demo": {
+    "banner": "Demo mode · changes aren't saved"
+  },
   "chat": {
     "input": {
       "placeholder": "Send a message...",

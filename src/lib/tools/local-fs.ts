@@ -60,6 +60,12 @@ export async function writeFileLocal(
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
 
+  // Demo mode is strictly read-only: accept the write so callers/UI behave as
+  // if it succeeded, but never persist it (the public demo has no auth).
+  if (DEMO_MODE) {
+    return { path, created: false };
+  }
+
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
     throw new Error(`Content too large. Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`);
   }
