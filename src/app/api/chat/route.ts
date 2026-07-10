@@ -377,7 +377,13 @@ export async function POST(request: Request) {
           });
         }
 
-        // Phase 2 + 3: Pro — thinking + text
+        // Phase 2 + 3: Pro — thinking + text. Reasoning duration is measured
+        // server-side (first reasoning chunk → first text chunk) and emitted as
+        // a data part, so the "Thought · Ns" timer survives re-renders instead
+        // of relying on the client catching the streaming→done transition.
+        let reasoningStartedAt: number | null = null;
+        let reasoningMsSent = false;
+
         const result = streamText({
           model: deepseek(model),
           providerOptions: thinking
@@ -386,6 +392,25 @@ export async function POST(request: Request) {
           system: finalSystemPrompt,
           messages: modelMessages,
           stopWhen: stepCountIs(20),
+          onChunk: ({ chunk }) => {
+            if (
+              (chunk.type === "reasoning-start" || chunk.type === "reasoning-delta") &&
+              reasoningStartedAt === null
+            ) {
+              reasoningStartedAt = Date.now();
+            } else if (
+              (chunk.type === "text-start" || chunk.type === "text-delta") &&
+              reasoningStartedAt !== null &&
+              !reasoningMsSent
+            ) {
+              reasoningMsSent = true;
+              writer.write({
+                type: "data-reasoning",
+                id: `reasoning-${Date.now()}`,
+                data: { done: true, durationMs: Date.now() - reasoningStartedAt },
+              });
+            }
+          },
           onFinish: async ({ text, finishReason }) => {
             if (finishReason === "stop") {
               appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: text });

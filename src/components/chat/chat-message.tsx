@@ -123,14 +123,18 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
 
   // ── Separate phase-level from inline parts ────────────────────────────
 
-  const { recallParts, reasoningText, inlineParts } = useMemo(() => {
+  const { recallParts, reasoningText, reasoningDurationMs, inlineParts } = useMemo(() => {
     const recall: typeof parts = [];
     const reasoning: string[] = [];
     const inline: typeof parts = [];
+    let durationMs: number | undefined;
 
     for (const p of parts) {
       if (p.type === "data-flash") {
         recall.push(p);
+      } else if (p.type === "data-reasoning") {
+        const d = (p as { data?: { durationMs?: number } }).data;
+        if (d?.durationMs != null) durationMs = d.durationMs;
       } else if (p.type === "reasoning") {
         reasoning.push((p as { text: string }).text);
       } else {
@@ -141,6 +145,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
     return {
       recallParts: recall,
       reasoningText: reasoning.join("\n"),
+      reasoningDurationMs: durationMs,
       inlineParts: inline,
     };
   }, [parts]);
@@ -198,6 +203,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
           {isAssistant && hasReasoning && (
             <ThinkingSteps
               text={reasoningText}
+              durationMs={reasoningDurationMs}
               isStreaming={isStreaming && !hasInline}
             />
           )}
