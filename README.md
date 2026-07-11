@@ -21,6 +21,20 @@
 
 ---
 
+## Documentation
+
+Full docs are in [`content/docs/`](content/docs/) — plain Markdown, readable on GitHub, browsable in-app at `/docs`, and consumable by any AI tool. Key pages:
+
+- **[Introduction](content/docs/en/introduction.md)** — what Previously is and how it works
+- **[Slices & Strands](content/docs/en/slices.md)** — the core memory model
+- **[Self-hosting](content/docs/en/self-hosting.md)** — prerequisites, config, deploy
+- **[Architecture](content/docs/en/architecture.md)** — design, pipeline, modules
+- **[FAQ](content/docs/en/faq.md)**
+
+AI tools can also read [`llms.txt`](public/llms.txt) for structured access.
+
+---
+
 ## Previously — an agent that always remembers
 
 Previously is a lightweight cloud agent that lives on the edge — always available, never forgetting. Open a browser tab and it's there. It can read, write, reason, and act on your behalf. What makes it different isn't any single feature — it's that there are no "conversations." Just one continuous relationship, organized on a timeline.
