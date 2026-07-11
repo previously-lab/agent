@@ -1,26 +1,24 @@
 /**
  * Slicing Decision Engine — M8 simplified.
  *
- * Single rule: time silence. If the last activity was more than
- * THIRTY_MINUTES_MS ago, close the current slice and start a new one.
+ * Two rules, checked in the chat route:
+ * 1. Time silence — 30 min inactivity (configurable via user config).
+ * 2. Turn count cap — force-close after N turns (configurable, default 20).
  *
- * Capacity checks and Flash continuity checks were removed in M8.
- * If long-session capacity issues emerge, they will be addressed in v2
- * with a configurable cap, not a per-request model call.
+ * Both thresholds are read from the user config at request time so they can
+ * be adjusted in Settings without a redeploy.
  */
 
-// ─── Configurable threshold ────────────────────────────────────────────
+// ─── Configurable defaults (overridable via memory/user/config.json) ───
 
-/** Milliseconds of inactivity before a time-silence split triggers */
-export const TIME_SILENCE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+export const DEFAULT_TIME_SILENCE_MS = 30 * 60 * 1000; // 30 minutes
+export const DEFAULT_MAX_TURNS_PER_SLICE = 20;
 
 /**
  * Check whether enough wall-clock time has passed since the last activity
  * to warrant closing the current time slice.
- *
- * @param lastActivity - Timestamp of the last turn in milliseconds (Date.now() style)
  */
-export function checkTimeSilence(lastActivity: number): boolean {
+export function checkTimeSilence(lastActivity: number, thresholdMs = DEFAULT_TIME_SILENCE_MS): boolean {
   const elapsedMs = Date.now() - lastActivity;
-  return elapsedMs >= TIME_SILENCE_THRESHOLD_MS;
+  return elapsedMs >= thresholdMs;
 }

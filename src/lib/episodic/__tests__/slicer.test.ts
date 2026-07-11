@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { checkTimeSilence, TIME_SILENCE_THRESHOLD_MS } from "../slicer";
+import { checkTimeSilence, DEFAULT_TIME_SILENCE_MS } from "../slicer";
 
 describe("checkTimeSilence", () => {
   beforeEach(() => {
@@ -26,14 +26,14 @@ describe("checkTimeSilence", () => {
   it("returns false exactly at the threshold boundary minus 1ms", () => {
     const now = Date.now();
     vi.setSystemTime(now);
-    const boundary = now - TIME_SILENCE_THRESHOLD_MS + 1;
+    const boundary = now - DEFAULT_TIME_SILENCE_MS + 1;
     expect(checkTimeSilence(boundary)).toBe(false);
   });
 
   it("returns true exactly at the threshold boundary", () => {
     const now = Date.now();
     vi.setSystemTime(now);
-    const boundary = now - TIME_SILENCE_THRESHOLD_MS;
+    const boundary = now - DEFAULT_TIME_SILENCE_MS;
     expect(checkTimeSilence(boundary)).toBe(true);
   });
 
@@ -59,6 +59,6 @@ describe("checkTimeSilence", () => {
   });
 
   it("threshold is exactly 30 minutes in milliseconds", () => {
-    expect(TIME_SILENCE_THRESHOLD_MS).toBe(30 * 60 * 1000);
+    expect(DEFAULT_TIME_SILENCE_MS).toBe(30 * 60 * 1000);
   });
 });

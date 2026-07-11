@@ -47,7 +47,9 @@ function estimateTokens(text: string): number {
  * chat message, not duplicated into the system prompt.
  */
 export function assembleContext(input: AssemblyInput): AssembledContext {
-  const budget = input.tokenBudget ?? DEFAULT_TOKEN_BUDGET;
+  const budget = input.tokenBudget && input.tokenBudget > 0
+    ? input.tokenBudget
+    : DEFAULT_TOKEN_BUDGET;
 
   // ---- Layer 0: System prompt ----
   const system = input.systemPrompt;
@@ -127,7 +129,7 @@ function formatSession(
     parts.push(
       "## Recent Conversation\n" +
         turns
-          .map((t) => `**${t.role}**: ${t.content.slice(0, 300)}`)
+          .map((t) => `**${t.role}**: ${t.content}`)
           .join("\n\n")
     );
   }
