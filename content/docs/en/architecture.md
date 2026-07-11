@@ -16,6 +16,14 @@ The diagram from the README puts it simply: you interact on your phone, Vercel o
 
 > **Key takeaway: no database, no always-on agent, no persistent connection.** Previously runs entirely inside the Vercel request lifecycle. You send a message, the route fires the pipeline, and the response streams back. When the response ends, there is no background process, no heartbeat, no loop.
 
+### Frontend Architecture
+
+The Next.js App Router enforces a strict server-component/client-component boundary. `page.tsx` is a Server Component that fetches all episodic data via `getEpisodicState` and the user profile server-side, then passes both as props — no client-side data fetching for the initial load. `ChatPage` is a thin client shell that owns only the AI SDK `useChat` hook and the flex layout. The hero section and timeline panel are passed as React children from `page.tsx`, keeping the React Server Component boundary narrow.
+
+A `LoadedIdsProvider` context replaces the older `onLoadedIdsChange` callback prop chain. `TimelinePanel` reads and writes loaded slice IDs through this context instead of drilling a callback through intermediate components.
+
+The message area uses a `relative h-screen` outer container with a `size-full` scroller. The chat input floats at `fixed bottom-0`, while `MessageScroller` fills the full page height.
+
 ## The Single `/api/chat` Pipeline
 
 The whole agent is `src/app/api/chat/route.ts` — one `export async function POST(request: Request)`. Every user message triggers these six steps in order:

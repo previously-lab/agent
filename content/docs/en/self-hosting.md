@@ -53,7 +53,7 @@ Create a file named `.env.local` in the project root. The template below shows e
 DEEPSEEK_API_KEY=sk-...
 
 # Required — GitHub fine-grained PAT (contents read/write, single repo)
-GITHUB_TOKEN=github_pat_...
+# GITHUB_TOKEN=github_pat_...
 
 # Required — your memory repository owner and name
 # These can point at a different repo from the one the code lives in.
@@ -66,6 +66,8 @@ GITHUB_REPO_NAME=your-memory-repo
 # real memory/ directory.
 DEMO_MODE=false
 ```
+
+For local development without a GitHub token, simply omit or comment out `GITHUB_TOKEN`. The app will use local filesystem storage.
 
 ### Environment variable reference
 
@@ -111,6 +113,8 @@ pnpm lint         # Run ESLint
 pnpm test         # Run vitest
 pnpm start        # Start the production server
 ```
+
+When the app is running, a unified header bar (`AppHeader`) appears at the top of every page, providing GitHub, Docs, Settings, theme toggle, and language toggle.
 
 Two scripts — `predev` and `prebuild` — run `node scripts/generate-identity.mjs` automatically before `dev` and `build`. No manual intervention is needed.
 

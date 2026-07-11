@@ -11,21 +11,21 @@ Every variable the runtime actually reads, in one table:
 | Variable | Required | Shipped | Default | Runtime effect |
 |---|---|---|---|---|
 | `DEEPSEEK_API_KEY` | Yes | Yes | — | Powers both Flash and Pro tiers. The `@ai-sdk/deepseek` provider reads it automatically from the environment — no source file references `process.env.DEEPSEEK_API_KEY` directly. |
-| `GITHUB_TOKEN` | See note | Yes | — | Presence of this variable **is the backend switch**. When set, the app uses the Octokit/GitHub API backend; when absent, the app falls back to the local filesystem. A fine-grained PAT with Contents read/write scoped to a single repository. |
+| `GITHUB_TOKEN` | See note | Yes | — | Presence of this variable **is the backend switch**. When set, the app uses the Octokit/GitHub API backend; when absent, the app falls back to the local filesystem. Leave unset or commented out for local development. An empty string `GITHUB_TOKEN=` will now correctly fall back to local filesystem. A fine-grained PAT with Contents read/write scoped to a single repository. |
 | `GITHUB_REPO_OWNER` | When using GitHub backend | Yes | `local` | GitHub username or organization that owns the memory repository. Read at multiple modules including the chat route, flush endpoint, episodic manager, and identity/profile. |
 | `GITHUB_REPO_NAME` | When using GitHub backend | Yes | `local` | The repository name for memory data. Same consumption points as `GITHUB_REPO_OWNER`. |
 | `DEMO_MODE` | No | Yes | `false` | When set to the string `"true"`, redirects all `memory/` reads to a pre-seeded persona dataset at `memory/demo/personal_14/`. Writes are accepted but never persisted on **both** backends — the app returns a success response but discards the data. The locale layout also renders a `<DemoBanner />` component. |
 | `DEMO_REF` | No | Yes (undocumented in `.env.example`) | — | Git ref (branch, tag, or SHA) that demo-mode GitHub reads are pinned to. Lets a token-backed demo deployment read from a demo branch instead of the intentionally-empty main branch. Only active when `DEMO_MODE=true`. |
 | `ANTHROPIC_API_KEY` | No | Roadmap only | — | Appears in `README.md` and the `@ai-sdk/anthropic` dependency is installed, but **no shipped code reads `process.env.ANTHROPIC_API_KEY`** or instantiates an Anthropic provider. Multi-provider support is typed in the model registry (`provider: "deepseek" | "anthropic" | "openai"`) but `DEFAULT_MODELS` ships only DeepSeek entries. Setting this variable has zero runtime effect in v0.1.0. |
 
-> **Note on `GITHUB_TOKEN`:** The code decides its backend with a single expression — `const USE_GITHUB = process.env.GITHUB_TOKEN != null` — declared independently in five modules (chat route, flush route, episodic manager, user profile, profile writer). There is no dedicated `USE_GITHUB` environment variable. Token present = GitHub API. Token absent = local filesystem. This is intentional: the simplest possible toggle, no config file, no extra surface area.
+> **Note on `GITHUB_TOKEN`:** The code decides its backend with a single expression — `const USE_GITHUB = !!process.env.GITHUB_TOKEN` — declared independently in seven modules (chat route, flush route, episodic manager, user profile, profile writer, maintenance, and the identity/profile endpoint). There is no dedicated `USE_GITHUB` environment variable. Token present = GitHub API. Token absent = local filesystem. This is intentional: the simplest possible toggle, no config file, no extra surface area.
 
 ## Backend switch: GitHub API vs local filesystem
 
 The storage backend is implicit by design. No env var, no config toggle — just the presence or absence of `GITHUB_TOKEN`:
 
 ```typescript
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 ```
 
 | Backend | When selected | How reads work | How writes work |
@@ -157,7 +157,7 @@ A few environment variables you might expect, and why they do not exist:
 
 | You might expect | Reality |
 |---|---|
-| `USE_GITHUB` | Does not exist. The backend switch is `process.env.GITHUB_TOKEN != null` — implicit, zero-config, intentional. |
+| `USE_GITHUB` | Does not exist. The backend switch is `!!process.env.GITHUB_TOKEN` — implicit, zero-config, intentional. |
 | `LOG_LEVEL` | Not implemented. Logging is thin in v0.1.0. |
 | `DATABASE_URL` | There is no database. State lives in GitHub files. |
 | `PORT` | Not read by the app; Next.js handles it. |

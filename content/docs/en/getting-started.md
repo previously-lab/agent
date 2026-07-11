@@ -4,13 +4,15 @@ Previously replaces chat threads with a single, continuous relationship organize
 
 ## The Interface
 
+A fixed **AppHeader** spans the top of every page: the "Previously" logo on the left, with GitHub, Docs, Settings, theme toggle, and language toggle on the right. Always visible regardless of scroll position.
+
 The page is one vertical scroller in three sections, top to bottom:
 
-1. **Full-screen hero** — `"Previously on {your name}"` rendered in a cinematic text-reveal animation, with a GitHub credit link below.
+1. **Full-screen hero** — `"Previously on {your name}"` rendered in a cinematic text-reveal animation. Navigation links and appearance controls have moved to the AppHeader, keeping the hero clean and focused.
 2. **Memory timeline** — your past slices, oldest at the top, newest at the bottom, grouped by date with per-slice timestamps and a "load more" button for older history.
 3. **Live chat messages** — the ongoing conversation, streaming in real time.
 
-Below all three, **pinned to the bottom of the screen**, sits a sticky input bar: a textarea that auto-resizes from 24 px to 72 px max. Enter submits; Shift+Enter adds a newline. When the agent is streaming, the submit arrow becomes a square stop button. The toolbar offers image attachment (paste, drag-drop, or file picker; `image/*` only, 10 MB per file), theme toggle, locale toggle, and a settings link.
+Below all three, **pinned to the bottom of the screen**, sits a sticky input bar: a textarea that auto-resizes from 24 px to 72 px max. Enter submits; Shift+Enter adds a newline. When the agent is streaming, the submit arrow becomes a square stop button. The toolbar offers image attachment (paste, drag-drop, or file picker; `image/*` only, 10 MB per file).
 
 The whole layout lives inside a single `MessageScroller` — scroll up to revisit the past, scroll down to continue where you left off.
 
