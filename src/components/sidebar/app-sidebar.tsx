@@ -9,6 +9,7 @@ import {
   Target,
   Archive,
   Settings,
+  BookOpen,
   ChevronLeft,
   ChevronRight,
   Menu,
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/memory", labelKey: "memory", icon: Brain },
   { href: "/missions", labelKey: "missions", icon: Target },
   { href: "/archive", labelKey: "archive", icon: Archive },
+  { href: "/docs", labelKey: "docs", icon: BookOpen },
   { href: "/settings", labelKey: "settings", icon: Settings },
 ] as const;
 

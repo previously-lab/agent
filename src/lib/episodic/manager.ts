@@ -30,7 +30,7 @@ import type {
 
 // ─── Environment detection ───────────────────────────────────────────────
 
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 // Demo data is static (writes are no-op'd), so reads can be cached hard.
 const DEMO_MODE = process.env.DEMO_MODE === "true";
@@ -408,7 +408,6 @@ async function readSliceIndexRaw(
     const parsed: MonthlyIndex = JSON.parse(raw);
     return parsed.slices ?? [];
   } catch {
-    // Index doesn't exist yet — return empty
     return [];
   }
 }

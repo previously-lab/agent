@@ -14,6 +14,7 @@
     "memory": "记忆",
     "missions": "任务",
     "archive": "存档",
+    "docs": "文档",
     "settings": "设置",
     "expand": "展开",
     "collapse": "收起"
@@ -137,6 +138,20 @@
       "aboutPlaceholder": "任何你希望 agent 了解的信息：你是谁、在做什么、偏好如何。",
       "save": "保存",
       "saving": "保存中…",
+      "saved": "已保存 ✓",
+      "saveFailed": "保存失败，请重试。"
+    },
+    "config": {
+      "heading": "Agent 行为",
+      "desc": "调整 Agent 的切片、回忆和上下文管理方式。保存到你的记忆仓库中，无需重新部署。",
+      "maxTurnsPerSlice": "每切片最大轮数",
+      "timeSilenceMinutes": "静默超时（分钟）",
+      "recentTurnsLimit": "上下文中的最近轮数",
+      "tokenBudget": "上下文 Token 预算",
+      "modelProvider": "模型提供者",
+      "thinking": "推理思考",
+      "save": "保存配置",
+      "saving": "保存中...",
       "saved": "已保存 ✓",
       "saveFailed": "保存失败，请重试。"
     },

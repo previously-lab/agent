@@ -14,6 +14,7 @@
     "memory": "Memory",
     "missions": "Missions",
     "archive": "Archive",
+    "docs": "Docs",
     "settings": "Settings",
     "expand": "Expand",
     "collapse": "Collapse"
@@ -136,6 +137,20 @@
       "about": "About you",
       "aboutPlaceholder": "Anything the agent should know about you, your work, or preferences.",
       "save": "Save profile",
+      "saving": "Saving...",
+      "saved": "Saved ✓",
+      "saveFailed": "Couldn't save. Try again."
+    },
+    "config": {
+      "heading": "Agent behaviour",
+      "desc": "Tune how the agent slices, recalls, and manages context. Saved to your memory repo — no redeploy needed.",
+      "maxTurnsPerSlice": "Max turns per slice",
+      "timeSilenceMinutes": "Silence timeout (min)",
+      "recentTurnsLimit": "Recent turns in context",
+      "tokenBudget": "Context token budget",
+      "modelProvider": "Model provider",
+      "thinking": "Thinking (reasoning)",
+      "save": "Save config",
       "saving": "Saving...",
       "saved": "Saved ✓",
       "saveFailed": "Couldn't save. Try again."

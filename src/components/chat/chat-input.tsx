@@ -6,8 +6,6 @@ import { ArrowUp, Square, Paperclip, X, Settings } from "lucide-react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Link } from "@/i18n/navigation";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ThemeToggle } from "./theme-toggle";
-import { LocaleToggle } from "./locale-toggle";
 
 interface ChatInputProps {
   onSubmit: (message: string) => void;
@@ -163,13 +161,6 @@ export function ChatInput({ onSubmit, isLoading, onStop }: ChatInputProps) {
             className="hidden"
             accept="image/*"
           />
-
-          {/* Divider */}
-          <span className="w-px h-4 bg-border/50" />
-
-          {/* Appearance & language */}
-          <ThemeToggle />
-          <LocaleToggle />
 
           {/* Settings */}
           <Tooltip>

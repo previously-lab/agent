@@ -2,17 +2,15 @@
 
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useState, useCallback, useRef } from "react";
+import { useState } from "react";
 import { ChatInput } from "./chat-input";
 import { ChatSection } from "./chat-section";
-import { MemorySection } from "./memory-section";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
-import type { SliceSummary } from "@/lib/episodic/actions";
+import { LoadedIdsProvider, useLoadedIds } from "./loaded-ids-context";
 import {
   MessageScroller,
   MessageScrollerButton,
   MessageScrollerContent,
-  MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
@@ -24,27 +22,29 @@ function getClientSetting(key: string, fallback: string): string {
 
 interface ChatPageProps {
   children: React.ReactNode;
-  initialData: {
-    active: SliceSummary | null;
-    slices: SliceSummary[];
-    hasMore: boolean;
-  };
 }
 
-export function ChatPage({ children, initialData }: ChatPageProps) {
+/**
+ * Thin client shell: nothing but the LoadedIdsProvider. The real work
+ * happens in `Inner` which lives inside the provider so it can access
+ * the loaded-ids context.
+ */
+export function ChatPage({ children }: ChatPageProps) {
+  return (
+    <LoadedIdsProvider>
+      <Inner>{children}</Inner>
+    </LoadedIdsProvider>
+  );
+}
+
+function Inner({ children }: { children: React.ReactNode }) {
   const [settings] = useState(() => ({
     model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
     thinking: getClientSetting("PREVIOUSLY_THINKING", "true") !== "false",
   }));
 
-  const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(
-    null,
-  );
-  const loadedSliceIdsRef = useRef<string[]>([]);
-
-  const handleLoadedIdsChange = useCallback((ids: string[]) => {
-    loadedSliceIdsRef.current = ids;
-  }, []);
+  const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
+  const { snapshot } = useLoadedIds();
 
   const { messages, sendMessage, status, stop, error } = useChat({
     transport: new DefaultChatTransport({
@@ -55,7 +55,7 @@ export function ChatPage({ children, initialData }: ChatPageProps) {
           typeof Intl !== "undefined"
             ? Intl.DateTimeFormat().resolvedOptions().timeZone
             : "UTC",
-        loadedSliceIds: loadedSliceIdsRef.current,
+        loadedSliceIds: snapshot(),
       }),
     }),
   });
@@ -70,29 +70,18 @@ export function ChatPage({ children, initialData }: ChatPageProps) {
   };
 
   return (
-    <div className="flex flex-col h-screen w-full bg-background">
+    <div className="relative h-screen w-full bg-background">
       <MessageScrollerProvider defaultScrollPosition="start">
-        <MessageScroller className="flex-1">
+        <MessageScroller className="size-full">
           <MessageScrollerViewport>
             <MessageScrollerContent
               aria-busy={isStreaming}
-              className="mx-auto max-w-5xl xl:max-w-7xl px-4 sm:px-6 lg:px-8 pb-24"
+              className="mx-auto max-w-5xl xl:max-w-7xl px-4 sm:px-6 lg:px-8 pb-28"
             >
-              {/* Hero section */}
-              <MessageScrollerItem messageId="hero-section">
-                {children}
-              </MessageScrollerItem>
+              {/* RSC slots: hero + timeline, rendered server-side */}
+              {children}
 
-              {/* Memory section */}
-              <MessageScrollerItem messageId="memory-section">
-                <MemorySection
-                  onLoadedIdsChange={handleLoadedIdsChange}
-                  chatEmpty={messages.length === 0}
-                  initialData={initialData}
-                />
-              </MessageScrollerItem>
-
-              {/* Chat messages + thinking + errors */}
+              {/* Client: AI SDK chat messages */}
               <ChatSection
                 messages={messages}
                 isStreaming={isStreaming}
@@ -102,20 +91,13 @@ export function ChatPage({ children, initialData }: ChatPageProps) {
               />
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          <MessageScrollerButton />
+          <MessageScrollerButton className="!bottom-28" />
         </MessageScroller>
       </MessageScrollerProvider>
 
-      {/* Input — sticky at bottom.
-          Responsive width: full-width on mobile, constrained on desktop
-          so the input doesn't stretch awkwardly across the screen. */}
-      <div className="sticky bottom-0 pt-2 pb-2">
+      <div className="fixed bottom-0 inset-x-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
         <div className="mx-auto w-full md:max-w-2xl px-4 sm:px-6 lg:px-8">
-          <ChatInput
-            onSubmit={handleSubmit}
-            isLoading={isLoading}
-            onStop={stop}
-          />
+          <ChatInput onSubmit={handleSubmit} isLoading={isLoading} onStop={stop} />
         </div>
       </div>
     </div>

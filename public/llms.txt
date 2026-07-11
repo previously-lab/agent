@@ -1,0 +1,27 @@
+# Previously — Agent Documentation (llms.txt)
+#
+# Previously is a lightweight cloud agent with episodic memory.
+# Docs live at /docs (en/zh), markdown in content/docs/.
+#
+# Index for AI tools (Claude Code, Cursor, etc.) — one link per page,
+# with a short label so an agent can read what it needs on-demand.
+
+## Overview
+- Introduction: /en/docs/introduction (content/docs/en/introduction.md)
+- Why Previously: /en/docs/why (content/docs/en/why.md)
+
+## Concepts
+- The Timeline: /en/docs/timeline (content/docs/en/timeline.md)
+- Slices: /en/docs/slices (content/docs/en/slices.md)
+- Strands: /en/docs/strands (content/docs/en/strands.md)
+- Memory Model: /en/docs/memory-model (content/docs/en/memory-model.md)
+- Recall: /en/docs/recall (content/docs/en/recall.md)
+
+## Guides
+- Getting Started: /en/docs/getting-started (content/docs/en/getting-started.md)
+- Deployment: /en/docs/deployment (content/docs/en/deployment.md)
+
+## Reference
+- Configuration: /en/docs/configuration (content/docs/en/configuration.md)
+- Architecture: /en/docs/architecture (content/docs/en/architecture.md)
+- FAQ: /en/docs/faq (content/docs/en/faq.md)

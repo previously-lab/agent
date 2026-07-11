@@ -34,8 +34,9 @@ import {
   type MaintenanceOutput,
   type RecentSummary,
 } from "@/lib/episodic/maintenance";
+import { loadUserConfig } from "@/lib/config/loader";
 
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 function getRepoConfig(): { owner: string; repo: string } {
   const owner = process.env.GITHUB_REPO_OWNER ?? "local";
@@ -66,7 +67,8 @@ async function buildDynamicSystemPrompt(
   userInput: string,
   recentTurns: Array<{ role: string; content: string }> = [],
   precomputedIntent?: { intent: string; confidence: number; source?: string },
-  episodicContext = ""
+  episodicContext = "",
+  config?: { context: { recentTurnsLimit: number; tokenBudget: number } }
 ): Promise<{ prompt: string; intent: string; source: string; confidence: number }> {
   let intent: string, source: string, confidence: number;
 
@@ -100,7 +102,8 @@ Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${sourc
     extendedNodes: loadedNodes.slice(3, 8),
     referenceNodes: ranked.slice(8),
     sessionSummary: "",
-    recentTurns: recentTurns.slice(-3),
+    recentTurns: recentTurns.slice(-(config?.context.recentTurnsLimit ?? 20)),
+    tokenBudget: config?.context.tokenBudget ?? 12000,
   });
 
   return { prompt: assembled.prompt, intent, source, confidence };
@@ -222,8 +225,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const { messages } = body;
-    const model = (body.model as string) ?? "deepseek-chat";
-    const thinking = body.thinking !== false;
+    const config = await loadUserConfig();
+    const model = (body.model as string) || config.model.provider;
+    const thinking = body.thinking !== false && config.model.thinking;
     const clientTimezone = (body.timezone as string) ?? "UTC";
     const loadedSliceIds = (body.loadedSliceIds as string[]) ?? [];
 
@@ -236,9 +240,10 @@ export async function POST(request: Request) {
 
     const { owner, repo } = getRepoConfig();
 
-    // Extract recent conversation context
+    // Extract recent conversation context — full turns, no truncation.
+    // The limit comes from user config so it can be tuned without a redeploy.
     const modelMessages = await convertToModelMessages(messages);
-    const recentTurns = modelMessages.slice(-8).map((m) => ({
+    const recentTurns = modelMessages.slice(-Math.ceil(config.context.recentTurnsLimit * 1.2)).map((m) => ({
       role: m.role as string,
       content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
     }));
@@ -259,7 +264,7 @@ export async function POST(request: Request) {
       if (diskSlice && diskSlice.status === "active") {
         const lastTurn = diskSlice.turns[diskSlice.turns.length - 1];
         const lastActivity = new Date(lastTurn.timestamp).getTime();
-        if (checkTimeSilence(lastActivity)) {
+        if (checkTimeSilence(lastActivity, config.slicing.timeSilenceMinutes * 60 * 1000)) {
           await closeSlice(diskSlice, "time_silence");
           console.log(`[Episodic] Recovered & closed stale slice: ${diskSlice.slice_id}`);
           slice = createSlice(lastUserMessage, clientTimezone);
@@ -277,9 +282,16 @@ export async function POST(request: Request) {
       const lastTurnTs = slice.turns.length > 0
         ? new Date(slice.turns[slice.turns.length - 1].timestamp).getTime()
         : Date.now();
-      if (checkTimeSilence(lastTurnTs)) {
+      if (checkTimeSilence(lastTurnTs, config.slicing.timeSilenceMinutes * 60 * 1000)) {
         await closeSlice(slice, "time_silence");
         console.log(`[Episodic] Closed stale slice: ${slice.slice_id}`);
+        slice = createSlice(lastUserMessage, clientTimezone);
+      }
+
+      // Force-close on turn count (safety net for marathon sessions)
+      if (slice.turns.length >= config.slicing.maxTurnsPerSlice) {
+        await closeSlice(slice, "capacity");
+        console.log(`[Episodic] Closed at turn cap: ${slice.slice_id} (${slice.turns.length} turns)`);
         slice = createSlice(lastUserMessage, clientTimezone);
       }
     }
@@ -350,7 +362,7 @@ export async function POST(request: Request) {
     const { prompt: finalSystemPrompt, intent, confidence } =
       await buildDynamicSystemPrompt(lastUserMessage, recentTurns, flashOutput
         ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
-        : undefined, episodicContext);
+        : undefined, episodicContext, config);
     console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)} pipeline=${Date.now() - t0}ms`);
 
     const recallHits = flashOutput?.recall_hits ?? [];

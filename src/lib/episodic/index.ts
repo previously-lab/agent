@@ -26,7 +26,8 @@ export {
 } from "./manager";
 
 export {
-  TIME_SILENCE_THRESHOLD_MS,
+  DEFAULT_TIME_SILENCE_MS,
+  DEFAULT_MAX_TURNS_PER_SLICE,
   checkTimeSilence,
 } from "./slicer";
 
