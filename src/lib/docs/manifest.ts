@@ -34,7 +34,7 @@ export const DOC_PAGES: DocPage[] = [
   { slug: "memory-model", section: "concepts", title: { en: "Memory Model", zh: "记忆模型" } },
   { slug: "recall", section: "concepts", title: { en: "Recall", zh: "回忆（Recall）" } },
   { slug: "getting-started", section: "guides", title: { en: "Getting Started", zh: "快速上手" } },
-  { slug: "self-hosting", section: "guides", title: { en: "Self-hosting", zh: "自部署" } },
+  { slug: "deployment", section: "guides", title: { en: "Deployment", zh: "部署" } },
   { slug: "configuration", section: "reference", title: { en: "Configuration", zh: "配置" } },
   { slug: "architecture", section: "reference", title: { en: "Architecture", zh: "架构" } },
   { slug: "faq", section: "reference", title: { en: "FAQ", zh: "常见问题" } },

@@ -1,0 +1,41 @@
+name: Bump version on release
+
+# When you publish a new GitHub Release, this workflow automatically updates
+# the version constant in the source code so the app always reports the correct
+# version. It only runs on the upstream repo — forks skip it.
+#
+# WHY THIS EXISTS:
+# Fork users carry a copy of this workflow. Without the repository check below,
+# a fork owner who accidentally creates a Release in their own repo would
+# trigger a commit that diverges from upstream, breaking their ability to
+# cleanly Sync fork for future updates. The `if` guard prevents that.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  bump-version:
+    # Only run on the upstream repository — never on forks.
+    if: github.repository == 'LikeDreamwalker/previously'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update version constant
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          FILE="src/lib/version/constants.ts"
+          sed -i "s/export const APP_VERSION = \".*\"/export const APP_VERSION = \"$VERSION\"/" "$FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src/lib/version/constants.ts
+          git commit -m "chore: bump version to ${{ github.event.release.tag_name }}" || true
+          git push

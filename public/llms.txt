@@ -19,7 +19,7 @@
 
 ## Guides
 - Getting Started: /en/docs/getting-started (content/docs/en/getting-started.md)
-- Self-hosting: /en/docs/self-hosting (content/docs/en/self-hosting.md)
+- Deployment: /en/docs/deployment (content/docs/en/deployment.md)
 
 ## Reference
 - Configuration: /en/docs/configuration (content/docs/en/configuration.md)

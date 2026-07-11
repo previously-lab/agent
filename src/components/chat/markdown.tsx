@@ -1,14 +1,23 @@
-import { memo } from "react";
+import { memo, isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import rehypeSlug from "rehype-slug";
 import type { Components } from "react-markdown";
 import { CodeBlock } from "./code-block";
+
+function extractText(children: React.ReactNode): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join("");
+  if (isValidElement(children)) return extractText((children.props as { children?: React.ReactNode }).children);
+  return "";
+}
 
 const components: Components = {
   code({ className, children, ...props }) {
     const match = /language-(\w+)/.exec(className ?? "");
-    const codeStr = String(children).replace(/\n$/, "");
+    const codeStr = extractText(children).replace(/\n$/, "");
 
     // Inline code
     if (!match) {
@@ -90,7 +99,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content }: Mark
     <div className="prose-sm dark:prose-invert max-w-none break-words [&_h1]:text-lg [&_h1]:font-bold [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={[rehypeHighlight, rehypeSlug]}
         components={components}
       >
         {content}

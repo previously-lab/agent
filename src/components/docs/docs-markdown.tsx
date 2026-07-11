@@ -1,10 +1,22 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
+import rehypeSlug from "rehype-slug";
 import type { Components } from "react-markdown";
+import { isValidElement } from "react";
 import { CodeBlock } from "@/components/chat/code-block";
 import { Link } from "@/i18n/navigation";
 import { DocPreview } from "./doc-preview";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+
+/** Extract raw text from React children — rehype-highlight wraps tokens in <span>s. */
+function extractText(children: React.ReactNode): string {
+  if (typeof children === "string") return children;
+  if (typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join("");
+  if (isValidElement(children)) return extractText((children.props as { children?: React.ReactNode }).children);
+  return "";
+}
 
 /**
  * Docs-tuned Markdown renderer. Reuses the chat `CodeBlock`, routes internal
@@ -16,11 +28,19 @@ const components: Components = {
   code({ className, children, ...props }) {
     const match = /language-(\w+)/.exec(className ?? "");
     const lang = match?.[1];
-    const codeStr = String(children).replace(/\n$/, "");
+    const codeStr = extractText(children).replace(/\n$/, "");
 
     if (lang === "preview") {
       const demoId = /demo:\s*([\w-]+)/.exec(codeStr)?.[1] ?? "";
       return <DocPreview id={demoId} />;
+    }
+
+    if (lang === "alert") {
+      return (
+        <Alert variant="destructive" className="my-4">
+          <AlertDescription>{codeStr}</AlertDescription>
+        </Alert>
+      );
     }
 
     if (!match) {
@@ -94,10 +114,10 @@ const components: Components = {
 
 export function DocsMarkdown({ content }: { content: string }): React.ReactElement {
   return (
-    <div className="max-w-none text-sm leading-relaxed text-foreground/90 [&_h1]:mb-4 [&_h1]:mt-0 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:mb-3 [&_h2]:mt-8 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-6 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3">
+    <div className="max-w-none text-sm leading-relaxed text-foreground/90 [&_h1]:mb-4 [&_h1]:mt-0 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:mb-3 [&_h2]:mt-8 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mb-2 [&_h3]:mt-6 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-3 [&_h1]:scroll-mt-16 [&_h2]:scroll-mt-16 [&_h3]:scroll-mt-16">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={[rehypeHighlight, rehypeSlug]}
         components={components}
       >
         {content}

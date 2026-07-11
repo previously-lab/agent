@@ -1,6 +1,6 @@
 # Introduction
 
-Previously is a lightweight cloud agent whose defining feature is episodic memory: it reads, writes, reasons, and acts, and is designed to never forget across time (tagline: "Previously on you.").
+Previously is a lightweight cloud agent whose defining feature is episodic memory: it reads, writes, reasons, and acts, and is designed to never forget across time.
 
 ## What Previously Is
 

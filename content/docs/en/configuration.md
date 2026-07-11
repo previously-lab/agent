@@ -165,6 +165,6 @@ A few environment variables you might expect, and why they do not exist:
 
 ## Related
 
-- [Self-hosting](/docs/en/self-hosting) — deployment walkthrough with the full `.env.local` template
+- [Deployment](/docs/en/deployment) — deployment walkthrough with the full `.env.local` template
 - [Episodic Memory](/docs/en/episodic-memory) — how slices and strands work; the data that configuration makes accessible
 - [Recall](/docs/en/recall) — how Flash and Pro use the configured models

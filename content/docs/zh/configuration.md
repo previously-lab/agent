@@ -165,6 +165,6 @@ defineRouting({
 
 ## 相关文档
 
-- [自托管部署](/docs/zh/self-hosting) —— 包含完整 `.env.local` 模板的部署指南
+- [部署](/docs/zh/deployment) —— 包含完整 `.env.local` 模板的部署指南
 - [情景记忆](/docs/zh/episodic-memory) —— slice 和 strand 的工作原理；配置使之可访问的数据
 - [召回](/docs/zh/recall) —— Flash 和 Pro 如何使用已配置的模型

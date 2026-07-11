@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { saveUserProfile } from "@/lib/identity/actions";
 import { saveUserConfig } from "@/lib/config/actions";
+import { checkForUpdate, type UpdateInfo } from "@/lib/version/actions";
+import { APP_VERSION } from "@/lib/version/constants";
 import type { UserProfile } from "@/lib/identity";
 import type { UserConfig } from "@/lib/config/types";
 
@@ -151,6 +153,42 @@ export function SettingsForm({
         </div>
       </section>
 
+      {/* Version */}
+      <VersionSection />
+
     </div>
+  );
+}
+
+function VersionSection() {
+  const [info, setInfo] = useState<UpdateInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+
+  const doCheck = async () => {
+    setChecking(true);
+    try {
+      const result = await checkForUpdate();
+      setInfo(result);
+    } catch { /* ignore */ }
+    setChecking(false);
+  };
+
+  useEffect(() => { doCheck(); }, []);
+
+  return (
+    <section className="rounded-lg border border-border p-4">
+      <h3 className="text-sm font-medium mb-1">Version</h3>
+      <p className="text-xs text-muted-foreground">
+        v{APP_VERSION}
+        {info?.updateAvailable && (
+          <span className="ml-2 text-red-500">Update available: v{info.latest}</span>
+        )}
+      </p>
+      <div className="flex items-center gap-3 mt-3">
+        <Button onClick={doCheck} disabled={checking} variant="secondary" className="text-xs">
+          {checking ? "Checking..." : "Check for updates"}
+        </Button>
+      </div>
+    </section>
   );
 }

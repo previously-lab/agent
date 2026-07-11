@@ -4,6 +4,7 @@ import { Link } from "@/i18n/navigation";
 import { BookOpen, Settings } from "lucide-react";
 import { ThemeToggle } from "@/components/chat/theme-toggle";
 import { LocaleToggle } from "@/components/chat/locale-toggle";
+import { VersionBadge } from "@/components/layout/version-badge";
 
 export function AppHeader() {
   return (
@@ -43,6 +44,7 @@ export function AppHeader() {
         <span className="w-px h-4 bg-border/50 mx-1" />
         <ThemeToggle />
         <LocaleToggle />
+        <VersionBadge />
       </nav>
     </header>
   );

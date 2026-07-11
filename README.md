@@ -84,7 +84,7 @@ Full docs are at **[previously.ldwid.com/docs](https://previously.ldwid.com/docs
 - [Introduction](https://previously.ldwid.com/docs/introduction) — what Previously is and how it works
 - [Slices & Strands](https://previously.ldwid.com/docs/slices) — the core memory model
 - [Architecture](https://previously.ldwid.com/docs/architecture) — pipeline, modules, tech stack, design decisions
-- [Self-hosting](https://previously.ldwid.com/docs/self-hosting) — prerequisites, config, deploy
+- [Deployment](https://previously.ldwid.com/docs/deployment) — fork, configure, deploy
 - [FAQ](https://previously.ldwid.com/docs/faq)
 
 Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. AI tools can also use [`llms.txt`](public/llms.txt) for structured access.
@@ -93,28 +93,17 @@ Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. A
 
 ## Quick start
 
-```bash
-git clone https://github.com/LikeDreamwalker/previously.git
-cd Aftrbrez
-pnpm install
-```
+1. **Fork this repo** → set to **private** (your memory lives here). Fork creates a copy under your GitHub account. Updates from upstream are one click away — see the Sync button on your repo page.
 
-Create `.env.local` with a GitHub token (contents read/write scope) and API keys for your LLM provider:
+2. **Import to Vercel** — [Import this repo](https://vercel.com/new). Set these environment variables:
+   - `GITHUB_TOKEN` — GitHub personal access token with contents read/write scope
+   - `GITHUB_REPO_OWNER` — your GitHub username
+   - `GITHUB_REPO_NAME` — your private fork's repo name
+   - `DEEPSEEK_API_KEY` — DeepSeek API key
 
-```bash
-GITHUB_TOKEN=ghp_xxxxxxxxxxxx
-GITHUB_REPO_OWNER=your-username
-GITHUB_REPO_NAME=your-memory-repo
-DEEPSEEK_API_KEY=sk-xxxxxxxxxxxx   # or ANTHROPIC_API_KEY
-```
+3. **Alternative: Deploy Button** — one click, but note: "Fastest path to a running instance. Updates from upstream require manual git steps — see the Updating section in docs."
 
-```bash
-pnpm dev     # Start dev server with Turbopack (port 3000)
-pnpm build   # Production build
-pnpm test    # Run tests
-```
-
-For full deployment instructions (Vercel, environment variables, production configuration), see the [Self-hosting docs](https://previously.ldwid.com/docs/self-hosting).
+4. **Local dev** — `git clone` your fork, `pnpm install`, `pnpm dev`.
 
 ---
 
@@ -154,6 +143,12 @@ A few principles that guide every decision:
 5. **Human memory is the right metaphor.** Episodic vs. semantic. Fast scan vs. deep retrieval. Time-organized, context-rich. Previously doesn't pretend to be a database with a chat interface — it's built to remember the way people remember.
 
 Previously runs as a pure cloud agent on edge infrastructure — no install, no GPU, no Docker — so it's reachable from any device. Your context lives in your GitHub repo, portable by `git clone`. For a deeper discussion of these design decisions, see the [Why docs](https://previously.ldwid.com/docs/why) and [Architecture docs](https://previously.ldwid.com/docs/architecture).
+
+---
+
+## Acknowledgments
+
+Thanks to [Vercel AI SDK](https://sdk.vercel.ai), [shadcn/ui](https://ui.shadcn.com), and the [Open Agents](https://github.com/open-agents) community.
 
 ---
 
