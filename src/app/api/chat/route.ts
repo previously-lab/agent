@@ -36,7 +36,7 @@ import {
 } from "@/lib/episodic/maintenance";
 import { loadUserConfig } from "@/lib/config/loader";
 
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 function getRepoConfig(): { owner: string; repo: string } {
   const owner = process.env.GITHUB_REPO_OWNER ?? "local";

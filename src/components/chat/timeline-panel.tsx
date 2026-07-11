@@ -14,9 +14,10 @@ import { DateGroupHeader, SliceTimeMarker } from "./date-group-header";
 import { useLocale, useTranslations } from "next-intl";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
+import { useLoadedIds } from "./loaded-ids-context";
 
 interface TimelinePanelProps {
-  onLoadedIdsChange: (ids: string[]) => void;
+  onLoadedIdsChange?: (ids: string[]) => void;
   /** True when the live chat below has no messages yet — shows a cue to speak. */
   chatEmpty?: boolean;
   initialData?: {
@@ -73,14 +74,16 @@ export function TimelinePanel({
 }: TimelinePanelProps) {
   const { slices, active, loading, loadingMore, hasMore, loadMore, loadedIds } =
     useTimeline(initialData);
+  const ctx = useLoadedIds();
   const locale = useLocale();
   const tRow = useTranslations("timeline.row");
   const tPanel = useTranslations("timeline.panel");
   const tGap = useTranslations("timeline.gap");
 
   useEffect(() => {
-    onLoadedIdsChange(loadedIds);
-  }, [loadedIds, onLoadedIdsChange]);
+    ctx.register(loadedIds);
+    onLoadedIdsChange?.(loadedIds);
+  }, [loadedIds]);
 
   const groups = useMemo(
     () => groupByDate(slices, tRow, locale),
@@ -92,10 +95,8 @@ export function TimelinePanel({
   const gapAnchor = active?.start ?? slices[0]?.start ?? null;
   const [gapInfo, setGapInfo] = useState<ReturnType<typeof getGapInfo>>(null);
   useEffect(() => {
-    setGapInfo(
-      chatEmpty && gapAnchor ? getGapInfo(gapAnchor, Date.now()) : null,
-    );
-  }, [chatEmpty, gapAnchor]);
+    setGapInfo(gapAnchor ? getGapInfo(gapAnchor, Date.now()) : null);
+  }, [gapAnchor]);
 
   if (loading) {
     return (

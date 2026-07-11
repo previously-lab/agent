@@ -3,7 +3,7 @@ import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
 import { DemoBanner } from "@/components/demo-banner";
-import { AnimatedHeader } from "@/components/layout/animated-header";
+import { AppHeader } from "@/components/layout/app-header";
 
 type Props = {
   children: React.ReactNode;
@@ -28,7 +28,7 @@ export default async function LocaleLayout({ children, params }: Props) {
   return (
     <NextIntlClientProvider messages={messages} locale={locale}>
       {isDemo && <DemoBanner />}
-      <AnimatedHeader />
+      <AppHeader />
       {children}
     </NextIntlClientProvider>
   );

@@ -14,7 +14,7 @@ import { writeFile } from "@/lib/tools/writeFile";
 import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
 
 const PROFILE_PATH = "memory/user/profile.md";
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 export interface ProfilePatch {
   name?: string;

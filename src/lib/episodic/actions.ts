@@ -76,7 +76,6 @@ export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boo
   );
 
   const sorted = entries.sort((a, b) => b.start.localeCompare(a.start));
-
   const recent = sorted.slice(0, PAGE_SIZE);
   const hasMore = sorted.length > PAGE_SIZE || !exhausted;
   const first = recent[0];

@@ -9,7 +9,7 @@ import { mergeConfig, DEFAULTS } from "./defaults";
 import type { UserConfig } from "./types";
 
 const CONFIG_PATH = "memory/user/config.json";
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 async function readRaw(): Promise<string | null> {
   try {

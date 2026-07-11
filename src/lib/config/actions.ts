@@ -13,7 +13,7 @@ import { loadUserConfig } from "./loader";
 import type { UserConfig } from "./types";
 
 const CONFIG_PATH = "memory/user/config.json";
-const USE_GITHUB = process.env.GITHUB_TOKEN != null;
+const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 export async function saveUserConfig(
   overrides: Partial<UserConfig>,
