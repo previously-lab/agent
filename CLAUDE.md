@@ -53,7 +53,7 @@ Previously On — a personal AI commander platform (C2). Human is the commander,
 ### shadcn/ui
 
 - Base UI primitives (shadcn's future direction)
-- Components: `src/components/ui/` — 19 components (button, card, dialog, drawer, popover, select, tabs, tooltip, command, skeleton, avatar, separator, switch, label, input, textarea, scroll-area, dropdown-menu, sheet)
+- Components: `src/components/ui/` — 28 components (button, card, dialog, drawer, popover, select, tabs, tooltip, command, skeleton, avatar, separator, switch, label, input, textarea, scroll-area, dropdown-menu, sheet, alert, bubble, input-group, message, message-scroller, number-ticker, sonner, text-generate-effect, toggle)
 - Utilities: `cn()` from `@/lib/utils`
 - Toast notifications: `sonner` via `src/components/ui/sonner.tsx`
 
@@ -61,7 +61,7 @@ Previously On — a personal AI commander platform (C2). Human is the commander,
 
 Three-phase message rendering (M8). See `src/components/chat/CLAUDE.md` for full details.
 
-1. **`Chat`** (`index.tsx`) — Main container, useChat hook, TimelinePanel, MessageScroller
+1. **`ChatPage`** (`chat-page.tsx`) — Main container, useChat hook, TimelinePanel, MessageScroller
 2. **`ChatMessage`** — Three-phase rendering: Recall → Reasoning → Response
 3. **`RecallPhase`** — Flash recall results with expandable matched slices (ToolLayout + History icon)
 4. **`ThinkingSteps`** — Pro reasoning block (ToolLayout + Brain icon, MarkdownRenderer)
@@ -70,7 +70,6 @@ Three-phase message rendering (M8). See `src/components/chat/CLAUDE.md` for full
 7. **`ChatInput`** — Text area + submit/stop
 8. **`MarkdownRenderer`** — `react-markdown` + `remark-gfm` + `rehype-highlight`
 9. **`FileNamePill`** — File path pill with icon (used by tool renderers)
-10. **`SlashCommandDropdown`** — / command autocomplete
 
 ### Skills System
 
