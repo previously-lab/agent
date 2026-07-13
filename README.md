@@ -19,6 +19,8 @@
   <img src="https://img.shields.io/badge/memory-episodic-ec4899" alt="Memory: Episodic">
 </p>
 
+> 💡 **Want to understand the ideas and philosophy behind Previously?** Read the design deep-dive: [Is Time the Missing Dimension in AI Memory?](https://dev.to/likedreamwalker/is-time-the-missing-dimension-in-ai-memory-2l9c)
+
 ---
 
 ## Previously — an agent that always remembers
