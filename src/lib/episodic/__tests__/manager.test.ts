@@ -28,6 +28,7 @@ const sampleSlice: TimeSlice = {
   decisions: ["Use color-coded checklist format", "Schedule next review for Friday"],
   tags: ["work", "planning", "corridor-project"],
   related_slices: ["2024-03-08"],
+  loops: [],
   emotional_tone: "neutral",
   turns: sampleTurns,
   estimatedTokens: 500,

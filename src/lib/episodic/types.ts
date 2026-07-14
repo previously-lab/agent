@@ -53,6 +53,8 @@ export interface SliceFrontmatter {
   tags: string[];
   /** Paths of related slices, e.g. ["2026/06/22"] */
   related_slices: string[];
+  /** loop run ids spawned from this slice */
+  loops: string[];
   /** Emotional tone assessed by Flash on freeze */
   emotional_tone?: EmotionalTone;
 }
@@ -76,6 +78,8 @@ export interface TimeSlice {
   decisions: string[];
   tags: string[];
   related_slices: string[];
+  /** loop run ids spawned from this slice */
+  loops: string[];
   emotional_tone?: EmotionalTone;
   /** Ordered list of turns that make up the slice body */
   turns: Turn[];
