@@ -4,11 +4,9 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## About
 
-Previously On — a personal AI commander platform (C2). Human is the commander, cloud agents are the staff. Agents don't initiate contact; they work while you're away, results waiting when you return.
+A Next.js web application where a cloud LLM agent reads and writes repository state through a chat interface. The agent runs server-side, operates only on whitelisted data directories (`memory/`, `tasks/`, `sessions/`), and can spawn durable background loops (Vercel Workflow) that persist their progress to the repo.
 
-**Core narrative**: Not "I'm always with you" but "I come after you're done."
-
-**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · octokit · sonner · streamdown
+**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · Vercel Workflow · octokit · sonner · streamdown
 
 ## Project Architecture
 
