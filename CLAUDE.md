@@ -6,6 +6,8 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 A Next.js web application where a cloud LLM agent reads and writes repository state through a chat interface. The agent runs server-side, operates only on whitelisted data directories (`memory/`, `tasks/`, `sessions/`), and can spawn durable background loops (Vercel Workflow) that persist their progress to the repo.
 
+Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/chat/turn-workflow.ts`), streamed back through `run.readable` and resumable after a dropped connection. GitHub files remain the single source of truth for memory — Workflow is only the execution container, never a store. There is intentionally no database/KV; cross-device reconnect is deliberately not implemented because it would require one.
+
 **Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · Vercel Workflow · octokit · sonner · streamdown
 
 ## Project Architecture
