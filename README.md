@@ -7,7 +7,11 @@
 </p>
 
 <p align="center">
-  <a href="https://previously-demo.ldwid.com"><strong>previously-demo.ldwid.com</strong></a>
+  <a href="https://previously.ldwid.com"><strong>previously.ldwid.com</strong></a>
+  ·
+  <a href="https://previously.ldwid.com/docs"><strong>Docs</strong></a>
+  ·
+  <a href="https://previously-demo.ldwid.com"><strong>Live Demo</strong></a>
 </p>
 
 <p align="center">
@@ -67,7 +71,7 @@ A **strand** is a keyword — like `work`, `family`, `health` — that appears a
   <sub>Each slice carries a summary. Time gaps between slices get natural labels — "Now," "Seven months later" — so scrolling the timeline feels like turning pages.</sub>
 </p>
 
-For implementation details — the two-tier recall pipeline (Flash scan + Pro deep-read), file structure, YAML schemas, and the cognitive science foundations — see the [Memory Model](https://previously-demo.ldwid.com/docs/memory-model) and [Architecture](https://previously-demo.ldwid.com/docs/architecture) docs.
+For implementation details — the two-tier recall pipeline (Flash scan + Pro deep-read), file structure, YAML schemas, and the cognitive science foundations — see the [Memory Model](https://previously.ldwid.com/docs/memory-model) and [Architecture](https://previously.ldwid.com/docs/architecture) docs.
 
 ---
 
@@ -81,13 +85,13 @@ The demo runs on two models: **DeepSeek V4 Flash** handles the fast recall scan 
 
 ## Documentation
 
-Full docs are at **[previously-demo.ldwid.com/docs](https://previously-demo.ldwid.com/docs)** — plain Markdown, readable on GitHub, browsable in-app at `/docs`, and consumable by any AI tool. Key pages:
+Full docs are at **[previously.ldwid.com/docs](https://previously.ldwid.com/docs)** — plain Markdown, readable on GitHub, browsable in-app at `/docs`, and consumable by any AI tool. Key pages:
 
-- [Introduction](https://previously-demo.ldwid.com/docs/introduction) — what Previously is and how it works
-- [Slices & Strands](https://previously-demo.ldwid.com/docs/slices) — the core memory model
-- [Architecture](https://previously-demo.ldwid.com/docs/architecture) — pipeline, modules, tech stack, design decisions
-- [Deployment](https://previously-demo.ldwid.com/docs/deployment) — fork, configure, deploy
-- [FAQ](https://previously-demo.ldwid.com/docs/faq)
+- [Introduction](https://previously.ldwid.com/docs/introduction) — what Previously is and how it works
+- [Slices & Strands](https://previously.ldwid.com/docs/slices) — the core memory model
+- [Architecture](https://previously.ldwid.com/docs/architecture) — pipeline, modules, tech stack, design decisions
+- [Deployment](https://previously.ldwid.com/docs/deployment) — fork, configure, deploy
+- [FAQ](https://previously.ldwid.com/docs/faq)
 
 Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. AI tools can also use [`llms.txt`](public/llms.txt) for structured access.
 
@@ -126,7 +130,7 @@ Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. A
 - Multi-model support (DeepSeek, Anthropic, via AI SDK)
 - Internationalization (English & Chinese)
 
-For the full roadmap, see the [Architecture docs](https://previously-demo.ldwid.com/docs/architecture) or the [Memory Model docs](https://previously-demo.ldwid.com/docs/memory-model).
+For the full roadmap, see the [Architecture docs](https://previously.ldwid.com/docs/architecture) or the [Memory Model docs](https://previously.ldwid.com/docs/memory-model).
 
 ---
 
@@ -144,7 +148,7 @@ A few principles that guide every decision:
 
 5. **Human memory is the right metaphor.** Episodic vs. semantic. Fast scan vs. deep retrieval. Time-organized, context-rich. Previously doesn't pretend to be a database with a chat interface — it's built to remember the way people remember.
 
-Previously runs as a pure cloud agent on edge infrastructure — no install, no GPU, no Docker — so it's reachable from any device. Your context lives in your GitHub repo, portable by `git clone`. For a deeper discussion of these design decisions, see the [Why docs](https://previously-demo.ldwid.com/docs/why) and [Architecture docs](https://previously-demo.ldwid.com/docs/architecture).
+Previously runs as a pure cloud agent on edge infrastructure — no install, no GPU, no Docker — so it's reachable from any device. Your context lives in your GitHub repo, portable by `git clone`. For a deeper discussion of these design decisions, see the [Why docs](https://previously.ldwid.com/docs/why) and [Architecture docs](https://previously.ldwid.com/docs/architecture).
 
 ---
 
