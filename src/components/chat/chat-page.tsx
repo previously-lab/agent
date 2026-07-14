@@ -1,8 +1,8 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport } from "ai";
-import { useState } from "react";
+import { WorkflowChatTransport } from "@workflow/ai";
+import { useMemo, useState } from "react";
 import { ChatInput } from "./chat-input";
 import { ChatSection } from "./chat-section";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
@@ -19,6 +19,13 @@ function getClientSetting(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   return localStorage.getItem(key) ?? fallback;
 }
+
+/**
+ * localStorage key holding the run id of a turn still streaming when the tab
+ * was last closed. Written on send (from the x-workflow-run-id header), cleared
+ * when the stream finishes; its presence at mount drives same-browser resume.
+ */
+const ACTIVE_RUN_KEY = "PREVIOUSLY_ACTIVE_RUN_ID";
 
 interface ChatPageProps {
   children: React.ReactNode;
@@ -46,17 +53,58 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
   const { snapshot } = useLoadedIds();
 
+  // A run left mid-stream by a previous mount (tab closed during a response)?
+  // Its id was persisted on send; resume it once on mount. Read only at mount
+  // so a completion during this session doesn't retrigger resume.
+  const initialActiveRunId = useMemo<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    return localStorage.getItem(ACTIVE_RUN_KEY) ?? undefined;
+  }, []);
+
   const { messages, sendMessage, status, stop, error } = useChat({
-    transport: new DefaultChatTransport({
+    resume: !!initialActiveRunId,
+    // Every turn runs inside a durable Workflow run. WorkflowChatTransport reads
+    // the x-workflow-run-id header, auto-reconnects on same-session drops, and
+    // resumes post-reload via /api/chat/{runId}/stream. Created inline (like the
+    // old DefaultChatTransport) so prepareSendMessagesRequest closes over the
+    // current settings/loaded-ids at send time.
+    transport: new WorkflowChatTransport({
       api: "/api/chat",
-      body: () => ({
-        ...settings,
-        timezone:
-          typeof Intl !== "undefined"
-            ? Intl.DateTimeFormat().resolvedOptions().timeZone
-            : "UTC",
-        loadedSliceIds: snapshot(),
+      prepareSendMessagesRequest: (config) => ({
+        api: config.api,
+        headers: config.headers,
+        credentials: config.credentials,
+        body: {
+          messages: config.messages,
+          ...settings,
+          timezone:
+            typeof Intl !== "undefined"
+              ? Intl.DateTimeFormat().resolvedOptions().timeZone
+              : "UTC",
+          loadedSliceIds: snapshot(),
+        },
       }),
+      onChatSendMessage: (response) => {
+        const runId = response.headers.get("x-workflow-run-id");
+        if (runId && typeof window !== "undefined") {
+          localStorage.setItem(ACTIVE_RUN_KEY, runId);
+        }
+      },
+      onChatEnd: () => {
+        if (typeof window !== "undefined") {
+          localStorage.removeItem(ACTIVE_RUN_KEY);
+        }
+      },
+      prepareReconnectToStreamRequest: (config) => {
+        const runId =
+          typeof window !== "undefined"
+            ? localStorage.getItem(ACTIVE_RUN_KEY)
+            : null;
+        return {
+          ...config,
+          api: runId ? `/api/chat/${encodeURIComponent(runId)}/stream` : config.api,
+        };
+      },
     }),
   });
 
