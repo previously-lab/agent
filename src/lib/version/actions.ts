@@ -6,7 +6,7 @@ export interface UpdateInfo {
   current: string;
   latest: string | null;
   updateAvailable: boolean;
-  /** Link to the updating instructions in docs */
+  /** Link to the updating instructions in the official docs */
   docsUrl: string;
 }
 
@@ -35,6 +35,6 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
     current: APP_VERSION,
     latest,
     updateAvailable: latest !== null && latest !== APP_VERSION,
-    docsUrl: "/docs/deployment#updating",
+    docsUrl: "https://previously.ldwid.com/docs/deployment#updating",
   };
 }

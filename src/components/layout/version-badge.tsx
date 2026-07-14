@@ -60,9 +60,11 @@ export function VersionBadge() {
               </Link>
               <Link
                 href={info.docsUrl}
-                className="block text-blue-500 hover:underline"
+                target="_blank"
+                className="flex items-center gap-1.5 text-blue-500 hover:underline w-full"
               >
-                How to update →
+                How to update
+                <ExternalLink className="h-3 w-3" />
               </Link>
             </>
           ) : (
