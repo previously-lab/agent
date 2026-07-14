@@ -35,6 +35,7 @@ import {
   type RecentSummary,
 } from "@/lib/episodic/maintenance";
 import { loadUserConfig } from "@/lib/config/loader";
+import { startLoop } from "@/app/api/loops/start-loop";
 
 const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
@@ -94,7 +95,9 @@ async function buildDynamicSystemPrompt(
   const userProfile = await loadUserProfile();
   const baseSystemPrompt = `${buildAgentIdentityPrompt(userProfile)}
 
-Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}`;
+Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}
+
+You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory, so results are waiting when the user returns. Tell the user when you start one. Don't use it for anything you can answer right now.`;
 
   const assembled = assembleContext({
     systemPrompt: baseSystemPrompt,
@@ -508,6 +511,37 @@ export async function POST(request: Request) {
               execute: async ({ reason, ...patch }) => {
                 const res = await applyProfilePatch(patch, `[agent] ${reason}`);
                 return res.ok ? { ok: true } : { ok: false, error: res.error };
+              },
+            }),
+            startLoop: tool({
+              description:
+                "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
+              inputSchema: z.object({
+                goal: z.string().describe("A clear, self-contained statement of what the loop should accomplish."),
+                tags: z.array(z.string()).optional().describe("Keyword tags for later recall, e.g. topic names."),
+              }),
+              execute: async ({ goal, tags }) => {
+                try {
+                  const started = await startLoop({ goal, tags: tags ?? [], sliceId: slice.slice_id });
+                  // Record the slice→loop pointer and weave loop tags into strands.
+                  // Best-effort: never fail the tool if the snapshot write fails.
+                  try {
+                    if (!slice.loops.includes(started.loopId)) {
+                      slice.loops.push(started.loopId);
+                    }
+                    for (const tag of tags ?? []) {
+                      if (!slice.tags.includes(tag)) {
+                        slice.tags.push(tag);
+                      }
+                    }
+                    await saveSliceSnapshot(slice);
+                  } catch {
+                    // swallow: pointer persistence is non-critical
+                  }
+                  return { ok: true, loopId: started.loopId, filePath: started.filePath };
+                } catch (e) {
+                  return { ok: false, error: e instanceof Error ? e.message : "failed to start loop" };
+                }
               },
             }),
           },

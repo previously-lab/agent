@@ -6,6 +6,7 @@ import { ReadFileRenderer } from "./tool-renderers/read-file";
 import { WriteFileRenderer } from "./tool-renderers/write-file";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
+import { LoopToolRenderer } from "./tool-renderers/loop";
 import { DefaultRenderer } from "./tool-renderers/default";
 
 interface ToolRendererProps {
@@ -32,6 +33,8 @@ function friendlyName(
       return t("writeMemory");
     case "updateUserProfile":
       return t("updateUserProfile");
+    case "startLoop":
+      return t("startLoop");
     default:
       return toolName.charAt(0).toUpperCase() + toolName.slice(1);
   }
@@ -84,6 +87,18 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
           displayName={displayName}
           input={input}
           output={output}
+          state={renderState}
+        />
+      );
+    case "startLoop":
+      return (
+        <LoopToolRenderer
+          input={input as { goal?: string; tags?: string[] } | undefined}
+          output={
+            output as
+              | { ok?: boolean; loopId?: string; filePath?: string; error?: string }
+              | undefined
+          }
           state={renderState}
         />
       );
