@@ -65,3 +65,4 @@ benchmark-data/
 # ===== Misc =====
 *.pem
 vercel.json
+/.swc
