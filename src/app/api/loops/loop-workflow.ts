@@ -15,7 +15,7 @@
  */
 import type { LoopInput, LoopResult, LoopStep, LoopStatus } from "@/lib/loops/types";
 import { detectNoProgress } from "@/lib/loops/guards";
-import { runLoopStep, persistLoop } from "./steps";
+import { runLoopStep, persistLoop, streamLoopProgress } from "./steps";
 
 export async function loopWorkflow(input: LoopInput): Promise<LoopResult> {
   "use workflow";
@@ -24,6 +24,7 @@ export async function loopWorkflow(input: LoopInput): Promise<LoopResult> {
 
   // Create the record up front so the human sees "running" immediately.
   await persistLoop(input, steps, "running", "");
+  await streamLoopProgress(input, steps, "running", false);
 
   let status: LoopStatus = "running";
 
@@ -35,6 +36,7 @@ export async function loopWorkflow(input: LoopInput): Promise<LoopResult> {
       if (next.done) {
         status = "completed";
         await persistLoop(input, steps, status, "");
+        await streamLoopProgress(input, steps, status, true);
         break;
       }
 
@@ -46,11 +48,13 @@ export async function loopWorkflow(input: LoopInput): Promise<LoopResult> {
           status,
           "No progress across the last 3 steps."
         );
+        await streamLoopProgress(input, steps, status, true);
         break;
       }
 
-      // Real-time writeback after each step.
+      // Real-time writeback + progress after each step.
       await persistLoop(input, steps, "running", "");
+      await streamLoopProgress(input, steps, "running", false);
     }
 
     if (status === "running") {
@@ -61,11 +65,13 @@ export async function loopWorkflow(input: LoopInput): Promise<LoopResult> {
         status,
         `Hit max iterations (${input.maxIterations}).`
       );
+      await streamLoopProgress(input, steps, status, true);
     }
   } catch (err) {
     status = "failed";
     const message = err instanceof Error ? err.message : "unknown error";
     await persistLoop(input, steps, status, message);
+    await streamLoopProgress(input, steps, status, true);
   }
 
   return { loopId: input.loopId, status, iterations: steps.length };

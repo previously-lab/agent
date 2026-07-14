@@ -586,7 +586,7 @@ export async function generate(
             } catch {
               // swallow: pointer persistence is non-critical
             }
-            return { ok: true, loopId: started.loopId, filePath: started.filePath };
+            return { ok: true, loopId: started.loopId, runId: started.runId, filePath: started.filePath };
           } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : "failed to start loop" };
           }

@@ -7,9 +7,10 @@
  * `"use step"` functions by reference; the loader compiles them into the step
  * bundle, not the workflow bundle.
  */
-import { generateText, tool, stepCountIs } from "ai";
+import { generateText, tool, stepCountIs, type UIMessageChunk } from "ai";
 import { deepseek } from "@ai-sdk/deepseek";
 import { z } from "zod";
+import { getWritable } from "workflow";
 import type {
   LoopInput,
   LoopRun,
@@ -175,4 +176,52 @@ export async function persistLoop(
   };
 
   await writeLoopFile(input.filePath, serializeLoop(run));
+}
+
+/**
+ * Emit a progress chunk to the run's durable writable so any client connected
+ * via GET /api/loops/{runId}/stream can follow along in real time. Each chunk
+ * carries the current state: the latest step (if any), the loop status, and
+ * whether the run has settled (`done: true` closes the stream).
+ *
+ * Best-effort — a failure here must not crash the loop, because the stream is
+ * a convenience for the human watcher; the memory-truth write (persistLoop)
+ * already committed.
+ */
+export async function streamLoopProgress(
+  input: LoopInput,
+  steps: LoopStep[],
+  status: LoopStatus,
+  isFinal: boolean
+): Promise<void> {
+  "use step";
+
+  try {
+    const writable = getWritable<UIMessageChunk>();
+    const writer = writable.getWriter();
+
+    await writer.write({
+      type: "data-loop",
+      id: `loop-${input.loopId}`,
+      data: {
+        loopId: input.loopId,
+        goal: input.goal,
+        status,
+        iteration: steps.length,
+        latestStep: steps.length > 0 ? steps[steps.length - 1] : null,
+        done: isFinal,
+      },
+    } as UIMessageChunk);
+
+    writer.releaseLock();
+    if (isFinal) {
+      await writable.close();
+    }
+  } catch (err) {
+    // Stream writes are non-critical — the human can always read the loop file.
+    console.warn(
+      `[Loop] stream write failed (loop=${input.loopId}):`,
+      err instanceof Error ? err.message : err
+    );
+  }
 }

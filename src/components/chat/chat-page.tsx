@@ -5,6 +5,7 @@ import { WorkflowChatTransport } from "@workflow/ai";
 import { useMemo, useState } from "react";
 import { ChatInput } from "./chat-input";
 import { ChatSection } from "./chat-section";
+import { LoopWatcher } from "./loop-watcher";
 import { shouldShowThinkingIndicator } from "@/lib/chat/streaming-state";
 import { LoadedIdsProvider, useLoadedIds } from "./loaded-ids-context";
 import {
@@ -137,6 +138,9 @@ function Inner({ children }: { children: React.ReactNode }) {
                 error={error}
                 lastUserMessageAt={lastUserMessageAt}
               />
+
+              {/* Side-effects: subscribes to loop streams, toasts on completion */}
+              <LoopWatcher messages={messages} />
             </MessageScrollerContent>
           </MessageScrollerViewport>
           <MessageScrollerButton className="!bottom-28" />
