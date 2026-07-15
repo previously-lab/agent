@@ -16,6 +16,7 @@ import type { ModelMessage } from "ai";
 import type { TimeSlice } from "@/lib/episodic";
 import type { MaintenanceOutput } from "@/lib/episodic/maintenance";
 import type { UserConfig } from "@/lib/config/types";
+import type { ToolContext } from "@/app/api/agent/tool-executors";
 
 /**
  * Everything a turn needs, built once in `start-turn.ts` (the only place real
@@ -58,4 +59,35 @@ export interface FlashRecallResult {
   slice: TimeSlice;
   flashOutput: MaintenanceOutput | null;
   flashMs: number;
+}
+
+/**
+ * Result of the prepareGenerate step — everything the workflow needs to call
+ * `agent.stream()`: the assembled system prompt and the serializable tool
+ * context (built inside the step, where process.env is readable).
+ */
+export interface PrepareGenerateResult {
+  systemPrompt: string;
+  intent: string;
+  confidence: number;
+  toolContext: ToolContext;
+}
+
+/** A background loop the agent started during this turn (for slice writeback). */
+export interface StartedLoopRef {
+  loopId: string;
+  tags: string[];
+}
+
+/**
+ * What the workflow extracts (as pure serializable values) from the agent
+ * stream result and hands to the finalizeTurn step.
+ */
+export interface TurnOutcome {
+  /** Final assistant text (empty when the model produced none). */
+  text: string;
+  /** Finish reason of the last step — "stop" means a clean completion. */
+  finishReason: string;
+  /** Loops started via the startLoop tool during this turn. */
+  startedLoops: StartedLoopRef[];
 }

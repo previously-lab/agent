@@ -2,51 +2,36 @@
  * Chat turn step functions — full Node.js, retried automatically on failure.
  *
  * Kept in a SEPARATE module from the workflow so their Node-dependent imports
- * (ai/deepseek, gray-matter + fs, the GitHub tools, the episodic manager) never
- * enter the deterministic workflow sandbox. `turn-workflow.ts` imports these
+ * (gray-matter + fs, the episodic manager, DeepSeek Flash) never enter the
+ * deterministic workflow sandbox. `turn-workflow.ts` imports these
  * `"use step"` functions by reference only; the loader compiles them into the
  * step bundle, not the workflow bundle.
  *
- * These three steps map the five I/O clusters of the old inline chat route:
- *   1. housekeeping — recover/close/create the slice, append the user turn,
- *      durably snapshot it (was fire-and-forget; now awaited so the turn is on
- *      GitHub before we stream a single token).
- *   2. flashRecall  — unified Flash (intent + recall + metadata), metadata
- *      copy-back onto the slice. Returns the slice + Flash output by value.
- *   3. generate     — system-prompt assembly + `streamText` with the six memory
- *      tools, pumped into the run's writable; onFinish persists the agent turn.
- *      The single owner of the run's output stream: it writes data-flash →
- *      data-reasoning → text/tool chunks in that order, exactly as the old
- *      createUIMessageStream did, so the chat UI's phase classification is
- *      unchanged.
+ * The Pro agent loop itself no longer lives here: the workflow body runs it
+ * via WorkflowAgent (see src/app/api/agent/), so each LLM call and each tool
+ * call is its own durable step. These four steps wrap that loop:
+ *   1. housekeeping    — recover/close/create the slice, append the user turn,
+ *      durably snapshot it, and open the UI stream (start / start-step).
+ *   2. flashRecall     — unified Flash (intent + recall + metadata), metadata
+ *      copy-back onto the slice, then the data-flash chunk for the recall card.
+ *   3. prepareGenerate — assemble the dynamic system prompt + the serializable
+ *      tool context the workflow passes to `agent.stream()`.
+ *   4. finalizeTurn    — persist the agent turn to the episodic slice, write
+ *      back startLoop pointers, close the UI stream (finish-step / finish).
+ *
+ * Chunk order for the UI's three-phase rendering is unchanged:
+ * data-flash → reasoning/text/tool (written by agent.stream) → data-reasoning.
  */
-import {
-  streamText,
-  tool,
-  stepCountIs,
-  type UIMessageChunk,
-} from "ai";
-import { deepseek } from "@ai-sdk/deepseek";
-import { z } from "zod";
+import { type UIMessageChunk } from "ai";
 import { getWritable } from "workflow";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import matter from "gray-matter";
-import { readFile } from "@/lib/tools/readFile";
-import { writeFile } from "@/lib/tools/writeFile";
-import { listFiles } from "@/lib/tools/listFiles";
-import {
-  readFileLocal,
-  listFilesLocal,
-  writeFileLocal,
-} from "@/lib/tools/local-fs";
-import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 import { classifyIntentKeywords } from "@/lib/router";
 import { listNodes } from "@/lib/memory/manager";
 import { rankNodes } from "@/lib/memory/scorer";
 import { assembleContext } from "@/lib/context/assembler";
 import { buildAgentIdentityPrompt, loadUserProfile } from "@/lib/identity";
-import { applyProfilePatch } from "@/lib/identity/profile-writer";
 import type { MemoryNode } from "@/lib/memory/types";
 import {
   createSlice,
@@ -64,11 +49,12 @@ import {
   applyMetadataUpdates,
   type MaintenanceOutput,
 } from "@/lib/episodic/maintenance";
-import { startLoop } from "@/app/api/loops/start-loop";
 import type {
   TurnInput,
   HousekeepingResult,
   FlashRecallResult,
+  PrepareGenerateResult,
+  TurnOutcome,
 } from "@/lib/chat/turn-types";
 
 const USE_GITHUB = !!process.env.GITHUB_TOKEN;
@@ -302,9 +288,18 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
 
   // Durable snapshot BEFORE streaming (was fire-and-forget in the inline route):
   // guarantees the user turn is on GitHub, and that the next turn's
-  // tryLoadTodaySlice sees it even if generate never finishes.
+  // tryLoadTodaySlice sees it even if the agent never finishes.
   await saveSliceSnapshot(slice);
   await ensureIndexEntries(slice);
+
+  // Open the UI message stream. Lifecycle chunks are written INTO the durable
+  // run stream (not injected by the route transform) so the POST path and the
+  // reconnect path replay identical chunk sequences — WorkflowChatTransport
+  // resumes by chunk index, which must line up across both.
+  const writer = getWritable<UIMessageChunk>().getWriter();
+  await writer.write({ type: "start" } as UIMessageChunk);
+  await writer.write({ type: "start-step" } as UIMessageChunk);
+  writer.releaseLock();
 
   return { slice };
 }
@@ -376,53 +371,18 @@ export async function flashRecall(
     );
   }
 
-  return { slice, flashOutput, flashMs: Date.now() - t0 };
-}
+  const flashMs = Date.now() - t0;
 
-// ─── Step 3: Generate (the streaming step) ───────────────────────────────
-
-/**
- * Assemble the system prompt, run the Pro model with the six memory tools, and
- * pump the result into the run's writable. This step OWNS the run's output
- * stream: it writes the recall (data-flash) part, the reasoning-duration
- * (data-reasoning) part, then the model's text/tool chunks — in that order —
- * and closes the writable at the end. onFinish persists the agent turn to
- * GitHub (correct: a write from inside a step commits to the memory truth).
- */
-export async function generate(
-  input: TurnInput,
-  slice: TimeSlice,
-  flashOutput: MaintenanceOutput | null,
-  flashMs: number
-): Promise<void> {
-  "use step";
-
-  const { owner, repo, model, thinking, modelMessages, lastUserMessage, recentTurns, config } = input;
-
-  const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
-  const { prompt: finalSystemPrompt, intent, confidence } =
-    await buildDynamicSystemPrompt(
-      lastUserMessage,
-      recentTurns,
-      flashOutput
-        ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
-        : undefined,
-      episodicContext,
-      config
-    );
-  console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)}`);
-
-  const recallHits = flashOutput?.recall_hits ?? [];
-  const recallText = recallHits.length > 0
-    ? `Recalled ${recallHits.length} conversations related to ${flashOutput!.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
-    : "Scanned recent conversations — no directly relevant matches found";
-
-  const writable = getWritable<UIMessageChunk>();
-  const writer = writable.getWriter();
-
-  // Phase 1: recall card (data-flash). Same shape the old createUIMessageStream
-  // wrote, so RecallPhase renders identically.
+  // Phase 1: recall card (data-flash) — written here, before the agent runs,
+  // so the UI's three-phase order (recall → reasoning → response) holds.
   if (flashOutput) {
+    const recallHits = flashOutput.recall_hits ?? [];
+    const recallText =
+      recallHits.length > 0
+        ? `Recalled ${recallHits.length} conversations related to ${flashOutput.suggested_topics.slice(0, 3).join(", ") || "past topics"}`
+        : "Scanned recent conversations — no directly relevant matches found";
+
+    const writer = getWritable<UIMessageChunk>().getWriter();
     await writer.write({
       type: "data-flash",
       id: `flash-recall-${Date.now()}`,
@@ -436,175 +396,121 @@ export async function generate(
         recall_hits: recallHits,
       },
     } as UIMessageChunk);
+    writer.releaseLock();
   }
 
-  // Phase 2 + 3: Pro — thinking + text. Reasoning duration is measured
-  // server-side (first reasoning chunk → first text chunk) and emitted as a
-  // data part, so the "Thought · Ns" timer survives re-renders.
-  let reasoningStartedAt: number | null = null;
-  let reasoningMsSent = false;
+  return { slice, flashOutput, flashMs };
+}
 
-  const result = streamText({
-    model: deepseek(model),
-    providerOptions: thinking
-      ? { deepseek: { thinking: { type: "enabled" as const }, reasoningEffort: "medium" as const } }
+
+// ─── Step 3: Prepare generate ────────────────────────────────────────────
+
+/**
+ * Assemble the dynamic system prompt (identity + intent + episodic timeline +
+ * ranked memory nodes) and the serializable tool context for this turn. Both
+ * feed the workflow's `agent.stream()` call — prompt assembly does local fs +
+ * profile I/O, so it lives in a step, never the workflow body.
+ */
+export async function prepareGenerate(
+  input: TurnInput,
+  slice: TimeSlice,
+  flashOutput: MaintenanceOutput | null
+): Promise<PrepareGenerateResult> {
+  "use step";
+
+  const { owner, repo, lastUserMessage, recentTurns, config } = input;
+
+  const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
+  const { prompt, intent, confidence } = await buildDynamicSystemPrompt(
+    lastUserMessage,
+    recentTurns,
+    flashOutput
+      ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
       : undefined,
-    system: finalSystemPrompt,
-    messages: modelMessages,
-    stopWhen: stepCountIs(20),
-    onChunk: ({ chunk }) => {
-      if (
-        (chunk.type === "reasoning-start" || chunk.type === "reasoning-delta") &&
-        reasoningStartedAt === null
-      ) {
-        reasoningStartedAt = Date.now();
-      } else if (
-        (chunk.type === "text-start" || chunk.type === "text-delta") &&
-        reasoningStartedAt !== null &&
-        !reasoningMsSent
-      ) {
-        reasoningMsSent = true;
-        // Enqueued from onChunk, which fires before the corresponding text
-        // chunk reaches the pump, so the WritableStream keeps data-reasoning
-        // ahead of the first text chunk. Not awaited (onChunk is sync).
-        writer.write({
-          type: "data-reasoning",
-          id: `reasoning-${Date.now()}`,
-          data: { done: true, durationMs: Date.now() - reasoningStartedAt },
-        } as UIMessageChunk).catch(() => {});
-      }
-    },
-    onFinish: async ({ text, finishReason }) => {
-      if (finishReason === "stop") {
-        appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: text });
-        await saveSliceSnapshot(slice);
-        await ensureIndexEntries(slice);
-      } else {
-        if (text) {
-          appendTurn(slice, { timestamp: new Date().toISOString(), role: "agent", content: `[partial] ${text}` });
-          await saveSliceSnapshot(slice);
-        }
-        console.log(`[Episodic] Pro interrupted (${finishReason})`);
-      }
-    },
-    tools: {
-      readMemory: tool({
-        description: "Read a file from memory (time slices or semantic nodes). Only memory/ paths are accessible.",
-        inputSchema: z.object({
-          path: z.string().describe("Path within memory/, e.g. 'memory/episodic/slices/2026/07/01.md'"),
-        }),
-        execute: async ({ path }) => {
-          return USE_GITHUB ? await readFile(path, repo, owner) : await readFileLocal(path);
-        },
-      }),
-      listMemory: tool({
-        description: "List directories under memory/ to explore available time slices.",
-        inputSchema: z.object({
-          path: z.string().describe("Directory path within memory/, e.g. 'memory/episodic/slices/2026/'"),
-        }),
-        execute: async ({ path }) => {
-          return USE_GITHUB ? await listFiles(path, repo, owner) : await listFilesLocal(path);
-        },
-      }),
-      readIndex: tool({
-        description: "Read a monthly _index.json to browse time slices in a given month.",
-        inputSchema: z.object({
-          year: z.number().int().min(2000).max(2100), month: z.number().min(1).max(12),
-        }),
-        execute: async ({ year, month }) => {
-          const mm = String(month).padStart(2, "0");
-          const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
-          try {
-            const raw = USE_GITHUB ? await readFile(path, repo, owner) : await readFileLocal(path);
-            return JSON.parse(raw);
-          } catch {
-            return { exists: false, month: `${year}-${mm}`, slices: [] };
-          }
-        },
-      }),
-      writeMemory: tool({
-        description:
-          "Create or update a memory file (notes or semantic nodes under memory/) when the user asks you to remember or record something. Cannot touch episodic slices/indexes or the user profile — use updateUserProfile for the profile.",
-        inputSchema: z.object({
-          path: z.string().describe("Path under memory/, e.g. 'memory/nodes/<id>.md'"),
-          content: z.string().describe("Full file content to write"),
-          reason: z.string().describe("Short note explaining the write (used as the commit message)"),
-        }),
-        execute: async ({ path, content, reason }) => {
-          if (!isPathAllowed(path) || isProtectedSystemPath(path)) {
-            return { ok: false, error: `Write denied: "${path}" is outside the writable area or is system-managed.` };
-          }
-          try {
-            const res = USE_GITHUB
-              ? await writeFile(path, content, repo, owner, `[agent] ${reason}`)
-              : await writeFileLocal(path, content);
-            return { ok: true, path: res.path, created: res.created };
-          } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : "write failed" };
-          }
-        },
-      }),
-      updateUserProfile: tool({
-        description:
-          "Update the user's profile (memory/user/profile.md) when they tell you who they are or ask you to remember something about them. Patch individual fields; omitted fields are left unchanged.",
-        inputSchema: z.object({
-          name: z.string().optional(),
-          pronouns: z.string().optional(),
-          timezone: z.string().optional(),
-          locale: z.string().optional(),
-          addressAs: z.string().optional().describe("What to call the user (frontmatter address_as)"),
-          body: z.string().optional().describe("Free-form 'about you' markdown"),
-          reason: z.string().describe("Why this change is being made (used as the commit message)"),
-        }),
-        execute: async ({ reason, ...patch }) => {
-          const res = await applyProfilePatch(patch, `[agent] ${reason}`);
-          return res.ok ? { ok: true } : { ok: false, error: res.error };
-        },
-      }),
-      startLoop: tool({
-        description:
-          "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
-        inputSchema: z.object({
-          goal: z.string().describe("A clear, self-contained statement of what the loop should accomplish."),
-          tags: z.array(z.string()).optional().describe("Keyword tags for later recall, e.g. topic names."),
-        }),
-        execute: async ({ goal, tags }) => {
-          try {
-            const started = await startLoop({ goal, tags: tags ?? [], sliceId: slice.slice_id });
-            // Record the slice→loop pointer and weave loop tags into strands.
-            // Best-effort: never fail the tool if the snapshot write fails.
-            try {
-              if (!slice.loops.includes(started.loopId)) {
-                slice.loops.push(started.loopId);
-              }
-              for (const tag of tags ?? []) {
-                if (!slice.tags.includes(tag)) {
-                  slice.tags.push(tag);
-                }
-              }
-              await saveSliceSnapshot(slice);
-            } catch {
-              // swallow: pointer persistence is non-critical
-            }
-            return { ok: true, loopId: started.loopId, runId: started.runId, filePath: started.filePath };
-          } catch (e) {
-            return { ok: false, error: e instanceof Error ? e.message : "failed to start loop" };
-          }
-        },
-      }),
-    },
-  });
+    episodicContext,
+    config
+  );
+  console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)}`);
 
-  // Manual pump: iterate the AI SDK UI message stream and write each chunk to
-  // the run's writable (the validated getWritable pattern). Closing the
-  // writable at the end ends the run's output stream.
-  const reader = result.toUIMessageStream().getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    await writer.write(value);
+  return {
+    systemPrompt: prompt,
+    intent,
+    confidence,
+    toolContext: {
+      repo,
+      owner,
+      useGithub: USE_GITHUB,
+      sliceId: slice.slice_id,
+    },
+  };
+}
+
+// ─── Step 4: Finalize turn ───────────────────────────────────────────────
+
+/**
+ * Persist the agent turn to the episodic slice (the old streamText onFinish),
+ * write back pointers for any loops the agent started this turn, and close the
+ * run's output stream with the trailing lifecycle chunks.
+ *
+ * The agent streamed with `sendFinish: false` + `preventClose: true`, so this
+ * step owns the stream tail — finish-step / finish, then close. Retries are
+ * safe: the slice arrives by value, so re-running appends to the same base
+ * copy and the snapshot write is idempotent.
+ */
+export async function finalizeTurn(
+  slice: TimeSlice,
+  outcome: TurnOutcome
+): Promise<void> {
+  "use step";
+
+  // 1. Episodic persistence (the old onFinish branches).
+  if (outcome.finishReason === "stop") {
+    appendTurn(slice, {
+      timestamp: new Date().toISOString(),
+      role: "agent",
+      content: outcome.text,
+    });
+  } else if (outcome.text) {
+    appendTurn(slice, {
+      timestamp: new Date().toISOString(),
+      role: "agent",
+      content: `[partial] ${outcome.text}`,
+    });
+    console.log(`[Episodic] Pro interrupted (${outcome.finishReason})`);
+  } else {
+    console.log(`[Episodic] Pro produced no text (${outcome.finishReason})`);
   }
-  reader.releaseLock();
+
+  // 2. startLoop writeback: record the slice→loop pointer and weave loop tags
+  // into strands (moved here from the old inline tool closure — the executor
+  // only knows the sliceId; this step owns the slice by value).
+  for (const started of outcome.startedLoops) {
+    if (!slice.loops.includes(started.loopId)) {
+      slice.loops.push(started.loopId);
+    }
+    for (const tag of started.tags) {
+      if (!slice.tags.includes(tag)) {
+        slice.tags.push(tag);
+      }
+    }
+  }
+
+  if (
+    outcome.finishReason === "stop" ||
+    outcome.text ||
+    outcome.startedLoops.length > 0
+  ) {
+    await saveSliceSnapshot(slice);
+    if (outcome.finishReason === "stop") {
+      await ensureIndexEntries(slice);
+    }
+  }
+
+  // 3. Close the UI stream.
+  const writable = getWritable<UIMessageChunk>();
+  const writer = writable.getWriter();
+  await writer.write({ type: "finish-step" } as UIMessageChunk);
+  await writer.write({ type: "finish" } as UIMessageChunk);
   writer.releaseLock();
   await writable.close();
 }

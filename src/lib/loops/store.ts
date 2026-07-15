@@ -9,8 +9,9 @@
  */
 import matter from "gray-matter";
 import { writeFile as writeFileGitHub } from "@/lib/tools/writeFile";
-import { writeFileLocal } from "@/lib/tools/local-fs";
-import type { LoopRun, LoopStep } from "./types";
+import { readFile as readFileGitHub } from "@/lib/tools/readFile";
+import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
+import type { LoopRun, LoopStatus, LoopStep } from "./types";
 
 // ─── Storage backend switch (mirrors src/lib/episodic/manager.ts) ──────────
 
@@ -39,9 +40,59 @@ export async function writeLoopFile(
   await writeFileLocal(path, content);
 }
 
+/**
+ * Read the loop record back from storage and reconstruct the LoopRun from its
+ * YAML frontmatter (which carries the full `steps` array — see serializeLoop).
+ * Returns null when the file doesn't exist yet or can't be parsed; callers
+ * treat that as "no steps recorded so far".
+ */
+export async function readLoopRun(path: string): Promise<LoopRun | null> {
+  let raw: string;
+  try {
+    if (USE_GITHUB) {
+      const { owner, repo } = getRepoConfig();
+      raw = await readFileGitHub(path, repo, owner);
+    } else {
+      raw = await readFileLocal(path);
+    }
+  } catch {
+    return null;
+  }
+
+  try {
+    const { data } = matter(raw);
+    const steps: LoopStep[] = Array.isArray(data.steps)
+      ? (data.steps as LoopStep[])
+      : [];
+    return {
+      loopId: typeof data.loop_id === "string" ? data.loop_id : "",
+      goal: typeof data.goal === "string" ? data.goal : "",
+      status: (data.status ?? "running") as LoopStatus,
+      startedAt: typeof data.started_at === "string" ? data.started_at : "",
+      updatedAt: typeof data.updated_at === "string" ? data.updated_at : "",
+      sliceOrigin:
+        typeof data.slice_origin === "string" ? data.slice_origin : null,
+      tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
+      iterations: steps.length,
+      maxIterations:
+        typeof data.max_iterations === "number" ? data.max_iterations : 0,
+      lastError: typeof data.last_error === "string" ? data.last_error : "",
+      steps,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Serialization ─────────────────────────────────────────────────────────
 
-/** Render a LoopRun as YAML frontmatter + a Markdown step log. */
+/**
+ * Render a LoopRun as YAML frontmatter + a Markdown step log.
+ *
+ * The `steps` array is duplicated into the frontmatter (machine-readable,
+ * losslessly parseable back via readLoopRun) while the body stays the
+ * human-readable narrative. Loop files are small, so the duplication is cheap.
+ */
 export function serializeLoop(run: LoopRun): string {
   const frontmatter: Record<string, unknown> = {
     loop_id: run.loopId,
@@ -52,6 +103,7 @@ export function serializeLoop(run: LoopRun): string {
     iterations: run.iterations,
     max_iterations: run.maxIterations,
     tags: run.tags,
+    steps: run.steps,
   };
   if (run.sliceOrigin) frontmatter.slice_origin = run.sliceOrigin;
   if (run.lastError) frontmatter.last_error = run.lastError;

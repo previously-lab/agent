@@ -5,13 +5,19 @@
  */
 import type { LoopStep } from "./types";
 
+/** The comparable core of a loop increment — what stall detection looks at. */
+export interface LoopReportLike {
+  action: string;
+  result: string;
+}
+
 /**
- * Normalize a step into comparable text: lowercase, strip punctuation, collapse
- * whitespace to single spaces, trim. Combines action + result so a stall is
- * judged on the whole decision, not just the outcome string.
+ * Normalize a report into comparable text: lowercase, strip punctuation,
+ * collapse whitespace to single spaces, trim. Combines action + result so a
+ * stall is judged on the whole decision, not just the outcome string.
  */
-function normalizeStep(step: LoopStep): string {
-  return `${step.action} ${step.result}`
+function normalizeReport(report: LoopReportLike): string {
+  return `${report.action} ${report.result}`
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .replace(/\s+/g, " ")
@@ -37,7 +43,7 @@ function jaccardSimilarity(a: string, b: string): number {
 }
 
 /**
- * Stall guard: true when the last 3 steps are near-duplicates of each other.
+ * Stall guard: true when the last 3 reports are near-duplicates of each other.
  *
  * Byte-identical comparison misses real stalls, where a stuck loop re-emits the
  * same decision with a word or two changed (a timestamp, a reworded phrase).
@@ -46,12 +52,17 @@ function jaccardSimilarity(a: string, b: string): number {
  * high 0.85 threshold — high enough that genuine progress (which shifts the word
  * set materially) still slips under it.
  */
-export function detectNoProgress(steps: LoopStep[]): boolean {
-  if (steps.length < 3) return false;
-  const [a, b, c] = steps.slice(-3).map(normalizeStep);
+export function detectNoProgressFromReports(reports: LoopReportLike[]): boolean {
+  if (reports.length < 3) return false;
+  const [a, b, c] = reports.slice(-3).map(normalizeReport);
   return (
     jaccardSimilarity(a, b) >= 0.85 &&
     jaccardSimilarity(a, c) >= 0.85 &&
     jaccardSimilarity(b, c) >= 0.85
   );
+}
+
+/** LoopStep-shaped convenience wrapper over detectNoProgressFromReports. */
+export function detectNoProgress(steps: LoopStep[]): boolean {
+  return detectNoProgressFromReports(steps);
 }

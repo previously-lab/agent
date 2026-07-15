@@ -1,7 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { WorkflowChatTransport } from "@workflow/ai";
+import { WorkflowChatTransport } from "@ai-sdk/workflow";
 import { useMemo, useState } from "react";
 import { ChatInput } from "./chat-input";
 import { ChatSection } from "./chat-section";

@@ -12,6 +12,7 @@
  */
 import { createUIMessageStreamResponse } from "ai";
 import { getRun } from "workflow/api";
+import { createMixedStreamTransform } from "../../../chat/mixed-stream-transform";
 
 export async function GET(
   request: Request,
@@ -29,7 +30,11 @@ export async function GET(
     const tailIndex = await readable.getTailIndex();
 
     return createUIMessageStreamResponse({
-      stream: readable,
+      // The loop's raw run stream now mixes data-loop chunks with the agent's
+      // ModelCallStreamParts — convert the latter so the SSE stays pure
+      // UIMessageChunk (LoopWatcher only reacts to data-loop and ignores the
+      // rest).
+      stream: readable.pipeThrough(createMixedStreamTransform()),
       headers: { "x-workflow-stream-tail-index": String(tailIndex) },
     });
   } catch (err) {

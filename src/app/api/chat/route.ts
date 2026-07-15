@@ -11,6 +11,7 @@
  */
 import { createUIMessageStreamResponse, type UIMessage } from "ai";
 import { startTurn } from "./start-turn";
+import { createMixedStreamTransform } from "./mixed-stream-transform";
 
 export async function POST(request: Request): Promise<Response> {
   try {
@@ -37,7 +38,7 @@ export async function POST(request: Request): Promise<Response> {
     });
 
     return createUIMessageStreamResponse({
-      stream: run.readable,
+      stream: run.readable.pipeThrough(createMixedStreamTransform()),
       headers: { "x-workflow-run-id": run.runId },
     });
   } catch (error) {

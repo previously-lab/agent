@@ -15,6 +15,7 @@
  */
 import { createUIMessageStreamResponse } from "ai";
 import { getRun } from "workflow/api";
+import { createMixedStreamTransform } from "../../mixed-stream-transform";
 
 export async function GET(
   request: Request,
@@ -32,7 +33,10 @@ export async function GET(
     const tailIndex = await readable.getTailIndex();
 
     return createUIMessageStreamResponse({
-      stream: readable,
+      // Same transform as the POST path: the raw run stream mixes our
+      // UIMessageChunks (data-flash / data-reasoning / lifecycle) with the
+      // agent's ModelCallStreamParts — the client only speaks UIMessageChunk.
+      stream: readable.pipeThrough(createMixedStreamTransform()),
       headers: { "x-workflow-stream-tail-index": String(tailIndex) },
     });
   } catch (err) {

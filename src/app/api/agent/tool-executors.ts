@@ -1,0 +1,245 @@
+/**
+ * Tool executors for the shared WorkflowAgent — standalone "use step" functions.
+ *
+ * Each executor is an independent durable step: automatically retried on
+ * failure, persisted, and visible in the workflow dashboard. Context (repo,
+ * owner, useGithub, sliceId / loop identity) flows through WorkflowAgent's
+ * `toolsContext` mechanism rather than JavaScript closures, so it stays
+ * serializable across workflow/step boundaries.
+ *
+ * Used by BOTH the chat turn workflow and the background loop workflow — the
+ * tool definitions that bind these executors live in ./tools.ts.
+ */
+
+import type { UIMessageChunk } from "ai";
+import { getWritable } from "workflow";
+// Side effect: register the DeepSeek model class in the step runtime's
+// serialization registry (see register-model-classes.ts for why).
+import "./register-model-classes";
+import { readFile } from "@/lib/tools/readFile";
+import { writeFile } from "@/lib/tools/writeFile";
+import { listFiles } from "@/lib/tools/listFiles";
+import {
+  readFileLocal,
+  listFilesLocal,
+  writeFileLocal,
+} from "@/lib/tools/local-fs";
+import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
+import { applyProfilePatch } from "@/lib/identity/profile-writer";
+import { startLoop } from "@/app/api/loops/start-loop";
+import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
+import type { LoopRun, LoopStep } from "@/lib/loops/types";
+
+// ─── Shared tool contexts ────────────────────────────────────────────────
+
+/**
+ * Context each chat tool receives from WorkflowAgent's toolsContext mechanism.
+ * Kept serializable so it survives workflow step boundaries.
+ */
+export interface ToolContext {
+  /** GitHub repo name (or "local" when running without GITHUB_TOKEN). */
+  repo: string;
+  /** GitHub repo owner (or "local" when running without GITHUB_TOKEN). */
+  owner: string;
+  /** Whether GitHub token is configured. Off → local filesystem. */
+  useGithub: boolean;
+  /** The current time-slice id (for startLoop to record the link). */
+  sliceId: string;
+}
+
+/**
+ * Context the loop's checkpoint tool receives — the loop's own identity, so
+ * loopReportExecute can do the read-append-write on the loop record file.
+ */
+export interface LoopToolContext {
+  repo: string;
+  owner: string;
+  useGithub: boolean;
+  loopId: string;
+  goal: string;
+  filePath: string;
+  startedAt: string;
+  sliceOrigin: string | null;
+  tags: string[];
+  maxIterations: number;
+}
+
+/** Shorthand for the options object each execute function receives. */
+type ExecuteOpts<C> = {
+  context: C;
+};
+
+// ─── Memory tool executors (chat + loop) ─────────────────────────────────
+
+export async function readMemoryExecute(
+  { path }: { path: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  return ctx.useGithub
+    ? await readFile(path, ctx.repo, ctx.owner)
+    : await readFileLocal(path);
+}
+
+export async function listMemoryExecute(
+  { path }: { path: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+  "use step";
+  return ctx.useGithub
+    ? await listFiles(path, ctx.repo, ctx.owner)
+    : await listFilesLocal(path);
+}
+
+export async function readIndexExecute(
+  { year, month }: { year: number; month: number },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ exists: boolean; month: string; slices: unknown[] }> {
+  "use step";
+  const mm = String(month).padStart(2, "0");
+  const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
+  try {
+    const raw = ctx.useGithub
+      ? await readFile(path, ctx.repo, ctx.owner)
+      : await readFileLocal(path);
+    return JSON.parse(raw);
+  } catch {
+    return { exists: false, month: `${year}-${mm}`, slices: [] };
+  }
+}
+
+export async function writeMemoryExecute(
+  { path, content, reason }: { path: string; content: string; reason: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ ok: boolean; path?: string; created?: boolean; error?: string }> {
+  "use step";
+  if (!isPathAllowed(path) || isProtectedSystemPath(path)) {
+    return {
+      ok: false,
+      error: `Write denied: "${path}" is outside the writable area or is system-managed.`,
+    };
+  }
+  try {
+    const res = ctx.useGithub
+      ? await writeFile(path, content, ctx.repo, ctx.owner, `[agent] ${reason}`)
+      : await writeFileLocal(path, content);
+    return { ok: true, path: res.path, created: res.created };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "write failed" };
+  }
+}
+
+// ─── Chat-only executors ─────────────────────────────────────────────────
+
+export async function updateUserProfileExecute(
+  patch: {
+    name?: string;
+    pronouns?: string;
+    timezone?: string;
+    locale?: string;
+    addressAs?: string;
+    body?: string;
+    reason: string;
+  },
+  _opts: ExecuteOpts<ToolContext>,
+): Promise<{ ok: boolean; error?: string }> {
+  "use step";
+  const { reason, ...fields } = patch;
+  const res = await applyProfilePatch(fields, `[agent] ${reason}`);
+  return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+export async function startLoopExecute(
+  { goal, tags }: { goal: string; tags?: string[] },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ ok: boolean; loopId?: string; runId?: string; filePath?: string; error?: string }> {
+  "use step";
+  try {
+    const started = await startLoop({
+      goal,
+      tags: tags ?? [],
+      sliceId: ctx.sliceId,
+    });
+    // NOTE: the slice.loops / slice.tags back-reference is written by the chat
+    // workflow's finalizeTurn step (which owns the slice by value) — not here.
+    return {
+      ok: true,
+      loopId: started.loopId,
+      runId: started.runId,
+      filePath: started.filePath,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "failed to start loop",
+    };
+  }
+}
+
+// ─── Loop-only executor: the checkpoint tool ─────────────────────────────
+
+/**
+ * loopReport — the loop's checkpoint. Each call appends one LoopStep to the
+ * loop's markdown record (read-append-write; the file is the accumulator, so
+ * progress survives any crash/retry) and emits a `data-loop` progress chunk to
+ * the run's writable for live watchers. Replaces the old per-iteration
+ * persistLoop + streamLoopProgress pair.
+ */
+export async function loopReportExecute(
+  { action, result, done }: { action: string; result: string; done: boolean },
+  { context: ctx }: ExecuteOpts<LoopToolContext>,
+): Promise<{ recorded: true; step: number; done: boolean }> {
+  "use step";
+
+  const existing = await readLoopRun(ctx.filePath);
+  const priorSteps: LoopStep[] = existing?.steps ?? [];
+  const step: LoopStep = {
+    step: priorSteps.length + 1,
+    action,
+    result,
+    time: new Date().toISOString(),
+  };
+  const steps = [...priorSteps, step];
+
+  const run: LoopRun = {
+    loopId: ctx.loopId,
+    goal: ctx.goal,
+    status: "running", // final status is stamped by the workflow's finalizeLoop
+    startedAt: ctx.startedAt,
+    updatedAt: new Date().toISOString(),
+    sliceOrigin: ctx.sliceOrigin,
+    tags: ctx.tags,
+    iterations: steps.length,
+    maxIterations: ctx.maxIterations,
+    lastError: existing?.lastError ?? "",
+    steps,
+  };
+  await writeLoopFile(ctx.filePath, serializeLoop(run));
+
+  // Live progress chunk — best-effort: the memory-truth write above already
+  // committed, so a stream failure must never fail the checkpoint.
+  try {
+    const writable = getWritable<UIMessageChunk>();
+    const writer = writable.getWriter();
+    await writer.write({
+      type: "data-loop",
+      id: `loop-${ctx.loopId}`,
+      data: {
+        loopId: ctx.loopId,
+        goal: ctx.goal,
+        status: "running",
+        iteration: steps.length,
+        latestStep: step,
+        done: false,
+      },
+    } as UIMessageChunk);
+    writer.releaseLock();
+  } catch (err) {
+    console.warn(
+      `[Loop] progress chunk failed (loop=${ctx.loopId}):`,
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  return { recorded: true, step: step.step, done };
+}

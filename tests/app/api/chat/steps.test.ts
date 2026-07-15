@@ -34,11 +34,25 @@ vi.mock("@/lib/episodic/slicer", () => ({
 }));
 vi.mock("@/lib/episodic/maintenance", () => maintenance);
 
-// Imported by steps.ts at module load but unused by housekeeping/flashRecall.
-vi.mock("workflow", () => ({ getWritable: vi.fn() }));
-vi.mock("ai", () => ({ streamText: vi.fn(), tool: vi.fn(), stepCountIs: vi.fn() }));
-vi.mock("@ai-sdk/deepseek", () => ({ deepseek: vi.fn() }));
-vi.mock("@/app/api/loops/start-loop", () => ({ startLoop: vi.fn() }));
+// The run's writable: housekeeping writes the start/start-step lifecycle
+// chunks and flashRecall writes the data-flash recall card, so the mock
+// collects everything written for assertions.
+const workflowMock = vi.hoisted(() => {
+  const written: Array<Record<string, unknown>> = [];
+  return {
+    written,
+    getWritable: vi.fn(() => ({
+      getWriter: () => ({
+        write: async (chunk: unknown) => {
+          written.push(chunk as Record<string, unknown>);
+        },
+        releaseLock: () => {},
+      }),
+    })),
+  };
+});
+
+vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
 vi.mock("@/lib/router", () => ({ classifyIntentKeywords: () => ({ intent: "chat", source: "keyword" }) }));
 vi.mock("@/lib/memory/manager", () => ({ listNodes: () => [] }));
 vi.mock("@/lib/memory/scorer", () => ({ rankNodes: () => [] }));
@@ -47,10 +61,6 @@ vi.mock("@/lib/identity", () => ({
   buildAgentIdentityPrompt: () => "",
   loadUserProfile: async () => ({}),
 }));
-vi.mock("@/lib/identity/profile-writer", () => ({ applyProfilePatch: vi.fn() }));
-vi.mock("@/lib/tools/readFile", () => ({ readFile: vi.fn() }));
-vi.mock("@/lib/tools/writeFile", () => ({ writeFile: vi.fn() }));
-vi.mock("@/lib/tools/listFiles", () => ({ listFiles: vi.fn() }));
 
 import { housekeeping, flashRecall } from "@/app/api/chat/steps";
 
@@ -94,6 +104,7 @@ function makeInput(lastUserMessage: string): TurnInput {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workflowMock.written.length = 0;
   timeSilent = false;
 });
 
@@ -113,6 +124,9 @@ describe("housekeeping step", () => {
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice);
     expect(episodic.ensureIndexEntries).toHaveBeenCalledWith(slice);
     expect(episodic.appendTurn).not.toHaveBeenCalled();
+    // Opens the UI stream: lifecycle chunks live in the durable run stream so
+    // the POST and reconnect paths replay identical chunk sequences.
+    expect(workflowMock.written.map((c) => c.type)).toEqual(["start", "start-step"]);
   });
 
   it("restores an active slice and appends the new user turn", async () => {
@@ -183,6 +197,10 @@ describe("flashRecall step", () => {
     expect(result.slice.tags).toContain("rust");
     expect(result.flashOutput?.intent).toBe("coding");
     expect(typeof result.flashMs).toBe("number");
+    // The recall card is written into the run stream ahead of the agent.
+    const flashChunk = workflowMock.written.find((c) => c.type === "data-flash");
+    expect(flashChunk).toBeDefined();
+    expect((flashChunk?.data as { recall_hits: unknown[] }).recall_hits).toHaveLength(1);
   });
 
   it("degrades gracefully when Flash throws — null output, slice untouched", async () => {
@@ -194,5 +212,7 @@ describe("flashRecall step", () => {
     expect(result.flashOutput).toBeNull();
     expect(result.slice.focus).toBe("unchanged");
     expect(typeof result.flashMs).toBe("number");
+    // No Flash output → no recall card chunk.
+    expect(workflowMock.written.find((c) => c.type === "data-flash")).toBeUndefined();
   });
 });

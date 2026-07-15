@@ -32,6 +32,16 @@ export function LoopWatcher({ messages }: { messages: UIMessage[] }) {
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
+  // Track completed tool parts count so the effect fires when a tool result
+  // arrives — even when the assistant message already exists. `messages.length`
+  // alone isn't enough: the AI SDK appends tool parts to an existing message
+  // in-place, so the array length stays the same.
+  const completedToolCount = messages
+    .filter((m) => m.role === "assistant")
+    .flatMap((m) => (m as { parts?: Array<{ type?: string; state?: string }> }).parts ?? [])
+    .filter((p) => p.type?.startsWith("tool-") && (p.state === "output-available" || p.state === "result"))
+    .length;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -115,28 +125,28 @@ export function LoopWatcher({ messages }: { messages: UIMessage[] }) {
       }
     }
 
-    // Scan the latest message for freshly-completed startLoop tool calls.
-    // Only the last message matters — prior messages were already scanned.
-    const latest = messagesRef.current[messagesRef.current.length - 1];
-    if (!latest || latest.role !== "assistant") return;
-
-    for (const part of (latest as { parts?: Array<{ type?: string; toolCallId?: string; state?: string; input?: unknown; output?: unknown }> }).parts ?? []) {
-      if (
-        part.type === "tool-startLoop" &&
-        part.state === "result" &&
-        typeof (part.output as Record<string, unknown> | null)?.runId === "string"
-      ) {
-        const output = part.output as { runId: string; loopId: string; goal?: string };
-        // goal is embedded in the tool input
-        const input = (part.input as { goal?: string } | undefined) ?? {};
-        const goal = input.goal ?? "background task";
-        connectAndWatch(output.runId, output.loopId, goal);
+    // Scan ALL assistant messages for completed startLoop tool calls that
+    // we haven't subscribed to yet. The `seen` Set deduplicates.
+    for (const msg of messagesRef.current) {
+      if (msg.role !== "assistant") continue;
+      for (const part of (msg as { parts?: Array<{ type?: string; state?: string; input?: unknown; output?: unknown }> }).parts ?? []) {
+        if (
+          part.type === "tool-startLoop" &&
+          (part.state === "output-available" || part.state === "result") &&
+          typeof (part.output as Record<string, unknown> | null)?.runId === "string"
+        ) {
+          const output = part.output as { runId: string; loopId: string };
+          const input = (part.input as { goal?: string } | undefined) ?? {};
+          const goal = input.goal ?? "background task";
+          connectAndWatch(output.runId, output.loopId, goal);
+        }
       }
     }
 
     // Cleanup: cancel all inflight fetch readers when the component unmounts.
     return () => { cancelled = true; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completedToolCount]);
 
   return null;
 }

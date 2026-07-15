@@ -2,7 +2,7 @@
 
 ## Overview
 
-The chat rendering system is a client-side component tree that pipes Vercel AI SDK `UIMessage` parts (text, reasoning, tool-invocations, data-flash) through a three-phase visual pipeline — recall context, reasoning, then final response — with tool calls rendered inline via a shared expandable card pattern (`ToolLayout`). The top-level container (`ChatPage`) uses `useChat` with `@workflow/ai`'s `WorkflowChatTransport` — every turn runs inside a durable Vercel Workflow run and is resumable after a dropped connection (same-session auto-reconnect, plus same-browser post-reload resume via a localStorage run id) — `MessageScroller` for virtualized auto-scroll, and bubbles with Markdown for text output. The scroller holds three stacked regions: a server-rendered hero, the memory timeline, and the live chat messages.
+The chat rendering system is a client-side component tree that pipes Vercel AI SDK `UIMessage` parts (text, reasoning, tool-invocations, data-flash) through a three-phase visual pipeline — recall context, reasoning, then final response — with tool calls rendered inline via a shared expandable card pattern (`ToolLayout`). The top-level container (`ChatPage`) uses `useChat` with `@ai-sdk/workflow`'s `WorkflowChatTransport` — every turn runs inside a durable Vercel Workflow run and is resumable after a dropped connection (same-session auto-reconnect, plus same-browser post-reload resume via a localStorage run id) — `MessageScroller` for virtualized auto-scroll, and bubbles with Markdown for text output. The scroller holds three stacked regions: a server-rendered hero, the memory timeline, and the live chat messages.
 
 ## Component Tree
 
