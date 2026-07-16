@@ -47,7 +47,7 @@ export function ChatPage({ children }: ChatPageProps) {
 
 function Inner({ children }: { children: React.ReactNode }) {
   const [settings] = useState(() => ({
-    model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-chat"),
+    model: getClientSetting("PREVIOUSLY_MODEL", "deepseek-v4-flash"),
     thinking: getClientSetting("PREVIOUSLY_THINKING", "true") !== "false",
   }));
 

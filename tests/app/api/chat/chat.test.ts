@@ -83,14 +83,14 @@ describe("POST /api/chat durable turn", () => {
     await POST(
       createRequest({
         messages: [{ role: "user", content: "hi" }],
-        model: "deepseek-reasoner",
+        model: "deepseek-v4-pro",
         thinking: false,
         timezone: "Asia/Shanghai",
       })
     );
     expect(mockStartTurn).toHaveBeenCalledWith(
       expect.objectContaining({
-        model: "deepseek-reasoner",
+        model: "deepseek-v4-pro",
         thinking: false,
         timezone: "Asia/Shanghai",
       })

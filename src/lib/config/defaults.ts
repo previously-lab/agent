@@ -1,4 +1,5 @@
 import type { UserConfig } from "./types";
+import { resolveModelId } from "@/lib/models/registry";
 
 /**
  * Hard defaults. When `memory/user/config.json` is missing or a field is
@@ -15,19 +16,22 @@ export const DEFAULTS: UserConfig = {
     tokenBudget: 12000,
   },
   model: {
-    provider: "deepseek-chat",
+    provider: "deepseek-v4-flash",
     thinking: true,
   },
 };
 
 /**
  * Shallow-merge partial user overrides onto defaults. Only the keys present in
- * `overrides` are applied; missing keys stay at their default values.
+ * `overrides` are applied; missing keys stay at their default values. A stored
+ * legacy model id (pre-V4) is normalized to its successor.
  */
 export function mergeConfig(overrides: Partial<UserConfig>): UserConfig {
+  const model = { ...DEFAULTS.model, ...overrides.model };
+  model.provider = resolveModelId(model.provider);
   return {
     slicing: { ...DEFAULTS.slicing, ...overrides.slicing },
     context: { ...DEFAULTS.context, ...overrides.context },
-    model: { ...DEFAULTS.model, ...overrides.model },
+    model,
   };
 }

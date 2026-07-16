@@ -16,6 +16,7 @@ import { convertToModelMessages, type UIMessage } from "ai";
 import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import { loadUserConfig } from "@/lib/config/loader";
+import { resolveModelId } from "@/lib/models/registry";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -52,7 +53,8 @@ export async function startTurn(
   args: StartTurnArgs
 ): Promise<Awaited<ReturnType<typeof start>>> {
   const config = await loadUserConfig();
-  const model = args.model || config.model.provider;
+  // resolveModelId: the client's stored model preference may predate V4.
+  const model = resolveModelId(args.model || config.model.provider);
   const thinking = args.thinking !== false && config.model.thinking;
   const clientTimezone = args.timezone ?? "UTC";
   const { owner, repo } = getRepoConfig();

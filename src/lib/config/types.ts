@@ -19,7 +19,7 @@ export interface ContextConfig {
 }
 
 export interface ModelConfig {
-  /** Provider model id (e.g. "deepseek-chat", "deepseek-reasoner"). */
+  /** Provider model id (e.g. "deepseek-v4-flash", "deepseek-v4-pro"). */
   provider: string;
   /** Whether reasoning/thinking is enabled for the Pro tier. */
   thinking: boolean;

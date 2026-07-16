@@ -62,30 +62,16 @@ const flashOutputSchema = tool({
   }),
 });
 
-// ─── Timeout + retry ───────────────────────────────────────────────────
+// ─── Retry ─────────────────────────────────────────────────────────────
+// No timeout — Flash is reliability-critical (same policy as the unified
+// Flash in episodic/maintenance.ts). Model slowness is tolerated.
 
-const FLASH_TIMEOUT_MS = 1000;
 const FLASH_RETRY_DELAY_MS = 200;
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout>;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("Flash timeout")), ms);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer!);
-  }
-}
 
 /**
  * Classify user intent using structured tool output.
  * Flash calls a schema-validated tool — no manual JSON.parse, no regex extraction.
- * Includes 1s timeout + 1 retry on failure.
+ * No timeout; 1 retry on failure.
  */
 export async function classifyWithFlash(
   input: FlashInput
@@ -120,16 +106,18 @@ If you have a genuine suggestion about where Pro might find related past time sl
 Omit recall_hint if you have no relevant suggestion.`;
 
   async function attempt(): Promise<FlashResult> {
-    const result = await withTimeout(
-      generateText({
-        model: deepseek("deepseek-chat"),
-        prompt,
-        temperature: 0.1,
-        tools: { flashOutput: flashOutputSchema },
-        toolChoice: "required",
-      }),
-      FLASH_TIMEOUT_MS
-    );
+    const result = await generateText({
+      model: deepseek("deepseek-v4-flash"),
+      prompt,
+      temperature: 0.1,
+      tools: { flashOutput: flashOutputSchema },
+      toolChoice: "required",
+      // V4 models default to thinking ENABLED — Flash is a conditioned
+      // reflex (classifier), so force it off for latency and clean tool output.
+      providerOptions: {
+        deepseek: { thinking: { type: "disabled" as const } },
+      },
+    });
 
     const toolCall = result.toolCalls?.[0];
     if (toolCall?.toolName === "flashOutput" && (toolCall as Record<string, unknown>).input) {

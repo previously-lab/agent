@@ -16,18 +16,32 @@ export interface ModelConfig {
 
 export const DEFAULT_MODELS: ModelConfig[] = [
   {
-    id: "deepseek-chat",
-    name: "DeepSeek Chat",
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
     provider: "deepseek",
-    capabilities: { thinking: true, vision: false, maxTokens: 65536 },
+    capabilities: { thinking: true, vision: false, maxTokens: 393216 },
   },
   {
-    id: "deepseek-reasoner",
-    name: "DeepSeek Reasoner",
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
     provider: "deepseek",
-    capabilities: { thinking: true, vision: false, maxTokens: 65536 },
+    capabilities: { thinking: true, vision: false, maxTokens: 393216 },
   },
 ];
+
+/**
+ * Legacy DeepSeek ids retired on 2026-07-24 (they now error upstream). Stored
+ * user configs and browser-local settings may still hold them — map onto the
+ * V4 successors: chat → Flash, reasoner → Pro (our thinking tier).
+ */
+const LEGACY_MODEL_IDS: Record<string, string> = {
+  "deepseek-chat": "deepseek-v4-flash",
+  "deepseek-reasoner": "deepseek-v4-pro",
+};
+
+export function resolveModelId(id: string): string {
+  return LEGACY_MODEL_IDS[id] ?? id;
+}
 
 export function getModel(id: string): ModelConfig | undefined {
   return DEFAULT_MODELS.find((m) => m.id === id);

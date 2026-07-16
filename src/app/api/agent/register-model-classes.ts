@@ -41,7 +41,7 @@ interface SerializedModelOptions {
 }
 
 // The registry only requires a Function carrying the deserialize symbol; the
-// name is cosmetic. Both deepseek-chat and deepseek-reasoner share this class.
+// name is cosmetic. All DeepSeek V4 model ids share this class.
 function DeepSeekChatLanguageModelHost(): void {}
 (
   DeepSeekChatLanguageModelHost as unknown as Record<symbol, unknown>
