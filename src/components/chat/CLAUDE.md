@@ -62,6 +62,7 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 | `chat-section.tsx` | Renders the message list (`ChatMessage` per message), the pre-first-part thinking indicator, and the error banner |
 | `memory-section.tsx` | Passthrough wrapper forwarding props to `TimelinePanel` (past-memory region of the scroller) |
 | `hero-section.tsx` | Server component: "Previously on {name}" landing block; name comes from `memory/user/profile.md` via `getUserName()` |
+| `hero-text.tsx` | `HeroText`: animated "Previously on {name}" hero built on `TextGenerateEffect`; rendered by `hero-section.tsx` |
 | `chat-message.tsx` | Per-message renderer: classifies parts into recall/reasoning/inline phases, wraps in Message/Bubble, footer |
 | `chat-input.tsx` | Textarea with image attachments (paste/drag-drop/file picker), auto-resize, submit/stop buttons |
 | `markdown.tsx` | Markdown renderer: react-markdown with remark-gfm, rehype-highlight, custom components for code/table/link/list/blockquote |
@@ -72,9 +73,13 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 | `tool-layout.tsx` | Shared expandable card: status icon (spinner/dot/error/interrupted), name, summary, meta, expandable content area with CSS grid row animation |
 | `thinking.tsx` | Phase 2 reasoning: Brain icon, elapsed timer, markdown-rendered thought content inside ToolLayout |
 | `recall-phase.tsx` | Phase 1 context recall: History icon, elapsed timer, tags/recall-hits/reasoning inside ToolLayout |
+| `recall-group.tsx` | `RecallGroup`: groups recall tool-call parts by category (`timeline`/`browse`), delegating each to `ToolRenderer`/`ToolLayout` |
 | `timeline-panel.tsx` | Past memory slices grouped by date with "load more" pagination, calls useTimeline hook, feeds `loadedSliceIds` back to the chat transport |
+| `loaded-ids-context.tsx` | `LoadedIdsProvider` / `useLoadedIds`: shared set of loaded slice IDs snapshotted into the chat transport body (no-op fallback outside `ChatPage`) |
 | `date-group-header.tsx` | `DateGroupHeader` (locale-aware animated year/month/day header) + `SliceTimeMarker` (animated HH:MM), both built on `NumberTicker` |
 | `time-slice-row.tsx` | Individual memory slice: lazy-loads content, shows last exchange by default, expandable to full conversation, open loops/decisions as pills |
+| `theme-toggle.tsx` | `ThemeToggle`: toolbar button cycling light → dark → system |
+| `locale-toggle.tsx` | `LocaleToggle`: toolbar button swapping UI language (en ⇄ zh) via the URL locale |
 | `tool-renderers/read-file.tsx` | ReadFile tool: FileNamePill summary, line count meta, scrollable preview (5k char cap) |
 | `tool-renderers/write-file.tsx` | WriteFile tool: FileNamePill summary, +/- line diff meta, preview of written content |
 | `tool-renderers/list-files.tsx` | ListFiles tool: path + item count summary, expanded view shows file/dir list with icons |
