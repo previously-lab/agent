@@ -6,6 +6,7 @@ import { ReadFileRenderer } from "./tool-renderers/read-file";
 import { WriteFileRenderer } from "./tool-renderers/write-file";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
+import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { LoopToolRenderer } from "./tool-renderers/loop";
 import { DefaultRenderer } from "./tool-renderers/default";
 
@@ -33,6 +34,8 @@ function friendlyName(
       return t("writeMemory");
     case "updateUserProfile":
       return t("updateUserProfile");
+    case "webSearch":
+      return t("webSearch");
     case "startLoop":
       return t("startLoop");
     default:
@@ -84,6 +87,15 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
       return (
         <MemoryToolRenderer
           toolName={toolName}
+          displayName={displayName}
+          input={input}
+          output={output}
+          state={renderState}
+        />
+      );
+    case "webSearch":
+      return (
+        <WebSearchRenderer
           displayName={displayName}
           input={input}
           output={output}

@@ -42,7 +42,7 @@
     "thinking": {
       "indicator": "Thinking...",
       "streaming": "Thinking...",
-      "completed": "{count, plural, one {Thought} other {# thoughts}}",
+      "completed": "Thought",
       "elapsed": "{count, plural, one {# second} other {# seconds}}"
     },
     "actions": {
@@ -69,6 +69,8 @@
       "readIndex": "Scanning timeline...",
       "writeMemory": "Saving to memory...",
       "updateUserProfile": "Updating your profile...",
+      "webSearch": "Searching the web...",
+      "sources": "{count} sources",
       "startLoop": "Starting a background loop",
       "loopFile": "Loop file",
       "loopId": "Loop ID",

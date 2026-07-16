@@ -20,7 +20,8 @@ import {
   readIndexExecute,
   writeMemoryExecute,
   updateUserProfileExecute,
-  startLoopExecute,
+  webSearchExecute,
+  // startLoopExecute, // re-enable with the startLoop tool below
   loopReportExecute,
   type ToolContext,
   type LoopToolContext,
@@ -99,9 +100,26 @@ export const memoryTools = {
 };
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
+// startLoop is deliberately NOT bound in this release: the loop engine works,
+// but its UX is not ready to ship — progress lives in an ephemeral floating
+// watcher (should be durable, in-conversation) and the no-repo/demo story
+// (read-only memory) can't demonstrate it at all. The loop workflow, /api/loops
+// door, and startLoopExecute all stay in the codebase; re-enable by binding
+// the tool here + restoring the system-prompt paragraph in chat/steps.ts.
 
 export const chatTools = {
   ...memoryTools,
+  webSearch: tool({
+    description:
+      "Search the live web for current or external information — news, releases, prices, docs, anything time-sensitive or beyond the user's memory files. Returns a concise cited answer plus source links. Do not use it for things already in memory or that you reliably know.",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .describe("A specific, self-contained search question."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: webSearchExecute,
+  }),
   updateUserProfile: tool({
     description:
       "Update the user's profile (memory/user/profile.md) when they tell you who they are or ask you to remember something about them. Patch individual fields; omitted fields are left unchanged.",
@@ -122,21 +140,21 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: updateUserProfileExecute,
   }),
-  startLoop: tool({
-    description:
-      "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
-    inputSchema: z.object({
-      goal: z
-        .string()
-        .describe("A clear, self-contained statement of what the loop should accomplish."),
-      tags: z
-        .array(z.string())
-        .optional()
-        .describe("Keyword tags for later recall, e.g. topic names."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: startLoopExecute,
-  }),
+  // startLoop: tool({
+  //   description:
+  //     "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
+  //   inputSchema: z.object({
+  //     goal: z
+  //       .string()
+  //       .describe("A clear, self-contained statement of what the loop should accomplish."),
+  //     tags: z
+  //       .array(z.string())
+  //       .optional()
+  //       .describe("Keyword tags for later recall, e.g. topic names."),
+  //   }),
+  //   contextSchema: toolContextSchema,
+  //   execute: startLoopExecute,
+  // }),
 };
 
 // ─── Loop tool set ───────────────────────────────────────────────────────
@@ -167,8 +185,9 @@ export function buildChatToolsContext(ctx: ToolContext): Record<keyof typeof cha
     listMemory: ctx,
     readIndex: ctx,
     writeMemory: ctx,
+    webSearch: ctx,
     updateUserProfile: ctx,
-    startLoop: ctx,
+    // startLoop: ctx, // re-enable with the startLoop tool above
   };
 }
 

@@ -26,6 +26,7 @@ import {
 } from "@/lib/tools/local-fs";
 import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 import { applyProfilePatch } from "@/lib/identity/profile-writer";
+import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
 import { startLoop } from "@/app/api/loops/start-loop";
 import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
 import type { LoopRun, LoopStep } from "@/lib/loops/types";
@@ -71,24 +72,59 @@ type ExecuteOpts<C> = {
 
 // ─── Memory tool executors (chat + loop) ─────────────────────────────────
 
+/**
+ * Deterministic domain outcomes ("file not found", "access denied", …) must
+ * reach the MODEL as tool results, not throw. A thrown error is treated as a
+ * transient failure by the workflow runtime, which retries the step 3 more
+ * times (with backoff) before bubbling — pure waste on errors that can never
+ * succeed, and the agent never gets the chance to adapt. Anything not matched
+ * here (network failures, GitHub 5xx) still throws and gets the retries.
+ */
+const DOMAIN_ERROR_RE =
+  /^(File not found|Directory not found|Access denied)|is (a directory, not a file|not a regular file)|too large/;
+
+function domainError(e: unknown): string | null {
+  return e instanceof Error && DOMAIN_ERROR_RE.test(e.message)
+    ? e.message
+    : null;
+}
+
 export async function readMemoryExecute(
   { path }: { path: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
-  return ctx.useGithub
-    ? await readFile(path, ctx.repo, ctx.owner)
-    : await readFileLocal(path);
+  try {
+    return ctx.useGithub
+      ? await readFile(path, ctx.repo, ctx.owner)
+      : await readFileLocal(path);
+  } catch (e) {
+    const msg = domainError(e);
+    if (msg === null) throw e;
+    const hint = msg.startsWith("File not found")
+      ? " The file does not exist — do not retry this path. Use listMemory to see what actually exists, or write the file first."
+      : "";
+    return `ERROR: ${msg}.${hint}`;
+  }
 }
 
 export async function listMemoryExecute(
   { path }: { path: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string }> | { error: string }> {
   "use step";
-  return ctx.useGithub
-    ? await listFiles(path, ctx.repo, ctx.owner)
-    : await listFilesLocal(path);
+  try {
+    return ctx.useGithub
+      ? await listFiles(path, ctx.repo, ctx.owner)
+      : await listFilesLocal(path);
+  } catch (e) {
+    const msg = domainError(e);
+    if (msg === null) throw e;
+    const hint = msg.startsWith("Directory not found")
+      ? " The directory does not exist — do not retry this path."
+      : "";
+    return { error: `${msg}.${hint}` };
+  }
 }
 
 export async function readIndexExecute(
@@ -130,6 +166,23 @@ export async function writeMemoryExecute(
 }
 
 // ─── Chat-only executors ─────────────────────────────────────────────────
+
+/**
+ * webSearch — delegates to the Flash search adapter (see lib/search/). The
+ * context is accepted for tool-set uniformity but unused: search needs no
+ * repo identity. A missing API key is a deterministic config problem →
+ * returned as data; transient search failures throw and get the step retries.
+ */
+export async function webSearchExecute(
+  { query }: { query: string },
+  _opts: ExecuteOpts<ToolContext>,
+): Promise<WebSearchResult | { error: string }> {
+  "use step";
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return { error: "Web search is not configured (DEEPSEEK_API_KEY missing)." };
+  }
+  return searchViaFlash(query);
+}
 
 export async function updateUserProfileExecute(
   patch: {
