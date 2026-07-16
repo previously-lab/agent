@@ -46,36 +46,38 @@ export function WebSearchRenderer({
     sources.length > 0 ? t("sources", { count: sources.length }) : undefined;
 
   const expandedContent = out ? (
-    <div className="space-y-2">
-      {out.error ? (
-        <p className="text-xs text-destructive">{out.error}</p>
-      ) : (
-        <>
-          {out.answer ? (
-            <div className="max-h-80 overflow-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed">
-              <MarkdownRenderer content={out.answer} />
-            </div>
-          ) : null}
-          {sources.length > 0 ? (
-            <ul className="space-y-1">
-              {sources.map((s, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs">
-                  <span className="text-muted-foreground shrink-0">[{i + 1}]</span>
-                  <a
-                    href={s.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 dark:text-blue-400 underline underline-offset-2 truncate"
-                  >
-                    {s.title || s.url}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </>
-      )}
-    </div>
+    out.error ? (
+      <p className="text-xs text-destructive">{out.error}</p>
+    ) : (
+      // One scrollable container: the answer and its sources belong together —
+      // sources are part of the search result, so they scroll with it.
+      <div className="max-h-80 overflow-auto rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground leading-relaxed space-y-2">
+        {out.answer ? <MarkdownRenderer content={out.answer} /> : null}
+        {sources.length > 0 ? (
+          <ul
+            className={
+              out.answer
+                ? "space-y-1 border-t border-border pt-2"
+                : "space-y-1"
+            }
+          >
+            {sources.map((s, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs">
+                <span className="text-muted-foreground shrink-0">[{i + 1}]</span>
+                <a
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 dark:text-blue-400 underline underline-offset-2 truncate"
+                >
+                  {s.title || s.url}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    )
   ) : undefined;
 
   return (

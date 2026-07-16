@@ -42,7 +42,7 @@
     "thinking": {
       "indicator": "思考中…",
       "streaming": "思考中…",
-      "completed": "思考完成",
+      "completed": "已思考",
       "elapsed": "{count, plural, other {# 秒}}"
     },
     "actions": {
