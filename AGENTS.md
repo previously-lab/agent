@@ -4,9 +4,9 @@ This file provides guidance to AI coding agents when working with code in this r
 
 ## About
 
-Previously — a personal AI platform built around episodic memory. No conversations, just a timeline. An agent that always remembers.
+A Next.js web application with a server-side LLM agent and a GitHub-backed episodic memory system (conversation history stored as time slices). The agent operates only on whitelisted data directories and can spawn durable background loops (Vercel Workflow).
 
-**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · octokit · sonner · streamdown
+**Tech stack**: Next.js 16 · React 19 · TypeScript 6 · Tailwind CSS 4 · shadcn/ui (Base UI) · next-intl · Vercel AI SDK · Vercel Workflow · octokit · sonner · streamdown
 
 ## Commands
 
@@ -33,7 +33,7 @@ Three-layer separation:
 
 | File | Purpose |
 |------|---------|
-| `doc/project-info.md` | Project soul: one-liner, architecture, current focus |
+| `doc/project-info.md` | Project one-liner, architecture, current focus |
 | `doc/requirements.md` | Feature specs in BDD/Gherkin format |
 | `doc/solution.md` | Technical solution with option comparisons |
 | `doc/roadmap.md` | Milestone + task breakdown |

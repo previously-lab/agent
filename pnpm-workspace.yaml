@@ -1,6 +1,10 @@
 allowBuilds:
   '@parcel/watcher': true
   '@swc/core': true
+  cbor-extract: true
   esbuild: true
   sharp: true
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@ai-sdk/deepseek@3.0.10'
+  - '@ai-sdk/provider-utils@5.0.10'

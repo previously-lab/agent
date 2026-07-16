@@ -142,11 +142,16 @@ async function attemptUnifiedFlash(
   prompt: string
 ): Promise<MaintenanceOutput> {
   const result = await generateText({
-    model: deepseek("deepseek-chat"),
+    model: deepseek("deepseek-v4-flash"),
     prompt,
     temperature: 0.1,
     tools: { flashOutput: unifiedFlashSchema },
     toolChoice: "required",
+    // V4 models default to thinking ENABLED — Flash is a conditioned
+    // reflex, so force it off for latency and clean tool output.
+    providerOptions: {
+      deepseek: { thinking: { type: "disabled" as const } },
+    },
   });
 
   const toolCall = result.toolCalls?.[0];

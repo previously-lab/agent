@@ -2,7 +2,7 @@
 
 ## Overview
 
-The chat rendering system is a client-side component tree that pipes Vercel AI SDK `UIMessage` parts (text, reasoning, tool-invocations, data-flash) through a three-phase visual pipeline — recall context, reasoning, then final response — with tool calls rendered inline via a shared expandable card pattern (`ToolLayout`). The top-level container (`ChatPage`) uses `useChat` with `DefaultChatTransport` for streaming, `MessageScroller` for virtualized auto-scroll, and bubbles with Markdown for text output. The scroller holds three stacked regions: a server-rendered hero, the memory timeline, and the live chat messages.
+The chat rendering system is a client-side component tree that pipes Vercel AI SDK `UIMessage` parts (text, reasoning, tool-invocations, data-flash) through a three-phase visual pipeline — recall context, reasoning, then final response — with tool calls rendered inline via a shared expandable card pattern (`ToolLayout`). The top-level container (`ChatPage`) uses `useChat` with `@ai-sdk/workflow`'s `WorkflowChatTransport` — every turn runs inside a durable Vercel Workflow run and is resumable after a dropped connection (same-session auto-reconnect, plus same-browser post-reload resume via a localStorage run id) — `MessageScroller` for virtualized auto-scroll, and bubbles with Markdown for text output. The scroller holds three stacked regions: a server-rendered hero, the memory timeline, and the live chat messages.
 
 ## Component Tree
 
@@ -58,7 +58,7 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 
 | File | Description |
 |------|-------------|
-| `chat-page.tsx` | Top-level `"use client"` container: `useChat` hook, `DefaultChatTransport` wiring (model/thinking/timezone/loadedSliceIds body), MessageScroller shell, hero/memory/chat regions, sticky ChatInput |
+| `chat-page.tsx` | Top-level `"use client"` container: `useChat` hook, `WorkflowChatTransport` wiring (durable-run resume — persists the `x-workflow-run-id` to localStorage, `resume` on mount; model/thinking/timezone/loadedSliceIds body via `prepareSendMessagesRequest`), MessageScroller shell, hero/memory/chat regions, sticky ChatInput |
 | `chat-section.tsx` | Renders the message list (`ChatMessage` per message), the pre-first-part thinking indicator, and the error banner |
 | `memory-section.tsx` | Passthrough wrapper forwarding props to `TimelinePanel` (past-memory region of the scroller) |
 | `hero-section.tsx` | Server component: "Previously on {name}" landing block; name comes from `memory/user/profile.md` via `getUserName()` |

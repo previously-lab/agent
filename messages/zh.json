@@ -42,7 +42,7 @@
     "thinking": {
       "indicator": "思考中…",
       "streaming": "思考中…",
-      "completed": "{count, plural, other {# 次思考}}",
+      "completed": "已思考",
       "elapsed": "{count, plural, other {# 秒}}"
     },
     "actions": {
@@ -69,6 +69,11 @@
       "readIndex": "扫描时间线…",
       "writeMemory": "写入记忆…",
       "updateUserProfile": "更新你的信息…",
+      "webSearch": "联网搜索中…",
+      "sources": "{count} 个来源",
+      "startLoop": "正在开启后台循环",
+      "loopFile": "循环文件",
+      "loopId": "循环 ID",
       "readFile": "读取",
       "updateFile": "更新",
       "createFile": "创建",

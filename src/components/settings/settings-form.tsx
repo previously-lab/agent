@@ -135,8 +135,8 @@ export function SettingsForm({
             <label className="block space-y-1">
               <span className="text-xs text-muted-foreground">{t("config.modelProvider")}</span>
               <select value={modelProvider} onChange={(e) => setModelProvider(e.target.value)} className={inputClass}>
-                <option value="deepseek-chat">deepseek-chat</option>
-                <option value="deepseek-reasoner">deepseek-reasoner</option>
+                <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+                <option value="deepseek-v4-pro">deepseek-v4-pro</option>
               </select>
             </label>
             <label className="flex items-end gap-2 pb-2">

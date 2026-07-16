@@ -115,6 +115,7 @@ export function createSlice(userMessage: string, timezone: string): TimeSlice {
     decisions: [],
     tags: [],
     related_slices: [],
+    loops: [],
     turns: [firstTurn],
     estimatedTokens: Math.ceil(userMessage.length / 4),
   };
@@ -246,6 +247,7 @@ export function serializeSlice(slice: TimeSlice): string {
     decisions: slice.decisions,
     tags: slice.tags,
     related_slices: slice.related_slices,
+    loops: slice.loops,
     emotional_tone: slice.emotional_tone,
   };
 
@@ -293,6 +295,7 @@ export function parseSlice(raw: string): TimeSlice {
     decisions: frontmatter.decisions ?? [],
     tags: frontmatter.tags ?? [],
     related_slices: frontmatter.related_slices ?? [],
+    loops: frontmatter.loops ?? [],
     emotional_tone: frontmatter.emotional_tone,
     turns,
     estimatedTokens,
