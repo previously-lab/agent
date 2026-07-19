@@ -20,8 +20,8 @@ Previously is a lightweight cloud agent with episodic memory. There are no conve
 
 Parallel timeline indexing · Multi-branch memory with git-native version control · Connector framework for cloud-local agent hybrid · Semantic memory extraction from episodic data.
 
-[Full roadmap →](https://github.com/LikeDreamwalker/previously#roadmap)
+[Full roadmap →](https://github.com/previously-lab/agent#roadmap)
 
 ---
 
-This is a one-person research project. Ideas and bug reports welcome on [GitHub Issues](https://github.com/LikeDreamwalker/previously/issues).
+This is a one-person research project. Ideas and bug reports welcome on [GitHub Issues](https://github.com/previously-lab/agent/issues).

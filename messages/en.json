@@ -160,6 +160,22 @@
       "saved": "Saved ✓",
       "saveFailed": "Couldn't save. Try again."
     },
+    "version": {
+      "heading": "Version & Updates",
+      "checkButton": "Check for updates",
+      "checking": "Checking...",
+      "updateAvailable": "Update available: v{version}",
+      "upToDate": "Up to date",
+      "sync": {
+        "heading": "Sync from upstream",
+        "desc": "Pull the latest code from the original Previously template into your repository. Your personal data (memory, tasks, sessions) is never touched.",
+        "button": "Sync from upstream",
+        "syncing": "Syncing...",
+        "success": "Synced {count, plural, one {# file} other {# files}} to v{version}.",
+        "noChanges": "Already up to date.",
+        "failRetry": "Sync failed. Check your GitHub token permissions and try again."
+      }
+    },
     "form": {
       "modelSection": "Chat model",
       "thinkingLabel": "Thinking",
