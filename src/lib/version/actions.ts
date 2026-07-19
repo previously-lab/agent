@@ -38,5 +38,3 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
     docsUrl: "https://previously.ldwid.com/docs/deployment#syncing-upstream-updates",
   };
 }
-
-export { syncFromUpstream, type SyncResult } from "./sync";
