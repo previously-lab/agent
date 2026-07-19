@@ -211,7 +211,7 @@ function VersionSection() {
       <h3 className="text-sm font-medium mb-1">{t("version.heading")}</h3>
       <p className="text-xs text-muted-foreground">
         v{APP_VERSION}
-        {info?.updateAvailable && (
+        {info?.updateAvailable && info.latest && (
           <span className="ml-2 text-red-500">{t("version.updateAvailable", { version: info.latest })}</span>
         )}
         {info && !info.updateAvailable && (
@@ -249,7 +249,7 @@ function VersionSection() {
             <p className="mt-2 text-xs text-green-600 dark:text-green-400">
               {syncResult.syncedFiles === 0
                 ? t("version.sync.noChanges")
-                : t("version.sync.success", { count: syncResult.syncedFiles, version: syncResult.upstreamVersion ?? "latest" })}
+                : t("version.sync.success", { count: syncResult.syncedFiles ?? 0, version: syncResult.upstreamVersion ?? "latest" })}
             </p>
           )}
 
