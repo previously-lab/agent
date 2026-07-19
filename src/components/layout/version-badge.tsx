@@ -51,7 +51,7 @@ export function VersionBadge() {
               </div>
               <hr className="border-border" />
               <Link
-                href="https://github.com/LikeDreamwalker/previously/releases"
+                href="https://github.com/previously-lab/agent/releases"
                 target="_blank"
                 className="flex items-center gap-1.5 text-blue-500 hover:underline w-full"
               >
@@ -63,9 +63,12 @@ export function VersionBadge() {
                 target="_blank"
                 className="flex items-center gap-1.5 text-blue-500 hover:underline w-full"
               >
-                How to update
+                How to sync
                 <ExternalLink className="h-3 w-3" />
               </Link>
+              <p className="text-muted-foreground/70 text-[10px] leading-snug">
+                Go to Settings → Sync from upstream to pull the latest code.
+              </p>
             </>
           ) : (
             <p className="text-muted-foreground">You&apos;re on the latest version.</p>

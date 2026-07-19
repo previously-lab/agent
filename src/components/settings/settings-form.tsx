@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/button";
 import { saveUserProfile } from "@/lib/identity/actions";
 import { saveUserConfig } from "@/lib/config/actions";
-import { checkForUpdate, type UpdateInfo } from "@/lib/version/actions";
+import { checkForUpdate, syncFromUpstream, type UpdateInfo, type SyncResult } from "@/lib/version/actions";
 import { APP_VERSION } from "@/lib/version/constants";
 import type { UserProfile } from "@/lib/identity";
 import type { UserConfig } from "@/lib/config/types";
@@ -161,8 +161,16 @@ export function SettingsForm({
 }
 
 function VersionSection() {
+  const t = useTranslations("settings");
+
+  // ── Version check ──
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [checking, setChecking] = useState(false);
+
+  // ── Sync ──
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
 
   const doCheck = async () => {
     setChecking(true);
@@ -173,22 +181,83 @@ function VersionSection() {
     setChecking(false);
   };
 
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    setSyncError(null);
+    try {
+      const result = await syncFromUpstream();
+      if (result.ok) {
+        setSyncResult(result);
+        // Refresh version info after successful sync
+        setInfo(null);
+        doCheck();
+      } else {
+        setSyncError(result.error ?? "Sync failed. Please try again.");
+      }
+    } catch (e) {
+      setSyncError(
+        e instanceof Error ? e.message : "An unexpected error occurred during sync.",
+      );
+    }
+    setSyncing(false);
+  };
+
   useEffect(() => { doCheck(); }, []);
 
   return (
     <section className="rounded-lg border border-border p-4">
-      <h3 className="text-sm font-medium mb-1">Version</h3>
+      <h3 className="text-sm font-medium mb-1">{t("version.heading")}</h3>
       <p className="text-xs text-muted-foreground">
         v{APP_VERSION}
         {info?.updateAvailable && (
-          <span className="ml-2 text-red-500">Update available: v{info.latest}</span>
+          <span className="ml-2 text-red-500">{t("version.updateAvailable", { version: info.latest })}</span>
+        )}
+        {info && !info.updateAvailable && (
+          <span className="ml-2 text-muted-foreground/60">{t("version.upToDate")}</span>
         )}
       </p>
+
+      {/* Check button */}
       <div className="flex items-center gap-3 mt-3">
         <Button onClick={doCheck} disabled={checking} variant="secondary" className="text-xs">
-          {checking ? "Checking..." : "Check for updates"}
+          {checking ? t("version.checking") : t("version.checkButton")}
         </Button>
       </div>
+
+      {/* Sync section — only show when update is available */}
+      {info?.updateAvailable && (
+        <div className="mt-4 pt-4 border-t border-border">
+          <h4 className="text-sm font-medium mb-1">{t("version.sync.heading")}</h4>
+          <p className="text-xs text-muted-foreground mb-3">
+            {t("version.sync.desc")}
+          </p>
+
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={handleSync}
+              disabled={syncing}
+              className="text-xs"
+            >
+              {syncing ? t("version.sync.syncing") : t("version.sync.button")}
+            </Button>
+          </div>
+
+          {/* Success */}
+          {syncResult && syncResult.ok && (
+            <p className="mt-2 text-xs text-green-600 dark:text-green-400">
+              {syncResult.syncedFiles === 0
+                ? t("version.sync.noChanges")
+                : t("version.sync.success", { count: syncResult.syncedFiles, version: syncResult.upstreamVersion ?? "latest" })}
+            </p>
+          )}
+
+          {/* Error */}
+          {syncError && (
+            <p className="mt-2 text-xs text-red-500">{syncError}</p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

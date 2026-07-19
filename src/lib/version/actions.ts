@@ -1,6 +1,6 @@
 "use server";
 
-import { APP_VERSION, GITHUB_RELEASES_API } from "./constants";
+import { APP_VERSION, GITHUB_RELEASES_API, compareSemver } from "./constants";
 
 export interface UpdateInfo {
   current: string;
@@ -13,7 +13,7 @@ export interface UpdateInfo {
 /**
  * Fetch the latest release tag from GitHub and compare with APP_VERSION.
  * Returns null for `latest` if the API is unreachable (no network / rate-limited).
- * Semver comparison is intentionally simple — tag vs version string match.
+ * Compares versions using semver — only reports an update when upstream is strictly newer.
  */
 export async function checkForUpdate(): Promise<UpdateInfo> {
   let latest: string | null = null;
@@ -34,7 +34,9 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
   return {
     current: APP_VERSION,
     latest,
-    updateAvailable: latest !== null && latest !== APP_VERSION,
-    docsUrl: "https://previously.ldwid.com/docs/deployment#updating",
+    updateAvailable: latest !== null && compareSemver(latest, APP_VERSION) > 0,
+    docsUrl: "https://previously.ldwid.com/docs/deployment#syncing-upstream-updates",
   };
 }
+
+export { syncFromUpstream, type SyncResult } from "./sync";

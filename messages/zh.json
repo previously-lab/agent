@@ -160,6 +160,22 @@
       "saved": "已保存 ✓",
       "saveFailed": "保存失败，请重试。"
     },
+    "version": {
+      "heading": "版本与更新",
+      "checkButton": "检查更新",
+      "checking": "检查中...",
+      "updateAvailable": "发现新版本：v{version}",
+      "upToDate": "已是最新",
+      "sync": {
+        "heading": "从上游同步",
+        "desc": "从原始 Previously 模板仓库拉取最新代码到你的仓库。你的个人数据（记忆、任务、会话）不会被触碰。",
+        "button": "从上游同步",
+        "syncing": "同步中...",
+        "success": "已同步 {count} 个文件至 v{version}。",
+        "noChanges": "已是最新版本。",
+        "failRetry": "同步失败。请检查 GitHub token 权限后重试。"
+      }
+    },
     "form": {
       "modelSection": "对话模型",
       "thinkingLabel": "推理思考",
