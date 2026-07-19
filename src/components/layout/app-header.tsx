@@ -18,7 +18,7 @@ export function AppHeader() {
 
       <nav className="flex items-center gap-1">
         <a
-          href="https://github.com/LikeDreamwalker/previously"
+          href="https://github.com/previously-lab/agent"
           target="_blank"
           rel="noopener noreferrer"
           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"

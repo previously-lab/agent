@@ -17,7 +17,7 @@ on:
 jobs:
   bump-version:
     # Only run on the upstream repository — never on forks.
-    if: github.repository == 'LikeDreamwalker/previously'
+    if: github.repository == 'previously-lab/agent'
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Previously" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/previously-on-you.png" width="600">
+  <img alt="Previously" src="https://raw.githubusercontent.com/previously-lab/agent/main/public/previously-on-you.png" width="600">
 </p>
 
 <p align="center">
@@ -60,11 +60,11 @@ A **strand** is a keyword — like `work`, `family`, `health` — that appears a
 > Slice = what happened. Strand = what it was about. Together they give you both episodic and semantic memory — remembering by time, and remembering by topic.
 
 <p align="center">
-  <img alt="Timeline view" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/timeline-screenshot.png" width="700">
+  <img alt="Timeline view" src="https://raw.githubusercontent.com/previously-lab/agent/main/public/timeline-screenshot.png" width="700">
 </p>
 
 <p align="center">
-  <img alt="Timeline detail — Now marker, time gaps, and active slice" src="https://raw.githubusercontent.com/LikeDreamwalker/previously/main/public/timeline-detail.png" width="700">
+  <img alt="Timeline detail — Now marker, time gaps, and active slice" src="https://raw.githubusercontent.com/previously-lab/agent/main/public/timeline-detail.png" width="700">
 </p>
 
 <p align="center">
@@ -90,7 +90,7 @@ Full docs are at **[previously.ldwid.com/docs](https://previously.ldwid.com/docs
 - [Introduction](https://previously.ldwid.com/docs/introduction) — what Previously is and how it works
 - [Slices & Strands](https://previously.ldwid.com/docs/slices) — the core memory model
 - [Architecture](https://previously.ldwid.com/docs/architecture) — pipeline, modules, tech stack, design decisions
-- [Deployment](https://previously.ldwid.com/docs/deployment) — fork, configure, deploy
+- [Deployment](https://previously.ldwid.com/docs/deployment) — template, configure, deploy
 - [FAQ](https://previously.ldwid.com/docs/faq)
 
 Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. AI tools can also use [`llms.txt`](public/llms.txt) for structured access.
@@ -99,17 +99,15 @@ Docs live in [`content/docs/`](content/docs/) — readable directly on GitHub. A
 
 ## Quick start
 
-1. **Fork this repo** → set to **private** (your memory lives here). Fork creates a copy under your GitHub account. Updates from upstream are one click away — see the Sync button on your repo page.
+1. **Use this template** — Click the green "Use this template" button on the [Previously repo](https://github.com/previously-lab/agent) and create a **private** repository. Your memory lives here. Sync code updates from Settings — one click, no git commands needed.
 
-2. **Import to Vercel** — [Import this repo](https://vercel.com/new). Set these environment variables:
+2. **Import to Vercel** — [Import your repo](https://vercel.com/new). Set these environment variables:
    - `GITHUB_TOKEN` — GitHub personal access token with contents read/write scope
    - `GITHUB_REPO_OWNER` — your GitHub username
-   - `GITHUB_REPO_NAME` — your private fork's repo name
+   - `GITHUB_REPO_NAME` — your private repo's name
    - `DEEPSEEK_API_KEY` — DeepSeek API key
 
-3. **Alternative: Deploy Button** — one click, but note: "Fastest path to a running instance. Updates from upstream require manual git steps — see the Updating section in docs."
-
-4. **Local dev** — `git clone` your fork, `pnpm install`, `pnpm dev`.
+3. **Local dev** — `git clone` your repo, `pnpm install`, `pnpm dev`.
 
 ---
 

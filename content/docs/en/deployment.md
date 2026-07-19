@@ -1,27 +1,27 @@
 # Deployment
 
-Get your own Previously running in about 10 minutes. You'll fork the repository, create a GitHub token, and deploy to Vercel. No server management, no database setup — just a fork, a token, and a deploy.
+Get your own Previously running in about 10 minutes. You'll create a private copy from the template, create a GitHub token, and deploy to Vercel. No server management, no database setup — just a repo, a token, and a deploy.
 
 ```alert
 ⚠️ Important: No authentication yet. Previously is in early development and does not yet have built-in authentication or access control. Anyone with your deployment URL can use your instance — and access or modify your memory data. Keep your deployment URL private. Do not share it publicly. Limit your Vercel deployment visibility if possible. Authentication is a high-priority feature and will be available soon.
 ```
 
-## Fork the repository
+## Create your private copy
 
-Start by [forking the Previously repository](https://github.com/LikeDreamwalker/previously/fork) on GitHub. **Make your fork private** — this repository holds your agent's memory data (episodic slices, memory nodes, tasks, and session state). A private fork keeps everything accessible only to you and your agent.
+Previously is a [GitHub Template Repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/creating-a-repository-from-a-template). Click **Use this template** on the [Previously repo page](https://github.com/previously-lab/agent) and choose **Create a new repository**. **Make your new repository private** — this repository holds your agent's memory data (episodic slices, memory nodes, tasks, and session state). A private repo keeps everything accessible only to you and your agent.
 
-> Your fork contains the application code. Memory data your agent creates is stored in whichever GitHub repository the environment variables point to — by default your fork, but you can point it at a different repo entirely. Code and memory are decoupled by design.
+> Your repository contains the application code. Memory data your agent creates is stored in whichever GitHub repository the environment variables point to — by default your own repo, but you can point it at a different repo entirely. Code and memory are decoupled by design.
 
 ## Create a GitHub token
 
-Previously uses the GitHub API to read and write memory data. You need a fine-grained personal access token scoped to your fork.
+Previously uses the GitHub API to read and write memory data. You need a fine-grained personal access token scoped to your repository.
 
 1. Go to **GitHub Settings** (your profile picture → **Settings**).
 2. In the left sidebar, click **Developer settings**.
 3. Click **Personal access tokens** → **Fine-grained tokens**.
 4. Click **Generate new token**.
 5. Give it a name (like "Previously") and choose an expiration.
-6. Under **Repository access**, select **Only select repositories** and pick your fork.
+6. Under **Repository access**, select **Only select repositories** and pick your private repo.
 7. Under **Permissions**, find **Contents** and set it to **Read and write**.
 8. Click **Generate token** and **copy the token immediately** — you won't be able to see it again.
 
@@ -29,34 +29,26 @@ The token needs Contents read/write because Previously reads memory files (episo
 
 ## Deploy to Vercel
 
-Three options, from smoothest updates to quickest setup.
+Two options, from smoothest updates to quickest setup.
 
-### Option A: Fork + import to Vercel (recommended)
+### Option A: Import to Vercel (recommended)
 
-This gives you the easiest update path — one click to sync upstream changes.
-
-1. Fork the repository (you already did this above).
+1. Create your private copy from the template (you already did this above).
 2. Go to [vercel.com](https://vercel.com) and sign in with your GitHub account.
 3. Click **Add New** → **Project**.
-4. Import your fork from the repository list.
+4. Import your private repo from the repository list. If it's not visible, click **Adjust GitHub App Permissions** and grant Vercel access to the repo.
 5. In the **Environment Variables** section, add `DEEPSEEK_API_KEY`, `GITHUB_TOKEN`, `GITHUB_REPO_OWNER`, and `GITHUB_REPO_NAME` (see below).
 6. Click **Deploy**.
 
 Vercel detects Next.js, builds, and gives you a URL. That's it.
 
-### Option B: Deploy Button (fastest)
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/LikeDreamwalker/previously)
-
-Click the button, create your fork, set environment variables in the Vercel dashboard, and deploy. This is the fastest path to a running instance, but updating to new versions requires a few manual git commands (see [Updating](#updating)).
-
-### Option C: Local dev (for testing)
+### Option B: Local dev (for testing)
 
 To run Previously on your own machine:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/previously.git
-cd previously
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO.git
+cd YOUR_REPO
 pnpm install
 pnpm dev
 ```
@@ -76,7 +68,7 @@ GITHUB_TOKEN=github_pat_...
 
 # Required — your GitHub username and the repo name
 GITHUB_REPO_OWNER=your-username
-GITHUB_REPO_NAME=previously
+GITHUB_REPO_NAME=your-repo-name
 
 # Optional — redirect memory reads to a bundled demo persona
 # DEMO_MODE=true
@@ -87,38 +79,35 @@ GITHUB_REPO_NAME=previously
 | `DEEPSEEK_API_KEY` | Yes | Authenticates requests to DeepSeek for both the fast recall model (Flash) and the deep reasoning model (Pro). | [platform.deepseek.com](https://platform.deepseek.com) — create an account and generate an API key. |
 | `GITHUB_TOKEN` | Yes | The fine-grained personal access token. Every GitHub read and write flows through it. | [Created above](#create-a-github-token) in the token setup steps. |
 | `GITHUB_REPO_OWNER` | Yes | Your GitHub username or organization that owns the repository holding memory data. | Your GitHub username. |
-| `GITHUB_REPO_NAME` | Yes | The repository name where memory data lives. By default this is your fork, but you can point it at any repo you own. | Your fork's name on GitHub. |
+| `GITHUB_REPO_NAME` | Yes | The repository name where memory data lives. By default this is your repo, but you can point it at any repo you own. | Your repo's name on GitHub. |
 | `DEMO_MODE` | No | Set to `"true"` to redirect memory reads to a pre-seeded demo persona. Writes still go to your real memory directory. Useful for evaluation. | — |
 
-## Updating
+## Syncing upstream updates
 
-### If you forked and imported (Option A)
+Previously has a built-in sync mechanism. When a new version is released:
 
-1. On your fork's GitHub page, click **Sync fork** (near the branch selector).
-2. Click **Update branch**.
-3. Vercel auto-redeploys when the fork's default branch is updated.
+1. Open your Previously instance and go to **Settings**.
+2. In the **Version & Updates** section, if you see "Update available," click **Sync from upstream**.
+3. The latest code is merged into your repository automatically. Vercel redeploys on the next push.
 
-### If you used the Deploy Button (Option B)
+Your personal data (`memory/`, `tasks/`, `sessions/`) is never overwritten — only code directories are synced. The sync creates a proper merge commit that preserves your git history.
 
-The Deploy Button creates its own fork, but GitHub does not set up the upstream remote automatically. To update:
+### Manual sync (fallback)
+
+If the built-in sync button is unavailable, you can merge upstream changes manually from the command line. First, add the upstream remote (one-time setup):
 
 ```bash
-git remote add upstream https://github.com/LikeDreamwalker/previously.git
+git remote add upstream https://github.com/previously-lab/agent.git
 git fetch upstream
-git checkout main
-git merge upstream/main
+git merge upstream/main --allow-unrelated-histories
 git push origin main
 ```
 
 Vercel redeploys automatically after the push.
 
-### If you deployed elsewhere (not Vercel)
+### What sync touches
 
-The instructions above assume you deployed on Vercel, where a push to your fork's main branch triggers an automatic redeploy. If you're using a different platform, or have modified the default deployment configuration, you may need to **manually trigger your deployment pipeline** after pulling in code updates. Check your platform's documentation for how to trigger redeploys on push.
-
-### What updates touch
-
-Episodic memory data (`memory/episodic/`) is gitignored, so pulling in new code never overwrites your accumulated memory. All changes land in code-only directories.
+Code directories (`src/`, `content/`, `public/`, `messages/`, `scripts/`, etc.) and root config files are synced from upstream. Episodic memory data (`memory/episodic/`) is gitignored, so pulling in new code never overwrites your accumulated memory. Your personal data in `memory/`, `tasks/`, and `sessions/` is always preserved.
 
 ## Related
 
