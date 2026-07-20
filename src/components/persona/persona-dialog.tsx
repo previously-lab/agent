@@ -46,7 +46,10 @@ export function PersonaDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!max-w-lg !sm:max-w-2xl !md:max-w-3xl max-h-[85vh] overflow-y-auto">
+      <DialogContent
+        className="max-h-[85vh] overflow-y-auto"
+        style={{ maxWidth: "48rem" }}
+      >
         <DialogHeader>
           <DialogTitle>Choose a Persona</DialogTitle>
         </DialogHeader>

@@ -2,7 +2,6 @@
 
 import { ArrowLeftRight } from "lucide-react";
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
-import { Button } from "@/components/ui/button";
 
 export function HeroText({
   name,
@@ -23,25 +22,24 @@ export function HeroText({
         staggerDelay={0.25}
       />
       <div className="mt-3">
-        {clickable ? (
-          <Button
-            variant="ghost"
-            onClick={onNameClick}
-            className="group relative text-3xl sm:text-4xl md:text-5xl font-bold text-foreground hover:bg-transparent hover:text-primary/80 transition-colors h-auto py-1 px-3 rounded-lg"
-          >
-            <span>{name}</span>
-            <ArrowLeftRight className="ml-2 h-5 w-5 opacity-0 group-hover:opacity-40 transition-opacity -translate-y-px" />
-          </Button>
-        ) : (
-          <TextGenerateEffect
-            words={name}
-            className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground"
-            duration={0.5}
-            delay={1.1}
-            staggerDelay={0.4}
-          />
-        )}
+        <TextGenerateEffect
+          words={name}
+          className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground"
+          duration={0.5}
+          delay={1.1}
+          staggerDelay={0.4}
+        />
       </div>
+
+      {clickable && onNameClick && (
+        <button
+          onClick={onNameClick}
+          className="mt-5 group inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 transition-all duration-300"
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100 transition-opacity" />
+          <span>Browse personas</span>
+        </button>
+      )}
     </div>
   );
 }
