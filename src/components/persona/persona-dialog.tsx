@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { usePathname } from "@/i18n/navigation";
+import { useTranslations } from "next-intl";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
@@ -27,6 +28,7 @@ export function PersonaDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const t = useTranslations("persona");
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -47,7 +49,7 @@ export function PersonaDialog({
         style={{ maxWidth: "48rem" }}
       >
         <DialogHeader>
-          <DialogTitle>Choose a Persona</DialogTitle>
+          <DialogTitle>{t("dialogTitle")}</DialogTitle>
         </DialogHeader>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           {personas.map((p) => (

@@ -29,7 +29,14 @@
     "switchTooltip": "切换语言"
   },
   "demo": {
-    "banner": "演示模式 · 所有更改不会被保存"
+    "banner": "正在浏览演示数据 · 所有更改不会被保存",
+    "toastTitle": "你正在浏览演示数据",
+    "toastDesc": "这是一个只读预览，包含预设角色数据。连接你自己的 GitHub 仓库即可保存记忆、编辑设置并运行后台任务。",
+    "setupAction": "配置自己的仓库",
+    "dismissAction": "知道了"
+  },
+  "persona": {
+    "dialogTitle": "选择角色"
   },
   "chat": {
     "input": {
@@ -184,6 +191,11 @@
     "error": {
       "title": "加载设置失败",
       "message": "无法加载设置。"
+    },
+    "demo": {
+      "heading": "演示模式",
+      "description": "你正在浏览一个只读演示，包含预设角色数据。连接你自己的 GitHub 仓库即可解锁完整记忆功能——个人资料编辑、持久化设置和后台任务。",
+      "setupLink": "配置指南 →"
     }
   },
   "memory": {

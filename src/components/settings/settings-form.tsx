@@ -76,19 +76,15 @@ export function SettingsForm({
       {/* Data source — demo info banner */}
       {isDemo && (
         <section className="rounded-lg border border-border p-4 bg-muted/20">
-          <h3 className="text-sm font-medium mb-1">Demo Mode</h3>
-          <p className="text-xs text-muted-foreground">
-            You are browsing a read-only demo with pre-seeded persona data.
-            Connect your own GitHub repository to unlock full memory features:
-            profile editing, persistent settings, and background loops.
-          </p>
+          <h3 className="text-sm font-medium mb-1">{t("demo.heading")}</h3>
+          <p className="text-xs text-muted-foreground">{t("demo.description")}</p>
           <a
-            href="https://github.com/previously-lab/agent#readme"
+            href="https://previously.ldwid.com/docs/deployment"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-block mt-2 text-xs text-primary hover:underline"
           >
-            Setup guide →
+            {t("demo.setupLink")}
           </a>
         </section>
       )}
