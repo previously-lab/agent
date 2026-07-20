@@ -58,6 +58,7 @@ import type {
 } from "@/lib/chat/turn-types";
 
 const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+const USE_DEMO = process.env.DEMO_MODE === "true";
 
 // ─── Context assembly helpers (moved verbatim from the inline route) ─────
 
@@ -450,6 +451,7 @@ export async function prepareGenerate(
       repo,
       owner,
       useGithub: USE_GITHUB,
+      useDemo: USE_DEMO,
       sliceId: slice.slice_id,
     },
   };

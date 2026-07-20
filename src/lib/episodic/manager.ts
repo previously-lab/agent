@@ -18,6 +18,11 @@ import {
   writeFileLocal,
   listFilesLocal,
 } from "@/lib/tools/local-fs";
+import {
+  readFileDemo,
+  listFilesDemo,
+  writeFileDemo,
+} from "@/lib/demo/demo-fs";
 import type {
   TimeSlice,
   Turn,
@@ -44,6 +49,7 @@ function getRepoConfig(): { owner: string; repo: string } {
 // ─── Internal I/O helpers ────────────────────────────────────────────────
 
 async function fsReadFile(path: string): Promise<string> {
+  if (DEMO_MODE) return readFileDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return readFileGitHub(path, repo, owner);
@@ -55,6 +61,7 @@ async function fsWriteFile(
   path: string,
   content: string
 ): Promise<{ path: string; created: boolean }> {
+  if (DEMO_MODE) return writeFileDemo(path, content);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return writeFileGitHub(path, content, repo, owner);
@@ -65,6 +72,7 @@ async function fsWriteFile(
 async function fsListFiles(
   path: string
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+  if (DEMO_MODE) return listFilesDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return listFilesGitHub(path, repo, owner);

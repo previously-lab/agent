@@ -33,6 +33,7 @@ const toolContextSchema = z.object({
   repo: z.string(),
   owner: z.string(),
   useGithub: z.boolean(),
+  useDemo: z.boolean(),
   sliceId: z.string(),
 });
 
