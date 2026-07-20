@@ -1,6 +1,8 @@
 "use client";
 
+import { ArrowLeftRight } from "lucide-react";
 import { TextGenerateEffect } from "@/components/ui/text-generate-effect";
+import { Button } from "@/components/ui/button";
 
 export function HeroText({
   name,
@@ -21,24 +23,23 @@ export function HeroText({
         staggerDelay={0.25}
       />
       <div className="mt-3">
-        <TextGenerateEffect
-          words={name}
-          className={`text-3xl sm:text-4xl md:text-5xl font-bold text-foreground ${
-            clickable
-              ? "cursor-pointer hover:text-primary/80 transition-colors group inline-flex items-center gap-2"
-              : ""
-          }`}
-          duration={0.5}
-          delay={1.1}
-          staggerDelay={0.4}
-        />
-        {clickable && (
-          <span
+        {clickable ? (
+          <Button
+            variant="ghost"
             onClick={onNameClick}
-            className="ml-2 inline-flex cursor-pointer rounded-md px-2 py-1 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors align-middle"
+            className="group relative text-3xl sm:text-4xl md:text-5xl font-bold text-foreground hover:bg-transparent hover:text-primary/80 transition-colors h-auto py-1 px-3 rounded-lg"
           >
-            Switch &#x25BE;
-          </span>
+            <span>{name}</span>
+            <ArrowLeftRight className="ml-2 h-5 w-5 opacity-0 group-hover:opacity-40 transition-opacity -translate-y-px" />
+          </Button>
+        ) : (
+          <TextGenerateEffect
+            words={name}
+            className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground"
+            duration={0.5}
+            delay={1.1}
+            staggerDelay={0.4}
+          />
         )}
       </div>
     </div>
