@@ -25,7 +25,7 @@ export function HeroText({
       {clickable ? (
         <div
           onClick={onNameClick}
-          className="relative mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 -mx-4 -my-2 hover:bg-accent transition-colors duration-300"
+          className="relative mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 -mx-4 -my-2 hover:bg-secondary transition-colors duration-300"
         >
           <TextGenerateEffect
             words={name}
