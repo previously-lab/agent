@@ -8,6 +8,7 @@ interface PersonaInfo {
   id: string;
   name: string;
   description: string;
+  blurb?: string;
   topics: string[];
   sliceCount: number;
   dateRange: string[];

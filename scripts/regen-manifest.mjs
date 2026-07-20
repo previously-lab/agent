@@ -46,6 +46,7 @@ for (const p of personas) {
   }
 
   const profilePath = path.join(OUT, p, "user", "profile.md");
+  let blurb = "";
   if (fs.existsSync(profilePath)) {
     const raw = fs.readFileSync(profilePath, "utf-8");
     const fmMatch = raw.match(/---\n([\s\S]*?)---/);
@@ -53,11 +54,29 @@ for (const p of personas) {
       const nm = fmMatch[1].match(/name:\s*(.+)/);
       if (nm) name = nm[1].trim();
     }
+    // Extract narrative blurb: prefer quality-report overallNotes, fallback to profile body
+    const qrPath = path.join(OUT, p, "quality-report.json");
+    if (fs.existsSync(qrPath)) {
+      try {
+        const qr = JSON.parse(fs.readFileSync(qrPath, "utf-8"));
+        if (qr.overallNotes) {
+          blurb = qr.overallNotes.slice(0, 280).replace(/\n/g, " ").trim();
+          if (qr.overallNotes.length > 280) blurb += "…";
+        }
+      } catch { /* fall through */ }
+    }
+    if (!blurb) {
+      let body = raw.split("---").slice(2).join("---").trim();
+      body = body.replace(/^Hello,?\s*I'd like to share my personal information[^.]*\.\s*/i, "");
+      blurb = body.slice(0, 250).replace(/\n/g, " ").trim();
+      if (body.length > 250) blurb += "…";
+    }
   }
 
   manifest.personas[p] = {
     name,
     description: sliceCount + " sessions across " + (dateRange[0] || "?") + " → " + (dateRange[1] || "?"),
+    blurb,
     topics,
     sliceCount,
     dateRange,

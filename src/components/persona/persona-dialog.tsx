@@ -10,6 +10,7 @@ interface PersonaInfo {
   id: string;
   name: string;
   description: string;
+  blurb?: string;
   topics: string[];
   sliceCount: number;
   dateRange: string[];
@@ -47,11 +48,11 @@ export function PersonaDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Choose a Persona</DialogTitle>
         </DialogHeader>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           {personas.map((p) => (
             <Card
               key={p.id}
@@ -64,21 +65,9 @@ export function PersonaDialog({
               <CardHeader>
                 <CardTitle className="text-sm">{p.name}</CardTitle>
                 <CardDescription className="text-xs">
-                  {p.sliceCount} sessions · {p.dateRange[0]} → {p.dateRange[1]}
+                  {p.blurb || `${p.sliceCount} sessions · ${p.dateRange[0]} → ${p.dateRange[1]}`}
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap gap-1">
-                  {p.topics.slice(0, 5).map((t) => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center rounded-md bg-muted/50 px-1.5 py-0.5 text-xs text-muted-foreground"
-                    >
-                      {t}
-                    </span>
-                  ))}
-                </div>
-              </CardContent>
             </Card>
           ))}
         </div>

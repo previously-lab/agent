@@ -47,6 +47,7 @@ function resolveRelative(path: string): string {
 interface ManifestPersona {
   name: string;
   description: string;
+  blurb?: string;
   topics: string[];
   sliceCount: number;
   dateRange: string[];
@@ -164,6 +165,7 @@ export async function listDemoPersonas(): Promise<(ManifestPersona & { id: strin
     id,
     name: p.name,
     description: p.description,
+    blurb: p.blurb,
     topics: p.topics,
     sliceCount: p.sliceCount,
     dateRange: p.dateRange,
