@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useRouter, usePathname } from "@/i18n/navigation";
+import { usePathname } from "@/i18n/navigation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
@@ -27,7 +27,6 @@ export function PersonaDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -36,12 +35,9 @@ export function PersonaDialog({
       onOpenChange(false);
       return;
     }
-    onOpenChange(false);
-
-    // Preserve other params, replace persona
     const params = new URLSearchParams(searchParams.toString());
     params.set("persona", personaId);
-    router.push(`${pathname}?${params.toString()}`);
+    window.location.href = `${pathname}?${params.toString()}`;
   }
 
   return (

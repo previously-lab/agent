@@ -1,10 +1,11 @@
+import { Suspense } from "react";
 import { setRequestLocale } from "next-intl/server";
-import { getEpisodicState } from "@/lib/episodic/actions";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { ChatPage } from "@/components/chat/chat-page";
 import { HeroSection } from "@/components/chat/hero-section";
-import { TimelinePanel } from "@/components/chat/timeline-panel";
+import { TimelineSection } from "@/components/chat/timeline-section";
+import { TimelineSkeleton } from "@/components/chat/timeline-skeleton";
 
 type SearchParams = Promise<{ persona?: string }>;
 
@@ -18,24 +19,27 @@ export default async function HomePage({
   const { locale } = await params;
   setRequestLocale(locale);
 
-  // Demo mode: persona can be selected via URL query param
   const { persona } = await searchParams;
   if (resolveDataSource() === "demo") {
     setDemoPersona(persona || "personal_14");
   }
 
-  const episodicData = await getEpisodicState();
-
   return (
-    <ChatPage key={persona || "default"}>
-      <HeroSection personaId={persona} />
-      <TimelinePanel
-        initialData={{
-          active: episodicData.hasActiveSlice ? episodicData.active : null,
-          slices: episodicData.recent ?? [],
-          hasMore: episodicData.hasMore ?? false,
-        }}
-      />
+    <ChatPage>
+      {/* Static title — never flashes, always visible */}
+      <div className="h-screen flex flex-col items-center justify-center text-center font-[family-name:var(--font-raleway)]">
+        <div className="text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-light text-foreground leading-none tracking-tighter">
+          Previously on
+        </div>
+        <Suspense fallback={<div className="mt-3 h-10 w-48 rounded-lg bg-muted animate-pulse" />}>
+          <div className="mt-3">
+            <HeroSection personaId={persona} />
+          </div>
+        </Suspense>
+      </div>
+      <Suspense fallback={<TimelineSkeleton />}>
+        <TimelineSection personaId={persona} />
+      </Suspense>
     </ChatPage>
   );
 }

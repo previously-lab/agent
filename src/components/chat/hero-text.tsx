@@ -13,15 +13,7 @@ export function HeroText({
   clickable?: boolean;
 }) {
   return (
-    <div className="h-screen flex flex-col items-center justify-center text-center font-[family-name:var(--font-raleway)]">
-      <TextGenerateEffect
-        words="Previously on"
-        className="text-6xl sm:text-7xl md:text-8xl lg:text-9xl font-light text-foreground leading-none tracking-tighter"
-        duration={0.5}
-        delay={0.3}
-        staggerDelay={0.25}
-      />
-
+    <>
       {clickable ? (
         <div
           onClick={onNameClick}
@@ -54,6 +46,6 @@ export function HeroText({
           />
         </div>
       )}
-    </div>
+    </>
   );
 }
