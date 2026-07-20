@@ -61,17 +61,19 @@ async function scanMonthsBack(
 }
 
 export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boolean }> {
-  const isDemoMode = !process.env.GITHUB_TOKEN; // demo data spans years, need deep scan
   const PAGE_SIZE = 3;
 
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth() + 1;
 
+  // Scan back until we find enough slices or hit the floor (120 months = 10 years).
+  // Don't stop at an arbitrary recent-month window — the latest slice could be
+  // anywhere in the timeline (especially with seeded demo data).
   const { entries, exhausted } = await scanMonthsBack(
     year,
     month,
-    isDemoMode ? 48 : 2,
+    120,
     PAGE_SIZE + 2,
   );
 

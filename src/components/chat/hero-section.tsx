@@ -8,11 +8,9 @@ import { PersonaDialogWrapper } from "@/components/persona/persona-dialog-wrappe
 export async function HeroSection() {
   const source = resolveDataSource();
   const config = await loadUserConfig();
-  const isOnboarded = config.onboarded ?? false;
 
-  if (source === "demo" || (source === "github" && !isOnboarded)) {
-    // Show persona selector
-    const personaId = getDemoPersona();
+  if (source === "demo") {
+    const personaId = await getDemoPersona();
     const personas = await listDemoPersonas().catch(() => []);
     const current = personas.find((p) => p.id === personaId);
     const name = current?.name ?? personaId;
@@ -26,7 +24,21 @@ export async function HeroSection() {
     );
   }
 
-  // Normal mode — show user's own name
+  // Normal mode — user's own name
+  const isOnboarded = config.onboarded ?? false;
+  if (!isOnboarded && source === "github") {
+    // New user with their own repo — still show onboarding
+    const personaId = "personal_14";
+    const personas = await listDemoPersonas().catch(() => []);
+    return (
+      <PersonaDialogWrapper
+        personas={personas}
+        currentId={personaId}
+        personaName="You"
+      />
+    );
+  }
+
   const name = await getUserName();
   return <HeroText name={name} />;
 }

@@ -1,46 +1,40 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { setDemoPersona } from "@/lib/demo/demo-fs";
+import { setPersonaId } from "@/lib/demo/persona-cookie";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { writeFile as writeFileGitHub } from "@/lib/tools/writeFile";
 import { writeFileLocal } from "@/lib/tools/local-fs";
-import { readFileLocal } from "@/lib/tools/local-fs";
 
 const CONFIG_PATH = "memory/user/config.json";
 
 export async function selectPersona(personaId: string) {
-  setDemoPersona(personaId);
+  // Cookie is the source of truth for persona selection
+  await setPersonaId(personaId);
 
   const source = resolveDataSource();
-  if (source === "demo") {
-    // Can't persist — just refresh with the in-memory change
-    revalidatePath("/", "layout");
-    return;
-  }
-
-  // Persist to config.json when writable
-  try {
-    let config: Record<string, unknown> = {};
-    if (source === "github") {
-      const owner = process.env.GITHUB_REPO_OWNER ?? "";
-      const repo = process.env.GITHUB_REPO_NAME ?? "";
-      await writeFileGitHub(
-        CONFIG_PATH,
-        JSON.stringify({ onboarded: true, datasource: "demo" }, null, 2),
-        repo,
-        owner,
-        "[previously] select demo persona"
-      );
-    } else {
-      // local dev
-      await writeFileLocal(
-        CONFIG_PATH,
-        JSON.stringify({ onboarded: true, datasource: "demo" }, null, 2)
-      );
+  if (source !== "demo") {
+    // Persist to config.json when writable
+    try {
+      if (source === "github") {
+        const owner = process.env.GITHUB_REPO_OWNER ?? "";
+        const repo = process.env.GITHUB_REPO_NAME ?? "";
+        await writeFileGitHub(
+          CONFIG_PATH,
+          JSON.stringify({ onboarded: true, datasource: "demo" }, null, 2),
+          repo,
+          owner,
+          "[previously] select demo persona"
+        );
+      } else {
+        await writeFileLocal(
+          CONFIG_PATH,
+          JSON.stringify({ onboarded: true, datasource: "demo" }, null, 2)
+        );
+      }
+    } catch {
+      // Non-fatal
     }
-  } catch {
-    // Non-fatal — the selection still works in-memory for this session
   }
 
   revalidatePath("/", "layout");

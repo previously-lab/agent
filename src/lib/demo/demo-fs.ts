@@ -16,6 +16,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { getPersonaId } from "@/lib/demo/persona-cookie";
 
 const BENCHMARK_BASE = process.env.BENCHMARK_BASE_URL ?? "";
 const IS_REMOTE = !!BENCHMARK_BASE;
@@ -23,23 +24,32 @@ const IS_REMOTE = !!BENCHMARK_BASE;
 // Local fallback: look for benchmark-data as a sibling of the project root
 const LOCAL_DATA_DIR = join(process.cwd(), "..", "benchmark-data");
 
-/** Currently selected persona id. */
-let currentPersona = "personal_14";
-
-export function setDemoPersona(personaId: string) {
-  currentPersona = personaId;
+/** Currently selected persona id — read from cookie, fall back to default. */
+async function resolvePersona(): Promise<string> {
+  try {
+    return await getPersonaId();
+  } catch {
+    return "personal_14";
+  }
 }
 
-export function getDemoPersona(): string {
-  return currentPersona;
+/** Legacy setter — still used by server actions that also set the cookie. */
+export function setDemoPersona(_personaId: string) {
+  // Cookie is the source of truth now. This function exists for backward
+  // compatibility with callers that call setDemoPersona + setPersonaId.
+}
+
+export async function getDemoPersona(): Promise<string> {
+  return resolvePersona();
 }
 
 // ─── Path helpers ────────────────────────────────────────────────────────
 
 /** Strip `memory/` prefix, prepend persona dir. */
-function resolveRelative(path: string): string {
+async function resolveRelative(path: string): Promise<string> {
+  const personaId = await resolvePersona();
   const relative = path.replace(/^memory\//, "");
-  return `${currentPersona}/${relative}`;
+  return `${personaId}/${relative}`;
 }
 
 // ─── Manifest ────────────────────────────────────────────────────────────
@@ -86,7 +96,7 @@ async function fetchManifest(): Promise<Manifest> {
 // ─── File API ────────────────────────────────────────────────────────────
 
 export async function readFileDemo(path: string): Promise<string> {
-  const rel = resolveRelative(path);
+  const rel = await resolveRelative(path);
 
   if (IS_REMOTE) {
     const res = await fetch(`${BENCHMARK_BASE}/${rel}`);
@@ -108,8 +118,9 @@ export async function listFilesDemo(
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
   if (IS_REMOTE) {
     const manifest = await fetchManifest();
-    const persona = manifest.personas[currentPersona];
-    if (!persona?.tree) throw new Error(`Persona "${currentPersona}" not found in manifest`);
+    const personaId = await resolvePersona();
+    const persona = manifest.personas[personaId];
+    if (!persona?.tree) throw new Error(`Persona "${personaId}" not found in manifest`);
 
     const relative = path.replace(/^memory\//, "").replace(/\/$/, "");
     const segments = relative.split("/").filter(Boolean);
@@ -137,7 +148,7 @@ export async function listFilesDemo(
   }
 
   // Local disk
-  const rel = resolveRelative(path);
+  const rel = await resolveRelative(path);
   const fullPath = join(LOCAL_DATA_DIR, rel);
   if (!existsSync(fullPath)) return [];
   const stat = statSync(fullPath);
