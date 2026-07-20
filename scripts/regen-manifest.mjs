@@ -49,7 +49,7 @@ for (const p of personas) {
   let blurb = "";
   if (fs.existsSync(profilePath)) {
     const raw = fs.readFileSync(profilePath, "utf-8");
-    const fmMatch = raw.match(/---\n([\s\S]*?)---/);
+    const fmMatch = raw.match(/---\r?\n([\s\S]*?)---/);
     if (fmMatch) {
       const nm = fmMatch[1].match(/name:\s*(.+)/);
       if (nm) name = nm[1].trim();

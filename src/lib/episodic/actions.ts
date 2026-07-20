@@ -61,7 +61,7 @@ async function scanMonthsBack(
 }
 
 export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boolean }> {
-  const isDemoMode = process.env.NODE_ENV !== "development" && !process.env.GITHUB_TOKEN;
+  const isDemoMode = !process.env.GITHUB_TOKEN; // demo data spans years, need deep scan
   const PAGE_SIZE = 3;
 
   const now = new Date();
