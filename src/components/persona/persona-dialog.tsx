@@ -1,10 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "@/i18n/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { selectPersona } from "@/lib/demo/persona-actions";
+import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 
 interface PersonaInfo {
   id: string;
@@ -29,26 +27,25 @@ export function PersonaDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const router = useRouter();
-  const [switching, setSwitching] = useState<string | null>(null);
+  const searchParams = useSearchParams();
 
-  async function handleSelect(personaId: string) {
+  function handleSelect(personaId: string) {
     if (personaId === currentId) {
       onOpenChange(false);
       return;
     }
-    setSwitching(personaId);
-    try {
-      await selectPersona(personaId);
-      router.refresh();
-    } finally {
-      setSwitching(null);
-      onOpenChange(false);
-    }
+    onOpenChange(false);
+
+    // Build target URL with persona query param
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("persona", personaId);
+    const qs = params.toString();
+    router.push(qs ? `?${qs}` : "/");
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="!sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="!sm:max-w-xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Choose a Persona</DialogTitle>
         </DialogHeader>
@@ -59,14 +56,16 @@ export function PersonaDialog({
               size="sm"
               className={`cursor-pointer transition-all hover:ring-2 hover:ring-primary/50 ${
                 p.id === currentId ? "ring-2 ring-primary" : ""
-              } ${switching === p.id ? "opacity-50 pointer-events-none" : ""}`}
+              }`}
               onClick={() => handleSelect(p.id)}
             >
               <CardHeader>
                 <CardTitle className="text-sm">{p.name}</CardTitle>
-                <CardDescription className="text-xs">
-                  {p.blurb || `${p.sliceCount} sessions · ${p.dateRange[0]} → ${p.dateRange[1]}`}
-                </CardDescription>
+                {p.blurb && (
+                  <CardDescription className="text-xs line-clamp-3">
+                    {p.blurb}
+                  </CardDescription>
+                )}
               </CardHeader>
             </Card>
           ))}
