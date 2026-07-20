@@ -19,8 +19,9 @@ export type DataSource = "local" | "github" | "demo";
 
 /** The best available source given current environment. */
 export function resolveDataSource(): DataSource {
-  if (process.env.NODE_ENV === "development") return "local";
+  // GitHub token present → user's own memory repo (production path)
   if (process.env.GITHUB_TOKEN) return "github";
+  // No token → demo data (remote benchmark, or local benchmark-data directory)
   return "demo";
 }
 
