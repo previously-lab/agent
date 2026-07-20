@@ -54,16 +54,16 @@ function Inner({ children }: { children: React.ReactNode }) {
   const [lastUserMessageAt, setLastUserMessageAt] = useState<string | null>(null);
   const { snapshot } = useLoadedIds();
 
-  // A run left mid-stream by a previous mount (tab closed during a response)?
-  // Its id was persisted on send; resume it once on mount. Read only at mount
-  // so a completion during this session doesn't retrigger resume.
-  const initialActiveRunId = useMemo<string | undefined>(() => {
-    if (typeof window === "undefined") return undefined;
-    return localStorage.getItem(ACTIVE_RUN_KEY) ?? undefined;
-  }, []);
+  // FIXME(#localStorage-resume): disabled — stale run ids from previous
+  // mounts were causing the chat to get stuck in streaming state (red stop
+  // button). Re-enable once the resume path is cleaned up.
+  // const initialActiveRunId = useMemo<string | undefined>(() => {
+  //   if (typeof window === "undefined") return undefined;
+  //   return localStorage.getItem(ACTIVE_RUN_KEY) ?? undefined;
+  // }, []);
 
   const { messages, sendMessage, status, stop, error } = useChat({
-    resume: !!initialActiveRunId,
+    resume: false, // was: !!initialActiveRunId
     // Every turn runs inside a durable Workflow run. WorkflowChatTransport reads
     // the x-workflow-run-id header, auto-reconnects on same-session drops, and
     // resumes post-reload via /api/chat/{runId}/stream. Created inline (like the
@@ -85,27 +85,10 @@ function Inner({ children }: { children: React.ReactNode }) {
           loadedSliceIds: snapshot(),
         },
       }),
-      onChatSendMessage: (response) => {
-        const runId = response.headers.get("x-workflow-run-id");
-        if (runId && typeof window !== "undefined") {
-          localStorage.setItem(ACTIVE_RUN_KEY, runId);
-        }
-      },
-      onChatEnd: () => {
-        if (typeof window !== "undefined") {
-          localStorage.removeItem(ACTIVE_RUN_KEY);
-        }
-      },
-      prepareReconnectToStreamRequest: (config) => {
-        const runId =
-          typeof window !== "undefined"
-            ? localStorage.getItem(ACTIVE_RUN_KEY)
-            : null;
-        return {
-          ...config,
-          api: runId ? `/api/chat/${encodeURIComponent(runId)}/stream` : config.api,
-        };
-      },
+      // FIXME(#localStorage-resume): localStorage writes disabled — see above.
+      onChatSendMessage: (_response) => {},
+      onChatEnd: () => {},
+      prepareReconnectToStreamRequest: (config) => config,
     }),
   });
 
