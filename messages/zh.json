@@ -30,9 +30,12 @@
   },
   "demo": {
     "banner": "正在浏览演示数据 · 所有更改不会被保存",
+    "badgeLabel": "体验",
+    "badgeTitle": "你正在体验模式",
+    "badgeDesc": "你正在浏览一个只读预览，包含预设角色数据。连接你自己的 GitHub 仓库即可保存记忆、编辑设置并运行后台任务。",
+    "setupAction": "配置自己的仓库 →",
     "toastTitle": "你正在浏览演示数据",
-    "toastDesc": "这是一个只读预览，包含预设角色数据。连接你自己的 GitHub 仓库即可保存记忆、编辑设置并运行后台任务。",
-    "setupAction": "配置自己的仓库",
+    "toastDesc": "这是一个只读预览，包含预设角色数据。",
     "dismissAction": "知道了"
   },
   "persona": {

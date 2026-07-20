@@ -30,9 +30,12 @@
   },
   "demo": {
     "banner": "Browsing demo data — changes aren't saved",
+    "badgeLabel": "Demo",
+    "badgeTitle": "You're in demo mode",
+    "badgeDesc": "You're browsing a read-only preview with pre-seeded personas. Connect your own GitHub repository to save memories, edit settings, and run background loops.",
+    "setupAction": "Set up your own →",
     "toastTitle": "You're browsing demo data",
-    "toastDesc": "This is a read-only preview with pre-seeded personas. Connect your own GitHub repository to save memories, edit settings, and run background loops.",
-    "setupAction": "Set up your own",
+    "toastDesc": "This is a read-only preview with pre-seeded personas.",
     "dismissAction": "Got it"
   },
   "persona": {
