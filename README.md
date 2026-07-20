@@ -169,7 +169,7 @@ Thanks to [Vercel AI SDK](https://sdk.vercel.ai), [shadcn/ui](https://ui.shadcn.
 <p align="center">
   <a href="https://likedreamwalker.space">Website</a>
   ·
-  <a href="https://github.com/LikeDreamwalker">GitHub</a>
+  <a href="https://github.com/previously-lab">GitHub</a>
   ·
   <a href="mailto:a@ldwid.com">Email</a>
 </p>
