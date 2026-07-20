@@ -29,7 +29,11 @@ import type {
 import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+import { resolveDataSource } from "@/lib/data-source/resolve";
+
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 function getRepoConfig(): { owner: string; repo: string } {
   const owner = process.env.GITHUB_REPO_OWNER ?? "local";
@@ -117,6 +121,7 @@ export async function initLoop(
       repo,
       owner,
       useGithub: USE_GITHUB,
+      useDemo: USE_DEMO,
       sliceId: input.sliceOrigin ?? "",
     },
   };

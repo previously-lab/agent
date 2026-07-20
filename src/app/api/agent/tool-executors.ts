@@ -24,6 +24,11 @@ import {
   listFilesLocal,
   writeFileLocal,
 } from "@/lib/tools/local-fs";
+import {
+  readFileDemo,
+  listFilesDemo,
+  writeFileDemo,
+} from "@/lib/demo/demo-fs";
 import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 import { applyProfilePatch } from "@/lib/identity/profile-writer";
 import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
@@ -44,6 +49,8 @@ export interface ToolContext {
   owner: string;
   /** Whether GitHub token is configured. Off → local filesystem. */
   useGithub: boolean;
+  /** Whether demo mode is active (remote benchmark data, read-only). */
+  useDemo: boolean;
   /** The current time-slice id (for startLoop to record the link). */
   sliceId: string;
 }
@@ -95,6 +102,7 @@ export async function readMemoryExecute(
 ): Promise<string> {
   "use step";
   try {
+    if (ctx.useDemo) return await readFileDemo(path);
     return ctx.useGithub
       ? await readFile(path, ctx.repo, ctx.owner)
       : await readFileLocal(path);
@@ -114,6 +122,7 @@ export async function listMemoryExecute(
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }> | { error: string }> {
   "use step";
   try {
+    if (ctx.useDemo) return await listFilesDemo(path);
     return ctx.useGithub
       ? await listFiles(path, ctx.repo, ctx.owner)
       : await listFilesLocal(path);
@@ -135,9 +144,11 @@ export async function readIndexExecute(
   const mm = String(month).padStart(2, "0");
   const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
   try {
-    const raw = ctx.useGithub
-      ? await readFile(path, ctx.repo, ctx.owner)
-      : await readFileLocal(path);
+    const raw = ctx.useDemo
+      ? await readFileDemo(path)
+      : ctx.useGithub
+        ? await readFile(path, ctx.repo, ctx.owner)
+        : await readFileLocal(path);
     return JSON.parse(raw);
   } catch {
     return { exists: false, month: `${year}-${mm}`, slices: [] };
@@ -156,9 +167,11 @@ export async function writeMemoryExecute(
     };
   }
   try {
-    const res = ctx.useGithub
-      ? await writeFile(path, content, ctx.repo, ctx.owner, `[agent] ${reason}`)
-      : await writeFileLocal(path, content);
+    const res = ctx.useDemo
+      ? await writeFileDemo(path, content)
+      : ctx.useGithub
+        ? await writeFile(path, content, ctx.repo, ctx.owner, `[agent] ${reason}`)
+        : await writeFileLocal(path, content);
     return { ok: true, path: res.path, created: res.created };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "write failed" };

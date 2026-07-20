@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { getEpisodicState, getMoreSlices, type SliceSummary } from "@/lib/episodic/actions";
 
 export type { SliceSummary };
@@ -13,65 +13,66 @@ interface TimelineState {
 }
 
 export function useTimeline(initialData?: Partial<TimelineState> | null) {
-  const hasInitialData = !!initialData?.slices?.length;
-  const [state, setState] = useState<TimelineState>({
-    active: initialData?.active ?? null,
-    slices: initialData?.slices ?? [],
-    hasMore: initialData?.hasMore ?? false,
-    loadedIds: initialData?.loadedIds ?? initialData?.slices?.map((s) => s.slice_id) ?? [],
-  });
-  const [loading, setLoading] = useState(!hasInitialData);
+  // Initial data from server props — always up-to-date (RSC re-render → new props).
+  // Extra data from loadMore — accumulated locally, appended to initial slices.
+  const baseSlices = initialData?.slices ?? [];
+  const baseActive = initialData?.active ?? null;
+  const baseHasMore = initialData?.hasMore ?? false;
+
+  const [extraSlices, setExtraSlices] = useState<SliceSummary[]>([]);
+  const [extraHasMore, setExtraHasMore] = useState(baseHasMore);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  useEffect(() => {
-    if (hasInitialData) return;
-    getEpisodicState()
-      .then((data) => {
-        setState({
-          active: data.hasActiveSlice ? data.active : null,
-          slices: data.recent ?? [],
-          hasMore: data.hasMore ?? false,
-          loadedIds:
-            data.recent?.map((s) => s.slice_id) ?? [],
-        });
-        setLoading(false);
-      })
-      .catch(() => setLoading(false));
-  }, [hasInitialData]);
+  // When base slices change (persona switch), reset the extra accumulation.
+  // We detect the change by comparing the first base slice id.
+  const baseKey = baseSlices[0]?.slice_id ?? "";
+  const [lastBaseKey, setLastBaseKey] = useState(baseKey);
+  if (baseKey !== lastBaseKey) {
+    setExtraSlices([]);
+    setExtraHasMore(baseHasMore);
+    setLastBaseKey(baseKey);
+  }
+
+  const slices = useMemo(
+    () => [...baseSlices, ...extraSlices],
+    [baseSlices, extraSlices],
+  );
+
+  const active = baseActive;
+  const hasMore = extraHasMore;
+  const loadedIds = useMemo(
+    () => slices.map((s) => s.slice_id),
+    [slices],
+  );
 
   const loadMore = useCallback(async () => {
-    if (loadingMore || !state.hasMore) return;
+    if (loadingMore || !hasMore) return;
 
-    const oldest = state.slices[state.slices.length - 1];
+    const oldest = slices[slices.length - 1];
     if (!oldest) return;
 
     setLoadingMore(true);
     try {
       const data = await getMoreSlices(oldest.start, 10);
-
-      setState((prev) => ({
-        ...prev,
-        slices: [...prev.slices, ...(data.slices ?? [])],
-        hasMore: data.hasMore ?? false,
-        loadedIds: [
-          ...prev.loadedIds,
-          ...(data.slices ?? []).map((s) => s.slice_id),
-        ],
-      }));
+      setExtraSlices((prev) => [...prev, ...(data.slices ?? [])]);
+      setExtraHasMore(data.hasMore ?? false);
     } catch {
       // silently fail
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, state.hasMore, state.slices]);
+  }, [loadingMore, hasMore, slices]);
+
+  // Loading state: true if we haven't received any slices yet
+  const loading = baseSlices.length === 0 && extraSlices.length === 0;
 
   return {
-    active: state.active,
-    slices: state.slices,
-    loadedIds: state.loadedIds,
+    active,
+    slices,
+    loadedIds,
     loading,
     loadingMore,
-    hasMore: state.hasMore,
+    hasMore,
     loadMore,
   };
 }

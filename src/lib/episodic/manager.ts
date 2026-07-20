@@ -9,7 +9,6 @@
  * local-dev vs GitHub-production switch transparently.
  */
 import matter from "gray-matter";
-import { unstable_cache } from "next/cache";
 import { readFile as readFileGitHub } from "@/lib/tools/readFile";
 import { writeFile as writeFileGitHub } from "@/lib/tools/writeFile";
 import { listFiles as listFilesGitHub } from "@/lib/tools/listFiles";
@@ -18,6 +17,13 @@ import {
   writeFileLocal,
   listFilesLocal,
 } from "@/lib/tools/local-fs";
+import {
+  readFileDemo,
+  listFilesDemo,
+  writeFileDemo,
+  getDemoPersona,
+} from "@/lib/demo/demo-fs";
+import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import type {
   TimeSlice,
   Turn,
@@ -30,10 +36,12 @@ import type {
 
 // ─── Environment detection ───────────────────────────────────────────────
 
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 // Demo data is static (writes are no-op'd), so reads can be cached hard.
-const DEMO_MODE = process.env.DEMO_MODE === "true";
+const DEMO_MODE = isDemo(DATA_SOURCE);
 
 function getRepoConfig(): { owner: string; repo: string } {
   const owner = process.env.GITHUB_REPO_OWNER ?? "local";
@@ -44,6 +52,7 @@ function getRepoConfig(): { owner: string; repo: string } {
 // ─── Internal I/O helpers ────────────────────────────────────────────────
 
 async function fsReadFile(path: string): Promise<string> {
+  if (DEMO_MODE) return readFileDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return readFileGitHub(path, repo, owner);
@@ -55,6 +64,7 @@ async function fsWriteFile(
   path: string,
   content: string
 ): Promise<{ path: string; created: boolean }> {
+  if (DEMO_MODE) return writeFileDemo(path, content);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return writeFileGitHub(path, content, repo, owner);
@@ -65,6 +75,7 @@ async function fsWriteFile(
 async function fsListFiles(
   path: string
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+  if (DEMO_MODE) return listFilesDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
     return listFilesGitHub(path, repo, owner);
@@ -415,21 +426,38 @@ async function readSliceIndexRaw(
   }
 }
 
-// In demo mode, cache monthly indexes in the Next data cache (persisted on
-// Vercel) so the timeline doesn't re-hit the GitHub API on every load.
-const readSliceIndexCached = unstable_cache(
-  readSliceIndexRaw,
-  ["episodic-slice-index"],
-  { revalidate: 3600, tags: ["episodic"] },
-);
+// Persona-aware in-memory cache for demo mode. Keyed by persona + path so
+// switching personas doesn't return stale data from the previous persona's
+// cache. TTL: 1 hour (demo data is static; remote fetches have their own
+// manifest-level cache in demo-fs.ts).
+
+const _indexCache = new Map<string, { data: SliceIndexEntry[]; ttl: number }>();
+const _bodyCache = new Map<string, { data: string; ttl: number }>();
+
+function cacheGet<T>(store: Map<string, { data: T; ttl: number }>, key: string): T | null {
+  const entry = store.get(key);
+  if (entry && Date.now() < entry.ttl) return entry.data;
+  store.delete(key);
+  return null;
+}
+
+function cacheSet<T>(store: Map<string, { data: T; ttl: number }>, key: string, data: T): void {
+  store.set(key, { data, ttl: Date.now() + 3_600_000 }); // 1 hour
+}
 
 export async function readSliceIndex(
   year: number,
   month: number
 ): Promise<SliceIndexEntry[]> {
-  return DEMO_MODE
-    ? readSliceIndexCached(year, month)
-    : readSliceIndexRaw(year, month);
+  if (DEMO_MODE) {
+    const key = `${getDemoPersona()}:idx:${year}:${month}`;
+    const cached = cacheGet(_indexCache, key);
+    if (cached) return cached;
+    const data = await readSliceIndexRaw(year, month);
+    cacheSet(_indexCache, key, data);
+    return data;
+  }
+  return readSliceIndexRaw(year, month);
 }
 
 /**
@@ -449,18 +477,16 @@ export async function readStrands(): Promise<StrandIndex> {
 /**
  * Read the full body (Markdown with frontmatter) of a time slice from disk.
  */
-async function readSliceBodyRaw(path: string): Promise<string> {
-  return fsReadFile(path);
-}
-
-const readSliceBodyCached = unstable_cache(
-  readSliceBodyRaw,
-  ["episodic-slice-body"],
-  { revalidate: 3600, tags: ["episodic"] },
-);
-
 export async function readSliceBody(path: string): Promise<string> {
-  return DEMO_MODE ? readSliceBodyCached(path) : readSliceBodyRaw(path);
+  if (DEMO_MODE) {
+    const key = `${getDemoPersona()}:body:${path}`;
+    const cached = cacheGet(_bodyCache, key);
+    if (cached) return cached;
+    const data = await fsReadFile(path);
+    cacheSet(_bodyCache, key, data);
+    return data;
+  }
+  return fsReadFile(path);
 }
 
 // ─── Index maintenance ───────────────────────────────────────────────────

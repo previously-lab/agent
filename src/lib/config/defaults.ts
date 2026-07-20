@@ -19,6 +19,8 @@ export const DEFAULTS: UserConfig = {
     provider: "deepseek-v4-flash",
     thinking: true,
   },
+  onboarded: false,
+  datasource: "demo",
 };
 
 /**
@@ -33,5 +35,7 @@ export function mergeConfig(overrides: Partial<UserConfig>): UserConfig {
     slicing: { ...DEFAULTS.slicing, ...overrides.slicing },
     context: { ...DEFAULTS.context, ...overrides.context },
     model,
+    onboarded: overrides.onboarded ?? DEFAULTS.onboarded,
+    datasource: overrides.datasource ?? DEFAULTS.datasource,
   };
 }

@@ -39,11 +39,11 @@ export const TextGenerateEffect = ({
         delay: stagger(staggerDelay, { startDelay: delay }),
       }
     );
-  }, [scope.current, isInView]);
+  }, [scope.current, isInView, words]);
 
   const renderWords = () => {
     return (
-      <motion.div ref={scope}>
+      <motion.div key={words} ref={scope}>
         {wordsArray.map((word, idx) => {
           return (
             <motion.span

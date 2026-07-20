@@ -1,6 +1,5 @@
 import { getOctokit } from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
-import { resolveDemoPath, unresolveDemoPath, demoRef } from "@/lib/demo/paths";
 
 /**
  * List files and directories in the given path.
@@ -24,8 +23,7 @@ export async function listFiles(
     const response = await octokit.rest.repos.getContent({
       owner,
       repo,
-      path: resolveDemoPath(path),
-      ref: ref ?? demoRef(),
+      path,
     });
 
     // Single file (not a directory)
@@ -34,7 +32,7 @@ export async function listFiles(
         {
           name: response.data.name,
           type: "file",
-          path: unresolveDemoPath(response.data.path),
+          path: response.data.path,
         },
       ];
     }
@@ -44,7 +42,7 @@ export async function listFiles(
       (item: { name: string; type: string; path: string }) => ({
         name: item.name,
         type: item.type as "file" | "dir",
-        path: unresolveDemoPath(item.path),
+        path: item.path,
       })
     );
   } catch (error) {

@@ -2,8 +2,8 @@ import { NextIntlClientProvider, hasLocale } from "next-intl";
 import { getMessages, setRequestLocale } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { routing } from "@/i18n/routing";
-import { DemoBanner } from "@/components/demo-banner";
 import { AppHeader } from "@/components/layout/app-header";
+import { resolveDataSource } from "@/lib/data-source/resolve";
 
 type Props = {
   children: React.ReactNode;
@@ -23,12 +23,11 @@ export default async function LocaleLayout({ children, params }: Props) {
 
   setRequestLocale(locale);
   const messages = await getMessages();
-  const isDemo = process.env.DEMO_MODE === "true";
+  const isDemo = resolveDataSource() === "demo";
 
   return (
     <NextIntlClientProvider messages={messages} locale={locale}>
-      {isDemo && <DemoBanner />}
-      <AppHeader />
+      <AppHeader isDemo={isDemo} />
       {children}
     </NextIntlClientProvider>
   );

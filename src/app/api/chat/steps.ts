@@ -57,7 +57,11 @@ import type {
   TurnOutcome,
 } from "@/lib/chat/turn-types";
 
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+import { resolveDataSource } from "@/lib/data-source/resolve";
+
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 // ─── Context assembly helpers (moved verbatim from the inline route) ─────
 
@@ -450,6 +454,7 @@ export async function prepareGenerate(
       repo,
       owner,
       useGithub: USE_GITHUB,
+      useDemo: USE_DEMO,
       sliceId: slice.slice_id,
     },
   };
