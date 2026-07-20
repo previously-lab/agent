@@ -27,7 +27,7 @@ export default async function HomePage({
   const episodicData = await getEpisodicState();
 
   return (
-    <ChatPage>
+    <ChatPage key={persona || "default"}>
       <HeroSection personaId={persona} />
       <TimelinePanel
         initialData={{
