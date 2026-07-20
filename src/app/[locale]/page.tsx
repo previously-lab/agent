@@ -30,6 +30,7 @@ export default async function HomePage({
     <ChatPage>
       <HeroSection personaId={persona} />
       <TimelinePanel
+        key={persona || "default"}
         initialData={{
           active: episodicData.hasActiveSlice ? episodicData.active : null,
           slices: episodicData.recent ?? [],

@@ -21,6 +21,7 @@ import {
   readFileDemo,
   listFilesDemo,
   writeFileDemo,
+  getDemoPersona,
 } from "@/lib/demo/demo-fs";
 import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import type {
@@ -425,13 +426,37 @@ async function readSliceIndexRaw(
   }
 }
 
-// In demo mode persona can change between requests, so the cache key must
-// include the persona id. For simplicity (local disk is fast, remote has its
-// own manifest-level cache in demo-fs.ts), just skip caching in demo mode.
+// Persona-aware in-memory cache for demo mode. Keyed by persona + path so
+// switching personas doesn't return stale data from the previous persona's
+// cache. TTL: 1 hour (demo data is static; remote fetches have their own
+// manifest-level cache in demo-fs.ts).
+
+const _indexCache = new Map<string, { data: SliceIndexEntry[]; ttl: number }>();
+const _bodyCache = new Map<string, { data: string; ttl: number }>();
+
+function cacheGet<T>(store: Map<string, { data: T; ttl: number }>, key: string): T | null {
+  const entry = store.get(key);
+  if (entry && Date.now() < entry.ttl) return entry.data;
+  store.delete(key);
+  return null;
+}
+
+function cacheSet<T>(store: Map<string, { data: T; ttl: number }>, key: string, data: T): void {
+  store.set(key, { data, ttl: Date.now() + 3_600_000 }); // 1 hour
+}
+
 export async function readSliceIndex(
   year: number,
   month: number
 ): Promise<SliceIndexEntry[]> {
+  if (DEMO_MODE) {
+    const key = `${getDemoPersona()}:idx:${year}:${month}`;
+    const cached = cacheGet(_indexCache, key);
+    if (cached) return cached;
+    const data = await readSliceIndexRaw(year, month);
+    cacheSet(_indexCache, key, data);
+    return data;
+  }
   return readSliceIndexRaw(year, month);
 }
 
@@ -452,12 +477,16 @@ export async function readStrands(): Promise<StrandIndex> {
 /**
  * Read the full body (Markdown with frontmatter) of a time slice from disk.
  */
-async function readSliceBodyRaw(path: string): Promise<string> {
-  return fsReadFile(path);
-}
-
 export async function readSliceBody(path: string): Promise<string> {
-  return readSliceBodyRaw(path);
+  if (DEMO_MODE) {
+    const key = `${getDemoPersona()}:body:${path}`;
+    const cached = cacheGet(_bodyCache, key);
+    if (cached) return cached;
+    const data = await fsReadFile(path);
+    cacheSet(_bodyCache, key, data);
+    return data;
+  }
+  return fsReadFile(path);
 }
 
 // ─── Index maintenance ───────────────────────────────────────────────────
