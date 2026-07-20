@@ -9,7 +9,6 @@
  * local-dev vs GitHub-production switch transparently.
  */
 import matter from "gray-matter";
-import { unstable_cache } from "next/cache";
 import { readFile as readFileGitHub } from "@/lib/tools/readFile";
 import { writeFile as writeFileGitHub } from "@/lib/tools/writeFile";
 import { listFiles as listFilesGitHub } from "@/lib/tools/listFiles";
@@ -426,21 +425,14 @@ async function readSliceIndexRaw(
   }
 }
 
-// In demo mode, cache monthly indexes in the Next data cache (persisted on
-// Vercel) so the timeline doesn't re-hit the GitHub API on every load.
-const readSliceIndexCached = unstable_cache(
-  readSliceIndexRaw,
-  ["episodic-slice-index"],
-  { revalidate: 3600, tags: ["episodic"] },
-);
-
+// In demo mode persona can change between requests, so the cache key must
+// include the persona id. For simplicity (local disk is fast, remote has its
+// own manifest-level cache in demo-fs.ts), just skip caching in demo mode.
 export async function readSliceIndex(
   year: number,
   month: number
 ): Promise<SliceIndexEntry[]> {
-  return DEMO_MODE
-    ? readSliceIndexCached(year, month)
-    : readSliceIndexRaw(year, month);
+  return readSliceIndexRaw(year, month);
 }
 
 /**
@@ -464,14 +456,8 @@ async function readSliceBodyRaw(path: string): Promise<string> {
   return fsReadFile(path);
 }
 
-const readSliceBodyCached = unstable_cache(
-  readSliceBodyRaw,
-  ["episodic-slice-body"],
-  { revalidate: 3600, tags: ["episodic"] },
-);
-
 export async function readSliceBody(path: string): Promise<string> {
-  return DEMO_MODE ? readSliceBodyCached(path) : readSliceBodyRaw(path);
+  return readSliceBodyRaw(path);
 }
 
 // ─── Index maintenance ───────────────────────────────────────────────────
