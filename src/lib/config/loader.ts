@@ -5,15 +5,19 @@
  */
 import { readFile } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
+import { readFileDemo } from "@/lib/demo/demo-fs";
+import { resolveDataSource } from "@/lib/data-source/resolve";
 import { mergeConfig, DEFAULTS } from "./defaults";
 import type { UserConfig } from "./types";
 
 const CONFIG_PATH = "memory/user/config.json";
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+
+const SOURCE = resolveDataSource();
 
 async function readRaw(): Promise<string | null> {
   try {
-    if (USE_GITHUB) {
+    if (SOURCE === "demo") return await readFileDemo(CONFIG_PATH);
+    if (SOURCE === "github") {
       const owner = process.env.GITHUB_REPO_OWNER ?? "local";
       const repo = process.env.GITHUB_REPO_NAME ?? "local";
       return await readFile(CONFIG_PATH, repo, owner);

@@ -20,12 +20,6 @@ export async function writeFile(
     );
   }
 
-  // Demo mode is strictly read-only: accept the write so callers/UI behave as
-  // if it succeeded, but never persist it to the repo.
-  if (process.env.DEMO_MODE === "true") {
-    return { path, created: false };
-  }
-
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
     throw new Error(
       `Content is too large (${Buffer.byteLength(content, "utf-8")} bytes). Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`

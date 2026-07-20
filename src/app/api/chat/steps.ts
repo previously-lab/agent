@@ -57,8 +57,11 @@ import type {
   TurnOutcome,
 } from "@/lib/chat/turn-types";
 
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
-const USE_DEMO = process.env.DEMO_MODE === "true";
+import { resolveDataSource } from "@/lib/data-source/resolve";
+
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 // ─── Context assembly helpers (moved verbatim from the inline route) ─────
 

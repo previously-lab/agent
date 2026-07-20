@@ -10,9 +10,6 @@ const DATA_ROOT = join(process.cwd());
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
-/** Demo mode is read-only; writes are accepted but never persisted. */
-const DEMO_MODE = process.env.DEMO_MODE === "true";
-
 export async function readFileLocal(path: string): Promise<string> {
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
@@ -40,11 +37,6 @@ export async function writeFileLocal(
 ): Promise<{ path: string; created: boolean }> {
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
-  }
-
-  // Demo mode writes go through demo-fs.ts now; local-fs is not called in demo mode
-  if (DEMO_MODE) {
-    return { path, created: false };
   }
 
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {

@@ -10,9 +10,14 @@
 import matter from "gray-matter";
 import { readFile } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
+import { readFileDemo } from "@/lib/demo/demo-fs";
+import { resolveDataSource } from "@/lib/data-source/resolve";
 
 const PROFILE_PATH = "memory/user/profile.md";
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 export interface UserProfile {
   name: string;
@@ -29,6 +34,7 @@ function str(value: unknown): string | undefined {
 
 async function readProfileRaw(): Promise<string | null> {
   try {
+    if (USE_DEMO) return await readFileDemo(PROFILE_PATH);
     if (USE_GITHUB) {
       const owner = process.env.GITHUB_REPO_OWNER ?? "local";
       const repo = process.env.GITHUB_REPO_NAME ?? "local";
@@ -36,7 +42,7 @@ async function readProfileRaw(): Promise<string | null> {
     }
     return await readFileLocal(PROFILE_PATH);
   } catch {
-    return null; // missing / unreadable → fall back to defaults
+    return null;
   }
 }
 

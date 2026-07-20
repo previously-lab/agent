@@ -1,20 +1,29 @@
 /**
- * Demo-mode remote filesystem — reads benchmark persona data from a public
- * GitHub repository via raw.githubusercontent.com. No token required.
+ * Demo filesystem — reads benchmark persona data. Supports two backends:
  *
- * Mirrors the local-fs.ts interface so tool executors can dispatch to it
- * transparently when DEMO_MODE is on.
+ *   Remote (BENCHMARK_BASE_URL set):
+ *     Fetches from a public GitHub repo via raw.githubusercontent.com.
+ *     No token required. Writes are NO-OP.
  *
- *   Reads:  fetch raw URL → parse/return
- *   Lists:  consult cached manifest.json tree (no remote directory listing API)
- *   Writes: accepted but never persisted (demo is read-only)
+ *   Local (BENCHMARK_BASE_URL not set, e.g. dev):
+ *     Reads from a local benchmark-data repo on disk.
+ *     Path: ../benchmark-data/{persona}/{relative}
+ *
+ * The module is only called when the data-source resolver returns "demo".
+ * It never checks DEMO_MODE — the caller (data-source/resolve.ts) owns that
+ * decision.
  */
 
-const BENCHMARK_BASE =
-  process.env.BENCHMARK_BASE_URL ??
-  "https://raw.githubusercontent.com/previously-lab/benchmark-data/main";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
+import { join } from "path";
 
-/** Currently selected persona id — set by the demo controller. */
+const BENCHMARK_BASE = process.env.BENCHMARK_BASE_URL ?? "";
+const IS_REMOTE = !!BENCHMARK_BASE;
+
+// Local fallback: look for benchmark-data as a sibling of the project root
+const LOCAL_DATA_DIR = join(process.cwd(), "..", "benchmark-data");
+
+/** Currently selected persona id. */
 let currentPersona = "personal_14";
 
 export function setDemoPersona(personaId: string) {
@@ -25,7 +34,15 @@ export function getDemoPersona(): string {
   return currentPersona;
 }
 
-// ─── Manifest cache ──────────────────────────────────────────────────────
+// ─── Path helpers ────────────────────────────────────────────────────────
+
+/** Strip `memory/` prefix, prepend persona dir. */
+function resolveRelative(path: string): string {
+  const relative = path.replace(/^memory\//, "");
+  return `${currentPersona}/${relative}`;
+}
+
+// ─── Manifest ────────────────────────────────────────────────────────────
 
 interface ManifestPersona {
   name: string;
@@ -47,104 +64,104 @@ let manifestTtl = 0;
 async function fetchManifest(): Promise<Manifest> {
   const now = Date.now();
   if (manifestPromise && now < manifestTtl) return manifestPromise;
-
   manifestTtl = now + 3_600_000; // 1 hour
-  manifestPromise = fetch(`${BENCHMARK_BASE}/manifest.json`)
-    .then((res) => {
-      if (!res.ok) throw new Error(`Manifest fetch failed: ${res.status}`);
-      return res.json() as Promise<Manifest>;
-    })
-    .catch((err) => {
-      manifestPromise = null;
-      manifestTtl = 0;
-      throw err;
-    });
+
+  if (IS_REMOTE) {
+    manifestPromise = fetch(`${BENCHMARK_BASE}/manifest.json`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`Manifest fetch failed: ${res.status}`);
+        return res.json() as Promise<Manifest>;
+      })
+      .catch((err) => { manifestPromise = null; manifestTtl = 0; throw err; });
+  } else {
+    manifestPromise = Promise.resolve(
+      JSON.parse(readFileSync(join(LOCAL_DATA_DIR, "manifest.json"), "utf-8"))
+    ).catch((err) => { manifestPromise = null; manifestTtl = 0; throw err; });
+  }
 
   return manifestPromise;
 }
 
-// ─── File-level API (mirrors local-fs.ts) ────────────────────────────────
-
-/**
- * Strip the `memory/` prefix and resolve to a remote URL.
- *
- *   memory/episodic/slices/2022/01/_index.json
- *   → {base}/personal_14/episodic/slices/2022/01/_index.json
- *
- *   memory/user/profile.md
- *   → {base}/personal_14/user/profile.md
- */
-function buildRemoteUrl(path: string): string {
-  // Normalise: strip memory/ prefix, replace with persona path
-  const relative = path.replace(/^memory\//, "");
-  return `${BENCHMARK_BASE}/${currentPersona}/${relative}`;
-}
+// ─── File API ────────────────────────────────────────────────────────────
 
 export async function readFileDemo(path: string): Promise<string> {
-  const url = buildRemoteUrl(path);
-  const res = await fetch(url);
-  if (!res.ok) {
-    if (res.status === 404) throw new Error(`File not found: "${path}"`);
-    throw new Error(`Failed to read "${path}": HTTP ${res.status}`);
+  const rel = resolveRelative(path);
+
+  if (IS_REMOTE) {
+    const res = await fetch(`${BENCHMARK_BASE}/${rel}`);
+    if (!res.ok) {
+      if (res.status === 404) throw new Error(`File not found: "${path}"`);
+      throw new Error(`Failed to read "${path}": HTTP ${res.status}`);
+    }
+    return res.text();
   }
-  return res.text();
+
+  // Local disk
+  const fullPath = join(LOCAL_DATA_DIR, rel);
+  if (!existsSync(fullPath)) throw new Error(`File not found: "${path}"`);
+  return readFileSync(fullPath, "utf-8");
 }
 
 export async function listFilesDemo(
   path: string
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
-  const manifest = await fetchManifest();
-  const persona = manifest.personas[currentPersona];
-  if (!persona || !persona.tree) {
-    throw new Error(`Persona "${currentPersona}" not found in manifest`);
-  }
+  if (IS_REMOTE) {
+    const manifest = await fetchManifest();
+    const persona = manifest.personas[currentPersona];
+    if (!persona?.tree) throw new Error(`Persona "${currentPersona}" not found in manifest`);
 
-  // Navigate the manifest tree to the requested path
-  // Path is like: memory/episodic/slices/2022/01
-  const relative = path.replace(/^memory\//, "").replace(/\/$/, "");
-  const segments = relative.split("/").filter(Boolean);
-
-  // Walk into persona tree
-  let node: unknown = persona.tree;
-  for (const seg of segments) {
-    if (node && typeof node === "object" && seg in (node as Record<string, unknown>)) {
-      node = (node as Record<string, unknown>)[seg];
-    } else {
-      return []; // path doesn't exist in manifest
-    }
-  }
-
-  const entries: Array<{ name: string; type: "file" | "dir"; path: string }> = [];
-  if (node && typeof node === "object") {
-    const obj = node as Record<string, unknown>;
-    for (const [key, value] of Object.entries(obj)) {
-      if (key === "_files" && Array.isArray(value)) {
-        for (const f of value as string[]) {
-          entries.push({ name: f, type: "file" as const, path: `${path}/${f}` });
-        }
-      } else if (typeof value === "object" && value !== null) {
-        entries.push({ name: key, type: "dir" as const, path: `${path}/${key}` });
+    const relative = path.replace(/^memory\//, "").replace(/\/$/, "");
+    const segments = relative.split("/").filter(Boolean);
+    let node: unknown = persona.tree;
+    for (const seg of segments) {
+      if (node && typeof node === "object" && seg in (node as Record<string, unknown>)) {
+        node = (node as Record<string, unknown>)[seg];
+      } else {
+        return [];
       }
     }
+
+    const entries: Array<{ name: string; type: "file" | "dir"; path: string }> = [];
+    if (node && typeof node === "object") {
+      const obj = node as Record<string, unknown>;
+      for (const [key, value] of Object.entries(obj)) {
+        if (key === "_files" && Array.isArray(value)) {
+          for (const f of value as string[]) entries.push({ name: f, type: "file", path: `${path}/${f}` });
+        } else if (typeof value === "object" && value !== null) {
+          entries.push({ name: key, type: "dir", path: `${path}/${key}` });
+        }
+      }
+    }
+    return entries;
   }
 
-  return entries;
+  // Local disk
+  const rel = resolveRelative(path);
+  const fullPath = join(LOCAL_DATA_DIR, rel);
+  if (!existsSync(fullPath)) return [];
+  const stat = statSync(fullPath);
+  if (stat.isFile()) return [{ name: path.split("/").pop() ?? path, type: "file", path }];
+
+  return readdirSync(fullPath).map((name) => {
+    const ep = join(fullPath, name);
+    const es = statSync(ep);
+    return { name, type: es.isDirectory() ? "dir" as const : "file" as const, path: `${path}/${name}` };
+  });
 }
 
 export async function writeFileDemo(
   path: string,
   _content: string
 ): Promise<{ path: string; created: boolean }> {
-  // Demo mode is strictly read-only — accept writes but never persist.
   return { path, created: false };
 }
 
-// ─── Persona listing ──────────────────────────────────────────────────────
+// ─── Persona listing ─────────────────────────────────────────────────────
 
-export async function listDemoPersonas(): Promise<ManifestPersona[]> {
+export async function listDemoPersonas(): Promise<(ManifestPersona & { id: string })[]> {
   const manifest = await fetchManifest();
   return Object.entries(manifest.personas).map(([id, p]) => ({
-    ...p,
+    id,
     name: p.name,
     description: p.description,
     topics: p.topics,

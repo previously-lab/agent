@@ -14,11 +14,16 @@ import type { UserConfig } from "@/lib/config/types";
 export function SettingsForm({
   initialProfile,
   initialConfig,
+  dataSource = "local",
+  canWrite = true,
 }: {
   initialProfile: UserProfile;
   initialConfig: UserConfig;
+  dataSource?: string;
+  canWrite?: boolean;
 }) {
   const t = useTranslations("settings");
+  const isDemo = dataSource === "demo";
 
   // ── Profile (server-backed: memory/user/profile.md) ──
   const [name, setName] = useState(initialProfile.name ?? "");
@@ -68,6 +73,26 @@ export function SettingsForm({
 
   return (
     <div className="space-y-8">
+      {/* Data source — demo info banner */}
+      {isDemo && (
+        <section className="rounded-lg border border-border p-4 bg-muted/20">
+          <h3 className="text-sm font-medium mb-1">Demo Mode</h3>
+          <p className="text-xs text-muted-foreground">
+            You are browsing a read-only demo with pre-seeded persona data.
+            Connect your own GitHub repository to unlock full memory features:
+            profile editing, persistent settings, and background loops.
+          </p>
+          <a
+            href="https://github.com/previously-lab/agent#readme"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block mt-2 text-xs text-primary hover:underline"
+          >
+            Setup guide →
+          </a>
+        </section>
+      )}
+
       {/* Profile */}
       <section className="rounded-lg border border-border p-4">
         <h3 className="text-sm font-medium mb-1">{t("profile.heading")}</h3>
@@ -96,7 +121,7 @@ export function SettingsForm({
             <textarea value={about} onChange={(e) => setAbout(e.target.value)} placeholder={t("profile.aboutPlaceholder")} rows={4} className={`${inputClass} resize-y`} />
           </label>
           <div className="flex items-center gap-3">
-            <Button onClick={handleProfileSave} disabled={saving}>
+            <Button onClick={handleProfileSave} disabled={saving || !canWrite} title={!canWrite ? "Unavailable in demo mode" : undefined}>
               {saving ? t("profile.saving") : t("profile.save")}
             </Button>
             {savedMsg && <span className="text-xs text-muted-foreground">{savedMsg}</span>}
@@ -146,7 +171,7 @@ export function SettingsForm({
             </label>
           </div>
           <div className="flex items-center gap-3">
-            <Button onClick={handleConfigSave} disabled={configSaving}>
+            <Button onClick={handleConfigSave} disabled={configSaving || !canWrite} title={!canWrite ? "Unavailable in demo mode" : undefined}>
               {configSaving ? t("config.saving") : t("config.save")}
             </Button>
             {configSavedMsg && <span className="text-xs text-muted-foreground">{configSavedMsg}</span>}

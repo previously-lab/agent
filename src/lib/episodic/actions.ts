@@ -61,7 +61,7 @@ async function scanMonthsBack(
 }
 
 export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boolean }> {
-  const DEMO_MODE = process.env.DEMO_MODE === "true";
+  const isDemoMode = process.env.NODE_ENV !== "development" && !process.env.GITHUB_TOKEN;
   const PAGE_SIZE = 3;
 
   const now = new Date();
@@ -71,7 +71,7 @@ export async function getEpisodicState(): Promise<EpisodicState & { hasMore: boo
   const { entries, exhausted } = await scanMonthsBack(
     year,
     month,
-    DEMO_MODE ? 48 : 2,
+    isDemoMode ? 48 : 2,
     PAGE_SIZE + 2,
   );
 

@@ -23,6 +23,7 @@ import {
   listFilesDemo,
   writeFileDemo,
 } from "@/lib/demo/demo-fs";
+import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import type {
   TimeSlice,
   Turn,
@@ -35,10 +36,12 @@ import type {
 
 // ─── Environment detection ───────────────────────────────────────────────
 
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
+const DATA_SOURCE = resolveDataSource();
+const USE_GITHUB = DATA_SOURCE === "github";
+const USE_DEMO = DATA_SOURCE === "demo";
 
 // Demo data is static (writes are no-op'd), so reads can be cached hard.
-const DEMO_MODE = process.env.DEMO_MODE === "true";
+const DEMO_MODE = isDemo(DATA_SOURCE);
 
 function getRepoConfig(): { owner: string; repo: string } {
   const owner = process.env.GITHUB_REPO_OWNER ?? "local";

@@ -29,4 +29,8 @@ export interface UserConfig {
   slicing: SlicingConfig;
   context: ContextConfig;
   model: ModelConfig;
+  /** Has the user completed the onboarding welcome flow? */
+  onboarded?: boolean;
+  /** User's preferred data source: "demo" (benchmark personas) or "own" (GitHub repo). Only persisted when writes are available. */
+  datasource?: "demo" | "own";
 }
