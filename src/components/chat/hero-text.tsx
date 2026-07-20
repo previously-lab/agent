@@ -21,24 +21,31 @@ export function HeroText({
         delay={0.3}
         staggerDelay={0.25}
       />
-      <div className="mt-3">
-        <TextGenerateEffect
-          words={name}
-          className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground"
-          duration={0.5}
-          delay={1.1}
-          staggerDelay={0.4}
-        />
-      </div>
 
-      {clickable && onNameClick && (
-        <button
+      {clickable ? (
+        <div
           onClick={onNameClick}
-          className="mt-5 group inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 transition-all duration-300"
+          className="relative mt-3 inline-flex cursor-pointer group"
         >
-          <ArrowLeftRight className="h-3.5 w-3.5 opacity-50 group-hover:opacity-100 transition-opacity" />
-          <span>Browse personas</span>
-        </button>
+          <TextGenerateEffect
+            words={name}
+            className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground group-hover:text-primary/80 transition-colors duration-300"
+            duration={0.5}
+            delay={1.1}
+            staggerDelay={0.4}
+          />
+          <ArrowLeftRight className="absolute -top-1 -right-5 h-4 w-4 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-all duration-300" />
+        </div>
+      ) : (
+        <div className="mt-3">
+          <TextGenerateEffect
+            words={name}
+            className="text-3xl sm:text-4xl md:text-5xl font-bold text-foreground"
+            duration={0.5}
+            delay={1.1}
+            staggerDelay={0.4}
+          />
+        </div>
       )}
     </div>
   );
