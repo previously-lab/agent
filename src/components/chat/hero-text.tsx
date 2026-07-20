@@ -35,7 +35,7 @@ export function HeroText({
             staggerDelay={0.4}
           />
           <ArrowLeftRight
-            className="absolute -top-1 -right-3 h-4 w-4 text-muted-foreground"
+            className="ml-1 h-3 w-3 text-muted-foreground -translate-y-px"
             style={{
               opacity: 0,
               animation: "0.3s ease 2.5s forwards fade-in-icon",
