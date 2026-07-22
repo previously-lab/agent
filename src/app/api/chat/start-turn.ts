@@ -12,6 +12,7 @@
  * expose `run.runId` (the reconnect handle) in a response header.
  */
 import { start } from "workflow/api";
+import crypto from "crypto";
 import { convertToModelMessages, type UIMessage } from "ai";
 import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
@@ -54,6 +55,12 @@ export async function startTurn(
   const clientTimezone = args.timezone ?? "UTC";
   const { owner, repo } = getRepoConfig();
 
+  // Generate turn identity early — shared by user turn, agent turn, and
+  // agent.md cognition record. 4 random bytes → 6-char base64url, unique
+  // within a slice (and collision probability across 2^32 ≈ 4.3B values is
+  // negligible for a time slice's lifetime).
+  const turnId = crypto.randomBytes(4).toString("base64url");
+
   // Full turns, no truncation. The limit comes from user config so it can be
   // tuned without a redeploy.
   const modelMessages = await convertToModelMessages(args.messages);
@@ -78,6 +85,7 @@ export async function startTurn(
     owner,
     repo,
     startedAtIso: new Date().toISOString(),
+    turnId,
   };
 
   return start(turnWorkflow, [input]);

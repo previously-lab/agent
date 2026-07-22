@@ -29,6 +29,11 @@ import {
   listFilesDemo,
   writeFileDemo,
 } from "@/lib/demo/demo-fs";
+import {
+  serializeAgentTimeline,
+  writeAgentTimeline,
+  sliceIdToAgentPath,
+} from "@/lib/episodic/manager";
 import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 import { applyProfilePatch } from "@/lib/identity/profile-writer";
 import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
@@ -54,6 +59,8 @@ export interface ToolContext {
   useDemo: boolean;
   /** The current time-slice id (for startLoop to record the link). */
   sliceId: string;
+  /** Current turn identifier — used by recordCognition to tag agent.md. */
+  turnId: string;
 }
 
 /**
@@ -324,4 +331,49 @@ export async function loopReportExecute(
   }
 
   return { recorded: true, step: step.step, done };
+}
+
+// ─── Cognition tool executor ──────────────────────────────────────────────
+
+/**
+ * recordCognition — the agent's self-report of its internal cognitive process.
+ *
+ * Writes a structured cognition entry to the agent timeline (agent.md) under
+ * the current slice directory. The agent calls this at the end of each turn;
+ * the content is the agent's own narrative of why it did what it did — not
+ * raw tool results, but the agent's understanding of those results.
+ *
+ * This tool constructs its own deterministic path (getAgentPath) — it does NOT
+ * accept user-supplied paths, so it bypasses the generic writeMemory whitelist
+ * checks. The whitelist protects system files from the generic writeMemory tool;
+ * this tool is a first-class system tool.
+ */
+export async function recordCognitionExecute(
+  input: {
+    reasoning: string;
+    toolCalls?: Array<{ toolName: string; intent: string; assessment: string }>;
+    selfCheck: string;
+  },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ ok: boolean; path?: string; error?: string }> {
+  "use step";
+  try {
+    const content = serializeAgentTimeline({
+      turnId: ctx.turnId,
+      timestamp: new Date().toISOString(),
+      reasoning: input.reasoning,
+      toolCalls: input.toolCalls ?? [],
+      selfCheck: input.selfCheck,
+    });
+
+    // Write via the episodic manager's abstracted I/O — same three-backend
+    // dispatch as core.md (demo / GitHub / local).
+    const res = await writeAgentTimeline(ctx.sliceId, content);
+    return { ok: true, path: res.path };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "failed to write cognition",
+    };
+  }
 }

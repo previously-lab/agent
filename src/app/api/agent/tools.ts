@@ -23,6 +23,7 @@ import {
   webSearchExecute,
   startLoopExecute,
   loopReportExecute,
+  recordCognitionExecute,
   type ToolContext,
   type LoopToolContext,
 } from "./tool-executors";
@@ -35,6 +36,7 @@ const toolContextSchema = z.object({
   useGithub: z.boolean(),
   useDemo: z.boolean(),
   sliceId: z.string(),
+  turnId: z.string(),
 });
 
 const loopToolContextSchema = z.object({
@@ -153,6 +155,28 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: startLoopExecute,
   }),
+  recordCognition: tool({
+    description:
+      "Record your internal cognitive process for this turn. Call this at the end of your turn to self-report: what you were thinking, why you used each tool, what each result meant, and a brief self-assessment. This builds your agent timeline (agent.md), hidden from the user by default, for future self-improvement. Do NOT call this to report tool output back to the user — that goes in your normal text response.",
+    inputSchema: z.object({
+      reasoning: z
+        .string()
+        .describe("Your overall strategy and thought process for this turn."),
+      toolCalls: z
+        .array(z.object({
+          toolName: z.string().describe("Name of the tool you called"),
+          intent: z.string().describe("Why you called this tool — what you expected"),
+          assessment: z.string().describe("What the result meant — was it sufficient?"),
+        }))
+        .optional()
+        .describe("Each tool you called and your assessment of its result. Omit if no tools were called."),
+      selfCheck: z
+        .string()
+        .describe("Overall self-assessment: tool count, redundancy, goal achievement. Be honest and concise."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recordCognitionExecute,
+  }),
 };
 
 // ─── Loop tool set ───────────────────────────────────────────────────────
@@ -186,6 +210,7 @@ export function buildChatToolsContext(ctx: ToolContext): Record<keyof typeof cha
     webSearch: ctx,
     updateUserProfile: ctx,
     startLoop: ctx,
+    recordCognition: ctx,
   };
 }
 

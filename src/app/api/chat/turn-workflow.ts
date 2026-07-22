@@ -170,7 +170,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // Always finalize: the slice snapshot stays honest and the client's stream
   // is closed even when the agent errored mid-turn.
-  await finalizeTurn(flash.slice, outcome);
+  await finalizeTurn(flash.slice, outcome, input.turnId);
 
   if (streamError !== null) {
     throw streamError;

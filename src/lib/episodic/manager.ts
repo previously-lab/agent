@@ -94,7 +94,7 @@ export function getActiveSlice(): TimeSlice | null {
  * The slice_id is derived from the current UTC date at time of first message.
  * Does NOT write to disk — that happens when appendTurn or closeSlice is called.
  */
-export function createSlice(userMessage: string, timezone: string): TimeSlice {
+export function createSlice(userMessage: string, timezone: string, turnId: string): TimeSlice {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
@@ -108,6 +108,7 @@ export function createSlice(userMessage: string, timezone: string): TimeSlice {
     timestamp: start,
     role: "user",
     content: userMessage,
+    turnId,
   };
 
   const slice: TimeSlice = {
@@ -145,9 +146,27 @@ export async function tryLoadTodaySlice(): Promise<TimeSlice | null> {
 
   try {
     const entries = await fsListFiles(dir);
+
+    // NEW format: slice directories (HHMM/) containing timeline/core.md
+    const sliceDirs = entries
+      .filter((e) => e.type === "dir")
+      .sort((a, b) => b.name.localeCompare(a.name));
+
+    for (const d of sliceDirs) {
+      try {
+        const corePath = `${dir}/${d.name}/timeline/core.md`;
+        const raw = await fsReadFile(corePath);
+        const slice = parseSlice(raw);
+        if (slice.status === "active") return slice;
+      } catch {
+        // core.md may not exist in this directory yet — skip
+      }
+    }
+
+    // BACKWARD COMPAT: flat .md files (old format)
     const files = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".md"))
-      .sort((a, b) => b.name.localeCompare(a.name)); // newest HHMM first
+      .sort((a, b) => b.name.localeCompare(a.name));
 
     for (const f of files) {
       const raw = await fsReadFile(f.path);
@@ -204,15 +223,39 @@ export function sliceIdToRelPath(sliceId: string): string {
 }
 
 /**
- * Compute the file path for a time slice .md file.
- * New format: memory/episodic/slices/YYYY/MM/DD/HHMM.md
+ * Compute the path to the slice's timeline directory (no trailing file).
+ * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/
+ */
+export function sliceIdToTimelineDir(sliceId: string): string {
+  return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}/timeline`;
+}
+
+/**
+ * Compute the file path for core.md (the shared conversation record).
+ * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/core.md
  */
 export function sliceIdToFilePath(sliceId: string): string {
+  return `${sliceIdToTimelineDir(sliceId)}/core.md`;
+}
+
+/**
+ * Compute the file path for agent.md (the agent's internal cognitive record).
+ * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/agent.md
+ */
+export function sliceIdToAgentPath(sliceId: string): string {
+  return `${sliceIdToTimelineDir(sliceId)}/agent.md`;
+}
+
+/**
+ * Legacy flat-file path for backward compatibility.
+ * Old format: memory/episodic/slices/YYYY/MM/DD/HHMM.md
+ */
+export function sliceIdToLegacyFilePath(sliceId: string): string {
   return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}.md`;
 }
 
 /**
- * Compute the file path for a time slice .md file.
+ * Compute the file path for the active time slice's core.md.
  */
 export function getSlicePath(slice: TimeSlice): string {
   return sliceIdToFilePath(slice.slice_id);
@@ -267,8 +310,8 @@ export function serializeSlice(slice: TimeSlice): string {
 
   const body = slice.turns
     .map(
-      (turn, i) =>
-        `## Turn ${i + 1} — ${turn.timestamp} (${turn.role})\n\n${turn.content}`
+      (turn) =>
+        `## Turn ${turn.turnId ?? "?"} — ${turn.timestamp} (${turn.role})\n\n${turn.content}`
     )
     .join("\n\n");
 
@@ -312,18 +355,22 @@ export function parseSlice(raw: string): TimeSlice {
 
 /**
  * Parse turn blocks from the Markdown body of a time slice.
- * Each turn starts with "## Turn N — ISO_TIMESTAMP (role)".
+ * Each turn starts with "## Turn {turnId} — ISO_TIMESTAMP (role)" (new) or
+ * "## Turn N — ISO_TIMESTAMP (role)" (legacy, numeric index only).
  */
 function parseTurns(body: string): Turn[] {
   const turns: Turn[] = [];
   const trimmed = body.trim();
   if (!trimmed) return turns;
 
-  // Match turn headers: "## Turn N — ISO_TIMESTAMP (role)"
-  const turnHeaderRegex = /^## Turn \d+ — (\S+) \((\w+)\)$/gm;
+  // Match both old and new formats:
+  // New: ## Turn a3fk2w — ISO (role)
+  // Legacy: ## Turn 1 — ISO (role)
+  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)$/gm;
 
   // Collect turn headers with the position right after the header line
   const headers: Array<{
+    turnLabel: string;
     timestamp: string;
     role: "user" | "agent";
     contentStart: number;
@@ -337,31 +384,32 @@ function parseTurns(body: string): Turn[] {
         : trimmed.indexOf("\n", match.index) + 1;
 
     headers.push({
-      timestamp: match[1],
-      role: match[2] as "user" | "agent",
+      turnLabel: match[1],
+      timestamp: match[2],
+      role: match[3] as "user" | "agent",
       contentStart: afterHeader,
     });
   }
 
-  // Extract the content between each header and the next
+  // Extract the content between each header and the next.
+  // Search for "## Turn " as a generic delimiter — no longer relies on
+  // sequential numeric indices (which don't exist with base64url turnIds).
   for (let i = 0; i < headers.length; i++) {
-    let contentEnd: number;
-    if (i < headers.length - 1) {
-      // Find where the next header begins (search for "## Turn i+2 —")
-      contentEnd = trimmed.indexOf(`## Turn ${i + 2} —`, headers[i].contentStart);
-      if (contentEnd === -1) contentEnd = trimmed.length;
-    } else {
-      contentEnd = trimmed.length;
-    }
+    const nextHeaderIdx = trimmed.indexOf("## Turn ", headers[i].contentStart);
+    const contentEnd = nextHeaderIdx !== -1 ? nextHeaderIdx : trimmed.length;
 
     const turnContent = trimmed
       .slice(headers[i].contentStart, contentEnd)
       .trim();
 
+    // Distinguish: numeric label → legacy format (no turnId), base64url → new
+    const isNumeric = /^\d+$/.test(headers[i].turnLabel);
+
     turns.push({
       timestamp: headers[i].timestamp,
       role: headers[i].role,
       content: turnContent,
+      ...(isNumeric ? {} : { turnId: headers[i].turnLabel }),
     });
   }
 
@@ -559,6 +607,69 @@ export async function updateStrands(slice: TimeSlice): Promise<void> {
  */
 function extractRelativePath(slice: TimeSlice): string {
   return sliceIdToRelPath(slice.slice_id);
+}
+
+// ─── Agent timeline I/O ──────────────────────────────────────────────────
+
+/**
+ * Serialize a single cognition entry for the agent timeline (agent.md).
+ *
+ * The agent timeline stores cognitive process, not raw tool results:
+ * reasoning, per-tool intent + assessment, and a self-check.
+ */
+export function serializeAgentTimeline(input: {
+  turnId: string;
+  timestamp: string;
+  reasoning: string;
+  toolCalls: Array<{ toolName: string; intent: string; assessment: string }>;
+  selfCheck: string;
+}): string {
+  const header = `## Cognition ${input.turnId} — ${input.timestamp}`;
+  const reasoning = `\n### Reasoning\n${input.reasoning}\n`;
+  const steps =
+    input.toolCalls.length > 0
+      ? `\n${input.toolCalls
+          .map(
+            (tc) =>
+              `### Step: \`${tc.toolName}\`\n- **intent**: ${tc.intent}\n- **assessment**: ${tc.assessment}`
+          )
+          .join("\n\n")}\n`
+      : "";
+  const selfCheck = `\n### Self-check\n${input.selfCheck}`;
+  return header + reasoning + steps + selfCheck;
+}
+
+/**
+ * Write (append) a cognition entry to the agent's timeline for a slice.
+ * Reads the existing agent.md (if any) and appends the new entry.
+ */
+export async function writeAgentTimeline(
+  sliceId: string,
+  cognitionContent: string,
+): Promise<{ path: string; created: boolean }> {
+  const agentPath = sliceIdToAgentPath(sliceId);
+  let existing = "";
+  try {
+    existing = await fsReadFile(agentPath);
+  } catch {
+    // File doesn't exist yet — will be created
+  }
+  const fullContent = existing.trimEnd()
+    ? existing.trimEnd() + "\n\n" + cognitionContent
+    : cognitionContent;
+  return fsWriteFile(agentPath, fullContent);
+}
+
+/**
+ * Read the agent's cognitive timeline for a slice.
+ * Returns empty string if agent.md doesn't exist.
+ */
+export async function readAgentTimeline(sliceId: string): Promise<string> {
+  try {
+    return await fsReadFile(sliceIdToAgentPath(sliceId));
+  } catch {
+    return "";
+  }
 }
 
 // ─── Testing utilities ───────────────────────────────────────────────────

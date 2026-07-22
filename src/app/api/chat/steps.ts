@@ -117,7 +117,9 @@ Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${sourc
 
 You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory, so results are waiting when the user returns. Tell the user when you start one. Don't use it for anything you can answer right now.
 
-You can search the live web with the webSearch tool when the user needs current or external information beyond their memory and your knowledge. Weave what it finds into your prose with inline citations where relevant — do NOT append a standalone list of source links; the search card already shows them.`;
+You can search the live web with the webSearch tool when the user needs current or external information beyond their memory and your knowledge. Weave what it finds into your prose with inline citations where relevant — do NOT append a standalone list of source links; the search card already shows them.
+
+At the end of your turn, use the recordCognition tool to record your internal cognitive process: what you were thinking, why you chose each tool, what each result meant, and a brief self-assessment. This builds your agent timeline (hidden from the user) for future self-improvement.`;
 
   const assembled = assembleContext({
     systemPrompt: baseSystemPrompt,
@@ -266,18 +268,18 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     if (checkTimeSilence(lastActivity, silenceMs)) {
       await closeSlice(diskSlice, "time_silence");
       console.log(`[Episodic] Recovered & closed stale slice: ${diskSlice.slice_id}`);
-      slice = createSlice(lastUserMessage, clientTimezone);
+      slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
     } else if (diskSlice.turns.length >= config.slicing.maxTurnsPerSlice) {
       // Force-close on turn count (safety net for marathon sessions).
       await closeSlice(diskSlice, "capacity");
       console.log(`[Episodic] Closed at turn cap: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
-      slice = createSlice(lastUserMessage, clientTimezone);
+      slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
     } else {
       slice = diskSlice;
       console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
     }
   } else {
-    slice = createSlice(lastUserMessage, clientTimezone);
+    slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
     console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
   }
 
@@ -289,6 +291,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       timestamp: new Date().toISOString(),
       role: "user",
       content: lastUserMessage,
+      turnId: input.turnId,
     });
   }
 
@@ -448,6 +451,7 @@ export async function prepareGenerate(
       useGithub: USE_GITHUB,
       useDemo: USE_DEMO,
       sliceId: slice.slice_id,
+      turnId: input.turnId,
     },
   };
 }
@@ -466,7 +470,8 @@ export async function prepareGenerate(
  */
 export async function finalizeTurn(
   slice: TimeSlice,
-  outcome: TurnOutcome
+  outcome: TurnOutcome,
+  turnId: string,
 ): Promise<void> {
   "use step";
 
@@ -476,12 +481,14 @@ export async function finalizeTurn(
       timestamp: new Date().toISOString(),
       role: "agent",
       content: outcome.text,
+      turnId,
     });
   } else if (outcome.text) {
     appendTurn(slice, {
       timestamp: new Date().toISOString(),
       role: "agent",
       content: `[partial] ${outcome.text}`,
+      turnId,
     });
     console.log(`[Episodic] Pro interrupted (${outcome.finishReason})`);
   } else {

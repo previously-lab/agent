@@ -9,7 +9,9 @@ import type { TurnInput } from "@/lib/chat/turn-types";
 
 const episodic = vi.hoisted(() => ({
   tryLoadTodaySlice: vi.fn(),
-  createSlice: vi.fn(),
+  createSlice: vi.fn((msg: string, tz: string) =>
+    makeSlice({ turns: [{ timestamp: "t", role: "user", content: msg }] })
+  ),
   closeSlice: vi.fn(),
   appendTurn: vi.fn((slice: TimeSlice, turn: unknown) => {
     slice.turns.push(turn as TimeSlice["turns"][number]);
@@ -99,6 +101,7 @@ function makeInput(lastUserMessage: string): TurnInput {
     owner: "local",
     repo: "local",
     startedAtIso: "2026-07-14T10:00:00.000Z",
+    turnId: "test-id",
   };
 }
 
@@ -111,13 +114,9 @@ beforeEach(() => {
 describe("housekeeping step", () => {
   it("creates a fresh slice when none is on disk and returns it by value", async () => {
     episodic.tryLoadTodaySlice.mockResolvedValue(null);
-    episodic.createSlice.mockImplementation((msg: string) =>
-      makeSlice({ turns: [{ timestamp: "t", role: "user", content: msg }] })
-    );
-
     const { slice } = await housekeeping(makeInput("hello world"));
 
-    expect(episodic.createSlice).toHaveBeenCalledWith("hello world", "UTC");
+    expect(episodic.createSlice).toHaveBeenCalledWith("hello world", "UTC", "test-id");
     expect(slice.turns).toHaveLength(1);
     expect(slice.turns[0].content).toBe("hello world");
     // Durably snapshotted before returning (was fire-and-forget in the old route).

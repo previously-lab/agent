@@ -23,6 +23,12 @@ export {
   tryLoadTodaySlice,
   saveSliceSnapshot,
   ensureIndexEntries,
+  sliceIdToTimelineDir,
+  sliceIdToAgentPath,
+  sliceIdToLegacyFilePath,
+  serializeAgentTimeline,
+  writeAgentTimeline,
+  readAgentTimeline,
 } from "./manager";
 
 export {

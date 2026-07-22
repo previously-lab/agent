@@ -44,6 +44,12 @@ export interface TurnInput {
   repo: string;
   /** ISO 8601 turn start, stamped in the route layer. */
   startedAtIso: string;
+  /**
+   * Unique turn identifier — one per round of conversation (user message +
+   * agent response + agent cognitive process). 6-char base64url, generated in
+   * start-turn.ts. Cross-references core.md and agent.md.
+   */
+  turnId: string;
 }
 
 /** Result of the housekeeping step — the recovered/created slice by value. */

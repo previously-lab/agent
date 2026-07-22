@@ -5,15 +5,19 @@ import {
   toIndexEntry,
   sliceIdToRelPath,
   sliceIdToFilePath,
+  sliceIdToTimelineDir,
+  sliceIdToAgentPath,
+  sliceIdToLegacyFilePath,
+  serializeAgentTimeline,
 } from "../manager";
 import type { TimeSlice, Turn } from "../types";
 
 // ─── Sample data ───────────────────────────────────────────────────────
 
 const sampleTurns: Turn[] = [
-  { timestamp: "2024-03-15T10:00:00.000Z", role: "user", content: "Hello, let's discuss the project." },
-  { timestamp: "2024-03-15T10:01:00.000Z", role: "agent", content: "Sure! What aspect of the project?" },
-  { timestamp: "2024-03-15T10:02:00.000Z", role: "user", content: "The timeline and deliverables." },
+  { timestamp: "2024-03-15T10:00:00.000Z", role: "user", content: "Hello, let's discuss the project.", turnId: "a3fk2w" },
+  { timestamp: "2024-03-15T10:01:00.000Z", role: "agent", content: "Sure! What aspect of the project?", turnId: "a3fk2w" },
+  { timestamp: "2024-03-15T10:02:00.000Z", role: "user", content: "The timeline and deliverables.", turnId: "b4gl3x" },
 ];
 
 const sampleSlice: TimeSlice = {
@@ -47,11 +51,11 @@ describe("serializeSlice", () => {
     expect(md).toContain("2024-03-15T10:00:00.000Z"); // start may be quoted
   });
 
-  it("includes all turn headers in body", () => {
+  it("includes all turn headers in body with turnId labels", () => {
     const md = serializeSlice(sampleSlice);
-    expect(md).toContain("## Turn 1 — 2024-03-15T10:00:00.000Z (user)");
-    expect(md).toContain("## Turn 2 — 2024-03-15T10:01:00.000Z (agent)");
-    expect(md).toContain("## Turn 3 — 2024-03-15T10:02:00.000Z (user)");
+    expect(md).toContain("## Turn a3fk2w — 2024-03-15T10:00:00.000Z (user)");
+    expect(md).toContain("## Turn a3fk2w — 2024-03-15T10:01:00.000Z (agent)");
+    expect(md).toContain("## Turn b4gl3x — 2024-03-15T10:02:00.000Z (user)");
   });
 
   it("includes turn content after headers", () => {
@@ -114,7 +118,7 @@ describe("parseSlice", () => {
     expect(parsed.emotional_tone).toBe(sampleSlice.emotional_tone);
   });
 
-  it("roundtrips turns correctly", () => {
+  it("roundtrips turns correctly with turnId", () => {
     const md = serializeSlice(sampleSlice);
     const parsed = parseSlice(md);
 
@@ -122,6 +126,9 @@ describe("parseSlice", () => {
     expect(parsed.turns[0].timestamp).toBe(sampleTurns[0].timestamp);
     expect(parsed.turns[0].role).toBe(sampleTurns[0].role);
     expect(parsed.turns[0].content).toBe(sampleTurns[0].content);
+    expect(parsed.turns[0].turnId).toBe("a3fk2w");
+    expect(parsed.turns[1].turnId).toBe("a3fk2w");
+    expect(parsed.turns[2].turnId).toBe("b4gl3x");
   });
 
   it("parses em-dash turn headers correctly", () => {
@@ -273,15 +280,169 @@ describe("sliceIdToRelPath", () => {
 });
 
 describe("sliceIdToFilePath", () => {
-  it("builds the full .md path under slices/ for a time-bearing id", () => {
+  it("builds the core.md path under timeline/ for a time-bearing id", () => {
     expect(sliceIdToFilePath("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430.md"
+      "memory/episodic/slices/2026/07/10/1430/timeline/core.md"
     );
   });
 
-  it("builds the legacy path for a date-only id", () => {
+  it("builds the core.md path for a date-only id", () => {
     expect(sliceIdToFilePath("2026-07-10")).toBe(
-      "memory/episodic/slices/2026/07/10.md"
+      "memory/episodic/slices/2026/07/10/timeline/core.md"
     );
+  });
+});
+
+// ─── New directory-based path functions ────────────────────────────────
+
+describe("sliceIdToTimelineDir", () => {
+  it("builds the timeline directory path", () => {
+    expect(sliceIdToTimelineDir("2026-07-10-1430")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/timeline"
+    );
+  });
+});
+
+describe("sliceIdToAgentPath", () => {
+  it("builds the agent.md path", () => {
+    expect(sliceIdToAgentPath("2026-07-10-1430")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/timeline/agent.md"
+    );
+  });
+});
+
+describe("sliceIdToLegacyFilePath", () => {
+  it("builds the old flat .md path", () => {
+    expect(sliceIdToLegacyFilePath("2026-07-10-1430")).toBe(
+      "memory/episodic/slices/2026/07/10/1430.md"
+    );
+  });
+});
+
+// ─── Backward-compatible parsing ───────────────────────────────────────
+
+describe("parseSlice — backward compatibility", () => {
+  it("parses legacy turn headers (numeric index, no turnId)", () => {
+    const md = `---
+slice_id: 2024-01-01
+status: closed
+start: "2024-01-01T00:00:00.000Z"
+timezone: UTC
+summary: test
+open_loops: []
+decisions: []
+tags: []
+---
+
+## Turn 1 — 2024-01-01T00:00:00.000Z (user)
+
+Old format message
+
+## Turn 2 — 2024-01-01T00:01:00.000Z (agent)
+
+Old format reply
+`;
+    const parsed = parseSlice(md);
+    expect(parsed.turns).toHaveLength(2);
+    expect(parsed.turns[0].role).toBe("user");
+    expect(parsed.turns[0].turnId).toBeUndefined();
+    expect(parsed.turns[1].role).toBe("agent");
+    expect(parsed.turns[1].turnId).toBeUndefined();
+    expect(parsed.turns[0].content).toBe("Old format message");
+  });
+
+  it("parses new-format turn headers (base64url turnId)", () => {
+    const md = `---
+slice_id: 2024-01-01
+status: closed
+start: "2024-01-01T00:00:00.000Z"
+timezone: UTC
+summary: test
+open_loops: []
+decisions: []
+tags: []
+---
+
+## Turn a3fk2w — 2024-01-01T00:00:00.000Z (user)
+
+New format message
+
+## Turn b4gl3x — 2024-01-01T00:01:00.000Z (agent)
+
+New format reply
+`;
+    const parsed = parseSlice(md);
+    expect(parsed.turns).toHaveLength(2);
+    expect(parsed.turns[0].turnId).toBe("a3fk2w");
+    expect(parsed.turns[1].turnId).toBe("b4gl3x");
+  });
+
+  it("handles mixed old and new format turn headers", () => {
+    const md = `---
+slice_id: 2024-01-01
+status: closed
+start: "2024-01-01T00:00:00.000Z"
+timezone: UTC
+summary: test
+open_loops: []
+decisions: []
+tags: []
+---
+
+## Turn 1 — 2024-01-01T00:00:00.000Z (user)
+
+Legacy turn
+
+## Turn x7_y9z — 2024-01-01T00:01:00.000Z (agent)
+
+New turn
+`;
+    const parsed = parseSlice(md);
+    expect(parsed.turns).toHaveLength(2);
+    expect(parsed.turns[0].turnId).toBeUndefined();  // legacy numeric
+    expect(parsed.turns[1].turnId).toBe("x7_y9z");   // new base64url
+  });
+});
+
+// ─── Agent timeline serialization ──────────────────────────────────────
+
+describe("serializeAgentTimeline", () => {
+  it("produces a valid cognition entry with header and sections", () => {
+    const md = serializeAgentTimeline({
+      turnId: "a3fk2w",
+      timestamp: "2026-07-22T09:00:00.200Z",
+      reasoning: "The user wants a file listing — I need to check memory first.",
+      toolCalls: [
+        { toolName: "listMemory", intent: "Find relevant slices", assessment: "Found 3 relevant slices" },
+        { toolName: "readMemory", intent: "Read the most relevant slice", assessment: "Contains needed context" },
+      ],
+      selfCheck: "2 tools, no redundancy. Goal achieved.",
+    });
+
+    expect(md).toContain("## Cognition a3fk2w — 2026-07-22T09:00:00.200Z");
+    expect(md).toContain("### Reasoning");
+    expect(md).toContain("### Step: `listMemory`");
+    expect(md).toContain("- **intent**: Find relevant slices");
+    expect(md).toContain("- **assessment**: Found 3 relevant slices");
+    expect(md).toContain("### Step: `readMemory`");
+    expect(md).toContain("- **intent**: Read the most relevant slice");
+    expect(md).toContain("- **assessment**: Contains needed context");
+    expect(md).toContain("### Self-check");
+    expect(md).toContain("2 tools, no redundancy. Goal achieved.");
+  });
+
+  it("handles empty toolCalls array", () => {
+    const md = serializeAgentTimeline({
+      turnId: "b4gl3x",
+      timestamp: "2026-07-22T09:01:00.000Z",
+      reasoning: "Simple greeting, no tools needed.",
+      toolCalls: [],
+      selfCheck: "0 tools. Just a greeting.",
+    });
+
+    expect(md).toContain("## Cognition b4gl3x");
+    expect(md).not.toContain("### Step:");
+    expect(md).toContain("### Self-check");
+    expect(md).toContain("0 tools");
   });
 });
