@@ -156,7 +156,13 @@ Tool calls use friendly outer labels (`Recalling in detail...`, `Recalling more.
 - Use `vi.stubEnv()` or direct `process.env` manipulation for env-dependent modules (the project currently uses both; prefer `vi.stubEnv()` for new tests).
 - Use `vi.useFakeTimers()` / `vi.setSystemTime()` for time-dependent tests.
 
-### What must be tested
+### Testing requirements (mandatory)
+
+1. **New features and modules must have accompanying tests.** Every new module, tool executor, guard, or pure function ships with a corresponding test file. The exit criteria is that `pnpm test` passes with zero failures.
+2. **Changes to existing code must not break existing tests.** Unless the change is explicitly a functional or architectural pivot (which must be stated up front), the existing test suite must stay green. Run `pnpm test` before committing any change to existing code.
+3. **If a change requires modifying existing tests to pass, explain why.** Modifying test assertions to match new behavior is sometimes correct — but it means the contract changed. Flag this to the user before doing it, with a clear rationale for why the old behavior is being dropped.
+
+### What to test
 
 - **New pure functions**: mandatory. If a function has no I/O and no side effects, it must have deterministic unit tests.
 - **New tool executors / guards**: mandatory. Every rejection path and edge case must be covered.
