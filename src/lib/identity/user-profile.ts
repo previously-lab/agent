@@ -12,6 +12,7 @@ import { readFile } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
 import { readFileDemo } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getRepoConfig } from "@/lib/capabilities";
 
 const PROFILE_PATH = "memory/user/profile.md";
 
@@ -36,8 +37,7 @@ async function readProfileRaw(): Promise<string | null> {
   try {
     if (USE_DEMO) return await readFileDemo(PROFILE_PATH);
     if (USE_GITHUB) {
-      const owner = process.env.GITHUB_REPO_OWNER ?? "local";
-      const repo = process.env.GITHUB_REPO_NAME ?? "local";
+      const { owner, repo } = getRepoConfig();
       return await readFile(PROFILE_PATH, repo, owner);
     }
     return await readFileLocal(PROFILE_PATH);

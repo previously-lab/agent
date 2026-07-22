@@ -17,6 +17,7 @@ import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
 import { loadUserConfig } from "@/lib/config/loader";
 import { resolveModelId } from "@/lib/models/registry";
+import { getRepoConfig } from "@/lib/capabilities";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -27,12 +28,6 @@ export interface StartTurnArgs {
   thinking?: boolean;
   /** Client-reported timezone, used when minting a new slice. */
   timezone?: string;
-}
-
-function getRepoConfig(): { owner: string; repo: string } {
-  const owner = process.env.GITHUB_REPO_OWNER ?? "local";
-  const repo = process.env.GITHUB_REPO_NAME ?? "local";
-  return { owner, repo };
 }
 
 /** Extract the latest user message text from raw UI messages. */

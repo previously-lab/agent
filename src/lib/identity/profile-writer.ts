@@ -12,9 +12,9 @@ import matter from "gray-matter";
 import { readFile } from "@/lib/tools/readFile";
 import { writeFile } from "@/lib/tools/writeFile";
 import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
+import { canWrite, getRepoConfig } from "@/lib/capabilities";
 
 const PROFILE_PATH = "memory/user/profile.md";
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 export interface ProfilePatch {
   name?: string;
@@ -23,13 +23,6 @@ export interface ProfilePatch {
   locale?: string;
   addressAs?: string; // frontmatter `address_as`
   body?: string; // free-form "about you" markdown
-}
-
-function repoConfig() {
-  return {
-    owner: process.env.GITHUB_REPO_OWNER ?? "local",
-    repo: process.env.GITHUB_REPO_NAME ?? "local",
-  };
 }
 
 /**
@@ -43,8 +36,8 @@ export async function applyProfilePatch(
   try {
     let raw = "---\n---\n";
     try {
-      const { owner, repo } = repoConfig();
-      raw = USE_GITHUB
+      const { owner, repo } = getRepoConfig();
+      raw = canWrite()
         ? await readFile(PROFILE_PATH, repo, owner)
         : await readFileLocal(PROFILE_PATH);
     } catch {
@@ -63,8 +56,8 @@ export async function applyProfilePatch(
     const body = patch.body !== undefined ? patch.body : parsed.content;
     const next = matter.stringify(`${body.trim()}\n`, data);
 
-    if (USE_GITHUB) {
-      const { owner, repo } = repoConfig();
+    if (canWrite()) {
+      const { owner, repo } = getRepoConfig();
       await writeFile(PROFILE_PATH, next, repo, owner, commitMessage);
     } else {
       await writeFileLocal(PROFILE_PATH, next);

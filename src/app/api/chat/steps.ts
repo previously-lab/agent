@@ -111,19 +111,11 @@ async function buildDynamicSystemPrompt(
   // recall timeline is woven in here — as grounding that precedes the memory
   // nodes — rather than stapled on after the request.
   const userProfile = await loadUserProfile();
-  // startLoop is unbound this release (see src/app/api/agent/tools.ts) — when
-  // re-enabling, restore this paragraph to the base system prompt:
-  //
-  // You can start durable background loops with the startLoop tool. When the
-  // user asks for continuous or background work, or when you judge a task is
-  // large or long-running enough to work autonomously rather than answer
-  // inline, call startLoop with a clear, self-contained goal — it keeps
-  // working after this turn and records its progress to memory, so results
-  // are waiting when the user returns. Tell the user when you start one.
-  // Don't use it for anything you can answer right now.
   const baseSystemPrompt = `${buildAgentIdentityPrompt(userProfile)}
 
 Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}
+
+You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory, so results are waiting when the user returns. Tell the user when you start one. Don't use it for anything you can answer right now.
 
 You can search the live web with the webSearch tool when the user needs current or external information beyond their memory and your knowledge. Weave what it finds into your prose with inline citations where relevant — do NOT append a standalone list of source links; the search card already shows them.`;
 

@@ -11,16 +11,7 @@ import { readFile, writeFile } from "@/lib/tools";
 import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
 import { sliceIdToFilePath } from "@/lib/episodic/manager";
 import { z } from "zod";
-
-// ─── Environment detection ───────────────────────────────────────────────
-
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
-
-function getRepoConfig(): { owner: string; repo: string } {
-  const owner = process.env.GITHUB_REPO_OWNER ?? "local";
-  const repo = process.env.GITHUB_REPO_NAME ?? "local";
-  return { owner, repo };
-}
+import { canWrite, getRepoConfig } from "@/lib/capabilities";
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -101,7 +92,7 @@ export async function POST(request: Request) {
     // ── Read the existing slice body (if any) ──────────────────────────
     let existingContent = "";
     try {
-      if (USE_GITHUB) {
+      if (canWrite()) {
         const { owner, repo } = getRepoConfig();
         existingContent = await readFile(slicePath, repo, owner);
       } else {
@@ -128,7 +119,7 @@ export async function POST(request: Request) {
     }
 
     // ── Persist ────────────────────────────────────────────────────────
-    if (USE_GITHUB) {
+    if (canWrite()) {
       const { owner, repo } = getRepoConfig();
       await writeFile(slicePath, newContent, repo, owner, `Flush turns for slice ${sliceId}`);
     } else {

@@ -34,6 +34,7 @@ import { applyProfilePatch } from "@/lib/identity/profile-writer";
 import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
 import { startLoop } from "@/app/api/loops/start-loop";
 import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
+import { isAIConfigured, canWrite, DEPLOY_GUIDE_URL } from "@/lib/capabilities";
 import type { LoopRun, LoopStep } from "@/lib/loops/types";
 
 // ─── Shared tool contexts ────────────────────────────────────────────────
@@ -191,7 +192,7 @@ export async function webSearchExecute(
   _opts: ExecuteOpts<ToolContext>,
 ): Promise<WebSearchResult | { error: string }> {
   "use step";
-  if (!process.env.DEEPSEEK_API_KEY) {
+  if (!isAIConfigured()) {
     return { error: "Web search is not configured (DEEPSEEK_API_KEY missing)." };
   }
   return searchViaFlash(query);
@@ -220,6 +221,21 @@ export async function startLoopExecute(
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<{ ok: boolean; loopId?: string; runId?: string; filePath?: string; error?: string }> {
   "use step";
+
+  // Demo mode: loops require a connected GitHub repo for write access.
+  // The rejection is model-facing — the model reads it and explains the
+  // deployment requirement to the user naturally in the conversation.
+  if (!canWrite()) {
+    return {
+      ok: false,
+      error:
+        "The user is currently in demo mode (read-only preview data, no connected " +
+        "GitHub repository). Background loops need a real repository to write " +
+        "progress to memory/loops/. Tell the user they need to deploy their own " +
+        "instance to unlock background loops. Setup guide: " + DEPLOY_GUIDE_URL,
+    };
+  }
+
   try {
     const started = await startLoop({
       goal,

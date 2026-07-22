@@ -24,6 +24,7 @@ import {
   getDemoPersona,
 } from "@/lib/demo/demo-fs";
 import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
+import { getRepoConfig } from "@/lib/capabilities";
 import type {
   TimeSlice,
   Turn,
@@ -42,12 +43,6 @@ const USE_DEMO = DATA_SOURCE === "demo";
 
 // Demo data is static (writes are no-op'd), so reads can be cached hard.
 const DEMO_MODE = isDemo(DATA_SOURCE);
-
-function getRepoConfig(): { owner: string; repo: string } {
-  const owner = process.env.GITHUB_REPO_OWNER ?? "local";
-  const repo = process.env.GITHUB_REPO_NAME ?? "local";
-  return { owner, repo };
-}
 
 // ─── Internal I/O helpers ────────────────────────────────────────────────
 

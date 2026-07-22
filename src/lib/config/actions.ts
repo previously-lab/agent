@@ -8,12 +8,12 @@
 import { revalidatePath } from "next/cache";
 import { writeFile } from "@/lib/tools/writeFile";
 import { writeFileLocal } from "@/lib/tools/local-fs";
+import { canWrite, getRepoConfig } from "@/lib/capabilities";
 import { mergeConfig, DEFAULTS } from "./defaults";
 import { loadUserConfig } from "./loader";
 import type { UserConfig } from "./types";
 
 const CONFIG_PATH = "memory/user/config.json";
-const USE_GITHUB = !!process.env.GITHUB_TOKEN;
 
 export async function saveUserConfig(
   overrides: Partial<UserConfig>,
@@ -28,9 +28,8 @@ export async function saveUserConfig(
 
     const json = JSON.stringify(merged, null, 2);
 
-    if (USE_GITHUB) {
-      const owner = process.env.GITHUB_REPO_OWNER ?? "local";
-      const repo = process.env.GITHUB_REPO_NAME ?? "local";
+    if (canWrite()) {
+      const { owner, repo } = getRepoConfig();
       await writeFile(CONFIG_PATH, json, repo, owner);
     } else {
       await writeFileLocal(CONFIG_PATH, json);

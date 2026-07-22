@@ -21,7 +21,7 @@ import {
   writeMemoryExecute,
   updateUserProfileExecute,
   webSearchExecute,
-  // startLoopExecute, // re-enable with the startLoop tool below
+  startLoopExecute,
   loopReportExecute,
   type ToolContext,
   type LoopToolContext,
@@ -101,12 +101,9 @@ export const memoryTools = {
 };
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
-// startLoop is deliberately NOT bound in this release: the loop engine works,
-// but its UX is not ready to ship — progress lives in an ephemeral floating
-// watcher (should be durable, in-conversation) and the no-repo/demo story
-// (read-only memory) can't demonstrate it at all. The loop workflow, /api/loops
-// door, and startLoopExecute all stay in the codebase; re-enable by binding
-// the tool here + restoring the system-prompt paragraph in chat/steps.ts.
+// startLoop is always bound. In demo mode (no GITHUB_TOKEN), the executor
+// returns a model-facing rejection telling the model to explain the deployment
+// requirement to the user — the model never sees raw env checks.
 
 export const chatTools = {
   ...memoryTools,
@@ -141,21 +138,21 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: updateUserProfileExecute,
   }),
-  // startLoop: tool({
-  //   description:
-  //     "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
-  //   inputSchema: z.object({
-  //     goal: z
-  //       .string()
-  //       .describe("A clear, self-contained statement of what the loop should accomplish."),
-  //     tags: z
-  //       .array(z.string())
-  //       .optional()
-  //       .describe("Keyword tags for later recall, e.g. topic names."),
-  //   }),
-  //   contextSchema: toolContextSchema,
-  //   execute: startLoopExecute,
-  // }),
+  startLoop: tool({
+    description:
+      "Start a durable background loop that works a goal over multiple steps on its own and records its progress to memory/loops. Use this when the user explicitly asks to run something in the background or continuously, OR when you judge a task is large or long-running enough that it is better worked autonomously than answered inline right now. The loop keeps running after this turn finishes; tell the user you have started it and that results will be waiting when they return. Do NOT use it for anything you can simply answer now.",
+    inputSchema: z.object({
+      goal: z
+        .string()
+        .describe("A clear, self-contained statement of what the loop should accomplish."),
+      tags: z
+        .array(z.string())
+        .optional()
+        .describe("Keyword tags for later recall, e.g. topic names."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: startLoopExecute,
+  }),
 };
 
 // ─── Loop tool set ───────────────────────────────────────────────────────
@@ -188,7 +185,7 @@ export function buildChatToolsContext(ctx: ToolContext): Record<keyof typeof cha
     writeMemory: ctx,
     webSearch: ctx,
     updateUserProfile: ctx,
-    // startLoop: ctx, // re-enable with the startLoop tool above
+    startLoop: ctx,
   };
 }
 
