@@ -118,7 +118,6 @@ export async function initLoop(
       useGithub: USE_GITHUB,
       useDemo: USE_DEMO,
       sliceId: input.sliceOrigin ?? "",
-      turnId: "", // loops don't use recordCognition, but ToolContext requires the field
     },
   };
 }

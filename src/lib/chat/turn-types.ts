@@ -96,4 +96,9 @@ export interface TurnOutcome {
   finishReason: string;
   /** Loops started via the startLoop tool during this turn. */
   startedLoops: StartedLoopRef[];
+  /**
+   * Mechanically extracted cognition data for agent.md — reasoning traces
+   * and tool calls with success/failure status. Written by finalizeTurn.
+   */
+  cognition: string;
 }

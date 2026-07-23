@@ -63,6 +63,99 @@ function extractFinalText(messages: ModelMessage[]): string {
 }
 
 /**
+ * Mechanically extract the agent's cognitive process from its message history.
+ *
+ * Walks through the agent's messages and collects:
+ * - Reasoning traces (thinking mode)
+ * - Tool calls with key parameters and success/failure status
+ *
+ * Raw tool outputs (file contents, search results) are NOT included — this is
+ * a process log, not a data dump. The final text response is omitted (it lives
+ * in core.md).
+ */
+function extractCognition(
+  messages: ModelMessage[],
+): string {
+  const lines: string[] = [];
+
+  // Collect tool-call→result pairs by matching toolCallId across messages.
+  const toolResults = new Map<string, { ok: boolean; error?: string }>();
+
+  for (const m of messages) {
+    if (m.role !== "tool") continue;
+    const parts = Array.isArray(m.content) ? m.content : [];
+    for (const part of parts) {
+      const p = part as { type?: string; toolCallId?: string; toolName?: string; output?: unknown; isError?: boolean };
+      if (p.type !== "tool-result" || typeof p.toolCallId !== "string") continue;
+      const isError = p.isError === true;
+      const outputStr = typeof p.output === "string" ? p.output : "";
+      toolResults.set(p.toolCallId, {
+        ok: !isError,
+        error: isError ? (outputStr.slice(0, 200) || "unknown error") : undefined,
+      });
+    }
+  }
+
+  let hasThinking = false;
+  let hasTools = false;
+
+  for (const m of messages) {
+    if (m.role !== "assistant") continue;
+    const parts = Array.isArray(m.content) ? m.content : [];
+    if (typeof m.content === "string") continue;
+
+    for (const part of parts) {
+      const p = part as {
+        type?: string;
+        text?: string;
+        toolCallId?: string;
+        toolName?: string;
+        input?: unknown;
+      };
+
+      if (p.type === "reasoning" && typeof p.text === "string") {
+        if (!hasThinking) {
+          lines.push("\n### Thinking");
+          hasThinking = true;
+        }
+        lines.push(p.text);
+      }
+
+      if (p.type === "tool-call" && typeof p.toolName === "string") {
+        if (!hasTools) {
+          lines.push("\n### Tools");
+          hasTools = true;
+        }
+        const params = summarizeToolInput(p.input);
+        const result = toolResults.get(p.toolCallId ?? "");
+        const status = result
+          ? result.ok
+            ? "ok"
+            : `error: ${result.error}`
+          : "?";
+        lines.push(`- \`${p.toolName}\`(${params}) → ${status}`);
+      }
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
+/** Compact single-line representation of tool parameters. */
+function summarizeToolInput(input: unknown): string {
+  if (input === null || input === undefined) return "";
+  if (typeof input !== "object") return String(input);
+  const obj = input as Record<string, unknown>;
+  const entries = Object.entries(obj)
+    .filter(([, v]) => v !== undefined)
+    .slice(0, 5); // cap at 5 params to keep each line scannable
+  if (entries.length === 0) return "";
+  return entries
+    .map(([k, v]) => `${k}: ${typeof v === "string" ? `"${v.slice(0, 80)}${v.length > 80 ? "…" : ""}"` : JSON.stringify(v)}`)
+    .join(", ");
+}
+
+/**
  * Successful startLoop tool results → slice writeback refs.
  *
  * Extracted from the agent's MESSAGE history, not `result.steps`: after the
@@ -162,10 +255,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
       text: extractFinalText(result.messages),
       finishReason: result.finishReason,
       startedLoops: extractStartedLoops(result.messages),
+      cognition: extractCognition(result.messages),
     };
   } catch (err) {
     streamError = err;
-    outcome = { text: "", finishReason: "error", startedLoops: [] };
+    outcome = { text: "", finishReason: "error", startedLoops: [], cognition: "" };
   }
 
   // Always finalize: the slice snapshot stays honest and the client's stream

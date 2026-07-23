@@ -40,6 +40,7 @@ import {
   saveSliceSnapshot,
   ensureIndexEntries,
   tryLoadTodaySlice,
+  writeAgentTimeline,
   type TimeSlice,
 } from "@/lib/episodic";
 import { checkTimeSilence } from "@/lib/episodic/slicer";
@@ -117,9 +118,7 @@ Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${sourc
 
 You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory, so results are waiting when the user returns. Tell the user when you start one. Don't use it for anything you can answer right now.
 
-You can search the live web with the webSearch tool when the user needs current or external information beyond their memory and your knowledge. Weave what it finds into your prose with inline citations where relevant — do NOT append a standalone list of source links; the search card already shows them.
-
-At the end of your turn, use the recordCognition tool to record your internal cognitive process: what you were thinking, why you chose each tool, what each result meant, and a brief self-assessment. This builds your agent timeline (hidden from the user) for future self-improvement.`;
+You can search the live web with the webSearch tool when the user needs current or external information beyond their memory and your knowledge. Weave what it finds into your prose with inline citations where relevant — do NOT append a standalone list of source links; the search card already shows them.`;
 
   const assembled = assembleContext({
     systemPrompt: baseSystemPrompt,
@@ -451,7 +450,6 @@ export async function prepareGenerate(
       useGithub: USE_GITHUB,
       useDemo: USE_DEMO,
       sliceId: slice.slice_id,
-      turnId: input.turnId,
     },
   };
 }
@@ -518,6 +516,15 @@ export async function finalizeTurn(
     if (outcome.finishReason === "stop") {
       await ensureIndexEntries(slice);
     }
+  }
+
+  // 2b. Write agent timeline — mechanical extraction from the model's own
+  // reasoning traces and tool calls. The cognition body is produced by
+  // extractCognition() in the workflow body; here we prepend the header
+  // (timestamp stamped in this step, where Date is allowed) and persist.
+  if (outcome.cognition) {
+    const header = `## Cognition ${turnId} — ${new Date().toISOString()}\n`;
+    await writeAgentTimeline(slice.slice_id, header + outcome.cognition);
   }
 
   // 3. Close the UI stream.
