@@ -8,6 +8,9 @@ import {
   sliceIdToTimelineDir,
   sliceIdToAgentPath,
   sliceIdToLegacyFilePath,
+  sliceIdToPreviouslyPath,
+  applyPreviouslyDecay,
+  emptyPreviouslyTemplate,
 } from "../manager";
 import type { TimeSlice, Turn } from "../types";
 
@@ -400,6 +403,239 @@ New turn
     expect(parsed.turns).toHaveLength(2);
     expect(parsed.turns[0].turnId).toBeUndefined();  // legacy numeric
     expect(parsed.turns[1].turnId).toBe("x7_y9z");   // new base64url
+  });
+});
+
+// ─── previously.md path ─────────────────────────────────────────────────
+
+describe("sliceIdToPreviouslyPath", () => {
+  it("builds the previously.md path at slice root (sibling to timeline/)", () => {
+    expect(sliceIdToPreviouslyPath("2026-07-10-1430")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/previously.md",
+    );
+  });
+
+  it("builds the previously.md path for a date-only id", () => {
+    expect(sliceIdToPreviouslyPath("2026-07-10")).toBe(
+      "memory/episodic/slices/2026/07/10/previously.md",
+    );
+  });
+});
+
+// ─── emptyPreviouslyTemplate ────────────────────────────────────────────
+
+describe("emptyPreviouslyTemplate", () => {
+  it("contains all three sections with placeholder text", () => {
+    const tmpl = emptyPreviouslyTemplate("2026-07-24-1445");
+    expect(tmpl).toContain("# Agent Beliefs");
+    expect(tmpl).toContain("_Active slice: 2026-07-24-1445");
+    expect(tmpl).toContain("## User identity");
+    expect(tmpl).toContain("## User patterns");
+    expect(tmpl).toContain("## Agent strategies");
+    expect(tmpl).toContain("_No beliefs yet._");
+  });
+});
+
+// ─── applyPreviouslyDecay ───────────────────────────────────────────────
+
+describe("applyPreviouslyDecay", () => {
+  const newSliceId = "2026-07-24-1500";
+
+  it("de-rates 高→中 when last_seen is older than 14 days", () => {
+    // 15 days ago
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 15);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const staleDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-09-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 偏好简洁结构化的回答
+  (置信度: 高 | 首次: 2026/07/01/0500-a3fk2w | 最近: ${staleDate}-T2 | 观察: 6)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("置信度: 中");
+    expect(result).not.toContain("置信度: 高");
+  });
+
+  it("de-rates 中→低 when last_seen is older than 14 days", () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 20);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const staleDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-04-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 偏好结构化的回答
+  (置信度: 中 | 首次: 2026/06/01/0500-a3fk2w | 最近: ${staleDate}-T1 | 观察: 3)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("置信度: 低");
+    expect(result).not.toContain("置信度: 中");
+  });
+
+  it("prunes belief when confidence is 低 AND observations ≤ 2", () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 20);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const staleDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-04-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 一个弱信念会被清除
+  (置信度: 低 | 首次: 2026/06/01/0500-a3fk2w | 最近: ${staleDate}-T1 | 观察: 1)
+- 另一个保留的信念
+  (置信度: 高 | 首次: 2026/07/01/0500-a3fk2w | 最近: 2026/07/23/1500-T2 | 观察: 8)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).not.toContain("一个弱信念会被清除");
+    expect(result).not.toContain("观察: 1");
+    expect(result).toContain("另一个保留的信念");
+    expect(result).toContain("置信度: 高");
+  });
+
+  it("does NOT prune when 低 but observations > 2", () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 20);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const staleDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-04-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 一个有较多观察的弱信念
+  (置信度: 低 | 首次: 2026/06/01/0500-a3fk2w | 最近: ${staleDate}-T1 | 观察: 5)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    // Low but 5 observations — should survive
+    expect(result).toContain("一个有较多观察的弱信念");
+    expect(result).toContain("置信度: 低"); // already 低, can't de-rate further
+  });
+
+  it("does NOT modify User identity section (factual, user-stated)", () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 30);
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const staleDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-06-24-1200 | Last updated: Turn a3fk2w_
+
+## User identity (factual beliefs — user explicitly stated these)
+- 自称 Alan Yuan，可用 Alan 称呼
+  (来源: ${staleDate}-T1，用户原话)
+
+## User patterns (pattern beliefs — agent observed these)
+- 偏好简洁
+  (置信度: 高 | 首次: ${staleDate}-T1 | 最近: ${staleDate}-T1 | 观察: 10)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    // Identity belief survives untouched
+    expect(result).toContain("自称 Alan Yuan");
+    expect(result).toContain(`(来源: ${staleDate}-T1，用户原话)`);
+    // Pattern belief gets de-rated
+    expect(result).toContain("置信度: 中");
+  });
+
+  it("does NOT modify Agent strategies section", () => {
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-09-1200 | Last updated: Turn a3fk2w_
+
+## Agent strategies (derived from beliefs above)
+- 给出选项而非单一答案，让用户选方向
+  (来源: User patterns — 迭代式节奏 + 2026/07/23/1445-T2 用户确认)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("给出选项而非单一答案");
+    expect(result).toContain("User patterns — 迭代式节奏");
+  });
+
+  it("leaves recent beliefs (less than 14 days) unchanged", () => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 3); // only 3 days ago
+    const y = d.getUTCFullYear();
+    const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const recentDate = `${y}/${m}/${day}/1200`;
+
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-21-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 偏好简洁结构化的回答
+  (置信度: 高 | 首次: 2026/07/14/1435-T2 | 最近: ${recentDate}-T2 | 观察: 6)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("置信度: 高");
+  });
+
+  it("updates the active slice header line", () => {
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-09-1200 | Last updated: Turn a3fk2w_
+
+## User patterns (pattern beliefs — agent observed these)
+- 偏好简洁
+  (置信度: 高 | 首次: 2026/07/01/0500-a3fk2w | 最近: 2026/07/23/1500-T2 | 观察: 10)
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("_Active slice: 2026-07-24-1500");
+    expect(result).toContain("Last updated: (initial)");
+    expect(result).not.toContain("2026-07-09-1200");
+  });
+
+  it("handles empty content gracefully", () => {
+    const result = applyPreviouslyDecay("", newSliceId);
+    expect(result).toBe("");
+  });
+
+  it("handles content with no beliefs (just headers)", () => {
+    const content = `# Agent Beliefs
+
+_Active slice: 2026-07-09-1200 | Last updated: Turn a3fk2w_
+
+## User identity (factual beliefs — user explicitly stated these)
+
+_No beliefs yet._
+
+## User patterns (pattern beliefs — agent observed these)
+
+_No beliefs yet._
+
+## Agent strategies (derived from beliefs above)
+
+_No beliefs yet._
+`;
+    const result = applyPreviouslyDecay(content, newSliceId);
+    expect(result).toContain("_Active slice: 2026-07-24-1500");
+    expect(result).toContain("_No beliefs yet._");
+    expect(result).toContain("## User identity");
+    expect(result).toContain("## User patterns");
+    expect(result).toContain("## Agent strategies");
   });
 });
 

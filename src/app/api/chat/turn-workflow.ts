@@ -35,6 +35,7 @@ import {
   flashRecall,
   prepareGenerate,
   finalizeTurn,
+  reflectAndEvolve,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -222,7 +223,7 @@ function extractStartedLoops(messages: ModelMessage[]): StartedLoopRef[] {
 export async function turnWorkflow(input: TurnInput): Promise<void> {
   "use workflow";
 
-  const { slice } = await housekeeping(input);
+  const { slice, closedSlice } = await housekeeping(input);
   const flash = await flashRecall(input, slice);
   const prep = await prepareGenerate(input, flash.slice, flash.flashOutput);
 
@@ -265,6 +266,12 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // Always finalize: the slice snapshot stays honest and the client's stream
   // is closed even when the agent errored mid-turn.
   await finalizeTurn(flash.slice, outcome, input.turnId);
+
+  // Pro macro-reflection on the just-closed slice (if any).
+  // Runs after the UI stream is closed so the user isn't waiting on it.
+  if (closedSlice) {
+    await reflectAndEvolve(closedSlice);
+  }
 
   if (streamError !== null) {
     throw streamError;

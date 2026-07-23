@@ -55,6 +55,8 @@ export interface TurnInput {
 /** Result of the housekeeping step — the recovered/created slice by value. */
 export interface HousekeepingResult {
   slice: TimeSlice;
+  /** The slice that was just closed, if housekeeping closed one. */
+  closedSlice?: TimeSlice;
 }
 
 /**

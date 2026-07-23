@@ -22,7 +22,8 @@
  * Chunk order for the UI's three-phase rendering is unchanged:
  * data-flash → reasoning/text/tool (written by agent.stream) → data-reasoning.
  */
-import { type UIMessageChunk } from "ai";
+import { type UIMessageChunk, generateText } from "ai";
+import { deepseek } from "@ai-sdk/deepseek";
 import { getWritable } from "workflow";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -41,6 +42,12 @@ import {
   ensureIndexEntries,
   tryLoadTodaySlice,
   writeAgentTimeline,
+  readPreviously,
+  writePreviously,
+  ensurePreviously,
+  readAgentTimeline,
+  serializeSlice,
+  readStrands,
   type TimeSlice,
 } from "@/lib/episodic";
 import { checkTimeSilence } from "@/lib/episodic/slicer";
@@ -48,6 +55,7 @@ import {
   runUnifiedFlash,
   readRecentSummaries,
   applyMetadataUpdates,
+  applyBeliefUpdates,
   type MaintenanceOutput,
 } from "@/lib/episodic/maintenance";
 import type {
@@ -88,6 +96,7 @@ async function buildDynamicSystemPrompt(
   recentTurns: Array<{ role: string; content: string }>,
   precomputedIntent: { intent: string; confidence: number; source?: string } | undefined,
   episodicContext: string,
+  previouslyContext: string,
   config: { context: { recentTurnsLimit: number; tokenBudget: number } }
 ): Promise<{ prompt: string; intent: string; source: string; confidence: number }> {
   let intent: string, source: string, confidence: number;
@@ -114,7 +123,7 @@ async function buildDynamicSystemPrompt(
   const userProfile = await loadUserProfile();
   const baseSystemPrompt = `${buildAgentIdentityPrompt(userProfile)}
 
-Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}
+Current intent: ${intent} (confidence: ${confidence.toFixed(2)}, source: ${source})${episodicContext}${previouslyContext}
 
 You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory, so results are waiting when the user returns. Tell the user when you start one. Don't use it for anything you can answer right now.
 
@@ -241,6 +250,19 @@ function buildTimelineEpisodicContext(
   return ctx;
 }
 
+/**
+ * Build the "What I understand about you" context block from previously.md.
+ * Returns empty string when there are no actual beliefs (empty template) —
+ * avoids injecting noise into the system prompt.
+ */
+function buildPreviouslyContext(previouslyContent: string): string {
+  if (!previouslyContent.trim()) return "";
+  // Skip injection if this is the empty template (no actual beliefs yet)
+  if (previouslyContent.includes("_No beliefs yet._")) return "";
+
+  return `\n## What I understand about you\n\n${previouslyContent}\nThis is my current understanding of who you are and how you work. If any of this is wrong or outdated, tell me and I'll update it.\n`;
+}
+
 // ─── Step 1: Housekeeping ────────────────────────────────────────────────
 
 /**
@@ -256,6 +278,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   const silenceMs = config.slicing.timeSilenceMinutes * 60 * 1000;
 
   let slice: TimeSlice;
+  let closedSlice: TimeSlice | undefined;
   const diskSlice = await tryLoadTodaySlice();
 
   if (diskSlice && diskSlice.status === "active") {
@@ -267,11 +290,13 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     if (checkTimeSilence(lastActivity, silenceMs)) {
       await closeSlice(diskSlice, "time_silence");
       console.log(`[Episodic] Recovered & closed stale slice: ${diskSlice.slice_id}`);
+      closedSlice = diskSlice;
       slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
     } else if (diskSlice.turns.length >= config.slicing.maxTurnsPerSlice) {
       // Force-close on turn count (safety net for marathon sessions).
       await closeSlice(diskSlice, "capacity");
       console.log(`[Episodic] Closed at turn cap: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
+      closedSlice = diskSlice;
       slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
     } else {
       slice = diskSlice;
@@ -294,6 +319,10 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     });
   }
 
+  // Ensure previously.md exists for this slice (initialize with decay from
+  // last frozen, or create empty template for first-ever slices).
+  await ensurePreviously(slice.slice_id);
+
   // Durable snapshot BEFORE streaming (was fire-and-forget in the inline route):
   // guarantees the user turn is on GitHub, and that the next turn's
   // tryLoadTodaySlice sees it even if the agent never finishes.
@@ -309,7 +338,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   await writer.write({ type: "start-step" } as UIMessageChunk);
   writer.releaseLock();
 
-  return { slice };
+  return { slice, closedSlice };
 }
 
 // ─── Step 2: Flash recall + metadata maintenance ─────────────────────────
@@ -333,6 +362,8 @@ export async function flashRecall(
 
   try {
     const recentSummaries = await readRecentSummaries(15);
+    const previouslyContent = await readPreviously(slice.slice_id);
+
     flashOutput = await runUnifiedFlash({
       slice: {
         slice_id: slice.slice_id,
@@ -346,6 +377,7 @@ export async function flashRecall(
       recentTurns,
       newMessage: lastUserMessage,
       recentSummaries,
+      previouslyContent,
     });
 
     console.log(
@@ -371,6 +403,19 @@ export async function flashRecall(
       slice.decisions = meta.decisions;
       slice.tags = meta.tags;
       slice.emotional_tone = meta.emotional_tone as typeof slice.emotional_tone;
+    }
+
+    // Apply belief mutations from Flash's JOB 4 to previously.md
+    if (flashOutput.belief_updates?.length > 0) {
+      const updated = applyBeliefUpdates(
+        previouslyContent,
+        flashOutput.belief_updates,
+        slice.slice_id,
+      );
+      await writePreviously(slice.slice_id, updated);
+      console.log(
+        `[Flash] belief_updates applied: ${flashOutput.belief_updates.map(u => u.action).join(", ")}`,
+      );
     }
   } catch (err) {
     console.warn(
@@ -429,6 +474,12 @@ export async function prepareGenerate(
   const { owner, repo, lastUserMessage, recentTurns, config } = input;
 
   const episodicContext = buildTimelineEpisodicContext(slice, flashOutput);
+
+  // Read the current slice's belief system and build the "What I understand
+  // about you" context block. Empty template → empty string (no injection).
+  const prevContent = await readPreviously(slice.slice_id);
+  const previouslyContext = buildPreviouslyContext(prevContent);
+
   const { prompt, intent, confidence } = await buildDynamicSystemPrompt(
     lastUserMessage,
     recentTurns,
@@ -436,6 +487,7 @@ export async function prepareGenerate(
       ? { intent: flashOutput.intent, confidence: flashOutput.confidence, source: "flash" }
       : undefined,
     episodicContext,
+    previouslyContext,
     config
   );
   console.log(`[M3] intent=${intent} confidence=${confidence.toFixed(2)}`);
@@ -534,4 +586,175 @@ export async function finalizeTurn(
   await writer.write({ type: "finish" } as UIMessageChunk);
   writer.releaseLock();
   await writable.close();
+}
+
+// ─── Step 5: Reflect & Evolve (slice close only) ──────────────────────────
+
+const NEXT_PREVIOUSLY_PATH = "memory/episodic/next-previously.md";
+
+/**
+ * Build the Pro reflection prompt. Produces a full previously.md for the
+ * next slice based on deep analysis of the just-closed slice.
+ */
+function buildReflectionPrompt(params: {
+  previouslyContent: string;
+  agentContent: string;
+  coreContent: string;
+  sliceId: string;
+  turnCount: number;
+  strandContext: string;
+}): string {
+  const { previouslyContent, agentContent, coreContent, sliceId, turnCount, strandContext } = params;
+
+  return `你是 Previously，一个个人记忆 Agent。你刚刚完成了一个时间片的对话（共 ${turnCount} 轮，切片 ID: ${sliceId}）。
+
+你维护了一份关于用户的理解——previously.md。这份文件是你的"信念系统"：它记录了你认为用户是谁、偏好什么、如何工作，以及你应该如何调整自己的行为来更好地服务他。
+
+现在这个时间片已经关闭。previously.md 被冻结为这个时刻的快照。但在下一个时间片开始之前，你有一次机会做深度反思。
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 当前的 previously.md（刚刚冻结的版本）
+
+${previouslyContent.slice(0, 4000)}
+
+## 这个时间片的核心对话
+
+${coreContent.slice(0, 2000)}
+
+## Agent 认知过程（agent.md 中记录的工具调用和思考）
+
+${agentContent.slice(0, 3000)}
+${strandContext}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 你的任务
+
+审视整个时间片，产出下一版 previously.md。你的改动应该遵循：
+
+1. **保持结构**。使用相同的三个 section：User identity, User patterns, Agent strategies。
+
+2. **只改有证据的部分**。不要凭空添加信念。每条信念必须引用至少一个具体的 turn（格式：YYYY/MM/DD/HHMM-TURNID）。
+
+3. **降级陈旧信念**。如果一条信念的"最近"引用距今超过 14 天，将其置信度从高降为中，或从中降为低。置信度为低且观察次数 ≤ 1 的，直接删除。
+
+4. **合并相似信念**。如果两条信念描述的是同一个底层模式，合并为一条，保留两者的引用链。
+
+5. **提炼新的策略信念**。如果在这个时间片中反复观察到某个模式但还没有对应的 Agent strategy，请提出一条。策略信念格式是"用户有 X 模式 → Agent 应该 Y"，必须引用来源的 User pattern。
+
+6. **尊重用户自我陈述**。User identity section 中的事实信念不能被降级或删除，除非用户在这个时间片中自己更正了。
+
+## 你产出的格式
+
+直接产出下一版 previously.md 的完整内容（markdown 格式）。不要输出解释、不要输出 diff、不要输出 JSON。就是修改后的 previously.md 文件内容。
+
+记住：你不是在写回忆录。你是在更新你对用户的信念。引用证据，标注置信度，删除不再成立的，强化被反复验证的。保持诚实。`;
+}
+
+/**
+ * Pro macro-evolution step — runs AFTER finalizeTurn when the previous slice
+ * was just closed. Reads the frozen previously.md, agent.md, and core.md,
+ * then calls Pro (with thinking) to produce a structurally improved
+ * previously.md for the next slice.
+ *
+ * The output is written to next-previously.md, where ensurePreviously picks
+ * it up when the next active slice is created.
+ *
+ * Skipped when: slice has < 2 turns, previously.md is empty, or a
+ * next-previously.md already exists (idempotency guard).
+ */
+export async function reflectAndEvolve(
+  closedSlice: TimeSlice,
+): Promise<void> {
+  "use step";
+
+  // Guard: skip trivial slices
+  if (closedSlice.turns.length < 2) {
+    console.log("[Reflect] Skipped — slice has fewer than 2 turns");
+    return;
+  }
+
+  const prevContent = await readPreviously(closedSlice.slice_id);
+  if (!prevContent.trim() || prevContent.includes("_No beliefs yet._")) {
+    console.log("[Reflect] Skipped — no beliefs to reflect on");
+    return;
+  }
+
+  // Idempotency guard: if next-previously.md already exists and was created
+  // after this slice closed, don't overwrite it.
+  let nextPrevExists = false;
+  try {
+    // Try reading through the fs layer — if it's non-empty, skip
+    const { readFileLocal } = await import("@/lib/tools/local-fs");
+    const existing = await readFileLocal(NEXT_PREVIOUSLY_PATH);
+    if (existing.trim()) {
+      console.log("[Reflect] Skipped — next-previously.md already exists");
+      return;
+    }
+    nextPrevExists = true; // file exists but is empty
+  } catch {
+    // File doesn't exist — proceed
+  }
+
+  const agentContent = await readAgentTimeline(closedSlice.slice_id);
+  const coreContent = serializeSlice(closedSlice);
+
+  // Build strand context from the slice's tags
+  let strandContext = "";
+  try {
+    const strands = await readStrands();
+    const relevantTags = closedSlice.tags.filter((t) => strands[t]?.length);
+    if (relevantTags.length > 0) {
+      strandContext = "\n## Strand Context (slices with related tags)\n";
+      for (const tag of relevantTags.slice(0, 8)) {
+        const paths = strands[tag].slice(0, 5).join(", ");
+        strandContext += `- ${tag}: ${paths}\n`;
+      }
+      strandContext += "\n";
+    }
+  } catch {
+    // Strands unavailable — continue without
+  }
+
+  const prompt = buildReflectionPrompt({
+    previouslyContent: prevContent,
+    agentContent,
+    coreContent,
+    sliceId: closedSlice.slice_id,
+    turnCount: closedSlice.turns.length,
+    strandContext,
+  });
+
+  console.log(`[Reflect] Calling Pro for slice ${closedSlice.slice_id}...`);
+
+  try {
+    const result = await generateText({
+      model: deepseek("deepseek-v4"),
+      prompt,
+      temperature: 0.3,
+      // Thinking enabled by default on V4 — Pro needs it for deep reflection
+    });
+
+    const output = result.text;
+
+    // Validate minimal structure before writing
+    if (output.includes("## User identity") && output.includes("## User patterns")) {
+      // Use local-fs or writePreviously — writePreviously uses the episodic
+      // I/O layer which auto-routes to github/local/demo. But next-previously.md
+      // is a global singleton, not per-slice. Use the raw fsWriteFile path.
+      const { writeFileLocal } = await import("@/lib/tools/local-fs");
+      await writeFileLocal(NEXT_PREVIOUSLY_PATH, output);
+      console.log(`[Reflect] Pro reflection written to next-previously.md (${output.length} chars)`);
+    } else {
+      console.warn(
+        "[Reflect] Pro output missing required sections, falling back to decayed copy. " +
+        `Got sections: ${output.slice(0, 200)}...`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      "[Reflect] Pro call failed, next slice will use decayed copy:",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }

@@ -36,11 +36,34 @@ export interface RecentSummary {
   tags: string[];
 }
 
+export interface BeliefUpdate {
+  action: "observe" | "reinforce" | "contradict" | "discard";
+  section: "User identity" | "User patterns" | "Agent strategies";
+  /** Full belief text (required for "observe"). */
+  belief?: string;
+  /**
+   * Unique substring to match an existing belief (required for
+   * "reinforce" / "contradict" / "discard"). Must appear in the
+   * belief bullet line, not the annotation.
+   */
+  belief_key?: string;
+  /** Slice path in YYYY/MM/DD/HHMM format. */
+  evidence_slice: string;
+  /** Turn ID within the evidence slice. */
+  evidence_turn: string;
+  /** Explanation of the contradiction (for "contradict"). */
+  note?: string;
+  /** Why the belief is being removed (for "discard"). */
+  reason?: string;
+}
+
 export interface MaintenanceInput {
   slice: SliceMetadata;
   recentTurns: Array<{ role: string; content: string }>;
   newMessage: string;
   recentSummaries: RecentSummary[];
+  /** Current previously.md content, so Flash can see existing beliefs. */
+  previouslyContent: string;
 }
 
 export interface MaintenanceOutput {
@@ -55,6 +78,8 @@ export interface MaintenanceOutput {
   needs_metadata_update: boolean;
   metadata_updates: Partial<SliceMetadata> | null;
   reasoning: string;
+  /** Belief mutations Flash observed this turn. Empty array if none. */
+  belief_updates: BeliefUpdate[];
 }
 
 // ─── Structured output schema ──────────────────────────────────────────
@@ -130,6 +155,47 @@ const unifiedFlashSchema = tool({
     reasoning: z
       .string()
       .describe("Brief reasoning about what you decided and why (1-2 sentences)"),
+
+    belief_updates: z
+      .array(
+        z.object({
+          action: z
+            .enum(["observe", "reinforce", "contradict", "discard"])
+            .describe("What to do with this belief"),
+          section: z
+            .enum(["User identity", "User patterns", "Agent strategies"])
+            .describe("Which section the belief belongs to"),
+          belief: z
+            .string()
+            .optional()
+            .describe("Full belief text. Required for 'observe'."),
+          belief_key: z
+            .string()
+            .optional()
+            .describe(
+              "Unique substring to match an existing belief. Required for " +
+              "'reinforce' / 'contradict' / 'discard'. Must appear in the " +
+              "belief bullet line, not the annotation.",
+            ),
+          evidence_slice: z
+            .string()
+            .describe("Slice path in YYYY/MM/DD/HHMM format for the citing evidence"),
+          evidence_turn: z
+            .string()
+            .describe("Turn ID within the evidence slice"),
+          note: z
+            .string()
+            .optional()
+            .describe("Explanation of the tension (for 'contradict')"),
+          reason: z
+            .string()
+            .optional()
+            .describe("Why removing (for 'discard')"),
+        }),
+      )
+      .describe(
+        "Belief mutations observed this turn. Empty array if no clear evidence.",
+      ),
   }),
 });
 
@@ -164,6 +230,7 @@ async function attemptUnifiedFlash(
       needs_metadata_update: boolean;
       metadata_updates: Partial<SliceMetadata> | null;
       reasoning: string;
+      belief_updates: BeliefUpdate[];
     };
 
     // Build output, merging nullable fields from metadata_updates
@@ -186,6 +253,7 @@ async function attemptUnifiedFlash(
       needs_metadata_update: input.needs_metadata_update,
       metadata_updates: input.needs_metadata_update ? updates : null,
       reasoning: input.reasoning ?? "",
+      belief_updates: input.belief_updates ?? [],
     };
   }
 
@@ -195,11 +263,11 @@ async function attemptUnifiedFlash(
 // ─── Prompt builder ────────────────────────────────────────────────────
 
 function buildUnifiedPrompt(input: MaintenanceInput): string {
-  const { slice, recentTurns, newMessage, recentSummaries } = input;
+  const { slice, recentTurns, newMessage, recentSummaries, previouslyContent } = input;
 
   // Current slice context
   let prompt = `You are the Flash memory layer for Previously, a personal AI platform.
-You have three jobs. Do them all in one pass.
+You have four jobs. Do them all in one pass.
 
 ## Current Time Slice
 - ID: ${slice.slice_id}
@@ -237,7 +305,20 @@ No past conversations available yet.
 \n`;
   }
 
-  prompt += `## Your Three Jobs
+  // Inject previously.md so Flash can see existing beliefs
+  if (previouslyContent.trim()) {
+    prompt += `## User Beliefs (previously.md — the agent's current understanding of the user)
+
+${previouslyContent.slice(0, 3000)}
+
+`;
+  } else {
+    prompt += `## User Beliefs (previously.md)
+No beliefs established yet.
+\n`;
+  }
+
+  prompt += `## Your Four Jobs
 
 ### 1. INTENT
 Classify the user's intent based on the new message and recent conversation context.
@@ -264,6 +345,28 @@ Review the current time slice's metadata. Is anything stale or missing?
 CONSTRAINT: Only update fields that have actually changed.
 Set needs_metadata_update: false if nothing needs changing.
 Omit unchanged fields from metadata_updates — null means "clear this field", omission means "no change".
+
+### 4. BELIEF UPDATES (NEW)
+Examine the user's latest message and the conversation. Look at the existing
+beliefs above. Produce belief_updates — mutations to the belief system.
+
+Evidence quality rules:
+- User explicitly states a fact about themselves → "observe" in "User identity"
+- User behavior confirms an existing pattern belief → "reinforce" (bump count)
+- User behavior contradicts an existing belief → "contradict" with a note
+- Stale belief not reinforced in many turns + confidence already 低 → "discard"
+
+For "observe":
+- User identity: use 来源 format (factual, user-stated)
+- User patterns: use 置信度 format, start at 中 confidence, 观察: 1
+- Agent strategies: use 来源 format, cite the motivating User pattern
+
+For "reinforce": bump 观察 count. If ≥5 observations and confidence is 中, promote to 高.
+For "contradict": drop confidence one level, explain the tension in note.
+For "discard": only when confidence is 低 and no recent reinforcement.
+
+Return belief_updates as an array. Return [] if no clear evidence this turn.
+Do NOT fabricate observations just to fill the output.
 
 Call the flashOutput tool with your complete analysis.`;
 
@@ -349,6 +452,7 @@ export async function runUnifiedFlash(
         needs_metadata_update: false,
         metadata_updates: null,
         reasoning: "Flash unavailable, fell back to defaults",
+        belief_updates: [],
       };
     }
   }
@@ -384,4 +488,243 @@ export function applyMetadataUpdates(
   if (updates.decisions !== undefined) slice.decisions = updates.decisions ?? [];
   if (updates.open_loops !== undefined) slice.open_loops = updates.open_loops ?? [];
   if (updates.tags !== undefined) slice.tags = updates.tags ?? [];
+}
+
+// ─── Belief update application ────────────────────────────────────────────
+
+/**
+ * Apply a list of Flash-emitted belief mutations to a previously.md body.
+ *
+ * Pure string-in/string-out — no I/O, deterministic, testable.
+ * Only Flash emits mutations; this function just applies them.
+ *
+ * - `observe`: append a new belief to the target section
+ * - `reinforce`: bump observation count, update 最近 date, promote 中→高 at ≥5 obs
+ * - `contradict`: drop confidence one level, append note
+ * - `discard`: remove the belief (bullet + annotation lines)
+ */
+export function applyBeliefUpdates(
+  content: string,
+  updates: BeliefUpdate[],
+  currentSliceId: string,
+): string {
+  if (!updates.length) return content;
+
+  const lines = content.split("\n");
+  const result: string[] = [];
+
+  // Track which section we're in and section boundaries
+  const sectionHeaders = [
+    "## User identity",
+    "## User patterns",
+    "## Agent strategies",
+  ];
+  let currentSection: string | null = null;
+
+  // First pass: apply reinforce/contradict/discard (mutations to existing beliefs)
+  // We do this inline during the copy pass below.
+
+  // Second pass: collect observe actions to append at section ends
+  const observesBySection: Map<string, string[]> = new Map();
+
+  // Pre-process: separate observe from other actions
+  for (const u of updates) {
+    if (u.action === "observe" && u.belief) {
+      const existing = observesBySection.get(u.section) ?? [];
+      const annotation =
+        u.section === "User identity"
+          ? `  (来源: ${u.evidence_slice}-${u.evidence_turn}，用户原话)`
+          : u.section === "Agent strategies"
+            ? `  (来源: ${u.belief.slice(0, 80)} — ${u.evidence_slice}-${u.evidence_turn})`
+            : `  (置信度: 中 | 首次: ${u.evidence_slice}-${u.evidence_turn} | 最近: ${u.evidence_slice}-${u.evidence_turn} | 观察: 1)`;
+      existing.push(`- ${u.belief}\n${annotation}`);
+      observesBySection.set(u.section, existing);
+    }
+  }
+
+  // Build a map of (section, belief_key) → action for fast lookup
+  const mutationMap = new Map<string, BeliefUpdate>();
+  for (const u of updates) {
+    if (u.action !== "observe" && u.belief_key && u.section) {
+      mutationMap.set(`${u.section}::${u.belief_key}`, u);
+    }
+  }
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Track section
+    for (const h of sectionHeaders) {
+      if (line.startsWith(h)) {
+        currentSection = h.replace("## ", "");
+        // If this section has pending observes, we'll append them before the next section header or at EOF
+        break;
+      }
+    }
+    // If we hit a new section header (other than the three known ones),
+    // flush pending observes for the PREVIOUS section
+    if (line.startsWith("## ") && !sectionHeaders.some((h) => line.startsWith(h))) {
+      currentSection = null;
+    }
+
+    // Update the active slice header
+    if (/^_Active slice:/.test(line)) {
+      result.push(`_Active slice: ${currentSliceId} | Last updated: Turn ${updates[0]?.evidence_turn ?? "?"}_`);
+      i++;
+      continue;
+    }
+
+    // Check if this is a belief bullet line that matches a mutation
+    if (line.trimStart().startsWith("- ") && currentSection) {
+      // Try to match against pending mutations
+      let matchedUpdate: BeliefUpdate | null = null;
+      for (const [key, u] of mutationMap) {
+        const [section, beliefKey] = key.split("::");
+        if (section === currentSection && line.includes(beliefKey)) {
+          matchedUpdate = u;
+          break;
+        }
+      }
+
+      if (matchedUpdate) {
+        const u = matchedUpdate;
+        const nextLine = i + 1 < lines.length ? lines[i + 1] : "";
+
+        if (u.action === "discard") {
+          // Skip the belief bullet line (we haven't pushed it yet —
+          // the match was detected before the push) and its annotation.
+          i++; // Skip bullet
+          if (i < lines.length && lines[i].trim().startsWith("(")) {
+            i++; // Skip annotation
+          }
+          if (i < lines.length && lines[i].trim() === "") {
+            i++; // Skip trailing blank
+          }
+          continue;
+        }
+
+        if (u.action === "reinforce" && nextLine.includes("置信度:")) {
+          // Update annotation
+          const annotation = nextLine;
+          const now = `${u.evidence_slice}-${u.evidence_turn}`;
+
+          // Bump observation count
+          let updatedAnnotation = annotation.replace(
+            /观察: (\d+)/,
+            (_m, n) => `观察: ${parseInt(n, 10) + 1}`,
+          );
+
+          // Update 最近 date
+          updatedAnnotation = updatedAnnotation.replace(
+            /最近: \S+/,
+            `最近: ${now}`,
+          );
+
+          // Promote 中→高 at ≥5 observations
+          const newObs = parseInt(
+            (updatedAnnotation.match(/观察: (\d+)/) ?? ["", "0"])[1],
+            10,
+          );
+          if (newObs >= 5 && updatedAnnotation.includes("置信度: 中")) {
+            updatedAnnotation = updatedAnnotation.replace(
+              "置信度: 中",
+              "置信度: 高",
+            );
+          }
+
+          result.push(line); // bullet
+          result.push(updatedAnnotation); // updated annotation
+          i += 2;
+          // Skip trailing blank if present
+          if (i < lines.length && lines[i].trim() === "") {
+            result.push(lines[i]);
+            i++;
+          }
+          continue;
+        }
+
+        if (u.action === "contradict" && nextLine.includes("置信度:")) {
+          const annotation = nextLine;
+          // Drop confidence
+          let updatedAnnotation = annotation;
+          if (updatedAnnotation.includes("置信度: 高")) {
+            updatedAnnotation = updatedAnnotation.replace("置信度: 高", "置信度: 中");
+          } else if (updatedAnnotation.includes("置信度: 中")) {
+            updatedAnnotation = updatedAnnotation.replace("置信度: 中", "置信度: 低");
+          }
+
+          result.push(line);
+          result.push(updatedAnnotation);
+          // Append note as a comment below the annotation
+          if (u.note) {
+            result.push(`  <!-- 矛盾: ${u.note} (${u.evidence_slice}-${u.evidence_turn}) -->`);
+          }
+          i += 2;
+          if (i < lines.length && lines[i].trim() === "") {
+            result.push(lines[i]);
+            i++;
+          }
+          continue;
+        }
+      }
+    }
+
+    result.push(line);
+    i++;
+  }
+
+  // Append new observations at the end of each section
+  // Rebuild by finding section positions and inserting observes
+  let finalResult = result.join("\n");
+
+  for (const [section, beliefs] of observesBySection) {
+    const sectionHeader = `## ${section}`;
+    const sectionIdx = findSectionEnd(result, section);
+
+    if (sectionIdx >= 0 && beliefs.length > 0) {
+      // Insert beliefs before the section end (or at the end of the file)
+      const insertText = "\n" + beliefs.join("\n\n") + "\n";
+      // Rebuild from result array
+      const before = result.slice(0, sectionIdx);
+      const after = result.slice(sectionIdx);
+      // Find the insertion point: right before the next `## ` header or at end
+      let insertAt = after.length; // default: end of file
+      for (let j = 0; j < after.length; j++) {
+        if (after[j].startsWith("## ")) {
+          insertAt = j;
+          break;
+        }
+      }
+      const newResult = [...before, ...after.slice(0, insertAt)];
+      // Add observe beliefs
+      for (const b of beliefs) {
+        newResult.push(...b.split("\n"));
+        newResult.push(""); // blank separator
+      }
+      newResult.push(...after.slice(insertAt));
+      // Re-assign result and lines for next section
+      result.length = 0;
+      result.push(...newResult);
+      finalResult = result.join("\n");
+    }
+  }
+
+  return finalResult;
+}
+
+/** Find the line index right after a section header's content ends. */
+function findSectionEnd(lines: string[], sectionName: string): number {
+  const header = `## ${sectionName}`;
+  let foundHeader = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith(header)) {
+      foundHeader = true;
+      continue;
+    }
+    if (foundHeader && lines[i].startsWith("## ")) {
+      return i; // Next section starts here
+    }
+  }
+  return foundHeader ? lines.length : -1;
 }

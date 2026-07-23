@@ -30,7 +30,7 @@ import {
   writeFileDemo,
 } from "@/lib/demo/demo-fs";
 import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
-import { applyProfilePatch } from "@/lib/identity/profile-writer";
+
 import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
 import { startLoop } from "@/app/api/loops/start-loop";
 import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
@@ -208,12 +208,53 @@ export async function updateUserProfileExecute(
     body?: string;
     reason: string;
   },
-  _opts: ExecuteOpts<ToolContext>,
+  { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<{ ok: boolean; error?: string }> {
   "use step";
-  const { reason, ...fields } = patch;
-  const res = await applyProfilePatch(fields, `[agent] ${reason}`);
-  return res.ok ? { ok: true } : { ok: false, error: res.error };
+
+  // Build a belief line from the patch fields
+  const parts: string[] = [];
+  if (patch.name) parts.push(`自称 ${patch.name}`);
+  if (patch.addressAs) parts.push(`可用 ${patch.addressAs} 称呼`);
+  if (patch.pronouns) parts.push(`代词: ${patch.pronouns}`);
+  if (patch.timezone) parts.push(`时区: ${patch.timezone}`);
+  if (patch.locale) parts.push(`语言: ${patch.locale}`);
+  if (patch.body) parts.push(patch.body);
+
+  if (parts.length === 0) {
+    return { ok: false, error: "No profile fields provided" };
+  }
+
+  const beliefText = parts.join("，");
+  const evidenceSlice = ctx.sliceId.replace(/-/g, "/").replace(/^(\d{4})(\d{2})(\d{2})(\d{4})$/, "$1/$2/$3/$4");
+  // sliceId is YYYY-MM-DD-HHMM → YYYY/MM/DD/HHMM for the citation
+
+  try {
+    // Read current previously.md
+    const { readPreviously, writePreviously } =
+      await import("@/lib/episodic/manager");
+    const { applyBeliefUpdates } =
+      await import("@/lib/episodic/maintenance");
+
+    const current = await readPreviously(ctx.sliceId);
+    if (!current.trim()) {
+      return { ok: false, error: "No previously.md exists for this slice yet" };
+    }
+
+    const update = {
+      action: "observe" as const,
+      section: "User identity" as const,
+      belief: beliefText,
+      evidence_slice: evidenceSlice || ctx.sliceId,
+      evidence_turn: "?",
+    };
+
+    const updated = applyBeliefUpdates(current, [update], ctx.sliceId);
+    await writePreviously(ctx.sliceId, updated);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "write failed" };
+  }
 }
 
 export async function startLoopExecute(

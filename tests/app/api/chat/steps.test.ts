@@ -18,6 +18,9 @@ const episodic = vi.hoisted(() => ({
   }),
   saveSliceSnapshot: vi.fn(async () => {}),
   ensureIndexEntries: vi.fn(async () => {}),
+  readPreviously: vi.fn(async () => ""),
+  ensurePreviously: vi.fn(async () => ""),
+  writeAgentTimeline: vi.fn(async () => ({ path: "", created: false })),
 }));
 
 const maintenance = vi.hoisted(() => ({
@@ -123,6 +126,8 @@ describe("housekeeping step", () => {
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice);
     expect(episodic.ensureIndexEntries).toHaveBeenCalledWith(slice);
     expect(episodic.appendTurn).not.toHaveBeenCalled();
+    // Previously.md scaffolding initialized for new slices.
+    expect(episodic.ensurePreviously).toHaveBeenCalledWith(slice.slice_id);
     // Opens the UI stream: lifecycle chunks live in the durable run stream so
     // the POST and reconnect paths replay identical chunk sequences.
     expect(workflowMock.written.map((c) => c.type)).toEqual(["start", "start-step"]);
@@ -145,6 +150,8 @@ describe("housekeeping step", () => {
     expect(slice.turns).toHaveLength(3);
     expect(slice.turns[2].content).toBe("follow up");
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice);
+    // Previously.md ensured for recovered slices too.
+    expect(episodic.ensurePreviously).toHaveBeenCalledWith(slice.slice_id);
   });
 
   it("closes a stale slice on time silence and starts a new one", async () => {
@@ -188,6 +195,7 @@ describe("flashRecall step", () => {
       needs_metadata_update: true,
       metadata_updates: { focus: "rust borrow checker", tags: ["rust"] },
       reasoning: "matched",
+      belief_updates: [],
     });
 
     const result = await flashRecall(makeInput("rust question"), slice);

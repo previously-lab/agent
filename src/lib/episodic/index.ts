@@ -28,6 +28,13 @@ export {
   sliceIdToLegacyFilePath,
   writeAgentTimeline,
   readAgentTimeline,
+  sliceIdToPreviouslyPath,
+  readPreviously,
+  writePreviously,
+  findMostRecentPreviously,
+  ensurePreviously,
+  applyPreviouslyDecay,
+  emptyPreviouslyTemplate,
 } from "./manager";
 
 export {
