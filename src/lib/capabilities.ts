@@ -7,14 +7,11 @@
  * directly. The AI model layer does NOT import this — it learns about
  * limitations through tool-executor rejections returned as tool results.
  *
- * Decision flow:
- *
- *   DEEPSEEK_API_KEY set?
- *   ├─ NO  → App is non-functional (no AI). Show setup guidance.
- *   └─ YES → GITHUB_TOKEN set?
- *             ├─ NO  → Demo mode: can chat, CANNOT write, CANNOT loop.
- *             └─ YES → Production mode: full read/write, loops available.
+ * Data-source logic delegates to @/lib/data-source/resolve — this module only
+ * answers capability questions derived from that source.
  */
+
+import { resolveDataSource, isWritable } from "@/lib/data-source/resolve";
 
 // ─── Core checks ──────────────────────────────────────────────────────────
 
@@ -25,20 +22,19 @@ export function isAIConfigured(): boolean {
 
 /**
  * Is the app in read-only demo mode?
- * True when no GitHub token is configured — the user is browsing pre-seeded
- * persona data and cannot persist anything.
+ * True when the resolved data source is "demo".
  */
 export function isDemo(): boolean {
-  return !process.env.GITHUB_TOKEN;
+  return resolveDataSource() === "demo";
 }
 
 /**
  * Can the app persist data?
- * True when a GitHub token is configured, giving the agent write access to
- * the user's own memory repository. The inverse of isDemo().
+ * True when the data source supports writes (local or github). The inverse
+ * of demo mode.
  */
 export function canWrite(): boolean {
-  return !!process.env.GITHUB_TOKEN;
+  return isWritable();
 }
 
 // ─── Centralized repo identity ────────────────────────────────────────────
