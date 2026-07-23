@@ -8,7 +8,6 @@ import {
   sliceIdToTimelineDir,
   sliceIdToAgentPath,
   sliceIdToLegacyFilePath,
-  serializeAgentTimeline,
 } from "../manager";
 import type { TimeSlice, Turn } from "../types";
 
@@ -404,45 +403,3 @@ New turn
   });
 });
 
-// ─── Agent timeline serialization ──────────────────────────────────────
-
-describe("serializeAgentTimeline", () => {
-  it("produces a valid cognition entry with header and sections", () => {
-    const md = serializeAgentTimeline({
-      turnId: "a3fk2w",
-      timestamp: "2026-07-22T09:00:00.200Z",
-      reasoning: "The user wants a file listing — I need to check memory first.",
-      toolCalls: [
-        { toolName: "listMemory", intent: "Find relevant slices", assessment: "Found 3 relevant slices" },
-        { toolName: "readMemory", intent: "Read the most relevant slice", assessment: "Contains needed context" },
-      ],
-      selfCheck: "2 tools, no redundancy. Goal achieved.",
-    });
-
-    expect(md).toContain("## Cognition a3fk2w — 2026-07-22T09:00:00.200Z");
-    expect(md).toContain("### Reasoning");
-    expect(md).toContain("### Step: `listMemory`");
-    expect(md).toContain("- **intent**: Find relevant slices");
-    expect(md).toContain("- **assessment**: Found 3 relevant slices");
-    expect(md).toContain("### Step: `readMemory`");
-    expect(md).toContain("- **intent**: Read the most relevant slice");
-    expect(md).toContain("- **assessment**: Contains needed context");
-    expect(md).toContain("### Self-check");
-    expect(md).toContain("2 tools, no redundancy. Goal achieved.");
-  });
-
-  it("handles empty toolCalls array", () => {
-    const md = serializeAgentTimeline({
-      turnId: "b4gl3x",
-      timestamp: "2026-07-22T09:01:00.000Z",
-      reasoning: "Simple greeting, no tools needed.",
-      toolCalls: [],
-      selfCheck: "0 tools. Just a greeting.",
-    });
-
-    expect(md).toContain("## Cognition b4gl3x");
-    expect(md).not.toContain("### Step:");
-    expect(md).toContain("### Self-check");
-    expect(md).toContain("0 tools");
-  });
-});

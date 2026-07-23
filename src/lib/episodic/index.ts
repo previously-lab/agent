@@ -26,7 +26,6 @@ export {
   sliceIdToTimelineDir,
   sliceIdToAgentPath,
   sliceIdToLegacyFilePath,
-  serializeAgentTimeline,
   writeAgentTimeline,
   readAgentTimeline,
 } from "./manager";

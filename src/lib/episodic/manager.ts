@@ -612,34 +612,6 @@ function extractRelativePath(slice: TimeSlice): string {
 // ─── Agent timeline I/O ──────────────────────────────────────────────────
 
 /**
- * Serialize a single cognition entry for the agent timeline (agent.md).
- *
- * The agent timeline stores cognitive process, not raw tool results:
- * reasoning, per-tool intent + assessment, and a self-check.
- */
-export function serializeAgentTimeline(input: {
-  turnId: string;
-  timestamp: string;
-  reasoning: string;
-  toolCalls: Array<{ toolName: string; intent: string; assessment: string }>;
-  selfCheck: string;
-}): string {
-  const header = `## Cognition ${input.turnId} — ${input.timestamp}`;
-  const reasoning = `\n### Reasoning\n${input.reasoning}\n`;
-  const steps =
-    input.toolCalls.length > 0
-      ? `\n${input.toolCalls
-          .map(
-            (tc) =>
-              `### Step: \`${tc.toolName}\`\n- **intent**: ${tc.intent}\n- **assessment**: ${tc.assessment}`
-          )
-          .join("\n\n")}\n`
-      : "";
-  const selfCheck = `\n### Self-check\n${input.selfCheck}`;
-  return header + reasoning + steps + selfCheck;
-}
-
-/**
  * Write (append) a cognition entry to the agent's timeline for a slice.
  * Reads the existing agent.md (if any) and appends the new entry.
  */

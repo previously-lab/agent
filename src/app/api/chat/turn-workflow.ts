@@ -73,7 +73,7 @@ function extractFinalText(messages: ModelMessage[]): string {
  * a process log, not a data dump. The final text response is omitted (it lives
  * in core.md).
  */
-function extractCognition(
+export function extractCognition(
   messages: ModelMessage[],
 ): string {
   const lines: string[] = [];
