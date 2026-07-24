@@ -247,14 +247,6 @@ export function sliceIdToAgentPath(sliceId: string): string {
 }
 
 /**
- * Legacy flat-file path for backward compatibility.
- * Old format: memory/episodic/slices/YYYY/MM/DD/HHMM.md
- */
-export function sliceIdToLegacyFilePath(sliceId: string): string {
-  return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}.md`;
-}
-
-/**
  * Compute the file path for previously.md (the agent's belief system about
  * the user). Lives at slice root — sibling to timeline/, not inside it.
  * Format: memory/episodic/slices/YYYY/MM/DD/HHMM/previously.md

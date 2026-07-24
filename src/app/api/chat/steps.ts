@@ -240,11 +240,11 @@ function buildTimelineEpisodicContext(
       }
       ctx += "\n";
     }
-    ctx += "These summaries are usually enough — only readMemory a specific slice if you need a detail they don't carry.\n\n";
+    ctx += "These summaries are usually enough — only readSlice a specific slice if you need a detail they don't carry.\n\n";
   } else if (flashOutput) {
     ctx += "### Recall Results\n";
     ctx += "Flash scanned recent conversation history and found no directly relevant past conversations.\n";
-    ctx += "Use readMemory to explore `memory/episodic/strands.json` if deeper context is needed.\n\n";
+    ctx += "Use readSlice to explore `memory/episodic/` if deeper context is needed.\n\n";
   }
 
   return ctx;

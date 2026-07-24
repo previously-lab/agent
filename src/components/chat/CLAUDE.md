@@ -27,11 +27,13 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
                 Bubble > BubbleContent
                   [ToolRenderer dispatched]  ← inline per tool-* part
                     ToolLayout (shared expandable card)
-                      ├ ReadFileRenderer   (readFile)
-                      ├ WriteFileRenderer  (writeFile)
-                      ├ ListFilesRenderer  (listFiles)
-                      ├ MemoryToolRenderer (readMemory/listMemory/readIndex)
-                      └ DefaultRenderer    (unknown tools)
+                      ├ MemoryToolRenderer  (readSlice / readAgentTimeline /
+                      │                      readPreviously / readTimeline /
+                      │                      readStrand)
+                      ├ ListFilesRenderer   (listSlices / listStrands)
+                      ├ WebSearchRenderer   (webSearch)
+                      ├ LoopToolRenderer    (startLoop)
+                      └ DefaultRenderer     (unknown tools)
                   MarkdownRenderer  ← text parts
                     CodeBlock (fenced code with copy)
                   Streaming cursor (pulse span)
@@ -61,9 +63,9 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 | `chat-page.tsx` | Top-level `"use client"` container: `useChat` hook, `WorkflowChatTransport` wiring (durable-run resume — persists the `x-workflow-run-id` to localStorage, `resume` on mount; model/thinking/timezone/loadedSliceIds body via `prepareSendMessagesRequest`), MessageScroller shell, hero/memory/chat regions, sticky ChatInput |
 | `chat-section.tsx` | Renders the message list (`ChatMessage` per message), the pre-first-part thinking indicator, and the error banner |
 | `memory-section.tsx` | Passthrough wrapper forwarding props to `TimelinePanel` (past-memory region of the scroller) |
-| `hero-section.tsx` | Server component: "Previously on {name}" landing block; name comes from `memory/user/profile.md` via `getUserName()` |
+| `hero-section.tsx` | Server component: "Previously on {name}" landing block; name comes from previously.md via `getUserName()` |
 | `hero-text.tsx` | `HeroText`: animated "Previously on {name}" hero built on `TextGenerateEffect`; rendered by `hero-section.tsx` |
-| `chat-message.tsx` | Per-message renderer: classifies parts into recall/reasoning/inline phases, wraps in Message/Bubble, footer |
+| `chat-message.tsx` | Per-message renderer: unified stream — classifies parts into recall/reasoning/text/tool/belief, wraps in Bubble |
 | `chat-input.tsx` | Textarea with image attachments (paste/drag-drop/file picker), auto-resize, submit/stop buttons |
 | `markdown.tsx` | Markdown renderer: react-markdown with remark-gfm, rehype-highlight, custom components for code/table/link/list/blockquote |
 | `code-block.tsx` | Fenced code block: header bar with language label + copy button, scrollable code area |
@@ -72,33 +74,32 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 | `tool-renderer.tsx` | Dispatcher: extracts render state, maps toolNames to specific renderers, re-exports ToolLayout |
 | `tool-layout.tsx` | Shared expandable card: status icon (spinner/dot/error/interrupted), name, summary, meta, expandable content area with CSS grid row animation |
 | `thinking.tsx` | Phase 2 reasoning: Brain icon, elapsed timer, markdown-rendered thought content inside ToolLayout |
-| `recall-phase.tsx` | Phase 1 context recall: History icon, elapsed timer, tags/recall-hits/reasoning inside ToolLayout |
-| `recall-group.tsx` | `RecallGroup`: groups recall tool-call parts by category (`timeline`/`browse`), delegating each to `ToolRenderer`/`ToolLayout` |
+| `recall-phase.tsx` | Phase 1 context recall: History icon, tags/recall-hits/reasoning inside ToolLayout |
 | `timeline-panel.tsx` | Past memory slices grouped by date with "load more" pagination, calls useTimeline hook, feeds `loadedSliceIds` back to the chat transport |
 | `loaded-ids-context.tsx` | `LoadedIdsProvider` / `useLoadedIds`: shared set of loaded slice IDs snapshotted into the chat transport body (no-op fallback outside `ChatPage`) |
 | `date-group-header.tsx` | `DateGroupHeader` (locale-aware animated year/month/day header) + `SliceTimeMarker` (animated HH:MM), both built on `NumberTicker` |
 | `time-slice-row.tsx` | Individual memory slice: lazy-loads content, shows last exchange by default, expandable to full conversation, open loops/decisions as pills |
 | `theme-toggle.tsx` | `ThemeToggle`: toolbar button cycling light → dark → system |
 | `locale-toggle.tsx` | `LocaleToggle`: toolbar button swapping UI language (en ⇄ zh) via the URL locale |
-| `tool-renderers/read-file.tsx` | ReadFile tool: FileNamePill summary, line count meta, scrollable preview (5k char cap) |
-| `tool-renderers/write-file.tsx` | WriteFile tool: FileNamePill summary, +/- line diff meta, preview of written content |
 | `tool-renderers/list-files.tsx` | ListFiles tool: path + item count summary, expanded view shows file/dir list with icons |
-| `tool-renderers/memory-tool.tsx` | Memory tools (readMemory/listMemory/readIndex): Search icon, path/index label summary, output preview with smart formatting for slices |
+| `tool-renderers/memory-tool.tsx` | Memory tools (readSlice / readAgentTimeline / readPreviously / readTimeline / readStrand): Search icon, path/index label summary, output preview with smart formatting for slices |
+| `tool-renderers/web-search.tsx` | WebSearch tool: Globe icon, query summary, Markdown answer + source links in expanded view |
+| `tool-renderers/loop.tsx` | StartLoop tool: Repeat icon, goal summary, loopId/filePath details or error display |
 | `tool-renderers/default.tsx` | Fallback for unknown tools: Wrench icon, JSON-snippet summary, no expandable content |
 
 ## Tool Renderers
 
 `ToolRenderer` (tool-renderer.tsx) is the dispatch hub. It calls `extractRenderState()` from `@/lib/chat/tool-state` to normalize the raw SDK state string into a `ToolRenderState` object. Each tool maps to a dedicated renderer, all sharing `ToolLayout`:
 
-- **ReadFileRenderer** — shows `FileNamePill` + line count + scrollable code preview (5k char cap). Error state tints the pill red.
-- **WriteFileRenderer** — shows `FileNamePill` + `+N/-0` diff meta + content preview. Distinguishes "Create" vs "Update" via output text.
-- **ListFilesRenderer** — shows path + item count. Expanded view lists entries with folder/file icons.
-- **MemoryToolRenderer** — shows human-friendly name ("Recalling in detail...", "Scanning timeline...") + path/index label. Expanded view shows raw tool name + output, smart-formatted for slices (month/year grouping).
-- **DefaultRenderer** — shows friendly-cased tool name + first 40 chars of JSON input. No expandable content.
+- **MemoryToolRenderer** — used for read tools (readSlice, readAgentTimeline, readPreviously, readTimeline, readStrand). Shows human-friendly Chinese labels ("正在查看时间片…" / "已查看时间片") + path/index label. Expanded view shows tool name + output, smart-formatted for slices.
+- **ListFilesRenderer** — used for list/browse tools (listSlices, listStrands). Shows item count. Expanded view lists entries with folder/file icons.
+- **WebSearchRenderer** — used for webSearch. Shows query as summary. Expanded view shows markdown-rendered answer + clickable source links.
+- **LoopToolRenderer** — used for startLoop. Shows truncated goal as summary. Expanded view shows loopId/filePath or error display.
+- **DefaultRenderer** — fallback for unknown tools. Shows friendly-cased tool name + first 40 chars of JSON input. No expandable content.
 
 Every renderer passes `state` to `ToolLayout`, which handles: running spinner, error (red), interrupted (yellow), denied (red), and expand/collapse with a CSS `grid-template-rows` transition on the details panel.
 
-**Human-friendly display names** (defined in tool-renderer.tsx): `readMemory` becomes "Recalling in detail...", `listMemory` becomes "Recalling more...", `readIndex` becomes "Scanning timeline...". All others get capitalized first letter.
+**Human-friendly display names** (defined in tool-renderer.tsx): Flash recall uses "回忆" (Chinese). All tools use "查看"/"查找" patterns. Completed states switch to "已...". See `toolLabel()` in tool-renderer.tsx for the full mapping.
 
 ## Design Decisions
 

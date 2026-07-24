@@ -8,8 +8,8 @@
  *   3. Metadata maintenance (focus/summary/decisions/open_loops/tags/tone)
  *
  * Flash acts as a "conditioned reflex" layer — fast, shallow, possibly
- * inaccurate. Pro handles deep recall (readMemory, listMemory) when Flash
- * finds nothing or when deeper context is needed.
+ * inaccurate. Pro handles deep recall (readSlice) when Flash finds nothing
+ * or when deeper context is needed.
  */
 
 import { generateText, tool } from "ai";

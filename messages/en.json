@@ -86,13 +86,7 @@
       "startLoop": "Starting a background loop",
       "loopFile": "Loop file",
       "loopId": "Loop ID",
-      "readFile": "Read",
-      "updateFile": "Update",
-      "createFile": "Create",
-      "listFiles": "List",
-      "lines": "{count} lines",
       "items": "{count} items",
-      "failed": "failed",
       "expandedLabel": "Tool:",
       "conversations": "{count} conversations"
     },

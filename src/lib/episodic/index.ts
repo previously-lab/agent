@@ -25,7 +25,6 @@ export {
   ensureIndexEntries,
   sliceIdToTimelineDir,
   sliceIdToAgentPath,
-  sliceIdToLegacyFilePath,
   writeAgentTimeline,
   readAgentTimeline,
   sliceIdToPreviouslyPath,
@@ -36,6 +35,8 @@ export {
   applyPreviouslyDecay,
   emptyPreviouslyTemplate,
 } from "./manager";
+// NOTE: sliceIdToLegacyFilePath was removed in v0.5 — old flat-file format
+//       support dropped. Use sliceIdToTimelineDir / sliceIdToFilePath instead.
 
 export {
   DEFAULT_TIME_SILENCE_MS,

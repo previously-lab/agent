@@ -42,8 +42,8 @@ export const DEMO_REGISTRY: Record<string, DemoEntry> = {
     id: "tool-layout",
     label: "ToolLayout — expandable tool card",
     code: `<ToolLayout
-  name="readMemory"
-  summary="Recalling in detail…"
+  name="readSlice"
+  summary="Looking up a specific slice…"
   state={COMPLETED}
   defaultExpanded
   icon={<History className="h-4 w-4" />}
@@ -56,8 +56,8 @@ export const DEMO_REGISTRY: Record<string, DemoEntry> = {
 />`,
     render: () => (
       <ToolLayout
-        name="readMemory"
-        summary="Recalling in detail…"
+        name="readSlice"
+        summary="Looking up a specific slice…"
         state={COMPLETED}
         defaultExpanded
         icon={<History className="h-4 w-4" />}
@@ -74,15 +74,15 @@ export const DEMO_REGISTRY: Record<string, DemoEntry> = {
     id: "tool-layout-loading",
     label: "ToolLayout — loading state",
     code: `<ToolLayout
-  name="listMemory"
-  summary="Scanning timeline…"
+  name="readTimeline"
+  summary="Browsing monthly timeline…"
   state={RUNNING}
   icon={<Loader2 className="h-4 w-4 animate-spin" />}
 />`,
     render: () => (
       <ToolLayout
-        name="listMemory"
-        summary="Scanning timeline…"
+        name="readTimeline"
+        summary="Browsing monthly timeline…"
         state={RUNNING}
         icon={<Loader2 className="h-4 w-4 animate-spin" />}
       />

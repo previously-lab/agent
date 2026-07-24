@@ -5,7 +5,6 @@ export type SliceStatus = "active" | "closed";
 export type SlicingSignal =
   | "time_silence"
   | "user_explicit"
-  | "flash_high_confidence"
   | "capacity";
 
 /** Emotional tone of a time slice, maintained by Flash */

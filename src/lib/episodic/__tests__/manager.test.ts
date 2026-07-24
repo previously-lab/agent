@@ -7,7 +7,6 @@ import {
   sliceIdToFilePath,
   sliceIdToTimelineDir,
   sliceIdToAgentPath,
-  sliceIdToLegacyFilePath,
   sliceIdToPreviouslyPath,
   applyPreviouslyDecay,
   emptyPreviouslyTemplate,
@@ -309,14 +308,6 @@ describe("sliceIdToAgentPath", () => {
   it("builds the agent.md path", () => {
     expect(sliceIdToAgentPath("2026-07-10-1430")).toBe(
       "memory/episodic/slices/2026/07/10/1430/timeline/agent.md"
-    );
-  });
-});
-
-describe("sliceIdToLegacyFilePath", () => {
-  it("builds the old flat .md path", () => {
-    expect(sliceIdToLegacyFilePath("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430.md"
     );
   });
 });

@@ -86,9 +86,7 @@
       "startLoop": "启动后台循环",
       "loopFile": "循环文件",
       "loopId": "循环 ID",
-      "lines": "{count} 行",
       "items": "{count} 项",
-      "failed": "失败",
       "expandedLabel": "工具：",
       "conversations": "{count} 次对话"
     },

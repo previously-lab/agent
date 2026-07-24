@@ -1,25 +1,10 @@
 /**
- * User profile — mutable, agent-editable data.
+ * User profile — extracted from previously.md.
  *
- * As of v0.5 (Phase D), the canonical source is the most recent previously.md's
- * "User identity" section. The legacy memory/user/profile.md is still read as a
- * fallback for backward compatibility but is no longer written.
- *
- * DEMO_MODE redirects memory/ reads to the demo persona (handled in local-fs),
- * so the demo home page shows Caleb for free.
+ * As of v0.5, the canonical source is the most recent previously.md's
+ * "User identity" section. Flash micro-evolution and Pro macro-evolution
+ * manage beliefs automatically; there is no separate profile file.
  */
-import matter from "gray-matter";
-import { readFile } from "@/lib/tools/readFile";
-import { readFileLocal } from "@/lib/tools/local-fs";
-import { readFileDemo } from "@/lib/demo/demo-fs";
-import { resolveDataSource } from "@/lib/data-source/resolve";
-import { getRepoConfig } from "@/lib/capabilities";
-
-const LEGACY_PROFILE_PATH = "memory/user/profile.md";
-
-const DATA_SOURCE = resolveDataSource();
-const USE_GITHUB = DATA_SOURCE === "github";
-const USE_DEMO = DATA_SOURCE === "demo";
 
 export interface UserProfile {
   name: string;
@@ -32,37 +17,6 @@ export interface UserProfile {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-// ─── Legacy profile.md reader (backward compat) ──────────────────────────
-
-async function readLegacyProfile(): Promise<string | null> {
-  try {
-    if (USE_DEMO) return await readFileDemo(LEGACY_PROFILE_PATH);
-    if (USE_GITHUB) {
-      const { owner, repo } = getRepoConfig();
-      return await readFile(LEGACY_PROFILE_PATH, repo, owner);
-    }
-    return await readFileLocal(LEGACY_PROFILE_PATH);
-  } catch {
-    return null;
-  }
-}
-
-function parseLegacyProfile(
-  raw: string | null,
-): UserProfile {
-  const { data, content } = raw
-    ? matter(raw)
-    : { data: {} as Record<string, unknown>, content: "" };
-  return {
-    name: str(data.name) ?? "",
-    pronouns: str(data.pronouns),
-    timezone: str(data.timezone),
-    locale: str(data.locale),
-    addressAs: str(data.address_as),
-    body: content.trim(),
-  };
 }
 
 // ─── previously.md identity parser ───────────────────────────────────────
@@ -163,20 +117,17 @@ async function readPreviouslyIdentity(): Promise<UserProfile | null> {
   return null;
 }
 
-// ─── Public API ────────────────────────────────────────────────────────
+// ─── Public API ──────────────────────────────────────────────────────────
 
 export async function loadUserProfile(): Promise<UserProfile> {
-  // 1. Try previously.md first (new canonical source)
   try {
     const fromPreviously = await readPreviouslyIdentity();
     if (fromPreviously) return fromPreviously;
   } catch {
-    // Fall through to legacy
+    // previously.md unavailable — return empty default
   }
 
-  // 2. Fall back to legacy profile.md
-  const raw = await readLegacyProfile();
-  return parseLegacyProfile(raw);
+  return { name: "", body: "" };
 }
 
 /** The user's display name, or `fallback` ("You") when unset. */
