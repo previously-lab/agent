@@ -4,7 +4,6 @@ import { memo, useMemo } from "react";
 import type { UIMessage } from "ai";
 import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
-import { RecallPhase } from "./recall-phase";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { ToolLayout } from "./tool-layout";
@@ -33,7 +32,6 @@ type AnyPart = {
 };
 
 type StreamItem =
-  | { kind: "recall"; data: Record<string, unknown>; isStreaming: boolean }
   | { kind: "reasoning"; text: string }
   | { kind: "text"; content: string }
   | { kind: "tool"; toolName: string; state: string; input?: unknown; output?: unknown }
@@ -51,15 +49,7 @@ function buildStream(parts: readonly AnyPart[], isStreaming: boolean): StreamIte
   };
 
   for (const p of parts) {
-    if (p.type === "data-flash") {
-      flushText();
-      // Merge multiple data-flash updates (last-write-wins)
-      const existing = items.length > 0 && items[items.length - 1].kind === "recall"
-        ? (items.pop() as { kind: "recall"; data: Record<string, unknown>; isStreaming: boolean } | null)
-        : null;
-      const merged = { ...(existing?.data ?? {}), ...(p.data as Record<string, unknown> ?? {}) };
-      items.push({ kind: "recall", data: merged, isStreaming: merged.done === false });
-    } else if (p.type === "reasoning") {
+    if (p.type === "reasoning") {
       flushText();
       const reasoningText = (p as { text: string }).text ?? "";
       // Merge consecutive reasoning deltas
@@ -143,23 +133,8 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
       <Message align="start" className="gap-1">
         <MessageContent className="min-w-0">
           {hasContent && (
-            <Bubble variant="secondary">
-              <BubbleContent>
-                {streamItems.map((item, i) => {
-                  if (item.kind === "recall") {
-                    const d = item.data;
-                    return (
-                      <RecallPhase
-                        key={`recall-${i}`}
-                        text={(d.text as string) ?? ""}
-                        tags={d.tags as string[] | undefined}
-                        reasoning={d.reasoning as string | undefined}
-                        recallHits={d.recall_hits as Array<{ slice_id: string; relevance: number; reason: string }> | undefined}
-                        durationMs={d.durationMs as number | undefined}
-                        isStreaming={item.isStreaming}
-                      />
-                    );
-                  }
+            <div className="space-y-1">
+              {streamItems.map((item, i) => {
                   if (item.kind === "reasoning") {
                     return (
                       <ThinkingSteps
@@ -188,6 +163,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
                         name="更新了前情提要"
                         summary=""
                         icon={<FileText className="h-3.5 w-3.5" />}
+                        defaultExpanded
                         state={{
                           running: false,
                           interrupted: false,
@@ -219,8 +195,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
                 {isStreaming && isAssistant && (
                   <span className="inline-block w-1.5 h-4 bg-primary/50 animate-pulse rounded-sm ml-0.5 align-text-bottom" />
                 )}
-              </BubbleContent>
-            </Bubble>
+            </div>
           )}
 
           {/* Footer — actions only */}

@@ -87,6 +87,10 @@
       "loopFile": "Loop file",
       "loopId": "Loop ID",
       "items": "{count} items",
+      "recall": "Recalling…",
+      "recallHits": "{count} conversation{count, plural, one {} other {s}} found",
+      "recallNone": "No relevant conversations found",
+      "listFiles": "Browse",
       "expandedLabel": "Tool:",
       "conversations": "{count} conversations"
     },

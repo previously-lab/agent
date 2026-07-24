@@ -6,12 +6,13 @@ import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 
 interface ListFilesRendererProps {
+  displayName: string;
   input?: { path?: string };
   output?: Array<{ name: string; type: string }>;
   state: ToolRenderState;
 }
 
-export function ListFilesRenderer({ input, output, state }: ListFilesRendererProps) {
+export function ListFilesRenderer({ displayName, input, output, state }: ListFilesRendererProps) {
   const t = useTranslations("chat.tool");
   const dirPath = input?.path ?? "...";
   const files = Array.isArray(output) ? output : [];
@@ -42,7 +43,7 @@ export function ListFilesRenderer({ input, output, state }: ListFilesRendererPro
 
   return (
     <ToolLayout
-      name={t("listFiles")}
+      name={displayName}
       icon={<FolderOpen className="h-3.5 w-3.5" />}
       summary={summary}
       meta={files.length > 0 ? t("items", { count: files.length }) : undefined}

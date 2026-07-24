@@ -2,10 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { TimeSlice } from "@/lib/episodic";
 import type { TurnInput } from "@/lib/chat/turn-types";
 
-// ── Mock the step dependencies so housekeeping/flashRecall run their real
-// control flow against fakes. The "use step" directive is a build-time
-// transform vitest doesn't apply, so here they're just async functions we can
-// call directly and assert the by-value slice contract on. ──────────────────
+// ── Mock the step dependencies ──────────────────────────────────────────
 
 const episodic = vi.hoisted(() => ({
   tryLoadTodaySlice: vi.fn(),
@@ -19,16 +16,24 @@ const episodic = vi.hoisted(() => ({
   saveSliceSnapshot: vi.fn(async () => {}),
   ensureIndexEntries: vi.fn(async () => {}),
   readPreviously: vi.fn(async () => ""),
+  writePreviously: vi.fn(async () => {}),
   ensurePreviously: vi.fn(async () => ""),
   writeAgentTimeline: vi.fn(async () => ({ path: "", created: false })),
 }));
 
 const maintenance = vi.hoisted(() => ({
-  runUnifiedFlash: vi.fn(),
-  readRecentSummaries: vi.fn(async () => []),
   applyMetadataUpdates: vi.fn((meta: Record<string, unknown>, updates: Record<string, unknown>) => {
     Object.assign(meta, updates);
   }),
+  applyBeliefUpdates: vi.fn((content: string) => content),
+}));
+
+const flashMetadata = vi.hoisted(() => ({
+  runMetadataUpdate: vi.fn(),
+}));
+
+const flashBelief = vi.hoisted(() => ({
+  runBeliefUpdate: vi.fn(),
 }));
 
 let timeSilent = false;
@@ -38,10 +43,10 @@ vi.mock("@/lib/episodic/slicer", () => ({
   checkTimeSilence: () => timeSilent,
 }));
 vi.mock("@/lib/episodic/maintenance", () => maintenance);
+vi.mock("@/lib/episodic/flash/metadata", () => flashMetadata);
+vi.mock("@/lib/episodic/flash/belief", () => flashBelief);
 
-// The run's writable: housekeeping writes the start/start-step lifecycle
-// chunks and flashRecall writes the data-flash recall card, so the mock
-// collects everything written for assertions.
+// The run's writable: collects everything written for assertions.
 const workflowMock = vi.hoisted(() => {
   const written: Array<Record<string, unknown>> = [];
   return {
@@ -58,16 +63,12 @@ const workflowMock = vi.hoisted(() => {
 });
 
 vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
-vi.mock("@/lib/router", () => ({ classifyIntentKeywords: () => ({ intent: "chat", source: "keyword" }) }));
-vi.mock("@/lib/memory/manager", () => ({ listNodes: () => [] }));
-vi.mock("@/lib/memory/scorer", () => ({ rankNodes: () => [] }));
-vi.mock("@/lib/context/assembler", () => ({ assembleContext: () => ({ prompt: "" }) }));
 vi.mock("@/lib/identity", () => ({
-  buildAgentIdentityPrompt: () => "",
-  loadUserProfile: async () => ({}),
+  buildAgentIdentityPrompt: () => "identity prompt",
+  loadUserProfile: async () => ({ name: "Test" }),
 }));
 
-import { housekeeping, flashRecall } from "@/app/api/chat/steps";
+import { housekeeping, metadataUpdate, beliefUpdate, finalizeTurn } from "@/app/api/chat/steps";
 
 function makeSlice(overrides: Partial<TimeSlice> = {}): TimeSlice {
   return {
@@ -84,6 +85,7 @@ function makeSlice(overrides: Partial<TimeSlice> = {}): TimeSlice {
     loops: [],
     turns: [],
     estimatedTokens: 0,
+    emotional_tone: "neutral",
     ...overrides,
   };
 }
@@ -103,6 +105,8 @@ function makeInput(lastUserMessage: string): TurnInput {
     },
     owner: "local",
     repo: "local",
+    useGithub: false,
+    useDemo: false,
     startedAtIso: "2026-07-14T10:00:00.000Z",
     turnId: "test-id",
   };
@@ -122,14 +126,10 @@ describe("housekeeping step", () => {
     expect(episodic.createSlice).toHaveBeenCalledWith("hello world", "UTC", "test-id");
     expect(slice.turns).toHaveLength(1);
     expect(slice.turns[0].content).toBe("hello world");
-    // Durably snapshotted before returning (was fire-and-forget in the old route).
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice);
     expect(episodic.ensureIndexEntries).toHaveBeenCalledWith(slice);
     expect(episodic.appendTurn).not.toHaveBeenCalled();
-    // Previously.md scaffolding initialized for new slices.
     expect(episodic.ensurePreviously).toHaveBeenCalledWith(slice.slice_id);
-    // Opens the UI stream: lifecycle chunks live in the durable run stream so
-    // the POST and reconnect paths replay identical chunk sequences.
     expect(workflowMock.written.map((c) => c.type)).toEqual(["start", "start-step"]);
   });
 
@@ -150,7 +150,6 @@ describe("housekeeping step", () => {
     expect(slice.turns).toHaveLength(3);
     expect(slice.turns[2].content).toBe("follow up");
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice);
-    // Previously.md ensured for recovered slices too.
     expect(episodic.ensurePreviously).toHaveBeenCalledWith(slice.slice_id);
   });
 
@@ -184,42 +183,56 @@ describe("housekeeping step", () => {
   });
 });
 
-describe("flashRecall step", () => {
+describe("metadataUpdate step", () => {
   it("applies Flash metadata updates onto the slice and returns it by value", async () => {
     const slice = makeSlice();
-    maintenance.runUnifiedFlash.mockResolvedValue({
-      intent: "coding",
-      confidence: 0.8,
-      suggested_topics: ["rust"],
-      recall_hits: [{ slice_id: "2026-07-01-1200", relevance: 0.9, reason: "prior rust talk" }],
+    flashMetadata.runMetadataUpdate.mockResolvedValue({
       needs_metadata_update: true,
       metadata_updates: { focus: "rust borrow checker", tags: ["rust"] },
       reasoning: "matched",
-      belief_updates: [],
     });
 
-    const result = await flashRecall(makeInput("rust question"), slice);
+    const result = await metadataUpdate(makeInput("rust question"), slice);
 
     expect(result.slice.focus).toBe("rust borrow checker");
     expect(result.slice.tags).toContain("rust");
-    expect(result.flashOutput?.intent).toBe("coding");
-    expect(typeof result.flashMs).toBe("number");
-    // The recall card is written into the run stream ahead of the agent.
-    const flashChunk = workflowMock.written.find((c) => c.type === "data-flash");
-    expect(flashChunk).toBeDefined();
-    expect((flashChunk?.data as { recall_hits: unknown[] }).recall_hits).toHaveLength(1);
+    expect(result.metadataUpdated).toBe(true);
   });
 
-  it("degrades gracefully when Flash throws — null output, slice untouched", async () => {
+  it("degrades gracefully when Flash throws — slice untouched", async () => {
     const slice = makeSlice({ focus: "unchanged" });
-    maintenance.runUnifiedFlash.mockRejectedValue(new Error("flash down"));
+    flashMetadata.runMetadataUpdate.mockRejectedValue(new Error("flash down"));
 
-    const result = await flashRecall(makeInput("anything"), slice);
+    const result = await metadataUpdate(makeInput("anything"), slice);
 
-    expect(result.flashOutput).toBeNull();
+    expect(result.metadataUpdated).toBe(false);
     expect(result.slice.focus).toBe("unchanged");
-    expect(typeof result.flashMs).toBe("number");
-    // No Flash output → no recall card chunk.
-    expect(workflowMock.written.find((c) => c.type === "data-flash")).toBeUndefined();
+  });
+});
+
+describe("beliefUpdate step", () => {
+  it("updates previously.md with observed beliefs", async () => {
+    const slice = makeSlice();
+    flashBelief.runBeliefUpdate.mockResolvedValue({
+      belief_updates: [{ action: "observe", section: "User identity", belief: "测试用户", evidence_slice: "2026/07/14/0900", evidence_turn: "test-id" }],
+      reasoning: "observed",
+    });
+    episodic.readPreviously.mockResolvedValue("## User identity\n\n## User patterns\n\n## Agent strategies\n");
+
+    const result = await beliefUpdate(makeInput("我叫测试"), slice);
+
+    expect(result.beliefUpdates).toHaveLength(1);
+    expect(episodic.writePreviously).toHaveBeenCalled();
+  });
+
+  it("degrades gracefully when Flash throws — empty updates", async () => {
+    const slice = makeSlice();
+    flashBelief.runBeliefUpdate.mockRejectedValue(new Error("flash down"));
+    episodic.readPreviously.mockResolvedValue("");
+
+    const result = await beliefUpdate(makeInput("anything"), slice);
+
+    expect(result.beliefUpdates).toEqual([]);
+    expect(result.previouslyContent).toBe("");
   });
 });

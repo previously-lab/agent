@@ -87,6 +87,10 @@
       "loopFile": "循环文件",
       "loopId": "循环 ID",
       "items": "{count} 项",
+      "recall": "正在回忆…",
+      "recallHits": "找到 {count} 段相关对话",
+      "recallNone": "未找到相关对话",
+      "listFiles": "浏览",
       "expandedLabel": "工具：",
       "conversations": "{count} 次对话"
     },

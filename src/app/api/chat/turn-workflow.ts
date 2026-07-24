@@ -32,10 +32,9 @@ import type {
 } from "@/lib/chat/turn-types";
 import {
   housekeeping,
-  flashRecall,
-  prepareGenerate,
+  metadataUpdate,
+  beliefUpdate,
   finalizeTurn,
-  reflectAndEvolve,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -223,14 +222,46 @@ function extractStartedLoops(messages: ModelMessage[]): StartedLoopRef[] {
 export async function turnWorkflow(input: TurnInput): Promise<void> {
   "use workflow";
 
-  const { slice, closedSlice } = await housekeeping(input);
-  const flash = await flashRecall(input, slice);
-  const prep = await prepareGenerate(input, flash.slice, flash.flashOutput);
+  // ── Pre-turn steps ─────────────────────────────────────────────────────
+
+  const { slice } = await housekeeping(input);
+  const meta = await metadataUpdate(input, slice);
+  const belief = await beliefUpdate(input, meta.slice);
+
+  // ── Assemble system prompt (lightweight — no Flash injection) ──────────
+
+  const systemPrompt = `${belief.userProfile}
+
+## What I understand about you
+
+${belief.previouslyContent}
+This is my current understanding of who you are and how you work. If any of this is wrong or outdated, tell me and I'll update it.
+
+## Memory access rules
+
+When you need context from past conversations, follow this order:
+
+1. **Recall first.** Call \`recall\` to search the episodic memory. The recall agent will find relevant slices and return their raw content. Never call readSlice, readTimeline, readStrand, or listStrands before recall has returned results.
+2. **Deep-read if needed.** After recall returns, you may call \`readSlice\` to get full content from specific slices that recall identified as relevant (recall returns truncated content).
+3. **Explore more if needed.** Use \`readStrand\` or \`readTimeline\` only to follow up on leads from the recall results.
+
+Think of recall as your search engine — you must search before you read. Reading slices blindly without recall is like opening random files without knowing what's inside.
+
+You can search the live web with the webSearch tool when you need current or external information beyond the user's memory and your knowledge. Weave what it finds into your prose with inline citations where relevant.
+You can start durable background loops with the startLoop tool. When the user asks for continuous or background work, or when you judge a task is large or long-running enough to work autonomously rather than answer inline, call startLoop with a clear, self-contained goal — it keeps working after this turn and records its progress to memory. Tell the user when you start one. Don't use it for anything you can answer right now.`;
+
+  // ── Pro agent ──────────────────────────────────────────────────────────
 
   const agent = createChatAgent({
     modelId: input.model,
     thinking: input.thinking,
-    toolsContext: buildChatToolsContext(prep.toolContext),
+    toolsContext: buildChatToolsContext({
+      repo: input.repo,
+      owner: input.owner,
+      useGithub: input.useGithub,
+      useDemo: input.useDemo,
+      sliceId: slice.slice_id,
+    }),
   });
 
   let outcome: TurnOutcome;
@@ -238,19 +269,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   try {
     const result = await agent.stream({
       messages: input.modelMessages,
-      system: prep.systemPrompt,
+      system: systemPrompt,
       writable: getWritable<ModelCallStreamPart>(),
       stopWhen: isStepCount(20),
-      // finalizeTurn owns the stream tail (finish-step / finish / close).
       sendFinish: false,
       preventClose: true,
-      // NOTE(reasoning timer): the old streamText onChunk server-side
-      // "Thought · Ns" measurement has no WorkflowAgent equivalent — stream
-      // options are serialized across the workflow→step boundary, so function
-      // hooks (experimental_transform) never reach the model-call step. The
-      // timer now comes from the client-side fallback that already exists in
-      // thinking.tsx (`elapsed`); data-reasoning chunks from old runs still
-      // render.
     });
     outcome = {
       text: extractFinalText(result.messages),
@@ -263,15 +286,9 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     outcome = { text: "", finishReason: "error", startedLoops: [], cognition: "" };
   }
 
-  // Always finalize: the slice snapshot stays honest and the client's stream
-  // is closed even when the agent errored mid-turn.
-  await finalizeTurn(flash.slice, outcome, input.turnId, flash.beliefUpdates);
+  // ── Post-turn persistence ──────────────────────────────────────────────
 
-  // Pro macro-reflection on the just-closed slice (if any).
-  // Runs after the UI stream is closed so the user isn't waiting on it.
-  if (closedSlice) {
-    await reflectAndEvolve(closedSlice);
-  }
+  await finalizeTurn(belief.slice, outcome, input.turnId);
 
   if (streamError !== null) {
     throw streamError;

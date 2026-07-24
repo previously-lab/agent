@@ -23,6 +23,7 @@ import {
   readAgentTimelineExecute,
   readPreviouslyExecute,
   webSearchExecute,
+  recallExecute,
   startLoopExecute,
   loopReportExecute,
   type ToolContext,
@@ -159,6 +160,21 @@ export const conceptTools = {
 
 export const chatTools = {
   ...conceptTools,
+  recall: tool({
+    description:
+      "Search past conversation slices for context relevant to the current " +
+      "query. Use this when you need to recall what was discussed in previous " +
+      "sessions, or when the user references something you need to look up in " +
+      "their history. Returns raw conversation content from matching slices — " +
+      "no summaries, just the original conversations.",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .describe("What to search for in past conversations. Be specific about the topic, person, project, or question you need context on."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recallExecute,
+  }),
   webSearch: tool({
     description:
       "Search the live web for current or external information — news, " +
@@ -227,6 +243,7 @@ export function buildChatToolsContext(ctx: ToolContext): Record<keyof typeof cha
     listStrands: ctx,
     readAgentTimeline: ctx,
     readPreviously: ctx,
+    recall: ctx,
     webSearch: ctx,
     startLoop: ctx,
   };

@@ -17,7 +17,6 @@ import { ToolLayout } from "@/components/chat/tool-layout";
 import { Bubble, BubbleContent, BubbleGroup } from "@/components/ui/bubble";
 import { MarkdownRenderer } from "@/components/chat/markdown";
 import { CodeBlock } from "@/components/chat/code-block";
-import { RecallPhase } from "@/components/chat/recall-phase";
 import { ThinkingSteps } from "@/components/chat/thinking";
 
 const COMPLETED: ReturnType<typeof import("@/lib/chat/tool-state").extractRenderState> = {
@@ -85,32 +84,6 @@ export const DEMO_REGISTRY: Record<string, DemoEntry> = {
         summary="Browsing monthly timeline…"
         state={RUNNING}
         icon={<Loader2 className="h-4 w-4 animate-spin" />}
-      />
-    ),
-  },
-  "recall-phase": {
-    id: "recall-phase",
-    label: "RecallPhase — Flash scan results",
-    code: `<RecallPhase
-  text="Scanned recent slice summaries and found relevant context."
-  tags={["work-pressure", "housing-project", "trust-crisis"]}
-  recallHits={[
-    { slice_id: "2023-04-21-0610", relevance: 0.92, reason: "Housing trust crisis" },
-    { slice_id: "2023-11-15-0930", relevance: 0.78, reason: "Community meeting follow-up" },
-  ]}
-  reasoning="Both slices carry the housing-project and trust-crisis tags. Together they span the crisis onset and its resolution strategy."
-  durationMs={487}
-/>`,
-    render: () => (
-      <RecallPhase
-        text="Scanned recent slice summaries and found relevant context."
-        tags={["work-pressure", "housing-project", "trust-crisis"]}
-        recallHits={[
-          { slice_id: "2023-04-21-0610", relevance: 0.92, reason: "Housing trust crisis" },
-          { slice_id: "2023-11-15-0930", relevance: 0.78, reason: "Community meeting follow-up" },
-        ]}
-        reasoning="Both slices carry the housing-project and trust-crisis tags. Together they span the crisis onset and its resolution strategy."
-        durationMs={487}
       />
     ),
   },

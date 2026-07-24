@@ -4,6 +4,7 @@ import { extractRenderState } from "@/lib/chat/tool-state";
 import { useTranslations } from "next-intl";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
+import { RecallToolRenderer } from "./tool-renderers/recall";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { LoopToolRenderer } from "./tool-renderers/loop";
 import { DefaultRenderer } from "./tool-renderers/default";
@@ -40,6 +41,12 @@ function friendlyName(
       return t("webSearch");
     case "startLoop":
       return t("startLoop");
+    case "recall":
+      return t("recall");
+    case "updateSliceMeta":
+      return t("updateSliceMeta");
+    case "updatePreviously":
+      return t("updatePreviously");
     default:
       return toolName.charAt(0).toUpperCase() + toolName.slice(1);
   }
@@ -57,8 +64,11 @@ function toolLabel(toolName: string, running: boolean): string {
       case "listStrands":       return "正在列出线索…";
       case "readAgentTimeline": return "正在查看思考过程…";
       case "readPreviously":    return "正在查看前情提要…";
+      case "recall":           return "正在回忆…";
       case "webSearch":         return "正在搜索网络…";
       case "startLoop":         return "正在启动后台任务…";
+      case "updateSliceMeta":   return "正在更新切片信息…";
+      case "updatePreviously":  return "正在更新前情提要…";
       default:                  return `正在调用 ${toolName}…`;
     }
   }
@@ -70,8 +80,11 @@ function toolLabel(toolName: string, running: boolean): string {
     case "listStrands":       return "已列出线索";
     case "readAgentTimeline": return "已查看思考过程";
     case "readPreviously":    return "已查看前情提要";
+    case "recall":           return "回忆完成";
     case "webSearch":         return "搜索完成";
     case "startLoop":         return "已启动后台任务";
+    case "updateSliceMeta":   return "已更新切片信息";
+    case "updatePreviously":  return "已更新前情提要";
     default:                  return `${toolName} 完成`;
   }
 }
@@ -98,6 +111,7 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
     case "listStrands":
       return (
         <ListFilesRenderer
+          displayName={displayName}
           input={input as { path?: string } | undefined}
           output={output as Array<{ name: string; type: string }> | undefined}
           state={renderState}
@@ -117,6 +131,15 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
     case "webSearch":
       return (
         <WebSearchRenderer
+          displayName={displayName}
+          input={input}
+          output={output}
+          state={renderState}
+        />
+      );
+    case "recall":
+      return (
+        <RecallToolRenderer
           displayName={displayName}
           input={input}
           output={output}

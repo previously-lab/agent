@@ -856,29 +856,9 @@ export async function ensurePreviously(sliceId: string): Promise<string> {
   const existing = await readPreviously(sliceId);
   if (existing.trim()) return existing;
 
-  // Check for Pro's reflection output first (from a previous slice-close).
-  // If it exists, it's the authoritative starting point for the new slice.
-  let source: string | null = null;
-  const NEXT_PATH = "memory/episodic/next-previously.md";
-  try {
-    const nextPrev = await fsReadFile(NEXT_PATH);
-    if (nextPrev.trim()) {
-      source = nextPrev;
-      // Clear it so it's consumed only once (best-effort — if this fails
-      // the next slice will re-use the same reflection, which is harmless).
-      try {
-        await fsWriteFile(NEXT_PATH, "");
-      } catch {
-        // Non-fatal — the file just stays for the next attempt
-      }
-    }
-  } catch {
-    // No next-previously.md — fall through to scan
-  }
-
-  if (!source) {
-    source = await findMostRecentPreviously();
-  }
+  // Find the most recent previously.md from past slices, apply decay,
+  // and use it as the starting point for this new slice.
+  const source = await findMostRecentPreviously();
 
   const content = source
     ? applyPreviouslyDecay(source, sliceId)

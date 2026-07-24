@@ -32,6 +32,7 @@ import { startLoop } from "@/app/api/loops/start-loop";
 import { readLoopRun, serializeLoop, writeLoopFile } from "@/lib/loops/store";
 import { isAIConfigured, canWrite, DEPLOY_GUIDE_URL } from "@/lib/capabilities";
 import type { LoopRun, LoopStep } from "@/lib/loops/types";
+import { runRecallSearch, type RecallHit, type RecallSearchOutput } from "@/lib/episodic/flash/recall";
 
 // ─── Shared tool contexts ────────────────────────────────────────────────
 
@@ -282,6 +283,66 @@ export async function webSearchExecute(
     return { error: "Web search is not configured (DEEPSEEK_API_KEY missing)." };
   }
   return searchViaFlash(query);
+}
+
+// ── recall — semantic search across past conversation slices ─────────
+
+/**
+ * Recall search tool — Flash acts as a semantic search engine over the
+ * episodic memory. Flash explores the global timeline, traces strands,
+ * and deep-reads candidate slices, then returns pointers (which slices,
+ * which turns, why relevant). The executor reads the RAW slice content
+ * and returns it to Pro — Flash never produces summaries.
+ */
+export async function recallExecute(
+  { query }: { query: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{
+  hits: RecallHit[];
+  rawContents: Record<string, string>;
+  confidence: number;
+  reasoning: string;
+}> {
+  "use step";
+
+  const searchResult = await runRecallSearch({
+    query,
+    currentSliceId: ctx.sliceId,
+    owner: ctx.owner,
+    repo: ctx.repo,
+    useGithub: ctx.useGithub,
+    useDemo: ctx.useDemo,
+  });
+
+  // Read raw content for each hit — Flash only returns pointers,
+  // the executor does the mechanical content retrieval
+  const rawContents: Record<string, string> = {};
+  for (const hit of searchResult.hits) {
+    const parsed = parseSliceId(hit.slice_id);
+    if (!parsed) continue;
+    const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`;
+    try {
+      const content = ctx.useDemo
+        ? await readFileDemo(path)
+        : ctx.useGithub
+          ? await readFile(path, ctx.repo, ctx.owner)
+          : await readFileLocal(path);
+      // Truncate each slice to a reasonable window
+      rawContents[hit.slice_id] =
+        content.length > 3000
+          ? content.slice(-2500)
+          : content;
+    } catch {
+      rawContents[hit.slice_id] = "(Could not read slice content)";
+    }
+  }
+
+  return {
+    hits: searchResult.hits,
+    rawContents,
+    confidence: searchResult.confidence,
+    reasoning: searchResult.reasoning,
+  };
 }
 
 export async function startLoopExecute(

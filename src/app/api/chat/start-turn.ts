@@ -19,6 +19,7 @@ import type { TurnInput } from "@/lib/chat/turn-types";
 import { loadUserConfig } from "@/lib/config/loader";
 import { resolveModelId } from "@/lib/models/registry";
 import { getRepoConfig } from "@/lib/capabilities";
+import { resolveDataSource } from "@/lib/data-source/resolve";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -54,6 +55,7 @@ export async function startTurn(
   const thinking = args.thinking !== false && config.model.thinking;
   const clientTimezone = args.timezone ?? "UTC";
   const { owner, repo } = getRepoConfig();
+  const dataSource = resolveDataSource();
 
   // Generate turn identity early — shared by user turn, agent turn, and
   // agent.md cognition record. 4 random bytes → 6-char base64url, unique
@@ -84,6 +86,8 @@ export async function startTurn(
     config,
     owner,
     repo,
+    useGithub: dataSource === "github",
+    useDemo: dataSource === "demo",
     startedAtIso: new Date().toISOString(),
     turnId,
   };

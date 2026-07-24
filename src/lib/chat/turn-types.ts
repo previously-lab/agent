@@ -14,9 +14,8 @@
  */
 import type { ModelMessage } from "ai";
 import type { TimeSlice } from "@/lib/episodic";
-import type { MaintenanceOutput, BeliefUpdate } from "@/lib/episodic/maintenance";
+import type { BeliefUpdate } from "@/lib/episodic/maintenance";
 import type { UserConfig } from "@/lib/config/types";
-import type { ToolContext } from "@/app/api/agent/tool-executors";
 
 /**
  * Everything a turn needs, built once in `start-turn.ts` (the only place real
@@ -42,6 +41,10 @@ export interface TurnInput {
   owner: string;
   /** GitHub repo name (or "local" without a token). */
   repo: string;
+  /** Whether GitHub token is configured (resolved in start-turn). */
+  useGithub: boolean;
+  /** Whether demo mode is active (resolved in start-turn). */
+  useDemo: boolean;
   /** ISO 8601 turn start, stamped in the route layer. */
   startedAtIso: string;
   /**
@@ -60,28 +63,25 @@ export interface HousekeepingResult {
 }
 
 /**
- * Result of the Flash step — the slice with any metadata updates applied, the
- * Flash output (or null on failure), and how long Flash took.
+ * Result of the metadataUpdate step — the slice with any metadata updates applied.
  */
-export interface FlashRecallResult {
+export interface MetadataUpdateResult {
   slice: TimeSlice;
-  flashOutput: MaintenanceOutput | null;
-  flashMs: number;
-  /** Belief mutations Flash observed this turn. Passed through to finalizeTurn
-   *  for streaming a data-belief chunk to the UI. */
-  beliefUpdates: BeliefUpdate[];
+  metadataUpdated: boolean;
+  reasoning: string;
 }
 
 /**
- * Result of the prepareGenerate step — everything the workflow needs to call
- * `agent.stream()`: the assembled system prompt and the serializable tool
- * context (built inside the step, where process.env is readable).
+ * Result of the beliefUpdate step — the slice, updated previously.md content,
+ * and any belief mutations observed this turn.
  */
-export interface PrepareGenerateResult {
-  systemPrompt: string;
-  intent: string;
-  confidence: number;
-  toolContext: ToolContext;
+export interface BeliefUpdateResult {
+  slice: TimeSlice;
+  previouslyContent: string;
+  beliefUpdates: BeliefUpdate[];
+  /** User profile string for system prompt assembly (loaded by this step). */
+  userProfile: string;
+  reasoning: string;
 }
 
 /** A background loop the agent started during this turn (for slice writeback). */

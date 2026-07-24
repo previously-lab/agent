@@ -38,6 +38,48 @@ export {
 // NOTE: sliceIdToLegacyFilePath was removed in v0.5 — old flat-file format
 //       support dropped. Use sliceIdToTimelineDir / sliceIdToFilePath instead.
 
+export type {
+  SliceMetadata,
+  BeliefUpdate,
+} from "./maintenance";
+export {
+  applyMetadataUpdates,
+  applyBeliefUpdates,
+} from "./maintenance";
+
+export {
+  runMetadataUpdate,
+} from "./flash/metadata";
+export type {
+  MetadataUpdateInput,
+  MetadataUpdateOutput,
+} from "./flash/metadata";
+
+export {
+  runBeliefUpdate,
+} from "./flash/belief";
+export type {
+  BeliefUpdateInput,
+  BeliefUpdateOutput,
+} from "./flash/belief";
+
+export {
+  runRecallSearch,
+} from "./flash/recall";
+export type {
+  RecallHit,
+  RecallSearchOutput,
+  RecallSearchInput,
+} from "./flash/recall";
+
+export {
+  generateGlobalTimeline,
+  updateGlobalTimeline,
+} from "./flash/global-timeline";
+export type {
+  TimelineEntry,
+} from "./flash/global-timeline";
+
 export {
   DEFAULT_TIME_SILENCE_MS,
   DEFAULT_MAX_TURNS_PER_SLICE,
