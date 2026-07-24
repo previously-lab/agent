@@ -2,8 +2,6 @@
 
 import { extractRenderState } from "@/lib/chat/tool-state";
 import { useTranslations } from "next-intl";
-import { ReadFileRenderer } from "./tool-renderers/read-file";
-import { WriteFileRenderer } from "./tool-renderers/write-file";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
@@ -24,16 +22,20 @@ function friendlyName(
   t: ReturnType<typeof useTranslations>,
 ): string {
   switch (toolName) {
-    case "readMemory":
-      return t("readMemory");
-    case "listMemory":
-      return t("listMemory");
-    case "readIndex":
-      return t("readIndex");
-    case "writeMemory":
-      return t("writeMemory");
-    case "updateUserProfile":
-      return t("updateUserProfile");
+    case "readSlice":
+      return t("readSlice");
+    case "listSlices":
+      return t("listSlices");
+    case "readTimeline":
+      return t("readTimeline");
+    case "readStrand":
+      return t("readStrand");
+    case "listStrands":
+      return t("listStrands");
+    case "readAgentTimeline":
+      return t("readAgentTimeline");
+    case "readPreviously":
+      return t("readPreviously");
     case "webSearch":
       return t("webSearch");
     case "startLoop":
@@ -43,37 +45,57 @@ function friendlyName(
   }
 }
 
+/** Dynamic streaming/done labels in Chinese for the unified stream.
+ *  "回忆" is reserved for Flash only. Tools use "查看" / "查找". */
+function toolLabel(toolName: string, running: boolean): string {
+  if (running) {
+    switch (toolName) {
+      case "readSlice":         return "正在查看时间片…";
+      case "listSlices":        return "正在查找更多…";
+      case "readTimeline":      return "正在查看时间线…";
+      case "readStrand":        return "正在查找线索…";
+      case "listStrands":       return "正在列出线索…";
+      case "readAgentTimeline": return "正在查看思考过程…";
+      case "readPreviously":    return "正在查看前情提要…";
+      case "webSearch":         return "正在搜索网络…";
+      case "startLoop":         return "正在启动后台任务…";
+      default:                  return `正在调用 ${toolName}…`;
+    }
+  }
+  switch (toolName) {
+    case "readSlice":         return "已查看时间片";
+    case "listSlices":        return "已查找";
+    case "readTimeline":      return "已查看时间线";
+    case "readStrand":        return "已查找线索";
+    case "listStrands":       return "已列出线索";
+    case "readAgentTimeline": return "已查看思考过程";
+    case "readPreviously":    return "已查看前情提要";
+    case "webSearch":         return "搜索完成";
+    case "startLoop":         return "已启动后台任务";
+    default:                  return `${toolName} 完成`;
+  }
+}
+
 export function ToolRenderer({ toolName, state, input, output, isStreaming }: ToolRendererProps) {
   const t = useTranslations("chat.tool");
   const renderState = extractRenderState({ state }, null, isStreaming);
   const displayName = friendlyName(toolName, t);
 
   switch (toolName) {
-    case "readFile":
+    case "readSlice":
+    case "readAgentTimeline":
+    case "readPreviously":
       return (
-        <ReadFileRenderer
-          input={input as { path?: string } | undefined}
-          output={typeof output === "string" ? output : undefined}
+        <MemoryToolRenderer
+          toolName={toolName}
+          displayName={displayName}
+          input={input}
+          output={output}
           state={renderState}
         />
       );
-    case "writeFile":
-      return (
-        <WriteFileRenderer
-          input={input as { path?: string; content?: string } | undefined}
-          output={typeof output === "string" ? output : undefined}
-          state={renderState}
-        />
-      );
-    case "writeMemory":
-      return (
-        <WriteFileRenderer
-          input={input as { path?: string; content?: string } | undefined}
-          output={typeof output === "string" ? output : undefined}
-          state={renderState}
-        />
-      );
-    case "listFiles":
+    case "listSlices":
+    case "listStrands":
       return (
         <ListFilesRenderer
           input={input as { path?: string } | undefined}
@@ -81,9 +103,8 @@ export function ToolRenderer({ toolName, state, input, output, isStreaming }: To
           state={renderState}
         />
       );
-    case "readMemory":
-    case "listMemory":
-    case "readIndex":
+    case "readTimeline":
+    case "readStrand":
       return (
         <MemoryToolRenderer
           toolName={toolName}

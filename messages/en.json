@@ -64,22 +64,24 @@
       "regenerateTooltip": "Regenerate response"
     },
     "recall": {
-      "streaming": "Recalling...",
-      "completed": "Recalled",
+      "streaming": "Previously on you…",
+      "completed": "Previously on you",
       "group": {
-        "timeline": "Read {count} timeline records",
-        "browse": "Recalled {count} more"
+        "timeline": "Viewed {count} slices",
+        "browse": "Found {count} more"
       }
     },
     "tool": {
       "denied": "Denied",
       "interrupted": "interrupted",
-      "readMemory": "Recalling in detail...",
-      "listMemory": "Recalling more...",
-      "readIndex": "Scanning timeline...",
-      "writeMemory": "Saving to memory...",
-      "updateUserProfile": "Updating your profile...",
-      "webSearch": "Searching the web...",
+      "readSlice": "Viewing slice…",
+      "listSlices": "Finding slices…",
+      "readTimeline": "Viewing timeline…",
+      "readStrand": "Following strand…",
+      "listStrands": "Listing strands…",
+      "readAgentTimeline": "Viewing cognition…",
+      "readPreviously": "Reading 前情提要…",
+      "webSearch": "Searching the web…",
       "sources": "{count} sources",
       "startLoop": "Starting a background loop",
       "loopFile": "Loop file",

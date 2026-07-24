@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
 import { History } from "lucide-react";
 import type { ToolRenderState } from "@/lib/chat/tool-state";
 import { ToolLayout } from "./tool-layout";
@@ -48,7 +47,6 @@ export function RecallPhase({
   isStreaming = false,
   durationMs,
 }: RecallPhaseProps) {
-  const t = useTranslations("chat.recall");
   const [elapsed, setElapsed] = useState(0);
   const startTimeRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -90,7 +88,10 @@ export function RecallPhase({
   const hasReasoning = reasoning && reasoning.trim().length > 0;
   const hasDetails = hasContent || hasHits || hasReasoning;
 
-  const name = isStreaming ? t("streaming") : t("completed");
+  const hitCount = recallHits?.length ?? 0;
+  const name = isStreaming
+    ? "正在回忆…"
+    : "回忆完成";
   const summary = isStreaming
     ? ""
     : durationMs != null

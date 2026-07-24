@@ -17,19 +17,15 @@ import { getWritable } from "workflow";
 // serialization registry (see register-model-classes.ts for why).
 import "./register-model-classes";
 import { readFile } from "@/lib/tools/readFile";
-import { writeFile } from "@/lib/tools/writeFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {
   readFileLocal,
   listFilesLocal,
-  writeFileLocal,
 } from "@/lib/tools/local-fs";
 import {
   readFileDemo,
   listFilesDemo,
-  writeFileDemo,
 } from "@/lib/demo/demo-fs";
-import { isPathAllowed, isProtectedSystemPath } from "@/lib/whitelist";
 
 import { searchViaFlash, type WebSearchResult } from "@/lib/search/flash-search";
 import { startLoop } from "@/app/api/loops/start-loop";
@@ -78,15 +74,12 @@ type ExecuteOpts<C> = {
   context: C;
 };
 
-// ─── Memory tool executors (chat + loop) ─────────────────────────────────
+// ─── Concept tool executors (chat + loop) ────────────────────────────────
 
 /**
- * Deterministic domain outcomes ("file not found", "access denied", …) must
- * reach the MODEL as tool results, not throw. A thrown error is treated as a
- * transient failure by the workflow runtime, which retries the step 3 more
- * times (with backoff) before bubbling — pure waste on errors that can never
- * succeed, and the agent never gets the chance to adapt. Anything not matched
- * here (network failures, GitHub 5xx) still throws and gets the retries.
+ * Deterministic domain outcomes ("file not found", etc.) must reach the MODEL
+ * as tool results, not throw. A thrown error causes workflow retries on errors
+ * that can never succeed.
  */
 const DOMAIN_ERROR_RE =
   /^(File not found|Directory not found|Access denied)|is (a directory, not a file|not a regular file)|too large/;
@@ -97,11 +90,29 @@ function domainError(e: unknown): string | null {
     : null;
 }
 
-export async function readMemoryExecute(
-  { path }: { path: string },
+/** Parse "YYYY-MM-DD-HHMM" into path segments. Returns null on invalid format. */
+function parseSliceId(sliceId: string): { y: string; m: string; d: string; hm: string } | null {
+  const parts = sliceId.split("-");
+  if (parts.length !== 4) return null;
+  const [y, m, d, hm] = parts;
+  if (!/^\d{4}$/.test(y) || !/^\d{2}$/.test(m) || !/^\d{2}$/.test(d) || !/^\d{4}$/.test(hm)) {
+    return null;
+  }
+  return { y, m, d, hm };
+}
+
+// ── readSlice — read a time slice's core conversation ─────────────────
+
+export async function readSliceExecute(
+  { sliceId }: { sliceId: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<string> {
   "use step";
+  const parsed = parseSliceId(sliceId);
+  if (!parsed) {
+    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
+  }
+  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`;
   try {
     if (ctx.useDemo) return await readFileDemo(path);
     return ctx.useGithub
@@ -110,18 +121,23 @@ export async function readMemoryExecute(
   } catch (e) {
     const msg = domainError(e);
     if (msg === null) throw e;
-    const hint = msg.startsWith("File not found")
-      ? " The file does not exist — do not retry this path. Use listMemory to see what actually exists, or write the file first."
-      : "";
-    return `ERROR: ${msg}.${hint}`;
+    return `ERROR: ${msg}. This time slice does not exist.`;
   }
 }
 
-export async function listMemoryExecute(
-  { path }: { path: string },
+// ── listSlices — browse slice directories ─────────────────────────────
+
+export async function listSlicesExecute(
+  { year, month }: { year?: number; month?: number },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }> | { error: string }> {
   "use step";
+  const now = new Date();
+  const y = year ?? now.getUTCFullYear();
+  const mo = month ?? now.getUTCMonth() + 1;
+  const mm = String(mo).padStart(2, "0");
+  const path = `memory/episodic/slices/${y}/${mm}`;
+
   try {
     if (ctx.useDemo) return await listFilesDemo(path);
     return ctx.useGithub
@@ -130,14 +146,13 @@ export async function listMemoryExecute(
   } catch (e) {
     const msg = domainError(e);
     if (msg === null) throw e;
-    const hint = msg.startsWith("Directory not found")
-      ? " The directory does not exist — do not retry this path."
-      : "";
-    return { error: `${msg}.${hint}` };
+    return { error: `${msg}` };
   }
 }
 
-export async function readIndexExecute(
+// ── readTimeline — read monthly index ──────────────────────────────────
+
+export async function readTimelineExecute(
   { year, month }: { year: number; month: number },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<{ exists: boolean; month: string; slices: unknown[] }> {
@@ -156,26 +171,97 @@ export async function readIndexExecute(
   }
 }
 
-export async function writeMemoryExecute(
-  { path, content, reason }: { path: string; content: string; reason: string },
+// ── readStrand — find slices by strand (tag) ───────────────────────────
+
+export async function readStrandExecute(
+  { strand }: { strand: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<{ ok: boolean; path?: string; created?: boolean; error?: string }> {
+): Promise<{ strand: string; slices: string[]; exists: boolean }> {
   "use step";
-  if (!isPathAllowed(path) || isProtectedSystemPath(path)) {
-    return {
-      ok: false,
-      error: `Write denied: "${path}" is outside the writable area or is system-managed.`,
-    };
-  }
+  const path = "memory/episodic/strands.json";
   try {
-    const res = ctx.useDemo
-      ? await writeFileDemo(path, content)
+    const raw = ctx.useDemo
+      ? await readFileDemo(path)
       : ctx.useGithub
-        ? await writeFile(path, content, ctx.repo, ctx.owner, `[agent] ${reason}`)
-        : await writeFileLocal(path, content);
-    return { ok: true, path: res.path, created: res.created };
+        ? await readFile(path, ctx.repo, ctx.owner)
+        : await readFileLocal(path);
+    const strands = JSON.parse(raw) as Record<string, string[]>;
+    if (!strands[strand]) {
+      return { strand, slices: [], exists: false };
+    }
+    return { strand, slices: strands[strand], exists: true };
+  } catch {
+    return { strand, slices: [], exists: false };
+  }
+}
+
+// ── listStrands — list all known strands ───────────────────────────────
+
+export async function listStrandsExecute(
+  _input: Record<string, never>,
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<{ strands: string[] }> {
+  "use step";
+  const path = "memory/episodic/strands.json";
+  try {
+    const raw = ctx.useDemo
+      ? await readFileDemo(path)
+      : ctx.useGithub
+        ? await readFile(path, ctx.repo, ctx.owner)
+        : await readFileLocal(path);
+    const strands = JSON.parse(raw) as Record<string, string[]>;
+    return { strands: Object.keys(strands) };
+  } catch {
+    return { strands: [] };
+  }
+}
+
+// ── readAgentTimeline — read the agent's cognition for a slice ──────────
+
+export async function readAgentTimelineExecute(
+  { sliceId }: { sliceId: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const parsed = parseSliceId(sliceId);
+  if (!parsed) {
+    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
+  }
+  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/agent.md`;
+  try {
+    if (ctx.useDemo) return await readFileDemo(path);
+    return ctx.useGithub
+      ? await readFile(path, ctx.repo, ctx.owner)
+      : await readFileLocal(path);
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "write failed" };
+    const msg = domainError(e);
+    if (msg === null) throw e;
+    return `ERROR: ${msg}. Agent timeline not available for this slice.`;
+  }
+}
+
+// ── readPreviously — read the 前情提要 for a slice ─────────────────────
+
+export async function readPreviouslyExecute(
+  { sliceId }: { sliceId?: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const sid = sliceId ?? ctx.sliceId;
+  const parsed = parseSliceId(sid);
+  if (!parsed) {
+    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
+  }
+  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/previously.md`;
+  try {
+    if (ctx.useDemo) return await readFileDemo(path);
+    return ctx.useGithub
+      ? await readFile(path, ctx.repo, ctx.owner)
+      : await readFileLocal(path);
+  } catch (e) {
+    const msg = domainError(e);
+    if (msg === null) throw e;
+    return `ERROR: ${msg}. 前情提要 not available for this slice.`;
   }
 }
 
@@ -196,65 +282,6 @@ export async function webSearchExecute(
     return { error: "Web search is not configured (DEEPSEEK_API_KEY missing)." };
   }
   return searchViaFlash(query);
-}
-
-export async function updateUserProfileExecute(
-  patch: {
-    name?: string;
-    pronouns?: string;
-    timezone?: string;
-    locale?: string;
-    addressAs?: string;
-    body?: string;
-    reason: string;
-  },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<{ ok: boolean; error?: string }> {
-  "use step";
-
-  // Build a belief line from the patch fields
-  const parts: string[] = [];
-  if (patch.name) parts.push(`自称 ${patch.name}`);
-  if (patch.addressAs) parts.push(`可用 ${patch.addressAs} 称呼`);
-  if (patch.pronouns) parts.push(`代词: ${patch.pronouns}`);
-  if (patch.timezone) parts.push(`时区: ${patch.timezone}`);
-  if (patch.locale) parts.push(`语言: ${patch.locale}`);
-  if (patch.body) parts.push(patch.body);
-
-  if (parts.length === 0) {
-    return { ok: false, error: "No profile fields provided" };
-  }
-
-  const beliefText = parts.join("，");
-  const evidenceSlice = ctx.sliceId.replace(/-/g, "/").replace(/^(\d{4})(\d{2})(\d{2})(\d{4})$/, "$1/$2/$3/$4");
-  // sliceId is YYYY-MM-DD-HHMM → YYYY/MM/DD/HHMM for the citation
-
-  try {
-    // Read current previously.md
-    const { readPreviously, writePreviously } =
-      await import("@/lib/episodic/manager");
-    const { applyBeliefUpdates } =
-      await import("@/lib/episodic/maintenance");
-
-    const current = await readPreviously(ctx.sliceId);
-    if (!current.trim()) {
-      return { ok: false, error: "No previously.md exists for this slice yet" };
-    }
-
-    const update = {
-      action: "observe" as const,
-      section: "User identity" as const,
-      belief: beliefText,
-      evidence_slice: evidenceSlice || ctx.sliceId,
-      evidence_turn: "?",
-    };
-
-    const updated = applyBeliefUpdates(current, [update], ctx.sliceId);
-    await writePreviously(ctx.sliceId, updated);
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "write failed" };
-  }
 }
 
 export async function startLoopExecute(

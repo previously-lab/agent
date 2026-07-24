@@ -452,7 +452,12 @@ export async function flashRecall(
     writer.releaseLock();
   }
 
-  return { slice, flashOutput, flashMs };
+  return {
+    slice,
+    flashOutput,
+    flashMs,
+    beliefUpdates: flashOutput?.belief_updates ?? [],
+  };
 }
 
 
@@ -522,6 +527,7 @@ export async function finalizeTurn(
   slice: TimeSlice,
   outcome: TurnOutcome,
   turnId: string,
+  beliefUpdates?: import("@/lib/episodic/maintenance").BeliefUpdate[],
 ): Promise<void> {
   "use step";
 
@@ -577,6 +583,37 @@ export async function finalizeTurn(
   if (outcome.cognition) {
     const header = `## Cognition ${turnId} — ${new Date().toISOString()}\n`;
     await writeAgentTimeline(slice.slice_id, header + outcome.cognition);
+  }
+
+  // 2c. Emit belief updates as a visible stream event (self-evolution).
+  if (beliefUpdates && beliefUpdates.length > 0) {
+    const summaries = beliefUpdates.map((u) => {
+      switch (u.action) {
+        case "observe":
+          return `+ 注意到：${u.belief ?? u.belief_key ?? "新印象"}`;
+        case "reinforce":
+          return `↑ 加深了印象：${u.belief_key ?? ""}`;
+        case "contradict":
+          return `↓ 调整了判断：${u.belief_key ?? ""}${u.note ? ` — ${u.note}` : ""}`;
+        case "discard":
+          return `✕ 移除了过时的印象：${u.belief_key ?? u.reason ?? ""}`;
+        default:
+          return "";
+      }
+    }).filter(Boolean);
+
+    const writer2 = getWritable<UIMessageChunk>().getWriter();
+    await writer2.write({
+      type: "data-belief",
+      id: `belief-${Date.now()}`,
+      data: {
+        phase: "belief",
+        done: true,
+        updates: beliefUpdates,
+        summaries,
+      },
+    } as UIMessageChunk);
+    writer2.releaseLock();
   }
 
   // 3. Close the UI stream.

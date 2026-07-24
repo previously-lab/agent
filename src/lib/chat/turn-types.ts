@@ -14,7 +14,7 @@
  */
 import type { ModelMessage } from "ai";
 import type { TimeSlice } from "@/lib/episodic";
-import type { MaintenanceOutput } from "@/lib/episodic/maintenance";
+import type { MaintenanceOutput, BeliefUpdate } from "@/lib/episodic/maintenance";
 import type { UserConfig } from "@/lib/config/types";
 import type { ToolContext } from "@/app/api/agent/tool-executors";
 
@@ -67,6 +67,9 @@ export interface FlashRecallResult {
   slice: TimeSlice;
   flashOutput: MaintenanceOutput | null;
   flashMs: number;
+  /** Belief mutations Flash observed this turn. Passed through to finalizeTurn
+   *  for streaming a data-belief chunk to the UI. */
+  beliefUpdates: BeliefUpdate[];
 }
 
 /**

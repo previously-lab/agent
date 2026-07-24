@@ -2,7 +2,6 @@
 
 import type { UIMessage } from "ai";
 import { ChatMessage } from "./chat-message";
-import { RecallPhase } from "./recall-phase";
 import { MessageScrollerItem } from "@/components/ui/message-scroller";
 
 interface ChatSectionProps {
@@ -42,11 +41,12 @@ export function ChatSection({
         </MessageScrollerItem>
       ))}
 
-      {/* Pre-stream wait: show "recalling…" so activity is visible from send */}
+      {/* Pre-stream wait: "正在回忆…" — Flash is the first phase. */}
       {showThinking && (
         <MessageScrollerItem messageId="recalling-indicator">
-          <div className="py-1">
-            <RecallPhase text="" isStreaming />
+          <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
+            <span className="inline-block size-2 rounded-full bg-primary/50 animate-pulse" />
+            正在回忆…
           </div>
         </MessageScrollerItem>
       )}

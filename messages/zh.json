@@ -64,30 +64,28 @@
       "regenerateTooltip": "重新生成回复"
     },
     "recall": {
-      "streaming": "回忆中…",
-      "completed": "已回忆",
+      "streaming": "正在回忆…",
+      "completed": "前情提要",
       "group": {
-        "timeline": "阅读了 {count} 条时间线记录",
-        "browse": "回忆了额外的 {count} 条记忆"
+        "timeline": "查看了 {count} 个时间片",
+        "browse": "查找了 {count} 条线索"
       }
     },
     "tool": {
       "denied": "已拒绝",
       "interrupted": "已中断",
-      "readMemory": "详细回忆…",
-      "listMemory": "更多回忆…",
-      "readIndex": "扫描时间线…",
-      "writeMemory": "写入记忆…",
-      "updateUserProfile": "更新你的信息…",
+      "readSlice": "查看时间片…",
+      "listSlices": "查找更多…",
+      "readTimeline": "查看时间线…",
+      "readStrand": "查找线索…",
+      "listStrands": "列出线索…",
+      "readAgentTimeline": "查看思考过程…",
+      "readPreviously": "查看前情提要…",
       "webSearch": "联网搜索中…",
       "sources": "{count} 个来源",
-      "startLoop": "正在开启后台循环",
+      "startLoop": "启动后台循环",
       "loopFile": "循环文件",
       "loopId": "循环 ID",
-      "readFile": "读取",
-      "updateFile": "更新",
-      "createFile": "创建",
-      "listFiles": "列表",
       "lines": "{count} 行",
       "items": "{count} 项",
       "failed": "失败",

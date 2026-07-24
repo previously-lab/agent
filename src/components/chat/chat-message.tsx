@@ -7,9 +7,10 @@ import { ThinkingSteps } from "./thinking";
 import { RecallPhase } from "./recall-phase";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
-import { RecallGroup, type RecallCategory, type RecallToolPart } from "./recall-group";
+import { ToolLayout } from "./tool-layout";
 import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import { FileText } from "lucide-react";
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -18,9 +19,7 @@ interface ChatMessageProps {
   startedAt?: string;
 }
 
-// ── Inline-part grouping ────────────────────────────────────────────────
-// Consecutive memory-read tool calls are collapsed into a single "act of
-// recall" so a dozen readMemory calls don't render as a mechanical log.
+// ── Unified stream: walk parts in natural order ────────────────────────
 
 type AnyPart = {
   type?: string;
@@ -30,212 +29,190 @@ type AnyPart = {
   input?: unknown;
   output?: unknown;
   text?: string;
+  data?: unknown;
 };
 
-const RECALL_CATEGORY: Record<string, RecallCategory> = {
-  readMemory: "timeline",
-  readIndex: "timeline",
-  listMemory: "browse",
-};
+type StreamItem =
+  | { kind: "recall"; data: Record<string, unknown>; isStreaming: boolean }
+  | { kind: "reasoning"; text: string }
+  | { kind: "text"; content: string }
+  | { kind: "tool"; toolName: string; state: string; input?: unknown; output?: unknown }
+  | { kind: "belief"; summaries: string[] };
 
-function resolveToolName(p: AnyPart): string {
-  return p.toolName ?? p.type?.replace("tool-", "") ?? "tool";
-}
+function buildStream(parts: readonly AnyPart[], isStreaming: boolean): StreamItem[] {
+  const items: StreamItem[] = [];
+  let textBuf: string[] = [];
 
-type RenderItem =
-  | { kind: "text"; key: string; content: string }
-  | { kind: "tool"; key: string; toolName: string; state: string; input?: unknown; output?: unknown }
-  | { kind: "recallGroup"; key: string; category: RecallCategory; parts: RecallToolPart[] };
+  const flushText = () => {
+    if (textBuf.length > 0) {
+      items.push({ kind: "text", content: textBuf.join("") });
+      textBuf = [];
+    }
+  };
 
-function groupInlineParts(parts: readonly AnyPart[]): RenderItem[] {
-  const items: RenderItem[] = [];
-  let buffer: { category: RecallCategory; parts: RecallToolPart[]; startIndex: number } | null = null;
-
-  const flush = () => {
-    if (!buffer) return;
-    if (buffer.parts.length >= 2) {
-      items.push({
-        kind: "recallGroup",
-        key: `recall-${buffer.category}-${buffer.startIndex}`,
-        category: buffer.category,
-        parts: buffer.parts,
-      });
-    } else {
-      // A lone memory read renders as a normal tool card, not a group.
-      const p = buffer.parts[0];
+  for (const p of parts) {
+    if (p.type === "data-flash") {
+      flushText();
+      // Merge multiple data-flash updates (last-write-wins)
+      const existing = items.length > 0 && items[items.length - 1].kind === "recall"
+        ? (items.pop() as { kind: "recall"; data: Record<string, unknown>; isStreaming: boolean } | null)
+        : null;
+      const merged = { ...(existing?.data ?? {}), ...(p.data as Record<string, unknown> ?? {}) };
+      items.push({ kind: "recall", data: merged, isStreaming: merged.done === false });
+    } else if (p.type === "reasoning") {
+      flushText();
+      const reasoningText = (p as { text: string }).text ?? "";
+      // Merge consecutive reasoning deltas
+      const last = items.length > 0 ? items[items.length - 1] : null;
+      if (last?.kind === "reasoning") {
+        last.text += reasoningText;
+      } else {
+        items.push({ kind: "reasoning", text: reasoningText });
+      }
+    } else if (p.type === "text") {
+      textBuf.push((p as { text: string }).text ?? "");
+    } else if (p.type === "data-belief") {
+      flushText();
+      const d = p.data as { summaries?: string[] } | undefined;
+      const summaries = d?.summaries ?? [];
+      if (summaries.length > 0) {
+        items.push({ kind: "belief", summaries });
+      }
+    } else if (p.type?.startsWith("tool-")) {
+      flushText();
+      const toolName = p.toolName ?? p.type.replace("tool-", "");
       items.push({
         kind: "tool",
-        key: p.toolCallId ?? `tool-${buffer.startIndex}`,
-        toolName: p.toolName,
-        state: p.state,
+        toolName,
+        state: p.state ?? "running",
         input: p.input,
         output: p.output,
       });
     }
-    buffer = null;
-  };
+  }
+  flushText();
 
-  parts.forEach((part, i) => {
-    if (part.type?.startsWith("tool-")) {
-      const toolName = resolveToolName(part);
-      const toolPart: RecallToolPart = {
-        toolCallId: part.toolCallId,
-        toolName,
-        state: part.state ?? "",
-        input: part.input,
-        output: part.output,
-      };
-      const category = RECALL_CATEGORY[toolName];
-      if (category) {
-        if (buffer && buffer.category === category) {
-          buffer.parts.push(toolPart);
-        } else {
-          flush();
-          buffer = { category, parts: [toolPart], startIndex: i };
-        }
-        return;
-      }
-      flush();
-      items.push({
-        kind: "tool",
-        key: part.toolCallId ?? `tool-${i}`,
-        toolName,
-        state: toolPart.state,
-        input: part.input,
-        output: part.output,
-      });
-      return;
-    }
-    flush();
-    if (part.type === "text") {
-      items.push({ kind: "text", key: `text-${i}`, content: part.text ?? "" });
-    }
-  });
-
-  flush();
   return items;
 }
 
 export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, isStreaming, startedAt }: ChatMessageProps) {
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
-  const parts = message.parts ?? [];
-
-  // ── Separate phase-level from inline parts ────────────────────────────
-
-  const { recallParts, reasoningText, reasoningDurationMs, inlineParts } = useMemo(() => {
-    const recall: typeof parts = [];
-    const reasoning: string[] = [];
-    const inline: typeof parts = [];
-    let durationMs: number | undefined;
-
-    for (const p of parts) {
-      if (p.type === "data-flash") {
-        recall.push(p);
-      } else if (p.type === "data-reasoning") {
-        const d = (p as { data?: { durationMs?: number } }).data;
-        if (d?.durationMs != null) durationMs = d.durationMs;
-      } else if (p.type === "reasoning") {
-        reasoning.push((p as { text: string }).text);
-      } else {
-        inline.push(p);
-      }
-    }
-
-    return {
-      recallParts: recall,
-      reasoningText: reasoning.join("\n"),
-      reasoningDurationMs: durationMs,
-      inlineParts: inline,
-    };
-  }, [parts]);
-
-  const hasRecall = recallParts.length > 0;
-  const hasReasoning = reasoningText.trim().length > 0;
-  const hasInline = inlineParts.length > 0;
-
-  // A recall phase is one logical act, but it arrives as two data-flash updates
-  // (recalling → recalled). Merge them (last-write-wins) so it renders ONCE and
-  // the single component transitions streaming→done (keeping its timer).
-  const recallData = hasRecall
-    ? recallParts.reduce<{
-        done?: boolean;
-        durationMs?: number;
-        text?: string;
-        tags?: string[];
-        reasoning?: string;
-        recall_hits?: Array<{ slice_id: string; relevance: number; reason: string }>;
-      }>((acc, part) => {
-        const d = (part as { data?: typeof acc }).data;
-        return d ? { ...acc, ...d } : acc;
-      }, {})
-    : null;
-
-  const renderItems = useMemo(
-    () => groupInlineParts(inlineParts as AnyPart[]),
-    [inlineParts],
+  const parts = useMemo(
+    () => (message.parts ?? []) as AnyPart[],
+    [message.parts],
   );
 
-  // Full text for footer display
-  const textContent = inlineParts
-    .filter((p) => p.type === "text")
-    .map((p) => (p as { text: string }).text)
-    .join("\n") ?? "";
+  const streamItems = useMemo(
+    () => (isAssistant ? buildStream(parts, isStreaming ?? false) : []),
+    [parts, isAssistant, isStreaming],
+  );
 
+  // Full text for footer / actions
+  const textContent = streamItems
+    .filter((item) => item.kind === "text")
+    .map((item) => (item as { kind: "text"; content: string }).content)
+    .join("\n");
+
+  const hasContent = streamItems.length > 0;
+
+  // ── User message ──────────────────────────────────────────────────
+  if (isUser) {
+    const userText = parts
+      .filter((p) => p.type === "text")
+      .map((p) => p.text ?? "")
+      .join("\n");
+    return (
+      <div className="py-1">
+        <Message align="end" className="gap-1">
+          <MessageContent className="min-w-0">
+            <Bubble variant="default">
+              <BubbleContent>
+                <MarkdownRenderer content={userText} />
+              </BubbleContent>
+            </Bubble>
+          </MessageContent>
+        </Message>
+      </div>
+    );
+  }
+
+  // ── Assistant: unified stream inside one bubble ────────────────────
   return (
     <div className="py-1">
-      <Message align={isUser ? "end" : "start"} className="gap-1">
+      <Message align="start" className="gap-1">
         <MessageContent className="min-w-0">
-          {/* Phase 1: Recall — one act, rendered from the merged state */}
-          {isAssistant && recallData && (
-            <RecallPhase
-              key="recall"
-              text={recallData.text ?? ""}
-              tags={recallData.tags}
-              reasoning={recallData.reasoning}
-              recallHits={recallData.recall_hits}
-              durationMs={recallData.durationMs}
-              isStreaming={recallData.done === false}
-            />
-          )}
-
-          {/* Phase 2: Reasoning — always visible */}
-          {isAssistant && hasReasoning && (
-            <ThinkingSteps
-              text={reasoningText}
-              durationMs={reasoningDurationMs}
-              isStreaming={isStreaming && !hasInline}
-            />
-          )}
-
-          {/* Phase 3: Inline parts (tools + text) — rendered in original stream order */}
-          {hasInline && (
-            <Bubble variant={isUser ? "default" : "secondary"}>
+          {hasContent && (
+            <Bubble variant="secondary">
               <BubbleContent>
-                {renderItems.map((item) => {
-                  if (item.kind === "text") {
-                    return <MarkdownRenderer key={item.key} content={item.content} />;
-                  }
-                  if (item.kind === "recallGroup") {
+                {streamItems.map((item, i) => {
+                  if (item.kind === "recall") {
+                    const d = item.data;
                     return (
-                      <RecallGroup
-                        key={item.key}
-                        category={item.category}
-                        parts={item.parts}
+                      <RecallPhase
+                        key={`recall-${i}`}
+                        text={(d.text as string) ?? ""}
+                        tags={d.tags as string[] | undefined}
+                        reasoning={d.reasoning as string | undefined}
+                        recallHits={d.recall_hits as Array<{ slice_id: string; relevance: number; reason: string }> | undefined}
+                        durationMs={d.durationMs as number | undefined}
+                        isStreaming={item.isStreaming}
+                      />
+                    );
+                  }
+                  if (item.kind === "reasoning") {
+                    return (
+                      <ThinkingSteps
+                        key={`thinking-${i}`}
+                        text={item.text}
+                        isStreaming={isStreaming && i === streamItems.length - 1}
+                      />
+                    );
+                  }
+                  if (item.kind === "tool") {
+                    return (
+                      <ToolRenderer
+                        key={`tool-${i}`}
+                        toolName={item.toolName}
+                        state={item.state}
+                        input={item.input}
+                        output={item.output}
                         isStreaming={isStreaming ?? false}
                       />
                     );
                   }
-                  return (
-                    <ToolRenderer
-                      key={item.key}
-                      toolName={item.toolName}
-                      state={item.state}
-                      input={item.input}
-                      output={item.output}
-                      isStreaming={isStreaming ?? false}
-                    />
-                  );
+                  if (item.kind === "belief") {
+                    return (
+                      <ToolLayout
+                        key={`belief-${i}`}
+                        name="更新了前情提要"
+                        summary=""
+                        icon={<FileText className="h-3.5 w-3.5" />}
+                        state={{
+                          running: false,
+                          interrupted: false,
+                          denied: false,
+                          approvalRequested: false,
+                          isActiveApproval: false,
+                        }}
+                        expandedContent={
+                          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-1 text-xs text-muted-foreground leading-relaxed">
+                            {item.summaries.map((s, j) => (
+                              <div key={j}>{s}</div>
+                            ))}
+                          </div>
+                        }
+                      />
+                    );
+                  }
+                  if (item.kind === "text") {
+                    return (
+                      <div key={`text-${i}`} className="[&:not(:last-child)]:mb-3">
+                        <MarkdownRenderer content={item.content} />
+                      </div>
+                    );
+                  }
+                  return null;
                 })}
 
                 {/* Streaming cursor */}
@@ -246,7 +223,7 @@ export const ChatMessage = memo(function ChatMessage({ message, onRegenerate, is
             </Bubble>
           )}
 
-          {/* Footer — actions only, no model pill */}
+          {/* Footer — actions only */}
           {isAssistant && textContent && !isStreaming && onRegenerate && (
             <MessageFooter>
               <MessageActions content={textContent} onRegenerate={onRegenerate} />
