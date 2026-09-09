@@ -211,7 +211,21 @@ export type ArrivalState =
  * together. Last activity is the slice's last turn timestamp (falling back to
  * `end`, then `start`); younger than the idle gap → `resume` with the slice's
  * turns, otherwise → `briefing` (the existing EmptyBriefing path).
+ *
+ * Only slices that can still be the SAME conversation resume: the active
+ * one, a time_cap/capacity CHECKPOINT (the next turn's housekeeping creates
+ * the continuesFrom follow-up slice, so arriving now continues rather than
+ * forks), or a slice with no recorded close reason (legacy/migrated data).
+ * A known genuine boundary (idle_gap / context_lost / user_explicit /
+ * time_silence) always briefs.
  */
+const ARRIVAL_BOUNDARY_SIGNALS: ReadonlySet<string> = new Set([
+  "idle_gap",
+  "context_lost",
+  "user_explicit",
+  "time_silence",
+]);
+
 export async function getArrivalState(persona?: string): Promise<ArrivalState> {
   if (persona) setDemoPersona(persona);
   const idx = await readTimelineIndex();
@@ -221,6 +235,14 @@ export async function getArrivalState(persona?: string): Promise<ArrivalState> {
 
   const slice = await loadSlice(last.id);
   if (!slice) return { mode: "briefing" };
+
+  if (
+    last.status !== "active" &&
+    last.closed_by &&
+    ARRIVAL_BOUNDARY_SIGNALS.has(last.closed_by)
+  ) {
+    return { mode: "briefing" };
+  }
 
   const lastActivity =
     slice.turns[slice.turns.length - 1]?.timestamp ?? slice.end ?? slice.start;

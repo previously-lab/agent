@@ -32,6 +32,7 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 | `slice-mutex.ts` | In-process per-sliceId async mutex (`withSliceLock`) serializing housekeeping/finalizeTurn on the same slice; acquired inside a single step only |
 | `turn-merge.ts` | `mergeTurnsWithRemote` — pure append-only turn merge used by finalizeTurn's write-conflict self-heal (re-read remote core.md, append missing turns by turnId, retry commit ≤ 2×) |
 | `rework-signal.ts` | Mechanical-signal instrumentation (v1.0 design §2.6) — module-level per-conversation record of recall outcomes; classifies each main-agent `readSlice` as `verify` / `rework`, plus the UI-driven interaction signals (`interaction_regenerate`, recorded by housekeeping from the regenerate body flag; `interaction_interrupt`, POSTed to `/api/episodic/signal` when the user stops a turn). Every signal lands in BOTH the machine-readable fitness store and an audit line in the slice's agent.md. Best-effort — never fails the caller |
+| `strand-files.ts` | Strand entity layer — one `strands/<name>.md` per strand (frontmatter: `first_seen` / `last_active` / `aliases`; body: 1-2 paragraphs of natural-language description). Read by recall (listStrands carries truncated summaries, readStrand the full text) for SEMANTIC strand matching; written ONLY by the strand-consolidator, behind `gateStrandDescriptionRefresh`. Missing dir/file degrades to the bare index |
 | `../evolution/` | Evolution data layer + loop (v1.0 design §2): `paths.ts` (file constants), `store.ts` (typed I/O over `memory/evolution/` + `memory/agent-playbooks/` — direction doc, per-sub-agent playbooks, generation-scoped fitness event/signal store with structural evidence-anchoring + the generation settle (`resetFitnessGeneration`), generation net scores), `triggers.ts` (deterministic trigger computation (v0.9.2): a bucket's current-generation net ≤ -5 fires it — purely quantitative, no semantic fast paths), `direction-agent.ts` (the direction contract — Portrait (six fixed dimensions) + hypothesis-pool skeleton, mode detection (bootstrap/migrate/steady), structural proposal validation, the L1b system-prompt layer builder; plus the legacy standalone evaluator) |
 
 ## Key Flows
@@ -74,7 +75,7 @@ All defined in `types.ts` unless noted.
 | `TimeSlice` | `slice_id`, `focus`, `status` (active/closed), `start`/`end`, `turns: Turn[]`, `estimatedTokens`, `closedBy: SlicingSignal`, optional `continuesFrom` (checkpoint link) |
 | `Turn` | `timestamp` (ISO 8601), `role` ("user"/"agent"), `content`, optional `turnId` (6-char base64url) |
 | `SliceFrontmatter` | The YAML representation of a slice: adds `summary`, `open_loops`, `decisions`, `tags`, `related_slices`, `emotional_tone`, `continues_from` |
-| `SlicingSignal` | `"time_cap" \| "time_silence" (legacy) \| "user_explicit" \| "capacity" \| "context_lost" \| "idle_gap"` |
+| `SlicingSignal` | `"time_cap" \| "time_silence" (legacy) \| "user_explicit" \| "capacity" \| "context_lost" (legacy — no longer emitted) \| "idle_gap"` |
 | `SliceIndexEntry` | Slim version stored in `_index.json`: `id`, `focus`, `summary`, `tags`, `status`, `start`, `open_loops`, `decisions` |
 | `SliceSummary` (actions.ts) | Truncated view for UI: `slice_id`, `focus`, `summary`, `start`, `status`, `open_loops`, `decisions` |
 
@@ -93,6 +94,11 @@ memory/episodic/
             previously.md       -- user-card snapshot (Previously Agent evolution)
         _index.json             -- monthly index of all slices in this month
   strands.json                  -- the strand index: strand (keyword) -> slice paths
+  strands/
+    <name>.md                   -- strand entity: frontmatter (first_seen /
+                                  last_active / aliases) + 1-2 paragraphs of
+                                  natural-language description (the thread's
+                                  topic, when the user first raised it)
   timeline.md                   -- global timeline (all slice summaries)
 ```
 
@@ -113,12 +119,26 @@ to its slice paths, i.e. "the whole history of that thing" across time. It's the
 thin, lossless semantic-memory layer over the episodic slices. Tags are extracted
 by the turn analyzer in the housekeeping step and woven into strands at snapshot time.
 
+On top of the index sits the **strand entity layer** (`strands/<name>.md`, see
+`strand-files.ts`): one file per strand carrying a natural-language description
+(1-2 paragraphs) plus `first_seen` / `last_active` / `aliases` frontmatter. The
+recall sub-agent reads it for semantic strand matching — `listStrands` carries a
+truncated one-line summary per described strand, `readStrand` the full text —
+so a question phrased with synonyms or in another language can still find the
+right thread. Old memory roots without a `strands/` directory degrade to the
+bare keyword index. The **strand-consolidator is the ONLY writer** of entity
+files, behind a mechanical gate: a refresh requires ≥5 new associated slices
+since the entity's `last_active` AND a 7-day cooldown since then, and the update
+call itself must carry the triggering slice ids as evidence (the LLM prompt is
+required to ground the description in them). `first_seen` / `last_active` are
+derived from the slice paths mechanically, never from the model.
+
 ## Design Decisions
 
 - **Tag extraction in housekeeping**: A quick low-effort sub-agent call (main model via the shared runner) extracts tags from each user message. Existing tags are preferred to encourage cross-language semantic merging (e.g., "self-evolution" and "自我进化" reuse the same tag).
-- **Context continuity detection**: When a client has no assistant messages in its history but the recovered slice has agent turns, the slice is closed with `"context_lost"` — handling page refreshes and device switches gracefully.
+- **Client-history mismatch → window rebuild, not a close**: When the client-sent history no longer matches the active slice (page refresh, device switch, stale local writes — `checkClientHistoryMismatch` in `steps.ts` compares the slice-aligned user-turn tail), the slice STAYS OPEN: the model history window is rebuilt from the slice's own turns (`rebuiltHistory` in the HousekeepingResult, used verbatim by `buildHistoryWindow` in `turn-workflow.ts`) and a one-line warning is logged. The old `"context_lost"` CLOSE signal is legacy-only — kept in the `SlicingSignal` union so historical slices still parse and seam-classify as boundaries, but never emitted.
 - **Main agent reads only**: The main agent never modifies previously.md. The Previously Agent (main model via the shared runner) edits the card through validated mutation tools; mechanical writes (slice tags, strands) happen in housekeeping and finalizeTurn. Card evolution runs INLINE in the housekeeping step, gated by the analyzer's `evolve_card.worth` judgment (a legacy-format card forces a run).
-- **Pure time-based slicing with idle-gap + context-loss triggers**: The primary slicing triggers are slice age (30 min from slice start, `"time_cap"`) and idle gap (15 min since the last turn, `"idle_gap"`), plus context loss (`"context_lost"`). Turn count cap is a pure safety net (`"capacity"`). `time_cap`/`capacity` are autosave CHECKPOINTS of the same conversation — the new slice links back via `continuesFrom` and carries the closed slice's last 10 turns as a frozen history prefix; `idle_gap`/`context_lost` are genuine conversation boundaries (no link, no carry-over). `"time_silence"` is a legacy `closed_by` value kept for historical slices.
+- **Pure time-based slicing with idle-gap close**: The primary slicing triggers are slice age (30 min from slice start, `"time_cap"`) and idle gap (30 min since the last turn, `"idle_gap"`). Turn count cap is a pure safety net (`"capacity"`). `time_cap`/`capacity` are autosave CHECKPOINTS of the same conversation — the new slice links back via `continuesFrom` and carries the closed slice's last 10 turns as a frozen history prefix; `idle_gap` is a genuine conversation boundary (no link, no carry-over). A client-history mismatch is NOT a slicing trigger — it rebuilds the window from the slice (see above). `"time_silence"` and `"context_lost"` are legacy `closed_by` values kept for historical slices.
 - **In-memory active slice with periodic snapshots**: The slice is held in a module-level variable. It is snapshotted to disk periodically (every N turns, `beforeunload`) but not on every turn -- avoids excessive GitHub API writes. `tryLoadTodaySlice()` recovers state on refresh.
 - **Gray-matter serialization**: Slices use `---` YAML frontmatter + markdown body, parsed via `gray-matter`. Turn headers follow the convention `## Turn {id} — ISO_TIMESTAMP (role)`.
 - **Dual storage backend**: Local filesystem (dev) vs. GitHub API (production) selected at import time via a `USE_GITHUB` flag. The `fsReadFile`/`fsWriteFile`/`fsListFiles` wrappers in `io-helpers.ts` delegate transparently.
@@ -127,4 +147,4 @@ by the turn analyzer in the housekeeping step and woven into strands at snapshot
 ## Known Limitations
 
 - **Turn-header collision**: a message body containing a line shaped like `## Turn {id} — ISO (role)` splits slice parsing incorrectly (pinned by a guard test in `manager.test.ts`).
-- **Rich first-class strands** (with per-strand rolling summaries) are a future milestone. Currently strands are a keyword-to-slice-paths index; the recall agent traces them automatically but they don't yet carry their own semantic summaries.
+- **Strand descriptions are consolidation-pass-only**: entity files are refreshed at slice-close consolidation (capped at 10 LLM refreshes per pass), never per turn — a brand-new strand therefore carries no description until it has ≥5 slices and survives the cooldown.

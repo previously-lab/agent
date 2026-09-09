@@ -44,6 +44,13 @@ const episodic = vi.hoisted(() => ({
   upsertTimelineEntry: vi.fn(async () => {}),
   deterministicSliceMark: vi.fn(() => ({ focus: "fallback focus", summary: "fallback summary" })),
   readStrands: vi.fn(async () => ({})),
+  // Strand description refresh driver — asserted by the close-boundary tests.
+  refreshStrandDescriptions: vi.fn(
+    async (): Promise<{ refreshed: string[]; skipped: Array<{ name: string; reason: string }> }> => ({
+      refreshed: [],
+      skipped: [],
+    }),
+  ),
   analyzeTurn: vi.fn(
     async (_input: {
       model: unknown;
@@ -114,9 +121,46 @@ let sliceAged = false;
 let idleGapHit = false;
 
 vi.mock("@/lib/episodic", () => episodic);
+vi.mock("@/lib/episodic/strands", () => ({
+  // Pure index operations — mirror the real signatures (prune returns a fresh
+  // index object + the pruned names) so both the consolidator and the bridge
+  // merge-apply paths run unchanged.
+  pruneStrands: (strands: Record<string, string[]>) => ({
+    strands,
+    pruned: [] as string[],
+  }),
+  applyStrandMerges: vi.fn(),
+}));
 vi.mock("@/lib/episodic/flash/backfill-marks", () => ({
   backfillDrySliceMarks: vi.fn(async () => 0),
+  collectDrySliceCandidates: vi.fn(async () => []),
+  applyMarksToDrySlices: vi.fn(async () => 0),
 }));
+
+// Phase-level bridge outsourcing — runHousekeepingBridge / applyBridgeCardEvolution
+// are replaced with fakes (the report under test is injected verbatim);
+// applyBridgePlaybookWrites + isPhaseOutsourceActive stay REAL so the playbook
+// bucket gate is exercised end to end.
+const bridgePhases = vi.hoisted(() => ({
+  runHousekeepingBridge: vi.fn(),
+  applyBridgeCardEvolution: vi.fn(
+    async (): Promise<{
+      ran: boolean;
+      changed: boolean;
+      droppedRecent: number;
+      note: string;
+      summary?: string;
+    }> => ({ ran: true, changed: true, droppedRecent: 0, note: "applied", summary: "card moved" }),
+  ),
+}));
+vi.mock("@/lib/bridge-phases", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/bridge-phases")>();
+  return {
+    ...actual,
+    runHousekeepingBridge: bridgePhases.runHousekeepingBridge,
+    applyBridgeCardEvolution: bridgePhases.applyBridgeCardEvolution,
+  };
+});
 
 // The interaction-signal writer is mocked at its module boundary — the real
 // one double-writes the fitness store + the slice's agent.md.
@@ -162,6 +206,9 @@ const evolutionLoop = vi.hoisted(() => ({
         directionRejections: string[];
       }> => ({ events: [], signals: [], directionRejections: [] }),
     ),
+    readPlaybook: vi.fn(async (): Promise<string | null> => null),
+    writePlaybook: vi.fn(async (_agent: string, _content: string, _batch?: unknown) => {}),
+    capPlaybook: (content: string): string => content,
     readRecentSignals: vi.fn(async () => []),
     recordDirectionRejection: vi.fn(async () => {}),
     resetFitnessGeneration: vi.fn(async (_batch?: unknown) => {}),
@@ -373,22 +420,92 @@ describe("housekeeping step", () => {
     });
     episodic.tryLoadTodaySlice.mockResolvedValue(disk);
 
-    // Include assistant messages so context continuity check passes
+    // Client history matches the slice (its user turns are the aligned tail)
+    // — no rebuild, plain restore. Like production, the history ENDS with
+    // the current user message.
     const input = makeInput("follow up", {
       modelMessages: [
+        { role: "user", content: "earlier" },
         { role: "assistant", content: "reply" },
+        { role: "user", content: "follow up" },
       ] as unknown as TurnInput["modelMessages"],
     });
-    const { slice } = await housekeeping(input);
+    const { slice, rebuiltHistory } = await housekeeping(input);
 
     expect(episodic.createSlice).not.toHaveBeenCalled();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
     expect(slice.slice_id).toBe(disk.slice_id);
     expect(slice.turns).toHaveLength(3);
     expect(slice.turns[2].content).toBe("follow up");
+    expect(rebuiltHistory).toBeUndefined();
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice, expect.anything());
     // Restored (not created) — no catalog upsert needed.
     expect(episodic.upsertTimelineEntry).not.toHaveBeenCalled();
+  });
+
+  it("refresh within the idle gap keeps the slice open and rebuilds the window from the slice's turns", async () => {
+    const disk = makeSlice({
+      turns: [
+        { timestamp: "t0", role: "user", content: "earlier" },
+        { timestamp: "t1", role: "agent", content: "reply" },
+        { timestamp: "t2", role: "user", content: "another" },
+        { timestamp: "t3", role: "agent", content: "reply2" },
+      ],
+    });
+    episodic.tryLoadTodaySlice.mockResolvedValue(disk);
+
+    // Page refresh: the client sends ONLY the new user message (no assistant
+    // history) — the slice must NOT close; the window is rebuilt from the
+    // slice's own turns instead.
+    const input = makeInput("new after refresh");
+    const { slice, rebuiltHistory } = await housekeeping(input);
+
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    expect(episodic.createSlice).not.toHaveBeenCalled();
+    expect(slice.slice_id).toBe(disk.slice_id);
+    // The user turn append proceeds normally; the rebuilt window carries the
+    // whole slice (current message included, appended once).
+    expect(slice.turns).toHaveLength(5);
+    expect(rebuiltHistory).toEqual([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "another" },
+      { role: "assistant", content: "reply2" },
+      { role: "user", content: "new after refresh" },
+    ]);
+  });
+
+  it("stale writes (client has turns the slice never recorded) still trust the slice", async () => {
+    const disk = makeSlice({
+      turns: [
+        { timestamp: "t0", role: "user", content: "q1" },
+        { timestamp: "t1", role: "agent", content: "a1" },
+      ],
+    });
+    episodic.tryLoadTodaySlice.mockResolvedValue(disk);
+
+    // The client's recent tail diverges from the slice (a write that never
+    // landed) — the slice is authoritative, not closed, and the unsaved
+    // turns do NOT leak into the rebuilt window. The history ends with the
+    // current message, as production sends it.
+    const input = makeInput("current", {
+      modelMessages: [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "a1" },
+        { role: "user", content: "unsaved question" },
+        { role: "assistant", content: "unsaved reply" },
+        { role: "user", content: "current" },
+      ] as unknown as TurnInput["modelMessages"],
+    });
+    const { slice, rebuiltHistory } = await housekeeping(input);
+
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    expect(slice.slice_id).toBe(disk.slice_id);
+    expect(rebuiltHistory).toEqual([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "current" },
+    ]);
   });
 
   it("closes an over-age slice on time_cap and starts a new one", async () => {
@@ -420,29 +537,7 @@ describe("housekeeping step", () => {
     expect(slice.slice_id).toBe("2026-07-14-1100");
   });
 
-  it("closes on context_lost when client has no assistant messages but slice has agent turns", async () => {
-    const disk = makeSlice({
-      turns: [
-        { timestamp: "t0", role: "user", content: "earlier" },
-        { timestamp: "t1", role: "agent", content: "reply" },
-        { timestamp: "t2", role: "user", content: "another" },
-        { timestamp: "t3", role: "agent", content: "reply2" },
-      ],
-    });
-    episodic.tryLoadTodaySlice.mockResolvedValue(disk);
-    episodic.createSlice.mockImplementation((msg: string) =>
-      makeSlice({ slice_id: "2026-07-14-1200", turns: [{ timestamp: "t", role: "user", content: msg }] })
-    );
-
-    // modelMessages has only the current user message, no assistant messages
-    const input = makeInput("new from different device");
-    const { slice } = await housekeeping(input);
-
-    expect(episodic.closeSlice).toHaveBeenCalledWith(disk, "context_lost", expect.anything());
-    expect(slice.slice_id).toBe("2026-07-14-1200");
-  });
-
-  it("regenerate: no duplicate user turn, no context_lost, and an interaction signal", async () => {
+  it("regenerate: no duplicate user turn, no window rebuild, and an interaction signal", async () => {
     const disk = makeSlice({
       turns: [
         { timestamp: "t0", role: "user", content: "same question" },
@@ -452,9 +547,9 @@ describe("housekeeping step", () => {
     episodic.tryLoadTodaySlice.mockResolvedValue(disk);
 
     // The SDK truncated the rejected assistant message locally, so the
-    // history legitimately carries NO assistant message — normally the
-    // context_lost heuristic would fire (0 assistant vs ≥1 agent turns).
-    const { slice } = await housekeeping(
+    // history legitimately mismatches the slice — detection is skipped for
+    // the regenerate turn shape.
+    const { slice, rebuiltHistory } = await housekeeping(
       makeInput("same question", { regenerate: true }),
     );
 
@@ -462,6 +557,7 @@ describe("housekeeping step", () => {
     expect(episodic.closeSlice).not.toHaveBeenCalled();
     expect(slice.slice_id).toBe(disk.slice_id);
     expect(slice.turns).toHaveLength(2);
+    expect(rebuiltHistory).toBeUndefined();
     expect(episodic.appendTurn).not.toHaveBeenCalled();
     // …and the rejection is recorded as a mechanical fitness signal.
     expect(interactionSignal.logInteractionSignal).toHaveBeenCalledWith(
@@ -597,7 +693,7 @@ describe("slicing policy: idle_gap close + checkpoint continuation", () => {
     expect(contextPrefix?.[0]).toEqual({ role: "user", content: "m30" });
   });
 
-  it("context_lost close gets NO continuation link and no carry-over", async () => {
+  it("a client-history mismatch gets NO close — the slice stays open with a rebuilt window (no continuation link, no carry-over)", async () => {
     const disk = makeSlice({
       turns: [
         { timestamp: "t0", role: "user", content: "earlier" },
@@ -609,11 +705,21 @@ describe("slicing policy: idle_gap close + checkpoint continuation", () => {
     episodic.tryLoadTodaySlice.mockResolvedValue(disk);
     mockCreateSlice("2026-07-14-1200");
 
-    const { slice, contextPrefix } = await housekeeping(makeInput("new from different device"));
+    const { slice, contextPrefix, rebuiltHistory } = await housekeeping(makeInput("new from different device"));
 
-    expect(episodic.closeSlice).toHaveBeenCalledWith(disk, "context_lost", expect.anything());
+    // context_lost used to close here — now the slice survives, unchanged.
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    expect(episodic.createSlice).not.toHaveBeenCalled();
+    expect(slice.slice_id).toBe(disk.slice_id);
     expect(slice.continuesFrom).toBeUndefined();
     expect(contextPrefix).toBeUndefined();
+    expect(rebuiltHistory).toEqual([
+      { role: "user", content: "earlier" },
+      { role: "assistant", content: "reply" },
+      { role: "user", content: "another" },
+      { role: "assistant", content: "reply2" },
+      { role: "user", content: "new from different device" },
+    ]);
   });
 
   it("later turns of a checkpointed slice re-read the frozen predecessor via loadSlice", async () => {
@@ -1221,7 +1327,7 @@ describe("mid-turn evolution check (every turn, pre-reply)", () => {
   }
 
   /** A genuine MID-TURN input: the client history remembers the slice's
-   *  agent reply, so the context_lost close heuristic stays off. */
+   *  turns, so the mismatch detection stays off. */
   function midTurnInput(msg: string, overrides: Partial<TurnInput> = {}) {
     return makeInput(msg, {
       modelMessages: [
@@ -1635,5 +1741,208 @@ describe("turn idempotency (workflow redelivery)", () => {
 
     expect(slice.turns.filter((t) => t.role === "user")).toHaveLength(1);
     expect(slice.turns.filter((t) => t.role === "agent")).toHaveLength(1);
+  });
+});
+
+
+// ── bridge wiring: playbook write-back + strand description refresh ────────
+
+describe("bridge wiring: playbook write-back (job 8)", () => {
+  function setupBridgeBoundary() {
+    sliceAged = true;
+    const disk = makeSlice({
+      turns: [
+        { timestamp: "t0", role: "user", content: "old" },
+        { timestamp: "t1", role: "agent", content: "reply" },
+      ],
+    });
+    episodic.tryLoadTodaySlice.mockResolvedValue(disk);
+    episodic.createSlice.mockImplementation((msg: string) =>
+      makeSlice({
+        slice_id: "2026-07-14-1000",
+        turns: [{ timestamp: "t", role: "user", content: msg }],
+      }),
+    );
+    return disk;
+  }
+
+  function bridgeInput() {
+    const base = makeInput("wrapping up");
+    return {
+      ...base,
+      model: "bridge/claude",
+      modelConfig: { ...base.modelConfig, id: "bridge/claude", sdk: "bridge" as const },
+    };
+  }
+
+  function makeReport(overrides: Record<string, unknown> = {}) {
+    return {
+      analysis: {
+        tags: { reuse: [], create: [] },
+        semantic_hint: [],
+        intent: "chat",
+        memory_worthy: true,
+        memory_update: null,
+        emotional_signal: { intensity: "none", register: "neutral", note: "" },
+      },
+      closed_marking: null,
+      evolution: {
+        worth: true,
+        reason: "a durable preference was stated",
+        mutations: [{ op: "addNow", content: "prefers concrete answers" }],
+      },
+      backfill_marks: [],
+      strand_merges: [],
+      fitness: [],
+      direction: null,
+      playbooks: [
+        {
+          agent: "recall",
+          content: "- read the full slice before concluding",
+          evidence: ["2026-07-14-0900"],
+          expected_benefit: "fewer re-reads outside references",
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  function terminalEvoChunks() {
+    return workflowMock.written.filter(
+      (c) =>
+        c.type === "data-evolution" &&
+        (c.data as { running?: boolean }).running === false,
+    );
+  }
+
+  it("offers the pre-trigger buckets in the payload and applies a triggered bucket's playbook write through the gate", async () => {
+    setupBridgeBoundary();
+    // The SAME deterministic verdict feeds the payload offer (pre-append) and
+    // the apply-time gate (post-append) — both read the mocked trigger check.
+    evolutionLoop.computeEvolutionTriggers.mockReturnValue([
+      { bucket: "recall", reason: "net -5" },
+    ]);
+    bridgePhases.runHousekeepingBridge.mockResolvedValue({
+      ok: true,
+      report: makeReport(),
+    });
+
+    await housekeeping(bridgeInput());
+
+    // Payload: the pre-trigger bucket set + current playbook content offered.
+    expect(bridgePhases.runHousekeepingBridge).toHaveBeenCalledOnce();
+    const payload = bridgePhases.runHousekeepingBridge.mock.calls[0][0] as {
+      playbookTriggerBuckets?: string[];
+      playbooks?: Array<{ agent: string; content: string }>;
+    };
+    expect(payload.playbookTriggerBuckets).toEqual(["recall"]);
+    expect(payload.playbooks).toEqual([{ agent: "recall", content: "" }]);
+
+    // Apply: the gate passes (recall triggered) → the single-writer boundary.
+    expect(evolutionLoop.store.writePlaybook).toHaveBeenCalledWith(
+      "recall",
+      "- read the full slice before concluding",
+      expect.anything(),
+    );
+    // The terminal frame tells the playbook story like the runCardEvolution path.
+    const chunks = terminalEvoChunks();
+    expect(chunks.length).toBeGreaterThan(0);
+    const data = chunks[chunks.length - 1].data as {
+      playbooks?: Array<{ agent: string; summary: string }>;
+    };
+    expect(data.playbooks).toEqual([
+      { agent: "recall", summary: "fewer re-reads outside references" },
+    ]);
+  });
+
+  it("does NOT write playbooks for buckets the post-append trigger gate did not fire", async () => {
+    setupBridgeBoundary();
+    evolutionLoop.computeEvolutionTriggers.mockReturnValue([]); // nothing triggered
+    bridgePhases.runHousekeepingBridge.mockResolvedValue({
+      ok: true,
+      report: makeReport({
+        evolution: {
+          worth: false,
+          reason: "pure logistics",
+          mutations: [],
+        },
+      }),
+    });
+
+    await housekeeping(bridgeInput());
+
+    expect(evolutionLoop.store.writePlaybook).not.toHaveBeenCalled();
+    const chunks = terminalEvoChunks();
+    expect(chunks.length).toBeGreaterThan(0);
+    const data = chunks[chunks.length - 1].data as {
+      note?: string;
+      playbooks?: unknown[];
+    };
+    expect(data.note).toContain("nothing worth sedimenting");
+    expect(data.playbooks).toBeUndefined();
+  });
+
+  it("skips the playbook applier entirely when the bridge call failed (no report)", async () => {
+    setupBridgeBoundary();
+    evolutionLoop.computeEvolutionTriggers.mockReturnValue([
+      { bucket: "recall", reason: "net -5" },
+    ]);
+    bridgePhases.runHousekeepingBridge.mockResolvedValue({
+      ok: false,
+      reason: "bridge-not-found",
+    });
+
+    await housekeeping(bridgeInput());
+
+    expect(evolutionLoop.store.writePlaybook).not.toHaveBeenCalled();
+  });
+});
+
+describe("strand description refresh driver", () => {
+  function setupClosingSlice() {
+    sliceAged = true;
+    const disk = makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "old" }],
+    });
+    episodic.tryLoadTodaySlice.mockResolvedValue(disk);
+    episodic.createSlice.mockImplementation((msg: string) =>
+      makeSlice({
+        slice_id: "2026-07-14-1000",
+        turns: [{ timestamp: "t", role: "user", content: msg }],
+      }),
+    );
+    return disk;
+  }
+
+  it("drives refreshStrandDescriptions on a close boundary (and logs the counts)", async () => {
+    setupClosingSlice();
+    episodic.refreshStrandDescriptions.mockResolvedValue({
+      refreshed: ["work"],
+      skipped: [{ name: "health", reason: "cooldown" }],
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      await housekeeping(makeInput("wrapping up"));
+
+      expect(episodic.refreshStrandDescriptions).toHaveBeenCalledOnce();
+      const [strands, model] = episodic.refreshStrandDescriptions.mock
+        .calls[0] as unknown as [Record<string, string[]>, { id: string }];
+      expect(strands).toEqual({});
+      expect(model.id).toBe("deepseek-v4-flash");
+      expect(logSpy).toHaveBeenCalledWith(
+        "[Strands] Description refresh: 1 refreshed, 1 skipped",
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("skips the refresh in demo mode (read-only preview)", async () => {
+    setupClosingSlice();
+
+    await housekeeping(makeInput("wrapping up", { useDemo: true }));
+
+    expect(episodic.refreshStrandDescriptions).not.toHaveBeenCalled();
   });
 });

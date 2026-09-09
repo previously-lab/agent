@@ -224,8 +224,12 @@ describe("getArrivalState", () => {
     vi.useRealTimers();
   });
 
-  function seedLastSlice(turns: Turn[], overrides: Partial<TimeSlice> = {}) {
-    const entry = makeEntry({ status: "active", end: undefined });
+  function seedLastSlice(
+    turns: Turn[],
+    overrides: Partial<TimeSlice> = {},
+    entryOverrides: Partial<TimelineSliceEntry> = {},
+  ) {
+    const entry = makeEntry({ status: "active", end: undefined, ...entryOverrides });
     mocks.readTimelineIndex.mockResolvedValue({
       _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [entry],
     });
@@ -275,6 +279,37 @@ describe("getArrivalState", () => {
     seedLastSlice([makeTurn("old", "2026-08-11T11:00:00.000Z")]); // 60 min ago
     const state = await getArrivalState();
     expect(state.mode).toBe("resume");
+  });
+
+  it("resumes a time_cap/capacity-checkpointed slice within the idle gap (the next turn continues it)", async () => {
+    // The newest catalog entry is a closed CHECKPOINT whose follow-up slice
+    // housekeeping will create on the next turn (continuesFrom) — arriving
+    // now must resume, not brief. The gate reads closed_by from the CATALOG
+    // entry and last-activity from the slice turns.
+    seedLastSlice(
+      [makeTurn("q", "2026-08-11T11:45:00.000Z"), makeTurn("a", "2026-08-11T11:46:00.000Z", "agent")],
+      { status: "closed", end: "2026-08-11T11:46:00.000Z" },
+      { status: "closed", closed_by: "time_cap", end: "2026-08-11T11:46:00.000Z" },
+    );
+    expect((await getArrivalState()).mode).toBe("resume");
+
+    seedLastSlice(
+      [makeTurn("q", "2026-08-11T11:45:00.000Z")],
+      { status: "closed", end: "2026-08-11T11:45:30.000Z" },
+      { status: "closed", closed_by: "capacity", end: "2026-08-11T11:45:30.000Z" },
+    );
+    expect((await getArrivalState()).mode).toBe("resume");
+  });
+
+  it("briefs on a genuine boundary (idle_gap / user_explicit / legacy context_lost) even within the idle gap", async () => {
+    for (const closedBy of ["idle_gap", "user_explicit", "context_lost"]) {
+      seedLastSlice(
+        [makeTurn("q", "2026-08-11T11:45:00.000Z")],
+        { status: "closed", end: "2026-08-11T11:45:30.000Z" },
+        { status: "closed", closed_by: closedBy, end: "2026-08-11T11:45:30.000Z" },
+      );
+      expect((await getArrivalState()).mode).toBe("briefing");
+    }
   });
 
   it("briefs on an empty catalog or a missing slice file", async () => {

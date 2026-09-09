@@ -1,7 +1,7 @@
 /**
  * Slicing Decision Engine — pure time-based (v0.9) + idle-gap close.
  *
- * Four signals, checked in the chat route:
+ * Three close signals, checked in the chat route (steps.ts):
  * 1. Idle gap — no turn for `idleGapMinutes` means the user left and came
  *    back: close with `"idle_gap"` and open a genuinely NEW conversation
  *    (no context carry-over). Checked first, measured from the last turn.
@@ -10,27 +10,25 @@
  *    This is a periodic autosave CHECKPOINT (`"time_cap"`), not the end of
  *    the conversation — the follow-up slice links back via `continuesFrom`.
  * 3. Turn count cap — pure safety net (`"capacity"`, also a checkpoint).
- * 4. Context loss — client history no longer matches the slice
- *    (`"context_lost"`, checked in steps.ts; a genuine new conversation).
+ *
+ * A client-history mismatch (page refresh, device switch, stale writes) is
+ * NOT a close signal: the server slice is authoritative and the model
+ * history window is rebuilt from the slice's own turns instead (steps.ts).
  *
  * All closes are lazy — detected when the NEXT turn arrives — so an idle-gap
  * close fires on the first turn after the silence.
  *
- * Thresholds are read from the user config at request time so they can
- * be adjusted in Settings without a redeploy.
+ * Thresholds are read from the user config (`src/lib/config/defaults.ts`,
+ * overridable via memory/user/config.json) at request time so they can be
+ * adjusted in Settings without a redeploy — this module has NO defaults of
+ * its own (the old 15-minute idle-gap constant lived here and is gone).
  */
-
-// ─── Configurable defaults (overridable via memory/user/config.json) ───
-
-export const DEFAULT_MAX_SLICE_AGE_MS = 30 * 60 * 1000; // 30 minutes
-export const DEFAULT_MAX_TURNS_PER_SLICE = 50;
-export const DEFAULT_IDLE_GAP_MS = 15 * 60 * 1000; // 15 minutes
 
 /**
  * Check whether the slice has been open long enough (wall-clock time since
  * its start) to warrant closing it.
  */
-export function checkSliceAge(startIso: string, maxMs = DEFAULT_MAX_SLICE_AGE_MS): boolean {
+export function checkSliceAge(startIso: string, maxMs: number): boolean {
   const elapsedMs = Date.now() - new Date(startIso).getTime();
   return elapsedMs >= maxMs;
 }
@@ -40,7 +38,7 @@ export function checkSliceAge(startIso: string, maxMs = DEFAULT_MAX_SLICE_AGE_MS
  * to treat the conversation as abandoned. Unparseable/absent timestamps never
  * trigger the close.
  */
-export function checkIdleGap(lastTurnIso: string, maxMs = DEFAULT_IDLE_GAP_MS): boolean {
+export function checkIdleGap(lastTurnIso: string, maxMs: number): boolean {
   const lastMs = new Date(lastTurnIso).getTime();
   if (Number.isNaN(lastMs) || Number.isNaN(maxMs)) return false;
   return Date.now() - lastMs >= maxMs;

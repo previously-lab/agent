@@ -42,6 +42,7 @@ import {
   serializeStrands,
   sliceIdToFilePath,
   loadSlice,
+  refreshStrandDescriptions,
   type TimeSlice,
   type StrandIndex,
   type SlicingSignal,
@@ -60,6 +61,7 @@ import { applyStrandMerges, pruneStrands } from "@/lib/episodic/strands";
 import {
   adaptHousekeepingReport,
   applyBridgeCardEvolution,
+  applyBridgePlaybookWrites,
   degradedAnalysis,
   isPhaseOutsourceActive,
   runHousekeepingBridge,
@@ -84,6 +86,7 @@ import {
   ensureEvolutionFiles,
   readDirection,
   readFitness,
+  readPlaybook,
   readRecentSignals,
   recordDirectionRejection,
   resetFitnessGeneration,
@@ -91,6 +94,7 @@ import {
 } from "@/lib/evolution/store";
 import { logInteractionSignal } from "@/lib/episodic/rework-signal";
 import { computeEvolutionTriggers } from "@/lib/evolution/triggers";
+import type { PlaybookAgent } from "@/lib/evolution/paths";
 import {
   DIRECTION_RECENT_EVENTS,
   DIRECTION_RECENT_MARKINGS,
@@ -345,24 +349,53 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
 }
 
 /**
- * Detect when the client has lost conversational context (page refresh,
- * device switch). Compares assistant messages in the client's message
- * history against agent turns in the recovered slice.
+ * Detect when the client-sent history no longer matches the active slice
+ * (page refresh, device switch, stale local writes). DETECTION ONLY — a
+ * mismatch never closes the slice: the server slice is authoritative and
+ * housekeeping rebuilds the model history window from the slice's own turns
+ * instead (see rebuiltHistory in the HousekeepingResult).
+ *
+ * The client history may carry turns from OLDER slices before the current
+ * one, so the check compares the slice-aligned TAIL: the client's user
+ * messages (the current one excluded — it is not in the slice yet at
+ * decision time) must end with the slice's user turns, turn for turn. A
+ * short tail means the client lost turns (refresh); a non-matching tail
+ * means stale writes the slice never recorded. Either way → rebuild.
  */
-function checkContextLost(modelMessages: ModelMessage[], slice: TimeSlice): boolean {
-  const assistantCount = modelMessages.filter(
-    (m) => m.role === "assistant"
-  ).length;
-  const agentTurnCount = slice.turns.filter(
-    (t) => t.role === "agent"
-  ).length;
+function checkClientHistoryMismatch(
+  modelMessages: ModelMessage[],
+  slice: TimeSlice,
+): boolean {
+  const sliceUserContents = slice.turns
+    .filter((t) => t.role === "user")
+    .map((t) => t.content);
+  if (sliceUserContents.length === 0) return false;
+  const clientUserContents = modelMessages
+    .filter((m) => m.role === "user")
+    .map((m) => messageText(m.content));
+  const aligned = clientUserContents.slice(0, -1).slice(-sliceUserContents.length);
+  if (aligned.length < sliceUserContents.length) return true; // client lost turns
+  return aligned.some((c, i) => c !== sliceUserContents[i]);
+}
 
-  // Client has 0 assistant messages but slice has agent turns → context lost
-  if (assistantCount === 0 && agentTurnCount >= 1) return true;
-  // Client barely remembers (1 assistant) but slice has many turns → context lost
-  if (assistantCount <= 1 && agentTurnCount >= 3) return true;
+/** Plain-text extraction for comparing a user message against a slice turn
+ *  (slice turns store plain text; the client may send content parts). */
+function messageText(content: ModelMessage["content"]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("");
+  }
+  return "";
+}
 
-  return false;
+/** Slice turns → wire messages (the shape the model history window uses). */
+function sliceTurnsToMessages(turns: TimeSlice["turns"]): ModelMessage[] {
+  return turns.map((t) => ({
+    role: t.role === "agent" ? "assistant" : "user",
+    content: t.content,
+  }));
 }
 
 /**
@@ -458,9 +491,10 @@ const ANALYZER_PORTRAIT_MAX_CHARS = 4000;
 /**
  * Recover today's slice from GitHub truth (never the module global — it does
  * not survive across workflow invocations), close it on slice-age cap / turn
- * cap / context loss, or create a fresh one. Append the user turn and durably
- * snapshot before returning, so the message is on GitHub before we stream
- * anything.
+ * cap / idle gap, or keep it open (rebuilding the history window from the
+ * slice's own turns when the client history mismatches). Append the user
+ * turn and durably snapshot before returning, so the message is on GitHub
+ * before we stream anything.
  */
 export async function housekeeping(input: TurnInput): Promise<HousekeepingResult> {
   "use step";
@@ -573,6 +607,11 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
 
   // ── 1. Decide lifecycle (pure — no I/O, no LLM yet) ──────────────────
   let closeSignal: SlicingSignal | null = null;
+  /** True when the client-sent history mismatched the active slice: the
+   *  slice STAYS OPEN and the model window is rebuilt from the slice's own
+   *  turns (context_lost used to close the slice here — it is a rebuild
+   *  trigger now, never a close trigger). */
+  let rebuildFromSlice = false;
   if (diskSlice && diskSlice.status === "active") {
     // Idle gap FIRST: a long silence since the last turn means the user left
     // and came back — this is a genuinely new conversation, not a checkpoint.
@@ -589,12 +628,15 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       closeSignal = "time_cap";
     } else if (diskSlice.turns.length >= config.slicing.maxTurnsPerSlice) {
       closeSignal = "capacity";
-    // A regenerate turn legitimately carries NO assistant message in its
-    // client history (the SDK truncated the rejected reply) — the counting
-    // heuristic would misread a first-turn regenerate as context loss, so it
-    // is skipped for this turn shape.
-    } else if (!input.regenerate && checkContextLost(modelMessages, diskSlice)) {
-      closeSignal = "context_lost";
+    // A regenerate turn legitimately carries a truncated client history (the
+    // SDK dropped the rejected reply) — detection is skipped for this turn
+    // shape, and demo mode never persists a slice so nothing to rebuild from.
+    } else if (
+      !input.regenerate &&
+      !input.useDemo &&
+      checkClientHistoryMismatch(modelMessages, diskSlice)
+    ) {
+      rebuildFromSlice = true;
     }
   }
 
@@ -675,6 +717,29 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     if (bridgeStrandMergeOffered && prunedForOffer) {
       bridgeStrandMergeNames = new Set(Object.keys(prunedForOffer));
     }
+    // Playbook evolution (job 8) rides the SAME report. The payload offers
+    // the buckets that trigger on the PRE-turn store — this readFitness sees
+    // the store BEFORE §3a appends this turn's report deltas (that append
+    // happens only after the bridge call returns). The APPLY-TIME gate
+    // (applyBridgePlaybooks in §4b) re-checks against the POST-append
+    // evolutionTriggers, the authoritative set for this turn — the two can
+    // differ when this turn's own deltas push a bucket over the threshold.
+    // Offering a bucket the apply gate then rejects is harmless (the write
+    // is skipped, never written); missing one only defers its playbook
+    // rewrite to the next triggered turn.
+    const playbookPreTriggers = input.useDemo
+      ? []
+      : computeEvolutionTriggers(await readFitness(batch)).map((t) => t.bucket);
+    const playbookAgents = playbookPreTriggers.filter(
+      (b): b is PlaybookAgent =>
+        b === "recall" || b === "search" || b === "thinkdeep",
+    );
+    const playbookContents = await Promise.all(
+      playbookAgents.map(async (agent) => ({
+        agent,
+        content: (await readPlaybook(agent).catch(() => null)) ?? "",
+      })),
+    );
     // Forward the client agent's live tool activity into the turn stream so
     // the user can watch the CLI work during housekeeping — the same
     // data-phase channel + payload the chat bridge model uses
@@ -727,6 +792,9 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
             : undefined,
         signals:
           thisSliceSignals.length > 0 ? thisSliceSignals : undefined,
+        playbookTriggerBuckets:
+          playbookPreTriggers.length > 0 ? playbookPreTriggers : undefined,
+        playbooks: playbookContents.length > 0 ? playbookContents : undefined,
         directionContent: bridgeDirection,
         selfModelContent: bridgeSelfModel,
         directionMode: bridgeDirectionMode,
@@ -874,10 +942,28 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       );
     }
 
+    // Strand description refresh — rides the SAME close boundary and the same
+    // model path as the consolidation pass (under phase outsourcing the
+    // sub-agent runner dispatches over the bridge, consistent with the
+    // consolidator's own behavior). The mechanical gate (new-slice count +
+    // cooldown + per-pass cap) lives inside refreshStrandDescriptions; demo
+    // mode is skipped (read-only preview). Never throws — the log line is
+    // the audit trail.
+    if (!input.useDemo) {
+      const refresh = await refreshStrandDescriptions(
+        consolidated,
+        input.modelConfig,
+        batch,
+      );
+      console.log(
+        `[Strands] Description refresh: ${refresh.refreshed.length} refreshed, ${refresh.skipped.length} skipped`,
+      );
+    }
+
     // Checkpoint continuation link: only time_cap/capacity closes are
     // autosave checkpoints of the SAME conversation — the new slice carries
-    // the closed slice's tail as live context. idle_gap/context_lost are
-    // genuine conversation boundaries and get no link (no carry-over).
+    // the closed slice's tail as live context. idle_gap is a genuine
+    // conversation boundary and gets no link (no carry-over).
     const checkpoint =
       closeSignal === "time_cap" || closeSignal === "capacity";
     slice = createSlice(
@@ -1229,6 +1315,49 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     }
   };
   /**
+   * Apply the bridge report's playbook rewrites (v1.0 §2.4) through the SAME
+   * bucket gate as the merged run's writePlaybook (applyBridgePlaybookWrites).
+   * Shared by the boundary / mid-turn / explicit bridge paths — every emitted
+   * EvolutionResult of a bridge branch folds the outcome in via its
+   * withDirection-style wrapper so the terminal frame tells the playbook
+   * story exactly like the runCardEvolution path does.
+   *
+   * The gate is the POST-append evolutionTriggers: §3a has appended the
+   * report's own fitness deltas by the time any §4b branch runs, so a bucket
+   * this turn's report pushed over the threshold authorizes its playbook
+   * write even though the payload offered only the pre-turn set (see the
+   * analyze-stage comment). No-op (undefined) without a report or proposals;
+   * a write failure degrades to a warning — evolution failures never take the
+   * turn down.
+   */
+  const applyBridgePlaybooks = async (): Promise<
+    EvolutionResult["playbooks"]
+  > => {
+    if (!bridgeReport || bridgeReport.playbooks.length === 0) return undefined;
+    try {
+      const res = await applyBridgePlaybookWrites(
+        bridgeReport.playbooks,
+        evolutionTriggers.map((t) => t.bucket),
+        batch,
+      );
+      console.log(
+        `[Evolution] bridge playbooks: ${res.applied.length} applied` +
+          (res.skipped.length > 0
+            ? `, ${res.skipped.length} skipped by the bucket gate (${res.skipped
+                .map((s) => s.agent)
+                .join(", ")})`
+            : ""),
+      );
+      return res.applied.length > 0 ? res.applied : undefined;
+    } catch (e) {
+      console.warn(
+        "[Evolution] bridge playbook write failed:",
+        e instanceof Error ? e.message : e,
+      );
+      return undefined;
+    }
+  };
+  /**
    * Settle the fitness generation after a SUCCESSFUL fitness-triggered
    * evolution run (v0.9.2 — see the §4b header). Only a run that fired
    * BECAUSE of selection pressure (evolutionTriggers non-empty) and
@@ -1281,7 +1410,8 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
         // outcome rides the same report and is applied through the SAME write
         // paths as the direction sub-agent flow (applyBridgeDirectionVerdict).
         const bridgeDirectionOutcome = await applyBridgeDirectionVerdict();
-        // The verdict rides every terminal frame of this branch.
+        const bridgePlaybooks = await applyBridgePlaybooks();
+        // The verdict + playbook outcome ride every terminal frame of this branch.
         const withDirection = (
           result: EvolutionResult,
         ): EvolutionResult => ({
@@ -1289,6 +1419,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
           ...(bridgeDirectionOutcome
             ? { direction: bridgeDirectionOutcome }
             : {}),
+          ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
         });
 
         if (!bridgeReport) {
@@ -1532,6 +1663,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
           // verdict + proposed mutations through the same write paths, no
           // second spawn.
           const bridgeDirectionOutcome = await applyBridgeDirectionVerdict();
+          const bridgePlaybooks = await applyBridgePlaybooks();
           const withDirection = (
             result: EvolutionResult,
           ): EvolutionResult => ({
@@ -1539,6 +1671,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
             ...(bridgeDirectionOutcome
               ? { direction: bridgeDirectionOutcome }
               : {}),
+            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
           });
           if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
             // Open the card in its running state first — a terminal chunk out
@@ -1670,18 +1803,22 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       } else if (explicitUpdate) {
       if (phaseOutsource) {
         const cardRaw = bridgeCardRaw ?? (await readCurrentPreviously(batch));
+        const bridgePlaybooks = await applyBridgePlaybooks();
         if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
           // Open the card in its running state before applying — see the
           // slice-close branch above.
           emitEvolutionProgress(stream, "reviewing");
-          evolutionResult = await applyBridgeCardEvolution({
-            card: cardRaw,
-            sliceId: slice.slice_id,
-            today: todayLocal ?? new Date().toISOString().slice(0, 10),
-            reason: bridgeReport.evolution.reason || explicitUpdate.content,
-            mutations: bridgeReport.evolution.mutations,
-            batch,
-          });
+          evolutionResult = {
+            ...(await applyBridgeCardEvolution({
+              card: cardRaw,
+              sliceId: slice.slice_id,
+              today: todayLocal ?? new Date().toISOString().slice(0, 10),
+              reason: bridgeReport.evolution.reason || explicitUpdate.content,
+              mutations: bridgeReport.evolution.mutations,
+              batch,
+            })),
+            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
+          };
           await emitEvolutionResult(stream, evolutionResult);
           freezeEvolutionSummary(slice);
           console.log(
@@ -1696,6 +1833,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
               ? `Memory update noted — no card mutation proposed (${bridgeReport.evolution.reason || "no reason given"}).`
               : "Housekeeping bridge unavailable — card evolution skipped this turn.",
             ...(bridgeReport ? {} : { error: "housekeeping bridge failed" }),
+            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
           });
         }
       } else {
@@ -1805,13 +1943,24 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
         : (await loadSlice(slice.continuesFrom, batch))?.turns;
     const tail = prevTurns?.slice(-CHECKPOINT_CARRY_OVER_TURNS) ?? [];
     if (tail.length > 0) {
-      contextPrefix = tail.map(
-        (t): ModelMessage => ({
-          role: t.role === "agent" ? "assistant" : "user",
-          content: t.content,
-        }),
-      );
+      contextPrefix = sliceTurnsToMessages(tail);
     }
+  }
+
+  // ── Rebuilt history window (client-history mismatch) ─────────────────
+  // The client-sent history mismatched the active slice (page refresh,
+  // device switch, stale local writes) — the slice stays OPEN and the model
+  // history window is rebuilt from the SLICE's own turns (authoritative),
+  // so the conversation continues seamlessly instead of forking a new slice.
+  // Built AFTER the user-turn append: the current message is in the slice
+  // by now, so it is part of the rebuilt window exactly once.
+  let rebuiltHistory: ModelMessage[] | undefined;
+  if (rebuildFromSlice) {
+    rebuiltHistory = sliceTurnsToMessages(slice.turns);
+    console.warn(
+      `[Episodic] Client history mismatch — rebuilt window from slice ${slice.slice_id} ` +
+        `(${rebuiltHistory.length} turns), slice stays open`,
+    );
   }
 
   // The frozen L3 block — see buildSliceHeadBlock (src/lib/turn-priming.ts).
@@ -1853,12 +2002,17 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // pointer lines + catalog totals. Pure pointers, never content.
   // v0.9: FROZEN mode (asOfSliceId) — absolute dates and only slices closed
   // before this one began, so the brief can't drift mid-slice.
+  // L4: the line list is bounded by BOTH a 50-line cap and a rolling 30-day
+  // recency window (anchored at the asOf slice's own start in frozen mode,
+  // so the window stays byte-stable for the slice's whole life).
   const timelineIndex = await readTimelineIndex();
   const timelineBrief = timelineIndex
     ? buildTimelineBrief(timelineIndex, {
         timezone: input.clientTimezone,
         locale: input.locale,
         asOfSliceId: slice.slice_id,
+        recent: 50,
+        withinDays: 30,
       })
     : "";
 
@@ -1871,6 +2025,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     ...(directionBlock ? { directionBlock } : {}),
     ...(timelineBrief ? { timelineBrief } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
+    ...(rebuiltHistory ? { rebuiltHistory } : {}),
   };
   });
   } finally {

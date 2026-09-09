@@ -248,3 +248,89 @@ describe("buildTimelineBrief — frozen mode (v0.9, asOfSliceId)", () => {
     expect(buildTimelineBrief(index(grown), opts)).toBe(buildTimelineBrief(index(base), opts));
   });
 });
+
+describe("buildTimelineBrief — L4 recency window (withinDays)", () => {
+  const CURRENT = "2026-08-17-1400";
+
+  it("bounds the line list to the last `withinDays` days (live mode anchors at nowIso)", () => {
+    const brief = buildTimelineBrief(
+      index([
+        // 40 days before nowIso — outside the 30-day window.
+        entry({ id: "2026-07-08-0900", date: "2026-07-08", start: "2026-07-08T09:00:00.000Z", focus: "旧话题" }),
+        // 10 days before — inside.
+        entry({ id: "2026-08-07-0900", date: "2026-08-07", start: "2026-08-07T09:00:00.000Z", focus: "近话题" }),
+      ]),
+      { nowIso: "2026-08-17T06:00:00.000Z", withinDays: 30, recent: 1, locale: "zh" },
+    );
+    expect(brief).toContain("近话题");
+    expect(brief).not.toContain("旧话题");
+    // Totals are NOT windowed — the pool still holds both slices.
+    expect(brief).toContain("往前共 2 片");
+  });
+
+  it("the recent cap still applies on top of the window", () => {
+    const slices = Array.from({ length: 5 }, (_, i) =>
+      entry({
+        id: `2026-08-1${i}-0900`,
+        date: `2026-08-1${i}`,
+        start: `2026-08-1${i}T09:00:00.000Z`,
+        focus: `话题${i}`,
+      }),
+    );
+    const brief = buildTimelineBrief(index(slices), {
+      nowIso: "2026-08-17T06:00:00.000Z",
+      withinDays: 30,
+      recent: 3,
+      locale: "zh",
+    });
+    expect(brief).toContain("话题4");
+    expect(brief).toContain("话题2");
+    expect(brief).not.toContain("话题1");
+  });
+
+  it("frozen mode anchors the window at the asOf slice's start — no live clock, byte-stable", () => {
+    const opts = {
+      asOfSliceId: CURRENT,
+      withinDays: 30,
+      timezone: "Asia/Shanghai",
+      locale: "zh",
+    } as const;
+    const old = entry({
+      id: "2026-07-10-0900",
+      date: "2026-07-10",
+      start: "2026-07-10T09:00:00.000Z",
+      focus: "窗口外旧片",
+    });
+    const inside = entry({
+      id: "2026-08-10-0900",
+      date: "2026-08-10",
+      start: "2026-08-10T09:00:00.000Z",
+      focus: "窗口内近片",
+    });
+    const brief = buildTimelineBrief(index([old, inside]), opts);
+    // asOf = 2026-08-17T14:00Z; 30 days back = 2026-07-18. The 07-10 slice is
+    // outside, the 08-10 slice inside.
+    expect(brief).toContain("窗口内近片");
+    expect(brief).not.toContain("窗口外旧片");
+    // Byte-stable: same input rebuilt → identical string (anchored at the
+    // asOf id, not Date.now()).
+    expect(buildTimelineBrief(index([old, inside]), opts)).toBe(brief);
+  });
+
+  it("frozen mode stays byte-identical when the catalog grows newer slices mid-slice (window included)", () => {
+    const base = [
+      entry({ id: "2026-08-10-0900", date: "2026-08-10", start: "2026-08-10T09:00:00.000Z", focus: "近片" }),
+    ];
+    const grown = [
+      ...base,
+      entry({ id: "2026-08-17-1500", date: "2026-08-17", status: "active", focus: "别的设备" }),
+    ];
+    const opts = {
+      asOfSliceId: CURRENT,
+      withinDays: 30,
+      timezone: "Asia/Shanghai",
+      locale: "zh",
+    } as const;
+    expect(buildTimelineBrief(index(grown), opts)).toBe(buildTimelineBrief(index(base), opts));
+  });
+});

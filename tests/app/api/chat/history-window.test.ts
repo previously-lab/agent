@@ -43,9 +43,9 @@ describe("sliceAlignedWindow (v0.9 — history window aligned to the time slice)
   });
 
   it("client tail too short for the slice → degrades to all given messages", () => {
-    // housekeeping's checkContextLost normally forces a new slice in this
-    // situation; if it ever slips through, the window must not drop the
-    // current user message or invent messages.
+    // housekeeping's mismatch detection normally rebuilds the window from
+    // the slice's own turns in this situation; if it ever slips through,
+    // the window must not drop the current user message or invent messages.
     const history = [u("only this")];
     expect(sliceAlignedWindow(history, 3, 100)).toEqual(history);
   });
@@ -225,5 +225,42 @@ describe("buildHistoryWindow — demo mode (v0.9.1)", () => {
       contextPrefix: prefix,
     });
     expect(out).toEqual([u("p1"), a("p1 reply"), u("s1"), a("r1"), u("s2")]);
+  });
+
+  it("a rebuilt window (client-history mismatch) is used verbatim — the client history is ignored", () => {
+    // Page refresh: the client sent only the current message, housekeeping
+    // rebuilt the window from the slice's turns. Those are authoritative.
+    const rebuilt: ModelMessage[] = [u("s1"), a("r1"), u("s2")];
+    const out = buildHistoryWindow({
+      modelMessages: [u("current only")],
+      userTurnsInSlice: 2,
+      maxMessages: 100,
+      rebuiltHistory: rebuilt,
+    });
+    expect(out).toEqual(rebuilt);
+  });
+
+  it("rebuilt window still joins with the checkpoint prefix (slice turns after the carried tail)", () => {
+    const prefix: ModelMessage[] = [u("p1"), a("p1 reply")];
+    const out = buildHistoryWindow({
+      modelMessages: [u("current only")],
+      userTurnsInSlice: 1,
+      maxMessages: 100,
+      contextPrefix: prefix,
+      rebuiltHistory: [u("s1")],
+    });
+    expect(out).toEqual([u("p1"), a("p1 reply"), u("s1")]);
+  });
+
+  it("demo mode ignores a rebuilt window — the full client history still wins", () => {
+    const history = [u("first"), a("first reply"), u("second")];
+    const out = buildHistoryWindow({
+      modelMessages: history,
+      userTurnsInSlice: 1,
+      maxMessages: 100,
+      useDemo: true,
+      rebuiltHistory: [u("second")],
+    });
+    expect(out).toEqual(history);
   });
 });
