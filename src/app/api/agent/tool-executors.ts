@@ -30,6 +30,7 @@ import {
 import { searchViaFlash, SEARCH_TIMEOUT_MS, type WebSearchResult } from "@/lib/search/flash-search";
 import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_MAX_BYTES } from "@/lib/search/fetch-utils";
 import { describeImage } from "@/lib/vision/describe-image";
+import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
 import {
   runRecallSearch,
@@ -776,7 +777,9 @@ export async function webFetchExecute(
  * `source` is either an http(s) URL or `attachment:N` referring to the Nth
  * image attachment extracted from the current turn. The actual vision call is a
  * one-shot infrastructure call to `deepseek-v4-flash-vision-exp` via
- * `describeImage`.
+ * `describeImage`. If the vision model is unavailable the tool does not fail:
+ * it returns a degraded metadata-only result (dimensions, format, size) that
+ * says so explicitly.
  */
 export async function viewImageExecute(
   { source, question }: { source: string; question?: string },
@@ -814,10 +817,18 @@ export async function viewImageExecute(
   await emitToolProgress(
     toolCallId,
     "viewImage",
-    result.ok ? "Looked at image" : "Could not view image",
+    result.ok
+      ? result.degraded
+        ? "Metadata only — vision model unavailable"
+        : "Looked at image"
+      : "Could not view image",
     result.ok ? "done" : "running",
   );
-  return result.ok ? result.description : result.error;
+  if (!result.ok) return result.error;
+  // Degraded descriptions already embed the metadata and the DEGRADED marker;
+  // real descriptions get metadata appended so the agent always sees it.
+  if (result.degraded) return result.description;
+  return `${result.description}\n\n[image: ${formatImageMetadata(result.metadata)}]`;
 }
 
 // ── delegateTask — subscription bridge dispatch (client mode only) ───────

@@ -4,14 +4,24 @@
  * This is an INFRASTRUCTURE call: it always reaches the DeepSeek
  * OpenAI-compatible endpoint with the vision-capable
  * `deepseek-v4-flash-vision-exp` model and always needs a `DEEPSEEK_API_KEY`,
- * independent of the user's chosen chat model. A missing key is surfaced as a
- * user-facing error before any network or model call runs.
+ * independent of the user's chosen chat model. When the key (or the model,
+ * or the call itself) is unavailable, the result degrades to a metadata-only
+ * description — ok:true with degraded:true — instead of an error, so the
+ * calling agent still gets dimensions, format, and byte size.
+ *
+ * Header-parsed metadata (see image-meta.ts) is attached to every result.
  */
 
 import { generateText } from "ai";
 import { createModel } from "@/lib/models/provider";
 import { getModel } from "@/lib/models/registry";
 import { fetchWithGuard, isPrivateHost } from "@/lib/search/fetch-utils";
+import {
+  decodeDataUrl,
+  formatImageMetadata,
+  parseImageMetadata,
+  type ImageMetadata,
+} from "@/lib/vision/image-meta";
 
 /** Hard cap on fetched image bytes (10 MB). Large images are rejected so data
  *  URLs do not bloat the step/workflow payload. */
@@ -29,7 +39,20 @@ export type DescribeImageInput = {
 };
 
 export type DescribeImageResult =
-  | { ok: true; description: string }
+  | {
+      ok: true;
+      description: string;
+      /** Header-parsed metadata — attached unconditionally, on every path. */
+      metadata: ImageMetadata;
+      /**
+       * True when the vision model was unavailable (missing key, missing
+       * registry entry, or a failed call) and `description` is a degraded
+       * metadata-only stand-in instead of a real visual description.
+       */
+      degraded: boolean;
+      /** Present only when `degraded` — why the vision model could not run. */
+      reason?: string;
+    }
   | { ok: false; error: string };
 
 function isDataUrl(s: string): boolean {
@@ -95,7 +118,7 @@ async function readImageBytes(
 }
 
 async function fetchImageAsDataUrl(url: string): Promise<
-  | { ok: true; dataUrl: string }
+  | { ok: true; dataUrl: string; bytes: Uint8Array; contentType: string }
   | { ok: false; error: string }
 > {
   let parsed: URL;
@@ -152,7 +175,7 @@ async function fetchImageAsDataUrl(url: string): Promise<
 
     const base64 = Buffer.from(bytes).toString("base64");
     const dataUrl = `data:${contentType};base64,${base64}`;
-    return { ok: true, dataUrl };
+    return { ok: true, dataUrl, bytes, contentType };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: `ERROR: Could not fetch image: ${msg}` };
@@ -187,37 +210,88 @@ function buildInstruction(
 }
 
 /**
- * One-shot image-to-text. Never throws — returns an error union on failure.
+ * Compose the degraded (vision-model-unavailable) description: metadata the
+ * text model can reason about (dimensions, format, size) plus an explicit
+ * marker so the agent knows it is not a real visual description.
+ */
+function buildDegradedDescription(
+  metadata: ImageMetadata,
+  reason: string,
+  question?: string,
+): string {
+  const lines = [
+    `[DEGRADED RESULT] The vision model is unavailable (${reason}), so no visual description could be produced.`,
+    `Image metadata: ${formatImageMetadata(metadata)}.`,
+  ];
+  if (question?.trim()) {
+    lines.push(
+      `Your question could not be answered visually: "${question.trim()}".`,
+    );
+  }
+  lines.push(
+    "Treat this as format/layout information only — the actual image content is unknown.",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * One-shot image-to-text. Never throws — returns an error union when the
+ * image itself cannot be resolved, and a degraded metadata-only result
+ * (ok:true, degraded:true) when the vision model is unavailable.
  */
 export async function describeImage(
   input: DescribeImageInput,
 ): Promise<DescribeImageResult> {
-  if (!process.env.DEEPSEEK_API_KEY) {
-    return {
-      ok: false,
-      error:
-        "Image viewing requires a DEEPSEEK_API_KEY. It runs as a separate DeepSeek " +
-        "infrastructure call independent of the chat model you selected. Add " +
-        "DEEPSEEK_API_KEY to enable it.",
-    };
-  }
-
+  // Resolve the image to raw bytes first — needed for metadata extraction
+  // on every path, and so the degraded result still works when the vision
+  // model is unavailable.
   let imageData: { data: string; mimeType?: string };
+  let bytes: Uint8Array | null = null;
+  let mimeHint: string | undefined;
   if ("url" in input.image) {
     const fetched = await fetchImageAsDataUrl(input.image.url);
     if (!fetched.ok) return fetched;
     imageData = { data: fetched.dataUrl };
+    bytes = fetched.bytes;
+    mimeHint = fetched.contentType;
   } else {
     imageData = normalizeImageInput(input.image);
+    const data = input.image.data.trim();
+    const decoded = isDataUrl(data)
+      ? decodeDataUrl(data)
+      : (() => {
+          try {
+            return {
+              bytes: new Uint8Array(Buffer.from(data, "base64")),
+              mimeType: input.image.mediaType,
+            };
+          } catch {
+            return null;
+          }
+        })();
+    if (decoded) {
+      bytes = decoded.bytes;
+      mimeHint = decoded.mimeType;
+    }
+  }
+
+  const metadata = parseImageMetadata(bytes ?? new Uint8Array(), mimeHint);
+
+  const degraded = (reason: string): DescribeImageResult => ({
+    ok: true,
+    description: buildDegradedDescription(metadata, reason, input.question),
+    metadata,
+    degraded: true,
+    reason,
+  });
+
+  if (!process.env.DEEPSEEK_API_KEY) {
+    return degraded("DEEPSEEK_API_KEY is not set");
   }
 
   const visionModel = getModel("deepseek-v4-flash-vision-exp");
   if (!visionModel) {
-    return {
-      ok: false,
-      error:
-        "ERROR: Vision model deepseek-v4-flash-vision-exp is not available.",
-    };
+    return degraded("vision model deepseek-v4-flash-vision-exp is not available");
   }
 
   try {
@@ -238,9 +312,9 @@ export async function describeImage(
       ],
       timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
-    return { ok: true, description: text.trim() };
+    return { ok: true, description: text.trim(), metadata, degraded: false };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return { ok: false, error: `ERROR: Could not describe image: ${msg}` };
+    return degraded(`vision call failed: ${msg}`);
   }
 }

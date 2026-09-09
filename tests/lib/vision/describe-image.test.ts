@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { DescribeImageResult } from "@/lib/vision/describe-image";
+import type { ImageMetadata } from "@/lib/vision/image-meta";
 
 const aiSdk = vi.hoisted(() => ({ generateText: vi.fn() }));
 vi.mock("ai", () => ({
@@ -34,13 +35,36 @@ function assertError(r: DescribeImageResult): asserts r is { ok: false; error: s
   expect(r.ok).toBe(false);
 }
 
-function assertOk(r: DescribeImageResult): asserts r is { ok: true; description: string } {
+function assertOk(
+  r: DescribeImageResult,
+): asserts r is {
+  ok: true;
+  description: string;
+  metadata: ImageMetadata;
+  degraded: boolean;
+} {
   expect(r.ok).toBe(true);
+}
+
+/** Minimal legal PNG header (33-byte IHDR) for metadata assertions. */
+function makePngBytes(width: number, height: number): Buffer {
+  const b = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(b, 0);
+  b.writeUInt32BE(13, 8);
+  b.write("IHDR", 12);
+  b.writeUInt32BE(width, 16);
+  b.writeUInt32BE(height, 20);
+  b[24] = 8;
+  return b;
+}
+
+function pngDataUrl(width: number, height: number): string {
+  return `data:image/png;base64,${makePngBytes(width, height).toString("base64")}`;
 }
 
 function makeImageResponse(
   contentType = "image/png",
-  body: Uint8Array = new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+  body: Uint8Array = new Uint8Array(makePngBytes(640, 480)),
 ): Response {
   return new Response(body as unknown as BodyInit, {
     headers: { "content-type": contentType },
@@ -69,13 +93,24 @@ describe("describeImage", () => {
     process.env = { ...SAVED_ENV };
   });
 
-  it("returns an honest error when DEEPSEEK_API_KEY is missing", async () => {
+  it("degrades to metadata only when DEEPSEEK_API_KEY is missing", async () => {
     delete process.env.DEEPSEEK_API_KEY;
     const result = await describeImage({
-      image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
+      image: { data: pngDataUrl(800, 600), mediaType: "image/png" },
+      question: "What is this?",
     });
-    assertError(result);
-    expect(result.error).toContain("DEEPSEEK_API_KEY");
+    assertOk(result);
+    expect(result.degraded).toBe(true);
+    expect(result.reason).toContain("DEEPSEEK_API_KEY");
+    expect(result.description).toContain("DEGRADED");
+    expect(result.description).toContain("800×600 PNG");
+    expect(result.description).toContain("What is this?");
+    expect(result.metadata).toEqual({
+      format: "png",
+      width: 800,
+      height: 600,
+      bytes: 33,
+    });
     expect(aiSdk.generateText).not.toHaveBeenCalled();
   });
 
@@ -102,7 +137,7 @@ describe("describeImage", () => {
     expect(aiSdk.generateText).not.toHaveBeenCalled();
   });
 
-  it("describes an image from a URL with a question", async () => {
+  it("describes an image from a URL with a question and attaches metadata", async () => {
     fetchUtils.fetchWithGuard.mockResolvedValue(makeImageResponse());
     aiSdk.generateText.mockResolvedValue({ text: "A red circle." });
 
@@ -113,7 +148,11 @@ describe("describeImage", () => {
     });
 
     assertOk(result);
+    expect(result.degraded).toBe(false);
     expect(result.description).toBe("A red circle.");
+    expect(result.metadata.format).toBe("png");
+    expect(result.metadata.width).toBe(640);
+    expect(result.metadata.height).toBe(480);
     expect(aiSdk.generateText).toHaveBeenCalledTimes(1);
     const args = aiSdk.generateText.mock.calls[0]![0];
     expect(args.model).toEqual({ __kind: "languageModel" });
@@ -121,19 +160,23 @@ describe("describeImage", () => {
     expect(args.messages[0].content[1].text).toContain("What color is it?");
   });
 
-  it("describes an image from base64 data", async () => {
+  it("describes an image from base64 data and attaches metadata", async () => {
     aiSdk.generateText.mockResolvedValue({ text: "A cat." });
+    const b64 = Buffer.from(makePngBytes(100, 50)).toString("base64");
 
     const result = await describeImage({
-      image: { data: "iVBORw0KGgo=", mediaType: "image/png" },
+      image: { data: b64, mediaType: "image/png" },
       locale: "zh",
     });
 
     assertOk(result);
+    expect(result.degraded).toBe(false);
     expect(result.description).toBe("A cat.");
+    expect(result.metadata.width).toBe(100);
+    expect(result.metadata.height).toBe(50);
     expect(aiSdk.generateText).toHaveBeenCalledTimes(1);
     const args = aiSdk.generateText.mock.calls[0]![0];
-    expect(args.messages[0].content[0].image).toBe("iVBORw0KGgo=");
+    expect(args.messages[0].content[0].image).toBe(b64);
     expect(args.messages[0].content[0].mimeType).toBe("image/png");
     expect(args.messages[0].content[1].text).toContain("用中文回答");
   });
@@ -152,25 +195,32 @@ describe("describeImage", () => {
     expect(args.messages[0].content[0]).not.toHaveProperty("mimeType");
   });
 
-  it("errors when the vision model is missing from the registry", async () => {
+  it("degrades to metadata only when the vision model is missing from the registry", async () => {
     registry.getModel.mockReturnValue(undefined);
 
     const result = await describeImage({
-      image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
+      image: { data: pngDataUrl(320, 200), mediaType: "image/png" },
     });
 
-    assertError(result);
-    expect(result.error).toContain("deepseek-v4-flash-vision-exp");
+    assertOk(result);
+    expect(result.degraded).toBe(true);
+    expect(result.reason).toContain("deepseek-v4-flash-vision-exp");
+    expect(result.description).toContain("DEGRADED");
+    expect(result.metadata.width).toBe(320);
+    expect(aiSdk.generateText).not.toHaveBeenCalled();
   });
 
-  it("surfaces model errors as the error union", async () => {
+  it("degrades to metadata only when the vision call fails", async () => {
     aiSdk.generateText.mockRejectedValue(new Error("rate limited"));
 
     const result = await describeImage({
-      image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
+      image: { data: pngDataUrl(10, 10), mediaType: "image/png" },
     });
 
-    assertError(result);
-    expect(result.error).toContain("rate limited");
+    assertOk(result);
+    expect(result.degraded).toBe(true);
+    expect(result.reason).toContain("rate limited");
+    expect(result.description).toContain("DEGRADED");
+    expect(result.description).toContain("rate limited");
   });
 });

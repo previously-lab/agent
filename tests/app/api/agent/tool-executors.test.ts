@@ -529,18 +529,22 @@ describe("viewImageExecute", () => {
     visionDeps.describeImage.mockReset();
   });
 
-  it("resolves attachment:N and returns the description", async () => {
-    visionDeps.describeImage.mockResolvedValue({
-      ok: true,
-      description: "A red circle.",
-    });
+  const visionOk = {
+    ok: true as const,
+    description: "A red circle.",
+    metadata: { format: "png" as const, width: 10, height: 10, bytes: 100 },
+    degraded: false,
+  };
+
+  it("resolves attachment:N and returns the description with metadata", async () => {
+    visionDeps.describeImage.mockResolvedValue(visionOk);
 
     const out = await viewImageExecute(
       { source: "attachment:0", question: "What color?" },
       opts({ imageAttachments: ["data:image/png;base64,xx"], locale: "en" }),
     );
 
-    expect(out).toBe("A red circle.");
+    expect(out).toBe("A red circle.\n\n[image: 10×10 PNG, 100 B]");
     expect(visionDeps.describeImage).toHaveBeenCalledWith({
       image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
       question: "What color?",
@@ -550,8 +554,9 @@ describe("viewImageExecute", () => {
 
   it("resolves a URL source and returns the description", async () => {
     visionDeps.describeImage.mockResolvedValue({
-      ok: true,
+      ...visionOk,
       description: "A cat.",
+      metadata: { format: "jpeg", width: 640, height: 480, bytes: 2048 },
     });
 
     const out = await viewImageExecute(
@@ -559,12 +564,34 @@ describe("viewImageExecute", () => {
       opts(),
     );
 
-    expect(out).toBe("A cat.");
+    expect(out).toBe("A cat.\n\n[image: 640×480 JPEG, 2.0 KB]");
     expect(visionDeps.describeImage).toHaveBeenCalledWith({
       image: { url: "https://example.com/cat.png" },
       question: undefined,
       locale: undefined,
     });
+  });
+
+  it("passes degraded results through transparently without appending metadata", async () => {
+    visionDeps.describeImage.mockResolvedValue({
+      ok: true,
+      description:
+        "[DEGRADED RESULT] The vision model is unavailable (DEEPSEEK_API_KEY is not set).\n" +
+        "Image metadata: 10×10 PNG, 100 B.",
+      metadata: { format: "png", width: 10, height: 10, bytes: 100 },
+      degraded: true,
+      reason: "DEEPSEEK_API_KEY is not set",
+    });
+
+    const out = await viewImageExecute(
+      { source: "attachment:0" },
+      opts({ imageAttachments: ["data:image/png;base64,xx"] }),
+    );
+
+    expect(out).toContain("DEGRADED");
+    expect(out).toContain("10×10 PNG");
+    // Not duplicated: the executor must not append a second metadata line.
+    expect(out).not.toContain("[image:");
   });
 
   it("returns an error string for an out-of-range attachment index", async () => {
