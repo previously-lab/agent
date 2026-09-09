@@ -39,6 +39,12 @@ import matter from "gray-matter";
 import { tolerantBounded01 } from "@/lib/chat/tolerant-schemas";
 import { fsReadFile } from "../io-helpers";
 import { readStrands } from "@/lib/episodic/manager";
+import {
+  listStrandEntityNames,
+  readStrandEntity,
+  resolveStrandEntityName,
+} from "@/lib/episodic/strand-files";
+import { findMatchingStrand } from "@/lib/episodic/strands";
 import { generateGlobalTimeline } from "@/lib/episodic/flash/global-timeline";
 import { sliceLine } from "@/lib/episodic/timeline/render";
 import { TIMELINE_INDEX_PATH } from "@/lib/episodic/timeline/store";
@@ -305,10 +311,58 @@ async function searchTimelineImpl(
 
 // ─── Sub-agent tool: readStrand / listStrands ───────────────────────────
 
-async function readStrandImpl(strand: string): Promise<string> {
+/**
+ * How many characters of a strand description listStrands carries per strand.
+ * The list is a discovery surface — one line per strand — not a reader.
+ */
+const STRAND_LIST_DESCRIPTION_MAX = 140;
+
+/** How many entity files listStrands reads per call. Memory roots can hold
+ *  hundreds of strands; each entity read is a backend call, so the list
+ *  caps description lookups and says when it stopped. */
+const STRAND_LIST_ENTITY_READ_CAP = 50;
+
+/** One-line, length-capped summary of a strand description for the list view. */
+function strandListLine(name: string, description: string | null): string {
+  if (!description) return `- ${name}`;
+  const flat = description.replace(/\s+/g, " ").trim();
+  const summary =
+    flat.length > STRAND_LIST_DESCRIPTION_MAX
+      ? `${flat.slice(0, STRAND_LIST_DESCRIPTION_MAX)}…`
+      : flat;
+  return `- ${name} — ${summary}`;
+}
+
+/** Load a strand's entity file by index key, tolerating casing drift between
+ *  the requested name and the stored file. Null when no entity exists (old
+ *  memory roots have no strands/ directory at all). */
+async function loadStrandEntityByName(
+  name: string,
+  available: ReadonlySet<string>,
+) {
+  const resolved = resolveStrandEntityName(name, available);
+  if (!resolved) return null;
+  return readStrandEntity(resolved);
+}
+
+/** Format the entity block readStrand prepends to the slice listing:
+ *  the FULL description plus the mechanical activity span. */
+function formatStrandEntityBlock(
+  name: string,
+  entity: { description: string; first_seen: string; last_active: string; aliases: string[] },
+): string {
+  const span = `first seen ${entity.first_seen || "?"}, last active ${entity.last_active || "?"}`;
+  const aliases = entity.aliases.length > 0 ? `; also known as: ${entity.aliases.join(", ")}` : "";
+  return `Strand "${name}": ${entity.description}\n(${span}${aliases})`;
+}
+
+export async function readStrandImpl(strand: string): Promise<string> {
   try {
     const strands = await readStrands();
-    const paths = strands[strand];
+    // Casing drift: the model may ask for "apex" while the index keys "Apex"
+    // (same normalized-match rule as the weave path).
+    const key = findMatchingStrand(strands, strand) ?? strand;
+    const paths = strands[key];
     if (!paths || paths.length === 0) {
       return `Strand "${strand}" not found. No slices carry this tag.`;
     }
@@ -319,18 +373,48 @@ async function readStrandImpl(strand: string): Promise<string> {
       paths.length > shown.length
         ? ` (showing ${shown.length} of ${paths.length})`
         : "";
-    return `Strand "${strand}" appears in: ${shown.join(", ")}${truncation}`;
+    const listing = `Strand "${key}" appears in: ${shown.join(", ")}${truncation}`;
+    // Entity layer is optional: no strands/ dir / no file → bare listing,
+    // exactly the pre-entity behavior.
+    const entityNames = await listStrandEntityNames();
+    const entity = await loadStrandEntityByName(key, entityNames);
+    if (!entity || !entity.description) return listing;
+    return `${formatStrandEntityBlock(key, entity)}\n${listing}`;
   } catch {
     return `Could not read strands index.`;
   }
 }
 
-async function listStrandsImpl(): Promise<string> {
+export async function listStrandsImpl(): Promise<string> {
   try {
     const strands = await readStrands();
     const names = Object.keys(strands);
     if (names.length === 0) return "(no strands yet — no topic tags woven)";
-    return `Known strands (${names.length}): ${names.join(", ")}`;
+    // Graceful degradation for old memory roots: no entity directory → the
+    // legacy bare-name listing, byte-for-byte the old behavior.
+    const entityNames = await listStrandEntityNames();
+    if (entityNames.size === 0) {
+      return `Known strands (${names.length}): ${names.join(", ")}`;
+    }
+    const described: string[] = [];
+    let omitted = 0;
+    for (const name of names) {
+      if (described.length >= STRAND_LIST_ENTITY_READ_CAP) {
+        omitted += 1;
+        continue;
+      }
+      const entity = await loadStrandEntityByName(name, entityNames);
+      described.push(strandListLine(name, entity?.description ?? null));
+    }
+    const capNote =
+      omitted > 0
+        ? `\n(descriptions omitted for ${omitted} more strands — readStrand a specific one)`
+        : "";
+    return (
+      `Known strands (${names.length}) — match the question semantically against ` +
+      `these names and summaries, then trace the best fit with readStrand:\n` +
+      `${described.join("\n")}${capNote}`
+    );
   } catch {
     return "Could not read strands index.";
   }
@@ -584,7 +668,7 @@ const RECALL_ROLE = `You are the recall colleague: you remember this user's past
 You hold the FULL read-only memory toolset: the timeline catalog (readGlobalTimeline / readTimelineWindow / searchTimeline), topic strands (listStrands / readStrand), slice summaries (readSliceSummary — frontmatter only, the cheap relevance check), and full slice content (readSlice — with optional range filters). Your value is an answer backed by evidence, not a pile of pointers.
 
 Recall strategy (mirror how a person remembers):
-1. STRANDS FIRST — match the question's topic against strand names (listStrands) and the strands hint; semantic matching, not just literal. Trace matching strands with readStrand, then walk the strand's slice chain BACKWARD from the newest (readSliceSummary to triage, readSlice full reads on the strongest 1-4 candidates, within the ${MAX_SLICE_READS} quota).
+1. STRANDS FIRST — match the question's topic against strand names AND their descriptions (listStrands carries a one-line summary per described strand; readStrand returns the full text) — semantic matching, not just literal. Trace matching strands with readStrand, then walk the strand's slice chain BACKWARD from the newest (readSliceSummary to triage, readSlice full reads on the strongest 1-4 candidates, within the ${MAX_SLICE_READS} quota).
 2. KEYWORD PRE-CHECK — run searchTimeline for a quick deterministic scan of the catalog before or while you do semantic strand matching. A "no catalog match" result does NOT prove absence; still follow strands.
 3. TIME-WINDOW SCANNING AS FALLBACK — when no strand matches or the question turns out to carry a time anchor after all, fall back to readTimelineWindow / readGlobalTimeline (sample windows rather than exhaustively paging). This is the second line, not the first.
 4. VERIFY BEFORE ANSWERING — check candidate slices with readSliceSummary, then read the most promising ones in full with readSlice (range filters keep it cheap). You may read at most ${MAX_SLICE_READS} slices in full — spend them on the strongest candidates.
@@ -808,17 +892,21 @@ IMPORTANT: You MUST end by calling recallReport. Even when the honest answer is 
       }),
       listStrands: tool({
         description:
-          "List all known strands — every keyword tag woven through past " +
-          "slices. Your first move for topic-shaped questions: discover which topics " +
-          "exist, then trace the semantically matching ones with readStrand.",
+          "List all known strands — every topic tag woven through past " +
+          "slices. Each described strand carries a one-line summary of what " +
+          "the thread is about, so match the question SEMANTICALLY against " +
+          "names and summaries (synonyms, rephrasing, other languages), not " +
+          "just literally. Then trace the best fit with readStrand.",
         inputSchema: z.object({}),
         execute: async () => listStrandsImpl(),
       }),
       readStrand: tool({
         description:
-          "Follow a strand (keyword tag) that threads through multiple time slices. " +
-          "Returns slice paths carrying that tag (newest-first under the cap). Walk the " +
-          "chain BACKWARD from the newest slice and triage with readSliceSummary before " +
+          "Follow a strand (topic tag) that threads through multiple time slices. " +
+          "Returns the strand's full description (when one exists — what the thread " +
+          "is about, first seen / last active) plus the slice paths carrying that " +
+          "tag (newest-first under the cap). Walk the chain BACKWARD from the " +
+          "newest slice and triage with readSliceSummary before " +
           "spending full readSlice quota slots.",
         inputSchema: z.object({
           strand: z.string().describe("The strand (tag) to follow."),
