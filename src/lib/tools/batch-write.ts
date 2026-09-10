@@ -140,8 +140,9 @@ export async function commitBatchToGitHub(
     force: false,
   });
 
-  // All written files changed on GitHub — drop them from the read cache so a
-  // later read in this turn (or the next request) never serves stale content.
+  // All written files changed on GitHub — revalidate their Data Cache tags
+  // so a later read in this turn (or the next request) never serves stale
+  // content.
   for (const { path } of entries) {
     invalidateReadCache(path, repo, owner);
   }

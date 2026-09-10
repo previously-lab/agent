@@ -35,6 +35,7 @@ import {
 } from "@/lib/chat/stream-items";
 import { useSliceStream } from "@/hooks/use-slice-stream";
 import { useFrameColumn } from "@/hooks/use-frame-column";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -42,7 +43,7 @@ import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { setTurnBusy } from "./turn-busy";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
-import { parseAtParam, stripAtParam } from "@/lib/chat/mode-switch";
+import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/mode-switch";
 import { setViewportSlice } from "@/lib/chat/viewport-slice";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
@@ -382,6 +383,14 @@ function Inner({
   // observes its parent — the shell's right-hand pane the timeline also
   // measures from.
   const { ref: paneRef, columnWidth } = useFrameColumn();
+  // The frame-geometry coupling only pays off on DESKTOP, where the chat
+  // column's edges must stay on the timeline card field's edges through the
+  // chat ↔ timeline switch. On mobile the timeline is a separate full-screen
+  // view (the shell swaps it in over the chat), so the cardW-derived width
+  // (paneW − 40px on a phone) just throws away 20px per side for nothing —
+  // the column falls back to the stream's full-width classes instead.
+  const isMobile = useIsMobile();
+  const chatColumnWidth = isMobile ? null : columnWidth;
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
@@ -761,10 +770,11 @@ function Inner({
   // scroll-lands on its seam. "now" lands at the bottom.
   const tHist = useTranslations("chat.history");
 
-  // The travel clock's TARGET time: producers rarely know the slice's start
-  // (the gone-from-home wheel was the only one that passed it), so resolve it
-  // — loaded stream window, the recent-summaries catalog, the resume block,
-  // else one catalog fetch. Unknown target → the clock just holds (to = from).
+  // The travel clock's TARGET time: producers that know the slice's start
+  // pass it as `toTime` (the timeline card click threads it through
+  // `?atStart=`), everyone else resolves it — loaded stream window, the
+  // recent-summaries catalog, the resume block, else one catalog fetch.
+  // Unknown target → the clock just holds (to = from).
   const resolveSliceStart = useCallback(
     async (sliceId: string): Promise<string | null> => {
       const known =
@@ -864,24 +874,28 @@ function Inner({
     return unregister;
   }, [handleSelectSlice]);
 
-  // `?at=<sliceId>` — the timeline → chat half of the context carry
-  // (the wheel fallback's pick, the L3 traverse, a shared link). The chat
-  // page stays MOUNTED under the timeline shell, so this must react to
+  // `?at=<sliceId>&atStart=<iso>` — the timeline → chat half of the context
+  // carry (the wheel fallback's pick, the L3 traverse, a shared link). The
+  // chat page stays MOUNTED under the timeline shell, so this must react to
   // searchParam changes, not just the initial mount. Consumed once: the
-  // param is stripped (replaceState, no navigation) so a refresh or a
-  // re-render never re-fires the jump. When the shell has the timeline view
-  // active it suppresses this so the timeline handles the anchor.
+  // params are stripped (replaceState, no navigation) so a refresh or a
+  // re-render never re-fires the jump. `atStart` is the target slice's ISO
+  // start from the timeline card — passing it as the clock's `to` skips the
+  // catalog fetch resolveSliceStart would otherwise need. When the shell
+  // has the timeline view active it suppresses this so the timeline handles
+  // the anchor.
   const searchParams = useSearchParams();
   useEffect(() => {
     if (suppressAtJump) return;
     const at = parseAtParam(searchParams.toString());
     if (!at) return;
+    const atStart = parseAtStartParam(searchParams.toString());
     window.history.replaceState(
       null,
       "",
       window.location.pathname + stripAtParam(searchParams.toString()) + window.location.hash,
     );
-    void handleSelectSlice(at);
+    void handleSelectSlice(at, atStart ?? undefined);
   }, [searchParams, handleSelectSlice, suppressAtJump]);
 
   // Publish the slice at the top of the viewport — the header mode switcher
@@ -905,8 +919,13 @@ function Inner({
            (AppShell) owns the top-level flex layout and the left time axis;
            this component just fills the right-hand column. The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
-           an EMPTY memory falls back to the full-screen empty briefing. ── */}
-      <div className="relative flex-1 overflow-hidden" ref={paneRef}>
+           an EMPTY memory falls back to the full-screen empty briefing.
+           Top padding clears the floating header pills (AppHeader): on mobile
+           p-2 + the h-7 mode-switcher pill bottom out at ~40px, on desktop
+           (md:p-4) at ~52px — the pills overlap the stream at EVERY width
+           (they are equally broken on desktop), so the clearance is shared
+           rather than mobile-gated. pt-12/pt-16 leave an 8-12px gap. ── */}
+      <div className="relative flex-1 overflow-hidden pt-12 md:pt-16" ref={paneRef}>
         {emptyMemory ? (
           <div className="h-full overflow-y-auto pb-24">
             <EmptyBriefing
@@ -924,7 +943,7 @@ function Inner({
             onStartReached={handleStartReached}
             error={error}
             virtuosoRef={virtuosoRef}
-            columnWidth={columnWidth}
+            columnWidth={chatColumnWidth}
             onTopItemChange={handleTopItemChange}
             anchorsRef={anchorsRef}
             anchorsActive={anchorsActive}
@@ -1011,15 +1030,17 @@ function Inner({
       {/* ── Bottom input bar — the shell provides the flex column, so this is
            a normal shrink-0 footer rather than a fixed overlay. The wrapper
            tracks the same frame column as the stream (and the timeline card
-           field), so the composer's edges sit on the stream's edges. ── */}
+           field), so the composer's edges sit on the stream's edges. On mobile
+           (chatColumnWidth null) it goes full pane width with the stream's
+           px-3 gutters, so the composer's edges sit on the content's edges. ── */}
       <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
         <div
-          className={`mx-auto w-full px-4 sm:px-6 lg:px-8 ${
-            columnWidth == null ? "md:max-w-2xl" : ""
+          className={`mx-auto w-full px-3 sm:px-6 lg:px-8 ${
+            chatColumnWidth == null ? "md:max-w-2xl" : ""
           }`}
           style={
-            columnWidth != null
-              ? { width: columnWidth, maxWidth: "100%" }
+            chatColumnWidth != null
+              ? { width: chatColumnWidth, maxWidth: "100%" }
               : undefined
           }
         >

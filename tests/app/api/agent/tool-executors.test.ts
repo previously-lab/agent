@@ -25,8 +25,10 @@ vi.mock("@/lib/tools/readFile", () => ({
   readFile: vi.fn(async () => {
     throw new Error("github read should not be called in local mode");
   }),
+  readFileFresh: vi.fn(async () => {
+    throw new Error("github read should not be called in local mode");
+  }),
   invalidateReadCache: vi.fn(),
-  __resetReadCache: vi.fn(),
 }));
 vi.mock("@/lib/demo/demo-fs", () => ({
   readFileDemo: vi.fn(async () => {

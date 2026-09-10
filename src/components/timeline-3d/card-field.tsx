@@ -66,8 +66,9 @@ export interface CardFieldProps {
   entries: TimelineSliceEntry[];
   hasMore: boolean;
   onNeedOlder: () => void;
-  /** L0 card click → dock the reading panel. */
-  onOpenSlice: (sliceId: string) => void;
+  /** L0 card click → dock the reading panel. `start` (the row top's ISO
+   *  start) rides along so the chat jump never needs a catalog fetch. */
+  onOpenSlice: (sliceId: string, start?: string) => void;
   /** ?at= deep link: land at L0 on this slice, flashed. */
   initialAtId?: string;
   /** Identity of the current filter — a change re-plays the deal. */
@@ -745,7 +746,7 @@ export function CardField({
 
   const onActivate = useCallback(
     (row: StackRow) => {
-      if (row.level === 0) onOpenSlice(row.top.id);
+      if (row.level === 0) onOpenSlice(row.top.id, row.top.start);
       else stepLevel((row.level - 1) as StackLevel, row.top.id);
     },
     [onOpenSlice, stepLevel],

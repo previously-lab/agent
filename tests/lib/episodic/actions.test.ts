@@ -43,6 +43,7 @@ vi.mock("@/lib/config/loader", () => ({
 
 import {
   getSlicePageWithContent,
+  getSliceJumpWindow,
   getArrivalState,
   getStrandList,
 } from "@/lib/episodic/actions";
@@ -210,6 +211,108 @@ describe("getSlicePageWithContent", () => {
     mocks.setDemoPersona.mockClear();
     await getSlicePageWithContent(null, 10);
     expect(mocks.setDemoPersona).not.toHaveBeenCalled();
+  });
+});
+
+// ─── getSliceJumpWindow ──────────────────────────────────────────────────
+
+describe("getSliceJumpWindow", () => {
+  it("loads the whole missing stretch in one batch — target inclusive, oldest→newest", async () => {
+    const entries = seedCatalog(6);
+
+    const win = await getSliceJumpWindow(entries[1].id, entries[5].id);
+
+    expect(win.found).toBe(true);
+    expect(win.slices.map((s) => s.id)).toEqual(
+      entries.slice(1, 5).map((e) => e.id),
+    );
+    expect(win.slices[0].turns).toHaveLength(2);
+    // The catalog still holds entries older than the batch head.
+    expect(win.hasMore).toBe(true);
+  });
+
+  it("reports hasMore false when the batch reaches the catalog's oldest entry", async () => {
+    const entries = seedCatalog(4);
+
+    const win = await getSliceJumpWindow(entries[0].id, entries[3].id);
+
+    expect(win.slices.map((s) => s.id)).toEqual(
+      entries.slice(0, 3).map((e) => e.id),
+    );
+    expect(win.hasMore).toBe(false);
+  });
+
+  it("with a null oldestLoadedId, stretches from the target to the catalog end", async () => {
+    const entries = seedCatalog(5);
+
+    const win = await getSliceJumpWindow(entries[2].id, null);
+
+    expect(win.slices.map((s) => s.id)).toEqual(
+      entries.slice(2).map((e) => e.id),
+    );
+    expect(win.hasMore).toBe(true);
+  });
+
+  it("caps from the newest side when the stretch exceeds the jump window", async () => {
+    // 600 slices back, a 500-slice cap: the batch must sit flush against the
+    // loaded window (no hole) — target stays unloaded for the caller's page
+    // loop, hasMore stays true.
+    const entries = seedCatalog(600);
+
+    const win = await getSliceJumpWindow(entries[0].id, entries[599].id);
+
+    expect(win.found).toBe(true);
+    expect(win.slices).toHaveLength(500);
+    // Newest-capped: the batch sits flush against the loaded window (index
+    // 599 exclusive) — entries[99..598] — with the target left outside.
+    expect(win.slices[0].id).toBe(entries[99].id);
+    expect(win.slices[499].id).toBe(entries[598].id);
+    expect(win.hasMore).toBe(true);
+  });
+
+  it("treats an unknown oldestLoadedId as 'stretch to the catalog end'", async () => {
+    const entries = seedCatalog(6);
+
+    const win = await getSliceJumpWindow(entries[4].id, "not-in-the-catalog");
+
+    expect(win.found).toBe(true);
+    expect(win.slices.map((s) => s.id)).toEqual(
+      entries.slice(4).map((e) => e.id),
+    );
+  });
+
+  it("returns found:false when the target isn't in the catalog (index lag)", async () => {
+    seedCatalog(3);
+
+    const win = await getSliceJumpWindow("2026-08-11-9999", null);
+
+    expect(win).toEqual({ found: false, slices: [], hasMore: true });
+  });
+
+  it("skips phantom entries whose slice file is missing", async () => {
+    const entries = seedCatalog(4);
+    mocks.loadSlice.mockImplementation(async (id: string) =>
+      id === entries[1].id
+        ? null
+        : makeSlice(
+            entries.find((e) => e.id === id)!,
+            [makeTurn("x", entries[0].start)],
+          ),
+    );
+
+    const win = await getSliceJumpWindow(entries[0].id, entries[3].id);
+
+    expect(win.found).toBe(true);
+    expect(win.slices.map((s) => s.id)).toEqual([
+      entries[0].id,
+      entries[2].id,
+    ]);
+  });
+
+  it("forwards the demo persona", async () => {
+    const entries = seedCatalog(2);
+    await getSliceJumpWindow(entries[0].id, entries[1].id, "alice");
+    expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
   });
 });
 

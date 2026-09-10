@@ -164,24 +164,17 @@ export interface SliceContentPage {
  * as `getSliceContent`; catalog entries whose slice file is missing
  * (phantoms) are skipped, never faked.
  */
-export async function getSlicePageWithContent(
-  before: string | null,
-  limit: number = 10,
-  persona?: string,
-): Promise<SliceContentPage> {
-  if (persona) setDemoPersona(persona);
-  const cap = Math.max(1, Math.min(limit, 50));
-  const idx = await readTimelineIndex();
-  const catalog = idx?.slices ?? [];
-
-  const eligible = before === null
-    ? catalog
-    : catalog.filter((e) => e.start < before);
-  const pageEntries = eligible.slice(-cap);
-  const hasMore = eligible.length > pageEntries.length;
-
+/**
+ * Load a run of catalog entries into `SliceWithContent`, ALL slice-file reads
+ * in PARALLEL — one round trip's latency for the whole batch, not per slice.
+ * Catalog entries whose slice file is missing (phantoms) are skipped, never
+ * faked.
+ */
+async function loadEntriesWithContent(
+  entries: TimelineSliceEntry[],
+): Promise<SliceWithContent[]> {
   const loaded = await Promise.all(
-    pageEntries.map(async (entry): Promise<SliceWithContent | null> => {
+    entries.map(async (entry): Promise<SliceWithContent | null> => {
       const slice = await loadSlice(entry.id);
       if (!slice) return null;
       return {
@@ -199,10 +192,85 @@ export async function getSlicePageWithContent(
       };
     }),
   );
+  return loaded.filter((s): s is SliceWithContent => s !== null);
+}
+
+export async function getSlicePageWithContent(
+  before: string | null,
+  limit: number = 10,
+  persona?: string,
+): Promise<SliceContentPage> {
+  if (persona) setDemoPersona(persona);
+  const cap = Math.max(1, Math.min(limit, 50));
+  const idx = await readTimelineIndex();
+  const catalog = idx?.slices ?? [];
+
+  const eligible = before === null
+    ? catalog
+    : catalog.filter((e) => e.start < before);
+  const pageEntries = eligible.slice(-cap);
+  const hasMore = eligible.length > pageEntries.length;
 
   return {
-    slices: loaded.filter((s): s is SliceWithContent => s !== null),
+    slices: await loadEntriesWithContent(pageEntries),
     hasMore,
+  };
+}
+
+/**
+ * One-round-trip slice jump (the timeline-card click path): instead of the
+ * client paging one 10-slice page at a time until the target appears (a
+ * serial round trip per page — 10+ pages for a slice 100 back), the server
+ * reads the single timeline index, slices out the WHOLE missing stretch
+ * between the jump target and the oldest already-loaded slice, and loads
+ * every slice file in PARALLEL. The client prepends the batch as one page.
+ */
+export interface SliceJumpWindow extends SliceContentPage {
+  /**
+   * False when `targetId` isn't in the catalog at all (e.g. the index lags
+   * a just-written slice) — the caller falls back to page-at-a-time paging,
+   * which scans by `start` cursor rather than by id.
+   */
+  found: boolean;
+}
+
+/** Same bound as the page-at-a-time jump loop it replaces (50 pages × 10). */
+const JUMP_WINDOW_CAP = 500;
+
+export async function getSliceJumpWindow(
+  targetId: string,
+  oldestLoadedId: string | null,
+  persona?: string,
+): Promise<SliceJumpWindow> {
+  if (persona) setDemoPersona(persona);
+  const idx = await readTimelineIndex();
+  const catalog = idx?.slices ?? [];
+
+  const targetIndex = catalog.findIndex((e) => e.id === targetId);
+  if (targetIndex === -1) {
+    return { found: false, slices: [], hasMore: catalog.length > 0 };
+  }
+
+  // The stretch to fill runs from the target (inclusive) up to the loaded
+  // window's head (exclusive). A head that isn't in the catalog (restored
+  // cache, index lag) stretches to the catalog's end — prependPage dedupes
+  // any overlap with the already-loaded window.
+  const loadedIndex = oldestLoadedId
+    ? catalog.findIndex((e) => e.id === oldestLoadedId)
+    : -1;
+  const endExclusive = loadedIndex >= 0 ? loadedIndex : catalog.length;
+  // Cap from the NEWEST side so the batch always sits flush against the
+  // loaded window (no hole in the stream); when the cap bites, the target
+  // stays unloaded and the caller's page loop walks the rest.
+  const start = Math.max(targetIndex, endExclusive - JUMP_WINDOW_CAP);
+  const windowEntries = catalog.slice(start, Math.max(endExclusive, start));
+
+  return {
+    found: true,
+    slices: await loadEntriesWithContent(windowEntries),
+    // True when the catalog still holds slices older than the batch head —
+    // the caller's hasMore for continuing to page up from the new head.
+    hasMore: start > 0,
   };
 }
 
@@ -419,21 +487,20 @@ export async function getSliceContent(
   if (persona) setDemoPersona(persona);
   try {
     const path = sliceIdToFilePath(sliceId);
-    const raw = await readSliceBody(path);
+    // core slice body + previously.md ride in PARALLEL — they don't depend
+    // on each other, and serializing them doubled the card-open latency.
+    // A missing previously.md is normal (not every slice has one) and stays
+    // a null, exactly as before.
+    const [raw, previously] = await Promise.all([
+      readSliceBody(path),
+      readPreviously(sliceId).catch(() => null),
+    ]);
     const slice = parseSlice(raw);
 
     const totalChars = slice.turns.reduce(
       (sum, t) => sum + t.content.length,
       0
     );
-
-    // Try to read previously.md for this slice — 404 / missing is normal
-    let previously: string | null = null;
-    try {
-      previously = await readPreviously(sliceId);
-    } catch {
-      // previously.md doesn't exist for this slice
-    }
 
     return {
       slice_id: slice.slice_id,

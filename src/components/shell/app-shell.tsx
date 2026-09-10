@@ -180,8 +180,14 @@ export function AppShell({ initialConfig }: AppShellProps) {
   }, [hasMore, oldestMonth]);
 
   const openSlice = useCallback(
-    (sliceId: string) => {
-      router.push(`/?at=${encodeURIComponent(sliceId)}`);
+    (sliceId: string, start?: string) => {
+      // `atStart` carries the slice's ISO start — the chat page's jump
+      // handler needs it for the travel clock and would otherwise spend a
+      // full catalog fetch to learn it.
+      const startParam = start
+        ? `&atStart=${encodeURIComponent(start)}`
+        : "";
+      router.push(`/?at=${encodeURIComponent(sliceId)}${startParam}`);
     },
     [router],
   );

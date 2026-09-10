@@ -12,14 +12,11 @@ vi.mock("@/lib/github/client", () => ({
   }),
 }));
 
-import { readFile, __resetReadCache } from "@/lib/tools/readFile";
+import { readFile } from "@/lib/tools/readFile";
 
 describe("readFile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // The read cache is module-level — reset between cases so a cached file
-    // from a previous test can't mask a changed mock.
-    __resetReadCache();
   });
 
   const repo = "test-repo";

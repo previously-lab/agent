@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  getSliceJumpWindow,
   getSlicePageWithContent,
   type SliceWithContent,
 } from "@/lib/episodic/actions";
@@ -131,6 +132,42 @@ export function useSliceStream(
             loadingRef.current ? setTimeout(check, 50) : resolve();
           check();
         });
+      if (slicesRef.current.some((s) => s.id === sliceId)) return true;
+      if (!hasMoreRef.current) return false;
+      await waitForIdle();
+      if (slicesRef.current.some((s) => s.id === sliceId)) return true;
+
+      // Fast path: ONE server round trip loads the whole missing stretch
+      // between the target and the loaded window (the server reads the
+      // timeline index once and loads every slice file in parallel). The
+      // result prepends as a single page, so firstItemIndex shifts once.
+      if (!loadingRef.current) {
+        loadingRef.current = true;
+        setLoadingOlder(true);
+        try {
+          const win = await getSliceJumpWindow(
+            sliceId,
+            slicesRef.current[0]?.id ?? null,
+            persona,
+          );
+          if (win.found && win.slices.length > 0) {
+            const added = applyPage(win);
+            onPrepend?.(added);
+          }
+          // found:false (index lag — the target isn't catalogued yet) or a
+          // thrown call both fall through to the page loop below.
+        } catch {
+          // Server hiccup — the page loop retries, one page at a time.
+        } finally {
+          loadingRef.current = false;
+          setLoadingOlder(false);
+        }
+        if (slicesRef.current.some((s) => s.id === sliceId)) return true;
+      }
+
+      // Fallback: page one at a time (index lag, a failed batch call, or the
+      // batch's cap left the target beyond the window — the loop continues
+      // from the batch's new head).
       for (let i = 0; i < MAX_JUMP_PAGES; i++) {
         if (slicesRef.current.some((s) => s.id === sliceId)) return true;
         if (!hasMoreRef.current) return false;
@@ -147,7 +184,7 @@ export function useSliceStream(
       }
       return slicesRef.current.some((s) => s.id === sliceId);
     },
-    [loadOlder],
+    [loadOlder, persona, applyPage],
   );
 
   // Initial fill — only when no cached window was restored. (Persona is fixed

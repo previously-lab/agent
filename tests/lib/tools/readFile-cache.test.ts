@@ -1,4 +1,14 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// No Data Cache in vitest — unstable_cache is replaced with a passthrough so
+// these tests exercise the no-store fallback path, and revalidateTag is a
+// spy so tag invalidation is asserted directly.
+const mockRevalidateTag = vi.fn();
+
+vi.mock("next/cache", () => ({
+  unstable_cache: (cb: unknown) => cb,
+  revalidateTag: (...args: unknown[]) => mockRevalidateTag(...args),
+}));
 
 // Mock octokit
 const mockGetContent = vi.fn();
@@ -14,8 +24,11 @@ vi.mock("@/lib/github/client", () => ({
 
 import {
   readFile,
+  readFileFresh,
   invalidateReadCache,
-  __resetReadCache,
+  ttlForPath,
+  fileCacheTag,
+  READ_TTLS,
 } from "@/lib/tools/readFile";
 
 const repo = "test-repo";
@@ -35,68 +48,70 @@ function fileResponse(content: string) {
   };
 }
 
-describe("readFile cache", () => {
+describe("ttlForPath", () => {
+  it("caches closed slice files for a day (immutable)", () => {
+    expect(ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md")).toBe(
+      READ_TTLS.CLOSED_SLICE_SECONDS
+    );
+    expect(
+      ttlForPath("memory/episodic/slices/2026-01/slice-abc/previously.md")
+    ).toBe(READ_TTLS.CLOSED_SLICE_SECONDS);
+    expect(ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md")).toBe(
+      86_400
+    );
+  });
+
+  it("uses a short TTL for the timeline index (mutates on open/close)", () => {
+    expect(ttlForPath("memory/episodic/timeline/index.json")).toBe(
+      READ_TTLS.TIMELINE_INDEX_SECONDS
+    );
+    expect(ttlForPath("memory/episodic/timeline/index.json")).toBe(60);
+  });
+
+  it("uses a moderate TTL for other memory files", () => {
+    expect(ttlForPath("memory/episodic/strands.json")).toBe(
+      READ_TTLS.MEMORY_DEFAULT_SECONDS
+    );
+    expect(ttlForPath("memory/episodic/current-previously.md")).toBe(
+      READ_TTLS.MEMORY_DEFAULT_SECONDS
+    );
+    expect(ttlForPath("memory/user/card.md")).toBe(300);
+    expect(ttlForPath("memory/evolution/direction.md")).toBe(300);
+  });
+
+  it("normalizes backslashes before classifying", () => {
+    expect(
+      ttlForPath("memory\\episodic\\slices\\2026-01\\slice-a\\core.md")
+    ).toBe(READ_TTLS.CLOSED_SLICE_SECONDS);
+  });
+});
+
+describe("fileCacheTag", () => {
+  it("identifies one file in one repo", () => {
+    expect(fileCacheTag("memory/f.md", repo, owner)).toBe(
+      `file:${owner}/${repo}:memory/f.md`
+    );
+  });
+
+  it("differs by owner, repo, and path", () => {
+    const base = fileCacheTag("memory/f.md", repo, owner);
+    expect(fileCacheTag("memory/f.md", "other-repo", owner)).not.toBe(base);
+    expect(fileCacheTag("memory/f.md", repo, "other-owner")).not.toBe(base);
+    expect(fileCacheTag("memory/g.md", repo, owner)).not.toBe(base);
+  });
+});
+
+describe("readFile without a Data Cache store", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    __resetReadCache();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  it("reads directly when no cache store is available", async () => {
+    mockGetContent.mockResolvedValue(fileResponse("hello"));
 
-  it("serves repeated reads of the same path from the cache", async () => {
-    mockGetContent.mockResolvedValue(fileResponse("version one"));
-
-    const first = await readFile("memory/f.md", repo, owner);
-    const second = await readFile("memory/f.md", repo, owner);
-
-    expect(first).toBe("version one");
-    expect(second).toBe("version one");
-    // One GitHub round-trip, not two.
+    const content = await readFile("memory/f.md", repo, owner);
+    expect(content).toBe("hello");
     expect(mockGetContent).toHaveBeenCalledTimes(1);
-  });
-
-  it("caches per-path, not globally", async () => {
-    mockGetContent.mockImplementation(async ({ path }: { path: string }) =>
-      fileResponse(`content of ${path}`),
-    );
-
-    const a = await readFile("memory/a.md", repo, owner);
-    const b = await readFile("memory/b.md", repo, owner);
-    const aAgain = await readFile("memory/a.md", repo, owner);
-
-    expect(a).toBe("content of memory/a.md");
-    expect(b).toBe("content of memory/b.md");
-    expect(aAgain).toBe(a);
-    expect(mockGetContent).toHaveBeenCalledTimes(2);
-  });
-
-  it("invalidating a path forces a fresh fetch", async () => {
-    mockGetContent.mockResolvedValueOnce(fileResponse("old"));
-    await readFile("memory/f.md", repo, owner);
-
-    mockGetContent.mockResolvedValueOnce(fileResponse("new"));
-    invalidateReadCache("memory/f.md", repo, owner);
-
-    const fresh = await readFile("memory/f.md", repo, owner);
-    expect(fresh).toBe("new");
-    expect(mockGetContent).toHaveBeenCalledTimes(2);
-  });
-
-  it("expires cached entries after the TTL", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
-
-    mockGetContent.mockResolvedValueOnce(fileResponse("before ttl"));
-    await readFile("memory/f.md", repo, owner);
-
-    mockGetContent.mockResolvedValueOnce(fileResponse("after ttl"));
-    vi.advanceTimersByTime(61_000);
-
-    const fresh = await readFile("memory/f.md", repo, owner);
-    expect(fresh).toBe("after ttl");
-    expect(mockGetContent).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache errors, so a later success re-fetches", async () => {
@@ -115,15 +130,37 @@ describe("readFile cache", () => {
     expect(mockGetContent).toHaveBeenCalledTimes(2);
   });
 
-  it("__resetReadCache forces a re-fetch", async () => {
-    mockGetContent.mockResolvedValueOnce(fileResponse("cached"));
-    await readFile("memory/f.md", repo, owner);
+  it("readFileFresh always reads directly", async () => {
+    mockGetContent.mockResolvedValue(fileResponse("fresh"));
 
-    mockGetContent.mockResolvedValueOnce(fileResponse("reset"));
-    __resetReadCache();
+    const content = await readFileFresh("memory/f.md", repo, owner);
+    expect(content).toBe("fresh");
+    expect(mockGetContent).toHaveBeenCalledTimes(1);
+  });
+});
 
-    const fresh = await readFile("memory/f.md", repo, owner);
-    expect(fresh).toBe("reset");
-    expect(mockGetContent).toHaveBeenCalledTimes(2);
+describe("invalidateReadCache", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("revalidates the per-path tag with immediate expiry", () => {
+    invalidateReadCache("memory/f.md", repo, owner);
+
+    expect(mockRevalidateTag).toHaveBeenCalledTimes(1);
+    expect(mockRevalidateTag).toHaveBeenCalledWith(
+      fileCacheTag("memory/f.md", repo, owner),
+      { expire: 0 }
+    );
+  });
+
+  it("is a safe no-op when there is no Next request store", () => {
+    mockRevalidateTag.mockImplementationOnce(() => {
+      throw new Error(
+        "Invariant: static generation store missing in revalidateTag"
+      );
+    });
+
+    expect(() => invalidateReadCache("memory/f.md", repo, owner)).not.toThrow();
   });
 });

@@ -125,7 +125,7 @@ import {
   runCardEvolution,
   type CardEvolutionReaders,
 } from "@/app/api/evolution/run-card-evolution";
-import { readFile, invalidateReadCache } from "@/lib/tools/readFile";
+import { readFile, readFileFresh } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
 import { readFileDemo } from "@/lib/demo/demo-fs";
 import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
@@ -2067,11 +2067,11 @@ async function flushTurnBatch(
       }
       const corePath = sliceIdToFilePath(slice.slice_id);
       try {
-        // The read cache may still hold OUR stale base — drop it so the
-        // re-read sees the commit that beat us.
+        // Re-read the remote slice BYPASSING the Data Cache: our own cached
+        // copy may still hold the stale base, and the tag revalidation may
+        // not be visible in this (non-request) context.
         const { owner, repo } = getRepoConfig();
-        invalidateReadCache(corePath, repo, owner);
-        const remoteRaw = await fsReadFile(corePath);
+        const remoteRaw = await readFileFresh(corePath, repo, owner);
         batch.entries.set(corePath, mergeTurnsWithRemote(remoteRaw, slice));
         console.warn(
           `[Episodic] flush conflict on ${corePath} — merged remote turns, retrying (${attempt + 1}/${MAX_FLUSH_RETRIES})`,

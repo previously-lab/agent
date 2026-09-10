@@ -56,7 +56,9 @@ interface UnifiedChatStreamProps {
    * The stream column's pixel width — driven by the SAME frame geometry as
    * the timeline card field (useFrameColumn), so the stream's left/right
    * edges sit exactly on the card column's edges in both views. Null/undefined
-   * before the first measurement → the legacy responsive classes apply.
+   * before the first measurement — or on mobile, where the caller deliberately
+   * decouples (the timeline is a separate full-screen view there, so the
+   * coupling buys nothing) → the legacy responsive classes apply.
    */
   columnWidth?: number | null;
   /** Reports the top visible item's time (the travel clock's "from") and the
@@ -86,7 +88,7 @@ function ResumeBanner({ startIso }: { startIso: string }) {
   const t = useTranslations("chat.resume");
   const locale = useLocale();
   return (
-    <div className="my-4 flex justify-center pr-4 sm:pr-6 lg:pr-8">
+    <div className="my-4 flex justify-center px-3 sm:pr-6 md:pl-0 lg:pr-8">
       <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-500/25 bg-brand-500/8 px-3 py-1 text-[0.65rem] font-medium text-brand-600 dark:text-brand-400">
         <History className="h-3 w-3" />
         {t("banner", { date: formatSeamDate(startIso, locale) })}
@@ -184,11 +186,16 @@ export function UnifiedChatStream({
   const isMobile = useIsMobile();
 
   // ── Item rendering ──────────────────────────────────────────────────────
+  // Row gutters: mobile (<md) gets SYMMETRIC px-3 gutters — the old right-only
+  // padding left content left-flush with dead space on the right, which read
+  // as misaligned on a narrow phone column. Desktop (≥md) keeps today's exact
+  // geometry: left-flush, pr-6 (lg: pr-8) — `md:pl-0` cancels the mobile left
+  // gutter, `sm:pr-6`/`lg:pr-8` reproduce the legacy right padding.
   const renderItem = useCallback((_index: number, item: ChatStreamItem) => {
     switch (item.kind) {
       case "seam":
         return (
-          <div className="pr-4 sm:pr-6 lg:pr-8" data-seam-anchor>
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8" data-seam-anchor>
             <SliceSeam seam={item.seam} dateIso={item.dateIso} />
           </div>
         );
@@ -207,7 +214,7 @@ export function UnifiedChatStream({
         ) : null;
       case "history-turn":
         return (
-          <div className="pr-4 sm:pr-6 lg:pr-8">
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
             <HistoryTurn
               role={item.turn.role}
               content={item.turn.content}
@@ -220,7 +227,7 @@ export function UnifiedChatStream({
         );
       case "live":
         return (
-          <div className="pr-4 sm:pr-6 lg:pr-8">
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
             <ChatMessage
               message={item.message}
               isStreaming={item.isStreaming}
@@ -238,7 +245,7 @@ export function UnifiedChatStream({
     () =>
       function StreamHeader() {
         return (
-          <div className="pr-4 pt-3 sm:pr-6 lg:pr-8">
+          <div className="px-3 pt-3 sm:pr-6 md:pl-0 lg:pr-8">
             {loadingOlder && (
               <div className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -255,10 +262,15 @@ export function UnifiedChatStream({
     () =>
       function StreamFooter() {
         return (
-          <div className="pr-4 sm:pr-6 lg:pr-8">
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
             {error && <ErrorBanner error={error} />}
-            {/* Safe area clearing the fixed bottom input bar (was pb-36). */}
-            <div className="h-36" />
+            {/* Safe area clearing the fixed bottom input bar (was pb-36).
+                Mobile: wrapper pt-2 (8px) + the input card (~88px collapsed:
+                pt-3 + 24px textarea + toolbar) + the safe-area padding
+                (≥8px) ≈ 104px, so h-28 (112px) clears it with margin —
+                desktop keeps the original h-36. An expanded textarea can
+                still lap the tail; that was true of pb-36 too. */}
+            <div className="h-28 md:h-36" />
           </div>
         );
       },

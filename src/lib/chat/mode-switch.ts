@@ -36,13 +36,27 @@ export function parseAtParam(search: string): string | null {
 }
 
 /**
- * Remove the `at` param from a query string, returning the remaining query
- * (with leading `?`) or an empty string — the chat page consumes the anchor
- * once, then strips it so a refresh doesn't re-jump.
+ * Extract the `atStart` anchor — the target slice's ISO `start`, which the
+ * timeline card click already knows. Handing it to the chat page saves the
+ * jump handler a full catalog fetch just to learn the travel-clock target.
+ * Anything that doesn't parse as a date is discarded (the caller falls back
+ * to the catalog lookup).
+ */
+export function parseAtStartParam(search: string): string | null {
+  const raw = new URLSearchParams(search).get("atStart")?.trim();
+  if (!raw) return null;
+  return Number.isNaN(Date.parse(raw)) ? null : raw;
+}
+
+/**
+ * Remove the `at`/`atStart` params from a query string, returning the
+ * remaining query (with leading `?`) or an empty string — the chat page
+ * consumes the anchors once, then strips them so a refresh doesn't re-jump.
  */
 export function stripAtParam(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("at");
+  params.delete("atStart");
   const rest = params.toString();
   return rest ? `?${rest}` : "";
 }

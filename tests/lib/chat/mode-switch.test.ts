@@ -3,6 +3,7 @@ import {
   modeFromSearch,
   modeFromPathname,
   parseAtParam,
+  parseAtStartParam,
   stripAtParam,
   chatHref,
   timelineHref,
@@ -51,6 +52,31 @@ describe("stripAtParam", () => {
     expect(stripAtParam("?persona=user&at=x")).toBe("?persona=user");
     expect(stripAtParam("?at=x")).toBe("");
     expect(stripAtParam("")).toBe("");
+  });
+
+  it("strips atStart along with at", () => {
+    expect(
+      stripAtParam("?at=x&atStart=2026-08-11T10%3A00%3A00.000Z&persona=user"),
+    ).toBe("?persona=user");
+    expect(stripAtParam("?atStart=2026-08-11T10:00:00.000Z")).toBe("");
+  });
+});
+
+describe("parseAtStartParam", () => {
+  it("extracts the ISO start", () => {
+    expect(parseAtStartParam("?at=x&atStart=2026-08-11T10:00:00.000Z")).toBe(
+      "2026-08-11T10:00:00.000Z",
+    );
+    expect(
+      parseAtStartParam("atStart=2026-08-11T10%3A00%3A00.000Z"),
+    ).toBe("2026-08-11T10:00:00.000Z");
+  });
+
+  it("treats missing / blank / non-date values as no anchor", () => {
+    expect(parseAtStartParam("?at=x")).toBeNull();
+    expect(parseAtStartParam("?atStart=")).toBeNull();
+    expect(parseAtStartParam("?atStart=%20")).toBeNull();
+    expect(parseAtStartParam("?atStart=not-a-date")).toBeNull();
   });
 });
 

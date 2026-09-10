@@ -36,7 +36,7 @@ export interface TimelineSceneProps {
   /** Prefetch the next older window. */
   onNeedOlder: () => Promise<void>;
   /** Navigate to the chat anchored at a slice. */
-  onOpenSlice: (sliceId: string) => void;
+  onOpenSlice: (sliceId: string, start?: string) => void;
   /** Slice id from `?at=` — the list lands on it, flashed. */
   initialAtId?: string;
   /** Currently selected strand, if any. */
