@@ -52,15 +52,6 @@ interface UnifiedChatStreamProps {
   onStartReached: () => void;
   error: Error | undefined;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
-  /**
-   * The stream column's pixel width — driven by the SAME frame geometry as
-   * the timeline card field (useFrameColumn), so the stream's left/right
-   * edges sit exactly on the card column's edges in both views. Null/undefined
-   * before the first measurement — or on mobile, where the caller deliberately
-   * decouples (the timeline is a separate full-screen view there, so the
-   * coupling buys nothing) → the legacy responsive classes apply.
-   */
-  columnWidth?: number | null;
   /** Reports the top visible item's time (the travel clock's "from") and the
    *  slice it belongs to (the mode switcher's `?at=` anchor; null = live). */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
@@ -110,7 +101,6 @@ export function UnifiedChatStream({
   onStartReached,
   error,
   virtuosoRef,
-  columnWidth,
   onTopItemChange,
   briefing,
   anchorsRef,
@@ -396,14 +386,7 @@ export function UnifiedChatStream({
   }, []);
 
   return (
-    <div
-      className={`relative mx-auto h-full ${
-        columnWidth == null ? "w-full max-w-5xl xl:max-w-7xl" : ""
-      }`}
-      style={
-        columnWidth != null ? { width: columnWidth, maxWidth: "100%" } : undefined
-      }
-    >
+    <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">
       <Virtuoso
         ref={virtuosoRef}
         className="h-full"

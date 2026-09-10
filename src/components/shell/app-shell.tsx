@@ -196,22 +196,26 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      {/* LEFT: persistent time axis. Only when WebGL is confirmed; collapsed
-          in chat view, expanded on desktop in timeline view. */}
+      {/* LEFT: persistent time axis. Only when WebGL is confirmed. Always
+          MOUNTED (the R3F canvas/WebGL context and the bloom transition must
+          survive view switches) but display-hidden in chat view so it takes
+          zero layout space — `contents` leaves the timeline layout untouched. */}
       {webgl === true && (
-        <AxisBand
-          narrow={!showTimeline}
-          range={range}
-          progressRef={progressRef}
-          levelRef={zoomLevelRef}
-          anchorsRef={anchorsRef}
-          strand={strand}
-          strandList={strandList}
-          ambientStrands={ambientStrands}
-          selectedCount={selectedCount}
-          reducedMotion={reducedMotion}
-          onSelectStrand={setStrand}
-        />
+        <div className={showTimeline ? "contents" : "hidden"}>
+          <AxisBand
+            narrow={!showTimeline}
+            range={range}
+            progressRef={progressRef}
+            levelRef={zoomLevelRef}
+            anchorsRef={anchorsRef}
+            strand={strand}
+            strandList={strandList}
+            ambientStrands={ambientStrands}
+            selectedCount={selectedCount}
+            reducedMotion={reducedMotion}
+            onSelectStrand={setStrand}
+          />
+        </div>
       )}
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}

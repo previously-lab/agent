@@ -34,8 +34,6 @@ import {
   type ResumeBlock,
 } from "@/lib/chat/stream-items";
 import { useSliceStream } from "@/hooks/use-slice-stream";
-import { useFrameColumn } from "@/hooks/use-frame-column";
-import { useIsMobile } from "@/hooks/use-is-mobile";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -377,20 +375,6 @@ function Inner({
 
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_BASE);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  // The chat column tracks the timeline card field's card column width
-  // (same frame geometry) so the views' left/right edges never jump on the
-  // chat ↔ timeline switch. The ref lands on the stream area; the hook
-  // observes its parent — the shell's right-hand pane the timeline also
-  // measures from.
-  const { ref: paneRef, columnWidth } = useFrameColumn();
-  // The frame-geometry coupling only pays off on DESKTOP, where the chat
-  // column's edges must stay on the timeline card field's edges through the
-  // chat ↔ timeline switch. On mobile the timeline is a separate full-screen
-  // view (the shell swaps it in over the chat), so the cardW-derived width
-  // (paneW − 40px on a phone) just throws away 20px per side for nothing —
-  // the column falls back to the stream's full-width classes instead.
-  const isMobile = useIsMobile();
-  const chatColumnWidth = isMobile ? null : columnWidth;
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
@@ -925,7 +909,7 @@ function Inner({
            (md:p-4) at ~52px — the pills overlap the stream at EVERY width
            (they are equally broken on desktop), so the clearance is shared
            rather than mobile-gated. pt-12/pt-16 leave an 8-12px gap. ── */}
-      <div className="relative flex-1 overflow-hidden pt-12 md:pt-16" ref={paneRef}>
+      <div className="relative flex-1 overflow-hidden pt-12 md:pt-16">
         {emptyMemory ? (
           <div className="h-full overflow-y-auto pb-24">
             <EmptyBriefing
@@ -943,7 +927,6 @@ function Inner({
             onStartReached={handleStartReached}
             error={error}
             virtuosoRef={virtuosoRef}
-            columnWidth={chatColumnWidth}
             onTopItemChange={handleTopItemChange}
             anchorsRef={anchorsRef}
             anchorsActive={anchorsActive}
@@ -1029,21 +1012,11 @@ function Inner({
 
       {/* ── Bottom input bar — the shell provides the flex column, so this is
            a normal shrink-0 footer rather than a fixed overlay. The wrapper
-           tracks the same frame column as the stream (and the timeline card
-           field), so the composer's edges sit on the stream's edges. On mobile
-           (chatColumnWidth null) it goes full pane width with the stream's
-           px-3 gutters, so the composer's edges sit on the content's edges. ── */}
+           tracks the same CSS column as the stream (same max-width scale and
+           padding), so the composer's edges sit on the content's edges at
+           every width. ── */}
       <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
-        <div
-          className={`mx-auto w-full px-3 sm:px-6 lg:px-8 ${
-            chatColumnWidth == null ? "md:max-w-2xl" : ""
-          }`}
-          style={
-            chatColumnWidth != null
-              ? { width: chatColumnWidth, maxWidth: "100%" }
-              : undefined
-          }
-        >
+        <div className="mx-auto w-full max-w-5xl xl:max-w-7xl px-3 sm:px-6 lg:px-8">
           <ChatInput
             onSubmit={handleSubmit}
             isLoading={isLoading}

@@ -9,11 +9,14 @@
  * strand-selection caption.
  *
  * The band renders ONLY when WebGL is available; without it the caller should
- * collapse or hide the band and let the content take the full width. In chat
- * view the band is narrow (`w-14`); in timeline view it is a slim strip on
- * phones (`w-10`) and expands on desktop (`md:w-44`). The width swap is a
- * 500 ms CSS transition, and the threadline weave blooms/collapses in step
- * with it via its `expanded` prop (see threadline-scene).
+ * collapse or hide the band and let the content take the full width. The
+ * shell keeps the band MOUNTED in both views but display-hides it in chat
+ * view (`hidden` wrapper, zero layout space); internally the band still runs
+ * its narrow mode (`w-14`) there so the timeline reopen blooms from the
+ * collapsed weave. In timeline view it is a slim strip on phones (`w-10`) and
+ * expands on desktop (`md:w-44`). The width swap is a 500 ms CSS transition,
+ * and the threadline weave blooms/collapses in step with it via its
+ * `expanded` prop (see threadline-scene).
  */
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
