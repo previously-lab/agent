@@ -9,9 +9,9 @@ import {
 /**
  * v0.10 memory-viz e2e (design doc §9): the unified message stream's
  * scroll-up paging + seams, the arrival resume/briefing gate (Rev 2: the
- * briefing seats as a stream-tail card), the scroll-transient left time rail
- * (Rev 2, §1.3), the card-style left-drag mode gesture (Rev 2, §5.2/§6.1),
- * the search palette's jump-to-slice, the /timeline route's two entry forms,
+ * briefing seats as a stream-tail card), the card-style left-drag mode
+ * gesture (Rev 2, §5.2/§6.1),
+ * the search palette's jump-to-slice, the timeline view selected by ?view=timeline,
  * and the Rev 8 stack list: day-stack landing, click-to-step-finer,
  * ctrl+wheel level stepping, strand filter, and month-window paging.
  *
@@ -202,47 +202,14 @@ test.describe("Memory viz (v0.10)", () => {
     });
   });
 
-  test.describe("left time rail (Rev 2, §1.3)", () => {
-    test("desktop scroll fades the rail in with turn-granular nodes, then out", async ({
-      page,
-    }) => {
-      const slices = datasetA();
-      await seedSlices(slices);
-
-      await page.goto("/en");
-      // Stream settled at its tail (briefing mode) before scrolling.
-      await expect(page.getByText(sentinel(slices[11], "user"))).toBeVisible();
-
-      const rail = page.locator(
-        'div[aria-label="Timeline of the messages on screen"]',
-      );
-      // Idle: the transient rail is faded out (still mounted, aria-hidden).
-      await expect(rail).toHaveAttribute("aria-hidden", "true");
-
-      // Scroll — the rail fades in and every visible turn anchors a node
-      // carrying a rolling-digit HH:MM timestamp.
-      const scroller = page.locator('[data-testid="virtuoso-scroller"]');
-      await scroller.evaluate((el) => {
-        el.scrollTop = el.scrollHeight / 2;
-      });
-      await expect(rail).toHaveAttribute("aria-hidden", "false");
-      await expect(rail.locator("span.font-mono").first()).toBeVisible();
-
-      // ~1s after the scroll stops the rail fades out again (§1.3).
-      await expect(rail).toHaveAttribute("aria-hidden", "true", {
-        timeout: 5_000,
-      });
-    });
-  });
-
   test.describe("card-style mode gesture (Rev 2, §5.2/§6.1)", () => {
     // Rev 6 (2026-09-07): the swipe mode switch is unwired — ModeSwitchGesture
     // no longer wraps the content region. The spec stays for restoration once
     // the gesture returns in its redesigned form.
-    test.skip("a committed left drag on the content card routes to /timeline", async ({
+    test.skip("a committed left drag on the content card opens the timeline view", async ({
       page,
     }) => {
-      // The timeline overlay compiles the three.js chunk on first hit in dev.
+      // The timeline view compiles the three.js chunk on first hit in dev.
       test.slow();
       const slices = datasetA();
       await seedSlices(slices);
@@ -307,7 +274,7 @@ test.describe("Memory viz (v0.10)", () => {
       }
 
       // Committed → routed navigation carrying the viewport slice as ?at=.
-      await expect(page).toHaveURL(/\/en\/timeline/);
+      await expect(page).toHaveURL(/\/en.*view=timeline/);
     });
   });
 
@@ -348,16 +315,19 @@ test.describe("Memory viz (v0.10)", () => {
     });
   });
 
-  test.describe("/timeline route", () => {
-    // The first /timeline hit compiles the three.js chunk in dev — allow
+  test.describe("timeline view", () => {
+    const timelineUrl = /\/en.*view=timeline/;
+    const chatUrl = /\/en\/?(\?|$)/;
+
+    // The first timeline view hit compiles the three.js chunk in dev — allow
     // triple the default timeout.
-    test("direct URL renders the full-page timeline view", async ({ page }) => {
+    test("direct URL renders the timeline view in the shell", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
 
-      const res = await page.goto("/en/timeline");
+      const res = await page.goto("/en?view=timeline");
       expect(res?.status()).toBe(200);
-      // URL 即模式: the header switcher shows the timeline segment active.
+      // The header switcher shows the timeline segment active.
       await expect(
         page
           .getByRole("group", { name: "Switch view" })
@@ -378,7 +348,7 @@ test.describe("Memory viz (v0.10)", () => {
       }
     });
 
-    test("mode switcher opens the timeline overlay over the live chat page", async ({
+    test("mode switcher toggles the timeline view over the live chat page", async ({
       page,
     }) => {
       test.slow();
@@ -396,32 +366,41 @@ test.describe("Memory viz (v0.10)", () => {
         page.getByRole("button", { name: "Local", exact: true }),
       ).toBeVisible();
 
-      // Soft navigation → the intercepted route renders the overlay; the URL
-      // becomes /timeline while the chat page never unmounts.
+      // Capture the chat stream root element handle so we can prove it survives.
+      const stream = page.locator('[data-testid="virtuoso-scroller"]');
+      const streamHandle = await stream.elementHandle();
+      expect(streamHandle).toBeTruthy();
+
+      // Soft navigation → the URL gains ?view=timeline while the chat page
+      // stays mounted underneath.
       await page
         .getByRole("group", { name: "Switch view" })
         .getByRole("button", { name: "Timeline" })
         .click();
-      await expect(page).toHaveURL(/\/en\/timeline/);
-      // Header pill + the overlay's own dark pill.
-      await expect(page.getByRole("group", { name: "Switch view" })).toHaveCount(2);
-      // The chat input survives under the overlay (chat 常驻, §6.1).
+      await expect(page).toHaveURL(timelineUrl);
+      // The chat input survives under the timeline pane (chat 常驻, §6.1).
       await expect(page.locator("textarea")).toBeAttached();
 
-      // The overlay renders the same stack list as the full page.
+      // The timeline renders the same stack list as the direct URL.
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
 
-      // The overlay's own Chat segment closes it — back to the untouched chat.
+      // The chat stream is the same DOM node as before (still mounted).
+      const isSameNode = await page.evaluate(
+        (prev) => prev === document.querySelector('[data-testid="virtuoso-scroller"]'),
+        streamHandle,
+      );
+      expect(isSameNode).toBe(true);
+
+      // Switching back to Chat drops the view param and restores the chat.
       await page
         .getByRole("group", { name: "Switch view" })
-        .nth(1)
         .getByRole("button", { name: "Chat" })
         .click();
-      await expect(page).toHaveURL(/\/en\/?$/);
-      await expect(page.getByRole("group", { name: "Switch view" })).toHaveCount(1);
+      await expect(page).toHaveURL(chatUrl);
       await expect(page.locator("textarea")).toBeAttached();
+      await expect(stream).toBeVisible();
     });
 
     test("Cmd/Ctrl+. toggles between the two view modes", async ({ page }) => {
@@ -438,10 +417,10 @@ test.describe("Memory viz (v0.10)", () => {
       // press-until-navigated instead of firing once into a dead window.
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).toHaveURL(/\/en\/timeline/, { timeout: 3_000 });
+        await expect(page).toHaveURL(timelineUrl, { timeout: 3_000 });
       }).toPass();
       // Wait for the scene to actually render before toggling back: a
-      // router.push issued while the /timeline navigation is still in flight
+      // router.push issued while the timeline navigation is still in flight
       // is silently dropped (observed in the full-suite run), swallowing the
       // return toggle. Gate on the stack list being up.
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
@@ -449,7 +428,7 @@ test.describe("Memory viz (v0.10)", () => {
       });
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).toHaveURL(/\/en\/?$/, { timeout: 3_000 });
+        await expect(page).toHaveURL(chatUrl, { timeout: 3_000 });
       }).toPass();
     });
   });
@@ -478,7 +457,7 @@ test.describe("Memory viz (v0.10)", () => {
 
     const cards = (page: Page) => page.locator(".tl-card-in");
     const cardCount = (page: Page) => cards(page).count();
-    /** aria-labels, e.g. "02/03 Tue · 1" (L1) / "2026/02 · 12" (L2). */
+    /** aria-labels, e.g. "02/03 Tue · 1" (L1) / "2026 W06 · 2/2–2/8 · 7" (L2). */
     const cardLabels = (page: Page) =>
       page.evaluate(() =>
         [...document.querySelectorAll(".tl-card-in")].map(
@@ -517,7 +496,7 @@ test.describe("Memory viz (v0.10)", () => {
     }) => {
       test.slow();
       await seedSlices(datasetA());
-      await page.goto("/en/timeline");
+      await page.goto("/en?view=timeline");
 
       // Landing = L1 day stacks: "<MM/DD> <weekday> · <count>".
       await expect
@@ -542,8 +521,8 @@ test.describe("Memory viz (v0.10)", () => {
         );
       }).toPass({ timeout: 15_000 });
 
-      // Ctrl+wheel out ×2 → L2 month stacks: "2026/02 · 12". Pause between
-      // steps so the level remount's listener gap can't eat an event.
+      // Ctrl+wheel out ×2 → L2 week stacks: "2026 W06 · 2/2–2/8 · 7". Pause
+      // between steps so the level remount's listener gap can't eat an event.
       await zoomStep(page, "out");
       await page.waitForTimeout(400);
       await zoomStep(page, "out");
@@ -551,7 +530,7 @@ test.describe("Memory viz (v0.10)", () => {
         .poll(
           async () =>
             (await cardLabels(page)).some((l) =>
-              /^\d{4}\/\d{2} · \d+$/.test(l),
+              /^\d{4} W\d{2} · \d{1,2}\/\d{1,2}–\d{1,2}\/\d{1,2} · \d+$/.test(l),
             ),
           { timeout: 10_000 },
         )
@@ -576,7 +555,7 @@ test.describe("Memory viz (v0.10)", () => {
       test.slow();
       const slices = datasetA();
       await seedSlices(slices);
-      await page.goto("/en/timeline");
+      await page.goto("/en?view=timeline");
       await expect
         .poll(() => cardCount(page), { timeout: 30_000 })
         .toBeGreaterThan(0);
@@ -633,7 +612,7 @@ test.describe("Memory viz (v0.10)", () => {
         }),
       ];
       await seedSlices(slices);
-      await page.goto("/en/timeline");
+      await page.goto("/en?view=timeline");
       await expect
         .poll(() => cardCount(page), { timeout: 30_000 })
         .toBe(3);
@@ -677,7 +656,7 @@ test.describe("Memory viz (v0.10)", () => {
         ),
       ];
       await seedSlices(slices);
-      await page.goto("/en/timeline");
+      await page.goto("/en?view=timeline");
       await expect
         .poll(() => cardCount(page), { timeout: 30_000 })
         .toBeGreaterThan(0);

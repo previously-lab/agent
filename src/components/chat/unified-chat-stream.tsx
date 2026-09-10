@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type RefObject,
 } from "react";
 import { Virtuoso, type VirtuosoHandle, type ListRange } from "react-virtuoso";
@@ -16,15 +17,9 @@ import { ChatMessage } from "./chat-message";
 import { HistoryTurn } from "./history-turn";
 import { SliceSeam, formatSeamDate } from "./slice-seam";
 import { StreamTimeIndicator } from "./stream-time-indicator";
-import { StreamTimeRail } from "./stream-time-rail";
 import { EmptyBriefing } from "./empty-briefing";
 import { ErrorBanner } from "./error-banner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import {
-  computeRailNodes,
-  type RailNode,
-  type RailNodeInput,
-} from "@/lib/chat/time-rail";
 import type { HistoryStreamItem } from "@/lib/chat/stream-items";
 import type { SliceSummary } from "@/lib/episodic/actions";
 
@@ -35,6 +30,8 @@ export interface LiveStreamItem {
   kind: "live";
   key: string;
   message: UIMessage;
+  /** The current slice's strands — the user bubble's tint source. */
+  strands?: string[];
   timeIso: string;
   isStreaming: boolean;
   startedAt?: string;
@@ -55,6 +52,13 @@ interface UnifiedChatStreamProps {
   onStartReached: () => void;
   error: Error | undefined;
   virtuosoRef: RefObject<VirtuosoHandle | null>;
+  /**
+   * The stream column's pixel width — driven by the SAME frame geometry as
+   * the timeline card field (useFrameColumn), so the stream's left/right
+   * edges sit exactly on the card column's edges in both views. Null/undefined
+   * before the first measurement → the legacy responsive classes apply.
+   */
+  columnWidth?: number | null;
   /** Reports the top visible item's time (the travel clock's "from") and the
    *  slice it belongs to (the mode switcher's `?at=` anchor; null = live). */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
@@ -66,6 +70,14 @@ interface UnifiedChatStreamProps {
     recent: SliceSummary[];
     onSend: (message: string) => void;
   } | null;
+  /** Shared convergence anchors owned by the app shell — the threadline
+   *  pinches its helices toward them. Chat-mode counterpart of the card
+   *  field's row-start anchors (timeline view). */
+  anchorsRef?: MutableRefObject<number[]>;
+  /** True only when the chat view is the FOREGROUND view. The stream stays
+   *  mounted (dimmed) while the timeline is open, but the timeline's CardField
+   *  owns the ref then — no measuring here, the two would fight. */
+  anchorsActive?: boolean;
 }
 
 /** The "继续 <date> 的对话" banner — the light top hint of a resumed
@@ -96,13 +108,16 @@ export function UnifiedChatStream({
   onStartReached,
   error,
   virtuosoRef,
+  columnWidth,
   onTopItemChange,
   briefing,
+  anchorsRef,
+  anchorsActive,
 }: UnifiedChatStreamProps) {
   const tSeam = useTranslations("chat.seam");
 
-  // ── Scroll-transient time chrome (§1.3): floating indicator on mobile,
-  //  left time rail on desktop — both share this visibility lifecycle. ─────
+  // ── Scroll-transient time chrome (§1.3): floating indicator on mobile.
+  //  (The desktop left time rail was retired — the 3D axis carries time.)
   // rAF-throttled read of the top visible item (the wheel's scroll-throttle
   // precedent), shown while scrolling, faded 1s after it stops.
   const [indicatorTime, setIndicatorTime] = useState<string | null>(null);
@@ -155,97 +170,25 @@ export function UnifiedChatStream({
     () => () => {
       // Reset the refs to null after cancelling — otherwise a dev StrictMode
       // remount cancels the pending rAF but leaves the stale id in the ref,
-      // and every later updateRail/handleRangeChanged call early-returns on
-      // the `!== null` guard: the rail/range reporting would be dead forever.
+      // and every later handleRangeChanged call early-returns on
+      // the `!== null` guard: the range reporting would be dead forever.
       if (rafRef.current !== null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-      if (railRafRef.current !== null) {
-        cancelAnimationFrame(railRafRef.current);
-        railRafRef.current = null;
-      }
     },
     [],
   );
 
-  // ── Left time rail (§1.3 Rev 2, desktop) ───────────────────────────────
-  // Nodes anchor the VISIBLE turns: Virtuoso tags every item wrapper with
-  // `data-index`, so a DOM read of the scroller maps rects back to stream
-  // items and their `timeIso`. rAF-throttled, updated on scroll / range
-  // changes / item changes; geometry math is pure (lib/chat/time-rail.ts).
-  // Mobile keeps the floating indicator — the rail never mounts there.
   const isMobile = useIsMobile();
-  const scrollerElRef = useRef<HTMLElement | null>(null);
-  const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
-  const [railNodes, setRailNodes] = useState<RailNode[]>([]);
-  const [railRect, setRailRect] = useState<{ top: number; height: number }>({
-    top: 0,
-    height: 0,
-  });
-  const railRafRef = useRef<number | null>(null);
-
-  const handleScrollerRef = useCallback((ref: HTMLElement | Window | null) => {
-    // We never set customScrollParent, so the scroller is always an element.
-    const el = ref instanceof HTMLElement ? ref : null;
-    scrollerElRef.current = el;
-    setScrollerEl(el);
-  }, []);
-
-  const updateRail = useCallback(() => {
-    if (railRafRef.current !== null) return; // one read per frame
-    railRafRef.current = requestAnimationFrame(() => {
-      railRafRef.current = null;
-      const el = scrollerElRef.current;
-      if (!el) return;
-      const containerRect = el.getBoundingClientRect();
-      const inputs: RailNodeInput[] = [];
-      el.querySelectorAll("[data-index]").forEach((node) => {
-        const idx = Number((node as HTMLElement).dataset.index);
-        if (!Number.isFinite(idx)) return;
-        // Virtuoso's `data-index` is the 0-based DATA index (its internal
-        // `originalIndex`) — NOT shifted by firstItemIndex (the shifted one
-        // rides `data-item-index`), so it indexes `items` directly.
-        const item = itemsRef.current[idx];
-        // Turn granularity only (§1.3) — seams/banners anchor no node.
-        if (!item || (item.kind !== "history-turn" && item.kind !== "live"))
-          return;
-        const r = (node as HTMLElement).getBoundingClientRect();
-        inputs.push({
-          key: item.key,
-          timeIso: item.timeIso,
-          top: r.top - containerRect.top,
-          height: r.height,
-        });
-      });
-      setRailRect({ top: containerRect.top, height: containerRect.height });
-      setRailNodes(computeRailNodes(inputs, containerRect.height));
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!scrollerEl || isMobile) {
-      setRailNodes([]);
-      return;
-    }
-    const onScroll = () => updateRail();
-    scrollerEl.addEventListener("scroll", onScroll, { passive: true });
-    updateRail();
-    return () => scrollerEl.removeEventListener("scroll", onScroll);
-  }, [scrollerEl, isMobile, updateRail]);
-
-  // Prepend/live-append changes rects without a scroll event.
-  useEffect(() => {
-    if (!isMobile) updateRail();
-  }, [items, isMobile, updateRail]);
 
   // ── Item rendering ──────────────────────────────────────────────────────
   const renderItem = useCallback((_index: number, item: ChatStreamItem) => {
     switch (item.kind) {
       case "seam":
         return (
-          <div className="pr-4 sm:pr-6 lg:pr-8">
+          <div className="pr-4 sm:pr-6 lg:pr-8" data-seam-anchor>
             <SliceSeam seam={item.seam} dateIso={item.dateIso} />
           </div>
         );
@@ -271,6 +214,7 @@ export function UnifiedChatStream({
               sliceId={item.sliceId}
               turnId={item.turn.turnId}
               timestamp={item.turn.timestamp}
+              strands={item.strands}
             />
           </div>
         );
@@ -282,6 +226,7 @@ export function UnifiedChatStream({
               isStreaming={item.isStreaming}
               startedAt={item.startedAt}
               onRegenerate={item.onRegenerate}
+              strands={item.strands}
             />
           </div>
         );
@@ -353,11 +298,102 @@ export function UnifiedChatStream({
     return () => cancelAnimationFrame(raf);
   }, [items, liveStreaming, virtuosoRef]);
 
+  // ── Convergence anchors for the threadline (chat view) ──────────────────
+  // In chat view the stream's slice seams are the weave's nodes: each seam
+  // row's screen-Y fraction is one anchor, mirroring the card field's
+  // row-start anchors in timeline view (same 24-anchor cap, same center-based
+  // fraction). Virtuoso's scroller element arrives via its scrollerRef prop.
+  const scrollerElRef = useRef<HTMLElement | null>(null);
+  // Virtuoso types scrollerRef as `HTMLElement | Window | null` (window
+  // scroll mode) — this stream scrolls in its own element, so keep the
+  // element and ignore a window.
+  const handleScrollerRef = useCallback((el: HTMLElement | Window | null) => {
+    scrollerElRef.current = el instanceof HTMLElement ? el : null;
+  }, []);
+  const anchorsRafRef = useRef<number | null>(null);
+  // Ref mirrors (the file's onTopItemChangeRef pattern) so the unmount cleanup
+  // below can see the latest props without re-subscribing.
+  const anchorsRefRef = useRef(anchorsRef);
+  anchorsRefRef.current = anchorsRef;
+  const anchorsActiveRef = useRef(anchorsActive);
+  anchorsActiveRef.current = anchorsActive;
+
+  const measureAnchors = useCallback(() => {
+    if (!anchorsActive || !anchorsRef) return;
+    const scroller = scrollerElRef.current;
+    if (!scroller) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const list: number[] = [];
+    // Virtuoso keeps overscan rows mounted, so a seam slightly outside the
+    // viewport is still in the DOM — keep a small margin but drop the rest.
+    const rows = scroller.querySelectorAll("[data-seam-anchor]");
+    for (let i = 0; i < rows.length && list.length < 24; i++) {
+      const r = rows[i].getBoundingClientRect();
+      const fraction = (r.top + r.height / 2 - scrollerRect.top) / scrollerRect.height;
+      if (fraction < -0.05 || fraction > 1.05) continue;
+      list.push(fraction);
+    }
+    anchorsRef.current = list;
+  }, [anchorsActive, anchorsRef]);
+
+  // Scroll-driven remeasure, rAF-throttled (the wheel's one-read-per-frame
+  // precedent). Re-subscribes when measureAnchors changes identity (the
+  // activation toggle), so no listener fires while the timeline owns the ref.
+  useEffect(() => {
+    const scroller = scrollerElRef.current;
+    if (!scroller) return;
+    const onScroll = () => {
+      if (anchorsRafRef.current !== null) return; // one measure per frame
+      anchorsRafRef.current = requestAnimationFrame(() => {
+        anchorsRafRef.current = null;
+        measureAnchors();
+      });
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      // Cancel AND reset — the StrictMode-remount pattern documented above:
+      // a stale id would dead-end every later scroll behind the `!== null`
+      // guard.
+      if (anchorsRafRef.current !== null) {
+        cancelAnimationFrame(anchorsRafRef.current);
+        anchorsRafRef.current = null;
+      }
+    };
+  }, [measureAnchors]);
+
+  // Item-set / activation changes: paging prepends seams, streaming appends
+  // them, and re-activation after the timeline closes must refill the ref
+  // CardField's unmount cleanup emptied. All reshape the anchor set without a
+  // scroll event, so measure on the next frame.
+  useEffect(() => {
+    if (!anchorsActive) return;
+    const raf = requestAnimationFrame(measureAnchors);
+    return () => cancelAnimationFrame(raf);
+  }, [items, anchorsActive, measureAnchors]);
+
+  // Unmount cleanup: mirrors CardField's — the weave relaxes back to straight
+  // when the stream goes away while it owned the anchors.
+  useEffect(() => {
+    return () => {
+      if (anchorsActiveRef.current) {
+        const ref = anchorsRefRef.current;
+        if (ref) ref.current = [];
+      }
+    };
+  }, []);
+
   return (
-    <div className="relative mx-auto h-full max-w-5xl xl:max-w-7xl">
+    <div
+      className={`relative mx-auto h-full ${
+        columnWidth == null ? "w-full max-w-5xl xl:max-w-7xl" : ""
+      }`}
+      style={
+        columnWidth != null ? { width: columnWidth, maxWidth: "100%" } : undefined
+      }
+    >
       <Virtuoso
         ref={virtuosoRef}
-        scrollerRef={handleScrollerRef}
         className="h-full"
         data={items}
         firstItemIndex={firstItemIndex}
@@ -367,6 +403,7 @@ export function UnifiedChatStream({
         atBottomStateChange={handleAtBottomChange}
         isScrolling={handleIsScrolling}
         rangeChanged={handleRangeChanged}
+        scrollerRef={handleScrollerRef}
         increaseViewportBy={{ top: 600, bottom: 600 }}
         // Height prior for not-yet-rendered items (real rows: seam ~26, turns
         // 74-156) — narrows the gap between Virtuoso's internal totalHeight
@@ -375,17 +412,10 @@ export function UnifiedChatStream({
         itemContent={renderItem}
         components={components}
       />
-      {/* §1.3 Rev 2: desktop gets the left time rail (turn-granular nodes);
-          mobile keeps the floating indicator. */}
-      {isMobile ? (
+      {/* §1.3: mobile keeps the floating indicator; the desktop rail is
+          retired — the 3D axis carries time. */}
+      {isMobile && (
         <StreamTimeIndicator timeIso={indicatorTime} visible={indicatorVisible} />
-      ) : (
-        <StreamTimeRail
-          nodes={railNodes}
-          visible={indicatorVisible}
-          top={railRect.top}
-          height={railRect.height}
-        />
       )}
     </div>
   );

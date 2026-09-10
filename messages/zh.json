@@ -22,6 +22,14 @@
     "docs": "文档",
     "settings": "设置",
     "settingsBusy": "回复进行中——完成后即可修改设置",
+    "overflow": "更多",
+    "themeLabel": "主题",
+    "languageLabel": "语言",
+    "english": "English",
+    "chinese": "中文",
+    "versionLabel": "版本",
+    "releaseNotes": "更新日志",
+    "howToSync": "如何同步",
     "mode": {
       "label": "切换视图",
       "chat": "对话",
@@ -312,6 +320,17 @@
       "all": "核心时间线",
       "placeholder": "搜索线索…",
       "empty": "没有匹配的线索"
+    },
+    "selected": {
+      "slices": "{count} 片"
+    },
+    "lens": {
+      "label": "镜头",
+      "slice": "片",
+      "day": "日",
+      "week": "周",
+      "hintDesktop": "Ctrl+滚轮或双指捏合缩放",
+      "hintTouch": "双指捏合缩放"
     }
   },
   "settings": {

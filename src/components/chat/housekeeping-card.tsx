@@ -67,7 +67,7 @@ export function HousekeepingCard({ steps }: { steps: HousekeepingStep[] }) {
                 <Check className="h-3 w-3" />
               )}
             </span>
-            <span className="min-w-0 text-muted-foreground">{label}</span>
+            <span className="min-w-0 font-serif text-xs font-light text-muted-foreground">{label}</span>
             {!s.running && s.summaries && s.summaries.length > 0 && (
               <span className="truncate font-mono text-[11px] leading-none text-muted-foreground/60">
                 {s.summaries.join(", ")}

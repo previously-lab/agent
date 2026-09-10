@@ -8,6 +8,7 @@ import { readSliceIndex, readSliceBody, parseSlice, sliceIdToFilePath, readPrevi
 import { readDirection } from "@/lib/evolution/store";
 import { loadUserConfig } from "@/lib/config/loader";
 import { readTimelineIndex } from "./timeline/store";
+import { readStrandEntity } from "./strand-files";
 import { pageCatalog, type CatalogPage } from "./timeline/paginate";
 import type { TimelineSliceEntry } from "./timeline/types";
 import type { Turn } from "./types";
@@ -20,6 +21,8 @@ export interface SliceSummary {
   status: "active" | "closed";
   open_loops: string[];
   decisions: string[];
+  /** The slice's strands — the chat user bubble's tint source. */
+  strands: string[];
   turnCount?: number;
   timezone?: string;
 }
@@ -92,6 +95,14 @@ export async function getEpisodicState(persona?: string): Promise<EpisodicState 
   const hasMore = sorted.length > PAGE_SIZE || !exhausted;
   const first = recent[0];
 
+  // The monthly _index.json rows carry no strands — resolve them from the
+  // timeline catalog (same source the 3D timeline reads), so the chat's
+  // user-bubble tint and the timeline cards agree on the slice's accent.
+  const timelineIdx = await readTimelineIndex();
+  const strandsById = new Map(
+    (timelineIdx?.slices ?? []).map((e) => [e.id, e.strands]),
+  );
+
   return {
     hasActiveSlice: recent.length > 0,
     hasMore,
@@ -104,6 +115,7 @@ export async function getEpisodicState(persona?: string): Promise<EpisodicState 
           status: first.status as "active" | "closed",
           open_loops: first.open_loops,
           decisions: first.decisions,
+          strands: strandsById.get(first.id) ?? [],
         }
       : null,
     recent: recent.map((s) => ({
@@ -114,6 +126,7 @@ export async function getEpisodicState(persona?: string): Promise<EpisodicState 
       status: s.status as "active" | "closed",
       open_loops: s.open_loops,
       decisions: s.decisions,
+      strands: strandsById.get(s.id) ?? [],
     })),
   };
 }
@@ -200,6 +213,8 @@ export type ArrivalState =
       turns: Turn[];
       focus: string;
       start: string;
+      /** The resumed slice's strands — the restored turns' tint source. */
+      strands: string[];
     }
   | { mode: "briefing" };
 
@@ -254,6 +269,7 @@ export async function getArrivalState(persona?: string): Promise<ArrivalState> {
       turns: slice.turns,
       focus: slice.focus,
       start: slice.start,
+      strands: last.strands,
     };
   }
   return { mode: "briefing" };
@@ -291,12 +307,16 @@ export interface StrandListItem {
   count: number;
   /** UTC ISO start of the newest carrier — sort key for "最近活跃". */
   lastStart: string;
+  /** Entity-file description (strands/<name>.md), null when the entity layer
+   *  has no file for this strand yet. */
+  description: string | null;
 }
 
 /**
  * The strand list for the timeline filter, aggregated from the FULL catalog
  * (the client's month window would miss strands that only appear in unloaded
- * history). Sorted by most recent activity first.
+ * history). Sorted by most recent activity first. Descriptions ride along
+ * from the strand entity layer when present.
  */
 export async function getStrandList(): Promise<StrandListItem[]> {
   const idx = await readTimelineIndex();
@@ -308,11 +328,16 @@ export async function getStrandList(): Promise<StrandListItem[]> {
         item.count += 1;
         if (s.start > item.lastStart) item.lastStart = s.start;
       } else {
-        acc.set(name, { name, count: 1, lastStart: s.start });
+        acc.set(name, { name, count: 1, lastStart: s.start, description: null });
       }
     }
   }
-  return [...acc.values()].sort((a, b) => b.lastStart.localeCompare(a.lastStart));
+  const items = [...acc.values()].sort((a, b) => b.lastStart.localeCompare(a.lastStart));
+  const entities = await Promise.all(items.map((i) => readStrandEntity(i.name)));
+  entities.forEach((e, i) => {
+    if (e) items[i].description = e.description;
+  });
+  return items;
 }
 
 // ─── Empty-state briefing identity ─────────────────────────────────────────
@@ -358,13 +383,13 @@ export interface SliceContent {
 /**
  * Single-slice content for the 3D timeline frame card.
  *
- * The card face only ever shows ONE fixed exchange (the slice's opening
- * user/agent round), so the wire payload is cut down server-side: at most
- * FRAME_TURN_COUNT turns, each truncated to FRAME_TURN_CHARS with an
+ * The card face only ever shows the slice's opening TWO exchanges (four
+ * bubbles: user/agent ×2), so the wire payload is cut down server-side: at
+ * most FRAME_TURN_COUNT turns, each truncated to FRAME_TURN_CHARS with an
  * ellipsis. Full turn text never leaves the server for this view.
  * `totalTurns`/`totalChars` still describe the untruncated slice.
  */
-const FRAME_TURN_COUNT = 2;
+const FRAME_TURN_COUNT = 4;
 const FRAME_TURN_CHARS = 280;
 
 /** Cut at a word boundary near the limit and strip trailing punctuation so

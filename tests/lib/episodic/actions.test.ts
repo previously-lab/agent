@@ -364,8 +364,8 @@ describe("getStrandList", () => {
       ],
     });
     expect(await getStrandList()).toEqual([
-      { name: "work", count: 2, lastStart: "2026-08-13T10:00:00.000Z" },
-      { name: "running", count: 2, lastStart: "2026-08-12T10:00:00.000Z" },
+      { name: "work", count: 2, lastStart: "2026-08-13T10:00:00.000Z", description: null },
+      { name: "running", count: 2, lastStart: "2026-08-12T10:00:00.000Z", description: null },
     ]);
   });
 

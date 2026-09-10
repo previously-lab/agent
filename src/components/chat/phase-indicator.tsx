@@ -239,7 +239,7 @@ export function PhaseIndicator({
         {/* Label */}
         <span
           className={cn(
-            "min-w-0 truncate text-sm font-semibold",
+            "min-w-0 truncate font-serif text-sm font-semibold",
             isError || isDenied
               ? "text-red-500"
               : isInterrupted
@@ -252,21 +252,21 @@ export function PhaseIndicator({
 
         {/* Elapsed (streaming) */}
         {mode === "streaming" && elapsed > 0 && isRunning && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light tabular-nums text-muted-foreground">
             {elapsed}s
           </span>
         )}
 
         {/* Meta (static, finished) */}
         {mode === "static" && meta && !isRunning && (
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light text-muted-foreground">
             {meta}
           </span>
         )}
 
         {/* Summary (static) */}
         {mode === "static" && summary && (
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate font-serif text-xs font-light text-muted-foreground">
             {summary}
           </span>
         )}
@@ -307,7 +307,7 @@ export function PhaseIndicator({
                     className={cn(
                       "text-xs",
                       subtitleTone === "answer"
-                        ? "text-foreground"
+                        ? "font-serif font-light text-foreground"
                         : "font-mono text-muted-foreground",
                     )}
                   >

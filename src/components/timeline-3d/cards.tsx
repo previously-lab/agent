@@ -12,15 +12,16 @@
  * noise grain + a top light-falloff gradient + a hairline frame.
  *
  * - SliceCard: one slice per row (L0).
- * - StackCard: a day (L1) or month (L2) stack — the top card is real; the
+ * - StackCard: a day (L1) or week (L2) stack — the top card is real; the
  *   DOM shells underneath are the no-WebGL fallback.
  */
 import { useLocale, useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import { strandColor, STRANDLESS_GREY } from "@/lib/timeline3d/layout";
+import { strandColor, strandAccent } from "@/lib/timeline3d/layout";
 import {
   densityTier,
   shellPose,
+  weekLabelFor,
   type CardGeometry,
   type StackRow,
 } from "@/lib/timeline3d/stacks";
@@ -60,15 +61,13 @@ function dateTimeLabel(entry: TimelineSliceEntry): string {
 
 /** One accent per card: the first strand's color (grey when strandless). */
 function accentOf(entry: TimelineSliceEntry): string {
-  return entry.strands.length > 0
-    ? strandColor(entry.strands[0])
-    : STRANDLESS_GREY;
+  return strandAccent(entry.strands);
 }
 
-/** "08/17 周日" / "08/17 Sun" for day stacks; "2024/08" for month stacks. */
+/** "08/17 周日" / "08/17 Sun" for day stacks; the week label for L2 stacks. */
 function groupLabel(row: StackRow, locale: string): string {
   const d = row.top.date;
-  if (row.level === 2) return d.slice(0, 7).replace("-", "/");
+  if (row.level === 2) return weekLabelFor(d, locale);
   const date = new Date(`${d}T12:00:00`);
   const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
     date,

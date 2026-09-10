@@ -35,6 +35,8 @@ export interface HistoryTurnItem {
   kind: "history-turn";
   key: string;
   sliceId: string;
+  /** The owning slice's strands — the user bubble's tint source. */
+  strands: string[];
   turn: Turn;
   timeIso: string;
 }
@@ -71,14 +73,21 @@ export interface ResumeBlock {
   sliceId: string;
   start: string;
   focus: string;
+  strands: string[];
   turns: Turn[];
 }
 
-function turnItem(sliceId: string, turn: Turn, index: number): HistoryTurnItem {
+function turnItem(
+  sliceId: string,
+  turn: Turn,
+  index: number,
+  strands: string[],
+): HistoryTurnItem {
   return {
     kind: "history-turn",
     key: `ht-${sliceId}-${index}-${turn.timestamp}`,
     sliceId,
+    strands,
     turn,
     timeIso: turn.timestamp,
   };
@@ -107,7 +116,9 @@ export function buildHistoryItems(
     if (i > 0) {
       items.push(seamItem(slices[i - 1].closedBy, slice.id, slice.start));
     }
-    slice.turns.forEach((turn, j) => items.push(turnItem(slice.id, turn, j)));
+    slice.turns.forEach((turn, j) =>
+      items.push(turnItem(slice.id, turn, j, slice.strands)),
+    );
   });
   if (resume) {
     const last = slices[slices.length - 1];
@@ -121,7 +132,7 @@ export function buildHistoryItems(
       timeIso: resume.start,
     });
     resume.turns.forEach((turn, j) =>
-      items.push(turnItem(resume.sliceId, turn, j)),
+      items.push(turnItem(resume.sliceId, turn, j, resume.strands)),
     );
   }
   return items;

@@ -16,8 +16,10 @@
  *   top edge prefetches the older catalog window (`onNeedOlder`), and a
  *   prepend shifts the scroll offset so the world never jumps.
  * - Zoom: ctrl/cmd+wheel or two-finger pinch steps L0 slice ↔ L1 day ↔
- *   L2 month; clicking a stack steps one level finer, anchored on it. Every
- *   level change captures a transition snapshot: the new rows fly from their
+ *   L2 week; clicking a stack steps one level finer, anchored on it. The
+ *   level is semi-controlled: the shell owns it (for the floating lens
+ *   switcher) and every change — gesture, card click, or switcher — runs
+ *   through the same anchored transition. Every level change captures a transition snapshot: the new rows fly from their
  *   OLD slot positions (or from the stack they were swallowed by) to their
  *   NEW slots, while cards that disappear into a coarser stack fly into that
  *   pile as leaving cards. Filter changes and initial mount keep the existing
@@ -73,6 +75,17 @@ export interface CardFieldProps {
   reducedMotion: boolean;
   /** Written every frame: scroll progress 0..1 (0 = oldest, 1 = now). */
   progressRef: React.MutableRefObject<number>;
+  /** Optional ref the ambient threadline reads for zoom linkage. */
+  levelRef?: React.MutableRefObject<StackLevel>;
+  /** Controlled zoom level (lifted to the shell for the lens switcher). When
+   *  provided, every level change — gesture, card click, or external — still
+   *  runs through the same transition path and is echoed via onLevelChange. */
+  level?: StackLevel;
+  onLevelChange?: (level: StackLevel) => void;
+  /** Written every frame: screen-Y fractions (0=top, 1=bottom) of the
+   *  visible row starts at the current level — the threadline converges
+   *  its helices toward these heights. */
+  anchorsRef?: React.MutableRefObject<number[]>;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -214,6 +227,7 @@ interface FieldSceneProps {
   texts: FrameCardTexts;
   leaving: LeavingItem[];
   onLeavingDone: (id: string) => void;
+  anchorsRef?: React.MutableRefObject<number[]>;
 }
 
 function FieldScene({
@@ -231,6 +245,7 @@ function FieldScene({
   texts,
   leaving,
   onLeavingDone,
+  anchorsRef,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -295,6 +310,22 @@ function FieldScene({
     }
 
     progressRef.current = max > 0 ? rigNow.current / max : 1;
+
+    // Row-start anchors for the threadline's convergence layer: every visible
+    // row at the CURRENT level is one anchor (L0 slice / L1 day / L2 week),
+    // as a screen-Y fraction of the shared field height.
+    if (anchorsRef) {
+      const h = size.height;
+      const scroll = rigNow.current;
+      const list: number[] = [];
+      for (let i = 0; i < rows.length; i++) {
+        const centerPy = i * pitch + geo.cardH / 2 - scroll;
+        if (centerPy < -geo.cardH || centerPy > h + geo.cardH) continue;
+        list.push(centerPy / h);
+        if (list.length >= 24) break;
+      }
+      anchorsRef.current = list;
+    }
 
     // Scroll-driven camera drift: translate the camera slightly, then TURN it
     // back onto the card column (lookAt x=0) so the z=0 faces stay horizontally
@@ -384,6 +415,10 @@ export function CardField({
   genKey = "",
   reducedMotion,
   progressRef,
+  levelRef,
+  level: levelProp,
+  onLevelChange,
+  anchorsRef,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const locale = useLocale();
@@ -404,9 +439,20 @@ export function CardField({
     }),
     [t],
   );
-  const [level, setLevel] = useState<StackLevel>(
+  const [innerLevel, setInnerLevel] = useState<StackLevel>(
     initialAtId ? 0 : DEFAULT_LEVEL,
   );
+  const level = levelProp ?? innerLevel;
+  const applyLevel = useCallback(
+    (next: StackLevel) => {
+      setInnerLevel(next);
+      onLevelChange?.(next);
+    },
+    [onLevelChange],
+  );
+  useEffect(() => {
+    if (levelRef) levelRef.current = level;
+  }, [level, levelRef]);
   const [flashId, setFlashId] = useState<string | null>(initialAtId ?? null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [fieldSize, setFieldSize] = useState({ w: 0, h: 0 });
@@ -467,6 +513,15 @@ export function CardField({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // The threadline only converges while the field is mounted; clear the
+  // anchors on unmount (view switch) so the weave relaxes back to straight.
+  useEffect(() => {
+    if (!anchorsRef) return;
+    return () => {
+      anchorsRef.current = [];
+    };
+  }, [anchorsRef]);
 
   // ── Generation bookkeeping: bump the deal clock on level/filter change ──
   const genTrackRef = useRef<{ level: StackLevel; genKey: string } | null>(null);
@@ -643,29 +698,50 @@ export function CardField({
     (next: StackLevel, anchorId?: string) => {
       if (next === level) return;
       startTransition(level, next, anchorId ?? null);
-      setLevel(next);
+      applyLevel(next);
     },
-    [level, startTransition],
+    [level, startTransition, applyLevel],
   );
 
-  const zoomBy = useCallback(
-    (dir: 1 | -1) => {
-      const next = Math.min(2, Math.max(0, level + dir)) as StackLevel;
-      if (next === level) return;
-      const curPitch = framePitchFor(level, geo);
+  /** Top id of the row nearest the viewport center — the gesture anchor. */
+  const centerAnchorFor = useCallback(
+    (fromLevel: StackLevel) => {
+      const curPitch = framePitchFor(fromLevel, geo);
       const centerRow = Math.max(
         0,
         Math.round(
           (rig.current.current + fieldSize.h / 2 - geo.cardH / 2) / curPitch,
         ),
       );
-      const curRows = groupForLevel(entries, level);
-      const anchorId = curRows[centerRow]?.top.id ?? null;
-      startTransition(level, next, anchorId);
-      setLevel(next);
+      return groupForLevel(entries, fromLevel)[centerRow]?.top.id ?? null;
     },
-    [level, entries, geo, fieldSize.h, startTransition],
+    [entries, geo, fieldSize.h],
   );
+
+  const zoomBy = useCallback(
+    (dir: 1 | -1) => {
+      const next = Math.min(2, Math.max(0, level + dir)) as StackLevel;
+      if (next === level) return;
+      startTransition(level, next, centerAnchorFor(level));
+      applyLevel(next);
+    },
+    [level, centerAnchorFor, startTransition, applyLevel],
+  );
+
+  // ── External level changes (the lens switcher) ──
+  // Render-time, not an effect: the transition snapshot (deal origins +
+  // leaving cards) must exist BEFORE the new level's rows render, or the
+  // first frame already shows the final layout with no fly-in. An internal
+  // change echoes back through the prop with innerLevel already updated, so
+  // the `levelProp !== innerLevel` guard runs the transition exactly once.
+  const prevLevelPropRef = useRef(levelProp);
+  if (levelProp != null && prevLevelPropRef.current !== levelProp) {
+    prevLevelPropRef.current = levelProp;
+    if (levelProp !== innerLevel) {
+      startTransition(innerLevel, levelProp, centerAnchorFor(innerLevel));
+      setInnerLevel(levelProp);
+    }
+  }
 
   const onActivate = useCallback(
     (row: StackRow) => {
@@ -801,6 +877,7 @@ export function CardField({
           texts={texts}
           leaving={leaving}
           onLeavingDone={onLeavingDone}
+          anchorsRef={anchorsRef}
         />
       </Canvas>
     </div>

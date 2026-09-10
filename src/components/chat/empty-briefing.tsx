@@ -42,13 +42,53 @@ function truncate(text: string, max: number): string {
 /** Open loops shown in the briefing card — the rest live behind "view full previously". */
 const MAX_LOOPS = 4;
 
+/** "2026/08/17 16:44" — the slice-card timecode format. */
+function eyebrowStamp(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 1px hairline with the card's muted foreground tint (frame-card language). */
+function Hairline({ className = "" }: { className?: string }) {
+  return (
+    <div
+      aria-hidden
+      className={`h-px w-full bg-foreground/[0.07] ${className}`}
+    />
+  );
+}
+
+/** A single ledger row: fixed-width uppercase key + value (frame-card language). */
+function LedgerRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-3 py-3">
+      <span className="w-24 shrink-0 pt-px text-[0.65rem] uppercase leading-relaxed tracking-[0.12em] text-muted-foreground/75">
+        {label}
+      </span>
+      <span className="min-w-0 flex-1 text-sm leading-relaxed text-foreground/90">
+        {value}
+      </span>
+    </div>
+  );
+}
+
 // ─── Component ──────────────────────────────────────────────────────────
 
 /**
- * The empty-live briefing — the product's "arrival" moment. A film-title-card
- * framing: a letter-spaced "PREVIOUSLY ON" eyebrow over the user's name, above
- * a soft brand glow, then a hot-start summary drawn from real memory (the last
- * topic, open threads, and contextual suggestion chips). Every section only
+ * The empty-live briefing — the product's "arrival" moment, in the timeline's
+ * slice-card skin: a mono eyebrow row (primary square marker + letter-spaced
+ * "PREVIOUSLY ON" + the active slice's timecode) over a hairline, then the
+ * user's name in the serif card-title face, then ledger-style rows for the
+ * hot-start summary drawn from real memory (the last topic, open threads, and
+ * contextual suggestion chips), then a quiet footer. Every section only
  * renders when it has real data — nothing says "上次聊到" followed by nothing.
  * The name doubles as the persona switcher in demo mode; "view full previously"
  * opens the same Previously On dialog used by the historical slice view.
@@ -119,124 +159,139 @@ export function EmptyBriefing({
     break;
   }
 
-  const hasSections = Boolean(focus) || openLoops.length > 0 || chips.length > 0;
+  // Ledger-style briefing rows — each only renders when it has real data.
+  // Test data runs long, so every value clamps: the topic to 3 lines, loops
+  // to 4 entries × 2 lines, chips to one truncated line. The full text is
+  // always one click away ("view full previously").
+  const rows: { key: string; value: React.ReactNode }[] = [];
+  if (focus) {
+    rows.push({
+      key: t("lastTopic"),
+      value: <span className="line-clamp-3 break-words">{focus}</span>,
+    });
+  }
+  if (openLoops.length > 0) {
+    rows.push({
+      key: t("openLoops"),
+      value: (
+        <ul className="space-y-1.5">
+          {openLoops.slice(0, MAX_LOOPS).map((loop, i) => (
+            <li
+              key={i}
+              className="flex items-start gap-2 text-sm leading-relaxed text-muted-foreground"
+            >
+              <span className="mt-1.5 inline-block size-1 shrink-0 rounded-full bg-muted-foreground/50" />
+              <span className="line-clamp-2 break-words">{loop}</span>
+            </li>
+          ))}
+        </ul>
+      ),
+    });
+  }
+  if (chips.length > 0) {
+    rows.push({
+      key: t("pickUp"),
+      value: (
+        <div className="flex flex-wrap gap-2">
+          {chips.map((chip) => (
+            <button
+              key={chip.prompt}
+              onClick={() => onSend(chip.prompt)}
+              className="max-w-full truncate rounded-full border border-foreground/15 px-3.5 py-1.5 text-xs text-foreground/75 transition-colors hover:border-foreground/40 hover:text-foreground"
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+      ),
+    });
+  }
 
-  const sectionLabel = "flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/70";
-  /** Each briefing block is a quiet card — contains long content and keeps the
-   *  sections visually parallel. */
-  const sectionCard = "rounded-xl border border-border/50 bg-muted/20 px-4 py-3 backdrop-blur-sm";
+  const stamp = active?.start ? eyebrowStamp(active.start) : "";
 
   return (
     // Full variant: tall briefings scroll instead of clipping (the parent
-    // chain is a fixed h-full) — overflow-x stays hidden so the glow blob
-    // never widens the page. Card variant: one in-flow item, sized to content.
+    // chain is a fixed h-full). Card variant: one in-flow item, sized to
+    // content. Both seats render the same slice-card face.
     <div
       className={
         variant === "card"
-          ? "relative flex flex-col items-center overflow-x-hidden px-4 py-10"
-          : "relative flex min-h-full flex-col items-center justify-center overflow-x-hidden overflow-y-auto pl-0 pr-4"
+          ? "relative flex flex-col items-center px-4 py-10"
+          : "relative flex min-h-full flex-col items-center justify-center pl-0 pr-4"
       }
     >
-      {/* Soft brand glow — the "stage light" behind the title card. */}
-      <div
-        aria-hidden
-        className={`pointer-events-none absolute left-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/10 blur-3xl ${
-          variant === "card" ? "top-24" : "top-[36%]"
-        }`}
-      />
+      {/* The slice-card face — ring + soft shadow + top light falloff, the
+          same language as the timeline's FrameCard. */}
+      <div className="relative w-full max-w-xl overflow-hidden rounded-xl bg-card text-left ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]">
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
+        />
 
-      <div className="relative w-full max-w-xl">
-        {/* ── Title card ─────────────────────────────────────────────── */}
-        <div className="text-center">
-          <div className="font-mono text-[0.65rem] uppercase tracking-[0.35em] text-muted-foreground/60">
-            {t("eyebrow")}
+        <div className="relative px-5 py-5 sm:px-6">
+          {/* ── Eyebrow row — marker square + mono eyebrow, the active
+               slice's timecode on the right. ── */}
+          <div className="flex items-center gap-2 text-[0.65rem] leading-none tracking-[0.08em] text-muted-foreground">
+            <span
+              aria-hidden
+              className="inline-block size-1.5 shrink-0 rounded-[1px] bg-primary"
+            />
+            <span className="font-mono uppercase tracking-[0.35em]">
+              {t("eyebrow")}
+            </span>
+            {stamp && (
+              <span className="ml-auto font-mono tabular-nums text-muted-foreground/60">
+                {stamp}
+              </span>
+            )}
           </div>
+
+          <Hairline className="mt-4" />
+
+          {/* ── Title — the user's name in the slice card's serif face. ── */}
           {identity?.isDemo ? (
             <button
               onClick={() => setPersonaOpen(true)}
-              className="mt-3 inline-block max-w-full text-4xl font-light tracking-tight break-words text-foreground transition-colors hover:text-brand-600 sm:text-5xl dark:hover:text-brand-400"
+              className="mt-4 block max-w-full text-left font-serif text-3xl font-light tracking-tight break-words text-card-foreground transition-colors hover:text-foreground/60 sm:text-4xl"
             >
               {name}
             </button>
           ) : (
-            <div className="mt-3 text-4xl font-light tracking-tight break-words text-foreground sm:text-5xl">
+            <h2 className="mt-4 font-serif text-3xl font-light tracking-tight break-words text-card-foreground sm:text-4xl">
               {name}
-            </div>
+            </h2>
+          )}
+
+          {/* ── Ledger-style briefing rows. ── */}
+          {rows.length > 0 && (
+            <>
+              <Hairline className="mt-5" />
+              <div className="flex flex-col">
+                {rows.map((row, i) => (
+                  <div key={row.key}>
+                    {i > 0 && <Hairline />}
+                    <LedgerRow label={row.key} value={row.value} />
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* ── View the full previously — a quiet footer row. ── */}
+          {active?.slice_id && (
+            <>
+              <Hairline className="mt-2" />
+              <div className="flex items-center justify-between pt-3">
+                <button
+                  onClick={() => setPrevOpen(true)}
+                  className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
+                >
+                  {t("viewFull")} →
+                </button>
+              </div>
+            </>
           )}
         </div>
-
-        {/* ── Hot-start briefing — each section is a card and only renders
-             when it has data. Test data runs long, so every block clamps:
-             the topic to 3 lines, loops to 4 entries × 2 lines, chips to one
-             truncated line. The full text is always one click away ("view
-             full previously"). ── */}
-        {hasSections && (
-          <div className={`space-y-4 ${variant === "card" ? "mt-8" : "mt-12"}`}>
-            {focus && (
-              <section className={sectionCard}>
-                <h3 className={sectionLabel}>
-                  <span className="inline-block size-1.5 rounded-full bg-brand-500" />
-                  {t("lastTopic")}
-                </h3>
-                <p className="mt-2 line-clamp-3 text-base leading-relaxed break-words text-foreground/85">
-                  {focus}
-                </p>
-              </section>
-            )}
-
-            {openLoops.length > 0 && (
-              <section className={sectionCard}>
-                <h3 className={sectionLabel}>
-                  <span className="inline-block size-1.5 rounded-full bg-brand-500" />
-                  {t("openLoops")}
-                </h3>
-                <ul className="mt-2 space-y-1.5">
-                  {openLoops.slice(0, MAX_LOOPS).map((loop, i) => (
-                    <li
-                      key={i}
-                      className="flex items-start gap-2 text-sm leading-relaxed text-muted-foreground"
-                    >
-                      <span className="mt-1.5 inline-block size-1 shrink-0 rounded-full bg-muted-foreground/50" />
-                      <span className="line-clamp-2 break-words">{loop}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {chips.length > 0 && (
-              <section className={sectionCard}>
-                <h3 className={sectionLabel}>
-                  <span className="inline-block size-1.5 rounded-full bg-brand-500" />
-                  {t("pickUp")}
-                </h3>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {chips.map((chip) => (
-                    <button
-                      key={chip.prompt}
-                      onClick={() => onSend(chip.prompt)}
-                      className="max-w-full truncate rounded-full border border-border/60 px-3.5 py-1.5 text-sm text-foreground/80 transition-colors hover:border-brand-500/50 hover:text-brand-600 dark:hover:text-brand-400"
-                    >
-                      {chip.label}
-                    </button>
-                  ))}
-                </div>
-              </section>
-            )}
-          </div>
-        )}
-
-        {/* ── View the full previously ──────────────────────────────── */}
-        {active?.slice_id && (
-          <div className={`text-center ${variant === "card" ? "mt-8" : "mt-12"}`}>
-            <button
-              onClick={() => setPrevOpen(true)}
-              className="text-xs font-medium text-muted-foreground/70 transition-colors hover:text-foreground"
-            >
-              {t("viewFull")} →
-            </button>
-          </div>
-        )}
       </div>
 
       {/* ── Persona switcher (demo mode) ─────────────────────────────── */}

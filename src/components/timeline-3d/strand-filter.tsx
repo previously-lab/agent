@@ -41,14 +41,14 @@ export function StrandFilter({ strands, selected, onSelect }: StrandFilterProps)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="pointer-events-auto flex max-w-full items-center gap-1.5 rounded-md bg-card/85 px-2.5 py-1.5 font-mono text-[10.5px] tracking-[0.08em] text-foreground/85 ring-1 ring-foreground/10 backdrop-blur-md transition-shadow hover:ring-foreground/25"
+        className="pointer-events-auto flex items-center gap-1.5 rounded-md bg-card/85 px-2.5 py-1.5 font-mono text-[10.5px] tracking-[0.08em] text-foreground/85 ring-1 ring-foreground/10 backdrop-blur-md transition-shadow hover:ring-foreground/25"
         aria-label={t("label")}
       >
         <ColorSquare
           color={selected ? strandColor(selected) : STRAND_PALETTE[0]}
           className="size-2"
         />
-        <span className="truncate">{selected ?? t("all")}</span>
+        <span className="whitespace-nowrap">{selected ?? t("all")}</span>
       </PopoverTrigger>
       <PopoverContent align="start" side="bottom" className="w-64 gap-1 p-1.5">
         <div className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1.5">
@@ -75,13 +75,20 @@ export function StrandFilter({ strands, selected, onSelect }: StrandFilterProps)
             <button
               key={s.name}
               onClick={() => pick(s.name)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent ${
+              className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-[12px] transition-colors hover:bg-accent ${
                 selected === s.name ? "bg-accent/70" : ""
               }`}
             >
-              <ColorSquare color={strandColor(s.name)} className="size-2" />
-              <span className="flex-1 truncate">{s.name}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">
+              <ColorSquare color={strandColor(s.name)} className="mt-1 size-2" />
+              <span className="flex-1">
+                <span className="block truncate">{s.name}</span>
+                {s.description && (
+                  <span className="mt-0.5 block line-clamp-2 text-[11px] font-serif font-light leading-snug text-muted-foreground">
+                    {s.description}
+                  </span>
+                )}
+              </span>
+              <span className="mt-0.5 font-mono text-[10px] text-muted-foreground">
                 ×{s.count}
               </span>
             </button>

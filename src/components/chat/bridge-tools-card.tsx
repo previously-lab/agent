@@ -117,16 +117,16 @@ export function BridgeToolCard({
             }
           />
         </span>
-        <span className="min-w-0 truncate text-sm font-semibold text-foreground/90">
+        <span className="min-w-0 truncate font-serif text-sm font-semibold text-foreground/90">
           {t(phase)}
         </span>
         {tools.length > 0 && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light tabular-nums text-muted-foreground">
             {tools.length}
           </span>
         )}
         {running && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light tabular-nums text-muted-foreground">
             {elapsed}s
           </span>
         )}

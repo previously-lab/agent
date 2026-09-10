@@ -1,35 +1,40 @@
 /**
- * Backfill the agent repo's episodic memory (step 2 — run AFTER audit-memory.mjs).
+ * Backfill an episodic memory dataset (run AFTER audit-memory.mjs).
  *
- * Target: C:/Users/Dream/Documents/GitHub/agent/memory/episodic
+ * Default target: C:/Users/Dream/Documents/GitHub/agent/memory/episodic
  * (the real data repo — Aftrbrez's own memory/ is an old test copy, never touched)
  *
- * Does two things, ALL writes inside the agent repo's memory/:
+ * Does two things, ALL writes inside the target dataset:
  *  1. Slice marking — for every slice missing focus/summary in its core.md
  *     frontmatter, ask the LLM to mark it (prompt style mirrors the
  *     turn-analyzer's Task 6 closed_marking in src/lib/episodic/flash/turn-analyzer.ts):
  *     focus = one sentence, summary <= 100 chars. Then clears the matching
  *     needs_marking flag in timeline/index.json (status is NOT touched).
  *  2. Strand entities — for every keyword in strands.json, create
- *     memory/episodic/strands/<name>.md with pinned frontmatter schema
+ *     <episodic>/strands/<name>.md with pinned frontmatter schema
  *     (first_seen / last_active / aliases[]) and a 1-2 paragraph description
  *     (first mention, main themes) generated from the associated slices'
- *     focus/summary lines. Alias merging is deterministic (NFKC + trim +
- *     lowercase collision), not LLM-driven.
+ *     focus/summary lines. strands.json may be tag -> path[] OR tag -> count;
+ *     count-only entries are reverse-mapped from slice frontmatter tags.
+ *     Alias merging is deterministic (NFKC + trim + lowercase collision),
+ *     not LLM-driven.
  *
  * LLM discipline (the 0910 internal model is rate-limited, 20 concurrent):
  *  - STRICTLY serial (concurrency = 1), one call at a time
  *  - per-call timeout (AbortSignal), at most ONE retry per call
- *  - hard global cap on LLM calls (--max-calls, default 600) — stops and
- *    reports when reached; no unbounded loops anywhere
+ *  - hard global cap on LLM calls (--max-calls) — stops and reports when
+ *    reached; no unbounded loops anywhere
+ *  - generous maxOutputTokens (default 2000): thinking burns output budget,
+ *    a small cap returns empty bodies
  *
  * Safety: before any write, every file about to be modified is copied into a
- * backup dir (default: system temp previously-memory-backup-<date>/; use
- * --backup-in-memory for memory/.backup-<date>/ inside the agent repo, or
- * --backup-dir <path>). Idempotent: existing focus/summary and existing
- * strand files are skipped.
+ * backup dir (default: system temp previously-<name>-backup-<date>/; use
+ * --backup-in-memory for .backup-<date>/ inside the dataset, or --backup-dir
+ * <path>). Idempotent: existing focus/summary and existing strand files are
+ * skipped.
  *
- * Run:   node scripts/backfill-memory.mjs [--model <id>] [--dry] [--limit <n>]
+ * Run:   node scripts/backfill-memory.mjs [--root <episodicDir>] [--name <slug>]
+ *        [--lang zh|en] [--model <id>] [--dry] [--limit <n>]
  *        [--only-slice <sliceId>] [--only-strand <name>] [--max-calls <n>]
  *        [--timeout-ms <n>] [--backup-dir <path>] [--backup-in-memory]
  */
@@ -51,6 +56,9 @@ const arg = (name, dflt) => {
 };
 const hasFlag = (name) => process.argv.includes(`--${name}`);
 
+const EPISODIC = arg("root", "C:/Users/Dream/Documents/GitHub/agent/memory/episodic");
+const NAME = arg("name", "memory");
+const LANG = arg("lang", "zh");
 const MODEL = arg("model", "deepseek-v4.1-flash-expires-on-0910");
 const DRY = hasFlag("dry");
 const LIMIT = Number(arg("limit", "0")); // 0 = no limit
@@ -58,12 +66,12 @@ const ONLY_SLICE = arg("only-slice", null);
 const ONLY_STRAND = arg("only-strand", null);
 const MAX_CALLS = Number(arg("max-calls", "600")); // hard cap, never exceeded
 const TIMEOUT_MS = Number(arg("timeout-ms", "90000"));
+const MAX_TOKENS = Number(arg("max-tokens", "2000")); // thinking eats output budget
 const BACKUP_IN_MEMORY = hasFlag("backup-in-memory");
 const BACKUP_DIR_ARG = arg("backup-dir", null);
 
 // ─── Paths ────────────────────────────────────────────────────────────
-const MEMORY_ROOT = "C:/Users/Dream/Documents/GitHub/agent/memory";
-const EPISODIC = path.join(MEMORY_ROOT, "episodic");
+const MEMORY_ROOT = path.dirname(EPISODIC); // <repo>/memory or <repo>/user
 const SLICES = path.join(EPISODIC, "slices");
 const INDEX_JSON = path.join(EPISODIC, "timeline", "index.json");
 const STRANDS_JSON = path.join(EPISODIC, "strands.json");
@@ -75,7 +83,7 @@ const BACKUP_DIR = BACKUP_DIR_ARG
   ? path.resolve(BACKUP_DIR_ARG)
   : BACKUP_IN_MEMORY
     ? path.join(MEMORY_ROOT, `.backup-${today}`)
-    : path.join(os.tmpdir(), `previously-memory-backup-${today}`);
+    : path.join(os.tmpdir(), `previously-${NAME}-backup-${today}`);
 
 // ─── Env (minimal .env.local loader, same pattern as scripts/archive/smoke-search.mjs) ──
 try {
@@ -102,7 +110,7 @@ const openai = createOpenAI({
   apiKey: process.env.DEEPSEEK_API_KEY ?? "dry-run",
 });
 
-async function llm(prompt, { maxTokens = 700 } = {}) {
+async function llm(prompt, { maxTokens = MAX_TOKENS } = {}) {
   if (llmCalls >= MAX_CALLS) {
     capReached = true;
     throw new Error(`HARD CAP REACHED (${MAX_CALLS} LLM calls) — stopping`);
@@ -163,6 +171,19 @@ function fmHas(fmText, field) {
   return new RegExp(`^${field}:`, "m").test(fmText);
 }
 
+/** Parse the `tags:` frontmatter field — block list and inline list forms. */
+function parseTags(fmText) {
+  const block = fmText.match(/^tags:\r?\n((?:\s+-\s+.+\r?\n)*)/m);
+  if (block) {
+    return block[1].split(/\r?\n/).map((l) => l.match(/^\s+-\s+(.+?)\s*$/)?.[1]).filter(Boolean);
+  }
+  const inline = fmText.match(/^tags:\s*\[([^\]]*)\]/m);
+  if (inline) {
+    return inline[1].split(",").map((t) => t.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 function parseTurns(body) {
   const turns = [];
   const parts = body.split(/^## Turn /m);
@@ -198,6 +219,76 @@ function yamlScalar(value) {
   return JSON.stringify(v);
 }
 
+// ─── Prompts (zh default / en for English datasets like the `you` demo) ──
+const PROMPTS = {
+  slice: {
+    zh: (conversation, tags) => `你是一段对话记忆系统的打标同事。一个时间片刚关闭，请阅读对话并给它打标，供未来的记忆召回使用。
+
+## 对话内容（节选）
+
+${conversation}
+
+该片已有标签：${tags.join("、") || "（无）"}
+
+## 任务
+
+严格返回一个 JSON 对象（不要输出任何其他内容）：
+{"focus": "…", "summary": "…"}
+
+- focus：一句话概括这个会话聊了什么（中文，<= 60 字）。
+- summary：最多 100 字——发生了什么 / 关键决定（中文，句末用句号）。
+只依据对话内容，不要编造。`,
+    en: (conversation, tags) => `You are the marking colleague of a conversational memory system. A time slice just closed — read the conversation and mark it for future recall.
+
+## Conversation (excerpt)
+
+${conversation}
+
+Tags already on this slice: ${tags.join(", ") || "(none)"}
+
+## Task
+
+Return exactly one JSON object (no other text):
+{"focus": "…", "summary": "…"}
+
+- focus: one sentence capturing what this session was about (<= 60 words).
+- summary: at most 100 characters — what happened / key decisions.
+Base both ONLY on the conversation; do not invent facts.`,
+  },
+  strand: {
+    zh: (name, aliases, totalRefs, listed, evidenceText) => `你是一段对话记忆系统的整理同事。下面是一条"线索"（strand）——一个跨越多天的 recurring 话题，以及它关联的各时间片摘要（按时间排序，共 ${totalRefs} 片，列出 ${listed} 片）。
+
+线索名称：${name}${aliases.length ? `（别名：${aliases.join("、")}）` : ""}
+
+## 关联时间片摘要
+
+${evidenceText}
+
+## 任务
+
+为该线索写一段中文描述正文（1-2 段，总共 100-250 字），直接输出正文，不要标题、不要 JSON、不要列表。内容要求：
+- 最早是什么时候提起的（用具体日期）；
+- 主要聊了什么（主题、关键事件、决定）；
+- 如果有明显演变，一句话带过。
+只依据上面的摘要，不要编造。日期用 YYYY-MM-DD 格式。`,
+    en: (name, aliases, totalRefs, listed, evidenceText) => `You are the curation colleague of a conversational memory system. Below is a "strand" — a recurring topic woven across many days — with the focus/summary lines of its associated time slices (chronological, ${totalRefs} slices total, ${listed} listed).
+
+Strand name: ${name}${aliases.length ? ` (aliases: ${aliases.join(", ")})` : ""}
+
+## Associated slice summaries
+
+${evidenceText}
+
+## Task
+
+Write the strand's description body in English (1-2 paragraphs, 80-200 words total). Output ONLY the body prose — no heading, no JSON, no bullet list. Cover:
+- when it first came up (use concrete YYYY-MM-DD dates);
+- what it is mainly about (themes, key events, decisions);
+- one sentence on its evolution if visible.
+Base everything ONLY on the summaries above; do not invent facts.`,
+  },
+};
+
 // ─── Backup: snapshot every file we are about to modify ───────────────
 async function backupFiles(relPaths) {
   await fsp.mkdir(BACKUP_DIR, { recursive: true });
@@ -220,6 +311,7 @@ const indexById = new Map(index.slices.map((s) => [s.id, s]));
 
 const results = {
   model: MODEL,
+  lang: LANG,
   dry: DRY,
   backupDir: BACKUP_DIR,
   sliceMarks: [], // { id, ok, detail }
@@ -227,6 +319,24 @@ const results = {
   llmCalls: 0,
   capReached: false,
 };
+
+// strands shape resolution (same rule as the audit):
+//   tag -> path[] used as-is; tag -> count (or non-path strings) reverse-mapped from frontmatter tags
+const PATH_REF = /^\d{4}\/\d{2}\/\d{2}\/\d{4}$/;
+const tagToRefs = new Map();
+const strandRefs = new Map();
+function resolveStrandRefs() {
+  for (const k of Object.keys(strands)) {
+    const v = strands[k];
+    if (Array.isArray(v) && v.every((p) => typeof p === "string" && PATH_REF.test(p))) {
+      strandRefs.set(k, v);
+    } else if (typeof v === "number" || (Array.isArray(v) && v.every((p) => typeof p === "string"))) {
+      strandRefs.set(k, tagToRefs.get(k) ?? []);
+    } else {
+      strandRefs.set(k, []); // bad shape — skipped downstream
+    }
+  }
+}
 
 // ═══ Phase A — slice marking (focus/summary backfill) ═════════════════
 async function phaseSlices() {
@@ -239,10 +349,17 @@ async function phaseSlices() {
     const raw = await fsp.readFile(corePath, "utf8");
     const split = splitFrontmatter(raw);
     if (!split) continue;
-    if (fmHas(split.fmText, "focus") && fmHas(split.fmText, "summary")) continue;
     const m = dir.match(/(\d{4})[\\/]+(\d{2})[\\/]+(\d{2})[\\/]+(\d{4})$/);
-    targets.push({ id: `${m[1]}-${m[2]}-${m[3]}-${m[4]}`, dir, corePath, raw, split });
+    const rel = `${m[1]}/${m[2]}/${m[3]}/${m[4]}`;
+    // harvest tags from EVERY slice — the count-index fallback needs the full map
+    for (const tag of parseTags(split.fmText)) {
+      if (!tagToRefs.has(tag)) tagToRefs.set(tag, []);
+      tagToRefs.get(tag).push(rel);
+    }
+    if (fmHas(split.fmText, "focus") && fmHas(split.fmText, "summary")) continue;
+    targets.push({ id: `${m[1]}-${m[2]}-${m[3]}-${m[4]}`, dir, corePath, raw, split, tags: parseTags(split.fmText) });
   }
+  resolveStrandRefs();
   console.log(`slices missing focus/summary: ${targets.length}`);
 
   let done = 0;
@@ -250,26 +367,8 @@ async function phaseSlices() {
     if (ONLY_SLICE && t.id !== ONLY_SLICE) continue;
     if (LIMIT && done >= LIMIT) break;
     const turns = parseTurns(t.raw.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, ""));
-    const tags = (t.split.fmText.match(/^tags:\r?\n((?:\s+-\s+.+\r?\n)*)/m)?.[1] ?? "")
-      .split(/\r?\n/).map((l) => l.match(/^\s+-\s+(.+)$/)?.[1]).filter(Boolean);
     const conversation = compressTurns(turns);
-
-    const prompt = `你是一段对话记忆系统的打标同事。一个时间片刚关闭，请阅读对话并给它打标，供未来的记忆召回使用。
-
-## 对话内容（节选）
-
-${conversation}
-
-该片已有标签：${tags.join("、") || "（无）"}
-
-## 任务
-
-严格返回一个 JSON 对象（不要输出任何其他内容）：
-{"focus": "…", "summary": "…"}
-
-- focus：一句话概括这个会话聊了什么（中文，<= 60 字）。
-- summary：最多 100 字——发生了什么 / 关键决定（中文，句末用句号）。
-只依据对话内容，不要编造。`;
+    const prompt = PROMPTS.slice[LANG](conversation, t.tags);
 
     if (DRY) {
       console.log(`  [dry] would mark ${t.id} (${turns.length} turns)`);
@@ -334,7 +433,7 @@ async function phaseStrands() {
   }
   const primaries = [...groups.values()]
     .map((names) => {
-      const sorted = [...names].sort((a, b) => (strands[b].length - strands[a].length) || a.localeCompare(b));
+      const sorted = [...names].sort((a, b) => ((strandRefs.get(b)?.length ?? 0) - (strandRefs.get(a)?.length ?? 0)) || a.localeCompare(b));
       return { primary: sorted[0], aliases: sorted.slice(1) };
     })
     .sort((a, b) => a.primary.localeCompare(b.primary));
@@ -344,15 +443,20 @@ async function phaseStrands() {
   for (const g of primaries) {
     if (ONLY_STRAND && g.primary !== ONLY_STRAND) continue;
     if (LIMIT && done >= LIMIT) break;
-    const refs = [...new Set([g.primary, ...g.aliases].flatMap((k) => strands[k] ?? []))].sort();
-    const firstSeen = dateOfRef(refs[0]);
-    const lastActive = dateOfRef(refs[refs.length - 1]);
+    const refs = [...new Set([g.primary, ...g.aliases].flatMap((k) => strandRefs.get(k) ?? []))].sort();
     const fileName = `${safeStrandFilename(g.primary)}.md`;
     const outPath = path.resolve(STRANDS_DIR, fileName);
     if (!outPath.startsWith(path.resolve(STRANDS_DIR) + path.sep)) {
       results.strandFiles.push({ file: fileName, ok: false, detail: "path escape rejected" });
       continue;
     }
+    if (refs.length === 0) {
+      results.strandFiles.push({ file: `strands/${fileName}`, ok: "skipped", detail: "no resolved refs" });
+      continue;
+    }
+
+    const firstSeen = dateOfRef(refs[0]);
+    const lastActive = dateOfRef(refs[refs.length - 1]);
 
     if (await exists(outPath)) {
       results.strandFiles.push({ file: `strands/${fileName}`, ok: "skipped", detail: "already exists" });
@@ -369,24 +473,10 @@ async function phaseStrands() {
       .filter(Boolean)
       .slice(0, 25);
     const evidenceText = evidence
-      .map((e) => `- ${e.date}：${(e.focus || "").slice(0, 60)}｜${(e.summary || "").slice(0, 80)}`)
+      .map((e) => `- ${e.date}: ${(e.focus || "").slice(0, 60)} | ${(e.summary || "").slice(0, 80)}`)
       .join("\n");
 
-    const prompt = `你是一段对话记忆系统的整理同事。下面是一条"线索"（strand）——一个跨越多天的 recurring 话题，以及它关联的各时间片摘要（按时间排序，共 ${refs.length} 片，列出 ${evidence.length} 片）。
-
-线索名称：${g.primary}${g.aliases.length ? `（别名：${g.aliases.join("、")}）` : ""}
-
-## 关联时间片摘要
-
-${evidenceText}
-
-## 任务
-
-为该线索写一段中文描述正文（1-2 段，总共 100-250 字），直接输出正文，不要标题、不要 JSON、不要列表。内容要求：
-- 最早是什么时候提起的（用具体日期）；
-- 主要聊了什么（主题、关键事件、决定）；
-- 如果有明显演变，一句话带过。
-只依据上面的摘要，不要编造。日期用 YYYY-MM-DD 格式。`;
+    const prompt = PROMPTS.strand[LANG](g.primary, g.aliases, refs.length, evidence.length, evidenceText);
 
     if (DRY) {
       console.log(`  [dry] would create strands/${fileName} (${refs.length} refs, ${firstSeen}..${lastActive})`);
@@ -395,9 +485,8 @@ ${evidenceText}
     }
 
     try {
-      const description = await llm(prompt, { maxTokens: 2000 });
-      if (!description || description.length < 20)
-        throw new Error(`description too short (got ${JSON.stringify((description ?? "").slice(0, 200))})`);
+      const description = await llm(prompt, { maxTokens: MAX_TOKENS });
+      if (!description || description.length < 20) throw new Error("description too short");
 
       const doc = `---
 first_seen: '${firstSeen}'
@@ -421,11 +510,11 @@ ${description}
 
 // ═══ Main ═════════════════════════════════════════════════════════════
 console.log(`target: ${EPISODIC}`);
-console.log(`model: ${MODEL}${DRY ? " (dry run — no LLM, no writes)" : ""}`);
+console.log(`model: ${MODEL} | lang: ${LANG}${DRY ? " (dry run — no LLM, no writes)" : ""}`);
 console.log(`backup dir: ${BACKUP_DIR}`);
 
 if (DRY) {
-  await phaseSlices();
+  await phaseSlices(); // resolves strandRefs as a side effect
   await phaseStrands();
 } else {
   // Pre-compute the write set for backup BEFORE touching anything.
@@ -444,7 +533,7 @@ if (DRY) {
   console.log(`backup: ${backedUp} file(s) snapshotted to ${BACKUP_DIR}`);
 
   try {
-    await phaseSlices();
+    await phaseSlices(); // resolves strandRefs as a side effect
     if (!capReached) await phaseStrands();
   } finally {
     results.llmCalls = llmCalls;
@@ -463,9 +552,11 @@ const failed = [
 ];
 
 const R = [];
-R.push(`# Memory Backfill Run — ${today}`);
+R.push(`# Memory Backfill Run — ${NAME} — ${today}`);
 R.push(``);
-R.push(`- Model: \`${MODEL}\` (serial, timeout ${TIMEOUT_MS}ms, ≤1 retry)`);
+R.push(`- Target: \`${EPISODIC.replace(/\\/g, "/")}\``);
+R.push(`- Model: \`${MODEL}\` (serial, timeout ${TIMEOUT_MS}ms, ≤1 retry, maxTokens ${MAX_TOKENS})`);
+R.push(`- Lang: ${LANG}`);
 R.push(`- LLM calls: **${llmCalls} / ${MAX_CALLS}**${capReached ? " — HARD CAP REACHED, remaining items skipped" : ""}`);
 R.push(`- Dry run: ${DRY}`);
 R.push(`- Backup: \`${BACKUP_DIR}\``);
@@ -484,7 +575,7 @@ if (failed.length) {
   for (const r of failed) R.push(`- \`${r.file ?? r.id}\`: ${r.detail}`);
 }
 
-const reportPath = path.join(ROOT, "reports", "overnight", `backfill-memory-${today}.md`);
+const reportPath = path.join(ROOT, "reports", "overnight", `backfill-${NAME}-${today}.md`);
 if (!DRY) {
   await fsp.mkdir(path.dirname(reportPath), { recursive: true });
   await fsp.writeFile(reportPath, R.join("\n") + "\n", "utf8");

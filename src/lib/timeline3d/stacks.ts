@@ -3,9 +3,9 @@
  * functions, no React/R3F.
  *
  * The right field is a vertical DOM list whose ROW GRANULARITY is the zoom
- * level: L0 one slice per row, L1 one day-stack per row, L2 one month-stack
+ * level: L0 one slice per row, L1 one day-stack per row, L2 one week-stack
  * per row. A stack is a visual fiction — the top card is real, the depth is
- * 0-3 hash-posed shells plus a count badge, so a 700-slice month costs the
+ * 0-3 hash-posed shells plus a count badge, so a 700-slice week costs the
  * same as a 2-slice day.
  *
  * Row order follows the catalog: oldest at the top, newest at the bottom
@@ -14,7 +14,7 @@
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { hashString } from "./layout";
 
-/** Zoom levels: 0 = slice rows · 1 = day stacks · 2 = month stacks. */
+/** Zoom levels: 0 = slice rows · 1 = day stacks · 2 = week stacks. */
 export type StackLevel = 0 | 1 | 2;
 
 export const STACK_LEVELS: StackLevel[] = [0, 1, 2];
@@ -22,7 +22,7 @@ export const STACK_LEVELS: StackLevel[] = [0, 1, 2];
 export const DEFAULT_LEVEL: StackLevel = 1;
 
 export interface StackRow {
-  /** Stable key: the slice id (L0), "d:YYYY-MM-DD" (L1), "m:YYYY-MM" (L2). */
+  /** Stable key: the slice id (L0), "d:YYYY-MM-DD" (L1), "w:YYYY-Www" (L2). */
   key: string;
   level: StackLevel;
   /** Newest entry of the group — its content heads the stack. */
@@ -39,7 +39,66 @@ export interface StackRow {
 export function rowKeyFor(entry: TimelineSliceEntry, level: StackLevel): string {
   if (level === 0) return entry.id;
   if (level === 1) return `d:${entry.date}`;
-  return `m:${entry.date.slice(0, 7)}`;
+  return `w:${isoWeekKey(entry.date)}`;
+}
+
+// ─── ISO week grouping (L2) ─────────────────────────────────────────────────
+
+const DAY_MS = 86_400_000;
+
+export interface IsoWeek {
+  /** ISO week-numbering year (differs from the calendar year near Jan 1). */
+  year: number;
+  /** ISO week number, 1–53. */
+  week: number;
+  /** Monday of the week (UTC), "YYYY-MM-DD". */
+  monday: string;
+  /** Sunday of the week (UTC), "YYYY-MM-DD". */
+  sunday: string;
+}
+
+/**
+ * The ISO-8601 week (Monday start) a "YYYY-MM-DD" date falls into. Boundary
+ * rule: a Sunday belongs to the week that started the PREVIOUS Monday (so
+ * 2024-08-18 → the 8/12–8/18 week), and dates around Jan 1 roll into the
+ * neighbouring ISO year (2024-12-30 → 2025-W01). Parsed at noon UTC so the
+ * date string never shifts under a negative timezone offset.
+ */
+export function isoWeekFor(date: string): IsoWeek {
+  const d = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) {
+    return { year: 0, week: 0, monday: date, sunday: date };
+  }
+  const isoDay = d.getUTCDay() || 7; // 1 Mon .. 7 Sun
+  const mondayMs = d.getTime() - (isoDay - 1) * DAY_MS;
+  const thursdayMs = mondayMs + 3 * DAY_MS; // a week's Thursday fixes its ISO year/week
+  const year = new Date(thursdayMs).getUTCFullYear();
+  const jan1Ms = Date.UTC(year, 0, 1);
+  const week = Math.ceil(((thursdayMs - jan1Ms) / DAY_MS + 1) / 7);
+  const fmt = (ms: number) => {
+    const x = new Date(ms);
+    return `${x.getUTCFullYear()}-${String(x.getUTCMonth() + 1).padStart(2, "0")}-${String(x.getUTCDate()).padStart(2, "0")}`;
+  };
+  return { year, week, monday: fmt(mondayMs), sunday: fmt(mondayMs + 6 * DAY_MS) };
+}
+
+/** "2026-W33" — the L2 row-key suffix. */
+export function isoWeekKey(date: string): string {
+  const { year, week } = isoWeekFor(date);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+/**
+ * "2026 W33 · 8/12–8/18" (en) / "2026 第33周 · 8/12–8/18" (zh) — the L2
+ * stack's corner label, the week analog of the day label "08/17 Sun".
+ */
+export function weekLabelFor(date: string, locale: string): string {
+  const { year, week, monday, sunday } = isoWeekFor(date);
+  const md = (s: string) => `${parseInt(s.slice(5, 7), 10)}/${parseInt(s.slice(8, 10), 10)}`;
+  const range = `${md(monday)}–${md(sunday)}`;
+  return locale.toLowerCase().startsWith("zh")
+    ? `${year} 第${week}周 · ${range}`
+    : `${year} W${String(week).padStart(2, "0")} · ${range}`;
 }
 
 /**

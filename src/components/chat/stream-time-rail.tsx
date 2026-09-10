@@ -15,6 +15,11 @@ import { RollingField } from "./rolling-number";
 import { formatSeamDate } from "./slice-seam";
 import { sameDay } from "./time-display";
 
+/** Top clearance kept under the floating header islands — the brand pill's
+ *  bottom edge sits ~56–64px from the viewport top, so a node never renders
+ *  above this line (it pins here while its turn slides underneath). */
+const RAIL_HEADER_CLEARANCE_PX = 64;
+
 /** One node's timestamp: HH:MM in rolling digits, prefixed by a small static
  *  date once it crosses a day boundary (the indicator's label rule, §1.3). */
 function RailTimestamp({ iso, locale }: { iso: string; locale: string }) {
@@ -70,7 +75,10 @@ export function StreamTimeRail({
         <div
           key={node.key}
           className="absolute left-0 flex items-center"
-          style={{ top: node.y, transform: "translateY(-50%)" }}
+          style={{
+            top: Math.max(node.y, RAIL_HEADER_CLEARANCE_PX),
+            transform: "translateY(-50%)",
+          }}
         >
           <span
             aria-hidden

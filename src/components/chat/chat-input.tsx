@@ -105,12 +105,22 @@ export function ChatInput({
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl bg-muted transition-colors ${isDragOver ? "ring-2 ring-blue-500/50" : ""}`}
+      className={`relative overflow-hidden rounded-2xl bg-card ring-1 transition-[box-shadow,ring-color] duration-200 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
+        isDragOver
+          ? "ring-2 ring-blue-500/50"
+          : "ring-foreground/10 focus-within:ring-foreground/30"
+      }`}
       onPaste={visionEnabled ? handlePaste : undefined}
       onDrop={visionEnabled ? onDrop : undefined}
       onDragOver={visionEnabled ? onDragOver : undefined}
       onDragLeave={visionEnabled ? onDragLeave : undefined}
     >
+      {/* Top light falloff — the same paper treatment as the timeline's
+          frame card and the travel-clock card. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
+      />
       {/* Image previews */}
       {images.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
@@ -141,9 +151,8 @@ export function ChatInput({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
-          disabled={isLoading}
           rows={1}
-          className="w-full resize-none overflow-y-auto bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none text-sm"
+          className="w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:text-muted-foreground placeholder:font-light focus:outline-none"
           style={{ minHeight: "24px", maxHeight: "72px" }}
         />
       </div>

@@ -1,20 +1,28 @@
 /**
- * Pure helpers for the chat ⇄ timeline mode switch (v0.10 §6.1: "URL 即模式").
+ * Pure helpers for the chat ⇄ timeline view switch (v0.11 shell refactor).
  *
- * - `/` is chat mode, `/timeline` is timeline mode. The pathname seen here is
- *   the locale-stripped one (next-intl's `usePathname`).
- * - `?at=<sliceId>` carries the reading position across the boundary both
- *   ways: chat → timeline docks the 3D camera at that node, timeline → chat
- *   pages the slice into the stream and scroll-lands on its seam.
+ * The view is now a search param on the single `/` route:
+ *   - absent `view` (or any value other than `timeline`) = chat view
+ *   - `?view=timeline` = timeline view
+ * `?at=<sliceId>` still carries the reading position both ways: chat → timeline
+ * docks the 3D camera at that node; timeline → chat pages the slice into the
+ * stream and scroll-lands on its seam.
  */
 
 export type ViewMode = "chat" | "timeline";
 
-/** The mode a locale-stripped pathname belongs to. */
-export function modeFromPathname(pathname: string): ViewMode {
-  return pathname === "/timeline" || pathname.startsWith("/timeline/")
-    ? "timeline"
-    : "chat";
+const VIEW_PARAM = "view";
+const TIMELINE_VIEW = "timeline";
+
+/** Read the view mode from a query string (with or without the leading `?`). */
+export function modeFromSearch(search: string): ViewMode {
+  const view = new URLSearchParams(search).get(VIEW_PARAM);
+  return view === TIMELINE_VIEW ? "timeline" : "chat";
+}
+
+/** Kept for call-sites that only have a pathname; the /timeline route is gone. */
+export function modeFromPathname(_pathname: string): ViewMode {
+  return "chat";
 }
 
 /**
@@ -39,7 +47,26 @@ export function stripAtParam(search: string): string {
   return rest ? `?${rest}` : "";
 }
 
+/**
+ * Remove both `at` and `view` params from a query string, returning the
+ * remaining query (with leading `?`) or an empty string.
+ */
+export function stripViewAndAt(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("at");
+  params.delete(VIEW_PARAM);
+  const rest = params.toString();
+  return rest ? `?${rest}` : "";
+}
+
+/** The chat href carrying an optional reading-position anchor. */
+export function chatHref(at: string | null): string {
+  return at ? `/?at=${encodeURIComponent(at)}` : "/";
+}
+
 /** The timeline href carrying an optional reading-position anchor. */
 export function timelineHref(at: string | null): string {
-  return at ? `/timeline?at=${encodeURIComponent(at)}` : "/timeline";
+  return at
+    ? `/?${VIEW_PARAM}=${TIMELINE_VIEW}&at=${encodeURIComponent(at)}`
+    : `/?${VIEW_PARAM}=${TIMELINE_VIEW}`;
 }

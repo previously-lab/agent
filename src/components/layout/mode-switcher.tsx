@@ -1,48 +1,48 @@
 "use client";
 
 /**
- * The header mode switcher (v0.10 §6.1) — a segmented pill「对话 · 时间线」
- * centered in the header. URL IS the mode: `/` = chat, `/timeline` = timeline,
- * so the current segment follows the route and the pill is a first-class view
- * switch (deep-linkable, refresh-safe, browser-back returns to the chat).
+ * The header mode switcher (v0.11 shell refactor) — a segmented pill
+ * 「对话 · 时间线」 centered in the header. The view is now selected by the
+ * `?view=timeline` search param on the single `/` route, so the active segment
+ * follows the URL and the pill remains a first-class view switch (deep-linkable,
+ * refresh-safe, browser-back returns to the chat).
  *
- * Switching to the timeline carries the reading position: the slice at the
- * top of the chat stream's viewport (viewport-slice.ts) rides along as
- * `?at=<sliceId>` so the 3D camera docks at the node the user was reading.
- * Switching back to chat pushes `/` — from the intercepted overlay the push
- * leaves the modal slot mounted (Next.js keeps an unmatched parallel slot's
- * previous subpage on soft navigation), but the overlay self-hides on any
- * non-/timeline pathname (see timeline-overlay.tsx), so the chat underneath
- * is exactly as it was (it never unmounted); from the full-page form it's a
- * plain navigation home.
+ * Switching to the timeline carries the reading position: the slice at the top
+ * of the chat stream's viewport (viewport-slice.ts) rides along as `?at=...`
+ * so the 3D camera docks at the node the user was reading. Switching back to
+ * chat pushes `/`.
  *
  * `Cmd/Ctrl+.` toggles the mode (parallel to Cmd+K search). The shortcut lives
- * only on the header instance (`enableShortcut`) — the overlay renders a
- * second, shortcut-less pill so the covered header isn't the only exit.
+ * only on the header instance (`enableShortcut`).
  */
 import { useCallback, useEffect } from "react";
 import { useTranslations } from "next-intl";
 import { MessageSquare, Waypoints } from "lucide-react";
-import { usePathname, useRouter } from "@/i18n/navigation";
-import { modeFromPathname, timelineHref } from "@/lib/chat/mode-switch";
+import { useSearchParams } from "next/navigation";
+import { useRouter } from "@/i18n/navigation";
+import {
+  modeFromSearch,
+  timelineHref,
+  chatHref,
+} from "@/lib/chat/mode-switch";
 import { getViewportSlice } from "@/lib/chat/viewport-slice";
 
 export function ModeSwitcher({
   enableShortcut = true,
-  /** The 3D scene is always dark — the overlay instance pins the dark tone
-   *  regardless of the UI theme. */
+  /** The 3D scene is always dark — a nested instance (no longer an overlay)
+   *  can pin the dark tone regardless of the UI theme. */
   tone = "auto",
 }: {
   enableShortcut?: boolean;
   tone?: "auto" | "dark";
 }) {
   const t = useTranslations("nav.mode");
-  const pathname = usePathname();
   const router = useRouter();
-  const mode = modeFromPathname(pathname);
+  const searchParams = useSearchParams();
+  const mode = modeFromSearch(searchParams.toString());
 
   const goChat = useCallback(() => {
-    if (mode !== "chat") router.push("/");
+    if (mode !== "chat") router.replace(chatHref(null));
   }, [mode, router]);
 
   const goTimeline = useCallback(() => {
@@ -55,12 +55,11 @@ export function ModeSwitcher({
       if (!(e.metaKey || e.ctrlKey) || e.key !== ".") return;
       e.preventDefault();
       // Read the live URL, not the `mode` render value: right after a soft
-      // navigation the pathname prop can lag the address bar by a commit, and
-      // a stale closure would re-push the route we're already on — the press
-      // lands between the URL change and the effect re-attach and the toggle
-      // appears dead (e2e: Ctrl+. right after toHaveURL).
-      const inTimeline = /\/timeline\/?$/.test(window.location.pathname);
-      router.push(inTimeline ? "/" : timelineHref(getViewportSlice()));
+      // navigation the searchParams prop can lag the address bar by a commit,
+      // and a stale closure would re-push the route we're already on.
+      const inTimeline =
+        modeFromSearch(window.location.search) === "timeline";
+      router.push(inTimeline ? chatHref(null) : timelineHref(getViewportSlice()));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -89,12 +88,13 @@ export function ModeSwitcher({
       type="button"
       onClick={onClick}
       aria-pressed={active}
+      aria-label={label}
       className={`flex items-center gap-1 rounded-full px-2.5 py-1 transition-colors ${
         active ? activeTone : idleTone
       }`}
     >
       <Icon className="h-3 w-3 shrink-0" />
-      <span>{label}</span>
+      <span className="hidden sm:inline">{label}</span>
     </button>
   );
 

@@ -2,17 +2,72 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "@/i18n/navigation";
+import { useTranslations } from "next-intl";
 import { ExternalLink } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { checkForUpdate, type UpdateInfo } from "@/lib/version/actions";
 import { APP_VERSION } from "@/lib/version/constants";
 
-export function VersionBadge() {
+/**
+ * Version badge, two renderings:
+ * - "popover" (default): the standalone pill + update-details popover.
+ * - "menu": rows for the nav overflow menu — a version label (with the
+ *   update dot) plus release-notes / how-to-sync links when an update is
+ *   available. Rendered inside the DropdownMenu tree from nav-overflow-menu.
+ */
+export function VersionBadge({ variant = "popover" }: { variant?: "popover" | "menu" }) {
+  const t = useTranslations("nav");
   const [info, setInfo] = useState<UpdateInfo | null>(null);
 
   useEffect(() => {
     checkForUpdate().then(setInfo).catch(() => {});
   }, []);
+
+  if (variant === "menu") {
+    return (
+      <>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex items-center justify-between font-normal">
+            <span className="flex items-center gap-1.5">
+              {t("versionLabel")}
+              {info?.updateAvailable && (
+                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              )}
+            </span>
+            <span className="font-mono text-foreground">v{APP_VERSION}</span>
+          </DropdownMenuLabel>
+          {info?.updateAvailable && info.latest && (
+            <>
+              <DropdownMenuItem
+                render={
+                  <Link
+                    href="https://github.com/previously-lab/agent/releases"
+                    target="_blank"
+                  />
+                }
+              >
+                {t("releaseNotes")}
+                <ExternalLink className="ml-auto" />
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                render={<Link href={info.docsUrl} target="_blank" />}
+              >
+                {t("howToSync")}
+                <ExternalLink className="ml-auto" />
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuGroup>
+      </>
+    );
+  }
 
   const trigger = (
     <button

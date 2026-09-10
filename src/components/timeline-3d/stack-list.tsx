@@ -3,7 +3,7 @@
 /**
  * StackList (Rev 8 §R8) — the timeline's right field: ONE virtualized DOM
  * list of rows whose granularity is the zoom level (L0 slice / L1 day stack /
- * L2 month stack, `src/lib/timeline3d/stacks.ts`).
+ * L2 week stack, `src/lib/timeline3d/stacks.ts`).
  *
  * - Wheel scrolls time (newest at the bottom, scroll up into the past —
  *   same reading direction as the chat stream; pages prepend via

@@ -30,12 +30,19 @@ import {
   type StreamItem,
   type AgentStage,
 } from "@/lib/chat/build-stream";
+import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/layout";
 
 interface ChatMessageProps {
   message: UIMessage;
   onRegenerate?: () => void;
   isStreaming?: boolean;
   startedAt?: string;
+  /**
+   * The current slice's strands — tints the user bubble with its FIRST
+   * strand (shared tint helpers, same source as the timeline cards).
+   * Undefined while the slice identity is unknown → the default bubble.
+   */
+  strands?: string[];
 }
 
 // ── i18n key lookup for the live agent-stage pill ───────────────────────
@@ -141,6 +148,7 @@ export const ChatMessage = memo(function ChatMessage({
   onRegenerate,
   isStreaming,
   startedAt,
+  strands,
 }: ChatMessageProps) {
   const t = useTranslations("chat.phase");
   const tChat = useTranslations("chat");
@@ -201,6 +209,12 @@ export const ChatMessage = memo(function ChatMessage({
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
       .join("\n");
+    // Strand tint of the current slice — the bubble background rides the
+    // shared tint helpers; text stays foreground at this alpha, in both
+    // themes. Unknown slice (arrival still resolving) → default secondary.
+    const userTint = strands
+      ? strandTint(strands[0], STRAND_TINT_ALPHA)
+      : undefined;
     // File parts (attachments): images render inline from their data URL;
     // anything else collapses to a small file chip.
     const fileParts = parts.filter((p) => p.type === "file" && p.url);
@@ -232,7 +246,9 @@ export const ChatMessage = memo(function ChatMessage({
             )}
             {(userText || fileParts.length === 0) && (
               <Bubble variant="secondary">
-                <BubbleContent>
+                <BubbleContent
+                  style={userTint ? { backgroundColor: userTint } : undefined}
+                >
                   <div className="font-serif font-light">
                     <MarkdownRenderer content={userText} />
                   </div>

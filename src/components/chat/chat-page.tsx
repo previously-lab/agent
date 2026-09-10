@@ -2,11 +2,12 @@
 
 import { useChat } from "@ai-sdk/react";
 import { WorkflowChatTransport } from "@ai-sdk/workflow";
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import type { UIMessage } from "ai";
 import type { VirtuosoHandle } from "react-virtuoso";
 import { ChatInput } from "./chat-input";
+import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
 import {
   UnifiedChatStream,
@@ -15,7 +16,7 @@ import {
 } from "./unified-chat-stream";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   getArrivalState,
   getBriefingIdentity,
@@ -33,6 +34,7 @@ import {
   type ResumeBlock,
 } from "@/lib/chat/stream-items";
 import { useSliceStream } from "@/hooks/use-slice-stream";
+import { useFrameColumn } from "@/hooks/use-frame-column";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -48,6 +50,15 @@ interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
    *  chat starts on the real value instead of flashing defaults. */
   initialConfig?: UserConfig;
+  /** When true the `?at=` search param is ignored. Used by the shell when the
+   *  timeline view is active, because the timeline handles the deep-link anchor. */
+  suppressAtJump?: boolean;
+  /** Shared threadline convergence anchors owned by the app shell — the chat
+   *  stream's slice seams fill them while the chat view is foreground. */
+  anchorsRef?: MutableRefObject<number[]>;
+  /** True only when the chat view is foreground (`!showTimeline`) — false
+   *  while the timeline's CardField owns the ref. */
+  anchorsActive?: boolean;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -57,7 +68,12 @@ interface MountVerdict extends ArrivalDecision {
   persona: string;
 }
 
-export function ChatPage({ initialConfig }: ChatPageProps) {
+export function ChatPage({
+  initialConfig,
+  suppressAtJump,
+  anchorsRef,
+  anchorsActive,
+}: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
   // this verdict is async — Inner (and therefore useChat) mounts only after it
@@ -77,10 +93,13 @@ export function ChatPage({ initialConfig }: ChatPageProps) {
       cancelled = true;
     };
   }, []);
-  if (!verdict) return null;
+  if (!verdict) return <ChatPageSkeleton />;
   return (
     <Inner
       initialConfig={initialConfig}
+      suppressAtJump={suppressAtJump}
+      anchorsRef={anchorsRef}
+      anchorsActive={anchorsActive}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -264,12 +283,20 @@ export function sliceStartIndex(
 
 function Inner({
   initialConfig,
+  suppressAtJump,
+  anchorsRef,
+  anchorsActive,
   persona,
   shouldResume,
   initialMessages,
   arrival,
 }: {
   initialConfig?: UserConfig;
+  suppressAtJump?: boolean;
+  /** Shared threadline convergence anchors — see ChatPageProps. */
+  anchorsRef?: MutableRefObject<number[]>;
+  /** True only when the chat view is foreground. */
+  anchorsActive?: boolean;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -337,6 +364,7 @@ function Inner({
           sliceId: arrival.sliceId,
           start: arrival.start,
           focus: arrival.focus,
+          strands: arrival.strands,
           turns: arrival.turns,
         }
       : null,
@@ -348,6 +376,12 @@ function Inner({
 
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_BASE);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  // The chat column tracks the timeline card field's card column width
+  // (same frame geometry) so the views' left/right edges never jump on the
+  // chat ↔ timeline switch. The ref lands on the stream area; the hook
+  // observes its parent — the shell's right-hand pane the timeline also
+  // measures from.
+  const { ref: paneRef, columnWidth } = useFrameColumn();
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
@@ -379,7 +413,8 @@ function Inner({
   }, [loadingOlder, pageOlder]);
 
   // Load the newest slice on mount — feeds the empty briefing. (The 3D
-  // timeline and its wheel fallback load their own catalog on /timeline.)
+  // timeline loads its catalog lazily inside AppShell.)
+  const [episodicReady, setEpisodicReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
     getEpisodicState(persona)
@@ -390,6 +425,9 @@ function Inner({
       })
       .catch(() => {
         // silently ignore
+      })
+      .finally(() => {
+        if (!cancelled) setEpisodicReady(true);
       });
     // Resolve the display name for the "PREVIOUSLY ON {name}" eyebrow.
     getBriefingIdentity(persona)
@@ -587,6 +625,9 @@ function Inner({
       // "Maximum update depth exceeded" (#185).
       key: `${message.id}-${index}`,
       message,
+      // The live turns continue the active slice — its strands tint the user
+      // bubbles (same source as the history turns' tint).
+      strands: activeSlice?.strands,
       timeIso: nowIso,
       isStreaming: message.id === lastMessage?.id && isStreaming,
       startedAt:
@@ -598,7 +639,7 @@ function Inner({
           ? () => handleRegenerate(message.id)
           : undefined,
     }));
-  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate]);
+  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice]);
 
   // ── Arrival forms (v0.10 §1.2 Rev 2): the stream is ALWAYS the view — no
   // "briefing page vs stream" split. Briefing mode seats the EmptyBriefing
@@ -616,6 +657,21 @@ function Inner({
   // A mount-time "now" stamp — the briefing tail item's time anchor for the
   // time indicator / rail.
   const [briefingTimeIso] = useState(() => new Date().toISOString());
+
+  // ── Arrival skeleton cover ─────────────────────────────────────────────
+  // Until the mount fetches settle (episodic state + the first history
+  // page), an isomorphic skeleton covers the pane and crossfades out — the
+  // briefing card / restored turns replace it without a hard cut. A hard
+  // backstop lifts the cover even if a fetch hangs forever.
+  const reducedMotion = useReducedMotion() ?? false;
+  const [skeletonBackstop, setSkeletonBackstop] = useState(false);
+  const arrivalReady = episodicReady && stream.initialLoaded;
+  useEffect(() => {
+    if (arrivalReady) return;
+    const id = setTimeout(() => setSkeletonBackstop(true), 12_000);
+    return () => clearTimeout(id);
+  }, [arrivalReady]);
+  const showArrivalSkeleton = !arrivalReady && !skeletonBackstop;
 
   const items = useMemo<ChatStreamItem[]>(() => {
     const tail: ChatStreamItem[] = showBriefingCard
@@ -794,7 +850,7 @@ function Inner({
   );
 
   // M2 jump bus: the search palette, the recall references bar and the
-  // /timeline views request a stream jump through the module-level slice-jump
+  // timeline view request a stream jump through the module-level slice-jump
   // bus (or via `?at=`, below) — the handler is the same select path
   // (page-until-loaded + scroll-to-seam + the travel clock as the loading
   // state). A jump stashed while the chat page wasn't mounted replays once,
@@ -808,14 +864,16 @@ function Inner({
     return unregister;
   }, [handleSelectSlice]);
 
-  // `?at=<sliceId>` — the timeline → chat half of the §6.1 context carry
+  // `?at=<sliceId>` — the timeline → chat half of the context carry
   // (the wheel fallback's pick, the L3 traverse, a shared link). The chat
-  // page stays MOUNTED under the timeline overlay, so this must react to
+  // page stays MOUNTED under the timeline shell, so this must react to
   // searchParam changes, not just the initial mount. Consumed once: the
   // param is stripped (replaceState, no navigation) so a refresh or a
-  // re-render never re-fires the jump.
+  // re-render never re-fires the jump. When the shell has the timeline view
+  // active it suppresses this so the timeline handles the anchor.
   const searchParams = useSearchParams();
   useEffect(() => {
+    if (suppressAtJump) return;
     const at = parseAtParam(searchParams.toString());
     if (!at) return;
     window.history.replaceState(
@@ -824,10 +882,10 @@ function Inner({
       window.location.pathname + stripAtParam(searchParams.toString()) + window.location.hash,
     );
     void handleSelectSlice(at);
-  }, [searchParams, handleSelectSlice]);
+  }, [searchParams, handleSelectSlice, suppressAtJump]);
 
   // Publish the slice at the top of the viewport — the header mode switcher
-  // reads it to build `/timeline?at=…` (chat → timeline context carry).
+  // reads it to build `/?view=timeline&at=…` (chat → timeline context carry).
   useEffect(() => () => setViewportSlice(null), []);
   const handleTopItemChange = useCallback(
     (iso: string, sliceId: string | null) => {
@@ -843,98 +901,137 @@ function Inner({
 
   return (
     <>
-      {/* ── Content — one centered column (v0.10 §6.1 首页瘦身): the timeline
-           wheel moved to the /timeline route; no resident sidebar. The region
-           below the fixed header has an explicit height; the unified stream
-           (Virtuoso) owns the scroll. The stream is always mounted (§1.2
-           Rev 2) — briefing mode rides its tail as a card; only an EMPTY
-           memory falls back to the standalone full-screen briefing. ── */}
-      <div className="pt-12">
-        {/* §5.2/§6.1 Rev 6: the swipe mode switch is OFF for now (user call,
-            2026-09-07 — revisit after the spine-left layout beds in); the
-            header switcher / Cmd+. are the way over. ModeSwitchGesture stays
-            in the tree, unwired. */}
-        <div className="relative h-[calc(100vh-3rem)]">
-          {emptyMemory ? (
-            <div className="h-full overflow-y-auto pb-24">
-              <EmptyBriefing
-                persona={persona}
-                active={activeSlice}
-                recent={timelineSlices}
-                onSend={(msg) => void handleSubmit(msg, [])}
-              />
-            </div>
-          ) : (
-            <UnifiedChatStream
-              items={items}
-              firstItemIndex={firstItemIndex}
-              loadingOlder={stream.loadingOlder}
-              onStartReached={handleStartReached}
-              error={error}
-              virtuosoRef={virtuosoRef}
-              onTopItemChange={handleTopItemChange}
-              briefing={
-                showBriefingCard
-                  ? {
-                      persona,
-                      active: activeSlice,
-                      recent: timelineSlices,
-                      onSend: (msg) => void handleSubmit(msg, []),
-                    }
-                  : null
-              }
+      {/* ── Content — one centered column below the fixed header. The shell
+           (AppShell) owns the top-level flex layout and the left time axis;
+           this component just fills the right-hand column. The stream is always
+           mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
+           an EMPTY memory falls back to the full-screen empty briefing. ── */}
+      <div className="relative flex-1 overflow-hidden" ref={paneRef}>
+        {emptyMemory ? (
+          <div className="h-full overflow-y-auto pb-24">
+            <EmptyBriefing
+              persona={persona}
+              active={activeSlice}
+              recent={timelineSlices}
+              onSend={(msg) => void handleSubmit(msg, [])}
             />
-          )}
+          </div>
+        ) : (
+          <UnifiedChatStream
+            items={items}
+            firstItemIndex={firstItemIndex}
+            loadingOlder={stream.loadingOlder}
+            onStartReached={handleStartReached}
+            error={error}
+            virtuosoRef={virtuosoRef}
+            columnWidth={columnWidth}
+            onTopItemChange={handleTopItemChange}
+            anchorsRef={anchorsRef}
+            anchorsActive={anchorsActive}
+            briefing={
+              showBriefingCard
+                ? {
+                    persona,
+                    active: activeSlice,
+                    recent: timelineSlices,
+                    onSend: (msg) => void handleSubmit(msg, []),
+                  }
+                : null
+            }
+          />
+        )}
 
-          {/* ── Time-travel cover — an overlay ABOVE the stream (the list
-               never unmounts, so the scroll position and the jump target
-               survive the trip). Doubles as the page-loading state. ── */}
-          <AnimatePresence>
-            {transition && (
-              <motion.div
-                key="travel"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
-                className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden bg-background"
-              >
-                {/* Soft brand glow behind the travel readout — the same stage-light
-                    as the empty briefing's title card. */}
-                <div
+        {/* ── Time-travel cover — an overlay ABOVE the stream (the list
+             never unmounts, so the scroll position and the jump target
+             survive the trip). Doubles as the page-loading state. ── */}
+        <AnimatePresence>
+          {transition && (
+            <motion.div
+              key="travel"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3 }}
+              className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden bg-background"
+            >
+              {/* The slice-card face — the same ring/hairline/serif language
+                  as the timeline's FrameCard and the briefing card, so the
+                  travel "moment" reads as one product. */}
+              <div className="relative mx-4 w-full max-w-md overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]">
+                <span
                   aria-hidden
-                  className="pointer-events-none absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/10 blur-3xl"
+                  className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
                 />
-                <div className="relative flex flex-col items-center gap-3">
-                  <span className="font-mono text-[0.65rem] uppercase tracking-[0.35em] text-muted-foreground/60">
-                    {tBrief("eyebrowWithName", { name: briefingName || tBrief("fallbackName") })}
-                  </span>
+                <div className="relative flex flex-col items-center px-6 py-8">
+                  <div className="flex w-full items-center gap-2 self-stretch text-[0.65rem] leading-none tracking-[0.08em] text-muted-foreground">
+                    <span
+                      aria-hidden
+                      className="inline-block size-1.5 shrink-0 rounded-[1px] bg-primary"
+                    />
+                    <span className="font-mono uppercase tracking-[0.35em]">
+                      {tBrief("eyebrowWithName", { name: briefingName || tBrief("fallbackName") })}
+                    </span>
+                  </div>
+                  <div
+                    aria-hidden
+                    className="mt-4 h-px w-full self-stretch bg-foreground/[0.07]"
+                  />
                   <RelativeTimeReadout
                     timestamp={transition.to}
                     from={transition.from}
                     onRollComplete={() => clockLandedRef.current?.()}
+                    className="mt-8"
                   />
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── Arrival skeleton cover — same seat as the travel clock: an
+             isomorphic skeleton (seams, bubble pairs, the briefing card
+             face) over the pane while the mount fetches are in flight,
+             crossfading out as the real stream takes over. ── */}
+        <AnimatePresence>
+          {showArrivalSkeleton && (
+            <motion.div
+              key="arrival-skeleton"
+              exit={{ opacity: 0 }}
+              transition={{ duration: reducedMotion ? 0 : 0.3 }}
+              className="absolute inset-0 z-10 overflow-hidden bg-background"
+            >
+              <ChatStreamSkeleton
+                tail={arrival.mode === "briefing" ? "briefing" : "rounds"}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* ── Fixed bottom bar ────────────────────────────────────────────── */}
-      <div className="fixed bottom-0 inset-x-0 z-10">
-        <div className="pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
-          <div className="mx-auto w-full md:max-w-2xl px-4 sm:px-6 lg:px-8">
-            <ChatInput
-              onSubmit={handleSubmit}
-              isLoading={isLoading}
-              onStop={handleStop}
-              persona={persona}
-              visionEnabled={visionSupported}
-              currentModelId={selectedModel}
-              onModelChange={handleModelChange}
-            />
-          </div>
+      {/* ── Bottom input bar — the shell provides the flex column, so this is
+           a normal shrink-0 footer rather than a fixed overlay. The wrapper
+           tracks the same frame column as the stream (and the timeline card
+           field), so the composer's edges sit on the stream's edges. ── */}
+      <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
+        <div
+          className={`mx-auto w-full px-4 sm:px-6 lg:px-8 ${
+            columnWidth == null ? "md:max-w-2xl" : ""
+          }`}
+          style={
+            columnWidth != null
+              ? { width: columnWidth, maxWidth: "100%" }
+              : undefined
+          }
+        >
+          <ChatInput
+            onSubmit={handleSubmit}
+            isLoading={isLoading}
+            onStop={handleStop}
+            persona={persona}
+            visionEnabled={visionSupported}
+            currentModelId={selectedModel}
+            onModelChange={handleModelChange}
+          />
         </div>
       </div>
     </>

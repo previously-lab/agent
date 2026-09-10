@@ -22,6 +22,14 @@
     "docs": "Docs",
     "settings": "Settings",
     "settingsBusy": "A reply is in progress — settings unlock when it finishes",
+    "overflow": "More",
+    "themeLabel": "Theme",
+    "languageLabel": "Language",
+    "english": "English",
+    "chinese": "中文",
+    "versionLabel": "Version",
+    "releaseNotes": "Release notes",
+    "howToSync": "How to sync",
     "mode": {
       "label": "Switch view",
       "chat": "Chat",
@@ -312,6 +320,17 @@
       "all": "Core timeline",
       "placeholder": "Search strands…",
       "empty": "No matching strands"
+    },
+    "selected": {
+      "slices": "{count, plural, one {# slice} other {# slices}}"
+    },
+    "lens": {
+      "label": "Lens",
+      "slice": "Slice",
+      "day": "Day",
+      "week": "Week",
+      "hintDesktop": "Ctrl+scroll or pinch to zoom",
+      "hintTouch": "Pinch to zoom"
     }
   },
   "settings": {

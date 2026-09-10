@@ -20,8 +20,9 @@
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { Turn } from "@/lib/episodic/types";
-import { strandColor, STRANDLESS_GREY } from "@/lib/timeline3d/layout";
+import { strandColor, strandAccent } from "@/lib/timeline3d/layout";
 import type { FrameGeometry, StackRow } from "@/lib/timeline3d/stacks";
+import { weekLabelFor } from "@/lib/timeline3d/stacks";
 import { ColorSquare, hhmm } from "./cards";
 import { useSliceTurns } from "./slice-content";
 
@@ -53,7 +54,7 @@ export interface FrameCardTexts {
  *  fallback cards so e2e aria-labels stay identical. */
 function groupLabel(row: StackRow, locale: string): string {
   const d = row.top.date;
-  if (row.level === 2) return d.slice(0, 7).replace("-", "/");
+  if (row.level === 2) return weekLabelFor(d, locale);
   const date = new Date(`${d}T12:00:00`);
   const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
     date,
@@ -65,9 +66,7 @@ const NOISE_URI =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E\")";
 
 function accentOf(entry: TimelineSliceEntry): string {
-  return entry.strands.length > 0
-    ? strandColor(entry.strands[0])
-    : STRANDLESS_GREY;
+  return strandAccent(entry.strands);
 }
 
 function durationMin(start: string, end?: string): number | null {
@@ -182,8 +181,10 @@ function LedgerRow({
   );
 }
 
-/** The bubbles: one fixed exchange (server-truncated), chat-style. User
- *  right, tinted with the card's strand accent; agent left/muted. */
+/** The bubbles: the server's opening rounds (up to two user/agent
+ *  exchanges), chat-style. User right, tinted with the card's strand
+ *  accent; agent left/muted. The bubble column may overflow the card's
+ *  fixed frame — the parent clamps it and fades the bottom edge. */
 function TurnBubbles({
   turns,
   state,
@@ -198,10 +199,11 @@ function TurnBubbles({
   texts: FrameCardTexts;
 }) {
   // The skeleton stays mounted after resolve (absolute, fading out) so the
-  // swap reads as a crossfade into the real bubbles, not a hard cut.
+  // swap reads as a crossfade into the real bubbles, not a hard cut. The
+  // server caps the payload at two rounds, so everything sent is shown.
   const loading = state === "loading";
   const hasTurns = !loading && turns != null && turns.length > 0;
-  const shown = hasTurns ? turns.slice(0, 2) : [];
+  const shown = hasTurns ? turns : [];
   return (
     <div className="relative">
       {hasTurns && (
@@ -238,9 +240,9 @@ function TurnBubbles({
           })}
         </div>
       )}
-      {/* Mirrors the fixed exchange exactly: one user bubble (2 lines →
-          3.5em) tinted with the card's accent, one agent reply (3 lines →
-          4.7em) in gray. */}
+      {/* Mirrors the opening rounds exactly: for each of the two rounds a
+          user bubble (2 lines → 3.5em) tinted with the card's accent, then
+          an agent reply (3 lines → 4.7em) in gray. */}
       <div
         aria-hidden
         className={`flex flex-col gap-[0.55em] pt-[0.2em] transition-opacity duration-300 motion-reduce:transition-none ${
@@ -249,15 +251,19 @@ function TurnBubbles({
             : "pointer-events-none absolute inset-x-0 top-0 opacity-0"
         }`}
       >
-        <div
-          className="ml-auto h-[3.5em] w-[72%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-br-[0.2em]"
-          style={
-            {
-              backgroundColor: `color-mix(in oklch, ${accent} 22%, transparent)`,
-            } as React.CSSProperties
-          }
-        />
-        <div className="h-[4.7em] w-[80%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-bl-[0.2em] bg-foreground/8" />
+        {[0, 1].map((round) => (
+          <div key={round} className="contents">
+            <div
+              className="ml-auto h-[3.5em] w-[72%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-br-[0.2em]"
+              style={
+                {
+                  backgroundColor: `color-mix(in oklch, ${accent} 22%, transparent)`,
+                } as React.CSSProperties
+              }
+            />
+            <div className="h-[4.7em] w-[80%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-bl-[0.2em] bg-foreground/8" />
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -446,11 +452,12 @@ export function FrameCard({
 
         <Hairline className="mt-[0.55em]" />
 
-        {/* The film frame: one fixed opening exchange, vertically centered
-            in the remaining space. No bottom fade — the server sends only
-            the truncated exchange, so there is nothing more to hint at. */}
+        {/* The film frame: the slice's opening rounds, vertically centered
+            in the remaining space. Two full exchanges can overflow the
+            fixed frame — the column clamps (overflow-hidden) and the
+            bottom edge fades into the card instead of growing it. */}
         <div
-          className="mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col justify-center overflow-hidden"
+          className="relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col justify-center overflow-hidden"
           style={{ maxWidth: "34em" }}
         >
           <TurnBubbles
@@ -465,6 +472,10 @@ export function FrameCard({
               {entry.summary || "…"}
             </p>
           )}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.6em] bg-gradient-to-t from-card to-transparent"
+          />
         </div>
 
         {/* Footer. */}

@@ -3,9 +3,10 @@ import { test, expect } from "@playwright/test";
 // Current routes: chat lives at the locale root (/), with settings as the only
 // sub-route. Docs moved to the official site — in-app /docs URLs are 308
 // redirects (next.config.ts), and the header Docs link is external. Navigation
-// is the top AppHeader (Previously / GitHub / Docs / Settings) — there is no
-// sidebar. Header link hrefs are locale-prefixed (/en/settings, ...), so tests
-// select them by href.
+// is the floating-island AppHeader: brand pill, centered mode switcher, and an
+// action pill (search / docs / settings + a "···" overflow menu holding
+// GitHub, theme, language, version). There is no sidebar. Header link hrefs
+// are locale-prefixed (/en/settings, ...), so tests select them by href.
 const ROUTES = ["/", "/settings"] as const;
 
 test.describe("Navigation", () => {
@@ -79,11 +80,17 @@ test.describe("Navigation", () => {
     await expect(page).toHaveURL(/\/en$/);
   });
 
-  test("header exposes the GitHub link", async ({ page }) => {
+  // The GitHub link lives in the header's "···" overflow menu (v0.12 floating
+  // islands) — the menu portals to <body>, so assert inside the popup, not
+  // under <header>.
+  test("header exposes the GitHub link in the overflow menu", async ({ page }) => {
     await page.goto("/en");
-    const github = page.locator(
-      'header a[href="https://github.com/previously-lab/agent"]',
+    await page.click('header button[data-testid="nav-overflow-trigger"]');
+    const menu = page.locator('[data-slot="dropdown-menu-content"]');
+    const github = menu.locator(
+      'a[href="https://github.com/previously-lab/agent"]',
     );
     await expect(github).toBeVisible();
+    await expect(github).toHaveAttribute("target", "_blank");
   });
 });

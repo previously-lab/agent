@@ -63,16 +63,16 @@ export function BridgeHousekeepingCard({
             }
           />
         </span>
-        <span className="min-w-0 truncate text-sm font-semibold text-foreground/90">
+        <span className="min-w-0 truncate font-serif text-sm font-semibold text-foreground/90">
           {t("bridgeHousekeeping")}
         </span>
         {tools.length > 0 && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light tabular-nums text-muted-foreground">
             {tools.length}
           </span>
         )}
         {running && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-serif text-xs font-light tabular-nums text-muted-foreground">
             {elapsed}s
           </span>
         )}
@@ -83,7 +83,7 @@ export function BridgeHousekeepingCard({
       {warning && (
         <div className="mt-1.5 flex items-baseline gap-1.5 pl-6.5 text-xs text-amber-600 dark:text-amber-400">
           <AlertTriangle className="h-3 w-3 shrink-0 self-center" />
-          <span className="shrink-0">{t("bridgeHousekeepingDegraded")}</span>
+          <span className="shrink-0 font-serif font-light">{t("bridgeHousekeepingDegraded")}</span>
           <span className="truncate font-mono text-[11px] leading-none text-amber-600/70 dark:text-amber-400/70">
             {warning}
           </span>
@@ -134,7 +134,7 @@ export function BridgeHousekeepingCard({
                     <Check className="h-3 w-3" />
                   )}
                 </span>
-                <span className="min-w-0 text-muted-foreground">{label}</span>
+                <span className="min-w-0 font-serif text-xs font-light text-muted-foreground">{label}</span>
                 {!s.running && s.summaries && s.summaries.length > 0 && (
                   <span className="truncate font-mono text-[11px] leading-none text-muted-foreground/60">
                     {s.summaries.join(", ")}

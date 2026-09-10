@@ -8,6 +8,7 @@ import {
   prependPage,
   type SeamItem,
   type ResumeBannerItem,
+  type HistoryStreamItem,
 } from "@/lib/chat/stream-items";
 import type { SliceWithContent } from "@/lib/episodic/actions";
 import type { Turn } from "@/lib/episodic/types";
@@ -85,6 +86,7 @@ describe("buildHistoryItems", () => {
       sliceId: "2026-08-11-1200",
       start: "2026-08-11T12:00:00.000Z",
       focus: "f",
+      strands: ["work"],
       turns: [
         { timestamp: "2026-08-11T12:00:00.000Z", role: "user" as const, content: "hi" },
       ],
@@ -102,6 +104,10 @@ describe("buildHistoryItems", () => {
     expect(seam.dateIso).toBe(resume.start);
     const banner = items[3] as ResumeBannerItem;
     expect(banner.startIso).toBe(resume.start);
+    // The resume turns carry the resumed slice's strands (the user bubble's
+    // tint source).
+    const turn = items[4] as Extract<HistoryStreamItem, { kind: "history-turn" }>;
+    expect(turn.strands).toEqual(["work"]);
   });
 
   it("resume-only (no history) renders banner + turns without a seam", () => {
@@ -109,11 +115,22 @@ describe("buildHistoryItems", () => {
       sliceId: "s1",
       start: "2026-08-11T12:00:00.000Z",
       focus: "f",
+      strands: [],
       turns: [
         { timestamp: "2026-08-11T12:00:00.000Z", role: "user", content: "hi" },
       ],
     });
     expect(items.map((i) => i.kind)).toEqual(["resume-banner", "history-turn"]);
+  });
+
+  it("turns carry their slice's strands (tint source for user bubbles)", () => {
+    const slice = makeSlice({ strands: ["health", "work"] });
+    const items = buildHistoryItems([slice], null);
+    const turns = items.filter(
+      (i): i is Extract<HistoryStreamItem, { kind: "history-turn" }> =>
+        i.kind === "history-turn",
+    );
+    expect(turns.every((t) => t.strands === slice.strands)).toBe(true);
   });
 });
 

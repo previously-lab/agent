@@ -5,6 +5,10 @@ import {
   zoomStateForLevel,
   strandColor,
   strandOffset,
+  strandAccent,
+  strandTint,
+  STRAND_TINT_ALPHA,
+  STRANDLESS_GREY,
   oklchToHex,
   coreXAt,
   isRealBoundaryBefore,
@@ -217,6 +221,31 @@ describe("strand identity (§5.0 palette + cable-bundle offsets)", () => {
     for (const y of [0, -10, -333.7, -5000]) {
       expect(Math.abs(coreXAt(y))).toBeLessThanOrEqual(WOBBLE_AMP + 1e-9);
     }
+  });
+});
+
+describe("strand tint — the shared slice → bubble-color source", () => {
+  it("strandAccent falls back to the strandless grey", () => {
+    expect(strandAccent([])).toBe(STRANDLESS_GREY);
+    expect(strandAccent(["work"])).toBe(strandColor("work"));
+    // First strand wins, same hash as everywhere else.
+    expect(strandAccent(["a", "b"])).toBe(strandColor("a"));
+  });
+
+  it("strandTint keeps the palette color and only adds an alpha", () => {
+    const tint = strandTint("work", STRAND_TINT_ALPHA);
+    expect(tint).toBe(
+      `oklch(from ${strandColor("work")} l c h / ${STRAND_TINT_ALPHA})`,
+    );
+    expect(STRAND_TINT_ALPHA).toBeGreaterThanOrEqual(0.08);
+    expect(STRAND_TINT_ALPHA).toBeLessThanOrEqual(0.12);
+  });
+
+  it("a null/undefined strand name tints with the strandless grey", () => {
+    expect(strandTint(null, 0.1)).toBe(`oklch(from ${STRANDLESS_GREY} l c h / 0.1)`);
+    expect(strandTint(undefined, 0.1)).toBe(
+      `oklch(from ${STRANDLESS_GREY} l c h / 0.1)`,
+    );
   });
 });
 

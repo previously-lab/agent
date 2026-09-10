@@ -1,19 +1,28 @@
 import { describe, it, expect } from "vitest";
 import {
+  modeFromSearch,
   modeFromPathname,
   parseAtParam,
   stripAtParam,
+  chatHref,
   timelineHref,
 } from "@/lib/chat/mode-switch";
 
+describe("modeFromSearch", () => {
+  it("maps ?view=timeline to timeline mode, everything else to chat", () => {
+    expect(modeFromSearch("?view=timeline")).toBe("timeline");
+    expect(modeFromSearch("view=timeline")).toBe("timeline");
+    expect(modeFromSearch("?view=chat")).toBe("chat");
+    expect(modeFromSearch("")).toBe("chat");
+    expect(modeFromSearch("?persona=user")).toBe("chat");
+  });
+});
+
 describe("modeFromPathname", () => {
-  it("maps /timeline to timeline mode, everything else to chat", () => {
-    expect(modeFromPathname("/timeline")).toBe("timeline");
-    expect(modeFromPathname("/timeline/")).toBe("timeline");
+  it("is chat-only now that the /timeline route is gone", () => {
+    expect(modeFromPathname("/timeline")).toBe("chat");
     expect(modeFromPathname("/")).toBe("chat");
     expect(modeFromPathname("/settings")).toBe("chat");
-    // A same-prefix sibling route must not match.
-    expect(modeFromPathname("/timeline-x")).toBe("chat");
   });
 });
 
@@ -45,13 +54,26 @@ describe("stripAtParam", () => {
   });
 });
 
-describe("timelineHref", () => {
+describe("chatHref", () => {
   it("carries the anchor when present", () => {
-    expect(timelineHref("2026-08-01-1000")).toBe("/timeline?at=2026-08-01-1000");
-    expect(timelineHref("a b")).toBe("/timeline?at=a%20b");
+    expect(chatHref("2026-08-01-1000")).toBe("/?at=2026-08-01-1000");
+    expect(chatHref("a b")).toBe("/?at=a%20b");
   });
 
   it("falls back to the bare route without an anchor", () => {
-    expect(timelineHref(null)).toBe("/timeline");
+    expect(chatHref(null)).toBe("/");
+  });
+});
+
+describe("timelineHref", () => {
+  it("carries the anchor when present", () => {
+    expect(timelineHref("2026-08-01-1000")).toBe(
+      "/?view=timeline&at=2026-08-01-1000",
+    );
+    expect(timelineHref("a b")).toBe("/?view=timeline&at=a%20b");
+  });
+
+  it("falls back to the view param without an anchor", () => {
+    expect(timelineHref(null)).toBe("/?view=timeline");
   });
 });

@@ -43,11 +43,12 @@ import {
   useDragControls,
   type PanInfo,
 } from "motion/react";
-import { usePathname, useRouter } from "@/i18n/navigation";
+import { useSearchParams } from "next/navigation";
+import { useRouter } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { shouldCommitModeSwitch } from "@/lib/chat/mode-gesture";
-import { timelineHref } from "@/lib/chat/mode-switch";
+import { modeFromSearch, timelineHref } from "@/lib/chat/mode-switch";
 import { getViewportSlice } from "@/lib/chat/viewport-slice";
 
 /** Pointer-downs on these targets belong to the element, never to the mode
@@ -63,7 +64,7 @@ const DRAG_HEADROOM_PX = 200;
 export function ModeSwitchGesture({ children }: { children: ReactNode }) {
   const t = useTranslations("chat.gesture");
   const router = useRouter();
-  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const dragControls = useDragControls();
   const animateControls = useAnimationControls();
   const [committed, setCommitted] = useState(false);
@@ -97,14 +98,14 @@ export function ModeSwitchGesture({ children }: { children: ReactNode }) {
     [animateControls, router],
   );
 
-  // Back in chat mode (browser back, header switcher, Cmd+.) — the page is
-  // still mounted under where the overlay was, so return the card to rest.
+  // Back in chat mode (browser back, header switcher, Cmd+.) — return the
+  // card to rest.
   useEffect(() => {
-    if (pathname.startsWith("/timeline") || !committedRef.current) return;
+    if (modeFromSearch(searchParams.toString()) === "timeline" || !committedRef.current) return;
     committedRef.current = false;
     setCommitted(false);
     void animateControls.start({ x: 0, opacity: 1, transition: SPRING_HOME });
-  }, [pathname, animateControls]);
+  }, [searchParams, animateControls]);
 
   return (
     <motion.div

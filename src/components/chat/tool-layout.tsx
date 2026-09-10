@@ -208,7 +208,7 @@ export function ToolLayout({
         {/* Name */}
         <span
           className={cn(
-            "min-w-0 shrink truncate leading-none",
+            "min-w-0 shrink truncate font-serif font-light leading-none",
             showErrorHeader
               ? "text-red-500"
               : showInterruptedHeader
@@ -243,12 +243,12 @@ export function ToolLayout({
             <span className="flex-1" />
           )}
           {showErrorHeader && hasErrorMeta && (
-            <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[12px] leading-none text-red-400/70">
+            <span className="inline-flex shrink-0 items-center gap-1.5 font-serif text-[12px] font-light leading-none text-red-400/70">
               {errorMeta}
             </span>
           )}
           {hasTrailingMeta && (
-            <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[12px] leading-none text-muted-foreground">
+            <span className="inline-flex shrink-0 items-center gap-1.5 font-serif text-[12px] font-light leading-none text-muted-foreground">
               {meta}
             </span>
           )}
@@ -259,11 +259,11 @@ export function ToolLayout({
         {children}
 
         {hasOutput && !state.interrupted && (
-          <div className="mt-2 text-xs text-muted-foreground">{output}</div>
+          <div className="mt-2 font-serif text-xs font-light text-muted-foreground">{output}</div>
         )}
 
         {state.denied && (
-          <div className="mt-2 text-xs text-red-500">
+          <div className="mt-2 font-serif text-xs font-light text-red-500">
             {t("denied")}{state.denialReason ? `: ${state.denialReason}` : ""}
           </div>
         )}
@@ -294,7 +294,7 @@ export function ToolLayout({
                         </pre>
                       )}
                       {isInterrupted && (
-                        <p className="font-mono text-xs leading-relaxed text-yellow-500">
+                        <p className="font-serif text-xs font-light leading-relaxed text-yellow-500">
                           {t("interrupted")}
                         </p>
                       )}

@@ -12,10 +12,13 @@ import {
   framePitchFor,
   groupForLevel,
   indexForAnchor,
+  isoWeekFor,
+  isoWeekKey,
   rowKeyFor,
   rowPitchFor,
   sheetPose,
   shellPose,
+  weekLabelFor,
 } from "@/lib/timeline3d/stacks";
 
 let seq = 0;
@@ -45,10 +48,51 @@ function entry(
 
 describe("rowKeyFor", () => {
   const e = entry("2024-08-17T01:21:00.000Z");
-  it("keys by slice id / day / month", () => {
+  it("keys by slice id / day / ISO week", () => {
     expect(rowKeyFor(e, 0)).toBe("2024-08-17-0121");
     expect(rowKeyFor(e, 1)).toBe("d:2024-08-17");
-    expect(rowKeyFor(e, 2)).toBe("m:2024-08");
+    expect(rowKeyFor(e, 2)).toBe("w:2024-W33");
+  });
+});
+
+describe("isoWeekFor / isoWeekKey", () => {
+  it("buckets a plain mid-month Saturday", () => {
+    expect(isoWeekKey("2024-08-17")).toBe("2024-W33");
+    expect(isoWeekFor("2024-08-17")).toMatchObject({
+      year: 2024,
+      week: 33,
+      monday: "2024-08-12",
+      sunday: "2024-08-18",
+    });
+  });
+
+  it("a Sunday belongs to the week that started the previous Monday", () => {
+    expect(isoWeekKey("2024-08-18")).toBe("2024-W33");
+    expect(isoWeekKey("2024-09-01")).toBe("2024-W35"); // Sun of 8/26–9/1
+  });
+
+  it("rolls into the neighbouring ISO year around Jan 1", () => {
+    expect(isoWeekKey("2024-12-30")).toBe("2025-W01"); // Mon 12/30–1/5
+    expect(isoWeekKey("2023-01-01")).toBe("2022-W52"); // Sun of 2022's last week
+    expect(isoWeekKey("2026-02-01")).toBe("2026-W05"); // Sun of 1/26–2/1
+  });
+
+  it("pads single-digit week numbers", () => {
+    expect(isoWeekKey("2024-01-04")).toBe("2024-W01");
+  });
+});
+
+describe("weekLabelFor", () => {
+  it("formats en as 'year Www · M/D–M/D'", () => {
+    expect(weekLabelFor("2024-08-17", "en")).toBe("2024 W33 · 8/12–8/18");
+  });
+
+  it("formats zh with 周", () => {
+    expect(weekLabelFor("2024-08-17", "zh-CN")).toBe("2024 第33周 · 8/12–8/18");
+  });
+
+  it("follows the ISO week year across a calendar-year boundary", () => {
+    expect(weekLabelFor("2024-12-30", "en")).toBe("2025 W01 · 12/30–1/5");
   });
 });
 
@@ -76,12 +120,13 @@ describe("groupForLevel", () => {
     expect(rows[0].strands).toEqual(["running", "work"]);
   });
 
-  it("L2 stacks by month", () => {
+  it("L2 stacks by ISO week (Monday start)", () => {
     const rows = groupForLevel(entries, 2);
     expect(rows).toHaveLength(2);
-    expect(rows[0].key).toBe("m:2024-08");
+    expect(rows[0].key).toBe("w:2024-W33"); // 8/12–8/18 holds 08-17 ×2 + 08-18
     expect(rows[0].count).toBe(3);
-    expect(rows[1].key).toBe("m:2024-09");
+    expect(rows[1].key).toBe("w:2024-W35"); // 8/26–9/1 holds Sunday 09-01
+    expect(rows[1].count).toBe(1);
   });
 
   it("sorts defensively when input is unordered", () => {
@@ -116,7 +161,7 @@ describe("shellPose", () => {
 
   it("stays inside the askew-but-tidy envelope", () => {
     for (let i = 0; i < MAX_SHELLS; i++) {
-      for (const key of ["a", "b", "c", "m:2024-08"]) {
+      for (const key of ["a", "b", "c", "w:2024-W33"]) {
         const p = shellPose(key, i);
         expect(Math.abs(p.rotate)).toBeGreaterThanOrEqual(0.5);
         expect(Math.abs(p.rotate)).toBeLessThanOrEqual(1.4);
@@ -138,8 +183,8 @@ describe("indexForAnchor", () => {
     const days = groupForLevel(entries, 1);
     // Anchored on the OLDER member of the 08-17 stack → that stack.
     expect(indexForAnchor(days, "2024-08-17-0121")).toBe(0);
-    const months = groupForLevel(entries, 2);
-    expect(indexForAnchor(months, "2024-08-18-1000")).toBe(0);
+    const weeks = groupForLevel(entries, 2); // all three in 2024-W33
+    expect(indexForAnchor(weeks, "2024-08-18-1000")).toBe(0);
   });
 
   it("falls back to the nearest row by time when the entry is gone (filter)", () => {
@@ -201,7 +246,7 @@ describe("sheetPose", () => {
   });
 
   it("cascades: deeper sheets peek further, in one stable direction", () => {
-    for (const key of ["a", "b", "m:2024-08", "d:2024-08-17", "x"]) {
+    for (const key of ["a", "b", "w:2024-W33", "d:2024-08-17", "x"]) {
       const poses = [0, 1, 2].map((i) => sheetPose(key, i));
       for (const p of poses) {
         expect(Math.abs(p.rotate)).toBeLessThanOrEqual(5.4);

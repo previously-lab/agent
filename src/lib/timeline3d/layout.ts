@@ -172,6 +172,33 @@ export function strandColor(name: string): string {
 }
 
 /**
+ * A slice's accent: its FIRST strand's color, or STRANDLESS_GREY when the
+ * slice carries no strands. The single source for "slice → color" — the
+ * timeline cards (cards.tsx / frame-card.tsx) and the chat's strand tint
+ * both derive from here, never re-implementing the fallback.
+ */
+export function strandAccent(strands: readonly string[]): string {
+  return strands.length > 0 ? strandColor(strands[0]) : STRANDLESS_GREY;
+}
+
+/** Default alpha for strand-tinted surfaces (chat user bubbles) — 8–12%
+ *  reads as a tint in both light and dark themes. */
+export const STRAND_TINT_ALPHA = 0.12;
+
+/**
+ * A low-alpha background tint of a strand color (`null`/`undefined` name →
+ * the strandless grey). Relative oklch syntax keeps STRAND_PALETTE the only
+ * color source and lets the page's theme show through at any alpha.
+ */
+export function strandTint(
+  name: string | null | undefined,
+  alpha: number,
+): string {
+  const base = name ? strandColor(name) : STRANDLESS_GREY;
+  return `oklch(from ${base} l c h / ${alpha})`;
+}
+
+/**
  * Deterministic lane offset for a strand — a point in the cable bundle's
  * cross-section disc, radius in [STRAND_LANE_MIN, STRAND_LANE_MAX]. x is the
  * in-plane lateral axis (visible head-on), z the depth axis (revealed by the

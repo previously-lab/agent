@@ -1,12 +1,13 @@
+import { Suspense } from "react";
 import { setRequestLocale } from "next-intl/server";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
-import { ChatPage } from "@/components/chat/chat-page";
+import { AppShell } from "@/components/shell/app-shell";
 import { ClientErrorCapture } from "@/components/chat/client-error-capture";
 import { DebugErrorBoundary } from "@/components/ui/error-boundary";
 import { loadUserConfig } from "@/lib/config/loader";
 
-type SearchParams = Promise<{ persona?: string }>;
+type SearchParams = Promise<{ persona?: string; view?: string; at?: string }>;
 
 export default async function HomePage({
   params,
@@ -29,8 +30,9 @@ export default async function HomePage({
   // and the underlying GitHub read rides the readFile cache, so this is cheap.
   const config = await loadUserConfig();
 
-  // One page: the unified message stream / empty briefing (v0.10 §6.1 — the
-  // timeline wheel moved to the /timeline route; the home page is pure chat).
+  // v0.11 single-shell page: chat and timeline are views of `/` selected by
+  // the `?view=timeline` search param. AppShell owns the left time axis and
+  // the switchable right pane.
   return (
     <>
       {/* Window-level error listeners — catch anything the SDK transport or
@@ -40,7 +42,9 @@ export default async function HomePage({
           here with the full stack + component stack instead of an opaque
           frame. */}
       <DebugErrorBoundary label="chat-page">
-        <ChatPage initialConfig={config} />
+        <Suspense fallback={<div className="h-dvh" />}>
+          <AppShell initialConfig={config} />
+        </Suspense>
       </DebugErrorBoundary>
     </>
   );
