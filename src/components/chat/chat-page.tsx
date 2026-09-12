@@ -5,7 +5,6 @@ import { WorkflowChatTransport } from "@ai-sdk/workflow";
 import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import type { UIMessage } from "ai";
-import type { VirtuosoHandle } from "react-virtuoso";
 import { ChatInput } from "./chat-input";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
@@ -63,9 +62,6 @@ interface ChatPageProps {
    *  so the band's ruler and rotation drift track the chat the same way the
    *  card field makes them track the timeline. */
   progressRef?: MutableRefObject<number>;
-  /** Render the conversation as a camera-navigated field instead of a
-   *  virtualized scroll container. See `ConversationField`. */
-  useField?: boolean;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -81,7 +77,6 @@ export function ChatPage({
   anchorsRef,
   anchorsActive,
   progressRef,
-  useField,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -110,7 +105,6 @@ export function ChatPage({
       anchorsRef={anchorsRef}
       anchorsActive={anchorsActive}
       progressRef={progressRef}
-      useField={useField}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -298,7 +292,6 @@ function Inner({
   anchorsRef,
   anchorsActive,
   progressRef,
-  useField,
   persona,
   shouldResume,
   initialMessages,
@@ -306,7 +299,6 @@ function Inner({
 }: {
   initialConfig?: UserConfig;
   progressRef?: MutableRefObject<number>;
-  useField?: boolean;
   suppressAtJump?: boolean;
   /** Shared strand-field anchors — see ChatPageProps. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;
@@ -389,21 +381,19 @@ function Inner({
   );
   const stream = useSliceStream(persona, streamCursor);
 
-  const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_BASE);
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null);
-  // The field owns the same two moves the Virtuoso handle offers, so the jump
-  // paths below can drive whichever renderer is live.
+  // The field owns the position, so the jump paths drive it directly rather
+  // than going through a list handle.
   const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
 
-  // Page one older slice page in and shift the absolute index origin by the
-  // exact item delta so the viewport doesn't move (Virtuoso prepend pattern).
+  // Page one older slice in. There is no index origin to shift any more: the
+  // field holds its position through a prepend by measuring the added blocks,
+  // which is the same guarantee without a windowing library's bookkeeping.
   const { loadOlder, loadingOlder } = stream;
   const pageOlder = useCallback(async () => {
-    const added = await loadOlder();
-    if (added > 0) setFirstItemIndex((f) => f - added);
+    await loadOlder();
   }, [loadOlder]);
 
   // startReached while a page is in flight (incl. the initial fill) would
@@ -696,19 +686,35 @@ function Inner({
     ];
   }, [stream.slices, resumeBlock, liveItems, showBriefingCard, briefingTimeIso]);
   // Refs for the async jump path (scrollToIndex after paging lands).
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
 
-  // Virtuoso's scrollToIndex takes the DATA-relative index (0-based into
-  // `items`) — the firstItemIndex shift only applies to the indexes Virtuoso
-  // REPORTS (rangeChanged / itemContent), and a shifted index here gets
-  // clamped to the last item (a silent no-op jump).
+  /**
+   * Run `fn` against the field's handle as soon as it exists.
+   *
+   * The field mounts BELOW this component and fills its handle from an effect,
+   * so a jump that fires during the mount sequence — and `?at=` is consumed
+   * exactly then — would find nothing. Retrying is bounded, so a genuinely
+   * absent field gives up rather than spinning. `scrollToKey` needs no retry
+   * of its own: it remembers an unloaded target and lands when it arrives.
+   */
+  const withField = useCallback(
+    (fn: (api: ConversationFieldHandle) => void, frames = 120) => {
+      const attempt = (left: number) => {
+        const api = fieldApiRef.current;
+        if (api) {
+          fn(api);
+          return;
+        }
+        if (left <= 0) return;
+        requestAnimationFrame(() => attempt(left - 1));
+      };
+      attempt(frames);
+    },
+    [],
+  );
+
   const scrollToBottom = useCallback(() => {
-    virtuosoRef.current?.scrollToIndex({
-      index: itemsRef.current.length - 1,
-      align: "end",
-    });
-  }, []);
+    withField((api) => api.scrollToBottom());
+  }, [withField]);
 
   const handleSubmit = async (message: string, images: File[]) => {
     // Sending snaps back to the present: the jump target is cleared and the
@@ -819,9 +825,9 @@ function Inner({
       // right above the live turns).
       let found = true;
       if (sliceId !== "now" && sliceId !== resumeBlock?.sliceId) {
-        found = await stream.loadUntilSlice(sliceId, (added) => {
-          if (added > 0) setFirstItemIndex((f) => f - added);
-        });
+        // No index bookkeeping to do: the field tracks its own offsets and
+        // absorbs a prepend by measurement, not by shifting a window base.
+        found = await stream.loadUntilSlice(sliceId);
       }
 
       await clockLanded;
@@ -842,13 +848,11 @@ function Inner({
           scrollToBottom();
           return;
         }
-        const rel = sliceStartIndex(itemsRef.current, sliceId);
-        if (rel !== null) {
-          virtuosoRef.current?.scrollToIndex({
-            index: rel,
-            align: "start",
-          });
-        }
+        // The field addresses a slice by its seam KEY — the seam carries the
+        // slice id — so it never needs the data-relative index the virtualized
+        // list wanted. A false return means the target is still paging in; the
+        // field lands on it when it appears.
+        withField((api) => api.scrollToKey("seam-" + sliceId));
       });
     },
     [
@@ -857,6 +861,7 @@ function Inner({
       resumeBlock,
       stream,
       scrollToBottom,
+      withField,
       resolveSliceStart,
       tHist,
     ],
@@ -941,16 +946,14 @@ function Inner({
         ) : (
           <UnifiedChatStream
             items={items}
-            firstItemIndex={firstItemIndex}
             loadingOlder={stream.loadingOlder}
             onStartReached={handleStartReached}
             error={error}
-            virtuosoRef={virtuosoRef}
             onTopItemChange={handleTopItemChange}
             anchorsRef={anchorsRef}
             anchorsActive={anchorsActive}
             progressRef={progressRef}
-            useField={useField}
+            fieldApiRef={fieldApiRef}
             briefing={
               showBriefingCard
                 ? {

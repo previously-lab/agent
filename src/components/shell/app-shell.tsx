@@ -234,10 +234,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
             anchorsRef={anchorsRef}
             anchorsActive={!showTimeline}
             progressRef={progressRef}
-            // The conversation field is the default; `?field=0` falls back to
-            // the Virtuoso list on the same data, which is the only honest way
-            // to compare the two while the field is still settling.
-            useField={searchParams.get("field") !== "0"}
           />
         </div>
 

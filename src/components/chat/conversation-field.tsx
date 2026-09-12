@@ -35,7 +35,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
-import { NextIntlClientProvider, useLocale, useMessages } from "next-intl";
+import { Loader2 } from "lucide-react";
+import { NextIntlClientProvider, useLocale, useMessages, useTranslations } from "next-intl";
+import { useIsMobile } from "@/hooks/use-is-mobile";
+import { ErrorBanner } from "./error-banner";
+import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { SliceGate } from "./slice-gate";
@@ -57,6 +61,8 @@ const FOLLOW = 0.22;
 /** Height assumed for a block that has not reported yet. Only ever applies to
  *  offscreen history, and it is replaced the moment the block measures. */
 const FALLBACK_BLOCK_PX = 320;
+/** How long the scroll-transient time pill lingers after the camera stops. */
+const INDICATOR_HOLD_MS = 1000;
 
 /** What a caller outside the field can ask it to do. Filled into a ref rather
  *  than exposed through a component ref, matching `anchorsRef`/`progressRef` —
@@ -86,6 +92,16 @@ export interface ConversationFieldProps {
   apiRef?: React.MutableRefObject<ConversationFieldHandle | null>;
   /** Called when the reader reaches the top of what is loaded. */
   onNeedOlder: () => void;
+  /** The block at the top of the viewport, reported only when it CHANGES.
+   *  Replaces what the virtualized list read off `rangeChanged`: the shell
+   *  publishes the slice for the mode switcher, and the travel clock reads the
+   *  time it is travelling FROM. `sliceId` is null for the live run. */
+  onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
+  /** True while older slices are being paged in — shown above the oldest
+   *  loaded block. */
+  loadingOlder?: boolean;
+  /** A failed turn, shown as a banner under the content. */
+  error?: Error;
   /** Briefing payload, seated as the tail card exactly as in the stream. */
   briefing?: React.ComponentProps<typeof EmptyBriefing> | null;
   /** False while the reader has scrolled away from the live edge — growth must
@@ -109,6 +125,22 @@ function splitItems(items: ChatStreamItem[]): {
   const firstLive = items.findIndex((i) => i.kind === "live");
   if (firstLive < 0) return { history: items, live: [] };
   return { history: items.slice(0, firstLive), live: items.slice(firstLive) };
+}
+
+/** The slice a stream item belongs to, or null for the live run. Seam and
+ *  resume keys carry the slice id (`seam-<id>` / `resume-<id>`), which is the
+ *  same convention the virtualized list read them with. */
+function sliceIdOf(item: ChatStreamItem): string | null {
+  switch (item.kind) {
+    case "history-turn":
+      return item.sliceId;
+    case "seam":
+      return item.key.slice("seam-".length);
+    case "resume-banner":
+      return item.key.slice("resume-".length);
+    default:
+      return null;
+  }
 }
 
 /** A new block starts at each seam and each resume banner — the same
@@ -378,11 +410,16 @@ export function ConversationField({
   progressRef,
   apiRef,
   onNeedOlder,
+  onTopItemChange,
+  loadingOlder,
+  error,
   briefing,
   following,
 }: ConversationFieldProps) {
   const messages = useMessages();
   const locale = useLocale();
+  const tSeam = useTranslations("chat.seam");
+  const isMobile = useIsMobile();
 
   const { history, live } = useMemo(() => splitItems(items), [items]);
   const blocks = useMemo(() => groupBlocks(history), [history]);
@@ -397,6 +434,13 @@ export function ConversationField({
   const maxOffsetRef = useRef(0);
   const [, forceRender] = useState(0);
   const [mountedCount, setMountedCount] = useState(0);
+  const [indicatorVisible, setIndicatorVisible] = useState(false);
+  const movingRef = useRef(0);
+  const indicatorShownRef = useRef(false);
+  const topKeyRef = useRef("");
+  const onTopItemChangeRef = useRef(onTopItemChange);
+  onTopItemChangeRef.current = onTopItemChange;
+  const [topTime, setTopTime] = useState<string | null>(null);
   // Following is SELF-MANAGED unless the caller insists: the field is the only
   // thing that knows whether the camera is at the live edge, and deriving it
   // here means a caller cannot forget to keep it up to date.
@@ -413,6 +457,27 @@ export function ConversationField({
    *  a data attribute. The slice gates read it to choose which of their two
    *  times to show; see `SliceGate` for why this is not React state. */
   const dirRef = useRef<"past" | "future">("future");
+
+  /** A jump the caller asked for before its target had finished paging in.
+   *  See the effect below — this is what makes `scrollToKey` reliable without
+   *  making the caller poll. */
+  const pendingKeyRef = useRef<string | null>(null);
+
+  /** The block holding `key`, matching the whole key first and then a key
+   *  SUFFIX (a slice id), so a caller that only knows the slice reaches it
+   *  without walking the item list itself. */
+  const findBlockFor = useCallback(
+    (key: string): number | null => {
+      for (let i = 0; i < blocks.length; i++) {
+        if (blocks[i].items.some((it) => it.key === key)) return i;
+      }
+      for (let i = 0; i < blocks.length; i++) {
+        if (blocks[i].items.some((it) => it.key.endsWith(key))) return i;
+      }
+      return null;
+    },
+    [blocks],
+  );
 
   /** The ONLY way the camera moves. Clamping, the follow state and the
    *  direction attribute live together so no input path can leave them
@@ -461,6 +526,18 @@ export function ConversationField({
   const maxOffset = Math.max(0, totalPx - viewportHRef.current);
   maxOffsetRef.current = maxOffset;
 
+  // Honour a jump whose target was still paging in when it was asked for.
+  // `findBlockFor` changes identity whenever the block list does, so this runs
+  // exactly when new content could have brought the target with it.
+  useEffect(() => {
+    const key = pendingKeyRef.current;
+    if (!key) return;
+    const i = findBlockFor(key);
+    if (i === null) return;
+    pendingKeyRef.current = null;
+    setTarget(offsetsRef.current[i] ?? 0);
+  }, [findBlockFor, setTarget]);
+
   // Arrival: sit on the live edge and stay there while the first measurements
   // land. The first placement is instant — a conversation should not animate
   // itself into view — and every later one is the normal eased follow.
@@ -480,31 +557,39 @@ export function ConversationField({
     if (!apiRef) return;
     apiRef.current = {
       scrollToKey(key) {
-        for (let i = 0; i < blocks.length; i++) {
-          if (blocks[i].items.some((it) => it.key === key)) {
-            setTarget(offsetsRef.current[i] ?? 0);
-            return true;
-          }
-        }
-        // A slice's seam key carries the slice id (`seam-<id>`, see
-        // stream-items.ts), so callers that only know the slice can reach it
-        // without walking the item list themselves.
-        for (let i = 0; i < blocks.length; i++) {
-          if (blocks[i].items.some((it) => it.key.endsWith(key))) {
-            setTarget(offsetsRef.current[i] ?? 0);
-            return true;
-          }
+        // A PROGRAMMATIC jump also ends the arrival. Without this the arrival
+        // pin keeps re-targeting the bottom whenever paging changes maxOffset,
+        // and it silently overrides the jump the caller just asked for.
+        arrivingRef.current = false;
+        const i = findBlockFor(key);
+        if (i !== null) {
+          setTarget(offsetsRef.current[i] ?? 0);
+          return true;
         }
         if (key === "live" && live.length > 0) {
           setTarget(offsetsRef.current[blocks.length] ?? 0);
           return true;
         }
+        // NOT LOADED YET — and this is the normal case, not an error. A jump
+        // pages its target in first, and the caller scrolls on the frame after
+        // the paging resolves, which is BEFORE React has committed the new
+        // blocks; the handle it calls therefore still closes over the old
+        // list. Remembering the key and honouring it when the block appears
+        // makes the jump reliable without the caller polling. The field still
+        // fetches nothing itself — the paging policy stays with the caller.
+        pendingKeyRef.current = key;
         return false;
       },
       scrollToOffset(px) {
+        arrivingRef.current = false;
         setTarget(px);
       },
       scrollToBottom() {
+        // The one programmatic move that KEEPS the arrival pin: it is going
+        // where the pin wants to be, and the pin is what holds it there while
+        // the tail keeps growing.
+        arrivingRef.current = true;
+        arrivedRef.current = true;
         setTarget(maxOffsetRef.current);
       },
       offset() {
@@ -514,10 +599,15 @@ export function ConversationField({
     return () => {
       apiRef.current = null;
     };
-  }, [apiRef, blocks, live.length, setTarget]);
+  }, [apiRef, findBlockFor, blocks.length, live.length, setTarget]);
 
   // The eased follow. A rAF rather than `useFrame` because the position must
   // keep advancing even if the canvas is briefly idle.
+  //
+  // It also reports the block at the top of the viewport, but only when that
+  // block CHANGES — the same one-read-per-crossing shape the virtualized list
+  // had, and the reason the shell's viewport-slice publication does not tick
+  // per frame.
   useEffect(() => {
     let raf = 0;
     const tick = () => {
@@ -525,11 +615,37 @@ export function ConversationField({
       const d = targetRef.current - offsetRef.current;
       if (d !== 0) {
         offsetRef.current += Math.abs(d) < 0.5 ? d : d * FOLLOW;
+        movingRef.current = performance.now();
+        if (!indicatorShownRef.current) {
+          indicatorShownRef.current = true;
+          setIndicatorVisible(true);
+        }
+      } else if (
+        indicatorShownRef.current &&
+        performance.now() - movingRef.current > INDICATOR_HOLD_MS
+      ) {
+        indicatorShownRef.current = false;
+        setIndicatorVisible(false);
       }
+
+      const cb = onTopItemChangeRef.current;
+      if (!cb || blocks.length === 0) return;
+      const off = offsetRef.current;
+      const offsets = offsetsRef.current;
+      let idx = 0;
+      for (let i = 0; i < blocks.length; i++) {
+        if ((offsets[i] ?? 0) <= off) idx = i;
+        else break;
+      }
+      const first = blocks[idx]?.items[0];
+      if (!first || first.key === topKeyRef.current) return;
+      topKeyRef.current = first.key;
+      setTopTime(first.timeIso);
+      cb(first.timeIso, sliceIdOf(first));
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [blocks]);
 
   const onBlockHeight = useCallback(
     (index: number, h: number) => {
@@ -683,6 +799,24 @@ export function ConversationField({
           onMountCount={setMountedCount}
         />
       </Canvas>
+
+      {/* The paging affordance, seated where the virtualized list's Header
+          was: pinned to the top of the viewport, above the oldest loaded
+          block, so it reads whether or not the first block is on screen. */}
+      {loadingOlder && (
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-40 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          {tSeam("loadingOlder")}
+        </div>
+      )}
+
+      {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
+          retired — the 3D axis carries time. */}
+      {isMobile && (
+        <StreamTimeIndicator timeIso={topTime} visible={indicatorVisible} />
+      )}
+
+      {error && <ErrorBanner error={error} />}
 
       <div className="pointer-events-none absolute right-3 top-3 z-50 rounded-md bg-card/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-muted-foreground ring-1 ring-foreground/10">
         <div>conversation field</div>
