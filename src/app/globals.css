@@ -315,6 +315,18 @@
   color: var(--foreground);
 }
 
+/* The slice gate offers two readouts and shows the one matching the direction
+   the reader is moving through it — back into the past, or forward to now.
+   Switched by an attribute on the field rather than by React state: the flip
+   happens mid-scroll, and a state change would re-render every mounted block,
+   each of which is its own React root with its own provider. */
+[data-dir="past"] .host-future {
+  display: none;
+}
+[data-dir="future"] .host-past {
+  display: none;
+}
+
 /* ── Streaming content animations ──────────────────────────────────── */
 
 @keyframes slide-in-heading {

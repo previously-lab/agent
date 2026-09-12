@@ -235,6 +235,11 @@
       "interruptedContinuePrompt": "Please continue the response you were working on — it was interrupted before finishing.",
       "backgroundDone": "Your answer is ready"
     },
+    "gate": {
+      "label": "Between conversations",
+      "past": "Back to the past · {date}",
+      "future": "Back to now · {date}"
+    },
     "seam": {
       "checkpoint": "Auto-archived · conversation continues",
       "newConversation": "{date} · New conversation",

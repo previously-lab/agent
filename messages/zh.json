@@ -235,6 +235,11 @@
       "interruptedContinuePrompt": "请继续你之前被中断的回答——它还没完成。",
       "backgroundDone": "你的回答已就绪"
     },
+    "gate": {
+      "label": "对话之间",
+      "past": "回到过去 · {date}",
+      "future": "回到现在 · {date}"
+    },
     "seam": {
       "checkpoint": "自动存档 · 对话继续",
       "newConversation": "{date} · 新对话",

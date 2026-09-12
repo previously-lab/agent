@@ -38,7 +38,7 @@ import { Html } from "@react-three/drei";
 import { NextIntlClientProvider, useLocale, useMessages } from "next-intl";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import { SliceSeam } from "./slice-seam";
+import { SliceGate } from "./slice-gate";
 import { HistoryTurn } from "./history-turn";
 import { ChatMessage } from "./chat-message";
 import { ResumeBanner } from "./resume-banner";
@@ -136,9 +136,11 @@ function renderStreamItem(
 ) {
   switch (item.kind) {
     case "seam":
+      // The gate REPLACES the hairline divider in the field. It carries the
+      // same two times the seam did, but as a region tall enough for the band
+      // to unwind in — a release needs somewhere to happen.
       return (
-        <SliceSeam
-          seam={item.seam}
+        <SliceGate
           dateIso={item.dateIso}
           prevActivityIso={item.prevActivityIso}
         />
@@ -405,14 +407,29 @@ export function ConversationField({
   const arrivingRef = useRef(true);
   const arrivedRef = useRef(false);
 
-  /** The ONLY way the camera moves. Clamping and the follow state live together
-   *  so no input path can leave the two disagreeing. */
+  /** The direction the reader last moved, written straight onto the wrapper as
+   *  a data attribute. The slice gates read it to choose which of their two
+   *  times to show; see `SliceGate` for why this is not React state. */
+  const dirRef = useRef<"past" | "future">("future");
+
+  /** The ONLY way the camera moves. Clamping, the follow state and the
+   *  direction attribute live together so no input path can leave them
+   *  disagreeing. */
   const setTarget = useCallback(
     (next: number) => {
       const max = maxOffsetRef.current;
       const clamped = Math.min(max, Math.max(0, next));
+      const prev = targetRef.current;
       targetRef.current = clamped;
       if (following === undefined) followingRef.current = clamped >= max - 4;
+      if (clamped !== prev) {
+        const dir = clamped < prev ? "past" : "future";
+        if (dir !== dirRef.current) {
+          dirRef.current = dir;
+          const el = wrapperRef.current;
+          if (el) el.dataset.dir = dir;
+        }
+      }
     },
     [following],
   );
@@ -627,6 +644,7 @@ export function ConversationField({
     // gesture for its own panning and no pointermove ever arrives.
     <div
       ref={wrapperRef}
+      data-dir="future"
       className="relative h-full w-full touch-none overflow-hidden"
     >
       <Canvas
