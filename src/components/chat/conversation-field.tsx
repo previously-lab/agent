@@ -35,7 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
-import { Loader2 } from "lucide-react";
+import { ChevronUp, Loader2 } from "lucide-react";
 import { NextIntlClientProvider, useLocale, useMessages, useTranslations } from "next-intl";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ErrorBanner } from "./error-banner";
@@ -52,10 +52,10 @@ import { EmptyBriefing } from "./empty-briefing";
  *  width in world units. One world unit is one CSS pixel, so the numbers here
  *  are the numbers on screen and the text is never scaled. */
 const COLUMN_PX = 680;
-/** How far outside the viewport a block stays mounted. */
-const OVERSCAN_PX = 1200;
-/** The reader is this close to the top of what is loaded → ask for older. */
-const LOAD_OLDER_PX = 600;
+/** How far past the viewport a block stays MOUNTED (never a fetch: paging is
+ *  manual). About one screen — the reader should be able to scroll a little in
+ *  either direction without a block appearing from nowhere. */
+const OVERSCAN_PX = 700;
 /** Follow fraction per frame; higher is snappier, lower is floatier. */
 const FOLLOW = 0.22;
 /** Height assumed for a block that has not reported yet. Only ever applies to
@@ -419,6 +419,7 @@ export function ConversationField({
   const messages = useMessages();
   const locale = useLocale();
   const tSeam = useTranslations("chat.seam");
+  const tChat = useTranslations("chat");
   const isMobile = useIsMobile();
 
   const { history, live } = useMemo(() => splitItems(items), [items]);
@@ -438,6 +439,7 @@ export function ConversationField({
   const movingRef = useRef(0);
   const indicatorShownRef = useRef(false);
   const topKeyRef = useRef("");
+  const loadOlderRef = useRef<HTMLDivElement>(null);
   const onTopItemChangeRef = useRef(onTopItemChange);
   onTopItemChangeRef.current = onTopItemChange;
   const [topTime, setTopTime] = useState<string | null>(null);
@@ -628,6 +630,13 @@ export function ConversationField({
         setIndicatorVisible(false);
       }
 
+      // The ask-for-older control rides the CONTENT's top edge, written
+      // imperatively: a `top` from React state would re-render the page every
+      // frame. Twelve px of lead so it clears the content once you scroll in.
+      if (loadOlderRef.current) {
+        loadOlderRef.current.style.top = `${12 - offsetRef.current}px`;
+      }
+
       const cb = onTopItemChangeRef.current;
       if (!cb || blocks.length === 0) return;
       const off = offsetRef.current;
@@ -764,10 +773,13 @@ export function ConversationField({
     };
   }, [setTarget]);
 
-  // Prefetch when the reader nears the top of what is loaded.
-  useEffect(() => {
-    if (targetRef.current <= LOAD_OLDER_PX) onNeedOlder();
-  }, [onNeedOlder, mountedCount]);
+  // Page older is MANUAL — the reader asks for it at the top of the content.
+  // There is deliberately no scroll-position trigger: an earlier version fired
+  // at `target <= LOAD_OLDER_PX` from an effect keyed on the mounted count, and
+  // the mounted count changes while the first measurement pass settles, so
+  // arriving alone paged history in. It also fired unconditionally whenever the
+  // loaded content was shorter than the threshold. A slice read is a repository
+  // call in production; it should be asked for, not inferred.
 
   return (
     // `touch-none` is load-bearing: without it the browser claims the touch
@@ -803,12 +815,29 @@ export function ConversationField({
       {/* The paging affordance, seated where the virtualized list's Header
           was: pinned to the top of the viewport, above the oldest loaded
           block, so it reads whether or not the first block is on screen. */}
-      {loadingOlder && (
-        <div className="pointer-events-none absolute inset-x-0 top-3 z-40 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          {tSeam("loadingOlder")}
-        </div>
-      )}
+      {/* THE WAY BACK. Pinned to the very top of the CONTENT — so it comes
+          into view exactly when the reader has reached the oldest thing
+          loaded, and scrolls away with everything else. Paging is asked for
+          here rather than inferred from a scroll position. */}
+      <div
+        ref={loadOlderRef}
+        className="absolute left-1/2 top-0 z-40 flex -translate-x-1/2 justify-center"
+        style={{ width: COLUMN_PX }}
+      >
+        <button
+          type="button"
+          onClick={onNeedOlder}
+          disabled={loadingOlder}
+          className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/90 px-4 py-2 text-xs text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground disabled:opacity-60"
+        >
+          {loadingOlder ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <ChevronUp className="h-3.5 w-3.5" />
+          )}
+          {loadingOlder ? tSeam("loadingOlder") : tChat("seamLoadOlder")}
+        </button>
+      </div>
 
       {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
           retired — the 3D axis carries time. */}

@@ -240,6 +240,7 @@
       "past": "Back to the past · {date}",
       "future": "Back to now · {date}"
     },
+    "seamLoadOlder": "Load earlier conversations",
     "seam": {
       "checkpoint": "Auto-archived · conversation continues",
       "newConversation": "{date} · New conversation",
