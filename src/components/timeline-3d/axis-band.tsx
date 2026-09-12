@@ -14,15 +14,18 @@
  * view (`hidden` wrapper, zero layout space); internally the band still runs
  * its narrow mode (`w-14`) there so the timeline reopen blooms from the
  * collapsed weave. In timeline view it is a slim strip on phones (`w-10`) and
- * expands on desktop (`md:w-44`). The width swap is a 500 ms CSS transition,
- * and the threadline weave blooms/collapses in step with it via its
- * `expanded` prop (see threadline-scene).
+ * is a thin strip (`w-8`, 32px) in both views. The width swap is a 500 ms
+ * CSS transition,
+ * and the threadline weave blooms/collapses in step with it on its own: the
+ * strand cylinder's radius is read against the live band width every frame
+ * (see threadline-scene), so the width transition IS the bloom.
  */
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useTheme } from "@teispace/next-themes";
 import { useTranslations } from "next-intl";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import type { RulerRange } from "@/lib/timeline3d/ruler-math";
 import {
   computeYearMarkers,
@@ -156,11 +159,11 @@ export interface AxisBandProps {
   progressRef: React.MutableRefObject<number>;
   /** Card-field zoom level — the threadline camera reads it per frame. */
   levelRef: React.MutableRefObject<StackLevel>;
-  /** Screen-Y fractions (0=top, 1=bottom) of the current view's nodes — the
-   *  card field's row starts in timeline view, the chat stream's slice seam
-   *  rows in chat view; the threadline converges its helices at these
-   *  heights. */
-  anchorsRef: React.MutableRefObject<number[]>;
+  /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
+   *  the strands each carries — the card field's row starts in timeline view,
+   *  the chat stream's slice seam rows in chat view; the band winds its strand
+   *  lines at these heights. */
+  anchorsRef: React.MutableRefObject<FieldAnchor[]>;
   /** Currently selected strand, if any. */
   strand: string | null;
   /** Strand list for the filter chip. */
@@ -202,7 +205,7 @@ export function AxisBand({
   useEffect(() => {
     const el = bandRef.current;
     if (!el) return;
-    const update = () => setBandWide(el.clientWidth >= 176); // md:w-44
+    const update = () => setBandWide(el.clientWidth >= 90); // md:w-24
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
@@ -213,7 +216,7 @@ export function AxisBand({
     <div
       ref={bandRef}
       className={`relative shrink-0 ${
-        narrow ? "w-14" : "w-10 md:w-44"
+        narrow ? "w-14" : "w-8 md:w-8"
       } ${
         reducedMotion ? "" : "transition-[width] duration-500 ease-out"
       }`}
@@ -246,7 +249,6 @@ export function AxisBand({
         levelRef={levelRef}
         anchorsRef={anchorsRef}
         reducedMotion={reducedMotion}
-        expanded={!narrow}
       />
       <AmbientScene progressRef={progressRef} range={range} />
       {SHOW_YEAR_RULER && <RulerYearLabels progressRef={progressRef} range={range} />}

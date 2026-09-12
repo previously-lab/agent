@@ -42,6 +42,7 @@ import { toast } from "sonner";
 import { setTurnBusy } from "./turn-busy";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
 import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/mode-switch";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { setViewportSlice } from "@/lib/chat/viewport-slice";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
@@ -52,9 +53,9 @@ interface ChatPageProps {
   /** When true the `?at=` search param is ignored. Used by the shell when the
    *  timeline view is active, because the timeline handles the deep-link anchor. */
   suppressAtJump?: boolean;
-  /** Shared threadline convergence anchors owned by the app shell — the chat
-   *  stream's slice seams fill them while the chat view is foreground. */
-  anchorsRef?: MutableRefObject<number[]>;
+  /** Shared strand-field anchors owned by the app shell — the chat stream's
+   *  slice seams fill them while the chat view is foreground. */
+  anchorsRef?: MutableRefObject<FieldAnchor[]>;
   /** True only when the chat view is foreground (`!showTimeline`) — false
    *  while the timeline's CardField owns the ref. */
   anchorsActive?: boolean;
@@ -292,8 +293,8 @@ function Inner({
 }: {
   initialConfig?: UserConfig;
   suppressAtJump?: boolean;
-  /** Shared threadline convergence anchors — see ChatPageProps. */
-  anchorsRef?: MutableRefObject<number[]>;
+  /** Shared strand-field anchors — see ChatPageProps. */
+  anchorsRef?: MutableRefObject<FieldAnchor[]>;
   /** True only when the chat view is foreground. */
   anchorsActive?: boolean;
   /** Persona from the URL — server actions can't read searchParams. */

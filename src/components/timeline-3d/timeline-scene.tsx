@@ -14,6 +14,7 @@
 import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand, type StackLevel } from "@/lib/timeline3d/stacks";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
   AtmosphereBackdrop,
   AtmosphereVignette,
@@ -49,9 +50,9 @@ export interface TimelineSceneProps {
   level: StackLevel;
   /** Request a zoom level — CardField runs the anchored transition. */
   onLevelChange: (level: StackLevel) => void;
-  /** Card-field row-start screen-Y fractions — forwarded to the left band
-   *  so the threadline converges its helices at the row starts. */
-  anchorsRef: React.MutableRefObject<number[]>;
+  /** Card-field row-start anchors (screen-Y fraction + the row's strands) —
+   *  forwarded to the left band so it winds each strand at the row starts. */
+  anchorsRef: React.MutableRefObject<FieldAnchor[]>;
   /** Reduced-motion preference. */
   reducedMotion: boolean;
   /** WebGL capability from the shell; false forces the StackList fallback. */

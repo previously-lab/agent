@@ -29,6 +29,7 @@ import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { DEFAULT_LEVEL } from "@/lib/timeline3d/stacks";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
   getStrandList,
   getTimelineCatalog,
@@ -79,10 +80,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  AxisBand read the same value CardField transitions through. A deep link
    *  (`?at=`) lands on slice level. */
   const [level, setLevel] = useState<StackLevel>(at ? 0 : DEFAULT_LEVEL);
-  /** Screen-Y fractions (0=top, 1=bottom) of the current view's nodes —
-   *  CardField's row starts in timeline view, the chat stream's seam rows in
-   *  chat view. The threadline pinches its helices toward them. */
-  const anchorsRef = useRef<number[]>([]);
+  /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
+   *  the strands each carries — CardField's row starts in timeline view, the
+   *  chat stream's seam rows in chat view. The band winds its strand lines at
+   *  these heights. */
+  const anchorsRef = useRef<FieldAnchor[]>([]);
   const [strand, setStrand] = useState<string | null>(null);
   const [strandList, setStrandList] = useState<StrandListItem[]>([]);
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);

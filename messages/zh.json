@@ -238,7 +238,17 @@
     "seam": {
       "checkpoint": "自动存档 · 对话继续",
       "newConversation": "{date} · 新对话",
-      "loadingOlder": "加载更早的对话…"
+      "loadingOlder": "加载更早的对话…",
+      "gapLabel": "距上次对话：{gap}",
+      "gap": {
+        "justNow": "刚刚",
+        "minute": "{count} 分钟",
+        "hour": "{count} 小时",
+        "day": "{count} 天",
+        "week": "{count} 周",
+        "month": "{count} 个月",
+        "year": "{count} 年"
+      }
     },
     "timeIndicator": {
       "label": "正在查看 {time} 附近的消息"

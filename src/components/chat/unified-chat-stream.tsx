@@ -21,6 +21,7 @@ import { EmptyBriefing } from "./empty-briefing";
 import { ErrorBanner } from "./error-banner";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import type { HistoryStreamItem } from "@/lib/chat/stream-items";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import type { SliceSummary } from "@/lib/episodic/actions";
 
 /** A live message rendered through the full chat renderer (tool states,
@@ -63,10 +64,11 @@ interface UnifiedChatStreamProps {
     recent: SliceSummary[];
     onSend: (message: string) => void;
   } | null;
-  /** Shared convergence anchors owned by the app shell — the threadline
-   *  pinches its helices toward them. Chat-mode counterpart of the card
-   *  field's row-start anchors (timeline view). */
-  anchorsRef?: MutableRefObject<number[]>;
+  /** Shared strand-field anchors owned by the app shell — the band winds each
+   *  strand at these heights. Chat-mode counterpart of the card field's
+   *  row-start anchors (timeline view): one anchor per visible slice seam,
+   *  carrying that slice's strands. */
+  anchorsRef?: MutableRefObject<FieldAnchor[]>;
   /** True only when the chat view is the FOREGROUND view. The stream stays
    *  mounted (dimmed) while the timeline is open, but the timeline's CardField
    *  owns the ref then — no measuring here, the two would fight. */
@@ -175,6 +177,17 @@ export function UnifiedChatStream({
 
   const isMobile = useIsMobile();
 
+  // Seam key → the newer slice's strands. The anchors are measured off the
+  // DOM (`[data-seam-anchor]`), so the rows only carry their key as a data
+  // attribute; the strands come back from this lookup.
+  const seamStrands = useMemo(() => {
+    const map = new Map<string, readonly string[]>();
+    for (const item of items) {
+      if (item.kind === "seam") map.set(item.key, item.strands);
+    }
+    return map;
+  }, [items]);
+
   // ── Item rendering ──────────────────────────────────────────────────────
   // Row gutters: mobile (<md) gets SYMMETRIC px-3 gutters — the old right-only
   // padding left content left-flush with dead space on the right, which read
@@ -185,8 +198,16 @@ export function UnifiedChatStream({
     switch (item.kind) {
       case "seam":
         return (
-          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8" data-seam-anchor>
-            <SliceSeam seam={item.seam} dateIso={item.dateIso} />
+          <div
+            className="px-3 sm:pr-6 md:pl-0 lg:pr-8"
+            data-seam-anchor
+            data-seam-key={item.key}
+          >
+            <SliceSeam
+              seam={item.seam}
+              dateIso={item.dateIso}
+              prevActivityIso={item.prevActivityIso}
+            />
           </div>
         );
       case "resume-banner":
@@ -300,11 +321,12 @@ export function UnifiedChatStream({
     return () => cancelAnimationFrame(raf);
   }, [items, liveStreaming, virtuosoRef]);
 
-  // ── Convergence anchors for the threadline (chat view) ──────────────────
-  // In chat view the stream's slice seams are the weave's nodes: each seam
-  // row's screen-Y fraction is one anchor, mirroring the card field's
-  // row-start anchors in timeline view (same 24-anchor cap, same center-based
-  // fraction). Virtuoso's scroller element arrives via its scrollerRef prop.
+  // ── Strand-field anchors for the band (chat view) ───────────────────────
+  // In chat view the stream's slice seams are the strand field's nodes: each
+  // seam row's screen-Y fraction is one anchor, carrying the newer slice's
+  // strands, mirroring the card field's row-start anchors in timeline view
+  // (same 24-anchor cap, same center-based fraction). Virtuoso's scroller
+  // element arrives via its scrollerRef prop.
   const scrollerElRef = useRef<HTMLElement | null>(null);
   // Virtuoso types scrollerRef as `HTMLElement | Window | null` (window
   // scroll mode) — this stream scrolls in its own element, so keep the
@@ -319,13 +341,15 @@ export function UnifiedChatStream({
   anchorsRefRef.current = anchorsRef;
   const anchorsActiveRef = useRef(anchorsActive);
   anchorsActiveRef.current = anchorsActive;
+  const seamStrandsRef = useRef(seamStrands);
+  seamStrandsRef.current = seamStrands;
 
   const measureAnchors = useCallback(() => {
     if (!anchorsActive || !anchorsRef) return;
     const scroller = scrollerElRef.current;
     if (!scroller) return;
     const scrollerRect = scroller.getBoundingClientRect();
-    const list: number[] = [];
+    const list: FieldAnchor[] = [];
     // Virtuoso keeps overscan rows mounted, so a seam slightly outside the
     // viewport is still in the DOM — keep a small margin but drop the rest.
     const rows = scroller.querySelectorAll("[data-seam-anchor]");
@@ -333,7 +357,9 @@ export function UnifiedChatStream({
       const r = rows[i].getBoundingClientRect();
       const fraction = (r.top + r.height / 2 - scrollerRect.top) / scrollerRect.height;
       if (fraction < -0.05 || fraction > 1.05) continue;
-      list.push(fraction);
+      const key = rows[i].getAttribute("data-seam-key");
+      const strands = (key ? seamStrandsRef.current.get(key) : undefined) ?? [];
+      list.push({ y: fraction, strands });
     }
     anchorsRef.current = list;
   }, [anchorsActive, anchorsRef]);

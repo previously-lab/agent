@@ -28,6 +28,15 @@ export interface SeamItem {
   seam: SeamKind;
   /** Start of the NEWER slice — the boundary heading's date. */
   dateIso: string;
+  /** Last activity of the OLDER slice — the time spine's interval ("6 days")
+   *  measures from here to `dateIso` (v0.11 §3.1). Absent when the older slice
+   *  carries neither turns nor an `end` — the seam then states no interval
+   *  rather than inventing one. */
+  prevActivityIso?: string;
+  /** The NEWER slice's strands — the seam is that slice's top edge, so its
+   *  screen height is an activity of these strands for the left band's strand
+   *  field (v0.11 §2.3/§2.4). */
+  strands: string[];
   timeIso: string;
 }
 
@@ -93,14 +102,37 @@ function turnItem(
   };
 }
 
-function seamItem(closedBy: string | undefined, newerSliceId: string, dateIso: string): SeamItem {
+function seamItem(
+  closedBy: string | undefined,
+  newerSliceId: string,
+  dateIso: string,
+  strands: string[],
+  prevActivityIso: string | undefined,
+): SeamItem {
   return {
     kind: "seam",
     key: `seam-${newerSliceId}`,
     seam: classifySeam(closedBy),
     dateIso,
+    prevActivityIso,
+    strands,
     timeIso: dateIso,
   };
+}
+
+/**
+ * The OLDER slice's last activity — the point the seam's interval ("6 days")
+ * measures from, to the newer slice's start (v0.11 §3.1).
+ *
+ * The last TURN, not `end`. `end` is stamped when the close is DETECTED, which
+ * happens on the next session's first message — so `end`→start is a near
+ * constant ~7s (real data) while the silence the user actually felt lives
+ * between the last turn and the new slice's start (2.9h, 13.2h, …). Turns are
+ * preferred; `end` only covers a turn-less slice (the writer's own fallback —
+ * `closeSlice` sets `end` from the last turn).
+ */
+function lastActivityIso(slice: SliceWithContent): string | undefined {
+  return slice.turns.at(-1)?.timestamp ?? slice.end;
 }
 
 /**
@@ -114,7 +146,15 @@ export function buildHistoryItems(
   const items: HistoryStreamItem[] = [];
   slices.forEach((slice, i) => {
     if (i > 0) {
-      items.push(seamItem(slices[i - 1].closedBy, slice.id, slice.start));
+      items.push(
+        seamItem(
+          slices[i - 1].closedBy,
+          slice.id,
+          slice.start,
+          slice.strands,
+          lastActivityIso(slices[i - 1]),
+        ),
+      );
     }
     slice.turns.forEach((turn, j) =>
       items.push(turnItem(slice.id, turn, j, slice.strands)),
@@ -123,7 +163,15 @@ export function buildHistoryItems(
   if (resume) {
     const last = slices[slices.length - 1];
     if (last) {
-      items.push(seamItem(last.closedBy, resume.sliceId, resume.start));
+      items.push(
+        seamItem(
+          last.closedBy,
+          resume.sliceId,
+          resume.start,
+          resume.strands,
+          lastActivityIso(last),
+        ),
+      );
     }
     items.push({
       kind: "resume-banner",

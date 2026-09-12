@@ -58,6 +58,48 @@ describe("buildHistoryItems", () => {
     expect(seam.key).toBe(`seam-${newer.id}`);
   });
 
+  it("a seam's interval anchors on the OLDER slice's LAST TURN — the real silence (v0.11 §3.1)", () => {
+    // Not its `end`: that stamp is written when the close is DETECTED (on the
+    // next session's first message), so end→start is a constant few seconds
+    // while the silence the user felt is last-turn→start.
+    const older = makeSlice({
+      closedBy: "idle_gap",
+      turns: [
+        { timestamp: "2026-08-11T10:00:00.000Z", role: "user", content: "hi" },
+        { timestamp: "2026-08-11T10:05:00.000Z", role: "agent", content: "hey" },
+      ],
+      end: "2026-08-17T10:59:53.000Z",
+    });
+    const newer = makeSlice({ start: "2026-08-17T11:00:00.000Z" });
+    const items = buildHistoryItems([older, newer], null);
+    const seam = items.find((i) => i.kind === "seam") as SeamItem;
+    expect(seam.prevActivityIso).toBe("2026-08-11T10:05:00.000Z");
+  });
+
+  it("a turn-less older slice falls back to its end (the writer's own last-turn fallback)", () => {
+    const older = makeSlice({ turnCount: 0, end: "2026-08-11T11:00:00.000Z" });
+    const items = buildHistoryItems([older, makeSlice()], null);
+    const seam = items.find((i) => i.kind === "seam") as SeamItem;
+    expect(seam.prevActivityIso).toBe(older.end);
+  });
+
+  it("an older slice with neither turns nor end leaves the interval absent (never fabricated)", () => {
+    const older = makeSlice({ turnCount: 0 });
+    const items = buildHistoryItems([older, makeSlice()], null);
+    const seam = items.find((i) => i.kind === "seam") as SeamItem;
+    expect(seam.prevActivityIso).toBeUndefined();
+  });
+
+  it("a seam carries the NEWER slice's strands (the band's activity source)", () => {
+    // The seam is the top edge of the newer slice, so its screen height is an
+    // activity of that slice's strands (v0.11 strand field).
+    const older = makeSlice({ closedBy: "time_cap", strands: ["old"] });
+    const newer = makeSlice({ strands: ["health", "work"] });
+    const items = buildHistoryItems([older, newer], null);
+    const seam = items.find((i) => i.kind === "seam") as SeamItem;
+    expect(seam.strands).toEqual(["health", "work"]);
+  });
+
   it("classifies idle_gap / missing closedBy seams as boundaries", () => {
     const items = buildHistoryItems(
       [makeSlice({ closedBy: "idle_gap" }), makeSlice(), makeSlice()],

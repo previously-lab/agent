@@ -238,7 +238,17 @@
     "seam": {
       "checkpoint": "Auto-archived · conversation continues",
       "newConversation": "{date} · New conversation",
-      "loadingOlder": "Loading earlier conversations…"
+      "loadingOlder": "Loading earlier conversations…",
+      "gapLabel": "Time since the previous conversation: {gap}",
+      "gap": {
+        "justNow": "just now",
+        "minute": "{count, plural, one {# minute} other {# minutes}}",
+        "hour": "{count, plural, one {# hour} other {# hours}}",
+        "day": "{count, plural, one {# day} other {# days}}",
+        "week": "{count, plural, one {# week} other {# weeks}}",
+        "month": "{count, plural, one {# month} other {# months}}",
+        "year": "{count, plural, one {# year} other {# years}}"
+      }
     },
     "timeIndicator": {
       "label": "Viewing messages around {time}"

@@ -56,6 +56,7 @@ import {
   type StackLevel,
   type StackRow,
 } from "@/lib/timeline3d/stacks";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { LeavingCard } from "./leaving-card";
@@ -83,10 +84,10 @@ export interface CardFieldProps {
    *  runs through the same transition path and is echoed via onLevelChange. */
   level?: StackLevel;
   onLevelChange?: (level: StackLevel) => void;
-  /** Written every frame: screen-Y fractions (0=top, 1=bottom) of the
-   *  visible row starts at the current level — the threadline converges
-   *  its helices toward these heights. */
-  anchorsRef?: React.MutableRefObject<number[]>;
+  /** Written every frame: the visible row starts at the current level as
+   *  screen-Y fractions (0=top, 1=bottom) plus the strands each row carries —
+   *  the band winds its strand lines at these heights. */
+  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -228,7 +229,7 @@ interface FieldSceneProps {
   texts: FrameCardTexts;
   leaving: LeavingItem[];
   onLeavingDone: (id: string) => void;
-  anchorsRef?: React.MutableRefObject<number[]>;
+  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
 }
 
 function FieldScene({
@@ -312,17 +313,18 @@ function FieldScene({
 
     progressRef.current = max > 0 ? rigNow.current / max : 1;
 
-    // Row-start anchors for the threadline's convergence layer: every visible
-    // row at the CURRENT level is one anchor (L0 slice / L1 day / L2 week),
-    // as a screen-Y fraction of the shared field height.
+    // Row-start anchors for the threadline's strand field: every visible row
+    // at the CURRENT level is one anchor (L0 slice / L1 day / L2 week), as a
+    // screen-Y fraction of the shared field height, carrying the row's own
+    // strands so the band winds them at exactly this height (v0.11 §2.3).
     if (anchorsRef) {
       const h = size.height;
       const scroll = rigNow.current;
-      const list: number[] = [];
+      const list: FieldAnchor[] = [];
       for (let i = 0; i < rows.length; i++) {
         const centerPy = i * pitch + geo.cardH / 2 - scroll;
         if (centerPy < -geo.cardH || centerPy > h + geo.cardH) continue;
-        list.push(centerPy / h);
+        list.push({ y: centerPy / h, strands: rows[i].strands });
         if (list.length >= 24) break;
       }
       anchorsRef.current = list;
