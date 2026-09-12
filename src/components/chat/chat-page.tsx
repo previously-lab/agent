@@ -10,6 +10,7 @@ import { ChatInput } from "./chat-input";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
 import { UnifiedChatStream } from "./unified-chat-stream";
+import type { ConversationFieldHandle } from "./conversation-field";
 // The stream's item model moved to its own module: the conversation field
 // renders the same items and must not import the stream component to get them.
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
@@ -390,6 +391,9 @@ function Inner({
 
   const [firstItemIndex, setFirstItemIndex] = useState(FIRST_ITEM_INDEX_BASE);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
+  // The field owns the same two moves the Virtuoso handle offers, so the jump
+  // paths below can drive whichever renderer is live.
+  const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);

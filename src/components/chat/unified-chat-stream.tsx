@@ -20,7 +20,7 @@ import { StreamTimeIndicator } from "./stream-time-indicator";
 import { EmptyBriefing } from "./empty-briefing";
 import { ErrorBanner } from "./error-banner";
 import { ResumeBanner } from "./resume-banner";
-import { ConversationField } from "./conversation-field";
+import { ConversationField, type ConversationFieldHandle } from "./conversation-field";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import type { HistoryStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
@@ -70,6 +70,9 @@ interface UnifiedChatStreamProps {
    *  stay in the tree so the field can be switched off with `?field=0` and
    *  compared against the old behaviour on the same data. */
   useField?: boolean;
+  /** Filled by the field with its imperative handle. Only meaningful when
+   *  `useField` is on — the Virtuoso path is driven through `virtuosoRef`. */
+  fieldApiRef?: MutableRefObject<ConversationFieldHandle | null>;
 }
 
 /** The "继续 <date> 的对话" banner now lives in its own module — the
@@ -95,6 +98,7 @@ export function UnifiedChatStream({
   anchorsActive,
   progressRef,
   useField,
+  fieldApiRef,
 }: UnifiedChatStreamProps) {
   const tSeam = useTranslations("chat.seam");
 
@@ -472,6 +476,7 @@ export function UnifiedChatStream({
           progressRef={progressRef}
           onNeedOlder={onStartReached}
           briefing={briefing}
+          apiRef={fieldApiRef}
         />
       </div>
     );

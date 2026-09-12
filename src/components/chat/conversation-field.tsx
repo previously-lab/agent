@@ -71,6 +71,8 @@ export interface ConversationFieldHandle {
   scrollToOffset(px: number): void;
   /** Where the camera is now, px. */
   offset(): number;
+  /** Pin to the live edge — what sending a message does. */
+  scrollToBottom(): void;
 }
 
 export interface ConversationFieldProps {
@@ -484,6 +486,15 @@ export function ConversationField({
             return true;
           }
         }
+        // A slice's seam key carries the slice id (`seam-<id>`, see
+        // stream-items.ts), so callers that only know the slice can reach it
+        // without walking the item list themselves.
+        for (let i = 0; i < blocks.length; i++) {
+          if (blocks[i].items.some((it) => it.key.endsWith(key))) {
+            setTarget(offsetsRef.current[i] ?? 0);
+            return true;
+          }
+        }
         if (key === "live" && live.length > 0) {
           setTarget(offsetsRef.current[blocks.length] ?? 0);
           return true;
@@ -492,6 +503,9 @@ export function ConversationField({
       },
       scrollToOffset(px) {
         setTarget(px);
+      },
+      scrollToBottom() {
+        setTarget(maxOffsetRef.current);
       },
       offset() {
         return offsetRef.current;
