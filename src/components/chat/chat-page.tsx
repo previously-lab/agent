@@ -9,7 +9,10 @@ import { ChatInput } from "./chat-input";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
 import { UnifiedChatStream } from "./unified-chat-stream";
-import type { ConversationFieldHandle } from "./conversation-field";
+import type {
+  ConversationFieldHandle,
+  CrossingMark,
+} from "./conversation-field";
 // The stream's item model moved to its own module: the conversation field
 // renders the same items and must not import the stream component to get them.
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
@@ -55,6 +58,8 @@ interface ChatPageProps {
   /** Shared strand-field anchors owned by the app shell — the chat stream's
    *  slice seams fill them while the chat view is foreground. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing slice boundary sits, for the band's anchor dot. */
+  crossingRef?: MutableRefObject<CrossingMark>;
   /** True only when the chat view is foreground (`!showTimeline`) — false
    *  while the timeline's CardField owns the ref. */
   anchorsActive?: boolean;
@@ -75,6 +80,7 @@ export function ChatPage({
   initialConfig,
   suppressAtJump,
   anchorsRef,
+  crossingRef,
   anchorsActive,
   progressRef,
 }: ChatPageProps) {
@@ -103,6 +109,7 @@ export function ChatPage({
       initialConfig={initialConfig}
       suppressAtJump={suppressAtJump}
       anchorsRef={anchorsRef}
+      crossingRef={crossingRef}
       anchorsActive={anchorsActive}
       progressRef={progressRef}
       persona={verdict.persona}
@@ -290,6 +297,7 @@ function Inner({
   initialConfig,
   suppressAtJump,
   anchorsRef,
+  crossingRef,
   anchorsActive,
   progressRef,
   persona,
@@ -302,6 +310,8 @@ function Inner({
   suppressAtJump?: boolean;
   /** Shared strand-field anchors — see ChatPageProps. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing slice boundary sits — see ChatPageProps. */
+  crossingRef?: MutableRefObject<CrossingMark>;
   /** True only when the chat view is foreground. */
   anchorsActive?: boolean;
   /** Persona from the URL — server actions can't read searchParams. */
@@ -947,10 +957,15 @@ function Inner({
           <UnifiedChatStream
             items={items}
             loadingOlder={stream.loadingOlder}
+            hasMore={stream.hasMore}
             onStartReached={handleStartReached}
             error={error}
             onTopItemChange={handleTopItemChange}
             anchorsRef={anchorsRef}
+            // Same rule as the anchors: only the FOREGROUND view publishes, so
+            // the band's dot follows whichever field the reader is actually
+            // looking at rather than being fought over by both.
+            crossingRef={anchorsActive ? crossingRef : undefined}
             anchorsActive={anchorsActive}
             progressRef={progressRef}
             fieldApiRef={fieldApiRef}

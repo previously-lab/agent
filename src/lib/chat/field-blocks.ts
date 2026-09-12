@@ -1,0 +1,237 @@
+/**
+ * The conversation field's block model — pure, no React, no three.js.
+ *
+ * The field lays the stream out as a vertical run of BLOCKS, each anchored by
+ * its top edge. A block opens at every slice gate (a `seam`) and at every
+ * resume banner; everything between two openings belongs to the block above
+ * it. This module owns that grouping, the fixed sizes the layout assumes, and
+ * the rule that decides which boundary is currently announcing itself.
+ *
+ * It was lifted out of `conversation-field.tsx` because every one of these was
+ * already pure: they take a stream item list and return numbers or strings.
+ * Living inside the component meant they could only be checked by driving the
+ * whole R3F field in a browser, which is a bad price for arithmetic.
+ */
+
+import type { ChatStreamItem } from "./stream-items";
+
+/**
+ * The height of a slice gate, in px — FIXED, and the constant is load-bearing
+ * twice over.
+ *
+ * The field's offset table is only stable if a block's height is a function of
+ * its CONTENT, never of what the reader happens to be looking at. So the gate
+ * announces itself by changing what is painted inside its box, never the box.
+ * If the box ever varied with the armed state, arming a gate would move every
+ * block below it — the exact failure the whole field architecture exists to
+ * avoid.
+ *
+ * The second reason is arithmetic: the field needs to know where a gate's band
+ * ends without measuring it (see `armedGate`), and a constant is how it knows.
+ * `SliceGate` renders at exactly this height; Tailwind `h-32` is 128px.
+ */
+export const SLICE_GATE_PX = 128;
+
+/**
+ * The height of the field's ORIGIN region — the strip above the oldest loaded
+ * block, where the reader is told they have reached the head of the window and
+ * is offered the older page.
+ *
+ * It sits at a CONSTANT world offset of `-FIELD_ORIGIN_PX`, one region above
+ * block 0. That is what makes "load older" behave: the blocks a page brings in
+ * land between the origin and the old head, so the origin is always above
+ * everything, and the camera compensation (see `prependHeadCount`) leaves the
+ * reader's view exactly where it was — with the new content off-screen above
+ * them, to be scrolled into.
+ */
+export const FIELD_ORIGIN_PX = 128;
+
+/** The band index `armedGate` returns for the origin region. */
+export const ORIGIN_REGION = -1;
+
+/**
+ * How close to the top clamp counts as "at the head of the window", in px.
+ * Within this the origin speaks rather than whichever gate happens to be
+ * nearest the middle of the screen.
+ *
+ * Half the origin's height: the window is exactly "at least half the origin is
+ * on screen". A boundary that has scrolled fully out of view must not announce
+ * itself from off-stage, and at the top clamp the origin is the whole story.
+ */
+export const ORIGIN_SLOP_PX = FIELD_ORIGIN_PX / 2;
+
+/** Everything up to the first trailing `live` item is history, the rest is the
+ *  live run. stream-items.ts builds them in that order, so this is one split
+ *  rather than a scan carrying state. */
+export function splitItems(items: readonly ChatStreamItem[]): {
+  history: ChatStreamItem[];
+  live: ChatStreamItem[];
+} {
+  const firstLive = items.findIndex((i) => i.kind === "live");
+  if (firstLive < 0) return { history: [...items], live: [] };
+  return {
+    history: items.slice(0, firstLive),
+    live: items.slice(firstLive),
+  };
+}
+
+/** The slice a stream item belongs to, or null for the live run. Seam and
+ *  resume keys carry the slice id (`seam-<id>` / `resume-<id>`), which is the
+ *  same convention the retired virtualized list read them with. */
+export function sliceIdOf(item: ChatStreamItem): string | null {
+  switch (item.kind) {
+    case "history-turn":
+      return item.sliceId;
+    case "seam":
+      return item.key.slice("seam-".length);
+    case "resume-banner":
+      return item.key.slice("resume-".length);
+    default:
+      return null;
+  }
+}
+
+export interface StreamBlock {
+  /** The opening item's key — stable for the life of the block, because a
+   *  block is identified by the boundary that opens it, not by its index. */
+  key: string;
+  items: ChatStreamItem[];
+  /** Every strand any of the block's turns carries, in first-seen order. */
+  strands: string[];
+  /** True when the block OPENS with a slice gate. A block that does not is
+   *  the oldest inside the loaded window — nothing precedes it to cross. */
+  gate: boolean;
+}
+
+/** A new block starts at each slice gate and each resume banner — the same
+ *  boundaries the stream itself uses. */
+export function groupBlocks(history: readonly ChatStreamItem[]): StreamBlock[] {
+  const out: StreamBlock[] = [];
+  for (const item of history) {
+    if (item.kind === "seam" || item.kind === "resume-banner" || out.length === 0) {
+      out.push({
+        key: item.key,
+        items: [],
+        strands: [],
+        gate: item.kind === "seam",
+      });
+    }
+    const block = out[out.length - 1];
+    block.items.push(item);
+    if (item.kind === "history-turn") {
+      for (const s of item.strands ?? []) {
+        if (!block.strands.includes(s)) block.strands.push(s);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * How many blocks sit at the HEAD of `next` that were not in `prev` — the
+ * count of blocks a prepend added, accumulated across prepends.
+ *
+ * A block is keyed by the boundary that opens it, and that key is stable for
+ * as long as the block exists, so the question reduces to: where did the old
+ * head go? Its new index IS the number of blocks that arrived above it. No
+ * suffix matching, no guessing about what else might have moved — a prepend
+ * adds above the head and touches nothing else, and this reads exactly that.
+ *
+ * `previous` is the running total, or `null` for the first list the field ever
+ * saw. That first list is a plain initial fill, not a prepend: the camera is
+ * arriving at the live edge anyway, so compensating for it would be a jump
+ * with nothing to preserve. It therefore seeds the baseline at zero.
+ *
+ * Idempotent on purpose — calling it twice with the same `next` yields the
+ * same total, which matters because React may run a render-phase computation
+ * more than once.
+ */
+export function prependHeadCount(
+  previous: number | null,
+  prevKeys: readonly string[],
+  nextKeys: readonly string[],
+): number {
+  if (previous === null || prevKeys.length === 0) return 0;
+  const headIndex = nextKeys.indexOf(prevKeys[0]);
+  // -1 means the old head is gone, which a prepend cannot cause; 0 means it is
+  // still the head. Neither is a prepend, and guessing in the -1 case would
+  // offset the camera by a number nothing supports.
+  if (headIndex <= 0) return previous;
+  return previous + headIndex;
+}
+
+/**
+ * What the field tells one boundary each frame.
+ *
+ * A mutable object rather than props on purpose: the arm state flips while
+ * scrolling, every gate is its own `<Html>` React root, and a re-render per
+ * crossing to swap two words is exactly the cost the field's design keeps
+ * out. The gate reads this in its own frame loop and writes to the DOM.
+ */
+export interface GateSignal {
+  /** True while this boundary is the one announcing itself. */
+  armed: boolean;
+  /** Which way the reader is travelling — decides which side speaks. */
+  dir: "past" | "future";
+}
+
+/** One boundary the reader can be looking at. */
+export interface GateBand {
+  /** Block index, or `ORIGIN_REGION` for the head of the loaded window. */
+  index: number;
+  /** World offset of the band's top edge, px. */
+  top: number;
+  /** The band's height, px. */
+  height: number;
+}
+
+/**
+ * Which boundary is announcing itself right now, or `null` when the reader is
+ * inside a slice and no boundary is on screen.
+ *
+ * THE RULE IS LOCAL, and that is the whole point. An earlier version kept one
+ * direction flag for the entire field, so a single wheel tick flipped every
+ * gate on screen at once — gates nowhere near the reader claimed to be
+ * crossing. Here each boundary answers for itself: it announces when it is
+ * actually IN view, and when several are, the one nearest the middle of the
+ * screen wins. So exactly one boundary ever speaks, and it is the one the
+ * reader is looking at.
+ *
+ * At the head of the window the origin takes precedence over that rule: being
+ * at the very top is itself the announcement.
+ */
+export function armedGate(
+  bands: readonly GateBand[],
+  viewTop: number,
+  viewportH: number,
+  minOffset: number,
+): number | null {
+  if (bands.length === 0) return null;
+
+  if (viewTop <= minOffset + ORIGIN_SLOP_PX) {
+    const origin = bands.find((b) => b.index === ORIGIN_REGION);
+    if (origin) return ORIGIN_REGION;
+  }
+
+  const viewBottom = viewTop + viewportH;
+  const centre = viewTop + viewportH / 2;
+  let best: number | null = null;
+  let bestDistance = Infinity;
+  for (const band of bands) {
+    const bottom = band.top + band.height;
+    // A band that only shares an edge with the viewport has zero visible area,
+    // and a boundary the reader cannot see does not speak.
+    if (bottom <= viewTop || band.top >= viewBottom) continue;
+    const distance =
+      centre < band.top
+        ? band.top - centre
+        : centre > bottom
+          ? centre - bottom
+          : 0;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = band.index;
+    }
+  }
+  return best;
+}

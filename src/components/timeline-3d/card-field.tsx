@@ -57,6 +57,7 @@ import {
   type StackRow,
 } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import type { CrossingMark } from "@/components/chat/conversation-field";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { LeavingCard } from "./leaving-card";
@@ -88,6 +89,9 @@ export interface CardFieldProps {
    *  screen-Y fractions (0=top, 1=bottom) plus the strands each row carries —
    *  the band winds its strand lines at these heights. */
   anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing row boundary sits (screen-Y fraction), for the left
+   *  band's anchor dot. */
+  crossingRef?: React.MutableRefObject<CrossingMark>;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -230,6 +234,7 @@ interface FieldSceneProps {
   leaving: LeavingItem[];
   onLeavingDone: (id: string) => void;
   anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
+  crossingRef?: React.MutableRefObject<CrossingMark>;
 }
 
 function FieldScene({
@@ -248,6 +253,7 @@ function FieldScene({
   leaving,
   onLeavingDone,
   anchorsRef,
+  crossingRef,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -335,6 +341,28 @@ function FieldScene({
         if (list.length >= 24) break;
       }
       anchorsRef.current = list;
+    }
+
+    // The boundary the reader is crossing, for the band's anchor dot. The card
+    // view's boundaries are the GAPS between rows — the same regions the band
+    // unwinds in — so the mark is the midpoint of a gap rather than a row's
+    // own centre. Same rule as the conversation field's gates: the nearest
+    // boundary on screen announces, and none does when the reader is mid-row.
+    if (crossingRef) {
+      const centre = rigNow.current + size.height / 2;
+      let bestY: number | null = null;
+      let bestDistance = Infinity;
+      for (let i = 0; i < rows.length - 1; i++) {
+        const gapMid =
+          i * pitch + geo.cardH + (pitch - geo.cardH) / 2 - rigNow.current;
+        if (gapMid < 0 || gapMid > size.height) continue;
+        const distance = Math.abs(gapMid - centre);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestY = gapMid / size.height;
+        }
+      }
+      crossingRef.current.y = bestY;
     }
 
     // Scroll-driven camera drift: translate the camera slightly, then TURN it
@@ -429,6 +457,7 @@ export function CardField({
   level: levelProp,
   onLevelChange,
   anchorsRef,
+  crossingRef,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const locale = useLocale();
@@ -888,6 +917,7 @@ export function CardField({
           leaving={leaving}
           onLeavingDone={onLeavingDone}
           anchorsRef={anchorsRef}
+          crossingRef={crossingRef}
         />
       </Canvas>
     </div>

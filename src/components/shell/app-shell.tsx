@@ -30,6 +30,7 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { DEFAULT_LEVEL } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import type { CrossingMark } from "@/components/chat/conversation-field";
 import {
   getStrandList,
   getTimelineCatalog,
@@ -85,6 +86,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  chat stream's seam rows in chat view. The band winds its strand lines at
    *  these heights. */
   const anchorsRef = useRef<FieldAnchor[]>([]);
+  /** Where the announcing slice boundary sits, for the band's anchor dot. The
+   *  foreground field fills it — the conversation field in chat, the card
+   *  field in the timeline. */
+  const crossingRef = useRef<CrossingMark>({ y: null });
   const [strand, setStrand] = useState<string | null>(null);
   const [strandList, setStrandList] = useState<StrandListItem[]>([]);
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
@@ -212,6 +217,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
           progressRef={progressRef}
           levelRef={zoomLevelRef}
           anchorsRef={anchorsRef}
+          crossingRef={crossingRef}
           strand={strand}
           strandList={strandList}
           ambientStrands={ambientStrands}
@@ -232,6 +238,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
             initialConfig={initialConfig}
             suppressAtJump={showTimeline}
             anchorsRef={anchorsRef}
+            crossingRef={crossingRef}
             anchorsActive={!showTimeline}
             progressRef={progressRef}
           />
@@ -281,6 +288,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       level={level}
                       onLevelChange={setLevel}
                       anchorsRef={anchorsRef}
+                      crossingRef={crossingRef}
                       reducedMotion={reducedMotion}
                       webgl={webgl}
                     />

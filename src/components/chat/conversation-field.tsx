@@ -10,7 +10,7 @@
  * fighting the virtualizer's own compensation, momentum that cannot be handed
  * from one element to another. Measured on the old stack: `scrollHeight`
  * reported 13,471 px for ~1,000 px of real content, and setting `scrollTop`
- * came back 32–64 px away because something else had moved it. Here the
+ * came back 32-64 px away because something else had moved it. Here the
  * position is a NUMBER WE OWN — the camera — and none of that exists.
  *
  * EVERY BLOCK IS A BILLBOARD, and the whole model follows from one property:
@@ -26,6 +26,17 @@
  * about the growth: follow if the reader is already at the live edge, do
  * nothing at all if they have scrolled away.
  *
+ * THE ONE DIRECTION THAT PROPERTY DOES NOT COVER IS UPWARD. A block arriving
+ * ABOVE the reader is exactly the case where "grows downward, moves nothing
+ * above" gives no protection, because everything the reader can see is below
+ * it. Paging older is therefore handled by COMPENSATION rather than by
+ * anchoring: when the block list gains blocks at its head, the camera is moved
+ * by the height they add, which leaves the reader's view of the content they
+ * were already reading pixel-identical — and puts the new conversations
+ * off-screen above them, to be scrolled into. See `relayout`. This is the
+ * "infinite canvas" the product is: slices are placed above and below, and the
+ * reader moves the camera.
+ *
  * SCALE IS NOT A CONCERN. Only the blocks crossing the viewport, plus one
  * screen of overscan, exist as portals. The rest are numbers in an offset
  * table, so the mounted count is a handful however long the conversation gets.
@@ -35,14 +46,27 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
-import { ChevronUp, Loader2 } from "lucide-react";
-import { NextIntlClientProvider, useLocale, useMessages, useTranslations } from "next-intl";
+import { useReducedMotion } from "motion/react";
+import { NextIntlClientProvider, useLocale, useMessages } from "next-intl";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ErrorBanner } from "./error-banner";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import {
+  armedGate,
+  FIELD_ORIGIN_PX,
+  groupBlocks,
+  ORIGIN_REGION,
+  prependHeadCount,
+  SLICE_GATE_PX,
+  sliceIdOf,
+  splitItems,
+  type GateBand,
+  type GateSignal,
+} from "@/lib/chat/field-blocks";
 import { SliceGate } from "./slice-gate";
+import { FieldOrigin } from "./field-origin";
 import { HistoryTurn } from "./history-turn";
 import { ChatMessage } from "./chat-message";
 import { ResumeBanner } from "./resume-banner";
@@ -81,25 +105,38 @@ export interface ConversationFieldHandle {
   scrollToBottom(): void;
 }
 
+/** Where the announcing boundary sits, for the axis band's anchor dot. */
+export interface CrossingMark {
+  /** Screen-Y as a 0..1 fraction of the viewport height, or null when no
+   *  boundary is announcing itself. */
+  y: number | null;
+}
+
 export interface ConversationFieldProps {
   items: ChatStreamItem[];
   /** Screen-Y anchors for the left band — the same contract the card field
    *  publishes in the timeline view, so the band needs no second code path. */
   anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing slice boundary sits, for the band's anchor dot. The
+   *  card field fills the same ref in the timeline view. */
+  crossingRef?: React.MutableRefObject<CrossingMark>;
   /** 0..1 through the content, for the band's ruler and rotation drift. */
   progressRef?: React.MutableRefObject<number>;
   /** Filled with the imperative handle; see `ConversationFieldHandle`. */
   apiRef?: React.MutableRefObject<ConversationFieldHandle | null>;
-  /** Called when the reader reaches the top of what is loaded. */
+  /** Called when the reader asks for the older page at the window's head. */
   onNeedOlder: () => void;
   /** The block at the top of the viewport, reported only when it CHANGES.
    *  Replaces what the virtualized list read off `rangeChanged`: the shell
    *  publishes the slice for the mode switcher, and the travel clock reads the
    *  time it is travelling FROM. `sliceId` is null for the live run. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
-  /** True while older slices are being paged in — shown above the oldest
-   *  loaded block. */
+  /** True while older slices are being paged in — shown at the window's head. */
   loadingOlder?: boolean;
+  /** Whether the catalog still holds slices older than the loaded window.
+   *  False turns the head of the window into "the beginning of this memory"
+   *  rather than an invitation to load more. */
+  hasMore?: boolean;
   /** A failed turn, shown as a banner under the content. */
   error?: Error;
   /** Briefing payload, seated as the tail card exactly as in the stream. */
@@ -113,72 +150,31 @@ interface Block {
   key: string;
   items: ChatStreamItem[];
   strands: string[];
-}
-
-/** Everything up to the first trailing `live` item is history, the rest is the
- *  live run. stream-items.ts builds them in that order, so this is one split
- *  rather than a scan carrying state. */
-function splitItems(items: ChatStreamItem[]): {
-  history: ChatStreamItem[];
-  live: ChatStreamItem[];
-} {
-  const firstLive = items.findIndex((i) => i.kind === "live");
-  if (firstLive < 0) return { history: items, live: [] };
-  return { history: items.slice(0, firstLive), live: items.slice(firstLive) };
-}
-
-/** The slice a stream item belongs to, or null for the live run. Seam and
- *  resume keys carry the slice id (`seam-<id>` / `resume-<id>`), which is the
- *  same convention the virtualized list read them with. */
-function sliceIdOf(item: ChatStreamItem): string | null {
-  switch (item.kind) {
-    case "history-turn":
-      return item.sliceId;
-    case "seam":
-      return item.key.slice("seam-".length);
-    case "resume-banner":
-      return item.key.slice("resume-".length);
-    default:
-      return null;
-  }
-}
-
-/** A new block starts at each seam and each resume banner — the same
- *  boundaries the stream itself uses. */
-function groupBlocks(history: ChatStreamItem[]): Block[] {
-  const out: Block[] = [];
-  for (const item of history) {
-    if (item.kind === "seam" || item.kind === "resume-banner" || out.length === 0) {
-      out.push({ key: item.key, items: [], strands: [] });
-    }
-    const block = out[out.length - 1];
-    block.items.push(item);
-    if (item.kind === "history-turn") {
-      for (const s of item.strands ?? []) {
-        if (!block.strands.includes(s)) block.strands.push(s);
-      }
-    }
-  }
-  return out;
+  /** True when the block opens with a slice gate (see `groupBlocks`). */
+  gate: boolean;
 }
 
 /** One stream item, in its plain form. Shared by history blocks and the live
  *  block so the two cannot drift apart visually. */
 function renderStreamItem(
   item: ChatStreamItem,
-  briefing?: ConversationFieldProps["briefing"],
+  briefing: ConversationFieldProps["briefing"] | undefined,
+  gateSignal: GateSignal | undefined,
 ) {
   switch (item.kind) {
     case "seam":
       // The gate REPLACES the hairline divider in the field. It carries the
       // same two times the seam did, but as a region tall enough for the band
       // to unwind in — a release needs somewhere to happen.
-      return (
+      return gateSignal ? (
         <SliceGate
           dateIso={item.dateIso}
           prevActivityIso={item.prevActivityIso}
+          focus={item.focus}
+          prevFocus={item.prevFocus}
+          signal={gateSignal}
         />
-      );
+      ) : null;
     case "resume-banner":
       return <ResumeBanner startIso={item.startIso} />;
     case "history-turn":
@@ -218,12 +214,15 @@ function renderStreamItem(
  * repo already met this: `frame-card.tsx` takes all its strings as props for
  * exactly this reason. Re-wrapping is the cheaper half of that trade while the
  * components are ones the real stream also uses verbatim; passing strings would
- * mean forking them.
+ * mean forking them. It is also why the gate's arm state travels as a MUTABLE
+ * OBJECT rather than a prop — a prop change per crossing would re-render the
+ * portal, and a mutable signal read by the gate's own frame loop costs nothing.
  */
 function BillboardBlock({
   blockKey,
   items,
   briefing,
+  gateSignal,
   messages,
   locale,
   /** Called with the block's DOM height whenever it settles. */
@@ -232,6 +231,7 @@ function BillboardBlock({
   blockKey: string;
   items: ChatStreamItem[];
   briefing?: ConversationFieldProps["briefing"];
+  gateSignal?: GateSignal;
   messages: ReturnType<typeof useMessages>;
   locale: string;
   onHeight: (h: number) => void;
@@ -260,7 +260,9 @@ function BillboardBlock({
     <div ref={ref} className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
       <NextIntlClientProvider messages={messages} locale={locale}>
         {items.map((item) => (
-          <div key={item.key}>{renderStreamItem(item, briefing)}</div>
+          <div key={item.key}>
+            {renderStreamItem(item, briefing, gateSignal)}
+          </div>
         ))}
       </NextIntlClientProvider>
     </div>
@@ -273,14 +275,28 @@ interface SceneProps {
   blocks: Block[];
   liveItems: ChatStreamItem[];
   briefing?: ConversationFieldProps["briefing"];
+  /** The reader is at the window's head, so the head announces itself. */
+  hasOrigin: boolean;
+  oldestIso: string;
+  hasMore: boolean;
+  loadingOlder: boolean;
+  onNeedOlder: () => void;
   /** Eased camera offset, px — read every frame, never a prop. */
   offsetRef: React.MutableRefObject<number>;
+  /** The direction the reader last moved — written by `setTarget`. */
+  dirRef: React.MutableRefObject<"past" | "future">;
   /** Measured DOM height per history block. */
   heightsRef: React.MutableRefObject<number[]>;
   /** Running world offset of each block's top, derived from the heights. */
   offsetsRef: React.MutableRefObject<number[]>;
+  /** The lowest offset the camera can reach — the origin sits above block 0. */
+  minOffset: number;
   anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
+  crossingRef?: React.MutableRefObject<CrossingMark>;
   progressRef?: React.MutableRefObject<number>;
+  /** The mutable arm signal for a gate block, keyed by the block's key. */
+  signalFor: (key: string) => GateSignal;
+  originSignal: GateSignal;
   messages: ReturnType<typeof useMessages>;
   locale: string;
   onBlockHeight: (index: number, h: number) => void;
@@ -292,11 +308,21 @@ function FieldScene({
   blocks,
   liveItems,
   briefing,
+  hasOrigin,
+  oldestIso,
+  hasMore,
+  loadingOlder,
+  onNeedOlder,
   offsetRef,
+  dirRef,
   heightsRef,
   offsetsRef,
+  minOffset,
   anchorsRef,
+  crossingRef,
   progressRef,
+  signalFor,
+  originSignal,
   messages,
   locale,
   onBlockHeight,
@@ -310,6 +336,8 @@ function FieldScene({
   const [visible, setVisible] = useState<number[]>([]);
   const visibleKey = useRef("");
   const statsKey = useRef("");
+  // Reused between frames so the arm computation allocates nothing.
+  const bandsRef = useRef<GateBand[]>([]);
 
   useFrame(() => {
     if (group.current) {
@@ -336,10 +364,47 @@ function FieldScene({
       onMountCount(next.length);
     }
 
+    // ── The boundary that announces itself ───────────────────────────────
+    // One decision per frame for the WHOLE field, written into per-boundary
+    // signal objects. It is a single winner rather than a flag each boundary
+    // reads: that is what stops a boundary nowhere near the reader from
+    // claiming the reader is crossing it.
+    const bands = bandsRef.current;
+    bands.length = 0;
+    if (hasOrigin) {
+      bands.push({
+        index: ORIGIN_REGION,
+        top: -FIELD_ORIGIN_PX,
+        height: FIELD_ORIGIN_PX,
+      });
+    }
+    for (let i = 0; i < blocks.length; i++) {
+      if (!blocks[i].gate) continue;
+      bands.push({ index: i, top: offsets[i] ?? 0, height: SLICE_GATE_PX });
+    }
+    const armed = armedGate(bands, offsetRef.current, size.height, minOffset);
+    let armedBand: GateBand | null = null;
+    for (const band of bands) {
+      const isArmed = band.index === armed;
+      if (isArmed) armedBand = band;
+      const signal =
+        band.index === ORIGIN_REGION
+          ? originSignal
+          : signalFor(blocks[band.index].key);
+      if (signal.armed !== isArmed) signal.armed = isArmed;
+      if (isArmed && signal.dir !== dirRef.current) signal.dir = dirRef.current;
+    }
+    if (crossingRef) {
+      crossingRef.current.y = armedBand
+        ? (armedBand.top + armedBand.height / 2 - offsetRef.current) / size.height
+        : null;
+    }
+
     if (anchorsRef) {
       const total = offsets[blocks.length] ?? 1;
       if (progressRef) {
-        progressRef.current = total > 0 ? offsetRef.current / total : 1;
+        const span = Math.max(1, total - minOffset);
+        progressRef.current = (offsetRef.current - minOffset) / span;
       }
       const list: FieldAnchor[] = [];
       for (const i of next) {
@@ -360,6 +425,28 @@ function FieldScene({
 
   return (
     <group ref={group}>
+      {/* THE HEAD OF THE WINDOW — one region above block 0, at a constant
+          world offset. A page of older slices lands BELOW it (between it and
+          the old head), so the head is always above everything loaded, and the
+          camera compensation leaves the reader looking at exactly what they
+          were looking at. */}
+      {hasOrigin && (
+        <Html
+          key="origin"
+          position={[-COLUMN_PX / 2, FIELD_ORIGIN_PX, 0]}
+          zIndexRange={[10, 0]}
+          style={{ width: COLUMN_PX }}
+        >
+          <FieldOrigin
+            oldestIso={oldestIso}
+            hasMore={hasMore}
+            loading={loadingOlder}
+            onLoadOlder={onNeedOlder}
+            signal={originSignal}
+          />
+        </Html>
+      )}
+
       {visible.map((i) => (
         <Html
           // NOT `transform`: screen-space mode positions the element by
@@ -372,6 +459,7 @@ function FieldScene({
           <BillboardBlock
             blockKey={blocks[i].key}
             items={blocks[i].items}
+            gateSignal={blocks[i].gate ? signalFor(blocks[i].key) : undefined}
             messages={messages}
             locale={locale}
             onHeight={(h) => onBlockHeight(i, h)}
@@ -407,23 +495,29 @@ function FieldScene({
 export function ConversationField({
   items,
   anchorsRef,
+  crossingRef,
   progressRef,
   apiRef,
   onNeedOlder,
   onTopItemChange,
   loadingOlder,
+  hasMore,
   error,
   briefing,
   following,
 }: ConversationFieldProps) {
   const messages = useMessages();
   const locale = useLocale();
-  const tSeam = useTranslations("chat.seam");
-  const tChat = useTranslations("chat");
   const isMobile = useIsMobile();
+  const reducedMotion = useReducedMotion() ?? false;
 
   const { history, live } = useMemo(() => splitItems(items), [items]);
-  const blocks = useMemo(() => groupBlocks(history), [history]);
+  const blocks = useMemo<Block[]>(() => groupBlocks(history), [history]);
+  const hasOrigin = history.length > 0;
+  const oldestIso = history[0]?.timeIso ?? "";
+  const minOffset = hasOrigin ? -FIELD_ORIGIN_PX : 0;
+  const minOffsetRef = useRef(minOffset);
+  minOffsetRef.current = minOffset;
 
   const heightsRef = useRef<number[]>([]);
   const offsetsRef = useRef<number[]>([0]);
@@ -439,7 +533,6 @@ export function ConversationField({
   const movingRef = useRef(0);
   const indicatorShownRef = useRef(false);
   const topKeyRef = useRef("");
-  const loadOlderRef = useRef<HTMLDivElement>(null);
   const onTopItemChangeRef = useRef(onTopItemChange);
   onTopItemChangeRef.current = onTopItemChange;
   const [topTime, setTopTime] = useState<string | null>(null);
@@ -455,15 +548,54 @@ export function ConversationField({
   const arrivingRef = useRef(true);
   const arrivedRef = useRef(false);
 
-  /** The direction the reader last moved, written straight onto the wrapper as
-   *  a data attribute. The slice gates read it to choose which of their two
-   *  times to show; see `SliceGate` for why this is not React state. */
+  /** The direction the reader last moved. The armed boundary reads it to
+   *  choose which of its two times to show; see `SliceGate`. */
   const dirRef = useRef<"past" | "future">("future");
 
   /** A jump the caller asked for before its target had finished paging in.
    *  See the effect below — this is what makes `scrollToKey` reliable without
    *  making the caller poll. */
   const pendingKeyRef = useRef<string | null>(null);
+
+  // ── The boundary signals ──────────────────────────────────────────────
+  // One mutable object per gate block, plus one for the window's head. They
+  // are the only channel into the `<Html>` portals that costs no render.
+  const gateSignalsRef = useRef(new Map<string, GateSignal>());
+  const originSignalRef = useRef<GateSignal>({ armed: false, dir: "past" });
+  const signalFor = useCallback((key: string): GateSignal => {
+    const map = gateSignalsRef.current;
+    let signal = map.get(key);
+    if (!signal) {
+      signal = { armed: false, dir: "future" };
+      map.set(key, signal);
+    }
+    return signal;
+  }, []);
+
+  // ── Prepend detection ─────────────────────────────────────────────────
+  // A prepend is the only way the block list grows at its HEAD, and `relayout`
+  // needs to know how many blocks arrived that way so it can compensate the
+  // camera by exactly their height. Written during render, like the prop
+  // mirrors above, and idempotent, so a double render cannot double-count.
+  const blockKeys = useMemo(() => blocks.map((b) => b.key), [blocks]);
+  const prevBlockKeysRef = useRef<string[] | null>(null);
+  const headCountRef = useRef(0);
+  const prependShiftRef = useRef<number | null>(null);
+  const prevBlockKeys = prevBlockKeysRef.current;
+  if (prevBlockKeys !== null) {
+    const nextHead = prependHeadCount(
+      headCountRef.current,
+      prevBlockKeys,
+      blockKeys,
+    );
+    if (nextHead > headCountRef.current && headCountRef.current === 0) {
+      // The first prepend of this mount: the baseline the compensation
+      // measures FROM is the head's offset before anything arrived above it.
+      prependShiftRef.current = 0;
+    }
+    headCountRef.current = nextHead;
+  }
+  prevBlockKeysRef.current = blockKeys;
 
   /** The block holding `key`, matching the whole key first and then a key
    *  SUFFIX (a slice id), so a caller that only knows the slice reaches it
@@ -482,22 +614,18 @@ export function ConversationField({
   );
 
   /** The ONLY way the camera moves. Clamping, the follow state and the
-   *  direction attribute live together so no input path can leave them
+   *  direction all live together so no input path can leave them
    *  disagreeing. */
   const setTarget = useCallback(
     (next: number) => {
       const max = maxOffsetRef.current;
-      const clamped = Math.min(max, Math.max(0, next));
+      const min = minOffsetRef.current;
+      const clamped = Math.min(max, Math.max(min, next));
       const prev = targetRef.current;
       targetRef.current = clamped;
       if (following === undefined) followingRef.current = clamped >= max - 4;
       if (clamped !== prev) {
-        const dir = clamped < prev ? "past" : "future";
-        if (dir !== dirRef.current) {
-          dirRef.current = dir;
-          const el = wrapperRef.current;
-          if (el) el.dataset.dir = dir;
-        }
+        dirRef.current = clamped < prev ? "past" : "future";
       }
     },
     [following],
@@ -516,6 +644,26 @@ export function ConversationField({
       next.push(next[i] + carry);
     }
     offsetsRef.current = next;
+
+    // ── The prepend compensation ─────────────────────────────────────────
+    // `next[head]` is the world offset of the block that was at the head
+    // before the prepends began; before any of them it was 0. Every px it has
+    // moved is a px every block below it has moved, so moving the camera by
+    // the same amount leaves the reader looking at exactly what they were
+    // looking at. It also fires again each time a newly prepended block
+    // reports its real height, which is what keeps the view stable while the
+    // page above settles from estimate to measurement.
+    const head = headCountRef.current;
+    if (head > 0) {
+      const shift = next[head] ?? 0;
+      const previousShift = prependShiftRef.current;
+      if (previousShift !== null && shift !== previousShift) {
+        const delta = shift - previousShift;
+        offsetRef.current += delta;
+        targetRef.current += delta;
+      }
+      prependShiftRef.current = shift;
+    }
   }, [blocks.length]);
 
   useEffect(() => {
@@ -525,7 +673,7 @@ export function ConversationField({
 
   const historyTotal = offsetsRef.current[blocks.length] ?? 0;
   const totalPx = historyTotal + liveHeightRef.current;
-  const maxOffset = Math.max(0, totalPx - viewportHRef.current);
+  const maxOffset = Math.max(minOffset, totalPx - viewportHRef.current);
   maxOffsetRef.current = maxOffset;
 
   // Honour a jump whose target was still paging in when it was asked for.
@@ -616,9 +764,15 @@ export function ConversationField({
       raf = requestAnimationFrame(tick);
       const d = targetRef.current - offsetRef.current;
       if (d !== 0) {
-        offsetRef.current += Math.abs(d) < 0.5 ? d : d * FOLLOW;
+        // Reduced motion snaps: the camera is the scroll position, and an
+        // ease here is exactly the kind of animation the preference is about.
+        offsetRef.current += reducedMotion
+          ? d
+          : Math.abs(d) < 0.5
+            ? d
+            : d * FOLLOW;
         movingRef.current = performance.now();
-        if (!indicatorShownRef.current) {
+        if (!reducedMotion && !indicatorShownRef.current) {
           indicatorShownRef.current = true;
           setIndicatorVisible(true);
         }
@@ -628,13 +782,6 @@ export function ConversationField({
       ) {
         indicatorShownRef.current = false;
         setIndicatorVisible(false);
-      }
-
-      // The ask-for-older control rides the CONTENT's top edge, written
-      // imperatively: a `top` from React state would re-render the page every
-      // frame. Twelve px of lead so it clears the content once you scroll in.
-      if (loadOlderRef.current) {
-        loadOlderRef.current.style.top = `${12 - offsetRef.current}px`;
       }
 
       const cb = onTopItemChangeRef.current;
@@ -654,7 +801,7 @@ export function ConversationField({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [blocks]);
+  }, [blocks, reducedMotion]);
 
   const onBlockHeight = useCallback(
     (index: number, h: number) => {
@@ -733,7 +880,7 @@ export function ConversationField({
       dragging = false;
       el.releasePointerCapture?.(e.pointerId);
       // A flick coasts; a slow release does not.
-      coasting = Math.abs(velocity) > 0.25;
+      coasting = !reducedMotion && Math.abs(velocity) > 0.25;
     };
 
     let raf = 0;
@@ -771,22 +918,22 @@ export function ConversationField({
       el.removeEventListener("pointercancel", onPointerUp);
       el.removeEventListener("pointerdown", stopCoast);
     };
-  }, [setTarget]);
+  }, [setTarget, reducedMotion]);
 
-  // Page older is MANUAL — the reader asks for it at the top of the content.
-  // There is deliberately no scroll-position trigger: an earlier version fired
-  // at `target <= LOAD_OLDER_PX` from an effect keyed on the mounted count, and
-  // the mounted count changes while the first measurement pass settles, so
-  // arriving alone paged history in. It also fired unconditionally whenever the
-  // loaded content was shorter than the threshold. A slice read is a repository
-  // call in production; it should be asked for, not inferred.
+  // Paging older is MANUAL — the reader asks for it at the head of the window,
+  // in the origin region. There is deliberately no scroll-position trigger: an
+  // earlier version fired at `target <= LOAD_OLDER_PX` from an effect keyed on
+  // the mounted count, and the mounted count changes while the first
+  // measurement pass settles, so arriving alone paged history in. It also fired
+  // unconditionally whenever the loaded content was shorter than the threshold.
+  // A slice read is a repository call in production; it should be asked for,
+  // not inferred.
 
   return (
     // `touch-none` is load-bearing: without it the browser claims the touch
     // gesture for its own panning and no pointermove ever arrives.
     <div
       ref={wrapperRef}
-      data-dir="future"
       className="relative h-full w-full touch-none overflow-hidden"
     >
       <Canvas
@@ -799,11 +946,21 @@ export function ConversationField({
           blocks={blocks}
           liveItems={live}
           briefing={briefing}
+          hasOrigin={hasOrigin}
+          oldestIso={oldestIso}
+          hasMore={hasMore !== false}
+          loadingOlder={loadingOlder === true}
+          onNeedOlder={onNeedOlder}
           offsetRef={offsetRef}
+          dirRef={dirRef}
           heightsRef={heightsRef}
           offsetsRef={offsetsRef}
+          minOffset={minOffset}
           anchorsRef={anchorsRef}
+          crossingRef={crossingRef}
           progressRef={progressRef}
+          signalFor={signalFor}
+          originSignal={originSignalRef.current}
           messages={messages}
           locale={locale}
           onBlockHeight={onBlockHeight}
@@ -811,33 +968,6 @@ export function ConversationField({
           onMountCount={setMountedCount}
         />
       </Canvas>
-
-      {/* The paging affordance, seated where the virtualized list's Header
-          was: pinned to the top of the viewport, above the oldest loaded
-          block, so it reads whether or not the first block is on screen. */}
-      {/* THE WAY BACK. Pinned to the very top of the CONTENT — so it comes
-          into view exactly when the reader has reached the oldest thing
-          loaded, and scrolls away with everything else. Paging is asked for
-          here rather than inferred from a scroll position. */}
-      <div
-        ref={loadOlderRef}
-        className="absolute left-1/2 top-0 z-40 flex -translate-x-1/2 justify-center"
-        style={{ width: COLUMN_PX }}
-      >
-        <button
-          type="button"
-          onClick={onNeedOlder}
-          disabled={loadingOlder}
-          className="pointer-events-auto inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/90 px-4 py-2 text-xs text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground disabled:opacity-60"
-        >
-          {loadingOlder ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <ChevronUp className="h-3.5 w-3.5" />
-          )}
-          {loadingOlder ? tSeam("loadingOlder") : tChat("seamLoadOlder")}
-        </button>
-      </div>
 
       {/* §1.3: mobile keeps the floating time pill. The desktop left rail is
           retired — the 3D axis carries time. */}
@@ -847,15 +977,17 @@ export function ConversationField({
 
       {error && <ErrorBanner error={error} />}
 
-      <div className="pointer-events-none absolute right-3 top-3 z-50 rounded-md bg-card/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-muted-foreground ring-1 ring-foreground/10">
-        <div>conversation field</div>
-        <div>
-          blocks {blocks.length} · mounted {mountedCount}
+      {process.env.NODE_ENV !== "production" && (
+        <div className="pointer-events-none absolute right-3 top-3 z-50 rounded-md bg-card/90 px-3 py-2 font-mono text-[10px] leading-relaxed text-muted-foreground ring-1 ring-foreground/10">
+          <div>conversation field</div>
+          <div>
+            blocks {blocks.length} · mounted {mountedCount}
+          </div>
+          <div>
+            offset {Math.round(offsetRef.current)} / {Math.round(maxOffset)}
+          </div>
         </div>
-        <div>
-          offset {Math.round(offsetRef.current)} / {Math.round(maxOffset)}
-        </div>
-      </div>
+      )}
     </div>
   );
 }

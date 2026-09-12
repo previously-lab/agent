@@ -237,8 +237,10 @@
     },
     "gate": {
       "label": "Between conversations",
-      "past": "Back to the past · {date}",
-      "future": "Back to now · {date}"
+      "earlier": "Earlier",
+      "later": "Later",
+      "head": "Head of the loaded window",
+      "beginning": "The beginning of this memory"
     },
     "seamLoadOlder": "Load earlier conversations",
     "seam": {

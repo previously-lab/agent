@@ -21,19 +21,26 @@
  */
 
 import type { MutableRefObject } from "react";
-import { ConversationField, type ConversationFieldHandle } from "./conversation-field";
+import {
+  ConversationField,
+  type ConversationFieldHandle,
+  type CrossingMark,
+} from "./conversation-field";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 
 export interface UnifiedChatStreamProps {
   items: ChatStreamItem[];
-  /** Fired when the reader reaches the top of what is loaded. */
+  /** Fired when the reader asks for the older page at the window's head. */
   onStartReached: () => void;
   /** The block at the top of the viewport — the travel clock's "from", and the
    *  slice the mode switcher carries to the timeline. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
   /** True while older slices are being paged in. */
   loadingOlder: boolean;
+  /** Whether the catalog still holds older slices — decides whether the
+   *  window's head offers the older page or reads as the beginning. */
+  hasMore?: boolean;
   /** A failed turn, shown as a banner under the content. */
   error: Error | undefined;
   /** Briefing-mode arrival card props (§1.2 Rev 2). When set, the parent seats
@@ -47,6 +54,8 @@ export interface UnifiedChatStreamProps {
   /** Shared strand-field anchors owned by the app shell — the field fills them
    *  while the chat view is foreground. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing boundary sits, for the band's anchor dot. */
+  crossingRef?: MutableRefObject<CrossingMark>;
   /** True only when the chat view is the FOREGROUND view. The field keeps
    *  rendering while the timeline is open, but the timeline's card field owns
    *  the anchors then — publishing here would fight it. */
@@ -62,9 +71,11 @@ export function UnifiedChatStream({
   onStartReached,
   onTopItemChange,
   loadingOlder,
+  hasMore,
   error,
   briefing,
   anchorsRef,
+  crossingRef,
   anchorsActive,
   progressRef,
   fieldApiRef,
@@ -76,9 +87,11 @@ export function UnifiedChatStream({
         onNeedOlder={onStartReached}
         onTopItemChange={onTopItemChange}
         loadingOlder={loadingOlder}
+        hasMore={hasMore}
         error={error}
         briefing={briefing}
         anchorsRef={anchorsActive ? anchorsRef : undefined}
+        crossingRef={crossingRef}
         progressRef={progressRef}
         apiRef={fieldApiRef}
       />

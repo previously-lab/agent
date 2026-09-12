@@ -315,16 +315,42 @@
   color: var(--foreground);
 }
 
-/* The slice gate offers two readouts and shows the one matching the direction
-   the reader is moving through it — back into the past, or forward to now.
-   Switched by an attribute on the field rather than by React state: the flip
-   happens mid-scroll, and a state change would re-render every mounted block,
-   each of which is its own React root with its own provider. */
-[data-dir="past"] .host-future {
-  display: none;
+/* ── The slice gate / field origin ──────────────────────────────────────
+   A boundary between conversations has a fixed box (SLICE_GATE_PX) and two
+   faces stacked inside it: the dormant rule, and the armed intertitle that
+   announces where the reader is arriving. The field arms exactly one boundary
+   at a time and writes `data-armed` on it from its own frame loop.
+
+   Both the fade and the direction swap are CSS on purpose. Arming flips
+   mid-scroll, every gate is a separate `<Html>` React root with its own
+   provider, and re-rendering a portal to swap two words is a cost the field's
+   design exists to avoid. Only the ATTRIBUTES change; the boxes never do —
+   arming must not resize a gate, or the block below it would move. */
+.gate-idle,
+.gate-face {
+  transition: opacity 220ms ease-out;
 }
-[data-dir="future"] .host-past {
-  display: none;
+/* Every face is inert until something lights it — including the one carrying
+   the origin's "load earlier" button, so the button is reachable exactly when
+   the region is armed to show it. */
+.gate-face {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-armed="false"] .gate-idle {
+  opacity: 1;
+}
+/* Both destination faces stay mounted so a direction change is a crossfade
+   rather than a pop; the attribute picks which one is lit. The origin has only
+   one face and says so with `gate-face-solo`. */
+[data-armed="true"] .gate-idle {
+  opacity: 0;
+}
+[data-armed="true"] .gate-face-solo,
+[data-armed="true"][data-dir="past"] .gate-face-past,
+[data-armed="true"][data-dir="future"] .gate-face-future {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ── Streaming content animations ──────────────────────────────────── */

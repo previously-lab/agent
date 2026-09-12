@@ -64,3 +64,28 @@ export function RollingField({ value, digits = 2 }: { value: number; digits?: nu
     </span>
   );
 }
+
+/**
+ * A rolling HH:MM in the reader's own zone — the app's time face, shared by
+ * the timeline wheel's central readout and the slice gate's intertitle, so a
+ * time looks the same wherever the product states one.
+ */
+export function RollingTime({
+  timestamp,
+  className = "",
+}: {
+  timestamp: string;
+  className?: string;
+}) {
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return null;
+  return (
+    <span
+      className={`inline-flex items-baseline font-mono leading-none tabular-nums ${className}`}
+    >
+      <RollingField value={d.getHours()} />
+      <span className="mx-0.5 text-muted-foreground/60">:</span>
+      <RollingField value={d.getMinutes()} />
+    </span>
+  );
+}

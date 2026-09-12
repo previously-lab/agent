@@ -15,6 +15,7 @@ import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand, type StackLevel } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import type { CrossingMark } from "@/components/chat/conversation-field";
 import {
   AtmosphereBackdrop,
   AtmosphereVignette,
@@ -53,6 +54,9 @@ export interface TimelineSceneProps {
   /** Card-field row-start anchors (screen-Y fraction + the row's strands) —
    *  forwarded to the left band so it winds each strand at the row starts. */
   anchorsRef: React.MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing row boundary sits (screen-Y fraction), for the left
+   *  band's anchor dot. */
+  crossingRef: React.MutableRefObject<CrossingMark>;
   /** Reduced-motion preference. */
   reducedMotion: boolean;
   /** WebGL capability from the shell; false forces the StackList fallback. */
@@ -89,6 +93,7 @@ export function TimelineScene({
   level,
   onLevelChange,
   anchorsRef,
+  crossingRef,
   reducedMotion,
   webgl,
 }: TimelineSceneProps) {
@@ -115,6 +120,7 @@ export function TimelineScene({
               level={level}
               onLevelChange={onLevelChange}
               anchorsRef={anchorsRef}
+              crossingRef={crossingRef}
             />
             {/* NOW tail marker — the field's bottom is the present. */}
             <NowTail />

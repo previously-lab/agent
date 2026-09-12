@@ -38,6 +38,12 @@ export interface SeamItem {
    *  screen height is an activity of these strands for the left band's strand
    *  field (v0.11 §2.3/§2.4). */
   strands: string[];
+  /** The NEWER slice's focus — what the gate's forward face announces. */
+  focus?: string;
+  /** The OLDER slice's focus — what the gate's back face announces. The gate
+   *  is the only place a reader learns what they are crossing INTO without
+   *  reading the slice, so both sides carry it. */
+  prevFocus?: string;
   timeIso: string;
 }
 
@@ -129,6 +135,8 @@ function seamItem(
   dateIso: string,
   strands: string[],
   prevActivityIso: string | undefined,
+  focus: string | undefined,
+  prevFocus: string | undefined,
 ): SeamItem {
   return {
     kind: "seam",
@@ -137,6 +145,8 @@ function seamItem(
     dateIso,
     prevActivityIso,
     strands,
+    focus,
+    prevFocus,
     timeIso: dateIso,
   };
 }
@@ -174,6 +184,8 @@ export function buildHistoryItems(
           slice.start,
           slice.strands,
           lastActivityIso(slices[i - 1]),
+          slice.focus,
+          slices[i - 1].focus,
         ),
       );
     }
@@ -191,6 +203,8 @@ export function buildHistoryItems(
           resume.start,
           resume.strands,
           lastActivityIso(last),
+          resume.focus,
+          last.focus,
         ),
       );
     }

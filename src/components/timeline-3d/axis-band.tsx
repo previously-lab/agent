@@ -35,6 +35,7 @@ import {
   RULER_LABEL_RIGHT_PX,
 } from "@/lib/timeline3d/ruler-math";
 import type { StrandListItem } from "@/lib/episodic/actions";
+import type { CrossingMark } from "@/components/chat/conversation-field";
 import { RollingField } from "@/components/chat/rolling-number";
 import { StrandFilter } from "./strand-filter";
 
@@ -151,6 +152,66 @@ function RulerYearLabels({
   );
 }
 
+/**
+ * CrossingDot — the mark on the core line where the boundary the reader is
+ * crossing sits.
+ *
+ * The gate and the band were, until this, two answers to the same question
+ * with nothing joining them: the right pane said "you are arriving at 10:24"
+ * and the left band untwisted at some height, and nothing tied the two
+ * together. One dot is enough. It is placed by a rAF reading the shared
+ * `crossingRef` and written imperatively (style.transform, no setState), so it
+ * paints in the same frame as the band's own frame loop rather than one behind
+ * it — the same arrangement the year labels use.
+ *
+ * Sits on the core line, which is at x=0 in the threadline's world and
+ * therefore the horizontal centre of the strip, and fades rather than pops:
+ * most of the time there is no boundary on screen, and an anchor that
+ * appeared instantly would read as a glitch.
+ */
+function CrossingDot({
+  crossingRef,
+}: {
+  crossingRef: React.MutableRefObject<CrossingMark>;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let raf = 0;
+    let shown = false;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const parent = el.parentElement;
+      if (!parent) return;
+      const y = crossingRef.current.y;
+      const on = y !== null;
+      if (on) {
+        // The fraction is of the SHARED viewport height — the same frame the
+        // anchors arrive in — so it maps straight onto the strip.
+        el.style.transform = `translate(-50%, -50%) translateY(${y * parent.clientHeight}px)`;
+      }
+      if (on !== shown) {
+        shown = on;
+        el.style.opacity = on ? "1" : "0";
+      }
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [crossingRef]);
+
+  return (
+    <div
+      ref={ref}
+      aria-hidden="true"
+      className="pointer-events-none absolute left-1/2 top-0 opacity-0 transition-opacity duration-300 ease-out"
+    >
+      <span className="block size-1.5 rounded-full bg-primary ring-2 ring-background" />
+    </div>
+  );
+}
+
 export interface AxisBandProps {
   /** Whether the band renders its own overlay chrome — the strand filter chip
    *  and the selection caption. These are timeline-view affordances and they
@@ -169,6 +230,8 @@ export interface AxisBandProps {
    *  the chat stream's slice seam rows in chat view; the band winds its strand
    *  lines at these heights. */
   anchorsRef: React.MutableRefObject<FieldAnchor[]>;
+  /** Where the announcing slice boundary sits, for the core line's anchor dot. */
+  crossingRef: React.MutableRefObject<CrossingMark>;
   /** Currently selected strand, if any. */
   strand: string | null;
   /** Strand list for the filter chip. */
@@ -189,6 +252,7 @@ export function AxisBand({
   progressRef,
   levelRef,
   anchorsRef,
+  crossingRef,
   strand,
   strandList,
   ambientStrands,
@@ -261,6 +325,7 @@ export function AxisBand({
       {SHOW_YEAR_RULER && <RulerYearLabels progressRef={progressRef} range={range} />}
       {/* Fade-out at the ruler band's edges (bottom weaker so the NOW
           dot stays visible). */}
+      <CrossingDot crossingRef={crossingRef} />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-background to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background/60 to-transparent" />
       <div
