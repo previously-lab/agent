@@ -41,8 +41,8 @@ export interface TimelineSceneProps {
   onOpenSlice: (sliceId: string, start?: string) => void;
   /** Slice id from `?at=` — the list lands on it, flashed. */
   initialAtId?: string;
-  /** Currently selected strand, if any. */
-  strand: string | null;
+  /** The current picks, in order. Empty = 核心时间线 (no filter). */
+  strands: readonly string[];
   /** Card-field scroll progress 0..1 — forwarded to the left band. */
   progressRef: React.MutableRefObject<number>;
   /** Card-field zoom level — forwarded to the left band. */
@@ -87,7 +87,7 @@ export function TimelineScene({
   onNeedOlder,
   onOpenSlice,
   initialAtId,
-  strand,
+  strands,
   progressRef,
   levelRef,
   level,
@@ -97,7 +97,7 @@ export function TimelineScene({
   reducedMotion,
   webgl,
 }: TimelineSceneProps) {
-  const filtered = filterByStrand(entries, strand);
+  const filtered = filterByStrand(entries, strands);
 
   return (
     <div className="relative h-full w-full overflow-hidden">
@@ -113,7 +113,7 @@ export function TimelineScene({
               onNeedOlder={onNeedOlder}
               onOpenSlice={onOpenSlice}
               initialAtId={initialAtId}
-              genKey={strand ?? "core"}
+              genKey={strands.join("|") || "core"}
               reducedMotion={reducedMotion}
               progressRef={progressRef}
               levelRef={levelRef}
@@ -137,7 +137,7 @@ export function TimelineScene({
             hasMore={hasMore}
             onNeedOlder={onNeedOlder}
             initialAtId={initialAtId}
-            genKey={strand ?? "core"}
+            genKey={strands.join("|") || "core"}
           />
         )}
       </div>

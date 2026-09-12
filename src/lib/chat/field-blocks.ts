@@ -2,10 +2,10 @@
  * The conversation field's block model — pure, no React, no three.js.
  *
  * The field lays the stream out as a vertical run of BLOCKS, each anchored by
- * its top edge. A block opens at every slice gate (a `seam`) and at every
- * resume banner; everything between two openings belongs to the block above
- * it. This module owns that grouping, the fixed sizes the layout assumes, and
- * the rule that decides which boundary is currently announcing itself.
+ * its top edge. A block is one slice's region, and the gate that follows it —
+ * the `seam` between that slice and the next — is its bottom edge. This module
+ * owns that grouping, the fixed sizes the layout assumes, and the rule that
+ * decides which boundary is currently announcing itself.
  *
  * It was lifted out of `conversation-field.tsx` because every one of these was
  * already pure: they take a stream item list and return numbers or strings.
@@ -92,37 +92,76 @@ export function sliceIdOf(item: ChatStreamItem): string | null {
 }
 
 export interface StreamBlock {
-  /** The opening item's key — stable for the life of the block, because a
-   *  block is identified by the boundary that opens it, not by its index. */
+  /** The opening item's key — identity WITHIN a rendering, e.g. a React key. */
   key: string;
+  /**
+   * The slice this block's content belongs to, or null for the briefing card.
+   *
+   * This, not `key`, is the block's STABLE identity. A block holds a slice's
+   * turns, and the turns are keyed by slice AND by their index within it, so
+   * the key is stable too — until a page of older slices arrives and the
+   * oldest block gains the seam that now precedes it. Which is exactly the
+   * event prepend detection is looking for, which is why it reads this field
+   * and not the key.
+   */
+  sliceId: string | null;
   items: ChatStreamItem[];
   /** Every strand any of the block's turns carries, in first-seen order. */
   strands: string[];
-  /** True when the block OPENS with a slice gate. A block that does not is
-   *  the oldest inside the loaded window — nothing precedes it to cross. */
+  /** True when the block ENDS with a slice gate — the boundary between this
+   *  slice and the next. The last block in the window has none: nothing
+   *  follows it to cross. */
   gate: boolean;
 }
 
-/** A new block starts at each slice gate and each resume banner — the same
- *  boundaries the stream itself uses. */
+/**
+ * Group the stream into blocks. A block is ONE SLICE'S REGION, and the gate
+ * that follows it is its bottom edge.
+ *
+ * WHICH SIDE OF A GATE OWNS IT IS NOT A STYLE CHOICE. The gate sits between two
+ * slices and looks identical either way, but the layout consequences are not:
+ * a block is measured and then frozen, so anything added to it moves every
+ * block below. Attaching the gate to the slice it OPENS means that when a page
+ * of older slices arrives, the seam that now precedes the old head is attached
+ * to the OLD HEAD — the reader's own block grows by a gate's height under them,
+ * and their text slides down by exactly that much while the camera is tracking
+ * something else. Attaching it to the slice it CLOSES puts that seam in the
+ * region that just arrived, leaves every existing block byte-identical, and
+ * makes the prepend compensation exact.
+ *
+ * So: turns append to the open block, a gate closes the open block, and a
+ * resume banner opens a new one. The stream itself is unchanged — the gate
+ * still renders between the two slices, at the same pixel.
+ */
 export function groupBlocks(history: readonly ChatStreamItem[]): StreamBlock[] {
   const out: StreamBlock[] = [];
+  let previous: ChatStreamItem["kind"] | null = null;
   for (const item of history) {
-    if (item.kind === "seam" || item.kind === "resume-banner" || out.length === 0) {
+    // A block opens on the item AFTER a gate (so the gate belongs to the block
+    // above it) and at a resume banner, which is a boundary the stream states
+    // outright. Everything else joins the block already open.
+    if (out.length === 0 || item.kind === "resume-banner" || previous === "seam") {
       out.push({
         key: item.key,
+        sliceId: sliceIdOf(item),
         items: [],
         strands: [],
-        gate: item.kind === "seam",
+        gate: false,
       });
     }
     const block = out[out.length - 1];
     block.items.push(item);
-    if (item.kind === "history-turn") {
+    if (item.kind === "seam") {
+      // The gate closes the region above it. `gate` being true means this
+      // block ENDS with a boundary; the band reads its position from the
+      // block's tail, not its head.
+      block.gate = true;
+    } else if (item.kind === "history-turn") {
       for (const s of item.strands ?? []) {
         if (!block.strands.includes(s)) block.strands.push(s);
       }
     }
+    previous = item.kind;
   }
   return out;
 }
@@ -131,11 +170,16 @@ export function groupBlocks(history: readonly ChatStreamItem[]): StreamBlock[] {
  * How many blocks sit at the HEAD of `next` that were not in `prev` — the
  * count of blocks a prepend added, accumulated across prepends.
  *
- * A block is keyed by the boundary that opens it, and that key is stable for
- * as long as the block exists, so the question reduces to: where did the old
- * head go? Its new index IS the number of blocks that arrived above it. No
- * suffix matching, no guessing about what else might have moved — a prepend
- * adds above the head and touches nothing else, and this reads exactly that.
+ * Takes each block's STABLE ID (`StreamBlock.sliceId`), not its key. That
+ * distinction is the difference between this working and silently returning
+ * zero forever: the oldest block in the window opens with a turn, and gains a
+ * seam the instant a page lands above it, so its key always changes on exactly
+ * the event being detected. Its slice does not.
+ *
+ * The question then reduces to: where did the old head go? Its new index IS
+ * the number of blocks that arrived above it. No suffix matching, no guessing
+ * about what else might have moved — a prepend adds above the head and touches
+ * nothing else, and this reads exactly that.
  *
  * `previous` is the running total, or `null` for the first list the field ever
  * saw. That first list is a plain initial fill, not a prepend: the camera is
@@ -148,14 +192,15 @@ export function groupBlocks(history: readonly ChatStreamItem[]): StreamBlock[] {
  */
 export function prependHeadCount(
   previous: number | null,
-  prevKeys: readonly string[],
-  nextKeys: readonly string[],
+  prevIds: readonly (string | null)[],
+  nextIds: readonly (string | null)[],
 ): number {
-  if (previous === null || prevKeys.length === 0) return 0;
-  const headIndex = nextKeys.indexOf(prevKeys[0]);
-  // -1 means the old head is gone, which a prepend cannot cause; 0 means it is
-  // still the head. Neither is a prepend, and guessing in the -1 case would
-  // offset the camera by a number nothing supports.
+  if (previous === null || prevIds.length === 0) return 0;
+  const headId = prevIds[0];
+  // A head with no slice id (the briefing card) has no stable identity to look
+  // up, and an id that is gone entirely cannot be reached by a prepend.
+  if (headId === null) return previous;
+  const headIndex = nextIds.indexOf(headId);
   if (headIndex <= 0) return previous;
   return previous + headIndex;
 }
@@ -200,6 +245,7 @@ export interface GateBand {
  * At the head of the window the origin takes precedence over that rule: being
  * at the very top is itself the announcement.
  */
+
 export function armedGate(
   bands: readonly GateBand[],
   viewTop: number,

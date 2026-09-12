@@ -151,9 +151,14 @@
   --strand-8: oklch(0.72 0.115 329); /* magenta, light */
   --strand-9: oklch(0.5 0.155 357); /* rose        */
   --strand-10: oklch(0.72 0.115 357); /* rose, light  */
+  /* The resting ink for every strand line in the left band (see ink.ts).
+     The ten colours above are a HIGHLIGHT, not an identity: the bundle is
+     grey until the reader singles strands out. */
+  --strand-idle: oklch(0.58 0 0);
 }
 
 .dark {
+  --strand-idle: oklch(0.7 0 0);
   --brand: oklch(0.6 0.23 260);
   --brand-50: oklch(0.21 0.09 267);
   --brand-100: oklch(0.27 0.12 265);

@@ -358,13 +358,22 @@ function anchorStartMs(anchorId: string): number {
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
 }
 
-/** Filter the catalog to a strand's carriers (null = 核心时间线, no filter). */
+/**
+ * Filter the catalog to the carriers of any selected strand — an empty list is
+ * 核心时间线, no filter.
+ *
+ * UNION, not intersection: picking "running" and "work" asks for the slices
+ * about either thread, which is the standard reading of a multi-select facet.
+ * The band agrees — both threads light up — so requiring BOTH would leave the
+ * reader looking at fewer cards than lines.
+ */
 export function filterByStrand(
   entries: TimelineSliceEntry[],
-  strand: string | null,
+  strands: readonly string[],
 ): TimelineSliceEntry[] {
-  if (!strand) return entries;
-  return entries.filter((e) => e.strands.includes(strand));
+  if (strands.length === 0) return entries;
+  const wanted = new Set(strands);
+  return entries.filter((e) => e.strands.some((s) => wanted.has(s)));
 }
 
 // ─── Shared animation easing ────────────────────────────────────────────────

@@ -90,7 +90,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  foreground field fills it — the conversation field in chat, the card
    *  field in the timeline. */
   const crossingRef = useRef<CrossingMark>({ y: null });
-  const [strand, setStrand] = useState<string | null>(null);
+  /** The strand picks, in the order they were added. An EMPTY list is 核心时间线
+   *  — the unfiltered timeline — which is why this is a list and not a nullable
+   *  name: "nothing selected" is a real state, not the absence of one. */
+  const [strands, setStrands] = useState<string[]>([]);
   const [strandList, setStrandList] = useState<StrandListItem[]>([]);
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
   const [oldestMonth, setOldestMonth] = useState<string | null>(null);
@@ -98,11 +101,21 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [timelineReady, setTimelineReady] = useState(false);
   const loadingRef = useRef(false);
 
+  // Only meaningful for a SINGLE pick: with several, the counts overlap (a
+  // slice can carry two chosen strands) and summing them would overcount. A
+  // number that can be wrong is worse than no number, so several picks show
+  // names and no count.
   const selectedCount = useMemo(() => {
-    if (!strand) return null;
-    const item = strandList.find((s) => s.name === strand);
-    return item?.count ?? null;
-  }, [strand, strandList]);
+    if (strands.length !== 1) return null;
+    return strandList.find((s) => s.name === strands[0])?.count ?? null;
+  }, [strands, strandList]);
+
+  const toggleStrand = useCallback((name: string) => {
+    setStrands((prev) =>
+      prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name],
+    );
+  }, []);
+  const clearStrands = useCallback(() => setStrands([]), []);
 
   const ambientStrands = useMemo(
     () => strandList.slice(0, 12).map((s) => s.name),
@@ -218,12 +231,13 @@ export function AppShell({ initialConfig }: AppShellProps) {
           levelRef={zoomLevelRef}
           anchorsRef={anchorsRef}
           crossingRef={crossingRef}
-          strand={strand}
+          strands={strands}
           strandList={strandList}
           ambientStrands={ambientStrands}
           selectedCount={selectedCount}
           reducedMotion={reducedMotion}
-          onSelectStrand={setStrand}
+          onToggleStrand={toggleStrand}
+          onClearStrands={clearStrands}
         />
       )}
 
@@ -282,7 +296,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       onNeedOlder={loadOlder}
                       onOpenSlice={openSlice}
                       initialAtId={at ?? undefined}
-                      strand={strand}
+                      strands={strands}
                       progressRef={progressRef}
                       levelRef={zoomLevelRef}
                       level={level}

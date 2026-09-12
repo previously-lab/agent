@@ -117,7 +117,7 @@ describe("sliceIdOf", () => {
 });
 
 describe("groupBlocks", () => {
-  it("opens a block at each seam and marks it a gate", () => {
+  it("gives the gate to the block it CLOSES, not the one it opens", () => {
     const blocks = groupBlocks([
       turn("a", 0),
       turn("a", 1),
@@ -126,19 +126,37 @@ describe("groupBlocks", () => {
       seam("c"),
       turn("c", 0),
     ]);
-    expect(blocks.map((b) => b.key)).toEqual(["ht-a-0", "seam-b", "seam-c"]);
-    expect(blocks.map((b) => b.gate)).toEqual([false, true, true]);
-    expect(blocks[1].items.map((i) => i.key)).toEqual(["seam-b", "ht-b-0"]);
+    expect(blocks.map((b) => b.key)).toEqual(["ht-a-0", "ht-b-0", "ht-c-0"]);
+    // The last block ends the stream, so nothing follows it to cross.
+    expect(blocks.map((b) => b.gate)).toEqual([true, true, false]);
+    expect(blocks[0].items.map((i) => i.key)).toEqual(["ht-a-0", "ht-a-1", "seam-b"]);
   });
 
-  it("marks the oldest block as NOT a gate — nothing precedes it to cross", () => {
-    const blocks = groupBlocks([turn("a", 0), seam("b"), turn("b", 0)]);
-    expect(blocks[0].gate).toBe(false);
+  it("keeps a block byte-identical when a page lands above it", () => {
+    // THE property the whole prepend compensation rests on. If the seam that
+    // now precedes the old head were attached to the old head, its block would
+    // grow by a gate's height under the reader and their text would slide down
+    // by exactly that much while the camera tracked something else.
+    const before = groupBlocks([turn("old", 0), seam("new"), turn("new", 0)]);
+    const after = groupBlocks([
+      turn("older", 0),
+      seam("old"),
+      turn("old", 0),
+      seam("new"),
+      turn("new", 0),
+    ]);
+    expect(after[1].key).toBe(before[0].key);
+    expect(after[1].items.map((i) => i.key)).toEqual(
+      before[0].items.map((i) => i.key),
+    );
+    expect(after[1].sliceId).toBe(before[0].sliceId);
+    expect(after[1].gate).toBe(before[0].gate);
   });
 
-  it("opens a block at a resume banner too, but that is not a gate", () => {
+  it("opens a block at a resume banner", () => {
     const blocks = groupBlocks([
       turn("a", 0),
+      seam("b"),
       {
         kind: "resume-banner",
         key: "resume-b",
@@ -147,28 +165,36 @@ describe("groupBlocks", () => {
       },
       turn("b", 0),
     ]);
+    // The seam closes slice a's block; the banner opens the resumed one.
     expect(blocks.map((b) => b.key)).toEqual(["ht-a-0", "resume-b"]);
-    expect(blocks[1].gate).toBe(false);
+    expect(blocks.map((b) => b.gate)).toEqual([true, false]);
+    expect(blocks[1].sliceId).toBe("b");
   });
 
   it("collects a block's strands from its TURNS, first-seen order, no duplicates", () => {
-    // The turns carry the slice's own strand set, so the seam's copy on the
-    // opening item is not collected — it would only ever repeat them.
+    // A seam's strand list is that of the NEXT slice, and the seam belongs to
+    // this block — so it must not leak in here.
     const blocks = groupBlocks([
-      seam("a", ["work", "rust"]),
       turn("a", 0, ["rust", "travel"]),
       turn("a", 1, ["work"]),
+      seam("b", ["work", "rust"]),
     ]);
     expect(blocks[0].strands).toEqual(["rust", "travel", "work"]);
   });
 
-  it("gives a turn-less block no strands rather than the seam's", () => {
-    const blocks = groupBlocks([seam("a", ["work"])]);
-    expect(blocks[0].strands).toEqual([]);
-  });
-
   it("returns nothing for an empty history", () => {
     expect(groupBlocks([])).toEqual([]);
+  });
+
+  it("seats the briefing card in the last block rather than opening one", () => {
+    // The briefing is a TAIL, not a boundary: it belongs to whatever slice the
+    // reader is already in, so it must not split the block it lands in.
+    const blocks = groupBlocks([
+      turn("a", 0),
+      { kind: "briefing", key: "briefing", timeIso: "2026-08-11T11:00:00.000Z" },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].sliceId).toBe("a");
   });
 });
 
@@ -177,7 +203,7 @@ describe("prependHeadCount", () => {
     expect(prependHeadCount(null, [], ["a", "b", "c"])).toBe(0);
   });
 
-  it("counts the blocks a prepend added, from the shared suffix", () => {
+  it("counts the blocks a prepend added by where the old head went", () => {
     expect(prependHeadCount(0, ["a", "b", "c"], ["x", "y", "a", "b", "c"])).toBe(2);
   });
 
@@ -199,10 +225,14 @@ describe("prependHeadCount", () => {
     expect(twice).toBe(once);
   });
 
-  it("refuses to guess when the old head has vanished", () => {
-    // A prepend cannot remove the head block, so this is not a prepend and the
-    // running total must not move on the strength of a missing key.
+  it("refuses to guess when the head's id has vanished", () => {
+    // A prepend cannot remove the head, so this is not one, and the running
+    // total must not move on the strength of a missing id.
     expect(prependHeadCount(1, ["a", "b"], ["c", "d", "e"])).toBe(1);
+  });
+
+  it("refuses to guess when the head has no stable id (the briefing card)", () => {
+    expect(prependHeadCount(2, [null, "a"], ["x", "y"])).toBe(2);
   });
 
   it("seeds at zero when the field had no blocks to begin with", () => {

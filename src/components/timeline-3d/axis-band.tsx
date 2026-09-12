@@ -232,18 +232,23 @@ export interface AxisBandProps {
   anchorsRef: React.MutableRefObject<FieldAnchor[]>;
   /** Where the announcing slice boundary sits, for the core line's anchor dot. */
   crossingRef: React.MutableRefObject<CrossingMark>;
-  /** Currently selected strand, if any. */
-  strand: string | null;
+  /** The current picks, in order. Empty = 核心时间线 (no filter, core line
+   *  leads). The band highlights every picked strand and greys the rest. */
+  strands: readonly string[];
   /** Strand list for the filter chip. */
   strandList: StrandListItem[];
   /** Full set of strand names drawn by the threadline (capped). */
   ambientStrands: string[];
-  /** Count of slices carrying the selected strand (for the caption). */
+  /** Slice count for the caption — only meaningful for a SINGLE pick, where
+   *  it is exact. Several picks overcount a slice carrying two of them, and a
+   *  number that can be wrong is worse than no number. */
   selectedCount: number | null;
   /** Reduced-motion preference passed to the threadline. */
   reducedMotion: boolean;
-  /** Strand selection callback. */
-  onSelectStrand: (strand: string | null) => void;
+  /** Add or remove one strand from the picks. */
+  onToggleStrand: (strand: string) => void;
+  /** Clear the picks — back to 核心时间线. */
+  onClearStrands: () => void;
 }
 
 export function AxisBand({
@@ -253,12 +258,13 @@ export function AxisBand({
   levelRef,
   anchorsRef,
   crossingRef,
-  strand,
+  strands,
   strandList,
   ambientStrands,
   selectedCount,
   reducedMotion,
-  onSelectStrand,
+  onToggleStrand,
+  onClearStrands,
 }: AxisBandProps) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
@@ -301,20 +307,34 @@ export function AxisBand({
         <div
           className="pointer-events-none absolute inset-y-0 left-1/2 -z-10 transition-[width,filter,opacity] duration-700 ease-out"
           style={{
-            width: bandWide ? (strand ? "34%" : "58%") : strand ? "44%" : "60%",
-            maxWidth: bandWide ? (strand ? 70 : 130) : strand ? 36 : 44,
+            width: bandWide
+              ? strands.length > 0
+                ? "34%"
+                : "58%"
+              : strands.length > 0
+                ? "44%"
+                : "60%",
+            maxWidth: bandWide
+              ? strands.length > 0
+                ? 70
+                : 130
+              : strands.length > 0
+                ? 36
+                : 44,
             transform: bandWide ? "translateX(-38%)" : "translateX(-50%)",
             background: dark
               ? "radial-gradient(ellipse 38% 88% at 32% 42%, rgba(0,0,0,0.28), transparent)"
               : "radial-gradient(ellipse 38% 88% at 32% 42%, rgba(0,0,0,0.16), transparent)",
-            filter: `blur(${bandWide ? (strand ? 16 : 26) : strand ? 9 : 13}px)`,
+            filter: `blur(${
+              bandWide ? (strands.length > 0 ? 16 : 26) : strands.length > 0 ? 9 : 13
+            }px)`,
             opacity: dark ? (bandWide ? 0.4 : 0.3) : bandWide ? 0.9 : 0.7,
           }}
         />
       )}
       <ThreadlineScene
         strands={ambientStrands}
-        selected={strand}
+        selected={strands}
         progressRef={progressRef}
         range={range}
         levelRef={levelRef}
@@ -331,13 +351,15 @@ export function AxisBand({
       <div
         className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center px-2"
         style={{
-          opacity: showChrome && strand ? 1 : 0,
-          transition: `opacity ${strand ? "400ms" : "200ms"} ${strand ? "600ms" : "0ms"}`,
+          opacity: showChrome && strands.length > 0 ? 1 : 0,
+          transition: `opacity ${strands.length > 0 ? "400ms" : "200ms"} ${
+            strands.length > 0 ? "600ms" : "0ms"
+          }`,
         }}
       >
-        {showChrome && strand && (
-          <span className="pb-1 font-mono text-[10px] tracking-[0.15em] text-foreground">
-            {strand}
+        {showChrome && strands.length > 0 && (
+          <span className="max-w-full truncate pb-1 font-mono text-[10px] tracking-[0.15em] text-foreground">
+            {strands.join(" + ")}
             {selectedCount != null && (
               <> · {t("selected.slices", { count: selectedCount })}</>
             )}
@@ -352,8 +374,9 @@ export function AxisBand({
         <div className="absolute inset-x-0 top-16 flex justify-center">
           <StrandFilter
             strands={strandList}
-            selected={strand}
-            onSelect={onSelectStrand}
+            selected={strands}
+            onToggle={onToggleStrand}
+            onClear={onClearStrands}
           />
         </div>
       )}

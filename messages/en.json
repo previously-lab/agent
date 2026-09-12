@@ -240,7 +240,8 @@
       "earlier": "Earlier",
       "later": "Later",
       "head": "Head of the loaded window",
-      "beginning": "The beginning of this memory"
+      "beginning": "The beginning of this memory",
+      "loadOlder": "Load earlier conversations"
     },
     "seamLoadOlder": "Load earlier conversations",
     "seam": {

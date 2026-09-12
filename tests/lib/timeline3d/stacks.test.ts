@@ -204,14 +204,24 @@ describe("filterByStrand", () => {
     entry("2024-08-19T10:00:00.000Z", { strands: ["work"] }),
   ];
 
-  it("null keeps everything (核心时间线)", () => {
-    expect(filterByStrand(entries, null)).toBe(entries);
+  it("no strands keeps everything (核心时间线)", () => {
+    expect(filterByStrand(entries, [])).toBe(entries);
   });
 
   it("keeps only carriers of the strand", () => {
-    expect(filterByStrand(entries, "running")).toHaveLength(2);
-    expect(filterByStrand(entries, "work")).toHaveLength(2);
-    expect(filterByStrand(entries, "nope")).toHaveLength(0);
+    expect(filterByStrand(entries, ["running"])).toHaveLength(2);
+    expect(filterByStrand(entries, ["work"])).toHaveLength(2);
+    expect(filterByStrand(entries, ["nope"])).toHaveLength(0);
+  });
+
+  it("UNIONS several strands rather than intersecting them", () => {
+    // All three slices carry one or the other; none carries both "work" and
+    // "running" alone, so an intersection would return two, not three.
+    expect(filterByStrand(entries, ["running", "work"])).toHaveLength(3);
+  });
+
+  it("returns the same carrier for a strand repeated in the list", () => {
+    expect(filterByStrand(entries, ["work", "work"])).toHaveLength(2);
   });
 });
 

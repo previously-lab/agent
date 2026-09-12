@@ -240,7 +240,8 @@
       "earlier": "更早",
       "later": "更晚",
       "head": "已加载的最早",
-      "beginning": "记忆的起点"
+      "beginning": "记忆的起点",
+      "loadOlder": "加载更早的对话"
     },
     "seamLoadOlder": "加载更早的对话",
     "seam": {

@@ -69,32 +69,38 @@
  * total twist is always `TURNS` whole turns and the twist migrates down the
  * cable as the user scrolls, with no strand ever leaving its seat.
  *
- * THE COLOUR COMES FROM A TEN-COLOUR PALETTE, not from the wheel. A strand
- * hashes to one of the ten entries defined in globals.css (`--strand-1` …
- * `-10`) — a single arc from blue to rose. Colours REPEAT, and that is the
- * design: ten is about the ceiling on telling categorical colours apart at
- * all, so a different colour per strand would buy nothing and cost the
- * coherence of the whole strip. See `ink.ts`.
+ * COLOUR IS A HIGHLIGHT, NOT AN IDENTITY. The bundle rests GREY: a strand
+ * wears its palette entry (globals.css `--strand-1` … `-10`, a single arc from
+ * blue to rose, picked by hashing the name — see `ink.ts`) ONLY while the
+ * reader has singled it out. Everything else is the resting grey. The core
+ * line is drawn at full brand blue while nothing is selected, and STEPS BACK TO
+ * THE SAME GREY the moment a selection exists, so exactly one thing on the
+ * strip is ever carrying colour.
+ *
+ * That is what makes ten threads at once legible. Colour asked to say "which
+ * strand is this" for every line simultaneously has no answer — ten hues in a
+ * 32 px braid is a colour chart with no reading order, which is what this strip
+ * used to be. Asked to say "these ones, not those" it works, and multi-select
+ * becomes a natural reading of the gesture rather than a second feature.
  *
  * The canvas cannot resolve a CSS variable, so this file reads each strand's
- * `var()` reference back off the document (`resolveCssColor`). That is what
- * keeps the palette in exactly one place — a designer edits globals.css and
- * the WebGL band follows.
+ * `var()` reference back off the document (`resolveCssHex`). That is what keeps
+ * the palette in exactly one place — a designer edits globals.css and the WebGL
+ * band follows.
  *
  * DARK QUIETENS THE BRAID, and it does so HERE rather than in the palette: the
- * ink range below is bounded at BOTH ends, so on a near-black page the strands
- * settle into tinted greys, and the core — the one line drawn at full chroma
- * (`CORE_INK`) — is left holding all the colour authority on the strip.
+ * ink range below is bounded at BOTH ends, so on a near-black page the resting
+ * strands settle into soft greys rather than a fence of bright threads.
  *
  * PER FRAME the scene rewrites each line's segment positions and vertex
  * colours. The braid's volume is a fake upper-left directional light
  * modulating each strand's OWN colour (§2.7) — the cylinder puts every strand
  * at one radius, so a line's depth is its angle around the core, and the
  * shading reads that angle: a strand on the near side of the cable catches more
- * of the light than one on the far side. Strand selection straightens one line
- * — it stops carrying the shared spin for as long as the focus lasts and runs
- * up its own seat — and brightens it, then sends a pulse up it. Reduced motion
- * snaps the focus tween and stills the light drift.
+ * of the light than one on the far side. A highlighted line straightens — it
+ * stops carrying the shared spin for as long as the focus lasts and runs up its
+ * own seat — and brightens, then sends a pulse up it. Reduced motion snaps the
+ * focus tween and stills the light drift.
  *
  * THE LINE-UP JOINT (§2.5): scrolling into a different region changes the top-N
  * set the band draws, and that change is animated rather than cut — a strand
@@ -113,7 +119,7 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Line } from "@react-three/drei";
 import { useTheme } from "@teispace/next-themes";
 import { oklchToHex } from "@/lib/timeline3d/layout";
-import { strandColor } from "@/lib/timeline3d/ink";
+import { STRAND_IDLE_INK, strandColor } from "@/lib/timeline3d/ink";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { screenFractionToWorldY } from "@/lib/timeline3d/convergence";
 import {
@@ -240,42 +246,33 @@ const AMBIENT = 0.22;
 const DIFFUSE = 0.78;
 const CROSSING_DARKEN = 0.18;
 const CROSSING_SHARPNESS = 4.0;
-/** How far a line's colour is carried from the page background. The fake light
- *  modulates the strand's colour, but it is bounded at BOTH ends: a string has
- *  no gaps, so it never fades out, and it never runs to full chroma either —
- *  that second bound is what stops the bundle reading as neon wire.
+/** How far a RESTING line's ink is carried from the page background. The fake
+ *  light modulates it, but it is bounded at BOTH ends: a string has no gaps, so
+ *  it never fades out, and it never runs to full ink either — that second bound
+ *  is what stops the bundle reading as a fence.
  *
- *  Dark needs both numbers moved, and the CEILING is the one that matters. On
- *  a near-black page every line's lit flank used to sit at full saturation —
- *  ten braided lines, ten light sources, all shouting over the core. Held at
- *  0.55 they stay tinted greys with a thread of their own hue, and the core
- *  line is the only thing on the strip left with colour authority. The floor
- *  drops with it so the unlit flank of each line recedes into the page rather
- *  than hovering above it. */
+ *  These bound the GREY now, not the palette (`ink.ts` gave the strands their
+ *  chroma up). That is why dark's ceiling could come back up from the 0.26 it
+ *  needed when every line was a saturated hue: greys have no chroma to shout
+ *  with, so the same fraction of the same lightness reads as a quiet thread
+ *  where a colour read as neon wire. The floor still drops in dark so the unlit
+ *  flank of each line recedes into the page rather than hovering above it. */
 const STRAND_VISIBILITY_FLOOR_LIGHT = 0.3;
-const STRAND_VISIBILITY_CEILING_LIGHT = 1;
-const STRAND_VISIBILITY_FLOOR_DARK = 0.1;
-/** Tuned against the PALETTE, not against a feeling: the ten colours in
- *  globals.css carry roughly three times the chroma the old per-theme ink did,
- *  so the dark ceiling had to come down by about the same factor to leave the
- *  braid as quiet as it was.
- *
- *  Light needs no equivalent, and that asymmetry is the whole story: a
- *  saturated colour blended toward WHITE loses its chroma on the way (the
- *  light band is already a whisper at a ceiling of 1), while blending toward
- *  BLACK keeps chroma and only loses lightness — so the same fraction of the
- *  same colour reads far louder in the dark theme. The dark ceiling is
- *  therefore low enough that the braid sits closer to the light theme's
- *  whisper than to a neon sign, and the core line is left as the only thing
- *  on the strip with real colour. */
-const STRAND_VISIBILITY_CEILING_DARK = 0.26;
-/** The selected line brightens to this share of its own colour under focus —
- *  in ABSOLUTE units, not relative to the theme's ceiling, because it is the
- *  one line allowed to reach full ink in either theme. That is what keeps the
- *  focus gesture legible now that the rest of the bundle has gone quiet. */
-const SELECTED_FOCUS_VISIBILITY = 0.8;
-/** How far the unselected lines recede into the background under focus. */
-const BACKDROP_RECEDE = 0.82;
+const STRAND_VISIBILITY_CEILING_LIGHT = 0.8;
+const STRAND_VISIBILITY_FLOOR_DARK = 0.16;
+const STRAND_VISIBILITY_CEILING_DARK = 0.5;
+/** How far a HIGHLIGHTED line is carried toward its own palette colour — in
+ *  ABSOLUTE units, not relative to the theme's ceiling, because these are the
+ *  only lines still allowed real colour. It has to clear the grey bundle by a
+ *  wide margin: the whole gesture is "this one, not those", and a highlight you
+ *  have to hunt for is not a highlight. */
+const SELECTED_FOCUS_VISIBILITY = 0.92;
+/** How far the unhighlighted lines recede into the background under focus.
+ *  Held well short of 1: the highlight has to dominate, not erase. The rest of
+ *  the bundle is the CONTEXT the picked threads run through — a selection that
+ *  left an empty strip would tell the reader nothing about where those threads
+ *  sit relative to everything else. */
+const BACKDROP_RECEDE = 0.6;
 /** Depth maps onto a brightness multiplier — nearer lanes read brighter. */
 const LANE_BRIGHTNESS_MIN = 0.75;
 const LANE_BRIGHTNESS_SPAN = 0.5;
@@ -317,8 +314,11 @@ export interface ThreadlineSceneProps {
   /** Strand names (display order) — the band's fallback set when the view has
    *  published no anchors yet, and the initial bake's line-up. */
   strands: string[];
-  /** The filter's selection — null = no focus. */
-  selected: string | null;
+  /** The filter's selection — an EMPTY list is no focus. A list rather than a
+   *  single name because the highlight is the only thing colour does on the
+   *  strip now, and "these ones, not those" is the whole gesture: multi-select
+   *  is a natural reading of it, not a second feature bolted on. */
+  selected: readonly string[];
   /** Card-field scroll progress 0..1 (0 = oldest/top, 1 = now/bottom). */
   progressRef: React.MutableRefObject<number>;
   /** Visible date range of the catalog. */
@@ -354,6 +354,8 @@ interface BuildData {
   bgB: number;
   core: THREE.Color;
   companion: THREE.Color;
+  /** The resting strand ink, as a three.js colour — see `ink.ts`. */
+  idleColor: THREE.Color;
   corePoints: THREE.Vector3Tuple[];
   companionPoints: THREE.Vector3Tuple[];
   pulseColorR: number;
@@ -461,6 +463,10 @@ function buildData(
     COMPANION_WHITEN,
   );
   const pulseColor = hexToRgb(dark ? PULSE_INK_DARK : CORE_INK);
+  // The resting ink every unhighlighted line wears. Same resolution path as a
+  // palette entry — a CSS var read off the document — so the theme owns it.
+  const idleHex = resolveCssHex(STRAND_IDLE_INK) || readBackground(dark);
+  const idle = hexToRgb(idleHex);
   const inkFloor = dark
     ? STRAND_VISIBILITY_FLOOR_DARK
     : STRAND_VISIBILITY_FLOOR_LIGHT;
@@ -492,8 +498,11 @@ function buildData(
   // before the first paint; this only has to be a sane shape.
   const slots: SlotBake[] = [];
   for (let s = 0; s < STRAND_SLOT_POOL; s++) {
+    // The bake is a placeholder the frame loop overwrites before the first
+    // paint, so it wears the RESTING ink: a slot that somehow survived to the
+    // screen would be a grey thread, not an unexplained coloured one.
     const name = names[s];
-    const ink = name ? strandInkRgb(name, dark) : bg;
+    const ink = name ? idle : bg;
     const points: THREE.Vector3Tuple[] = [];
     const colors: THREE.Color[] = [];
     for (let j = 0; j < nPoints; j++) {
@@ -527,6 +536,7 @@ function buildData(
     bgB: bg.b,
     core,
     companion,
+    idleColor: new THREE.Color(idle.r, idle.g, idle.b),
     corePoints,
     companionPoints,
     pulseColorR: pulseColor.r,
@@ -663,7 +673,15 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const cameraZRef = useRef(BASE_Z);
   const rotationYRef = useRef(0);
   const prevProgressRef = useRef(progressRef.current);
-  const selectedRef = useRef<string | null>(selected);
+  // The highlight set for this frame, LOWER-CASED through the same
+  // normalisation ink.ts uses, so a selection matches the names the anchor
+  // ranking produced even if the two sides were cased differently.
+  const highlight = useMemo(
+    () => new Set(selected.map((n) => n.trim().normalize("NFKC").toLowerCase())),
+    [selected],
+  );
+  const selectedKey = useMemo(() => selected.join(SET_KEY_SEP), [selected]);
+  const selectedRef = useRef<string>("");
   const pulseStartRef = useRef<number | null>(null);
 
   const coreLineRef = useRef<THREE.Object3D | null>(null);
@@ -702,6 +720,10 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   );
 
   const focusRef = useRef(0);
+  // Scratch colours for the per-frame core/companion lerp — allocating a
+  // THREE.Color per frame would hand the GC a job it does not need.
+  const coreColor = useRef(new THREE.Color());
+  const companionColor = useRef(new THREE.Color());
 
   // One-time material setup: transparent, no depth write, no per-frame shader
   // recompilation. Line2 materials expose opacity through uniforms.opacity.
@@ -721,16 +743,16 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     const dt = Math.min(rawDt, 0.1);
     if (!build) return;
 
-    const targetF = selected ? 1 : 0;
+    const targetF = highlight.size > 0 ? 1 : 0;
     const nextF = reducedMotion
       ? targetF
       : focusRef.current +
         (targetF - focusRef.current) * Math.min(1, dt * FOCUS_SMOOTH_SPEED);
     focusRef.current = nextF;
 
-    if (selected !== selectedRef.current) {
-      selectedRef.current = selected;
-      if (selected) {
+    if (selectedKey !== selectedRef.current) {
+      selectedRef.current = selectedKey;
+      if (highlight.size > 0) {
         pulseStartRef.current = performance.now() / 1000;
       }
     }
@@ -815,15 +837,30 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       groupRef.current.rotation.y = rotationYRef.current;
     }
 
-    const coreOpacity = THREE.MathUtils.lerp(0.8, 0.5, nextF);
+    // THE CORE STEPS BACK TOO. While nothing is singled out it is the one line
+    // on the strip with colour, and the grey bundle is built around it. The
+    // moment a selection exists, colour has a job again and the core hands its
+    // authority over — it fades to the resting grey with the rest, so the
+    // reader's eye has exactly one thing to follow either way.
+    coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
+    const coreOpacity = THREE.MathUtils.lerp(0.8, 0.55, nextF);
     const coreMat = (coreLineRef.current as any)?.material;
     if (coreMat) {
+      if (coreMat.color) coreMat.color.copy(coreColor.current);
       coreMat.opacity = coreOpacity;
       if (coreMat.uniforms?.opacity)
         coreMat.uniforms.opacity.value = coreOpacity;
+      // LineMaterial keeps its diffuse colour in a uniform; `color` above is a
+      // convenience accessor over it on some builds only, so set both.
+      if (coreMat.uniforms?.diffuse)
+        coreMat.uniforms.diffuse.value.copy(coreColor.current);
     }
+    companionColor.current.copy(build.companion).lerp(build.idleColor, nextF);
     const companionMat = (companionLineRef.current as any)?.material;
     if (companionMat) {
+      if (companionMat.color) companionMat.color.copy(companionColor.current);
+      if (companionMat.uniforms?.diffuse)
+        companionMat.uniforms.diffuse.value.copy(companionColor.current);
       const companionOpacity = coreOpacity * 0.55;
       companionMat.opacity = companionOpacity;
       if (companionMat.uniforms?.opacity)
@@ -843,13 +880,14 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     } else {
       liveNames = strands.slice(0, limit);
     }
-    // The focused strand is always drawn, so selecting a line never makes it
-    // vanish from the band. It takes the last ranked seat — never a seat more.
-    if (selected && !liveNames.includes(selected)) {
-      liveNames =
-        liveNames.length >= limit
-          ? [...liveNames.slice(0, Math.max(0, limit - 1)), selected]
-          : [...liveNames, selected];
+    // A highlighted strand is ALWAYS drawn: selecting a line that then vanished
+    // from the band would make the highlight gesture look broken. Missing ones
+    // take the tail seats, never more than the limit allows — the ranking
+    // yields to the selection, not the other way round.
+    const missing = selected.filter((name) => !liveNames.includes(name));
+    if (missing.length > 0) {
+      const keep = Math.max(0, limit - missing.length);
+      liveNames = [...liveNames.slice(0, keep), ...missing].slice(0, limit);
     }
 
     // ── The line-up joint (§2.5) ─────────────────────────────────────────
@@ -1118,9 +1156,11 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       }
       (line as any).visible = true;
 
-      const isSelected = name === selected;
-      const pulseActive = isSelected && pulseActiveGlobal;
-      (line as any).renderOrder = isSelected ? 3 : 1;
+      const isHighlighted = highlight.has(
+        name.trim().normalize("NFKC").toLowerCase(),
+      );
+      const pulseActive = isHighlighted && pulseActiveGlobal;
+      (line as any).renderOrder = isHighlighted ? 3 : 1;
 
       // The joint envelope (§2.5): a joining line is still winding up and a
       // leaving line is unwinding and thinning out; a settled line is at 1.
@@ -1134,7 +1174,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         // Solid at rest: transparency was making the bundle read as a smudge
         // and hiding whether the twist shape is actually right. Only the
         // focus state dims the others.
-        const targetOpacity = isSelected
+        const targetOpacity = isHighlighted
           ? 1
           : THREE.MathUtils.lerp(1, 0.12, nextF);
         const opacity =
@@ -1159,7 +1199,11 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       const laneBrightness =
         LANE_BRIGHTNESS_MIN + LANE_BRIGHTNESS_SPAN * depth;
 
-      const ink = strandInkRgb(name, dark);
+      // COLOUR IS THE HIGHLIGHT. A strand carries its palette entry only while
+      // it is singled out; the resting bundle is grey (see `ink.ts`). This is
+      // the whole reason the band can show ten threads at once without reading
+      // as a colour chart — colour is doing one job here, not ten.
+      const ink = isHighlighted ? strandInkRgb(name, dark) : build.idleColor;
       const inkR = ink.r;
       const inkG = ink.g;
       const inkB = ink.b;
@@ -1169,7 +1213,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       // knot; the joint amplitude winds a joining line up and a leaving line
       // down (§2.5). Both are a scale on the SHARED spin, never a per-strand
       // rotation of its own, so the line stays on the cylinder throughout.
-      const unwind = (isSelected ? 1 - nextF : 1) * jointAmp;
+      const unwind = (isHighlighted ? 1 - nextF : 1) * jointAmp;
 
       const geom = (line as any).geometry;
       if (!geom) continue;
@@ -1254,7 +1298,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         let g = bgG + (inkG - bgG) * visibility;
         let b = bgB + (inkB - bgB) * visibility;
 
-        if (isSelected) {
+        if (isHighlighted) {
           const selVisibility =
             SELECTED_FOCUS_VISIBILITY +
             (1 - SELECTED_FOCUS_VISIBILITY) * strength;

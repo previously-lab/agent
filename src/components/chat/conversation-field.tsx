@@ -64,6 +64,7 @@ import {
   splitItems,
   type GateBand,
   type GateSignal,
+  type StreamBlock,
 } from "@/lib/chat/field-blocks";
 import { SliceGate } from "./slice-gate";
 import { FieldOrigin } from "./field-origin";
@@ -146,13 +147,9 @@ export interface ConversationFieldProps {
   following?: boolean;
 }
 
-interface Block {
-  key: string;
-  items: ChatStreamItem[];
-  strands: string[];
-  /** True when the block opens with a slice gate (see `groupBlocks`). */
-  gate: boolean;
-}
+/** The field lays out exactly the blocks `groupBlocks` produces — the type is
+ *  imported rather than re-declared so the two cannot drift. */
+type Block = StreamBlock;
 
 /** One stream item, in its plain form. Shared by history blocks and the live
  *  block so the two cannot drift apart visually. */
@@ -380,7 +377,15 @@ function FieldScene({
     }
     for (let i = 0; i < blocks.length; i++) {
       if (!blocks[i].gate) continue;
-      bands.push({ index: i, top: offsets[i] ?? 0, height: SLICE_GATE_PX });
+      // The gate is the block's BOTTOM edge — the boundary between its slice
+      // and the next — so its band sits at the block's tail.
+      const start = offsets[i] ?? 0;
+      const height = (offsets[i + 1] ?? start + FALLBACK_BLOCK_PX) - start;
+      bands.push({
+        index: i,
+        top: start + Math.max(0, height - SLICE_GATE_PX),
+        height: SLICE_GATE_PX,
+      });
     }
     const armed = armedGate(bands, offsetRef.current, size.height, minOffset);
     let armedBand: GateBand | null = null;
@@ -437,13 +442,19 @@ function FieldScene({
           zIndexRange={[10, 0]}
           style={{ width: COLUMN_PX }}
         >
-          <FieldOrigin
-            oldestIso={oldestIso}
-            hasMore={hasMore}
-            loading={loadingOlder}
-            onLoadOlder={onNeedOlder}
-            signal={originSignal}
-          />
+          {/* The provider is REQUIRED here for the same reason BillboardBlock
+              needs one: `<Html>` mounts into a separate React root, so every
+              context above the canvas — NextIntlClientProvider included — is
+              cut at the portal. */}
+          <NextIntlClientProvider messages={messages} locale={locale}>
+            <FieldOrigin
+              oldestIso={oldestIso}
+              hasMore={hasMore}
+              loading={loadingOlder}
+              onLoadOlder={onNeedOlder}
+              signal={originSignal}
+            />
+          </NextIntlClientProvider>
         </Html>
       )}
 
@@ -577,25 +588,47 @@ export function ConversationField({
   // needs to know how many blocks arrived that way so it can compensate the
   // camera by exactly their height. Written during render, like the prop
   // mirrors above, and idempotent, so a double render cannot double-count.
-  const blockKeys = useMemo(() => blocks.map((b) => b.key), [blocks]);
-  const prevBlockKeysRef = useRef<string[] | null>(null);
+  //
+  // The identity used is each block's SLICE, never its key: the block at the
+  // head of the window opens with a turn and gains a seam as soon as a page
+  // lands above it, so its key changes on precisely the event being detected.
+  const blockIds = useMemo(
+    () => blocks.map((b) => b.sliceId),
+    [blocks],
+  );
+  const prevBlockIdsRef = useRef<(string | null)[] | null>(null);
   const headCountRef = useRef(0);
   const prependShiftRef = useRef<number | null>(null);
-  const prevBlockKeys = prevBlockKeysRef.current;
-  if (prevBlockKeys !== null) {
+  const prevBlockIds = prevBlockIdsRef.current;
+  if (prevBlockIds !== null) {
     const nextHead = prependHeadCount(
       headCountRef.current,
-      prevBlockKeys,
-      blockKeys,
+      prevBlockIds,
+      blockIds,
     );
-    if (nextHead > headCountRef.current && headCountRef.current === 0) {
-      // The first prepend of this mount: the baseline the compensation
-      // measures FROM is the head's offset before anything arrived above it.
-      prependShiftRef.current = 0;
+    const added = nextHead - headCountRef.current;
+    if (added > 0) {
+      // A height is recorded against the block's INDEX, and a prepend moves
+      // every block that already exists down by `added`. Without this the
+      // measurements stay where they were: each arriving block inherits the
+      // height of whichever block used to sit at its index, and the blocks the
+      // reader is actually looking at lose theirs and fall back to an
+      // estimate — which puts THEM somewhere else while the camera is tracking
+      // the head, and the view drifts. Re-indexing by the same amount keeps
+      // every block's own measurement with it.
+      heightsRef.current = [
+        ...new Array<number>(added).fill(0),
+        ...heightsRef.current,
+      ];
+      if (headCountRef.current === 0) {
+        // The first prepend of this mount: the baseline the compensation
+        // measures FROM is the head's offset before anything arrived above it.
+        prependShiftRef.current = 0;
+      }
     }
     headCountRef.current = nextHead;
   }
-  prevBlockKeysRef.current = blockKeys;
+  prevBlockIdsRef.current = blockIds;
 
   /** The block holding `key`, matching the whole key first and then a key
    *  SUFFIX (a slice id), so a caller that only knows the slice reaches it

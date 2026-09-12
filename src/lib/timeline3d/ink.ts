@@ -50,6 +50,25 @@ const FNV_PRIME = 16777619;
 /** The strandless grey — a slice with no strands gets no palette colour. */
 export const STRANDLESS_GREY = "oklch(0.556 0 0)";
 
+/**
+ * The RESTING ink every strand line wears in the band — a neutral, themed in
+ * globals.css beside the palette.
+ *
+ * The band does not spend its ten colours on identity any more. Ten lines
+ * braided through a 32 px strip, each carrying its own hue, is a colour chart
+ * with no reading order: colour was being asked to say "which strand is this"
+ * for every strand AT ONCE, and no palette survives that. Instead the bundle
+ * rests grey and colour is a HIGHLIGHT — it marks the strands the reader has
+ * actually singled out, and nothing else. The core line keeps the brand blue
+ * until something is selected; then the selection takes the colour and even
+ * the core steps back to grey.
+ *
+ * This is also what the product asked for from the start: a timeline that is
+ * not the loudest thing on the page. A strip of grey threads with one blue
+ * spine is quiet by construction, and it leaves colour free to mean something.
+ */
+export const STRAND_IDLE_INK = "var(--strand-idle)";
+
 /** Default alpha for strand-tinted surfaces (chat user bubbles) — 8–12%
  *  reads as a tint in both light and dark themes. */
 export const STRAND_TINT_ALPHA = 0.12;
