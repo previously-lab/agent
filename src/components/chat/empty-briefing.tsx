@@ -14,6 +14,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 interface EmptyBriefingProps {
   /** Current persona id (demo mode only — drives the persona switcher). */
   persona?: string;
+  /**
+   * The resolved identity, when the parent already has it. The chat page needs
+   * the display name for its own "PREVIOUSLY ON" eyebrow and fetches it at
+   * mount, so the briefing takes it as a prop rather than asking a second
+   * time — in GitHub mode each ask can walk a month of day directories
+   * looking for a previously.md.
+   */
+  identity?: BriefingIdentity | null;
   /** The most recent slice (its focus / open_loops seed the briefing). May be
    *  null before the mount fetch resolves, or for a brand-new user. */
   active: SliceSummary | null;
@@ -99,29 +107,33 @@ function LedgerRow({
  */
 export function EmptyBriefing({
   persona,
+  identity: provided,
   active,
   recent,
   onSend,
   variant = "full",
 }: EmptyBriefingProps) {
   const t = useTranslations("emptyBriefing");
-  const [identity, setIdentity] = useState<BriefingIdentity | null>(null);
+  const [fetched, setFetched] = useState<BriefingIdentity | null>(null);
+  const identity = provided ?? fetched;
   const [personaOpen, setPersonaOpen] = useState(false);
   const [prevOpen, setPrevOpen] = useState(false);
   const [prevContent, setPrevContent] = useState<string | null>(null);
 
-  // Resolve the display name (+ persona list in demo mode).
+  // Resolve the display name (+ persona list in demo mode) — only when the
+  // caller did not already have it.
   useEffect(() => {
+    if (provided !== undefined) return;
     let cancelled = false;
     getBriefingIdentity(persona)
       .then((id) => {
-        if (!cancelled) setIdentity(id);
+        if (!cancelled) setFetched(id);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [persona]);
+  }, [persona, provided]);
 
   // Lazily fetch the active slice's previously.md only when the dialog opens.
   useEffect(() => {

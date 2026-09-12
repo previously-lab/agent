@@ -5,9 +5,26 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { AppShell } from "@/components/shell/app-shell";
 import { ClientErrorCapture } from "@/components/chat/client-error-capture";
 import { DebugErrorBoundary } from "@/components/ui/error-boundary";
+import { ChatStreamSkeleton } from "@/components/chat/chat-skeleton";
 import { loadUserConfig } from "@/lib/config/loader";
 
 type SearchParams = Promise<{ persona?: string; view?: string; at?: string }>;
+
+/**
+ * The config read, in its OWN async boundary.
+ *
+ * It used to sit directly in the page body, above the JSX — which meant the
+ * `<Suspense>` below it could never show its fallback, because the page had
+ * not finished awaiting by the time the boundary was created. The whole page
+ * segment (HTML and all) waited on a `getContent` round trip, and the user
+ * watched an empty screen for it. The shell needs nothing from the config but
+ * the model-selector seed, so it is awaited HERE and the shell streams in
+ * around it.
+ */
+async function Shell() {
+  const config = await loadUserConfig();
+  return <AppShell initialConfig={config} />;
+}
 
 export default async function HomePage({
   params,
@@ -24,11 +41,6 @@ export default async function HomePage({
   if (isDemo) {
     setDemoPersona(persona || "user");
   }
-  // Preload the user config server-side so ChatPage seeds its model state from
-  // real values instead of flashing the defaults and then reconciling via a
-  // mount-time server action. The config loader has a 60s TTL
-  // and the underlying GitHub read rides the readFile cache, so this is cheap.
-  const config = await loadUserConfig();
 
   // v0.11 single-shell page: chat and timeline are views of `/` selected by
   // the `?view=timeline` search param. AppShell owns the left time axis and
@@ -42,8 +54,8 @@ export default async function HomePage({
           here with the full stack + component stack instead of an opaque
           frame. */}
       <DebugErrorBoundary label="chat-page">
-        <Suspense fallback={<div className="h-dvh" />}>
-          <AppShell initialConfig={config} />
+        <Suspense fallback={<ChatStreamSkeleton />}>
+          <Shell />
         </Suspense>
       </DebugErrorBoundary>
     </>

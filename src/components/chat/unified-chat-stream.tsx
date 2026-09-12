@@ -44,13 +44,12 @@ export interface UnifiedChatStreamProps {
   /** A failed turn, shown as a banner under the content. */
   error: Error | undefined;
   /** Briefing-mode arrival card props (§1.2 Rev 2). When set, the parent seats
-   *  a `briefing` item at the stream tail and it renders through these. */
-  briefing?: {
-    persona?: string;
-    active: import("@/lib/episodic/actions").SliceSummary | null;
-    recent: import("@/lib/episodic/actions").SliceSummary[];
-    onSend: (message: string) => void;
-  } | null;
+   *  a `briefing` item at the stream tail and it renders through these. Typed
+   *  from the component itself so a new briefing prop cannot be added without
+   *  this adapter carrying it. */
+  briefing?: React.ComponentProps<
+    typeof import("./empty-briefing").EmptyBriefing
+  > | null;
   /** Shared strand-field anchors owned by the app shell — the field fills them
    *  while the chat view is foreground. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;

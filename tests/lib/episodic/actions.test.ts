@@ -254,19 +254,21 @@ describe("getSliceJumpWindow", () => {
   });
 
   it("caps from the newest side when the stretch exceeds the jump window", async () => {
-    // 600 slices back, a 500-slice cap: the batch must sit flush against the
+    // 600 slices back, a 150-slice cap: the batch must sit flush against the
     // loaded window (no hole) — target stays unloaded for the caller's page
-    // loop, hasMore stays true.
+    // loop, hasMore stays true. The cap came DOWN from 500 because a batch is
+    // full slices with every turn in them, so the cap is a payload bound as
+    // much as a request bound; the client's page loop covers the remainder.
     const entries = seedCatalog(600);
 
     const win = await getSliceJumpWindow(entries[0].id, entries[599].id);
 
     expect(win.found).toBe(true);
-    expect(win.slices).toHaveLength(500);
+    expect(win.slices).toHaveLength(150);
     // Newest-capped: the batch sits flush against the loaded window (index
-    // 599 exclusive) — entries[99..598] — with the target left outside.
-    expect(win.slices[0].id).toBe(entries[99].id);
-    expect(win.slices[499].id).toBe(entries[598].id);
+    // 599 exclusive) — entries[449..598] — with the target left outside.
+    expect(win.slices[0].id).toBe(entries[449].id);
+    expect(win.slices[149].id).toBe(entries[598].id);
     expect(win.hasMore).toBe(true);
   });
 
@@ -466,9 +468,12 @@ describe("getStrandList", () => {
         makeEntry({ id: "2026-08-13-1000", date: "2026-08-13", start: "2026-08-13T10:00:00.000Z", strands: ["work"] }),
       ],
     });
+    // No `description`: the entity layer is no longer read here. It cost one
+    // backend round trip PER STRAND (mostly 404s) to populate a field no
+    // surface rendered — the filter shows a swatch, a name and a count.
     expect(await getStrandList()).toEqual([
-      { name: "work", count: 2, lastStart: "2026-08-13T10:00:00.000Z", description: null },
-      { name: "running", count: 2, lastStart: "2026-08-12T10:00:00.000Z", description: null },
+      { name: "work", count: 2, lastStart: "2026-08-13T10:00:00.000Z" },
+      { name: "running", count: 2, lastStart: "2026-08-12T10:00:00.000Z" },
     ]);
   });
 

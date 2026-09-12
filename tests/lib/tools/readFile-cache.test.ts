@@ -68,6 +68,13 @@ describe("ttlForPath", () => {
     expect(ttlForPath("memory/episodic/timeline/index.json")).toBe(60);
   });
 
+  it("treats the MONTHLY index as mutable, not as a closed slice", () => {
+    // It lives under `slices/`, so it used to inherit the 24-hour rule meant
+    // for immutable closed slices — on a file rewritten every time a slice in
+    // that month opens, closes or flushes.
+    expect(ttlForPath("memory/episodic/slices/2026/08/_index.json")).toBe(60);
+  });
+
   it("uses a moderate TTL for other memory files", () => {
     expect(ttlForPath("memory/episodic/strands.json")).toBe(
       READ_TTLS.MEMORY_DEFAULT_SECONDS

@@ -50,6 +50,14 @@ export const READ_TTLS = {
 /** Cache TTL for a path, by memory-file class. Pure — unit-tested. */
 export function ttlForPath(path: string): number {
   const normalized = path.replace(/\\/g, "/");
+  // The MONTHLY index is the same class of file as the global one — it is
+  // rewritten whenever a slice in that month opens, closes or flushes, and
+  // `readSliceIndex` is how every boot scan finds slices. It used to fall
+  // through to the closed-slice rule below, which is up to 24 hours of
+  // staleness on a file the design calls mutable, so it is matched FIRST.
+  if (MONTHLY_INDEX.test(normalized)) {
+    return READ_TTLS.TIMELINE_INDEX_SECONDS;
+  }
   if (normalized.startsWith("memory/episodic/slices/")) {
     return READ_TTLS.CLOSED_SLICE_SECONDS;
   }
@@ -58,6 +66,9 @@ export function ttlForPath(path: string): number {
   }
   return READ_TTLS.MEMORY_DEFAULT_SECONDS;
 }
+
+/** `memory/episodic/slices/YYYY/MM/_index.json` — see `ttlForPath`. */
+const MONTHLY_INDEX = /^memory\/episodic\/slices\/\d{4}\/\d{2}\/_index\.json$/;
 
 /** Cache tag identifying one file in one repo. Writes revalidate this tag. */
 export function fileCacheTag(path: string, repo: string, owner: string): string {

@@ -223,8 +223,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
           supplies the anchors either way: the card field's rows in the
           timeline, the chat stream's slice seams in chat, so the braid winds
           at whatever the user is actually looking at. */}
-      {webgl === true && (
+      {/* Rendered from the first paint unless WebGL is known ABSENT, so the
+          strip's 38 px are never inserted in front of the reader a frame after
+          hydration. `contentReady` fades the braid in once detection lands. */}
+      {webgl !== false && (
         <AxisBand
+          contentReady={webgl === true}
           showChrome={showTimeline}
           range={range}
           progressRef={progressRef}

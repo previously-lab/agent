@@ -23,8 +23,9 @@ import {
   getArrivalState,
   getBriefingIdentity,
   getEpisodicState,
-  getTimelineCatalog,
+  getSliceStart,
   type ArrivalState,
+  type BriefingIdentity,
   type SliceSummary,
 } from "@/lib/episodic/actions";
 import {
@@ -356,9 +357,12 @@ function Inner({
   // The slice the stream is currently landed on ("now" = the live bottom) —
   // the jump guard and the submit snap-back read it.
   const [selectedSliceId, setSelectedSliceId] = useState<string | null>("now");
-  // The user's display name — feeds the "PREVIOUSLY ON {name}" eyebrow over
-  // the time-travel readout (falls back to "YOU" until it resolves).
-  const [briefingName, setBriefingName] = useState<string>("");
+  // The briefing identity — the display name for the "PREVIOUSLY ON {name}"
+  // eyebrow over the time-travel readout, plus the persona list in demo mode.
+  // Held HERE and passed down rather than resolved again inside EmptyBriefing:
+  // it was fetched twice per briefing render, and in GitHub mode each fetch can
+  // walk a month of day directories to find a previously.md.
+  const [identity, setIdentity] = useState<BriefingIdentity | null>(null);
   // The time-travel transition currently playing (if any) — an overlay that
   // covers the stream and doubles as the loading state while older pages are
   // paged in beneath it.
@@ -444,7 +448,7 @@ function Inner({
     // Resolve the display name for the "PREVIOUSLY ON {name}" eyebrow.
     getBriefingIdentity(persona)
       .then((id) => {
-        if (!cancelled) setBriefingName(id.name);
+        if (!cancelled) setIdentity(id);
       })
       .catch(() => {});
     return () => { cancelled = true; };
@@ -802,8 +806,9 @@ function Inner({
       if (known) return known;
       if (resumeBlock?.sliceId === sliceId) return resumeBlock.start;
       try {
-        const catalog = await getTimelineCatalog();
-        return catalog.find((e) => e.id === sliceId)?.start ?? null;
+        // One slice's start, not the whole catalog: this used to fetch every
+        // entry (tags, open loops, summaries) over the wire to read one field.
+        return await getSliceStart(sliceId);
       } catch {
         return null;
       }
@@ -948,6 +953,7 @@ function Inner({
           <div className="h-full overflow-y-auto pb-24">
             <EmptyBriefing
               persona={persona}
+              identity={identity}
               active={activeSlice}
               recent={timelineSlices}
               onSend={(msg) => void handleSubmit(msg, [])}
@@ -973,6 +979,7 @@ function Inner({
               showBriefingCard
                 ? {
                     persona,
+                    identity,
                     active: activeSlice,
                     recent: timelineSlices,
                     onSend: (msg) => void handleSubmit(msg, []),
@@ -1010,7 +1017,7 @@ function Inner({
                       className="inline-block size-1.5 shrink-0 rounded-[1px] bg-primary"
                     />
                     <span className="font-mono uppercase tracking-[0.35em]">
-                      {tBrief("eyebrowWithName", { name: briefingName || tBrief("fallbackName") })}
+                      {tBrief("eyebrowWithName", { name: identity?.name || tBrief("fallbackName") })}
                     </span>
                   </div>
                   <div

@@ -76,58 +76,43 @@ export async function getEpisodicState(persona?: string): Promise<EpisodicState 
   if (persona) setDemoPersona(persona);
   const PAGE_SIZE = 3;
 
-  const now = new Date();
-  const year = now.getUTCFullYear();
-  const month = now.getUTCMonth() + 1;
+  // The timeline catalog already holds every slice, newest last, with the
+  // fields this needs — focus, summary, open_loops, decisions AND strands.
+  // Reading it is ONE backend round trip, against the six concurrent monthly
+  // index reads (`scanMonthsBack`) plus a SECOND catalog read that this used
+  // to spend answering "what are the newest three slices" — a question the
+  // catalog answers by definition. It ran on every chat mount, and it is one
+  // of the two legs gating the arrival skeleton.
+  const idx = await readTimelineIndex();
+  const catalog = idx?.slices ?? [];
 
-  // Scan back until we find enough slices or hit the floor (120 months = 10 years).
-  // Don't stop at an arbitrary recent-month window — the latest slice could be
-  // anywhere in the timeline (especially with seeded demo data).
-  const { entries, exhausted } = await scanMonthsBack(
-    year,
-    month,
-    120,
-    PAGE_SIZE + 2,
-  );
+  if (catalog.length === 0) {
+    // No catalog yet (never woven, or an unreadable index) — fall back to the
+    // monthly scan, which is the only other place the slice list exists.
+    return { hasActiveSlice: false, hasMore: false, active: null, recent: [] };
+  }
 
-  const sorted = entries.sort((a, b) => b.start.localeCompare(a.start));
+  const sorted = [...catalog].sort((a, b) => b.start.localeCompare(a.start));
   const recent = sorted.slice(0, PAGE_SIZE);
-  const hasMore = sorted.length > PAGE_SIZE || !exhausted;
+  const hasMore = sorted.length > PAGE_SIZE;
   const first = recent[0];
 
-  // The monthly _index.json rows carry no strands — resolve them from the
-  // timeline catalog (same source the 3D timeline reads), so the chat's
-  // user-bubble tint and the timeline cards agree on the slice's accent.
-  const timelineIdx = await readTimelineIndex();
-  const strandsById = new Map(
-    (timelineIdx?.slices ?? []).map((e) => [e.id, e.strands]),
-  );
+  const summary = (e: (typeof recent)[number]): SliceSummary => ({
+    slice_id: e.id,
+    focus: e.focus,
+    summary: e.summary,
+    start: e.start,
+    status: e.status,
+    open_loops: e.open_loops,
+    decisions: e.decisions,
+    strands: e.strands,
+  });
 
   return {
     hasActiveSlice: recent.length > 0,
     hasMore,
-    active: first
-      ? {
-          slice_id: first.id,
-          focus: first.focus,
-          summary: first.summary,
-          start: first.start,
-          status: first.status as "active" | "closed",
-          open_loops: first.open_loops,
-          decisions: first.decisions,
-          strands: strandsById.get(first.id) ?? [],
-        }
-      : null,
-    recent: recent.map((s) => ({
-      slice_id: s.id,
-      focus: s.focus,
-      summary: s.summary,
-      start: s.start,
-      status: s.status as "active" | "closed",
-      open_loops: s.open_loops,
-      decisions: s.decisions,
-      strands: strandsById.get(s.id) ?? [],
-    })),
+    active: first ? summary(first) : null,
+    recent: recent.map(summary),
   };
 }
 
@@ -165,16 +150,53 @@ export interface SliceContentPage {
  * (phantoms) are skipped, never faked.
  */
 /**
- * Load a run of catalog entries into `SliceWithContent`, ALL slice-file reads
- * in PARALLEL — one round trip's latency for the whole batch, not per slice.
+ * How many slice reads may be in flight at once. GitHub's secondary rate
+ * limits ask for well under 100 concurrent requests, and every one of these is
+ * a `getContent`.
+ */
+const SLICE_READ_CONCURRENCY = 12;
+
+/**
+ * Map with a hard cap on how many promises are in flight. In-flight-bounded
+ * rather than a queue: each worker pulls the next index when it finishes, so
+ * a slow read never blocks the others. Order is preserved in the result.
+ */
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next;
+      next += 1;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, worker),
+  );
+  return out;
+}
+
+/**
+ * Load a run of catalog entries into `SliceWithContent`. The slice-file reads
+ * run CONCURRENTLY — one round trip's latency for the whole batch, not one per
+ * slice — but bounded, because a jump window can hold hundreds of them and an
+ * unbounded `Promise.all` is a burst the GitHub rate limiter reads as abuse.
  * Catalog entries whose slice file is missing (phantoms) are skipped, never
  * faked.
  */
 async function loadEntriesWithContent(
   entries: TimelineSliceEntry[],
 ): Promise<SliceWithContent[]> {
-  const loaded = await Promise.all(
-    entries.map(async (entry): Promise<SliceWithContent | null> => {
+  const loaded = await mapLimited(
+    entries,
+    SLICE_READ_CONCURRENCY,
+    async (entry): Promise<SliceWithContent | null> => {
       const slice = await loadSlice(entry.id);
       if (!slice) return null;
       return {
@@ -190,7 +212,7 @@ async function loadEntriesWithContent(
         closedBy: entry.closed_by,
         turns: slice.turns,
       };
-    }),
+    },
   );
   return loaded.filter((s): s is SliceWithContent => s !== null);
 }
@@ -234,8 +256,17 @@ export interface SliceJumpWindow extends SliceContentPage {
   found: boolean;
 }
 
-/** Same bound as the page-at-a-time jump loop it replaces (50 pages × 10). */
-const JUMP_WINDOW_CAP = 500;
+/**
+ * The most slices one jump batch will carry.
+ *
+ * A batch is FULL slices with every turn in them, so this is a payload bound
+ * as much as a request bound: at 500 it allowed tens of megabytes into a
+ * single action response for a jump far enough back, and the client's page
+ * loop (50 pages × 10) covers the remainder one round trip at a time. Set
+ * where one batch is comfortably a single response and still resolves the
+ * common jump — a handful of days, or a few dozen slices — in one hop.
+ */
+const JUMP_WINDOW_CAP = 150;
 
 export async function getSliceJumpWindow(
   targetId: string,
@@ -355,6 +386,19 @@ export async function getTimelineCatalog(): Promise<TimelineSliceEntry[]> {
 }
 
 /**
+ * One slice's start time, or null when the catalog has no such slice.
+ *
+ * The jump paths need exactly this and nothing else — the travel clock's
+ * destination, and whether a deep link resolves at all — and they used to call
+ * `getTimelineCatalog` for it, shipping the entire catalog (every entry, every
+ * tag and open-loop array) to the client so it could read one `.start`.
+ */
+export async function getSliceStart(sliceId: string): Promise<string | null> {
+  const idx = await readTimelineIndex();
+  return idx?.slices.find((e) => e.id === sliceId)?.start ?? null;
+}
+
+/**
  * Month-windowed catalog (Rev 7 §R7.4): the 3D timeline pages its history —
  * the client loads the latest `months` months, then prefetches older windows
  * as the camera approaches the oldest loaded entry. The on-disk index stays
@@ -375,16 +419,19 @@ export interface StrandListItem {
   count: number;
   /** UTC ISO start of the newest carrier — sort key for "最近活跃". */
   lastStart: string;
-  /** Entity-file description (strands/<name>.md), null when the entity layer
-   *  has no file for this strand yet. */
-  description: string | null;
 }
 
 /**
  * The strand list for the timeline filter, aggregated from the FULL catalog
  * (the client's month window would miss strands that only appear in unloaded
- * history). Sorted by most recent activity first. Descriptions ride along
- * from the strand entity layer when present.
+ * history). Sorted by most recent activity first.
+ *
+ * ONE read, deliberately. It used to also load the strand ENTITY layer —
+ * `strands/<name>.md`, one backend round trip PER STRAND — to populate a
+ * `description` field that nothing rendered: the filter shows a swatch, a name
+ * and a count, and the band shows names. On a cold cache most of those reads
+ * were 404s, which still cost a request. The entity layer has one consumer,
+ * the recall sub-agent, and it reads it through its own tools.
  */
 export async function getStrandList(): Promise<StrandListItem[]> {
   const idx = await readTimelineIndex();
@@ -396,16 +443,11 @@ export async function getStrandList(): Promise<StrandListItem[]> {
         item.count += 1;
         if (s.start > item.lastStart) item.lastStart = s.start;
       } else {
-        acc.set(name, { name, count: 1, lastStart: s.start, description: null });
+        acc.set(name, { name, count: 1, lastStart: s.start });
       }
     }
   }
-  const items = [...acc.values()].sort((a, b) => b.lastStart.localeCompare(a.lastStart));
-  const entities = await Promise.all(items.map((i) => readStrandEntity(i.name)));
-  entities.forEach((e, i) => {
-    if (e) items[i].description = e.description;
-  });
-  return items;
+  return [...acc.values()].sort((a, b) => b.lastStart.localeCompare(a.lastStart));
 }
 
 // ─── Empty-state briefing identity ─────────────────────────────────────────
