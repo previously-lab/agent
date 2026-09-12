@@ -5,7 +5,7 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { MarkdownRenderer } from "./markdown";
 import { CognitionPopover } from "./cognition-popover";
 import { TimeDisplay, sameDay } from "./time-display";
-import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/layout";
+import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
 
 /**
  * A single historical turn — pure body bubbles (design §1.2: history renders

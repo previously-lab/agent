@@ -198,26 +198,27 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
   return (
     <div className="flex h-dvh overflow-hidden">
-      {/* LEFT: persistent time axis. Only when WebGL is confirmed. Always
-          MOUNTED (the R3F canvas/WebGL context and the bloom transition must
-          survive view switches) but display-hidden in chat view so it takes
-          zero layout space — `contents` leaves the timeline layout untouched. */}
+      {/* LEFT: the time axis, present in BOTH views. It is not a timeline-view
+          affordance — it is where the app's strands live, and it stays put
+          across the switch (which also keeps the R3F canvas and its WebGL
+          context alive, so the braid is never re-mounted). The right pane
+          supplies the anchors either way: the card field's rows in the
+          timeline, the chat stream's slice seams in chat, so the braid winds
+          at whatever the user is actually looking at. */}
       {webgl === true && (
-        <div className={showTimeline ? "contents" : "hidden"}>
-          <AxisBand
-            narrow={!showTimeline}
-            range={range}
-            progressRef={progressRef}
-            levelRef={zoomLevelRef}
-            anchorsRef={anchorsRef}
-            strand={strand}
-            strandList={strandList}
-            ambientStrands={ambientStrands}
-            selectedCount={selectedCount}
-            reducedMotion={reducedMotion}
-            onSelectStrand={setStrand}
-          />
-        </div>
+        <AxisBand
+          showChrome={showTimeline}
+          range={range}
+          progressRef={progressRef}
+          levelRef={zoomLevelRef}
+          anchorsRef={anchorsRef}
+          strand={strand}
+          strandList={strandList}
+          ambientStrands={ambientStrands}
+          selectedCount={selectedCount}
+          reducedMotion={reducedMotion}
+          onSelectStrand={setStrand}
+        />
       )}
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
@@ -232,6 +233,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
             suppressAtJump={showTimeline}
             anchorsRef={anchorsRef}
             anchorsActive={!showTimeline}
+            progressRef={progressRef}
+            // The conversation field is the default; `?field=0` falls back to
+            // the Virtuoso list on the same data, which is the only honest way
+            // to compare the two while the field is still settling.
+            useField={searchParams.get("field") !== "0"}
           />
         </div>
 

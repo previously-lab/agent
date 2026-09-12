@@ -3,16 +3,11 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import {
   computeTimelineLayout,
   zoomStateForLevel,
-  strandColor,
   strandOffset,
   strandAccent,
-  strandTint,
-  STRAND_TINT_ALPHA,
-  STRANDLESS_GREY,
   oklchToHex,
   coreXAt,
   isRealBoundaryBefore,
-  STRAND_PALETTE,
   STRAND_LANE_MIN,
   STRAND_LANE_MAX,
   BASE_GAP,
@@ -25,6 +20,13 @@ import {
   LEVEL_DISTANCES,
   MAX_ZOOM_LEVEL,
 } from "@/lib/timeline3d/layout";
+import {
+  BRAND_INK,
+  strandColor,
+  strandTint,
+  STRAND_TINT_ALPHA,
+  STRANDLESS_GREY,
+} from "@/lib/timeline3d/ink";
 
 let seq = 0;
 function entry(overrides: Partial<TimelineSliceEntry> = {}): TimelineSliceEntry {
@@ -202,9 +204,13 @@ describe("strand identity (§5.0 palette + cable-bundle offsets)", () => {
     expect(strandOffset("agent-memory")).toEqual(strandOffset("agent-memory"));
   });
 
-  it("colors always come from the five-color oklch palette", () => {
+  it("colors are a reference into the CSS palette, never a literal", () => {
+    // Colour ownership moved to globals.css in v0.11 (`--strand-1` … `-10`) and
+    // ink.ts only picks the slot. The palette's own invariants — its size, its
+    // hue range, its five-hues-by-two-lightnesses shape — are asserted in
+    // ink.test.ts, where the palette lives.
     for (const name of ["agent-memory", "client-cli", "evolution", "x", "线索", "s3"]) {
-      expect(STRAND_PALETTE).toContain(strandColor(name));
+      expect(strandColor(name)).toMatch(/^var\(--strand-\d+\)$/);
     }
   });
 
@@ -341,8 +347,18 @@ describe("zoomStateForLevel — level = information density (§R5.1)", () => {
 });
 
 describe("oklchToHex", () => {
-  it("converts every palette entry to a valid hex color", () => {
-    for (const c of STRAND_PALETTE) {
+  it("converts a palette colour to a valid hex color", () => {
+    // The canvas path. `strandColor` hands back a `var(--strand-N)` REFERENCE,
+    // which a canvas cannot resolve; the scene resolves it off the document
+    // first and gets a concrete oklch() string like these. That two-step is
+    // why the shell keeps the var form and the canvas does not.
+    const concretes = [
+      BRAND_INK,
+      "oklch(0.5 0.155 245)",
+      "oklch(0.72 0.115 357)",
+      STRANDLESS_GREY,
+    ];
+    for (const c of concretes) {
       expect(oklchToHex(c)).toMatch(/^#[0-9a-f]{6}$/);
     }
   });

@@ -4,7 +4,7 @@
  * ThreadlineScene (v0.11) — the timeline view's LEFT band: the strand field
  * (doc/design/v0.11-strand-field.md §2).
  *
- * A perspective R3F canvas fills the narrow band. A blue brand core runs the
+ * A perspective R3F canvas fills the narrow band. The brand-blue core runs the
  * full height, with a companion hairline beside it. The band is a COAXIAL
  * CABLE: the core is the centre conductor, the band's lines are the shield
  * braid. Each line runs the WHOLE height — no start, no end — and every line
@@ -57,6 +57,35 @@
  * (`knotLambda` halves the on-screen row pitch) so a turn is exactly as tall as
  * the row it marks and the two sides stay in step when the viewport resizes.
  *
+ * THE TWIST IS CONSERVED, AND HANDED OFF. A rope's twist cannot be created or
+ * destroyed, only moved along it, so the knot is not one card's property. A
+ * single knot would have to teleport the moment the nearest card changes — a
+ * whole row pitch in one frame, the braid snapping back to the start and
+ * re-winding at the next card. Each frame therefore blends TWO knots (§2.2,
+ * `spinAtKnots`): A, the nearest anchor at or above the viewport centre, and B,
+ * the nearest at or below, weighted `1 - t` and `t`. `t` is the SCRUB
+ * parameter — how far the centre has travelled from A down to B — a pure
+ * function of the scroll position, never a timer. The weights sum to 1, so the
+ * total twist is always `TURNS` whole turns and the twist migrates down the
+ * cable as the user scrolls, with no strand ever leaving its seat.
+ *
+ * THE COLOUR COMES FROM A TEN-COLOUR PALETTE, not from the wheel. A strand
+ * hashes to one of the ten entries defined in globals.css (`--strand-1` …
+ * `-10`) — a single arc from blue to rose. Colours REPEAT, and that is the
+ * design: ten is about the ceiling on telling categorical colours apart at
+ * all, so a different colour per strand would buy nothing and cost the
+ * coherence of the whole strip. See `ink.ts`.
+ *
+ * The canvas cannot resolve a CSS variable, so this file reads each strand's
+ * `var()` reference back off the document (`resolveCssColor`). That is what
+ * keeps the palette in exactly one place — a designer edits globals.css and
+ * the WebGL band follows.
+ *
+ * DARK QUIETENS THE BRAID, and it does so HERE rather than in the palette: the
+ * ink range below is bounded at BOTH ends, so on a near-black page the strands
+ * settle into tinted greys, and the core — the one line drawn at full chroma
+ * (`CORE_INK`) — is left holding all the colour authority on the strip.
+ *
  * PER FRAME the scene rewrites each line's segment positions and vertex
  * colours. The braid's volume is a fake upper-left directional light
  * modulating each strand's OWN colour (§2.7) — the cylinder puts every strand
@@ -83,21 +112,23 @@ import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Line } from "@react-three/drei";
 import { useTheme } from "@teispace/next-themes";
-import { oklchToHex, strandColor } from "@/lib/timeline3d/layout";
+import { oklchToHex } from "@/lib/timeline3d/layout";
+import { strandColor } from "@/lib/timeline3d/ink";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { screenFractionToWorldY } from "@/lib/timeline3d/convergence";
 import {
   laneDepthFor,
-  strandPointAt,
+  strandPointAtKnots,
   topStrands,
   type FieldAnchor,
+  type SpinKnot,
 } from "@/lib/timeline3d/winding";
 import {
   anchorWorldYs,
-  knotLambda,
+  knotLambdaForAnchor,
   NARROW_BAND_PX,
+  NARROW_STRAND_LIMIT,
   strandLimitForBandWidth,
-  WIDE_STRAND_LIMIT,
 } from "@/lib/timeline3d/strand-band";
 import {
   joinStrandSets,
@@ -110,9 +141,15 @@ const BASE_Z = 9;
  *  sits exactly this far from the core at every height, so the cross-section is
  *  a circle and the winding only ever moves a line AROUND it (never in or out).
  *  Expressed as a fraction of the band's half-width and read against the LIVE
- *  band width each frame, so the cable is a true miniature on a slim strip
- *  (chat view, phone) and swells with the view-switch width transition for
- *  free — the band's CSS width IS the bloom.
+ *  band width each frame, so the cable stays a true miniature of whatever strip
+ *  it is drawn in rather than tracking a hard-coded pixel size.
+ *
+ *  This is also the lever for how much air the cable has either side of it:
+ *  at 0.78 the silhouette fills 78% of the strip and the outer strands sit
+ *  ~3.5 px from the edge. It is deliberately NOT lowered to buy a gutter —
+ *  a smaller radius packs the strands closer together in x, which is exactly
+ *  the direction the braid's moiré gets worse. The gutter comes from the
+ *  band's own margin instead (see `AxisBand`).
  *
  *  0.84 spans the cable's silhouette (diameter 2R) across 84% of the band — the
  *  exact footprint the previous model's flat rest row covered (2 · 2.8 · 0.30
@@ -140,9 +177,9 @@ const ZOOM_Z_MULTIPLIER = 0.18;
 const MAX_ZOOM_Z_MULTIPLIER = 1 + ZOOM_Z_MULTIPLIER * 2;
 const FOCUS_CAMERA_MULT = 0.55;
 const SAMPLE_PX_STEP = 12;
-/** Narrow bands sample denser: 12 px steps read as polyline facets in a
- *  ~56 px-wide band, so the step tightens to keep the weave smooth. */
-const NARROW_SAMPLE_PX_STEP = 8;
+/** Narrow bands sample denser: 12 px steps read as polyline facets in a ~32 px
+ *  band, so the step tightens to keep the weave smooth. */
+const NARROW_SAMPLE_PX_STEP = 6;
 const ROTATION_SPEED = 0.04;
 const LIGHT_DRIFT_PERIOD = 25;
 const PULSE_DURATION = 1.2;
@@ -161,14 +198,81 @@ const VERTICAL_MARGIN_FRACTION = 0.12;
  */
 const TURNS = 3;
 
+/**
+ * The core line's ink — the brand blue, PINNED as a literal instead of being
+ * read from `--primary`.
+ *
+ * The core is a decorative spine, not a themed surface: it has to be the same
+ * line in both themes and across the view switch, and it is now the ONLY
+ * saturated thing on the strip (the strands gave their chroma up — see
+ * `ink.ts`), so it can afford to be this definite. Reading it from the theme
+ * would let it drift with the token, which is exactly what a fixed landmark
+ * must not do.
+ */
+const CORE_INK = "#0066ff";
+/** How far the companion hairline is mixed toward white from the core. */
+const COMPANION_WHITEN = 0.45;
+/** The pulse that runs up the focused strand: a lightened core in the light
+ *  theme, and cyan on black where a lighter BLUE would just read as more blue. */
+const PULSE_INK_DARK = "#22d3ee";
+
+/**
+ * Line widths, in CSS pixels — Line2 draws in screen space (drei sets the
+ * material's `resolution` from the canvas), so these are what the user sees at
+ * 1x and simply get denser on a high-DPI display.
+ *
+ * The strand width is a legibility/moiré trade: a heavier line is easier to
+ * follow on its own, but it lays down more ink where the bundle crosses
+ * itself, which is exactly where the braid is densest. 1.5 was tried and
+ * reverted by the user — the braid read as heavier than the band should be,
+ * and the quietness of the strip is worth more than the extra legibility of
+ * any single thread. The core sits at the SAME width and still leads, because
+ * it is the only line carrying full chroma (`CORE_INK`) while the strands are
+ * held under a visibility ceiling — weight is not the only way to rank, and
+ * here colour is doing that job.
+ */
+const STRAND_LINE_WIDTH = 1;
+const CORE_LINE_WIDTH = 1.5;
+/** The companion hairline beside the core — deliberately the lightest mark. */
+const COMPANION_LINE_WIDTH = 1;
+
 const AMBIENT = 0.22;
 const DIFFUSE = 0.78;
 const CROSSING_DARKEN = 0.18;
 const CROSSING_SHARPNESS = 4.0;
-/** Floor on a line's visibility: the fake light modulates the strand's colour
- *  but never drops the string out of sight — a string has no gaps. */
-const STRAND_MIN_VISIBILITY = 0.3;
-/** The selected line brightens to this share of its own colour under focus. */
+/** How far a line's colour is carried from the page background. The fake light
+ *  modulates the strand's colour, but it is bounded at BOTH ends: a string has
+ *  no gaps, so it never fades out, and it never runs to full chroma either —
+ *  that second bound is what stops the bundle reading as neon wire.
+ *
+ *  Dark needs both numbers moved, and the CEILING is the one that matters. On
+ *  a near-black page every line's lit flank used to sit at full saturation —
+ *  ten braided lines, ten light sources, all shouting over the core. Held at
+ *  0.55 they stay tinted greys with a thread of their own hue, and the core
+ *  line is the only thing on the strip left with colour authority. The floor
+ *  drops with it so the unlit flank of each line recedes into the page rather
+ *  than hovering above it. */
+const STRAND_VISIBILITY_FLOOR_LIGHT = 0.3;
+const STRAND_VISIBILITY_CEILING_LIGHT = 1;
+const STRAND_VISIBILITY_FLOOR_DARK = 0.1;
+/** Tuned against the PALETTE, not against a feeling: the ten colours in
+ *  globals.css carry roughly three times the chroma the old per-theme ink did,
+ *  so the dark ceiling had to come down by about the same factor to leave the
+ *  braid as quiet as it was.
+ *
+ *  Light needs no equivalent, and that asymmetry is the whole story: a
+ *  saturated colour blended toward WHITE loses its chroma on the way (the
+ *  light band is already a whisper at a ceiling of 1), while blending toward
+ *  BLACK keeps chroma and only loses lightness — so the same fraction of the
+ *  same colour reads far louder in the dark theme. The dark ceiling is
+ *  therefore low enough that the braid sits closer to the light theme's
+ *  whisper than to a neon sign, and the core line is left as the only thing
+ *  on the strip with real colour. */
+const STRAND_VISIBILITY_CEILING_DARK = 0.26;
+/** The selected line brightens to this share of its own colour under focus —
+ *  in ABSOLUTE units, not relative to the theme's ceiling, because it is the
+ *  one line allowed to reach full ink in either theme. That is what keeps the
+ *  focus gesture legible now that the rest of the bundle has gone quiet. */
 const SELECTED_FOCUS_VISIBILITY = 0.8;
 /** How far the unselected lines recede into the background under focus. */
 const BACKDROP_RECEDE = 0.82;
@@ -176,8 +280,19 @@ const BACKDROP_RECEDE = 0.82;
 const LANE_BRIGHTNESS_MIN = 0.75;
 const LANE_BRIGHTNESS_SPAN = 0.5;
 
-/** The most strands drawn in one frame (the widest band's set). */
-const MAX_STRAND_SLOTS = WIDE_STRAND_LIMIT;
+/**
+ * The most strands drawn in one frame, and therefore the size the slot pool is
+ * built from.
+ *
+ * Sized for the NARROW tier, not the widest one the tier table supports: the
+ * band is a fixed 32 px strip (`AxisBand`), so `strandLimitForBandWidth` can
+ * only ever return `NARROW_STRAND_LIMIT` here, and sizing the pool for the
+ * wide tier mounted twice the `Line2` objects with half of them always empty.
+ * IF THE BAND'S WIDTH EVER BECOMES VARIABLE AGAIN, this must follow it — a too
+ * small pool degrades gracefully (`claimStrandSlot` evicts), but it would drop
+ * strands that should be on screen.
+ */
+const MAX_STRAND_SLOTS = NARROW_STRAND_LIMIT;
 /** The fixed pool the per-frame loop fills. Twice a full set, because a joint
  *  (§2.5) has one set unwinding while the next winds up — both are on screen at
  *  once, so the pool has to hold both. The pool is allocated once and never
@@ -195,7 +310,7 @@ const STRAND_LANE_EASE_SPEED = 6;
 /** Below this, a lane has reached its seat and the joint can go idle. */
 const LANE_SETTLE_EPSILON = 1e-3;
 
-/** strand name → its three.js ink, cached (the palette has five entries). */
+/** theme + strand name → its three.js ink (see `strandInkRgb` for the key). */
 const INK_CACHE = new Map<string, { r: number; g: number; b: number }>();
 
 export interface ThreadlineSceneProps {
@@ -231,11 +346,13 @@ interface BuildData {
   /** Shared vertical sample positions, top (+y) → bottom (−y). */
   ys: Float32Array;
   viewportWorldHeight: number;
-  baseOpacity: number;
+  /** Theme-bounded ink range for a line's colour — see the visibility note. */
+  inkFloor: number;
+  inkCeiling: number;
   bgR: number;
   bgG: number;
   bgB: number;
-  primary: THREE.Color;
+  core: THREE.Color;
   companion: THREE.Color;
   corePoints: THREE.Vector3Tuple[];
   companionPoints: THREE.Vector3Tuple[];
@@ -244,31 +361,57 @@ interface BuildData {
   pulseColorB: number;
 }
 
-function getCssHex(variable: string): string {
+/**
+ * Resolve ANY CSS colour value — a `var()` reference included — to a concrete
+ * `#rrggbb`. This is how the canvas gets at the CSS-side palette: three.js
+ * cannot resolve a variable or parse `oklch()`, but the document can, and
+ * doing it here keeps the palette in exactly one place (globals.css).
+ *
+ * TWO STEPS, and the second is not optional. The browser first computes the
+ * value (`var()` and all); then the result is RASTERISED onto a 1×1 canvas and
+ * the pixel read back. Reading the computed colour as a STRING does not work:
+ * Chrome echoes it back in whatever space it was written in (`lab(66.49
+ * 7.95 -41.58)` for an oklch declaration), so a string reader needs a parser
+ * per colour space and quietly returns nothing for the ones it does not know —
+ * which is exactly how this first shipped, and three.js turned the empty
+ * string into WHITE lines. The canvas has no such problem: it converts any
+ * space to sRGB bytes, which is what the renderer wants anyway.
+ *
+ * Returns "" when there is no DOM, no 2D context, or the value resolves to
+ * nothing. Callers must treat "" as "no colour" and NOT paint, never as black
+ * or white.
+ */
+function resolveCssHex(cssValue: string): string {
   if (typeof window === "undefined") return "";
-  // Resolve through a probe element so var() chains (Tailwind v4 `@theme
-  // inline` defines --primary as a var reference) come out fully resolved.
-  const el = document.createElement("div");
-  el.style.display = "none";
-  el.style.color = `var(${variable})`;
-  document.body.appendChild(el);
-  const value = getComputedStyle(el).color.trim();
-  el.remove();
-  if (!value) return "";
-  if (value.startsWith("oklch")) return oklchToHex(value);
-  if (value.startsWith("#") || value.startsWith("rgb")) return value;
-  return "";
+  const probe = document.createElement("div");
+  probe.style.display = "none";
+  probe.style.color = cssValue;
+  document.body.appendChild(probe);
+  const computed = getComputedStyle(probe).color.trim();
+  probe.remove();
+  if (!computed) return "";
+
+  const canvas = document.createElement("canvas");
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return "";
+  ctx.fillStyle = computed;
+  ctx.fillRect(0, 0, 1, 1);
+  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+  const hex = (v: number) => v.toString(16).padStart(2, "0");
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
-function readPrimaryAndBg(dark: boolean): {
-  primary: string;
-  bg: string;
-} {
-  const primary =
-    getCssHex("--primary") || (dark ? "#3b82f6" : "#2563eb");
-  const bg =
-    getCssHex("--background") || (dark ? "#242426" : "#ffffff");
-  return { primary, bg };
+/**
+ * The band's backdrop, read from the theme token. Every line's colour is a
+ * blend AWAY from this, so it has to be the page's real background and not a
+ * guess. The literals are the fallbacks for a probe that cannot resolve the
+ * token (no DOM, or a stylesheet that has not loaded); they are the values
+ * globals.css sets `--background` to in each theme.
+ */
+function readBackground(dark: boolean): string {
+  return resolveCssHex("var(--background)") || (dark ? "#0a0a0a" : "#ffffff");
 }
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -276,12 +419,29 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
   return { r: c.r, g: c.g, b: c.b };
 }
 
-/** A strand's ink — `strandColor` (§2.7), resolved to the RGB three.js needs. */
-function strandInk(name: string): { r: number; g: number; b: number } {
-  const hit = INK_CACHE.get(name);
+/**
+ * A strand's ink, resolved to the RGB three.js needs. `ink.ts` hands back a
+ * `var(--strand-N)` reference — the palette itself lives in globals.css — so
+ * this resolves it off the document and converts oklch → sRGB, then caches.
+ *
+ * Keyed PER THEME even though the palette is currently theme-independent: the
+ * resolution goes through the live document, so if a `.dark` override of the
+ * palette is ever added the cache must not serve the other theme's colour.
+ */
+function strandInkRgb(
+  name: string,
+  dark: boolean,
+): { r: number; g: number; b: number } {
+  const key = (dark ? "d" : "l") + SET_KEY_SEP + name;
+  const hit = INK_CACHE.get(key);
   if (hit) return hit;
-  const ink = hexToRgb(oklchToHex(strandColor(name)));
-  INK_CACHE.set(name, ink);
+  const hex = resolveCssHex(strandColor(name));
+  // A palette entry that will not resolve means the STYLESHEET is wrong, not
+  // this strand. Fall back to the page background so the line quietly
+  // disappears — an unresolved colour must never become the loudest thing on
+  // the strip, which is what a white fallback does.
+  const ink = hex ? hexToRgb(hex) : hexToRgb(readBackground(dark));
+  INK_CACHE.set(key, ink);
   return ink;
 }
 
@@ -293,15 +453,20 @@ function buildData(
 ): BuildData | null {
   if (width <= 0 || height <= 0) return null;
 
-  const { primary: primaryHex, bg: bgHex } = readPrimaryAndBg(dark);
-  const primary = new THREE.Color(primaryHex);
+  const bgHex = readBackground(dark);
   const bg = hexToRgb(bgHex);
-  const companion = new THREE.Color(primaryHex).lerp(
+  const core = new THREE.Color(CORE_INK);
+  const companion = new THREE.Color(CORE_INK).lerp(
     new THREE.Color("#ffffff"),
-    0.45,
+    COMPANION_WHITEN,
   );
-  const pulseColor = hexToRgb(dark ? "#22d3ee" : primaryHex);
-  const baseOpacity = dark ? 0.35 : 0.55;
+  const pulseColor = hexToRgb(dark ? PULSE_INK_DARK : CORE_INK);
+  const inkFloor = dark
+    ? STRAND_VISIBILITY_FLOOR_DARK
+    : STRAND_VISIBILITY_FLOOR_LIGHT;
+  const inkCeiling = dark
+    ? STRAND_VISIBILITY_CEILING_DARK
+    : STRAND_VISIBILITY_CEILING_LIGHT;
 
   const worldHeight = 2 * BASE_Z * Math.tan((FOV * Math.PI) / 360);
   const viewportWorldHeight = worldHeight;
@@ -328,7 +493,7 @@ function buildData(
   const slots: SlotBake[] = [];
   for (let s = 0; s < STRAND_SLOT_POOL; s++) {
     const name = names[s];
-    const ink = name ? strandInk(name) : bg;
+    const ink = name ? strandInkRgb(name, dark) : bg;
     const points: THREE.Vector3Tuple[] = [];
     const colors: THREE.Color[] = [];
     for (let j = 0; j < nPoints; j++) {
@@ -355,11 +520,12 @@ function buildData(
     slots,
     ys,
     viewportWorldHeight,
-    baseOpacity,
+    inkFloor,
+    inkCeiling,
     bgR: bg.r,
     bgG: bg.g,
     bgB: bg.b,
-    primary,
+    core,
     companion,
     corePoints,
     companionPoints,
@@ -439,6 +605,21 @@ function createStrandSlots(): StrandSlotState[] {
 }
 
 /**
+ * The two knots the shared spin blends: A (the card at or above the viewport
+ * centre) and B (the one at or below). Allocated ONCE — the frame loop mutates
+ * these in place, because it runs sixty times a second and a per-frame array
+ * would be pure garbage. A knot the frame has no use for (no anchors at all,
+ * only one side of the centre, a zero-length handoff) is simply left at weight
+ * 0, which the blend skips and takes no share of the twist from.
+ */
+function createSpinKnots(): SpinKnot[] {
+  return [
+    { centerY: 0, lambda: 0, weight: 1 },
+    { centerY: 0, lambda: 0, weight: 0 },
+  ];
+}
+
+/**
  * The pool entry a joining strand should take: its own slot if it is still
  * unwinding there (a strand that re-enters the set reverses in place instead of
  * leaving a ghost line behind), else the first free slot, else — pool
@@ -473,6 +654,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     levelRef,
     anchorsRef,
     reducedMotion,
+    dark,
   } = props;
   const { size } = useThree();
   const camera = useThree((s) => s.camera);
@@ -497,6 +679,11 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const lastSetKeyRef = useRef<string | null>(null);
   const jointActiveRef = useRef(false);
   const seededRef = useRef(false);
+
+  // The two knots of this frame's twist handoff — allocated once, rewritten in
+  // place every frame (see `createSpinKnots`).
+  const knotsRef = useRef<SpinKnot[] | null>(null);
+  if (knotsRef.current === null) knotsRef.current = createSpinKnots();
 
   // The initial bake's line-up: the ambient strand set, capped at the widest
   // band's slot count. The frame loop replaces it with the view's top strands.
@@ -766,31 +953,106 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       build.viewportWorldHeight * (cameraZRef.current / BASE_Z);
     const publishedWorldYs = anchorWorldYs(anchors, visibleWorldHeight);
 
-    // ── The active card (the observer) ────────────────────────────────────
-    // The knot belongs to the card nearest the middle of the viewport. The
+    // ── The twist's two knots (the observer) ──────────────────────────────
+    // The knot belongs to the cards nearest the middle of the viewport. The
     // anchors are the observer: each one already carries its row's on-screen
     // position and the right pane rewrites them every frame, so there is no
     // DOM IntersectionObserver to fall out of date and the band can never be a
-    // frame behind the scene it registers against. With nothing published yet
-    // the viewport centre stands in, so the band still renders.
-    let activeCenterY = 0;
-    if (anchors.length > 0) {
-      let nearest = anchors[0];
-      let nearestDist = Math.abs(nearest.y - 0.5);
-      for (let i = 1; i < anchors.length; i++) {
-        const dist = Math.abs(anchors[i].y - 0.5);
-        if (dist < nearestDist) {
-          nearest = anchors[i];
-          nearestDist = dist;
+    // frame behind the scene it registers against.
+    //
+    // A rope's twist is conserved — it cannot be created or destroyed, only
+    // moved — so the knot is not one card's property. One knot would have to
+    // flip from card to card with the centre, handing the whole twist over in a
+    // single frame (a whole row pitch: the braid snaps back to the start and
+    // re-winds). The band blends TWO instead: A, the nearest anchor at or above
+    // the centre, and B, the nearest at or below, weighted `1 - t` and `t`. `t`
+    // is the SCRUB parameter — how far the centre has travelled from A to B —
+    // a pure function of the scroll position (v0.10 §5.0: everything is a
+    // continuous function of scroll/zoom progress, never a triggered
+    // animation). Because the weights sum to 1 the total is always `TAU·TURNS`,
+    // a whole number of turns, at every t: the twist migrates down the cable
+    // and no strand ever leaves its seat.
+    const knots = knotsRef.current ?? createSpinKnots();
+    const knotA = knots[0];
+    const knotB = knots[1];
+
+    // The centre and the anchors are all screen fractions here, so the scan
+    // needs no world conversion — only the two winners get converted.
+    let aAnchor: FieldAnchor | null = null;
+    let aFraction = 0;
+    let aDist = Infinity;
+    let bAnchor: FieldAnchor | null = null;
+    let bFraction = 0;
+    let bDist = Infinity;
+    for (let i = 0; i < anchors.length; i++) {
+      const fraction = anchors[i].y;
+      if (!Number.isFinite(fraction)) continue;
+      if (fraction <= 0.5) {
+        const dist = 0.5 - fraction;
+        if (dist < aDist) {
+          aDist = dist;
+          aAnchor = anchors[i];
+          aFraction = fraction;
+        }
+      } else {
+        const dist = fraction - 0.5;
+        if (dist < bDist) {
+          bDist = dist;
+          bAnchor = anchors[i];
+          bFraction = fraction;
         }
       }
-      activeCenterY = screenFractionToWorldY(nearest.y, visibleWorldHeight);
     }
 
-    const lambda = knotLambda(publishedWorldYs, visibleWorldHeight);
-    // `knotLambda` halves the on-screen row pitch — so lambda is the active
-    // card's half-height in world units — and floors it at a positive fraction
-    // of the viewport, so the knot always has real height.
+    let centerA = 0;
+    let weightA = 1;
+    let centerB = 0;
+    let weightB = 0;
+    if (aDist === Infinity && bDist === Infinity) {
+      // Nothing published yet: the viewport centre stands in, so the band still
+      // renders a knot (as it always has).
+    } else if (bDist === Infinity) {
+      // Everything in view is above the centre (the top of the memory): one
+      // knot, at A. The B slot is left weightless.
+      centerA = screenFractionToWorldY(aFraction, visibleWorldHeight);
+    } else if (aDist === Infinity) {
+      // Everything in view is below the centre (the bottom): one knot, at the
+      // only anchor there is — the A slot carries it, the B slot is left
+      // weightless.
+      centerA = screenFractionToWorldY(bFraction, visibleWorldHeight);
+    } else {
+      // A and B straddle the centre. `t` is how far the centre has travelled
+      // from A (t = 0) to B (t = 1). A span of zero — the two anchors landed on
+      // top of each other, which the f>=0.5 split should make impossible — is
+      // read as t = 0 rather than dividing by zero.
+      const span = bFraction - aFraction;
+      const scrub =
+        span > 0 ? Math.min(1, Math.max(0, (0.5 - aFraction) / span)) : 0;
+      centerA = screenFractionToWorldY(aFraction, visibleWorldHeight);
+      centerB = screenFractionToWorldY(bFraction, visibleWorldHeight);
+      weightA = 1 - scrub;
+      weightB = scrub;
+    }
+
+    // Each knot is sized from ITS OWN anchor's span, not from one shared
+    // number: that is what makes the twist span exactly its slice and be back
+    // to 0 at the slice's edges, so the seam between two slices is the place
+    // the bundle is reliably unwound. One lambda for both knots would let the
+    // release drift off the seam wherever the two slices differ in height.
+    knotA.centerY = centerA;
+    knotA.lambda = knotLambdaForAnchor(
+      aAnchor?.span,
+      publishedWorldYs,
+      visibleWorldHeight,
+    );
+    knotA.weight = weightA;
+    knotB.centerY = centerB;
+    knotB.lambda = knotLambdaForAnchor(
+      bAnchor?.span,
+      publishedWorldYs,
+      visibleWorldHeight,
+    );
+    knotB.weight = weightB;
 
     // ── The band's cross-section for this frame ───────────────────────────
     // ONE cylinder for the whole bundle, sized from the band's OWN live
@@ -798,7 +1060,16 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     // strip (chat view, phone) and swells smoothly as the 500 ms width
     // transition runs. The winding never touches it — the radius is the same
     // at every height for every strand, and only the angle moves.
-    const halfBandWorld = (build.viewportWorldHeight * size.width) / size.height / 2;
+    // The radius is sized from the height visible at the CURRENT camera
+    // distance, not the baked one — exactly like the anchors and `lambda`
+    // above. That is what keeps the cable the same size ON SCREEN at every
+    // zoom level. Sizing it from the un-zoomed height instead makes the cable
+    // shrink as the camera pulls back (level 2 draws it at ~74 % of level 0),
+    // which packs the strands into fewer pixels than the lines are wide and is
+    // what turns the braid into a grating — the moiré is worst exactly when
+    // the content is zoomed out. The band is a fixed 32 px strip; how much
+    // TIME is in view is the camera's business and must not resize the cable.
+    const halfBandWorld = (visibleWorldHeight * size.width) / size.height / 2;
     const radius = halfBandWorld * RING_RADIUS_FACTOR;
 
     const groupY = groupRef.current?.position.y ?? 0;
@@ -810,6 +1081,8 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     const bgR = build.bgR;
     const bgG = build.bgG;
     const bgB = build.bgB;
+    const inkFloor = build.inkFloor;
+    const inkCeiling = build.inkCeiling;
     const pulseR = build.pulseColorR;
     const pulseG = build.pulseColorG;
     const pulseB = build.pulseColorB;
@@ -832,12 +1105,18 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       const name = slot?.name ?? null;
       if (!slot || !name) {
         // A slot outside the live set holds no strand: no line at all.
+        // `visible = false` and not merely opacity 0 — a transparent material
+        // is still submitted, so an opaque pool would spend a draw call per
+        // empty slot every frame. Only the slots actually carrying a strand
+        // should reach the renderer at all.
+        (line as any).visible = false;
         if (mat) {
           mat.opacity = 0;
           if (mat.uniforms?.opacity) mat.uniforms.opacity.value = 0;
         }
         continue;
       }
+      (line as any).visible = true;
 
       const isSelected = name === selected;
       const pulseActive = isSelected && pulseActiveGlobal;
@@ -880,7 +1159,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       const laneBrightness =
         LANE_BRIGHTNESS_MIN + LANE_BRIGHTNESS_SPAN * depth;
 
-      const ink = strandInk(name);
+      const ink = strandInkRgb(name, dark);
       const inkR = ink.r;
       const inkG = ink.g;
       const inkB = ink.b;
@@ -902,26 +1181,25 @@ function ThreadlineRig(props: ThreadlineRigProps) {
           const y0 = ys[i] + groupY;
           const y1 = ys[i + 1] + groupY;
           // The cylinder (§2.2): one radius for the whole bundle, one shared
-          // spin per height. Away from the knot the spin is 0, so the line is
-          // straight at its own seat; through the knot it winds and comes back
-          // onto that same seat. `unwind` folds the focus and joint transitions
-          // in as a scale on the spin.
-          const p0 = strandPointAt(
+          // spin per height. Away from the knots the spin is 0, so the line is
+          // straight at its own seat; through them it winds and comes back onto
+          // that same seat. The two knots hand the twist from A to B as the
+          // centre scrubs between them, and `unwind` folds the focus and joint
+          // transitions in as a scale on the spin.
+          const p0 = strandPointAtKnots(
             y0,
             seat,
             count,
-            activeCenterY,
-            lambda,
+            knots,
             radius,
             TURNS,
             unwind,
           );
-          const p1 = strandPointAt(
+          const p1 = strandPointAtKnots(
             y1,
             seat,
             count,
-            activeCenterY,
-            lambda,
+            knots,
             radius,
             TURNS,
             unwind,
@@ -947,12 +1225,11 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         // direction of its position: (x, z) normalised. On the cylinder that is
         // exactly the strand's angle — cos/sin of `seat + spin` — so the light
         // falls on the NEAR side of the cable and leaves the far side dark.
-        const p = strandPointAt(
+        const p = strandPointAtKnots(
           y,
           seat,
           count,
-          activeCenterY,
-          lambda,
+          knots,
           radius,
           TURNS,
           unwind,
@@ -971,8 +1248,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
             lit * depthFactor * (1 - CROSSING_DARKEN * crossing) * laneBrightness,
           ),
         );
-        const visibility =
-          STRAND_MIN_VISIBILITY + (1 - STRAND_MIN_VISIBILITY) * strength;
+        const visibility = inkFloor + (inkCeiling - inkFloor) * strength;
 
         let r = bgR + (inkR - bgR) * visibility;
         let g = bgG + (inkG - bgG) * visibility;
@@ -1018,8 +1294,8 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       <Line
         ref={coreLineRef as any}
         points={build.corePoints}
-        color={build.primary}
-        lineWidth={1.5}
+        color={build.core}
+        lineWidth={CORE_LINE_WIDTH}
         transparent
         opacity={0.8}
         depthTest={false}
@@ -1029,7 +1305,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         ref={companionLineRef as any}
         points={build.companionPoints}
         color={build.companion}
-        lineWidth={1}
+        lineWidth={COMPANION_LINE_WIDTH}
         transparent
         opacity={0.56}
         depthTest={false}
@@ -1043,7 +1319,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
           }}
           points={slot.points}
           vertexColors={slot.colors}
-          lineWidth={1}
+          lineWidth={STRAND_LINE_WIDTH}
           transparent
           opacity={0}
           renderOrder={1}

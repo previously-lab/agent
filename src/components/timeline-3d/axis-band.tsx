@@ -9,16 +9,17 @@
  * strand-selection caption.
  *
  * The band renders ONLY when WebGL is available; without it the caller should
- * collapse or hide the band and let the content take the full width. The
- * shell keeps the band MOUNTED in both views but display-hides it in chat
- * view (`hidden` wrapper, zero layout space); internally the band still runs
- * its narrow mode (`w-14`) there so the timeline reopen blooms from the
- * collapsed weave. In timeline view it is a slim strip on phones (`w-10`) and
- * is a thin strip (`w-8`, 32px) in both views. The width swap is a 500 ms
- * CSS transition,
- * and the threadline weave blooms/collapses in step with it on its own: the
- * strand cylinder's radius is read against the live band width every frame
- * (see threadline-scene), so the width transition IS the bloom.
+ * omit the band and let the content take the full width. It is ONE fixed
+ * width — a 32 px strip (`w-8`) — in both views and at every breakpoint, so
+ * the same braid is what the user sees whether they are reading the chat or
+ * the timeline; nothing about the band is a view-switch affordance any more.
+ * The threadline reads its cylinder radius against that live width every
+ * frame (see threadline-scene), so the geometry follows the real strip rather
+ * than a constant.
+ *
+ * `showChrome` is the only thing the caller still varies: it gates the two
+ * overlays that need horizontal room — the strand filter chip and the
+ * selection caption. See `AxisBandProps`.
  */
 import { useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
@@ -151,8 +152,12 @@ function RulerYearLabels({
 }
 
 export interface AxisBandProps {
-  /** When true the band occupies the collapsed chat width only. */
-  narrow?: boolean;
+  /** Whether the band renders its own overlay chrome — the strand filter chip
+   *  and the selection caption. These are timeline-view affordances and they
+   *  need horizontal room; the strip is a fixed 32 px (see the width note in
+   *  the file header), so the caller decides, and the band renders fully
+   *  without them. Does NOT affect the band's width or its braid. */
+  showChrome?: boolean;
   /** Calendar range: oldest loaded slice → today. */
   range: { oldest: string; now: string };
   /** Card-field scroll progress 0..1 — the threadline reads it per frame. */
@@ -179,7 +184,7 @@ export interface AxisBandProps {
 }
 
 export function AxisBand({
-  narrow = false,
+  showChrome = false,
   range,
   progressRef,
   levelRef,
@@ -215,11 +220,13 @@ export function AxisBand({
   return (
     <div
       ref={bandRef}
-      className={`relative shrink-0 ${
-        narrow ? "w-14" : "w-8 md:w-8"
-      } ${
-        reducedMotion ? "" : "transition-[width] duration-500 ease-out"
-      }`}
+      // `ml-1.5` is the gutter between the window edge and the cable. Without
+      // it the braid's outer strands land on x=0 and the band reads as
+      // bleeding off the side of the page rather than sitting on it. The
+      // margin moves the WHOLE strip (canvas included), so the cable keeps its
+      // size — insetting the canvas instead would shrink the radius and pack
+      // the strands tighter, which is the opposite of what the moiré needs.
+      className="relative ml-1.5 w-8 shrink-0"
     >
       {/* Soft drop shadow behind the 3D thread bundle. Rendered only on the
           wide desktop band: on a slim strip (phone timeline, or the collapsed
@@ -259,11 +266,11 @@ export function AxisBand({
       <div
         className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center px-2"
         style={{
-          opacity: !narrow && strand ? 1 : 0,
+          opacity: showChrome && strand ? 1 : 0,
           transition: `opacity ${strand ? "400ms" : "200ms"} ${strand ? "600ms" : "0ms"}`,
         }}
       >
-        {!narrow && strand && (
+        {showChrome && strand && (
           <span className="pb-1 font-mono text-[10px] tracking-[0.15em] text-foreground">
             {strand}
             {selectedCount != null && (
@@ -272,8 +279,12 @@ export function AxisBand({
           </span>
         )}
       </div>
-      {!narrow && (
-        <div className="absolute left-1 top-16 md:left-3">
+      {/* Centred in the strip, not left-aligned: the trigger is a compact
+          square (see StrandFilter), and the strip has no room for a labelled
+          control — the old pill was 127 px wide inside a 32 px band and hung
+          its label over the content. */}
+      {showChrome && (
+        <div className="absolute inset-x-0 top-16 flex justify-center">
           <StrandFilter
             strands={strandList}
             selected={strand}

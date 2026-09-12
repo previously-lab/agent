@@ -7,9 +7,8 @@
  * binding between "what the right pane is showing" and "what the band draws".
  *
  *  - HOW MANY strands are drawn (§2.4): N is a responsive quantity, not a
- *    constant. Ten lanes need ten distinguishable seats around the core; a
- *    phone-width strip can only resolve a handful before the bundle smears
- *    into one line.
+ *    constant. Every lane needs a distinguishable seat around the core, and a
+ *    strip can only resolve so many before the bundle smears into one line.
  *  - HOW LONG one knot is (§2.3): `lambda` is the world length of a single
  *    turn, and it must equal the on-screen height of the content that turn
  *    belongs to. That is what registers the band to the right pane: the knot
@@ -19,13 +18,31 @@
 import type { FieldAnchor } from "./winding";
 import { screenFractionToWorldY } from "./convergence";
 
-/** Strands drawn on the wide desktop band (md:w-44 ≈ 176 px). */
-export const WIDE_STRAND_LIMIT = 10;
-/** Strands drawn on a band too narrow to seat ten lanes (chat / phone). */
-export const NARROW_STRAND_LIMIT = 5;
+/** Strands drawn on the widest band. */
+export const WIDE_STRAND_LIMIT = 20;
+/** Strands drawn on a band too narrow to seat the full set. The band is a
+ *  32 px strip (see `AxisBand`), so this is the tier that is actually live in
+ *  both views — it is the one number to turn.
+ *
+ *  IT IS A MOIRÉ DIAL, not just a density dial. A strand's on-screen x is
+ *  `R·cos(seat + spin)` and every strand shares one `spin`, so the lines cross
+ *  at REGULAR intervals, and 1 px lines crossing regularly is a diffraction
+ *  grating: past a handful of strands the eye stops seeing individual threads
+ *  and starts seeing the beat pattern between them. The crossing period grows
+ *  with the angular gap between seats, so FEWER strands means a coarser, calmer
+ *  pattern as well as less clutter.
+ *
+ *  Seven, not ten. `cos` is even, so seats pair up — strand i and strand N−i
+ *  share an x at every height and are separated only by depth and shading.
+ *  Ten seats therefore collapse to six x-traces, but seven collapse to four,
+ *  i.e. a 33 % drop in the number of things actually crossing, for a 30 %
+ *  drop in line count. The user's read — "cut two or three" — lands on the
+ *  knee of that curve. (Five was the previous value; it reads as too sparse
+ *  once the strands are this quiet.) */
+export const NARROW_STRAND_LIMIT = 7;
 /** Strands drawn while the band is between the two widths (the 500 ms width
  *  transition, and mid-size tablet bands). */
-export const MID_STRAND_LIMIT = 8;
+export const MID_STRAND_LIMIT = 14;
 
 /** Band width (CSS px) at or below which the narrow set is drawn. */
 export const NARROW_BAND_PX = 64;
@@ -105,4 +122,32 @@ export function knotLambda(
       : viewportWorldHeight * KNOT_LAMBDA_VIEWPORT_FRACTION;
   if (!Number.isFinite(raw) || raw < minLambda) return minLambda;
   return raw;
+}
+
+/**
+ * The world length of ONE anchor's knot — half the anchor's OWN `span` when it
+ * has one, so the twist is exactly as tall as the slice it belongs to and
+ * returns to 0 at that slice's boundaries.
+ *
+ * THAT IS WHAT MAKES THE SEAM STRAIGHT. Two slices back to back, each winding
+ * across its own extent, means the spin leaves the first slice at a whole
+ * number of turns and enters the second from 0 — so the region between them,
+ * the seam, is the one place the bundle is reliably unwound. Sizing the knot
+ * from the median pitch instead (the `knotLambda` fallback) overshoots by the
+ * gap after the slice and drags the release past the seam.
+ *
+ * Falls back to `knotLambda` for an anchor with no span: the timeline's rows
+ * have a uniform pitch, so the median IS the right answer there.
+ */
+export function knotLambdaForAnchor(
+  span: number | undefined,
+  worldYs: readonly number[],
+  viewportWorldHeight: number,
+): number {
+  const minLambda = viewportWorldHeight * KNOT_LAMBDA_MIN_FRACTION;
+  if (span != null && Number.isFinite(span) && span > 0) {
+    const half = (span * viewportWorldHeight) / 2;
+    return Math.max(minLambda, half);
+  }
+  return knotLambda(worldYs, viewportWorldHeight);
 }

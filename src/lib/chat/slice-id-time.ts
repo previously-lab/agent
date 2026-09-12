@@ -1,3 +1,4 @@
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 /**
  * Slice-id → clock label for the UI (v0.10 M2). A slice id
  * (YYYY-MM-DD-HHMM) is a UTC instant; `formatSliceIdLabel` renders it in the
@@ -27,7 +28,7 @@ export function formatSliceIdLabel(
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   const sameYear = d.getFullYear() === new Date().getFullYear();
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormat(locale, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",

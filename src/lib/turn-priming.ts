@@ -16,6 +16,7 @@
  * Everything here is pure: no LLM, no I/O.
  */
 import { buildDateAnchors, normalizeLocale } from "@/lib/time/relative";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 
 // ─── Emotional register ───────────────────────────────────────────────────
 
@@ -87,7 +88,7 @@ export function formatLocalTime(nowIso: string, timezone: string): LocalTimeInfo
   const d = new Date(nowIso);
   const zone = timezone && timezone.trim() ? timezone : "UTC";
   try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
+    const parts = dateTimeFormat("en-GB", {
       timeZone: zone,
       hour12: false,
       hourCycle: "h23",
@@ -102,7 +103,7 @@ export function formatLocalTime(nowIso: string, timezone: string): LocalTimeInfo
 
     let offset = "";
     try {
-      const tzParts = new Intl.DateTimeFormat("en-US", {
+      const tzParts = dateTimeFormat("en-US", {
         timeZone: zone,
         timeZoneName: "longOffset",
       }).formatToParts(d);

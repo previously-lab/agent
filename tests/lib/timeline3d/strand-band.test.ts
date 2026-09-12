@@ -5,6 +5,7 @@ import {
   KNOT_LAMBDA_MIN_FRACTION,
   KNOT_LAMBDA_VIEWPORT_FRACTION,
   knotLambda,
+  knotLambdaForAnchor,
   MID_STRAND_LIMIT,
   NARROW_BAND_PX,
   NARROW_STRAND_LIMIT,
@@ -118,6 +119,52 @@ describe("knotLambda", () => {
       const lambda = knotLambda(ys, 4.8);
       expect(Number.isFinite(lambda)).toBe(true);
       expect(lambda).toBeGreaterThanOrEqual(4.8 * KNOT_LAMBDA_MIN_FRACTION);
+    }
+  });
+});
+
+describe("knotLambdaForAnchor — sizing the twist to its own slice", () => {
+  const VIEWPORT = 4; // world units, arbitrary
+
+  it("is half the anchor's span, converted out of screen fractions", () => {
+    // The span is a SCREEN fraction, lambda is WORLD units — so the viewport's
+    // world height is what converts between them.
+    for (const span of [0.25, 0.5, 0.9]) {
+      expect(knotLambdaForAnchor(span, [], VIEWPORT)).toBeCloseTo(
+        (span * VIEWPORT) / 2,
+        12,
+      );
+    }
+  });
+
+  it("makes the twist span EXACTLY its slice, which is what keeps a seam straight", () => {
+    // Two slices back to back, each wound across its own extent: the spin
+    // leaves the first at a whole number of turns and the second starts from
+    // 0, so the gap between them — the seam — is the one reliably unwound
+    // region. If lambda could exceed half a slice's span the twist would reach
+    // across the seam and there would be no straight part left.
+    const span = 0.6;
+    const lambda = knotLambdaForAnchor(span, [], VIEWPORT);
+    const sliceWorld = span * VIEWPORT;
+    expect(lambda * 2).toBeLessThanOrEqual(sliceWorld + 1e-12);
+  });
+
+  it("falls back to the median pitch when the anchor carries no span", () => {
+    const worldYs = [2, 0, -2]; // a uniform pitch of 2
+    for (const missing of [undefined, 0, -1, NaN, Infinity]) {
+      expect(knotLambdaForAnchor(missing, worldYs, VIEWPORT)).toBe(
+        knotLambda(worldYs, VIEWPORT),
+      );
+    }
+  });
+
+  it("never returns a knot with no height", () => {
+    for (const span of [0, -1, NaN, Infinity, 1e-9]) {
+      const lambda = knotLambdaForAnchor(span, [], VIEWPORT);
+      expect(Number.isFinite(lambda)).toBe(true);
+      expect(lambda).toBeGreaterThanOrEqual(
+        VIEWPORT * KNOT_LAMBDA_MIN_FRACTION,
+      );
     }
   });
 });

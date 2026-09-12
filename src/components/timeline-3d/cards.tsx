@@ -17,7 +17,9 @@
  */
 import { useLocale, useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import { strandColor, strandAccent } from "@/lib/timeline3d/layout";
+import { strandColor } from "@/lib/timeline3d/ink";
+import { strandAccent } from "@/lib/timeline3d/layout";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   densityTier,
   shellPose,
@@ -69,7 +71,7 @@ function groupLabel(row: StackRow, locale: string): string {
   const d = row.top.date;
   if (row.level === 2) return weekLabelFor(d, locale);
   const date = new Date(`${d}T12:00:00`);
-  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
+  const weekday = dateTimeFormat(locale, { weekday: "short" }).format(
     date,
   );
   return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;

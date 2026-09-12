@@ -11,7 +11,7 @@ import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Search } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { strandColor, STRAND_PALETTE } from "@/lib/timeline3d/layout";
+import { BRAND_INK, strandColor } from "@/lib/timeline3d/ink";
 import type { StrandListItem } from "@/lib/episodic/actions";
 import { ColorSquare } from "./cards";
 
@@ -41,14 +41,17 @@ export function StrandFilter({ strands, selected, onSelect }: StrandFilterProps)
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="pointer-events-auto flex items-center gap-1.5 rounded-md bg-card/85 px-2.5 py-1.5 font-mono text-[10.5px] tracking-[0.08em] text-foreground/85 ring-1 ring-foreground/10 backdrop-blur-md transition-shadow hover:ring-foreground/25"
-        aria-label={t("label")}
+        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-card/80 ring-1 ring-foreground/12 backdrop-blur-md transition-[background-color,box-shadow] duration-200 hover:bg-card hover:ring-foreground/25 data-[state=open]:bg-card data-[state=open]:ring-foreground/25"
+        aria-label={selected ? `${t("label")}: ${selected}` : t("label")}
       >
+        {/* The swatch IS the label. A 32 px strip cannot seat a word, so the
+            trigger carries the one thing that is worth the pixels — which
+            colour the timeline is filtered to — and the popover lists the
+            names. `aria-label` above keeps it legible to a screen reader. */}
         <ColorSquare
-          color={selected ? strandColor(selected) : STRAND_PALETTE[0]}
-          className="size-2"
+          color={selected ? strandColor(selected) : BRAND_INK}
+          className="size-3"
         />
-        <span className="whitespace-nowrap">{selected ?? t("all")}</span>
       </PopoverTrigger>
       <PopoverContent align="start" side="bottom" className="w-64 gap-1 p-1.5">
         <div className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1.5">
@@ -68,7 +71,7 @@ export function StrandFilter({ strands, selected, onSelect }: StrandFilterProps)
               selected === null ? "bg-accent/70" : ""
             }`}
           >
-            <ColorSquare color={STRAND_PALETTE[0]} className="size-2" />
+            <ColorSquare color={BRAND_INK} className="size-2" />
             <span className="flex-1 truncate">{t("all")}</span>
           </button>
           {visible.map((s) => (

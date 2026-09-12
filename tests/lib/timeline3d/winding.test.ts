@@ -2,11 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   activityYsByStrand,
   type FieldAnchor,
+  knotProgress,
   laneAngleFor,
   laneDepthFor,
   smoothstep01,
   spinAt,
+  spinAtKnots,
+  type SpinKnot,
   strandPointAt,
+  strandPointAtKnots,
   topStrands,
   wrapWeightAt,
 } from "@/lib/timeline3d/winding";
@@ -154,6 +158,259 @@ describe("spinAt", () => {
       expect(spinAt(centerY, centerY, degenerate, turns)).toBe(0);
       expect(spinAt(centerY + 5, centerY, degenerate, turns)).toBe(0);
     }
+  });
+});
+
+describe("knotProgress", () => {
+  const centerY = 0;
+  const lambda = 2;
+
+  it("is exactly 0 at and below the knot's lower edge", () => {
+    expect(knotProgress(centerY - lambda, centerY, lambda)).toBe(0);
+    expect(knotProgress(centerY - 10 * lambda, centerY, lambda)).toBe(0);
+  });
+
+  it("is exactly 1 at and above the knot's upper edge", () => {
+    expect(knotProgress(centerY + lambda, centerY, lambda)).toBe(1);
+    expect(knotProgress(centerY + 10 * lambda, centerY, lambda)).toBe(1);
+  });
+
+  it("is half way at the centre", () => {
+    expect(knotProgress(centerY, centerY, lambda)).toBeCloseTo(0.5, 12);
+  });
+
+  it("is monotone in the height, so a knot never doubles back", () => {
+    let prev = -1;
+    for (let t = -2; t <= 2; t += 0.01) {
+      const p = knotProgress(centerY + t * lambda, centerY, lambda);
+      expect(p).toBeGreaterThanOrEqual(prev);
+      prev = p;
+    }
+  });
+
+  it("is the one shape spinAt sweeps its turns across", () => {
+    // spinAt is now expressed in terms of it, so the two can never drift.
+    for (const turns of [1, 3]) {
+      for (let t = -2; t <= 2; t += 0.13) {
+        const y = centerY + t * lambda;
+        expect(spinAt(y, centerY, lambda, turns)).toBe(
+          TAU * turns * knotProgress(y, centerY, lambda),
+        );
+      }
+    }
+  });
+
+  it("is 0 everywhere for a knot with no length", () => {
+    for (const degenerate of [0, -3]) {
+      for (const y of [centerY - 5, centerY, centerY + 5]) {
+        expect(knotProgress(y, centerY, degenerate)).toBe(0);
+      }
+    }
+  });
+});
+
+describe("spinAtKnots", () => {
+  const turns = 3;
+  /** The band's handoff shape: A above the centre, B below it, and a C below
+   *  that — each a row one pitch from the last, lambda half a pitch — so the
+   *  knots' windows tile edge to edge exactly as they do on screen. */
+  const A = { centerY: 1, lambda: 1 };
+  const B = { centerY: -1, lambda: 1 };
+  const C = { centerY: -3, lambda: 1 };
+
+  /** The band's blend at scrub `t`: A carries `1 - t` and B carries `t`. */
+  const handoff = (
+    a: { centerY: number; lambda: number },
+    b: { centerY: number; lambda: number },
+    t: number,
+  ): SpinKnot[] => [
+    { centerY: a.centerY, lambda: a.lambda, weight: 1 - t },
+    { centerY: b.centerY, lambda: b.lambda, weight: t },
+  ];
+
+  it("reproduces spinAt exactly for a single weight-1 knot", () => {
+    for (const centerY of [-2.5, 0, 1.75]) {
+      for (const lambda of [0.5, 2, 7]) {
+        for (
+          let y = centerY - 3 * lambda;
+          y <= centerY + 3 * lambda;
+          y += lambda / 7
+        ) {
+          expect(spinAtKnots(y, [{ centerY, lambda, weight: 1 }], turns)).toBe(
+            spinAt(y, centerY, lambda, turns),
+          );
+        }
+      }
+    }
+  });
+
+  it("conserves the twist: a whole number of turns at EVERY t", () => {
+    // The property the handoff exists for. Far above both knots every profile
+    // is saturated at 1, so the spin is the normalised sum of the weights —
+    // exactly `turns` for any t, because they sum to 1. Nothing is created and
+    // nothing is destroyed; the twist only ever moves between the two knots.
+    const above = 10; // above A + lambda, B + lambda
+    for (let i = 0; i <= 32; i++) {
+      // Dyadic t, so the two weights sum to 1 in binary as well as in maths.
+      const t = i / 32;
+      expect(spinAtKnots(above, handoff(A, B, t), turns)).toBe(TAU * turns);
+    }
+  });
+
+  it("conserves the twist for a dense, non-dyadic sweep of t too", () => {
+    const above = 10;
+    for (let i = 0; i <= 200; i++) {
+      const t = i / 200;
+      expect(spinAtKnots(above, handoff(A, B, t), turns)).toBeCloseTo(
+        TAU * turns,
+        12,
+      );
+    }
+  });
+
+  it("is exactly 0 below both knots, whatever the handoff is doing", () => {
+    for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+      expect(spinAtKnots(-10, handoff(A, B, t), turns)).toBe(0);
+    }
+  });
+
+  it("is A alone at t = 0 and B alone at t = 1", () => {
+    for (let y = -4; y <= 4; y += 0.2) {
+      expect(spinAtKnots(y, handoff(A, B, 0), turns)).toBe(
+        spinAt(y, A.centerY, A.lambda, turns),
+      );
+      expect(spinAtKnots(y, handoff(A, B, 1), turns)).toBe(
+        spinAt(y, B.centerY, B.lambda, turns),
+      );
+    }
+  });
+
+  it("is monotone in y for every t, so a line never doubles back", () => {
+    for (let i = 0; i <= 20; i++) {
+      const knots = handoff(A, B, i / 20);
+      let prev = -1;
+      for (let y = -4; y <= 4; y += 0.02) {
+        const spin = spinAtKnots(y, knots, turns);
+        expect(spin).toBeGreaterThanOrEqual(prev);
+        prev = spin;
+      }
+    }
+  });
+
+  it("stays monotone where the two knots' windows overlap", () => {
+    // lambda is half a pitch on screen, so the windows only just tile — but a
+    // caller is free to pass longer knots, and the blend must not crease.
+    for (let i = 0; i <= 8; i++) {
+      const knots = handoff(
+        { centerY: 1, lambda: 2.5 },
+        { centerY: -1, lambda: 2.5 },
+        i / 8,
+      );
+      let prev = -1;
+      for (let y = -6; y <= 6; y += 0.05) {
+        const spin = spinAtKnots(y, knots, turns);
+        expect(spin).toBeGreaterThanOrEqual(prev);
+        prev = spin;
+      }
+    }
+  });
+
+  it("hands off continuously at a flip: (A,B) at t = 1 is (B,C) at t = 0", () => {
+    // The frame the centre crosses B, B becomes the new A with the scrub back
+    // at 0 — the same position, or the braid snaps in that frame.
+    const endOfFirst = handoff(A, B, 1);
+    const startOfSecond = handoff(B, C, 0);
+    for (let y = -6; y <= 5; y += 0.1) {
+      expect(spinAtKnots(y, startOfSecond, turns)).toBe(
+        spinAtKnots(y, endOfFirst, turns),
+      );
+    }
+  });
+
+  it("moves the twist rather than remaking it, one frame either side of a flip", () => {
+    // A frame is not a point: sample it a hair either side and the two must
+    // still agree to within the leftover weight — a fraction of one frame's
+    // scroll, not a whole knot's worth of twist.
+    const eps = 1e-3;
+    const bound = TAU * turns * eps * 4;
+    for (let y = -6; y <= 5; y += 0.1) {
+      const before = spinAtKnots(y, handoff(A, B, 1 - eps), turns);
+      const after = spinAtKnots(y, handoff(B, C, eps), turns);
+      expect(Math.abs(after - before)).toBeLessThan(bound);
+    }
+  });
+
+  it("normalises weights that do not sum to 1", () => {
+    // Chosen over clamping or rejecting: a caller can pass raw proportions and
+    // the conservation property still holds. {1, 3} is {0.25, 0.75}.
+    const raw: SpinKnot[] = [
+      { centerY: 1, lambda: 1, weight: 1 },
+      { centerY: -1, lambda: 1, weight: 3 },
+    ];
+    const scaled: SpinKnot[] = [
+      { centerY: 1, lambda: 1, weight: 0.25 },
+      { centerY: -1, lambda: 1, weight: 0.75 },
+    ];
+    for (let y = -4; y <= 4; y += 0.25) {
+      expect(spinAtKnots(y, raw, turns)).toBeCloseTo(
+        spinAtKnots(y, scaled, turns),
+        12,
+      );
+    }
+    expect(spinAtKnots(10, raw, turns)).toBeCloseTo(TAU * turns, 12);
+  });
+
+  it("scales a lone knot's weight away — one knot is one knot", () => {
+    for (let y = -4; y <= 4; y += 0.25) {
+      expect(spinAtKnots(y, [{ centerY: 0, lambda: 2, weight: 5 }], turns)).toBeCloseTo(
+        spinAt(y, 0, 2, turns),
+        12,
+      );
+    }
+  });
+
+  it("treats a negative or non-finite weight as no knot at all", () => {
+    for (let y = -4; y <= 4; y += 0.5) {
+      for (const weight of [-1, Number.NaN, Infinity, -Infinity]) {
+        expect(spinAtKnots(y, [{ centerY: 0, lambda: 2, weight }], turns)).toBe(0);
+      }
+    }
+  });
+
+  it("lets a bad weight lose only its own knot, never the live one", () => {
+    // A dead half of a handoff must not dilute the live half into a fractional
+    // number of turns — that would leave every strand off its own seat.
+    const live: SpinKnot = { centerY: 0, lambda: 2, weight: 1 };
+    for (const dead of [-2, 0, Number.NaN]) {
+      for (let y = -4; y <= 4; y += 0.5) {
+        expect(
+          spinAtKnots(y, [live, { centerY: 5, lambda: 2, weight: dead }], turns),
+        ).toBe(spinAt(y, 0, 2, turns));
+      }
+    }
+  });
+
+  it("treats a knot with no length as no knot at all", () => {
+    const live: SpinKnot = { centerY: 0, lambda: 2, weight: 1 };
+    for (let y = -4; y <= 4; y += 0.5) {
+      for (const lambda of [0, -3]) {
+        // Beside a live knot it takes no share of the twist…
+        expect(
+          spinAtKnots(y, [live, { centerY: y, lambda, weight: 1 }], turns),
+        ).toBe(spinAt(y, 0, 2, turns));
+        // …and alone it is no rotation at all, like `spinAt`.
+        expect(spinAtKnots(y, [{ centerY: 0, lambda, weight: 1 }], turns)).toBe(0);
+      }
+    }
+  });
+
+  it("is 0 everywhere for an empty blend, and never NaN", () => {
+    for (let y = -4; y <= 4; y += 0.5) {
+      expect(spinAtKnots(y, [], turns)).toBe(0);
+    }
+    expect(
+      spinAtKnots(0, [{ centerY: Number.NaN, lambda: 1, weight: 1 }], turns),
+    ).toBe(0);
   });
 });
 
@@ -441,6 +698,100 @@ describe("strandPointAt", () => {
   });
 });
 
+describe("strandPointAtKnots", () => {
+  const count = 5;
+  const radius = 0.8;
+  const turns = 3;
+
+  it("reproduces strandPointAt for a single weight-1 knot", () => {
+    const centerY = 0.75;
+    const lambda = 2;
+    for (const index of [0, 1.5, 4]) {
+      for (const winding of [1, 0, 0.4]) {
+        for (let y = -4; y <= 4; y += 0.5) {
+          const blend = strandPointAtKnots(
+            y,
+            index,
+            count,
+            [{ centerY, lambda, weight: 1 }],
+            radius,
+            turns,
+            winding,
+          );
+          const single = strandPointAt(
+            y,
+            index,
+            count,
+            centerY,
+            lambda,
+            radius,
+            turns,
+            winding,
+          );
+          expect(blend.y).toBe(y);
+          expect(blend.x).toBeCloseTo(single.x, 12);
+          expect(blend.z).toBeCloseTo(single.z, 12);
+        }
+      }
+    }
+  });
+
+  it("keeps every strand on the cylinder through a whole handoff", () => {
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      const knots: SpinKnot[] = [
+        { centerY: 1, lambda: 1, weight: 1 - t },
+        { centerY: -1, lambda: 1, weight: t },
+      ];
+      for (let index = 0; index < count; index++) {
+        for (let y = -4; y <= 4; y += 0.25) {
+          const p = strandPointAtKnots(y, index, count, knots, radius, turns);
+          expect(Number.isFinite(p.x)).toBe(true);
+          expect(Number.isFinite(p.z)).toBe(true);
+          expect(radiusOf(p)).toBeCloseTo(radius, 12);
+        }
+      }
+    }
+  });
+
+  it("closes the helix through a whole handoff: the line above is the line below", () => {
+    // Whole turns at every t is what buys this, and it is the reason the blend
+    // is weighted to sum to 1: whatever the handoff is doing, no strand carries
+    // a permanent offset above the knots.
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      const knots: SpinKnot[] = [
+        { centerY: 1, lambda: 1, weight: 1 - t },
+        { centerY: -1, lambda: 1, weight: t },
+      ];
+      for (let index = 0; index < count; index++) {
+        const below = strandPointAtKnots(-10, index, count, knots, radius, turns);
+        const above = strandPointAtKnots(10, index, count, knots, radius, turns);
+        expect(above.x).toBeCloseTo(below.x, 12);
+        expect(above.z).toBeCloseTo(below.z, 12);
+      }
+    }
+  });
+
+  it("straightens at its own seat when there is nothing to wind", () => {
+    const nothing: SpinKnot[][] = [
+      [],
+      [{ centerY: 0, lambda: 0, weight: 1 }],
+      [{ centerY: 0, lambda: 2, weight: 0 }],
+    ];
+    for (const knots of nothing) {
+      for (let index = 0; index < count; index++) {
+        const seat = laneAngleFor(index, count);
+        for (const y of [-2, 0, 2]) {
+          const p = strandPointAtKnots(y, index, count, knots, radius, turns);
+          expect(p.x).toBeCloseTo(radius * Math.cos(seat), 12);
+          expect(p.z).toBeCloseTo(radius * Math.sin(seat), 12);
+        }
+      }
+    }
+  });
+});
+
 describe("laneAngleFor", () => {
   it("spreads lanes evenly around the cylinder", () => {
     const angles = Array.from({ length: 4 }, (_, i) => laneAngleFor(i, 4));
@@ -550,3 +901,4 @@ describe("topStrands", () => {
     expect(topStrands([], 5)).toEqual([]);
   });
 });
+

@@ -324,7 +324,14 @@ function FieldScene({
       for (let i = 0; i < rows.length; i++) {
         const centerPy = i * pitch + geo.cardH / 2 - scroll;
         if (centerPy < -geo.cardH || centerPy > h + geo.cardH) continue;
-        list.push({ y: centerPy / h, strands: rows[i].strands });
+        // `span` is the row's own height: the band sizes each knot to the
+        // content it marks, so the twist spans the card and unwinds in the gap
+        // after it.
+        list.push({
+          y: centerPy / h,
+          strands: rows[i].strands,
+          span: geo.cardH / h,
+        });
         if (list.length >= 24) break;
       }
       anchorsRef.current = list;

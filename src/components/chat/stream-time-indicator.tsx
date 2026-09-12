@@ -2,6 +2,7 @@
 
 import { useLocale, useTranslations } from "next-intl";
 import { sameDay } from "./time-display";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 
 /** The floating indicator's label: time-only within today, full date (+time)
  *  once it crosses a day boundary (design §1.3). */
@@ -9,13 +10,13 @@ export function formatIndicatorTime(iso: string, locale: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   if (sameDay(iso)) {
-    return new Intl.DateTimeFormat(locale, {
+    return dateTimeFormat(locale, {
       hour: "2-digit",
       minute: "2-digit",
     }).format(d);
   }
   const sameYear = d.getFullYear() === new Date().getFullYear();
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     ...(sameYear ? {} : { year: "numeric" }),

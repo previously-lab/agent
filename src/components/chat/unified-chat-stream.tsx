@@ -19,6 +19,8 @@ import { SliceSeam, formatSeamDate } from "./slice-seam";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import { EmptyBriefing } from "./empty-briefing";
 import { ErrorBanner } from "./error-banner";
+import { ResumeBanner } from "./resume-banner";
+import { ConversationField } from "./conversation-field";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import type { HistoryStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
@@ -27,19 +29,8 @@ import type { SliceSummary } from "@/lib/episodic/actions";
 /** A live message rendered through the full chat renderer (tool states,
  *  housekeeping cards, phase indicators — design §1.2's live/history split).
  *  Display props are precomputed by the parent so items stay plain data. */
-export interface LiveStreamItem {
-  kind: "live";
-  key: string;
-  message: UIMessage;
-  /** The current slice's strands — the user bubble's tint source. */
-  strands?: string[];
-  timeIso: string;
-  isStreaming: boolean;
-  startedAt?: string;
-  onRegenerate?: () => void;
-}
-
-export type ChatStreamItem = HistoryStreamItem | LiveStreamItem;
+import type { ChatStreamItem } from "@/lib/chat/stream-items";
+export type { ChatStreamItem } from "@/lib/chat/stream-items";
 
 /** How long after the scroll stops before the time indicator fades (§1.3). */
 const INDICATOR_HOLD_MS = 1000;
@@ -73,22 +64,17 @@ interface UnifiedChatStreamProps {
    *  mounted (dimmed) while the timeline is open, but the timeline's CardField
    *  owns the ref then — no measuring here, the two would fight. */
   anchorsActive?: boolean;
+  /** Shared 0..1 progress for the band — only the field publishes it. */
+  progressRef?: MutableRefObject<number>;
+  /** Render as a camera-navigated field instead of a Virtuoso list. Both paths
+   *  stay in the tree so the field can be switched off with `?field=0` and
+   *  compared against the old behaviour on the same data. */
+  useField?: boolean;
 }
 
-/** The "继续 <date> 的对话" banner — the light top hint of a resumed
- *  conversation (design §2), sitting directly above the restored turns. */
-function ResumeBanner({ startIso }: { startIso: string }) {
-  const t = useTranslations("chat.resume");
-  const locale = useLocale();
-  return (
-    <div className="my-4 flex justify-center px-3 sm:pr-6 md:pl-0 lg:pr-8">
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-brand-500/25 bg-brand-500/8 px-3 py-1 text-[0.65rem] font-medium text-brand-600 dark:text-brand-400">
-        <History className="h-3 w-3" />
-        {t("banner", { date: formatSeamDate(startIso, locale) })}
-      </span>
-    </div>
-  );
-}
+/** The "继续 <date> 的对话" banner now lives in its own module — the
+ *  conversation field renders it too, and it must not have to import this
+ *  file to get a presentational pill. */
 
 /**
  * The unified message stream (v0.10 §1): ONE continuous, virtualized,
@@ -107,6 +93,8 @@ export function UnifiedChatStream({
   briefing,
   anchorsRef,
   anchorsActive,
+  progressRef,
+  useField,
 }: UnifiedChatStreamProps) {
   const tSeam = useTranslations("chat.seam");
 
@@ -322,11 +310,20 @@ export function UnifiedChatStream({
   }, [items, liveStreaming, virtuosoRef]);
 
   // ── Strand-field anchors for the band (chat view) ───────────────────────
-  // In chat view the stream's slice seams are the strand field's nodes: each
-  // seam row's screen-Y fraction is one anchor, carrying the newer slice's
-  // strands, mirroring the card field's row-start anchors in timeline view
-  // (same 24-anchor cap, same center-based fraction). Virtuoso's scroller
-  // element arrives via its scrollerRef prop.
+  // The band is wound where the CONTENT is and straight where the boundaries
+  // are — one rule, and the timeline view is its reference: there the knot
+  // sits on each card and unwinds in the gap between cards. The chat's
+  // equivalent of "the card" is the slice BLOCK (its seam header plus its
+  // turns), so the anchor is the block's MIDDLE and the seams fall in the
+  // straight parts.
+  //
+  // Publishing the seam rows as the anchors — which is what this did first —
+  // puts the knot on the divider and leaves the conversation itself unwound:
+  // the exact inverse of the timeline. Seams mark block STARTS, so they are
+  // the boundaries between anchors, and the block's extent is the gap between
+  // one seam and the next.
+  //
+  // Virtuoso's scroller element arrives via its scrollerRef prop.
   const scrollerElRef = useRef<HTMLElement | null>(null);
   // Virtuoso types scrollerRef as `HTMLElement | Window | null` (window
   // scroll mode) — this stream scrolls in its own element, so keep the
@@ -349,17 +346,63 @@ export function UnifiedChatStream({
     const scroller = scrollerElRef.current;
     if (!scroller) return;
     const scrollerRect = scroller.getBoundingClientRect();
+    if (scrollerRect.height <= 0) return;
+
+    // Every seam row in the DOM, as the screen-Y fraction of its TOP edge —
+    // a block boundary, not a node.
+    const bounds: { y: number; strands: readonly string[] }[] = [];
+    for (const row of scroller.querySelectorAll("[data-seam-anchor]")) {
+      const r = row.getBoundingClientRect();
+      const key = row.getAttribute("data-seam-key");
+      bounds.push({
+        y: (r.top - scrollerRect.top) / scrollerRect.height,
+        strands: (key ? seamStrandsRef.current.get(key) : undefined) ?? [],
+      });
+    }
+    if (bounds.length === 0) {
+      anchorsRef.current = [];
+      return;
+    }
+
+    // Where the newest block ends. It has no seam after it, so its extent has
+    // to come from the last ROW actually rendered — and NOT from
+    // `scroller.scrollHeight`, which in Virtuoso is its ESTIMATED total,
+    // including placeholders for items that are not mounted. Measured on the
+    // demo stream that estimate was 8x the real content (a block centre
+    // computed from it landed ~7 viewports below the fold and was dropped), so
+    // every block but the last lost its anchor and the band fell back to a
+    // single knot pinned to the viewport centre — which is why the chat band
+    // had no braid to speak of.
+    //
+    // `[data-index]` is Virtuoso's own item wrapper. Reading it is reading an
+    // implementation detail, but the alternative is a marker element of our
+    // own and the measurement is the same either way.
+    const rows = scroller.querySelectorAll("[data-index]");
+    let contentEnd = bounds[bounds.length - 1].y;
+    if (rows.length > 0) {
+      const lastBottom = rows[rows.length - 1].getBoundingClientRect().bottom;
+      contentEnd = (lastBottom - scrollerRect.top) / scrollerRect.height;
+    }
+
+    // A block is wound across its OWN extent, so the anchor carries that
+    // extent (`span`) as well as its middle. The seam between two blocks is
+    // then the region the twist leaves at 0 and returns to 0 — the straight
+    // part, and the place the strand set changes.
+    //
+    // The window is deliberately WIDER than the viewport (a slice is often
+    // taller than one screen): the band blends the anchor above the centre
+    // with the one below, and if the neighbouring slice's anchor is dropped
+    // for being off-screen there is nothing to blend to — no handoff, and the
+    // twist has nowhere to travel as the seam crosses the centre.
     const list: FieldAnchor[] = [];
-    // Virtuoso keeps overscan rows mounted, so a seam slightly outside the
-    // viewport is still in the DOM — keep a small margin but drop the rest.
-    const rows = scroller.querySelectorAll("[data-seam-anchor]");
-    for (let i = 0; i < rows.length && list.length < 24; i++) {
-      const r = rows[i].getBoundingClientRect();
-      const fraction = (r.top + r.height / 2 - scrollerRect.top) / scrollerRect.height;
-      if (fraction < -0.05 || fraction > 1.05) continue;
-      const key = rows[i].getAttribute("data-seam-key");
-      const strands = (key ? seamStrandsRef.current.get(key) : undefined) ?? [];
-      list.push({ y: fraction, strands });
+    for (let i = 0; i < bounds.length && list.length < 24; i++) {
+      const end = i + 1 < bounds.length ? bounds[i + 1].y : contentEnd;
+      // A zero- or negative-height block (two seams rendered on top of each
+      // other during a paging swap) has no middle to anchor to.
+      if (!(end > bounds[i].y)) continue;
+      const y = (bounds[i].y + end) / 2;
+      if (y < -1.5 || y > 2.5) continue;
+      list.push({ y, strands: bounds[i].strands, span: end - bounds[i].y });
     }
     anchorsRef.current = list;
   }, [anchorsActive, anchorsRef]);
@@ -410,6 +453,29 @@ export function UnifiedChatStream({
       }
     };
   }, []);
+
+  // ── The field path ──────────────────────────────────────────────────────
+  // Everything above this point is SHARED: the item model, the paging policy,
+  // the arrival and resume state all stay where they were. Only the renderer
+  // changes — which is the whole reason the field takes the same
+  // `ChatStreamItem[]` instead of a payload of its own.
+  //
+  // The Virtuoso-only machinery (firstItemIndex, atBottom, the scroller ref,
+  // the rAF anchor measurement) simply does not run here: the field owns its
+  // own position and publishes its own anchors.
+  if (useField) {
+    return (
+      <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">
+        <ConversationField
+          items={items}
+          anchorsRef={anchorsRef}
+          progressRef={progressRef}
+          onNeedOlder={onStartReached}
+          briefing={briefing}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">

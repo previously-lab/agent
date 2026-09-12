@@ -28,21 +28,24 @@ export function AtmosphereBackdrop() {
             "radial-gradient(ellipse at center, oklch(0.6 0.23 260 / 14%) 0%, oklch(0.21 0.09 267 / 8%) 45%, transparent 70%)",
         }}
       />
-      {/* Faint amber echo — lower left (desktop only: big blur layers are a
-          mobile scroll-jank source) */}
+      {/* Two fainter echoes of the SAME brand hue, not two other hues — the
+          atmosphere is one colour drifting, not a light show. These were an
+          amber and an emerald, the last two literal survivors of the retired
+          five-entry strand palette, which left the backdrop carrying two hues
+          that no longer meant anything anywhere in the product.
+          (Desktop only: big blur layers are a mobile scroll-jank source.) */}
       <div
         className="tl-aurora-slow absolute bottom-[5%] -left-[10%] hidden h-[40vh] w-[45vw] rounded-full blur-3xl sm:block"
         style={{
           background:
-            "radial-gradient(ellipse at center, oklch(0.7 0.12 85 / 5%) 0%, transparent 65%)",
+            "radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 5%, transparent) 0%, transparent 65%)",
         }}
       />
-      {/* Faint emerald echo — mid right */}
       <div
         className="tl-aurora absolute top-[35%] -right-[12%] hidden h-[40vh] w-[40vw] rounded-full blur-3xl sm:block"
         style={{
           background:
-            "radial-gradient(ellipse at center, oklch(0.7 0.15 160 / 4.5%) 0%, transparent 65%)",
+            "radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 4.5%, transparent) 0%, transparent 65%)",
         }}
       />
       {/* 72px grid, radially masked so it dissolves at the edges */}

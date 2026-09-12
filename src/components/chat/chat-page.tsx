@@ -9,11 +9,10 @@ import type { VirtuosoHandle } from "react-virtuoso";
 import { ChatInput } from "./chat-input";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
-import {
-  UnifiedChatStream,
-  type ChatStreamItem,
-  type LiveStreamItem,
-} from "./unified-chat-stream";
+import { UnifiedChatStream } from "./unified-chat-stream";
+// The stream's item model moved to its own module: the conversation field
+// renders the same items and must not import the stream component to get them.
+import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -59,6 +58,13 @@ interface ChatPageProps {
   /** True only when the chat view is foreground (`!showTimeline`) — false
    *  while the timeline's CardField owns the ref. */
   anchorsActive?: boolean;
+  /** Shared 0..1 progress owned by the shell — the conversation field fills it
+   *  so the band's ruler and rotation drift track the chat the same way the
+   *  card field makes them track the timeline. */
+  progressRef?: MutableRefObject<number>;
+  /** Render the conversation as a camera-navigated field instead of a
+   *  virtualized scroll container. See `ConversationField`. */
+  useField?: boolean;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -73,6 +79,8 @@ export function ChatPage({
   suppressAtJump,
   anchorsRef,
   anchorsActive,
+  progressRef,
+  useField,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -100,6 +108,8 @@ export function ChatPage({
       suppressAtJump={suppressAtJump}
       anchorsRef={anchorsRef}
       anchorsActive={anchorsActive}
+      progressRef={progressRef}
+      useField={useField}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -286,12 +296,16 @@ function Inner({
   suppressAtJump,
   anchorsRef,
   anchorsActive,
+  progressRef,
+  useField,
   persona,
   shouldResume,
   initialMessages,
   arrival,
 }: {
   initialConfig?: UserConfig;
+  progressRef?: MutableRefObject<number>;
+  useField?: boolean;
   suppressAtJump?: boolean;
   /** Shared strand-field anchors — see ChatPageProps. */
   anchorsRef?: MutableRefObject<FieldAnchor[]>;
@@ -931,6 +945,8 @@ function Inner({
             onTopItemChange={handleTopItemChange}
             anchorsRef={anchorsRef}
             anchorsActive={anchorsActive}
+            progressRef={progressRef}
+            useField={useField}
             briefing={
               showBriefingCard
                 ? {

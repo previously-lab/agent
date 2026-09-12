@@ -4,13 +4,14 @@ import { Clock } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
 import { relativeBetween } from "./relative-time";
 import type { SeamKind } from "@/lib/chat/seam";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 
 /** Localized short date for seam headings / banners ("2月10日" / "Feb 10"). */
 export function formatSeamDate(iso: string, locale: string): string {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return "";
   const sameYear = d.getFullYear() === new Date().getFullYear();
-  return new Intl.DateTimeFormat(locale, {
+  return dateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     ...(sameYear ? {} : { year: "numeric" }),

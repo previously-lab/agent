@@ -112,6 +112,45 @@
   --sidebar-active-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.55 0.25 262);
+
+  /* ── Strand palette ────────────────────────────────────────────────────
+     The ten colours a strand can be. A strand is assigned one by hashing its
+     name (src/lib/timeline3d/ink.ts) — colours REPEAT by design; see the note
+     on the palette's shape below.
+
+     ONE ARC, NO MUD. Five hues from blue through indigo, violet and magenta to
+     rose (oklch hue 245 → 357), never entering the blue-green (~200) or
+     yellow-green (~90-150) zones, which are the colours the wheel produces
+     that read as impure. Half the entries are 15 OKLCH L units darker than the
+     other half, and that lightness split is doing real work: ten hues evenly
+     spread over this arc would be only 14° apart and indistinguishable, so the
+     palette is FIVE hues × TWO lightnesses — the same construction as
+     ColorBrewer's "Paired". Every adjacent pair differs by at least 0.22 L.
+
+     WHY TEN AND NOT MORE. Roughly ten is the ceiling at which people can still
+     tell categorical colours apart at all (Atlassian, Nightingale, ColorBrewer
+     all land on 8-12; Seaborn's default is ten). Past that no palette helps,
+     which is why a finite palette with reuse beats a generator: the generator
+     promised infinite distinctness that the eye cannot deliver.
+
+     This is a DECORATIVE aid, not an identifier. Every coloured mark in the
+     app sits beside the strand's name in text, and the band's lines are told
+     apart by seat and depth, not hue. The palette therefore optimises for
+     looking like one product rather than for maximum discriminability.
+
+     Palette is theme-INDEPENDENT on purpose: these are saturated marks, and
+     they hold on both backgrounds. The band's dark-mode quietening is not
+     done here — it is the band's own visibility ceiling (threadline-scene). */
+  --strand-1: oklch(0.5 0.155 245); /* blue        */
+  --strand-2: oklch(0.72 0.115 245); /* blue, light */
+  --strand-3: oklch(0.5 0.155 273); /* indigo      */
+  --strand-4: oklch(0.72 0.115 273); /* indigo, light */
+  --strand-5: oklch(0.5 0.155 301); /* violet      */
+  --strand-6: oklch(0.72 0.115 301); /* violet, light */
+  --strand-7: oklch(0.5 0.155 329); /* magenta     */
+  --strand-8: oklch(0.72 0.115 329); /* magenta, light */
+  --strand-9: oklch(0.5 0.155 357); /* rose        */
+  --strand-10: oklch(0.72 0.115 357); /* rose, light  */
 }
 
 .dark {
@@ -160,6 +199,7 @@
   --sidebar-active-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.6 0.23 260);
+  /* Strand palette: theme-independent — see the block in :root. */
 }
 
 /* Scrollbar styles */
@@ -263,10 +303,16 @@
    lightness/chroma-normalized (L 0.58, chroma capped at 0.14) so every hue
    lands at the same muted visual weight. First line is the fallback for
    browsers without relative-color syntax. */
+/* The user's turn inside a timeline card. `--bubble-accent` arrives ALREADY
+   TINTED (frame-card builds it with `tintOf(accent, STRAND_TINT_ALPHA)`), so
+   there is no second alpha to keep in step with the chat's bubbles and no
+   relative-colour syntax here to fall back from. It used to be painted as an
+   opaque block of the strand colour at a hard-coded lightness and chroma —
+   a full card-width slab of a generated hue, in every card, which made the
+   timeline read as a colour chart and bypassed the palette entirely. */
 .tl-user-bubble {
   background-color: var(--bubble-accent);
-  background-color: oklch(from var(--bubble-accent) 0.58 min(c, 0.14) h);
-  color: oklch(0.97 0 0);
+  color: var(--foreground);
 }
 
 /* ── Streaming content animations ──────────────────────────────────── */

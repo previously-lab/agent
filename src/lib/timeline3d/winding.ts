@@ -24,6 +24,12 @@
  * bundle at that height, 0 away from the active card and a full `turns` around
  * it to form the braid.
  *
+ * The result is a regular diamond lattice, because evenly-spaced seats under
+ * one shared spin cross on a perfectly even rhythm. That is what an ideal
+ * braid looks like and it is left alone: a per-strand phase offset was tried
+ * as a way to break the regularity and made no visible difference, so the
+ * model keeps the simpler, exact form.
+ *
  * TWO STATES, ONE FORMULA — only `spin` differs:
  *
  *   spin = 0        a straight vertical line on the cylinder. From the side the
@@ -31,6 +37,18 @@
  *                   DEPTHS — some in front, some behind.
  *   spin = 0 → 2π·turns   a helix on the cylinder: the braid, and only across
  *                   the knot.
+ *
+ * THE TWIST IS CONSERVED, AND HANDED OFF (`spinAtKnots`). A rope's twist
+ * cannot be created or destroyed, only moved along it, so the knot is not one
+ * card's property. A single knot would have to teleport when the card nearest
+ * the viewport centre changes — a whole row pitch in one frame, which reads as
+ * the braid snapping back to the start and re-winding at the next card. So the
+ * band blends TWO: the nearest card at or above the centre, and the nearest at
+ * or below it, weighted `1 - t` and `t`. `t` is the SCRUB parameter — how far
+ * the centre has travelled from the first card to the second, a pure function
+ * of the scroll position and never a timer. The weights sum to 1, so the total
+ * is `turns` WHOLE turns at every `t`: the twist migrates down the cable
+ * instead of being remade, and no strand ever leaves its seat.
  *
  * THE REST STATE IS NOT A FLAT PLANE. Every strand sits at the SAME radius but
  * a DIFFERENT angle, hence a different `z`. That is the whole point of the
@@ -64,6 +82,21 @@ export interface FieldAnchor {
   y: number;
   /** Strands carried by the slice rendered at this anchor. */
   strands: readonly string[];
+  /**
+   * How tall the slice this anchor marks is, as a screen-Y fraction — the
+   * anchor's own extent.
+   *
+   * This is what lets the band size the knot to the CONTENT rather than to
+   * the average: lambda is half of this, so the twist spans exactly its slice
+   * and is back to 0 at the slice's boundaries. Without it the band has only
+   * the pitch between neighbouring anchors, which is the slice height PLUS the
+   * gap after it — close, but it pushes the release past the boundary and the
+   * seam stops being the clean straight region it is supposed to be.
+   *
+   * Optional: an anchor may publish only a position, in which case the band
+   * falls back to the median pitch.
+   */
+  span?: number;
 }
 
 /** Every anchor's height, grouped by the strand carried there. */
@@ -140,8 +173,39 @@ export function wrapWeightAt(
 }
 
 /**
- * The SHARED rotation at a height, radians: the one angle every strand at this
- * height is turned by.
+ * The monotone height profile of ONE knot, 0..1: 0 at and below
+ * `centerY - lambda`, 1 at and above `centerY + lambda`, a smoothstep between —
+ * C¹ at both edges, so two of them can tile edge to edge without a crease.
+ *
+ * This is the shape `spinAt` sweeps its turns across, factored out because the
+ * two-knot handoff (`spinAtKnots`) needs the same profile knot by knot, and
+ * because "how far this knot has wound at this height" is a question other
+ * consumers of a knot window legitimately ask.
+ *
+ * `lambda <= 0` is no knot at all: the profile is 0 everywhere, exactly at the
+ * centre included. A zero-length knot is not a step — it is nothing.
+ */
+export function knotProgress(
+  worldY: number,
+  centerY: number,
+  lambda: number,
+): number {
+  if (lambda <= 0) return 0;
+  return smoothstep01(((worldY - centerY) / lambda + 1) / 2);
+}
+
+/** One knot of the shared rotation, for a blend of several: where it sits (in
+ *  world units), how long it is, and how much of the twist belongs to it. */
+export interface SpinKnot {
+  centerY: number;
+  lambda: number;
+  weight: number;
+}
+
+/**
+ * The SHARED rotation at a height, radians, for ONE knot — the single-knot case
+ * of `spinAtKnots`, and exactly what `spinAtKnots` returns for a lone weight-1
+ * knot.
  *
  * A single monotone sweep of `turns` full turns across the knot, built from
  * `smoothstep01` progress — exactly 0 below the knot, `turns` full turns at
@@ -162,9 +226,54 @@ export function spinAt(
   lambda: number,
   turns: number,
 ): number {
-  if (lambda <= 0) return 0;
-  const progress = smoothstep01(((worldY - centerY) / lambda + 1) / 2);
-  return Math.PI * 2 * turns * progress;
+  return Math.PI * 2 * turns * knotProgress(worldY, centerY, lambda);
+}
+
+/**
+ * The SHARED rotation at a height, radians, for a BLEND of knots:
+ *
+ *   spin(y) = 2π·turns · Σ_k weight_k · knotProgress(y; centerY_k, lambda_k)
+ *
+ * This is the handoff that lets the twist travel with the observer. One knot
+ * would have to teleport when the card nearest the viewport centre changes —
+ * a whole row pitch in a single frame, the twist destroyed at the old card and
+ * created at the new one. Two knots, weighted `1 - t` and `t` (see the file
+ * header), MOVE it instead: as the centre scrubs from one card to the next the
+ * twist migrates down the cable, and because the weights sum to 1 the total is
+ * ALWAYS `2π·turns` — a whole number of turns — at every `t`. Nothing is
+ * created or destroyed, and the strands land back on their own seats above the
+ * knots whatever the handoff is doing.
+ *
+ * Weights are NORMALISED by their own sum, so a caller may pass raw
+ * proportions (`{1, 3}` is 0.25 / 0.75) and the conservation above still holds.
+ * A weight that is zero or less carries no knot and is SKIPPED — it takes no
+ * part in the sum either, because a knot already at weight 0 (the far side of
+ * a handoff) must not dilute the live one into a fractional number of turns.
+ * The same goes for a knot with no length (`lambda <= 0`): it is not a knot, so
+ * it takes neither twist nor weight. A negative or non-finite weight is treated
+ * as 0, and a knot whose progress cannot be computed is skipped, so a caller
+ * can never invert the profile or poison the vertex buffer with NaN. With no
+ * weight left at all (an empty blend) the rotation is 0 everywhere — the same
+ * as a bundle with nothing to wind.
+ */
+export function spinAtKnots(
+  worldY: number,
+  knots: readonly SpinKnot[],
+  turns: number,
+): number {
+  let weighted = 0;
+  let total = 0;
+  for (const knot of knots) {
+    const weight = knot.weight;
+    if (!Number.isFinite(weight) || weight <= 0) continue;
+    if (!(knot.lambda > 0)) continue;
+    const progress = knotProgress(worldY, knot.centerY, knot.lambda);
+    if (!Number.isFinite(progress)) continue;
+    total += weight;
+    weighted += weight * progress;
+  }
+  if (!(total > 0) || !Number.isFinite(total)) return 0;
+  return Math.PI * 2 * turns * (weighted / total);
 }
 
 /**
@@ -178,8 +287,31 @@ export interface StrandPoint {
 }
 
 /**
+ * The cylinder position of a strand whose shared rotation at this height is
+ * already known: the seat, the winding clamp and the trig, in the one place
+ * both entry points below share — so a two-knot frame is the same geometry as
+ * a one-knot frame, not a second implementation of it.
+ */
+function strandPointForSpin(
+  worldY: number,
+  index: number,
+  count: number,
+  spin: number,
+  radius: number,
+  winding: number,
+): StrandPoint {
+  const w = Number.isFinite(winding) ? Math.min(1, Math.max(0, winding)) : 1;
+  const angle = laneAngleFor(index, count) + spin * w;
+  return {
+    x: radius * Math.cos(angle),
+    y: worldY,
+    z: radius * Math.sin(angle),
+  };
+}
+
+/**
  * The position of strand `index` of `count` at height `worldY` — the cylinder
- * model, whole. See the file header for the formula.
+ * model, whole, for ONE knot. See the file header for the formula.
  *
  * - `radius` is the ONE cylinder the whole bundle lives on. It is a caller
  *   constant (the band's own width decides it), never derived per strand: every
@@ -188,6 +320,8 @@ export interface StrandPoint {
  * - `lambda` and `centerY` define the knot: the active card's half-height and
  *   its world centre (unchanged semantics). Away from that window the shared
  *   spin is 0 and every strand is a straight vertical line at its own seat.
+ *   For the band's two-knot handoff use `strandPointAtKnots`, which is this
+ *   same geometry with a blended spin.
  * - `index` may be fractional: the line-up joint (§2.5) eases a strand between
  *   seats, and this slides it around the circumference rather than popping it
  *   across.
@@ -210,15 +344,43 @@ export function strandPointAt(
   turns: number,
   winding = 1,
 ): StrandPoint {
-  const w = Number.isFinite(winding) ? Math.min(1, Math.max(0, winding)) : 1;
-  const angle =
-    laneAngleFor(index, count) +
-    spinAt(worldY, centerY, lambda, turns) * w;
-  return {
-    x: radius * Math.cos(angle),
-    y: worldY,
-    z: radius * Math.sin(angle),
-  };
+  return strandPointForSpin(
+    worldY,
+    index,
+    count,
+    spinAt(worldY, centerY, lambda, turns),
+    radius,
+    winding,
+  );
+}
+
+/**
+ * The position of strand `index` of `count` at height `worldY` under a BLEND of
+ * knots — `strandPointAt` with `spinAtKnots` in place of `spinAt`, and the same
+ * everything else: one radius, one seat per strand, the same clamped `winding`.
+ *
+ * This is the band's per-frame call while it hands the twist from one card to
+ * the next (see `spinAtKnots`): the line is on the same cylinder at the same
+ * seat, and only the shared rotation under it is a blend of two knots rather
+ * than one.
+ */
+export function strandPointAtKnots(
+  worldY: number,
+  index: number,
+  count: number,
+  knots: readonly SpinKnot[],
+  radius: number,
+  turns: number,
+  winding = 1,
+): StrandPoint {
+  return strandPointForSpin(
+    worldY,
+    index,
+    count,
+    spinAtKnots(worldY, knots, turns),
+    radius,
+    winding,
+  );
 }
 
 /**

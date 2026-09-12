@@ -13,6 +13,7 @@
  * helpers) or the input unchanged (annotate*), so a malformed date can never
  * take a turn down.
  */
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 
 export type RelLocale = "zh" | "en";
 
@@ -66,7 +67,7 @@ export function localDateKey(iso: string, timezone: string): string | null {
   const zones = [timezone && timezone.trim() ? timezone : "UTC", "UTC"];
   for (const zone of zones) {
     try {
-      const parts = new Intl.DateTimeFormat("en-CA", {
+      const parts = dateTimeFormat("en-CA", {
         timeZone: zone,
         year: "numeric",
         month: "2-digit",

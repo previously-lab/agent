@@ -40,7 +40,8 @@ import {
   type StackLevel,
   type StackRow,
 } from "@/lib/timeline3d/stacks";
-import { STRAND_PALETTE, oklchToHex } from "@/lib/timeline3d/layout";
+import { BRAND_INK } from "@/lib/timeline3d/ink";
+import { oklchToHex } from "@/lib/timeline3d/layout";
 import { SliceCard, StackCard } from "./cards";
 
 export interface StackListProps {
@@ -377,7 +378,7 @@ export function StackList({
     [flashId, router, stepLevel, geo, reducedMotion],
   );
 
-  const brandHex = oklchToHex(STRAND_PALETTE[0]);
+  const brandHex = oklchToHex(BRAND_INK);
   const pitch = rowPitchFor(level, geo);
 
   if (entries.length === 0) {

@@ -20,7 +20,9 @@
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { Turn } from "@/lib/episodic/types";
-import { strandColor, strandAccent } from "@/lib/timeline3d/layout";
+import { strandColor, tintOf, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
+import { strandAccent } from "@/lib/timeline3d/layout";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import type { FrameGeometry, StackRow } from "@/lib/timeline3d/stacks";
 import { weekLabelFor } from "@/lib/timeline3d/stacks";
 import { ColorSquare, hhmm } from "./cards";
@@ -56,7 +58,7 @@ function groupLabel(row: StackRow, locale: string): string {
   const d = row.top.date;
   if (row.level === 2) return weekLabelFor(d, locale);
   const date = new Date(`${d}T12:00:00`);
-  const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(
+  const weekday = dateTimeFormat(locale, { weekday: "short" }).format(
     date,
   );
   return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;
@@ -221,7 +223,14 @@ function TurnBubbles({
                 style={
                   {
                     fontSize: em * 0.72,
-                    ...(isUser ? { "--bubble-accent": accent } : {}),
+                    // Already a TINT, not the raw palette entry: a user turn
+                    // is a field, and at full strength it would be a card-width
+                    // slab of colour (see `.tl-user-bubble`). Same alpha as the
+                    // chat's bubbles, from the same constant, so one turn looks
+                    // the same in both views.
+                    ...(isUser
+                      ? { "--bubble-accent": tintOf(accent, STRAND_TINT_ALPHA) }
+                      : {}),
                   } as React.CSSProperties
                 }
               >
@@ -257,7 +266,10 @@ function TurnBubbles({
               className="ml-auto h-[3.5em] w-[72%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-br-[0.2em]"
               style={
                 {
-                  backgroundColor: `color-mix(in oklch, ${accent} 22%, transparent)`,
+                  // The loading stand-in for a user turn: the same tint the
+                  // real bubble uses, so the card does not change colour when
+                  // the turns arrive.
+                  backgroundColor: tintOf(accent, STRAND_TINT_ALPHA),
                 } as React.CSSProperties
               }
             />

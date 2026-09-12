@@ -22,6 +22,7 @@
  */
 
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
+import { strandColor, STRANDLESS_GREY } from "./ink";
 
 // ─── Tuning constants ──────────────────────────────────────────────────────
 
@@ -57,18 +58,13 @@ export const EMBER_BRIGHTNESS = 0.22;
 export const STRAND_LANE_MIN = 1.0;
 export const STRAND_LANE_MAX = 2.4;
 
-// ─── Strand palette (§5.0, oklch — previously-site landing tokens) ─────────
-
-export const STRAND_PALETTE = [
-  "oklch(0.6 0.23 260)", // brand blue — time
-  "oklch(0.7 0.12 85)", // amber
-  "oklch(0.7 0.15 160)", // emerald
-  "oklch(0.72 0.14 350)", // rose
-  "oklch(0.68 0.16 300)", // violet
-] as const;
-
-/** Grey for strand-less events (§5.0). */
-export const STRANDLESS_GREY = "oklch(0.556 0 0)";
+// ─── Strand colour ─────────────────────────────────────────────────────────
+//
+// The five-entry STRAND_PALETTE and its `hash % 5` are gone (v0.11): a strand's
+// colour is now GENERATED from its own name by the spec in `ink.ts`, so the
+// hue space is continuous and two strands cannot collide. This module keeps
+// only the slice-level policy on top of it — which strand a slice is painted
+// by — and re-exports nothing; import the ink helpers from `ink.ts` directly.
 
 // ─── Public types ──────────────────────────────────────────────────────────
 
@@ -110,7 +106,9 @@ export interface TimelineNodeLayout {
 
 export interface StrandLayout {
   name: string;
-  /** CSS `oklch()` string from STRAND_PALETTE, deterministic per name. */
+  /** CSS `oklch()` string generated from the name by `ink.ts`, deterministic
+   *  per name and theme-aware through the `--ink-l` / `--ink-c` custom
+   *  properties. */
   color: string;
   /**
    * Lateral lane offset (x, z) — the strand's seat in the cable bundle's
@@ -166,11 +164,6 @@ export function hashString(input: string): number {
   return h;
 }
 
-/** Deterministic strand color: one of the five §5.0 oklch palette entries. */
-export function strandColor(name: string): string {
-  return STRAND_PALETTE[hashString(name) % STRAND_PALETTE.length];
-}
-
 /**
  * A slice's accent: its FIRST strand's color, or STRANDLESS_GREY when the
  * slice carries no strands. The single source for "slice → color" — the
@@ -179,23 +172,6 @@ export function strandColor(name: string): string {
  */
 export function strandAccent(strands: readonly string[]): string {
   return strands.length > 0 ? strandColor(strands[0]) : STRANDLESS_GREY;
-}
-
-/** Default alpha for strand-tinted surfaces (chat user bubbles) — 8–12%
- *  reads as a tint in both light and dark themes. */
-export const STRAND_TINT_ALPHA = 0.12;
-
-/**
- * A low-alpha background tint of a strand color (`null`/`undefined` name →
- * the strandless grey). Relative oklch syntax keeps STRAND_PALETTE the only
- * color source and lets the page's theme show through at any alpha.
- */
-export function strandTint(
-  name: string | null | undefined,
-  alpha: number,
-): string {
-  const base = name ? strandColor(name) : STRANDLESS_GREY;
-  return `oklch(from ${base} l c h / ${alpha})`;
 }
 
 /**

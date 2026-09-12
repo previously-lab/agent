@@ -18,6 +18,7 @@
  * the top visible item's time without re-deriving it.
  */
 
+import type { UIMessage } from "ai";
 import type { SliceWithContent } from "@/lib/episodic/actions";
 import type { Turn } from "@/lib/episodic/types";
 import { classifySeam, type SeamKind } from "./seam";
@@ -76,6 +77,26 @@ export type HistoryStreamItem =
   | HistoryTurnItem
   | ResumeBannerItem
   | BriefingItem;
+
+/** A live turn — the message in flight. The component appends these from
+ *  `useChat`; this module never builds one, which is why it lives here as a
+ *  type only. Kept beside the history union because BOTH renderers of the
+ *  stream — the virtualized list and the conversation field — take the same
+ *  `ChatStreamItem[]` and must not describe it twice. */
+export interface LiveStreamItem {
+  kind: "live";
+  key: string;
+  message: UIMessage;
+  /** The current slice's strands — the user bubble's tint source. */
+  strands?: string[];
+  timeIso: string;
+  isStreaming: boolean;
+  startedAt?: string;
+  onRegenerate?: () => void;
+}
+
+/** Everything either renderer can be handed, oldest → newest. */
+export type ChatStreamItem = HistoryStreamItem | LiveStreamItem;
 
 /** The still-alive newest slice restored by getArrivalState (§2). */
 export interface ResumeBlock {

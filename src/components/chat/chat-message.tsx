@@ -30,7 +30,7 @@ import {
   type StreamItem,
   type AgentStage,
 } from "@/lib/chat/build-stream";
-import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/layout";
+import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
 
 interface ChatMessageProps {
   message: UIMessage;
