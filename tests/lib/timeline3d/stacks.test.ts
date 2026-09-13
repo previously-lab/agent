@@ -240,34 +240,42 @@ describe("sheetPose", () => {
 });
 
 describe("frameGeometryFor (Rev 11)", () => {
-  it("uses a landscape card on wide desktop fields", () => {
-    const geo = frameGeometryFor(1424, 902);
+  it("uses a landscape card for the dossier variant", () => {
+    const geo = frameGeometryFor("dossier", 1424, 902);
     expect(geo.cardW).toBe(Math.round(Math.min(1424 * 0.78, 900)));
     expect(geo.cardH).toBe(Math.round(Math.min(geo.cardW / 1.5, 902 * 0.82)));
     expect(geo.cardW / geo.cardH).toBeCloseTo(1.5, 1);
     expect(geo.cardH).toBeLessThanOrEqual(902 * 0.82);
   });
 
-  it("keeps the portrait frame logic on narrow fields", () => {
-    const geo = frameGeometryFor(800, 902);
+  it("keeps the portrait frame logic for the portrait variant", () => {
+    const geo = frameGeometryFor("portrait", 800, 902);
     expect(geo.cardH).toBe(Math.round(Math.min(Math.max(902 * 0.7, 300), 720)));
     expect(geo.cardW).toBeLessThanOrEqual(geo.cardH);
     expect(geo.cardW).toBeGreaterThan(0);
   });
 
   it("clamps the portrait height between 300 and 720", () => {
-    expect(frameGeometryFor(800, 2000).cardH).toBe(720);
-    expect(frameGeometryFor(800, 300).cardH).toBe(300);
+    expect(frameGeometryFor("portrait", 800, 2000).cardH).toBe(720);
+    expect(frameGeometryFor("portrait", 800, 300).cardH).toBe(300);
   });
 
   it("never lets the card overflow the field width", () => {
-    const mobile = frameGeometryFor(390, 700);
+    const mobile = frameGeometryFor("portrait", 390, 700);
     expect(mobile.cardW).toBeLessThanOrEqual(390 - 40);
     expect(mobile.cardW).toBeGreaterThanOrEqual(240);
   });
 
+  it("carries the variant it was built with", () => {
+    // The variant is what `frame-card.tsx` reads to pick its type scale and
+    // its ledger length, so a geometry that drops it would silently fall back
+    // to the dossier's 1/26 em — the 8.9px body text this exists to fix.
+    expect(frameGeometryFor("portrait", 800, 902).variant).toBe("portrait");
+    expect(frameGeometryFor("dossier", 1424, 902).variant).toBe("dossier");
+  });
+
   it("derives a pitch that shows ~1.2-1.5 cards per screen", () => {
-    const geo = frameGeometryFor(1424, 902);
+    const geo = frameGeometryFor("dossier", 1424, 902);
     expect(geo.pitch).toBeGreaterThan(geo.cardH);
     expect(902 / geo.pitch).toBeGreaterThanOrEqual(1.1);
     expect(902 / geo.pitch).toBeLessThanOrEqual(2);
@@ -275,7 +283,7 @@ describe("frameGeometryFor (Rev 11)", () => {
 });
 
 describe("framePitchFor (Rev 10)", () => {
-  const geo = frameGeometryFor(1424, 902);
+  const geo = frameGeometryFor("dossier", 1424, 902);
   it("slice rows pack tighter than stack rows (the pile needs the gap)", () => {
     expect(framePitchFor(0, geo)).toBeLessThan(framePitchFor(1, geo));
     expect(framePitchFor(1, geo)).toBe(framePitchFor(2, geo));

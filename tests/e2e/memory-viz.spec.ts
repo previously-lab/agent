@@ -69,15 +69,17 @@ function armedOrigin(page: Page) {
  * scroll container an earlier version could hand a test (`virtuoso-scroller`).
  * It is what "the chat stayed mounted" is true of.
  *
- * `touch-none` is the only handle on it: the class is load-bearing (see
- * `conversation-field.tsx` — without it the browser claims the touch gesture
- * and no pointermove arrives), and the card field that is mounted behind it in
- * the timeline view uses an inline `touchAction` instead, so this matches the
- * conversation field and nothing else. A `data-testid` would be a better hook
- * than a class; the product does not carry one.
+ * `data-conversation-field` is the handle, and it replaced `div.touch-none`
+ * for a concrete reason: the time rail's scrub surface also carries
+ * `touch-none`, and the rail renders BEFORE the right pane in the document, so
+ * a class selector started matching the rail and would have reported the chat
+ * field's position from the wrong element entirely. The class is still
+ * load-bearing (see `conversation-field.tsx` — without it the browser claims
+ * the touch gesture and no pointermove arrives); it is just no longer the
+ * identity.
  */
 function conversationField(page: Page) {
-  return page.locator("div.touch-none");
+  return page.locator("[data-conversation-field]");
 }
 
 /**
@@ -338,26 +340,31 @@ test.describe("Memory viz (v0.10)", () => {
     });
   });
 
-  test.describe("timeline view", () => {
-    const timelineUrl = /\/en.*view=timeline/;
-    const chatUrl = /\/en\/?(\?|$)/;
+  // The app is ONE LADDER at four zooms — conversation → slice → day → week —
+  // and the floating lens is the only control that moves along it. This block
+  // used to test a `chat | timeline` VIEW switch owned by a header pill; both
+  // the pill and the view param are gone (`src/lib/chat/deep-link.ts` explains
+  // why), so the tests now drive the lens and assert on `?z=`.
+  test.describe("the rung ladder", () => {
+    /** The floating zoom lens. Its segments are named by rung. */
+    const lens = (page: Page) => page.getByRole("group", { name: "Lens" });
+    const lensButton = (page: Page, rung: string) =>
+      lens(page).getByRole("button", { name: rung });
 
-    // The first timeline view hit compiles the three.js chunk in dev — allow
+    // The first card-rung hit compiles the three.js chunk in dev — allow
     // triple the default timeout.
-    test("direct URL renders the timeline view in the shell", async ({ page }) => {
+    test("a deep link renders the rung it names", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
 
-      const res = await page.goto("/en?view=timeline");
+      const res = await page.goto("/en?z=slice");
       expect(res?.status()).toBe(200);
-      // The header switcher shows the timeline segment active.
-      await expect(
-        page
-          .getByRole("group", { name: "Switch view" })
-          .getByRole("button", { name: "Timeline" }),
-      ).toHaveAttribute("aria-pressed", "true");
+      await expect(lensButton(page, "Slice")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
 
-      // The card field IS the data view.
+      // The card field IS the data view at a card rung.
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
@@ -367,62 +374,58 @@ test.describe("Memory viz (v0.10)", () => {
       });
     });
 
-    test("mode switcher toggles the timeline view over the live chat page", async ({
+    test("the lens moves along the ladder over the live conversation", async ({
       page,
     }) => {
       test.slow();
       await seedSlices(datasetA());
 
+      // `/` opens on the conversation — the finest rung — which is where the
+      // app has always opened.
       await page.goto("/en");
-      await expect(
-        page
-          .getByRole("group", { name: "Switch view" })
-          .getByRole("button", { name: "Chat" }),
-      ).toHaveAttribute("aria-pressed", "true");
+      await expect(lensButton(page, "Conversation")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       // Hydration gate before clicking (the onClick attaches on mount) — the
       // client badge only renders after its mount-time fetch resolved.
       await expect(
         page.getByRole("button", { name: "Local", exact: true }),
       ).toBeVisible();
 
-      // Capture the chat stream root element handle so we can prove it survives.
+      // Capture the conversation field's root so we can prove it survives.
       const stream = conversationField(page);
       const streamHandle = await stream.elementHandle();
       expect(streamHandle).toBeTruthy();
 
-      // Soft navigation → the URL gains ?view=timeline while the chat page
-      // stays mounted underneath.
-      await page
-        .getByRole("group", { name: "Switch view" })
-        .getByRole("button", { name: "Timeline" })
-        .click();
-      await expect(page).toHaveURL(timelineUrl);
-      // The chat input survives under the timeline pane (chat 常驻, §6.1).
+      await lensButton(page, "Slice").click();
+      await expect(page).toHaveURL(/z=slice/);
+      // The composer is still attached under the card field: it collapses to a
+      // button rather than unmounting (see `composer-host.tsx`).
       await expect(page.locator("textarea")).toBeAttached();
 
-      // The timeline renders the same stack list as the direct URL.
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
 
-      // The chat stream is the same DOM node as before (still mounted).
+      // The conversation field is the same DOM node as before (still mounted).
       const isSameNode = await page.evaluate(
-        (prev) => prev === document.querySelector("div.touch-none"),
+        (prev) => prev === document.querySelector("[data-conversation-field]"),
         streamHandle,
       );
       expect(isSameNode).toBe(true);
 
-      // Switching back to Chat drops the view param and restores the chat.
-      await page
-        .getByRole("group", { name: "Switch view" })
-        .getByRole("button", { name: "Chat" })
-        .click();
-      await expect(page).toHaveURL(chatUrl);
+      // Back to the conversation: the default rung is written as NO param, so
+      // the URL goes clean rather than carrying `?z=conversation`.
+      await lensButton(page, "Conversation").click();
+      await expect(page).not.toHaveURL(/z=/);
       await expect(page.locator("textarea")).toBeAttached();
       await expect(stream).toBeVisible();
     });
 
-    test("Cmd/Ctrl+. toggles between the two view modes", async ({ page }) => {
+    test("Cmd/Ctrl+. toggles the conversation against the last card rung", async ({
+      page,
+    }) => {
       test.slow();
       await seedSlices(datasetA());
 
@@ -436,18 +439,17 @@ test.describe("Memory viz (v0.10)", () => {
       // press-until-navigated instead of firing once into a dead window.
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).toHaveURL(timelineUrl, { timeout: 3_000 });
+        await expect(page).toHaveURL(/z=/, { timeout: 3_000 });
       }).toPass();
-      // Wait for the scene to actually render before toggling back: a
-      // router.push issued while the timeline navigation is still in flight
-      // is silently dropped (observed in the full-suite run), swallowing the
-      // return toggle. Gate on the stack list being up.
+      // Wait for the scene to actually render before toggling back: a rung
+      // change issued while the card field is still mounting is dropped,
+      // swallowing the return toggle. Gate on the stack list being up.
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).toHaveURL(chatUrl, { timeout: 3_000 });
+        await expect(page).not.toHaveURL(/z=/, { timeout: 3_000 });
       }).toPass();
     });
   });

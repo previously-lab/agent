@@ -69,6 +69,7 @@ import {
   unitAtPx,
   visibleRangeFor,
 } from "@/lib/timeline3d/field-offsets";
+import { offsetFor } from "@/lib/timeline3d/field-feed";
 import {
   layoutFor,
   layoutForRows,
@@ -82,6 +83,7 @@ import {
   type UnitMetrics,
 } from "@/lib/timeline3d/units";
 import { boundaryBetween } from "@/lib/timeline3d/boundary";
+import { useTier } from "@/hooks/use-tier";
 import {
   armedGate,
   gateBands,
@@ -383,11 +385,28 @@ function FieldScene({
   }
   prevRangeFirstKeyRef.current = rows[rangeRef.current[0]]?.key ?? null;
 
+  /** The last seek this field acted on — see `SeekRequest.gen`. */
+  const seekGenRef = useRef(-1);
+
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
     const max = Math.max(0, layout.total - size.height);
     rigNow.target = THREE.MathUtils.clamp(rigNow.target, 0, max);
+
+    // A SEEK from the band. Consumed by `gen`, so a request is acted on once
+    // however many frames it stays published. While the pointer is down the
+    // field goes exactly where it was told — a scrubber that eases toward the
+    // finger is a scrubber that lags it — and the release needs no special
+    // case, because the last drag frame already left `target` and `current` in
+    // the same place.
+    const seek = feed?.seek;
+    if (seek && seek.gen !== seekGenRef.current) {
+      seekGenRef.current = seek.gen;
+      const to = offsetFor(seek.progress, 0, max);
+      rigNow.target = to;
+      if (seek.dragging) rigNow.current = to;
+    }
 
     if (reducedMotion) {
       rigNow.current = rigNow.target;
@@ -442,6 +461,10 @@ function FieldScene({
           y: centerPy / h,
           strands: rows[i].strands,
           span: faceH / h,
+          // Identity, so the band can NAME where a scrub is heading rather
+          // than reporting a fraction. Straight off the row — see `FieldAnchor`.
+          date: rows[i].top.date,
+          focus: rows[i].top.focus,
         });
         if (list.length >= 24) break;
       }
@@ -485,21 +508,29 @@ function FieldScene({
         : null;
     }
 
-    // Scroll-driven camera drift: translate the camera slightly, then TURN it
-    // back onto the card column (lookAt x=0) so the z=0 faces stay horizontally
-    // centered while sheets at different depths shift by different amounts
-    // (real parallax). A pure translation (lookAt(cx,cy,0)) would keep the axis
-    // parallel to z and drag the whole card plane sideways — don't do that.
-    // The offsets are authored against the old fixed camera and scaled by
-    // `worldScaleFor`, so the turn stays the same ANGLE (atan(0.42/9) = 2.67°)
-    // and the parallax it produces is the same at every viewport height.
+    // Scroll-driven camera drift, VERTICAL ONLY.
+    //
+    // There used to be a horizontal term too: `cx = (p - 0.5) * 2 * 0.42 *
+    // worldScale`, paired with `lookAt(0, cy, 0)`. That pair keeps the card
+    // column centred — which is why it looked right on paper — but the only way
+    // to be centred on x=0 from x=cx is to TURN, and a perspective camera that
+    // has turned by atan(0.42/9) = 2.67° renders a face-on rectangle as a
+    // trapezoid: the card's left and right edges sit at different depths, so
+    // the card is drawn very slightly crooked. Measured, that is ~2% of scale
+    // across a 900px card — about 20px of keystone, and unmistakably "the card
+    // is leaning" rather than "the field has depth".
+    //
+    // The vertical term is free by comparison: the camera sits at y=cy and
+    // looks at y=cy, so there is no pitch and no distortion — it simply moves
+    // what is on screen, which is the whole point of a drift. So the drift
+    // stays and the turn goes. Depth in this field comes from the sheets' own
+    // poses (`sheetPose`), which is where it was always drawn from anyway.
     const camZ = camZFor(size.height);
     const worldScale = worldScaleFor(size.height);
     if (!reducedMotion) {
       const p = feed.progress; // 0..1 (0 = oldest/top, 1 = newest/bottom)
-      const cx = (p - 0.5) * 2 * 0.42 * worldScale; // ±0.42 old world units
       const cy = (p - 0.5) * 2 * 0.14 * worldScale; // ±0.14 old world units
-      camera.position.set(cx, cy, camZ);
+      camera.position.set(0, cy, camZ);
       camera.lookAt(0, cy, 0);
     } else {
       camera.position.set(0, 0, camZ);
@@ -725,9 +756,15 @@ export function CardField({
   }, []);
 
   const rows = useMemo(() => groupForLevel(entries, level), [entries, level]);
+  // The tier decides the card's COMPOSITION; `frameGeometryFor` still decides
+  // its size from the pane's measured box. Keeping the two apart is what stops
+  // a phone from getting a desktop card scaled down — the composition is where
+  // "too small to read" is actually fixed, not the dimensions.
+  const { spec } = useTier();
+  const variant = spec.cardVariant;
   const geo = useMemo(
-    () => frameGeometryFor(fieldSize.w || 1280, fieldSize.h || 800),
-    [fieldSize],
+    () => frameGeometryFor(variant, fieldSize.w || 1280, fieldSize.h || 800),
+    [variant, fieldSize],
   );
   // THE ONE OFFSET TABLE. Every consumer — the scene's placement, the scroll
   // transitions, the fill pass, the deep-link landing — reads this one, because
@@ -1186,6 +1223,65 @@ export function CardField({
     };
   }, [zoomBy]);
 
+  // ── Keyboard: the field had NO keyboard scroll at all before this ────────
+  // Wheel, one-finger drag and pinch were the only ways to move, so a reader
+  // without a pointer could not travel the timeline at all — they could only
+  // Tab between the cards that happened to be mounted, which is the one
+  // grouping of this content that cannot be reached by any other means. The
+  // steps mirror what a scroll container does: a line for the arrows, a
+  // viewport for Page, and the ends for Home/End.
+  //
+  // Bound as a React prop rather than through `addEventListener` in an effect.
+  // The imperative version had a real bug: this component renders a DIFFERENT
+  // tree (with no wrapper, so `wrapRef.current` is null) until the catalog
+  // arrives, so the effect attached nothing on its first run — and its deps
+  // (`layout.total`, the measured height) did not change afterwards, so it
+  // never got a second chance. The handler was never bound and the keys went
+  // nowhere, silently. A prop has no attach order to get wrong.
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Never steal a key from a control inside the field — the cards are
+      // buttons and the strand filter has a real input.
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target !== e.currentTarget &&
+        target.closest("input, textarea, button, a, [contenteditable]")
+      ) {
+        return;
+      }
+      const viewH = e.currentTarget.clientHeight || fieldSize.h;
+      const max = Math.max(0, layout.total - viewH);
+      const page = Math.max(120, viewH * 0.9);
+      let next: number;
+      switch (e.key) {
+        case "ArrowDown":
+          next = rig.current.target + 120;
+          break;
+        case "ArrowUp":
+          next = rig.current.target - 120;
+          break;
+        case "PageDown":
+          next = rig.current.target + page;
+          break;
+        case "PageUp":
+          next = rig.current.target - page;
+          break;
+        case "Home":
+          next = 0;
+          break;
+        case "End":
+          next = max;
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      rig.current.target = THREE.MathUtils.clamp(next, 0, max);
+    },
+    [layout.total, fieldSize.h],
+  );
+
   if (entries.length === 0) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-background px-6 text-center text-sm text-muted-foreground">
@@ -1198,7 +1294,15 @@ export function CardField({
     <div
       ref={wrapRef}
       data-card-field
-      className="relative h-full w-full"
+      // Focusable so the arrow/Page/Home/End handler above has somewhere to
+      // listen. `tabIndex={0}` on a scrollable region is the standard advice
+      // and it is what this is: the cards inside are reachable by Tab either
+      // way, but the SPACE between them is only reachable from here.
+      tabIndex={0}
+      role="group"
+      aria-label={t("fieldLabel")}
+      onKeyDown={onKeyDown}
+      className="relative h-full w-full outline-none"
       style={{ touchAction: "none" }}
     >
       <Canvas

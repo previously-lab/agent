@@ -20,7 +20,6 @@ import {
   AtmosphereVignette,
   TIMELINE_KEYFRAMES,
 } from "./atmosphere";
-import { LensSwitcher } from "./lens-switcher";
 import dynamic from "next/dynamic";
 
 const CardField = dynamic(
@@ -61,7 +60,13 @@ function NowTail() {
   return (
     <>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
-      <div className="pointer-events-none absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
+      {/* LEFT-ALIGNED, not centred. This marks the field's bottom edge, and the
+          bottom centre now belongs to the collapsed composer — a round button
+          that sits exactly where this caption used to. Two things claiming the
+          same spot, one of them a label that does nothing, is how a label comes
+          to look like a broken button; the reader who hit this reported exactly
+          that. The caption keeps its bottom edge and gives up its centre. */}
+      <div className="pointer-events-none absolute bottom-3 left-4 flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-muted-foreground sm:left-6">
         <span
           aria-hidden
           className="inline-block size-1.5 rounded-[1px]"
@@ -109,12 +114,11 @@ export function TimelineScene({
         />
         {/* NOW tail marker — the field's bottom is the present. */}
         <NowTail />
-        {/* Floating zoom-lens control (Conversation / Slice / Day / Week). */}
-        <LensSwitcher
-          rung={rung}
-          onSelect={onRungChange}
-          reducedMotion={reducedMotion}
-        />
+        {/* The zoom lens is NOT here any more. It is the app's only navigation
+            control, so it belongs to the shell (`app-shell.tsx`) where it is
+            mounted at every rung — inside this scene it vanished on the
+            conversation rung, which is precisely where a reader needs it to
+            get back to the cards. */}
       </div>
 
       <AtmosphereVignette />

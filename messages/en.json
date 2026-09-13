@@ -309,7 +309,15 @@
       "now": "Now"
     }
   },
+  "composer": {
+    "hint": "Say something…",
+    "open": "Write a message"
+  },
   "timeline3d": {
+    "fieldLabel": "Timeline field — arrow keys or Page Up/Down to move through time",
+    "scrubLabel": "Timeline position",
+    "jumpTop": "Jump to the oldest",
+    "jumpBottom": "Jump to now",
     "fallback": {
       "loading": "Loading timeline…",
       "empty": "No memory slices yet — start a conversation first."

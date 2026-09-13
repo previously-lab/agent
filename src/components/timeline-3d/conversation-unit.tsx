@@ -40,7 +40,7 @@ import { useLocale, useMessages } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { UnitBoundary } from "@/lib/timeline3d/boundary";
 import type { GateSignal } from "@/lib/chat/field-blocks";
-import { CONVERSATION_COLUMN_PX } from "@/lib/chat/field-blocks";
+import { useTier } from "@/hooks/use-tier";
 import { settleEase } from "@/lib/timeline3d/stacks";
 import { SliceConversation } from "@/components/field/slice-conversation";
 import {
@@ -89,6 +89,11 @@ export function ConversationUnit({
   const size = useThree((s) => s.size);
   const locale = useLocale();
   const messages = useMessages();
+  // The SAME column the conversation field lays its blocks out at — same
+  // function, same input, so the two cannot disagree. `<Html transform>` with
+  // `distanceFactor={400}` is 1:1 at z=0 (see `camera.ts`), so this width is a
+  // screen width here too, and a slice read at one rung matches the other.
+  const { column } = useTier();
 
   // The unit plays the same deal the cards do — it is the same transition seen
   // one rung down, and a rung change where half the units fly and the other
@@ -151,7 +156,7 @@ export function ConversationUnit({
         // slice the reader can select text in must win any overlap with the
         // cards scrolled past above it.
         zIndexRange={[30, 21]}
-        style={{ width: CONVERSATION_COLUMN_PX, pointerEvents: "auto" }}
+        style={{ width: column, pointerEvents: "auto" }}
       >
         <SliceConversation
           entry={entry}

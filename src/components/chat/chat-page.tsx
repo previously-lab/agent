@@ -6,6 +6,8 @@ import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObjec
 import { useSearchParams } from "next/navigation";
 import type { UIMessage } from "ai";
 import { ChatInput } from "./chat-input";
+import { ComposerHost } from "./composer-host";
+import type { FieldRung } from "@/lib/timeline3d/units";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
 import { UnifiedChatStream } from "./unified-chat-stream";
@@ -42,22 +44,32 @@ import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { setTurnBusy } from "./turn-busy";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
-import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/mode-switch";
+import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/deep-link";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import { setViewportSlice } from "@/lib/chat/viewport-slice";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
 interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
    *  chat starts on the real value instead of flashing defaults. */
   initialConfig?: UserConfig;
-  /** When true the `?at=` search param is ignored. Used by the shell when the
-   *  timeline view is active, because the timeline handles the deep-link anchor. */
+  /** When true the `?at=` search param is ignored. Used by the shell while a
+   *  card rung is up, because the card field handles the deep-link anchor. */
   suppressAtJump?: boolean;
+  /** The zoom rung. This page draws the CONVERSATION rung; at any other rung
+   *  the card field is on top and this page's content is dimmed out of the way
+   *  — except for its composer, which collapses to a button and stays live, so
+   *  a reader looking at the cards can still say something. */
+  rung?: FieldRung;
+  /** Ask the shell for a rung — the composer uses it to return to the
+   *  conversation on send, which is where the reply will actually appear. */
+  onRungChange?: (rung: FieldRung) => void;
+  /** A turn finished and its slice is on disk. The shell refreshes the card
+   *  field's catalog; see the effect in `Inner`. */
+  onTurnSettled?: () => void;
   /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
   feed?: FieldFeed;
-  /** True only while the chat view OWNS the band (`!showTimeline`). Both fields
-   *  are mounted at once while the timeline is open, and two writers on one
+  /** True only while the chat view OWNS the band (the conversation rung). Both
+   *  fields are mounted at once while a card rung is up, and two writers on one
    *  feed is what the feed exists to prevent. */
   publishing?: boolean;
 }
@@ -72,6 +84,9 @@ interface MountVerdict extends ArrivalDecision {
 export function ChatPage({
   initialConfig,
   suppressAtJump,
+  rung = "conversation",
+  onRungChange,
+  onTurnSettled,
   feed,
   publishing,
 }: ChatPageProps) {
@@ -99,6 +114,9 @@ export function ChatPage({
     <Inner
       initialConfig={initialConfig}
       suppressAtJump={suppressAtJump}
+      rung={rung}
+      onRungChange={onRungChange}
+      onTurnSettled={onTurnSettled}
       feed={feed}
       publishing={publishing}
       persona={verdict.persona}
@@ -285,6 +303,9 @@ export function sliceStartIndex(
 function Inner({
   initialConfig,
   suppressAtJump,
+  rung,
+  onRungChange,
+  onTurnSettled,
   feed,
   publishing,
   persona,
@@ -294,9 +315,14 @@ function Inner({
 }: {
   initialConfig?: UserConfig;
   suppressAtJump?: boolean;
+  /** The zoom rung, and the way to ask for another — see ChatPageProps. */
+  rung: FieldRung;
+  onRungChange?: (rung: FieldRung) => void;
+  /** A turn settled — see ChatPageProps. */
+  onTurnSettled?: () => void;
   /** The shared band feed — see ChatPageProps. */
   feed?: FieldFeed;
-  /** True only while the chat view owns the band — see ChatPageProps. */
+  /** True only while the conversation rung owns the band — see ChatPageProps. */
   publishing?: boolean;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
@@ -556,6 +582,24 @@ function Inner({
 
   const isStreaming = status === "streaming";
   const isLoading = status === "submitted" || isStreaming;
+
+  /**
+   * A turn just SETTLED — the stream is done and the slice is now persisted.
+   *
+   * This is the moment the card field needs to know about: its rows come from
+   * the catalog, and the catalog is fetched once, so a slice written by the
+   * turn that just finished is invisible to the cards until something asks
+   * again. Nothing else in the app re-fetches it, which means a reader who
+   * finished a conversation at the `week` rung would not find it there.
+   *
+   * Keyed on the falling edge only. `isLoading` is true for the whole stream,
+   * so firing on the value would re-fetch on every token.
+   */
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading) onTurnSettled?.();
+    wasLoadingRef.current = isLoading;
+  }, [isLoading, onTurnSettled]);
 
   // Publish the in-flight state so the header can disable the settings entry
   // mid-turn (engine/model changes must not land while a call is running).
@@ -904,20 +948,38 @@ function Inner({
     void handleSelectSlice(at, atStart ?? undefined);
   }, [searchParams, handleSelectSlice, suppressAtJump]);
 
-  // Publish the slice at the top of the viewport — the header mode switcher
-  // reads it to build `/?view=timeline&at=…` (chat → timeline context carry).
-  useEffect(() => () => setViewportSlice(null), []);
-  const handleTopItemChange = useCallback(
-    (iso: string, sliceId: string | null) => {
-      topTimeRef.current = iso;
-      setViewportSlice(sliceId);
-    },
-    [],
-  );
+  // The slice at the top of the viewport. It used to be PUBLISHED here, into a
+  // module global the header's mode switcher read to build
+  // `/?view=timeline&at=…` — carrying the reading position across the view
+  // switch. That switch is gone (the rung replaced it, and the lens does not
+  // carry a position), so the publication went with it. The TIME half stays:
+  // the travel clock reads `topTimeRef` for the "from" end of its interval.
+  const handleTopItemChange = useCallback((iso: string, _sliceId: string | null) => {
+    topTimeRef.current = iso;
+  }, []);
 
   // The "PREVIOUSLY ON" eyebrow over the travel readout — same brand mark as
   // the empty briefing's title card.
   const tBrief = useTranslations("emptyBriefing");
+
+  const onConversationRung = rung === "conversation";
+
+  /**
+   * Sending comes HOME first. At a card rung the composer is collapsed, and a
+   * reader who sends from there is answered at the conversation rung — so the
+   * submit switches rung and then runs the normal path. Doing it in that order
+   * means the field is already mounted and following the live edge when the
+   * first token arrives, instead of the reply streaming into a pane nobody is
+   * looking at.
+   */
+  // Not memoized, deliberately: `handleSubmit` is not either (it closes over
+  // the whole turn state), so a `useCallback` here would either recreate on
+  // every render anyway or need a ref to hide that — machinery for a prop that
+  // is not memoized on the other end either.
+  const submitFromAnyRung = (...args: Parameters<typeof handleSubmit>) => {
+    if (!onConversationRung) onRungChange?.("conversation");
+    return handleSubmit(...args);
+  };
 
   return (
     <>
@@ -931,7 +993,17 @@ function Inner({
            (md:p-4) at ~52px — the pills overlap the stream at EVERY width
            (they are equally broken on desktop), so the clearance is shared
            rather than mobile-gated. pt-12/pt-16 leave an 8-12px gap. ── */}
-      <div className="relative flex-1 overflow-hidden pt-12 md:pt-16">
+      <div
+        className={`relative flex-1 overflow-hidden pt-12 md:pt-16 transition-opacity duration-300 ${
+          onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        // Dimmed-and-mounted, not unmounted: this subtree holds the field's
+        // camera position and the live stream, and a rung change must not
+        // rebuild either. `inert` is what makes "hidden" mean hidden — the
+        // content is off the focus order and out of the accessibility tree,
+        // which `opacity-0` alone does not do.
+        inert={!onConversationRung || undefined}
+      >
         {emptyMemory ? (
           <div className="h-full overflow-y-auto pb-24">
             <EmptyBriefing
@@ -1042,10 +1114,11 @@ function Inner({
            tracks the same CSS column as the stream (same max-width scale and
            padding), so the composer's edges sit on the content's edges at
            every width. ── */}
-      <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
-        <div className="mx-auto w-full max-w-5xl xl:max-w-7xl px-3 sm:px-6 lg:px-8">
+      <ComposerHost
+        rung={rung}
+        composer={
           <ChatInput
-            onSubmit={handleSubmit}
+            onSubmit={submitFromAnyRung}
             isLoading={isLoading}
             onStop={handleStop}
             persona={persona}
@@ -1053,8 +1126,8 @@ function Inner({
             currentModelId={selectedModel}
             onModelChange={handleModelChange}
           />
-        </div>
-      </div>
+        }
+      />
     </>
   );
 }

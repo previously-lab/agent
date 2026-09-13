@@ -27,11 +27,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import { DEFAULT_LEVEL } from "@/lib/timeline3d/stacks";
-import {
-  rungForStackLevel,
-  type FieldRung,
-} from "@/lib/timeline3d/units";
+import type { FieldRung } from "@/lib/timeline3d/units";
 import {
   createFieldFeed,
   type FieldFeed,
@@ -42,9 +38,14 @@ import {
   getTimelineCatalogPage,
   type StrandListItem,
 } from "@/lib/episodic/actions";
-import { modeFromSearch, parseAtParam } from "@/lib/chat/mode-switch";
+import {
+  DEFAULT_RUNG,
+  parseAtParam,
+  parseRungParam,
+} from "@/lib/chat/deep-link";
 import { ChatPage } from "@/components/chat/chat-page";
 import { AxisBand } from "@/components/timeline-3d/axis-band";
+import { LensSwitcher } from "@/components/timeline-3d/lens-switcher";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
 
@@ -57,7 +58,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawSearch = searchParams.toString();
-  const view = modeFromSearch(rawSearch);
+  // THE RUNG IS THE ONLY NAVIGATION. There used to be a view mode beside it
+  // (`?view=timeline` = cards, absent = chat) and the two were the same axis at
+  // different resolutions — see `deep-link.ts`. `?z=` names the rung; a deep
+  // link with `?at=` still lands on the slice rung, because a reader arriving
+  // at a named slice wants the field one step coarser than the conversation.
+  const rungParam = parseRungParam(rawSearch);
   const at = parseAtParam(rawSearch);
   const reducedMotion = useReducedMotion() ?? false;
 
@@ -73,12 +79,58 @@ export function AppShell({ initialConfig }: AppShellProps) {
   feedRef.current ??= createFieldFeed();
   const feed = feedRef.current;
   /** The zoom rung, owned here so the floating lens switcher reads the same
-   *  value CardField transitions through. A deep link (`?at=`) lands on the
-   *  slice rung — one step coarser than the conversation, which is where a
-   *  reader arriving at a named slice wants the field to open. */
-  const [rung, setRung] = useState<FieldRung>(
-    at ? "slice" : rungForStackLevel(DEFAULT_LEVEL),
-  );
+   *  value CardField transitions through. Seeded from `?z=` when the URL names
+   *  one, and otherwise from `DEFAULT_RUNG` — the CONVERSATION, so a bare `/`
+   *  opens on the live conversation exactly as it always has. (The card field's
+   *  own default is `day`; that is the right default for someone who asked for
+   *  the timeline and the wrong one for someone who just opened the app.)
+   *
+   *  `?at=` DELIBERATELY DOES NOT PICK A RUNG. It used to force `slice`, and
+   *  that was a porting slip: the rule was written when `?view=` still chose
+   *  which pane was up, so "the slice rung" then meant "open the timeline
+   *  field at this slice". With the view gone, `?at=` means what its only
+   *  remaining callers mean by it — a slice JUMP, which the conversation
+   *  performs (`openSlice`, the search palette). Forcing `slice` opened the
+   *  card field on top of the jump and the conversation never happened; the
+   *  e2e caught it. `?z=slice&at=…` still asks for the card rung at a slice. */
+  const [rung, setRung] = useState<FieldRung>(rungParam ?? DEFAULT_RUNG);
+
+  // The rung lives in the URL so a refresh or a share keeps the zoom — the view
+  // param used to be the only thing that survived, which meant the one piece of
+  // state the reader actually manipulates was the one that did not. Written with
+  // `replaceState`, not a router push: the rung changes on every wheel-zoom, and
+  // a history entry per notch would make Back useless.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (rung === DEFAULT_RUNG) params.delete("z");
+    else params.set("z", rung);
+    const q = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${q ? `?${q}` : ""}`,
+    );
+  }, [rung]);
+
+  // `Cmd/Ctrl+.` — the shortcut the deleted mode switcher owned. Kept because
+  // it is the fastest round trip between the cards and the conversation, and it
+  // now does something better than a fixed jump: it returns you to the card
+  // rung you were last on, so it is a toggle rather than a reset.
+  const lastCardRungRef = useRef<FieldRung>("slice");
+  useEffect(() => {
+    if (rung !== "conversation") lastCardRungRef.current = rung;
+  }, [rung]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== ".") return;
+      e.preventDefault();
+      setRung((r) =>
+        r === "conversation" ? lastCardRungRef.current : "conversation",
+      );
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   /** The strand picks, in the order they were added. An EMPTY list is 核心时间线
    *  — the unfiltered timeline — which is why this is a list and not a nullable
    *  name: "nothing selected" is a real state, not the absence of one. */
@@ -132,11 +184,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
     };
   }, [strandList.length]);
 
-  // ── Lazy catalog load on first timeline view (or a deep link that starts
-  //    there). Mirrors the old /timeline page: `?at=` loads the full catalog;
-  //    otherwise loads the latest month window. ─────────────────────────────
+  // ── Lazy catalog load on the first CARD rung (or a deep link that starts on
+  //    one). `?at=` loads the full catalog so the linked slice is always
+  //    resolvable; otherwise loads the latest month window. ──────────────────
   useEffect(() => {
-    if (view !== "timeline" || timelineReady) return;
+    if (rung === "conversation" || timelineReady) return;
     let cancelled = false;
     (async () => {
       try {
@@ -156,13 +208,43 @@ export function AppShell({ initialConfig }: AppShellProps) {
         setTimelineReady(true);
       } catch {
         // A failed boot load leaves the fallback in place; the user can retry
-        // by toggling the view.
+        // by zooming out to a card rung again.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [view, at, timelineReady]);
+  }, [rung, at, timelineReady]);
+
+  /**
+   * Re-read the newest catalog page after a turn settles, and APPEND.
+   *
+   * Appending is the whole trick, and it is not an optimisation. `rows` is
+   * `groupForLevel(entries, level)`, so replacing `entries` reorders the
+   * reader's list under them; and `buildOffsets` recomputes every `tops[i]`,
+   * so a head that moves invalidates the one offset table everything
+   * positional reads. A new slice is always the NEWEST — `groupForLevel` sorts
+   * by `start` — so it can only ever land at the tail, where nothing above it
+   * moves. Returning `prev` BY IDENTITY when there is nothing new is the other
+   * half: React bails out, `rows` never recomputes, and a settle with no new
+   * slice costs one no-op render.
+   */
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const page = await getTimelineCatalogPage(null);
+      setEntries((prev) => {
+        const have = new Set(prev.map((e) => e.id));
+        const newest = prev.at(-1)?.start ?? "";
+        const fresh = page.entries
+          .filter((e) => !have.has(e.id) && e.start > newest)
+          .sort((a, b) => a.start.localeCompare(b.start));
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+    } catch {
+      // A failed refresh is silent: the slice is on disk and the next settle,
+      // or the next mount, finds it. Retrying here would fight the turn.
+    }
+  }, []);
 
   const loadOlder = useCallback(async () => {
     if (!hasMore || loadingRef.current || !oldestMonth) return;
@@ -201,33 +283,32 @@ export function AppShell({ initialConfig }: AppShellProps) {
     [router],
   );
 
-  // ── THE SHELL IS STILL TWO VIEWS, AND THAT IS THE NEXT THING TO GO ────────
-  // `ChatPage` and `TimelineScene` are both mounted here, one dimmed behind the
-  // other, and `?view=` picks which. They are the same thing at two
-  // granularities — a conversation block is one slice plus its closing gate
-  // (`field-blocks.ts`), and an L0 card row is one slice (`stacks.ts`) — so the
-  // target is ONE field whose zoom picks the component each unit wears, with
-  // the conversation as its finest rung and the slice/day/week cards above it.
+  // ── ONE LADDER, TWO RENDERERS ─────────────────────────────────────────────
+  // The rung is the navigation now; there is no view mode beside it. The
+  // CONVERSATION rung is drawn by the chat's own field and the three card rungs
+  // by the card field, because the two have genuinely different jobs rather
+  // than two settings of one thing:
   //
-  // The ground for that is already laid and should not be re-laid:
-  //   - `src/lib/timeline3d/field-offsets.ts` is the ONE running offset table
-  //     (`buildOffsets` carries a measured height, a formula, or both).
-  //   - `gateBands` in `src/lib/chat/field-blocks.ts` builds the boundary
-  //     bands for any unit list, so the conversation's intertitle can render at
-  //     the card rungs too.
-  //   - The camera is the last piece: `card-field.tsx` still runs at
-  //     `CAM_Z = 9` with `worldPerPxForField`, while the conversation field is
-  //     orthographic at 1 world unit = 1 CSS px. Derive `CAM_Z` from the
-  //     viewport height (`H / (2·tan(fov/2))`) and the two coordinate systems
-  //     become the same one — `wpp ≡ 1`. SET `near`/`far` WHEN YOU DO: R3F's
-  //     default `far = 1000` clips the whole field once the camera distance is
-  //     derived that way (it is 1.87·H, so any viewport over ~536 px tall).
-  const showTimeline = view === "timeline";
+  //   - the conversation rung must show the turn that is being written RIGHT
+  //     NOW, which lives only in `useChat`'s messages — the card field's rows
+  //     come from the persisted catalog (`groupForLevel(entries)`) and have no
+  //     path to it. Giving it one means threading a streaming array through
+  //     props or a store, which is the re-render storm `card-field.tsx:30-36`
+  //     documents.
+  //   - the card rungs must show the pile, the deal and the rung transitions,
+  //     which the conversation field has no concept of.
+  //
+  // So: one LADDER the reader navigates, two RENDERERS behind it. The camera
+  // unification the previous note here described (derive `CAM_Z` from the
+  // viewport so both fields share one coordinate system) is still true and
+  // still worth doing — but it is a rendering change, not a navigation one, and
+  // it is not what stood between the reader and a single ladder.
+  const showCardField = rung !== "conversation";
   /** THE OWNERSHIP RULE, in one line. Exactly one pane publishes to the band at
-   *  a time: the timeline while it is open, the chat otherwise. The other field
-   *  is still mounted and still animating — it simply writes nothing, which is
-   *  why this is a lease rather than a merge. */
-  const panePublishes = showTimeline;
+   *  a time: the card field while a card rung is up, the chat otherwise. The
+   *  other field is still mounted and still animating — it simply writes
+   *  nothing, which is why this is a lease rather than a merge. */
+  const panePublishes = showCardField;
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -239,7 +320,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
           timeline, the chat stream's slice seams in chat, so the braid winds
           at whatever the user is actually looking at. */}
       <AxisBand
-        showChrome={showTimeline}
+        showChrome={showCardField}
         range={range}
         feed={feed}
         strands={strands}
@@ -253,21 +334,25 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
-        <div
-          className={`absolute inset-0 flex flex-col transition-opacity duration-300 ${
-            showTimeline ? "opacity-30 pointer-events-none" : "opacity-100"
-          }`}
-        >
+        {/* NOT dimmed as a whole. The composer lives inside `ChatPage`, and at
+            a card rung the reader still needs to be able to send a message —
+            the collapsed form of the composer is the whole point of it. So
+            `ChatPage` dims its own CONTENT region and leaves the composer
+            alone; dimming the pane here would take the send button with it. */}
+        <div className="absolute inset-0 flex flex-col">
           <ChatPage
             initialConfig={initialConfig}
-            suppressAtJump={showTimeline}
+            suppressAtJump={showCardField}
+            rung={rung}
+            onRungChange={setRung}
+            onTurnSettled={refreshCatalog}
             feed={feed}
             publishing={!panePublishes}
           />
         </div>
 
         <AnimatePresence>
-          {showTimeline && (
+          {showCardField && (
             <motion.div
               key="timeline"
               initial={{ opacity: 0, x: 24 }}
@@ -317,6 +402,19 @@ export function AppShell({ initialConfig }: AppShellProps) {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* THE ZOOM LENS — the only navigation control the app has now, so it
+            is mounted with the SHELL rather than with the card field. It used
+            to live inside `TimelineScene`, which meant the control that would
+            get you back to the conversation disappeared at exactly the moment
+            you were on the conversation. Rendered last so it stacks above the
+            field and above the card faces (which pin their own portals at
+            z-index 21-30 — see `row-group`'s `zIndexRange`). */}
+        <LensSwitcher
+          rung={rung}
+          onSelect={setRung}
+          reducedMotion={reducedMotion}
+        />
       </div>
     </div>
   );

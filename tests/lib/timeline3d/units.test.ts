@@ -126,7 +126,7 @@ describe("layoutFor", () => {
 
 describe("unitMetricsFor", () => {
   // A representative desktop field: 1280×800 → a landscape dossier card.
-  const geo = frameGeometryFor(1280, 800);
+  const geo = frameGeometryFor("dossier", 1280, 800);
 
   it("keys the grouping off the rung, not off a fourth StackLevel", () => {
     const empty = new Map<string, number>();
@@ -176,7 +176,7 @@ describe("unitMetricsFor", () => {
 });
 
 describe("layoutForRows", () => {
-  const geo = frameGeometryFor(1280, 800);
+  const geo = frameGeometryFor("dossier", 1280, 800);
 
   function row(key: string): StackRow {
     return {

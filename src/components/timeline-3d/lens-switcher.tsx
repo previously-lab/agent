@@ -76,7 +76,16 @@ export function LensSwitcher({
     // z-40: the card faces are drei Html overlays pinned at z-index 21–30
     // (row-group/leaving-card zIndexRange) — the pill must stack above every
     // card, yet still below the floating header islands (z-50).
-    <div className="pointer-events-none absolute right-3 bottom-16 z-40 flex items-center gap-2 sm:right-5 sm:bottom-20">
+    // Below `sm` the hint stacks ABOVE the pill instead of beside it, and wraps
+    // inside 68vw. Beside it, `whitespace-nowrap` made the pair wider than a
+    // 320px screen — measured at [-16..146] against a 320px viewport, i.e. the
+    // hint's own left edge off the glass. Stacked, the hint has the full width
+    // to wrap into and the row is never wider than the pill itself.
+    // `bottom-24` on the narrow end, not `bottom-16`: the collapsed composer
+    // is a fixed 48px button centred at the bottom, and at 64px the two controls
+    // overlapped in a corner on a 390px screen. Raising the lens on the phone
+    // clears it without moving the composer off the thumb.
+    <div className="pointer-events-none absolute right-3 bottom-24 z-40 flex flex-col items-end gap-2 sm:right-5 sm:bottom-20 sm:flex-row sm:items-center">
       <AnimatePresence>
         {hintOpen && (
           <motion.div
@@ -86,7 +95,7 @@ export function LensSwitcher({
             transition={
               reducedMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }
             }
-            className={`${ISLAND} px-3 py-1.5 text-[11px] whitespace-nowrap text-muted-foreground`}
+            className={`${ISLAND} max-w-[68vw] px-3 py-1.5 text-center text-[11px] text-muted-foreground sm:max-w-none sm:whitespace-nowrap`}
           >
             {coarse ? t("hintTouch") : t("hintDesktop")}
           </motion.div>

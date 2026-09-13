@@ -21,10 +21,11 @@
  * overlays that need horizontal room — the strand filter chip and the
  * selection caption. See `AxisBandProps`.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { useTheme } from "@teispace/next-themes";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
+import { ArrowDownToLine, ArrowUpToLine } from "lucide-react";
+import { useTier } from "@/hooks/use-tier";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import type { RulerRange } from "@/lib/timeline3d/ruler-math";
@@ -209,6 +210,222 @@ function CrossingDot({ feed }: { feed: FieldFeed }) {
   );
 }
 
+/**
+ * ScrubLens — the strip as a CONTROL rather than a readout.
+ *
+ * WHY HERE AND NOT A SCROLLBAR. The field has never had one: its position is a
+ * number it owns and every input (wheel, one-finger drag, pinch, the lens
+ * buttons) moves it by a delta. So a reader who wants a specific day has no way
+ * to say so — they scrub blind until it goes past. The band is already the map
+ * of that space: it knows `feed.progress`, it draws the NOW dot and the
+ * crossing mark, and it is the only thing on screen that spans the whole
+ * memory. A separate scrollbar would be a second coordinate system beside a
+ * first one; this makes the one already drawn grabbable.
+ *
+ * PRESS AND DRAG, OR TAP. Both are the same gesture here — `pointerdown` seeks
+ * immediately, so a tap lands where it was aimed without a drag.
+ *
+ * THE THUMB AND THE READOUT ARE WRITTEN IMPERATIVELY, from one rAF, for the
+ * same reason `CrossingDot` is: a pointermove fires faster than a frame and a
+ * React state update per move would re-render the band, the strand filter and
+ * two canvases' worth of props to move a 16px pill. The loop runs only while
+ * the pointer is down.
+ *
+ * THE READOUT NAMES THE LANDING, and it is read off `feed.anchors` AFTER the
+ * field has acted on the seek — never interpolated from `progress`. Progress
+ * is a fraction of PIXELS SCROLLED, and a conversation unit is thousands of
+ * pixels while a card is hundreds, so progress is nowhere near linear in time.
+ * A date interpolated from it would be confidently wrong; the anchor carries
+ * the date the catalog actually holds.
+ */
+function ScrubLens({
+  feed,
+  bandRef,
+  locale,
+}: {
+  feed: FieldFeed;
+  bandRef: React.RefObject<HTMLDivElement | null>;
+  locale: string;
+}) {
+  const t = useTranslations("timeline3d");
+  const genRef = useRef(0);
+  const draggingRef = useRef(false);
+  const thumbYRef = useRef(0);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const readoutRef = useRef<HTMLDivElement>(null);
+  const lastTextRef = useRef<string | null>(null);
+
+  const fmt = useMemo(
+    () => new Intl.DateTimeFormat(locale, { month: "long", day: "numeric" }),
+    [locale],
+  );
+
+  /** Publish a seek at a progress. The ONE writer of `feed.seek`, shared by the
+   *  drag and the jump buttons — see `SeekRequest` for why the band owns it. */
+  const publish = useCallback(
+    (progress: number, dragging: boolean) => {
+      genRef.current += 1;
+      feed.seek = {
+        progress: progress < 0 ? 0 : progress > 1 ? 1 : progress,
+        gen: genRef.current,
+        dragging,
+      };
+    },
+    [feed],
+  );
+
+  const seek = useCallback(
+    (clientY: number, dragging: boolean) => {
+      const el = bandRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      if (r.height <= 0) return;
+      thumbYRef.current = clientY - r.top;
+      publish((clientY - r.top) / r.height, dragging);
+    },
+    [bandRef, publish],
+  );
+
+  useEffect(() => {
+    let raf = 0;
+    let shown = false;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const thumb = thumbRef.current;
+      if (!thumb) return;
+      const on = draggingRef.current;
+      if (on !== shown) {
+        shown = on;
+        thumb.style.opacity = on ? "1" : "0";
+        if (!on && readoutRef.current) readoutRef.current.style.opacity = "0";
+        if (!on) lastTextRef.current = null;
+      }
+      if (!on) return;
+
+      thumb.style.transform = `translate(-50%, -50%) translateY(${thumbYRef.current}px)`;
+
+      // Nearest anchor to the thumb, in the band's own pixel space.
+      const h = bandRef.current?.clientHeight ?? 0;
+      let best: FieldAnchor | null = null;
+      let bestD = Infinity;
+      for (const a of feed.anchors) {
+        const d = Math.abs(a.y * h - thumbYRef.current);
+        if (d < bestD) {
+          bestD = d;
+          best = a;
+        }
+      }
+      const readout = readoutRef.current;
+      if (!readout) return;
+      const text = best?.date
+        ? `${fmt.format(new Date(`${best.date}T12:00:00`))}${
+            best.focus ? ` · ${best.focus}` : ""
+          }`
+        : "";
+      if (text !== lastTextRef.current) {
+        lastTextRef.current = text;
+        readout.textContent = text;
+      }
+      readout.style.opacity = text ? "1" : "0";
+      readout.style.transform = `translateY(${thumbYRef.current}px) translateY(-50%)`;
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [feed, bandRef, fmt]);
+
+  const end = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      // One last request with `dragging: false`, so the field knows the finger
+      // is up and can resume its own easing for anything still in flight.
+      seek(e.clientY, false);
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    },
+    [seek],
+  );
+
+  return (
+    <>
+      {/* The pointer surface. Above the two canvases (which set
+          `pointer-events: none` inline) and below the strand-filter chip, which
+          is later in the DOM and therefore wins where they overlap. */}
+      <div
+        data-scrub-surface
+        role="slider"
+        aria-label={t("scrubLabel")}
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        // `cursor-pointer`, NOT a resize cursor. The rail is a scrubber, but
+        // `ns-resize` says "drag to resize a panel" — it promises a kind of
+        // direct manipulation this is not, and reads as a mistake on a surface
+        // whose height does not change. The hand is the honest affordance: this
+        // is a thing you press.
+        className="absolute inset-0 z-0 cursor-pointer touch-none"
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse" && e.button !== 0) return;
+          draggingRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          seek(e.clientY, true);
+        }}
+        onPointerMove={(e) => {
+          if (!draggingRef.current) return;
+          seek(e.clientY, true);
+        }}
+        onPointerUp={end}
+        onPointerCancel={end}
+      />
+      <div
+        ref={thumbRef}
+        data-scrub-thumb
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-0 opacity-0 transition-opacity duration-150"
+      >
+        <span className="block h-0.5 w-5 -translate-x-1/2 rounded-full bg-primary shadow-sm" />
+      </div>
+      <div
+        ref={readoutRef}
+        data-scrub-readout
+        aria-hidden
+        className="pointer-events-none absolute left-full top-0 ml-2 max-w-56 truncate rounded-md bg-background/90 px-2 py-1 font-mono text-[10px] whitespace-nowrap text-foreground opacity-0 ring-1 ring-border/60 backdrop-blur-md transition-opacity duration-150"
+      />
+
+      {/* The two ends, one press away. Dragging is how you AIM; these are how
+          you LEAVE — the far ends of a long memory are the two places a reader
+          most often wants and the two a drag is worst at reaching, because the
+          target zone shrinks to a few pixels as the content grows.
+          They go through the same `publish` the drag does, so they inherit the
+          field's own travel and the band's own readout rather than adding a
+          second way to move the camera. */}
+      <div className="absolute inset-x-0 bottom-3 z-20 flex flex-col items-center gap-1">
+        <button
+          type="button"
+          data-jump="top"
+          aria-label={t("jumpTop")}
+          title={t("jumpTop")}
+          onClick={() => publish(0, false)}
+          className="flex size-6 items-center justify-center rounded-md bg-card/80 text-muted-foreground ring-1 ring-foreground/12 transition-colors hover:text-foreground"
+        >
+          <ArrowUpToLine className="size-3" />
+        </button>
+        <button
+          type="button"
+          data-jump="bottom"
+          aria-label={t("jumpBottom")}
+          title={t("jumpBottom")}
+          onClick={() => publish(1, false)}
+          className="flex size-6 items-center justify-center rounded-md bg-card/80 text-muted-foreground ring-1 ring-foreground/12 transition-colors hover:text-foreground"
+        >
+          <ArrowDownToLine className="size-3" />
+        </button>
+      </div>
+    </>
+  );
+}
+
 export interface AxisBandProps {
   /** Whether the band renders its own overlay chrome — the strand filter chip
    *  and the selection caption. These are timeline-view affordances and they
@@ -255,72 +472,29 @@ export function AxisBand({
   onToggleStrand,
   onClearStrands,
 }: AxisBandProps) {
-  const { resolvedTheme } = useTheme();
-  const dark = resolvedTheme !== "light";
   const t = useTranslations("timeline3d");
+  const locale = useLocale();
 
-  // The drop shadow under the thread bundle only exists on the wide desktop
-  // band; on a slim strip (phone timeline, or the collapsed chat band) the
-  // same blur would smear across the whole width and its clipped right edge
-  // reads as a hard dark seam against the card field. Measure the actual band
-  // width and skip the shadow entirely unless the band is wide.
   const bandRef = useRef<HTMLDivElement>(null);
-  const [bandWide, setBandWide] = useState(false);
-  useEffect(() => {
-    const el = bandRef.current;
-    if (!el) return;
-    const update = () => setBandWide(el.clientWidth >= 90); // md:w-24
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const { spec } = useTier();
 
   return (
     <div
       ref={bandRef}
-      // `ml-1.5` is the gutter between the window edge and the cable. Without
-      // it the braid's outer strands land on x=0 and the band reads as
-      // bleeding off the side of the page rather than sitting on it. The
-      // margin moves the WHOLE strip (canvas included), so the cable keeps its
-      // size — insetting the canvas instead would shrink the radius and pack
-      // the strands tighter, which is the opposite of what the moiré needs.
-      className="relative ml-1.5 w-8 shrink-0"
+      // The rail's margin and width come from the layout tier, not from
+      // Tailwind: `phone` narrows the strip, and a tier value has to reach the
+      // canvas geometry too (see `tiers.ts`). Inline style rather than an
+      // arbitrary `w-[24px]` because the number is dynamic, not authored.
+      //
+      // The MARGIN is the gutter between the window edge and the cable. Without
+      // it the braid's outer strands land on x=0 and the band reads as bleeding
+      // off the side of the page rather than sitting on it. It moves the WHOLE
+      // strip (canvas included), so the cable keeps its size — insetting the
+      // canvas instead would shrink the radius and pack the strands tighter,
+      // which is the opposite of what the moiré needs.
+      className="relative shrink-0"
+      style={{ marginLeft: spec.railMargin, width: spec.railW }}
     >
-      {/* Soft drop shadow behind the 3D thread bundle. Rendered only on the
-          wide desktop band: on a slim strip (phone timeline, or the collapsed
-          chat band) the blurred gradient spans nearly the whole width and
-          smears the weave into one soft blob — the narrow-band look must stay
-          crisp. */}
-      {bandWide && (
-        <div
-          className="pointer-events-none absolute inset-y-0 left-1/2 -z-10 transition-[width,filter,opacity] duration-700 ease-out"
-          style={{
-            width: bandWide
-              ? strands.length > 0
-                ? "34%"
-                : "58%"
-              : strands.length > 0
-                ? "44%"
-                : "60%",
-            maxWidth: bandWide
-              ? strands.length > 0
-                ? 70
-                : 130
-              : strands.length > 0
-                ? 36
-                : 44,
-            transform: bandWide ? "translateX(-38%)" : "translateX(-50%)",
-            background: dark
-              ? "radial-gradient(ellipse 38% 88% at 32% 42%, rgba(0,0,0,0.28), transparent)"
-              : "radial-gradient(ellipse 38% 88% at 32% 42%, rgba(0,0,0,0.16), transparent)",
-            filter: `blur(${
-              bandWide ? (strands.length > 0 ? 16 : 26) : strands.length > 0 ? 9 : 13
-            }px)`,
-            opacity: dark ? (bandWide ? 0.4 : 0.3) : bandWide ? 0.9 : 0.7,
-          }}
-        />
-      )}
       <ThreadlineScene
         strands={ambientStrands}
         selected={strands}
@@ -333,6 +507,7 @@ export function AxisBand({
       {/* Fade-out at the ruler band's edges (bottom weaker so the NOW
           dot stays visible). */}
       <CrossingDot feed={feed} />
+      <ScrubLens feed={feed} bandRef={bandRef} locale={locale} />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-background to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background/60 to-transparent" />
       <div

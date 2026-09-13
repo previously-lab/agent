@@ -22,7 +22,6 @@ import { DemoBadge } from "@/components/layout/demo-badge";
 import { ClientBadge } from "@/components/layout/client-badge";
 import { SettingsLink } from "@/components/layout/settings-link";
 import { SearchPalette } from "@/components/layout/search-palette";
-import { ModeSwitcher } from "@/components/layout/mode-switcher";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
 
 /** Shared frosted-pill shell for every island. */
@@ -47,18 +46,12 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
         <ClientBadge />
       </div>
 
-      {/* CENTER — mode switcher pill. The active segment follows the
-          `?view=timeline` search param. Suspense boundary required because it
-          reads useSearchParams. */}
-      <div className="absolute top-2 left-1/2 -translate-x-1/2 sm:top-3 md:top-4">
-        <div className={`${ISLAND} p-0.5`}>
-          <Suspense
-            fallback={<div className="h-7 w-16 rounded-full bg-muted/40 sm:w-32" />}
-          >
-            <ModeSwitcher />
-          </Suspense>
-        </div>
-      </div>
+      {/* CENTER — deliberately empty. The 「对话 · 时间线」 pill lived here and
+          is gone: it was the coarse half of the same axis the lens switcher
+          already offered (`units.ts` — a rung ladder, not two views), so the
+          header now carries only brand and status on the left and actions on
+          the right. The zoom control moved to the shell's floating layer, at
+          the bottom, where a thumb can reach it. */}
 
       {/* RIGHT — actions. Search / settings / docs stay exposed (icon-only on
           small screens); the rest folds into the "···" overflow menu so the

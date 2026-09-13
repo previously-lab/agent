@@ -309,7 +309,15 @@
       "now": "现在"
     }
   },
+  "composer": {
+    "hint": "想说点什么…",
+    "open": "写一条消息"
+  },
   "timeline3d": {
+    "fieldLabel": "时间线画布——方向键或 Page Up/Down 在时间中移动",
+    "scrubLabel": "时间线位置",
+    "jumpTop": "回到最早",
+    "jumpBottom": "回到现在",
     "fallback": {
       "loading": "正在加载时间线…",
       "empty": "还没有记忆时间片——先开始一段对话吧。"

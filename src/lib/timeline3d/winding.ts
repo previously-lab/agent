@@ -97,6 +97,19 @@ export interface FieldAnchor {
    * falls back to the median pitch.
    */
   span?: number;
+  /**
+   * When this slice happened (`YYYY-MM-DD`), and what it was about.
+   *
+   * The band is a MAP, and the scrubber turns it into a control — so it has to
+   * be able to say where the reader is about to land. Without these the band
+   * knows a slice's position but not its identity, and a drag could only report
+   * a fraction, which is not a thing anyone wants to read.
+   *
+   * Both are pass-throughs of fields the right pane already holds on its rows;
+   * the band never re-derives or formats them.
+   */
+  date?: string;
+  focus?: string;
 }
 
 /** Every anchor's height, grouped by the strand carried there. */

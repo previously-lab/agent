@@ -47,20 +47,26 @@ import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
 import { useReducedMotion } from "motion/react";
-import { NextIntlClientProvider, useLocale, useMessages } from "next-intl";
+import {
+  NextIntlClientProvider,
+  useLocale,
+  useMessages,
+  useTranslations,
+} from "next-intl";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useTier } from "@/hooks/use-tier";
 import { ErrorBanner } from "./error-banner";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
   clearFeed,
+  offsetFor,
   progressFor,
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
 import {
   armedGate,
-  CONVERSATION_COLUMN_PX,
   FIELD_ORIGIN_PX,
   gateBands,
   groupBlocks,
@@ -80,11 +86,14 @@ import { ChatMessage } from "./chat-message";
 import { ResumeBanner } from "./resume-banner";
 import { EmptyBriefing } from "./empty-briefing";
 
-/** The conversation column's width — and, orthographic camera at zoom 1, its
- *  width in world units. One world unit is one CSS pixel, so the numbers here
- *  are the numbers on screen and the text is never scaled. Shared with the
- *  merged field's finest rung, which draws the same column. */
-const COLUMN_PX = CONVERSATION_COLUMN_PX;
+/*
+ * The column width is no longer a module constant. It is `columnFor(w)` from
+ * `@/lib/layout/tiers`, resolved once per render by `useTier()` and threaded
+ * down as `column` — because it is now viewport-derived and two components
+ * must agree on it (`field-blocks.ts` states why). The orthographic camera is
+ * still at zoom 1, so the number is also its width in world units and the text
+ * is still never scaled; only the number's SOURCE changed.
+ */
 /** How far past the viewport a block stays MOUNTED (never a fetch: paging is
  *  manual). About one screen — the reader should be able to scroll a little in
  *  either direction without a block appearing from nowhere. */
@@ -274,6 +283,10 @@ interface SceneProps {
   blocks: Block[];
   liveItems: ChatStreamItem[];
   briefing?: ConversationFieldProps["briefing"];
+  /** The reading column, px — `columnFor(w)` resolved by `useTier()` above the
+   *  canvas and threaded down. It is also the column's width in world units
+   *  (orthographic, zoom 1), which is why it is one number and not two. */
+  column: number;
   /** The reader is at the window's head, so the head announces itself. */
   hasOrigin: boolean;
   oldestIso: string;
@@ -310,6 +323,7 @@ function FieldScene({
   blocks,
   liveItems,
   briefing,
+  column,
   hasOrigin,
   oldestIso,
   hasMore,
@@ -422,10 +436,19 @@ function FieldScene({
     for (const i of next) {
       const start = offsets[i] ?? 0;
       const h = (offsets[i + 1] ?? start + FALLBACK_BLOCK_PX) - start;
+      // A slice id is minted from the clock (`YYYY-MM-DD-HHMM`), so its first
+      // ten characters ARE the date the catalog would report. Guarded rather
+      // than sliced blind: a block whose id is not that shape (the briefing
+      // card's is null) publishes no date rather than a wrong one, and the
+      // band's readout falls back to the fraction.
+      const sid = blocks[i].sliceId;
+      const date =
+        sid && /^\d{4}-\d{2}-\d{2}/.test(sid) ? sid.slice(0, 10) : undefined;
       list.push({
         y: (start + h / 2 - offsetRef.current) / size.height,
         strands: blocks[i].strands,
         span: h / size.height,
+        date,
       });
     }
     feed.anchors = list;
@@ -460,9 +483,9 @@ function FieldScene({
       {hasOrigin && (
         <Html
           key="origin"
-          position={[-COLUMN_PX / 2, FIELD_ORIGIN_PX, 0]}
+          position={[-column / 2, FIELD_ORIGIN_PX, 0]}
           zIndexRange={[10, 0]}
-          style={{ width: COLUMN_PX }}
+          style={{ width: column }}
         >
           {/* The provider is REQUIRED here for the same reason BillboardBlock
               needs one: `<Html>` mounts into a separate React root, so every
@@ -485,9 +508,9 @@ function FieldScene({
           // NOT `transform`: screen-space mode positions the element by
           // projection and leaves it at 1:1, so text is never scaled.
           key={blocks[i].key}
-          position={[-COLUMN_PX / 2, -(offsets[i] ?? 0), 0]}
+          position={[-column / 2, -(offsets[i] ?? 0), 0]}
           zIndexRange={[10, 0]}
-          style={{ width: COLUMN_PX }}
+          style={{ width: column }}
         >
           <BillboardBlock
             blockKey={blocks[i].key}
@@ -515,9 +538,9 @@ function FieldScene({
       {liveItems.length > 0 && (
         <Html
           key="live"
-          position={[-COLUMN_PX / 2, -liveTop, 0]}
+          position={[-column / 2, -liveTop, 0]}
           zIndexRange={[10, 0]}
-          style={{ width: COLUMN_PX }}
+          style={{ width: column }}
         >
           <BillboardBlock
             blockKey="live"
@@ -554,6 +577,8 @@ export function ConversationField({
   const locale = useLocale();
   const isMobile = useIsMobile();
   const reducedMotion = useReducedMotion() ?? false;
+  const { column } = useTier();
+  const tField = useTranslations("timeline3d");
 
   const { history, live } = useMemo(() => splitItems(items), [items]);
   const blocks = useMemo<Block[]>(() => groupBlocks(history), [history]);
@@ -562,6 +587,8 @@ export function ConversationField({
   const minOffset = hasOrigin ? -FIELD_ORIGIN_PX : 0;
   const minOffsetRef = useRef(minOffset);
   minOffsetRef.current = minOffset;
+  /** The last seek this field acted on — see `SeekRequest.gen`. */
+  const seekGenRef = useRef(-1);
 
   const heightsRef = useRef<number[]>([]);
   const offsetsRef = useRef<number[]>([0]);
@@ -827,6 +854,28 @@ export function ConversationField({
     let raf = 0;
     const tick = () => {
       raf = requestAnimationFrame(tick);
+
+      // A SEEK from the band — see `SeekRequest`. Consumed by `gen`, so a
+      // request that stays published across many frames moves the reader once.
+      // Routed through `setTarget`, the ONE way this camera moves, so the
+      // clamping/follow/direction it keeps together cannot be left disagreeing.
+      //
+      // `dragging` skips the ease entirely: while the pointer is down the
+      // camera goes exactly where it was told, because a scrubber that eases
+      // toward the finger is one that lags it. A released seek needs no special
+      // case — the eased follow below carries it the last few px and lands.
+      //
+      // Only the field that OWNS the pane acts on it. The other is mounted
+      // behind this one and must not move.
+      const seek = feed?.seek;
+      if (seek && publishing && seek.gen !== seekGenRef.current) {
+        seekGenRef.current = seek.gen;
+        setTarget(
+          offsetFor(seek.progress, minOffsetRef.current, maxOffsetRef.current),
+        );
+        if (seek.dragging) offsetRef.current = targetRef.current;
+      }
+
       const d = targetRef.current - offsetRef.current;
       if (d !== 0) {
         // Reduced motion snaps: the camera is the scroll position, and an
@@ -866,7 +915,9 @@ export function ConversationField({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [blocks, reducedMotion]);
+    // `feed`/`publishing` are here because this loop is where the band's seek
+    // is consumed; `setTarget` because it is the seam the seek goes through.
+  }, [blocks, reducedMotion, feed, publishing, setTarget]);
 
   const onBlockHeight = useCallback(
     (index: number, h: number) => {
@@ -994,12 +1045,83 @@ export function ConversationField({
   // A slice read is a repository call in production; it should be asked for,
   // not inferred.
 
+  // ── Keyboard: the field had NO keyboard scroll at all before this ────────
+  // Position here is a camera offset with no scroll container behind it, so
+  // there was nothing for the browser to scroll with a key. A reader without a
+  // pointer could reach the cards and the links by Tab and could not travel
+  // between them except by following those links. The steps mirror a scroll
+  // container: a line for the arrows, a viewport for Page, the ends for
+  // Home/End — and here the ends mean the oldest loaded slice and the LIVE
+  // EDGE, which is this field's "now".
+  //
+  // A React prop, not `addEventListener` in an effect: see the note in
+  // `card-field.tsx` — an effect that runs before its element exists binds
+  // nothing and never retries.
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Never steal a key from something typed into or activated inside the
+      // field — the composer is outside this wrapper, but markdown links and
+      // tool cards are not.
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        target !== e.currentTarget &&
+        target.closest("input, textarea, button, a, [contenteditable]")
+      ) {
+        return;
+      }
+      const viewH = viewportHRef.current || e.currentTarget.clientHeight;
+      const max = maxOffsetRef.current;
+      const min = minOffsetRef.current;
+      const page = Math.max(120, viewH * 0.9);
+      let next: number;
+      switch (e.key) {
+        case "ArrowDown":
+          next = targetRef.current + 120;
+          break;
+        case "ArrowUp":
+          next = targetRef.current - 120;
+          break;
+        case "PageDown":
+          next = targetRef.current + page;
+          break;
+        case "PageUp":
+          next = targetRef.current - page;
+          break;
+        case "Home":
+          next = min;
+          break;
+        case "End":
+          next = max;
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      setTarget(next);
+    },
+    [setTarget],
+  );
+
   return (
     // `touch-none` is load-bearing: without it the browser claims the touch
     // gesture for its own panning and no pointermove ever arrives.
     <div
       ref={wrapperRef}
-      className="relative h-full w-full touch-none overflow-hidden"
+      // The stable hook, mirroring `data-card-field`. `touch-none` used to be
+      // the only way to find this element, and that stopped being safe the
+      // moment the time rail's scrub surface also took `touch-none` — the rail
+      // is rendered BEFORE this in the document, so a `div.touch-none` selector
+      // silently started matching the rail instead of the conversation.
+      data-conversation-field
+      // Focusable for the same reason the card field is: the conversation
+      // scrolls in a space with no scroll container, so Tab could reach the
+      // cards and the links but never the space between them.
+      tabIndex={0}
+      role="group"
+      aria-label={tField("fieldLabel")}
+      onKeyDown={onKeyDown}
+      className="relative h-full w-full touch-none overflow-hidden outline-none"
     >
       <Canvas
         orthographic
@@ -1011,6 +1133,7 @@ export function ConversationField({
           blocks={blocks}
           liveItems={live}
           briefing={briefing}
+          column={column}
           hasOrigin={hasOrigin}
           oldestIso={oldestIso}
           hasMore={hasMore !== false}

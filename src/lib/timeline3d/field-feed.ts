@@ -53,6 +53,36 @@ export interface CrossingMark {
  * these are read sixty times a second by three different rAF loops, which is
  * the one place in this app where a re-render per value is not an option.
  */
+/**
+ * A SEEK REQUEST — the band asking the field to jump somewhere.
+ *
+ * This is the ONE thing in the feed that flows the other way, and it is worth
+ * being explicit about why it is not a violation of the one-writer rule above.
+ * The rule exists because `progress` is DERIVED — the field computes it from
+ * its rig every frame, so a second writer would be overwritten and the band
+ * would be lying about where the reader is. A seek is not a claim about where
+ * the reader is; it is an instruction. The band writes the request, the field
+ * reads it, nothing is derived from it, and no value is ever contested.
+ *
+ * It is deliberately NOT `progress` written from the band. Writing `progress`
+ * would be overwritten on the next frame and the band's own scrubber would
+ * spring back under the reader's finger — the failure the one-writer rule was
+ * written to prevent, arrived at from the other direction.
+ */
+export interface SeekRequest {
+  /** 0 = the oldest thing loaded, 1 = now — `progress`'s own scale, inverted
+   *  by `offsetFor`, which is `progressFor` read backwards. */
+  progress: number;
+  /** Monotonic. The field consumes a request by `gen`, so a frame that sees
+   *  the same request twice seeks once — and a re-render that republishes the
+   *  same object does not move the reader a second time. */
+  gen: number;
+  /** True for the frames the pointer is still down: the field tracks the
+   *  finger EXACTLY rather than easing toward it, because a scrubber that
+   *  eases is a scrubber that lags the thing doing the scrubbing. */
+  dragging: boolean;
+}
+
 export interface FieldFeed {
   /** 0 = the oldest thing loaded, 1 = now. */
   progress: number;
@@ -65,6 +95,8 @@ export interface FieldFeed {
   anchors: FieldAnchor[];
   /** Where the announcing boundary sits. */
   crossing: CrossingMark;
+  /** A pending instruction from the band, or null. See `SeekRequest`. */
+  seek: SeekRequest | null;
 }
 
 export function createFieldFeed(): FieldFeed {
@@ -76,7 +108,25 @@ export function createFieldFeed(): FieldFeed {
     level: DEFAULT_LEVEL,
     anchors: [],
     crossing: { y: null },
+    seek: null,
   };
+}
+
+/**
+ * `progressFor` read BACKWARDS — the offset a seek's progress names.
+ *
+ * The two are one equation and belong together: `progressFor` normalises an
+ * offset into 0..1, this denormalises it, and `field-feed.test.ts` asserts they
+ * round-trip. Written as its own function rather than inlined at the call site
+ * so that stays provable.
+ */
+export function offsetFor(
+  progress: number,
+  minOffset: number,
+  maxOffset: number,
+): number {
+  const t = progress < 0 ? 0 : progress > 1 ? 1 : progress;
+  return minOffset + t * (maxOffset - minOffset);
 }
 
 /**

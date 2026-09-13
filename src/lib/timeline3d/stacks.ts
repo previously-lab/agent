@@ -12,6 +12,7 @@
  * (same reading direction as the chat stream; the list bottom-anchors).
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
+import type { CardVariant } from "@/lib/layout/tiers";
 import { hashString } from "./layout";
 
 /** Zoom levels: 0 = slice rows · 1 = day stacks · 2 = week stacks. */
@@ -193,6 +194,19 @@ export interface FrameGeometry {
   cardH: number;
   /** Vertical pitch between row anchors (px). */
   pitch: number;
+  /**
+   * Which composition the card wears — carried on the geometry because the
+   * card and everything measuring it must agree, and the SAME dimensions can
+   * describe either face: the variant is what `frame-card.tsx` reads to pick
+   * its type scale and its ledger length.
+   *
+   * The two are not interchangeable at one size. The dossier's `em` is a
+   * twenty-sixth of its short edge, which is 23px on a desktop card and 12px
+   * on a portrait one — and a card that carries `text-[0.74em]` body rows at
+   * 12px is rendering them at 8.9px. The portrait variant is a SHORTER
+   * DOCUMENT, not a smaller one.
+   */
+  variant: CardVariant;
 }
 
 /** Portrait aspect (W/H) of the frame card for narrow fields. */
@@ -201,25 +215,29 @@ export const FRAME_RATIO = 0.8;
 /** Landscape aspect (W/H) of the frame card for wide desktop fields. */
 export const FRAME_LANDSCAPE_RATIO = 1.5;
 
-export function frameGeometryFor(fieldW: number, fieldH: number): FrameGeometry {
-  // Wide desktop field: a landscape dossier card, ~78% of the field width,
-  // capped at 900px, with its height capped to ~82% of the field height.
-  if (fieldW >= 900) {
+export function frameGeometryFor(
+  variant: CardVariant,
+  fieldW: number,
+  fieldH: number,
+): FrameGeometry {
+  // The dossier: a landscape board, ~78% of the field width, capped at 900px,
+  // with its height capped to ~82% of the field height.
+  if (variant === "dossier") {
     let cardW = Math.round(Math.min(fieldW * 0.78, 900));
     let cardH = Math.round(Math.min(cardW / FRAME_LANDSCAPE_RATIO, fieldH * 0.82));
     if (cardH < 300) {
       cardH = 300;
       cardW = Math.round(cardH * FRAME_LANDSCAPE_RATIO);
     }
-    return { cardW, cardH, pitch: Math.round(cardH * 1.12) };
+    return { cardW, cardH, pitch: Math.round(cardH * 1.12), variant };
   }
 
-  // Narrow field: keep the original portrait frame logic.
+  // The portrait: taller than wide, never wider than the pane it sits in.
   const cardH = Math.round(Math.min(Math.max(fieldH * 0.7, 300), 720));
   const cardW = Math.round(
     Math.min(cardH * FRAME_RATIO, Math.max(fieldW - 40, 240), 600),
   );
-  return { cardW, cardH, pitch: Math.round(cardH * 1.12) };
+  return { cardW, cardH, pitch: Math.round(cardH * 1.12), variant };
 }
 
 /** Row pitch per level: L0 rows leave an 8%-of-card gap; stack levels add

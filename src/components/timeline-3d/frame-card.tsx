@@ -307,7 +307,14 @@ export function FrameCard({
   // Root em scales off the short edge so type stays consistent across the
   // responsive landscape and portrait geometry tiers.
   const landscape = geo.cardW > geo.cardH;
-  const em = Math.min(geo.cardW, geo.cardH) / 26;
+  const portrait = geo.variant === "portrait";
+  // THE DIVISOR IS PER-VARIANT, and that is the whole reason `variant` is on
+  // the geometry. A single 26 sizes the dossier correctly — 900/26 is 23px —
+  // but the portrait's short edge is its WIDTH, so the same divisor gave a
+  // 318px card a 12px em and the `text-[0.74em]` body rows beneath it 8.9px.
+  // The portrait is a SHORTER DOCUMENT (see the ledger below), not a smaller
+  // one, so it spends the room it does not give to rows on its type.
+  const em = Math.min(geo.cardW, geo.cardH) / (portrait ? 17 : 26);
 
   const minutes = durationMin(entry.start, entry.end);
   const stamp = archiveStamp(entry);
@@ -322,10 +329,16 @@ export function FrameCard({
   const previouslyText = previouslyExcerpt(previously);
 
   const ledgerRows: { key: string; value: React.ReactNode }[] = [];
-  if (entry.tone) {
+  // What the portrait drops, and why it is these two: TONE and DECIDED are the
+  // ledger's context rows — useful, and the first thing to go when a card has
+  // room for two rows instead of four. OPEN and STRANDS stay because they are
+  // the card's forward-looking content: what is still unresolved, and what this
+  // slice is woven into. Truncating all four to illegibility is the worse trade;
+  // this is the "adjust what is rendered" half of the responsive brief.
+  if (entry.tone && !portrait) {
     ledgerRows.push({ key: texts.tone, value: entry.tone });
   }
-  if (decided.length > 0) {
+  if (decided.length > 0 && !portrait) {
     ledgerRows.push({
       key: texts.decided,
       value: decided.join(texts.listSeparator),
