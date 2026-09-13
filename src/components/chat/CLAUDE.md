@@ -91,7 +91,9 @@ Two things make that exact, and both are easy to break:
 | `history-turn.tsx` | One historical turn as pure-body bubbles (no tool state) |
 | `resume-banner.tsx` | The "继续 <date> 的对话" banner over a restored live slice. Extracted from the stream component so the field does not depend on it |
 | `stream-time-indicator.tsx` | The transient floating time pill (mobile): top-edge, visible while scrolling, fades ~1s after stop |
-| `rolling-number.tsx` | The odometer rolling-digit family (`useRollingNumber`/`RollingDigit`/`RollingField`/`RollingTime`) — shared by the timeline wheel, the band's year labels and the slice gate, so a time looks the same wherever the product states one |
+| `rolling-number.tsx` | The odometer rolling-digit family (`useRollingNumber`/`RollingDigit`/`RollingField`/`RollingTime`) — the timeline wheel's central readout and the band's year labels |
+| `date-stamp.tsx` | The ANIMATED date and time faces (`DateStamp`/`TimeStamp` + the pure `dateStampParts`/`timeStampParts`): the locale decides the structure, `NumberTicker` springs the parts that are numeric, and the year rolls up from twenty years back. Revived from the retired `DateGroupHeader`/`SliceTimeMarker` — it is what the gate and the window's head render |
+| `relative-time.tsx` | `relativeBetween` (the app's one interval humanizer) and `RelativeStamp` — the "5 天前" / "5 天后" phrase, shared by the travel clock and the gate. A boundary's phrase is anchored to the OTHER SIDE of the boundary; the travel clock's is anchored to now |
 | `mode-switch-gesture.tsx` | The card-style left drag that switches chat → timeline. UNWIRED (swipe mode switch off for now), kept for reuse; pure logic in `src/lib/chat/mode-gesture.ts` |
 | `error-banner.tsx` | The red chat-error banner with expandable full detail |
 | `chat-skeleton.tsx` | The loading faces (`ChatPageSkeleton`, `ChatStreamSkeleton`, `ChatInputSkeleton`), shared with the route-level `loading.tsx` so the handover is invisible |
@@ -107,7 +109,6 @@ Two things make that exact, and both are easy to break:
 | `tool-layout.tsx` | Shared expandable tool card: status icon, name, summary, meta, CSS grid-animated details panel |
 | `tool-renderers/` | Per-tool: `recall.tsx`, `memory-tool.tsx`, `list-files.tsx`, `current-time.tsx`, `web-search.tsx`, `default.tsx` |
 | `time-display.tsx` | The shared time readout (`NumberTicker` per field) |
-| `relative-time.tsx` | The time-travel readout: a big relative label + the actual time as a rolling subtitle. `relativeBetween` (the app's one interval humanizer) lives here |
 | `empty-briefing.tsx` | The arrival briefing in the timeline's slice-card skin. Two seats: `variant="card"` rides the stream's tail; the full-screen form only for an empty, slice-less memory. Takes the resolved `identity` as a prop |
 | `cognition-popover.tsx` | Per-turn agent thoughts dialog (lazy-loaded Markdown) |
 | `loading-tip.tsx` | RETIRED (unused, kept for a content refresh) |
