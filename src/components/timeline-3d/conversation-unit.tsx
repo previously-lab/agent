@@ -62,6 +62,13 @@ export interface ConversationUnitProps {
   /** Arm state for that boundary — see `GateSignal`. */
   signal: GateSignal | undefined;
   rig: React.MutableRefObject<FieldRig>;
+  /** Reduced-motion preference. REQUIRED, and it has to be honoured here for
+   *  the same reason `RowGroup` honours it: the deal is a full-column fly-in,
+   *  and a reader who asked for less motion is the last person who should get
+   *  one. Omitting the guard does not just animate — it leaves `origin.dy`
+   *  applied to every unit for the length of the animation, which is a
+   *  position the reader did not ask for. */
+  reducedMotion: boolean;
   /** The unit's measured face height, reported up to the offset table. This is
    *  the field's ONLY measurement of a conversation unit; everything below it
    *  is placed on the strength of this number. */
@@ -75,6 +82,7 @@ export function ConversationUnit({
   boundary,
   signal,
   rig,
+  reducedMotion,
   onHeight,
 }: ConversationUnitProps) {
   const group = useRef<THREE.Group>(null);
@@ -88,8 +96,11 @@ export function ConversationUnit({
   const animRef = useRef<{ deal: number } | null>(null);
   if (animRef.current === null) {
     const inGenWindow = performance.now() - rig.current.genAt < GEN_WINDOW_MS;
-    const initialDeal =
-      rig.current.dealEligible?.has(entry.id) && inGenWindow ? 0 : 1;
+    const initialDeal = reducedMotion
+      ? 1
+      : rig.current.dealEligible?.has(entry.id) && inGenWindow
+        ? 0
+        : 1;
     animRef.current = { deal: initialDeal };
   }
 
@@ -110,9 +121,9 @@ export function ConversationUnit({
     }
 
     const staggerOrder = Math.min(Math.abs(index - rig.current.anchorIndex), 12);
-    const dealT = settleEase(
-      anim.deal - staggerOrder * (DEAL_STAGGER / DEAL_DURATION),
-    );
+    const dealT = reducedMotion
+      ? 1
+      : settleEase(anim.deal - staggerOrder * (DEAL_STAGGER / DEAL_DURATION));
     const origin = rig.current.dealOrigins?.get(entry.id);
     // Screen-y px IS world-y (camera.ts): one equation, the same one the rows
     // and the conversation field's own camera offset use.

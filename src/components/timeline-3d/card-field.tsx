@@ -574,6 +574,7 @@ function FieldScene({
               boundary={boundary}
               signal={boundary ? signalFor(row.key) : undefined}
               rig={rig}
+              reducedMotion={reducedMotion}
               onHeight={(px) => onUnitHeight(row.key, px)}
             />
           );
@@ -771,6 +772,53 @@ export function CardField({
     }
     prevFirstKeyRef.current = firstKey;
   }
+
+  // ── The camera follows the table when the table moves UNDER it ───────────
+  // A card rung never needs this: `faceHeightOf` is `geo.cardH`, a formula, so
+  // the table is a constant and nothing can move. The turns rung does, because
+  // `faceHeightOf` is a DOM MEASUREMENT that arrives after the unit mounts — so
+  // the column re-lays itself out several times in the seconds after a reader
+  // arrives, and without this the reader's content slides by however much the
+  // units above them changed.
+  //
+  // Why the magnitude is not small: the running carry is seeded from the first
+  // positive height anywhere in the table, so with only a band of units near
+  // the viewport measured, everything ABOVE that band is laid out at the seed's
+  // height and the anchor's top is `anchorIndex x carry`. When the seed moves —
+  // which it does as the mounted set changes — that top moves by
+  // `anchorIndex x delta`. It scales with how far into history the reader is,
+  // which is why it measured 3px on one run and 689px on another.
+  //
+  // WHAT IT DOES: pin the unit at the viewport top. Re-read that unit's start
+  // off the old table, take its start off the new one, and move the camera by
+  // the difference — the same statement `relayout` makes in the conversation
+  // field, which fires on EVERY re-layout for exactly this reason and says so
+  // in as many words. The prepend block above is this mechanism's other half.
+  //
+  // WHAT IT DELIBERATELY IGNORES. A change in the UNIT KEYS is never this: a
+  // rung change, a strand filter and a page all renumber or replace the rows,
+  // and all three position the camera themselves — the first two through
+  // `startTransition`, the third through the prepend shift. Only a change to
+  // the heights of the SAME units in the SAME order is a measurement landing.
+  // `pendingAnchorRef` is the second guard: a landing owns the position
+  // outright until it has been applied, and this effect is declared above the
+  // anchor effect precisely so it cannot see that flag already cleared.
+  const reconcileRef = useRef<{ keys: string; tops: number[] } | null>(null);
+  useEffect(() => {
+    const keys = rows.map((r) => r.key).join("|");
+    const prev = reconcileRef.current;
+    reconcileRef.current = { keys, tops: tops.slice() };
+    if (!prev || prev.keys !== keys) return;
+    if (prev.tops.length !== tops.length) return;
+    if (pendingAnchorRef.current) return;
+    const count = prev.tops.length - 1;
+    const idx = unitAtPx(prev.tops, count, rig.current.current);
+    if (idx < 0) return;
+    const delta = (tops[idx] ?? 0) - (prev.tops[idx] ?? 0);
+    if (delta === 0) return;
+    rig.current.current += delta;
+    rig.current.target += delta;
+  }, [rows, tops]);
 
   const arias = useMemo(() => {
     const map = new Map<string, string>();
