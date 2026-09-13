@@ -117,8 +117,15 @@ export function ConversationUnit({
     // Screen-y px IS world-y (camera.ts): one equation, the same one the rows
     // and the conversation field's own camera offset use.
     const centerPy = centerPx - rig.current.current;
+    // `+`, not `-`, and the sign is the whole gesture. `dy` is
+    // `newCenterPy - oldCenterPy` in SCREEN px, and world-y runs the other way,
+    // so ADDING it at `dealT = 0` lands the unit on its old slot:
+    // `viewportH/2 - newCenter + dy = viewportH/2 - oldCenter`. Subtracting
+    // mirrors it through its final slot instead, which for a rung change —
+    // where `dy` is thousands of px — starts it off screen and reads as a
+    // pop-in rather than a fly-in. `RowGroup` adds; this is the same equation.
     g.position.y =
-      size.height / 2 - centerPy - (1 - dealT) * (origin?.dy ?? 0);
+      size.height / 2 - centerPy + (1 - dealT) * (origin?.dy ?? 0);
   });
 
   return (

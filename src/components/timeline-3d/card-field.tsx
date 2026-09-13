@@ -796,6 +796,11 @@ export function CardField({
   // around units that are no longer on screen.
   useEffect(() => {
     if (!publishing) return;
+    // Relax on ACQUIRE as well as on release — see the note in
+    // `conversation-field.tsx`. A field that mounts but never reaches its frame
+    // loop (an empty catalog renders no canvas) would otherwise leave the band
+    // holding the other pane's winding.
+    clearFeed(feed);
     return () => clearFeed(feed);
   }, [feed, publishing]);
 

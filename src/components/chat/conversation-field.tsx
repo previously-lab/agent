@@ -53,7 +53,11 @@ import { ErrorBanner } from "./error-banner";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import { progressFor, type FieldFeed } from "@/lib/timeline3d/field-feed";
+import {
+  clearFeed,
+  progressFor,
+  type FieldFeed,
+} from "@/lib/timeline3d/field-feed";
 import {
   armedGate,
   CONVERSATION_COLUMN_PX,
@@ -413,6 +417,22 @@ function FieldScene({
     }
     feed.anchors = list;
   });
+
+  // THE LEASE, BOTH WAYS. A field that owns the pane starts from a RELAXED
+  // feed and relaxes it again when it stops owning it (or unmounts) — the
+  // frame loop fills it in from there. Without the clear-on-lose, the band
+  // keeps whatever the outgoing field last published: the reader opens the
+  // timeline and the braid stays wound around the CHAT's slice seams, with the
+  // crossing dot lit on a boundary that is no longer on screen, for the whole
+  // window before the card field has a catalog to publish from. Clearing on
+  // ACQUIRE covers the other end — a field that mounts but never reaches its
+  // frame loop (an empty catalog) leaves the band resting rather than holding
+  // someone else's picture.
+  useEffect(() => {
+    if (!feed || !publishing) return;
+    clearFeed(feed);
+    return () => clearFeed(feed);
+  }, [feed, publishing]);
 
   const offsets = offsetsRef.current;
   const liveTop = offsets[blocks.length] ?? 0;
