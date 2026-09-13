@@ -333,21 +333,22 @@ describe("armedGate", () => {
 
 describe("gateBands", () => {
   /** Two 400px blocks, the first of which closes with a gate. */
-  const units = [{ gate: true }, { gate: false }];
+  const count = 2;
+  const closes = (i: number) => i === 0;
   const tops = [0, 400, 800];
 
   it("puts a gate's band at the TAIL of the unit it closes", () => {
     // Not the head: a gate belongs to the block it closes. Attach it to the
     // next block and the seam arriving with a fresh page lands inside the
     // reader's own block, growing it under them.
-    const bands = gateBands([], units, tops, 320, false);
+    const bands = gateBands([], count, closes, tops, 320, false);
     expect(bands).toEqual([
       { index: 0, top: 400 - SLICE_GATE_PX, height: SLICE_GATE_PX },
     ]);
   });
 
   it("puts the origin band first, above unit 0", () => {
-    const bands = gateBands([], units, tops, 320, true);
+    const bands = gateBands([], count, closes, tops, 320, true);
     expect(bands[0]).toEqual({
       index: ORIGIN_REGION,
       top: -FIELD_ORIGIN_PX,
@@ -357,18 +358,18 @@ describe("gateBands", () => {
   });
 
   it("emits nothing for units with no boundary", () => {
-    const bands = gateBands([], [{ gate: false }], [0, 100], 320, false);
+    const bands = gateBands([], 1, () => false, [0, 100], 320, false);
     expect(bands).toEqual([]);
   });
 
   it("falls back to an extent for units past the end of the table", () => {
     // The frames between a unit list growing and its table being rebuilt.
-    const bands = gateBands([], [{ gate: true }], [0], 320, false);
+    const bands = gateBands([], 1, () => true, [0], 320, false);
     expect(bands[0].top).toBe(320 - SLICE_GATE_PX);
   });
 
   it("never inverts a unit shorter than the gate", () => {
-    const bands = gateBands([], [{ gate: true }], [0, 40], 320, false);
+    const bands = gateBands([], 1, () => true, [0, 40], 320, false);
     expect(bands[0].top).toBe(0);
     expect(bands[0].height).toBe(SLICE_GATE_PX);
   });
@@ -376,7 +377,7 @@ describe("gateBands", () => {
   it("empties the caller's buffer before refilling it", () => {
     // This runs once per frame against a persistent array.
     const buffer: GateBand[] = [{ index: 99, top: 0, height: 0 }];
-    const bands = gateBands(buffer, units, tops, 320, false);
+    const bands = gateBands(buffer, count, closes, tops, 320, false);
     expect(bands).toBe(buffer);
     expect(bands).toHaveLength(1);
   });

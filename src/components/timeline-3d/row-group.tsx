@@ -56,8 +56,9 @@ function recordDealMount(rowKey: string, initialDeal: number) {
 
 function computeRowPosition(
   index: number,
-  pitch: number,
+  topPx: number,
   cardH: number,
+  pileGapForDeal: number,
   rig: FieldRig,
   viewportH: number,
   reducedMotion: boolean,
@@ -71,7 +72,7 @@ function computeRowPosition(
 
   // Screen-y px IS world-y (camera.ts), so the row's centre converts 1:1 — the
   // same equation the conversation field's camera offset uses.
-  const centerPy = index * pitch + cardH / 2 - rig.current;
+  const centerPy = topPx + cardH / 2 - rig.current;
   const yWorld = viewportH / 2 - centerPy;
   const worldScale = worldScaleFor(viewportH);
 
@@ -83,7 +84,14 @@ function computeRowPosition(
     y = yWorld + (1 - dealT) * origin.dy;
     z = (1 - dealT) * origin.dz;
   } else {
-    const dealOffsetY = (1 - dealT) * (rig.anchorIndex - index) * pitch * 0.35;
+    // The deal's lateral fan is measured in ROWS, so it needs a row ADVANCE —
+    // the face plus the pile's own gap. Deliberately not the row's full extent:
+    // the boundary region below a row is not part of the pile.
+    const dealOffsetY =
+      (1 - dealT) *
+      (rig.anchorIndex - index) *
+      (cardH + pileGapForDeal) *
+      0.35;
     y = yWorld + dealOffsetY;
     z = (1 - dealT) * -0.45 * worldScale;
   }
@@ -102,8 +110,14 @@ export interface RowGroupProps {
   row: StackRow;
   index: number;
   geo: FrameGeometry;
-  /** Row pitch (px) for this row's level. */
-  pitch: number;
+  /** The row's TOP edge, in world-y px — read off the field's offset table
+   *  (`layoutFor`) rather than computed from `index * pitch`, because rows are
+   *  no longer a fixed advance apart: each one reserves its own boundary
+   *  region, and a conversation row measures its text. */
+  topPx: number;
+  /** The card-to-card advance minus the face — the room the pile cascades
+   *  into, which the boundary region below the row must not inflate. */
+  pileGap: number;
   rig: React.MutableRefObject<FieldRig>;
   reducedMotion: boolean;
   flash: boolean;
@@ -116,7 +130,8 @@ export function RowGroup({
   row,
   index,
   geo,
-  pitch,
+  topPx,
+  pileGap,
   rig,
   reducedMotion,
   flash,
@@ -142,9 +157,9 @@ export function RowGroup({
   // frame (the pile must READ), but never let the deepest sheet's peek
   // overflow the row gap.
   const scale = useMemo(() => {
-    const maxPeek = (pitch - geo.cardH) * 0.75;
+    const maxPeek = pileGap * 0.75;
     return Math.min(poseScaleFor(geo) * 1.6, maxPeek / 40);
-  }, [geo, pitch]);
+  }, [geo, pileGap]);
   // A pile's second layer is a REAL card too (its own slice, full content) —
   // it takes the first cascade slot, the shell sheets make up the rest.
   const second = row.level > 0 ? row.entries[1] : undefined;
@@ -163,15 +178,25 @@ export function RowGroup({
     () =>
       computeRowPosition(
         index,
-        pitch,
+        topPx,
         geo.cardH,
+        pileGap,
         rig.current,
         size.height,
         reducedMotion,
         animRef.current!,
         row.key,
       ).toArray(),
-    [index, pitch, geo.cardH, rig, size.height, reducedMotion, row.key],
+    [
+      index,
+      topPx,
+      geo.cardH,
+      pileGap,
+      rig,
+      size.height,
+      reducedMotion,
+      row.key,
+    ],
   );
 
   useFrame((_, rawDt) => {
@@ -195,8 +220,9 @@ export function RowGroup({
 
     const p = computeRowPosition(
       index,
-      pitch,
+      topPx,
       geo.cardH,
+      pileGap,
       rig.current,
       size.height,
       reducedMotion,

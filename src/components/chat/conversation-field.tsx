@@ -370,7 +370,8 @@ function FieldScene({
     // tail — see `gateBands`, which owns the rule.
     const bands = gateBands(
       bandsRef.current,
-      blocks,
+      blocks.length,
+      (i) => blocks[i].gate,
       offsets,
       FALLBACK_BLOCK_PX,
       hasOrigin,

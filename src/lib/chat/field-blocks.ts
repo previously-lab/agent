@@ -254,7 +254,8 @@ export interface GateBand {
  */
 export function gateBands(
   out: GateBand[],
-  units: readonly { gate: boolean }[],
+  count: number,
+  closesBoundaryOf: (index: number) => boolean,
   tops: readonly number[],
   fallbackExtent: number,
   hasOrigin: boolean,
@@ -267,8 +268,13 @@ export function gateBands(
       height: FIELD_ORIGIN_PX,
     });
   }
-  for (let i = 0; i < units.length; i++) {
-    if (!units[i].gate) continue;
+  for (let i = 0; i < count; i++) {
+    // Whether a unit closes a boundary is the CALLER's rule, not a property of
+    // the unit: the conversation's blocks carry the answer (`groupBlocks` sets
+    // `gate` from where a seam landed), while a card row closes one simply by
+    // not being the last. Taking a predicate keeps both honest instead of
+    // making one of them fake a field it does not have.
+    if (!closesBoundaryOf(i)) continue;
     const start = tops[i] ?? 0;
     const height = (tops[i + 1] ?? start + fallbackExtent) - start;
     out.push({

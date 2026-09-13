@@ -64,9 +64,22 @@ import {
   clipPlanesFor,
   worldScaleFor,
 } from "@/lib/timeline3d/camera";
+import {
+  anchorScrollFor,
+  visibleRangeFor,
+} from "@/lib/timeline3d/field-offsets";
+import { layoutFor } from "@/lib/timeline3d/units";
+import { boundaryBetween } from "@/lib/timeline3d/boundary";
+import {
+  armedGate,
+  gateBands,
+  type GateBand,
+  type GateSignal,
+} from "@/lib/chat/field-blocks";
 import type { CrossingMark } from "@/components/chat/conversation-field";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
+import { BoundaryRow } from "./boundary-row";
 import { LeavingCard } from "./leaving-card";
 import type { DealOrigin, FieldRig, LeavingItem } from "./field-rig";
 
@@ -133,38 +146,51 @@ function findOldSlot(
   return null;
 }
 
+/** The offset table for a row list at a level. Rows no longer advance by a
+ *  fixed amount — every row but the last reserves a boundary region after its
+ *  face — so nothing may compute a position as `index * pitch` any more. */
+function layoutForRows(
+  rows: StackRow[],
+  level: StackLevel,
+  geo: FrameGeometry,
+) {
+  return layoutFor(
+    rows.length,
+    () => geo.cardH,
+    (i) => i < rows.length - 1,
+    framePitchFor(level, geo),
+  );
+}
+
 /** Scroll offset that centers `anchorIdx` in the field, clamped to content. */
 function centeredScrollForAnchor(
+  tops: readonly number[],
   anchorIdx: number,
-  rowCount: number,
-  pitch: number,
   cardH: number,
   fieldH: number,
 ): number {
-  const max = Math.max(0, rowCount * pitch - fieldH);
-  return THREE.MathUtils.clamp(
-    anchorIdx * pitch + cardH / 2 - fieldH / 2,
-    0,
-    max,
-  );
+  const max = Math.max(0, (tops[tops.length - 1] ?? 0) - fieldH);
+  return anchorScrollFor(tops, anchorIdx, cardH, fieldH / 2, 0, max);
 }
 
 /** Row keys visible (including virtual-scroll margin) at a given scroll. */
 function visibleKeysFor(
+  tops: readonly number[],
   rows: StackRow[],
   pitch: number,
   cardH: number,
   fieldH: number,
   scrollPx: number,
 ): Set<string> {
-  const margin = cardH * 1.2;
-  const first = Math.max(0, Math.floor((scrollPx - margin) / pitch));
-  const last = Math.min(
-    rows.length - 1,
-    Math.ceil((scrollPx + fieldH + margin) / pitch),
-  );
   const set = new Set<string>();
-  for (let i = first; i <= last; i++) {
+  for (const i of visibleRangeFor(
+    tops,
+    rows.length,
+    scrollPx,
+    fieldH,
+    cardH * 1.2,
+    pitch,
+  )) {
     if (rows[i]) set.add(rows[i].key);
   }
   return set;
@@ -174,18 +200,31 @@ function visibleKeysFor(
  *  Only cards in the old visible window participate. */
 function buildLeaving(
   fromRows: StackRow[],
+  fromTops: readonly number[],
   fromScroll: number,
   fromPitch: number,
   fromCardH: number,
   toRows: StackRow[],
   fieldH: number,
 ): LeavingItem[] {
-  const margin = fromCardH * 1.2;
-  const first = Math.max(0, Math.floor((fromScroll - margin) / fromPitch));
-  const last = Math.min(
-    fromRows.length - 1,
-    Math.ceil((fromScroll + fieldH + margin) / fromPitch),
+  // Only cards in the old VISIBLE window participate, by the shared rule.
+  const first = visibleRangeFor(
+    fromTops,
+    fromRows.length,
+    fromScroll,
+    fieldH,
+    fromCardH * 1.2,
+    fromPitch,
+  )[0] ?? 0;
+  const lastRange = visibleRangeFor(
+    fromTops,
+    fromRows.length,
+    fromScroll,
+    fieldH,
+    fromCardH * 1.2,
+    fromPitch,
   );
+  const last = lastRange[lastRange.length - 1] ?? -1;
   const newTops = new Set(toRows.map((r) => r.top.id));
   const toRowById = new Map<string, { key: string; depth: number }>();
   for (const row of toRows) {
@@ -197,7 +236,7 @@ function buildLeaving(
   for (let i = first; i <= last; i++) {
     const row = fromRows[i];
     if (!row) continue;
-    const fromYpx = i * fromPitch + fromCardH / 2 - fromScroll;
+    const fromYpx = (fromTops[i] ?? 0) + fromCardH / 2 - fromScroll;
     for (const entry of row.entries) {
       if (newTops.has(entry.id)) continue;
       const target = toRowById.get(entry.id);
@@ -256,6 +295,26 @@ function FieldScene({
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
   const pitch = framePitchFor(level, geo);
+  /** The card-to-card advance minus the face — the room the PILE cascades
+   *  into. Deliberately NOT the row's full extent: the boundary region below
+   *  each row is a new kind of space, and letting the sheets spread into it
+   *  would make the pile read bigger than it does today as a side effect of
+   *  adding the boundary. */
+  const pileGap = pitch - geo.cardH;
+
+  // WHERE EVERY ROW SITS, boundary included (v0.13). The card rungs used
+  // `index * pitch`; they now share the running offset table with the
+  // conversation rung, which is what lets one field carry both — a card row
+  // declares its height (`geo.cardH`, a formula), a conversation row measures
+  // its text, and `layoutFor` is the only place that difference is known.
+  //
+  // Every row but the LAST closes a boundary: nothing follows the newest slice
+  // to cross, which is also why the conversation's last block has no gate.
+  const layout = useMemo(
+    () => layoutFor(rows.length, () => geo.cardH, (i) => i < rows.length - 1, pitch),
+    [rows.length, geo.cardH, pitch],
+  );
+  const tops = layout.tops;
 
   // The clip planes follow the viewport, because the camera DISTANCE does
   // (`camera.ts`): at `camZ = 1.87·viewH` R3F's default `far = 1000` is nearer
@@ -271,6 +330,23 @@ function FieldScene({
   }, [camera, size.height]);
 
   const prevTopRef = useRef<number | null>(null);
+  // The boundary mechanism's per-frame scratch: the band list is refilled in
+  // place, the arm signals are MUTABLE OBJECTS kept per row (each gate is its
+  // own React root, so arming must not travel as a prop), and `dirRef` is the
+  // direction the reader is travelling — which decides which side of a
+  // boundary speaks. All three are the conversation field's arrangement.
+  const bandsRef = useRef<GateBand[]>([]);
+  const signalsRef = useRef(new Map<string, GateSignal>());
+  const signalFor = useCallback((key: string): GateSignal => {
+    let signal = signalsRef.current.get(key);
+    if (!signal) {
+      signal = { armed: false, dir: "past" };
+      signalsRef.current.set(key, signal);
+    }
+    return signal;
+  }, []);
+  const dirRef = useRef<"past" | "future">("past");
+  const lastScrollRef = useRef(0);
   // The visible range is STATE (drives which RowGroups mount), mirrored in a
   // ref so the frame loop can compare without a stale closure. Reading a ref
   // during render would leave stale rows mounted after a level change when no
@@ -304,7 +380,7 @@ function FieldScene({
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
-    const max = Math.max(0, rows.length * pitch - size.height);
+    const max = Math.max(0, layout.total - size.height);
     rigNow.target = THREE.MathUtils.clamp(rigNow.target, 0, max);
 
     if (reducedMotion) {
@@ -340,7 +416,7 @@ function FieldScene({
       const scroll = rigNow.current;
       const list: FieldAnchor[] = [];
       for (let i = 0; i < rows.length; i++) {
-        const centerPy = i * pitch + geo.cardH / 2 - scroll;
+        const centerPy = (tops[i] ?? 0) + geo.cardH / 2 - scroll;
         if (centerPy < -geo.cardH || centerPy > h + geo.cardH) continue;
         // `span` is the row's own height: the band sizes each knot to the
         // content it marks, so the twist spans the card and unwinds in the gap
@@ -360,21 +436,36 @@ function FieldScene({
     // unwinds in — so the mark is the midpoint of a gap rather than a row's
     // own centre. Same rule as the conversation field's gates: the nearest
     // boundary on screen announces, and none does when the reader is mid-row.
+    // ONE ARMED BOUNDARY, the same rule at every rung: each boundary answers
+    // for itself (it speaks only when it is actually in view, so a boundary
+    // nowhere near the reader cannot claim to be crossing), several in view
+    // resolve to the one nearest the middle, and the mark the band draws is
+    // that boundary's own band midpoint.
+    //
+    // This replaces a rule that measured the GAP between rows — a spacing, not
+    // a statement, and a different geometry from the conversation's gate
+    // midpoint. With a real boundary region both rungs mark the same thing.
+    const bands = gateBands(
+      bandsRef.current,
+      rows.length,
+      (i) => i < rows.length - 1,
+      tops,
+      pitch,
+      false, // the card rungs have no window head; the present is at the bottom
+    );
+    const armed = armedGate(bands, rigNow.current, size.height, 0);
+    let armedBand: GateBand | null = null;
+    for (const band of bands) {
+      const isArmed = band.index === armed;
+      if (isArmed) armedBand = band;
+      const signal = signalFor(rows[band.index].key);
+      if (signal.armed !== isArmed) signal.armed = isArmed;
+      if (isArmed && signal.dir !== dirRef.current) signal.dir = dirRef.current;
+    }
     if (crossingRef) {
-      const centre = rigNow.current + size.height / 2;
-      let bestY: number | null = null;
-      let bestDistance = Infinity;
-      for (let i = 0; i < rows.length - 1; i++) {
-        const gapMid =
-          i * pitch + geo.cardH + (pitch - geo.cardH) / 2 - rigNow.current;
-        if (gapMid < 0 || gapMid > size.height) continue;
-        const distance = Math.abs(gapMid - centre);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestY = gapMid / size.height;
-        }
-      }
-      crossingRef.current.y = bestY;
+      crossingRef.current.y = armedBand
+        ? (armedBand.top + armedBand.height / 2 - rigNow.current) / size.height
+        : null;
     }
 
     // Scroll-driven camera drift: translate the camera slightly, then TURN it
@@ -398,16 +489,29 @@ function FieldScene({
       camera.lookAt(0, 0, 0);
     }
 
-    // Visible-range virtualization (React state changes only when it does).
+    // Which way the reader is travelling, for the boundary that speaks. Read
+    // off the eased position rather than the input, so a flick that has not
+    // settled yet does not flip the side mid-crossing.
+    if (rigNow.current !== lastScrollRef.current) {
+      dirRef.current = rigNow.current < lastScrollRef.current ? "past" : "future";
+      lastScrollRef.current = rigNow.current;
+    }
+
+    // Visible-range virtualization (React state changes only when it does) —
+    // the shared rule, so a card row and a conversation block mount by the same
+    // arithmetic. The margin is what keeps a row's measurement from being
+    // thrown away the moment it leaves the viewport.
     const margin = geo.cardH * 1.2;
-    const first = Math.max(
-      0,
-      Math.floor((rigNow.current - margin) / pitch),
+    const nextVisible = visibleRangeFor(
+      tops,
+      rows.length,
+      rigNow.current,
+      size.height,
+      margin,
+      pitch,
     );
-    const last = Math.min(
-      rows.length - 1,
-      Math.ceil((rigNow.current + size.height + margin) / pitch),
-    );
+    const first = nextVisible[0] ?? 0;
+    const last = nextVisible[nextVisible.length - 1] ?? -1;
     if (first !== rangeRef.current[0] || last !== rangeRef.current[1]) {
       rangeRef.current = [first, last];
       setRange([first, last]);
@@ -426,20 +530,38 @@ function FieldScene({
     <>
       {visible.map((row, vi) => {
         const index = first + vi;
+        const topPx = tops[index] ?? 0;
+        // Every row but the last closes a boundary, and the closing row owns
+        // it — the region `layoutFor` reserved after this row's face.
+        const boundary =
+          index < rows.length - 1
+            ? boundaryBetween(row.top, rows[index + 1]?.top)
+            : null;
         return (
-          <RowGroup
-            key={row.key}
-            row={row}
-            index={index}
-            geo={geo}
-            pitch={pitch}
-            rig={rig}
-            reducedMotion={reducedMotion}
-            flash={flashId != null && row.entries.some((e) => e.id === flashId)}
-            onActivate={onActivate}
-            ariaLabel={arias.get(row.key) ?? ""}
-            texts={texts}
-          />
+          <group key={row.key}>
+            <RowGroup
+              row={row}
+              index={index}
+              topPx={topPx}
+              geo={geo}
+              pileGap={pileGap}
+              rig={rig}
+              reducedMotion={reducedMotion}
+              flash={flashId != null && row.entries.some((e) => e.id === flashId)}
+              onActivate={onActivate}
+              ariaLabel={arias.get(row.key) ?? ""}
+              texts={texts}
+            />
+            {boundary && (
+              <BoundaryRow
+                topPx={topPx + geo.cardH}
+                width={geo.cardW}
+                boundary={boundary}
+                signal={signalFor(row.key)}
+                rig={rig}
+              />
+            )}
+          </group>
         );
       })}
       {leaving.map((item) => (
@@ -532,6 +654,14 @@ export function CardField({
     () => frameGeometryFor(fieldSize.w || 1280, fieldSize.h || 800),
     [fieldSize],
   );
+  // The outer component needs the same offset table the scene does: the scroll
+  // transitions (level change, filter change, the initial land, a deep link)
+  // all resolve a row's position, and none of them may do it as
+  // `index * pitch` any more.
+  const tops = useMemo(
+    () => layoutForRows(rows, level, geo).tops,
+    [rows, level, geo],
+  );
 
   // Render-time prepend compensation: shift the scroll rig synchronously so the
   // next frame's RowGroup positions use the corrected offset, avoiding a
@@ -589,6 +719,7 @@ export function CardField({
     genTrackRef.current = { level, genKey };
     rig.current.genAt = performance.now();
     rig.current.dealEligible = visibleKeysFor(
+      tops,
       rows,
       framePitchFor(level, geo),
       geo.cardH,
@@ -626,6 +757,8 @@ export function CardField({
       const toRows = groupForLevel(entries, toLevel);
       const fromPitch = framePitchFor(fromLevel, geo);
       const toPitch = framePitchFor(toLevel, geo);
+      const fromTops = layoutForRows(fromRows, fromLevel, geo).tops;
+      const toTops = layoutForRows(toRows, toLevel, geo).tops;
       const fromCardH = geo.cardH;
       const toCardH = geo.cardH;
       const scroll = rig.current.current;
@@ -638,13 +771,7 @@ export function CardField({
       if (anchorIdx >= 0) rig.current.anchorIndex = anchorIdx;
       const newCurrent =
         anchorIdx >= 0
-          ? centeredScrollForAnchor(
-              anchorIdx,
-              toRows.length,
-              toPitch,
-              toCardH,
-              fieldH,
-            )
+          ? centeredScrollForAnchor(toTops, anchorIdx, toCardH, fieldH)
           : scroll;
       // Pre-apply the post-transition scroll so the first rendered frame
       // already uses the same current that RowGroup will animate toward.
@@ -655,8 +782,8 @@ export function CardField({
         const row = toRows[newIdx];
         const old = findOldSlot(row.top.id, fromRows);
         if (old == null) continue;
-        const newCenterPy = newIdx * toPitch + toCardH / 2 - newCurrent;
-        const oldCenterPy = old.index * fromPitch + fromCardH / 2 - scroll;
+        const newCenterPy = (toTops[newIdx] ?? 0) + toCardH / 2 - newCurrent;
+        const oldCenterPy = (fromTops[old.index] ?? 0) + fromCardH / 2 - scroll;
         dealOrigins.set(row.key, {
           // `dy` is a screen-px distance, already a world distance (camera.ts);
           // `dz` is authored against the old camera and scales with it.
@@ -668,6 +795,7 @@ export function CardField({
       rig.current.dealOrigins = dealOrigins;
       rig.current.genAt = performance.now();
       rig.current.dealEligible = visibleKeysFor(
+        toTops,
         toRows,
         toPitch,
         toCardH,
@@ -677,7 +805,15 @@ export function CardField({
 
       setLeaving(
         fromLevel < toLevel
-          ? buildLeaving(fromRows, scroll, fromPitch, fromCardH, toRows, fieldH)
+          ? buildLeaving(
+              fromRows,
+              fromTops,
+              scroll,
+              fromPitch,
+              fromCardH,
+              toRows,
+              fieldH,
+            )
           : [],
       );
     },
@@ -698,17 +834,12 @@ export function CardField({
       const idx = indexForAnchor(rows, anchorId);
       if (idx >= 0) {
         rig.current.anchorIndex = idx;
-        const pos = centeredScrollForAnchor(
-          idx,
-          rows.length,
-          pitch,
-          geo.cardH,
-          fieldSize.h,
-        );
+        const pos = centeredScrollForAnchor(tops, idx, geo.cardH, fieldSize.h);
         rig.current.target = pos;
         rig.current.current = pos;
         rig.current.genAt = performance.now();
         rig.current.dealEligible = visibleKeysFor(
+          tops,
           rows,
           pitch,
           geo.cardH,
@@ -726,6 +857,7 @@ export function CardField({
       rig.current.current = max;
       rig.current.genAt = performance.now();
       rig.current.dealEligible = visibleKeysFor(
+        tops,
         rows,
         pitch,
         geo.cardH,
@@ -733,7 +865,7 @@ export function CardField({
         max,
       );
     }
-  }, [rows, geo, level, fieldSize.h]);
+  }, [rows, geo, level, fieldSize.h, tops]);
 
   // ── Fill pass: content shorter than the field can never reach the top ──
   useEffect(() => {
