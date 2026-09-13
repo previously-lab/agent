@@ -25,19 +25,20 @@ import {
   type FrameGeometry,
   type StackRow,
 } from "@/lib/timeline3d/stacks";
+import { worldScaleFor } from "@/lib/timeline3d/camera";
 import { FrameCardTexts, frameCardLabel, SliceCardFace } from "./frame-card";
 import type { FieldRig } from "./field-rig";
 
 // ─── Tunables (mirrored from card-field.tsx) ─────────────────────────────────
 
-const SHEET_GAP_WORLD = 0.1; // ~20px equivalent; enough depth for visible parallax
+/** Depth between cascade sheets in world units AUTHORED against the old fixed
+ *  camera; `worldScaleFor` converts it (0.1 there = camZ/9 here), which is what
+ *  keeps the pile's depth cue the same fraction of the card at every viewport
+ *  height. */
+const SHEET_GAP_WORLD = 0.1;
 const DEAL_DURATION = 0.55;
 const DEAL_STAGGER = 0.05;
 const GEN_WINDOW_MS = 650;
-
-/** Fixed camera the scene and world-scale math agree on. */
-const CAM_Z = 9;
-const CAM_FOV = 30;
 
 const rowScratch = new THREE.Vector3();
 
@@ -59,7 +60,6 @@ function computeRowPosition(
   cardH: number,
   rig: FieldRig,
   viewportH: number,
-  wpp: number,
   reducedMotion: boolean,
   anim: { deal: number; lift: number },
   rowKey: string,
@@ -69,8 +69,11 @@ function computeRowPosition(
     ? 1
     : settleEase(anim.deal - staggerOrder * (DEAL_STAGGER / DEAL_DURATION));
 
+  // Screen-y px IS world-y (camera.ts), so the row's centre converts 1:1 — the
+  // same equation the conversation field's camera offset uses.
   const centerPy = index * pitch + cardH / 2 - rig.current;
-  const yWorld = (viewportH / 2 - centerPy) * wpp;
+  const yWorld = viewportH / 2 - centerPy;
+  const worldScale = worldScaleFor(viewportH);
 
   const origin = rig.dealOrigins?.get(rowKey);
   let x = 0;
@@ -80,13 +83,12 @@ function computeRowPosition(
     y = yWorld + (1 - dealT) * origin.dy;
     z = (1 - dealT) * origin.dz;
   } else {
-    const dealOffsetY =
-      (1 - dealT) * (rig.anchorIndex - index) * pitch * 0.35 * wpp;
+    const dealOffsetY = (1 - dealT) * (rig.anchorIndex - index) * pitch * 0.35;
     y = yWorld + dealOffsetY;
-    z = (1 - dealT) * -0.45;
+    z = (1 - dealT) * -0.45 * worldScale;
   }
 
-  z += anim.lift * 0.05;
+  z += anim.lift * 0.05 * worldScale;
   return rowScratch.set(x, y, z);
 }
 
@@ -136,8 +138,6 @@ export function RowGroup({
     recordDealMount(row.key, initialDeal);
   }
 
-  const wpp =
-    (2 * CAM_Z * Math.tan((CAM_FOV * Math.PI) / 360)) / size.height;
   // Cascade scale: authored against a 216px card, amplified for the big
   // frame (the pile must READ), but never let the deepest sheet's peek
   // overflow the row gap.
@@ -167,12 +167,11 @@ export function RowGroup({
         geo.cardH,
         rig.current,
         size.height,
-        wpp,
         reducedMotion,
         animRef.current!,
         row.key,
       ).toArray(),
-    [index, pitch, geo.cardH, rig, size.height, wpp, reducedMotion, row.key],
+    [index, pitch, geo.cardH, rig, size.height, reducedMotion, row.key],
   );
 
   useFrame((_, rawDt) => {
@@ -200,24 +199,25 @@ export function RowGroup({
       geo.cardH,
       rig.current,
       size.height,
-      wpp,
       reducedMotion,
       anim,
       row.key,
     );
     group.position.set(p.x, p.y, p.z);
 
-    // Sheets cascade behind the face; hover spreads the deck a little.
+    // Sheets cascade behind the face; hover spreads the deck a little. The
+    // pose offsets are px (world units now), the gap is an authored depth.
     const spread = 1 + anim.lift * 0.5;
+    const worldScale = worldScaleFor(size.height);
     group.children.forEach((child, ci) => {
       if (ci === 0) return; // child 0 is the face anchor
       const si = ci - 1;
       const pose = poses[si];
       if (!pose) return;
       child.position.set(
-        pose.offsetX * scale * spread * wpp,
-        -pose.offsetY * scale * spread * wpp,
-        -(si + 1) * SHEET_GAP_WORLD * spread,
+        pose.offsetX * scale * spread,
+        -pose.offsetY * scale * spread,
+        -(si + 1) * SHEET_GAP_WORLD * spread * worldScale,
       );
       child.rotation.set(
         -0.07 - si * 0.02,
@@ -233,7 +233,11 @@ export function RowGroup({
       <Html
         transform
         center
-        distanceFactor={400 * wpp}
+        // 400 is drei's 1:1 reference: it renders a portal's DOM px as world
+        // units, projected through a CSS `perspective` of `camZ` — and `camZ`
+        // IS the focal length in px (camera.ts), so the ratio cancels. It was
+        // `400 * wpp` while the camera was fixed; `wpp` is 1 now.
+        distanceFactor={400}
         zIndexRange={[30, 21]}
         style={{ pointerEvents: "auto" }}
       >
@@ -262,7 +266,7 @@ export function RowGroup({
         <Html
           transform
           center
-          distanceFactor={400 * wpp}
+          distanceFactor={400}
           zIndexRange={[20, 11]}
           style={{ pointerEvents: "none" }}
         >
@@ -285,7 +289,7 @@ export function RowGroup({
             key={`${row.key}#s${si}`}
             transform
             center
-            distanceFactor={400 * wpp}
+            distanceFactor={400}
             zIndexRange={[10, 1]}
             style={{ pointerEvents: "none" }}
           >

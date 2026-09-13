@@ -23,14 +23,12 @@ import type { FieldRig, LeavingItem } from "./field-rig";
 
 // ─── Tunables (mirrored from card-field.tsx) ─────────────────────────────────
 
+/** Depth between stacked leaving cards, in px — and a px IS a world unit
+ *  (camera.ts), so it needs no conversion. */
 const SHEET_GAP_PX = 5;
 const DEAL_DURATION = 0.55;
 const LEAVING_STAGGER_S = 0.03;
 const LEAVING_MAX_DEPTH = 12;
-
-/** Fixed camera the scene and world-scale math agree on. */
-const CAM_Z = 9;
-const CAM_FOV = 30;
 
 const leavingScratch = new THREE.Vector3();
 
@@ -41,7 +39,6 @@ function computeLeavingPosition(
   cardH: number,
   rig: FieldRig,
   viewportH: number,
-  wpp: number,
   reducedMotion: boolean,
   anim: { deal: number },
 ): THREE.Vector3 {
@@ -50,22 +47,24 @@ function computeLeavingPosition(
     ? 1
     : settleEase(anim.deal - staggerDepth * (LEAVING_STAGGER_S / DEAL_DURATION));
 
-  const fromYWorld = (viewportH / 2 - item.fromYpx) * wpp;
+  // Screen-y px IS world-y (camera.ts): the source row's px position, the
+  // destination row's centre, and the pile's px jitter all convert 1:1.
+  const fromYWorld = viewportH / 2 - item.fromYpx;
 
   const targetIndex = rowIndexMap.get(item.toRowKey) ?? -1;
   let targetYWorld = fromYWorld;
   if (targetIndex >= 0) {
     const centerPy = targetIndex * pitch + cardH / 2 - rig.current;
-    targetYWorld = (viewportH / 2 - centerPy) * wpp;
+    targetYWorld = viewportH / 2 - centerPy;
   }
 
   const depthSign = item.depth % 2 === 0 ? 1 : -1;
   const depthJitterPx = 1 + (item.depth % 3);
-  const targetYOffset = -item.depth * 1.5 * wpp;
-  const targetXOffset = depthSign * depthJitterPx * wpp;
+  const targetYOffset = -item.depth * 1.5;
+  const targetXOffset = depthSign * depthJitterPx;
 
   const y = fromYWorld + dealT * (targetYWorld + targetYOffset - fromYWorld);
-  const z = -(item.depth + 1) * SHEET_GAP_PX * wpp;
+  const z = -(item.depth + 1) * SHEET_GAP_PX;
 
   return leavingScratch.set(targetXOffset, y, z);
 }
@@ -98,8 +97,6 @@ export function LeavingCard({
     done: reducedMotion,
   });
 
-  const wpp =
-    (2 * CAM_Z * Math.tan((CAM_FOV * Math.PI) / 360)) / size.height;
   const pitch = framePitchFor(level, geo);
 
   // Mount the group at the exact spot the first useFrame will compute so it
@@ -113,20 +110,10 @@ export function LeavingCard({
         geo.cardH,
         rig.current,
         size.height,
-        wpp,
         reducedMotion,
         animRef.current,
       ).toArray(),
-    [
-      item,
-      rowIndexMap,
-      pitch,
-      geo.cardH,
-      rig,
-      size.height,
-      wpp,
-      reducedMotion,
-    ],
+    [item, rowIndexMap, pitch, geo.cardH, rig, size.height, reducedMotion],
   );
 
   useFrame((_, rawDt) => {
@@ -153,7 +140,6 @@ export function LeavingCard({
       geo.cardH,
       rig.current,
       size.height,
-      wpp,
       reducedMotion,
       anim,
     );
@@ -170,7 +156,9 @@ export function LeavingCard({
       <Html
         transform
         center
-        distanceFactor={400 * wpp}
+        // 400 is drei's 1:1 reference (see row-group.tsx) — the camera
+        // distance is the focal length in px, so the ratio cancels.
+        distanceFactor={400}
         zIndexRange={[25, 16]}
         style={{ pointerEvents: "none" }}
       >

@@ -38,6 +38,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -57,6 +58,12 @@ import {
   type StackRow,
 } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import {
+  FIELD_FOV,
+  camZFor,
+  clipPlanesFor,
+  worldScaleFor,
+} from "@/lib/timeline3d/camera";
 import type { CrossingMark } from "@/components/chat/conversation-field";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
@@ -109,15 +116,6 @@ const DEAL_STAGGER = 0.05;
 const GEN_WINDOW_MS = 650;
 /** Stagger for leaving cards stacking into a pile, seconds per depth step. */
 const LEAVING_STAGGER_S = 0.03;
-
-/** Camera that the scene and the world-scale math both agree on. */
-const CAM_Z = 9;
-const CAM_FOV = 30;
-
-/** World units per CSS px for the fixed camera and a given field height. */
-function worldPerPxForField(fieldH: number): number {
-  return (2 * CAM_Z * Math.tan((CAM_FOV * Math.PI) / 360)) / fieldH;
-}
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
 
@@ -258,6 +256,20 @@ function FieldScene({
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
   const pitch = framePitchFor(level, geo);
+
+  // The clip planes follow the viewport, because the camera DISTANCE does
+  // (`camera.ts`): at `camZ = 1.87·viewH` R3F's default `far = 1000` is nearer
+  // than the camera itself on any field taller than ~536 px, which puts the
+  // whole scene outside the frustum. A layout effect, so the projection is
+  // corrected before the frame the size change would be painted in.
+  useLayoutEffect(() => {
+    if (!(camera instanceof THREE.PerspectiveCamera)) return;
+    const { near, far } = clipPlanesFor(size.height);
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }, [camera, size.height]);
+
   const prevTopRef = useRef<number | null>(null);
   // The visible range is STATE (drives which RowGroups mount), mirrored in a
   // ref so the frame loop can compare without a stale closure. Reading a ref
@@ -370,14 +382,19 @@ function FieldScene({
     // centered while sheets at different depths shift by different amounts
     // (real parallax). A pure translation (lookAt(cx,cy,0)) would keep the axis
     // parallel to z and drag the whole card plane sideways — don't do that.
+    // The offsets are authored against the old fixed camera and scaled by
+    // `worldScaleFor`, so the turn stays the same ANGLE (atan(0.42/9) = 2.67°)
+    // and the parallax it produces is the same at every viewport height.
+    const camZ = camZFor(size.height);
+    const worldScale = worldScaleFor(size.height);
     if (!reducedMotion) {
       const p = progressRef.current; // 0..1 (0 = oldest/top, 1 = newest/bottom)
-      const cx = (p - 0.5) * 2 * 0.42; // ±0.42 world units
-      const cy = (p - 0.5) * 2 * 0.14; // ±0.14 world units
-      camera.position.set(cx, cy, CAM_Z);
+      const cx = (p - 0.5) * 2 * 0.42 * worldScale; // ±0.42 old world units
+      const cy = (p - 0.5) * 2 * 0.14 * worldScale; // ±0.14 old world units
+      camera.position.set(cx, cy, camZ);
       camera.lookAt(0, cy, 0);
     } else {
-      camera.position.set(0, 0, CAM_Z);
+      camera.position.set(0, 0, camZ);
       camera.lookAt(0, 0, 0);
     }
 
@@ -614,7 +631,7 @@ export function CardField({
       const scroll = rig.current.current;
       const fieldH = fieldSize.h || 800;
 
-      const wpp = worldPerPxForField(fieldH);
+      const worldScale = worldScaleFor(fieldH);
       const dealOrigins = new Map<string, DealOrigin>();
 
       const anchorIdx = anchorId ? indexForAnchor(toRows, anchorId) : -1;
@@ -641,8 +658,10 @@ export function CardField({
         const newCenterPy = newIdx * toPitch + toCardH / 2 - newCurrent;
         const oldCenterPy = old.index * fromPitch + fromCardH / 2 - scroll;
         dealOrigins.set(row.key, {
-          dy: (newCenterPy - oldCenterPy) * wpp,
-          dz: -0.45,
+          // `dy` is a screen-px distance, already a world distance (camera.ts);
+          // `dz` is authored against the old camera and scales with it.
+          dy: newCenterPy - oldCenterPy,
+          dz: -0.45 * worldScale,
         });
       }
 
@@ -898,7 +917,15 @@ export function CardField({
         // Dead-on camera: cards on the z=0 plane always face the viewer
         // square-on (no keystone tilt). A pile's depth comes from its own
         // sheet offsets/tilts/shadows, not from the camera angle.
-        camera={{ position: [0, 0, CAM_Z], fov: CAM_FOV }}
+        //
+        // The distance is DERIVED from the field height (`camera.ts`) and
+        // re-set every frame by the drift; this initial value only covers the
+        // frame before the loop starts. `fov` is fixed — the distance moving is
+        // what makes the field 1 world unit per CSS px.
+        camera={{
+          position: [0, 0, camZFor(fieldSize.h || 800)],
+          fov: FIELD_FOV,
+        }}
         gl={{ antialias: true, alpha: true }}
       >
         <FieldScene
