@@ -7,7 +7,11 @@ import {
   type SliceWithContent,
 } from "@/lib/episodic/actions";
 import { prependPage } from "@/lib/chat/stream-items";
-import { getStreamCache, setStreamCache } from "@/lib/chat/slice-cache";
+import {
+  getStreamCache,
+  setStreamCache,
+  upgradeCachedSlice,
+} from "@/lib/chat/slice-cache";
 
 /** Slices per page — a page is also the seam-anchored prepend unit (§1.4). */
 export const SLICE_PAGE_SIZE = 10;
@@ -91,6 +95,13 @@ export function useSliceStream(
       setSlices(next);
       setHasMore(page.hasMore);
       setStreamCache(persona, next, page.hasMore);
+      // Every slice of this page arrived WITH its turns — hand them to the
+      // one slice cache, so a card holding that slice's truncated preview is
+      // upgraded in place instead of the two stacks keeping private copies of
+      // the same conversation (and so a later jump to one of them is free).
+      for (const slice of page.slices) {
+        upgradeCachedSlice(slice.id, slice.turns);
+      }
       return addedItemCount;
     },
     [persona],

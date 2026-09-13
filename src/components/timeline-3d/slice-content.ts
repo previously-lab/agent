@@ -1,104 +1,48 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSliceContent } from "@/lib/episodic/actions";
-import type { Turn } from "@/lib/episodic/types";
+import {
+  peekEntry,
+  subscribeSlice,
+  SLICE_LOADING,
+  type SlicePreview,
+} from "@/lib/chat/slice-cache";
 
 /**
- * SliceContent (Rev 1) — module-level content cache + component hook for the
- * 3D card field.
+ * SliceContent (Rev 2) — the 3D card field's subscription to the ONE slice
+ * cache.
  *
  * Each card face used to receive its turn content from a `Map<string, ContentSlot>`
  * held in `CardField` state. That meant every visible slice resolve triggered a
  * top-down re-render of the whole R3F scene and produced the field-wide flicker
- * seen while scrolling. Now content lives in a module cache and each card
- * subscribes independently via `useSliceTurns(id)`:
+ * seen while scrolling. Rev 1 moved content into a module cache here, with each
+ * card subscribing independently via `useSliceTurns(id)`.
  *
- * - Concurrent requests for the same slice are deduped (`inflight`).
- * - Cache survives unmount so scrolling back and forth does not re-fetch.
- * - A true LRU cap: every ready/failed hit moves its key to the newest end,
- *   and `trimCache` evicts from the oldest end when the cache grows too large.
- * - Failures are sticky (no retry loop per card).
+ * Rev 2 keeps the subscription per card — the reason for it has not changed —
+ * but the CACHE moved to `src/lib/chat/slice-cache.ts`, because the chat's
+ * paging path was keeping its own parallel copy of the very same slices: a
+ * card's preview and the conversation's turns were two reads of one immutable
+ * file. What this module still owns is the React binding, and it asks for
+ * `meta` — the server-truncated opening rounds the card face is designed
+ * around. A slice the chat has already paged in upgrades that entry to `full`
+ * in place, and the upgrade reaches this subscription too.
  */
-export interface SliceContent {
-  state: "loading" | "ready" | "failed";
-  turns?: Turn[];
-  previously?: string | null;
-  summary?: string;
-  open_loops?: string[];
-  decisions?: string[];
-}
-
-const cache = new Map<string, SliceContent>();
-const inflight = new Map<string, Promise<void>>();
-const CACHE_CAP = 200;
-
-function trimCache(): void {
-  if (cache.size <= CACHE_CAP) return;
-  // Map iteration order is insertion order; evict from the oldest end.
-  const over = cache.size - CACHE_CAP;
-  let removed = 0;
-  for (const key of cache.keys()) {
-    if (removed >= over) break;
-    cache.delete(key);
-    removed++;
-  }
-}
+export type SliceContent = SlicePreview;
 
 /**
  * Hook that returns the cached/loading turn content for a single slice.
- * Triggers one module-level fetch when the slice is first requested and keeps
- * the result available for future mounts.
+ * Triggers one cache read when the slice is first requested and keeps the
+ * result available for future mounts.
  */
 export function useSliceTurns(id: string): SliceContent {
-  const [slot, setSlot] = useState<SliceContent>(() => {
-    const hit = cache.get(id);
-    return hit && hit.state !== "loading" ? hit : { state: "loading" };
-  });
+  const [slot, setSlot] = useState<SliceContent>(
+    () => peekEntry(id)?.preview ?? SLICE_LOADING,
+  );
 
-  useEffect(() => {
-    const hit = cache.get(id);
-    if (hit && hit.state !== "loading") {
-      // Move to newest end so frequently-accessed slices survive trimming.
-      cache.delete(id);
-      cache.set(id, hit);
-      setSlot(hit);
-      return;
-    }
-
-    if (!inflight.has(id)) {
-      cache.set(id, { state: "loading" });
-      trimCache();
-      const p = getSliceContent(id)
-        .then((c) => {
-          cache.set(id, {
-            state: c ? "ready" : "failed",
-            turns: c?.turns,
-            previously: c?.previously,
-            summary: c?.summary,
-            open_loops: c?.open_loops,
-            decisions: c?.decisions,
-          });
-        })
-        .catch(() => {
-          cache.set(id, { state: "failed" });
-        })
-        .finally(() => {
-          inflight.delete(id);
-        });
-      inflight.set(id, p);
-    }
-
-    let alive = true;
-    inflight.get(id)!.then(() => {
-      if (!alive) return;
-      setSlot(cache.get(id) ?? { state: "failed" });
-    });
-
-    return () => {
-      alive = false;
-    };
-  }, [id]);
+  useEffect(
+    () => subscribeSlice(id, "meta", (entry) => setSlot(entry.preview)),
+    [id],
+  );
 
   return slot;
 }
