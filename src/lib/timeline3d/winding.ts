@@ -137,6 +137,34 @@ export function topStrands(
   return (limit > 0 ? ranked.slice(0, limit) : ranked).map((r) => r.name);
 }
 
+/**
+ * The anchor the reader is CENTRED on — the one nearest the viewport centre
+ * (y = 0.5, the midpoint `spinAtKnots` splits at), or -1 when no anchor has a
+ * finite position.
+ *
+ * This is the band's "now". The knot winds around this moment, and — v0.12 —
+ * the line-up is this moment's strands, so the twist and the threads agree
+ * about which slice the strip is describing. The knot's own scan (the
+ * `aAnchor`/`bAnchor` walk in threadline-scene) traverses the same list for a
+ * different job: it needs BOTH anchors straddling the centre, so it can blend
+ * the twist between them as the reader scrubs. The nearest of those two is
+ * always this answer, so the two never disagree about where "here" is.
+ */
+export function activeAnchorIndex(anchors: readonly FieldAnchor[]): number {
+  let best = -1;
+  let bestDistance = Infinity;
+  for (let i = 0; i < anchors.length; i++) {
+    const y = anchors[i].y;
+    if (!Number.isFinite(y)) continue;
+    const distance = Math.abs(y - 0.5);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = i;
+    }
+  }
+  return best;
+}
+
 /** Clamped smoothstep on [0, 1] — 0 below, 1 above, C¹ across. */
 export function smoothstep01(t: number): number {
   if (t <= 0) return 0;

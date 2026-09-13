@@ -42,12 +42,13 @@
  * makes the focus gesture read as a physical turn of the bundle rather than a
  * colour change.
  *
- * WHAT IS DRAWN (§2.4): the current view's top strands —
- * `topStrands(anchors, limit)` over the screen-Y anchors the right pane
- * publishes (CardField's row starts in timeline view, the chat stream's slice
- * seams in chat view). The count is a responsive quantity
- * (`strandLimitForBandWidth`). A strand with no activity in the window still
- * draws its full-height line: straight, because nothing happened there (§2.2).
+ * WHAT IS DRAWN (§2.4): the strands of the ONE anchor the reader is centred on
+ * — the same anchor the knot is wound around — over the screen-Y anchors the
+ * right pane publishes (CardField's row starts in timeline view, the chat
+ * stream's slice seams in chat view). The count is a responsive quantity
+ * (`strandLimitForBandWidth`), and the selection is merged in and never
+ * dropped (`lineUpFor`). A strand with no activity elsewhere still draws its
+ * full-height line: straight, because nothing happened there (§2.2).
  *
  * REGISTRATION (§2.3): the ACTIVE CARD is the anchor nearest the middle of the
  * viewport, and the knot heights come straight from those same anchors, so a
@@ -77,11 +78,12 @@
  * THE SAME GREY the moment a selection exists, so exactly one thing on the
  * strip is ever carrying colour.
  *
- * That is what makes ten threads at once legible. Colour asked to say "which
- * strand is this" for every line simultaneously has no answer — ten hues in a
- * 32 px braid is a colour chart with no reading order, which is what this strip
- * used to be. Asked to say "these ones, not those" it works, and multi-select
- * becomes a natural reading of the gesture rather than a second feature.
+ * That is what makes a whole bundle of threads legible at once. Colour asked to
+ * say "which strand is this" for every line simultaneously has no answer — ten
+ * hues in a 32 px braid is a colour chart with no reading order, which is what
+ * this strip used to be. Asked to say "these ones, not those" it works, and
+ * multi-select becomes a natural reading of the gesture rather than a second
+ * feature.
  *
  * The canvas cannot resolve a CSS variable, so this file reads each strand's
  * `var()` reference back off the document (`resolveCssHex`). That is what keeps
@@ -118,7 +120,11 @@ import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { useTheme } from "@teispace/next-themes";
 import { oklchToHex } from "@/lib/timeline3d/layout";
-import { STRAND_IDLE_INK, strandColor } from "@/lib/timeline3d/ink";
+import {
+  normalizeStrandName,
+  STRAND_IDLE_INK,
+  strandColor,
+} from "@/lib/timeline3d/ink";
 import {
   COMPANION_TUBE_DIAMETER_CSS_PX,
   CORE_TUBE_DIAMETER_CSS_PX,
@@ -129,9 +135,9 @@ import { TubeLine } from "./tube-line";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { screenFractionToWorldY } from "@/lib/timeline3d/convergence";
 import {
+  activeAnchorIndex,
   laneDepthFor,
   strandPointAtKnots,
-  topStrands,
   type FieldAnchor,
   type SpinKnot,
 } from "@/lib/timeline3d/winding";
@@ -144,6 +150,7 @@ import {
 } from "@/lib/timeline3d/strand-band";
 import {
   joinStrandSets,
+  lineUpFor,
   strandEnvelope,
 } from "@/lib/timeline3d/strand-transition";
 
@@ -264,8 +271,22 @@ const SELECTED_FOCUS_VISIBILITY = 0.92;
  *  Held well short of 1: the highlight has to dominate, not erase. The rest of
  *  the bundle is the CONTEXT the picked threads run through — a selection that
  *  left an empty strip would tell the reader nothing about where those threads
- *  sit relative to everything else. */
-const BACKDROP_RECEDE = 0.6;
+ *  sit relative to everything else.
+ *
+ *  RE-TUNED when the resting grey went quiet (globals.css `--strand-idle`). At
+ *  0.6 it was chosen against a bundle that rendered around #7c7c7c, where
+ *  pulling 60% of the way to the page still left a legible thread. The resting
+ *  peak is now #353535 — only ~1.7:1 against the page — and 60% of a value that
+ *  small IS the page: the context vanished, which is the one outcome this
+ *  constant's own note rules out. The budget for dimming is set by the resting
+ *  contrast, and that budget shrank. */
+const BACKDROP_RECEDE = 0.3;
+/** How much of its opacity the unhighlighted bundle keeps under focus. The
+ *  second half of the same mistake: this used to fade to 0.12, and stacked on
+ *  top of `BACKDROP_RECEDE` it left the context at nothing. Kept high now —
+ *  the highlight separates itself by CHROMA (a saturated palette entry against
+ *  neutral grey), not by being the only thing still lit. */
+const BACKDROP_KEEP_OPACITY = 0.55;
 /** Depth maps onto a brightness multiplier — nearer lanes read brighter. */
 const LANE_BRIGHTNESS_MIN = 0.75;
 const LANE_BRIGHTNESS_SPAN = 0.5;
@@ -380,7 +401,8 @@ export interface ThreadlineSceneProps {
   /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
    *  the strands each carries — written by the card field (row starts) in
    *  timeline view and by the chat stream (slice seam rows) in chat view. The
-   *  band draws its top strands and winds them at these heights. */
+   *  band winds them at these heights, and draws the strands of whichever one
+   *  sits at the centre. */
   anchorsRef: React.MutableRefObject<FieldAnchor[]>;
   /** Whether to skip motion. */
   reducedMotion: boolean;
@@ -724,11 +746,13 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const cameraZRef = useRef(BASE_Z);
   const rotationYRef = useRef(0);
   const prevProgressRef = useRef(progressRef.current);
-  // The highlight set for this frame, LOWER-CASED through the same
-  // normalisation ink.ts uses, so a selection matches the names the anchor
-  // ranking produced even if the two sides were cased differently.
+  // The highlight set for this frame, put through `normalizeStrandName` — the
+  // SAME normalisation the line-up dedupes by and `strandColor` hashes by, so
+  // all three agree on which spellings are one strand. A selection therefore
+  // matches the names the anchor published even if the two sides were cased
+  // differently.
   const highlight = useMemo(
-    () => new Set(selected.map((n) => n.trim().normalize("NFKC").toLowerCase())),
+    () => new Set(selected.map((n) => normalizeStrandName(n))),
     [selected],
   );
   const selectedKey = useMemo(() => selected.join(SET_KEY_SEP), [selected]);
@@ -755,7 +779,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   if (knotsRef.current === null) knotsRef.current = createSpinKnots();
 
   // The initial bake's line-up: the ambient strand set, capped at the widest
-  // band's slot count. The frame loop replaces it with the view's top strands.
+  // band's slot count. The frame loop replaces it with the active anchor's.
   const bakeNames = useMemo(
     () => strands.slice(0, MAX_STRAND_SLOTS),
     [strands],
@@ -921,27 +945,18 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     }
 
     // ── The strand set for this frame (§2.4) ─────────────────────────────
-    // The right pane owns the heights; the band ranks the strands by how
-    // present they are here and draws the top ones. With no anchors published
-    // yet (a view that has not measured), fall back to the ambient set — the
-    // same ranking rule, all of them straight.
+    // The right pane owns the heights; the band draws the strands of the ONE
+    // anchor the reader is centred on — the same anchor the knot is wound
+    // around — so the braid says "what this moment is made of" and the
+    // highlight always has a bundle to stand against. With no anchors published
+    // yet (a view that has not measured), fall back to the ambient set, all of
+    // them straight.
     const anchors = anchorsRef.current;
     const limit = strandLimitForBandWidth(size.width);
-    let liveNames: string[];
-    if (anchors.length > 0) {
-      liveNames = topStrands(anchors, limit);
-    } else {
-      liveNames = strands.slice(0, limit);
-    }
-    // A highlighted strand is ALWAYS drawn: selecting a line that then vanished
-    // from the band would make the highlight gesture look broken. Missing ones
-    // take the tail seats, never more than the limit allows — the ranking
-    // yields to the selection, not the other way round.
-    const missing = selected.filter((name) => !liveNames.includes(name));
-    if (missing.length > 0) {
-      const keep = Math.max(0, limit - missing.length);
-      liveNames = [...liveNames.slice(0, keep), ...missing].slice(0, limit);
-    }
+    const activeIndex = activeAnchorIndex(anchors);
+    const base = activeIndex >= 0 ? anchors[activeIndex].strands : strands;
+    // Guarantees the selection survives the cap; see `lineUpFor`.
+    const liveNames = lineUpFor(base, selected, limit);
 
     // ── The line-up joint (§2.5) ─────────────────────────────────────────
     // Scrolling into a different region changes which strands are in the set.
@@ -1224,9 +1239,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       }
       (line as any).visible = true;
 
-      const isHighlighted = highlight.has(
-        name.trim().normalize("NFKC").toLowerCase(),
-      );
+      const isHighlighted = highlight.has(normalizeStrandName(name));
       const pulseActive = isHighlighted && pulseActiveGlobal;
       (line as any).renderOrder = isHighlighted ? 3 : 1;
       // THE SELECTED LINE IS NEVER OCCLUDED. The tubes depth-test against each
@@ -1251,7 +1264,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         // focus state dims the others.
         const targetOpacity = isHighlighted
           ? 1
-          : THREE.MathUtils.lerp(1, 0.12, nextF);
+          : THREE.MathUtils.lerp(1, BACKDROP_KEEP_OPACITY, nextF);
         const opacity =
           (pulseActive ? 1 : targetOpacity) * (joint ? joint.opacity : 1);
         mat.opacity = opacity;

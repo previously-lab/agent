@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   joinStrandSets,
   LEAVE_FADE_AFTER,
+  lineUpFor,
   strandEnvelope,
 } from "@/lib/timeline3d/strand-transition";
 
@@ -156,5 +157,53 @@ describe("strandEnvelope", () => {
       opacity: 0,
       done: true,
     });
+  });
+});
+
+describe("lineUpFor", () => {
+  it("draws the base set in its own order", () => {
+    expect(lineUpFor(["b", "a", "c"], [], 7)).toEqual(["b", "a", "c"]);
+  });
+
+  it("truncates to the limit", () => {
+    expect(lineUpFor(["a", "b", "c", "d"], [], 2)).toEqual(["a", "b"]);
+  });
+
+  it("treats a non-positive limit as no limit", () => {
+    expect(lineUpFor(["a", "b", "c"], [], 0)).toEqual(["a", "b", "c"]);
+    expect(lineUpFor(["a", "b", "c"], [], -1)).toEqual(["a", "b", "c"]);
+  });
+
+  it("appends a selection the base does not carry", () => {
+    // The safety net: with the right pane filtered by the pick the active unit
+    // already carries it, but a highlight that vanished would break the gesture.
+    expect(lineUpFor(["a", "b"], ["z"], 7)).toEqual(["a", "b", "z"]);
+  });
+
+  it("never draws one strand twice, whatever the spelling", () => {
+    // "Fitness", "fitness " and the full-width form are ONE strand — the same
+    // normalisation `strandColor` hashes by. The first spelling is kept.
+    expect(lineUpFor(["Fitness"], ["fitness ", "ｆｉｔｎｅｓｓ"], 7)).toEqual([
+      "Fitness",
+    ]);
+  });
+
+  it("skips a nameless entry rather than drawing an unexplained line", () => {
+    expect(lineUpFor(["", "  ", "a"], [], 7)).toEqual(["a"]);
+  });
+
+  it("drops greys before it drops a pick when the cap bites", () => {
+    expect(lineUpFor(["a", "b", "c", "d"], ["c"], 2)).toEqual(["c", "a"]);
+  });
+
+  it("keeps the picks when the picks alone exceed the cap", () => {
+    // Ten picks into a seven-line strip: render seven, highlight seven, drop
+    // the rest — but never drop a pick to make room for a grey.
+    const picked = ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"];
+    expect(lineUpFor(["g1", "g2"], picked, 7)).toEqual(picked.slice(0, 7));
+  });
+
+  it("is empty for an empty base and no picks", () => {
+    expect(lineUpFor([], [], 7)).toEqual([]);
   });
 });

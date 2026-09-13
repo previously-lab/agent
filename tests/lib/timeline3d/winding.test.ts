@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activeAnchorIndex,
   activityYsByStrand,
   type FieldAnchor,
   knotProgress,
@@ -899,6 +900,55 @@ describe("topStrands", () => {
 
   it("returns empty for an empty field", () => {
     expect(topStrands([], 5)).toEqual([]);
+  });
+});
+
+describe("activeAnchorIndex", () => {
+  it("picks the anchor nearest the viewport centre", () => {
+    const anchors: FieldAnchor[] = [
+      { y: 0.05, strands: ["a"] },
+      { y: 0.4, strands: ["b"] },
+      { y: 0.62, strands: ["c"] },
+      { y: 0.95, strands: ["d"] },
+    ];
+    // 0.4 is 0.1 from the centre; 0.62 is 0.12.
+    expect(activeAnchorIndex(anchors)).toBe(1);
+    expect(activeAnchorIndex([anchors[3], anchors[2]])).toBe(1);
+  });
+
+  it("takes the end anchors when the centre is past them", () => {
+    // Everything in view is below the centre (the top of the memory).
+    const anchors: FieldAnchor[] = [
+      { y: 0.7, strands: ["a"] },
+      { y: 0.9, strands: ["b"] },
+    ];
+    expect(activeAnchorIndex(anchors)).toBe(0);
+  });
+
+  it("skips non-finite positions", () => {
+    const anchors: FieldAnchor[] = [
+      { y: NaN, strands: ["a"] },
+      { y: 0.8, strands: ["b"] },
+      { y: Infinity, strands: ["c"] },
+    ];
+    expect(activeAnchorIndex(anchors)).toBe(1);
+  });
+
+  it("returns -1 when there is nothing to be centred on", () => {
+    expect(activeAnchorIndex([])).toBe(-1);
+    expect(activeAnchorIndex([{ y: NaN, strands: ["a"] }])).toBe(-1);
+  });
+
+  it("is deterministic on an exact tie", () => {
+    // 0.4 and 0.6 sit equally near the centre. Two anchors equidistant from
+    // "here" must not flip the line-up from frame to frame, so the FIRST in
+    // the published order wins — and the publisher orders top-to-bottom.
+    const upper: FieldAnchor = { y: 0.4, strands: ["a"] };
+    const lower: FieldAnchor = { y: 0.6, strands: ["b"] };
+    const topFirst = [upper, lower];
+    expect(topFirst[activeAnchorIndex(topFirst)]).toBe(upper);
+    const bottomFirst = [lower, upper];
+    expect(bottomFirst[activeAnchorIndex(bottomFirst)]).toBe(lower);
   });
 });
 

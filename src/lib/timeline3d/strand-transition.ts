@@ -7,13 +7,15 @@
  * into its lane and then fades; a strand that joins fades in and winds up; a
  * strand that stays keeps its seat, so the bundle never re-deals under the user.
  *
- * Two pure pieces, kept out of `winding.ts` (the geometry contract) so that
+ * Three pure pieces, kept out of `winding.ts` (the geometry contract) so that
  * frozen module stays untouched:
+ *  - `lineUpFor` decides WHICH strands one frame draws, and in what order.
  *  - `joinStrandSets` reconciles the previous draw order against the new set.
  *  - `strandEnvelope` is one strand's winding amplitude and opacity over the
  *    joint. For a LEAVING strand the amplitude reaches zero before the fade
  *    bites, so the line visibly unwinds and only then disappears.
  */
+import { normalizeStrandName } from "./ink";
 import { smoothstep01 } from "./winding";
 
 /** How one line-up reconciles with the next. */
@@ -51,6 +53,69 @@ export function joinStrandSets(
   const joined = next.filter((name) => !prevSet.has(name));
   const departed = previousOrder.filter((name) => !nextSet.has(name));
   return { order: [...retained, ...joined], retained, joined, departed };
+}
+
+/**
+ * The strands one frame draws, in order (v0.12).
+ *
+ * THE LINE-UP IS THE MOMENT, NOT THE WINDOW. It used to be `topStrands` — a
+ * ranking over every anchor in view, i.e. "the threads you are currently
+ * swimming in". That answered a different question from the one the strip is
+ * actually asked, and it had a second, worse cost: with the right pane
+ * filtered by a strand, the window collapses to the matching rows, so
+ * selecting a thread EMPTIED the band down to that one line. The highlight had
+ * nothing left to stand against — the gesture looked like it did nothing.
+ *
+ * The base is therefore the ACTIVE anchor's own strands: the anchor the knot
+ * is wound around, so the braid and the twist agree about which moment the
+ * strip is describing. `base` is passed in rather than derived here because
+ * the caller owns the anchor list and the ambient fallback for a pane that has
+ * published nothing yet.
+ *
+ * THE SELECTION IS MERGED IN AND NEVER DROPPED. With the right pane filtered
+ * by it the active unit already carries it, so this is a safety net — but a
+ * highlight that vanished mid-scroll would make the gesture look broken, and
+ * that is the one outcome worth spending a few lines to make impossible.
+ *
+ * ORDER is the base's own (first-seen), selections appended. That matters less
+ * than it looks: `joinStrandSets` keeps the previous frame's order for every
+ * strand present in both sets, so this order only decides where a NEW line
+ * appears, never where an established one sits.
+ *
+ * Two spellings of one strand are ONE line — the same `normalizeStrandName`
+ * that `strandColor` hashes by, so the drawn set and the highlight set can
+ * never disagree about which names are the same strand.
+ *
+ * A `limit` of <= 0 means "no limit".
+ */
+export function lineUpFor(
+  base: readonly string[],
+  selected: readonly string[],
+  limit: number,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (name: string): void => {
+    const key = normalizeStrandName(name);
+    if (key.length === 0 || seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  for (const name of base) push(name);
+  for (const name of selected) push(name);
+  if (limit <= 0 || out.length <= limit) return out;
+
+  // Over the cap, the reader's own picks are the last to go: they are the only
+  // lines carrying colour, and a strip that dropped one of them to keep a grey
+  // would be lying about what is being followed.
+  const picked = new Set(selected.map((n) => normalizeStrandName(n)));
+  const kept = out.filter((name) => picked.has(normalizeStrandName(name)));
+  if (kept.length >= limit) return kept.slice(0, limit);
+  for (const name of out) {
+    if (kept.length >= limit) break;
+    if (!picked.has(normalizeStrandName(name))) kept.push(name);
+  }
+  return kept;
 }
 
 /**
