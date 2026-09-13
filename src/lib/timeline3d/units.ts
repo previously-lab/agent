@@ -27,6 +27,7 @@
  * file has to know both.
  */
 import { SLICE_GATE_PX } from "@/lib/chat/field-blocks";
+import { buildOffsets } from "./field-offsets";
 import type { StackLevel } from "./stacks";
 
 /** The four steps of the field's zoom, finest first. */
@@ -99,4 +100,63 @@ export const FIELD_BOUNDARY_PX = SLICE_GATE_PX;
  */
 export function extentOf(faceHeight: number, closesBoundary: boolean): number {
   return faceHeight + (closesBoundary ? FIELD_BOUNDARY_PX : 0);
+}
+
+/** Where every unit sits, and how tall its face is on its own. */
+export interface UnitLayout {
+  /** Running start offsets; `tops.length === count + 1`, so the last is the
+   *  total extent AND `tops[i + 1] - tops[i]` is the unit's full extent. */
+  tops: number[];
+  /** The unit's own height, WITHOUT its boundary — what a face is drawn at and
+   *  what a measured unit reports. Kept separate from the extent because the
+   *  two answer different questions: "how tall is this card" and "how much room
+   *  does it take up in the column". */
+  faceHeights: number[];
+  /** The whole column's extent, boundary regions included. */
+  total: number;
+}
+
+/**
+ * The one place a unit's height is decided, per rung.
+ *
+ * `faceHeightOf` is the only thing a rung has to answer. A conversation unit
+ * MEASURES (its text has no formula), a card unit is a constant
+ * (`framePitchFor`), and either way the boundary is added here rather than by
+ * the caller — because a boundary belongs to the unit that CLOSES it, and the
+ * cost of getting that wrong is that a page arriving at the head grows the
+ * reader's own block by a gate's height under them.
+ *
+ * A unit with no measured height yet inherits the running one (`buildOffsets`),
+ * so the column stays monotonic while a freshly-paged window settles.
+ */
+export function layoutFor(
+  count: number,
+  faceHeightOf: (index: number) => number,
+  closesBoundaryOf: (index: number) => boolean,
+  fallbackExtent: number,
+): UnitLayout {
+  const { tops, total } = buildOffsets(
+    count,
+    (i) => {
+      const face = faceHeightOf(i);
+      // A boundary is a CONSTANT, so it must not count as "this unit has
+      // reported a height" — an unmounted conversation unit would otherwise
+      // look measured at exactly one gate, and the column would lay it out as
+      // a 128px stub instead of letting it inherit the running height the way
+      // an unmeasured unit is supposed to.
+      return face > 0 ? extentOf(face, closesBoundaryOf(i)) : 0;
+    },
+    fallbackExtent,
+  );
+  // The face is read back off the table rather than recomputed, so a face and
+  // the column it sits in can never disagree — including for a unit that
+  // inherited the running height instead of reporting one of its own.
+  const faceHeights: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const full = (tops[i + 1] ?? tops[i]) - tops[i];
+    faceHeights[i] = closesBoundaryOf(i)
+      ? Math.max(0, full - FIELD_BOUNDARY_PX)
+      : full;
+  }
+  return { tops, faceHeights, total };
 }
