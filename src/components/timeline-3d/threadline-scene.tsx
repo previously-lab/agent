@@ -113,13 +113,19 @@
  * reconciliation and the ramps (pure, tested); a frame whose set is unchanged
  * skips the machinery entirely.
  */
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Line } from "@react-three/drei";
 import { useTheme } from "@teispace/next-themes";
 import { oklchToHex } from "@/lib/timeline3d/layout";
 import { STRAND_IDLE_INK, strandColor } from "@/lib/timeline3d/ink";
+import {
+  COMPANION_TUBE_DIAMETER_CSS_PX,
+  CORE_TUBE_DIAMETER_CSS_PX,
+  STRAND_TUBE_DIAMETER_CSS_PX,
+  tubeRadiusWorld,
+} from "@/lib/timeline3d/tube";
+import { TubeLine } from "./tube-line";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { screenFractionToWorldY } from "@/lib/timeline3d/convergence";
 import {
@@ -223,29 +229,16 @@ const COMPANION_WHITEN = 0.45;
 const PULSE_INK_DARK = "#22d3ee";
 
 /**
- * Line widths, in CSS pixels — Line2 draws in screen space (drei sets the
- * material's `resolution` from the canvas), so these are what the user sees at
- * 1x and simply get denser on a high-DPI display.
+ * NO LIGHT. The band is drawn unlit — the colour of every line is decided here,
+ * on the CPU, and handed to three as an instance colour. There is no light
+ * source in the scene and no shading model to tune, which is deliberate: this
+ * strip's whole ink language is "the line fades toward the page", and a lit
+ * material cannot say that (it darkens the far side of a surface toward BLACK,
+ * which on a white page rings every thread in a hard dark rim).
  *
- * The strand width is a legibility/moiré trade: a heavier line is easier to
- * follow on its own, but it lays down more ink where the bundle crosses
- * itself, which is exactly where the braid is densest. 1.5 was tried and
- * reverted by the user — the braid read as heavier than the band should be,
- * and the quietness of the strip is worth more than the extra legibility of
- * any single thread. The core sits at the SAME width and still leads, because
- * it is the only line carrying full chroma (`CORE_INK`) while the strands are
- * held under a visibility ceiling — weight is not the only way to rank, and
- * here colour is doing that job.
+ * The geometry is still a real cylinder (`tube-line.tsx`), so the day a lit
+ * braid is wanted, it is one light and one material swap.
  */
-const STRAND_LINE_WIDTH = 1;
-const CORE_LINE_WIDTH = 1.5;
-/** The companion hairline beside the core — deliberately the lightest mark. */
-const COMPANION_LINE_WIDTH = 1;
-
-const AMBIENT = 0.22;
-const DIFFUSE = 0.78;
-const CROSSING_DARKEN = 0.18;
-const CROSSING_SHARPNESS = 4.0;
 /** How far a RESTING line's ink is carried from the page background. The fake
  *  light modulates it, but it is bounded at BOTH ends: a string has no gaps, so
  *  it never fades out, and it never runs to full ink either — that second bound
@@ -310,6 +303,65 @@ const LANE_SETTLE_EPSILON = 1e-3;
 /** theme + strand name → its three.js ink (see `strandInkRgb` for the key). */
 const INK_CACHE = new Map<string, { r: number; g: number; b: number }>();
 
+/** The direction a `CylinderGeometry` stands along before any rotation, so
+ *  orienting one onto a segment is a single `setFromUnitVectors`. */
+const CYLINDER_AXIS = new THREE.Vector3(0, 1, 0);
+
+/** A segment with no direction: its tube is collapsed rather than given an
+ *  arbitrary axis. Shared, and never written to. */
+const ZERO_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/** Scratch for `writeStraightLine` — one set, reused, because it runs for every
+ *  straight line on every frame. */
+const straightQuat = new THREE.Quaternion();
+const straightMid = new THREE.Vector3();
+const straightDir = new THREE.Vector3();
+const straightScale = new THREE.Vector3();
+const straightMatrix = new THREE.Matrix4();
+
+/**
+ * Place one tube instance per segment of a FIXED polyline — the core line and
+ * its companion, whose paths never change and whose only live input is their
+ * thickness.
+ *
+ * It is a separate path from the strand bundle because the strands' points are
+ * recomputed every frame from the winding, while these are baked once: writing
+ * their matrices from the baked points each frame costs a scan and nothing
+ * else, and keeps the thickness live.
+ */
+function writeStraightLine(
+  mesh: THREE.InstancedMesh | null,
+  points: readonly THREE.Vector3Tuple[],
+  radius: number,
+): void {
+  if (!mesh) return;
+  let placed = 0;
+  for (let i = 0; i + 1 < points.length; i++) {
+    const a = points[i];
+    const b = points[i + 1];
+    const dir = straightDir.set(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    const length = dir.length();
+    if (length < 1e-6) {
+      mesh.setMatrixAt(placed++, ZERO_SCALE_MATRIX);
+      continue;
+    }
+    dir.divideScalar(length);
+    straightQuat.setFromUnitVectors(CYLINDER_AXIS, dir);
+    straightMid.set(
+      (a[0] + b[0]) / 2,
+      (a[1] + b[1]) / 2,
+      (a[2] + b[2]) / 2,
+    );
+    straightScale.set(radius, length, radius);
+    mesh.setMatrixAt(
+      placed++,
+      straightMatrix.compose(straightMid, straightQuat, straightScale),
+    );
+  }
+  mesh.count = placed;
+  mesh.instanceMatrix.needsUpdate = true;
+}
+
 export interface ThreadlineSceneProps {
   /** Strand names (display order) — the band's fallback set when the view has
    *  published no anchors yet, and the initial bake's line-up. */
@@ -335,9 +387,12 @@ export interface ThreadlineSceneProps {
 }
 
 interface SlotBake {
-  /** Initial straight-line bake — the frame loop overwrites every vertex. */
+  /** Initial straight-line bake — the frame loop overwrites every instance. */
   points: THREE.Vector3Tuple[];
-  colors: THREE.Color[];
+  /** The ink every instance starts at. One colour, not one per point: an
+   *  instance is a whole segment now, and the loop rewrites them all before the
+   *  first paint anyway. */
+  ink: THREE.Color;
 }
 
 interface BuildData {
@@ -504,12 +559,8 @@ function buildData(
     const name = names[s];
     const ink = name ? idle : bg;
     const points: THREE.Vector3Tuple[] = [];
-    const colors: THREE.Color[] = [];
-    for (let j = 0; j < nPoints; j++) {
-      points.push([0, ys[j], 0]);
-      colors.push(new THREE.Color(ink.r, ink.g, ink.b));
-    }
-    slots.push({ points, colors });
+    for (let j = 0; j < nPoints; j++) points.push([0, ys[j], 0]);
+    slots.push({ points, ink: new THREE.Color(ink.r, ink.g, ink.b) });
   }
 
   const corePoints: THREE.Vector3Tuple[] = [];
@@ -684,9 +735,9 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const selectedRef = useRef<string>("");
   const pulseStartRef = useRef<number | null>(null);
 
-  const coreLineRef = useRef<THREE.Object3D | null>(null);
-  const companionLineRef = useRef<THREE.Object3D | null>(null);
-  const threadLineRefs = useRef<(THREE.Object3D | null)[]>([]);
+  const coreLineRef = useRef<THREE.InstancedMesh | null>(null);
+  const companionLineRef = useRef<THREE.InstancedMesh | null>(null);
+  const threadLineRefs = useRef<(THREE.InstancedMesh | null)[]>([]);
 
   // The line-up joint (§2.5). `slots` is the fixed pool's state, `order` the
   // present strands' draw order (retained seats first — see `joinStrandSets`),
@@ -724,20 +775,39 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   // THREE.Color per frame would hand the GC a job it does not need.
   const coreColor = useRef(new THREE.Color());
   const companionColor = useRef(new THREE.Color());
+  // Scratch for placing an instance: one matrix, one quaternion and one scale
+  // vector, reused for every segment of every line rather than allocated per
+  // instance per frame.
+  const instanceMatrix = useRef(new THREE.Matrix4());
+  const instanceQuat = useRef(new THREE.Quaternion());
+  const instanceScale = useRef(new THREE.Vector3());
+  const instanceMid = useRef(new THREE.Vector3());
+  const instanceDir = useRef(new THREE.Vector3());
+  const instanceColor = useRef(new THREE.Color());
 
-  // One-time material setup: transparent, no depth write, no per-frame shader
-  // recompilation. Line2 materials expose opacity through uniforms.opacity.
-  useEffect(() => {
-    const setup = (obj: THREE.Object3D | null) => {
-      const mat = (obj as any)?.material;
-      if (!mat) return;
-      mat.transparent = true;
-      mat.depthWrite = false;
-    };
-    setup(coreLineRef.current);
-    setup(companionLineRef.current);
-    threadLineRefs.current.forEach((obj) => setup(obj));
-  }, [build]);
+  /** The page, as a three colour — every strand's ink is a blend away from it. */
+  const bgColor = useMemo(
+    () =>
+      build
+        ? new THREE.Color(build.bgR, build.bgG, build.bgB)
+        : new THREE.Color(0, 0, 0),
+    [build],
+  );
+  const pulseColor = useMemo(
+    () =>
+      build
+        ? new THREE.Color(
+            build.pulseColorR,
+            build.pulseColorG,
+            build.pulseColorB,
+          )
+        : new THREE.Color(0, 0, 0),
+    [build],
+  );
+
+  /** One instance per segment: the frame loop writes `ys.length` samples and
+   *  therefore one fewer span between them. */
+  const segments = Math.max(1, (build?.ys.length ?? 2) - 1);
 
   useFrame((state, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
@@ -774,19 +844,6 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       (targetZ - cameraZRef.current) *
       Math.min(1, dt * CAMERA_SMOOTH_SPEED);
     camera.position.z = cameraZRef.current;
-
-    const lightAngle = reducedMotion
-      ? 0
-      : state.clock.elapsedTime * ((Math.PI * 2) / LIGHT_DRIFT_PERIOD);
-    const lightDirX = -Math.cos(lightAngle);
-    const lightDirZ = -Math.sin(lightAngle);
-    const lightDirY = 0.35;
-    const lightLen = Math.sqrt(
-      lightDirX * lightDirX + lightDirY * lightDirY + lightDirZ * lightDirZ,
-    );
-    const lx = lightDirX / lightLen;
-    const ly = lightDirY / lightLen;
-    const lz = lightDirZ / lightLen;
 
     if (groupRef.current) {
       const progress = progressRef.current;
@@ -844,27 +901,23 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     // reader's eye has exactly one thing to follow either way.
     coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
     const coreOpacity = THREE.MathUtils.lerp(0.8, 0.55, nextF);
-    const coreMat = (coreLineRef.current as any)?.material;
+    // The core and its companion carry ONE colour for the whole line, so it
+    // rides on the material rather than on per-instance colours (which stay
+    // white and multiply through harmlessly).
+    const coreMat = coreLineRef.current?.material as
+      | THREE.MeshBasicMaterial
+      | undefined;
     if (coreMat) {
-      if (coreMat.color) coreMat.color.copy(coreColor.current);
+      coreMat.color.copy(coreColor.current);
       coreMat.opacity = coreOpacity;
-      if (coreMat.uniforms?.opacity)
-        coreMat.uniforms.opacity.value = coreOpacity;
-      // LineMaterial keeps its diffuse colour in a uniform; `color` above is a
-      // convenience accessor over it on some builds only, so set both.
-      if (coreMat.uniforms?.diffuse)
-        coreMat.uniforms.diffuse.value.copy(coreColor.current);
     }
     companionColor.current.copy(build.companion).lerp(build.idleColor, nextF);
-    const companionMat = (companionLineRef.current as any)?.material;
+    const companionMat = companionLineRef.current?.material as
+      | THREE.MeshBasicMaterial
+      | undefined;
     if (companionMat) {
-      if (companionMat.color) companionMat.color.copy(companionColor.current);
-      if (companionMat.uniforms?.diffuse)
-        companionMat.uniforms.diffuse.value.copy(companionColor.current);
-      const companionOpacity = coreOpacity * 0.55;
-      companionMat.opacity = companionOpacity;
-      if (companionMat.uniforms?.opacity)
-        companionMat.uniforms.opacity.value = companionOpacity;
+      companionMat.color.copy(companionColor.current);
+      companionMat.opacity = coreOpacity * 0.55;
     }
 
     // ── The strand set for this frame (§2.4) ─────────────────────────────
@@ -990,6 +1043,29 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     const visibleWorldHeight =
       build.viewportWorldHeight * (cameraZRef.current / BASE_Z);
     const publishedWorldYs = anchorWorldYs(anchors, visibleWorldHeight);
+
+    // ── The tubes' thickness ──────────────────────────────────────────────
+    // Every line in the band is a cylinder (`tube-line.tsx`), and a cylinder's
+    // radius is a WORLD length — how wide it looks depends on the camera, so it
+    // is recomputed here every frame from the distance the camera is actually
+    // at. That is what keeps a "1 px line" one CSS pixel wide on screen at
+    // every zoom level. The DPR is not part of this: 1 CSS px is 1 CSS px, and
+    // how many device pixels the browser spends on it is the browser's business.
+    const strandRadius = tubeRadiusWorld(
+      STRAND_TUBE_DIAMETER_CSS_PX,
+      visibleWorldHeight,
+      size.height,
+    );
+    const coreRadius = tubeRadiusWorld(
+      CORE_TUBE_DIAMETER_CSS_PX,
+      visibleWorldHeight,
+      size.height,
+    );
+    const companionRadius = tubeRadiusWorld(
+      COMPANION_TUBE_DIAMETER_CSS_PX,
+      visibleWorldHeight,
+      size.height,
+    );
 
     // ── The twist's two knots (the observer) ──────────────────────────────
     // The knot belongs to the cards nearest the middle of the viewport. The
@@ -1127,14 +1203,6 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     const ys = build.ys;
     const n = ys.length;
 
-    // Line2 geometry uses INTERLEAVED buffers (start/end share one array with
-    // stride 6) — always write through setXYZ, never raw .array indexing, and
-    // flag the backing buffer dirty.
-    const markDirty = (attr: any) => {
-      if (attr?.data) attr.data.needsUpdate = true;
-      else if (attr) attr.needsUpdate = true;
-    };
-
     for (let s = 0; s < STRAND_SLOT_POOL; s++) {
       const line = threadLineRefs.current[s];
       if (!line) continue;
@@ -1161,6 +1229,13 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       );
       const pulseActive = isHighlighted && pulseActiveGlobal;
       (line as any).renderOrder = isHighlighted ? 3 : 1;
+      // THE SELECTED LINE IS NEVER OCCLUDED. The tubes depth-test against each
+      // other so that a crossing reads as one thread passing in front of
+      // another, but the strand the reader singled out must not be chopped into
+      // pieces by the grey ones lying nearer the camera — a highlight you have
+      // to hunt for is not a highlight. So it renders last, with depth testing
+      // off, exactly as it did when these were flat ribbons.
+      if (mat) mat.depthTest = !isHighlighted;
 
       // The joint envelope (§2.5): a joining line is still winding up and a
       // leaving line is unwinding and thinning out; a settled line is at 1.
@@ -1180,9 +1255,6 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         const opacity =
           (pulseActive ? 1 : targetOpacity) * (joint ? joint.opacity : 1);
         mat.opacity = opacity;
-        if (mat.uniforms?.opacity) {
-          mat.uniforms.opacity.value = opacity;
-        }
       }
 
       // Seat + depth: the strand's seat in the line-up (which is its angle
@@ -1215,62 +1287,35 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       // rotation of its own, so the line stays on the cylinder throughout.
       const unwind = (isHighlighted ? 1 - nextF : 1) * jointAmp;
 
-      const geom = (line as any).geometry;
-      if (!geom) continue;
+      // One instance per segment: placed on the polyline, inked with what that
+      // point of the strand is worth. Position and colour are computed in the
+      // same pass because they need the same sample.
+      //
+      // NOTHING HERE IS A LIGHT. The ink is a blend from the page to the
+      // strand's own colour, and the only thing that moves it along the strand
+      // is how far FORWARD that point sits on the cable — the near flank
+      // brighter than the far one. That is volume, not illumination, and it is
+      // the same term the flat ribbons carried.
+      //
+      // `CROSSING_DARKEN` is gone with it. It dimmed a line by up to 18%
+      // wherever `|cos| → 0` — the centre of the strip, which is exactly where
+      // the braid's strands cross each other — and the user read it, correctly,
+      // as crossings going dirty. The tubes do not need the fake: they are real
+      // surfaces at real depths, so they OCCLUDE each other and a crossing
+      // reads as one thread passing in front of another.
+      const recede = isHighlighted ? 0 : nextF * BACKDROP_RECEDE;
 
-      const startPos = geom.attributes.instanceStart;
-      const endPos = geom.attributes.instanceEnd;
-      if (startPos && endPos) {
-        for (let i = 0; i < n - 1; i++) {
-          const y0 = ys[i] + groupY;
-          const y1 = ys[i + 1] + groupY;
-          // The cylinder (§2.2): one radius for the whole bundle, one shared
-          // spin per height. Away from the knots the spin is 0, so the line is
-          // straight at its own seat; through them it winds and comes back onto
-          // that same seat. The two knots hand the twist from A to B as the
-          // centre scrubs between them, and `unwind` folds the focus and joint
-          // transitions in as a scale on the spin.
-          const p0 = strandPointAtKnots(
-            y0,
-            seat,
-            count,
-            knots,
-            radius,
-            TURNS,
-            unwind,
-          );
-          const p1 = strandPointAtKnots(
-            y1,
-            seat,
-            count,
-            knots,
-            radius,
-            TURNS,
-            unwind,
-          );
-          startPos.setXYZ(i, p0.x, ys[i], p0.z);
-          endPos.setXYZ(i, p1.x, ys[i + 1], p1.z);
-        }
-        markDirty(startPos);
-        markDirty(endPos);
-      }
-
-      const startCol = geom.attributes.instanceColorStart;
-      const endCol = geom.attributes.instanceColorEnd;
-      if (!startCol || !endCol) continue;
-
-      // Per-POINT colours, computed once: point i supplies the start of
-      // segment i and the end of segment i-1. The fake directional light
-      // modulates the strand's OWN colour, so the weave keeps its volume
-      // without washing every line to the same grey (§2.7).
-      for (let i = 0; i < n; i++) {
-        const y = ys[i] + groupY;
-        // The shading needs the strand's direction from the core, which is the
-        // direction of its position: (x, z) normalised. On the cylinder that is
-        // exactly the strand's angle — cos/sin of `seat + spin` — so the light
-        // falls on the NEAR side of the cable and leaves the far side dark.
-        const p = strandPointAtKnots(
-          y,
+      for (let i = 0; i < n - 1; i++) {
+        const y0 = ys[i] + groupY;
+        const y1 = ys[i + 1] + groupY;
+        // The cylinder (§2.2): one radius for the whole bundle, one shared
+        // spin per height. Away from the knots the spin is 0, so the line is
+        // straight at its own seat; through them it winds and comes back onto
+        // that same seat. The two knots hand the twist from A to B as the
+        // centre scrubs between them, and `unwind` folds the focus and joint
+        // transitions in as a scale on the spin.
+        const p0 = strandPointAtKnots(
+          y0,
           seat,
           count,
           knots,
@@ -1278,27 +1323,65 @@ function ThreadlineRig(props: ThreadlineRigProps) {
           TURNS,
           unwind,
         );
-        const axisDistance = Math.hypot(p.x, p.z);
-        const cosT = axisDistance > 0 ? p.x / axisDistance : 0;
-        const sinT = axisDistance > 0 ? p.z / axisDistance : 0;
+        const p1 = strandPointAtKnots(
+          y1,
+          seat,
+          count,
+          knots,
+          radius,
+          TURNS,
+          unwind,
+        );
 
-        const lit = AMBIENT + DIFFUSE * Math.max(0, cosT * lx + sinT * lz);
-        const depthFactor = 0.2 + 0.8 * ((sinT + 1) / 2);
-        const crossing = Math.exp(-CROSSING_SHARPNESS * Math.abs(cosT));
-        const strength = Math.max(
-          0,
-          Math.min(
-            1,
-            lit * depthFactor * (1 - CROSSING_DARKEN * crossing) * laneBrightness,
+        // ── Place the tube on this segment ──────────────────────────────
+        // The base cylinder stands one unit tall about +Y, so a segment is one
+        // rotation onto its own direction, one move to its midpoint, and one
+        // scale: the line's radius across, the segment's length along.
+        const dir = instanceDir.current.set(
+          p1.x - p0.x,
+          ys[i + 1] - ys[i],
+          p1.z - p0.z,
+        );
+        const segLength = dir.length();
+        if (segLength < 1e-6) {
+          // A degenerate segment has no direction to orient to. Collapsing it
+          // to zero size is the only honest answer: it is a point, and a tube
+          // drawn along an undefined axis would be an artefact.
+          line.setMatrixAt(i, ZERO_SCALE_MATRIX);
+          continue;
+        }
+        dir.divideScalar(segLength);
+        instanceQuat.current.setFromUnitVectors(CYLINDER_AXIS, dir);
+        instanceMid.current.set(
+          (p0.x + p1.x) / 2,
+          (ys[i] + ys[i + 1]) / 2,
+          (p0.z + p1.z) / 2,
+        );
+        instanceScale.current.set(strandRadius, segLength, strandRadius);
+        line.setMatrixAt(
+          i,
+          instanceMatrix.current.compose(
+            instanceMid.current,
+            instanceQuat.current,
+            instanceScale.current,
           ),
         );
+
+        // ── Ink that segment ────────────────────────────────────────────
+        // How far forward this point of the cable sits, read off its angle
+        // from the core: the direction of the strand's own position.
+        const axisDistance = Math.hypot(p0.x, p0.z);
+        const sinT = axisDistance > 0 ? p0.z / axisDistance : 0;
+        const depthFactor = 0.2 + 0.8 * ((sinT + 1) / 2);
+        const strength = Math.min(1, depthFactor * laneBrightness);
         const visibility = inkFloor + (inkCeiling - inkFloor) * strength;
 
-        let r = bgR + (inkR - bgR) * visibility;
-        let g = bgG + (inkG - bgG) * visibility;
-        let b = bgB + (inkB - bgB) * visibility;
-
+        let r: number;
+        let g: number;
+        let b: number;
         if (isHighlighted) {
+          // A singled-out strand is carried near its own colour, out of the
+          // band's ink range entirely — it has to clear the grey bundle.
           const selVisibility =
             SELECTED_FOCUS_VISIBILITY +
             (1 - SELECTED_FOCUS_VISIBILITY) * strength;
@@ -1306,67 +1389,78 @@ function ThreadlineRig(props: ThreadlineRigProps) {
           g = bgG + (inkG - bgG) * selVisibility;
           b = bgB + (inkB - bgB) * selVisibility;
         } else {
+          r = bgR + (inkR - bgR) * visibility;
+          g = bgG + (inkG - bgG) * visibility;
+          b = bgB + (inkB - bgB) * visibility;
           // The rest recede into the backdrop under focus — hue kept, so the
           // dimmed bundle still reads as its strands.
-          const recede = nextF * BACKDROP_RECEDE;
-          r = r + (bgR - r) * recede;
-          g = g + (bgG - g) * recede;
-          b = b + (bgB - b) * recede;
+          r += (bgR - r) * recede;
+          g += (bgG - g) * recede;
+          b += (bgB - b) * recede;
         }
 
         if (pulseActive) {
           const envelope = Math.exp(
-            -Math.pow((y - pulseCenterWorldY) / pulseWidthWorldY, 2),
+            -Math.pow((y0 - pulseCenterWorldY) / pulseWidthWorldY, 2),
           );
-          r = r + (pulseR - r) * envelope;
-          g = g + (pulseG - g) * envelope;
-          b = b + (pulseB - b) * envelope;
+          r += (pulseR - r) * envelope;
+          g += (pulseG - g) * envelope;
+          b += (pulseB - b) * envelope;
         }
 
-        if (i < n - 1) startCol.setXYZ(i, r, g, b);
-        if (i > 0) endCol.setXYZ(i - 1, r, g, b);
+        line.setColorAt(i, instanceColor.current.setRGB(r, g, b));
       }
-      markDirty(startCol);
-      markDirty(endCol);
+
+      line.instanceMatrix.needsUpdate = true;
+      if (line.instanceColor) line.instanceColor.needsUpdate = true;
     }
+
+    // The core and its companion are straight by construction, so they are
+    // placed from their baked points and only their THICKNESS is live.
+    writeStraightLine(coreLineRef.current, build.corePoints, coreRadius);
+    writeStraightLine(
+      companionLineRef.current,
+      build.companionPoints,
+      companionRadius,
+    );
   });
 
   if (!build) return null;
 
   return (
     <group ref={groupRef}>
-      <Line
-        ref={coreLineRef as any}
-        points={build.corePoints}
-        color={build.core}
-        lineWidth={CORE_LINE_WIDTH}
-        transparent
-        opacity={0.8}
+      {/* The core and its companion are the spine the braid wraps around, so
+          they neither depth-test against it nor write depth: they stay legible
+          THROUGH the bundle rather than being occluded by it, which is what
+          they did as ribbons and what the strip's whole reading order depends
+          on. The frame loop hands them their colour. */}
+      <TubeLine
+        segments={segments}
+        onObject={(el) => {
+          coreLineRef.current = el;
+        }}
         depthTest={false}
+        depthWrite={false}
         renderOrder={2}
       />
-      <Line
-        ref={companionLineRef as any}
-        points={build.companionPoints}
-        color={build.companion}
-        lineWidth={COMPANION_LINE_WIDTH}
-        transparent
-        opacity={0.56}
+      <TubeLine
+        segments={segments}
+        onObject={(el) => {
+          companionLineRef.current = el;
+        }}
         depthTest={false}
+        depthWrite={false}
         renderOrder={2}
       />
       {build.slots.map((slot, s) => (
-        <Line
+        <TubeLine
           key={`strand-slot-${s}`}
-          ref={(el) => {
-            threadLineRefs.current[s] = el as THREE.Object3D | null;
+          segments={segments}
+          onObject={(el) => {
+            threadLineRefs.current[s] = el;
           }}
-          points={slot.points}
-          vertexColors={slot.colors}
-          lineWidth={STRAND_LINE_WIDTH}
-          transparent
-          opacity={0}
           renderOrder={1}
+          initialColor={slot.ink}
         />
       ))}
     </group>
