@@ -56,16 +56,17 @@ import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
   armedGate,
   FIELD_ORIGIN_PX,
+  gateBands,
   groupBlocks,
   ORIGIN_REGION,
   prependHeadCount,
-  SLICE_GATE_PX,
   sliceIdOf,
   splitItems,
   type GateBand,
   type GateSignal,
   type StreamBlock,
 } from "@/lib/chat/field-blocks";
+import { buildOffsets, visibleRangeFor } from "@/lib/timeline3d/field-offsets";
 import { SliceGate } from "./slice-gate";
 import { FieldOrigin } from "./field-origin";
 import { HistoryTurn } from "./history-turn";
@@ -342,15 +343,14 @@ function FieldScene({
     }
 
     const offsets = offsetsRef.current;
-    const top = offsetRef.current - OVERSCAN_PX;
-    const bottom = offsetRef.current + size.height + OVERSCAN_PX;
-    const next: number[] = [];
-    for (let i = 0; i < blocks.length; i++) {
-      const start = offsets[i] ?? 0;
-      const end = offsets[i + 1] ?? start + FALLBACK_BLOCK_PX;
-      if (end < top || start > bottom) continue;
-      next.push(i);
-    }
+    const next = visibleRangeFor(
+      offsets,
+      blocks.length,
+      offsetRef.current,
+      size.height,
+      OVERSCAN_PX,
+      FALLBACK_BLOCK_PX,
+    );
     const key = next.join(",");
     if (key !== visibleKey.current) {
       visibleKey.current = key;
@@ -366,27 +366,15 @@ function FieldScene({
     // signal objects. It is a single winner rather than a flag each boundary
     // reads: that is what stops a boundary nowhere near the reader from
     // claiming the reader is crossing it.
-    const bands = bandsRef.current;
-    bands.length = 0;
-    if (hasOrigin) {
-      bands.push({
-        index: ORIGIN_REGION,
-        top: -FIELD_ORIGIN_PX,
-        height: FIELD_ORIGIN_PX,
-      });
-    }
-    for (let i = 0; i < blocks.length; i++) {
-      if (!blocks[i].gate) continue;
-      // The gate is the block's BOTTOM edge — the boundary between its slice
-      // and the next — so its band sits at the block's tail.
-      const start = offsets[i] ?? 0;
-      const height = (offsets[i + 1] ?? start + FALLBACK_BLOCK_PX) - start;
-      bands.push({
-        index: i,
-        top: start + Math.max(0, height - SLICE_GATE_PX),
-        height: SLICE_GATE_PX,
-      });
-    }
+    // A gate belongs to the block it CLOSES, so its band sits at that block's
+    // tail — see `gateBands`, which owns the rule.
+    const bands = gateBands(
+      bandsRef.current,
+      blocks,
+      offsets,
+      FALLBACK_BLOCK_PX,
+      hasOrigin,
+    );
     const armed = armedGate(bands, offsetRef.current, size.height, minOffset);
     let armedBand: GateBand | null = null;
     for (const band of bands) {
@@ -670,12 +658,11 @@ export function ConversationField({
    *  stack twitch. */
   const relayout = useCallback(() => {
     const h = heightsRef.current;
-    const next: number[] = [0];
-    let carry = h.find((v) => v > 0) ?? FALLBACK_BLOCK_PX;
-    for (let i = 0; i < blocks.length; i++) {
-      if (h[i] > 0) carry = h[i];
-      next.push(next[i] + carry);
-    }
+    const { tops: next } = buildOffsets(
+      blocks.length,
+      (i) => h[i] ?? 0,
+      FALLBACK_BLOCK_PX,
+    );
     offsetsRef.current = next;
 
     // ── The prepend compensation ─────────────────────────────────────────

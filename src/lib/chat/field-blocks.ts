@@ -231,6 +231,56 @@ export interface GateBand {
 }
 
 /**
+ * Every boundary the field could announce this frame, in unit order — the
+ * producer to `armedGate`'s consumer, kept beside it because the two are one
+ * mechanism: this says where the boundaries ARE, `armedGate` says which one is
+ * speaking.
+ *
+ * A GATE BELONGS TO THE UNIT IT CLOSES, so its band sits at that unit's TAIL,
+ * never its head. Getting this backwards is not a cosmetic error: the seam
+ * arriving with a fresh page would then land inside the reader's own block and
+ * grow it by a gate's height underneath them.
+ *
+ * The head of the window is a boundary too (`ORIGIN_REGION`) when the window
+ * has one — the one edge with no slice beyond it, which `armedGate` lets win
+ * outright.
+ *
+ * `fallbackExtent` covers the frames between a unit list growing and its offset
+ * table being rebuilt, when the last units have no measured extent yet.
+ *
+ * Fills a CALLER-OWNED array and empties it first: this runs once per frame,
+ * and the field already keeps a persistent buffer for it precisely so the frame
+ * loop is not allocating a list sixty times a second.
+ */
+export function gateBands(
+  out: GateBand[],
+  units: readonly { gate: boolean }[],
+  tops: readonly number[],
+  fallbackExtent: number,
+  hasOrigin: boolean,
+): GateBand[] {
+  out.length = 0;
+  if (hasOrigin) {
+    out.push({
+      index: ORIGIN_REGION,
+      top: -FIELD_ORIGIN_PX,
+      height: FIELD_ORIGIN_PX,
+    });
+  }
+  for (let i = 0; i < units.length; i++) {
+    if (!units[i].gate) continue;
+    const start = tops[i] ?? 0;
+    const height = (tops[i + 1] ?? start + fallbackExtent) - start;
+    out.push({
+      index: i,
+      top: start + Math.max(0, height - SLICE_GATE_PX),
+      height: SLICE_GATE_PX,
+    });
+  }
+  return out;
+}
+
+/**
  * Which boundary is announcing itself right now, or `null` when the reader is
  * inside a slice and no boundary is on screen.
  *
