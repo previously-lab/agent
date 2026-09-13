@@ -190,83 +190,9 @@ test.describe("Memory viz (v0.10)", () => {
     });
   });
 
-  test.describe("card-style mode gesture (Rev 2, §5.2/§6.1)", () => {
-    // Rev 6 (2026-09-07): the swipe mode switch is unwired — ModeSwitchGesture
-    // no longer wraps the content region. The spec stays for restoration once
-    // the gesture returns in its redesigned form.
-    test.skip("a committed left drag on the content card opens the timeline view", async ({
-      page,
-    }) => {
-      // The timeline view compiles the three.js chunk on first hit in dev.
-      test.slow();
-      const slices = datasetA();
-      await seedSlices(slices);
 
-      await page.goto("/en");
-      // Hydration gate before the synthetic drag: the stream's slice content
-      // only appears after a CLIENT-side fetch (SSR renders no turns), so a
-      // visible sentinel proves the chat subtree — and with it the gesture's
-      // pointerdown handler — is hydrated. (The header badge alone is not
-      // enough: client subtrees hydrate independently and the header can win
-      // the race.)
-      await expect(page.getByText(sentinel(slices[11], "user"))).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: "Local", exact: true }),
-      ).toBeVisible();
-
-      // Drag start on a mid-stream history turn — plain text, NOT inside a
-      // button/a/input (the gesture ignores those). Virtuoso's bottom
-      // anchoring can leave the tail briefing card a few px below the fold
-      // (a boundingBox there hits <html> and the drag never starts), so
-      // anchor on an in-stream turn and verify it is inside the viewport.
-      const anchor = page.getByText(sentinel(slices[10], "user"));
-      const viewport = page.viewportSize()!;
-      await expect
-        .poll(
-          async () => {
-            await anchor.scrollIntoViewIfNeeded();
-            const b = await anchor.boundingBox();
-            return (
-              b !== null && b.y >= 48 && b.y + b.height <= viewport.height - 4
-            );
-          },
-          { timeout: 15_000 },
-        )
-        .toBe(true);
-
-      // 160px left in 20px steps: the direction lock claims the horizontal
-      // axis, and 160 > the 120px commit threshold (lib/chat/mode-gesture.ts).
-      // The stream can re-lay-out under Virtuoso, so a measured anchor can go
-      // stale mid-drag — retry the whole gesture with a fresh box.
-      const card = page.getByTestId("mode-switch-card");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const b = (await anchor.boundingBox())!;
-        const sx = b.x + b.width / 2;
-        const sy = b.y + b.height / 2;
-        await page.mouse.move(sx, sy);
-        await page.mouse.down();
-        for (let dx = 20; dx <= 160; dx += 20) {
-          await page.mouse.move(sx - dx, sy);
-        }
-        // motion's pan session updates on animation frames — web-first poll
-        // until the drag position is registered before releasing (no sleeps).
-        const moved = await expect
-          .poll(() => card.evaluate((el) => el.style.transform), {
-            timeout: 3_000,
-          })
-          .toContain("translateX(-160px)")
-          .then(() => true)
-          .catch(() => false);
-        await page.mouse.up();
-        if (moved) break;
-      }
-
-      // Committed → routed navigation carrying the viewport slice as ?at=.
-      await expect(page).toHaveURL(/\/en.*view=timeline/);
-    });
-  });
-
-  test.describe("search palette", () => {    test("Cmd/Ctrl+K searches the catalog and jumps to the slice in the stream", async ({
+  test.describe("search palette", () => {
+    test("Cmd/Ctrl+K searches the catalog and jumps to the slice in the stream", async ({
       page,
     }) => {
       const slices = datasetA();
