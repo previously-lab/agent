@@ -58,7 +58,7 @@ Two things make that exact, and both are easy to break:
 
 ## Boundaries and the announcing gate
 
-- **`SliceGate`** is an INTERTITLE: crossing a boundary is arriving at a new time, and the card states the direction, the destination's rolling time, its date and its focus. It is a FIXED height (`SLICE_GATE_PX`) with the dormant and armed faces stacked absolutely inside it — if arming changed the box, arming would move every block below.
+- **`SliceGate`** is an INTERTITLE: crossing a boundary is arriving at a new time, and the card states HOW FAR it is — "5 天前" one way, "5 天后" the other, the same interval read in both directions — over the animated time, the date and the destination's focus. It is a FIXED height (`SLICE_GATE_PX`) with the dormant and armed faces stacked absolutely inside it — if arming changed the box, arming would move every block below.
 - **`FieldOrigin`** is the window's head: the same intertitle language for the one edge with no slice beyond it. It says either "the beginning of this memory" or offers the older page, and the page control lives HERE because the head is the only place where "show me earlier" is a coherent thing to ask.
 - **Exactly one boundary announces at a time**, decided by `armedGate` in `field-blocks.ts`: the nearest boundary actually in view, with the origin taking precedence at the head. An earlier version kept ONE direction flag for the whole field, so a single wheel tick flipped every gate on screen at once.
 - **Arm state travels as a MUTABLE OBJECT** (`GateSignal`), read by the gate's own frame loop. drei's `<Html>` mounts into a separate React root, so a prop change per crossing would re-render the portal to swap two words.
