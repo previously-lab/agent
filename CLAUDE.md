@@ -36,8 +36,9 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 ### Layout Hierarchy
 
 1. **Root Layout** (`src/app/layout.tsx`): Geist fonts + `ThemeProvider` + `<Toaster />`
-2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppSidebar />` + main content
-3. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
+2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppHeader />` + the page. **There is no sidebar** — chrome is three floating islands (brand/status left, actions right) over an infinite canvas with no page boundaries, so the header element is pointer-transparent and each island re-enables pointer events.
+3. **The shell** (`src/components/shell/app-shell.tsx`) is per-page, not per-layout: it owns the left `AxisBand` (the time rail) and the right pane, which holds the conversation field and the card field. The rung decides which is visible.
+4. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
 
 ### Internationalization (next-intl)
 
@@ -94,10 +95,12 @@ Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full de
 | Module | Path | Purpose |
 |--------|------|---------|
 | Capabilities | `src/lib/capabilities.ts` | Global app-mode checks: isAIConfigured, isDemo, canWrite, getRepoConfig (delegates data-source decisions to `src/lib/data-source/resolve.ts`) |
-| GitHub Tools | `src/lib/tools/` | readFile/writeFile/listFiles via Octokit |
+| GitHub Tools | `src/lib/tools/` | readFile/writeFile/listFiles via Octokit — the BASE data utilities. Everything else wraps these; nothing reads memory any other way |
+| Data Cache | `src/lib/cache/data-cache.ts` | The ONE home of the Next cache idiom. `unstable_cache`/`revalidateTag` are imported nowhere else. Per-backend TTLs: github 24h (closed slices) / 60s (indices) / 300s · **demo 30 days** (read-only dataset) · **local uncached** (a dev filesystem is written by things that bypass our write path). Every base read takes `{ fresh: true }` to bypass |
 | Path Whitelist | `src/lib/whitelist/` | Security boundary: memory/tasks/sessions only |
 | Origin Guard | `src/lib/security/origin-guard.ts` | Same-origin guard on POST mutation endpoints (`/api/chat`, `/api/episodic/flush`); optional `ACCESS_SECRET` key check for non-browser callers |
 | Session Manager | `src/lib/session/` | In-memory session state with sliding window (legacy) |
+| Layout Tiers | `src/lib/layout/tiers.ts` + `src/hooks/use-tier.ts` | The ONE place a viewport-dependent number is decided. Four presets (phone/tablet/laptop/wide); the reading column CLAMPS rather than switching so it never narrows as the window widens. The world does NOT scale — 1 world unit stays 1 CSS px, and the column/card take tier values instead |
 | Model Registry | `src/lib/models/` | models.dev-driven catalog, provider dispatch, main-model resolution (`resolve.ts`) — single model: everything runs on the selected model |
 | Time Rendering | `src/lib/time/relative.ts` + `src/lib/episodic/time-localize.ts` | Locale-aware relative-time annotations on slices/timeline/card reads, computed against the user's timezone |
 | Turn Priming | `src/lib/turn-priming.ts` | v0.9: only the slice-stable pieces survive — the continuity line and the date-anchor table, frozen into the system prompt's L3 block at slice start. The per-turn `Sent:` timestamp / intent / emotional read were evicted from the system prompt (cache stability); the model reads precise time via the `currentTime` tool |
@@ -165,16 +168,32 @@ landing, the fill pass — reads that one table.
 
 **One feed, one publisher.** The left band reads the right pane through a single
 mutable object (`src/lib/timeline3d/field-feed.ts`). Both fields are mounted
-whenever the timeline is open (the chat one dimmed behind), so the shell hands
-out a LEASE: the field that does not own the pane writes nothing at all. It used
-to be four shared refs with four private ownership rules, and the band's
-position came down to render order.
+whenever a card rung is up (the chat one held at `opacity-0` behind), so the
+shell hands out a LEASE: the field that does not own the pane writes nothing at
+all. It used to be four shared refs with four private ownership rules, and the
+band's position came down to render order.
 
-**Still to come** (see `doc/` plans): the two-view shell (`?view=`) cannot go
-until the live streaming turn has a home at the conversation rung — the live
-turn has no slice yet, so `SliceConversation` cannot render it — and the band is
-still its own WebGL canvas, which is what the four-ref protocol existed to
-bridge.
+**The ladder IS the navigation.** There is no view mode beside it. `?z=<rung>`
+names the rung (absent = `conversation`, written with `replaceState` because the
+rung changes on every wheel-zoom); `src/lib/chat/deep-link.ts` owns the parsing,
+and `?at=<sliceId>` still addresses a POINT rather than a zoom. The
+`?view=chat|timeline` param and the header pill that drove it are gone — they
+were the coarse half of this same axis. The floating lens
+(`components/timeline-3d/lens-switcher.tsx`) is now the only control that moves
+along it, and it is mounted by the SHELL so it exists at every rung.
+
+**Two renderers, deliberately.** The conversation rung is drawn by the chat's
+own field and the three card rungs by `CardField`. They are not two settings of
+one thing: the conversation rung must show the turn being written RIGHT NOW,
+which lives only in `useChat`'s messages, while `CardField`'s rows come from the
+persisted catalog. Giving the card field a live tail means threading a streaming
+array through props or a store — the re-render storm `card-field.tsx` documents.
+The camera unification (derive `CAM_Z` from the viewport so both fields share one
+coordinate system) is still open, but it is a RENDERING change, not a navigation
+one, and it is not what stood between the reader and a single ladder.
+
+**Still to come:** the band is still its own WebGL canvas, which is what the
+four-ref protocol existed to bridge.
 
 ## Project Documentation
 
