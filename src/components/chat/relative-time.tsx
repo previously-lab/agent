@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { NumberTicker } from "@/components/ui/number-ticker";
 import { TimeDisplay } from "./time-display";
@@ -51,6 +52,54 @@ interface RelativeTimeReadoutProps {
 }
 
 // ─── Component ──────────────────────────────────────────────────────────
+
+/**
+ * The relative phrase on its own — "12 分钟之前" / "3 天之后" / "12 mins ago".
+ *
+ * The distance from `fromIso` to `toIso`, in the app's one relative-time
+ * vocabulary (`relativeBetween`), rendered as prefix + rolling count + suffix.
+ * The noun is WHOLE, not a count: an earlier version of this idea composed
+ * numbers by hand, which is how "12分钟" and "12 mins" end up as two code
+ * paths. Here the ICU string carries the plural and the ticker carries only
+ * the number that moves.
+ *
+ * `fallback` is what to say when the two ends cannot be compared at all — an
+ * unparseable timestamp on either side. A boundary that has nothing honest to
+ * say about its distance should still say something.
+ *
+ * NOT ANCHORED TO NOW. The travel clock is (arriving somewhere reads as "3
+ * days ago" because you are coming from the present), but a boundary between
+ * two conversations is a distance between THOSE two, and it is the same
+ * number read in either direction — "12 minutes earlier" one way, "12 minutes
+ * later" the other.
+ */
+export function RelativeStamp({
+  fromIso,
+  toIso,
+  fallback,
+  className = "",
+}: {
+  fromIso: string;
+  toIso: string;
+  fallback: React.ReactNode;
+  className?: string;
+}) {
+  const t = useTranslations("relative");
+  const rel = useMemo(
+    () => relativeBetween(fromIso, toIso),
+    [fromIso, toIso],
+  );
+  if (!rel) return <span className={className}>{fallback}</span>;
+  if (rel.kind === "moments")
+    return <span className={className}>{t(`moments.${rel.dir}`)}</span>;
+  return (
+    <span className={`inline-flex items-baseline gap-1 ${className}`}>
+      {rel.dir === "after" && t("prefixAfter")}
+      <NumberTicker value={rel.count} className="![color:inherit]" />
+      {t(`${rel.unit}.${rel.dir}`, { count: rel.count })}
+    </span>
+  );
+}
 
 /**
  * The time-travel readout shown during slice navigation: a big relative label

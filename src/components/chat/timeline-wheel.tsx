@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { getTimelineCatalog } from "@/lib/episodic/actions";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { RollingDigit, RollingField } from "./rolling-number";
+import { RollingDigit, RollingField, RollingTime } from "./rolling-number";
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -137,22 +137,9 @@ function LockClock({ timestamp, isSelected }: { timestamp: string; isSelected: b
 
 // ─── Rolling digit — the "reverse tick" (shared: ./rolling-number) ────────
 
-/** The central readout — a rolling HH:MM (the rows carry the full date, so
- *  the readout stays slim). */
-function RollingTime({ timestamp }: { timestamp: string }) {
-  const d = new Date(timestamp);
-  const h = d.getHours();
-  const mi = d.getMinutes();
-
-  return (
-    <span className="inline-flex items-baseline font-mono leading-none">
-      <RollingField value={h} digits={2} />
-      <span className="mx-0.5 text-muted-foreground/60">:</span>
-      <RollingField value={mi} digits={2} />
-    </span>
-  );
-}
-
+// The central readout's rolling HH:MM is the SHARED `RollingTime` — the rows
+// carry the full date, so the readout stays slim. It used to be a local copy;
+// one time face is the point.
 // ─── The per-slice timestamp ────────────────────────────────────────────
 
 /**

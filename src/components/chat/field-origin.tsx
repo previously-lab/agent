@@ -23,11 +23,11 @@
  * the new conversations are off-screen above them to be scrolled into.
  */
 
-import { useEffect, useRef } from "react";
-import { useLocale, useTranslations } from "next-intl";
+import { useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ChevronUp, Loader2 } from "lucide-react";
-import { RollingTime } from "./rolling-number";
-import { formatSeamDate } from "./slice-seam";
+import { DateStamp, TimeStamp } from "./date-stamp";
+import { RelativeStamp } from "./relative-time";
 import { FIELD_ORIGIN_PX, type GateSignal } from "@/lib/chat/field-blocks";
 
 export interface FieldOriginProps {
@@ -50,8 +50,12 @@ export function FieldOrigin({
   signal,
 }: FieldOriginProps) {
   const t = useTranslations("chat.gate");
-  const locale = useLocale();
   const ref = useRef<HTMLDivElement>(null);
+  // The head's only anchor is the present — there is no other side to measure
+  // from — so "how long ago is this" is the question it answers. Stamped once
+  // per mount: a clock that re-reads itself every render would restart the
+  // ticker on every unrelated update.
+  const [nowIso] = useState(() => new Date().toISOString());
   const shownRef = useRef<boolean | null>(null);
 
   useEffect(() => {
@@ -89,17 +93,25 @@ export function FieldOrigin({
           has only one face — there is no other side to travel to — so it wears
           the solo class rather than the gate's direction pair. */}
       <div className="gate-face gate-face-solo absolute inset-0 flex flex-col items-center justify-center gap-2 px-4">
-        <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-          <ChevronUp className="size-3 shrink-0" aria-hidden />
-          {t("earlier")}
+        <span className="relative inline-flex items-baseline font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
+          <ChevronUp
+            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
+            aria-hidden
+          />
+          <RelativeStamp
+            fromIso={nowIso}
+            toIso={oldestIso}
+            fallback={t("earlier")}
+          />
         </span>
-        <RollingTime
+        <TimeStamp
           timestamp={oldestIso}
           className="text-3xl tracking-tight text-foreground"
         />
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-          {formatSeamDate(oldestIso, locale)}
-        </span>
+        <DateStamp
+          timestamp={oldestIso}
+          className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70"
+        />
         {hasMore && (
           <button
             type="button"

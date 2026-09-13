@@ -11,10 +11,11 @@
  * release needs somewhere to happen.
  *
  * WHAT IT DOES. It is an INTERTITLE. Crossing a boundary is arriving at a new
- * time, and the card says which — the direction, the time you land on, and
- * what that conversation was about, in the same time language the rest of the
- * app speaks (rolling digits, mono, tabular). The reader does not have to
- * guess what they just crossed into.
+ * time, and the card says how far that time is — "12 分钟之前" one way, "12
+ * 分钟之后" the other, the same distance read in both directions — over the
+ * date and the time it lands on, and what that conversation was about. Film
+ * intertitles have always worked this way, and so does every other time
+ * readout in this app.
  *
  * ONLY ONE SPEAKS AT A TIME. The field decides which boundary is announcing
  * (`armedGate`) and writes it into the `signal` object this component was
@@ -26,8 +27,7 @@
  * WHY IT IS NOT REACT STATE. The armed flag flips while scrolling, and each
  * gate is a separate `<Html>` React root — a state change would re-render the
  * portal to swap two words. The signal is a mutable object and the gate writes
- * a `data-` attribute from its own frame loop; CSS does the rest. Same reason
- * the field writes `data-dir` instead of holding direction in state.
+ * a `data-` attribute from its own frame loop; CSS does the rest.
  *
  * THE BOX NEVER CHANGES SIZE. `SLICE_GATE_PX` is fixed, and the dormant and
  * armed faces are both absolutely positioned inside it. If arming changed the
@@ -36,16 +36,16 @@
  */
 
 import { useEffect, useRef } from "react";
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { ChevronDown, ChevronUp } from "lucide-react";
-import { RollingTime } from "./rolling-number";
-import { formatSeamDate } from "./slice-seam";
+import { DateStamp, TimeStamp } from "./date-stamp";
+import { RelativeStamp } from "./relative-time";
 import { SLICE_GATE_PX, type GateSignal } from "@/lib/chat/field-blocks";
 
 export interface SliceGateProps {
-  /** Start of the NEWER slice — the destination when travelling forward. */
+  /** Start of the NEWER slice — the destination travelling forward. */
   dateIso: string;
-  /** Last activity of the OLDER slice — the destination when travelling back.
+  /** Last activity of the OLDER slice — the destination travelling back.
    *  Absent on a slice that recorded none, in which case the earlier face
    *  falls back to the newer time rather than rendering an empty readout. */
   prevActivityIso?: string;
@@ -70,39 +70,54 @@ function usableFocus(focus: string | undefined): string | null {
  * One of the two faces the armed card can wear — which one is on show is
  * chosen by the `data-dir` attribute, in CSS, because the flip happens
  * mid-scroll and must not cost a render.
+ *
+ * BOTH FACES READ THE SAME INTERVAL. `anchorIso` is the far side of the gate,
+ * so the two faces state the same distance and disagree only about which way
+ * it points — which is exactly what "12 分钟之前" and "12 分钟之后" mean.
  */
 function ArmedFace({
   dir,
   iso,
+  anchorIso,
   focus,
-  label,
 }: {
   dir: "past" | "future";
   iso: string;
+  anchorIso: string;
   focus: string | undefined;
-  label: string;
 }) {
-  const locale = useLocale();
+  const t = useTranslations("chat.gate");
   const said = usableFocus(focus);
   return (
     <div
       className={`gate-face gate-face-${dir} absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-4`}
     >
-      <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
+      {/* The chevron HANGS OFF the row rather than sitting in it: the card is
+          a centred column, and a leading arrow would push the phrase ~10px to
+          the right of the time and the date below it. */}
+      <span className="relative inline-flex items-baseline font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
         {dir === "past" ? (
-          <ChevronUp className="size-3 shrink-0" aria-hidden />
+          <ChevronUp
+            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
+            aria-hidden
+          />
         ) : (
-          <ChevronDown className="size-3 shrink-0" aria-hidden />
+          <ChevronDown
+            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
+            aria-hidden
+          />
         )}
-        {label}
+        <RelativeStamp
+          fromIso={anchorIso}
+          toIso={iso}
+          fallback={t(dir === "past" ? "earlier" : "later")}
+        />
       </span>
-      <RollingTime
+      <TimeStamp timestamp={iso} className="text-3xl tracking-tight text-foreground" />
+      <DateStamp
         timestamp={iso}
-        className="text-3xl tracking-tight text-foreground"
+        className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70"
       />
-      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70">
-        {formatSeamDate(iso, locale)}
-      </span>
       {said && (
         <span className="max-w-full truncate text-xs text-foreground/70">
           {said}
@@ -120,7 +135,6 @@ export function SliceGate({
   signal,
 }: SliceGateProps) {
   const t = useTranslations("chat.gate");
-  const locale = useLocale();
   const ref = useRef<HTMLDivElement>(null);
   const shownRef = useRef("");
 
@@ -159,19 +173,25 @@ export function SliceGate({
           nowhere near crossing it, and it is most of what they ever see. */}
       <div className="gate-idle absolute inset-0 flex items-center gap-3">
         <span className="h-px flex-1 bg-border/40" aria-hidden />
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] tabular-nums text-muted-foreground/50">
-          {formatSeamDate(dateIso, locale)}
-        </span>
+        <DateStamp
+          timestamp={dateIso}
+          className="shrink-0 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/50"
+        />
         <span className="h-px flex-1 bg-border/40" aria-hidden />
       </div>
 
       <ArmedFace
         dir="past"
         iso={olderIso}
+        anchorIso={dateIso}
         focus={prevFocus}
-        label={t("earlier")}
       />
-      <ArmedFace dir="future" iso={dateIso} focus={focus} label={t("later")} />
+      <ArmedFace
+        dir="future"
+        iso={dateIso}
+        anchorIso={olderIso}
+        focus={focus}
+      />
     </div>
   );
 }
