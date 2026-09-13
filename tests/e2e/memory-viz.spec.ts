@@ -258,22 +258,9 @@ test.describe("Memory viz (v0.10)", () => {
       ).toHaveCount(0);
     });
 
-    // EXPECTED TO FAIL — and this marker is a tripwire, not a shrug. The
-    // briefing card is genuinely absent from the DOM with two historical
-    // slices seeded and no live run: `showBriefingCard` is
-    // `arrival.mode === "briefing" && !emptyMemory`, and the turns below it DO
-    // render, so the memory is not empty and the mode is not `resume` (no
-    // banner). Where the card is lost between that gate and the stream's tail
-    // is NOT YET DIAGNOSED, and it predates the merged-field work — it fails
-    // identically on a tree with none of it (checked before the C6/C3 commits,
-    // in files neither touched: `chat-page.tsx`'s arrival block and
-    // `empty-briefing.tsx`).
-    //
-    // Playwright FAILS the run if a test marked `fail` starts passing, so
-    // fixing the briefing forces this marker off rather than letting it rot.
-    test.fail(
-      "briefing card not seated at the stream tail — undiagnosed, predates v0.13",
-      async ({ page }) => {
+    test("seats the briefing as a stream-tail card with history above (Rev 2)", async ({
+      page,
+    }) => {
       const slices = [
         makeSlice(new Date(Date.UTC(2026, 1, 1, 9)).toISOString(), {
           tag: "OLD1",
@@ -309,8 +296,7 @@ test.describe("Memory viz (v0.10)", () => {
       expect(cardBox).not.toBeNull();
       expect(turnBox).not.toBeNull();
       expect(cardBox!.y).toBeGreaterThan(turnBox!.y);
-      },
-    );
+    });
   });
 
 

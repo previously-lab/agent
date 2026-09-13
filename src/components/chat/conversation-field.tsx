@@ -459,6 +459,16 @@ function FieldScene({
           <BillboardBlock
             blockKey={blocks[i].key}
             items={blocks[i].items}
+            // EVERY block gets it, not just the live one. The briefing is a
+            // TAIL item — `groupBlocks` seats it in whatever block is already
+            // open rather than opening one for it, because it is not a
+            // boundary — so the block that needs to render the card is a
+            // HISTORY block. Handing the prop only to the live block is what
+            // made the card unreachable: it is set exactly when there IS
+            // history (`showBriefingCard` excludes the empty memory), and the
+            // item is seated in that history, so `renderStreamItem` saw
+            // `undefined` every time and drew nothing.
+            briefing={briefing}
             gateSignal={blocks[i].gate ? signalFor(blocks[i].key) : undefined}
             messages={messages}
             locale={locale}
