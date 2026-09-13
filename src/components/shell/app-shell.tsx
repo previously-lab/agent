@@ -195,6 +195,27 @@ export function AppShell({ initialConfig }: AppShellProps) {
     [router],
   );
 
+  // ── THE SHELL IS STILL TWO VIEWS, AND THAT IS THE NEXT THING TO GO ────────
+  // `ChatPage` and `TimelineScene` are both mounted here, one dimmed behind the
+  // other, and `?view=` picks which. They are the same thing at two
+  // granularities — a conversation block is one slice plus its closing gate
+  // (`field-blocks.ts`), and an L0 card row is one slice (`stacks.ts`) — so the
+  // target is ONE field whose zoom picks the component each unit wears, with
+  // the conversation as its finest rung and the slice/day/week cards above it.
+  //
+  // The ground for that is already laid and should not be re-laid:
+  //   - `src/lib/timeline3d/field-offsets.ts` is the ONE running offset table
+  //     (`buildOffsets` carries a measured height, a formula, or both).
+  //   - `gateBands` in `src/lib/chat/field-blocks.ts` builds the boundary
+  //     bands for any unit list, so the conversation's intertitle can render at
+  //     the card rungs too.
+  //   - The camera is the last piece: `card-field.tsx` still runs at
+  //     `CAM_Z = 9` with `worldPerPxForField`, while the conversation field is
+  //     orthographic at 1 world unit = 1 CSS px. Derive `CAM_Z` from the
+  //     viewport height (`H / (2·tan(fov/2))`) and the two coordinate systems
+  //     become the same one — `wpp ≡ 1`. SET `near`/`far` WHEN YOU DO: R3F's
+  //     default `far = 1000` clips the whole field once the camera distance is
+  //     derived that way (it is 1.87·H, so any viewport over ~536 px tall).
   const showTimeline = view === "timeline";
 
   return (

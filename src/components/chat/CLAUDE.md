@@ -54,7 +54,9 @@ Two things make that exact, and both are easy to break:
 - **A gate belongs to the block it CLOSES**, not the one it opens (`groupBlocks`). Attach the seam to the slice it opens and the seam that arrives with a new page lands inside the reader's own block, growing it by a gate's height under them.
 - **Block heights are re-indexed on prepend.** `heightsRef` is indexed by block position; a prepend renumbers every block, so the array is shifted by the same amount. Otherwise each arriving block inherits the height of whichever block used to sit at its index, and the blocks the reader is looking at fall back to an estimate.
 
-**4. Colour is a HIGHLIGHT, not an identity.** The left band rests grey; the core line carries the brand blue until something is singled out, and then the core steps back and the picked threads light in their own palette colours. See `src/lib/timeline3d/ink.ts`.
+**4. Colour is a HIGHLIGHT, not an identity, and the band draws the MOMENT rather than the window.** The left band rests grey; the core line carries the brand blue until something is singled out, and then the core steps back and the picked threads light in their own palette colours. See `src/lib/timeline3d/ink.ts`.
+
+Which threads it draws is decided by the anchor at the CENTRE of the viewport — the same one the knot is wound around — not by a ranking over everything in view (`lineUpFor` in `strand-transition.ts`, `activeAnchorIndex` in `winding.ts`). That is what lets a strand filter narrow the field without emptying the band: filtering drops CARDS, and a card still carries its whole strand set, so the bundle the highlight stands against survives the pick. Grey lines stay anonymous — the reader never needs to know which grey is which thread — and the selection is merged in and never dropped, so a highlight cannot vanish mid-scroll.
 
 ## Boundaries and the announcing gate
 
