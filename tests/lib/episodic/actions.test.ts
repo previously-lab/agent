@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
   loadSlice: vi.fn(),
   loadUserConfig: vi.fn(),
   setDemoPersona: vi.fn(),
+  readSliceBody: vi.fn(),
+  parseSlice: vi.fn(),
+  sliceIdToFilePath: vi.fn(),
+  readPreviously: vi.fn(),
 }));
 
 vi.mock("@/lib/demo/demo-fs", () => ({
@@ -28,10 +32,10 @@ vi.mock("@/lib/episodic/timeline/store", () => ({
 
 vi.mock("@/lib/episodic/manager", () => ({
   readSliceIndex: vi.fn(),
-  readSliceBody: vi.fn(),
-  parseSlice: vi.fn(),
-  sliceIdToFilePath: vi.fn(),
-  readPreviously: vi.fn(),
+  readSliceBody: mocks.readSliceBody,
+  parseSlice: mocks.parseSlice,
+  sliceIdToFilePath: mocks.sliceIdToFilePath,
+  readPreviously: mocks.readPreviously,
   readAgentTimeline: vi.fn(),
   loadSlice: mocks.loadSlice,
 }));
@@ -44,6 +48,7 @@ vi.mock("@/lib/config/loader", () => ({
 import {
   getSlicePageWithContent,
   getSliceJumpWindow,
+  getSliceContent,
   getArrivalState,
   getStrandList,
 } from "@/lib/episodic/actions";
@@ -315,6 +320,87 @@ describe("getSliceJumpWindow", () => {
     const entries = seedCatalog(2);
     await getSliceJumpWindow(entries[0].id, entries[1].id, "alice");
     expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
+  });
+});
+
+// ─── getSliceContent (the card face, and the `full` mode) ────────────────
+
+describe("getSliceContent", () => {
+  /** Longer than the frame's 280-char cut, so truncation is observable. */
+  const LONG = `${"x".repeat(400)} tail`;
+
+  function seedRead(turnCount: number): Turn[] {
+    const turns: Turn[] = Array.from({ length: turnCount }, (_, i) => ({
+      timestamp: `2026-08-11T10:${String(i).padStart(2, "0")}:00.000Z`,
+      role: i % 2 === 0 ? "user" : "agent",
+      content: LONG,
+    }));
+    mocks.sliceIdToFilePath.mockReturnValue(
+      "memory/episodic/slices/2026/08/11/1000/timeline/core.md",
+    );
+    mocks.readSliceBody.mockResolvedValue("raw body");
+    mocks.readPreviously.mockResolvedValue("previously card");
+    mocks.parseSlice.mockReturnValue({
+      slice_id: "2026-08-11-1000",
+      focus: "focus",
+      status: "closed",
+      start: "2026-08-11T10:00:00.000Z",
+      end: "2026-08-11T10:05:00.000Z",
+      timezone: "UTC",
+      summary: "summary",
+      open_loops: ["loop"],
+      decisions: ["decision"],
+      tags: [],
+      related_slices: [],
+      loops: [],
+      turns,
+      estimatedTokens: 0,
+    });
+    return turns;
+  }
+
+  it("cuts the wire payload to the card's opening rounds by default", async () => {
+    seedRead(9);
+
+    const content = await getSliceContent("2026-08-11-1000");
+
+    expect(content!.turns).toHaveLength(4);
+    expect(content!.turns[0].content.length).toBeLessThan(LONG.length);
+    expect(content!.turns[0].content.endsWith("…")).toBe(true);
+    expect(content!.totalTurns).toBe(9);
+    // The default read IS the preview — no second copy of it on the wire.
+    expect(content!.previewTurns).toBeUndefined();
+  });
+
+  it("ships every turn under { full: true }, and the card's preview with it", async () => {
+    const turns = seedRead(9);
+
+    const content = await getSliceContent("2026-08-11-1000", undefined, {
+      full: true,
+    });
+
+    expect(content!.turns).toBe(turns);
+    expect(content!.turns).toHaveLength(9);
+    // The preview rides along so ONE read answers both faces of the slice —
+    // `slice-cache` upgrades a card's entry with it instead of re-reading.
+    expect(content!.previewTurns).toHaveLength(4);
+    expect(content!.previewTurns![0].content.endsWith("…")).toBe(true);
+    // The truncation is a wire saving only: the read and the parse are the
+    // same either way.
+    expect(mocks.readSliceBody).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards the demo persona", async () => {
+    seedRead(1);
+    await getSliceContent("2026-08-11-1000", "alice", { full: true });
+    expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
+  });
+
+  it("returns null instead of throwing when the slice body cannot be read", async () => {
+    seedRead(1);
+    mocks.readSliceBody.mockRejectedValue(new Error("gone"));
+
+    expect(await getSliceContent("2026-08-11-1000")).toBeNull();
   });
 });
 

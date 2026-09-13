@@ -481,6 +481,8 @@ export interface SliceContent {
   summary: string;
   start: string;
   status: string;
+  /** The card's truncated opening rounds by default; every turn under
+   *  `{ full: true }` (see `getSliceContent`). */
   turns: Turn[];
   totalTurns: number;
   totalChars: number;
@@ -488,16 +490,35 @@ export interface SliceContent {
   decisions: string[];
   /** Previously.md content for this slice, or null if not found. */
   previously: string | null;
+  /**
+   * The card's truncated opening rounds, carried ONLY by a `full` read so that
+   * one read can answer both faces of a slice — the card's preview and the
+   * conversation's whole turns (`slice-cache` upgrades a preview in place with
+   * it, instead of re-requesting the slice it already holds). Absent on a
+   * default read, where `turns` already IS that preview.
+   */
+  previewTurns?: Turn[];
+}
+
+/** Options for `getSliceContent` — see the doc there. */
+export interface SliceContentOptions {
+  /** Ship every turn, not just the card's opening rounds. */
+  full?: boolean;
 }
 
 /**
- * Single-slice content for the 3D timeline frame card.
+ * Single-slice content for the 3D timeline frame card (and, under `full`, for
+ * the unified message stream).
  *
  * The card face only ever shows the slice's opening TWO exchanges (four
- * bubbles: user/agent ×2), so the wire payload is cut down server-side: at
- * most FRAME_TURN_COUNT turns, each truncated to FRAME_TURN_CHARS with an
- * ellipsis. Full turn text never leaves the server for this view.
- * `totalTurns`/`totalChars` still describe the untruncated slice.
+ * bubbles: user/agent ×2), so the DEFAULT wire payload is cut down server-side:
+ * at most FRAME_TURN_COUNT turns, each truncated to FRAME_TURN_CHARS with an
+ * ellipsis. `totalTurns`/`totalChars` still describe the untruncated slice.
+ *
+ * `{ full: true }` lifts that cut and ships every turn. It changes what crosses
+ * the wire, not what the read costs — the body is read and parsed in full
+ * either way — so the default stays truncated and existing callers are
+ * untouched.
  */
 const FRAME_TURN_COUNT = 4;
 const FRAME_TURN_CHARS = 280;
@@ -525,8 +546,10 @@ function frameTurns(turns: Turn[]): Turn[] {
 export async function getSliceContent(
   sliceId: string,
   persona?: string,
+  options?: SliceContentOptions,
 ): Promise<SliceContent | null> {
   if (persona) setDemoPersona(persona);
+  const full = options?.full === true;
   try {
     const path = sliceIdToFilePath(sliceId);
     // core slice body + previously.md ride in PARALLEL — they don't depend
@@ -550,12 +573,15 @@ export async function getSliceContent(
       summary: slice.summary,
       start: slice.start,
       status: slice.status,
-      turns: frameTurns(slice.turns),
+      turns: full ? slice.turns : frameTurns(slice.turns),
       totalTurns: slice.turns.length,
       totalChars,
       open_loops: slice.open_loops,
       decisions: slice.decisions,
       previously,
+      // A `full` read carries the card's preview too: the truncation is a wire
+      // saving, and this one has already paid for the whole body.
+      ...(full ? { previewTurns: frameTurns(slice.turns) } : {}),
     };
   } catch (err) {
     console.error(`[Episodic] getSliceContent failed for ${sliceId}:`, formatErrorDetail(err));
