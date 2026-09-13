@@ -10,7 +10,6 @@
  * range are owned by the shell and passed in as props so the left AxisBand can
  * read the same values.
  */
-import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand, type StackLevel } from "@/lib/timeline3d/stacks";
 import type { FieldRung } from "@/lib/timeline3d/units";
@@ -54,27 +53,23 @@ export interface TimelineSceneProps {
   reducedMotion: boolean;
 }
 
-/** The bottom fade + NOW marker overlaid on the card field. */
-function NowTail() {
-  const t = useTranslations("timeline3d");
+/**
+ * The bottom fade over the card field.
+ *
+ * THIS USED TO CARRY A 「NOW · 现在」 CAPTION and no longer does. The caption
+ * was a label with no action sitting in the bottom centre — exactly where the
+ * collapsed composer puts a button — and a reader clicked it expecting the
+ * button, which is the worst thing a label can do. It also said something the
+ * field already says: the bottom of the list IS now, the reader knows because
+ * they scrolled there, and the core line's blue spine marks the present on the
+ * rail. Removing it costs no information and removes a false affordance.
+ *
+ * The gradient stays: it is the fade that keeps a card from being sliced by the
+ * viewport edge mid-stroke.
+ */
+function BottomFade() {
   return (
-    <>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
-      {/* LEFT-ALIGNED, not centred. This marks the field's bottom edge, and the
-          bottom centre now belongs to the collapsed composer — a round button
-          that sits exactly where this caption used to. Two things claiming the
-          same spot, one of them a label that does nothing, is how a label comes
-          to look like a broken button; the reader who hit this reported exactly
-          that. The caption keeps its bottom edge and gives up its centre. */}
-      <div className="pointer-events-none absolute bottom-3 left-4 flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-muted-foreground sm:left-6">
-        <span
-          aria-hidden
-          className="inline-block size-1.5 rounded-[1px]"
-          style={{ backgroundColor: "var(--primary)" }}
-        />
-        {t("now.label")} · {t("now.sub")}
-      </div>
-    </>
+    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
   );
 }
 
@@ -113,7 +108,7 @@ export function TimelineScene({
           onRungChange={onRungChange}
         />
         {/* NOW tail marker — the field's bottom is the present. */}
-        <NowTail />
+        <BottomFade />
         {/* The zoom lens is NOT here any more. It is the app's only navigation
             control, so it belongs to the shell (`app-shell.tsx`) where it is
             mounted at every rung — inside this scene it vanished on the

@@ -36,7 +36,7 @@ import {
   RULER_LABEL_RIGHT_PX,
 } from "@/lib/timeline3d/ruler-math";
 import type { StrandListItem } from "@/lib/episodic/actions";
-import type { FieldFeed } from "@/lib/timeline3d/field-feed";
+import { requestSeek, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { RollingField } from "@/components/chat/rolling-number";
 import { StrandFilter } from "./strand-filter";
 
@@ -248,7 +248,6 @@ function ScrubLens({
   locale: string;
 }) {
   const t = useTranslations("timeline3d");
-  const genRef = useRef(0);
   const draggingRef = useRef(false);
   const thumbYRef = useRef(0);
   const thumbRef = useRef<HTMLDivElement>(null);
@@ -260,20 +259,6 @@ function ScrubLens({
     [locale],
   );
 
-  /** Publish a seek at a progress. The ONE writer of `feed.seek`, shared by the
-   *  drag and the jump buttons — see `SeekRequest` for why the band owns it. */
-  const publish = useCallback(
-    (progress: number, dragging: boolean) => {
-      genRef.current += 1;
-      feed.seek = {
-        progress: progress < 0 ? 0 : progress > 1 ? 1 : progress,
-        gen: genRef.current,
-        dragging,
-      };
-    },
-    [feed],
-  );
-
   const seek = useCallback(
     (clientY: number, dragging: boolean) => {
       const el = bandRef.current;
@@ -281,9 +266,9 @@ function ScrubLens({
       const r = el.getBoundingClientRect();
       if (r.height <= 0) return;
       thumbYRef.current = clientY - r.top;
-      publish((clientY - r.top) / r.height, dragging);
+      requestSeek(feed, (clientY - r.top) / r.height, dragging);
     },
-    [bandRef, publish],
+    [bandRef, feed],
   );
 
   useEffect(() => {
@@ -393,36 +378,49 @@ function ScrubLens({
         className="pointer-events-none absolute left-full top-0 ml-2 max-w-56 truncate rounded-md bg-background/90 px-2 py-1 font-mono text-[10px] whitespace-nowrap text-foreground opacity-0 ring-1 ring-border/60 backdrop-blur-md transition-opacity duration-150"
       />
 
-      {/* The two ends, one press away. Dragging is how you AIM; these are how
-          you LEAVE — the far ends of a long memory are the two places a reader
-          most often wants and the two a drag is worst at reaching, because the
-          target zone shrinks to a few pixels as the content grows.
-          They go through the same `publish` the drag does, so they inherit the
-          field's own travel and the band's own readout rather than adding a
-          second way to move the camera. */}
-      <div className="absolute inset-x-0 bottom-3 z-20 flex flex-col items-center gap-1">
-        <button
-          type="button"
-          data-jump="top"
-          aria-label={t("jumpTop")}
-          title={t("jumpTop")}
-          onClick={() => publish(0, false)}
-          className="flex size-6 items-center justify-center rounded-md bg-card/80 text-muted-foreground ring-1 ring-foreground/12 transition-colors hover:text-foreground"
-        >
-          <ArrowUpToLine className="size-3" />
-        </button>
-        <button
-          type="button"
-          data-jump="bottom"
-          aria-label={t("jumpBottom")}
-          title={t("jumpBottom")}
-          onClick={() => publish(1, false)}
-          className="flex size-6 items-center justify-center rounded-md bg-card/80 text-muted-foreground ring-1 ring-foreground/12 transition-colors hover:text-foreground"
-        >
-          <ArrowDownToLine className="size-3" />
-        </button>
-      </div>
     </>
+  );
+}
+
+/**
+ * JumpControls — the two ENDS of the memory, one press away.
+ *
+ * Dragging the rail is how you AIM; these are how you LEAVE. The far ends are
+ * the two places a reader most often wants and the two a drag is worst at
+ * reaching, because the target shrinks to a few pixels as the content grows.
+ *
+ * THEY FLOAT ON THE RIGHT, NOT ON THE RAIL. They used to sit on the strip
+ * itself, and a 32px column holding a thumb, a readout, a crossing dot and two
+ * buttons is not a rail any more — the controls were competing with the thing
+ * they controlled. The rail is where time IS; the right edge is where you act
+ * on it, and the zoom lens already lives there, so the two navigation controls
+ * now read as one cluster instead of being scattered across the screen.
+ */
+export function JumpControls({ feed }: { feed: FieldFeed }) {
+  const t = useTranslations("timeline3d");
+  return (
+    <div className="pointer-events-none absolute right-3 bottom-36 z-40 flex flex-col gap-1 sm:right-5 sm:bottom-32">
+      <button
+        type="button"
+        data-jump="top"
+        aria-label={t("jumpTop")}
+        title={t("jumpTop")}
+        onClick={() => requestSeek(feed, 0)}
+        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-background/75 text-muted-foreground ring-1 ring-border/60 backdrop-blur-md transition-colors hover:text-foreground"
+      >
+        <ArrowUpToLine className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        data-jump="bottom"
+        aria-label={t("jumpBottom")}
+        title={t("jumpBottom")}
+        onClick={() => requestSeek(feed, 1)}
+        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-background/75 text-muted-foreground ring-1 ring-border/60 backdrop-blur-md transition-colors hover:text-foreground"
+      >
+        <ArrowDownToLine className="size-3.5" />
+      </button>
+    </div>
   );
 }
 

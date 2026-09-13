@@ -44,7 +44,7 @@ import {
   parseRungParam,
 } from "@/lib/chat/deep-link";
 import { ChatPage } from "@/components/chat/chat-page";
-import { AxisBand } from "@/components/timeline-3d/axis-band";
+import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { LensSwitcher } from "@/components/timeline-3d/lens-switcher";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
@@ -415,6 +415,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
           onSelect={setRung}
           reducedMotion={reducedMotion}
         />
+        {/* The two ends, floating on the same right-hand edge as the lens. They
+            used to sit ON the rail, which by then held a thumb, a readout, a
+            crossing dot and these two — a 32px column where the controls were
+            competing with the thing they controlled. The rail says where time
+            IS; the right edge is where you act on it. */}
+        <JumpControls feed={feed} />
       </div>
     </div>
   );

@@ -73,10 +73,16 @@
  * COLOUR IS A HIGHLIGHT, NOT AN IDENTITY. The bundle rests GREY: a strand
  * wears its palette entry (globals.css `--strand-1` … `-10`, a single arc from
  * blue to rose, picked by hashing the name — see `ink.ts`) ONLY while the
- * reader has singled it out. Everything else is the resting grey. The core
- * line is drawn at full brand blue while nothing is selected, and STEPS BACK TO
- * THE SAME GREY the moment a selection exists, so exactly one thing on the
- * strip is ever carrying colour.
+ * reader has singled it out. Everything else is the resting grey.
+ *
+ * THE CORE IS THE ONE EXCEPTION, AND IT IS ALWAYS ON. It is the straight line
+ * down the middle of the cable, it is always `CORE_INK` (#0066ff), and it is
+ * always the same weight — nothing the reader does changes it. An earlier
+ * revision faded it to grey whenever a selection existed, reasoning that
+ * exactly one thing should carry colour at a time; the effect was that
+ * selecting a strand dissolved the landmark the reader was navigating by. A
+ * spine does not stop being a spine because you looked at one of the threads
+ * wrapped around it.
  *
  * That is what makes a whole bundle of threads legible at once. Colour asked to
  * say "which strand is this" for every line simultaneously has no answer — ten
@@ -230,6 +236,14 @@ const TURNS = 3;
  * must not do.
  */
 const CORE_INK = "#0066ff";
+
+/** The core line's opacity — CONSTANT, for the reason the frame loop gives:
+ *  the core is the strip's fixed landmark and every other line is read against
+ *  it, so it must not change when the reader selects something. It used to dip
+ *  to 0.55 under a selection to let the highlight pop; the highlight does not
+ *  need the help (it is the only colour on the strip either way) and the dip
+ *  cost the reader the thing they were navigating by. */
+const CORE_OPACITY = 0.8;
 /** How far the companion hairline is mixed toward white from the core. */
 const COMPANION_WHITEN = 0.45;
 /** The pulse that runs up the focused strand: a lightened core in the light
@@ -917,13 +931,24 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       groupRef.current.rotation.y = rotationYRef.current;
     }
 
-    // THE CORE STEPS BACK TOO. While nothing is singled out it is the one line
-    // on the strip with colour, and the grey bundle is built around it. The
-    // moment a selection exists, colour has a job again and the core hands its
-    // authority over — it fades to the resting grey with the rest, so the
-    // reader's eye has exactly one thing to follow either way.
-    coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
-    const coreOpacity = THREE.MathUtils.lerp(0.8, 0.55, nextF);
+    // THE CORE IS THE SPINE, AND IT DOES NOT STEP BACK.
+    //
+    // It used to. While nothing was singled out the core was the one line on
+    // the strip with colour, and the moment a selection existed it faded to the
+    // resting grey along with the bundle — on the theory that colour should
+    // have exactly one job at a time. What that did in practice was take the
+    // reader's only fixed landmark away at the exact moment they had asked to
+    // see MORE: the core is what says "this is the middle of the cable, and
+    // this is now", and it stopped saying it the moment the strip got
+    // interesting.
+    //
+    // So both its ink and its weight are constant. `CORE_INK` is #0066ff; it
+    // never takes a strand's colour and never goes grey. The highlight is
+    // untouched — selected strands still light in their own palette entries
+    // against the grey bundle, and since the core runs straight down the middle
+    // while they wind around it, the two never compete for the same pixels.
+    coreColor.current.copy(build.core);
+    const coreOpacity = CORE_OPACITY;
     // The core and its companion carry ONE colour for the whole line, so it
     // rides on the material rather than on per-instance colours (which stay
     // white and multiply through harmlessly).
@@ -934,7 +959,10 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       coreMat.color.copy(coreColor.current);
       coreMat.opacity = coreOpacity;
     }
-    companionColor.current.copy(build.companion).lerp(build.idleColor, nextF);
+    // The companion rides with the core and rides the same way — it is the
+    // second half of the spine, so it steps back exactly when the core does,
+    // which is never.
+    companionColor.current.copy(build.companion);
     const companionMat = companionLineRef.current?.material as
       | THREE.MeshBasicMaterial
       | undefined;

@@ -117,6 +117,28 @@ try {
   );
   check("the conversation field survived the round trip", fieldAfter);
 
+  // ── The rail carries the map; the right edge carries the controls ────────
+  // These two are here because they were MOVED, and a stale dev server serving
+  // the old bundle passes every behavioural check above while failing these —
+  // which is exactly how a false PASS happened earlier in this project.
+  const jumpTop = page.locator('[data-jump="top"]');
+  check("the jump-to-oldest control exists", (await jumpTop.count()) === 1);
+  if (await jumpTop.count()) {
+    const jb = await jumpTop.boundingBox();
+    const rail = await page.locator("[data-scrub-surface]").boundingBox();
+    check(
+      "the jump controls float to the RIGHT of the rail, not on it",
+      !!jb && !!rail && jb.x > rail.x + rail.width,
+      jb && rail
+        ? `jump x=${Math.round(jb.x)}, rail ends ${Math.round(rail.x + rail.width)}`
+        : "missing box",
+    );
+  }
+  check(
+    "the NOW caption is gone",
+    (await page.getByText(/NOW\s*·/).count()) === 0,
+  );
+
   await ctx.close();
 
   // ── The bottom-of-screen controls must not overlap, at PHONE width ───────

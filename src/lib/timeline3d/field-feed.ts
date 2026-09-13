@@ -113,6 +113,26 @@ export function createFieldFeed(): FieldFeed {
 }
 
 /**
+ * Ask the field to jump. THE way to publish a seek.
+ *
+ * The generation is derived from the feed's own last request rather than from a
+ * counter private to the caller, so any number of controls can publish without
+ * coordinating: each one simply takes the next number. A per-caller counter
+ * works until the second caller exists, and then two buttons in different
+ * components can hand the field the same generation and the field — which
+ * consumes by generation, precisely so a re-published request does not move the
+ * reader twice — would silently drop one of them.
+ */
+export function requestSeek(
+  feed: FieldFeed,
+  progress: number,
+  dragging = false,
+): void {
+  const t = progress < 0 ? 0 : progress > 1 ? 1 : progress;
+  feed.seek = { progress: t, gen: (feed.seek?.gen ?? 0) + 1, dragging };
+}
+
+/**
  * `progressFor` read BACKWARDS — the offset a seek's progress names.
  *
  * The two are one equation and belong together: `progressFor` normalises an
