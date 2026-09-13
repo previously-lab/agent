@@ -19,14 +19,13 @@ import {
   type StackLevel,
 } from "@/lib/timeline3d/stacks";
 import { FrameCardTexts, SliceCardFace } from "./frame-card";
-import type { FieldRig, LeavingItem } from "./field-rig";
+import { DEAL_DURATION, type FieldRig, type LeavingItem } from "./field-rig";
 
-// ─── Tunables (mirrored from card-field.tsx) ─────────────────────────────────
+// ─── Tunables ───────────────────────────────────────────────────────────────
 
 /** Depth between stacked leaving cards, in px — and a px IS a world unit
  *  (camera.ts), so it needs no conversion. */
 const SHEET_GAP_PX = 5;
-const DEAL_DURATION = 0.55;
 const LEAVING_STAGGER_S = 0.03;
 const LEAVING_MAX_DEPTH = 12;
 

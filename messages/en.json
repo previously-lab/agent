@@ -345,6 +345,7 @@
     },
     "lens": {
       "label": "Lens",
+      "conversation": "Conversation",
       "slice": "Slice",
       "day": "Day",
       "week": "Week",

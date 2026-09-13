@@ -29,6 +29,10 @@ import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { DEFAULT_LEVEL } from "@/lib/timeline3d/stacks";
+import {
+  rungForStackLevel,
+  type FieldRung,
+} from "@/lib/timeline3d/units";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import type { CrossingMark } from "@/components/chat/conversation-field";
 import {
@@ -60,10 +64,13 @@ export function AppShell({ initialConfig }: AppShellProps) {
   //    right TimelineScene read the same refs). ─────────────────────────────
   const progressRef = useRef<number>(1);
   const zoomLevelRef = useRef<StackLevel>(DEFAULT_LEVEL);
-  /** The zoom level, owned here so the floating lens switcher and the
-   *  AxisBand read the same value CardField transitions through. A deep link
-   *  (`?at=`) lands on slice level. */
-  const [level, setLevel] = useState<StackLevel>(at ? 0 : DEFAULT_LEVEL);
+  /** The zoom rung, owned here so the floating lens switcher reads the same
+   *  value CardField transitions through. A deep link (`?at=`) lands on the
+   *  slice rung — one step coarser than the conversation, which is where a
+   *  reader arriving at a named slice wants the field to open. */
+  const [rung, setRung] = useState<FieldRung>(
+    at ? "slice" : rungForStackLevel(DEFAULT_LEVEL),
+  );
   /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
    *  the strands each carries — CardField's row starts in timeline view, the
    *  chat stream's seam rows in chat view. The band winds its strand lines at
@@ -301,8 +308,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       strands={strands}
                       progressRef={progressRef}
                       levelRef={zoomLevelRef}
-                      level={level}
-                      onLevelChange={setLevel}
+                      rung={rung}
+                      onRungChange={setRung}
                       anchorsRef={anchorsRef}
                       crossingRef={crossingRef}
                       reducedMotion={reducedMotion}

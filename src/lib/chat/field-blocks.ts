@@ -50,6 +50,19 @@ export const FIELD_ORIGIN_PX = 128;
 export const ORIGIN_REGION = -1;
 
 /**
+ * The conversation column's width, in px — the measure a slice's turns are read
+ * at, at EVERY rung that draws them.
+ *
+ * A unit is one slice (see `units.ts`), so this is the width the turns are laid
+ * out in wherever they appear, and it belongs with the field's other fixed
+ * sizes rather than inside whichever component happens to draw them: the
+ * conversation field drew a block at this width and the merged field draws the
+ * same block at it, and a reader who switched between the two would see the
+ * text reflow if they disagreed.
+ */
+export const CONVERSATION_COLUMN_PX = 680;
+
+/**
  * How close to the top clamp counts as "at the head of the window", in px.
  * Within this the origin speaks rather than whichever gate happens to be
  * nearest the middle of the screen.

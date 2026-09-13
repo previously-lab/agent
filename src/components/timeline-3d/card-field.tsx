@@ -66,9 +66,21 @@ import {
 } from "@/lib/timeline3d/camera";
 import {
   anchorScrollFor,
+  unitAtPx,
   visibleRangeFor,
 } from "@/lib/timeline3d/field-offsets";
-import { layoutFor } from "@/lib/timeline3d/units";
+import {
+  layoutFor,
+  layoutForRows,
+  presentationForRung,
+  RUNG_ORDER,
+  rungForStackLevel,
+  rungIndex,
+  stackLevelForRung,
+  unitMetricsFor,
+  type FieldRung,
+  type UnitMetrics,
+} from "@/lib/timeline3d/units";
 import { boundaryBetween } from "@/lib/timeline3d/boundary";
 import {
   armedGate,
@@ -80,6 +92,7 @@ import type { CrossingMark } from "@/components/chat/conversation-field";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { BoundaryRow } from "./boundary-row";
+import { ConversationUnit } from "./conversation-unit";
 import { LeavingCard } from "./leaving-card";
 import type { DealOrigin, FieldRig, LeavingItem } from "./field-rig";
 
@@ -98,13 +111,21 @@ export interface CardFieldProps {
   reducedMotion: boolean;
   /** Written every frame: scroll progress 0..1 (0 = oldest, 1 = now). */
   progressRef: React.MutableRefObject<number>;
-  /** Optional ref the ambient threadline reads for zoom linkage. */
+  /** Optional ref the ambient threadline reads for zoom linkage.
+   *
+   *  A `StackLevel`, not a `FieldRung`, and that is deliberate rather than left
+   *  over: the band scales itself by the GROUPING (`zoomMult = 1 + 0.18·level`,
+   *  threadline-scene.tsx), and the two finest rungs group identically — both
+   *  are one slice per unit (`stackLevelForRung`). The band therefore cannot
+   *  tell them apart, and says so by taking the level. Making it take a rung
+   *  would mean re-deriving the band's whole zoom range against a camera it is
+   *  about to stop having its own of — that is C10's work, not this step's. */
   levelRef?: React.MutableRefObject<StackLevel>;
-  /** Controlled zoom level (lifted to the shell for the lens switcher). When
-   *  provided, every level change — gesture, card click, or external — still
-   *  runs through the same transition path and is echoed via onLevelChange. */
-  level?: StackLevel;
-  onLevelChange?: (level: StackLevel) => void;
+  /** Controlled rung (lifted to the shell for the lens switcher). When
+   *  provided, every rung change — gesture, unit click, or external — still
+   *  runs through the same transition path and is echoed via onRungChange. */
+  rung?: FieldRung;
+  onRungChange?: (rung: FieldRung) => void;
   /** Written every frame: the visible row starts at the current level as
    *  screen-Y fractions (0=top, 1=bottom) plus the strands each row carries —
    *  the band winds its strand lines at these heights. */
@@ -122,13 +143,6 @@ const PINCH_STEP_PX = 90;
 const ZOOM_ACCUM_IDLE_MS = 350;
 /** Entering this zone from below (px from the content top) prefetches older. */
 const TOP_ZONE_PX = 320;
-/** Deal-in: seconds; stagger per row of distance from the anchor. */
-const DEAL_DURATION = 0.55;
-const DEAL_STAGGER = 0.05;
-/** Mounts within this window after a level/filter change play the deal. */
-const GEN_WINDOW_MS = 650;
-/** Stagger for leaving cards stacking into a pile, seconds per depth step. */
-const LEAVING_STAGGER_S = 0.03;
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
 
@@ -146,39 +160,32 @@ function findOldSlot(
   return null;
 }
 
-/** The offset table for a row list at a level. Rows no longer advance by a
- *  fixed amount — every row but the last reserves a boundary region after its
- *  face — so nothing may compute a position as `index * pitch` any more. */
-function layoutForRows(
-  rows: StackRow[],
-  level: StackLevel,
-  geo: FrameGeometry,
-) {
-  return layoutFor(
-    rows.length,
-    () => geo.cardH,
-    (i) => i < rows.length - 1,
-    framePitchFor(level, geo),
-  );
-}
-
-/** Scroll offset that centers `anchorIdx` in the field, clamped to content. */
+/** Scroll offset that puts `anchorIdx`'s centre at the middle of the field,
+ *  clamped to content. The anchor's own height comes off the table — a
+ *  conversation unit's is measured, and passing a card's would aim the landing
+ *  half a conversation away from the slice the reader asked for. */
 function centeredScrollForAnchor(
-  tops: readonly number[],
+  layout: ReturnType<typeof layoutFor>,
   anchorIdx: number,
-  cardH: number,
   fieldH: number,
 ): number {
+  const { tops, faceHeights } = layout;
   const max = Math.max(0, (tops[tops.length - 1] ?? 0) - fieldH);
-  return anchorScrollFor(tops, anchorIdx, cardH, fieldH / 2, 0, max);
+  return anchorScrollFor(
+    tops,
+    anchorIdx,
+    faceHeights[anchorIdx] ?? 0,
+    fieldH / 2,
+    0,
+    max,
+  );
 }
 
 /** Row keys visible (including virtual-scroll margin) at a given scroll. */
 function visibleKeysFor(
   tops: readonly number[],
   rows: StackRow[],
-  pitch: number,
-  cardH: number,
+  metrics: UnitMetrics,
   fieldH: number,
   scrollPx: number,
 ): Set<string> {
@@ -188,8 +195,8 @@ function visibleKeysFor(
     rows.length,
     scrollPx,
     fieldH,
-    cardH * 1.2,
-    pitch,
+    metrics.margin,
+    metrics.fallbackExtent,
   )) {
     if (rows[i]) set.add(rows[i].key);
   }
@@ -258,7 +265,16 @@ function buildLeaving(
 interface FieldSceneProps {
   rows: StackRow[];
   geo: FrameGeometry;
-  level: StackLevel;
+  rung: FieldRung;
+  /** The offset table, computed ONCE by the field and handed down. It is the
+   *  same table the transitions and the fill pass read, and a second copy
+   *  computed here from the same inputs would be one more thing that has to
+   *  stay in agreement — with measured heights in the inputs, no longer a
+   *  guarantee that holds for free. */
+  layout: ReturnType<typeof layoutFor>;
+  metrics: UnitMetrics;
+  /** A conversation unit's measured height, reported up by the unit itself. */
+  onUnitHeight: (key: string, px: number) => void;
   rig: React.MutableRefObject<FieldRig>;
   hasMore: boolean;
   onNeedOlder: () => void;
@@ -277,7 +293,10 @@ interface FieldSceneProps {
 function FieldScene({
   rows,
   geo,
-  level,
+  rung,
+  layout,
+  metrics,
+  onUnitHeight,
   rig,
   hasMore,
   onNeedOlder,
@@ -294,7 +313,8 @@ function FieldScene({
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
-  const pitch = framePitchFor(level, geo);
+  const pitch = metrics.fallbackExtent;
+  const turns = presentationForRung(rung) === "turns";
   /** The card-to-card advance minus the face — the room the PILE cascades
    *  into. Deliberately NOT the row's full extent: the boundary region below
    *  each row is a new kind of space, and letting the sheets spread into it
@@ -302,18 +322,12 @@ function FieldScene({
    *  adding the boundary. */
   const pileGap = pitch - geo.cardH;
 
-  // WHERE EVERY ROW SITS, boundary included (v0.13). The card rungs used
+  // WHERE EVERY UNIT SITS, boundary included (v0.13). The card rungs used
   // `index * pitch`; they now share the running offset table with the
   // conversation rung, which is what lets one field carry both — a card row
-  // declares its height (`geo.cardH`, a formula), a conversation row measures
+  // declares its height (`geo.cardH`, a formula), a conversation unit measures
   // its text, and `layoutFor` is the only place that difference is known.
-  //
-  // Every row but the LAST closes a boundary: nothing follows the newest slice
-  // to cross, which is also why the conversation's last block has no gate.
-  const layout = useMemo(
-    () => layoutFor(rows.length, () => geo.cardH, (i) => i < rows.length - 1, pitch),
-    [rows.length, geo.cardH, pitch],
-  );
+  // `layout` itself is the field's, computed once and passed down (see props).
   const tops = layout.tops;
 
   // The clip planes follow the viewport, because the camera DISTANCE does
@@ -414,17 +428,25 @@ function FieldScene({
     if (anchorsRef) {
       const h = size.height;
       const scroll = rigNow.current;
+      const faces = layout.faceHeights;
       const list: FieldAnchor[] = [];
       for (let i = 0; i < rows.length; i++) {
-        const centerPy = (tops[i] ?? 0) + geo.cardH / 2 - scroll;
-        if (centerPy < -geo.cardH || centerPy > h + geo.cardH) continue;
-        // `span` is the row's own height: the band sizes each knot to the
-        // content it marks, so the twist spans the card and unwinds in the gap
-        // after it.
+        // The unit's OWN height, off the table — a card's formula at a card
+        // rung, a measurement at the turns rung. The offset table has already
+        // decided this once; re-deriving it here as `geo.cardH` would put the
+        // band's knot in the middle of the top card's worth of a conversation
+        // rather than the middle of the conversation.
+        const faceH = faces[i] ?? geo.cardH;
+        const centerPy = (tops[i] ?? 0) + faceH / 2 - scroll;
+        if (centerPy < -faceH || centerPy > h + faceH) continue;
+        // `span` is the unit's own height: the band sizes each knot to the
+        // content it marks, so the twist spans the slice and unwinds in the gap
+        // after it. Unclamped, as the conversation field has always published
+        // it — a tall block's knot simply spans further than the viewport.
         list.push({
           y: centerPy / h,
           strands: rows[i].strands,
-          span: geo.cardH / h,
+          span: faceH / h,
         });
         if (list.length >= 24) break;
       }
@@ -498,16 +520,16 @@ function FieldScene({
     }
 
     // Visible-range virtualization (React state changes only when it does) —
-    // the shared rule, so a card row and a conversation block mount by the same
-    // arithmetic. The margin is what keeps a row's measurement from being
-    // thrown away the moment it leaves the viewport.
-    const margin = geo.cardH * 1.2;
+    // the shared rule, so a card row and a conversation unit mount by the same
+    // arithmetic. The margin is what keeps a unit's measurement from being
+    // thrown away the moment it leaves the viewport, and at the turns rung it
+    // is sized to the tallest unit measured (see `unitMetricsFor`).
     const nextVisible = visibleRangeFor(
       tops,
       rows.length,
       rigNow.current,
       size.height,
-      margin,
+      metrics.margin,
       pitch,
     );
     const first = nextVisible[0] ?? 0;
@@ -537,6 +559,30 @@ function FieldScene({
           index < rows.length - 1
             ? boundaryBetween(row.top, rows[index + 1]?.top)
             : null;
+        if (turns) {
+          // The same unit, the other component: one slice drawn as its turns
+          // rather than as a card (`units.ts`). The gate is NOT a sibling here —
+          // it is drawn inside the unit, at its tail, because the room for it
+          // lives at the end of a MEASURED box and hanging it outside would
+          // need the measurement to be known before the unit renders, which is
+          // the one thing this rung cannot promise.
+          return (
+            <ConversationUnit
+              key={row.key}
+              entry={row.top}
+              index={index}
+              // The unit's CENTRE, off the table — see `ConversationUnit` for
+              // why a measured box is placed by its middle and not its top.
+              centerPx={
+                ((tops[index] ?? 0) + (tops[index + 1] ?? topPx + geo.cardH)) / 2
+              }
+              boundary={boundary}
+              signal={boundary ? signalFor(row.key) : undefined}
+              rig={rig}
+              onHeight={(px) => onUnitHeight(row.key, px)}
+            />
+          );
+        }
         return (
           <group key={row.key}>
             <RowGroup
@@ -569,7 +615,7 @@ function FieldScene({
           key={item.id}
           item={item}
           rowIndexMap={rowIndexMap}
-          level={level}
+          level={metrics.level}
           geo={geo}
           rig={rig}
           reducedMotion={reducedMotion}
@@ -593,8 +639,8 @@ export function CardField({
   reducedMotion,
   progressRef,
   levelRef,
-  level: levelProp,
-  onLevelChange,
+  rung: rungProp,
+  onRungChange,
   anchorsRef,
   crossingRef,
 }: CardFieldProps) {
@@ -617,18 +663,28 @@ export function CardField({
     }),
     [t],
   );
-  const [innerLevel, setInnerLevel] = useState<StackLevel>(
-    initialAtId ? 0 : DEFAULT_LEVEL,
+  // THE RUNG IS THE ZOOM; `level` is derived from it, never stored. `StackLevel`
+  // is still what the GROUPING is keyed by (`groupForLevel`, `framePitchFor`,
+  // `backingSheets`), so keeping a separate level state would be a second answer
+  // to a question `units.ts` already answers — and the two finest rungs share
+  // their answer, which is exactly the pair a second state would drift apart.
+  const [innerRung, setInnerRung] = useState<FieldRung>(
+    initialAtId ? "slice" : rungForStackLevel(DEFAULT_LEVEL),
   );
-  const level = levelProp ?? innerLevel;
-  const applyLevel = useCallback(
-    (next: StackLevel) => {
-      setInnerLevel(next);
-      onLevelChange?.(next);
+  const rung = rungProp ?? innerRung;
+  const level = stackLevelForRung(rung);
+  const applyRung = useCallback(
+    (next: FieldRung) => {
+      setInnerRung(next);
+      onRungChange?.(next);
     },
-    [onLevelChange],
+    [onRungChange],
   );
   useEffect(() => {
+    // The band's zoom linkage. Written as the LEVEL for the reason on the prop:
+    // the two finest rungs group identically, so the band cannot tell them
+    // apart, and pretending otherwise here would mean changing the band's zoom
+    // range in the same breath as the camera it scales against.
     if (levelRef) levelRef.current = level;
   }, [level, levelRef]);
   const [flashId, setFlashId] = useState<string | null>(initialAtId ?? null);
@@ -649,19 +705,52 @@ export function CardField({
   const initDoneRef = useRef(false);
   const prevFirstKeyRef = useRef<string | null>(null);
 
+  // ── Measured face heights: the turns rung's only input the cards lack ────
+  // Keyed by ROW KEY and not by index. A page arriving at the head renumbers
+  // every row, and an index-keyed map would hand each arriving slice the height
+  // of whichever one used to sit at its index — the same re-indexing trap the
+  // conversation field's `heightsRef` documents, avoided here by keying on the
+  // thing that does not move.
+  const measuredRef = useRef(new Map<string, number>());
+  const [measureVersion, setMeasureVersion] = useState(0);
+  // Coalesced to at most one bump per frame. A page landing reports a height
+  // per unit as each slice's read resolves, and a state update per report is a
+  // full re-render of the field per slice.
+  const bumpPendingRef = useRef(false);
+  const onUnitHeight = useCallback((key: string, px: number) => {
+    if (measuredRef.current.get(key) === px) return;
+    measuredRef.current.set(key, px);
+    if (bumpPendingRef.current) return;
+    bumpPendingRef.current = true;
+    requestAnimationFrame(() => {
+      bumpPendingRef.current = false;
+      setMeasureVersion((v) => v + 1);
+    });
+  }, []);
+
   const rows = useMemo(() => groupForLevel(entries, level), [entries, level]);
   const geo = useMemo(
     () => frameGeometryFor(fieldSize.w || 1280, fieldSize.h || 800),
     [fieldSize],
   );
-  // The outer component needs the same offset table the scene does: the scroll
-  // transitions (level change, filter change, the initial land, a deep link)
-  // all resolve a row's position, and none of them may do it as
-  // `index * pitch` any more.
-  const tops = useMemo(
-    () => layoutForRows(rows, level, geo).tops,
-    [rows, level, geo],
+  // THE ONE OFFSET TABLE. Every consumer — the scene's placement, the scroll
+  // transitions, the fill pass, the deep-link landing — reads this one, because
+  // with measured heights in the inputs two tables computed from "the same"
+  // inputs are two tables that can disagree.
+  const metrics = useMemo(
+    () => unitMetricsFor(rung, geo, measuredRef.current),
+    // `measureVersion` is the trigger. `measuredRef.current` is deliberately
+    // not a dependency — a ref's identity never changes, so listing it would
+    // say "this never moves" about the one thing that does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rung, geo, measureVersion],
   );
+  const layout = useMemo(
+    () => layoutForRows(rows, rung, geo, measuredRef.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rows, rung, geo, measureVersion],
+  );
+  const tops = layout.tops;
 
   // Render-time prepend compensation: shift the scroll rig synchronously so the
   // next frame's RowGroup positions use the corrected offset, avoiding a
@@ -672,9 +761,15 @@ export function CardField({
     if (prevFirst && prevFirst !== firstKey && !pendingAnchorRef.current) {
       const added = rows.findIndex((r) => r.key === prevFirst);
       if (added > 0) {
-        const pitch = framePitchFor(level, geo);
-        rig.current.target += added * pitch;
-        rig.current.current += added * pitch;
+        // THE SHIFT IS `tops[added]` — how far the old head has moved down the
+        // column — not `added * pitch`. The two are the same number at a card
+        // rung and stop being one at the turns rung, where a unit is as tall as
+        // its text: multiplying a count by a pitch would move the camera by a
+        // card per arriving SLICE and drop the reader's place by the
+        // difference.
+        const shift = tops[added] ?? added * metrics.fallbackExtent;
+        rig.current.target += shift;
+        rig.current.current += shift;
         rig.current.genAt = 0;
         rig.current.dealEligible = null;
       }
@@ -709,20 +804,19 @@ export function CardField({
     };
   }, [anchorsRef]);
 
-  // ── Generation bookkeeping: bump the deal clock on level/filter change ──
-  const genTrackRef = useRef<{ level: StackLevel; genKey: string } | null>(null);
+  // ── Generation bookkeeping: bump the deal clock on rung/filter change ──
+  const genTrackRef = useRef<{ rung: FieldRung; genKey: string } | null>(null);
   if (
     genTrackRef.current === null ||
-    genTrackRef.current.level !== level ||
+    genTrackRef.current.rung !== rung ||
     genTrackRef.current.genKey !== genKey
   ) {
-    genTrackRef.current = { level, genKey };
+    genTrackRef.current = { rung, genKey };
     rig.current.genAt = performance.now();
     rig.current.dealEligible = visibleKeysFor(
       tops,
       rows,
-      framePitchFor(level, geo),
-      geo.cardH,
+      metrics,
       fieldSize.h || 800,
       rig.current.current,
     );
@@ -739,13 +833,9 @@ export function CardField({
     }
   }, [genKey]);
 
-  // ── Start a real level transition (snapshot + leaving cards) ──
+  // ── Start a real rung transition (snapshot + leaving cards) ──
   const startTransition = useCallback(
-    (
-      fromLevel: StackLevel,
-      toLevel: StackLevel,
-      anchorId: string | null,
-    ) => {
+    (fromRung: FieldRung, toRung: FieldRung, anchorId: string | null) => {
       pendingAnchorRef.current = anchorId;
       if (reducedMotion) {
         rig.current.dealOrigins = null;
@@ -753,14 +843,17 @@ export function CardField({
         setLeaving([]);
         return;
       }
+      const fromLevel = stackLevelForRung(fromRung);
+      const toLevel = stackLevelForRung(toRung);
+      const measured = measuredRef.current;
       const fromRows = groupForLevel(entries, fromLevel);
       const toRows = groupForLevel(entries, toLevel);
-      const fromPitch = framePitchFor(fromLevel, geo);
-      const toPitch = framePitchFor(toLevel, geo);
-      const fromTops = layoutForRows(fromRows, fromLevel, geo).tops;
-      const toTops = layoutForRows(toRows, toLevel, geo).tops;
-      const fromCardH = geo.cardH;
-      const toCardH = geo.cardH;
+      const fromMetrics = unitMetricsFor(fromRung, geo, measured);
+      const toMetrics = unitMetricsFor(toRung, geo, measured);
+      const fromTops = layoutForRows(fromRows, fromRung, geo, measured).tops;
+      const toLayout = layoutForRows(toRows, toRung, geo, measured);
+      const toTops = toLayout.tops;
+      const cardH = geo.cardH;
       const scroll = rig.current.current;
       const fieldH = fieldSize.h || 800;
 
@@ -771,7 +864,7 @@ export function CardField({
       if (anchorIdx >= 0) rig.current.anchorIndex = anchorIdx;
       const newCurrent =
         anchorIdx >= 0
-          ? centeredScrollForAnchor(toTops, anchorIdx, toCardH, fieldH)
+          ? centeredScrollForAnchor(toLayout, anchorIdx, fieldH)
           : scroll;
       // Pre-apply the post-transition scroll so the first rendered frame
       // already uses the same current that RowGroup will animate toward.
@@ -782,8 +875,12 @@ export function CardField({
         const row = toRows[newIdx];
         const old = findOldSlot(row.top.id, fromRows);
         if (old == null) continue;
-        const newCenterPy = (toTops[newIdx] ?? 0) + toCardH / 2 - newCurrent;
-        const oldCenterPy = (fromTops[old.index] ?? 0) + fromCardH / 2 - scroll;
+        // Both ends use the CARD height, not the unit's own: the deal is a
+        // card-sized gesture playing between two card-sized slots. At a card
+        // rung that is the unit; at a conversation rung it is where the top
+        // card of the unit sits — which is where the reader's eye already is.
+        const newCenterPy = (toTops[newIdx] ?? 0) + cardH / 2 - newCurrent;
+        const oldCenterPy = (fromTops[old.index] ?? 0) + cardH / 2 - scroll;
         dealOrigins.set(row.key, {
           // `dy` is a screen-px distance, already a world distance (camera.ts);
           // `dz` is authored against the old camera and scales with it.
@@ -797,20 +894,22 @@ export function CardField({
       rig.current.dealEligible = visibleKeysFor(
         toTops,
         toRows,
-        toPitch,
-        toCardH,
+        toMetrics,
         fieldH,
         newCurrent,
       );
 
+      // Only a zoom OUT swallows cards. The two finest rungs share their
+      // grouping, so stepping between them leaves every unit where it is and
+      // this is empty by construction rather than by a special case.
       setLeaving(
         fromLevel < toLevel
           ? buildLeaving(
               fromRows,
               fromTops,
               scroll,
-              fromPitch,
-              fromCardH,
+              fromMetrics.fallbackExtent,
+              cardH,
               toRows,
               fieldH,
             )
@@ -820,11 +919,10 @@ export function CardField({
     [entries, geo, fieldSize.h, reducedMotion],
   );
 
-  // ── Anchor / scroll position after rows change (level, filter, paging) ──
+  // ── Anchor / scroll position after rows change (rung, filter, paging) ──
   useEffect(() => {
     if (rows.length === 0) return;
-    const pitch = framePitchFor(level, geo);
-    const max = Math.max(0, rows.length * pitch - fieldSize.h);
+    const max = Math.max(0, layout.total - fieldSize.h);
 
     // Prepend compensation now runs synchronously during render (above).
 
@@ -834,15 +932,14 @@ export function CardField({
       const idx = indexForAnchor(rows, anchorId);
       if (idx >= 0) {
         rig.current.anchorIndex = idx;
-        const pos = centeredScrollForAnchor(tops, idx, geo.cardH, fieldSize.h);
+        const pos = centeredScrollForAnchor(layout, idx, fieldSize.h);
         rig.current.target = pos;
         rig.current.current = pos;
         rig.current.genAt = performance.now();
         rig.current.dealEligible = visibleKeysFor(
           tops,
           rows,
-          pitch,
-          geo.cardH,
+          metrics,
           fieldSize.h,
           pos,
         );
@@ -859,22 +956,24 @@ export function CardField({
       rig.current.dealEligible = visibleKeysFor(
         tops,
         rows,
-        pitch,
-        geo.cardH,
+        metrics,
         fieldSize.h,
         max,
       );
     }
-  }, [rows, geo, level, fieldSize.h, tops]);
+    // `layout.total` rather than `count * pitch`: the column's extent is what
+    // the frame loop clamps against, and at the turns rung no count times any
+    // pitch gives it.
+  }, [rows, geo, layout, metrics, fieldSize.h, tops]);
 
   // ── Fill pass: content shorter than the field can never reach the top ──
   useEffect(() => {
     if (!hasMore || rows.length === 0) return;
     const timer = setTimeout(() => {
-      if (rows.length * framePitchFor(level, geo) <= fieldSize.h + 1) onNeedOlder();
+      if (layout.total <= fieldSize.h + 1) onNeedOlder();
     }, 900);
     return () => clearTimeout(timer);
-  }, [rows, hasMore, onNeedOlder, geo, level, fieldSize.h]);
+  }, [rows, hasMore, onNeedOlder, layout, fieldSize.h]);
 
   // ── ?at= flash decay ──
   useEffect(() => {
@@ -883,62 +982,71 @@ export function CardField({
     return () => clearTimeout(timer);
   }, [flashId]);
 
-  // ── Level stepping ──
-  const stepLevel = useCallback(
-    (next: StackLevel, anchorId?: string) => {
-      if (next === level) return;
-      startTransition(level, next, anchorId ?? null);
-      applyLevel(next);
+  // ── Rung stepping ──
+  const stepRung = useCallback(
+    (next: FieldRung, anchorId?: string) => {
+      if (next === rung) return;
+      startTransition(rung, next, anchorId ?? null);
+      applyRung(next);
     },
-    [level, startTransition, applyLevel],
+    [rung, startTransition, applyRung],
   );
 
-  /** Top id of the row nearest the viewport center — the gesture anchor. */
+  /** Top id of the unit nearest the viewport center — the gesture anchor.
+   *  Off the offset table, not `scroll / pitch`: a conversation unit is as tall
+   *  as its text, so dividing by a pitch names the wrong unit near the top of a
+   *  long one. */
   const centerAnchorFor = useCallback(
-    (fromLevel: StackLevel) => {
-      const curPitch = framePitchFor(fromLevel, geo);
-      const centerRow = Math.max(
-        0,
-        Math.round(
-          (rig.current.current + fieldSize.h / 2 - geo.cardH / 2) / curPitch,
-        ),
+    (fromRung: FieldRung) => {
+      const fromRows = groupForLevel(entries, stackLevelForRung(fromRung));
+      const table = layoutForRows(fromRows, fromRung, geo, measuredRef.current);
+      const idx = unitAtPx(
+        table.tops,
+        fromRows.length,
+        rig.current.current + fieldSize.h / 2,
       );
-      return groupForLevel(entries, fromLevel)[centerRow]?.top.id ?? null;
+      return fromRows[idx]?.top.id ?? null;
     },
     [entries, geo, fieldSize.h],
   );
 
   const zoomBy = useCallback(
     (dir: 1 | -1) => {
-      const next = Math.min(2, Math.max(0, level + dir)) as StackLevel;
-      if (next === level) return;
-      startTransition(level, next, centerAnchorFor(level));
-      applyLevel(next);
+      const next = RUNG_ORDER[rungIndex(rung) + dir];
+      if (next === undefined || next === rung) return;
+      startTransition(rung, next, centerAnchorFor(rung));
+      applyRung(next);
     },
-    [level, centerAnchorFor, startTransition, applyLevel],
+    [rung, centerAnchorFor, startTransition, applyRung],
   );
 
-  // ── External level changes (the lens switcher) ──
+  // ── External rung changes (the lens switcher) ──
   // Render-time, not an effect: the transition snapshot (deal origins +
-  // leaving cards) must exist BEFORE the new level's rows render, or the
-  // first frame already shows the final layout with no fly-in. An internal
-  // change echoes back through the prop with innerLevel already updated, so
-  // the `levelProp !== innerLevel` guard runs the transition exactly once.
-  const prevLevelPropRef = useRef(levelProp);
-  if (levelProp != null && prevLevelPropRef.current !== levelProp) {
-    prevLevelPropRef.current = levelProp;
-    if (levelProp !== innerLevel) {
-      startTransition(innerLevel, levelProp, centerAnchorFor(innerLevel));
-      setInnerLevel(levelProp);
+  // leaving cards) must exist BEFORE the new rung's rows render, or the first
+  // frame already shows the final layout with no fly-in. An internal change
+  // echoes back through the prop with innerRung already updated, so the
+  // `rungProp !== innerRung` guard runs the transition exactly once.
+  const prevRungPropRef = useRef(rungProp);
+  if (rungProp != null && prevRungPropRef.current !== rungProp) {
+    prevRungPropRef.current = rungProp;
+    if (rungProp !== innerRung) {
+      startTransition(innerRung, rungProp, centerAnchorFor(innerRung));
+      setInnerRung(rungProp);
     }
   }
 
+  // A CARD click means "show me this thing at the next grain down" — one step
+  // finer, which at `slice` is the conversation itself. At the conversation
+  // there is no finer rung and the click keeps its old meaning: hand the slice
+  // to the chat, which is the one place a slice can still be read in its full
+  // scrollback form.
   const onActivate = useCallback(
     (row: StackRow) => {
-      if (row.level === 0) onOpenSlice(row.top.id, row.top.start);
-      else stepLevel((row.level - 1) as StackLevel, row.top.id);
+      const finer = RUNG_ORDER[rungIndex(rung) - 1];
+      if (finer === undefined) onOpenSlice(row.top.id, row.top.start);
+      else stepRung(finer, row.top.id);
     },
-    [onOpenSlice, stepLevel],
+    [onOpenSlice, stepRung, rung],
   );
 
   const onLeavingDone = useCallback((id: string) => {
@@ -1063,7 +1171,10 @@ export function CardField({
         <FieldScene
           rows={rows}
           geo={geo}
-          level={level}
+          rung={rung}
+          layout={layout}
+          metrics={metrics}
+          onUnitHeight={onUnitHeight}
           rig={rig}
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}

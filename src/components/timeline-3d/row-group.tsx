@@ -27,18 +27,20 @@ import {
 } from "@/lib/timeline3d/stacks";
 import { worldScaleFor } from "@/lib/timeline3d/camera";
 import { FrameCardTexts, frameCardLabel, SliceCardFace } from "./frame-card";
-import type { FieldRig } from "./field-rig";
+import {
+  DEAL_DURATION,
+  DEAL_STAGGER,
+  GEN_WINDOW_MS,
+  type FieldRig,
+} from "./field-rig";
 
-// ─── Tunables (mirrored from card-field.tsx) ─────────────────────────────────
+// ─── Tunables ───────────────────────────────────────────────────────────────
 
 /** Depth between cascade sheets in world units AUTHORED against the old fixed
  *  camera; `worldScaleFor` converts it (0.1 there = camZ/9 here), which is what
  *  keeps the pile's depth cue the same fraction of the card at every viewport
  *  height. */
 const SHEET_GAP_WORLD = 0.1;
-const DEAL_DURATION = 0.55;
-const DEAL_STAGGER = 0.05;
-const GEN_WINDOW_MS = 650;
 
 const rowScratch = new THREE.Vector3();
 

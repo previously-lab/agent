@@ -16,8 +16,13 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTranslations } from "next-intl";
-import { CalendarDays, CalendarRange, Clapperboard } from "lucide-react";
-import type { StackLevel } from "@/lib/timeline3d/stacks";
+import {
+  CalendarDays,
+  CalendarRange,
+  Clapperboard,
+  MessagesSquare,
+} from "lucide-react";
+import { RUNG_ORDER, type FieldRung } from "@/lib/timeline3d/units";
 
 const HINT_KEY = "previously:lens-hint-seen:v1";
 
@@ -25,19 +30,23 @@ const HINT_KEY = "previously:lens-hint-seen:v1";
 const ISLAND =
   "rounded-full bg-background/75 ring-1 ring-border/60 backdrop-blur-md shadow-md";
 
-const SEGMENTS: { level: StackLevel; key: "slice" | "day" | "week"; Icon: typeof Clapperboard }[] = [
-  { level: 0, key: "slice", Icon: Clapperboard },
-  { level: 1, key: "day", Icon: CalendarDays },
-  { level: 2, key: "week", Icon: CalendarRange },
-];
+/** Finest first, the order `RUNG_ORDER` states — the segments are that list
+ *  wearing icons, so the control cannot drift out of step with the ladder it
+ *  offers. */
+const SEGMENTS: Record<FieldRung, { key: FieldRung; Icon: typeof Clapperboard }> = {
+  conversation: { key: "conversation", Icon: MessagesSquare },
+  slice: { key: "slice", Icon: Clapperboard },
+  day: { key: "day", Icon: CalendarDays },
+  week: { key: "week", Icon: CalendarRange },
+};
 
 export function LensSwitcher({
-  level,
+  rung,
   onSelect,
   reducedMotion,
 }: {
-  level: StackLevel;
-  onSelect: (level: StackLevel) => void;
+  rung: FieldRung;
+  onSelect: (rung: FieldRung) => void;
   reducedMotion: boolean;
 }) {
   const t = useTranslations("timeline3d.lens");
@@ -51,17 +60,17 @@ export function LensSwitcher({
     setCoarse(window.matchMedia("(pointer: coarse)").matches);
   }, []);
 
-  // The first level change — a switcher click, a gesture, or a stack click —
+  // The first rung change — a switcher click, a gesture, or a unit click —
   // means the user found zoom; dismiss the hint and remember it.
-  const prevLevelRef = useRef(level);
+  const prevRungRef = useRef(rung);
   useEffect(() => {
-    if (prevLevelRef.current === level) return;
-    prevLevelRef.current = level;
+    if (prevRungRef.current === rung) return;
+    prevRungRef.current = rung;
     setHintOpen((open) => {
       if (open) localStorage.setItem(HINT_KEY, "1");
       return false;
     });
-  }, [level]);
+  }, [rung]);
 
   return (
     // z-40: the card faces are drei Html overlays pinned at z-index 21–30
@@ -89,8 +98,9 @@ export function LensSwitcher({
         aria-label={t("label")}
         className={`${ISLAND} pointer-events-auto flex items-center gap-0.5 p-0.5 text-xs`}
       >
-        {SEGMENTS.map(({ level: segLevel, key, Icon }) => {
-          const active = segLevel === level;
+        {RUNG_ORDER.map((segRung) => {
+          const { key, Icon } = SEGMENTS[segRung];
+          const active = segRung === rung;
           return (
             <button
               key={key}
@@ -98,7 +108,7 @@ export function LensSwitcher({
               aria-pressed={active}
               aria-label={t(key)}
               title={t(key)}
-              onClick={() => onSelect(segLevel)}
+              onClick={() => onSelect(segRung)}
               className={`flex min-h-9 items-center gap-1 rounded-full px-3 transition-colors sm:min-h-7 sm:px-2.5 ${
                 active
                   ? "bg-background text-foreground shadow-sm"

@@ -55,6 +55,7 @@ import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
   armedGate,
+  CONVERSATION_COLUMN_PX,
   FIELD_ORIGIN_PX,
   gateBands,
   groupBlocks,
@@ -76,8 +77,9 @@ import { EmptyBriefing } from "./empty-briefing";
 
 /** The conversation column's width — and, orthographic camera at zoom 1, its
  *  width in world units. One world unit is one CSS pixel, so the numbers here
- *  are the numbers on screen and the text is never scaled. */
-const COLUMN_PX = 680;
+ *  are the numbers on screen and the text is never scaled. Shared with the
+ *  merged field's finest rung, which draws the same column. */
+const COLUMN_PX = CONVERSATION_COLUMN_PX;
 /** How far past the viewport a block stays MOUNTED (never a fetch: paging is
  *  manual). About one screen — the reader should be able to scroll a little in
  *  either direction without a block appearing from nowhere. */

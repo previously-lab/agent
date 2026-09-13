@@ -13,6 +13,7 @@
 import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand, type StackLevel } from "@/lib/timeline3d/stacks";
+import type { FieldRung } from "@/lib/timeline3d/units";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import type { CrossingMark } from "@/components/chat/conversation-field";
 import {
@@ -43,12 +44,14 @@ export interface TimelineSceneProps {
   strands: readonly string[];
   /** Card-field scroll progress 0..1 — forwarded to the left band. */
   progressRef: React.MutableRefObject<number>;
-  /** Card-field zoom level — forwarded to the left band. */
+  /** Card-field zoom level — forwarded to the left band. A `StackLevel` for
+   *  the reason on `CardFieldProps.levelRef`: the band scales by the GROUPING,
+   *  and the two finest rungs share one. */
   levelRef: React.MutableRefObject<StackLevel>;
-  /** Controlled zoom level owned by the shell (drives the lens switcher). */
-  level: StackLevel;
-  /** Request a zoom level — CardField runs the anchored transition. */
-  onLevelChange: (level: StackLevel) => void;
+  /** Controlled rung owned by the shell (drives the lens switcher). */
+  rung: FieldRung;
+  /** Request a rung — CardField runs the anchored transition. */
+  onRungChange: (rung: FieldRung) => void;
   /** Card-field row-start anchors (screen-Y fraction + the row's strands) —
    *  forwarded to the left band so it winds each strand at the row starts. */
   anchorsRef: React.MutableRefObject<FieldAnchor[]>;
@@ -86,8 +89,8 @@ export function TimelineScene({
   strands,
   progressRef,
   levelRef,
-  level,
-  onLevelChange,
+  rung,
+  onRungChange,
   anchorsRef,
   crossingRef,
   reducedMotion,
@@ -110,17 +113,17 @@ export function TimelineScene({
           reducedMotion={reducedMotion}
           progressRef={progressRef}
           levelRef={levelRef}
-          level={level}
-          onLevelChange={onLevelChange}
+          rung={rung}
+          onRungChange={onRungChange}
           anchorsRef={anchorsRef}
           crossingRef={crossingRef}
         />
         {/* NOW tail marker — the field's bottom is the present. */}
         <NowTail />
-        {/* Floating zoom-lens control (Slice / Day / Week). */}
+        {/* Floating zoom-lens control (Conversation / Slice / Day / Week). */}
         <LensSwitcher
-          level={level}
-          onSelect={onLevelChange}
+          rung={rung}
+          onSelect={onRungChange}
           reducedMotion={reducedMotion}
         />
       </div>

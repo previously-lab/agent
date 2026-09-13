@@ -345,6 +345,7 @@
     },
     "lens": {
       "label": "镜头",
+      "conversation": "对话",
       "slice": "片",
       "day": "日",
       "week": "周",

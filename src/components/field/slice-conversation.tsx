@@ -204,7 +204,7 @@ export function SliceConversation({
           height of dead space after every unit that closes one. The report is
           the FACE, which is what `faceHeights` means by "what a measured unit
           reports". */}
-      <div ref={ref} className={FACE_INSET}>
+      <div ref={ref} data-slice-conversation={entry.id} className={FACE_INSET}>
         {turns.map((turn, i) => (
           <HistoryTurn
             key={turnKey(turn, i)}

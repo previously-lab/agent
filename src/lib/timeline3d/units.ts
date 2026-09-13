@@ -28,7 +28,12 @@
  */
 import { SLICE_GATE_PX } from "@/lib/chat/field-blocks";
 import { buildOffsets } from "./field-offsets";
-import type { StackLevel } from "./stacks";
+import {
+  framePitchFor,
+  type FrameGeometry,
+  type StackLevel,
+  type StackRow,
+} from "./stacks";
 
 /** The four steps of the field's zoom, finest first. */
 export type FieldRung = "conversation" | "slice" | "day" | "week";
@@ -159,4 +164,70 @@ export function layoutFor(
       : full;
   }
   return { tops, faceHeights, total };
+}
+
+/**
+ * How a rung's units are sized, in one object — the answer to the three
+ * questions every position in the field needs and none of them should
+ * re-derive: which grouping the units come from, how much room an unmeasured
+ * one takes, and how far off screen one stays MOUNTED.
+ *
+ * `margin` is the one that is not a constant, and it is the subtle one. A card
+ * row's height is a formula, so a row just past the viewport edge is at most a
+ * row away from mattering and a card-and-a-bit covers it. A conversation unit's
+ * height is its TEXT — ten times a card, or more — so a unit whose top has
+ * scrolled above the viewport can still be the thing the reader is reading.
+ * Laying an unmeasured unit out at the inherited running height and then
+ * unmounting it because that GUESS put its end above the fold is a feedback
+ * loop: the measurement is lost, the table falls back to the guess, and every
+ * unit below jumps. So the margin is sized to the tallest unit actually seen.
+ */
+export interface UnitMetrics {
+  /** The `StackLevel` grouping this rung builds its units from. */
+  level: StackLevel;
+  /** What an unmeasured unit is assumed to occupy, until one reports. */
+  fallbackExtent: number;
+  /** How far past the viewport a unit stays mounted. */
+  margin: number;
+}
+
+export function unitMetricsFor(
+  rung: FieldRung,
+  geo: FrameGeometry,
+  measured: ReadonlyMap<string, number>,
+): UnitMetrics {
+  const level = stackLevelForRung(rung);
+  const base = geo.cardH * 1.2;
+  let margin = base;
+  if (rung === "conversation") {
+    for (const h of measured.values()) if (h > margin) margin = h;
+  }
+  return { level, fallbackExtent: framePitchFor(level, geo), margin };
+}
+
+/**
+ * The offset table for a unit list at a rung — the field's one entry point to
+ * `layoutFor`, and the one place a rung's `faceHeightOf` is decided.
+ *
+ * A card row states its height (a formula); a conversation unit measures its
+ * own, and reports 0 until it has — which `layoutFor` reads as "not measured
+ * yet", not as "zero tall" (see the `face > 0` test there). Keyed by ROW KEY,
+ * because a page arriving at the head renumbers every row and an index-keyed
+ * map would hand each arriving slice the height of whichever one used to sit at
+ * its index.
+ */
+export function layoutForRows(
+  rows: readonly StackRow[],
+  rung: FieldRung,
+  geo: FrameGeometry,
+  measured: ReadonlyMap<string, number>,
+): UnitLayout {
+  return layoutFor(
+    rows.length,
+    rung === "conversation"
+      ? (i) => measured.get(rows[i]?.key ?? "") ?? 0
+      : () => geo.cardH,
+    (i) => i < rows.length - 1,
+    framePitchFor(stackLevelForRung(rung), geo),
+  );
 }
