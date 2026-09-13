@@ -136,6 +136,46 @@ The chat component tree (`src/components/chat/`, see `src/components/chat/CLAUDE
 
 Tool calls use friendly outer labels with real tool names in expanded view.
 
+### The rung ladder — one field, four zooms
+
+The chat view and the timeline view are not two views. They are one field at
+different zoom, and `src/lib/timeline3d/units.ts` is the vocabulary for saying
+so:
+
+| rung | one unit is | drawn as |
+|------|-------------|----------|
+| `conversation` | one slice | its TURNS (`SliceConversation`) |
+| `slice` | one slice | a CARD (`RowGroup`) |
+| `day` | a day's slices | a stack |
+| `week` | a week's slices | a stack |
+
+The two finest rungs share a GROUPING — both render one slice, so both are
+`StackLevel` 0 — which is why stepping between them is the cheapest transition
+in the ladder: nothing is regrouped, only re-rendered. `StackLevel` is
+deliberately NOT renumbered to four values; `framePitchFor`, `groupForLevel`,
+`rowKeyFor` and `backingSheets` all key off `0 | 1 | 2`, and the band's camera
+multiplies it.
+
+**One offset table.** `layoutFor` is the only place a unit's height is decided,
+per rung: a card row states a formula, a conversation unit MEASURES its text and
+reports upward. A unit that has not measured yet inherits the running height
+rather than collapsing, so a freshly-paged window stays monotonic while it
+settles. Everything positional — placement, rung transitions, the deep-link
+landing, the fill pass — reads that one table.
+
+**One feed, one publisher.** The left band reads the right pane through a single
+mutable object (`src/lib/timeline3d/field-feed.ts`). Both fields are mounted
+whenever the timeline is open (the chat one dimmed behind), so the shell hands
+out a LEASE: the field that does not own the pane writes nothing at all. It used
+to be four shared refs with four private ownership rules, and the band's
+position came down to render order.
+
+**Still to come** (see `doc/` plans): the two-view shell (`?view=`) cannot go
+until the live streaming turn has a home at the conversation rung — the live
+turn has no slice yet, so `SliceConversation` cannot render it — and the band is
+still its own WebGL canvas, which is what the four-ref protocol existed to
+bridge.
+
 ## Project Documentation
 
 `doc/` is gitignored — it holds local design docs and release notes only.
