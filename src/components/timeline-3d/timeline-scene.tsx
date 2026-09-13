@@ -3,8 +3,7 @@
 /**
  * TimelineScene (Rev 11) — the timeline view's RIGHT pane only (v0.11 shell
  * refactor). The left AxisBand is now a persistent shell component; this file
- * composes the CardField R3F scene (WebGL present) or the StackList DOM
- * fallback (WebGL absent) plus the NOW tail marker, the floating lens
+ * composes the CardField R3F scene plus the NOW tail marker, the floating lens
  * switcher, and atmosphere overlays.
  *
  * Catalog window, strand selection, scroll progress/zoom refs, and the calendar
@@ -21,7 +20,6 @@ import {
   AtmosphereVignette,
   TIMELINE_KEYFRAMES,
 } from "./atmosphere";
-import { StackList } from "./stack-list";
 import { LensSwitcher } from "./lens-switcher";
 import dynamic from "next/dynamic";
 
@@ -59,8 +57,6 @@ export interface TimelineSceneProps {
   crossingRef: React.MutableRefObject<CrossingMark>;
   /** Reduced-motion preference. */
   reducedMotion: boolean;
-  /** WebGL capability from the shell; false forces the StackList fallback. */
-  webgl: boolean;
 }
 
 /** The bottom fade + NOW marker overlaid on the card field. */
@@ -95,7 +91,6 @@ export function TimelineScene({
   anchorsRef,
   crossingRef,
   reducedMotion,
-  webgl,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
 
@@ -105,41 +100,29 @@ export function TimelineScene({
       <AtmosphereBackdrop />
 
       <div className="relative h-full w-full">
-        {webgl ? (
-          <>
-            <CardField
-              entries={filtered}
-              hasMore={hasMore}
-              onNeedOlder={onNeedOlder}
-              onOpenSlice={onOpenSlice}
-              initialAtId={initialAtId}
-              genKey={strands.join("|") || "core"}
-              reducedMotion={reducedMotion}
-              progressRef={progressRef}
-              levelRef={levelRef}
-              level={level}
-              onLevelChange={onLevelChange}
-              anchorsRef={anchorsRef}
-              crossingRef={crossingRef}
-            />
-            {/* NOW tail marker — the field's bottom is the present. */}
-            <NowTail />
-            {/* Floating zoom-lens control (Slice / Day / Week). */}
-            <LensSwitcher
-              level={level}
-              onSelect={onLevelChange}
-              reducedMotion={reducedMotion}
-            />
-          </>
-        ) : (
-          <StackList
-            entries={filtered}
-            hasMore={hasMore}
-            onNeedOlder={onNeedOlder}
-            initialAtId={initialAtId}
-            genKey={strands.join("|") || "core"}
-          />
-        )}
+        <CardField
+          entries={filtered}
+          hasMore={hasMore}
+          onNeedOlder={onNeedOlder}
+          onOpenSlice={onOpenSlice}
+          initialAtId={initialAtId}
+          genKey={strands.join("|") || "core"}
+          reducedMotion={reducedMotion}
+          progressRef={progressRef}
+          levelRef={levelRef}
+          level={level}
+          onLevelChange={onLevelChange}
+          anchorsRef={anchorsRef}
+          crossingRef={crossingRef}
+        />
+        {/* NOW tail marker — the field's bottom is the present. */}
+        <NowTail />
+        {/* Floating zoom-lens control (Slice / Day / Week). */}
+        <LensSwitcher
+          level={level}
+          onSelect={onLevelChange}
+          reducedMotion={reducedMotion}
+        />
       </div>
 
       <AtmosphereVignette />

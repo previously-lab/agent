@@ -3,10 +3,8 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import {
   CARD_RATIO,
   DEFAULT_LEVEL,
-  MAX_SHELLS,
   backingSheets,
   cardGeometryFor,
-  densityTier,
   filterByStrand,
   frameGeometryFor,
   framePitchFor,
@@ -17,7 +15,6 @@ import {
   rowKeyFor,
   rowPitchFor,
   sheetPose,
-  shellPose,
   weekLabelFor,
 } from "@/lib/timeline3d/stacks";
 
@@ -136,39 +133,6 @@ describe("groupForLevel", () => {
 
   it("handles an empty catalog", () => {
     expect(groupForLevel([], 1)).toEqual([]);
-  });
-});
-
-describe("densityTier", () => {
-  it("maps count to shell layers", () => {
-    expect(densityTier(1)).toBe(0);
-    expect(densityTier(2)).toBe(1);
-    expect(densityTier(4)).toBe(1);
-    expect(densityTier(5)).toBe(2);
-    expect(densityTier(12)).toBe(2);
-    expect(densityTier(13)).toBe(3);
-    expect(densityTier(700)).toBe(MAX_SHELLS);
-  });
-});
-
-describe("shellPose", () => {
-  it("is deterministic for the same group + shell index", () => {
-    expect(shellPose("d:2024-08-17", 0)).toEqual(shellPose("d:2024-08-17", 0));
-    expect(shellPose("d:2024-08-17", 0)).not.toEqual(
-      shellPose("d:2024-08-17", 1),
-    );
-  });
-
-  it("stays inside the askew-but-tidy envelope", () => {
-    for (let i = 0; i < MAX_SHELLS; i++) {
-      for (const key of ["a", "b", "c", "w:2024-W33"]) {
-        const p = shellPose(key, i);
-        expect(Math.abs(p.rotate)).toBeGreaterThanOrEqual(0.5);
-        expect(Math.abs(p.rotate)).toBeLessThanOrEqual(1.4);
-        expect(Math.abs(p.offsetX)).toBeGreaterThanOrEqual(3);
-        expect(p.offsetY).toBeGreaterThanOrEqual(3);
-      }
-    }
   });
 });
 

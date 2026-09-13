@@ -248,50 +248,6 @@ export function poseScaleFor(geo: FrameGeometry): number {
   return geo.cardH / 216;
 }
 
-// ─── Stack shell pose (the "一沓" look) ─────────────────────────────────────
-
-/** Shell layers behind the top card, by group size. */
-export const MAX_SHELLS = 3;
-
-/** 1 slice → no shells (a plain card); 2-4 → 1; 5-12 → 2; 13+ → 3. */
-export function densityTier(count: number): 0 | 1 | 2 | 3 {
-  if (count <= 1) return 0;
-  if (count <= 4) return 1;
-  if (count <= 12) return 2;
-  return 3;
-}
-
-export interface ShellPose {
-  /** Degrees, ±(0.5°–1.4°) — DOM rows are wide; big tilts look broken. */
-  rotate: number;
-  /** px, ±(3–8) — the shell's edge peeks out on one side. */
-  offsetX: number;
-  /** px, +(3–7) — shells peek out BELOW the top card. */
-  offsetY: number;
-}
-
-/**
- * Hash-stable pose for shell `i` of a group — re-renders never reshuffle the
- * pile. Deeper shells drift further down and to their side. The pile reads
- * through edge offsets, not rotation: a wide DOM card rotated even 3° swings
- * its corners tens of px, which reads as broken, not askew.
- *
- * Rev 10: the 3D card field uses `sheetPose` for real backing-sheet meshes;
- * the DOM fallback uses `shellPose`.
- */
-export function shellPose(groupKey: string, i: number): ShellPose {
-  const h = hashString(`${groupKey}#${i}`);
-  const u = ((h >>> 3) % 1000) / 1000;
-  const v = ((h >>> 13) % 1000) / 1000;
-  const w = ((h >>> 23) % 512) / 512;
-  const sign = h & 1 ? 1 : -1;
-  return {
-    rotate: sign * (0.5 + u * 0.9),
-    offsetX: sign * (3 + v * 5) * (1 + i * 0.4),
-    offsetY: (3 + w * 4) * (1 + i * 0.5),
-  };
-}
-
 export interface SheetPose {
   /** Degrees — cumulative fan tilt, opposite sign of offsetX (a card that
    *  slipped down-right rotates with its right side lower). */

@@ -92,7 +92,7 @@ export const TIMELINE_KEYFRAMES = `
   0%, 100% { opacity: 0.15; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(1.3); }
 }
-/* Card entrance (Rev 9 §R9.4): the staggered rise lives in stack-list.tsx's
+/* Card entrance (Rev 9 §R9.4): the staggered rise lives in the field's
    generation-window motion wrapper — .tl-card-in remains only as the card
    MARKER class (e2e selector), no CSS animation. Scroll-mounted rows must
    not re-play an entrance. */

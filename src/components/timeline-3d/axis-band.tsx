@@ -243,16 +243,6 @@ export interface AxisBandProps {
    *  it is exact. Several picks overcount a slice carrying two of them, and a
    *  number that can be wrong is worse than no number. */
   selectedCount: number | null;
-  /**
-   * Whether the WebGL content is ready to be seen.
-   *
-   * The band's SPACE is reserved from the first paint — the caller renders it
-   * whenever WebGL is not known to be absent — so the only thing this gates is
-   * visibility. Without that split, the strip appears a frame after hydration
-   * (capability detection needs a DOM), shoving the conversation 38 px
-   * sideways in front of the reader; and without the fade, the braid pops.
-   */
-  contentReady?: boolean;
   /** Reduced-motion preference passed to the threadline. */
   reducedMotion: boolean;
   /** Add or remove one strand from the picks. */
@@ -272,7 +262,6 @@ export function AxisBand({
   strandList,
   ambientStrands,
   selectedCount,
-  contentReady = true,
   reducedMotion,
   onToggleStrand,
   onClearStrands,
@@ -307,9 +296,7 @@ export function AxisBand({
       // margin moves the WHOLE strip (canvas included), so the cable keeps its
       // size — insetting the canvas instead would shrink the radius and pack
       // the strands tighter, which is the opposite of what the moiré needs.
-      className={`relative ml-1.5 w-8 shrink-0 transition-opacity duration-500 ease-out ${
-        contentReady ? "opacity-100" : "opacity-0"
-      }`}
+      className="relative ml-1.5 w-8 shrink-0"
     >
       {/* Soft drop shadow behind the 3D thread bundle. Rendered only on the
           wide desktop band: on a slim strip (phone timeline, or the collapsed

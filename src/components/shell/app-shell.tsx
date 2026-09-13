@@ -48,17 +48,6 @@ interface AppShellProps {
   initialConfig?: UserConfig;
 }
 
-function detectWebGL(): boolean {
-  try {
-    const canvas = document.createElement("canvas");
-    return Boolean(
-      canvas.getContext("webgl2") ?? canvas.getContext("webgl"),
-    );
-  } catch {
-    return false;
-  }
-}
-
 export function AppShell({ initialConfig }: AppShellProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -66,12 +55,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const view = modeFromSearch(rawSearch);
   const at = parseAtParam(rawSearch);
   const reducedMotion = useReducedMotion() ?? false;
-
-  // null = not yet checked (first client render matches the server shell).
-  const [webgl, setWebgl] = useState<boolean | null>(null);
-  useEffect(() => {
-    setWebgl(detectWebGL());
-  }, []);
 
   // ── Shared timeline state (owned by the shell so the left AxisBand and the
   //    right TimelineScene read the same refs). ─────────────────────────────
@@ -223,27 +206,21 @@ export function AppShell({ initialConfig }: AppShellProps) {
           supplies the anchors either way: the card field's rows in the
           timeline, the chat stream's slice seams in chat, so the braid winds
           at whatever the user is actually looking at. */}
-      {/* Rendered from the first paint unless WebGL is known ABSENT, so the
-          strip's 38 px are never inserted in front of the reader a frame after
-          hydration. `contentReady` fades the braid in once detection lands. */}
-      {webgl !== false && (
-        <AxisBand
-          contentReady={webgl === true}
-          showChrome={showTimeline}
-          range={range}
-          progressRef={progressRef}
-          levelRef={zoomLevelRef}
-          anchorsRef={anchorsRef}
-          crossingRef={crossingRef}
-          strands={strands}
-          strandList={strandList}
-          ambientStrands={ambientStrands}
-          selectedCount={selectedCount}
-          reducedMotion={reducedMotion}
-          onToggleStrand={toggleStrand}
-          onClearStrands={clearStrands}
-        />
-      )}
+      <AxisBand
+        showChrome={showTimeline}
+        range={range}
+        progressRef={progressRef}
+        levelRef={zoomLevelRef}
+        anchorsRef={anchorsRef}
+        crossingRef={crossingRef}
+        strands={strands}
+        strandList={strandList}
+        ambientStrands={ambientStrands}
+        selectedCount={selectedCount}
+        reducedMotion={reducedMotion}
+        onToggleStrand={toggleStrand}
+        onClearStrands={clearStrands}
+      />
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
@@ -272,10 +249,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               className="absolute inset-0 z-10 flex flex-col bg-background"
             >
-              {/* Fallback → scene crossfade: the catalog arrival swaps a
-                  structured skeleton for the live scene without a hard cut. */}
+              {/* Catalog-loading crossfade: the arrival swaps a structured
+                  skeleton for the live scene without a hard cut. */}
               <AnimatePresence mode="wait" initial={false}>
-                {!timelineReady || webgl === null ? (
+                {!timelineReady ? (
                   <motion.div
                     key="fallback"
                     initial={{ opacity: 0 }}
@@ -308,7 +285,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       anchorsRef={anchorsRef}
                       crossingRef={crossingRef}
                       reducedMotion={reducedMotion}
-                      webgl={webgl}
                     />
                   </motion.div>
                 )}

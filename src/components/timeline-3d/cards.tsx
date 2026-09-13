@@ -11,21 +11,16 @@
  * squares; a 2px strand-colored spine on the left edge. Paper feel: subtle
  * noise grain + a top light-falloff gradient + a hairline frame.
  *
- * - SliceCard: one slice per row (L0).
- * - StackCard: a day (L1) or week (L2) stack — the top card is real; the
- *   DOM shells underneath are the no-WebGL fallback.
+ * The card FACE lives here; the pile's sheets are real 3D geometry (see
+ * `row-group.tsx`), so nothing in this file draws a stack.
  */
-import { useLocale, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { strandColor } from "@/lib/timeline3d/ink";
 import { strandAccent } from "@/lib/timeline3d/layout";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
-  densityTier,
-  shellPose,
-  weekLabelFor,
   type CardGeometry,
-  type StackRow,
 } from "@/lib/timeline3d/stacks";
 
 // ─── Shared bits ────────────────────────────────────────────────────────────
@@ -64,17 +59,6 @@ function dateTimeLabel(entry: TimelineSliceEntry): string {
 /** One accent per card: the first strand's color (grey when strandless). */
 function accentOf(entry: TimelineSliceEntry): string {
   return strandAccent(entry.strands);
-}
-
-/** "08/17 周日" / "08/17 Sun" for day stacks; the week label for L2 stacks. */
-function groupLabel(row: StackRow, locale: string): string {
-  const d = row.top.date;
-  if (row.level === 2) return weekLabelFor(d, locale);
-  const date = new Date(`${d}T12:00:00`);
-  const weekday = dateTimeFormat(locale, { weekday: "short" }).format(
-    date,
-  );
-  return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;
 }
 
 /** Paper grain — an SVG turbulence tile, tinted by `currentColor` at ~4%. */
@@ -174,95 +158,5 @@ function CardFace({
         )}
       </span>
     </span>
-  );
-}
-
-// ─── L0: one slice per row ──────────────────────────────────────────────────
-
-export function SliceCard({
-  entry,
-  geo,
-  flash,
-  onOpen,
-}: {
-  entry: TimelineSliceEntry;
-  geo: CardGeometry;
-  /** ?at= deep-link highlight. */
-  flash?: boolean;
-  onOpen: (sliceId: string) => void;
-}) {
-  return (
-    <button
-      onClick={() => onOpen(entry.id)}
-      className="tl-card-in group relative block text-left transition-transform duration-200 motion-safe:hover:-translate-y-0.5"
-      style={{ width: geo.cardW, height: geo.cardH }}
-    >
-      <CardFace
-        entry={entry}
-        label={`${entry.date.slice(5).replace("-", "/")} ${hhmm(entry.start)}`}
-        geo={geo}
-        flash={flash}
-      />
-    </button>
-  );
-}
-
-// ─── L1/L2: the stack ("一沓") ──────────────────────────────────────────────
-
-export function StackCard({
-  row,
-  geo,
-  flash,
-  /** DOM shells under the top card — the NO-WEBGL fallback pile only; the
-   *  WebGL pile field renders real 3D sheets instead. */
-  shells,
-  onZoomIn,
-}: {
-  row: StackRow;
-  geo: CardGeometry;
-  flash?: boolean;
-  shells: boolean;
-  /** Click = the whole view steps one level finer, anchored on this group. */
-  onZoomIn: (row: StackRow) => void;
-}) {
-  const locale = useLocale();
-  const shellCount = densityTier(row.count);
-  return (
-    <button
-      onClick={() => onZoomIn(row)}
-      aria-label={`${groupLabel(row, locale)} · ${row.count}`}
-      className="tl-card-in group relative block text-left transition-transform duration-200 motion-safe:hover:-translate-y-0.5"
-      style={{ width: geo.cardW, height: geo.cardH }}
-    >
-      {shells &&
-        Array.from({ length: shellCount }, (_, i) => {
-          // Deepest shell first so the top card's neighbour paints last.
-          const depth = shellCount - 1 - i;
-          const pose = shellPose(row.key, depth);
-          return (
-            <span
-              aria-hidden="true"
-              key={depth}
-              className="absolute top-0 bottom-0 rounded-xl bg-card ring-1 ring-foreground/15 shadow-sm"
-              style={{
-                left: 4 * (depth + 1),
-                right: 4 * (depth + 1),
-                transform: `translate(${pose.offsetX}px, ${pose.offsetY}px) rotate(${pose.rotate}deg)`,
-                opacity: 0.9 - depth * 0.15,
-                zIndex: 0,
-              }}
-            />
-          );
-        })}
-      <span className="relative z-[1] block">
-        <CardFace
-          entry={row.top}
-          label={groupLabel(row, locale)}
-          geo={geo}
-          flash={flash}
-          count={row.count}
-        />
-      </span>
-    </button>
   );
 }
