@@ -12,7 +12,7 @@
  *   catalog may hold thousands). Scroll state lives in refs — React only
  *   re-renders when the visible range or the level changes.
  * - Scroll: wheel / one-finger drag move through time (bottom = NOW); the
- *   shared `progressRef` reports 0..1 to the ambient threadline. Nearing the
+ *   shared `feed` reports 0..1 to the ambient threadline. Nearing the
  *   top edge prefetches the older catalog window (`onNeedOlder`), and a
  *   prepend shifts the scroll offset so the world never jumps.
  * - Zoom: ctrl/cmd+wheel or two-finger pinch steps L0 slice ↔ L1 day ↔
@@ -88,7 +88,11 @@ import {
   type GateBand,
   type GateSignal,
 } from "@/lib/chat/field-blocks";
-import type { CrossingMark } from "@/components/chat/conversation-field";
+import {
+  clearFeed,
+  progressFor,
+  type FieldFeed,
+} from "@/lib/timeline3d/field-feed";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { BoundaryRow } from "./boundary-row";
@@ -109,30 +113,18 @@ export interface CardFieldProps {
   /** Identity of the current filter — a change re-plays the deal. */
   genKey?: string;
   reducedMotion: boolean;
-  /** Written every frame: scroll progress 0..1 (0 = oldest, 1 = now). */
-  progressRef: React.MutableRefObject<number>;
-  /** Optional ref the ambient threadline reads for zoom linkage.
-   *
-   *  A `StackLevel`, not a `FieldRung`, and that is deliberate rather than left
-   *  over: the band scales itself by the GROUPING (`zoomMult = 1 + 0.18·level`,
-   *  threadline-scene.tsx), and the two finest rungs group identically — both
-   *  are one slice per unit (`stackLevelForRung`). The band therefore cannot
-   *  tell them apart, and says so by taking the level. Making it take a rung
-   *  would mean re-deriving the band's whole zoom range against a camera it is
-   *  about to stop having its own of — that is C10's work, not this step's. */
-  levelRef?: React.MutableRefObject<StackLevel>;
+  /** What the left band reads — see `field-feed.ts`. The chat field publishes
+   *  through the SAME object in the chat view. */
+  feed: FieldFeed;
+  /** Whether this field owns the band right now. False means it writes
+   *  NOTHING: both fields are mounted at once while the timeline is open, and
+   *  two writers on one feed is what the feed exists to prevent. */
+  publishing: boolean;
   /** Controlled rung (lifted to the shell for the lens switcher). When
    *  provided, every rung change — gesture, unit click, or external — still
    *  runs through the same transition path and is echoed via onRungChange. */
   rung?: FieldRung;
   onRungChange?: (rung: FieldRung) => void;
-  /** Written every frame: the visible row starts at the current level as
-   *  screen-Y fractions (0=top, 1=bottom) plus the strands each row carries —
-   *  the band winds its strand lines at these heights. */
-  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing row boundary sits (screen-Y fraction), for the left
-   *  band's anchor dot. */
-  crossingRef?: React.MutableRefObject<CrossingMark>;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -278,7 +270,6 @@ interface FieldSceneProps {
   rig: React.MutableRefObject<FieldRig>;
   hasMore: boolean;
   onNeedOlder: () => void;
-  progressRef: React.MutableRefObject<number>;
   reducedMotion: boolean;
   flashId: string | null;
   onActivate: (row: StackRow) => void;
@@ -286,8 +277,10 @@ interface FieldSceneProps {
   texts: FrameCardTexts;
   leaving: LeavingItem[];
   onLeavingDone: (id: string) => void;
-  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
-  crossingRef?: React.MutableRefObject<CrossingMark>;
+  /** The shared band feed — see `field-feed.ts`. */
+  feed: FieldFeed;
+  /** Whether this field owns the band. See `CardFieldProps.publishing`. */
+  publishing: boolean;
 }
 
 function FieldScene({
@@ -300,7 +293,6 @@ function FieldScene({
   rig,
   hasMore,
   onNeedOlder,
-  progressRef,
   reducedMotion,
   flashId,
   onActivate,
@@ -308,8 +300,8 @@ function FieldScene({
   texts,
   leaving,
   onLeavingDone,
-  anchorsRef,
-  crossingRef,
+  feed,
+  publishing,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -419,13 +411,16 @@ function FieldScene({
       onNeedOlder();
     }
 
-    progressRef.current = max > 0 ? rigNow.current / max : 1;
+    // THE ONE PLACE THIS FIELD TOUCHES THE FEED, and the ownership test is on
+    // the whole block rather than on each write — see `field-feed.ts`.
+    const ownsFeed = publishing;
+    if (ownsFeed) feed.progress = progressFor(rigNow.current, 0, max);
 
     // Row-start anchors for the threadline's strand field: every visible row
     // at the CURRENT level is one anchor (L0 slice / L1 day / L2 week), as a
     // screen-Y fraction of the shared field height, carrying the row's own
     // strands so the band winds them at exactly this height (v0.11 §2.3).
-    if (anchorsRef) {
+    if (ownsFeed) {
       const h = size.height;
       const scroll = rigNow.current;
       const faces = layout.faceHeights;
@@ -450,7 +445,7 @@ function FieldScene({
         });
         if (list.length >= 24) break;
       }
-      anchorsRef.current = list;
+      feed.anchors = list;
     }
 
     // The boundary the reader is crossing, for the band's anchor dot. The card
@@ -484,8 +479,8 @@ function FieldScene({
       if (signal.armed !== isArmed) signal.armed = isArmed;
       if (isArmed && signal.dir !== dirRef.current) signal.dir = dirRef.current;
     }
-    if (crossingRef) {
-      crossingRef.current.y = armedBand
+    if (ownsFeed) {
+      feed.crossing.y = armedBand
         ? (armedBand.top + armedBand.height / 2 - rigNow.current) / size.height
         : null;
     }
@@ -501,7 +496,7 @@ function FieldScene({
     const camZ = camZFor(size.height);
     const worldScale = worldScaleFor(size.height);
     if (!reducedMotion) {
-      const p = progressRef.current; // 0..1 (0 = oldest/top, 1 = newest/bottom)
+      const p = feed.progress; // 0..1 (0 = oldest/top, 1 = newest/bottom)
       const cx = (p - 0.5) * 2 * 0.42 * worldScale; // ±0.42 old world units
       const cy = (p - 0.5) * 2 * 0.14 * worldScale; // ±0.14 old world units
       camera.position.set(cx, cy, camZ);
@@ -637,12 +632,10 @@ export function CardField({
   initialAtId,
   genKey = "",
   reducedMotion,
-  progressRef,
-  levelRef,
+  feed,
+  publishing,
   rung: rungProp,
   onRungChange,
-  anchorsRef,
-  crossingRef,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const locale = useLocale();
@@ -681,12 +674,13 @@ export function CardField({
     [onRungChange],
   );
   useEffect(() => {
-    // The band's zoom linkage. Written as the LEVEL for the reason on the prop:
-    // the two finest rungs group identically, so the band cannot tell them
-    // apart, and pretending otherwise here would mean changing the band's zoom
-    // range in the same breath as the camera it scales against.
-    if (levelRef) levelRef.current = level;
-  }, [level, levelRef]);
+    // The band's zoom linkage, when this field owns the band. Written as the
+    // LEVEL because the band scales by the GROUPING and the two finest rungs
+    // group identically — the band cannot tell them apart, and saying otherwise
+    // here would mean re-deriving its zoom range against a camera it is about
+    // to stop having its own of (C10's work, not this step's).
+    if (publishing) feed.level = level;
+  }, [level, feed, publishing]);
   const [flashId, setFlashId] = useState<string | null>(initialAtId ?? null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [fieldSize, setFieldSize] = useState({ w: 0, h: 0 });
@@ -797,12 +791,13 @@ export function CardField({
 
   // The threadline only converges while the field is mounted; clear the
   // anchors on unmount (view switch) so the weave relaxes back to straight.
+  // The threadline only converges while a field owns the band; relax the feed on
+  // unmount (and on losing ownership) so the weave unwinds instead of freezing
+  // around units that are no longer on screen.
   useEffect(() => {
-    if (!anchorsRef) return;
-    return () => {
-      anchorsRef.current = [];
-    };
-  }, [anchorsRef]);
+    if (!publishing) return;
+    return () => clearFeed(feed);
+  }, [feed, publishing]);
 
   // ── Generation bookkeeping: bump the deal clock on rung/filter change ──
   const genTrackRef = useRef<{ rung: FieldRung; genKey: string } | null>(null);
@@ -1178,7 +1173,6 @@ export function CardField({
           rig={rig}
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}
-          progressRef={progressRef}
           reducedMotion={reducedMotion}
           flashId={flashId}
           onActivate={onActivate}
@@ -1186,8 +1180,8 @@ export function CardField({
           texts={texts}
           leaving={leaving}
           onLeavingDone={onLeavingDone}
-          anchorsRef={anchorsRef}
-          crossingRef={crossingRef}
+          feed={feed}
+          publishing={publishing}
         />
       </Canvas>
     </div>

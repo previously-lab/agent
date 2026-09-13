@@ -14,8 +14,7 @@ import { useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand, type StackLevel } from "@/lib/timeline3d/stacks";
 import type { FieldRung } from "@/lib/timeline3d/units";
-import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import type { CrossingMark } from "@/components/chat/conversation-field";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 import {
   AtmosphereBackdrop,
   AtmosphereVignette,
@@ -42,22 +41,16 @@ export interface TimelineSceneProps {
   initialAtId?: string;
   /** The current picks, in order. Empty = 核心时间线 (no filter). */
   strands: readonly string[];
-  /** Card-field scroll progress 0..1 — forwarded to the left band. */
-  progressRef: React.MutableRefObject<number>;
-  /** Card-field zoom level — forwarded to the left band. A `StackLevel` for
-   *  the reason on `CardFieldProps.levelRef`: the band scales by the GROUPING,
-   *  and the two finest rungs share one. */
-  levelRef: React.MutableRefObject<StackLevel>;
+  /** The shared band feed — forwarded to the left band. */
+  feed: FieldFeed;
+  /** True while the timeline is the visible pane and therefore owns the feed.
+   *  The chat field stays mounted behind it, and two writers is what the feed
+   *  exists to prevent. */
+  publishing: boolean;
   /** Controlled rung owned by the shell (drives the lens switcher). */
   rung: FieldRung;
   /** Request a rung — CardField runs the anchored transition. */
   onRungChange: (rung: FieldRung) => void;
-  /** Card-field row-start anchors (screen-Y fraction + the row's strands) —
-   *  forwarded to the left band so it winds each strand at the row starts. */
-  anchorsRef: React.MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing row boundary sits (screen-Y fraction), for the left
-   *  band's anchor dot. */
-  crossingRef: React.MutableRefObject<CrossingMark>;
   /** Reduced-motion preference. */
   reducedMotion: boolean;
 }
@@ -87,12 +80,10 @@ export function TimelineScene({
   onOpenSlice,
   initialAtId,
   strands,
-  progressRef,
-  levelRef,
+  feed,
+  publishing,
   rung,
   onRungChange,
-  anchorsRef,
-  crossingRef,
   reducedMotion,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
@@ -111,12 +102,10 @@ export function TimelineScene({
           initialAtId={initialAtId}
           genKey={strands.join("|") || "core"}
           reducedMotion={reducedMotion}
-          progressRef={progressRef}
-          levelRef={levelRef}
+          feed={feed}
+          publishing={publishing}
           rung={rung}
           onRungChange={onRungChange}
-          anchorsRef={anchorsRef}
-          crossingRef={crossingRef}
         />
         {/* NOW tail marker — the field's bottom is the present. */}
         <NowTail />

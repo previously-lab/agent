@@ -53,6 +53,7 @@ import { ErrorBanner } from "./error-banner";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import { progressFor, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import {
   armedGate,
   CONVERSATION_COLUMN_PX,
@@ -93,7 +94,7 @@ const FALLBACK_BLOCK_PX = 320;
 const INDICATOR_HOLD_MS = 1000;
 
 /** What a caller outside the field can ask it to do. Filled into a ref rather
- *  than exposed through a component ref, matching `anchorsRef`/`progressRef` —
+ *  than exposed through a component ref, matching the shared `FieldFeed` —
  *  this codebase has no `forwardRef`/`useImperativeHandle` anywhere and the
  *  ref-object handshake is its established shape for exactly this. */
 export interface ConversationFieldHandle {
@@ -109,23 +110,17 @@ export interface ConversationFieldHandle {
   scrollToBottom(): void;
 }
 
-/** Where the announcing boundary sits, for the axis band's anchor dot. */
-export interface CrossingMark {
-  /** Screen-Y as a 0..1 fraction of the viewport height, or null when no
-   *  boundary is announcing itself. */
-  y: number | null;
-}
-
 export interface ConversationFieldProps {
   items: ChatStreamItem[];
-  /** Screen-Y anchors for the left band — the same contract the card field
-   *  publishes in the timeline view, so the band needs no second code path. */
-  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing slice boundary sits, for the band's anchor dot. The
-   *  card field fills the same ref in the timeline view. */
-  crossingRef?: React.MutableRefObject<CrossingMark>;
-  /** 0..1 through the content, for the band's ruler and rotation drift. */
-  progressRef?: React.MutableRefObject<number>;
+  /** What the left band reads — see `field-feed.ts`. The card field publishes
+   *  through the SAME object in the timeline view, so the band needs no second
+   *  code path. */
+  feed?: FieldFeed;
+  /** Whether this field owns the band right now. False means it writes NOTHING:
+   *  both fields are mounted at once whenever the timeline is open, and when
+   *  two of them wrote the same refs the band's position came down to render
+   *  order. */
+  publishing?: boolean;
   /** Filled with the imperative handle; see `ConversationFieldHandle`. */
   apiRef?: React.MutableRefObject<ConversationFieldHandle | null>;
   /** Called when the reader asks for the older page at the window's head. */
@@ -291,9 +286,8 @@ interface SceneProps {
   offsetsRef: React.MutableRefObject<number[]>;
   /** The lowest offset the camera can reach — the origin sits above block 0. */
   minOffset: number;
-  anchorsRef?: React.MutableRefObject<FieldAnchor[]>;
-  crossingRef?: React.MutableRefObject<CrossingMark>;
-  progressRef?: React.MutableRefObject<number>;
+  feed?: FieldFeed;
+  publishing: boolean;
   /** The mutable arm signal for a gate block, keyed by the block's key. */
   signalFor: (key: string) => GateSignal;
   originSignal: GateSignal;
@@ -318,9 +312,8 @@ function FieldScene({
   heightsRef,
   offsetsRef,
   minOffset,
-  anchorsRef,
-  crossingRef,
-  progressRef,
+  feed,
+  publishing,
   signalFor,
   originSignal,
   messages,
@@ -390,30 +383,35 @@ function FieldScene({
       if (signal.armed !== isArmed) signal.armed = isArmed;
       if (isArmed && signal.dir !== dirRef.current) signal.dir = dirRef.current;
     }
-    if (crossingRef) {
-      crossingRef.current.y = armedBand
-        ? (armedBand.top + armedBand.height / 2 - offsetRef.current) / size.height
-        : null;
-    }
+    // THE ONE PLACE THIS FIELD TOUCHES THE FEED, and the ownership test is at
+    // the top of it rather than on each write: a field that does not own the
+    // pane publishes NOTHING. It is not a matter of writing the same numbers —
+    // the card field is mounted behind this one whenever the timeline is open,
+    // and the band's position must not come down to which of the two rendered
+    // last.
+    if (!feed || !publishing) return;
 
-    if (anchorsRef) {
-      const total = offsets[blocks.length] ?? 1;
-      if (progressRef) {
-        const span = Math.max(1, total - minOffset);
-        progressRef.current = (offsetRef.current - minOffset) / span;
-      }
-      const list: FieldAnchor[] = [];
-      for (const i of next) {
-        const start = offsets[i] ?? 0;
-        const h = (offsets[i + 1] ?? start + FALLBACK_BLOCK_PX) - start;
-        list.push({
-          y: (start + h / 2 - offsetRef.current) / size.height,
-          strands: blocks[i].strands,
-          span: h / size.height,
-        });
-      }
-      anchorsRef.current = list;
+    feed.crossing.y = armedBand
+      ? (armedBand.top + armedBand.height / 2 - offsetRef.current) / size.height
+      : null;
+
+    const total = offsets[blocks.length] ?? 1;
+    // The chat field's range starts at the ORIGIN region, one region above
+    // block 0 — not at zero. That difference is the whole reason `progressFor`
+    // takes a range instead of deriving one (see `field-feed.ts`).
+    feed.progress = progressFor(offsetRef.current, minOffset, total);
+
+    const list: FieldAnchor[] = [];
+    for (const i of next) {
+      const start = offsets[i] ?? 0;
+      const h = (offsets[i + 1] ?? start + FALLBACK_BLOCK_PX) - start;
+      list.push({
+        y: (start + h / 2 - offsetRef.current) / size.height,
+        strands: blocks[i].strands,
+        span: h / size.height,
+      });
     }
+    feed.anchors = list;
   });
 
   const offsets = offsetsRef.current;
@@ -496,9 +494,10 @@ function FieldScene({
 
 export function ConversationField({
   items,
-  anchorsRef,
-  crossingRef,
-  progressRef,
+  feed,
+  // No lease, no writes. Defaulting the other way would quietly restore the
+  // bug this exists to kill: two writers on one band, ordered by render.
+  publishing = false,
   apiRef,
   onNeedOlder,
   onTopItemChange,
@@ -979,9 +978,8 @@ export function ConversationField({
           heightsRef={heightsRef}
           offsetsRef={offsetsRef}
           minOffset={minOffset}
-          anchorsRef={anchorsRef}
-          crossingRef={crossingRef}
-          progressRef={progressRef}
+          feed={feed}
+          publishing={publishing}
           signalFor={signalFor}
           originSignal={originSignalRef.current}
           messages={messages}

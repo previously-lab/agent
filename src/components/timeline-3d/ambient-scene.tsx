@@ -22,11 +22,12 @@ import {
   RULER_AXIS_MARGIN_PX,
   YEAR_TICK_WIDTH,
 } from "@/lib/timeline3d/ruler-math";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 
 export interface AmbientSceneProps {
-  /** Card-field scroll progress 0..1 (0 = oldest/top, 1 = now/bottom).
-   *  Written by the card field every frame; read here without re-renders. */
-  progressRef: React.MutableRefObject<number>;
+  /** The shared band feed — see `field-feed.ts`. Read here every frame and
+   *  never through React state: this is a canvas drawn sixty times a second. */
+  feed: FieldFeed;
   /** Visible date range of the catalog. `oldest` is the earliest loaded
    *  slice's `date`; `now` is the current calendar date. */
   range: { oldest: string; now: string };
@@ -79,10 +80,7 @@ function drawRuler(
   ctx.fill();
 }
 
-export default function AmbientScene({
-  progressRef,
-  range,
-}: AmbientSceneProps) {
+export default function AmbientScene({ feed, range }: AmbientSceneProps) {
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
 
@@ -139,7 +137,7 @@ export default function AmbientScene({
       const { width, height } = sizeRef.current;
       if (width === 0 || height === 0) return;
       const { dark: d, range: r } = argsRef.current;
-      const progress = progressRef.current;
+      const progress = feed.progress;
       const last = lastDrawnRef.current;
       if (
         last &&

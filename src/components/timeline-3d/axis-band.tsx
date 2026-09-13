@@ -35,7 +35,7 @@ import {
   RULER_LABEL_RIGHT_PX,
 } from "@/lib/timeline3d/ruler-math";
 import type { StrandListItem } from "@/lib/episodic/actions";
-import type { CrossingMark } from "@/components/chat/conversation-field";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 import { RollingField } from "@/components/chat/rolling-number";
 import { StrandFilter } from "./strand-filter";
 
@@ -58,7 +58,7 @@ const ThreadlineScene = dynamic(() => import("./threadline-scene"), {
  * RulerYearLabels — the DOM half of the year ruler: one RollingField year
  * label per year-boundary tick (the same rolling-digits component the chat
  * side uses for time, so both read identically). Positions come from the
- * shared ruler-math strip; a rAF loop reads progressRef and positions the
+ * shared ruler-math strip; a rAF loop reads the feed's progress and positions the
  * label nodes IMPERATIVELY (style.top, no setState in the hot path), so the
  * labels paint in the same frame as this rAF — the tick canvas (AmbientScene)
  * reads the same progressRef in its own rAF and therefore can never be one
@@ -68,10 +68,10 @@ const ThreadlineScene = dynamic(() => import("./threadline-scene"), {
  * apart (the older one loses). Theme-aware via the text-foreground token.
  */
 function RulerYearLabels({
-  progressRef,
+  feed,
   range,
 }: {
-  progressRef: React.MutableRefObject<number>;
+  feed: FieldFeed;
   range: RulerRange;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -97,7 +97,7 @@ function RulerYearLabels({
         }
         return;
       }
-      const all = computeYearMarkers(range, height, progressRef.current);
+      const all = computeYearMarkers(range, height, feed.progress);
       const labelled = all ? resolveLabelledMarkers(all, height) : [];
       const live = new Set<number>();
       for (const m of labelled) {
@@ -121,7 +121,7 @@ function RulerYearLabels({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [range, progressRef]);
+  }, [range, feed]);
 
   return (
     <div
@@ -169,11 +169,7 @@ function RulerYearLabels({
  * most of the time there is no boundary on screen, and an anchor that
  * appeared instantly would read as a glitch.
  */
-function CrossingDot({
-  crossingRef,
-}: {
-  crossingRef: React.MutableRefObject<CrossingMark>;
-}) {
+function CrossingDot({ feed }: { feed: FieldFeed }) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -185,7 +181,7 @@ function CrossingDot({
       raf = requestAnimationFrame(loop);
       const parent = el.parentElement;
       if (!parent) return;
-      const y = crossingRef.current.y;
+      const y = feed.crossing.y;
       const on = y !== null;
       if (on) {
         // The fraction is of the SHARED viewport height — the same frame the
@@ -199,11 +195,12 @@ function CrossingDot({
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [crossingRef]);
+  }, [feed]);
 
   return (
     <div
       ref={ref}
+      data-crossing-dot
       aria-hidden="true"
       className="pointer-events-none absolute left-1/2 top-0 opacity-0 transition-opacity duration-300 ease-out"
     >
@@ -221,17 +218,12 @@ export interface AxisBandProps {
   showChrome?: boolean;
   /** Calendar range: oldest loaded slice → today. */
   range: { oldest: string; now: string };
-  /** Card-field scroll progress 0..1 — the threadline reads it per frame. */
-  progressRef: React.MutableRefObject<number>;
-  /** Card-field zoom level — the threadline camera reads it per frame. */
-  levelRef: React.MutableRefObject<StackLevel>;
-  /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
-   *  the strands each carries — the card field's row starts in timeline view,
-   *  the chat stream's slice seam rows in chat view; the band winds its strand
-   *  lines at these heights. */
-  anchorsRef: React.MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing slice boundary sits, for the core line's anchor dot. */
-  crossingRef: React.MutableRefObject<CrossingMark>;
+  /** What the right pane publishes, every frame — see `field-feed.ts`. ONE
+   *  object with ONE writer, which is why the band no longer takes a progress
+   *  ref, a level ref, an anchors ref and a crossing ref separately: four
+   *  props with four private ownership rules is how the band came to read
+   *  whichever field rendered last. */
+  feed: FieldFeed;
   /** The current picks, in order. Empty = 核心时间线 (no filter, core line
    *  leads). The band highlights every picked strand and greys the rest. */
   strands: readonly string[];
@@ -254,10 +246,7 @@ export interface AxisBandProps {
 export function AxisBand({
   showChrome = false,
   range,
-  progressRef,
-  levelRef,
-  anchorsRef,
-  crossingRef,
+  feed,
   strands,
   strandList,
   ambientStrands,
@@ -335,17 +324,15 @@ export function AxisBand({
       <ThreadlineScene
         strands={ambientStrands}
         selected={strands}
-        progressRef={progressRef}
+        feed={feed}
         range={range}
-        levelRef={levelRef}
-        anchorsRef={anchorsRef}
         reducedMotion={reducedMotion}
       />
-      <AmbientScene progressRef={progressRef} range={range} />
-      {SHOW_YEAR_RULER && <RulerYearLabels progressRef={progressRef} range={range} />}
+      <AmbientScene feed={feed} range={range} />
+      {SHOW_YEAR_RULER && <RulerYearLabels feed={feed} range={range} />}
       {/* Fade-out at the ruler band's edges (bottom weaker so the NOW
           dot stays visible). */}
-      <CrossingDot crossingRef={crossingRef} />
+      <CrossingDot feed={feed} />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-background to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background/60 to-transparent" />
       <div

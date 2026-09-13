@@ -27,14 +27,15 @@ import { AnimatePresence, motion } from "motion/react";
 import { useRouter } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import type { StackLevel } from "@/lib/timeline3d/stacks";
 import { DEFAULT_LEVEL } from "@/lib/timeline3d/stacks";
 import {
   rungForStackLevel,
   type FieldRung,
 } from "@/lib/timeline3d/units";
-import type { FieldAnchor } from "@/lib/timeline3d/winding";
-import type { CrossingMark } from "@/components/chat/conversation-field";
+import {
+  createFieldFeed,
+  type FieldFeed,
+} from "@/lib/timeline3d/field-feed";
 import {
   getStrandList,
   getTimelineCatalog,
@@ -61,9 +62,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const reducedMotion = useReducedMotion() ?? false;
 
   // ── Shared timeline state (owned by the shell so the left AxisBand and the
-  //    right TimelineScene read the same refs). ─────────────────────────────
-  const progressRef = useRef<number>(1);
-  const zoomLevelRef = useRef<StackLevel>(DEFAULT_LEVEL);
+  //    right pane read the same values). ────────────────────────────────────
+  //
+  // THE FEED IS ONE OBJECT WITH ONE WRITER (`lib/timeline3d/field-feed.ts`).
+  // Both fields are mounted whenever the timeline view is open — the chat one
+  // dimmed behind the other — and they used to publish into four shared refs
+  // with no ownership rule between them, so the band's position came down to
+  // which of the two rendered last. `panePublishes` below is the whole rule.
+  const feedRef = useRef<FieldFeed | null>(null);
+  feedRef.current ??= createFieldFeed();
+  const feed = feedRef.current;
   /** The zoom rung, owned here so the floating lens switcher reads the same
    *  value CardField transitions through. A deep link (`?at=`) lands on the
    *  slice rung — one step coarser than the conversation, which is where a
@@ -71,15 +79,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [rung, setRung] = useState<FieldRung>(
     at ? "slice" : rungForStackLevel(DEFAULT_LEVEL),
   );
-  /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
-   *  the strands each carries — CardField's row starts in timeline view, the
-   *  chat stream's seam rows in chat view. The band winds its strand lines at
-   *  these heights. */
-  const anchorsRef = useRef<FieldAnchor[]>([]);
-  /** Where the announcing slice boundary sits, for the band's anchor dot. The
-   *  foreground field fills it — the conversation field in chat, the card
-   *  field in the timeline. */
-  const crossingRef = useRef<CrossingMark>({ y: null });
   /** The strand picks, in the order they were added. An EMPTY list is 核心时间线
    *  — the unfiltered timeline — which is why this is a list and not a nullable
    *  name: "nothing selected" is a real state, not the absence of one. */
@@ -224,6 +223,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
   //     default `far = 1000` clips the whole field once the camera distance is
   //     derived that way (it is 1.87·H, so any viewport over ~536 px tall).
   const showTimeline = view === "timeline";
+  /** THE OWNERSHIP RULE, in one line. Exactly one pane publishes to the band at
+   *  a time: the timeline while it is open, the chat otherwise. The other field
+   *  is still mounted and still animating — it simply writes nothing, which is
+   *  why this is a lease rather than a merge. */
+  const panePublishes = showTimeline;
 
   return (
     <div className="flex h-dvh overflow-hidden">
@@ -237,10 +241,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
       <AxisBand
         showChrome={showTimeline}
         range={range}
-        progressRef={progressRef}
-        levelRef={zoomLevelRef}
-        anchorsRef={anchorsRef}
-        crossingRef={crossingRef}
+        feed={feed}
         strands={strands}
         strandList={strandList}
         ambientStrands={ambientStrands}
@@ -260,10 +261,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
           <ChatPage
             initialConfig={initialConfig}
             suppressAtJump={showTimeline}
-            anchorsRef={anchorsRef}
-            crossingRef={crossingRef}
-            anchorsActive={!showTimeline}
-            progressRef={progressRef}
+            feed={feed}
+            publishing={!panePublishes}
           />
         </div>
 
@@ -306,12 +305,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       onOpenSlice={openSlice}
                       initialAtId={at ?? undefined}
                       strands={strands}
-                      progressRef={progressRef}
-                      levelRef={zoomLevelRef}
+                      feed={feed}
+                      publishing={panePublishes}
                       rung={rung}
                       onRungChange={setRung}
-                      anchorsRef={anchorsRef}
-                      crossingRef={crossingRef}
                       reducedMotion={reducedMotion}
                     />
                   </motion.div>

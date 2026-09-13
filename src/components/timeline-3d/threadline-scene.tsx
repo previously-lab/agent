@@ -141,6 +141,7 @@ import {
   type FieldAnchor,
   type SpinKnot,
 } from "@/lib/timeline3d/winding";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 import {
   anchorWorldYs,
   knotLambdaForAnchor,
@@ -393,17 +394,17 @@ export interface ThreadlineSceneProps {
    *  is a natural reading of it, not a second feature bolted on. */
   selected: readonly string[];
   /** Card-field scroll progress 0..1 (0 = oldest/top, 1 = now/bottom). */
-  progressRef: React.MutableRefObject<number>;
+  feed: FieldFeed;
   /** Visible date range of the catalog. */
   range: { oldest: string; now: string };
   /** Current zoom level, written by `CardField`. */
-  levelRef: React.MutableRefObject<StackLevel>;
+
   /** The current view's nodes as screen-Y fractions (0=top, 1=bottom) plus
    *  the strands each carries — written by the card field (row starts) in
    *  timeline view and by the chat stream (slice seam rows) in chat view. The
    *  band winds them at these heights, and draws the strands of whichever one
    *  sits at the centre. */
-  anchorsRef: React.MutableRefObject<FieldAnchor[]>;
+
   /** Whether to skip motion. */
   reducedMotion: boolean;
 }
@@ -733,9 +734,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const {
     strands,
     selected,
-    progressRef,
-    levelRef,
-    anchorsRef,
+    feed,
     reducedMotion,
     dark,
   } = props;
@@ -745,7 +744,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   const groupRef = useRef<THREE.Group>(null);
   const cameraZRef = useRef(BASE_Z);
   const rotationYRef = useRef(0);
-  const prevProgressRef = useRef(progressRef.current);
+  const prevProgressRef = useRef(feed.progress);
   // The highlight set for this frame, put through `normalizeStrandName` — the
   // SAME normalisation the line-up dedupes by and `strandColor` hashes by, so
   // all three agree on which spellings are one strand. A selection therefore
@@ -860,7 +859,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         : 1;
     const pulseActiveGlobal = pulseProgress < 1;
 
-    const level = levelRef.current ?? 1;
+    const level = feed.level;
     const zoomMult = 1 + ZOOM_Z_MULTIPLIER * level;
     const focusMult = THREE.MathUtils.lerp(1, FOCUS_CAMERA_MULT, nextF);
     const targetZ = BASE_Z * zoomMult * focusMult;
@@ -870,7 +869,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     camera.position.z = cameraZRef.current;
 
     if (groupRef.current) {
-      const progress = progressRef.current;
+      const progress = feed.progress;
       const scrollVel =
         (progress - prevProgressRef.current) / Math.max(dt, 0.001);
       prevProgressRef.current = progress;
@@ -951,7 +950,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     // highlight always has a bundle to stand against. With no anchors published
     // yet (a view that has not measured), fall back to the ambient set, all of
     // them straight.
-    const anchors = anchorsRef.current;
+    const anchors = feed.anchors;
     const limit = strandLimitForBandWidth(size.width);
     const activeIndex = activeAnchorIndex(anchors);
     const base = activeIndex >= 0 ? anchors[activeIndex].strands : strands;

@@ -24,10 +24,9 @@ import type { MutableRefObject } from "react";
 import {
   ConversationField,
   type ConversationFieldHandle,
-  type CrossingMark,
 } from "./conversation-field";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
-import type { FieldAnchor } from "@/lib/timeline3d/winding";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 
 export interface UnifiedChatStreamProps {
   items: ChatStreamItem[];
@@ -50,17 +49,12 @@ export interface UnifiedChatStreamProps {
   briefing?: React.ComponentProps<
     typeof import("./empty-briefing").EmptyBriefing
   > | null;
-  /** Shared strand-field anchors owned by the app shell — the field fills them
-   *  while the chat view is foreground. */
-  anchorsRef?: MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing boundary sits, for the band's anchor dot. */
-  crossingRef?: MutableRefObject<CrossingMark>;
-  /** True only when the chat view is the FOREGROUND view. The field keeps
-   *  rendering while the timeline is open, but the timeline's card field owns
-   *  the anchors then — publishing here would fight it. */
-  anchorsActive?: boolean;
-  /** Shared 0..1 progress for the band's ruler and rotation drift. */
-  progressRef?: MutableRefObject<number>;
+  /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
+  feed?: FieldFeed;
+  /** True only while the chat view OWNS the band. The field keeps rendering
+   *  while the timeline is open, but the card field owns the feed then, and two
+   *  writers on one feed is exactly what the feed exists to prevent. */
+  publishing?: boolean;
   /** Filled with the field's imperative handle, for the page's jumps. */
   fieldApiRef?: MutableRefObject<ConversationFieldHandle | null>;
 }
@@ -73,10 +67,8 @@ export function UnifiedChatStream({
   hasMore,
   error,
   briefing,
-  anchorsRef,
-  crossingRef,
-  anchorsActive,
-  progressRef,
+  feed,
+  publishing,
   fieldApiRef,
 }: UnifiedChatStreamProps) {
   return (
@@ -89,9 +81,8 @@ export function UnifiedChatStream({
         hasMore={hasMore}
         error={error}
         briefing={briefing}
-        anchorsRef={anchorsActive ? anchorsRef : undefined}
-        crossingRef={crossingRef}
-        progressRef={progressRef}
+        feed={feed}
+        publishing={publishing}
         apiRef={fieldApiRef}
       />
     </div>

@@ -9,10 +9,8 @@ import { ChatInput } from "./chat-input";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { useAvailableModels } from "@/hooks/use-available-models";
 import { UnifiedChatStream } from "./unified-chat-stream";
-import type {
-  ConversationFieldHandle,
-  CrossingMark,
-} from "./conversation-field";
+import type { ConversationFieldHandle } from "./conversation-field";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 // The stream's item model moved to its own module: the conversation field
 // renders the same items and must not import the stream component to get them.
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
@@ -56,18 +54,12 @@ interface ChatPageProps {
   /** When true the `?at=` search param is ignored. Used by the shell when the
    *  timeline view is active, because the timeline handles the deep-link anchor. */
   suppressAtJump?: boolean;
-  /** Shared strand-field anchors owned by the app shell — the chat stream's
-   *  slice seams fill them while the chat view is foreground. */
-  anchorsRef?: MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing slice boundary sits, for the band's anchor dot. */
-  crossingRef?: MutableRefObject<CrossingMark>;
-  /** True only when the chat view is foreground (`!showTimeline`) — false
-   *  while the timeline's CardField owns the ref. */
-  anchorsActive?: boolean;
-  /** Shared 0..1 progress owned by the shell — the conversation field fills it
-   *  so the band's ruler and rotation drift track the chat the same way the
-   *  card field makes them track the timeline. */
-  progressRef?: MutableRefObject<number>;
+  /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
+  feed?: FieldFeed;
+  /** True only while the chat view OWNS the band (`!showTimeline`). Both fields
+   *  are mounted at once while the timeline is open, and two writers on one
+   *  feed is what the feed exists to prevent. */
+  publishing?: boolean;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -80,10 +72,8 @@ interface MountVerdict extends ArrivalDecision {
 export function ChatPage({
   initialConfig,
   suppressAtJump,
-  anchorsRef,
-  crossingRef,
-  anchorsActive,
-  progressRef,
+  feed,
+  publishing,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -109,10 +99,8 @@ export function ChatPage({
     <Inner
       initialConfig={initialConfig}
       suppressAtJump={suppressAtJump}
-      anchorsRef={anchorsRef}
-      crossingRef={crossingRef}
-      anchorsActive={anchorsActive}
-      progressRef={progressRef}
+      feed={feed}
+      publishing={publishing}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -297,24 +285,19 @@ export function sliceStartIndex(
 function Inner({
   initialConfig,
   suppressAtJump,
-  anchorsRef,
-  crossingRef,
-  anchorsActive,
-  progressRef,
+  feed,
+  publishing,
   persona,
   shouldResume,
   initialMessages,
   arrival,
 }: {
   initialConfig?: UserConfig;
-  progressRef?: MutableRefObject<number>;
   suppressAtJump?: boolean;
-  /** Shared strand-field anchors — see ChatPageProps. */
-  anchorsRef?: MutableRefObject<FieldAnchor[]>;
-  /** Where the announcing slice boundary sits — see ChatPageProps. */
-  crossingRef?: MutableRefObject<CrossingMark>;
-  /** True only when the chat view is foreground. */
-  anchorsActive?: boolean;
+  /** The shared band feed — see ChatPageProps. */
+  feed?: FieldFeed;
+  /** True only while the chat view owns the band — see ChatPageProps. */
+  publishing?: boolean;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -967,13 +950,11 @@ function Inner({
             onStartReached={handleStartReached}
             error={error}
             onTopItemChange={handleTopItemChange}
-            anchorsRef={anchorsRef}
             // Same rule as the anchors: only the FOREGROUND view publishes, so
             // the band's dot follows whichever field the reader is actually
             // looking at rather than being fought over by both.
-            crossingRef={anchorsActive ? crossingRef : undefined}
-            anchorsActive={anchorsActive}
-            progressRef={progressRef}
+            feed={feed}
+            publishing={publishing}
             fieldApiRef={fieldApiRef}
             briefing={
               showBriefingCard
