@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// No Data Cache in vitest — unstable_cache is replaced with a passthrough so
-// these tests exercise the no-store fallback path, and revalidateTag is a
-// spy so tag invalidation is asserted directly.
+// There is no Data Cache store in vitest, so `unstable_cache` is stubbed with
+// a passthrough: the reader runs directly, which is the same thing the
+// no-store fallback in `@/lib/cache/data-cache` does (that branch, and the
+// caching behavior itself, are covered in tests/lib/cache/data-cache.test.ts).
+// revalidateTag is a spy so tag invalidation is asserted directly.
 const mockRevalidateTag = vi.fn();
 
 vi.mock("next/cache", () => ({
@@ -26,10 +28,12 @@ import {
   readFile,
   readFileFresh,
   invalidateReadCache,
-  ttlForPath,
   fileCacheTag,
-  READ_TTLS,
 } from "@/lib/tools/readFile";
+
+// `ttlForPath` and the TTL table live in `@/lib/cache/data-cache` now, and are
+// covered there (tests/lib/cache/data-cache.test.ts) across all three
+// backends. This file covers the GitHub read that binds them to a path.
 
 const repo = "test-repo";
 const owner = "test-owner";
@@ -47,51 +51,6 @@ function fileResponse(content: string) {
     },
   };
 }
-
-describe("ttlForPath", () => {
-  it("caches closed slice files for a day (immutable)", () => {
-    expect(ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md")).toBe(
-      READ_TTLS.CLOSED_SLICE_SECONDS
-    );
-    expect(
-      ttlForPath("memory/episodic/slices/2026-01/slice-abc/previously.md")
-    ).toBe(READ_TTLS.CLOSED_SLICE_SECONDS);
-    expect(ttlForPath("memory/episodic/slices/2026-01/slice-abc/core.md")).toBe(
-      86_400
-    );
-  });
-
-  it("uses a short TTL for the timeline index (mutates on open/close)", () => {
-    expect(ttlForPath("memory/episodic/timeline/index.json")).toBe(
-      READ_TTLS.TIMELINE_INDEX_SECONDS
-    );
-    expect(ttlForPath("memory/episodic/timeline/index.json")).toBe(60);
-  });
-
-  it("treats the MONTHLY index as mutable, not as a closed slice", () => {
-    // It lives under `slices/`, so it used to inherit the 24-hour rule meant
-    // for immutable closed slices — on a file rewritten every time a slice in
-    // that month opens, closes or flushes.
-    expect(ttlForPath("memory/episodic/slices/2026/08/_index.json")).toBe(60);
-  });
-
-  it("uses a moderate TTL for other memory files", () => {
-    expect(ttlForPath("memory/episodic/strands.json")).toBe(
-      READ_TTLS.MEMORY_DEFAULT_SECONDS
-    );
-    expect(ttlForPath("memory/episodic/current-previously.md")).toBe(
-      READ_TTLS.MEMORY_DEFAULT_SECONDS
-    );
-    expect(ttlForPath("memory/user/card.md")).toBe(300);
-    expect(ttlForPath("memory/evolution/direction.md")).toBe(300);
-  });
-
-  it("normalizes backslashes before classifying", () => {
-    expect(
-      ttlForPath("memory\\episodic\\slices\\2026-01\\slice-a\\core.md")
-    ).toBe(READ_TTLS.CLOSED_SLICE_SECONDS);
-  });
-});
 
 describe("fileCacheTag", () => {
   it("identifies one file in one repo", () => {

@@ -7,11 +7,6 @@ import {
   type SliceWithContent,
 } from "@/lib/episodic/actions";
 import { prependPage } from "@/lib/chat/stream-items";
-import {
-  getStreamCache,
-  setStreamCache,
-  upgradeCachedSlice,
-} from "@/lib/chat/slice-cache";
 
 /** Slices per page — a page is also the seam-anchored prepend unit (§1.4). */
 export const SLICE_PAGE_SIZE = 10;
@@ -25,7 +20,7 @@ export interface SliceStream {
   slices: SliceWithContent[];
   hasMore: boolean;
   loadingOlder: boolean;
-  /** True once the first page (or a cache restore) has landed. */
+  /** True once the first page has landed. */
   initialLoaded: boolean;
   /**
    * Prepend one older page. Resolves to the exact number of STREAM ITEMS the
@@ -53,32 +48,26 @@ export interface SliceStream {
  * `initialBefore` pins the FIRST page's cursor (ISO `start` exclusive): the
  * chat page passes the resumed slice's start so the still-alive slice never
  * double-renders (its turns arrive via getArrivalState / the reconnect stash).
- * Loaded pages snapshot into slice-cache (5 min TTL) so a remount restores
- * instantly.
+ *
+ * The window starts EMPTY and is paged in on mount. It used to be restored
+ * synchronously from a per-persona snapshot in `slice-cache` (5 min TTL), and
+ * that restore is gone with the rest of the client's cache (v0.10 C7): the
+ * client holds nothing, the server action reads the catalog and the server
+ * caches it, and a remount pays one paging call rather than trusting a
+ * client-side copy of a catalog that may have gained a slice since.
  */
 export function useSliceStream(
   persona: string,
   initialBefore: string | null,
 ): SliceStream {
-  // Restore the cached window SYNCHRONOUSLY (lazy initializer) — the stream
-  // list mounts with it in place, so a cached restore never looks like an
-  // un-shifted prepend (which would jump the scroll position).
-  const [initial] = useState(() => {
-    const cached = getStreamCache(persona);
-    return {
-      slices: cached?.slices ?? [],
-      hasMore: cached?.hasMore ?? true,
-      restored: cached !== null,
-    };
-  });
-  const [slices, setSlices] = useState<SliceWithContent[]>(initial.slices);
-  const [hasMore, setHasMore] = useState(initial.hasMore);
+  const [slices, setSlices] = useState<SliceWithContent[]>([]);
+  const [hasMore, setHasMore] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
-  const [initialLoaded, setInitialLoaded] = useState(initial.restored);
+  const [initialLoaded, setInitialLoaded] = useState(false);
 
   // Refs mirror the state so the async callbacks never close over staleness.
-  const slicesRef = useRef<SliceWithContent[]>(initial.slices);
-  const hasMoreRef = useRef(initial.hasMore);
+  const slicesRef = useRef<SliceWithContent[]>([]);
+  const hasMoreRef = useRef(true);
   const loadingRef = useRef(false);
   // The cursor for the NEXT page: the oldest loaded slice's start, or the
   // initial pin while nothing is loaded yet.
@@ -94,17 +83,12 @@ export function useSliceStream(
       hasMoreRef.current = page.hasMore;
       setSlices(next);
       setHasMore(page.hasMore);
-      setStreamCache(persona, next, page.hasMore);
-      // Every slice of this page arrived WITH its turns — hand them to the
-      // one slice cache, so a card holding that slice's truncated preview is
-      // upgraded in place instead of the two stacks keeping private copies of
-      // the same conversation (and so a later jump to one of them is free).
-      for (const slice of page.slices) {
-        upgradeCachedSlice(slice.id, slice.turns);
-      }
       return addedItemCount;
     },
-    [persona],
+    // Every read and write goes through a ref, so this is stable for the life
+    // of the mount — and it must be: `loadOlder` depends on it, and the
+    // initial-fill effect depends on `loadOlder`.
+    [],
   );
 
   const loadOlder = useCallback(async (): Promise<number> => {
@@ -198,10 +182,10 @@ export function useSliceStream(
     [loadOlder, persona, applyPage],
   );
 
-  // Initial fill — only when no cached window was restored. (Persona is fixed
-  // per mount: it comes from the URL and a switch reloads the page state.)
+  // Initial fill. (Persona is fixed per mount: it comes from the URL and a
+  // switch reloads the page state, which is also why nothing here resets the
+  // window when it changes.)
   useEffect(() => {
-    if (initial.restored) return;
     let cancelled = false;
     void loadOlder().finally(() => {
       if (!cancelled) setInitialLoaded(true);
@@ -209,7 +193,6 @@ export function useSliceStream(
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [persona, loadOlder]);
 
   return { slices, hasMore, loadingOlder, initialLoaded, loadOlder, loadUntilSlice };

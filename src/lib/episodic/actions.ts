@@ -490,14 +490,6 @@ export interface SliceContent {
   decisions: string[];
   /** Previously.md content for this slice, or null if not found. */
   previously: string | null;
-  /**
-   * The card's truncated opening rounds, carried ONLY by a `full` read so that
-   * one read can answer both faces of a slice — the card's preview and the
-   * conversation's whole turns (`slice-cache` upgrades a preview in place with
-   * it, instead of re-requesting the slice it already holds). Absent on a
-   * default read, where `turns` already IS that preview.
-   */
-  previewTurns?: Turn[];
 }
 
 /** Options for `getSliceContent` — see the doc there. */
@@ -579,9 +571,6 @@ export async function getSliceContent(
       open_loops: slice.open_loops,
       decisions: slice.decisions,
       previously,
-      // A `full` read carries the card's preview too: the truncation is a wire
-      // saving, and this one has already paid for the whole body.
-      ...(full ? { previewTurns: frameTurns(slice.turns) } : {}),
     };
   } catch (err) {
     console.error(`[Episodic] getSliceContent failed for ${sliceId}:`, formatErrorDetail(err));

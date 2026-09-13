@@ -368,11 +368,9 @@ describe("getSliceContent", () => {
     expect(content!.turns[0].content.length).toBeLessThan(LONG.length);
     expect(content!.turns[0].content.endsWith("…")).toBe(true);
     expect(content!.totalTurns).toBe(9);
-    // The default read IS the preview — no second copy of it on the wire.
-    expect(content!.previewTurns).toBeUndefined();
   });
 
-  it("ships every turn under { full: true }, and the card's preview with it", async () => {
+  it("ships every turn under { full: true }", async () => {
     const turns = seedRead(9);
 
     const content = await getSliceContent("2026-08-11-1000", undefined, {
@@ -381,10 +379,6 @@ describe("getSliceContent", () => {
 
     expect(content!.turns).toBe(turns);
     expect(content!.turns).toHaveLength(9);
-    // The preview rides along so ONE read answers both faces of the slice —
-    // `slice-cache` upgrades a card's entry with it instead of re-reading.
-    expect(content!.previewTurns).toHaveLength(4);
-    expect(content!.previewTurns![0].content.endsWith("…")).toBe(true);
     // The truncation is a wire saving only: the read and the parse are the
     // same either way.
     expect(mocks.readSliceBody).toHaveBeenCalledTimes(1);

@@ -139,6 +139,18 @@ async function commitLocalWrites(paths: string[], message: string): Promise<void
 export async function fsReadFile(
   path: string,
   batch?: WriteBatch,
+  /**
+   * `{ fresh: true }` bypasses the Data Cache. For a read that FEEDS A WRITE —
+   * a read-modify-append, a conflict self-heal — a cached base is not a
+   * performance question but a correctness one: the result is computed from a
+   * copy that may be hours old, and everything that landed in between is
+   * silently dropped. The TTL for `memory/episodic/slices/**` is 24 hours, so
+   * "hours old" is literal rather than rhetorical.
+   *
+   * Nothing else needs it. A read that only DISPLAYS is safe to serve slightly
+   * stale, and serving it is the entire point of the cache.
+   */
+  opts?: { fresh?: boolean },
 ): Promise<string> {
   // With a batch, check pending writes first so functions that write and then
   // read (e.g. write _index.json → generateGlobalTimeline reads it) see the
@@ -148,10 +160,10 @@ export async function fsReadFile(
     return pending;
   }
 
-  if (DEMO_MODE) return readFileDemo(path);
+  if (DEMO_MODE) return readFileDemo(path, undefined, opts);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
-    return readFileGitHub(path, repo, owner);
+    return readFileGitHub(path, repo, owner, opts);
   }
   return readFileLocal(path);
 }

@@ -10,14 +10,13 @@
  * therefore the one face in the field that MEASURES itself and reports upward,
  * and that report is the field's only knowledge of where the next unit starts.
  *
- * WHY IT ASKS FOR `full` AND NOT `meta`. The cache holds two faces of one
- * immutable slice and they are NOT interchangeable (`slice-cache.ts`). The card
- * needs the server-truncated opening rounds, because a fixed-size frame handed
- * a whole conversation would centre on the middle of it. A reader who has
- * zoomed all the way in came to read the whole thing, so this face asks for
- * `full` — and because the cache keeps ONE entry per slice id, a slice the chat
- * has already paged in is upgraded in place and this subscription is handed the
- * turns with no second repository read.
+ * WHY IT ASKS FOR `full` AND NOT THE CARD'S PREVIEW. A slice has two faces and
+ * they are NOT interchangeable. The card needs the server-truncated opening
+ * rounds (`FRAME_TURN_COUNT` in `src/lib/episodic/actions.ts`), because a
+ * fixed-size frame handed a whole conversation would centre on the middle of
+ * it. A reader who has zoomed all the way in came to read the whole thing, so
+ * this face asks for `{ full: true }` at its own call site and draws what
+ * comes back.
  *
  * WHY NOTHING RENDERS WHILE IT LOADS. The field lays units out on a running
  * offset table that gives an unmeasured unit the height of the one before it
@@ -42,7 +41,7 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { Turn } from "@/lib/episodic/types";
 import type { UnitBoundary } from "@/lib/timeline3d/boundary";
 import type { GateSignal } from "@/lib/chat/field-blocks";
-import { peekEntry, subscribeSlice } from "@/lib/chat/slice-cache";
+import { getSliceContent } from "@/lib/episodic/actions";
 import { HistoryTurn } from "@/components/chat/history-turn";
 import { SliceGate, type SliceGateProps } from "@/components/chat/slice-gate";
 
@@ -143,24 +142,43 @@ export function SliceConversation({
 }: SliceConversationProps): JSX.Element | null {
   // Held WITH the id it belongs to. The field reconciles units by position, and
   // a page arriving at the head of the window renumbers every one of them — so
-  // until the subscription for the new id reports, this state still describes
-  // the slice that used to sit here. Showing it would put a DIFFERENT
-  // conversation under the reader; showing nothing costs one frame of the
-  // unmeasured-height guess the field already makes. Seeded from the cache
-  // rather than from `null`, so a slice the chat has already paged in draws on
-  // the first frame instead of after the effect.
-  const [slice, setSlice] = useState(() => ({
+  // until the read for the new id lands, this state still describes the slice
+  // that used to sit here. Showing it would put a DIFFERENT conversation under
+  // the reader. The guard below is what refuses it; nothing is shown instead,
+  // which costs one frame of the unmeasured-height guess the field already
+  // makes.
+  //
+  // The slot starts EMPTY, and that is the v0.10 C7 decision stated locally:
+  // the client holds no cache, so there is no entry to seed from. The read is a
+  // server action and the SERVER caches it, so re-reading a slice a card or the
+  // chat has already touched costs one call — cheaper than two surfaces keeping
+  // two copies of one immutable file that cannot see each other.
+  const [slice, setSlice] = useState<{ id: string; turns: Turn[] | null }>({
     id: entry.id,
-    turns: peekEntry(entry.id)?.full ?? null,
-  }));
+    turns: null,
+  });
 
-  useEffect(
-    () =>
-      subscribeSlice(entry.id, "full", (next) =>
-        setSlice({ id: entry.id, turns: next.full }),
-      ),
-    [entry.id],
-  );
+  useEffect(() => {
+    // The cancellation flag is load-bearing, not defensive: the field renumbers
+    // units on a prepend, so the read for the slice that used to sit here can
+    // land after this unit has become a different one. Without it that write
+    // paints the wrong conversation under the reader.
+    let cancelled = false;
+    getSliceContent(entry.id, undefined, { full: true })
+      .then((payload) => {
+        if (cancelled) return;
+        setSlice({ id: entry.id, turns: payload?.turns ?? null });
+      })
+      .catch(() => {
+        // `getSliceContent` resolves null for an unreadable slice; a rejection
+        // is a transport failure. Both mean "not readable", and both leave the
+        // unit unmeasured rather than drawing a conversation that isn't there.
+        if (!cancelled) setSlice({ id: entry.id, turns: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [entry.id]);
 
   const turns = slice.id === entry.id ? slice.turns : null;
 
