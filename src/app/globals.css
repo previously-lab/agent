@@ -153,12 +153,31 @@
   --strand-10: oklch(0.72 0.115 357); /* rose, light  */
   /* The resting ink for every strand line in the left band (see ink.ts).
      The ten colours above are a HIGHLIGHT, not an identity: the bundle is
-     grey until the reader singles strands out. */
-  --strand-idle: oklch(0.58 0 0);
+     grey until the reader singles strands out.
+
+     IT IS DEFINED BY ITS DISTANCE FROM THE PAGE, NOT BY A LIGHTNESS. The band
+     blends this toward `--background` by a fixed fraction of the way there
+     (the visibility floor/ceiling in threadline-scene), so the value that
+     lands here IS the strand's colour on screen — which is why the two themes
+     need DIFFERENT lightnesses for the weight the eye actually reads.
+
+     AND THAT WEIGHT IS NOT THE SAME IN BOTH THEMES, on purpose: dark carries
+     a little more than light does (≈1.95:1 against #0a0a0a vs ≈1.52:1 against
+     white). A contrast RATIO is not a perception — a faint grey on white
+     reads as a smudge well before the same ratio on black reads as a line, so
+     matching the two numbers by eye makes LIGHT the louder theme, not the
+     equal one. Light renders #d2d2d2…#efefef, dark #262626…#414141.
+
+     THE PAIR STILL MOVES TOGETHER. An earlier revision left dark at 0.7 — a
+     4.20:1 braid, 1.6× light's — which on a near-black page read as a cage
+     drawn around the core rather than a texture behind it. Tune the two by
+     eye, but never let dark run away from light again. */
+  --strand-idle: oklch(0.82 0 0);
 }
 
 .dark {
-  --strand-idle: oklch(0.7 0 0);
+  /* A touch heavier than light's, on purpose — see the note on `:root`. */
+  --strand-idle: oklch(0.47 0 0);
   --brand: oklch(0.6 0.23 260);
   --brand-50: oklch(0.21 0.09 267);
   --brand-100: oklch(0.27 0.12 265);
