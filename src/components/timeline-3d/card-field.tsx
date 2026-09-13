@@ -610,6 +610,7 @@ function FieldScene({
           key={item.id}
           item={item}
           rowIndexMap={rowIndexMap}
+          tops={tops}
           level={metrics.level}
           geo={geo}
           rig={rig}

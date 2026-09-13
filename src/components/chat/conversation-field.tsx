@@ -290,6 +290,10 @@ interface SceneProps {
   offsetsRef: React.MutableRefObject<number[]>;
   /** The lowest offset the camera can reach — the origin sits above block 0. */
   minOffset: number;
+  /** The field's maximum camera offset, refreshed every render. A REF and not
+   *  a number: it moves with the live block's height, and a prop would
+   *  re-render the scene on every streamed token. */
+  maxOffsetRef: React.MutableRefObject<number>;
   feed?: FieldFeed;
   publishing: boolean;
   /** The mutable arm signal for a gate block, keyed by the block's key. */
@@ -316,6 +320,7 @@ function FieldScene({
   heightsRef,
   offsetsRef,
   minOffset,
+  maxOffsetRef,
   feed,
   publishing,
   signalFor,
@@ -399,11 +404,19 @@ function FieldScene({
       ? (armedBand.top + armedBand.height / 2 - offsetRef.current) / size.height
       : null;
 
-    const total = offsets[blocks.length] ?? 1;
-    // The chat field's range starts at the ORIGIN region, one region above
-    // block 0 — not at zero. That difference is the whole reason `progressFor`
-    // takes a range instead of deriving one (see `field-feed.ts`).
-    feed.progress = progressFor(offsetRef.current, minOffset, total);
+    // BOTH ENDS OF THE RANGE, and neither is zero. The floor is the ORIGIN
+    // region, one region above block 0 — the chat field scrolls to `minOffset`,
+    // not to 0 — and the ceiling is `maxOffset`, NOT the history's height.
+    // Passing the history total here was a real slip: the live block's height
+    // is part of what the reader can scroll through, so the band's ruler
+    // saturated before they reached the live edge and the two panes' rulers
+    // meant different things — which is the one thing this unification exists
+    // to prevent. See `field-feed.ts` for why the range is a parameter.
+    feed.progress = progressFor(
+      offsetRef.current,
+      minOffset,
+      maxOffsetRef.current,
+    );
 
     const list: FieldAnchor[] = [];
     for (const i of next) {
@@ -1008,6 +1021,7 @@ export function ConversationField({
           heightsRef={heightsRef}
           offsetsRef={offsetsRef}
           minOffset={minOffset}
+          maxOffsetRef={maxOffsetRef}
           feed={feed}
           publishing={publishing}
           signalFor={signalFor}

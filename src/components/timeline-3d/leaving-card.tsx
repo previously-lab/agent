@@ -34,6 +34,13 @@ const leavingScratch = new THREE.Vector3();
 function computeLeavingPosition(
   item: LeavingItem,
   rowIndexMap: Map<string, number>,
+  /** The destination level's offset table — `layoutFor`, not `index * pitch`.
+   *  Since every row but the last reserves a boundary region, a row's advance
+   *  is `cardH + SLICE_GATE_PX`, which is not `framePitchFor` and drifts
+   *  further from it the deeper the index. Using the pitch sent a swallowed
+   *  card to a row that was `targetIndex * 32px` away from the pile it was
+   *  meant to join. */
+  tops: readonly number[],
   pitch: number,
   cardH: number,
   rig: FieldRig,
@@ -53,7 +60,7 @@ function computeLeavingPosition(
   const targetIndex = rowIndexMap.get(item.toRowKey) ?? -1;
   let targetYWorld = fromYWorld;
   if (targetIndex >= 0) {
-    const centerPy = targetIndex * pitch + cardH / 2 - rig.current;
+    const centerPy = (tops[targetIndex] ?? targetIndex * pitch) + cardH / 2 - rig.current;
     targetYWorld = viewportH / 2 - centerPy;
   }
 
@@ -71,6 +78,8 @@ function computeLeavingPosition(
 export interface LeavingCardProps {
   item: LeavingItem;
   rowIndexMap: Map<string, number>;
+  /** The destination level's offset table — see `computeLeavingPosition`. */
+  tops: readonly number[];
   level: StackLevel;
   geo: FrameGeometry;
   rig: React.MutableRefObject<FieldRig>;
@@ -82,6 +91,7 @@ export interface LeavingCardProps {
 export function LeavingCard({
   item,
   rowIndexMap,
+  tops,
   level,
   geo,
   rig,
@@ -105,6 +115,7 @@ export function LeavingCard({
       computeLeavingPosition(
         item,
         rowIndexMap,
+        tops,
         pitch,
         geo.cardH,
         rig.current,
@@ -112,7 +123,7 @@ export function LeavingCard({
         reducedMotion,
         animRef.current,
       ).toArray(),
-    [item, rowIndexMap, pitch, geo.cardH, rig, size.height, reducedMotion],
+    [item, rowIndexMap, tops, pitch, geo.cardH, rig, size.height, reducedMotion],
   );
 
   useFrame((_, rawDt) => {
@@ -135,6 +146,7 @@ export function LeavingCard({
     const p = computeLeavingPosition(
       item,
       rowIndexMap,
+      tops,
       pitch,
       geo.cardH,
       rig.current,
