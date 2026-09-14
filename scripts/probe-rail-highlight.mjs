@@ -162,6 +162,114 @@ try {
       spread.spread >= MIN_SPREAD_PX,
       `x spread ${spread.spread.toFixed(1)}px (straightening it drops this to ~2, a wound thread spans ~20)`,
     );
+
+    // ── Two picks must be spaced around the cylinder ───────────────────────
+    // `spreadSelection` spaces the picks evenly around the core so a pair lands
+    // on opposite flanks; before it they took whatever seats their names
+    // happened to occupy, and two that landed side by side read as one thick
+    // smear.
+    //
+    // MEASURED AS SEPARATION AT A GIVEN HEIGHT, not as mean x — a thread wound
+    // around the cylinder sweeps from one flank to the other, so its mean x is
+    // the band's centre no matter where its seat is. (The first version of this
+    // check made exactly that mistake and failed a correct render.) The two
+    // threads have different seats, so at any height their x differ by
+    // `2R·sin(Δ/2 + phase)`; the MAX over rows is `2R·sin(Δ/2)` and depends only
+    // on the angular gap. On this band R ≈ 12.5px, so an even pair (Δ = 206°)
+    // reaches ~24px and an adjacent pair (Δ = 51°) only ~11px.
+    await board.getByRole("button").last().click();
+    await page.waitForTimeout(600);
+    const row2 = popover.getByRole("button").nth(3);
+    const name2 = (await row2.innerText()).trim().split("\n")[0];
+    const [tr2, tg2, tb2] = await row2.evaluate((el) => {
+      const swatch = el.querySelector("[style*='background'], span");
+      const css = getComputedStyle(swatch ?? el).backgroundColor;
+      const c = document.createElement("canvas");
+      c.width = 1;
+      c.height = 1;
+      const g = c.getContext("2d");
+      g.fillStyle = css;
+      g.fillRect(0, 0, 1, 1);
+      return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    });
+    await row2.click();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(2500);
+
+    const shot2 = await page.screenshot({ clip: CLIP });
+    const maxGap = await page.evaluate(
+      async ({ b64, colours, clip }) => {
+        const img = new Image();
+        img.src = "data:image/png;base64," + b64;
+        await img.decode();
+        const c = document.createElement("canvas");
+        c.width = img.width;
+        c.height = img.height;
+        const g = c.getContext("2d");
+        g.drawImage(img, 0, 0);
+        const { data } = g.getImageData(0, 0, c.width, c.height);
+        const scale = img.width / clip.width;
+        // Per row, each colour's mean x — a wound thread crosses a given row
+        // once, so the row mean is where it is at that height.
+        const rows = new Map();
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const gg = data[i + 1];
+          const b = data[i + 2];
+          if (data[i + 3] < 200) continue;
+          if (Math.max(r, gg, b) - Math.min(r, gg, b) < 24) continue;
+          for (let k = 0; k < colours.length; k++) {
+            const [cr, cg, cb] = colours[k];
+            if (
+              Math.abs(r - cr) > 46 ||
+              Math.abs(gg - cg) > 46 ||
+              Math.abs(b - cb) > 46
+            ) {
+              continue;
+            }
+            const px = i / 4;
+            const y = Math.floor(px / c.width);
+            const x = (px % c.width) / scale;
+            let row = rows.get(y);
+            if (!row) {
+              row = colours.map(() => ({ n: 0, x: 0 }));
+              rows.set(y, row);
+            }
+            row[k].n++;
+            row[k].x += x;
+            break;
+          }
+        }
+        let best = 0;
+        let seen = 0;
+        for (const row of rows.values()) {
+          if (row[0].n === 0 || row[1].n === 0) continue;
+          seen++;
+          const gap = Math.abs(row[0].x / row[0].n - row[1].x / row[1].n);
+          if (gap > best) best = gap;
+        }
+        return { best, seen };
+      },
+      {
+        b64: shot2.toString("base64"),
+        colours: [
+          [tr, tg, tb],
+          [tr2, tg2, tb2],
+        ],
+        clip: CLIP,
+      },
+    );
+
+    check(
+      "both picks are still on the rail after the second one",
+      maxGap.seen > 0,
+      `${strandName} + ${name2}, ${maxGap.seen} rows carrying both`,
+    );
+    check(
+      "two picks are spaced around the core, not bunched together",
+      maxGap.best >= 16,
+      `widest separation ${maxGap.best.toFixed(1)}px (evenly spaced ~24, adjacent seats ~11)`,
+    );
   }
 
   await ctx.close();

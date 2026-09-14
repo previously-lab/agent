@@ -42,13 +42,17 @@
  * makes the focus gesture read as a physical turn of the bundle rather than a
  * colour change.
  *
- * WHAT IS DRAWN (§2.4): the strands of the ONE anchor the reader is centred on
- * — the same anchor the knot is wound around — over the screen-Y anchors the
+ * WHAT IS DRAWN (§2.4): the strands of the anchor the reader is centred on —
+ * the same anchor the knot is wound around — over the screen-Y anchors the
  * right pane publishes (CardField's row starts in timeline view, the chat
- * stream's slice seams in chat view). The count is a responsive quantity
- * (`strandLimitForBandWidth`), and the selection is merged in and never
- * dropped (`lineUpFor`). A strand with no activity elsewhere still draws its
- * full-height line: straight, because nothing happened there (§2.2).
+ * stream's slice seams in chat view). That anchor LEADS the line-up and its
+ * neighbours top it up to the band's count (`bundleFor`), which is a responsive
+ * quantity (`strandLimitForBandWidth`) the bundle now actually reaches instead
+ * of merely being capped by. The selection is merged in and never dropped
+ * (`lineUpFor`), and the picks are spaced evenly around the cylinder
+ * (`spreadSelection`) so two of them flank the core rather than bunching on one
+ * side. A strand with no activity elsewhere still draws its full-height line:
+ * straight, because nothing happened there (§2.2).
  *
  * REGISTRATION (§2.3): the ACTIVE CARD is the anchor nearest the middle of the
  * viewport, and the knot heights come straight from those same anchors, so a
@@ -75,14 +79,15 @@
  * blue to rose, picked by hashing the name — see `ink.ts`) ONLY while the
  * reader has singled it out. Everything else is the resting grey.
  *
- * THE CORE IS THE ONE EXCEPTION, AND IT IS ALWAYS ON. It is the straight line
- * down the middle of the cable, it is always `CORE_INK` (#0066ff), and it is
- * always the same weight — nothing the reader does changes it. An earlier
- * revision faded it to grey whenever a selection existed, reasoning that
- * exactly one thing should carry colour at a time; the effect was that
- * selecting a strand dissolved the landmark the reader was navigating by. A
- * spine does not stop being a spine because you looked at one of the threads
- * wrapped around it.
+ * THE CORE WEARS THE BRAND BLUE ONLY WHILE IT IS THE ANSWER. 「核心时间线」 is
+ * the unfiltered timeline — the state with nothing picked — so the core is
+ * #0066ff when nothing is picked and the resting grey when something is, and
+ * the strip never has more than one thing claiming to be the selection. Its
+ * WEIGHT is constant regardless: same tube, same opacity, so it stays the spine
+ * either way and the reader keeps their landmark. Both earlier versions got one
+ * half of this wrong — one faded it for the wrong reason, the next made it
+ * constant — so the reasoning lives at the frame loop, where the value is
+ * actually decided.
  *
  * That is what makes a whole bundle of threads legible at once. Colour asked to
  * say "which strand is this" for every line simultaneously has no answer — ten
@@ -159,8 +164,10 @@ import {
   strandLimitForBandWidth,
 } from "@/lib/timeline3d/strand-band";
 import {
+  bundleFor,
   joinStrandSets,
   lineUpFor,
+  spreadSelection,
   strandEnvelope,
 } from "@/lib/timeline3d/strand-transition";
 
@@ -232,11 +239,15 @@ const TURNS = 3;
  * read from `--primary`.
  *
  * The core is a decorative spine, not a themed surface: it has to be the same
- * line in both themes and across the view switch, and it is now the ONLY
- * saturated thing on the strip (the strands gave their chroma up — see
+ * line in both themes and across the view switch, and while it is showing it is
+ * the only saturated thing on the strip (the strands gave their chroma up — see
  * `ink.ts`), so it can afford to be this definite. Reading it from the theme
  * would let it drift with the token, which is exactly what a fixed landmark
  * must not do.
+ *
+ * It is NOT always showing — see the frame-loop note. Once the reader picks
+ * strands the core settles to the resting grey, and the picks are then the only
+ * colour on the strip.
  */
 const CORE_INK = "#0066ff";
 
@@ -249,6 +260,10 @@ const CORE_INK = "#0066ff";
 const CORE_OPACITY = 0.8;
 /** How far the companion hairline is mixed toward white from the core. */
 const COMPANION_WHITEN = 0.45;
+/** The mix target for the companion hairline, and only that — see
+ *  `COMPANION_WHITEN`. Allocated once; it is read every frame and never
+ *  written. */
+const WHITE_INK = new THREE.Color("#ffffff");
 /** The pulse that runs up the focused strand: a lightened core in the light
  *  theme, and cyan on black where a lighter BLUE would just read as more blue. */
 const PULSE_INK_DARK = "#22d3ee";
@@ -934,23 +949,27 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       groupRef.current.rotation.y = rotationYRef.current;
     }
 
-    // THE CORE IS THE SPINE, AND IT DOES NOT STEP BACK.
+    // THE CORE IS BLUE ONLY WHILE IT IS THE ANSWER.
     //
-    // It used to. While nothing was singled out the core was the one line on
-    // the strip with colour, and the moment a selection existed it faded to the
-    // resting grey along with the bundle — on the theory that colour should
-    // have exactly one job at a time. What that did in practice was take the
-    // reader's only fixed landmark away at the exact moment they had asked to
-    // see MORE: the core is what says "this is the middle of the cable, and
-    // this is now", and it stopped saying it the moment the strip got
-    // interesting.
+    // 「核心时间线」 is the unfiltered timeline — the state with NOTHING picked
+    // — so the reader's rule is simply that the core wears its colour when it
+    // IS the selection and the resting grey when it is not:
     //
-    // So both its ink and its weight are constant. `CORE_INK` is #0066ff; it
-    // never takes a strand's colour and never goes grey. The highlight is
-    // untouched — selected strands still light in their own palette entries
-    // against the grey bundle, and since the core runs straight down the middle
-    // while they wind around it, the two never compete for the same pixels.
-    coreColor.current.copy(build.core);
+    //     nothing picked  →  核心时间线 is the view     →  #0066ff
+    //     something picked →  线索时间线 is the view     →  resting grey
+    //
+    // An earlier revision made it constant instead, after a version that faded
+    // it for the wrong reason (to hand colour to the highlight, which read as
+    // the landmark dissolving). Constant overcorrected: with two threads picked
+    // the strip has three saturated things on it, and the two the reader chose
+    // are competing with a spine that is supposed to be the thing they are
+    // measured against. Blue marks "you are looking at everything"; grey marks
+    // "you are looking at these".
+    //
+    // The WEIGHT never changes — same tube, same opacity. Only the ink moves,
+    // and it moves by `nextF`, the same eased focus value every other transition
+    // here rides, so the change is a tween rather than a cut.
+    coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
     const coreOpacity = CORE_OPACITY;
     // The core and its companion carry ONE colour for the whole line, so it
     // rides on the material rather than on per-instance colours (which stay
@@ -963,9 +982,11 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       coreMat.opacity = coreOpacity;
     }
     // The companion rides with the core and rides the same way — it is the
-    // second half of the spine, so it steps back exactly when the core does,
-    // which is never.
-    companionColor.current.copy(build.companion);
+    // second half of the spine, so it takes the core's ink and whitens it by
+    // the same fraction, whether that ink is the brand blue or the resting
+    // grey. Derived here rather than baked, because the core's colour is no
+    // longer a constant (see above).
+    companionColor.current.copy(coreColor.current).lerp(WHITE_INK, COMPANION_WHITEN);
     const companionMat = companionLineRef.current?.material as
       | THREE.MeshBasicMaterial
       | undefined;
@@ -984,9 +1005,15 @@ function ThreadlineRig(props: ThreadlineRigProps) {
     const anchors = feed.anchors;
     const limit = strandLimitForBandWidth(size.width);
     const activeIndex = activeAnchorIndex(anchors);
-    const base = activeIndex >= 0 ? anchors[activeIndex].strands : strands;
+    // The centred anchor LEADS and its neighbours top the bundle up to the
+    // band's limit, so "seven threads" is a number the strip actually draws
+    // rather than a ceiling most moments fall short of. See `bundleFor`.
+    const base = bundleFor(anchors, activeIndex, strands, limit);
     // Guarantees the selection survives the cap; see `lineUpFor`.
-    const liveNames = lineUpFor(base, selected, limit);
+    const liveNames = spreadSelection(
+      lineUpFor(base, selected, limit),
+      selected,
+    );
 
     // ── The line-up joint (§2.5) ─────────────────────────────────────────
     // Scrolling into a different region changes which strands are in the set.

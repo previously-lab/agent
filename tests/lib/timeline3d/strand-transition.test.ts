@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  bundleFor,
   joinStrandSets,
   LEAVE_FADE_AFTER,
   lineUpFor,
+  spreadSelection,
   strandEnvelope,
 } from "@/lib/timeline3d/strand-transition";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
+
+/** An anchor carrying only what these two functions read. */
+const anchor = (strands: string[], y = 0.5): FieldAnchor => ({
+  y,
+  strands,
+  span: 0.1,
+});
 
 describe("joinStrandSets", () => {
   it("is a no-op when the set is unchanged", () => {
@@ -205,5 +215,99 @@ describe("lineUpFor", () => {
 
   it("is empty for an empty base and no picks", () => {
     expect(lineUpFor([], [], 7)).toEqual([]);
+  });
+});
+
+describe("bundleFor", () => {
+  it("leads with the centred anchor's own strands", () => {
+    const anchors = [anchor(["a"]), anchor(["b", "c"]), anchor(["d"])];
+    expect(bundleFor(anchors, 1, [], 7).slice(0, 2)).toEqual(["b", "c"]);
+  });
+
+  it("tops the bundle up from the neighbours, nearest first", () => {
+    // The bug this guards: a moment tagged with two things drew two threads on
+    // a strip sized for seven, so the highlight had almost nothing to stand
+    // against. The neighbours fill it.
+    const anchors = [anchor(["a"]), anchor(["b"]), anchor(["c"])];
+    expect(bundleFor(anchors, 1, [], 7)).toEqual(["b", "c", "a"]);
+  });
+
+  it("alternates outward, so the top-up is balanced either side", () => {
+    // Taking the nearest N by distance would put every extra strand on one side
+    // of the moment whenever the moment is off-centre in the loaded window.
+    const anchors = [anchor(["t2"]), anchor(["t1"]), anchor(["mid"]), anchor(["b1"]), anchor(["b2"])];
+    expect(bundleFor(anchors, 2, [], 5)).toEqual([
+      "mid",
+      "b1",
+      "t1",
+      "b2",
+      "t2",
+    ]);
+  });
+
+  it("stops at the limit", () => {
+    const anchors = [anchor(["a"]), anchor(["b"]), anchor(["c"]), anchor(["d"])];
+    expect(bundleFor(anchors, 0, [], 3)).toEqual(["a", "b", "c"]);
+  });
+
+  it("counts one strand once when two anchors carry it", () => {
+    const anchors = [anchor(["a", "b"]), anchor(["b", "c"])];
+    expect(bundleFor(anchors, 0, [], 7)).toEqual(["a", "b", "c"]);
+  });
+
+  it("falls back to the ambient set with no active anchor", () => {
+    expect(bundleFor([anchor(["a"])], -1, ["x", "y"], 7)).toEqual(["x", "y"]);
+    expect(bundleFor([], 0, ["x", "y"], 7)).toEqual(["x", "y"]);
+  });
+
+  it("normalises, so two spellings of one strand are one line", () => {
+    const anchors = [anchor(["Fitness"]), anchor(["fitness "])];
+    expect(bundleFor(anchors, 0, [], 7)).toEqual(["Fitness"]);
+  });
+});
+
+describe("spreadSelection", () => {
+  it("is a no-op with fewer than two picks", () => {
+    // One thread has nothing to be symmetric about.
+    expect(spreadSelection(["a", "b", "c"], [])).toEqual(["a", "b", "c"]);
+    expect(spreadSelection(["a", "b", "c"], ["b"])).toEqual(["a", "b", "c"]);
+  });
+
+  it("puts two picks on opposite flanks of a seven-seat line-up", () => {
+    // The reader's ask: two picks bunched on one side read as one thick smear.
+    // Seats 0 and 4 are 0° and 206° — cos of +0.9 and −0.9 — so one goes each
+    // side of the core.
+    const order = ["p1", "g1", "g2", "g3", "p2", "g4", "g5"];
+    const out = spreadSelection(order, ["p1", "p2"]);
+    expect(out.indexOf("p1")).toBe(0);
+    expect(out.indexOf("p2")).toBe(4);
+  });
+
+  it("spaces three picks evenly", () => {
+    const order = ["p1", "p2", "p3", "g1", "g2", "g3"];
+    const out = spreadSelection(order, ["p1", "p2", "p3"]);
+    expect([out.indexOf("p1"), out.indexOf("p2"), out.indexOf("p3")]).toEqual([
+      0, 2, 4,
+    ]);
+  });
+
+  it("keeps every strand — it re-orders, it does not filter", () => {
+    const order = ["a", "b", "c", "d", "e"];
+    const out = spreadSelection(order, ["a", "e"]);
+    expect([...out].sort()).toEqual([...order].sort());
+    expect(out).toHaveLength(order.length);
+  });
+
+  it("does not overwrite a seat when the picks exceed half the line-up", () => {
+    const order = ["p1", "p2", "p3", "p4"];
+    const out = spreadSelection(order, ["p1", "p2", "p3", "p4"]);
+    expect([...out].sort()).toEqual([...order].sort());
+  });
+
+  it("matches picks by normalised name, like the rest of the line-up", () => {
+    const order = ["Fitness", "g1", "g2", "running"];
+    const out = spreadSelection(order, ["fitness ", "Running"]);
+    expect(out.indexOf("Fitness")).toBe(0);
+    expect(out.indexOf("running")).toBe(2);
   });
 });

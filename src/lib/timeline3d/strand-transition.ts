@@ -16,7 +16,7 @@
  *    bites, so the line visibly unwinds and only then disappears.
  */
 import { normalizeStrandName } from "./ink";
-import { smoothstep01 } from "./winding";
+import { smoothstep01, type FieldAnchor } from "./winding";
 
 /** How one line-up reconciles with the next. */
 export interface StrandSetJoin {
@@ -116,6 +116,115 @@ export function lineUpFor(
     if (!picked.has(normalizeStrandName(name))) kept.push(name);
   }
   return kept;
+}
+
+/**
+ * The bundle one frame draws: the ACTIVE anchor's strands first, then its
+ * neighbours', outward, until the band's limit.
+ *
+ * WHY THE CENTRED ANCHOR ALONE WAS NOT ENOUGH. The line-up is "the moment, not
+ * the window" (see `lineUpFor`), and that is still the priority order — but the
+ * count that falls out of it is whatever the moment HAPPENS to carry, and a
+ * slice tagged with four things drew four threads on a band sized for seven.
+ * The reader's read was "the number of timelines shown at once seems low", and
+ * they were right: the limit was already seven and the bundle almost never
+ * reached it. A braid that thin also undercuts its own gesture — with four
+ * threads on screen, "these ones, not those" has very little to say.
+ *
+ * So the centred anchor still leads and still decides the reading order; the
+ * neighbouring anchors TOP IT UP, nearest first, until the band is full. That
+ * changes the CONTEXT the highlight stands against, which is what was missing,
+ * and not which moment the strip is describing.
+ *
+ * The walk alternates outward from the centre (one below, one above, then two
+ * either way) rather than taking the nearest N by distance, because the anchors
+ * arrive in row order and alternating is what keeps the top-up spread evenly
+ * either side of the moment instead of all landing above or below it.
+ */
+export function bundleFor(
+  anchors: readonly FieldAnchor[],
+  activeIndex: number,
+  fallback: readonly string[],
+  limit: number,
+): string[] {
+  if (activeIndex < 0 || anchors.length === 0) return [...fallback];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (name: string): void => {
+    const key = normalizeStrandName(name);
+    if (key.length === 0 || seen.has(key)) return;
+    seen.add(key);
+    out.push(name);
+  };
+  const want = limit > 0 ? limit : Number.POSITIVE_INFINITY;
+  const take = (names: readonly string[]): void => {
+    for (const name of names) {
+      if (out.length >= want) return;
+      push(name);
+    }
+  };
+  take(anchors[activeIndex].strands);
+  for (let d = 1; d < anchors.length && out.length < want; d++) {
+    const below = activeIndex + d;
+    const above = activeIndex - d;
+    if (below < anchors.length) take(anchors[below].strands);
+    if (out.length >= want) break;
+    if (above >= 0) take(anchors[above].strands);
+  }
+  return out;
+}
+
+/**
+ * Space the reader's picks EVENLY around the cylinder (v0.13).
+ *
+ * A pick takes whatever seat its name happened to land on in the line-up, so
+ * two picks that land next to each other come out as two curves bunched on the
+ * same flank of the core — the eye reads one thick smear rather than two
+ * threads. The reader asked for them placed symmetrically, and they are right
+ * that it reads better: seats map to angles evenly (`laneAngleFor`), so
+ * spreading the picks across the seat range puts them on opposite flanks and
+ * gives the 3D view its depth back.
+ *
+ * Even spacing in SEATS, not in degrees. A seat is an integer index into the
+ * line-up — the joint machinery addresses strands by index — so two picks in a
+ * seven-seat line-up land at 0 and 4: 0° and 206°, `cos` of +0.9 and −0.9, one
+ * flank each. That is as close to opposite as an integer seat comes, and it is
+ * close enough that the pair reads as balanced.
+ *
+ * Only the ORDER changes. Everything downstream — the twist, the shading, the
+ * joint's slide to a new seat — already works from a seat index, so the picks
+ * simply take new seats and the existing machinery animates them there.
+ *
+ * Fewer than two picks is a no-op: one thread has nothing to be symmetric
+ * about, and re-ordering the bundle for it would move lines for no reason.
+ * Two spellings of one strand count once, by the same `normalizeStrandName`
+ * every other part of the line-up uses.
+ */
+export function spreadSelection(
+  order: readonly string[],
+  selected: readonly string[],
+): string[] {
+  const n = order.length;
+  const picked = new Set(selected.map((name) => normalizeStrandName(name)));
+  const isPicked = (name: string): boolean => picked.has(normalizeStrandName(name));
+  const chosen = order.filter(isPicked);
+  const k = chosen.length;
+  if (k < 2 || n < 2) return [...order];
+
+  const slots: (string | null)[] = new Array<string | null>(n).fill(null);
+  for (let i = 0; i < k; i++) {
+    // Evenly across the ring. `(i * n) / k` is already an integer when k
+    // divides n; otherwise it rounds, and a rounding collision — reachable only
+    // with more picks than half the seats — steps to the next free seat rather
+    // than overwriting one.
+    let seat = Math.round((i * n) / k) % n;
+    while (slots[seat] !== null) seat = (seat + 1) % n;
+    slots[seat] = chosen[i];
+  }
+  const rest = order.filter((name) => !isPicked(name));
+  let r = 0;
+  for (let i = 0; i < n; i++) if (slots[i] === null) slots[i] = rest[r++];
+  return slots as string[];
 }
 
 /**
