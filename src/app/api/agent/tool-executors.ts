@@ -13,9 +13,11 @@
 
 import { streamText, type UIMessageChunk } from "ai";
 import { getWritable } from "workflow";
-// Side effect: register the DeepSeek model class in the step runtime's
-// serialization registry (see register-model-classes.ts for why).
-import "./register-model-classes";
+// Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
+// evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
+// serialization-class registration for it runs before any doStreamStep
+// message is handled (see src/lib/models/step-boundary-model.ts).
+import "@/lib/models/step-boundary-model";
 import { readFile } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {

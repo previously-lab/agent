@@ -6,9 +6,11 @@
  * agent loop then runs in the Workflow runtime, so every LLM call and every
  * tool call is an individually durable, auto-retried step.
  *
- * Import-graph discipline: pure JS only (WorkflowAgent + provider factories
- * are object construction, no I/O). All Node I/O lives behind the "use step"
- * tool executors bound in ./tools.
+ * Import-graph discipline: pure JS only (WorkflowAgent construction, no I/O —
+ * the model is the StepBoundaryLanguageModel wrapper, a plain-config handle
+ * that builds the real provider model lazily INSIDE the step, so no provider
+ * construction happens on the flow side at all). All Node I/O lives behind
+ * the "use step" tool executors bound in ./tools.
  */
 
 import {
@@ -18,7 +20,7 @@ import {
   type WorkflowAgentOptions,
 } from "@ai-sdk/workflow";
 import type { ModelMessage } from "ai";
-import { createModel } from "@/lib/models/provider";
+import { StepBoundaryLanguageModel } from "@/lib/models/step-boundary-model";
 import type { ModelConfig } from "@/lib/models/registry";
 import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import {
@@ -113,7 +115,13 @@ export function createChatAgent(opts: {
    */
   onStepEnd?: WorkflowAgentOptions<ChatToolSet>["onStepEnd"];
 }): ChatAgent {
-  const model = createModel(opts.model);
+  // StepBoundaryLanguageModel: the ONLY model instance that crosses the
+  // workflow→step boundary (WorkflowAgent hands it to doStreamStep). It
+  // serializes to plain `{ config }` JSON — no SDK model class crosses, so
+  // the step runtime never needs provider classes in its serialization
+  // registry (upstream vercel/workflow#2956) — and rebuilds the real model
+  // lazily inside the step.
+  const model = new StepBoundaryLanguageModel(opts.model);
 
   // The bridge main model (client mode, PREVIOUSLY_BRAIN=bridge) shells out
   // to a subscription CLI that returns plain text — it CANNOT emit structured

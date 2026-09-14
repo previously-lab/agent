@@ -49,11 +49,14 @@
  *     workflow surfaces them honestly; output is never faked (design
  *     doc/design/v0.9-client.md §8).
  *
- * Workflow serialization: the WorkflowAgent hands this instance across the
- * workflow→step boundary, so the class carries a static `classId` +
- * WORKFLOW_SERIALIZE/WORKFLOW_DESERIALIZE pair, registered for the step
- * runtime in src/app/api/agent/register-model-classes.ts (same pattern as the
- * DeepSeek/Anthropic/OpenAI model classes).
+ * Workflow serialization: the class keeps its WORKFLOW_SERIALIZE/
+ * WORKFLOW_DESERIALIZE pair, which Workflow 5's SWC plugin detects and
+ * registers automatically in every bundle (do NOT declare a static classId —
+ * the plugin installs the file-path-derived one). Nothing here crosses the
+ * workflow→step boundary anymore though: createChatAgent wraps the ModelConfig
+ * in StepBoundaryLanguageModel (src/lib/models/step-boundary-model.ts), which
+ * serializes to plain `{ config }` JSON and rebuilds the real model — this
+ * class included, via createModel — lazily inside the step.
  */
 
 import type {
@@ -860,7 +863,7 @@ export class BridgeChatLanguageModel implements LanguageModelV3 {
   }
 }
 
-/** Construction point used by createModel() dispatch and workflow deserialization. */
+/** Construction point used by createModel() dispatch and WORKFLOW_DESERIALIZE. */
 export function createBridgeLanguageModel(modelId: string): LanguageModelV3 {
   return new BridgeChatLanguageModel(modelId);
 }

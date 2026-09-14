@@ -151,15 +151,14 @@ export function getBridgeModel(): ModelConfig | undefined {
 // listed after the bridge entries (agent outsourcing is the default; BYOK is
 // the recommended full-capability path). Cloud mode never sees it.
 //
-// sdk is ALWAYS "openai" (OpenAI-compatible — DeepSeek included): the
-// workflow step runtime round-trips the model through class serialization,
-// and only the openai path's deserializer can restore the apiKey — the
-// deepseek/anthropic hosts re-read the key from env and would lose it.
-// createOpenAI itself hides apiKey/baseURL inside closures, so provider.ts
-// re-attaches them as JSON-safe config fields for the step side's
-// rebuildOpenAIModel (src/app/api/agent/register-model-classes.ts). The
-// tradeoff: BYOK v1 forgoes the deepseek path's prefix-caching provider
-// options.
+// sdk is ALWAYS "openai" (OpenAI-compatible — DeepSeek included) — the
+// createOpenAI catch-all. That used to be FORCED by workflow serialization
+// (only the openai path's deserializer could restore the BYOK apiKey); the
+// constraint is gone now that no model instance crosses the workflow→step
+// boundary (see src/lib/models/step-boundary-model.ts) — createModel reads
+// config.apiKey on every sdk path — but the openai routing remains the
+// status quo. The tradeoff: BYOK v1 forgoes the deepseek path's
+// prefix-caching provider options.
 
 /**
  * BYOK provider presets — mirror the openaiBaseURL table in ./catalog.ts
