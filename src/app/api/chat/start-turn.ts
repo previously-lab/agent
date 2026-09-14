@@ -255,7 +255,17 @@ export async function startTurn(
     ...(args.regenerate === true ? { regenerate: true } : {}),
   };
 
-  const run = await start(turnWorkflow, [input]);
+  // Pin the run to Hong Kong. The run's state, queue dispatch and streams live
+  // in this region for the run's whole lifetime — Workflow locks a run's region
+  // at creation and never migrates it. This is the workflow half of the region
+  // move; the functions themselves have to be deployed to hkg1 as well (Vercel
+  // project settings), because `region` only decides where the DATA lives, not
+  // where steps execute. Region-local execution needs both.
+  //
+  // This is the whole reason for the Workflow 5 upgrade: 4.x had no such
+  // option and always stored runs in iad1, which is exactly the cross-region
+  // layout the maintainers list as slow.
+  const run = await start(turnWorkflow, [input], { region: "hkg1" });
 
   return run;
 }

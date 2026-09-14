@@ -28,11 +28,10 @@
  * The classId format is fixed by the compiler: `class//<pkg>@<version>//<ClassName>`.
  * The version comes from the installed package.json, so upgrades stay in sync.
  */
-import { registerSerializationClass } from "workflow/internal/class-serialization";
+import { aliasSerializationClass } from "workflow/internal/class-serialization";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
-import { BridgeChatLanguageModel } from "@/lib/models/bridge-model";
 import openaiCompatiblePkg from "@ai-sdk/openai-compatible/package.json";
 import anthropicPkg from "@ai-sdk/anthropic/package.json";
 import openaiPkg from "@ai-sdk/openai/package.json";
@@ -75,7 +74,7 @@ function OpenAICompatibleChatLanguageModelHost(): void {}
   })(options.modelId);
 };
 
-registerSerializationClass(
+aliasSerializationClass(
   `class//@ai-sdk/openai-compatible@${openaiCompatiblePkg.version}//OpenAICompatibleChatLanguageModel`,
   OpenAICompatibleChatLanguageModelHost
 );
@@ -90,7 +89,7 @@ function AnthropicLanguageModelHost(): void {}
 )[WORKFLOW_DESERIALIZE] = (options: SerializedModelOptions) =>
   createAnthropic({})(options.modelId);
 
-registerSerializationClass(
+aliasSerializationClass(
   `class//@ai-sdk/anthropic@${anthropicPkg.version}//AnthropicLanguageModel`,
   AnthropicLanguageModelHost
 );
@@ -118,7 +117,7 @@ function OpenAIChatLanguageModelHost(): void {}
   OpenAIChatLanguageModelHost as unknown as Record<symbol, unknown>
 )[WORKFLOW_DESERIALIZE] = rebuildOpenAIModel;
 
-registerSerializationClass(
+aliasSerializationClass(
   `class//@ai-sdk/openai@${openaiPkg.version}//OpenAIChatLanguageModel`,
   OpenAIChatLanguageModelHost
 );
@@ -130,19 +129,13 @@ function OpenAIResponsesLanguageModelHost(): void {}
   OpenAIResponsesLanguageModelHost as unknown as Record<symbol, unknown>
 )[WORKFLOW_DESERIALIZE] = rebuildOpenAIModel;
 
-registerSerializationClass(
+aliasSerializationClass(
   `class//@ai-sdk/openai@${openaiPkg.version}//OpenAIResponsesLanguageModel`,
   OpenAIResponsesLanguageModelHost
 );
 
-// Bridge (local subscription CLI, client mode + PREVIOUSLY_BRAIN=bridge) —
-// our own class, so we register it directly: it carries its own static
-// classId + WORKFLOW_DESERIALIZE (see src/lib/models/bridge-model.ts), and
-// the deserializer just re-news it from the serialized modelId. The bridge
-// command/timeout are read from the step runtime's env at call time.
-registerSerializationClass(
-  BridgeChatLanguageModel.classId,
-  BridgeChatLanguageModel as unknown as Parameters<
-    typeof registerSerializationClass
-  >[1]
-);
+// Bridge (local subscription CLI, client mode + PREVIOUSLY_BRAIN=bridge) needs
+// nothing here. It is our own class, carries its own WORKFLOW_DESERIALIZE (see
+// src/lib/models/bridge-model.ts), and Workflow 5's compiler plugin registers
+// it automatically under the file-path-derived id. Registering it by hand under
+// a different id was what broke it.

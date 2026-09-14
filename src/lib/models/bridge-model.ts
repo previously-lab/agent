@@ -88,10 +88,6 @@ import { RECALL_SKILL_DOC } from "@/lib/bridge-skills";
 const WORKFLOW_SERIALIZE = Symbol.for("workflow-serialize");
 const WORKFLOW_DESERIALIZE = Symbol.for("workflow-deserialize");
 
-/** Stable serialization id — both bundles are built from the same source. */
-const BRIDGE_MODEL_CLASS_ID =
-  "class//previously-bridge@0//BridgeChatLanguageModel";
-
 /** Usage is unknown for a subprocess bridge — every field honestly undefined. */
 const UNKNOWN_USAGE: LanguageModelV3Usage = {
   inputTokens: {
@@ -594,7 +590,10 @@ export class BridgeChatLanguageModel implements LanguageModelV3 {
     this.modelId = modelId;
   }
 
-  static readonly classId = BRIDGE_MODEL_CLASS_ID;
+  // No `static classId` on purpose. Workflow 5's SWC plugin derives the id
+  // from the file path and class name, registers the class under it, and
+  // installs it as a non-configurable `classId`. Declaring our own made the
+  // serializer write an id the compiler never registered.
 
   static [WORKFLOW_SERIALIZE](instance: BridgeChatLanguageModel): {
     modelId: string;

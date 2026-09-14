@@ -234,7 +234,9 @@ describe("BridgeChatLanguageModel", () => {
     const deserialize = (
       BridgeChatLanguageModel as unknown as Record<symbol, (d: { modelId: string }) => unknown>
     )[Symbol.for("workflow-deserialize")];
-    expect(typeof BridgeChatLanguageModel.classId).toBe("string");
+    // No classId assertion: under Workflow 5 the compiler plugin derives the
+    // id from the file path and installs it on the class at build time, so it
+    // is absent when vitest loads the raw source.
     const revived = deserialize(serialize(model)) as BridgeChatLanguageModel;
     expect(revived).toBeInstanceOf(BridgeChatLanguageModel);
     expect(revived.modelId).toBe("bridge/kimi");
