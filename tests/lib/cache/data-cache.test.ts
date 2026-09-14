@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   /** Stands in for the Next Data Cache store. */
@@ -64,7 +64,7 @@ import {
   invalidate,
   ttlForPath,
 } from "@/lib/cache/data-cache";
-import { readFileDemo, setDemoPersona } from "@/lib/demo/demo-fs";
+import { listFilesDemo, readFileDemo, setDemoPersona } from "@/lib/demo/demo-fs";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -72,6 +72,20 @@ beforeEach(() => {
   hoisted.disk.content = "";
   hoisted.disk.reads = 0;
 });
+
+/**
+ * The `{ revalidate, tags }` options of the Nth `unstable_cache` call. The
+ * options argument is optional by the mock's own signature, so reading one
+ * number off `mock.calls[n][2]` directly is a possibly-undefined property
+ * access; this narrows once and throws if the call never happened.
+ */
+function cacheOptions(n: number): { revalidate: number; tags: string[] } {
+  const call = hoisted.mockUnstableCache.mock.calls[n];
+  if (!call) throw new Error(`unstable_cache has been called only ${n} times`);
+  const options = call[2];
+  if (!options) throw new Error(`unstable_cache call ${n} carried no options`);
+  return options;
+}
 
 // ─── ttlForPath: the three backends ──────────────────────────────────────
 
@@ -120,7 +134,7 @@ describe("ttlForPath — github", () => {
   });
 });
 
-describe("ttlForPath — demo", () => {
+describe("ttlForPath — demo, remote transport", () => {
   it("caches everything for 30 days, whatever the path", () => {
     // The demo dataset is a published read-only snapshot, so the path classes
     // that bound staleness on GitHub have nothing to bound here.
@@ -131,9 +145,37 @@ describe("ttlForPath — demo", () => {
       "memory/user/config.json",
       "memory/evolution/direction.md",
     ]) {
-      expect(ttlForPath(path, "demo")).toBe(CACHE_TTLS.DEMO_SECONDS);
-      expect(ttlForPath(path, "demo")).toBe(2_592_000);
+      expect(ttlForPath(path, "demo", "remote")).toBe(CACHE_TTLS.DEMO_SECONDS);
+      expect(ttlForPath(path, "demo", "remote")).toBe(2_592_000);
     }
+  });
+});
+
+describe("ttlForPath — demo, local transport", () => {
+  it("uses the SHORT dev TTL, whatever the path", () => {
+    // The local sibling clone is the same dataset as the remote one, but a
+    // developer edits it directly and none of those writes touch our write
+    // path, so no tag revalidates — a month-long entry would keep serving the
+    // pre-edit bytes for a month. Same argument as the `local` backend, one
+    // step weaker: the clone still gets memoized, just briefly.
+    for (const path of [
+      "memory/episodic/timeline/index.json",
+      "memory/episodic/slices/2026/08/_index.json",
+      "memory/episodic/slices/2026-01/slice-a/core.md",
+      "memory/user/config.json",
+      "memory/evolution/direction.md",
+    ]) {
+      expect(ttlForPath(path, "demo", "local")).toBe(CACHE_TTLS.DEMO_LOCAL_SECONDS);
+      expect(ttlForPath(path, "demo", "local")).toBe(60);
+    }
+  });
+
+  it("is strictly shorter than the remote TTL, and neither is UNCACHED", () => {
+    const path = "memory/user/config.json";
+    expect(ttlForPath(path, "demo", "local")).toBeLessThan(
+      ttlForPath(path, "demo", "remote")
+    );
+    expect(ttlForPath(path, "demo", "local")).not.toBe(CACHE_TTLS.UNCACHED);
   });
 });
 
@@ -303,7 +345,10 @@ describe("invalidate", () => {
 // ─── the demo backend, cached through this module ────────────────────────
 
 describe("demo reads go through the cache", () => {
-  it("serves a repeated demo read from the cache, at the demo TTL", async () => {
+  it("serves a repeated demo read from the cache, at the LOCAL demo TTL", async () => {
+    // No BENCHMARK_BASE_URL in the test env, so the demo backend resolves to
+    // the local sibling clone — the disk-read assertions below would not hold
+    // on the remote transport, which fetches instead of reading a file.
     setDemoPersona("user");
     hoisted.disk.content = '{"a":1}';
 
@@ -314,9 +359,17 @@ describe("demo reads go through the cache", () => {
     expect(second).toBe('{"a":1}');
     expect(hoisted.disk.reads).toBe(1);
     expect(hoisted.mockUnstableCache.mock.calls[0][2]).toEqual({
-      revalidate: CACHE_TTLS.DEMO_SECONDS,
+      revalidate: CACHE_TTLS.DEMO_LOCAL_SECONDS,
       tags: ["demo-file:user:memory/episodic/strands.json"],
     });
+    expect(cacheOptions(0).revalidate).toBe(60);
+  });
+
+  it("caches a LOCAL demo listing at the same short TTL", async () => {
+    setDemoPersona("user");
+    await listFilesDemo("memory/episodic");
+
+    expect(cacheOptions(0).revalidate).toBe(CACHE_TTLS.DEMO_LOCAL_SECONDS);
   });
 
   it("keys the cache by persona, not just by path", async () => {
@@ -348,5 +401,39 @@ describe("demo reads go through the cache", () => {
 
     expect(fresh).toBe("after");
     expect(hoisted.disk.reads).toBe(2);
+  });
+});
+
+// ─── the other demo transport, cached through this module ────────────────
+
+describe("demo reads over the REMOTE transport", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("keeps the long TTL when the dataset is fetched, not read off disk", async () => {
+    // `BENCHMARK_BASE_URL` is read once at module load in demo-fs.ts, so the
+    // transport can only change by re-importing it under a stubbed env. This
+    // is the wiring the split rests on: a published snapshot and a developer's
+    // clone are the same paths through the same functions, and the transport
+    // argument is the only thing that distinguishes them.
+    vi.stubEnv("BENCHMARK_BASE_URL", "https://benchmark.test/you");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => '{"a":1}' })),
+    );
+    vi.resetModules();
+
+    const remote = await import("@/lib/demo/demo-fs");
+    remote.setDemoPersona("user");
+
+    expect(await remote.readFileDemo("memory/episodic/strands.json")).toBe('{"a":1}');
+    expect(hoisted.disk.reads).toBe(0); // fetched, not read off disk
+    expect(hoisted.mockUnstableCache.mock.calls[0][2]).toEqual({
+      revalidate: CACHE_TTLS.DEMO_SECONDS,
+      tags: ["demo-file:user:memory/episodic/strands.json"],
+    });
   });
 });

@@ -20,11 +20,22 @@ import {
   cachedFetch,
   cacheTagFor,
   ttlForPath,
+  type DemoTransport,
   type ReadOptions,
 } from "@/lib/cache/data-cache";
 
 const BENCHMARK_BASE = process.env.BENCHMARK_BASE_URL ?? "";
 const IS_REMOTE = !!BENCHMARK_BASE;
+
+/**
+ * Which demo transport this process reads through, named once so the cache TTL
+ * and the read itself cannot disagree: `ttlForPath` takes the transport as an
+ * argument (it cannot tell a network read from a disk read), and the two
+ * readers below branch on this same flag. Remote is a published snapshot
+ * (`CACHE_TTLS.DEMO_SECONDS`); a local sibling clone is a directory the
+ * developer edits (`CACHE_TTLS.DEMO_LOCAL_SECONDS`).
+ */
+const DEMO_TRANSPORT: DemoTransport = IS_REMOTE ? "remote" : "local";
 
 // Local fallback: look for the `you` dataset repo as a sibling of the project root
 const LOCAL_DATA_DIR = join(process.cwd(), "..", "you");
@@ -104,10 +115,12 @@ async function fetchManifest(): Promise<Manifest> {
 // one persona's slice to another (exactly what the removed Maps guarded
 // against with their own persona-prefixed keys).
 //
-// Both transports are cached the same way: the remote fetch and the local
-// sibling clone are the same read with the same TTL, chosen only by
-// BENCHMARK_BASE_URL. See `CACHE_TTLS.DEMO_SECONDS` for why 30 days is
-// safe — and for the one caveat (a writable local clone).
+// Both transports are the same cache machinery over the same paths, but NOT
+// the same TTL: `DEMO_TRANSPORT` is handed to `ttlForPath` so the number
+// tracks the transport that actually performs the read. The remote dataset is
+// a finished snapshot (`CACHE_TTLS.DEMO_SECONDS`); the local sibling clone is
+// a directory the developer edits directly, so it takes the short
+// `CACHE_TTLS.DEMO_LOCAL_SECONDS` instead — see both members for the reasoning.
 
 /** Cache tag for one demo file in one persona. */
 export function demoFileCacheTag(path: string, persona: string): string {
@@ -129,7 +142,7 @@ export async function readFileDemo(
 
   return cachedFetch(
     ["demo", "file", pId, path],
-    ttlForPath(path, "demo"),
+    ttlForPath(path, "demo", DEMO_TRANSPORT),
     [demoFileCacheTag(path, pId)],
     () => readFileDemoDirect(path, pId),
     opts,
@@ -166,7 +179,7 @@ export async function listFilesDemo(
 
   return cachedFetch(
     ["demo", "list", pId, path],
-    ttlForPath(path, "demo"),
+    ttlForPath(path, "demo", DEMO_TRANSPORT),
     [demoFileCacheTag(path, pId)],
     () => listFilesDemoDirect(path, pId),
     opts,

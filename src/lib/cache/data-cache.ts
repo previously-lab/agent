@@ -64,16 +64,31 @@ export const CACHE_TTLS = {
   /** GitHub: strands, user card, direction doc, evolution store, config. */
   MEMORY_DEFAULT_SECONDS: 300,
   /**
-   * Demo: the dataset repo (`previously-lab/you`) is read-only and published
-   * as a finished snapshot — nothing in this app can write it, and the
-   * benchmark data is fixed for the life of a deployment. There is no churn
-   * to bound, so the TTL is long enough to make the persona cheap to browse.
-   * NOTE: this covers both demo transports (remote raw.githubusercontent and
-   * a local sibling clone — see demo-fs.ts); the sibling clone is writable by
-   * whoever is developing against it, so a dev editing the dataset sees their
-   * edit after 30 days, not immediately. Pass `fresh: true` for the escape.
+   * Demo, REMOTE transport only (`BENCHMARK_BASE_URL` — see demo-fs.ts): the
+   * dataset repo (`previously-lab/you`) is read-only and published as a
+   * finished snapshot. Nothing in this app can write it, nothing can race it,
+   * and the benchmark data is fixed for the life of a deployment, so there is
+   * no churn to bound — the TTL is long enough to make the persona cheap to
+   * browse over the network. Only valid because that dataset is immutable to
+   * everyone; the same repo read off a developer's own clone is NOT this case
+   * and takes `DEMO_LOCAL_SECONDS`.
    */
   DEMO_SECONDS: 2_592_000,
+  /**
+   * Demo, LOCAL transport only: the sibling `../you` clone read off disk in
+   * dev (see demo-fs.ts). The dataset is read-only to THIS app, but not to
+   * whoever is running it — they edit that clone directly (an editor, a `git
+   * checkout`, a `git pull`), and every one of those writes bypasses our write
+   * path, so no tag is ever revalidated and a month-long entry would keep
+   * serving the pre-edit bytes for a month. This is the `local` backend's
+   * argument one step weaker: `local` is UNCACHED because it is a filesystem a
+   * human is staring straight at, while this clone is still worth memoizing (a
+   * persona browse re-reads the same paths), so it keeps a TTL and only the
+   * length changes. 60s is the shortest bound the table uses anywhere (see
+   * TIMELINE_INDEX_SECONDS) — long enough to keep the memo warm across a
+   * render pass, short enough that an edit shows up without a server restart.
+   */
+  DEMO_LOCAL_SECONDS: 60,
   /**
    * Not a memory path: the one non-repository read in the app, the upstream
    * release tag the version badge checks (`version/actions.ts`). It was the
@@ -96,6 +111,16 @@ export const CACHE_TTLS = {
 const MONTHLY_INDEX = /^memory\/episodic\/slices\/\d{4}\/\d{2}\/_index\.json$/;
 
 /**
+ * Which transport the `demo` backend is reading its dataset through. The two
+ * are the same repository and the same read-only contract FOR THIS APP, but
+ * they are not the same cache target: one is a published snapshot nobody can
+ * write, the other is a directory the developer edits. `ttlForPath` cannot
+ * tell them apart by looking at a path, so the caller that picked the
+ * transport (demo-fs.ts) states it.
+ */
+export type DemoTransport = "remote" | "local";
+
+/**
  * Cache TTL for a path, by backend. Pure — unit-tested
  * (tests/lib/cache/data-cache.test.ts).
  *
@@ -106,8 +131,25 @@ const MONTHLY_INDEX = /^memory\/episodic\/slices\/\d{4}\/\d{2}\/_index\.json$/;
  * something different on each, and on two of the three the answer is not a
  * shorter TTL but a different policy. See the `CACHE_TTLS` members for the
  * reasoning behind each number.
+ *
+ * `demo` is the one backend whose answer also depends on HOW it is read, so it
+ * is the one that does not take the two-argument form: the transport is
+ * required, and a bare `ttlForPath(path, "demo")` does not compile. Nothing
+ * about a path reveals whether it came off the network or off a local clone,
+ * and defaulting the argument would mean defaulting a month-long TTL onto a
+ * file a developer edits — the exact bug this split exists to remove.
  */
-export function ttlForPath(path: string, backend: DataSource): number {
+export function ttlForPath(path: string, backend: Exclude<DataSource, "demo">): number;
+export function ttlForPath(
+  path: string,
+  backend: "demo",
+  transport: DemoTransport,
+): number;
+export function ttlForPath(
+  path: string,
+  backend: DataSource,
+  transport?: DemoTransport,
+): number {
   // ── local: UNCACHED, deliberately ──
   // A dev filesystem is written by processes that never touch our write path:
   // an editor, a `git checkout` in the memory root, the CLI in client/bridge
@@ -118,8 +160,16 @@ export function ttlForPath(path: string, backend: DataSource): number {
   // omitting one. (Same reasoning as readFile.ts's original contract note.)
   if (backend === "local") return CACHE_TTLS.UNCACHED;
 
-  // ── demo: one long TTL for everything ──
-  if (backend === "demo") return CACHE_TTLS.DEMO_SECONDS;
+  // ── demo: one TTL for everything, chosen by TRANSPORT ──
+  // The dataset is the same repo either way; what differs is who else can
+  // write it. Remotely it is a finished snapshot no one can churn
+  // (DEMO_SECONDS). On disk it is a clone the developer edits (see
+  // DEMO_LOCAL_SECONDS) — the `local` argument above, one step weaker.
+  if (backend === "demo") {
+    return transport === "local"
+      ? CACHE_TTLS.DEMO_LOCAL_SECONDS
+      : CACHE_TTLS.DEMO_SECONDS;
+  }
 
   // ── github: the per-path memory-file classes ──
   const normalized = path.replace(/\\/g, "/");
