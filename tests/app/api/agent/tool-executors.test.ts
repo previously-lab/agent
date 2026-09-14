@@ -25,8 +25,10 @@ vi.mock("@/lib/tools/readFile", () => ({
   readFile: vi.fn(async () => {
     throw new Error("github read should not be called in local mode");
   }),
+  readFileFresh: vi.fn(async () => {
+    throw new Error("github read should not be called in local mode");
+  }),
   invalidateReadCache: vi.fn(),
-  __resetReadCache: vi.fn(),
 }));
 vi.mock("@/lib/demo/demo-fs", () => ({
   readFileDemo: vi.fn(async () => {
@@ -82,11 +84,48 @@ vi.mock("@/lib/chat/step-timeout", () => ({
   StepTimeoutError: class StepTimeoutError extends Error {},
 }));
 
+// The workflow run writable — captured so tests can assert the data-* chunks
+// the executors stream to the client (data-tool-progress, data-recall-references).
+const workflowMock = vi.hoisted(() => {
+  const written: Array<{ type?: string; id?: string; data?: unknown }> = [];
+  return {
+    written,
+    getWritable: vi.fn(() => ({
+      getWriter: () => ({
+        write: vi.fn(async (chunk: { type?: string; id?: string; data?: unknown }) => {
+          written.push(chunk);
+        }),
+        releaseLock: vi.fn(),
+      }),
+    })),
+  };
+});
+vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
+
+// webSearchExecute dependencies — mocked so mode-threading tests drive
+// searchViaFlash's call shape directly (no network / model calls).
+const searchFlashDeps = vi.hoisted(() => ({
+  searchViaFlash: vi.fn(),
+}));
+vi.mock("@/lib/search/flash-search", () => ({
+  searchViaFlash: searchFlashDeps.searchViaFlash,
+  SEARCH_TIMEOUT_MS: 240_000,
+}));
+
+const visionDeps = vi.hoisted(() => ({
+  describeImage: vi.fn(),
+}));
+vi.mock("@/lib/vision/describe-image", () => ({
+  describeImage: visionDeps.describeImage,
+}));
+
 import {
   readSliceSummaryExecute,
   readTimelineWindowExecute,
   currentTimeExecute,
   recallExecute,
+  webSearchExecute,
+  viewImageExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
 
@@ -290,6 +329,44 @@ describe("currentTimeExecute", () => {
   });
 });
 
+describe("recallExecute context threading", () => {
+  beforeEach(() => {
+    recallDeps.runRecallSearch.mockReset();
+  });
+
+  it("passes `context` through to runRecallSearch as `knownContext`", async () => {
+    recallDeps.runRecallSearch.mockResolvedValue({
+      answer: "",
+      references: [],
+      searched: [],
+      confidence: 0,
+    });
+    await recallExecute(
+      {
+        question: "did we discuss apples?",
+        context: "I scanned 2026-08-01 → 2026-08-05 and saw pointer lines for 2026-08-02-1100 but no apple mentions.",
+      },
+      opts(),
+    );
+    const passed = recallDeps.runRecallSearch.mock.calls[0]![0];
+    expect(passed.knownContext).toBe(
+      "I scanned 2026-08-01 → 2026-08-05 and saw pointer lines for 2026-08-02-1100 but no apple mentions.",
+    );
+  });
+
+  it("omits `knownContext` when no context is provided", async () => {
+    recallDeps.runRecallSearch.mockResolvedValue({
+      answer: "",
+      references: [],
+      searched: [],
+      confidence: 0,
+    });
+    await recallExecute({ question: "did we discuss apples?" }, opts());
+    const passed = recallDeps.runRecallSearch.mock.calls[0]![0];
+    expect(passed.knownContext).toBeUndefined();
+  });
+});
+
 describe("recallExecute note logic", () => {
   beforeEach(() => {
     recallDeps.runRecallSearch.mockReset();
@@ -352,5 +429,193 @@ describe("recallExecute note logic", () => {
     const out = await recallExecute({ question: "q" }, opts());
     expect(out.note).toBeUndefined();
     expect(out.references).toHaveLength(1);
+  });
+});
+
+describe("recallExecute references channel (v0.10 §4.1)", () => {
+  beforeEach(() => {
+    recallDeps.runRecallSearch.mockReset();
+    workflowMock.written.length = 0;
+  });
+
+  it("streams the evidence anchors as a data-recall-references chunk", async () => {
+    recallDeps.runRecallSearch.mockResolvedValue({
+      answer: "Yes — you talked about it.",
+      references: [
+        { slice_id: "2026-08-01-1000", quote: "apples are great", note: "backs it" },
+        { slice_id: "2026-08-02-1100", quote: "more apples", note: "backs that" },
+      ],
+      searched: ["global timeline"],
+      confidence: 0.8,
+    });
+    await recallExecute({ question: "q" }, opts());
+    const chunk = workflowMock.written.find(
+      (c) => c.type === "data-recall-references",
+    );
+    expect(chunk).toBeDefined();
+    // One part per recall call — the id routes the merge client-side.
+    expect(chunk!.id).toBe("recall-refs-tc1");
+    const data = chunk!.data as {
+      references: Array<{ slice_id: string; note?: string; quote?: string }>;
+    };
+    // The bar carries id + note only — quotes stay in the tool result.
+    expect(data.references.map((r) => r.slice_id)).toEqual([
+      "2026-08-01-1000",
+      "2026-08-02-1100",
+    ]);
+    expect(data.references[0].note).toBeTruthy();
+    expect(data.references[0].quote).toBeUndefined();
+  });
+
+  it("emits nothing when the answer has no references", async () => {
+    recallDeps.runRecallSearch.mockResolvedValue({
+      answer: "You two haven't talked about this.",
+      references: [],
+      searched: ["global timeline"],
+      confidence: 0.9,
+    });
+    await recallExecute({ question: "q" }, opts());
+    expect(
+      workflowMock.written.some((c) => c.type === "data-recall-references"),
+    ).toBe(false);
+  });
+});
+
+describe("webSearchExecute mode threading", () => {
+  beforeEach(() => {
+    searchFlashDeps.searchViaFlash.mockReset();
+    searchFlashDeps.searchViaFlash.mockResolvedValue({
+      answer: "answer",
+      sources: [],
+      recommendation: "",
+      suggestedReads: [],
+    });
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("passes { scout: true } to searchViaFlash when mode is 'scout'", async () => {
+    await webSearchExecute(
+      { query: "best Rust web frameworks", mode: "scout" },
+      { context: makeCtx(), toolCallId: "tc-web" },
+    );
+    expect(searchFlashDeps.searchViaFlash).toHaveBeenCalledTimes(1);
+    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    expect(opts).toEqual({ scout: true });
+  });
+
+  it("passes { scout: false } to searchViaFlash when mode is 'standard'", async () => {
+    await webSearchExecute(
+      { query: "best Rust web frameworks", mode: "standard" },
+      { context: makeCtx(), toolCallId: "tc-web" },
+    );
+    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    expect(opts).toEqual({ scout: false });
+  });
+
+  it("passes { scout: false } to searchViaFlash when mode is omitted", async () => {
+    await webSearchExecute(
+      { query: "best Rust web frameworks" },
+      { context: makeCtx(), toolCallId: "tc-web" },
+    );
+    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    expect(opts).toEqual({ scout: false });
+  });
+});
+
+describe("viewImageExecute", () => {
+  beforeEach(() => {
+    visionDeps.describeImage.mockReset();
+  });
+
+  const visionOk = {
+    ok: true as const,
+    description: "A red circle.",
+    metadata: { format: "png" as const, width: 10, height: 10, bytes: 100 },
+    degraded: false,
+  };
+
+  it("resolves attachment:N and returns the description with metadata", async () => {
+    visionDeps.describeImage.mockResolvedValue(visionOk);
+
+    const out = await viewImageExecute(
+      { source: "attachment:0", question: "What color?" },
+      opts({ imageAttachments: ["data:image/png;base64,xx"], locale: "en" }),
+    );
+
+    expect(out).toBe("A red circle.\n\n[image: 10×10 PNG, 100 B]");
+    expect(visionDeps.describeImage).toHaveBeenCalledWith({
+      image: { data: "data:image/png;base64,xx", mediaType: "image/png" },
+      question: "What color?",
+      locale: "en",
+    });
+  });
+
+  it("resolves a URL source and returns the description", async () => {
+    visionDeps.describeImage.mockResolvedValue({
+      ...visionOk,
+      description: "A cat.",
+      metadata: { format: "jpeg", width: 640, height: 480, bytes: 2048 },
+    });
+
+    const out = await viewImageExecute(
+      { source: "https://example.com/cat.png" },
+      opts(),
+    );
+
+    expect(out).toBe("A cat.\n\n[image: 640×480 JPEG, 2.0 KB]");
+    expect(visionDeps.describeImage).toHaveBeenCalledWith({
+      image: { url: "https://example.com/cat.png" },
+      question: undefined,
+      locale: undefined,
+    });
+  });
+
+  it("passes degraded results through transparently without appending metadata", async () => {
+    visionDeps.describeImage.mockResolvedValue({
+      ok: true,
+      description:
+        "[DEGRADED RESULT] The vision model is unavailable (DEEPSEEK_API_KEY is not set).\n" +
+        "Image metadata: 10×10 PNG, 100 B.",
+      metadata: { format: "png", width: 10, height: 10, bytes: 100 },
+      degraded: true,
+      reason: "DEEPSEEK_API_KEY is not set",
+    });
+
+    const out = await viewImageExecute(
+      { source: "attachment:0" },
+      opts({ imageAttachments: ["data:image/png;base64,xx"] }),
+    );
+
+    expect(out).toContain("DEGRADED");
+    expect(out).toContain("10×10 PNG");
+    // Not duplicated: the executor must not append a second metadata line.
+    expect(out).not.toContain("[image:");
+  });
+
+  it("returns an error string for an out-of-range attachment index", async () => {
+    const out = await viewImageExecute(
+      { source: "attachment:2" },
+      opts({ imageAttachments: ["data:image/png;base64,a"] }),
+    );
+    expect(out).toContain("Invalid attachment index");
+    expect(visionDeps.describeImage).not.toHaveBeenCalled();
+  });
+
+  it("returns an error string when describeImage fails", async () => {
+    visionDeps.describeImage.mockResolvedValue({
+      ok: false,
+      error: "ERROR: Could not fetch image: network down",
+    });
+
+    const out = await viewImageExecute(
+      { source: "https://example.com/x.png" },
+      opts(),
+    );
+
+    expect(out).toContain("network down");
   });
 });

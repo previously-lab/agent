@@ -16,9 +16,26 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import {
+  cachedFetch,
+  cacheTagFor,
+  ttlForPath,
+  type DemoTransport,
+  type ReadOptions,
+} from "@/lib/cache/data-cache";
 
 const BENCHMARK_BASE = process.env.BENCHMARK_BASE_URL ?? "";
 const IS_REMOTE = !!BENCHMARK_BASE;
+
+/**
+ * Which demo transport this process reads through, named once so the cache TTL
+ * and the read itself cannot disagree: `ttlForPath` takes the transport as an
+ * argument (it cannot tell a network read from a disk read), and the two
+ * readers below branch on this same flag. Remote is a published snapshot
+ * (`CACHE_TTLS.DEMO_SECONDS`); a local sibling clone is a directory the
+ * developer edits (`CACHE_TTLS.DEMO_LOCAL_SECONDS`).
+ */
+const DEMO_TRANSPORT: DemoTransport = IS_REMOTE ? "remote" : "local";
 
 // Local fallback: look for the `you` dataset repo as a sibling of the project root
 const LOCAL_DATA_DIR = join(process.cwd(), "..", "you");
@@ -85,7 +102,30 @@ async function fetchManifest(): Promise<Manifest> {
   return manifestPromise;
 }
 
-// ─── File API ────────────────────────────────────────────────────────────
+// ─── File API (cached) ───────────────────────────────────────────────────
+//
+// Both readers are cached in the Next Data Cache under the demo TTL. This is
+// the ONLY cache over the dataset — the demo mode used to have a second one
+// in `episodic/manager.ts` (module-level `_indexCache` / `_bodyCache` Maps on
+// top of these reads), which is gone: two caches over one file disagree the
+// moment anything invalidates by tag, because the Map never hears about it.
+//
+// The identity carries the PERSONA, not just the path — `currentPersona` is
+// module state set during SSR from the URL, so a path-only key would serve
+// one persona's slice to another (exactly what the removed Maps guarded
+// against with their own persona-prefixed keys).
+//
+// Both transports are the same cache machinery over the same paths, but NOT
+// the same TTL: `DEMO_TRANSPORT` is handed to `ttlForPath` so the number
+// tracks the transport that actually performs the read. The remote dataset is
+// a finished snapshot (`CACHE_TTLS.DEMO_SECONDS`); the local sibling clone is
+// a directory the developer edits directly, so it takes the short
+// `CACHE_TTLS.DEMO_LOCAL_SECONDS` instead — see both members for the reasoning.
+
+/** Cache tag for one demo file in one persona. */
+export function demoFileCacheTag(path: string, persona: string): string {
+  return cacheTagFor("demo-file", `${persona}:${path}`);
+}
 
 /**
  * Read a file from the demo dataset. Uses `currentPersona` (set by
@@ -96,8 +136,24 @@ async function fetchManifest(): Promise<Manifest> {
 export async function readFileDemo(
   path: string,
   persona?: string,
+  opts?: ReadOptions,
 ): Promise<string> {
-  const rel = resolveRelative(path, persona ?? currentPersona);
+  const pId = persona ?? currentPersona;
+
+  return cachedFetch(
+    ["demo", "file", pId, path],
+    ttlForPath(path, "demo", DEMO_TRANSPORT),
+    [demoFileCacheTag(path, pId)],
+    () => readFileDemoDirect(path, pId),
+    opts,
+  );
+}
+
+async function readFileDemoDirect(
+  path: string,
+  persona: string,
+): Promise<string> {
+  const rel = resolveRelative(path, persona);
 
   if (IS_REMOTE) {
     const res = await fetch(`${BENCHMARK_BASE}/${rel}`);
@@ -117,9 +173,23 @@ export async function readFileDemo(
 export async function listFilesDemo(
   path: string,
   persona?: string,
+  opts?: ReadOptions,
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
   const pId = persona ?? currentPersona;
 
+  return cachedFetch(
+    ["demo", "list", pId, path],
+    ttlForPath(path, "demo", DEMO_TRANSPORT),
+    [demoFileCacheTag(path, pId)],
+    () => listFilesDemoDirect(path, pId),
+    opts,
+  );
+}
+
+async function listFilesDemoDirect(
+  path: string,
+  pId: string,
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
   if (IS_REMOTE) {
     const manifest = await fetchManifest();
     const personaEntry = manifest.personas[pId];

@@ -22,13 +22,22 @@
  * an automatic redeploy. After changing DEMO_LOCK / DEMO_MODEL / DEMO_EFFORT,
  * push a code change or manually redeploy so the new values reach the runtime.
  *
- * Defaults target the cheapest vision-capable DeepSeek tier so demo image
+ * The default targets the cheapest vision-capable DeepSeek tier so demo image
  * uploads work; override with DEMO_MODEL / DEMO_EFFORT when DeepSeek retires
- * the exp id.
+ * the id — see DEMO_LOCK_DEFAULT_MODEL below for why a retired id breaks the
+ * lock rather than merely failing to apply it.
  */
 import { resolveDataSource } from "@/lib/data-source/resolve";
 
-export const DEMO_LOCK_DEFAULT_MODEL = "deepseek-v4-flash-vision-exp";
+/**
+ * Must stay a LIVE DeepSeek id. The catalog is live-driven — a curated-but-
+ * retired id never reaches the selector, so the lock's `locked.length > 0`
+ * check fails and `/api/models` falls back to the FULL list while `startTurn`
+ * keeps enforcing the lock. The picker then offers models the server ignores.
+ * That is what `deepseek-v4-flash-vision-exp` did after DeepSeek retired it;
+ * `deepseek-flash` (verified vision-capable, 2026-09) is the current id.
+ */
+export const DEMO_LOCK_DEFAULT_MODEL = "deepseek-flash";
 
 export interface DemoModelLock {
   model: string;

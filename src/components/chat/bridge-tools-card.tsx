@@ -121,12 +121,12 @@ export function BridgeToolCard({
           {t(phase)}
         </span>
         {tools.length > 0 && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-xs font-light tabular-nums text-muted-foreground">
             {tools.length}
           </span>
         )}
         {running && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-xs font-light tabular-nums text-muted-foreground">
             {elapsed}s
           </span>
         )}

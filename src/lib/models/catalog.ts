@@ -144,6 +144,29 @@ interface ModelDefaults {
   effort: "low" | "medium" | "high";
 }
 
+/**
+ * Why `vision` defaults to FALSE for every provider, and must keep doing so.
+ *
+ * This is the value used for a live model id that is not in the curated
+ * registry — i.e. for every model we have not hand-verified. It is a guess
+ * either way, but the two directions fail very differently:
+ *
+ *   wrong `false` → the image never goes inline; `extractImageAttachments`
+ *     routes it to the `viewImage` tool instead. The agent still gets a real
+ *     description. Degraded, honest, usable.
+ *
+ *   wrong `true` → the image DOES go inline to a model that cannot read it,
+ *     and providers do not necessarily error. DeepSeek, measured 2026-09,
+ *     substitutes the literal text `[Unsupported Image]` and returns 200 —
+ *     so the model answers anyway and the reader never learns the image was
+ *     dropped. Silent fabrication.
+ *
+ * So the safe default is `false`: it fails toward a worse answer, never toward
+ * a confident wrong one. Curate an id (see ALL_MODELS) only after verifying it
+ * with a colour probe — `deepseek-flash` answers "Green"/"Blue" correctly,
+ * `deepseek-v4-pro` reports "[Unsupported Image]".
+ */
+
 interface ProviderSource {
   /** Provider key — the `provider` field on ModelConfig and route lookups. */
   key: string;

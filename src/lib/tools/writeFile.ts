@@ -57,7 +57,7 @@ export async function writeFile(
       sha,
     });
 
-    // The file just changed on GitHub — drop it from the read cache so a
+    // The file just changed on GitHub — revalidate its Data Cache tag so a
     // subsequent read (same turn or next request) never serves stale content.
     invalidateReadCache(path, repo, owner);
 

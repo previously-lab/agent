@@ -1,15 +1,35 @@
 import { getOctokit } from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
+import type { ReadOptions } from "@/lib/cache/data-cache";
 
 /**
  * List files and directories in the given path.
  * Only paths under the allowed directories are listable.
+ *
+ * DELIBERATELY NOT CACHED, unlike `readFile` — the one GitHub read that goes
+ * straight to the API. Caching is tag-invalidated, and a tag names a FILE:
+ * writing `…/1200/timeline/core.md` revalidates exactly that entry and
+ * nothing revalidates the listing of `…/1200/` it just appeared in. A listing
+ * is how `timeline/enumerate.ts` DISCOVERS slice directories, so a cached one
+ * could miss a slice another instance created seconds ago and quietly drop it
+ * from the catalog for the rest of the TTL. Directory membership has no
+ * writer-revalidated tag, so it gets no cache and no TTL — there is nothing
+ * to bound.
+ *
+ * (The demo backend's listing IS cached — see `listFilesDemo` — because the
+ * demo dataset is read-only: nothing can ever appear in a published
+ * directory, so there is no staleness to bound either.)
+ *
+ * `opts` is the shared base-read contract (`fresh`) and is unused here for
+ * the same reason: a read that is never cached needs no escape from it. It
+ * exists so backend-agnostic callers — io-helpers.fsListFiles, the agent tool
+ * executors — can pass it unconditionally.
  */
 export async function listFiles(
   path: string,
   repo: string,
   owner: string,
-  ref?: string
+  opts?: ReadOptions
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
   if (!isPathAllowed(path)) {
     throw new Error(

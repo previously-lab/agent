@@ -1,0 +1,586 @@
+"use client";
+
+/**
+ * FrameCard (Rev 11) — the dossier / specimen card face for the R3F card field.
+ * One face at every zoom level: the top card of a stack is ALWAYS the full
+ * original slice card (no summaries, no compaction), whether it sits alone or
+ * heads a pile.
+ *
+ * Layout (all sizes in em; root font-size derives from the card's short edge,
+ * so the face scales with the responsive geometry tiers without blowing up
+ * in landscape):
+ *   time code (strand square + FULL timestamp · duration · turn count ·
+ *   decorative archive number)
+ *   → serif focus title
+ *   → previously line (book quotes)
+ *   → ledger-style archive rows (TONE / DECIDED / OPEN / STRANDS)
+ *   → chat bubbles (real turns, agent serif, user sans)
+ *   → footer (continued-from + FR.date)
+ * Paper feel: noise grain + top light falloff + hairline frame + strand spine.
+ */
+import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
+import type { Turn } from "@/lib/episodic/types";
+import { strandColor, tintOf, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
+import { strandAccent } from "@/lib/timeline3d/layout";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
+import type { FrameGeometry, StackRow } from "@/lib/timeline3d/stacks";
+import { cardEmFor, weekLabelFor } from "@/lib/timeline3d/stacks";
+import { ColorSquare, hhmm } from "./cards";
+import { useSliceTurns } from "./slice-content";
+
+/** Translated strings, passed in from OUTSIDE the R3F Canvas — drei Html
+ *  renders in the Canvas's own React root, so next-intl context does not
+ *  reach components rendered here (no hooks allowed inside). */
+export interface FrameCardTexts {
+  /** "N 轮" / "N turns". */
+  turns(count: number): string;
+  user: string;
+  agent: string;
+  /** "47 分钟" / "47 MIN". */
+  duration(min: number): string;
+  /** "No.0808·0208" style archive stamp. */
+  no(date: string, time: string): string;
+  tone: string;
+  decided: string;
+  open: string;
+  strands: string;
+  /** "、" / "; ". */
+  listSeparator: string;
+  /** "续自 {{date}}" / "cont. {{date}}". */
+  continuedFrom(date: string): string;
+  /** "FR.{{date}}". */
+  fr(date: string): string;
+}
+
+/** "HH:MM" already lives in cards.tsx; group label format matches the DOM
+ *  fallback cards so e2e aria-labels stay identical. */
+function groupLabel(row: StackRow, locale: string): string {
+  const d = row.top.date;
+  if (row.level === 2) return weekLabelFor(d, locale);
+  const date = new Date(`${d}T12:00:00`);
+  const weekday = dateTimeFormat(locale, { weekday: "short" }).format(
+    date,
+  );
+  return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;
+}
+
+const NOISE_URI =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E\")";
+
+function accentOf(entry: TimelineSliceEntry): string {
+  return strandAccent(entry.strands);
+}
+
+function durationMin(start: string, end?: string): number | null {
+  if (!end) return null;
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (Number.isNaN(ms)) return null;
+  const min = Math.round(ms / 60000);
+  return min > 0 ? min : null;
+}
+
+function archiveStamp(entry: TimelineSliceEntry): string {
+  const datePart = `${entry.date.slice(5, 7)}${entry.date.slice(8, 10)}`;
+  const timePart = hhmm(entry.start).replace(":", "");
+  return `${datePart}·${timePart}`;
+}
+
+function continuedDate(id: string | undefined): string | null {
+  if (!id) return null;
+  return `${id.slice(5, 7)}/${id.slice(8, 10)}`;
+}
+
+/** Strip markdown noise out of a previously.md snapshot so the card shows
+ *  a readable prose sentence instead of headings, metadata pipes and bullets. */
+function cleanInlineMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/(^|\s)_([^_]+)_(\s|$)/g, "$1$2$3")
+    .replace(/[*`#]/g, "")
+    .trim();
+}
+
+/** Extract a readable prose sentence from a previously.md snapshot.
+ *  Keeps the cache untouched; this is display-layer cleanup only. */
+function previouslyExcerpt(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+
+  // Remove italic-wrapped metadata blocks (the "_Active slice: ... | Updated: ..._" line).
+  let text = raw.replace(
+    /_[\s\S]*?(?:Active slice|Format|Updated|updated):[\s\S]*?_/g,
+    " ",
+  );
+
+  // Strip a leading heading marker but keep the rest of the line so inline
+  // markdown like "# Previously On - User is..." still yields prose.
+  text = text.replace(/^#+\s+/, "");
+
+  // Split inline headings and bullets into separate lines.
+  text = text
+    .replace(/\s*#{2,}\s*[^#\n]+\s*/g, "\n")
+    .replace(/\s*-\s+/g, "\n");
+
+  // Clean residual inline markdown.
+  text = cleanInlineMarkdown(text);
+
+  const isMetadata = (l: string) =>
+    /^(Active slice:|Format:|Updated:|updated:)/.test(l);
+  // A bare "Previously On" heading with nothing under it carries no
+  // information — treat it as absent so the card drops the whole section.
+  const isBoilerplate = (l: string) => /^previously on[.:：\s-]*$/i.test(l);
+
+  const lines = text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !isMetadata(l) && !isBoilerplate(l));
+
+  // Prefer the first non-bullet narrative line that's long enough
+  // to be real prose (not a short heading like "User profile").
+  let prose: string | undefined =
+    lines.find((l) => !/^[-*]/.test(l) && l.length > 20) ||
+    lines.find((l) => !/^[-*]/.test(l));
+
+  if (!prose) {
+    prose = lines[0]?.replace(/^[-*]\s+/, "").trim();
+  }
+
+  if (!prose || prose.length === 0) return null;
+
+  if (prose.length <= 160) return prose;
+  const cut = prose.slice(0, 160).lastIndexOf(" ");
+  return prose.slice(0, cut > 0 ? cut : 160) + "…";
+}
+
+/** 1px hairline with the card's muted foreground tint. */
+function Hairline({ className = "" }: { className?: string }) {
+  return (
+    <div
+      aria-hidden
+      className={`h-px w-full bg-foreground/[0.07] ${className}`}
+    />
+  );
+}
+
+/** A single ledger row: fixed-width uppercase key + serif value. */
+function LedgerRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-[0.6em] py-[0.5em]">
+      <span className="w-[5.5em] shrink-0 font-sans text-[0.58em] uppercase leading-[1.45] tracking-[0.12em] text-muted-foreground/75">
+        {label}
+      </span>
+      <span className="min-w-0 flex-1 font-sans text-[0.72em] leading-[1.45] text-foreground/90">
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** The bubbles: the server's opening rounds (up to two user/agent
+ *  exchanges), chat-style. User right, tinted with the card's strand
+ *  accent; agent left/muted. The bubble column may overflow the card's
+ *  fixed frame — the parent clamps it and fades the bottom edge. */
+function TurnBubbles({
+  turns,
+  state,
+  em,
+  accent,
+  texts,
+}: {
+  turns: Turn[] | undefined;
+  state: "loading" | "ready" | "failed";
+  em: number;
+  accent: string;
+  texts: FrameCardTexts;
+}) {
+  // The skeleton stays mounted after resolve (absolute, fading out) so the
+  // swap reads as a crossfade into the real bubbles, not a hard cut. The
+  // server caps the payload at two rounds, so everything sent is shown.
+  const loading = state === "loading";
+  const hasTurns = !loading && turns != null && turns.length > 0;
+  const shown = hasTurns ? turns : [];
+  return (
+    // `overflow-hidden` KEEPS THE FADED SKELETON OUT OF THE SCROLL AREA. The
+    // skeleton below is `absolute` (so the two crossfade rather than cut), but
+    // an absolutely-positioned box still counts towards the scrollable
+    // overflow of the frame above it — and the skeleton is 356px tall against
+    // the real turns' 84. Measured on a 1024x900 card: the frame reported
+    // 436px of content around two bubbles measuring 23 and 46, so the frame
+    // looked permanently overflowing when nothing visible was.
+    //
+    // Clipping it HERE rather than at the frame is what makes both states
+    // right: while loading there are no bubbles, so this box is exactly the
+    // skeleton's height and nothing is cut; once the turns arrive this box
+    // shrinks to them and the invisible skeleton is trimmed away with it.
+    <div className="relative overflow-hidden">
+      {hasTurns && (
+        <div className="card-turns animate-content-arrive flex flex-col gap-[0.55em] pt-[0.2em]">
+          {shown.map((turn, i) => {
+            const isUser = turn.role === "user";
+            return (
+              <div
+                key={`${turn.turnId ?? "t"}-${i}`}
+                className={`max-w-[86%] rounded-[0.9em] px-[0.85em] py-[0.6em] leading-relaxed ${
+                  isUser
+                    ? "tl-user-bubble ml-auto rounded-br-[0.2em]"
+                    : "rounded-bl-[0.2em] bg-muted text-foreground/85"
+                }`}
+                style={
+                  {
+                    fontSize: em * 0.72,
+                    // Already a TINT, not the raw palette entry: a user turn
+                    // is a field, and at full strength it would be a card-width
+                    // slab of colour (see `.tl-user-bubble`). Same alpha as the
+                    // chat's bubbles, from the same constant, so one turn looks
+                    // the same in both views.
+                    ...(isUser
+                      ? { "--bubble-accent": tintOf(accent, STRAND_TINT_ALPHA) }
+                      : {}),
+                  } as React.CSSProperties
+                }
+              >
+                <span className="sr-only">{isUser ? texts.user : texts.agent}</span>
+                {/* Asymmetric clamps: a pasted wall of user text may not
+                    flood the frame — user gets 2 lines, the agent reply 3. */}
+                <span
+                  className={`whitespace-pre-wrap break-words font-serif font-light ${
+                    isUser ? "line-clamp-2" : "line-clamp-3"
+                  }`}
+                >
+                  {turn.content}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {/* Mirrors the opening rounds exactly: for each of the two rounds a
+          user bubble (2 lines → 3.5em) tinted with the card's accent, then
+          an agent reply (3 lines → 4.7em) in gray. */}
+      <div
+        aria-hidden
+        className={`flex flex-col gap-[0.55em] pt-[0.2em] transition-opacity duration-300 motion-reduce:transition-none ${
+          loading
+            ? "opacity-100"
+            : "pointer-events-none absolute inset-x-0 top-0 opacity-0"
+        }`}
+      >
+        {[0, 1].map((round) => (
+          <div key={round} className="contents">
+            <div
+              className="ml-auto h-[3.5em] w-[72%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-br-[0.2em]"
+              style={
+                {
+                  // The loading stand-in for a user turn: the same tint the
+                  // real bubble uses, so the card does not change colour when
+                  // the turns arrive.
+                  backgroundColor: tintOf(accent, STRAND_TINT_ALPHA),
+                } as React.CSSProperties
+              }
+            />
+            <div className="h-[4.7em] w-[80%] animate-pulse motion-reduce:animate-none rounded-[0.9em] rounded-bl-[0.2em] bg-foreground/8" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export interface FrameCardProps {
+  entry: TimelineSliceEntry;
+  geo: FrameGeometry;
+  flash?: boolean;
+  /** Turn content for the bubbles; undefined while loading. */
+  turns?: Turn[];
+  turnsState: "loading" | "ready" | "failed";
+  /** Previously.md snapshot, if any. */
+  previously?: string | null;
+  texts: FrameCardTexts;
+}
+
+export function FrameCard({
+  entry,
+  geo,
+  flash,
+  turns,
+  turnsState,
+  previously,
+  texts,
+}: FrameCardProps) {
+  const accent = accentOf(entry);
+  const dry = !entry.focus;
+  // The card's root em — what every `em` inside this face resolves against.
+  // `cardEmFor` owns the formula AND its bounds; the DOM face and the 3D
+  // backing sheet both read it, which is why it is a function and not a line
+  // here. It was computed inline and unbounded, and that is what let a 568px
+  // card draw 33px body rows.
+  const em = cardEmFor(geo);
+  const landscape = geo.cardW > geo.cardH;
+  const portrait = geo.variant === "portrait";
+
+  const minutes = durationMin(entry.start, entry.end);
+  const stamp = archiveStamp(entry);
+  const contDate = continuedDate(entry.continues_from);
+  const dateClean = entry.date.replace(/-/g, "");
+  const startD = new Date(entry.start);
+  const dateText = `${startD.getFullYear()}/${startD.getMonth() + 1}/${startD.getDate()} ${hhmm(entry.start)}`;
+
+  const decided = entry.decisions.slice(0, 2);
+  const open = entry.open_loops.slice(0, 2);
+  const strands = entry.strands.slice(0, 4);
+  const previouslyText = previouslyExcerpt(previously);
+
+  const ledgerRows: { key: string; value: React.ReactNode }[] = [];
+  // What the portrait drops, and why it is these two: TONE and DECIDED are the
+  // ledger's context rows — useful, and the first thing to go when a card has
+  // room for two rows instead of four. OPEN and STRANDS stay because they are
+  // the card's forward-looking content: what is still unresolved, and what this
+  // slice is woven into. Truncating all four to illegibility is the worse trade;
+  // this is the "adjust what is rendered" half of the responsive brief.
+  if (entry.tone && !portrait) {
+    ledgerRows.push({ key: texts.tone, value: entry.tone });
+  }
+  if (decided.length > 0 && !portrait) {
+    ledgerRows.push({
+      key: texts.decided,
+      value: decided.join(texts.listSeparator),
+    });
+  }
+  if (open.length > 0) {
+    ledgerRows.push({
+      key: texts.open,
+      value: open.join(texts.listSeparator),
+    });
+  }
+  if (strands.length > 0) {
+    ledgerRows.push({
+      key: texts.strands,
+      value: (
+        <span className="flex flex-wrap items-center gap-x-[0.5em] gap-y-[0.25em]">
+          {strands.map((name) => (
+            <span key={name} className="inline-flex items-center gap-[0.3em]">
+              <ColorSquare
+                color={strandColor(name)}
+                className="size-[0.42em]"
+              />
+              <span>{name}</span>
+            </span>
+          ))}
+        </span>
+      ),
+    });
+  }
+
+  return (
+    <div
+      className={`relative block overflow-hidden rounded-[0.9em] bg-card text-left ring-1 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] transition-[box-shadow,ring-color] duration-200 dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
+        flash
+          ? "tl-flash ring-primary/70"
+          : "ring-foreground/10 group-hover:ring-foreground/25"
+      }`}
+      style={{ width: geo.cardW, height: geo.cardH, fontSize: em }}
+    >
+      {/* Top light falloff + paper grain. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
+      />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
+        style={{ backgroundImage: NOISE_URI }}
+      />
+      {/* The strand spine. */}
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-0 w-[0.14em]"
+        style={{ backgroundColor: accent, opacity: 0.85 }}
+      />
+
+      <div className="relative flex h-full flex-col px-[1.15em] pb-[0.85em] pt-[0.8em]">
+        {/* Time code row. The timestamp is ALWAYS the slice's original
+            start, full precision — the card's face never changes with the
+            zoom/aggregation level. */}
+        <div className="flex items-center gap-[0.5em] text-[0.62em] leading-none tracking-[0.08em] text-muted-foreground">
+          <ColorSquare color={accent} className="size-[0.5em]" />
+          {/* Static timecode — NumberTicker's entrance roll (year counts up
+              from -30) replays on every virtualization remount and reads as
+              a glitch on a card face. Mono, same as the chat time readout. */}
+          <span className="font-mono tabular-nums">{dateText}</span>
+          <span className="ml-auto flex items-center gap-[0.8em] font-sans lining-nums tracking-[0.08em]">
+            {minutes != null && (
+              <span className="text-foreground/55">· {texts.duration(minutes)}</span>
+            )}
+            {entry.turn_count != null && (
+              <span className="text-foreground/55">
+                {texts.turns(entry.turn_count)}
+              </span>
+            )}
+            {landscape && (
+              <span className="font-mono text-foreground/40">{texts.no(stamp.slice(0, 4), stamp.slice(5))}</span>
+            )}
+          </span>
+        </div>
+
+        <Hairline className="mt-[0.65em]" />
+
+        {/* Title — the focus sentence, or a big date for a dry slice. */}
+        <div
+          className={`mt-[0.6em] line-clamp-2 font-serif leading-snug tracking-tight text-card-foreground ${
+            dry ? "text-[1.35em]" : "text-[1.08em]"
+          }`}
+        >
+          {entry.focus || `${entry.date.slice(5)} ${hhmm(entry.start)}`.trim()}
+        </div>
+
+        {/* Previously — book-quoted italic serif. While content loads, gray
+            bars reserve the exact two-line slot; on resolve they crossfade
+            into the real quote so the swap is visible but nothing jumps. */}
+        {(turnsState === "loading" || previouslyText) && (
+          <>
+            <Hairline className="mt-[0.65em]" />
+            <div className="relative mt-[0.55em]">
+              {turnsState !== "loading" && previouslyText && (
+                <p className="animate-content-arrive line-clamp-2 font-serif text-[0.74em] font-light italic leading-relaxed text-muted-foreground/85">
+                  <span className="text-foreground/40">❝ </span>
+                  {previouslyText}
+                  <span className="text-foreground/40"> ❞</span>
+                </p>
+              )}
+              <div
+                aria-hidden
+                className={`flex flex-col justify-between transition-opacity duration-300 motion-reduce:transition-none ${
+                  turnsState === "loading"
+                    ? "h-[2.4em] opacity-100"
+                    : "pointer-events-none absolute inset-x-0 top-0 h-full opacity-0"
+                }`}
+              >
+                <div className="h-[0.7em] w-[82%] animate-pulse rounded-full bg-foreground/8 motion-reduce:animate-none" />
+                <div className="h-[0.7em] w-[58%] animate-pulse rounded-full bg-foreground/8 motion-reduce:animate-none" />
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Ledger-style archive rows. */}
+        {ledgerRows.length > 0 && (
+          <>
+            <Hairline className="mt-[0.65em]" />
+            <div className="flex flex-col">
+              {ledgerRows.map((row, i) => (
+                <div key={row.key}>
+                  {i > 0 && <Hairline />}
+                  <LedgerRow label={row.key} value={row.value} />
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        <Hairline className="mt-[0.55em]" />
+
+        {/* The film frame: the slice's opening rounds, vertically centered
+            in the remaining space. Two full exchanges can overflow the fixed
+            frame — the column clamps (overflow-hidden) and the bottom edge
+            fades into the card instead of growing it.
+
+            IT DOES NOT SCROLL, AND IT DOES NOT NEED TO. It was made a scroll
+            region for an overflow that turned out not to exist: what filled
+            the frame was an invisible skeleton (see `TurnBubbles`), and with
+            that clipped the content measures exactly its frame at every size
+            tried — 300/300, 387/387, 392/392, 507/507. A scroller here would
+            buy nothing and cost something real: the fields own the wheel, so
+            an inner scroller has to stop the event before the wrapper cancels
+            it, and a wheel over any card would then stop moving the field for
+            no scroll in return. */}
+        <div
+          className="card-frame relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col overflow-hidden"
+          style={{ maxWidth: "34em" }}
+        >
+          <TurnBubbles
+            turns={turns}
+            state={turnsState}
+            em={em}
+            accent={accent}
+            texts={texts}
+          />
+          {turnsState === "ready" && (turns == null || turns.length === 0) && (
+            <p className="animate-content-arrive pt-[0.2em] font-serif text-[0.78em] font-light italic leading-relaxed text-muted-foreground/80">
+              {entry.summary || "…"}
+            </p>
+          )}
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-[1.6em] bg-gradient-to-t from-card to-transparent"
+          />
+        </div>
+
+        {/* Footer. */}
+        <Hairline className="mt-[0.55em]" />
+        <div className="mt-[0.45em] flex items-center justify-between font-sans lining-nums text-[0.55em] leading-none tracking-[0.1em] text-muted-foreground/70">
+          {contDate ? (
+            <span>↳ {texts.continuedFrom(contDate)}</span>
+          ) : (
+            <span />
+          )}
+          <span className="font-mono">{texts.fr(dateClean)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Self-loading face wrapper for the 3D card field.
+ *
+ * Content fetching used to live in `CardField` and was passed down through a
+ * `Map<string, ContentSlot>` prop; that caused the whole scene to re-render on
+ * every resolve and made the field flicker while scrolling. `SliceCardFace`
+ * keeps `FrameCard` a pure presentational component and moves the subscription
+ * to the per-card level via `useSliceTurns`.
+ */
+export function SliceCardFace({
+  entry,
+  geo,
+  flash,
+  texts,
+}: {
+  entry: TimelineSliceEntry;
+  geo: FrameGeometry;
+  flash?: boolean;
+  texts: FrameCardTexts;
+}) {
+  const content = useSliceTurns(entry.id);
+  return (
+    <FrameCard
+      entry={entry}
+      geo={geo}
+      flash={flash}
+      turns={content.turns}
+      turnsState={content.state}
+      previously={content.previously}
+      texts={texts}
+    />
+  );
+}
+
+/** Accessible label for a frame card (matches the DOM fallback cards). */
+export function frameCardLabel(
+  row: StackRow,
+  locale: string,
+): { label: string; aria: string } {
+  if (row.level === 0) {
+    const label =
+      `${row.top.date.slice(5).replace("-", "/")} ${hhmm(row.top.start)}`.trim();
+    return { label, aria: label };
+  }
+  const label = groupLabel(row, locale);
+  return { label, aria: `${label} · ${row.count}` };
+}

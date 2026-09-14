@@ -2,101 +2,196 @@
 
 import { useChat } from "@ai-sdk/react";
 import { WorkflowChatTransport } from "@ai-sdk/workflow";
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
+import { useSearchParams } from "next/navigation";
 import type { UIMessage } from "ai";
 import { ChatInput } from "./chat-input";
-import { useAvailableModels } from "@/hooks/use-available-models";
-import { ChatSection } from "./chat-section";
-import { HistoricalChatView } from "./historical-chat-view";
+import { ComposerHost } from "./composer-host";
+import type { FieldRung } from "@/lib/timeline3d/units";
+import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
+import { UnifiedChatStream } from "./unified-chat-stream";
+import type { ConversationFieldHandle } from "./conversation-field";
+import type { FieldFeed } from "@/lib/timeline3d/field-feed";
+// The stream's item model moved to its own module: the conversation field
+// renders the same items and must not import the stream component to get them.
+import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
-import { TimelineWheel } from "./timeline-wheel";
-import { ResizableSplit } from "./resizable-split";
-import { useTimelineOverlay } from "./timeline-overlay-context";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  getBriefingIdentity,
+  getArrivalState,
   getEpisodicState,
-  getSliceContent,
+  getSliceStart,
+  type ArrivalState,
   type SliceSummary,
-  type SliceContent,
 } from "@/lib/episodic/actions";
-import { getCached, setCache } from "@/lib/chat/slice-cache";
+import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
   type ArrivalDecision,
 } from "@/lib/chat/reconnect";
+import {
+  buildHistoryItems,
+  type ResumeBlock,
+} from "@/lib/chat/stream-items";
+import { useSliceStream } from "@/hooks/use-slice-stream";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { setTurnBusy } from "./turn-busy";
+import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
+import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/deep-link";
+import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
 interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
    *  chat starts on the real value instead of flashing defaults. */
   initialConfig?: UserConfig;
+  /** When true the `?at=` search param is ignored. Used by the shell while a
+   *  card rung is up, because the card field handles the deep-link anchor. */
+  suppressAtJump?: boolean;
+  /** The zoom rung. This page draws the CONVERSATION rung; at any other rung
+   *  the card field is on top and this page's content is dimmed out of the way
+   *  — except for its composer, which collapses to a button and stays live, so
+   *  a reader looking at the cards can still say something. */
+  rung?: FieldRung;
+  /** Ask the shell for a rung — the composer uses it to return to the
+   *  conversation on send, which is where the reply will actually appear. */
+  onRungChange?: (rung: FieldRung) => void;
+  /** A turn finished and its slice is on disk. The shell refreshes the card
+   *  field's catalog; see the effect in `Inner`. */
+  onTurnSettled?: () => void;
+  /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
+  feed?: FieldFeed;
+  /** True only while the chat view OWNS the band (the conversation rung). Both
+   *  fields are mounted at once while a card rung is up, and two writers on one
+   *  feed is what the feed exists to prevent. */
+  publishing?: boolean;
+  /** Report whether a turn is streaming. The card rungs have no row for a
+   *  slice that has not closed, so the shell draws the abstract placeholder
+   *  instead — and only the chat half knows a reply is in flight. */
+  onRunningChange?: (running: boolean) => void;
+  /** The floating chrome's height at the pane's top edge, px — measured once
+   *  by the shell (`use-chrome-inset`) and shared with the card field. */
+  insetTop?: number;
+  /** The floating composer's height at the pane's foot, px — BUBBLED UP rather
+   *  than held here, because the card field floats over the same foot and the
+   *  shell is the only place both fields can read one number from. */
+  insetBottom?: number;
+  /** Report that measurement upward. The composer is the only thing that knows
+   *  how tall it is (a growing textarea, an attachment row), so it is measured
+   *  where it is drawn and the number is owned where both fields can see it. */
+  onComposerClearanceChange?: (px: number) => void;
 }
 
-export function ChatPage({ initialConfig }: ChatPageProps) {
+/** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
+ *  half (§2 resume-vs-briefing) plus the persona both were resolved under. */
+interface MountVerdict extends ArrivalDecision {
+  arrival: ArrivalState;
+  persona: string;
+}
+
+export function ChatPage({
+  initialConfig,
+  suppressAtJump,
+  rung = "conversation",
+  onRungChange,
+  onTurnSettled,
+  feed,
+  publishing,
+  onRunningChange,
+  insetTop,
+  insetBottom,
+  onComposerClearanceChange,
+}: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
-  // run is still in flight, so this verdict is async — Inner (and therefore
-  // useChat) mounts only after it lands, keeping useChat's init a synchronous,
-  // once-only snapshot. Until then nothing renders (the header is outside this
-  // tree, so the page chrome still shows).
-  const [arrival, setArrival] = useState<ArrivalDecision | null>(null);
+  // run is still in flight and whether the newest slice is still alive, so
+  // this verdict is async — Inner (and therefore useChat) mounts only after it
+  // lands, keeping useChat's init a synchronous, once-only snapshot. Until
+  // then nothing renders (the header is outside this tree, so the page chrome
+  // still shows).
+  const [verdict, setVerdict] = useState<MountVerdict | null>(null);
   useEffect(() => {
+    // Persona comes from the URL — server actions can't read searchParams.
+    const persona =
+      new URLSearchParams(window.location.search).get("persona") || "user";
     let cancelled = false;
-    resolveArrival().then((d) => {
-      if (!cancelled) setArrival(d);
+    resolveArrival(persona).then((d) => {
+      if (!cancelled) setVerdict({ ...d, persona });
     });
     return () => {
       cancelled = true;
     };
   }, []);
-  if (!arrival) return null;
+  if (!verdict) return <ChatPageSkeleton />;
   return (
     <Inner
       initialConfig={initialConfig}
-      shouldResume={arrival.shouldResume}
-      initialMessages={arrival.initialMessages}
+      suppressAtJump={suppressAtJump}
+      rung={rung}
+      onRungChange={onRungChange}
+      onTurnSettled={onTurnSettled}
+      feed={feed}
+      publishing={publishing}
+      onRunningChange={onRunningChange}
+      insetTop={insetTop}
+      insetBottom={insetBottom}
+      onComposerClearanceChange={onComposerClearanceChange}
+      persona={verdict.persona}
+      shouldResume={verdict.shouldResume}
+      initialMessages={verdict.initialMessages}
+      arrival={verdict.arrival}
     />
   );
 }
 
 /**
- * The one-shot arrival verdict, side effects included. The rule: the live view
- * restores ONLY in-flight work.
+ * The one-shot arrival verdict, side effects included (v0.10 §1.7/§2).
  *
  * - The persisted run is still pending/running → genuine reconnect: keep the
- *   working conversation (the replay rebuilds its trailing partial turn).
- * - Anything else (no run, terminal run) → fresh arrival: CLEAR the stash so
- *   completed conversation never resurrects in the live view — it already
- *   lives in its slice on the timeline, and the arrival briefing carries the
- *   continuity ("上次聊到", suggested follow-ups).
+ *   working conversation from the stash (the replay rebuilds its trailing
+ *   partial turn). The stash's ONLY job is this in-flight reconnection.
+ * - Anything else (no run, terminal run) → drop the stash: continuity is now
+ *   restored from the SLICE — getArrivalState says whether the newest slice
+ *   is still inside the idle gap, and if so its turns re-enter the message
+ *   stream directly (cross-device, no localStorage involved). A dead slice
+ *   leaves the arrival briefing to carry the continuity.
  *
  * A failed status check (offline / server down) fails neutral: open blank but
  * DON'T clear the stash, so the next visit can retry the verdict.
  */
-async function resolveArrival(): Promise<ArrivalDecision> {
+async function resolveArrival(
+  persona: string,
+): Promise<ArrivalDecision & { arrival: ArrivalState }> {
   const runId = readStoredRunId();
   let active = false;
+  let statusCheckFailed = false;
   if (runId) {
     try {
       active = await isChatRunActive(runId);
     } catch {
-      return { shouldResume: false, initialMessages: [] };
+      statusCheckFailed = true;
     }
   }
+  // The arrival gate is independent of the run verdict — fetched in parallel
+  // spirit (after the run check so a hanging status call doesn't delay it is
+  // NOT a goal; correctness of the neutral-fail path is).
+  const arrival = await getArrivalState(persona).catch(
+    (): ArrivalState => ({ mode: "briefing" }),
+  );
+  if (statusCheckFailed) {
+    return { shouldResume: false, initialMessages: [], arrival };
+  }
   if (active) {
-    return decideArrival(true, readStoredMessages());
+    return { ...decideArrival(true, readStoredMessages()), arrival };
   }
   clearStoredRunId();
   clearStoredChatId();
   clearStoredMessages();
-  return decideArrival(false, []);
+  return { ...decideArrival(false, []), arrival };
 }
 
 // ─── Reconnect persistence ────────────────────────────────────────────────
@@ -104,8 +199,8 @@ async function resolveArrival(): Promise<ArrivalDecision> {
 // (phone lock / app switch) can re-attach to the SAME run's stream and replay
 // whatever it missed — but only while the run is actually in flight (the
 // mount-time arrival decision asks the server, see resolveArrival). Cleared on
-// a clean turn end and on any fresh arrival. Guarded so a private-mode / SSR
-// environment (no localStorage) degrades to no-op.
+// a clean turn end and whenever the run turns out terminal. Guarded so a
+// private-mode / SSR environment (no localStorage) degrades to no-op.
 const RUN_ID_KEY = "previously:activeRunId";
 const CHAT_ID_KEY = "previously:chatId";
 
@@ -119,6 +214,10 @@ const CHAT_ID_KEY = "previously:chatId";
 const SEND_MESSAGE_WINDOW = 10; // ~5 turns of working memory
 /** Cap the persisted conversation so a long session can't overflow localStorage. */
 const PERSIST_MESSAGE_CAP = 200;
+
+/** Virtuoso prepend pattern: the list's absolute index origin. Big enough
+ *  that any realistic history depth of prepended pages stays positive. */
+const FIRST_ITEM_INDEX_BASE = 100_000;
 
 function readStoredRunId(): string | null {
   if (typeof localStorage === "undefined") return null;
@@ -159,8 +258,8 @@ function clearStoredChatId(): void {
 // the stream resume only reconciles the LAST message instead of replaying the
 // whole run into an empty store (which pushes a full copy per chunk →
 // duplicated, growing message list). We persist the rendered UIMessage[] to
-// localStorage. A fresh arrival CLEARS the stash (see resolveArrival) — the
-// live view never resurrects completed conversation.
+// localStorage. Since v0.10 this stash serves ONLY the in-flight reconnect —
+// completed conversation is restored from its slice (see resolveArrival).
 const STORED_MESSAGES_KEY = "previously:messages";
 
 function readStoredMessages(): UIMessage[] {
@@ -199,17 +298,71 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * The stream index where a slice's block begins: its seam when one is
+ * rendered above it (so the jump lands with the seam in view), else its
+ * resume banner, else its first turn.
+ */
+export function sliceStartIndex(
+  items: readonly ChatStreamItem[],
+  sliceId: string,
+): number | null {
+  const seamIdx = items.findIndex(
+    (i) => i.kind === "seam" && i.key === `seam-${sliceId}`,
+  );
+  if (seamIdx >= 0) return seamIdx;
+  const idx = items.findIndex(
+    (i) =>
+      (i.kind === "history-turn" && i.sliceId === sliceId) ||
+      (i.kind === "resume-banner" && i.key === `resume-${sliceId}`),
+  );
+  return idx >= 0 ? idx : null;
+}
+
 // ─── Inner ───────────────────────────────────────────────────────────────
 
 function Inner({
   initialConfig,
+  suppressAtJump,
+  rung,
+  onRungChange,
+  onTurnSettled,
+  feed,
+  publishing,
+  onRunningChange,
+  insetTop,
+  insetBottom,
+  onComposerClearanceChange,
+  persona,
   shouldResume,
   initialMessages,
+  arrival,
 }: {
   initialConfig?: UserConfig;
+  suppressAtJump?: boolean;
+  /** The zoom rung, and the way to ask for another — see ChatPageProps. */
+  rung: FieldRung;
+  onRungChange?: (rung: FieldRung) => void;
+  /** A turn settled — see ChatPageProps. */
+  onTurnSettled?: () => void;
+  /** The shared band feed — see ChatPageProps. */
+  feed?: FieldFeed;
+  /** True only while the conversation rung owns the band — see ChatPageProps. */
+  publishing?: boolean;
+  /** Whether a turn is streaming — see ChatPageProps. */
+  onRunningChange?: (running: boolean) => void;
+  /** The pane's two floating insets — see `ChatPageProps`. */
+  insetTop?: number;
+  insetBottom?: number;
+  /** Report the composer's own measurement upward — see `ChatPageProps`. */
+  onComposerClearanceChange?: (px: number) => void;
+  /** Persona from the URL — server actions can't read searchParams. */
+  persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
   shouldResume: boolean;
   initialMessages: UIMessage[];
+  /** The §2 arrival gate — resume restores the alive slice's turns. */
+  arrival: ArrivalState;
 }) {
   // ── Model selection — reactive, persisted to config.json ─────────────
   // The single source of truth is memory/user/config.json (cross-device, no
@@ -219,15 +372,9 @@ function Inner({
   // effort for every turn (see start-turn.ts).
   const locale = useLocale();
   const [selectedModel, setSelectedModel] = useState(
-    initialConfig?.model.provider ?? "deepseek-v4-flash",
+    initialConfig?.model.provider ?? "deepseek-flash",
   );
 
-  // The live catalog (shared fetch with ModelSelector) — gates the image
-  // attach control on the selected model's vision capability.
-  const availableModels = useAvailableModels();
-  const visionSupported =
-    availableModels.find((m) => m.id === selectedModel)?.supportsVision ??
-    false;
 
   const handleModelChange = useCallback((modelId: string) => {
     setSelectedModel(modelId);
@@ -242,38 +389,85 @@ function Inner({
   const [timelineSlices, setTimelineSlices] = useState<SliceSummary[]>([]);
   // The most recent slice — its focus / open_loops seed the empty briefing.
   const [activeSlice, setActiveSlice] = useState<SliceSummary | null>(null);
+  // The slice the stream is currently landed on ("now" = the live bottom) —
+  // the jump guard and the submit snap-back read it.
   const [selectedSliceId, setSelectedSliceId] = useState<string | null>("now");
-  // The slice the user just clicked — drives the wheel's selection glow
-  // IMMEDIATELY (before the time-travel transition lands), so the marker
-  // doesn't lag behind the click by the roll's duration.
-  const [pendingSliceId, setPendingSliceId] = useState<string | null>(null);
-  // The user's display name — feeds the "PREVIOUSLY ON {name}" eyebrow over
-  // the time-travel readout (falls back to "YOU" until it resolves).
-  const [briefingName, setBriefingName] = useState<string>("");
-  const [historicalContent, setHistoricalContent] = useState<SliceContent | null>(null);
-  // The time-travel transition currently playing (if any). While active, the
-  // clock overlay covers the content area and doubles as the loading state.
+  // The briefing identity — the display name for the "PREVIOUSLY ON {name}"
+  // eyebrow over the time-travel readout, plus the persona list in demo mode.
+  // Resolved through the SHARED hook and passed down, so nothing below it looks
+  // the name up again — and so the header's brand shares this one request
+  // rather than making a second. The read walks the memory for the newest
+  // previously.md, which in GitHub mode is a network walk over a month of day
+  // directories; see `use-briefing-identity.ts`.
+  const identity = useBriefingIdentity();
+  // The time-travel transition currently playing (if any) — an overlay that
+  // covers the stream and doubles as the loading state while older pages are
+  // paged in beneath it.
   const [transition, setTransition] = useState<{
     from: string;
     to: string;
     sliceId: string;
   } | null>(null);
-  // Start time of the currently loaded slice — the clock travels FROM here
-  // (or from the live "now" when nothing historical is loaded).
-  const [loadedSliceStart, setLoadedSliceStart] = useState<string | null>(null);
   // Resolves when the clock animation lands (see handleSelectSlice).
   const clockLandedRef = useRef<(() => void) | null>(null);
 
-  // Persona picked from URL — server actions need it because they can't
-  // access searchParams on the server side. Defaults to "user".
-  const persona = useMemo(() => {
-    if (typeof window === "undefined") return "user";
-    return new URLSearchParams(window.location.search).get("persona") || "user";
-  }, []);
+  // ── Unified message stream (v0.10 §1/§2) ──────────────────────────────
+  // The resume block: when the newest slice is still alive (and we're not
+  // re-attaching to an in-flight run whose stash already carries those turns),
+  // its turns re-enter the stream from the slice itself. The historical
+  // paging cursor is pinned BEFORE that slice so it never double-renders.
+  const [resumeBlock] = useState<ResumeBlock | null>(() =>
+    arrival.mode === "resume" && !shouldResume
+      ? {
+          sliceId: arrival.sliceId,
+          start: arrival.start,
+          focus: arrival.focus,
+          strands: arrival.strands,
+          turns: arrival.turns,
+        }
+      : null,
+  );
+  const [streamCursor] = useState<string | null>(() =>
+    arrival.mode === "resume" ? arrival.start : null,
+  );
+  const stream = useSliceStream(persona, streamCursor);
 
-  // Load the newest slice on mount — feeds the NowPlaceholder gap anchor and
-  // the send-window `loadedSliceIds`. The timeline WHEEL loads its own full
-  // catalog independently (see timeline-wheel.tsx).
+  // The field owns the position, so the jump paths drive it directly rather
+  // than going through a list handle.
+  const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
+  // The time of the item currently at the top of the viewport (reported by the
+  // stream) — the travel clock rolls FROM where the viewer actually is.
+  const topTimeRef = useRef<string | null>(null);
+
+  // Page one older slice in. There is no index origin to shift any more: the
+  // field holds its position through a prepend by measuring the added blocks,
+  // which is the same guarantee without a windowing library's bookkeeping.
+  const { loadOlder, loadingOlder } = stream;
+  const pageOlder = useCallback(async () => {
+    await loadOlder();
+  }, [loadOlder]);
+
+  // startReached while a page is in flight (incl. the initial fill) would
+  // no-op through loadOlder's guard — re-fire once it settles so a short list
+  // keeps filling the viewport without requiring a scroll wiggle.
+  const startReachedPendingRef = useRef(false);
+  const handleStartReached = useCallback(() => {
+    if (loadingOlder) {
+      startReachedPendingRef.current = true;
+      return;
+    }
+    void pageOlder();
+  }, [loadingOlder, pageOlder]);
+  useEffect(() => {
+    if (!loadingOlder && startReachedPendingRef.current) {
+      startReachedPendingRef.current = false;
+      void pageOlder();
+    }
+  }, [loadingOlder, pageOlder]);
+
+  // Load the newest slice on mount — feeds the empty briefing. (The 3D
+  // timeline loads its catalog lazily inside AppShell.)
+  const [episodicReady, setEpisodicReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
     getEpisodicState(persona)
@@ -284,58 +478,12 @@ function Inner({
       })
       .catch(() => {
         // silently ignore
-      });
-    // Resolve the display name for the "PREVIOUSLY ON {name}" eyebrow.
-    getBriefingIdentity(persona)
-      .then((id) => {
-        if (!cancelled) setBriefingName(id.name);
       })
-      .catch(() => {});
+      .finally(() => {
+        if (!cancelled) setEpisodicReady(true);
+      });
     return () => { cancelled = true; };
   }, [persona]);
-
-  // Handle slice selection — runs the time-travel clock (which doubles as the
-  // loading state) while the target content fetches in the background, then
-  // swaps in the content and moves the blue selection mark.
-  const handleSelectSlice = useCallback(
-    async (sliceId: string, toTime?: string) => {
-      if (sliceId === selectedSliceId) return; // already there
-
-      const nowIso = new Date().toISOString();
-      // Travel FROM wherever the viewer currently is (live now, or the last
-      // loaded slice) TO the clicked slice.
-      const from =
-        selectedSliceId !== "now" && loadedSliceStart ? loadedSliceStart : nowIso;
-      const to = toTime ?? (sliceId === "now" ? nowIso : from);
-
-      const clockLanded = new Promise<void>((resolve) => {
-        clockLandedRef.current = resolve;
-      });
-      setTransition({ from, to, sliceId });
-      // Light the wheel's selection marker on the clicked slice right away —
-      // don't wait for the roll to land.
-      setPendingSliceId(sliceId);
-
-      // Fetch in the background while the clock animates.
-      let content: SliceContent | null = null;
-      if (sliceId !== "now") {
-        const cached = getCached(sliceId);
-        content = cached
-          ? cached.content
-          : await getSliceContent(sliceId, persona).catch(() => null);
-        if (content) setCache(sliceId, content, null);
-      }
-
-      // Land on the target: swap content + move the selection.
-      await clockLanded;
-      setSelectedSliceId(sliceId);
-      setPendingSliceId(null);
-      setHistoricalContent(content);
-      setLoadedSliceStart(sliceId === "now" ? null : content?.start ?? null);
-      setTransition(null);
-    },
-    [persona, selectedSliceId, loadedSliceStart],
-  );
 
   // Refresh-resume goes through the SDK's own path: `resume: true` calls
   // resumeStream() on mount, and prepareReconnectToStreamRequest redirects it
@@ -457,6 +605,24 @@ function Inner({
   const isStreaming = status === "streaming";
   const isLoading = status === "submitted" || isStreaming;
 
+  /**
+   * A turn just SETTLED — the stream is done and the slice is now persisted.
+   *
+   * This is the moment the card field needs to know about: its rows come from
+   * the catalog, and the catalog is fetched once, so a slice written by the
+   * turn that just finished is invisible to the cards until something asks
+   * again. Nothing else in the app re-fetches it, which means a reader who
+   * finished a conversation at the `week` rung would not find it there.
+   *
+   * Keyed on the falling edge only. `isLoading` is true for the whole stream,
+   * so firing on the value would re-fetch on every token.
+   */
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading) onTurnSettled?.();
+    wasLoadingRef.current = isLoading;
+  }, [isLoading, onTurnSettled]);
+
   // Publish the in-flight state so the header can disable the settings entry
   // mid-turn (engine/model changes must not land while a call is running).
   useEffect(() => {
@@ -499,14 +665,125 @@ function Inner({
     }
   }, [messages, t]);
 
+  // ── The stream's item model: [history slice blocks …, resume block, live] ─
+  const handleRegenerate = useCallback(
+    (messageId: string) => {
+      if (status !== "ready") return;
+      void regenerate({ messageId });
+    },
+    [regenerate, status],
+  );
+
+  const liveItems = useMemo<LiveStreamItem[]>(() => {
+    const lastMessage = messages[messages.length - 1];
+    // Regenerate re-answers the last user message — only meaningful on the
+    // LATEST assistant reply (and never mid-stream; ChatMessage also gates).
+    const lastAssistantId = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant")?.id;
+    const nowIso = new Date().toISOString();
+    return messages.map((message, index) => ({
+      kind: "live",
+      // Index-suffixed key: if a reconnect ever delivers a duplicated message
+      // id (the same turn written twice by concurrent streams), the key stays
+      // unique — React's duplicate-key reconciliation can otherwise loop into
+      // "Maximum update depth exceeded" (#185).
+      key: `${message.id}-${index}`,
+      message,
+      // The live turns continue the active slice — its strands tint the user
+      // bubbles (same source as the history turns' tint).
+      strands: activeSlice?.strands,
+      timeIso: nowIso,
+      isStreaming: message.id === lastMessage?.id && isStreaming,
+      startedAt:
+        message.id === lastMessage?.id
+          ? (lastUserMessageAt ?? undefined)
+          : undefined,
+      onRegenerate:
+        message.id === lastAssistantId
+          ? () => handleRegenerate(message.id)
+          : undefined,
+    }));
+  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice]);
+
+  // ── Arrival forms (v0.10 §1.2 Rev 2): the stream is ALWAYS the view — no
+  // "briefing page vs stream" split. Briefing mode seats the EmptyBriefing
+  // content as a stream-tail card (history pages in above it); resume mode
+  // restores the alive slice's turns under a banner. The standalone
+  // full-screen briefing survives ONLY for an empty memory (not one slice),
+  // known once the first page settles (initialLoaded).
+  const emptyMemory =
+    arrival.mode === "briefing" &&
+    stream.initialLoaded &&
+    stream.slices.length === 0 &&
+    !stream.hasMore &&
+    messages.length === 0;
+  const showBriefingCard = arrival.mode === "briefing" && !emptyMemory;
+  // A mount-time "now" stamp — the briefing tail item's time anchor for the
+  // time indicator / rail.
+  const [briefingTimeIso] = useState(() => new Date().toISOString());
+
+  // ── Arrival skeleton cover ─────────────────────────────────────────────
+  // Until the mount fetches settle (episodic state + the first history
+  // page), an isomorphic skeleton covers the pane and crossfades out — the
+  // briefing card / restored turns replace it without a hard cut. A hard
+  // backstop lifts the cover even if a fetch hangs forever.
+  const reducedMotion = useReducedMotion() ?? false;
+  const [skeletonBackstop, setSkeletonBackstop] = useState(false);
+  const arrivalReady = episodicReady && stream.initialLoaded;
+  useEffect(() => {
+    if (arrivalReady) return;
+    const id = setTimeout(() => setSkeletonBackstop(true), 12_000);
+    return () => clearTimeout(id);
+  }, [arrivalReady]);
+  const showArrivalSkeleton = !arrivalReady && !skeletonBackstop;
+
+  const items = useMemo<ChatStreamItem[]>(() => {
+    const tail: ChatStreamItem[] = showBriefingCard
+      ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
+      : [];
+    return [
+      ...buildHistoryItems(stream.slices, resumeBlock),
+      ...tail,
+      ...liveItems,
+    ];
+  }, [stream.slices, resumeBlock, liveItems, showBriefingCard, briefingTimeIso]);
+  // Refs for the async jump path (scrollToIndex after paging lands).
+
+  /**
+   * Run `fn` against the field's handle as soon as it exists.
+   *
+   * The field mounts BELOW this component and fills its handle from an effect,
+   * so a jump that fires during the mount sequence — and `?at=` is consumed
+   * exactly then — would find nothing. Retrying is bounded, so a genuinely
+   * absent field gives up rather than spinning. `scrollToKey` needs no retry
+   * of its own: it remembers an unloaded target and lands when it arrives.
+   */
+  const withField = useCallback(
+    (fn: (api: ConversationFieldHandle) => void, frames = 120) => {
+      const attempt = (left: number) => {
+        const api = fieldApiRef.current;
+        if (api) {
+          fn(api);
+          return;
+        }
+        if (left <= 0) return;
+        requestAnimationFrame(() => attempt(left - 1));
+      };
+      attempt(frames);
+    },
+    [],
+  );
+
+  const scrollToBottom = useCallback(() => {
+    withField((api) => api.scrollToBottom());
+  }, [withField]);
+
   const handleSubmit = async (message: string, images: File[]) => {
-    if (selectedSliceId !== "now" || transition) {
-      setSelectedSliceId("now");
-      setHistoricalContent(null);
-      setTransition(null);
-      setPendingSliceId(null);
-      setLoadedSliceStart(null);
-    }
+    // Sending snaps back to the present: the jump target is cleared and the
+    // stream follows the new turn to the bottom.
+    setSelectedSliceId("now");
+    setTransition(null);
     setLastUserMessageAt(new Date().toISOString());
     // Images travel as AI SDK file parts (data URLs) — convertToModelMessages
     // on the server maps them to the provider's image inputs. The files are
@@ -524,24 +801,12 @@ function Inner({
       ...(message ? [{ type: "text" as const, text: message }] : []),
     ];
     sendMessage({ role: "user", parts });
+    requestAnimationFrame(scrollToBottom);
     // v0.7b: self-evolution runs INLINE inside housekeeping (the turn's stream
     // carries data-evolution chunks) — no separate evolution request here.
     // v0.9: buildStream folds those chunks into the housekeeping card, so the
     // client needs no evolution-specific state at all.
   };
-
-  // ── Regenerate: re-answer the last user message. The SDK truncates the
-  // rejected assistant message locally and re-requests with trigger
-  // "regenerate-message" (which prepareSendMessagesRequest turns into the
-  // body's regenerate flag). Only the LAST assistant message gets the button
-  // (ChatSection gates), and never mid-turn.
-  const handleRegenerate = useCallback(
-    (messageId: string) => {
-      if (status !== "ready") return;
-      void regenerate({ messageId });
-    },
-    [regenerate, status],
-  );
 
   // ── Stop means STOP: abort the local stream, cancel the durable run
   // server-side (no further steps, no recorded agent reply — the slice keeps
@@ -571,152 +836,349 @@ function Inner({
     });
   }, [stop]);
 
-  // Hydration guard: the persisted conversation only exists client-side, so the
-  // server renders the empty state. Keep the FIRST client render matching the
-  // server HTML (empty), then reveal the restored messages after hydration —
-  // otherwise React throws a hydration mismatch (server empty vs client
-  // restored). Once hydrated the flag is irrelevant.
-  const [hydrated, setHydrated] = useState(false);
+  // The unified stream replaced the separate historical view (v0.10 §1): a
+  // slice jump (search palette, references bar, `?at=`) pages the target slice
+  // into the stream (the time-travel clock covers the loading) and
+  // scroll-lands on its seam. "now" lands at the bottom.
+  const tHist = useTranslations("chat.history");
+
+  // The travel clock's TARGET time: producers that know the slice's start
+  // pass it as `toTime` (the timeline card click threads it through
+  // `?atStart=`), everyone else resolves it — loaded stream window, the
+  // recent-summaries catalog, the resume block, else one catalog fetch.
+  // Unknown target → the clock just holds (to = from).
+  const resolveSliceStart = useCallback(
+    async (sliceId: string): Promise<string | null> => {
+      const known =
+        stream.slices.find((s) => s.id === sliceId)?.start ??
+        timelineSlices.find((s) => s.slice_id === sliceId)?.start;
+      if (known) return known;
+      if (resumeBlock?.sliceId === sliceId) return resumeBlock.start;
+      try {
+        // One slice's start, not the whole catalog: this used to fetch every
+        // entry (tags, open loops, summaries) over the wire to read one field.
+        return await getSliceStart(sliceId);
+      } catch {
+        return null;
+      }
+    },
+    [stream.slices, timelineSlices, resumeBlock],
+  );
+
+  const handleSelectSlice = useCallback(
+    async (sliceId: string, toTime?: string) => {
+      if (sliceId === selectedSliceId && !transition) return; // already there
+
+      const nowIso = new Date().toISOString();
+      // Travel FROM where the viewer actually is (the top item's time) — the
+      // clock's reverse-tick reads like the stream rewinding.
+      const from = topTimeRef.current ?? nowIso;
+      const to =
+        toTime ??
+        (sliceId === "now"
+          ? nowIso
+          : ((await resolveSliceStart(sliceId)) ?? from));
+
+      const clockLanded = new Promise<void>((resolve) => {
+        clockLandedRef.current = resolve;
+      });
+      setTransition({ from, to, sliceId });
+
+      // Page backwards beneath the clock until the target slice is in the
+      // stream window (the resume slice is always "loaded" — it's the block
+      // right above the live turns).
+      let found = true;
+      if (sliceId !== "now" && sliceId !== resumeBlock?.sliceId) {
+        // No index bookkeeping to do: the field tracks its own offsets and
+        // absorbs a prepend by measurement, not by shifting a window base.
+        found = await stream.loadUntilSlice(sliceId);
+      }
+
+      await clockLanded;
+      setTransition(null);
+
+      if (!found) {
+        // The catalog exhausted before the target — an honest miss, not a
+        // fake landing.
+        toast.error(tHist("notFound"));
+        return;
+      }
+
+      setSelectedSliceId(sliceId);
+      // Scroll once the stream is visible again (the exit fade is 0.3s, but
+      // the list beneath is live the whole time — one frame is enough).
+      requestAnimationFrame(() => {
+        if (sliceId === "now") {
+          scrollToBottom();
+          return;
+        }
+        // The field addresses a slice by its seam KEY — the seam carries the
+        // slice id — so it never needs the data-relative index the virtualized
+        // list wanted. A false return means the target is still paging in; the
+        // field lands on it when it appears.
+        withField((api) => api.scrollToKey("seam-" + sliceId));
+      });
+    },
+    [
+      selectedSliceId,
+      transition,
+      resumeBlock,
+      stream,
+      scrollToBottom,
+      withField,
+      resolveSliceStart,
+      tHist,
+    ],
+  );
+
+  // M2 jump bus: the search palette, the recall references bar and the
+  // timeline view request a stream jump through the module-level slice-jump
+  // bus (or via `?at=`, below) — the handler is the same select path
+  // (page-until-loaded + scroll-to-seam + the travel clock as the loading
+  // state). A jump stashed while the chat page wasn't mounted replays once,
+  // on registration.
   useEffect(() => {
-    setHydrated(true);
+    const unregister = registerSliceJumpHandler((sliceId) => {
+      void handleSelectSlice(sliceId);
+    });
+    const stashed = takePendingSliceJump();
+    if (stashed) void handleSelectSlice(stashed);
+    return unregister;
+  }, [handleSelectSlice]);
+
+  // `?at=<sliceId>&atStart=<iso>` — the timeline → chat half of the context
+  // carry (the wheel fallback's pick, the L3 traverse, a shared link). The
+  // chat page stays MOUNTED under the timeline shell, so this must react to
+  // searchParam changes, not just the initial mount. Consumed once: the
+  // params are stripped (replaceState, no navigation) so a refresh or a
+  // re-render never re-fires the jump. `atStart` is the target slice's ISO
+  // start from the timeline card — passing it as the clock's `to` skips the
+  // catalog fetch resolveSliceStart would otherwise need. When the shell
+  // has the timeline view active it suppresses this so the timeline handles
+  // the anchor.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    if (suppressAtJump) return;
+    const at = parseAtParam(searchParams.toString());
+    if (!at) return;
+    const atStart = parseAtStartParam(searchParams.toString());
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + stripAtParam(searchParams.toString()) + window.location.hash,
+    );
+    void handleSelectSlice(at, atStart ?? undefined);
+  }, [searchParams, handleSelectSlice, suppressAtJump]);
+
+  // The slice at the top of the viewport. It used to be PUBLISHED here, into a
+  // module global the header's mode switcher read to build
+  // `/?view=timeline&at=…` — carrying the reading position across the view
+  // switch. That switch is gone (the rung replaced it, and the lens does not
+  // carry a position), so the publication went with it. The TIME half stays:
+  // the travel clock reads `topTimeRef` for the "from" end of its interval.
+  const handleTopItemChange = useCallback((iso: string, _sliceId: string | null) => {
+    topTimeRef.current = iso;
   }, []);
 
-  const showingLive = selectedSliceId === "now";
   // The "PREVIOUSLY ON" eyebrow over the travel readout — same brand mark as
   // the empty briefing's title card.
   const tBrief = useTranslations("emptyBriefing");
-  // Timeline expand — toggled from the header / mini spine / desktop expand
-  // button; collapses on slice select. The same left timeline widens in place
-  // over the content (no separate drawer), with a blur mask over what's behind.
-  const {
-    open: timelineOpen,
-    close: closeTimeline,
-  } = useTimelineOverlay();
 
-  // Picking a slice in the timeline collapses it so the time-travel transition
-  // plays against the content revealed behind.
-  const handleTimelineSelect = useCallback(
-    (sliceId: string, start?: string) => {
-      handleSelectSlice(sliceId, start);
-      closeTimeline();
-    },
-    [handleSelectSlice, closeTimeline],
-  );
+  const onConversationRung = rung === "conversation";
+
+  // Tell the shell whether a reply is in flight, so a card rung can draw the
+  // running-slice placeholder. This is the ONLY piece of turn state the shell
+  // needs, which is why it is a one-boolean callback rather than a store: the
+  // card field cannot render a live turn (its rows come from the closed-slice
+  // catalog), so all it can honestly say is "one is happening".
+  useEffect(() => {
+    onRunningChange?.(isLoading);
+  }, [isLoading, onRunningChange]);
+
+  /**
+   * Sending comes HOME first. At a card rung the composer is collapsed, and a
+   * reader who sends from there is answered at the conversation rung — so the
+   * submit switches rung and then runs the normal path. Doing it in that order
+   * means the field is already mounted and following the live edge when the
+   * first token arrives, instead of the reply streaming into a pane nobody is
+   * looking at.
+   */
+  // Not memoized, deliberately: `handleSubmit` is not either (it closes over
+  // the whole turn state), so a `useCallback` here would either recreate on
+  // every render anyway or need a ref to hide that — machinery for a prop that
+  // is not memoized on the other end either.
+  const submitFromAnyRung = (...args: Parameters<typeof handleSubmit>) => {
+    if (!onConversationRung) onRungChange?.("conversation");
+    return handleSubmit(...args);
+  };
+
   return (
     <>
-      {/* ── Timeline + Content — a split view: timeline left (fixed width:
-           full wheel on desktop / mini spine on phones), conversation right.
-           Expanding widens the SAME timeline over the content with a blur mask
-           (no separate drawer). The right panel scrolls internally. */}
-      <ResizableSplit
-        expanded={timelineOpen}
-        left={
-          <div className="flex h-full flex-col pl-2 md:pl-5">
-            <div className="min-h-0 flex-1">
-              <TimelineWheel
-                selectedId={selectedSliceId}
-                pendingId={pendingSliceId}
-                onSelect={handleTimelineSelect}
-              />
-            </div>
+      {/* ── Content — one centered column below the fixed header. The shell
+           (AppShell) owns the top-level flex layout and the left time axis;
+           this component just fills the right-hand column. The stream is always
+           mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
+           an EMPTY memory falls back to the full-screen empty briefing.
+
+           THE COLUMN RESERVES NOTHING, and that is the point. It used to carry
+           `pt-24 pb-36` as the chrome's and the composer's keep-out, which read
+           as a reserve and behaved as a CROP: this box is `overflow-hidden`, so
+           a padding here shrinks the viewport and cuts the content off at that
+           edge — pixels the reader can never scroll to, because they are
+           outside the field rather than merely behind a control. The room now
+           comes off the CONTENT's own extent instead (the field's range, the
+           scroller's padding below), so the field fills the pane and content
+           passes under the floating chrome on its way past it. ── */}
+      <div
+        className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
+          onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        // Dimmed-and-mounted, not unmounted: this subtree holds the field's
+        // camera position and the live stream, and a rung change must not
+        // rebuild either. `inert` is what makes "hidden" mean hidden — the
+        // content is off the focus order and out of the accessibility tree,
+        // which `opacity-0` alone does not do.
+        inert={!onConversationRung || undefined}
+      >
+        {emptyMemory ? (
+          // THIS ONE IS A REAL SCROLLER, and there the padding IS the content
+          // inset: a scroll container's scrollport is its padding box, so
+          // content scrolls INTO the padding and is visible there. It is the
+          // same reserve the field makes with its range — expressed the way a
+          // DOM scroller expresses it, which is the one shape this column could
+          // not use.
+          <div
+            style={{ paddingTop: insetTop, paddingBottom: insetBottom }}
+            className="h-full overflow-y-auto"
+          >
+            <EmptyBriefing
+              persona={persona}
+              identity={identity}
+              active={activeSlice}
+              recent={timelineSlices}
+              onSend={(msg) => void handleSubmit(msg, [])}
+            />
           </div>
-        }
-        right={
-        <AnimatePresence mode="wait">
-          {transition ? (
+        ) : (
+          <UnifiedChatStream
+            items={items}
+            loadingOlder={stream.loadingOlder}
+            hasMore={stream.hasMore}
+            onStartReached={handleStartReached}
+            error={error}
+            onTopItemChange={handleTopItemChange}
+            // Same rule as the anchors: only the FOREGROUND view publishes, so
+            // the band's dot follows whichever field the reader is actually
+            // looking at rather than being fought over by both.
+            feed={feed}
+            publishing={publishing}
+            fieldApiRef={fieldApiRef}
+            insetTop={insetTop}
+            insetBottom={insetBottom}
+            briefing={
+              showBriefingCard
+                ? {
+                    persona,
+                    identity,
+                    active: activeSlice,
+                    recent: timelineSlices,
+                    onSend: (msg) => void handleSubmit(msg, []),
+                  }
+                : null
+            }
+          />
+        )}
+
+        {/* ── Time-travel cover — an overlay ABOVE the stream (the list
+             never unmounts, so the scroll position and the jump target
+             survive the trip). Doubles as the page-loading state. ── */}
+        <AnimatePresence>
+          {transition && (
             <motion.div
               key="travel"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              className="relative flex items-center justify-center overflow-hidden min-h-full"
+              className="absolute inset-0 z-10 flex items-center justify-center overflow-hidden bg-background"
             >
-              {/* Soft brand glow behind the travel readout — the same stage-light
-                  as the empty briefing's title card. */}
-              <div
-                aria-hidden
-                className="pointer-events-none absolute left-1/2 top-1/2 h-72 w-72 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-500/10 blur-3xl"
-              />
-              <div className="relative flex flex-col items-center gap-3">
-                <span className="font-mono text-[0.65rem] uppercase tracking-[0.35em] text-muted-foreground/60">
-                  {tBrief("eyebrowWithName", { name: briefingName || tBrief("fallbackName") })}
-                </span>
-                <RelativeTimeReadout
-                  timestamp={transition.to}
-                  from={transition.from}
-                  onRollComplete={() => clockLandedRef.current?.()}
+              {/* The slice-card face — the same ring/hairline/serif language
+                  as the timeline's FrameCard and the briefing card, so the
+                  travel "moment" reads as one product. */}
+              <div className="relative mx-4 w-full max-w-md overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
                 />
-              </div>
-            </motion.div>
-          ) : showingLive ? (
-            <motion.div
-              key="live"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
-              className="h-full"
-            >
-              {(!hydrated || (messages.length === 0 && !isLoading)) ? (
-                <EmptyBriefing
-                  persona={persona}
-                  active={activeSlice}
-                  recent={timelineSlices}
-                  onSend={(msg) => void handleSubmit(msg, [])}
-                />
-              ) : (
-                <div className="mx-auto max-w-5xl xl:max-w-7xl pl-0 pr-4 sm:pr-6 lg:pr-8 min-h-full pb-36">
-                  {/* No left padding — the timeline itself is the separator.
-                      pb-36 = safe area clearing the fixed bottom input bar. */}
-                  <ChatSection
-                    messages={messages}
-                    isStreaming={isStreaming}
-                    error={error}
-                    lastUserMessageAt={lastUserMessageAt}
-                    onRegenerate={handleRegenerate}
+                <div className="relative flex flex-col items-center px-6 py-8">
+                  <div className="flex w-full items-center gap-2 self-stretch text-[0.65rem] leading-none tracking-[0.08em] text-muted-foreground">
+                    <span
+                      aria-hidden
+                      className="inline-block size-1.5 shrink-0 rounded-[1px] bg-primary"
+                    />
+                    <span className="font-mono uppercase tracking-[0.35em]">
+                      {tBrief("eyebrowWithName", { name: identity?.name || tBrief("fallbackName") })}
+                    </span>
+                  </div>
+                  <div
+                    aria-hidden
+                    className="mt-4 h-px w-full self-stretch bg-foreground/[0.07]"
+                  />
+                  <RelativeTimeReadout
+                    timestamp={transition.to}
+                    from={transition.from}
+                    onRollComplete={() => clockLandedRef.current?.()}
+                    className="mt-8"
                   />
                 </div>
-              )}
+              </div>
             </motion.div>
-          ) : (
+          )}
+        </AnimatePresence>
+
+        {/* ── Arrival skeleton cover — same seat as the travel clock: an
+             isomorphic skeleton (seams, bubble pairs, the briefing card
+             face) over the pane while the mount fetches are in flight,
+             crossfading out as the real stream takes over. ── */}
+        <AnimatePresence>
+          {showArrivalSkeleton && (
             <motion.div
-              key={`slice-${selectedSliceId ?? "none"}`}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.3 }}
+              key="arrival-skeleton"
+              exit={{ opacity: 0 }}
+              transition={{ duration: reducedMotion ? 0 : 0.3 }}
+              className="absolute inset-0 z-10 overflow-hidden bg-background"
             >
-              <HistoricalChatView
-                content={historicalContent}
-                loading={false}
+              <ChatStreamSkeleton
+                tail={arrival.mode === "briefing" ? "briefing" : "rounds"}
               />
             </motion.div>
           )}
         </AnimatePresence>
-        }>
-      </ResizableSplit>
-
-      {/* ── Fixed bottom bar ────────────────────────────────────────────── */}
-      {/* While the timeline is expanded (z-20 panel + translucent blur mask),
-          fade the input out — otherwise the card ghosts through the mask. */}
-      <div
-        className={`fixed bottom-0 inset-x-0 z-10 transition-opacity duration-300 ${
-          timelineOpen ? "pointer-events-none opacity-0" : "opacity-100"
-        }`}
-      >
-        <div className="pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">
-          <div className="mx-auto w-full md:max-w-2xl px-4 sm:px-6 lg:px-8">
-            <ChatInput
-              onSubmit={handleSubmit}
-              isLoading={isLoading}
-              onStop={handleStop}
-              persona={persona}
-              visionEnabled={visionSupported}
-              currentModelId={selectedModel}
-              onModelChange={handleModelChange}
-            />
-          </div>
-        </div>
       </div>
+
+      {/* ── The composer. A FLOATING overlay, not a footer: it used to be a
+           `shrink-0` child that took its height out of the column, which made
+           it page furniture in an app that has none. `ComposerHost` positions
+           it and reports how much room it needs, and that number travels up to
+           the shell — the card field floats over the same foot, so the owner
+           of the number has to be above both fields. See
+           `ChatPageProps.onComposerClearanceChange`. ── */}
+      <ComposerHost
+        rung={rung}
+        onClearanceChange={onComposerClearanceChange}
+        composer={({ collapsed, expand }) => (
+          <ChatInput
+            collapsed={collapsed}
+            onExpand={expand}
+            onSubmit={submitFromAnyRung}
+            isLoading={isLoading}
+            onStop={handleStop}
+            persona={persona}
+            currentModelId={selectedModel}
+            onModelChange={handleModelChange}
+          />
+        )}
+      />
     </>
   );
 }

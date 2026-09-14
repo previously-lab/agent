@@ -39,6 +39,12 @@ import matter from "gray-matter";
 import { tolerantBounded01 } from "@/lib/chat/tolerant-schemas";
 import { fsReadFile } from "../io-helpers";
 import { readStrands } from "@/lib/episodic/manager";
+import {
+  listStrandEntityNames,
+  readStrandEntity,
+  resolveStrandEntityName,
+} from "@/lib/episodic/strand-files";
+import { findMatchingStrand } from "@/lib/episodic/strands";
 import { generateGlobalTimeline } from "@/lib/episodic/flash/global-timeline";
 import { sliceLine } from "@/lib/episodic/timeline/render";
 import { TIMELINE_INDEX_PATH } from "@/lib/episodic/timeline/store";
@@ -55,6 +61,11 @@ import {
   textLines,
   searchResultToString,
 } from "@/lib/retrieval/doc-segments";
+import {
+  filterByWindow,
+  sortNewestFirst,
+  searchCatalog,
+} from "@/lib/search/slice-search";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
   runSubAgent,
@@ -108,6 +119,10 @@ export interface RecallSearchInput {
   useDemo: boolean;
   /** Available strands (keyword tag → slice paths). Recall auto-traces matching ones. */
   strandsContext?: Record<string, string[]>;
+  /** What the main agent already established on the core timeline before
+   *  escalating to you. When present, build on it rather than redoing that
+   *  work. */
+  knownContext?: string;
   /** The evolved recall playbook (memory/agent-playbooks/recall.md, design
    *  v1.0 §2.4) — injected into the USER prompt, never the static system
    *  prompt, so the shared prefix cache is untouched. Absent → no block. */
@@ -152,15 +167,16 @@ function isStaleTimestamp(iso: string | undefined): boolean {
 /** Render the newest `limit` catalog entries as pointer lines (newest first),
  *  with a header noting the total and how to reach older slices. When `time`
  *  carries the user's clock, each id gets its LOCAL-date annotation so the
- *  agent never reads the UTC id as wall-clock time. */
+ *  agent never reads the UTC id as wall-clock time. The newest-first ordering
+ *  is the shared `sortNewestFirst` from slice-search (v0.10 §3.1 — the user
+ *  side's search and the agent side's recall order the same catalog the same
+ *  way). */
 export function paginateTimelineEntries(
   slices: TimelineSliceEntry[],
   limit: number = TIMELINE_PAGE_SIZE,
   time?: SliceLineTimeOpts,
 ): string {
-  const newest = [...slices]
-    .sort((a, b) => b.id.localeCompare(a.id))
-    .slice(0, limit);
+  const newest = sortNewestFirst(slices).slice(0, limit);
   if (newest.length === 0) {
     return "(timeline is empty — no slices yet)";
   }
@@ -246,12 +262,107 @@ async function readGlobalTimelineImpl(time?: SliceLineTimeOpts): Promise<string>
   }
 }
 
+// ─── Sub-agent tool: searchTimeline (keyword pre-check) ─────────────────
+
+/** How many pointer lines searchTimeline returns. A quick deterministic
+ *  pre-check should not dump the whole catalog into the model. */
+const KEYWORD_SEARCH_PAGE_SIZE = 40;
+
+/** Deterministic keyword pre-check over the timeline catalog using the shared
+ *  searchCatalog implementation (v0.10 §3.1). Returns matching pointer lines
+ *  newest-first, capped and with a truncation note. A "no catalog match" result
+ *  explicitly says this does NOT prove absence — semantic strand matching must
+ *  still follow. */
+async function searchTimelineImpl(
+  keywords: string[],
+  time?: SliceLineTimeOpts,
+): Promise<string> {
+  try {
+    const raw = await fsReadFile(TIMELINE_INDEX_PATH);
+    const idx = JSON.parse(raw) as Partial<TimelineIndex>;
+    const query = keywords.join(" ").trim();
+    if (!query) {
+      return "No keywords provided. Pass one or more keywords to search the timeline catalog.";
+    }
+    const hits = searchCatalog(idx.slices ?? [], query);
+    if (hits.length === 0) {
+      return (
+        `No catalog match for "${query}". ` +
+        "This does NOT prove the memory does not exist — synonyms, rephrasing, or language gaps can hide matches. " +
+        "Continue with strand tracing (listStrands / readStrand) and time-window fallback if needed."
+      );
+    }
+    const matched = sortNewestFirst(hits.map((h) => h.entry)).slice(
+      0,
+      KEYWORD_SEARCH_PAGE_SIZE,
+    );
+    const truncation =
+      hits.length > matched.length
+        ? ` (showing newest ${KEYWORD_SEARCH_PAGE_SIZE} of ${hits.length} matches)`
+        : "";
+    const header = `Keyword matches for "${query}"${truncation}:`;
+    const line = (s: TimelineSliceEntry) =>
+      time ? sliceLineWithTime(s, time) : sliceLine(s);
+    return `${header}\n${matched.map(line).join("\n")}`;
+  } catch {
+    return "(timeline index not available yet — the weave hasn't run)";
+  }
+}
+
 // ─── Sub-agent tool: readStrand / listStrands ───────────────────────────
 
-async function readStrandImpl(strand: string): Promise<string> {
+/**
+ * How many characters of a strand description listStrands carries per strand.
+ * The list is a discovery surface — one line per strand — not a reader.
+ */
+const STRAND_LIST_DESCRIPTION_MAX = 140;
+
+/** How many entity files listStrands reads per call. Memory roots can hold
+ *  hundreds of strands; each entity read is a backend call, so the list
+ *  caps description lookups and says when it stopped. */
+const STRAND_LIST_ENTITY_READ_CAP = 50;
+
+/** One-line, length-capped summary of a strand description for the list view. */
+function strandListLine(name: string, description: string | null): string {
+  if (!description) return `- ${name}`;
+  const flat = description.replace(/\s+/g, " ").trim();
+  const summary =
+    flat.length > STRAND_LIST_DESCRIPTION_MAX
+      ? `${flat.slice(0, STRAND_LIST_DESCRIPTION_MAX)}…`
+      : flat;
+  return `- ${name} — ${summary}`;
+}
+
+/** Load a strand's entity file by index key, tolerating casing drift between
+ *  the requested name and the stored file. Null when no entity exists (old
+ *  memory roots have no strands/ directory at all). */
+async function loadStrandEntityByName(
+  name: string,
+  available: ReadonlySet<string>,
+) {
+  const resolved = resolveStrandEntityName(name, available);
+  if (!resolved) return null;
+  return readStrandEntity(resolved);
+}
+
+/** Format the entity block readStrand prepends to the slice listing:
+ *  the FULL description plus the mechanical activity span. */
+function formatStrandEntityBlock(
+  name: string,
+  entity: { description: string; first_seen: string; last_active: string; aliases: string[] },
+): string {
+  const span = `first seen ${entity.first_seen || "?"}, last active ${entity.last_active || "?"}`;
+  const aliases = entity.aliases.length > 0 ? `; also known as: ${entity.aliases.join(", ")}` : "";
+  return `Strand "${name}": ${entity.description}\n(${span}${aliases})`;
+}
+
+export async function readStrandImpl(strand: string): Promise<string> {
   try {
     const strands = await readStrands();
-    const paths = strands[strand];
+    // Casing drift: the model may ask for "apex" while the index keys "Apex"
+    // (same normalized-match rule as the weave path).
+    const key = findMatchingStrand(strands, strand) ?? strand;
+    const paths = strands[key];
     if (!paths || paths.length === 0) {
       return `Strand "${strand}" not found. No slices carry this tag.`;
     }
@@ -262,18 +373,48 @@ async function readStrandImpl(strand: string): Promise<string> {
       paths.length > shown.length
         ? ` (showing ${shown.length} of ${paths.length})`
         : "";
-    return `Strand "${strand}" appears in: ${shown.join(", ")}${truncation}`;
+    const listing = `Strand "${key}" appears in: ${shown.join(", ")}${truncation}`;
+    // Entity layer is optional: no strands/ dir / no file → bare listing,
+    // exactly the pre-entity behavior.
+    const entityNames = await listStrandEntityNames();
+    const entity = await loadStrandEntityByName(key, entityNames);
+    if (!entity || !entity.description) return listing;
+    return `${formatStrandEntityBlock(key, entity)}\n${listing}`;
   } catch {
     return `Could not read strands index.`;
   }
 }
 
-async function listStrandsImpl(): Promise<string> {
+export async function listStrandsImpl(): Promise<string> {
   try {
     const strands = await readStrands();
     const names = Object.keys(strands);
     if (names.length === 0) return "(no strands yet — no topic tags woven)";
-    return `Known strands (${names.length}): ${names.join(", ")}`;
+    // Graceful degradation for old memory roots: no entity directory → the
+    // legacy bare-name listing, byte-for-byte the old behavior.
+    const entityNames = await listStrandEntityNames();
+    if (entityNames.size === 0) {
+      return `Known strands (${names.length}): ${names.join(", ")}`;
+    }
+    const described: string[] = [];
+    let omitted = 0;
+    for (const name of names) {
+      if (described.length >= STRAND_LIST_ENTITY_READ_CAP) {
+        omitted += 1;
+        continue;
+      }
+      const entity = await loadStrandEntityByName(name, entityNames);
+      described.push(strandListLine(name, entity?.description ?? null));
+    }
+    const capNote =
+      omitted > 0
+        ? `\n(descriptions omitted for ${omitted} more strands — readStrand a specific one)`
+        : "";
+    return (
+      `Known strands (${names.length}) — match the question semantically against ` +
+      `these names and summaries, then trace the best fit with readStrand:\n` +
+      `${described.join("\n")}${capNote}`
+    );
   } catch {
     return "Could not read strands index.";
   }
@@ -295,14 +436,11 @@ async function readTimelineWindowImpl(from?: string, to?: string, time?: SliceLi
   try {
     const raw = await fsReadFile(TIMELINE_INDEX_PATH);
     const idx = JSON.parse(raw) as { slices?: TimelineSliceEntry[] };
-    const inWindow = (idx.slices ?? [])
-      .filter((s) => {
-        const date = s.id.slice(0, 10); // "YYYY-MM-DD"
-        if (from && date < from) return false;
-        if (to && date > to) return false;
-        return true;
-      })
-      .sort((a, b) => b.id.localeCompare(a.id));
+    // The window filter + newest-first ordering are the SHARED slice-search
+    // functions (v0.10 §3.1) — same semantics as the user's command palette.
+    const inWindow = sortNewestFirst(
+      filterByWindow(idx.slices ?? [], from, to),
+    );
     const slices = inWindow.slice(0, TIMELINE_WINDOW_PAGE_SIZE);
     if (slices.length === 0) {
       return `(no slices in window ${from ?? "start"} → ${to ?? "now"})`;
@@ -527,12 +665,12 @@ const recallReportSchema = tool({
  */
 const RECALL_ROLE = `You are the recall colleague: you remember this user's past conversations and answer the main agent's questions about them.
 
-You hold the FULL read-only memory toolset: the timeline catalog (readGlobalTimeline / readTimelineWindow), topic strands (listStrands / readStrand), slice summaries (readSliceSummary — frontmatter only, the cheap relevance check), and full slice content (readSlice — with optional range filters). Your value is an answer backed by evidence, not a pile of pointers.
+You hold the FULL read-only memory toolset: the timeline catalog (readGlobalTimeline / readTimelineWindow / searchTimeline), topic strands (listStrands / readStrand), slice summaries (readSliceSummary — frontmatter only, the cheap relevance check), and full slice content (readSlice — with optional range filters). Your value is an answer backed by evidence, not a pile of pointers.
 
 Recall strategy (mirror how a person remembers):
-1. TIME ANCHOR FIRST — if the question carries one ("last week", "that night", "in March"), scope the physical window with readTimelineWindow before anything else.
-2. TRACE CLUES — check listStrands / the strands hint for topics the question touches, and readStrand the matching ones to find their slices.
-3. BROADEN LAST — only then scan the global timeline for anything the first two passes missed.
+1. STRANDS FIRST — match the question's topic against strand names AND their descriptions (listStrands carries a one-line summary per described strand; readStrand returns the full text) — semantic matching, not just literal. Trace matching strands with readStrand, then walk the strand's slice chain BACKWARD from the newest (readSliceSummary to triage, readSlice full reads on the strongest 1-4 candidates, within the ${MAX_SLICE_READS} quota).
+2. KEYWORD PRE-CHECK — run searchTimeline for a quick deterministic scan of the catalog before or while you do semantic strand matching. A "no catalog match" result does NOT prove absence; still follow strands.
+3. TIME-WINDOW SCANNING AS FALLBACK — when no strand matches or the question turns out to carry a time anchor after all, fall back to readTimelineWindow / readGlobalTimeline (sample windows rather than exhaustively paging). This is the second line, not the first.
 4. VERIFY BEFORE ANSWERING — check candidate slices with readSliceSummary, then read the most promising ones in full with readSlice (range filters keep it cheap). You may read at most ${MAX_SLICE_READS} slices in full — spend them on the strongest candidates.
 
 Time discipline (critical): a slice id (YYYY-MM-DD-HHMM) is an ADDRESS derived from the slice's UTC start instant — NEVER read it as the user's wall-clock time. Pointer lines carry the user's LOCAL date (+ weekday) in parentheses right after the id; THAT annotation is what "yesterday evening" or "last Friday" refers to. readTimelineWindow's from/to dates filter the id's UTC date, so when the question's anchor is a local day, pad the window by one day on both sides and let the local-date annotations guide you. When you cite a time in your answer, speak in the user's local calendar, not UTC.
@@ -550,10 +688,11 @@ Writing discipline (critical): a hard deadline may cut you off mid-exploration, 
 // ─── Public API ────────────────────────────────────────────────────────
 
 /**
- * Step budget for the recall sub-agent. The recall strategy is timeline →
- * window → strands → summaries → full reads → report, and full-slice reads
- * (quota-bounded) each cost a step pair — a wandering model gets room to
- * explore, and prepareRecallStep guarantees the last step is the report.
+ * Step budget for the recall sub-agent. The recall strategy is strands →
+ * keyword pre-check → time-window fallback → summaries → full reads → report,
+ * and full-slice reads (quota-bounded) each cost a step pair — a wandering
+ * model gets room to explore, and prepareRecallStep guarantees the last step
+ * is the report.
  */
 export const MAX_STEPS = 50;
 
@@ -671,7 +810,7 @@ export async function runRecallSearch(
   const strandsHint = strandsContext && Object.keys(strandsContext).length > 0
     ? `
 Available strands (keyword tags threaded across slices): ${Object.keys(strandsContext).join(", ")}
-IMPORTANT: After checking any time anchor, trace the strands that match the question with readStrand — they give you a direct path to relevant slices.`
+IMPORTANT: For this topic-shaped question, start by tracing the strands that semantically match the question with readStrand — they give you a direct path to relevant slices.`
     : "";
 
   // Evolved working notes (design v1.0 §2.4) — appended to the USER prompt so
@@ -681,11 +820,15 @@ IMPORTANT: After checking any time anchor, trace the strands that match the ques
     ? `\n\nEvolved working notes (your recall playbook — follow these unless they conflict with the current question):\n${capPlaybook(input.playbook.trim())}`
     : "";
 
+  const knownContextBlock = input.knownContext?.trim()
+    ? `\n\nYour colleague already checked on the core timeline: ${input.knownContext.trim()} — build on this, do not redo it.`
+    : "";
+
   const userPrompt = `Your colleague (the main agent) asks: "${question}"
 
-Current slice: ${currentSliceId} — this is the ONGOING conversation, NOT a past memory. EXCLUDE it from your references; you recall the PAST only.${timeBlock}${strandsHint}${playbookBlock}
+Current slice: ${currentSliceId} — this is the ONGOING conversation, NOT a past memory. EXCLUDE it from your references; you recall the PAST only.${timeBlock}${strandsHint}${knownContextBlock}${playbookBlock}
 
-Follow your recall strategy: time anchor first (readTimelineWindow), then clue strands (readStrand), broaden only after that; verify candidates with readSliceSummary and read the strongest slices in full (readSlice, at most ${MAX_SLICE_READS}) before answering. For questions spanning a longer period, triage with readSliceSummary first and spend full reads only on the strongest candidates; answers resting on summaries should be hedged as uncertain — don't force a verbatim quote for every slice.
+Follow your recall strategy: strands first (listStrands / readStrand), keyword pre-check with searchTimeline, then time-window fallback (readTimelineWindow / readGlobalTimeline) only when no strand matches or a time anchor appears; verify candidates with readSliceSummary and read the strongest slices in full (readSlice, at most ${MAX_SLICE_READS}) before answering. For questions spanning a longer period, triage with readSliceSummary first and spend full reads only on the strongest candidates; answers resting on summaries should be hedged as uncertain — don't force a verbatim quote for every slice.
 
 IMPORTANT: You MUST end by calling recallReport. Even when the honest answer is "we haven't talked about this", call it — with empty references and your searched trail.`;
 
@@ -715,9 +858,9 @@ IMPORTANT: You MUST end by calling recallReport. Even when the honest answer is 
       readTimelineWindow: tool({
         description:
           "Read the timeline catalog over a date window (inclusive, YYYY-MM-DD) — " +
-          "one compact pointer line per slice. Your FIRST move when the question " +
-          "carries a time anchor ('last week', 'that night', 'in March'). " +
-          "from/to filter the slice id's UTC date — pad the window by one day " +
+          "one compact pointer line per slice. Use this as a FALLBACK when no strand " +
+          "matches or when the question carries a time anchor ('last week', 'that night', " +
+          "'in March'). from/to filter the slice id's UTC date — pad the window by one day " +
           "on both sides for a local-day anchor and use the parenthesized " +
           "local-date annotations.",
         inputSchema: z.object({
@@ -733,17 +876,38 @@ IMPORTANT: You MUST end by calling recallReport. Even when the honest answer is 
         execute: async ({ from, to }: { from?: string; to?: string }) =>
           readTimelineWindowImpl(from, to, timeOpts),
       }),
+      searchTimeline: tool({
+        description:
+          "Deterministic keyword pre-check over the timeline catalog (focus / summary / " +
+          "tags). Pass one or more keywords; returns matching pointer lines newest-first, " +
+          "capped at ~40 with a truncation note. A 'no catalog match' result does NOT prove " +
+          "absence — continue with semantic strand tracing.",
+        inputSchema: z.object({
+          keywords: z
+            .array(z.string())
+            .describe("Keywords to match case-insensitively against the catalog."),
+        }),
+        execute: async ({ keywords }: { keywords: string[] }) =>
+          searchTimelineImpl(keywords, timeOpts),
+      }),
       listStrands: tool({
         description:
-          "List all known strands — every keyword tag woven through past " +
-          "slices. Use this to discover which topics exist before tracing one.",
+          "List all known strands — every topic tag woven through past " +
+          "slices. Each described strand carries a one-line summary of what " +
+          "the thread is about, so match the question SEMANTICALLY against " +
+          "names and summaries (synonyms, rephrasing, other languages), not " +
+          "just literally. Then trace the best fit with readStrand.",
         inputSchema: z.object({}),
         execute: async () => listStrandsImpl(),
       }),
       readStrand: tool({
         description:
-          "Follow a strand (keyword tag) that threads through multiple time slices. " +
-          "Returns all slice paths carrying that tag. Use this to trace a topic across time.",
+          "Follow a strand (topic tag) that threads through multiple time slices. " +
+          "Returns the strand's full description (when one exists — what the thread " +
+          "is about, first seen / last active) plus the slice paths carrying that " +
+          "tag (newest-first under the cap). Walk the chain BACKWARD from the " +
+          "newest slice and triage with readSliceSummary before " +
+          "spending full readSlice quota slots.",
         inputSchema: z.object({
           strand: z.string().describe("The strand (tag) to follow."),
         }),
@@ -851,6 +1015,9 @@ IMPORTANT: You MUST end by calling recallReport. Even when the honest answer is 
       }
       if (toolName === "readTimelineWindow") {
         return { line: "Scoping timeline window…", stage: "thinking" };
+      }
+      if (toolName === "searchTimeline") {
+        return { line: "Keyword scan of the catalog…", stage: "thinking" };
       }
       if (toolName === "listStrands") {
         return { line: "Listing memory topics…", stage: "thinking" };

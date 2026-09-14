@@ -77,11 +77,18 @@ export interface TurnInput {
    * True when this turn RE-RUNS the previous user message (the client
    * regenerate action — SDK trigger "regenerate-message"). Housekeeping then
    * skips the user-turn append (the question is already in the slice) and the
-   * context_lost heuristic (a legitimately assistant-less history), and emits
-   * an interaction_regenerate fitness signal. The new agent turn is recorded
-   * normally — the rejected reply stays in the slice as what happened.
+   * client-history mismatch detection (a legitimately truncated history), and
+   * emits an interaction_regenerate fitness signal. The new agent turn is
+   * recorded normally — the rejected reply stays in the slice as what happened.
    */
   regenerate?: boolean;
+  /**
+   * Image attachments (data URLs) extracted from the current user message when
+   * the main model lacks vision. Passed through to ToolContext so the viewImage
+   * tool can resolve `attachment:N`. Capped at 4 images; each is client-compressed
+   * to 1568px before upload.
+   */
+  imageAttachments: string[];
 }
 
 /** Summary of a synchronous card evolution run (v0.7b — inline in housekeeping). */
@@ -174,10 +181,19 @@ export interface HousekeepingResult {
    * slice-aligned history window so the same conversation continues
    * seamlessly; the prefix is frozen for the slice's whole life (append-only
    * window, prefix-cache friendly). Absent for genuine conversation
-   * boundaries (idle_gap/context_lost) and when the predecessor is
-   * unreadable (best-effort).
+   * boundaries (idle_gap) and when the predecessor is unreadable (best-effort).
    */
   contextPrefix?: ModelMessage[];
+  /**
+   * Window rebuild (client-history mismatch): when the client-sent history
+   * no longer matched the active slice (page refresh, device switch, stale
+   * local writes), housekeeping kept the slice OPEN and derived the history
+   * window from the SLICE's own turns instead — the server slice is
+   * authoritative. The workflow uses these messages verbatim (plus the
+   * checkpoint prefix, when present) in place of the client history. Absent
+   * on turns where the client history matched.
+   */
+  rebuiltHistory?: ModelMessage[];
 }
 
 /**

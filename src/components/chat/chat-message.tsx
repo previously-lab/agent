@@ -11,6 +11,7 @@ import { HousekeepingCard } from "./housekeeping-card";
 import { EvolutionCard } from "./evolution-card";
 import { BridgeToolCard } from "./bridge-tools-card";
 import { BridgeHousekeepingCard } from "./bridge-housekeeping-card";
+import { RecallReferencesBar } from "./recall-references-bar";
 import { MessageActions } from "./message-actions";
 import { ToolRenderer } from "./tool-renderer";
 import { Message, MessageContent, MessageFooter } from "@/components/ui/message";
@@ -29,12 +30,19 @@ import {
   type StreamItem,
   type AgentStage,
 } from "@/lib/chat/build-stream";
+import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
 
 interface ChatMessageProps {
   message: UIMessage;
   onRegenerate?: () => void;
   isStreaming?: boolean;
   startedAt?: string;
+  /**
+   * The current slice's strands — tints the user bubble with its FIRST
+   * strand (shared tint helpers, same source as the timeline cards).
+   * Undefined while the slice identity is unknown → the default bubble.
+   */
+  strands?: string[];
 }
 
 // ── i18n key lookup for the live agent-stage pill ───────────────────────
@@ -130,6 +138,8 @@ function itemKey(item: StreamItem, index: number): string {
       return `bridge-tools-${item.phase}-${index}`;
     case "phase":
       return `phase-${item.phase}-${index}`;
+    case "recall-references":
+      return `recall-references-${index}`;
   }
 }
 
@@ -138,6 +148,7 @@ export const ChatMessage = memo(function ChatMessage({
   onRegenerate,
   isStreaming,
   startedAt,
+  strands,
 }: ChatMessageProps) {
   const t = useTranslations("chat.phase");
   const tChat = useTranslations("chat");
@@ -198,6 +209,12 @@ export const ChatMessage = memo(function ChatMessage({
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
       .join("\n");
+    // Strand tint of the current slice — the bubble background rides the
+    // shared tint helpers; text stays foreground at this alpha, in both
+    // themes. Unknown slice (arrival still resolving) → default secondary.
+    const userTint = strands
+      ? strandTint(strands[0], STRAND_TINT_ALPHA)
+      : undefined;
     // File parts (attachments): images render inline from their data URL;
     // anything else collapses to a small file chip.
     const fileParts = parts.filter((p) => p.type === "file" && p.url);
@@ -229,8 +246,12 @@ export const ChatMessage = memo(function ChatMessage({
             )}
             {(userText || fileParts.length === 0) && (
               <Bubble variant="secondary">
-                <BubbleContent>
-                  <MarkdownRenderer content={userText} />
+                <BubbleContent
+                  style={userTint ? { backgroundColor: userTint } : undefined}
+                >
+                  <div className="font-serif font-light">
+                    <MarkdownRenderer content={userText} />
+                  </div>
                 </BubbleContent>
               </Bubble>
             )}
@@ -390,6 +411,16 @@ export const ChatMessage = memo(function ChatMessage({
                     );
                   }
 
+                  if (item.kind === "recall-references") {
+                    // The "referenced N time slices" bar — trails the reply.
+                    return (
+                      <RecallReferencesBar
+                        key={key}
+                        references={item.references}
+                      />
+                    );
+                  }
+
                   if (item.kind === "text") {
                     return (
                       <motion.div
@@ -397,7 +428,7 @@ export const ChatMessage = memo(function ChatMessage({
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         transition={{ duration: 0.15 }}
-                        className="px-3 [&:not(:last-child)]:mb-3"
+                        className="px-3 font-serif font-light [&:not(:last-child)]:mb-3"
                       >
                         <MarkdownRenderer
                           content={item.content}

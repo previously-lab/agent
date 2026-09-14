@@ -10,11 +10,12 @@
  * validates it (zod + the existing card-session caps) and applies it through
  * the same downstream code paths as the sub-agent flow.
  *
- * KNOWN GAP (v0.9.1): the report carries CARD mutations only — playbook
- * evolution (writePlaybook for triggered recall/search/thinkdeep buckets)
- * has no channel here and silently does not happen on this path. Playbook
- * proposals are an outsourcing TODO; the bucket triggers still fire and show
- * in the terminal frame.
+ * Playbook evolution (v1.0 §2.4) rides the SAME report: the client proposes
+ * playbook rewrites (report.playbooks) for triggered recall/search/thinkdeep
+ * buckets and the kernel applies them through applyBridgePlaybookWrites —
+ * the SAME bucket gate as the merged run's writePlaybook tool (a write for a
+ * bucket that did not trigger is skipped, never written). Old clients that
+ * omit the field keep the pre-playbook behavior (no playbook evolution).
  *
  * Wire contract (shared with the client repo — do not deviate):
  *   stdin : { task, context, phase: "housekeeping", protocol: 2 }
@@ -71,6 +72,12 @@ import type { TurnAnalysis, TurnIntent } from "@/lib/episodic/flash/turn-analyze
 import type { EmotionalTone } from "@/lib/episodic/types";
 import type { EvolutionResult } from "@/lib/chat/turn-types";
 import type { FitnessSignal } from "@/lib/evolution/store";
+import {
+  capPlaybook,
+  writePlaybook,
+  type FitnessBucket,
+} from "@/lib/evolution/store";
+import type { PlaybookAgent } from "@/lib/evolution/paths";
 import { directionOpSchema } from "@/lib/evolution/direction-agent";
 
 // ─── Gate ──────────────────────────────────────────────────────────────────
@@ -175,6 +182,28 @@ const fitnessEntrySchema = z.object({
 });
 
 /**
+ * Playbook rewrite proposal (job 8) — the wire form of the merged run's
+ * PlaybookWrite (previously-agent.ts): one FULL rewrite of a colleague's
+ * working notes. The agent ∈ recall / search / thinkdeep only (the
+ * colleagues that carry an evolvable playbook); card / interaction buckets
+ * have no playbook.
+ */
+/** The colleagues that carry an evolvable playbook — PlaybookAgent as a
+ *  wire-safe constant (subset of the fitness buckets). */
+const PLAYBOOK_AGENTS_WIRE = ["recall", "search", "thinkdeep"] as const;
+
+const playbookWriteSchema = z.object({
+  agent: z.enum(PLAYBOOK_AGENTS_WIRE),
+  content: z.string(),
+  evidence: z.array(z.string()).default([]),
+  expected_benefit: z.string().default(""),
+});
+export type BridgePlaybookWrite = z.infer<typeof playbookWriteSchema>;
+
+/** One write per colleague at most — mirrors the agent-side staging. */
+const MAX_PLAYBOOK_WRITES = 3;
+
+/**
  * The Phase-1 direction verdict (v1.0 §2.3/§6) riding the same report:
  * "no_change" (the common case) or a list of ATOMIC direction ops — the same
  * vocabulary the merged run's direction mutation tools use (single-sourced in
@@ -264,6 +293,15 @@ export const housekeepingPhaseReportSchema = z.object({
   // Direction verdict (v1.0 §2.3/§6 — job 7): absent/null/"no_change" all
   // mean the direction doc stays untouched.
   direction: directionOutcomeSchema.nullable().default(null),
+  // Playbook evolution (v1.0 §2.4 — job 8): proposed rewrites for the
+  // triggered recall / search / thinkdeep colleagues' playbooks. Tolerates
+  // omission (old clients) — and the bucket gate is re-applied server-side
+  // (applyBridgePlaybookWrites), so an over-eager proposal for a bucket that
+  // did NOT trigger is skipped, never written.
+  playbooks: z
+    .array(playbookWriteSchema)
+    .transform((a) => capped(a, MAX_PLAYBOOK_WRITES))
+    .default([]),
 });
 export type HousekeepingPhaseReport = z.infer<
   typeof housekeepingPhaseReportSchema
@@ -311,6 +349,18 @@ export interface HousekeepingBridgeInput {
    */
   signals?: FitnessSignal[];
   /**
+   * The fitness buckets that triggered this run (the deterministic
+   * computeEvolutionTriggers verdict — same list the merged run gates
+   * writePlaybook on). Offered ONLY when non-empty: the client may then
+   * propose playbook rewrites (report.playbooks) for these colleagues; the
+   * kernel re-applies the SAME bucket gate before anything lands on disk.
+   */
+  playbookTriggerBuckets?: FitnessBucket[];
+  /** The colleague playbooks' current contents — context for an in-place
+   *  rewrite proposal (job 8). Agents whose bucket did not trigger are never
+   *  listed. */
+  playbooks?: Array<{ agent: PlaybookAgent; content: string }>;
+  /**
    * The current direction.md content (v1.1) — the agent evaluates it in the
    * SAME call (direction in the report). null/absent = not set yet.
    */
@@ -347,6 +397,7 @@ One pass, these jobs:
 5. Strand merge — ONLY when the context carries a "Strand merge candidates" section: propose from→to merges for NEAR-DUPLICATE strands (typos / same concept under two names / same entity written differently). Every "to" MUST be a name from the offered list; no chains (A→B and B→C in one pass); do NOT merge distinct concepts that merely share a word; when in doubt, do NOT merge — a wrong merge destroys thread history. [] when the section is absent or the index is already clean.
 6. Fitness scoring — score ONLY what THIS slice's user messages explicitly signal: -2 explicit complaint/correction, -1 signs of dissatisfaction, +1 explicit approval, attributed to a bucket (card | recall | search | thinkdeep | interaction). Every non-zero delta MUST quote the user's exact words in evidence — no quote, NO entry. Nothing signaled → omit fitness entirely (an absent/empty array, never 0-delta filler). When the context lists a recall_rework / recall_repeat mechanical signal, treat it as a -1 CANDIDATE for the recall bucket, and an interaction_regenerate / interaction_interrupt signal as a -1 CANDIDATE for the interaction bucket (the signal's detail line may serve as the evidence); recall_verify is neutral — no entry.
 7. Direction verdict — the context carries the current evolution direction (direction.md: the loop's USER PORTRAIT + HYPOTHESIS POOL — it describes WHO THE USER IS as a person and NEVER instructs the agent; it is NOT a log of what the user did; the card and playbooks are only its products) plus the card's legacy Self-model lines (rules to MIGRATE, see below). Judge whether the portrait itself should move. "no_change" is the common case — one slice's events are card/playbook material, never direction material by themselves; a single explicit durable user statement becomes a Portrait entry directly (descriptive: "用户明确不喜欢 X"), while suspected patterns enter the hypothesis pool first and promote only when confirmed across ≥2 distinct slices (or explicitly by the user). The new document has two fixed sections: "# Portrait" (CONFIRMED understanding, in six fixed "##" dimensions always all present: Traits & cognitive style / Triggers & rhythms / Patterns & loops / Strengths & resilience / Communication preferences / Values & boundaries; an entry is portrait-grade ONLY when it holds across contexts, outlives the event that evidenced it, and predicts — "用户面对不确定时先搭建结构再行动" qualifies, "用户周四聊了面试" is a case note and belongs nowhere here; NEVER imperative "you should/shouldn't" lines — if a line tells the agent what to do, phrase the USER PATTERN that motivates it instead; body text carries NO names/dates/events/slice ids — evidence rides ONLY as a trailing "— refs: YYYY-MM-DD-HHMM, …" tail), "# Hypotheses" (a bounded DYNAMIC pool of GUESSES about the user's traits/patterns, ≤10, each line exactly "- [proposed YYYY-MM-DD-HHMM] <the guess> — falsify if: <condition>"; confirmed → PROMOTE into the matching Portrait dimension in the same run — a confirmed guess never lingers in the pool; refuted → remove; still unverified 4 slices after its proposed pointer → retire; refill the pool toward 10; guesses are about the PERSON, never predictions about events). Evidence bar: ≥2 DISTINCT slice pointers across the doc steady-state; ≥1 suffices when the mode says BOOTSTRAP or MIGRATE. LEGACY MIGRATION: when the mode says MIGRATE (the doc still uses an old skeleton: # Direction / # Anti-goals, or the first portrait skeleton's # Evidence / # Log) or the Self-model lines below are non-empty, fold every worth-keeping conclusion into the new skeleton wholesale — re-abstract event-shaped notes into portrait-grade lines (names/dates/events out, pointers into trailing refs), re-propose surviving guesses in the new format, drop the rest — and note the card no longer grows a Self-model section. A proposal violating this discipline is rejected by the kernel — and the direction moves ONLY through the direction ops vocabulary below (per-op structural validation; never a rewritten document).
+8. Playbook evolution — ONLY when the context carries a "Colleague playbooks" section: for each colleague listed there (its fitness bucket TRIGGERED this run), judge whether its working notes need a rewrite from THIS slice's evidence — a trigger authorizes, never obliges; "no change" is the common and correct outcome for most triggers. Propose via playbooks: [{agent copied verbatim from the section, content (the FULL new playbook — short behavioral guidance, rewritten in place, not an archive), evidence (slice pointers / user quotes), expected_benefit (one line: what improves if this playbook holds)}]. The kernel re-checks the trigger and DISCARDS rewrites for buckets that did not trigger. [] (or omit) when the section is absent.
 
 Mutation vocabulary (the evolution.mutations array):
 - {"op":"setIdentity","content":"Name: Alan"} — one Identity head line (Name / Address them as / Pronouns / Alias).
@@ -379,9 +430,10 @@ OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, 
   "backfill_marks": [ { "slice_id": string, "focus": string, "summary": string } ],
   "strand_merges": [ { "from": string, "to": string } ],
   "fitness": [ { "bucket": "card"|"recall"|"search"|"thinkdeep"|"interaction", "delta": -2|-1|0|1, "evidence": string } ],
-  "direction": "no_change" | { "ops": [ …direction ops below… ], "summary": string, "evidence": string[], "expected_benefit": string } | null
+  "direction": "no_change" | { "ops": [ …direction ops below… ], "summary": string, "evidence": string[], "expected_benefit": string } | null,
+  "playbooks": [ { "agent": "recall"|"search"|"thinkdeep", "content": string, "evidence": string[], "expected_benefit": string } ]
 }
-closed_marking is null when no slice is closing; mutations is [] when nothing changes; backfill_marks is [] when no dry slices were provided; strand_merges is [] when no merge candidates were provided; fitness is [] (or omitted) when the slice carried no explicit signal; direction is "no_change" (or omitted) when the direction doc stays as it is. Analysis, closed_marking, backfill_marks, strand_merges and fitness must be produced from the data in this payload ALONE — do not read memory for them. Reading memory is card-evolution forensics ONLY (substantiating mutations, especially self-model lessons), and only through the three evidence commands the workspace allows in this phase (readslice / agentlog / card); the search-type commands (timeline / strands / slicesummary) are gated off in the housekeeping phase and will be refused.`;
+closed_marking is null when no slice is closing; mutations is [] when nothing changes; backfill_marks is [] when no dry slices were provided; strand_merges is [] when no merge candidates were provided; fitness is [] (or omitted) when the slice carried no explicit signal; direction is "no_change" (or omitted) when the direction doc stays as it is; playbooks is [] (or omitted) when no colleague playbook section was provided or nothing needs a rewrite. Analysis, closed_marking, backfill_marks, strand_merges and fitness must be produced from the data in this payload ALONE — do not read memory for them. Reading memory is card-evolution forensics ONLY (substantiating mutations, especially self-model lessons), and only through the three evidence commands the workspace allows in this phase (readslice / agentlog / card); the search-type commands (timeline / strands / slicesummary) are gated off in the housekeeping phase and will be refused.`;
 
 /** Compress a closing slice's turns (first turn + last 10, chars capped). */
 function compressTurns(turns: Array<{ role: string; content: string }>): string {
@@ -451,6 +503,26 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
       `## Mechanical signals this slice (job 6 input)\n\nInstrumentation recorded these this slice (recall verify/rework tracking):\n\n${input.signals
         .map((s) => `- ${s.type} — ${s.detail}`)
         .join("\n")}`,
+    );
+  }
+  if (input.playbookTriggerBuckets && input.playbookTriggerBuckets.length > 0) {
+    // Only the playbook-carrying colleagues are ever offered (card /
+    // interaction buckets have no playbook — same subset writePlaybook gates).
+    const triggered = new Set(
+      input.playbookTriggerBuckets.filter((b): b is PlaybookAgent =>
+        (PLAYBOOK_AGENTS_WIRE as readonly string[]).includes(b),
+      ),
+    );
+    const current = new Map(
+      (input.playbooks ?? []).map((p) => [p.agent, p.content]),
+    );
+    sections.push(
+      `## Colleague playbooks (job 8 input)\n\nThese colleagues' fitness buckets TRIGGERED this run. For each, judge whether its working notes need a rewrite from this slice's evidence — a trigger authorizes, never obliges; "no change" is the common outcome. Propose via playbooks in the report (agent copied verbatim; content is the FULL new playbook, rewritten in place — short guidance, not an archive). The kernel re-checks the trigger and skips rewrites for buckets that did not trigger.\n\n${[...triggered]
+        .map((agent) => {
+          const body = (current.get(agent) ?? "").trim();
+          return `### ${agent}\n\n${body || "(no playbook yet — a proposal would create it)"}`;
+        })
+        .join("\n\n")}`,
     );
   }
   if (closing) {
@@ -899,4 +971,56 @@ export async function applyBridgeCardEvolution(input: {
     mutations: diffCardLines(input.card, applied.card),
     changes: summarizeCardChanges(input.card, applied.card, 0),
   };
+}
+
+// ─── Playbook-write application (same bucket gate as writePlaybook) ─────────
+
+export interface ApplyBridgePlaybooksResult {
+  /** Playbooks actually written — the same {agent, summary} shape as
+   *  runCardEvolution's `playbooks` result field (summary = the expected
+   *  benefit, or a generic line when the report left it empty). */
+  applied: Array<{ agent: PlaybookAgent; summary: string }>;
+  /** Writes REJECTED by the bucket gate (or empty content) — skipped with
+   *  their reason, never thrown, never retried (mirrors the mutation
+   *  applier's `skipped` discipline). */
+  skipped: Array<{ agent: string; reason: string }>;
+}
+
+/**
+ * Apply the report's playbooks array through the SAME gate as the merged
+ * run's writePlaybook tool: a rewrite lands ONLY when that colleague's
+ * bucket is in triggeredBuckets — the deterministic fitness-trigger verdict
+ * the caller computed for this turn, identical to the list runCardEvolution
+ * gates on. An over-eager client proposal for a bucket that did not trigger
+ * is skipped with the same rejection the agent-side tool produces; the
+ * content passes through capPlaybook, the same injection-budget cap the
+ * agent-side staging enforces before writePlaybook.
+ */
+export async function applyBridgePlaybookWrites(
+  writes: BridgePlaybookWrite[],
+  triggeredBuckets: readonly FitnessBucket[],
+  batch?: WriteBatch,
+): Promise<ApplyBridgePlaybooksResult> {
+  const applied: ApplyBridgePlaybooksResult["applied"] = [];
+  const skipped: ApplyBridgePlaybooksResult["skipped"] = [];
+  for (const w of writes.slice(0, MAX_PLAYBOOK_WRITES)) {
+    if (!triggeredBuckets.includes(w.agent)) {
+      skipped.push({
+        agent: w.agent,
+        reason: `the "${w.agent}" bucket did NOT trigger this run — the playbook stays as it is`,
+      });
+      continue;
+    }
+    const content = w.content.trim();
+    if (!content) {
+      skipped.push({ agent: w.agent, reason: "playbook content is empty" });
+      continue;
+    }
+    await writePlaybook(w.agent, capPlaybook(content), batch);
+    applied.push({
+      agent: w.agent,
+      summary: w.expected_benefit.trim() || `Rewrote the ${w.agent} playbook`,
+    });
+  }
+  return { applied, skipped };
 }

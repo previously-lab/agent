@@ -20,7 +20,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // One worker: every spec shares the single dev server and its isolated
+  // MEMORY_ROOT, and the memory-viz specs seed slice data that would race the
+  // other specs' arrival/briefing assertions under parallel workers.
+  workers: 1,
   reporter: "list",
   // Turbopack dev-server compiles routes on first hit — be generous.
   timeout: 60_000,
@@ -51,6 +54,9 @@ export default defineConfig({
             PREVIOUSLY_BRAIN: "bridge",
             PREVIOUSLY_HOME: E2E_HOME,
             MEMORY_ROOT: E2E_MEMORY_ROOT,
+            // .env.local must not leak a datasource override (e.g. a
+            // developer's STORAGE=demo) into the seeded local fixture.
+            STORAGE: "local",
           },
         },
       }),

@@ -6,6 +6,7 @@ import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
 import { RecallToolRenderer } from "./tool-renderers/recall";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { WebFetchRenderer } from "./tool-renderers/web-fetch";
+import { ViewImageRenderer } from "./tool-renderers/view-image";
 import { ThinkDeepToolRenderer } from "./tool-renderers/think-deep";
 import { CurrentTimeRenderer } from "./tool-renderers/current-time";
 import { DefaultRenderer } from "./tool-renderers/default";
@@ -34,6 +35,7 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
 
   switch (toolName) {
     case "readSlice":
+    case "readTimelineWindow":
     case "readAgentTimeline":
     case "readPreviously":
     case "readTimeline":
@@ -77,6 +79,15 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
     case "webFetch":
       return (
         <WebFetchRenderer
+          toolName={toolName}
+          input={input}
+          output={output}
+          state={renderState}
+        />
+      );
+    case "viewImage":
+      return (
+        <ViewImageRenderer
           toolName={toolName}
           input={input}
           output={output}

@@ -29,11 +29,14 @@ import {
 
 import { searchViaFlash, SEARCH_TIMEOUT_MS, type WebSearchResult } from "@/lib/search/flash-search";
 import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_MAX_BYTES } from "@/lib/search/fetch-utils";
+import { describeImage } from "@/lib/vision/describe-image";
+import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
 import {
   runRecallSearch,
   RECALL_TIMEOUT_MS,
   type RecallReference,
+  type RecallSearchInput,
 } from "@/lib/episodic/flash/recall";
 import { readPlaybook, capPlaybook } from "@/lib/evolution/store";
 import {
@@ -131,6 +134,13 @@ export interface ToolContext {
   startedAtIso?: string;
   /** UI locale ("zh" | "en") — relative-time annotations follow it. */
   locale?: string;
+  /**
+   * Image attachments extracted from the current user message when the main
+   * model lacks vision. Each entry is a data URL. These ride the workflow step
+   * boundary so viewImage can resolve `attachment:N`; they are capped to 4
+   * images and client-compressed to 1568px to keep the payload bounded.
+   */
+  imageAttachments?: string[];
 }
 
 /**
@@ -168,6 +178,41 @@ function emitToolProgress(
         type: "data-tool-progress",
         id: `tool-${toolCallId}`,
         data: { toolCallId, toolName, text, stage },
+      })
+      .then(() => writer.releaseLock())
+      .catch(() => {});
+  } catch {
+    // getWritable() can throw outside a step context — never fail the tool.
+    return Promise.resolve();
+  }
+}
+
+/**
+ * Surface a recall run's evidence anchors to the CLIENT as a
+ * `data-recall-references` chunk (v0.10 §4.1): the message stream renders them
+ * as the clickable "referenced N time slices" bar under the agent's reply.
+ * Same best-effort write discipline as emitToolProgress — a stream failure
+ * must never fail the tool.
+ *
+ * Channel reach: this write happens inside the kernel's recall STEP, so it
+ * flows under every model backend (BYOK, and the subscription bridge when the
+ * recall SUB-AGENT runs over it). The one path where it can never fire is
+ * bridge-as-chat-brain (`PREVIOUSLY_BRAIN=bridge` for the chat model itself):
+ * that chat agent mounts no kernel tools, so recall never runs there — nothing
+ * to transmit, by construction. Phase outsourcing is housekeeping-only and
+ * does not touch this path.
+ */
+function emitRecallReferences(
+  toolCallId: string,
+  references: Array<{ slice_id: string; note?: string }>,
+): Promise<void> {
+  try {
+    const writer = getWritable<UIMessageChunk>().getWriter();
+    return writer
+      .write({
+        type: "data-recall-references",
+        id: `recall-refs-${toolCallId}`,
+        data: { references },
       })
       .then(() => writer.releaseLock())
       .catch(() => {});
@@ -550,7 +595,7 @@ export async function readPreviouslyExecute(
  * returned as data; transient search failures throw and get the step retries.
  */
 export async function webSearchExecute(
-  { query }: { query: string },
+  { query, mode }: { query: string; mode?: "standard" | "scout" },
   { toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<WebSearchResult | { error: string }> {
   "use step";
@@ -581,7 +626,13 @@ export async function webSearchExecute(
   let timed: Awaited<ReturnType<typeof withStepTimeout<WebSearchResult>>>;
   try {
     timed = await withStepTimeout(
-      () => searchViaFlash(query, { toolCallId, toolName: "webSearch" }, playbook ?? undefined),
+      () =>
+        searchViaFlash(
+          query,
+          { toolCallId, toolName: "webSearch" },
+          playbook ?? undefined,
+          { scout: mode === "scout" },
+        ),
       SEARCH_TIMEOUT_MS,
     );
   } catch (err) {
@@ -715,6 +766,69 @@ export async function webFetchExecute(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// ── viewImage — one-shot image-to-text for non-vision main models ────────
+
+/**
+ * viewImage — describe an image the user attached (when the main model cannot
+ * see it natively) or an image found during research.
+ *
+ * `source` is either an http(s) URL or `attachment:N` referring to the Nth
+ * image attachment extracted from the current turn. The actual vision call is a
+ * one-shot infrastructure call to `describe-image.ts`'s `VISION_MODEL_ID` via
+ * `describeImage`. If the vision model is unavailable the tool does not fail:
+ * it returns a degraded metadata-only result (dimensions, format, size) that
+ * says so explicitly.
+ */
+export async function viewImageExecute(
+  { source, question }: { source: string; question?: string },
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  await emitToolProgress(toolCallId, "viewImage", "Looking at image…", "running");
+
+  let imageInput: { data: string; mediaType: string } | { url: string };
+  if (source.startsWith("attachment:")) {
+    const idx = Number(source.slice("attachment:".length));
+    const attachments = ctx.imageAttachments ?? [];
+    if (Number.isNaN(idx) || idx < 0 || idx >= attachments.length) {
+      return `ERROR: Invalid attachment index "${source}". This turn has ${attachments.length} image attachment${attachments.length === 1 ? "" : "s"}.`;
+    }
+    const dataUrl = attachments[idx];
+    if (!dataUrl) {
+      return `ERROR: Attachment ${idx} is empty.`;
+    }
+    const match = /^data:([^;]+);base64,/.exec(dataUrl);
+    imageInput = {
+      data: dataUrl,
+      mediaType: match?.[1] ?? "image/png",
+    };
+  } else {
+    imageInput = { url: source };
+  }
+
+  const result = await describeImage({
+    image: imageInput,
+    question,
+    locale: ctx.locale,
+  });
+
+  await emitToolProgress(
+    toolCallId,
+    "viewImage",
+    result.ok
+      ? result.degraded
+        ? "Metadata only — vision model unavailable"
+        : "Looked at image"
+      : "Could not view image",
+    result.ok ? "done" : "running",
+  );
+  if (!result.ok) return result.error;
+  // Degraded descriptions already embed the metadata and the DEGRADED marker;
+  // real descriptions get metadata appended so the agent always sees it.
+  if (result.degraded) return result.description;
+  return `${result.description}\n\n[image: ${formatImageMetadata(result.metadata)}]`;
 }
 
 // ── delegateTask — subscription bridge dispatch (client mode only) ───────
@@ -854,7 +968,7 @@ export async function currentTimeExecute(
  * Runs on the unified sub-agent runner (v0.9): the turn's MAIN model with
  * thinking ON at effort "low", streamed progress, and a 240s budget. */
 export async function recallExecute(
-  { question }: { question: string },
+  { question, context }: { question: string; context?: string },
   { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<{
   answer: string;
@@ -881,29 +995,34 @@ export async function recallExecute(
     // instead of a hard error. Transient failures inside runRecallSearch
     // re-throw and reach the triage catch below for the step's auto-retry.
     const mainModel = await resolveSubAgentModel(ctx);
+
+    // Forward any time-axis context the main agent already established, so the
+    // recall colleague does not redo work already on the timeline.
+    const recallInput: RecallSearchInput = {
+      question,
+      currentSliceId: ctx.sliceId,
+      owner: ctx.owner,
+      repo: ctx.repo,
+      strandsContext: strands,
+      playbook: playbook ?? undefined,
+      useGithub: ctx.useGithub,
+      useDemo: ctx.useDemo,
+      model: mainModel,
+      // The user's clock — timeline pointer lines get local-date
+      // annotations and the prompt states the current local time, so
+      // recall never reads a (UTC) slice id as wall-clock time.
+      timezone: ctx.timezone,
+      nowIso: ctx.startedAtIso,
+      locale: ctx.locale,
+      // The runner streams each sub-agent tool step ("Reading global
+      // timeline…", "Reading slice X…") onto the data-tool-progress
+      // channel as it happens.
+      progress: { toolCallId, toolName: "recall" },
+      knownContext: context,
+    };
+
     const timed = await withStepTimeout(
-      () =>
-        runRecallSearch({
-          question,
-          currentSliceId: ctx.sliceId,
-          owner: ctx.owner,
-          repo: ctx.repo,
-          strandsContext: strands,
-          playbook: playbook ?? undefined,
-          useGithub: ctx.useGithub,
-          useDemo: ctx.useDemo,
-          model: mainModel,
-          // The user's clock — timeline pointer lines get local-date
-          // annotations and the prompt states the current local time, so
-          // recall never reads a (UTC) slice id as wall-clock time.
-          timezone: ctx.timezone,
-          nowIso: ctx.startedAtIso,
-          locale: ctx.locale,
-          // The runner streams each sub-agent tool step ("Reading global
-          // timeline…", "Reading slice X…") onto the data-tool-progress
-          // channel as it happens.
-          progress: { toolCallId, toolName: "recall" },
-        }),
+      () => runRecallSearch(recallInput),
       RECALL_TIMEOUT_MS,
     );
 
@@ -939,6 +1058,16 @@ export async function recallExecute(
         : "Recall answered",
       "done",
     );
+
+    // v0.10 §4.1: hand the evidence anchors to the client too — the reply
+    // gets a clickable "referenced N time slices" bar (jump-to-slice). The
+    // full quotes stay in the tool result; the bar carries id + note only.
+    if (result.references.length > 0) {
+      await emitRecallReferences(
+        toolCallId,
+        result.references.map((r) => ({ slice_id: r.slice_id, note: r.note })),
+      );
+    }
 
     // A timed-out run is NOT a definitive result — the search never
     // finished, so an empty answer here means "ran out of time", not "no

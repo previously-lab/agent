@@ -19,7 +19,7 @@ export interface SlicingConfig {
 }
 
 export interface ModelConfig {
-  /** Provider model id (e.g. "deepseek-v4-flash", "deepseek-v4-pro"). */
+  /** Provider model id (e.g. "deepseek-flash", "deepseek-v4-pro"). */
   provider: string;
   /** Whether reasoning/thinking is enabled for the Pro tier. */
   thinking: boolean;

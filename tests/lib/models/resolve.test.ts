@@ -38,7 +38,7 @@ afterEach(() => {
 
 describe("resolveModelById", () => {
   it("resolves a curated registry id without touching the catalog", async () => {
-    const model = await resolveModelById("deepseek-v4-flash");
+    const model = await resolveModelById("deepseek-flash");
     expect(model?.provider).toBe("deepseek");
   });
 
@@ -85,6 +85,6 @@ describe("resolveMainModelFromConfig", () => {
     });
     const main = await resolveMainModelFromConfig();
     // No provider keys configured → the hardcoded first curated entry.
-    expect(main.id).toBe("deepseek-v4-flash");
+    expect(main.id).toBe("deepseek-flash");
   });
 });

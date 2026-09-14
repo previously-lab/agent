@@ -1,0 +1,447 @@
+"use client";
+
+/**
+ * AppShell (v0.11) — the single-route shell that hosts both chat and timeline
+ * views on `/`. The view is selected by the `?view=timeline` search param
+ * (absent = chat view). The left time axis (AxisBand) is always mounted; the
+ * right pane switches between the persistent chat stream and the timeline
+ * scene. The chat stream stays MOUNTED when the timeline is open (hidden and
+ * pointer-events-disabled) so Virtuoso scroll state and the live useChat stream
+ * survive the view switch.
+ *
+ * Catalog loading is lazy: the timeline data layer (catalog window + strand
+ * list) is fetched on the first switch to the timeline view. A deep link
+ * `/?view=timeline&at=<sliceId>` loads the full catalog so the linked slice is
+ * always resolvable, mirroring the old `/timeline` page behavior.
+ */
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useSearchParams } from "next/navigation";
+import { useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
+import { useRouter } from "@/i18n/navigation";
+import type { UserConfig } from "@/lib/config/types";
+import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
+import type { FieldRung } from "@/lib/timeline3d/units";
+import {
+  createFieldFeed,
+  type FieldFeed,
+} from "@/lib/timeline3d/field-feed";
+import {
+  getStrandList,
+  getTimelineCatalog,
+  getTimelineCatalogPage,
+  type StrandListItem,
+} from "@/lib/episodic/actions";
+import {
+  DEFAULT_RUNG,
+  parseAtParam,
+  parseRungParam,
+} from "@/lib/chat/deep-link";
+import { useChromeInset } from "@/hooks/use-chrome-inset";
+import { ChatPage } from "@/components/chat/chat-page";
+import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
+import { BoardBar } from "@/components/shell/board-bar";
+import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
+import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
+
+interface AppShellProps {
+  /** Server-preloaded user config passed through to ChatPage. */
+  initialConfig?: UserConfig;
+}
+
+export function AppShell({ initialConfig }: AppShellProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const rawSearch = searchParams.toString();
+  // THE RUNG IS THE ONLY NAVIGATION. There used to be a view mode beside it
+  // (`?view=timeline` = cards, absent = chat) and the two were the same axis at
+  // different resolutions — see `deep-link.ts`. `?z=` names the rung; a deep
+  // link with `?at=` still lands on the slice rung, because a reader arriving
+  // at a named slice wants the field one step coarser than the conversation.
+  const rungParam = parseRungParam(rawSearch);
+  const at = parseAtParam(rawSearch);
+  const reducedMotion = useReducedMotion() ?? false;
+
+  // ── Shared timeline state (owned by the shell so the left AxisBand and the
+  //    right pane read the same values). ────────────────────────────────────
+  //
+  // THE FEED IS ONE OBJECT WITH ONE WRITER (`lib/timeline3d/field-feed.ts`).
+  // Both fields are mounted whenever the timeline view is open — the chat one
+  // dimmed behind the other — and they used to publish into four shared refs
+  // with no ownership rule between them, so the band's position came down to
+  // which of the two rendered last. `panePublishes` below is the whole rule.
+  const feedRef = useRef<FieldFeed | null>(null);
+  feedRef.current ??= createFieldFeed();
+  const feed = feedRef.current;
+  /** The zoom rung, owned here so the floating lens switcher reads the same
+   *  value CardField transitions through. Seeded from `?z=` when the URL names
+   *  one, and otherwise from `DEFAULT_RUNG` — the CONVERSATION, so a bare `/`
+   *  opens on the live conversation exactly as it always has. (The card field's
+   *  own default is `day`; that is the right default for someone who asked for
+   *  the timeline and the wrong one for someone who just opened the app.)
+   *
+   *  `?at=` DELIBERATELY DOES NOT PICK A RUNG. It used to force `slice`, and
+   *  that was a porting slip: the rule was written when `?view=` still chose
+   *  which pane was up, so "the slice rung" then meant "open the timeline
+   *  field at this slice". With the view gone, `?at=` means what its only
+   *  remaining callers mean by it — a slice JUMP, which the conversation
+   *  performs (`openSlice`, the search palette). Forcing `slice` opened the
+   *  card field on top of the jump and the conversation never happened; the
+   *  e2e caught it. `?z=slice&at=…` still asks for the card rung at a slice. */
+  const [rung, setRung] = useState<FieldRung>(rungParam ?? DEFAULT_RUNG);
+
+  // The rung lives in the URL so a refresh or a share keeps the zoom — the view
+  // param used to be the only thing that survived, which meant the one piece of
+  // state the reader actually manipulates was the one that did not. Written with
+  // `replaceState`, not a router push: the rung changes on every wheel-zoom, and
+  // a history entry per notch would make Back useless.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (rung === DEFAULT_RUNG) params.delete("z");
+    else params.set("z", rung);
+    const q = params.toString();
+    window.history.replaceState(
+      null,
+      "",
+      `${window.location.pathname}${q ? `?${q}` : ""}`,
+    );
+  }, [rung]);
+
+  // `Cmd/Ctrl+.` — the shortcut the deleted mode switcher owned. Kept because
+  // it is the fastest round trip between the cards and the conversation, and it
+  // now does something better than a fixed jump: it returns you to the card
+  // rung you were last on, so it is a toggle rather than a reset.
+  const lastCardRungRef = useRef<FieldRung>("slice");
+  useEffect(() => {
+    if (rung !== "conversation") lastCardRungRef.current = rung;
+  }, [rung]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== ".") return;
+      e.preventDefault();
+      setRung((r) =>
+        r === "conversation" ? lastCardRungRef.current : "conversation",
+      );
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  /** The strand picks, in the order they were added. An EMPTY list is 核心时间线
+   *  — the unfiltered timeline — which is why this is a list and not a nullable
+   *  name: "nothing selected" is a real state, not the absence of one. */
+  const [strands, setStrands] = useState<string[]>([]);
+  const [strandList, setStrandList] = useState<StrandListItem[]>([]);
+  const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
+  const [oldestMonth, setOldestMonth] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [timelineReady, setTimelineReady] = useState(false);
+  const loadingRef = useRef(false);
+  /** A turn is streaming. Reported up by `ChatPage`, which is the only half
+   *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
+   *  placeholder from it. See `RunningCard`. */
+  const [running, setRunning] = useState(false);
+
+  // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
+  // What the chrome covers at the top edge and what the composer covers at the
+  // foot, in px. BOTH are measured from the things themselves (see
+  // `use-chrome-inset.ts` and `composer-host.tsx`) and both are OWNED HERE,
+  // because both fields float under the same two controls and the shell is the
+  // only place above both of them.
+  //
+  // They are RANGE insets, not container padding: the fields fill the pane and
+  // the content travels under the controls on its way past them, coming to rest
+  // clear of them. A padding on the pane would crop the content instead — see
+  // `minOffsetFor`.
+  const chromeInset = useChromeInset();
+  const [composerClearance, setComposerClearance] = useState(0);
+
+  // NOTE — there is deliberately no `selectedCount` here any more. It was the
+  // band caption's number, and it was only ever exact for a SINGLE pick: with
+  // several, the counts overlap (a slice can carry two chosen strands) and
+  // summing them overcounts. The board bar names the picks instead, which
+  // cannot be wrong. A number that can be wrong is worse than no number.
+
+  const toggleStrand = useCallback((name: string) => {
+    setStrands((prev) =>
+      prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name],
+    );
+  }, []);
+  const clearStrands = useCallback(() => setStrands([]), []);
+
+  const ambientStrands = useMemo(
+    () => strandList.slice(0, 12).map((s) => s.name),
+    [strandList],
+  );
+
+  const range = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (entries.length === 0) return { oldest: today, now: today };
+    return { oldest: entries[0].date, now: today };
+  }, [entries]);
+
+  // ── Strand list loads on mount in BOTH views (the axis focus chip lives in
+  //    the always-mounted band); the catalog stays lazy for the timeline. ────
+  useEffect(() => {
+    if (strandList.length > 0) return;
+    let cancelled = false;
+    getStrandList()
+      .then((strands) => {
+        if (!cancelled) setStrandList(strands);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [strandList.length]);
+
+  // ── Lazy catalog load on the first CARD rung (or a deep link that starts on
+  //    one). `?at=` loads the full catalog so the linked slice is always
+  //    resolvable; otherwise loads the latest month window. ──────────────────
+  useEffect(() => {
+    if (rung === "conversation" || timelineReady) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (at) {
+          const catalog = await getTimelineCatalog();
+          if (cancelled) return;
+          setEntries(catalog);
+          setOldestMonth(catalog[0]?.date.slice(0, 7) ?? null);
+          setHasMore(false);
+        } else {
+          const page = await getTimelineCatalogPage(null);
+          if (cancelled) return;
+          setEntries(page.entries);
+          setOldestMonth(page.oldestMonth);
+          setHasMore(page.hasMore);
+        }
+        setTimelineReady(true);
+      } catch {
+        // A failed boot load leaves the fallback in place; the user can retry
+        // by zooming out to a card rung again.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [rung, at, timelineReady]);
+
+  /**
+   * Re-read the newest catalog page after a turn settles, and APPEND.
+   *
+   * Appending is the whole trick, and it is not an optimisation. `rows` is
+   * `groupForLevel(entries, level)`, so replacing `entries` reorders the
+   * reader's list under them; and `buildOffsets` recomputes every `tops[i]`,
+   * so a head that moves invalidates the one offset table everything
+   * positional reads. A new slice is always the NEWEST — `groupForLevel` sorts
+   * by `start` — so it can only ever land at the tail, where nothing above it
+   * moves. Returning `prev` BY IDENTITY when there is nothing new is the other
+   * half: React bails out, `rows` never recomputes, and a settle with no new
+   * slice costs one no-op render.
+   */
+  const refreshCatalog = useCallback(async () => {
+    try {
+      const page = await getTimelineCatalogPage(null);
+      setEntries((prev) => {
+        const have = new Set(prev.map((e) => e.id));
+        const newest = prev.at(-1)?.start ?? "";
+        const fresh = page.entries
+          .filter((e) => !have.has(e.id) && e.start > newest)
+          .sort((a, b) => a.start.localeCompare(b.start));
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+    } catch {
+      // A failed refresh is silent: the slice is on disk and the next settle,
+      // or the next mount, finds it. Retrying here would fight the turn.
+    }
+  }, []);
+
+  const loadOlder = useCallback(async () => {
+    if (!hasMore || loadingRef.current || !oldestMonth) return;
+    loadingRef.current = true;
+    try {
+      const page = await getTimelineCatalogPage(oldestMonth);
+      if (page.entries.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      setEntries((prev) => {
+        const have = new Set(prev.map((e) => e.id));
+        const older = page.entries.filter((e) => !have.has(e.id));
+        return older.length > 0 ? [...older, ...prev] : prev;
+      });
+      setOldestMonth(page.oldestMonth);
+      setHasMore(page.hasMore);
+    } catch {
+      // A failed prefetch is silent: the list just finds no older rows and the
+      // next edge approach retries.
+    } finally {
+      loadingRef.current = false;
+    }
+  }, [hasMore, oldestMonth]);
+
+  const openSlice = useCallback(
+    (sliceId: string, start?: string) => {
+      // `atStart` carries the slice's ISO start — the chat page's jump
+      // handler needs it for the travel clock and would otherwise spend a
+      // full catalog fetch to learn it.
+      const startParam = start
+        ? `&atStart=${encodeURIComponent(start)}`
+        : "";
+      router.push(`/?at=${encodeURIComponent(sliceId)}${startParam}`);
+    },
+    [router],
+  );
+
+  // ── ONE LADDER, TWO RENDERERS ─────────────────────────────────────────────
+  // The rung is the navigation now; there is no view mode beside it. The
+  // CONVERSATION rung is drawn by the chat's own field and the three card rungs
+  // by the card field, because the two have genuinely different jobs rather
+  // than two settings of one thing:
+  //
+  //   - the conversation rung must show the turn that is being written RIGHT
+  //     NOW, which lives only in `useChat`'s messages — the card field's rows
+  //     come from the persisted catalog (`groupForLevel(entries)`) and have no
+  //     path to it. Giving it one means threading a streaming array through
+  //     props or a store, which is the re-render storm `card-field.tsx:30-36`
+  //     documents.
+  //   - the card rungs must show the pile, the deal and the rung transitions,
+  //     which the conversation field has no concept of.
+  //
+  // So: one LADDER the reader navigates, two RENDERERS behind it. The camera
+  // unification the previous note here described (derive `CAM_Z` from the
+  // viewport so both fields share one coordinate system) is still true and
+  // still worth doing — but it is a rendering change, not a navigation one, and
+  // it is not what stood between the reader and a single ladder.
+  const showCardField = rung !== "conversation";
+  /** THE OWNERSHIP RULE, in one line. Exactly one pane publishes to the band at
+   *  a time: the card field while a card rung is up, the chat otherwise. The
+   *  other field is still mounted and still animating — it simply writes
+   *  nothing, which is why this is a lease rather than a merge. */
+  const panePublishes = showCardField;
+
+  return (
+    <div className="flex h-dvh overflow-hidden">
+      {/* LEFT: the time axis, present in BOTH views. It is not a timeline-view
+          affordance — it is where the app's strands live, and it stays put
+          across the switch (which also keeps the R3F canvas and its WebGL
+          context alive, so the braid is never re-mounted). The right pane
+          supplies the anchors either way: the card field's rows in the
+          timeline, the chat stream's slice seams in chat, so the braid winds
+          at whatever the user is actually looking at. */}
+      <AxisBand
+        range={range}
+        feed={feed}
+        strands={strands}
+        ambientStrands={ambientStrands}
+        reducedMotion={reducedMotion}
+      />
+
+      {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
+      <div className="relative flex-1 min-w-0 flex flex-col">
+        {/* NOT dimmed as a whole. The composer lives inside `ChatPage`, and at
+            a card rung the reader still needs to be able to send a message —
+            the collapsed form of the composer is the whole point of it. So
+            `ChatPage` dims its own CONTENT region and leaves the composer
+            alone; dimming the pane here would take the send button with it. */}
+        <div className="absolute inset-0 flex flex-col">
+          <ChatPage
+            initialConfig={initialConfig}
+            suppressAtJump={showCardField}
+            rung={rung}
+            onRungChange={setRung}
+            onTurnSettled={refreshCatalog}
+            feed={feed}
+            publishing={!panePublishes}
+            onRunningChange={setRunning}
+            insetTop={chromeInset}
+            insetBottom={composerClearance}
+            onComposerClearanceChange={setComposerClearance}
+          />
+        </div>
+
+        <AnimatePresence>
+          {showCardField && (
+            <motion.div
+              key="timeline"
+              initial={{ opacity: 0, x: 24 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 24 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-0 z-10 flex flex-col bg-background"
+            >
+              {/* Catalog-loading crossfade: the arrival swaps a structured
+                  skeleton for the live scene without a hard cut. */}
+              <AnimatePresence mode="wait" initial={false}>
+                {!timelineReady ? (
+                  <motion.div
+                    key="fallback"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: reducedMotion ? 0 : 0.25 }}
+                    className="absolute inset-0"
+                  >
+                    <TimelineFallback />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="scene"
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: reducedMotion ? 0 : 0.25 }}
+                    className="absolute inset-0"
+                  >
+                    <TimelineScene
+                      entries={entries}
+                      hasMore={hasMore}
+                      onNeedOlder={loadOlder}
+                      onOpenSlice={openSlice}
+                      initialAtId={at ?? undefined}
+                      strands={strands}
+                      feed={feed}
+                      publishing={panePublishes}
+                      rung={rung}
+                      onRungChange={setRung}
+                      reducedMotion={reducedMotion}
+                      running={running}
+                      insetTop={chromeInset}
+                      insetBottom={composerClearance}
+                    />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* THE BOARD BAR — the zoom lens and the strand selector, together at
+            the top of the screen. Mounted with the SHELL rather than with the
+            card field, because the control that gets you back to the
+            conversation must not disappear at exactly the moment you are on
+            the conversation. See `board-bar.tsx`. */}
+        <BoardBar
+          rung={rung}
+          onRungChange={setRung}
+          reducedMotion={reducedMotion}
+          strands={strands}
+          strandList={strandList}
+          onToggleStrand={toggleStrand}
+          onClearStrands={clearStrands}
+        />
+        {/* The two ends, floating on the same right-hand edge as the lens. They
+            used to sit ON the rail, which by then held a thumb, a readout, a
+            crossing dot and these two — a 32px column where the controls were
+            competing with the thing they controlled. The rail says where time
+            IS; the right edge is where you act on it. */}
+        <JumpControls feed={feed} />
+      </div>
+    </div>
+  );
+}

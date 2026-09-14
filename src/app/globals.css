@@ -22,8 +22,9 @@
   --color-brand-950: var(--brand-950);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-raleway);
+  --font-sans: var(--font-raleway), "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
+  --font-serif: var(--font-source-serif), "Songti SC", "Noto Serif SC", serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -111,9 +112,72 @@
   --sidebar-active-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.55 0.25 262);
+
+  /* ── Strand palette ────────────────────────────────────────────────────
+     The ten colours a strand can be. A strand is assigned one by hashing its
+     name (src/lib/timeline3d/ink.ts) — colours REPEAT by design; see the note
+     on the palette's shape below.
+
+     ONE ARC, NO MUD. Five hues from blue through indigo, violet and magenta to
+     rose (oklch hue 245 → 357), never entering the blue-green (~200) or
+     yellow-green (~90-150) zones, which are the colours the wheel produces
+     that read as impure. Half the entries are 15 OKLCH L units darker than the
+     other half, and that lightness split is doing real work: ten hues evenly
+     spread over this arc would be only 14° apart and indistinguishable, so the
+     palette is FIVE hues × TWO lightnesses — the same construction as
+     ColorBrewer's "Paired". Every adjacent pair differs by at least 0.22 L.
+
+     WHY TEN AND NOT MORE. Roughly ten is the ceiling at which people can still
+     tell categorical colours apart at all (Atlassian, Nightingale, ColorBrewer
+     all land on 8-12; Seaborn's default is ten). Past that no palette helps,
+     which is why a finite palette with reuse beats a generator: the generator
+     promised infinite distinctness that the eye cannot deliver.
+
+     This is a DECORATIVE aid, not an identifier. Every coloured mark in the
+     app sits beside the strand's name in text, and the band's lines are told
+     apart by seat and depth, not hue. The palette therefore optimises for
+     looking like one product rather than for maximum discriminability.
+
+     Palette is theme-INDEPENDENT on purpose: these are saturated marks, and
+     they hold on both backgrounds. The band's dark-mode quietening is not
+     done here — it is the band's own visibility ceiling (threadline-scene). */
+  --strand-1: oklch(0.5 0.155 245); /* blue        */
+  --strand-2: oklch(0.72 0.115 245); /* blue, light */
+  --strand-3: oklch(0.5 0.155 273); /* indigo      */
+  --strand-4: oklch(0.72 0.115 273); /* indigo, light */
+  --strand-5: oklch(0.5 0.155 301); /* violet      */
+  --strand-6: oklch(0.72 0.115 301); /* violet, light */
+  --strand-7: oklch(0.5 0.155 329); /* magenta     */
+  --strand-8: oklch(0.72 0.115 329); /* magenta, light */
+  --strand-9: oklch(0.5 0.155 357); /* rose        */
+  --strand-10: oklch(0.72 0.115 357); /* rose, light  */
+  /* The resting ink for every strand line in the left band (see ink.ts).
+     The ten colours above are a HIGHLIGHT, not an identity: the bundle is
+     grey until the reader singles strands out.
+
+     IT IS DEFINED BY ITS DISTANCE FROM THE PAGE, NOT BY A LIGHTNESS. The band
+     blends this toward `--background` by a fixed fraction of the way there
+     (the visibility floor/ceiling in threadline-scene), so the value that
+     lands here IS the strand's colour on screen — which is why the two themes
+     need DIFFERENT lightnesses for the weight the eye actually reads.
+
+     AND THAT WEIGHT IS NOT THE SAME IN BOTH THEMES, on purpose: dark carries
+     a little more than light does (≈1.95:1 against #0a0a0a vs ≈1.52:1 against
+     white). A contrast RATIO is not a perception — a faint grey on white
+     reads as a smudge well before the same ratio on black reads as a line, so
+     matching the two numbers by eye makes LIGHT the louder theme, not the
+     equal one. Light renders #d2d2d2…#efefef, dark #262626…#414141.
+
+     THE PAIR STILL MOVES TOGETHER. An earlier revision left dark at 0.7 — a
+     4.20:1 braid, 1.6× light's — which on a near-black page read as a cage
+     drawn around the core rather than a texture behind it. Tune the two by
+     eye, but never let dark run away from light again. */
+  --strand-idle: oklch(0.82 0 0);
 }
 
 .dark {
+  /* A touch heavier than light's, on purpose — see the note on `:root`. */
+  --strand-idle: oklch(0.47 0 0);
   --brand: oklch(0.6 0.23 260);
   --brand-50: oklch(0.21 0.09 267);
   --brand-100: oklch(0.27 0.12 265);
@@ -159,6 +223,7 @@
   --sidebar-active-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.6 0.23 260);
+  /* Strand palette: theme-independent — see the block in :root. */
 }
 
 /* Scrollbar styles */
@@ -232,6 +297,84 @@
   );
   background-size: 200% 100%;
   animation: shimmer 1.5s ease-in-out infinite;
+}
+
+/* Skeleton → real content arrival (timeline frame card). Unlayered CSS beats
+   Tailwind's motion-reduce:animate-none, so the reduced-motion guard must
+   live on the class itself. */
+@keyframes content-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(0.25em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-content-arrive {
+  animation: content-arrive 0.32s ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-content-arrive {
+    animation: none;
+  }
+}
+
+/* User bubble on the timeline frame card: the card's strand accent,
+   lightness/chroma-normalized (L 0.58, chroma capped at 0.14) so every hue
+   lands at the same muted visual weight. First line is the fallback for
+   browsers without relative-color syntax. */
+/* The user's turn inside a timeline card. `--bubble-accent` arrives ALREADY
+   TINTED (frame-card builds it with `tintOf(accent, STRAND_TINT_ALPHA)`), so
+   there is no second alpha to keep in step with the chat's bubbles and no
+   relative-colour syntax here to fall back from. It used to be painted as an
+   opaque block of the strand colour at a hard-coded lightness and chroma —
+   a full card-width slab of a generated hue, in every card, which made the
+   timeline read as a colour chart and bypassed the palette entirely. */
+.tl-user-bubble {
+  background-color: var(--bubble-accent);
+  color: var(--foreground);
+}
+
+/* ── The slice gate / field origin ──────────────────────────────────────
+   A boundary between conversations has a fixed box (SLICE_GATE_PX) and two
+   faces stacked inside it: the dormant rule, and the armed intertitle that
+   announces where the reader is arriving. The field arms exactly one boundary
+   at a time and writes `data-armed` on it from its own frame loop.
+
+   Both the fade and the direction swap are CSS on purpose. Arming flips
+   mid-scroll, every gate is a separate `<Html>` React root with its own
+   provider, and re-rendering a portal to swap two words is a cost the field's
+   design exists to avoid. Only the ATTRIBUTES change; the boxes never do —
+   arming must not resize a gate, or the block below it would move. */
+.gate-idle,
+.gate-face {
+  transition: opacity 220ms ease-out;
+}
+/* Every face is inert until something lights it — including the one carrying
+   the origin's "load earlier" button, so the button is reachable exactly when
+   the region is armed to show it. */
+.gate-face {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-armed="false"] .gate-idle {
+  opacity: 1;
+}
+/* Both destination faces stay mounted so a direction change is a crossfade
+   rather than a pop; the attribute picks which one is lit. The origin has only
+   one face and says so with `gate-face-solo`. */
+[data-armed="true"] .gate-idle {
+  opacity: 0;
+}
+[data-armed="true"] .gate-face-solo,
+[data-armed="true"][data-dir="past"] .gate-face-past,
+[data-armed="true"][data-dir="future"] .gate-face-future {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ── Streaming content animations ──────────────────────────────────── */
@@ -417,4 +560,70 @@
   .heading-anchor {
     opacity: 0.45;
   }
+}
+
+/* ── The slice card's film frame ──────────────────────────────────────────
+   The frame holds the slice's opening exchanges at a FIXED height — the card
+   is the pane's size, not the content's — so two full rounds do not always
+   fit. It used to simply clip, which cuts the last bubble through its glyphs
+   and reads as broken rather than as "there is more". Measured on a 761x507
+   card: 136px of overflow through the middle of a line.
+
+   A SHORT FRAME DROPS TO THE FIRST EXCHANGE. The query is on the FRAME and not
+   on the card, because the portrait document spends fewer ledger rows above
+   it — two cards of the same height leave different amounts of room here, and
+   only the frame knows how much.
+
+   `container-name` rather than an anonymous query: an unnamed `@container`
+   resolves against the nearest ancestor container, and the card is one too
+   (the board bar sets `container-type` nowhere today, but a bare query would
+   silently start matching whatever gains one next). */
+/* IT CENTRES WHAT FITS AND TOPS WHAT DOES NOT. Plain `justify-center` centres
+   the content whether or not it fits, so a frame that does overflow cuts
+   through the FIRST bubble at the top AND the last one at the bottom — the
+   reader sees two half-lines and no indication of which end is missing. `safe`
+   keeps the centring while it fits and falls back to the start when it does
+   not, so any overflow is all at the bottom, under the fade that is already
+   there.
+
+   The frame does not overflow today: it did because of an invisible skeleton,
+   and that is fixed in `TurnBubbles`. This rule is the guard for the case it
+   comes back. */
+.card-frame {
+  justify-content: safe center;
+}
+
+/* ── A canvas renders; it never receives ─────────────────────────────────
+   THE FIELD CANVASES ARE TAKEN OUT OF HIT-TESTING, and this is not a
+   nicety — it is the fix for the messages that could not be clicked.
+
+   Everything interactive in this app is a DOM island floating OVER a canvas
+   (`<Html>` billboards: the turns, the gates, the card faces). drei gives
+   every one of those containers a computed inline `z-index`
+   (`web/Html.js` → `objectZIndex`), and in this field that computation is
+   meaningless: it projects the `<Html>`'s own LOCAL position as if it were a
+   world position, so the number is arbitrary. Measured on a live field:
+   -68, -4, +2.
+
+   A NEGATIVE z-index on a positioned element paints BELOW an in-flow,
+   non-positioned block box — and the `<canvas>` is exactly that. So any
+   billboard whose z came out negative was drawn UNDER the canvas, and the
+   canvas (`pointer-events` defaults to auto) then swallowed every pointer
+   event over it: no clicks, no text selection, nothing. Which billboards
+   were dead depended on a projected number, so the failure moved around and
+   read as intermittent.
+
+   This rule removes the whole class at the root rather than chasing the
+   z-index. It is SAFE because nothing here raycasts: every `onClick` in the
+   app is on a DOM node, and the fields' own wheel/drag listeners are on the
+   wrapper ELEMENT, which is an ancestor — events still reach it.
+
+   IT MUST TARGET THE `canvas` AND NOT THE CONTAINER. drei appends its
+   `<Html>` containers INSIDE the R3F container div, and `pointer-events` is
+   inherited — putting this on the container would take every island down
+   with it. And if 3D picking is ever wanted, it needs a different answer:
+   this rule says a canvas is a surface, not a control. */
+[data-conversation-field] canvas,
+[data-card-field] canvas {
+  pointer-events: none;
 }

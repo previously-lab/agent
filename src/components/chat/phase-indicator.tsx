@@ -36,6 +36,13 @@ function hasRenderableContent(value: ReactNode) {
   return value !== null && value !== undefined && value !== false && value !== "";
 }
 
+/**
+ * NO SERIF HERE. This header is CHROME — the app telling the reader what it is
+ * doing — so it reads in the UI sans, like the tool cards and the checklist it
+ * sits beside. The serif is reserved for PROSE: what the reader wrote and what
+ * the agent wrote back. See the rule in `src/components/chat/CLAUDE.md`; the
+ * short of it is that prose opts IN and chrome opts out by saying nothing.
+ */
 export function PhaseIndicator({
   mode,
   icon,
@@ -146,10 +153,22 @@ export function PhaseIndicator({
 
   // ── Expand / collapse ─────────────────────────────────────────────────
 
-  // In streaming mode, only allow toggle after running completes.
-  const canToggle = mode === "static"
-    ? hasExpandedDetails
-    : hasExpandedDetails && !isRunning;
+  /**
+   * OPENABLE WHILE IT IS STILL RUNNING, in both modes.
+   *
+   * Streaming mode used to be gated on `!isRunning`, which made the row inert
+   * for exactly as long as it had something to say. A reader watching the
+   * agent work is the reader most likely to want the detail, and the row gave
+   * them nothing to aim at — no handler, no cursor, and (below) no chevron —
+   * so a click did nothing and the block read as broken rather than as shut.
+   *
+   * There is no cost argument for the gate either: the REPLY streams through
+   * this same `MarkdownRenderer` (memoized on its content), so re-parsing a
+   * growing block per chunk is what the message body already does. The
+   * subtitle's own line-scroll is a separate element and does not fight the
+   * expanded card.
+   */
+  const canToggle = hasExpandedDetails;
 
   const handleToggle = useCallback(() => {
     if (!canToggle) return;
@@ -236,10 +255,14 @@ export function PhaseIndicator({
           )}
         </span>
 
-        {/* Label */}
+        {/* Label — `font-medium`, not `font-semibold`. This title is CHROME,
+            and it was the heaviest thing on a surface whose whole job is to
+            stay quiet while the agent works. One step down keeps the hierarchy
+            (it is still the only weight above the light meta beside it)
+            without the row shouting over the reply it is describing. */}
         <span
           className={cn(
-            "min-w-0 truncate text-sm font-semibold",
+            "min-w-0 truncate text-sm font-medium",
             isError || isDenied
               ? "text-red-500"
               : isInterrupted
@@ -252,27 +275,29 @@ export function PhaseIndicator({
 
         {/* Elapsed (streaming) */}
         {mode === "streaming" && elapsed > 0 && isRunning && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 text-xs font-light tabular-nums text-muted-foreground">
             {elapsed}s
           </span>
         )}
 
         {/* Meta (static, finished) */}
         {mode === "static" && meta && !isRunning && (
-          <span className="shrink-0 text-xs text-muted-foreground">
+          <span className="shrink-0 text-xs font-light text-muted-foreground">
             {meta}
           </span>
         )}
 
         {/* Summary (static) */}
         {mode === "static" && summary && (
-          <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-xs font-light text-muted-foreground">
             {summary}
           </span>
         )}
 
-        {/* Expand chevron */}
-        {canToggle && !isRunning && (
+        {/* Expand chevron — shown wherever the row IS openable. It used to
+            hide while running, which left the row clickable with nothing on
+            screen saying so. */}
+        {canToggle && (
           <ChevronDown
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
@@ -307,7 +332,7 @@ export function PhaseIndicator({
                     className={cn(
                       "text-xs",
                       subtitleTone === "answer"
-                        ? "text-foreground"
+                        ? "font-light text-foreground"
                         : "font-mono text-muted-foreground",
                     )}
                   >

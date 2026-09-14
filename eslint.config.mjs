@@ -30,6 +30,9 @@ const eslintConfig = [
       // Packaged-kernel build artifact (gitignored; see scripts/pack-standalone.mjs).
       "dist-kernel/**",
       "next-env.d.ts",
+      // Generated workflow entrypoints (bundled at build time; not hand-written source).
+      "src/app/.well-known/workflow/v1/flow/route.js",
+      "src/app/.well-known/workflow/v1/step/route.js",
     ],
   },
 ];

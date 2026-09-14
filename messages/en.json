@@ -22,9 +22,16 @@
     "docs": "Docs",
     "settings": "Settings",
     "settingsBusy": "A reply is in progress — settings unlock when it finishes",
-    "expand": "Expand",
-    "collapse": "Collapse",
-    "timelineToggle": "Toggle timeline"
+    "overflow": "More",
+    "brand": "Previously on",
+    "brandYou": "You",
+    "themeLabel": "Theme",
+    "languageLabel": "Language",
+    "english": "English",
+    "chinese": "中文",
+    "versionLabel": "Version",
+    "releaseNotes": "Release notes",
+    "howToSync": "How to sync"
   },
   "theme": {
     "light": "Light",
@@ -58,7 +65,6 @@
     "input": {
       "placeholder": "Send a message...",
       "attach": "Attach files",
-      "attachUnsupported": "The selected model doesn't support images",
       "stopTooltip": "Stop generation",
       "sendTooltip": "Send message",
       "modelTooltip": "Switch AI model",
@@ -98,6 +104,8 @@
       "readSliceDone": "Viewed {date}",
       "readTimelineRunning": "Viewing {period}…",
       "readTimelineDone": "Viewed {period}",
+      "readTimelineWindowRunning": "Viewing {period}…",
+      "readTimelineWindowDone": "Viewed {period}",
       "readStrandRunning": "Following \"{name}\"…",
       "readStrandDone": "Followed \"{name}\"",
       "readPreviously": "Reading 前情提要…",
@@ -113,6 +121,8 @@
       "webSearchSuggestedReads": "Suggested deeper reads",
       "webFetchRunning": "Fetching {url}…",
       "webFetchDone": "Fetched {url}",
+      "viewImageRunning": "Looking at image…",
+      "viewImageDone": "Looked at image",
       "listRunning": "Browsing…",
       "listDone": "Found {count} items",
       "sources": "{count} sources",
@@ -221,6 +231,51 @@
       "interruptedContinuePrompt": "Please continue the response you were working on — it was interrupted before finishing.",
       "backgroundDone": "Your answer is ready"
     },
+    "gate": {
+      "label": "Between conversations",
+      "earlier": "Earlier",
+      "later": "Later",
+      "head": "Head of the loaded window",
+      "beginning": "The beginning of this memory",
+      "loadOlder": "Load earlier"
+    },
+    "seam": {
+      "checkpoint": "Auto-archived · conversation continues",
+      "newConversation": "{date} · New conversation",
+      "gapLabel": "Time since the previous conversation: {gap}",
+      "gap": {
+        "justNow": "just now",
+        "minute": "{count, plural, one {# minute} other {# minutes}}",
+        "hour": "{count, plural, one {# hour} other {# hours}}",
+        "day": "{count, plural, one {# day} other {# days}}",
+        "week": "{count, plural, one {# week} other {# weeks}}",
+        "month": "{count, plural, one {# month} other {# months}}",
+        "year": "{count, plural, one {# year} other {# years}}"
+      }
+    },
+    "timeIndicator": {
+      "label": "Viewing messages around {time}"
+    },
+    "rail": {
+      "label": "Timeline of the messages on screen"
+    },
+    "gesture": {},
+    "resume": {
+      "banner": "Continuing the conversation from {date}"
+    },
+    "history": {
+      "notFound": "Slice not found or unavailable."
+    },
+    "search": {
+      "title": "Search memory",
+      "placeholder": "Search past conversations… #topic filters by strand",
+      "hint": "Search focuses, summaries, tags and decisions. #topic filters by strand.",
+      "searching": "Searching…",
+      "empty": "No time slices match \"{query}\""
+    },
+    "references": {
+      "title": "Referenced {count, plural, one {# time slice} other {# time slices}}"
+    },
     "loadingTips": [
       "Your conversations are saved as time slices — a slice closes 30 minutes after it starts and the next one begins",
       "The agent works after you're done — not always-on, but results are waiting when you return",
@@ -241,39 +296,65 @@
     ]
   },
   "timeline": {
-    "drawerTitle": "Timeline",
-    "row": {
-      "charCount": "{value} chars",
-      "collapse": "Collapse",
-      "expandAll": "Expand all ({value})",
-      "loading": "Loading...",
-      "viewMore": "View more",
-      "ongoing": "{count} ongoing",
-      "decided": "{count} decided",
-      "collapseMeta": "collapse",
-      "date": {
-        "today": "Today",
-        "yesterday": "Yesterday"
-      }
-    },
     "panel": {
-      "now": "Now",
-      "earlier": "Earlier memories"
+      "now": "Now"
+    }
+  },
+  "composer": {
+    "hint": "Say something…",
+    "open": "Write a message"
+  },
+  "timeline3d": {
+    "fieldLabel": "Timeline field — arrow keys or Page Up/Down to move through time",
+    "scrubLabel": "Timeline position",
+    "jumpTop": "Jump to the oldest",
+    "jumpBottom": "Jump to now",
+    "fallback": {
+      "loading": "Loading timeline…",
+      "empty": "No memory slices yet — start a conversation first."
     },
-    "gap": {
-      "moments": "Moments later",
-      "minutes": "{count, plural, one {# minute later} other {# minutes later}}",
-      "hours": "{count, plural, one {# hour later} other {# hours later}}",
-      "days": "{count, plural, one {# day later} other {# days later}}",
-      "weeks": "{count, plural, one {# week later} other {# weeks later}}",
-      "months": "{count, plural, one {# month later} other {# months later}}",
-      "unit": {
-        "minute": "{count, plural, one {minute later} other {minutes later}}",
-        "hour": "{count, plural, one {hour later} other {hours later}}",
-        "day": "{count, plural, one {day later} other {days later}}",
-        "week": "{count, plural, one {week later} other {weeks later}}",
-        "month": "{count, plural, one {month later} other {months later}}"
-      }
+    "turns": {
+      "user": "You",
+      "agent": "Agent"
+    },
+    "card": {
+      "turns": "{count, plural, one {# turn} other {# turns}}",
+      "tone": "TONE",
+      "decided": "DECIDED",
+      "open": "OPEN",
+      "strands": "STRANDS",
+      "listSeparator": "; ",
+      "continuedFrom": "cont. {date}",
+      "fr": "FR.{date}",
+      "duration": "{min} MIN",
+      "no": "No.{date}·{time}"
+    },
+    "filter": {
+      "label": "Filter timeline",
+      "all": "Core timeline",
+      "placeholder": "Search strands…",
+      "empty": "No matching strands"
+    },
+    "selected": {
+      "slices": "{count, plural, one {# slice} other {# slices}}"
+    },
+    "lens": {
+      "label": "Lens",
+      "conversation": "Conversation",
+      "slice": "Slice",
+      "day": "Day",
+      "week": "Week",
+      "hintDesktop": "Ctrl+scroll or pinch to zoom",
+      "hintTouch": "Pinch to zoom"
+    },
+    "running": {
+      "title": "Writing it down…",
+      "hint": "A reply is streaming. Open the conversation."
+    },
+    "filteredOut": {
+      "title": "Nothing here carries that strand",
+      "body": "The loaded window has no slice tagged with it — the strand may only occur further back.",
+      "loadOlder": "Load earlier"
     }
   },
   "settings": {
@@ -403,7 +484,10 @@
   },
   "relative": {
     "now": "Now",
-    "moments": { "before": "moments ago", "after": "in a moment" },
+    "moments": {
+      "before": "moments ago",
+      "after": "in a moment"
+    },
     "prefixAfter": "in ",
     "minute": {
       "before": "{count, plural, one {min ago} other {mins ago}}",

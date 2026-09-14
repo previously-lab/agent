@@ -164,7 +164,7 @@ describe("registry integration", () => {
   it("keeps an API-key model as the default when one is available", () => {
     activateBridge();
     process.env.DEEPSEEK_API_KEY = "sk-test";
-    expect(getDefaultModelId()).toBe("deepseek-v4-flash");
+    expect(getDefaultModelId()).toBe("deepseek-flash");
   });
 
   it("appears in the dynamic catalog (drives /api/models and id resolution)", async () => {

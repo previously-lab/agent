@@ -505,8 +505,10 @@ function messageKey(m: ModelMessage): string {
  * `maxMessages` is a pure safety valve (maxTurnsPerSlice × 2) — the slice's
  * capacity signal normally closes it long before the cap matters. When the
  * client's tail is too short to cover the slice's turns, degrade to ALL
- * given messages; the context_lost heuristic in housekeeping (steps.ts
- * checkContextLost) already handles the genuinely-mismatched cases.
+ * given messages; the mismatch detection in housekeeping (steps.ts
+ * checkClientHistoryMismatch) normally rebuilds the window from the slice's
+ * own turns in that case, so the degradation only matters when it slipped
+ * through.
  */
 export function sliceAlignedWindow(
   modelMessages: ModelMessage[],
@@ -545,6 +547,10 @@ export function sliceAlignedWindow(
  * the demo visitor's model would see no conversation history at all. Demo is
  * a read-only preview whose only conversation truth is the client history, so
  * slice alignment is skipped there (and nothing is persisted either way).
+ *
+ * `rebuiltHistory` (client-history mismatch: page refresh / device switch /
+ * stale writes) overrides the slice-aligned cut entirely — the server slice
+ * is authoritative and its turns are used verbatim.
  * Pure — extracted for unit tests.
  */
 export function buildHistoryWindow(opts: {
@@ -553,12 +559,16 @@ export function buildHistoryWindow(opts: {
   maxMessages: number;
   contextPrefix?: ModelMessage[];
   useDemo?: boolean;
+  /** Server-authoritative window (slice turns) when the client history
+   *  mismatched the active slice — used verbatim instead of slicing the
+   *  client history. */
+  rebuiltHistory?: ModelMessage[];
 }): ModelMessage[] {
   if (opts.useDemo) return opts.modelMessages;
-  return withCheckpointPrefix(
-    sliceAlignedWindow(opts.modelMessages, opts.userTurnsInSlice, opts.maxMessages),
-    opts.contextPrefix,
-  );
+  const base =
+    opts.rebuiltHistory ??
+    sliceAlignedWindow(opts.modelMessages, opts.userTurnsInSlice, opts.maxMessages);
+  return withCheckpointPrefix(base, opts.contextPrefix);
 }
 
 // ─── Bridge mode — notice + fresh-time injection ─────────────────────────
@@ -803,6 +813,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     directionBlock,
     timelineBrief,
     contextPrefix,
+    rebuiltHistory,
   } = await housekeeping(input);
 
   // ── Assemble system prompt ──────────────────────────────────────────────
@@ -834,7 +845,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     directionBlock: directionBlock ?? "",
     sliceHeadBlock,
     timelineBrief: timelineBrief
-      ? `${timelineBrief}\nTimeline lines are pointers — if a line looks relevant, ask recall about it (a natural-language question) before answering from it.`
+      ? `${timelineBrief}\nTimeline lines are pointers. If the user's question has an explicit time anchor (a date, "last week", "in March"), scan further back with readTimelineWindow and open the slice with readSlice before answering. If the question has no time anchor and is topic-shaped ("did we ever talk about X"), ask recall DIRECTLY. Answer specifics only from original slice text.`
       : "",
     strandsBlock: strandsMenu
       ? `## Memory topics\n\n${strandsMenu}\nWhen the user mentions these topics, ask recall about related past conversations. If it answers that there is no such memory, do not ask again — answer from what you have.`
@@ -869,8 +880,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // close): then the previous slice's frozen tail (contextPrefix, read
   // server-side by housekeeping) is prepended, so the same conversation
   // continues seamlessly. Within a slice the prefix grows append-only,
-  // keeping the provider cache warm; context_lost/idle_gap mismatches were
-  // already handled by housekeeping (a new slice → N = 1, no carry-over).
+  // keeping the provider cache warm. When the client history mismatched the
+  // active slice (page refresh / device switch / stale writes), housekeeping
+  // kept the slice open and shipped the slice's own turns as rebuiltHistory —
+  // the server slice is authoritative and they are used verbatim instead of
+  // the client messages.
   const userTurnsInSlice = slice.turns.filter((t) => t.role === "user").length;
   const historyWindow = buildHistoryWindow({
     modelMessages: input.modelMessages,
@@ -881,10 +895,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     // between turns — aligning to the always-fresh slice would send only the
     // current user message. Demo sends the full client history instead.
     useDemo: input.useDemo,
+    rebuiltHistory,
   });
-  if (historyWindow.length !== input.modelMessages.length) {
+  if (historyWindow.length !== input.modelMessages.length || rebuiltHistory) {
     console.log(
-      `[Turn:${input.turnId}] history window: ${historyWindow.length}/${input.modelMessages.length} messages (slice ${slice.slice_id}, ${userTurnsInSlice} user turns${contextPrefix ? `, +${contextPrefix.length} carried` : ""})`,
+      `[Turn:${input.turnId}] history window: ${historyWindow.length}/${input.modelMessages.length} messages (slice ${slice.slice_id}, ${userTurnsInSlice} user turns${contextPrefix ? `, +${contextPrefix.length} carried` : ""}${rebuiltHistory ? ", rebuilt from slice" : ""})`,
     );
   }
 
@@ -946,6 +961,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
       timezone: input.clientTimezone,
       startedAtIso: input.startedAtIso,
       locale: input.locale,
+      // Image attachments ride the workflow step boundary as data URLs so the
+      // viewImage tool can resolve `attachment:N` for non-vision main models.
+      // They are capped at 4 images and client-compressed to 1568px, keeping the
+      // serialized payload bounded.
+      imageAttachments: input.imageAttachments,
     }),
     // Fire after every COMPLETED LLM step: snapshot its text + tool
     // calls/results for a possible timeout continuation. (The killed step

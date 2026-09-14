@@ -36,8 +36,16 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 ### Layout Hierarchy
 
 1. **Root Layout** (`src/app/layout.tsx`): Geist fonts + `ThemeProvider` + `<Toaster />`
-2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppSidebar />` + main content
-3. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
+2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppHeader />` + the page. **There is no sidebar** — chrome is THREE floating islands over an infinite canvas with no page boundaries, so the header element is pointer-transparent and each island re-enables pointer events:
+   - **top-left** brand + status badges (`layout/app-header.tsx`)
+   - **top-centre** the board bar — the zoom lens and the strand selector, the two controls that change what the field SHOWS (`shell/board-bar.tsx`). It is rendered by the shell, not by the header, because the strand selection is shell state.
+   - **top-right** TWO controls, icons only: the search palette and the "···" overflow, which carries settings, docs, GitHub, theme, language and version as labelled rows. It held four glyphs until that became a toolbar; settings and docs gained their words on the way into the menu.
+
+   **Below `sm` the arrangement is two lines**: the header holds its own line — brand at the left, settings at the right — and the board bar takes the line BELOW both, right-aligned at `top-13` (the header's own `p-2` + `h-9` + `gap-2`). The brand used to share its line with the board bar, and that stopped fitting once the brand became an intertitle: "Previously on {name}" measures ~197 px against the wordmark's 84, beside a 244 px bar on a 390 px line. The settings island is 66, so pairing the brand with that fits with room to spare (287 of 390). It also reads the right way round — the first line is the app's, the second is the field's, sitting directly on the content it controls. Measured below.
+
+   The shared finish is one module, `src/components/layout/island.ts`. `ISLAND` is the material, `ISLAND_CONTROL` a control sitting on it, and `ISLAND_BAR` a bar that holds controls — `h-9` with `size-7` controls, FIXED rather than derived, because the three bars had drifted to three heights (28, 36, and a mix) while wearing the same material. The finish had been typed out four times before that, with four chances to drift.
+3. **The shell** (`src/components/shell/app-shell.tsx`) is per-page, not per-layout: it owns the left `AxisBand` (the time rail) and the right pane, which holds the conversation field and the card field. The rung decides which is visible.
+4. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
 
 ### Internationalization (next-intl)
 
@@ -62,7 +70,7 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 
 Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full details.
 
-1. **`ChatPage`** (`chat-page.tsx`) — Main container, useChat hook (WorkflowChatTransport), TimelineWheel
+1. **`ChatPage`** (`chat-page.tsx`) — Main container, useChat hook (WorkflowChatTransport), unified message stream
 2. **`ChatMessage`** — Classifies `UIMessage` parts (text / reasoning / tool / data-phase / data-evolution) in a single pass, rendered in stream order
 3. **`ThinkingSteps`** — Reasoning block (Brain icon, streaming subtitle)
 4. **`PhaseIndicator`** — `data-phase` parts (slicing, housekeeping, etc.)
@@ -94,10 +102,12 @@ Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full de
 | Module | Path | Purpose |
 |--------|------|---------|
 | Capabilities | `src/lib/capabilities.ts` | Global app-mode checks: isAIConfigured, isDemo, canWrite, getRepoConfig (delegates data-source decisions to `src/lib/data-source/resolve.ts`) |
-| GitHub Tools | `src/lib/tools/` | readFile/writeFile/listFiles via Octokit |
+| GitHub Tools | `src/lib/tools/` | readFile/writeFile/listFiles via Octokit — the BASE data utilities. Everything else wraps these; nothing reads memory any other way |
+| Data Cache | `src/lib/cache/data-cache.ts` | The ONE home of the Next cache idiom. `unstable_cache`/`revalidateTag` are imported nowhere else. Per-backend TTLs: github 24h (closed slices) / 60s (indices) / 300s · **demo 30 days over the network, 60s off a local sibling clone** (a published dataset is immutable; a clone is a directory the developer edits, and those writes bypass our write path) · **local uncached** (a dev filesystem is written by things that bypass our write path). Every base read takes `{ fresh: true }` to bypass |
 | Path Whitelist | `src/lib/whitelist/` | Security boundary: memory/tasks/sessions only |
 | Origin Guard | `src/lib/security/origin-guard.ts` | Same-origin guard on POST mutation endpoints (`/api/chat`, `/api/episodic/flush`); optional `ACCESS_SECRET` key check for non-browser callers |
 | Session Manager | `src/lib/session/` | In-memory session state with sliding window (legacy) |
+| Layout Tiers | `src/lib/layout/tiers.ts` + `src/hooks/use-tier.ts` | The ONE place a viewport-dependent number is decided. Four presets (phone/tablet/laptop/wide); the reading column CLAMPS rather than switching so it never narrows as the window widens. The world does NOT scale — 1 world unit stays 1 CSS px, and the column/card take tier values instead |
 | Model Registry | `src/lib/models/` | models.dev-driven catalog, provider dispatch, main-model resolution (`resolve.ts`) — single model: everything runs on the selected model |
 | Time Rendering | `src/lib/time/relative.ts` + `src/lib/episodic/time-localize.ts` | Locale-aware relative-time annotations on slices/timeline/card reads, computed against the user's timezone |
 | Turn Priming | `src/lib/turn-priming.ts` | v0.9: only the slice-stable pieces survive — the continuity line and the date-anchor table, frozen into the system prompt's L3 block at slice start. The per-turn `Sent:` timestamp / intent / emotional read were evicted from the system prompt (cache stability); the model reads precise time via the `currentTime` tool |
@@ -135,6 +145,63 @@ The chat component tree (`src/components/chat/`, see `src/components/chat/CLAUDE
 4. **Response text** — `MarkdownRenderer` blocks interleaved in natural stream order.
 
 Tool calls use friendly outer labels with real tool names in expanded view.
+
+### The rung ladder — one field, four zooms
+
+The chat view and the timeline view are not two views. They are one field at
+different zoom, and `src/lib/timeline3d/units.ts` is the vocabulary for saying
+so:
+
+| rung | one unit is | drawn as |
+|------|-------------|----------|
+| `conversation` | one slice | its TURNS (`SliceConversation`) |
+| `slice` | one slice | a CARD (`RowGroup`) |
+| `day` | a day's slices | a stack |
+| `week` | a week's slices | a stack |
+
+The two finest rungs share a GROUPING — both render one slice, so both are
+`StackLevel` 0 — which is why stepping between them is the cheapest transition
+in the ladder: nothing is regrouped, only re-rendered. `StackLevel` is
+deliberately NOT renumbered to four values; `framePitchFor`, `groupForLevel`,
+`rowKeyFor` and `backingSheets` all key off `0 | 1 | 2`, and the band's camera
+multiplies it.
+
+**One offset table.** `layoutFor` is the only place a unit's height is decided,
+per rung: a card row states a formula, a conversation unit MEASURES its text and
+reports upward. A unit that has not measured yet inherits the running height
+rather than collapsing, so a freshly-paged window stays monotonic while it
+settles. Everything positional — placement, rung transitions, the deep-link
+landing — reads that one table.
+
+**One feed, one publisher.** The left band reads the right pane through a single
+mutable object (`src/lib/timeline3d/field-feed.ts`). Both fields are mounted
+whenever a card rung is up (the chat one held at `opacity-0` behind), so the
+shell hands out a LEASE: the field that does not own the pane writes nothing at
+all. It used to be four shared refs with four private ownership rules, and the
+band's position came down to render order.
+
+**The ladder IS the navigation.** There is no view mode beside it. `?z=<rung>`
+names the rung (absent = `conversation`, written with `replaceState` because the
+rung changes on every wheel-zoom); `src/lib/chat/deep-link.ts` owns the parsing,
+and `?at=<sliceId>` still addresses a POINT rather than a zoom. The
+`?view=chat|timeline` param and the header pill that drove it are gone — they
+were the coarse half of this same axis. The board bar
+(`components/shell/board-bar.tsx`) is now the only control that moves along it
+— it carries the zoom lens (`timeline-3d/lens-switcher.tsx`) and the strand
+selector — and it is mounted by the SHELL so it exists at every rung.
+
+**Two renderers, deliberately.** The conversation rung is drawn by the chat's
+own field and the three card rungs by `CardField`. They are not two settings of
+one thing: the conversation rung must show the turn being written RIGHT NOW,
+which lives only in `useChat`'s messages, while `CardField`'s rows come from the
+persisted catalog. Giving the card field a live tail means threading a streaming
+array through props or a store — the re-render storm `card-field.tsx` documents.
+The camera unification (derive `CAM_Z` from the viewport so both fields share one
+coordinate system) is still open, but it is a RENDERING change, not a navigation
+one, and it is not what stood between the reader and a single ladder.
+
+**Still to come:** the band is still its own WebGL canvas, which is what the
+four-ref protocol existed to bridge.
 
 ## Project Documentation
 

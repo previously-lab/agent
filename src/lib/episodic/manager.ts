@@ -9,8 +9,6 @@
  * local-dev vs GitHub-production switch transparently.
  */
 import matter from "gray-matter";
-import { getDemoPersona } from "@/lib/demo/demo-fs";
-import { isDemo, resolveDataSource } from "@/lib/data-source/resolve";
 import type {
   TimeSlice,
   Turn,
@@ -33,11 +31,6 @@ import {
   isCardFormat,
 } from "./previously-format";
 import { weaveTag } from "./strands";
-
-// ─── Environment detection ───────────────────────────────────────────────
-
-const DATA_SOURCE = resolveDataSource();
-const DEMO_MODE = isDemo(DATA_SOURCE);
 
 // ─── In-memory active slice tracking ─────────────────────────────────────
 
@@ -519,38 +512,21 @@ async function readSliceIndexRaw(
   }
 }
 
-// Persona-aware in-memory cache for demo mode. Keyed by persona + path so
-// switching personas doesn't return stale data from the previous persona's
-// cache. TTL: 1 hour (demo data is static; remote fetches have their own
-// manifest-level cache in demo-fs.ts).
-
-const _indexCache = new Map<string, { data: SliceIndexEntry[]; ttl: number }>();
-const _bodyCache = new Map<string, { data: string; ttl: number }>();
-
-function cacheGet<T>(store: Map<string, { data: T; ttl: number }>, key: string): T | null {
-  const entry = store.get(key);
-  if (entry && Date.now() < entry.ttl) return entry.data;
-  store.delete(key);
-  return null;
-}
-
-function cacheSet<T>(store: Map<string, { data: T; ttl: number }>, key: string, data: T): void {
-  store.set(key, { data, ttl: Date.now() + 3_600_000 }); // 1 hour
-}
+// There is no cache here. Demo mode used to keep persona-keyed `_indexCache` /
+// `_bodyCache` Maps over these two reads; they are gone (v0.10) because the
+// demo backend is now cached where the read actually happens
+// (`demo-fs.ts` → the Data Cache, 30-day demo TTL), and a second cache on top
+// of a tagged one is strictly worse: a write revalidates the tag, which a
+// module-level Map never hears about, so the Map keeps serving the pre-write
+// bytes for the rest of its TTL. Persona separation is preserved — the Data
+// Cache identity carries the persona (see `readFileDemo`), which is exactly
+// what the Maps' `${persona}:` key prefix was for.
 
 export async function readSliceIndex(
   year: number,
   month: number,
   batch?: WriteBatch
 ): Promise<SliceIndexEntry[]> {
-  if (DEMO_MODE) {
-    const key = `${getDemoPersona()}:idx:${year}:${month}`;
-    const cached = cacheGet(_indexCache, key);
-    if (cached) return cached;
-    const data = await readSliceIndexRaw(year, month, batch);
-    cacheSet(_indexCache, key, data);
-    return data;
-  }
   return readSliceIndexRaw(year, month, batch);
 }
 
@@ -572,14 +548,6 @@ export async function readStrands(batch?: WriteBatch): Promise<StrandIndex> {
  * Read the full body (Markdown with frontmatter) of a time slice from disk.
  */
 export async function readSliceBody(path: string): Promise<string> {
-  if (DEMO_MODE) {
-    const key = `${getDemoPersona()}:body:${path}`;
-    const cached = cacheGet(_bodyCache, key);
-    if (cached) return cached;
-    const data = await fsReadFile(path);
-    cacheSet(_bodyCache, key, data);
-    return data;
-  }
   return fsReadFile(path);
 }
 

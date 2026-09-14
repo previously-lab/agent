@@ -62,6 +62,7 @@ import {
   readBodyCapped,
   FETCH_BODY_MAX_BYTES,
 } from "@/lib/search/fetch-utils";
+import { describeImage } from "@/lib/vision/describe-image";
 import {
   splitParagraphs,
   segmentSearch,
@@ -90,6 +91,9 @@ const MAX_SEARCHES_PER_QUERY = 3;
  *  would burn the whole step budget on reading. After the quota, webFetch
  *  returns a note and the researcher synthesizes from what it has. */
 export const MAX_PAGE_READS = 6;
+
+/** Images the researcher may look at per run. Separate from page reads. */
+const MAX_IMAGE_READS = 2;
 
 const WEB_FETCH_TIMEOUT_MS = 30_000;
 const WEB_FETCH_MAX_CHARS = 15_000;
@@ -264,24 +268,31 @@ const searchReportSchema = tool({
 const MAX_SEARCH_STEPS = 50;
 
 /**
- * The research sub-agent's static role block — the system prompt is
- * `buildSubAgentSystem(SEARCH_ROLE)` (shared static base + this block), so
- * every search call shares one prefix for provider prompt caches. The
- * per-call `Today is …` date anchor and the query live in the user prompt.
+ * Build the research sub-agent's role block for a specific run mode. The
+ * system prompt is `buildSubAgentSystem(buildSearchRole(r, p))` (shared static
+ * base + this block). The shared base is fully static, so provider prompt
+ * caches still hit across runs of the SAME mode; only the effective cap
+ * numbers differ between standard and scout runs. The per-call `Today is …`
+ * date anchor, the scout scoping note, and the query live in the user prompt.
  */
-const SEARCH_ROLE = `You are an independent researcher: the main agent hands you a topic, and you come back with a real answer.
+function buildSearchRole(
+  maxSearchRounds: number,
+  maxPageReads: number,
+): string {
+  return `You are an independent researcher: the main agent hands you a topic, and you come back with a real answer.
 
-You both search AND read. web_search (provider-executed) finds the material; webFetch reads the most promising pages yourself — the search digest alone is often too thin to answer well. Pages come back as Markdown (headings, lists, links and tables preserved). You may read at most ${MAX_PAGE_READS} pages per run — spend them on the strongest sources.
+You both search AND read. web_search (provider-executed) finds the material; webFetch reads the most promising pages yourself — the search digest alone is often too thin to answer well. Pages come back as Markdown (headings, lists, links and tables preserved). You may read at most ${maxPageReads} pages per run — spend them on the strongest sources. When a promising page's key content is an image, viewImage can look at it for you (up to ${MAX_IMAGE_READS} images per run).
 
 Process:
-1. Use web_search to find information relevant to the query in the user message (up to ${MAX_SEARCHES_PER_QUERY} rounds).
-2. Read the most promising pages with webFetch (use its range filters to keep reads focused).
+1. Plan your search: you may use up to ${maxSearchRounds} search rounds. Round 1 may use the query as-is; every later round must either reformulate based on what you have learned or chase a new lead discovered in the material you have already read. Before issuing a new search round, state (in thinking) what is still missing.
+2. Search, then read the most promising pages with webFetch between rounds when it sharpens your next query (use its range filters to keep reads focused).
 3. When you have enough, call searchReport with:
    - answer: a real answer to the query (2-5 paragraphs), synthesizing what you found with your own knowledge. Every claim that comes from the web must mention its source. Answer in the query's language — it reaches the user, so it overrides the shared base's English default.
    - recommendation: your researcher's assessment — how confident you are, what is solid, what is uncertain or conflicting between sources.
    - suggested_reads: 0-3 pages worth a follow-up look (your colleague's own verification, or further reading for the user).
 
 Distinguish what the sources SAY from what YOU know — never blend the two silently. If the search found nothing usable, say so plainly in the answer instead of papering over it.`;
+}
 
 /** Wall-clock budget for one research run (runner SDK timeout + backstop).
  *  Sized for the page quota: 6 reads (MAX_PAGE_READS) at the 30s fetch cap
@@ -323,12 +334,19 @@ export async function searchViaFlash(
   query: string,
   progress?: SubAgentProgressRef,
   playbook?: string,
+  opts?: { scout?: boolean },
 ): Promise<WebSearchResult> {
   const provider = createAnthropic({
     baseURL: "https://api.deepseek.com/anthropic",
     apiKey: process.env.DEEPSEEK_API_KEY,
     fetch: normalizingFetch,
   });
+
+  const scout = opts?.scout ?? false;
+  // Effective caps: scout is a lean fan-out leg with half the page-read quota
+  // and one fewer search round; standard mode keeps the exported constants.
+  const effectiveMaxSearchRounds = scout ? 2 : MAX_SEARCHES_PER_QUERY;
+  const effectiveMaxPageReads = scout ? 3 : MAX_PAGE_READS;
 
   const today = new Date().toISOString().slice(0, 10);
   // Evolved working notes (design v1.0 §2.4) — appended to the USER prompt so
@@ -337,25 +355,32 @@ export async function searchViaFlash(
   const playbookBlock = playbook?.trim()
     ? `\n\nEvolved working notes (your researcher playbook — follow these unless they conflict with the query):\n${capPlaybook(playbook.trim())}`
     : "";
+  const scoutBlock = scout
+    ? "\n\nYou are one of several researchers working in parallel on different sub-questions — stay tightly scoped to your query."
+    : "";
   let searchRounds = 0;
-  // Per-run page-read quota (see MAX_PAGE_READS).
+  // Per-run page-read quota (effectiveMaxPageReads).
   let pageReads = 0;
+  // Per-run image-read quota (MAX_IMAGE_READS).
+  let imageReads = 0;
   const res = await runSubAgent<SearchReport>({
     languageModel: provider("deepseek-v4-flash"),
     // The pre-built model speaks the Anthropic protocol — the effort mapping
     // must use the Anthropic provider-options shape, not DeepSeek's.
     effortSdk: "anthropic",
-    system: buildSubAgentSystem(SEARCH_ROLE),
-    prompt: `Today is ${today}.\n\nQuery: ${query}${playbookBlock}`,
+    system: buildSubAgentSystem(
+      buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
+    ),
+    prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}${playbookBlock}`,
     tools: {
       web_search: provider.tools.webSearch_20260209({
-        maxUses: MAX_SEARCHES_PER_QUERY,
+        maxUses: effectiveMaxSearchRounds,
       }),
       webFetch: tool({
         description:
           "Fetch and read a specific page as Markdown (headings/lists/links/" +
           "tables preserved, boilerplate stripped, up to ~15K characters). " +
-          `Costs one of your ${MAX_PAGE_READS} ` +
+          `Costs one of your ${effectiveMaxPageReads} ` +
           "page-read slots — spend them on the strongest sources only. " +
           "Optional `range`: `search` matches keywords across the page " +
           "(misses return the full text — 15K-capped — with a note); `lines` reads a " +
@@ -394,14 +419,45 @@ export async function searchViaFlash(
             .describe("Optional selective read. When omitted, returns the full extracted text."),
         }),
         execute: async ({ url, range }: { url: string; range?: PageReadRange }) => {
-          if (pageReads >= MAX_PAGE_READS) {
+          if (pageReads >= effectiveMaxPageReads) {
             return (
-              `(Page-read quota exhausted — ${MAX_PAGE_READS} reads per run.) ` +
+              `(Page-read quota exhausted — ${effectiveMaxPageReads} reads per run.) ` +
               "Answer from what you have already searched and read."
             );
           }
           pageReads += 1;
           return readPageImpl(url, range);
+        },
+      }),
+      viewImage: tool({
+        description:
+          "Describe the contents of an image URL. Use when a promising page's " +
+          "key content is an image, or when the user referenced an image link. " +
+          `Costs one of your ${MAX_IMAGE_READS} image-read slots per run. ` +
+          "Pass the full http(s) URL of the image and a question about what you " +
+          "need to know.",
+        inputSchema: z.object({
+          url: z
+            .string()
+            .describe("The full http(s) URL of the image to describe."),
+          question: z
+            .string()
+            .optional()
+            .describe(
+              "What you want to know about the image. Be specific. Omit for a " +
+              "general structured description.",
+            ),
+        }),
+        execute: async ({ url, question }: { url: string; question?: string }) => {
+          if (imageReads >= MAX_IMAGE_READS) {
+            return (
+              `(Image-read quota exhausted — ${MAX_IMAGE_READS} reads per run.) ` +
+              "Answer from what you have already searched and read."
+            );
+          }
+          imageReads += 1;
+          const result = await describeImage({ image: { url }, question });
+          return result.ok ? result.description : result.error;
         },
       }),
       searchReport: searchReportSchema,
@@ -435,6 +491,9 @@ export async function searchViaFlash(
           line: host ? `Reading page ${host}…` : "Reading a page…",
           stage: "running",
         };
+      }
+      if (toolName === "viewImage") {
+        return { line: "Looking at an image…", stage: "running" };
       }
       if (toolName === "searchReport") {
         return { line: "Compiling the research report…", stage: "running" };

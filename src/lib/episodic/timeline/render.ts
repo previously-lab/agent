@@ -197,6 +197,18 @@ export function renderTimelineMd(idx: TimelineIndex): string {
 }
 
 /**
+ * "YYYY-MM-DD-HHMM" slice id → its UTC instant in ms. Undefined when the id
+ * does not match the canonical format. Used to anchor recency windows at a
+ * slice without a live clock read (frozen-mode byte stability).
+ */
+function sliceIdToMs(id: string): number | undefined {
+  const m = id.match(/^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})$/);
+  if (!m) return undefined;
+  const ms = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00.000Z`);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/**
  * The compact per-turn brief: recent slices + catalog totals + an invitation
  * to read deeper. Pure pointers — never content.
  *
@@ -205,10 +217,17 @@ export function renderTimelineMd(idx: TimelineIndex): string {
  * computed from that fixed pool — so the string is byte-stable for the whole
  * life of the slice it is injected into (see SliceLineTimeOpts.asOfSliceId
  * for the accepted residual drift).
+ *
+ * `withinDays` (L4) additionally bounds the LINE LIST to a rolling recency
+ * window on top of the `recent` count cap. In frozen mode the window is
+ * anchored at the asOf slice's own start (from its id — no live clock, no
+ * index lookup), so it is byte-stable by construction: within a slice's life
+ * a pool slice can only age OUT of a 30-day window, never into it. Totals
+ * are NOT windowed — they still describe the whole pool.
  */
 export function buildTimelineBrief(
   idx: TimelineIndex,
-  opts: { recent?: number } & SliceLineTimeOpts = {},
+  opts: { recent?: number; withinDays?: number } & SliceLineTimeOpts = {},
 ): string {
   const recent = opts.recent ?? 10;
   const asOf = opts.asOfSliceId;
@@ -217,20 +236,39 @@ export function buildTimelineBrief(
   const pool = asOf
     ? idx.slices.filter((s) => s.status === "closed" && s.id < asOf)
     : idx.slices;
-  const newest = [...pool].sort((a, b) => b.id.localeCompare(a.id)).slice(0, recent);
+  let newest = [...pool].sort((a, b) => b.id.localeCompare(a.id));
+  if (opts.withinDays) {
+    // L4 recency window. Frozen mode anchors at the asOf slice's start so
+    // the cutoff is fixed for the slice's whole life (see docstring above);
+    // live mode uses the caller-supplied clock when available.
+    const refMs = asOf
+      ? sliceIdToMs(asOf)
+      : opts.nowIso
+        ? Date.parse(opts.nowIso)
+        : Date.now();
+    if (refMs !== undefined && !Number.isNaN(refMs)) {
+      const cutoff = refMs - opts.withinDays * 86_400_000;
+      newest = newest.filter((s) => {
+        const startMs = Date.parse(s.start);
+        return !Number.isNaN(startMs) && startMs >= cutoff;
+      });
+    }
+  }
+  const lines = [
+    "## Timeline (recent)",
+    ...(newest.length
+      ? newest.slice(0, recent).map((s) => sliceLineWithTime(s, opts))
+      : ["- (empty — no slices yet)"]),
+  ];
   // Totals come from the same fixed pool in frozen mode — idx.slice_count /
-  // idx.needs_marking would drift as newer slices land mid-slice.
+  // idx.needs_marking would drift as newer slices land mid-slice. They are
+  // deliberately NOT bounded by the withinDays window: they describe the
+  // whole pool, the lines only what the brief actually lists.
   const totalCount = asOf ? pool.length : idx.slice_count;
   const needsMarking = asOf
     ? pool.filter((s) => s.needs_marking).length
     : idx.needs_marking;
 
-  const lines = [
-    "## Timeline (recent)",
-    ...(newest.length
-      ? newest.map((s) => sliceLineWithTime(s, opts))
-      : ["- (empty — no slices yet)"]),
-  ];
   const zh = normalizeLocale(opts.locale) === "zh";
   if (totalCount > recent) {
     lines.push(

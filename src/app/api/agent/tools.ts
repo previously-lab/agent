@@ -26,10 +26,12 @@ import {
   readAgentTimelineExecute,
   readPreviouslyExecute,
   webSearchExecute,
+  webFetchExecute,
   recallExecute,
   thinkDeepExecute,
   currentTimeExecute,
   delegateTaskExecute,
+  viewImageExecute,
   type ToolContext,
 } from "./tool-executors";
 
@@ -92,6 +94,8 @@ export const toolContextSchema = z.object({
   startedAtIso: z.string().optional(),
   /** UI locale ("zh" | "en") — relative-time annotations follow it. */
   locale: z.string().optional(),
+  /** Image attachments (data URLs) extracted when the main model lacks vision. */
+  imageAttachments: z.array(z.string()).optional(),
 });
 
 // ─── Concept tools ───────────────────────────────────────────────────────
@@ -291,17 +295,30 @@ export const conceptTools = {
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
 //
-// The CHAT agent's surface is deliberately narrow (v1.0 sub-agent refinement):
-// the granular memory-browse and page-fetch tools moved DOWN into the
-// sub-agents — recall (an episodic-recall colleague that reads slices itself)
-// and webSearch (a researcher that fetches pages itself). The main agent keeps
-// readSlice as the VERIFICATION channel (audit a recall reference against the
-// original text), readPreviously for the card history, and the delegation
-// entries (recall / webSearch / thinkDeep). The removed tools
-// (readSliceSummary / readTimelineWindow / readAgentTimeline / webFetch) stay
-// defined in conceptTools / tool-executors for the sub-agent side.
+// The CHAT agent owns the TIME AXIS of memory; the recall sub-agent owns the
+// TOPIC AXIS and deep investigation.
+//
+// Main agent time-axis tools:
+//   - readTimelineWindow: scan the timeline catalog over a date window
+//     (inclusive YYYY-MM-DD), one compact pointer line per slice. This is YOUR
+//     tool when the user's question carries an explicit time anchor ("last
+//     week", "September 3rd", "in March"). Scope the window, then open the
+//     specific slice with readSlice.
+//   - readSlice: point-read the original slice text. Use it to answer from a
+//     slice you located on the time axis, or to verify a recall reference.
+//
+// Topic-axis / unanchored questions go DIRECTLY to recall — never investigate
+// first and then escalate. If the question has NO time anchor ("did we ever
+// talk about apples?", fuzzy memories, cross-topic synthesis), call recall
+// immediately. If you realize mid-scan that the time axis can't settle it,
+// stop and call recall rather than continuing to dig.
+//
+// The other granular memory-browse tools (readSliceSummary / readAgentTimeline /
+// listSlices / readTimeline / readStrand / listStrands) stay defined in
+// conceptTools / tool-executors for the sub-agent side.
 export const chatTools = {
   readSlice: conceptTools.readSlice,
+  readTimelineWindow: conceptTools.readTimelineWindow,
   readPreviously: conceptTools.readPreviously,
   currentTime: tool({
     description:
@@ -320,23 +337,36 @@ export const chatTools = {
   }),
   recall: tool({
     description:
-      "Ask the recall colleague — a sub-agent who REMEMBERS your past " +
-      "conversations with the user. Ask in natural language, colleague to " +
-      "colleague (\"Did we ever talk with the user about apples?\", \"Do you " +
-      "remember when they found that job?\"). Refer to the user in the THIRD " +
-      "PERSON in your question — the colleague is not the user, and it " +
-      "describes the user back to you in the third person too. It reads the " +
-      "answers in natural language; every situational claim in its answer " +
-      "carries a reference with a VERBATIM quote and the slice id — those " +
-      "references are attached for your audit. An honest \"we haven't talked " +
-      "about this\" is a valid, definitive answer: when it says so, do NOT " +
-      "call recall again for the same topic. Open a slice yourself (readSlice) " +
-      "only when you need to verify one of its references or need more of the " +
-      "original text.",
+      "Ask the recall colleague — a sub-agent who owns the TOPIC AXIS of " +
+      "memory and deep investigation. Use recall DIRECTLY for questions with " +
+      "NO explicit time anchor: topic-shaped queries (\"did we ever talk about " +
+      "apples?\"), fuzzy memories, cross-topic synthesis, or anything the time " +
+      "axis cannot settle. Do NOT browse memory first and then escalate — if " +
+      "the question is hard for readTimelineWindow + readSlice, recall is the " +
+      "first move, not the fallback. For questions WITH an explicit time anchor " +
+      "(\"last week\", \"September 3rd\", \"in March\"), use readTimelineWindow + " +
+      "readSlice yourself; if you realize mid-scan that the time axis can't " +
+      "answer it, stop and call recall. Ask in natural language, colleague to " +
+      "colleague, and refer to the user in the THIRD PERSON — the colleague is " +
+      "not the user, and it describes the user back to you in the third person " +
+      "too. Every situational claim in its answer carries a reference with a " +
+      "VERBATIM quote and the slice id — those references are attached for your " +
+      "audit. An honest \"we haven't talked about this\" is a valid, definitive " +
+      "answer: when it says so, do NOT call recall again for the same topic. " +
+      "Open a slice yourself (readSlice) only when you need to verify one of its " +
+      "references or need more of the original text.",
     inputSchema: z.object({
       question: z
         .string()
         .describe("A natural-language question about past conversations, asked colleague to colleague. Be specific about the topic, person, event, or period you are asking about."),
+      context: z
+        .string()
+        .optional()
+        .describe(
+          "What you already established on the core timeline before asking: " +
+          "windows you scanned, pointer lines you saw, and why that is not " +
+          "enough. Saves the recall colleague from redoing your work.",
+        ),
     }),
     contextSchema: toolContextSchema,
     execute: recallExecute,
@@ -351,46 +381,136 @@ export const chatTools = {
       "suggested pages for your own follow-up. Use it for current or external " +
       "information — news, releases, prices, docs, anything time-sensitive or " +
       "beyond the user's memory. Do not use it for things already in memory " +
-      "or that you reliably know.",
+      "or that you reliably know. " +
+      "For comparative / evaluation / survey-shaped questions, decompose the " +
+      "question yourself into 2–4 non-overlapping sub-queries and issue the " +
+      "calls in the SAME step with mode 'scout' (tool calls within one step " +
+      "run concurrently). Push source diversity — different angles, vendors, " +
+      "or regions where relevant. When all reports return, synthesize and " +
+      "cross-validate; where researchers conflict, say so explicitly. " +
+      "Simple factual questions get ONE standard call — never fan out. " +
+      "Max 4 parallel researchers.",
     inputSchema: z.object({
       query: z
         .string()
         .describe("A specific, self-contained research question."),
+      mode: z
+        .enum(["standard", "scout"])
+        .optional()
+        .describe(
+          "'scout' = a lean fan-out leg (fewer page reads/search rounds) for " +
+          "when you dispatch several researchers in parallel. Omit (or " +
+          "'standard') for a single normal research run.",
+        ),
     }),
     contextSchema: toolContextSchema,
     execute: webSearchExecute,
+  }),
+  webFetch: tool({
+    description:
+      "Read one specific page as Markdown (boilerplate stripped, ~15K " +
+      "characters, optional range filters search/lines). YOUR tool for " +
+      "reading a KNOWN URL — a link the user pasted, or a suggestedReads page " +
+      "from a webSearch report you want to verify. NOT a search tool: to FIND " +
+      "information, use webSearch.",
+    inputSchema: z.object({
+      url: z
+        .string()
+        .describe("Full absolute URL of the page to read, e.g. 'https://example.com/article'."),
+      range: z
+        .object({
+          type: z
+            .enum(["search", "lines"])
+            .describe(
+              "search = keyword match, returns matching paragraphs (+ context); " +
+              "if nothing matches, returns the full text with a note. " +
+              "lines = 1-indexed line range of the raw text, like a code file.",
+            ),
+          keywords: z
+            .array(z.string())
+            .optional()
+            .describe("Case-insensitive keywords to match. Only for type 'search'."),
+          context: z
+            .number()
+            .optional()
+            .describe("Paragraphs of context around each match (default 1). Only for type 'search'."),
+          start: z
+            .number()
+            .optional()
+            .describe("First line (1-indexed, inclusive). Only for type 'lines'."),
+          end: z
+            .number()
+            .optional()
+            .describe("Last line (1-indexed, inclusive). Only for type 'lines'."),
+        })
+        .optional()
+        .describe("Optional range filter. When omitted, returns the page text up to the cap."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: webFetchExecute,
+  }),
+  viewImage: tool({
+    description:
+      "See an image — a link the user pasted, an image found during research, " +
+      "or a user attachment on a non-vision model. One-shot look: pass a " +
+      "`question` to say what you want to know about the image. For `source`, " +
+      "use an http(s) URL or `attachment:N` where N is the attachment number " +
+      "from the placeholder in the user's message. NOT for pages — use webFetch " +
+      "for those.",
+    inputSchema: z.object({
+      source: z
+        .string()
+        .describe(
+          "Image source: an http(s) URL, or 'attachment:N' referring to the Nth " +
+          "image attachment of the current turn.",
+        ),
+      question: z
+        .string()
+        .optional()
+        .describe(
+          "What you want to know about the image. Be specific. Omit for a general " +
+          "structured description.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: viewImageExecute,
   }),
   thinkDeep: tool({
     description:
       "Dispatch a question to a clean-room thinking pod — a think-only copy " +
       "of yourself reasoning in complete isolation from your current context " +
       "(no search, no memory tools — embed every fact it needs in the " +
-      "question). Its primary use is DECOMPOSITION: when the user raises " +
-      "several parallel questions, observations, or angles in one turn, " +
-      "break it into one self-contained question per direction and dispatch " +
-      "all of them in the SAME step — tool calls within one step run " +
-      "concurrently, so every direction gets full-depth thinking in " +
-      "parallel, then you synthesize. Also reach for it when a single " +
-      "question deserves sustained reasoning your live context would water " +
-      "down: a trade-off or risk assessment, an unbiased second pass over a " +
-      "conclusion you lean towards, or context too polluted to think " +
-      "straight. Simple turns you simply answer — but do not skimp on " +
-      "questions worth thinking about. Returns the conclusion plus its " +
-      "thinking trail; a pod may come back partial (`status: timeout`) — " +
-      "its `answer` and `reasoning` hold what it already produced; work " +
-      "with them, or gather the missing facts yourself and dispatch a finer " +
-      "question. Tag each question with the right effort: low for simple " +
-      "logical verification, medium for a comparison, high for deep " +
-      "structural analysis. Synthesize what comes back into your answer in " +
+      "question). Two first-class uses: (a) genuinely hard problems where the " +
+      "clean room sustains depth that your live context would dilute — " +
+      "trade-offs, architecture decisions, deep analysis; dispatch with " +
+      "medium or high effort because the effort setting matters. (b) Parallel " +
+      "reasoning when the user raises several independent questions or angles " +
+      "in one turn — break it into one self-contained question per direction " +
+      "and dispatch all of them in the SAME step (tool calls within one step " +
+      "run concurrently), then synthesize. " +
+      "Embed not just facts but the user's DECISION CRITERIA — what matters " +
+      "to them, constraints, standards. A pod fed only facts reasons by " +
+      "generic standards and comes back objective but ill-fitting. " +
+      "The pod's output is EVIDENCE, not a verdict: it reasons without this " +
+      "conversation, so you must couple its conclusion with your own context " +
+      "and the user's actual needs. On conflict, your context wins; surface " +
+      "the divergence rather than hiding it. " +
+      "Returns the conclusion plus its thinking trail; a pod may come back " +
+      "partial (`status: timeout`) — its `answer` and `reasoning` hold what " +
+      "it already produced; work with them, or gather the missing facts " +
+      "yourself and dispatch a finer question. Tag each question with the " +
+      "right effort: low = simple verification, medium = comparison, high = " +
+      "structural analysis. A question worth thinking about deserves the " +
+      "effort it deserves. Synthesize what comes back into your answer in " +
       "your own voice.",
     inputSchema: z.object({
       question: z
         .string()
-        .describe("Self-contained question for the thinking pod. Include all necessary context and facts — it has no tools and cannot look anything up."),
+        .describe("Self-contained question for the thinking pod. Include all necessary context, facts, AND the user's decision criteria — it has no tools and cannot look anything up."),
       effort: z
         .enum(["low", "medium", "high"])
         .optional()
-        .describe("Reasoning intensity: 'low' for simple logical verification (fast), 'medium' for a comparison, 'high' for deep analysis. Defaults to 'low'."),
+        .describe("Reasoning intensity: 'low' for simple logical verification, 'medium' for a comparison, 'high' for structural analysis. Defaults to 'low'."),
     }),
     contextSchema: toolContextSchema,
     execute: thinkDeepExecute,
@@ -448,10 +568,13 @@ export function buildChatToolsContext(
 ): Record<keyof typeof chatTools, ToolContext> & { delegateTask?: ToolContext } {
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
     readSlice: ctx,
+    readTimelineWindow: ctx,
     readPreviously: ctx,
     currentTime: ctx,
     recall: ctx,
     webSearch: ctx,
+    webFetch: ctx,
+    viewImage: ctx,
     thinkDeep: ctx,
   };
   // Keep the context map in lockstep with getChatTools(): a registered tool

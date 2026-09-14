@@ -73,9 +73,18 @@ export {
 
 export {
   consolidateStrands,
+  gateStrandDescriptionRefresh,
+  refreshStrandDescription,
+  refreshStrandDescriptions,
+  MIN_NEW_SLICES_FOR_DESCRIPTION,
+  STRAND_DESCRIPTION_COOLDOWN_MS,
 } from "./flash/strand-consolidator";
 export type {
   ConsolidationResult,
+  StrandDescriptionGate,
+  RefreshStrandDescriptionInput,
+  RefreshStrandDescriptionResult,
+  RefreshStrandDescriptionsResult,
 } from "./flash/strand-consolidator";
 // ─── v0.8 timeline (first-class derived index) ─────────────────────────
 export {
@@ -109,8 +118,6 @@ export {
 export type { WriteBatch } from "./io-helpers";
 
 export {
-  DEFAULT_MAX_SLICE_AGE_MS,
-  DEFAULT_MAX_TURNS_PER_SLICE,
   checkSliceAge,
 } from "./slicer";
 
@@ -131,6 +138,20 @@ export type {
 export type {
   PruneOptions,
 } from "./strands";
+
+export {
+  STRANDS_DIR,
+  getStrandFilePath,
+  serializeStrandEntity,
+  parseStrandEntity,
+  readStrandEntity,
+  writeStrandEntity,
+  listStrandEntityNames,
+  resolveStrandEntityName,
+} from "./strand-files";
+export type {
+  StrandEntity,
+} from "./strand-files";
 
 export type {
   SliceStatus,

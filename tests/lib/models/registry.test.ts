@@ -103,7 +103,7 @@ describe("model registry", () => {
   });
 
   it("curates the DeepSeek multimodal model with vision capability", () => {
-    const vision = getModel("deepseek-v4-flash-vision-exp");
+    const vision = getModel("deepseek-flash");
     expect(vision?.capabilities.vision).toBe(true);
     expect(vision?.capabilities.thinking).toBe(true);
     expect(vision?.defaultEffort).toBe("low");
@@ -115,8 +115,10 @@ describe("model registry", () => {
 
   // ─── resolveModelId (legacy migration) ──────────────────────────────
 
-  it("maps legacy DeepSeek ids forward to V4", () => {
-    expect(resolveModelId("deepseek-chat")).toBe("deepseek-v4-flash");
+  it("maps legacy DeepSeek ids forward to a live curated id", () => {
+    // The target must be both live (so it survives the catalog) and curated
+    // (so getModel finds it) — deepseek-v4-flash is neither any more.
+    expect(resolveModelId("deepseek-chat")).toBe("deepseek-flash");
     expect(resolveModelId("deepseek-reasoner")).toBe("deepseek-v4-pro");
   });
 
@@ -133,7 +135,7 @@ describe("model registry", () => {
   });
 
   it("falls back to a hardcoded default when nothing is configured", () => {
-    expect(getDefaultModelId()).toBe("deepseek-v4-flash");
+    expect(getDefaultModelId()).toBe("deepseek-flash");
   });
 
   // ─── BYOK (client mode, config.json `byok` section) ─────────────────
@@ -232,10 +234,10 @@ describe("model registry", () => {
 
     it("falls back to ALL_MODELS[0] on a missing/corrupt config.json (never throws)", async () => {
       // Missing file.
-      expect(getDefaultModelId()).toBe("deepseek-v4-flash");
+      expect(getDefaultModelId()).toBe("deepseek-flash");
       // Corrupt file.
       await writeFile(join(home, "config.json"), "{ not json");
-      expect(getDefaultModelId()).toBe("deepseek-v4-flash");
+      expect(getDefaultModelId()).toBe("deepseek-flash");
     });
 
     it("resolves a byok default id back to its config (the start-turn chain)", async () => {

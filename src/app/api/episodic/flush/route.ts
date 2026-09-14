@@ -7,14 +7,20 @@
  * This is fire-and-forget from the client's perspective: the browser does not
  * wait for the response. Errors are logged but not surfaced to the user.
  */
-import { readFile, writeFile } from "@/lib/tools";
-import { readFileLocal, writeFileLocal } from "@/lib/tools/local-fs";
+import { writeFile } from "@/lib/tools";
+import { writeFileLocal } from "@/lib/tools/local-fs";
+import { fsReadFile } from "@/lib/episodic/io-helpers";
 import { sliceIdToFilePath, sliceIdToAgentPath } from "@/lib/episodic/manager";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
 import { isProtectedSystemPath } from "@/lib/whitelist";
 import { guardRequest } from "@/lib/security/origin-guard";
 import { z } from "zod";
 import { getRepoConfig, isDemo } from "@/lib/capabilities";
+// The WRITE still switches backend by hand, and that is deliberate for now:
+// demo never reaches it (the route returns early), so the two branches below
+// are the only reachable ones, and `fsWriteFile` would replace the specific
+// commit message ("Flush turns for slice <id>") with a generic one. The READ
+// above was the actual defect — it was reading through a cache — and is fixed.
 import { resolveDataSource } from "@/lib/data-source/resolve";
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -128,14 +134,22 @@ export async function POST(request: Request) {
     }
 
     // ── Read the existing slice body (if any) ──────────────────────────
+    // FRESH, and through the converged helper. This is the one read in the app
+    // where a cached copy is a data-loss bug rather than a stale pixel: the
+    // result is APPENDED to and written back, so a base that is missing turns
+    // writes a file that is missing them too — permanently. And the window is
+    // real: `memory/episodic/slices/**` carries a 24-hour TTL, and this route
+    // is the `beforeunload` emergency path, which by construction runs in a
+    // request context that may never have seen the write-side tag
+    // invalidation.
+    //
+    // It was also hand-rolling the backend switch (`github ? readFile :
+    // readFileLocal`) with no demo branch, so a demo session read the local
+    // filesystem instead of the dataset. `fsReadFile` is the one place that
+    // question is answered.
     let existingContent = "";
     try {
-      if (resolveDataSource() === "github") {
-        const { owner, repo } = getRepoConfig();
-        existingContent = await readFile(slicePath, repo, owner);
-      } else {
-        existingContent = await readFileLocal(slicePath);
-      }
+      existingContent = await fsReadFile(slicePath, undefined, { fresh: true });
     } catch {
       // File doesn't exist yet — we will create it from scratch below.
     }

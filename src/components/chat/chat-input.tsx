@@ -3,10 +3,19 @@
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUp, Square, Paperclip, X } from "lucide-react";
+import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelSelector } from "./model-selector";
 import { MemoryDocs } from "./memory-docs";
+import { ISLAND } from "@/components/layout/island";
+
+/** The textarea's floor and ceiling, in px. The floor is what an empty
+ *  composer reports so the box does not collapse while it is being typed
+ *  into and back out of; the ceiling is where it starts scrolling instead of
+ *  growing, so a pasted essay cannot push the toolbar off the screen. */
+const TEXTAREA_MIN_PX = 44;
+const TEXTAREA_MAX_PX = 160;
 
 interface ChatInputProps {
   onSubmit: (message: string, images: File[]) => void;
@@ -14,14 +23,31 @@ interface ChatInputProps {
   onStop?: () => void;
   /** Demo-mode persona — forwarded to the MemoryDocs server action. */
   persona?: string;
-  /** Whether the selected model accepts image inputs (from /api/models). */
-  visionEnabled?: boolean;
   // Model selection — owned by ChatPage so the request body and the toolbar
   // stay in sync. ChatInput renders the control, ChatPage persists.
   // Thinking is always ON at low effort (pinned server-side in start-turn.ts);
   // there is no thinking/effort UI anymore.
   currentModelId: string;
   onModelChange: (modelId: string) => void;
+  /**
+   * The COMPACT form: one row of controls, no textarea, no attachments.
+   *
+   * This is the composer at a card rung, where the reader is looking at the
+   * field and an empty box the size of a card would sit on top of it. What
+   * survives the collapse is what still makes sense from there — the memory
+   * docs (reading them is not a conversation act) and the control that
+   * restores the full composer. The attach button does NOT survive: choosing
+   * a file is the first half of sending, and a send button is not on screen
+   * either. Model selection does not survive for the same reason — it is a
+   * setting for the next message, and there is no next message to write yet.
+   *
+   * The component stays MOUNTED across the two forms (this is one component
+   * with an early return, not two), so typed text and staged image
+   * attachments survive a rung change in both directions.
+   */
+  collapsed?: boolean;
+  /** Restore the full composer. Required when `collapsed`. */
+  onExpand?: () => void;
 }
 
 export function ChatInput({
@@ -29,22 +55,26 @@ export function ChatInput({
   isLoading,
   onStop,
   persona,
-  visionEnabled = false,
   currentModelId,
   onModelChange,
+  collapsed = false,
+  onExpand,
 }: ChatInputProps) {
   const t = useTranslations("chat.input");
+  const tComposer = useTranslations("composer");
+  const reducedMotion = useReducedMotion() ?? false;
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const { images, removeImage, clearImages, handlePaste, handleDrop, handleDragOver } = useImageAttachments();
 
   const resizeTextarea = () => {
     const el = textareaRef.current;
     if (!el) return;
-    el.style.height = "24px";
-    el.style.height = Math.min(el.scrollHeight, 72) + "px";
+    el.style.height = `${TEXTAREA_MIN_PX}px`;
+    el.style.height = Math.min(el.scrollHeight, TEXTAREA_MAX_PX) + "px";
   };
 
   const handleSubmit = (e?: FormEvent) => {
@@ -53,11 +83,11 @@ export function ChatInput({
     if (!trimmed && images.length === 0) return;
     if (isLoading) return;
 
-    onSubmit(trimmed, visionEnabled ? images : []);
+    onSubmit(trimmed, images);
     setValue("");
     clearImages();
     if (textareaRef.current) {
-      textareaRef.current.style.height = "24px";
+      textareaRef.current.style.height = `${TEXTAREA_MIN_PX}px`;
     }
   };
 
@@ -102,15 +132,70 @@ export function ChatInput({
   };
 
   const hasContent = value.trim().length > 0 || images.length > 0;
+  const fade = reducedMotion
+    ? { duration: 0 }
+    : { duration: 0.22, ease: "easeOut" as const };
+
+  // ── THE COMPACT FORM ──────────────────────────────────────────────────────
+  // One row, siblings throughout — because the control that restores the
+  // composer stands where the send button stands, and everything beside it is
+  // its peer rather than a subordinate. The arrow is last for the same reason
+  // it is last in the full form: the right edge is where "do the thing" lives,
+  // at both sizes, so the muscle memory carries across the collapse.
+  if (collapsed) {
+    return (
+      <div
+        data-composer-pill
+        className={`${ISLAND} flex items-center gap-0.5 p-1`}
+      >
+        <MemoryDocs persona={persona} />
+
+        <button
+          type="button"
+          data-composer-collapsed
+          aria-label={tComposer("open")}
+          onPointerEnter={() => setHovered(true)}
+          onPointerLeave={() => setHovered(false)}
+          onFocus={() => setHovered(true)}
+          onBlur={() => setHovered(false)}
+          onClick={onExpand}
+          className="flex h-9 items-center gap-2 rounded-full px-2.5 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {/* The hint leads, the arrow stays pinned to the right edge — so the
+              button grows LEFTWARD and the target never moves out from under
+              the pointer that is already on it. */}
+          <motion.span
+            initial={false}
+            animate={{ opacity: hovered ? 1 : 0, width: hovered ? "auto" : 0 }}
+            transition={fade}
+            className="overflow-hidden text-xs whitespace-nowrap"
+          >
+            {tComposer("hint")}
+          </motion.span>
+          <ArrowUp className="size-4 shrink-0" />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
-      className={`overflow-hidden rounded-2xl bg-muted transition-colors ${isDragOver ? "ring-2 ring-blue-500/50" : ""}`}
-      onPaste={visionEnabled ? handlePaste : undefined}
-      onDrop={visionEnabled ? onDrop : undefined}
-      onDragOver={visionEnabled ? onDragOver : undefined}
-      onDragLeave={visionEnabled ? onDragLeave : undefined}
+      className={`relative overflow-hidden rounded-2xl bg-card ring-1 transition-[box-shadow,ring-color] duration-200 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
+        isDragOver
+          ? "ring-2 ring-blue-500/50"
+          : "ring-foreground/10 focus-within:ring-foreground/30"
+      }`}
+      onPaste={handlePaste}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
     >
+      {/* Top light falloff — the same paper treatment as the timeline's
+          frame card and the travel-clock card. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
+      />
       {/* Image previews */}
       {images.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
@@ -133,7 +218,9 @@ export function ChatInput({
         </div>
       )}
 
-      {/* Textarea */}
+      {/* Row 1 — the writing surface. It is the taller of the two rows on
+          purpose: at a card rung the composer is a floating card, and a card
+          whose only generous dimension is its toolbar reads as a menu. */}
       <div className="px-4 pb-2 pt-3">
         <textarea
           ref={textareaRef}
@@ -141,34 +228,46 @@ export function ChatInput({
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
-          disabled={isLoading}
           rows={1}
-          className="w-full resize-none overflow-y-auto bg-transparent text-foreground placeholder:text-muted-foreground focus:outline-none text-sm"
-          style={{ minHeight: "24px", maxHeight: "72px" }}
+          className="w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:text-muted-foreground placeholder:font-light focus:outline-none"
+          style={{ minHeight: `${TEXTAREA_MIN_PX}px`, maxHeight: `${TEXTAREA_MAX_PX}px` }}
         />
       </div>
 
-      {/* Toolbar */}
+      {/* Row 2 — everything you do AROUND the writing: what to attach, what to
+          read, which model, and send. The zoom lens is deliberately NOT here;
+          it moved to the shell's board bar, where it is mounted at every rung
+          and can be reached without opening the composer at all. */}
       <div className="flex items-center justify-between gap-2 px-3 pb-2">
         {/* Left side */}
         <div className="flex min-w-0 items-center gap-2">
-          {/* Attach — gated on the selected model's vision capability */}
+          {/* Attach — always available. Present in the full form only; see the
+              `collapsed` note above.
+
+              This used to be disabled unless the selected model reported image
+              support. That judgement was a hardcoded guess (providers do not
+              report modalities, and the live catalog falls back to a per-provider
+              default), so a model that gained vision was silently blocked from
+              using it. Attaching is now never prevented; if a model genuinely
+              cannot take the image, the provider says so and the turn surfaces
+              that error rather than us pre-empting it. */}
           <Tooltip>
             <TooltipTrigger
               render={
                 <button
                   type="button"
-                  disabled={!visionEnabled}
+                  data-attach
                   onClick={() => fileInputRef.current?.click()}
-                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                  // A tooltip is not an accessible name — it is a description
+                  // that appears on hover, which a screen reader never does.
+                  aria-label={t("attach")}
+                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                 </button>
               }
             />
-            <TooltipContent side="top">
-              {visionEnabled ? t("attach") : t("attachUnsupported")}
-            </TooltipContent>
+            <TooltipContent side="top">{t("attach")}</TooltipContent>
           </Tooltip>
           <input
             ref={fileInputRef}
@@ -179,18 +278,20 @@ export function ChatInput({
             accept="image/*"
           />
 
-          {/* Memory docs — previously / direction viewer */}
+          {/* Memory docs — previously / direction viewer. The one control that
+              is in BOTH forms: reading the memory is not a conversation act,
+              and gating it behind opening the composer would make the app's
+              own record of itself the hardest thing in it to reach. */}
           <MemoryDocs persona={persona} />
+        </div>
 
-          {/* Model selector — NEW */}
+        {/* Right side — model then send, in that order, so the send button
+            keeps the outer corner it owns in the compact form too. */}
+        <div className="flex shrink-0 items-center gap-1.5">
           <ModelSelector
             currentModelId={currentModelId}
             onModelChange={onModelChange}
           />
-        </div>
-
-        {/* Right side */}
-        <div className="flex shrink-0 items-center gap-1">
           {isLoading && onStop ? (
             <button
               type="button"
