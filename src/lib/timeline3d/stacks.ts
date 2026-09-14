@@ -12,7 +12,6 @@
  * (same reading direction as the chat stream; the list bottom-anchors).
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import type { CardVariant } from "@/lib/layout/tiers";
 import { hashString } from "./layout";
 import { normalizeStrandName } from "./ink";
 
@@ -200,13 +199,71 @@ export interface FrameGeometry {
    * describe either face: the variant is what `frame-card.tsx` reads to pick
    * its type scale and its ledger length.
    *
-   * The two are not interchangeable at one size. The dossier's `em` is a
-   * twenty-sixth of its short edge, which is 23px on a desktop card and 12px
-   * on a portrait one — and a card that carries `text-[0.74em]` body rows at
-   * 12px is rendering them at 8.9px. The portrait variant is a SHORTER
-   * DOCUMENT, not a smaller one.
+   * The two are not interchangeable at one size. A single `em` divisor cannot
+   * serve both — the dossier's short edge is its height and the portrait's is
+   * its width — which is why `cardEmFor` reads this to pick one. The portrait
+   * is a SHORTER DOCUMENT, not a smaller one.
    */
   variant: CardVariant;
+}
+
+/**
+ * How a slice card composes itself. Not a size — a different DOCUMENT. The
+ * dossier is the desktop face (ledger rows, quote, footer); the portrait drops
+ * the rows a narrow card cannot read at a legible size and spends that room on
+ * type.
+ *
+ * It lives here, beside the geometry, because it is decided from the PANE. It
+ * was a field on `TierSpec` — a statement about the window — for a card that
+ * lives in the pane; see `frameVariantFor`.
+ */
+export type CardVariant = "portrait" | "dossier";
+
+/** Pane aspect at which the card turns portrait. 1.15 rather than 1 so a pane
+ *  that is merely a little taller than wide stays with the dossier, whose
+ *  ledger rows it has the width to read. */
+export const FRAME_PORTRAIT_ABOVE = 1.15;
+
+/**
+ * WHICH COMPOSITION A CARD WEARS, decided from the PANE it sits in.
+ *
+ * This used to be read off the tier (`cardVariantFor(windowW)`), which is a
+ * statement about the WINDOW — and the card does not live in the window, it
+ * lives in the pane. The two agree almost everywhere, because the pane is the
+ * window minus a rail; they part company on a TALL window, which is exactly the
+ * family that was wrong (640x1130, and any window past 1024 that is taller than
+ * it is wide). The pane rule restores the dossier's ledger rows to the first
+ * and keeps them off the second.
+ */
+export function frameVariantFor(fieldW: number, fieldH: number): CardVariant {
+  return fieldH > fieldW * FRAME_PORTRAIT_ABOVE ? "portrait" : "dossier";
+}
+
+/**
+ * The card's root `em`, in px — ONE place, because the DOM face and the 3D
+ * backing sheet have to agree on it (see `sheetRadiusPx`, which matches the
+ * face's `rounded-[0.9em]`).
+ *
+ * IT IS BOUNDED, and that is the whole of what this function adds. The formula
+ * was `min(cardW, cardH) / (portrait ? 17 : 26)` and nothing else, which is a
+ * pure scale: type grew one-for-one with the card at every size, forever.
+ * Measured across four viewports it ran 18.7 → 33.4 → 19.5 → 23.1 px, so a
+ * 640px window — 1.6x wider than a phone — drew its body rows at 24.7px and its
+ * turn bubbles at 24.1px, which is why they no longer fitted the frame that
+ * clamps them.
+ *
+ * A card that gets bigger should get MORE ROOM, not bigger type, past the point
+ * where the type is comfortably read. The divisors still say which document
+ * this is (the portrait is a shorter one and spends its room on type); the
+ * bounds say type has a size the reader actually reads at.
+ */
+export const CARD_EM_MIN_PX = 13;
+export const CARD_EM_MAX_PX = 20;
+
+export function cardEmFor(geo: FrameGeometry): number {
+  const raw =
+    Math.min(geo.cardW, geo.cardH) / (geo.variant === "portrait" ? 17 : 26);
+  return Math.max(CARD_EM_MIN_PX, Math.min(raw, CARD_EM_MAX_PX));
 }
 
 /** Portrait aspect (W/H) of the frame card for narrow fields. */

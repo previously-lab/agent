@@ -18,6 +18,7 @@ import { Html } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   backingSheets,
+  cardEmFor,
   framePitchFor,
   poseScaleFor,
   settleEase,
@@ -102,10 +103,16 @@ function computeRowPosition(
   return rowScratch.set(x, y, z);
 }
 
-/** Sheet corner radius in px — identical to the face's rounded-[0.9em] where
- *  1em = cardW/26 (frame-card.tsx). Anything else breaks the illusion. */
+/** Sheet corner radius in px — identical to the face's `rounded-[0.9em]`.
+ *
+ *  IT READS THE FACE'S EM, not a divisor of its own. It used to be
+ *  `cardW * 0.9 / 26`, which was the same number as long as the face's em was
+ *  `cardW/26` and NOTHING ELSE — so when the em gained a floor and a ceiling
+ *  this would have quietly stopped matching the card it sits behind, and the
+ *  sheet's corners would have peeked out from under a face rounding at a
+ *  different radius. One function, both readers. */
 export function sheetRadiusPx(geo: FrameGeometry): number {
-  return (geo.cardW * 0.9) / 26;
+  return cardEmFor(geo) * 0.9;
 }
 
 export interface RowGroupProps {

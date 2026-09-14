@@ -562,6 +562,37 @@
   }
 }
 
+/* ── The slice card's film frame ──────────────────────────────────────────
+   The frame holds the slice's opening exchanges at a FIXED height — the card
+   is the pane's size, not the content's — so two full rounds do not always
+   fit. It used to simply clip, which cuts the last bubble through its glyphs
+   and reads as broken rather than as "there is more". Measured on a 761x507
+   card: 136px of overflow through the middle of a line.
+
+   A SHORT FRAME DROPS TO THE FIRST EXCHANGE. The query is on the FRAME and not
+   on the card, because the portrait document spends fewer ledger rows above
+   it — two cards of the same height leave different amounts of room here, and
+   only the frame knows how much.
+
+   `container-name` rather than an anonymous query: an unnamed `@container`
+   resolves against the nearest ancestor container, and the card is one too
+   (the board bar sets `container-type` nowhere today, but a bare query would
+   silently start matching whatever gains one next). */
+/* IT CENTRES WHAT FITS AND TOPS WHAT DOES NOT. Plain `justify-center` centres
+   the content whether or not it fits, so a frame that does overflow cuts
+   through the FIRST bubble at the top AND the last one at the bottom — the
+   reader sees two half-lines and no indication of which end is missing. `safe`
+   keeps the centring while it fits and falls back to the start when it does
+   not, so any overflow is all at the bottom, under the fade that is already
+   there.
+
+   The frame does not overflow today: it did because of an invisible skeleton,
+   and that is fixed in `TurnBubbles`. This rule is the guard for the case it
+   comes back. */
+.card-frame {
+  justify-content: safe center;
+}
+
 /* ── A canvas renders; it never receives ─────────────────────────────────
    THE FIELD CANVASES ARE TAKEN OUT OF HIT-TESTING, and this is not a
    nicety — it is the fix for the messages that could not be clicked.

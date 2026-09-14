@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  cardVariantFor,
   columnFor,
   MIN_COLUMN_PX,
   paneWidthFor,
@@ -94,17 +93,9 @@ describe("columnFor", () => {
   });
 });
 
-describe("cardVariantFor", () => {
-  it("gives the narrow tiers the portrait document", () => {
-    expect(cardVariantFor(390)).toBe("portrait");
-    expect(cardVariantFor(768)).toBe("portrait");
-  });
-
-  it("gives the wide tiers the dossier", () => {
-    expect(cardVariantFor(1024)).toBe("dossier");
-    expect(cardVariantFor(1440)).toBe("dossier");
-  });
-});
+// `cardVariantFor` lived here — the card's composition read off the WINDOW.
+// It moved to `@/lib/timeline3d/stacks` as `frameVariantFor`, keyed on the
+// PANE the card actually sits in; its tests moved with it.
 
 describe("railFootprintFor / paneWidthFor", () => {
   it("takes the rail and its margin off the window", () => {

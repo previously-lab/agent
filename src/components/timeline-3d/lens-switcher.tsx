@@ -86,10 +86,30 @@ export function LensSwitcher({
 
   return (
     <div className="relative">
+      {/* NO SURFACE OF ITS OWN. This carried `ISLAND` — the full frosted
+          finish, blur and ring and shadow — which put a second blurred panel
+          inside the board bar's own, and then the active segment put a third
+          on top of that. Three nested rounded frosted shapes is precisely what
+          `island.ts` warns against in its own header ("a control that borrowed
+          the island's own classes would put a second blurred panel inside the
+          first"); this control predates the warning and had exactly that.
+
+          THEN A TRACK, which was still one surface too many: on the light
+          theme a grey pill over a white frosted bar over a white thumb reads
+          as three nested rounded shapes, and the reader counts them. The bar
+          is ALREADY the surface — the group now draws nothing at all, and the
+          only thing in it with a background is the segment you are ON. That is
+          the same treatment the settings island gives its icons, which is what
+          makes the two bars read as one material rather than two dialects.
+
+          DROPPING `p-0.5` IS A FIX TOO. The segments are `h-7` (28 px) and the
+          bar's own `h-9 p-1` leaves a 28 px content box, so the padded group
+          measured 32 px inside it and hung 2 px past the bar's padding on each
+          side. Unpadded, the group is the box. */}
       <div
         role="group"
         aria-label={t("label")}
-        className={`${ISLAND} flex items-center gap-0.5 p-0.5 text-xs`}
+        className="flex items-center gap-0.5 text-xs"
       >
         {RUNG_ORDER.map((segRung) => {
           const { key, Icon } = SEGMENTS[segRung];
@@ -120,19 +140,18 @@ export function LensSwitcher({
         })}
       </div>
 
-      {/* The hint hangs BELOW the bar. It used to sit beside the pill and
-          stack above it under `sm`, which was right for a control anchored to
-          the bottom-right corner; a control on the top edge has room beneath
-          it at every width, so the two layouts collapse into one.
+      {/* The hint hangs BELOW the bar, at `mt-2`, at every width. It used to
+          sit beside the pill and stack above it under `sm`, which was right for
+          a control anchored to the bottom-right corner; a control on the top
+          edge has room beneath it, so the two layouts collapse into one.
 
-          EXCEPT AT PHONE WIDTH, where the room beneath the board bar is the
-          SETTINGS ISLAND. The header wraps at that width, so the island's own
-          row sits directly under this bar — `mt-2` put the bubble's bottom
-          corner on top of it, two controls overlapping. `mt-16` drops the
-          bubble clear of that whole row (`p-2` + `h-9` + `gap-2` + `h-9` +
-          `p-2` = 96px of chrome, measured from the bar's own bottom edge). It
-          reads as a tip under the toolbar, which is what it is; from `sm` up
-          the islands share one line and the bubble hangs where it always did. */}
+          IT CARRIED A PHONE-ONLY `mt-16` FOR A WHILE, and the swap retired it.
+          At phone width the settings island used to sit on the line directly
+          under this bar, so `mt-2` dropped the bubble's corner onto another
+          control; the offset pushed it clear of that whole row. The header
+          keeps the settings on its FIRST line now (`app-header.tsx`), which
+          left this bar the second line to itself — so there is nothing under
+          it to clear, and the bubble hangs where it was always meant to. */}
       <AnimatePresence>
         {hintOpen && (
           <motion.div
@@ -142,7 +161,7 @@ export function LensSwitcher({
             transition={
               reducedMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }
             }
-            className={`${ISLAND} pointer-events-none absolute top-full left-1/2 mt-16 w-max max-w-[70vw] -translate-x-1/2 px-3 py-1.5 text-center text-[11px] text-muted-foreground sm:mt-2`}
+            className={`${ISLAND} pointer-events-none absolute top-full left-1/2 mt-2 w-max max-w-[70vw] -translate-x-1/2 px-3 py-1.5 text-center text-[11px] text-muted-foreground`}
           >
             {coarse ? t("hintTouch") : t("hintDesktop")}
           </motion.div>

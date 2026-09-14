@@ -24,7 +24,7 @@ import { strandColor, tintOf, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
 import { strandAccent } from "@/lib/timeline3d/layout";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import type { FrameGeometry, StackRow } from "@/lib/timeline3d/stacks";
-import { weekLabelFor } from "@/lib/timeline3d/stacks";
+import { cardEmFor, weekLabelFor } from "@/lib/timeline3d/stacks";
 import { ColorSquare, hhmm } from "./cards";
 import { useSliceTurns } from "./slice-content";
 
@@ -207,9 +207,21 @@ function TurnBubbles({
   const hasTurns = !loading && turns != null && turns.length > 0;
   const shown = hasTurns ? turns : [];
   return (
-    <div className="relative">
+    // `overflow-hidden` KEEPS THE FADED SKELETON OUT OF THE SCROLL AREA. The
+    // skeleton below is `absolute` (so the two crossfade rather than cut), but
+    // an absolutely-positioned box still counts towards the scrollable
+    // overflow of the frame above it — and the skeleton is 356px tall against
+    // the real turns' 84. Measured on a 1024x900 card: the frame reported
+    // 436px of content around two bubbles measuring 23 and 46, so the frame
+    // looked permanently overflowing when nothing visible was.
+    //
+    // Clipping it HERE rather than at the frame is what makes both states
+    // right: while loading there are no bubbles, so this box is exactly the
+    // skeleton's height and nothing is cut; once the turns arrive this box
+    // shrinks to them and the invisible skeleton is trimmed away with it.
+    <div className="relative overflow-hidden">
       {hasTurns && (
-        <div className="animate-content-arrive flex flex-col gap-[0.55em] pt-[0.2em]">
+        <div className="card-turns animate-content-arrive flex flex-col gap-[0.55em] pt-[0.2em]">
           {shown.map((turn, i) => {
             const isUser = turn.role === "user";
             return (
@@ -304,17 +316,14 @@ export function FrameCard({
 }: FrameCardProps) {
   const accent = accentOf(entry);
   const dry = !entry.focus;
-  // Root em scales off the short edge so type stays consistent across the
-  // responsive landscape and portrait geometry tiers.
+  // The card's root em — what every `em` inside this face resolves against.
+  // `cardEmFor` owns the formula AND its bounds; the DOM face and the 3D
+  // backing sheet both read it, which is why it is a function and not a line
+  // here. It was computed inline and unbounded, and that is what let a 568px
+  // card draw 33px body rows.
+  const em = cardEmFor(geo);
   const landscape = geo.cardW > geo.cardH;
   const portrait = geo.variant === "portrait";
-  // THE DIVISOR IS PER-VARIANT, and that is the whole reason `variant` is on
-  // the geometry. A single 26 sizes the dossier correctly — 900/26 is 23px —
-  // but the portrait's short edge is its WIDTH, so the same divisor gave a
-  // 318px card a 12px em and the `text-[0.74em]` body rows beneath it 8.9px.
-  // The portrait is a SHORTER DOCUMENT (see the ledger below), not a smaller
-  // one, so it spends the room it does not give to rows on its type.
-  const em = Math.min(geo.cardW, geo.cardH) / (portrait ? 17 : 26);
 
   const minutes = durationMin(entry.start, entry.end);
   const stamp = archiveStamp(entry);
@@ -478,11 +487,21 @@ export function FrameCard({
         <Hairline className="mt-[0.55em]" />
 
         {/* The film frame: the slice's opening rounds, vertically centered
-            in the remaining space. Two full exchanges can overflow the
-            fixed frame — the column clamps (overflow-hidden) and the
-            bottom edge fades into the card instead of growing it. */}
+            in the remaining space. Two full exchanges can overflow the fixed
+            frame — the column clamps (overflow-hidden) and the bottom edge
+            fades into the card instead of growing it.
+
+            IT DOES NOT SCROLL, AND IT DOES NOT NEED TO. It was made a scroll
+            region for an overflow that turned out not to exist: what filled
+            the frame was an invisible skeleton (see `TurnBubbles`), and with
+            that clipped the content measures exactly its frame at every size
+            tried — 300/300, 387/387, 392/392, 507/507. A scroller here would
+            buy nothing and cost something real: the fields own the wheel, so
+            an inner scroller has to stop the event before the wrapper cancels
+            it, and a wheel over any card would then stop moving the field for
+            no scroll in return. */}
         <div
-          className="relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col justify-center overflow-hidden"
+          className="card-frame relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col overflow-hidden"
           style={{ maxWidth: "34em" }}
         >
           <TurnBubbles

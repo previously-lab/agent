@@ -23,7 +23,7 @@
 import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { useTier } from "@/hooks/use-tier";
-import { frameGeometryFor } from "@/lib/timeline3d/stacks";
+import { frameGeometryFor, frameVariantFor } from "@/lib/timeline3d/stacks";
 
 const PULSE = "animate-pulse motion-reduce:animate-none";
 
@@ -95,14 +95,19 @@ function FallbackCard({
 
 export function TimelineFallback() {
   const t = useTranslations("timeline3d.fallback");
-  const { spec, paneW } = useTier();
+  const { paneW } = useTier();
 
-  // The real geometry, from the real function. The height argument is the
+  // The real geometry, from the real function — including the VARIANT, which is
+  // the pane's to decide (see `frameVariantFor`). The height argument is the
   // desktop default the card field itself falls back to before it has measured
   // its box (`card-field.tsx` uses 800 for the same reason) — the fallback has
   // no measured box either, and a card that is one frame-height wrong is still
   // far closer than `max-w-xl` was.
-  const geo = frameGeometryFor(spec.cardVariant, paneW || 1280, 800);
+  const geo = frameGeometryFor(
+    frameVariantFor(paneW || 1280, 800),
+    paneW || 1280,
+    800,
+  );
 
   return (
     <div className="flex h-full w-full flex-col items-center justify-center gap-8 overflow-hidden bg-background px-6 py-8">

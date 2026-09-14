@@ -1,14 +1,22 @@
 "use client";
 
 /**
- * The right-island "···" overflow menu (v0.12 floating header) — low-frequency
- * chrome folded behind one trigger so the action pill stays compact on phone
- * widths:
+ * The right-island "···" overflow menu (v0.12 floating header) — the rest of
+ * the chrome, behind one trigger:
  *
+ *   Settings          → /settings
+ *   Docs ↗
+ *   ─────────────
  *   GitHub ↗
  *   ── Theme ──      Light / Dark / System (radio)
  *   ── Language ──   English / 中文 (radio)
  *   ── Version vX.Y.Z (+ release-notes / sync links when an update exists)
+ *
+ * SETTINGS AND DOCS CAME OUT OF THE BAR. They were two more glyphs in a row of
+ * four, and a row of four is a toolbar: every one of them aimed at on every
+ * screen, when the only one a reader reaches for mid-thought is search. Behind
+ * the trigger they also get their WORDS back — a menu row has room for a label
+ * and the icon row never did, which is why the bar had to be tooltips-only.
  *
  * Built on the project's Base UI dropdown-menu primitives. Radio selections
  * keep the menu open (Base UI radio items default closeOnClick=false); the
@@ -17,8 +25,8 @@
 import { useEffect, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
-import { MoreHorizontal } from "lucide-react";
-import { usePathname, useRouter } from "@/i18n/navigation";
+import { BookOpen, MoreHorizontal, Settings } from "lucide-react";
+import { Link, usePathname, useRouter } from "@/i18n/navigation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { VersionBadge } from "@/components/layout/version-badge";
+import { useTurnBusy } from "@/components/chat/turn-busy";
 
 const GITHUB_URL = "https://github.com/previously-lab/agent";
 const THEME_ORDER = ["light", "dark", "system"] as const;
@@ -42,6 +51,10 @@ export function NavOverflowMenu() {
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+  // Engine/model settings saved mid-turn would hot-apply to the next call, so
+  // the entry is shielded until the current reply finishes. `SettingsLink`
+  // owned this rule while the entry was an icon; the row owns it now.
+  const busy = useTurnBusy();
   // Pre-mount the theme value is unknown (localStorage) — fall back to
   // "system" until mounted to avoid a hydration mismatch, same guard as
   // ThemeToggle.
@@ -65,6 +78,38 @@ export function NavOverflowMenu() {
         sideOffset={8}
         className="w-44"
       >
+        <DropdownMenuGroup>
+          {/* Disabled, not hidden: the entry is where the reader left it, and
+              the hint under it says why. A row that disappears mid-turn reads
+              as a bug; one that is visibly unavailable reads as a rule. */}
+          <DropdownMenuItem
+            disabled={busy}
+            render={busy ? undefined : <Link href="/settings" />}
+          >
+            <Settings />
+            {t("settings")}
+            {busy && (
+              <span className="ml-auto pl-3 text-[10px] font-light text-muted-foreground">
+                {t("settingsBusy")}
+              </span>
+            )}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            render={
+              <a
+                href={`https://previously.ldwid.com/${locale}/docs`}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
+            }
+          >
+            <BookOpen />
+            {t("docs")}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+
+        <DropdownMenuSeparator />
+
         <DropdownMenuGroup>
           <DropdownMenuItem
             render={

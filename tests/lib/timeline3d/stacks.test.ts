@@ -1,13 +1,17 @@
 import { describe, it, expect } from "vitest";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import {
+  CARD_EM_MAX_PX,
+  CARD_EM_MIN_PX,
   CARD_RATIO,
   DEFAULT_LEVEL,
   backingSheets,
+  cardEmFor,
   cardGeometryFor,
   filterByStrand,
   frameGeometryFor,
   framePitchFor,
+  frameVariantFor,
   groupForLevel,
   indexForAnchor,
   isoWeekFor,
@@ -323,5 +327,79 @@ describe("backingSheets (Rev 10 tiers)", () => {
     expect(backingSheets(8)).toBe(4);
     expect(backingSheets(9)).toBe(6);
     expect(backingSheets(700)).toBe(6);
+  });
+});
+
+describe("frameVariantFor — the PANE picks the document", () => {
+  it("gives a pane taller than it is wide the portrait document", () => {
+    // 640x1130: the pane is 608 wide and ~1130 tall.
+    expect(frameVariantFor(608, 1130)).toBe("portrait");
+    // A 390 phone.
+    expect(frameVariantFor(358, 844)).toBe("portrait");
+  });
+
+  it("gives a wide pane the dossier", () => {
+    expect(frameVariantFor(976, 900)).toBe("dossier");
+    expect(frameVariantFor(1544, 1000)).toBe("dossier");
+  });
+
+  it("parts company with the window on a TALL window — the case that was wrong", () => {
+    // A 1024x1400 window: the old rule read the window (>= 1024 → laptop) and
+    // handed this pane the dossier, whose landscape card is 507px tall inside
+    // 1400px of height. The pane rule sees a tall pane and says portrait.
+    const paneW = 976;
+    const paneH = 1400;
+    expect(frameVariantFor(paneW, paneH)).toBe("portrait");
+  });
+
+  it("keeps a merely square-ish pane on the dossier", () => {
+    // The margin exists so a pane that is only a little taller than wide does
+    // not lose its ledger rows.
+    expect(frameVariantFor(800, 800 * 1.1)).toBe("dossier");
+    expect(frameVariantFor(800, 800 * 1.2)).toBe("portrait");
+  });
+});
+
+describe("cardEmFor — the card's root em, bounded", () => {
+  const portrait = (w: number, h: number) =>
+    cardEmFor(frameGeometryFor("portrait", w, h));
+  const dossier = (w: number, h: number) =>
+    cardEmFor(frameGeometryFor("dossier", w, h));
+
+  it("leaves the phone alone", () => {
+    // 390x844 measures an 18.7px em today; the bounds must not move it.
+    const em = portrait(358, 844);
+    expect(em).toBeGreaterThan(CARD_EM_MIN_PX);
+    expect(em).toBeLessThan(CARD_EM_MAX_PX);
+  });
+
+  it("caps the case that was 33px", () => {
+    // 640x1130 measured a 568x720 card and a 33.4px em — 1.8x a phone's type
+    // on a 1.6x wider window, with body rows at 24.7px.
+    const geo = frameGeometryFor("portrait", 608, 1130);
+    expect(cardEmFor(geo)).toBe(CARD_EM_MAX_PX);
+  });
+
+  it("caps the wide dossier too", () => {
+    // 1600x1000 measured 23.1px unbounded.
+    const geo = frameGeometryFor("dossier", 1544, 1000);
+    expect(cardEmFor(geo)).toBe(CARD_EM_MAX_PX);
+  });
+
+  it("never leaves the bounds, at any card the two variants can make", () => {
+    for (const variant of ["portrait", "dossier"] as const) {
+      for (const w of [200, 320, 608, 976, 1544, 2400]) {
+        for (const h of [300, 600, 900, 1400]) {
+          const em = cardEmFor(frameGeometryFor(variant, w, h));
+          expect(em).toBeGreaterThanOrEqual(CARD_EM_MIN_PX);
+          expect(em).toBeLessThanOrEqual(CARD_EM_MAX_PX);
+        }
+      }
+    }
+  });
+
+  it("is monotonic in the card — a bigger card never gets smaller type", () => {
+    expect(dossier(1400, 800)).toBeGreaterThanOrEqual(dossier(600, 800));
+    expect(portrait(900, 1200)).toBeGreaterThanOrEqual(portrait(400, 600));
   });
 });

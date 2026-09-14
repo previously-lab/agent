@@ -66,6 +66,7 @@ import {
   DEFAULT_LEVEL,
   frameGeometryFor,
   framePitchFor,
+  frameVariantFor,
   groupForLevel,
   indexForAnchor,
   type FrameGeometry,
@@ -98,7 +99,6 @@ import {
   type UnitMetrics,
 } from "@/lib/timeline3d/units";
 import { boundaryBetween } from "@/lib/timeline3d/boundary";
-import { useTier } from "@/hooks/use-tier";
 import {
   armedGate,
   gateBands,
@@ -870,12 +870,16 @@ export function CardField({
   }, []);
 
   const rows = useMemo(() => groupForLevel(entries, level), [entries, level]);
-  // The tier decides the card's COMPOSITION; `frameGeometryFor` still decides
-  // its size from the pane's measured box. Keeping the two apart is what stops
-  // a phone from getting a desktop card scaled down — the composition is where
+  // The PANE decides the card's COMPOSITION; `frameGeometryFor` decides its
+  // size from the same measured box. Keeping the two apart is what stops a
+  // phone from getting a desktop card scaled down — the composition is where
   // "too small to read" is actually fixed, not the dimensions.
-  const { spec } = useTier();
-  const variant = spec.cardVariant;
+  //
+  // IT USED TO BE THE TIER'S, and that was a statement about the window for a
+  // card that lives in the pane. The two agree almost everywhere (the pane is
+  // the window minus a rail) and part company on a tall window, which is the
+  // family that was wrong: see `frameVariantFor`.
+  const variant = frameVariantFor(fieldSize.w || 1280, fieldSize.h || 800);
   const geo = useMemo(
     () => frameGeometryFor(variant, fieldSize.w || 1280, fieldSize.h || 800),
     [variant, fieldSize],

@@ -39,6 +39,25 @@ function same(a: TierState, b: TierState): boolean {
 }
 
 /**
+ * How often a resize may recompute the tier, in ms.
+ *
+ * A DRAG USED TO RECOMPUTE ON EVERY EVENT. `resize` fires once per frame while
+ * a window edge is being dragged, and every one of those ran `columnFor` and
+ * re-rendered the whole field — up to three R3F canvases — for a number that
+ * only changes meaningfully a handful of times across the entire range. The
+ * `same()` guard does not help: below the column's cap the column genuinely
+ * tracks the pane, so `column` differs on essentially every event.
+ *
+ * SO THE LAYOUT IS ALLOWED TO LAG. Nobody can read while they are dragging a
+ * window edge, and settling a frame or two late is invisible; sixty
+ * re-renders a second is not. This is a TRAILING throttle rather than a plain
+ * debounce: a long drag still updates about six times a second instead of
+ * freezing until the mouse is released, and because every event with no update
+ * already pending schedules one, the LAST event always lands.
+ */
+const RESIZE_THROTTLE_MS = 150;
+
+/**
  * The current layout tier, live.
  *
  * Consulted in a layout effect so a phone renders its tier BEFORE the first
@@ -66,8 +85,29 @@ export function useTier(): TierState {
       setState((prev) => (same(prev, next) ? prev : next));
     };
     update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
+
+    // See RESIZE_THROTTLE_MS. One timer, so an event arriving while an update
+    // is already scheduled is dropped rather than queued — a burst of sixty
+    // collapses to one, which is the whole point.
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    let lastAt = 0;
+    const onResize = () => {
+      if (pending) return;
+      pending = setTimeout(
+        () => {
+          pending = null;
+          lastAt = performance.now();
+          update();
+        },
+        Math.max(0, RESIZE_THROTTLE_MS - (performance.now() - lastAt)),
+      );
+    };
+
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (pending) clearTimeout(pending);
+    };
   }, []);
 
   return state;

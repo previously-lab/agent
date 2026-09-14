@@ -37,13 +37,6 @@
 /** The four presets, finest viewport first. */
 export type LayoutTier = "phone" | "tablet" | "laptop" | "wide";
 
-/**
- * How a slice card composes itself. Not a size — a different DOCUMENT. The
- * dossier is the desktop face (ledger rows, quote, footer); the portrait drops
- * the rows a phone cannot read at a legible size and spends that room on type.
- */
-export type CardVariant = "portrait" | "dossier";
-
 export interface TierSpec {
   id: LayoutTier;
   /** Inclusive lower bound of the tier, in CSS px of WINDOW width. */
@@ -56,7 +49,6 @@ export interface TierSpec {
   inset: number;
   /** The column's cap, px — the measure a slice's turns are read at. */
   columnMax: number;
-  cardVariant: CardVariant;
   /** Multiplier for the field's fixed type (the gate and the window head). */
   typeScale: number;
 }
@@ -74,7 +66,6 @@ export const TIERS = [
     railW: 24,
     inset: 8,
     columnMax: 680,
-    cardVariant: "portrait",
     typeScale: 0.875,
   },
   {
@@ -88,7 +79,6 @@ export const TIERS = [
     railW: 24,
     inset: 8,
     columnMax: 680,
-    cardVariant: "portrait",
     typeScale: 1,
   },
   {
@@ -98,7 +88,6 @@ export const TIERS = [
     railW: 32,
     inset: 16,
     columnMax: 680,
-    cardVariant: "dossier",
     typeScale: 1,
   },
   {
@@ -108,7 +97,6 @@ export const TIERS = [
     railW: 32,
     inset: 24,
     columnMax: 760,
-    cardVariant: "dossier",
     typeScale: 1.125,
   },
 ] as const satisfies readonly TierSpec[];
@@ -176,10 +164,6 @@ export function columnFor(windowW: number): number {
   return Math.max(MIN_COLUMN_PX, Math.min(room, spec.columnMax));
 }
 
-/** The card's composition at this width. */
-export function cardVariantFor(windowW: number): CardVariant {
-  return specFor(tierFor(windowW)).cardVariant;
-}
 
 /** Type multiplier for the field's fixed-size type, by window width. */
 export function typeScaleFor(windowW: number): number {

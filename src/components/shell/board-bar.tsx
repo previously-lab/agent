@@ -59,18 +59,21 @@ export function BoardBar({
     //
     // WHERE IT SITS, per breakpoint, and it is the READER's arrangement:
     //
-    //   phone   top-right, beside the brand, with the settings bar wrapping to
-    //           the line below it (see `app-header.tsx`) — three islands and
-    //           four lens segments do not fit on one line at 390px, and the two
-    //           that belong together (the brand, and the control that changes
-    //           what you are looking at) get the first line
+    //   phone   the SECOND line, right-aligned under the header's own — the
+    //           header holds the brand and the settings on its first, and this
+    //           bar takes the line beneath both. It used to share the first
+    //           line with the brand, which stopped fitting when the brand
+    //           became an intertitle (~197 px against the wordmark's 84, beside
+    //           a 244 px bar on a 390 px line). `top-13` is 52 px: the header's
+    //           own `p-2` + `h-9` + `gap-2`, so this bar drops exactly onto
+    //           the line the header left for it
     //   sm+     the middle of three, all on one line
     <div
       data-board-bar
       // Four segments at the phone's `min-h-8` plus a 28 px strand trigger, so
       // a strand pick shortens the LENS's labels rather than pushing the bar
       // off the glass — the ladder is the thing that must stay reachable.
-      className="pointer-events-none fixed top-2 right-2 z-50 flex max-w-[calc(100vw-1rem)] sm:top-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:top-4"
+      className="pointer-events-none fixed top-13 right-2 z-50 flex max-w-[calc(100vw-1rem)] sm:top-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:top-4"
     >
       <div className={`${ISLAND_BAR} pointer-events-auto gap-1 p-1`}>
         <LensSwitcher rung={rung} onSelect={onRungChange} reducedMotion={reducedMotion} />
