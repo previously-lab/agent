@@ -154,7 +154,21 @@ export function NarrationDock({
       {/* Prose — serif. Plain text, line breaks preserved; no markdown. */}
       {status === "error" ? (
         <div className="px-4 pb-4 pt-2">
-          <p className="font-serif text-[13px] font-light leading-relaxed text-muted-foreground">
+          {/* A cut narration keeps the part that WAS told above the error
+              note — the stream's failure marker is stripped by the helper,
+              so `text` here is real prose only. */}
+          {text && (
+            <div aria-live="polite" className="max-h-[30vh] overflow-y-auto">
+              <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                {text}
+              </p>
+            </div>
+          )}
+          <p
+            className={`font-serif text-[13px] font-light leading-relaxed text-muted-foreground ${
+              text ? "mt-2" : ""
+            }`}
+          >
             {error ? errorMessage(error, t) : t("errorGeneric")}
           </p>
           <button

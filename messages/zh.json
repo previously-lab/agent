@@ -531,6 +531,6 @@
     "retry": "再讲一次",
     "errorBudget": "今天讲了很多了，明天再讲。",
     "errorUnavailable": "这里暂时还不支持讲述。",
-    "errorGeneric": "刚才走了神，什么也没讲出来。"
+    "errorGeneric": "刚才走了神，没能讲完。"
   }
 }

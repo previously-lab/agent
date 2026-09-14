@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { NarrateError, streamNarration } from "@/lib/companion/narrate";
+import {
+  NarrateError,
+  STREAM_FAILURE_MARKERS,
+  streamNarration,
+  stripFailureMarker,
+} from "@/lib/companion/narrate";
 
 /** A canned JSON error response per the contract ({ error }, status). */
 function errorResponse(status: number, error: unknown, json = true): Response {
@@ -195,5 +200,85 @@ describe("streamNarration", () => {
       () => {},
     ).catch((e) => e);
     expect(err.code).toBe("request_failed");
+  });
+});
+
+describe("stream failure marker", () => {
+  const ZH_MARKER = STREAM_FAILURE_MARKERS[0];
+  const EN_MARKER = STREAM_FAILURE_MARKERS[1];
+
+  it("stripFailureMarker cuts at the marker and reports failure", () => {
+    expect(stripFailureMarker(`前半段${ZH_MARKER}`)).toEqual({
+      text: "前半段",
+      failed: true,
+    });
+    // Anything after the marker is signalling, not prose.
+    expect(stripFailureMarker(`前半段${EN_MARKER} trailing`)).toEqual({
+      text: "前半段",
+      failed: true,
+    });
+    expect(stripFailureMarker("clean prose, no marker")).toEqual({
+      text: "clean prose, no marker",
+      failed: false,
+    });
+  });
+
+  it("flags a stream that ends with the zh marker, keeping the prose before it", async () => {
+    const received: string[] = [];
+    const fetchImpl = (async () =>
+      streamResponse(["讲到一半，", "话还没说完", ZH_MARKER])) as typeof fetch;
+    const err = await streamNarration(
+      { sliceId: "s", locale: "zh", fetchImpl },
+      (accumulated) => received.push(accumulated),
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(NarrateError);
+    expect(err.code).toBe("request_failed");
+    // The last reported text is the stripped partial prose — the marker
+    // never reaches the display layer.
+    expect(received.at(-1)).toBe("讲到一半，话还没说完");
+  });
+
+  it("flags the en marker too", async () => {
+    const fetchImpl = (async () =>
+      streamResponse(["Half a tale", EN_MARKER])) as typeof fetch;
+    const err = await streamNarration(
+      { sliceId: "s", locale: "en", fetchImpl },
+      () => {},
+    ).catch((e) => e);
+    expect(err.code).toBe("request_failed");
+  });
+
+  it("treats a clean stream as complete even with marker-like prose", async () => {
+    const near = "It wrote [ Previously 暂时走神了 and continued"; // no closing bracket
+    const fetchImpl = (async () => streamResponse([near])) as typeof fetch;
+    const text = await streamNarration({ sliceId: "s", fetchImpl }, () => {});
+    expect(text).toBe(near);
+  });
+
+  it("detects the marker split across chunk boundaries", async () => {
+    const bytes = new TextEncoder().encode(EN_MARKER);
+    const split1 = new TextDecoder().decode(bytes.slice(0, 12));
+    const split2 = new TextDecoder().decode(bytes.slice(12));
+    const received: string[] = [];
+    const fetchImpl = (async () =>
+      streamResponse(["Some prose…", split1, split2])) as typeof fetch;
+    const err = await streamNarration(
+      { sliceId: "s", fetchImpl },
+      (accumulated) => received.push(accumulated),
+    ).catch((e) => e);
+    expect(err.code).toBe("request_failed");
+    expect(received.at(-1)).toBe("Some prose…");
+  });
+
+  it("flags a stream whose only content is the marker (no prose at all)", async () => {
+    const received: string[] = [];
+    const fetchImpl = (async () => streamResponse([ZH_MARKER])) as typeof fetch;
+    const err = await streamNarration(
+      { sliceId: "s", fetchImpl },
+      (accumulated) => received.push(accumulated),
+    ).catch((e) => e);
+    expect(err.code).toBe("request_failed");
+    // The callback reported the stripped (empty) text once.
+    expect(received.at(-1)).toBe("");
   });
 });
