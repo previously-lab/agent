@@ -9,7 +9,13 @@
  *
  * Contract (frozen — the client is built against it):
  *   body:  { sliceId: string, event: "narrate", locale?: "zh" | "en", timezone?: string }
- *   200:   text/plain; charset=utf-8 stream (AI SDK toTextStreamResponse)
+ *   200:   text/plain; charset=utf-8 stream. Clean close WITHOUT a terminal
+ *          marker = complete narration. If the provider errors or hangs, the
+ *          stream is cut at a 120s bound and a terminal marker line is
+ *          appended before close — "[ Previously 暂时走神了，稍后再试。 ]" (zh) /
+ *          "[ Previously got distracted — please try again later. ]" (en):
+ *          marker present = cut narration (client shows failure/retry), so
+ *          the client can always tell hung/cut apart from slow-but-complete.
  *   400:   { error } — invalid JSON body / unknown event / bad sliceId format
  *   403:   { error } — origin guard (see src/lib/security/origin-guard.ts)
  *   429:   { error: "budget_exhausted" } — 20 narrations per IP per rolling hour

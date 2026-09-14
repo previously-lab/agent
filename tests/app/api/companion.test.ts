@@ -60,6 +60,10 @@ vi.mock("@/lib/demo/demo-fs", () => ({
 import { POST } from "@/app/api/companion/route";
 import { resetCompanionBudget } from "@/app/api/companion/budget";
 import { DEFAULT_COMPANION_PLAYBOOK } from "@/app/api/companion/default-playbook";
+import {
+  narrateSlice,
+  streamFailureMarker,
+} from "@/app/api/companion/narrate";
 
 function companionReq(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost:3000/api/companion", {
@@ -80,11 +84,12 @@ beforeEach(() => {
   hoisted.files.clear();
   resetCompanionBudget();
   hoisted.createModel.mockReturnValue({ __model: true });
+  // narrate.ts consumes result.fullStream directly (toTextStreamResponse
+  // cannot surface failure) — the default fake yields one clean text delta.
   hoisted.streamText.mockReturnValue({
-    toTextStreamResponse: () =>
-      new Response("narration-text", {
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-      }),
+    fullStream: (async function* () {
+      yield { type: "text-delta", id: "t1", text: "narration-text" };
+    })(),
   });
 });
 
@@ -251,5 +256,107 @@ describe("POST /api/companion budget gate", () => {
     // Different first entries → different buckets → both allowed.
     expect(one.status).toBe(200);
     expect(two.status).toBe(200);
+  });
+});
+
+
+describe("narrateSlice stream termination", () => {
+  it("cuts a never-yielding provider at the injectable timeout and closes with the zh marker", async () => {
+    // Simulates the live defect: the provider hangs (queue timeout) and the
+    // fullStream never yields anything.
+    hoisted.streamText.mockReturnValue({
+      fullStream: (async function* () {
+        await new Promise(() => {});
+        yield { type: "text-delta", id: "t1", text: "never" };
+      })(),
+    });
+    const started = Date.now();
+    const res = await narrateSlice(
+      { sliceId: "2026-07-28-0658", locale: "zh" },
+      { streamTimeoutMs: 40 },
+    );
+    const text = await res.text();
+    // Terminated promptly by the 40ms bound, not the 120s default.
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(text).toBe(streamFailureMarker("zh"));
+    expect(text).toContain("Previously 暂时走神了");
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+  });
+
+  it("appends the en marker after a mid-stream provider error and logs the cause", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    hoisted.streamText.mockReturnValue({
+      fullStream: (async function* () {
+        yield { type: "text-delta", id: "t1", text: "That day you said…" };
+        yield { type: "error", error: new Error("provider exploded") };
+      })(),
+    });
+    const res = await narrateSlice(
+      { sliceId: "2026-07-28-0658", locale: "en" },
+      { streamTimeoutMs: 1_000 },
+    );
+    const text = await res.text();
+    // Partial narration is preserved, then the terminal marker.
+    expect(text).toContain("That day you said…");
+    expect(text).toContain(streamFailureMarker("en"));
+    expect(text).toContain("got distracted");
+    expect(errSpy).toHaveBeenCalledWith(
+      "[Companion] narration terminated abnormally (provider error/timeout):",
+      expect.any(Error),
+    );
+    errSpy.mockRestore();
+  });
+
+  it("treats an SDK abort part as a cut narration", async () => {
+    hoisted.streamText.mockReturnValue({
+      fullStream: (async function* () {
+        yield { type: "text-delta", id: "t1", text: "partial" };
+        yield { type: "abort", reason: "The operation was aborted" };
+      })(),
+    });
+    const res = await narrateSlice(
+      { sliceId: "2026-07-28-0658" },
+      { streamTimeoutMs: 1_000 },
+    );
+    const text = await res.text();
+    expect(text).toContain("partial");
+    expect(text).toContain(streamFailureMarker("en")); // locale defaults to en
+  });
+
+  it("completes cleanly with no marker when the model finishes", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    hoisted.streamText.mockReturnValue({
+      fullStream: (async function* () {
+        yield { type: "text-start", id: "t1" };
+        yield { type: "text-delta", id: "t1", text: "那天你说了…" };
+        yield { type: "finish" };
+      })(),
+    });
+    const res = await narrateSlice(
+      { sliceId: "2026-07-28-0658", locale: "zh" },
+      { streamTimeoutMs: 1_000 },
+    );
+    const text = await res.text();
+    expect(text).toBe("那天你说了…");
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("passes the abort signal into streamText (overall 120s bound by default)", async () => {
+    await narrateSlice({ sliceId: "2026-07-28-0658" });
+    const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
+      abortSignal: AbortSignal;
+      onError: (e: { error: unknown }) => void;
+    };
+    expect(call.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(call.abortSignal.aborted).toBe(false);
+    // onError logs with the [Companion] tag.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    call.onError({ error: new Error("boom") });
+    expect(errSpy).toHaveBeenCalledWith(
+      "[Companion] narration stream error:",
+      expect.any(Error),
+    );
+    errSpy.mockRestore();
   });
 });

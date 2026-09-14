@@ -58,6 +58,31 @@ export interface NarrateArgs {
   timezone?: string;
 }
 
+export interface NarrateOptions {
+  /**
+   * Overall wall-clock bound for the provider stream. A hung LLM provider
+   * (upstream queue timeouts) is cut at this bound and the stream terminates
+   * with the failure marker instead of hanging for many minutes. Injectable
+   * so tests can use a short timeout.
+   */
+  streamTimeoutMs?: number;
+}
+
+/** Overall abort bound — hung provider cut off well inside platform walls. */
+const DEFAULT_STREAM_TIMEOUT_MS = 120_000;
+
+/**
+ * Terminal marker appended to the text stream when a narration is cut
+ * (provider error or overall timeout). Locale-honored. A stream that ends
+ * WITHOUT this marker is a complete narration; the marker is the in-band,
+ * client-distinguishable failure signal (see route.ts contract).
+ */
+export function streamFailureMarker(locale: "zh" | "en"): string {
+  return locale === "zh"
+    ? "\n\n[ Previously 暂时走神了，稍后再试。 ]"
+    : "\n\n[ Previously got distracted — please try again later. ]";
+}
+
 /**
  * Resolve a model id to its full config — the start-turn resolver sequence
  * (curated registry → live catalog → deployment default). Re-implemented
@@ -144,7 +169,10 @@ function buildEventBlock(opts: {
  * resolves here to 501 (JSON) — the bridge CLI returns plain text and cannot
  * emit the structured tool calls the read-only tools need (agent.ts:126-134).
  */
-export async function narrateSlice(args: NarrateArgs): Promise<Response> {
+export async function narrateSlice(
+  args: NarrateArgs,
+  opts: NarrateOptions = {},
+): Promise<Response> {
   // Model resolution mirrors the chat turn (start-turn.ts:170-192): config →
   // demo lock → resolve; thinking pinned to the model's capability; effort
   // pinned low (fast responses are the product rule).
@@ -222,6 +250,12 @@ export async function narrateSlice(args: NarrateArgs): Promise<Response> {
   // Plain AI SDK streamText — NOT a workflow, no StepBoundaryLanguageModel:
   // createModel instantiates the real provider model directly. The agent
   // loop is bounded at 6 steps (read tools + narration fit comfortably).
+  //
+  // Overall abort: a hung provider must not leave the response hanging for
+  // many minutes — cut the stream at the wall clock and terminate. (DeepSeek
+  // has been observed queue-timing-out requests with a 900s upstream limit.)
+  const streamTimeoutMs = opts.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
+  const abortSignal = AbortSignal.timeout(streamTimeoutMs);
   const result = streamText({
     model: createModel(modelConfig),
     system,
@@ -237,7 +271,76 @@ export async function narrateSlice(args: NarrateArgs): Promise<Response> {
     // Narration, not deduction: some warmth/variety; the read-only tools and
     // the playbook's honesty rules keep it grounded.
     temperature: 0.7,
+    abortSignal,
+    onError: ({ error }) => {
+      console.error("[Companion] narration stream error:", error);
+    },
   });
 
-  return result.toTextStreamResponse();
+  // NOT result.toTextStreamResponse(): its text stream silently drops the
+  // SDK's error/abort parts, so a cut narration would look like a clean
+  // close — and the client reads clean-close as "complete narration".
+  // Forward fullStream manually instead: text deltas become the prose, and
+  // an error/abort part (or the overall timeout racing ahead of a hung
+  // provider) appends the terminal marker and closes the stream. Either way
+  // the response terminates in bounded time; the marker is what lets the
+  // client tell "cut" apart from "complete" (route.ts contract).
+  const marker = streamFailureMarker(locale);
+  const encoder = new TextEncoder();
+  const iterator = result.fullStream[Symbol.asyncIterator]();
+  const abortRace = new Promise<never>((_, reject) => {
+    abortSignal.addEventListener(
+      "abort",
+      () =>
+        reject(
+          abortSignal.reason ?? new Error("companion narration timeout"),
+        ),
+      { once: true },
+    );
+  });
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for (;;) {
+          const { done, value: part } = await Promise.race([
+            iterator.next(),
+            abortRace,
+          ]);
+          if (done) break;
+          if (part.type === "text-delta") {
+            controller.enqueue(encoder.encode(part.text));
+          } else if (part.type === "error") {
+            throw part.error;
+          } else if (part.type === "abort") {
+            throw new Error(part.reason ?? "aborted");
+          }
+          // finish / step / tool parts: narration prose is text-delta only.
+        }
+        controller.close();
+      } catch (e) {
+        console.error(
+          "[Companion] narration terminated abnormally (provider error/timeout):",
+          e,
+        );
+        try {
+          controller.enqueue(encoder.encode(marker));
+        } catch {
+          // client already gone
+        }
+        try {
+          controller.close();
+        } catch {
+          // client already gone
+        }
+      }
+    },
+    async cancel() {
+      // Client disconnected — stop pulling the source stream.
+      await iterator.return?.();
+    },
+  });
+
+  return new Response(body, {
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
