@@ -298,10 +298,27 @@ describe("spreadSelection", () => {
     expect(out).toHaveLength(order.length);
   });
 
-  it("does not overwrite a seat when the picks exceed half the line-up", () => {
+  it("keeps every pick when the picks ARE the whole line-up", () => {
+    // Named for what it checks. It used to claim to cover the collision guard,
+    // which the even-spacing formula makes unreachable — the old name promised
+    // coverage of a branch no input can enter, which is worse than no test.
     const order = ["p1", "p2", "p3", "p4"];
     const out = spreadSelection(order, ["p1", "p2", "p3", "p4"]);
     expect([...out].sort()).toEqual([...order].sort());
+    expect(new Set(out).size).toBe(4);
+  });
+
+  it("keeps its picks distinct for every line-up size and pick count", () => {
+    // The property the formula guarantees, swept rather than spot-checked: the
+    // seats are distinct for every i < j < k <= n, so no pick is ever dropped.
+    for (let n = 2; n <= 40; n++) {
+      const order = Array.from({ length: n }, (_, i) => `s${i}`);
+      for (let k = 2; k <= n; k++) {
+        const out = spreadSelection(order, order.slice(0, k));
+        expect(new Set(out).size).toBe(n);
+        expect(out).toHaveLength(n);
+      }
+    }
   });
 
   it("matches picks by normalised name, like the rest of the line-up", () => {

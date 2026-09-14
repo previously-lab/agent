@@ -171,7 +171,7 @@ per rung: a card row states a formula, a conversation unit MEASURES its text and
 reports upward. A unit that has not measured yet inherits the running height
 rather than collapsing, so a freshly-paged window stays monotonic while it
 settles. Everything positional — placement, rung transitions, the deep-link
-landing, the fill pass — reads that one table.
+landing — reads that one table.
 
 **One feed, one publisher.** The left band reads the right pane through a single
 mutable object (`src/lib/timeline3d/field-feed.ts`). Both fields are mounted

@@ -6,7 +6,9 @@
  * detached pills hover over the canvas instead:
  *
  *   LEFT   brand wordmark + status badges (demo / client mode)
- *   CENTER the 「对话 · 时间线」 mode switcher pill
+ *   MIDDLE the BOARD BAR — the zoom lens and the strand selector. It is
+ *          rendered by the SHELL (`shell/board-bar.tsx`), not from here: the
+ *          strand selection is shell state, which a layout has no access to.
  *   RIGHT  high-frequency actions (search, settings, docs) + a "···"
  *          overflow menu (GitHub, theme, language, version)
  *
@@ -14,7 +16,6 @@
  * pointer events, so canvas content underneath the gaps stays interactive
  * and scrolls beneath the frosted pills.
  */
-import { Suspense } from "react";
 import { Link } from "@/i18n/navigation";
 import { BookOpen } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";

@@ -123,6 +123,11 @@ import type { DealOrigin, FieldRig, LeavingItem } from "./field-rig";
 export interface CardFieldProps {
   /** Catalog window, already strand-filtered (oldest → newest). */
   entries: TimelineSliceEntry[];
+  /** The filter removed EVERYTHING the window had. Distinct from "this memory
+   *  has no slices": the window is loaded, it simply carries none of the picks
+   *  — which may well live in a page nobody has asked for yet. The two need
+   *  different words and, in the second case, a way out. */
+  filteredOut: boolean;
   hasMore: boolean;
   /** Prefetch the next older window. Answers with the read's own promise when
    *  it has one, which is what lets the head's button show that a page is in
@@ -714,6 +719,7 @@ function FieldScene({
 export function CardField({
   entries,
   hasMore,
+  filteredOut,
   onNeedOlder,
   onOpenSlice,
   initialAtId,
@@ -786,7 +792,11 @@ export function CardField({
   const initDoneRef = useRef(false);
   const prevFirstKeyRef = useRef<string | null>(null);
 
-  // ── Paging older, and the one place it is asked for ──────────────────────
+  // ── Paging older: ONE caller, and it is the head ─────────────────────────
+  // `requestOlder` is the latch + the in-flight flag, and the head's own
+  // control is the only thing that calls it — this field no longer pages
+  // itself. See the module header for the two automatic triggers that were
+  // removed and why.
   // Two things ask: the top-edge trigger in the frame loop, and the head's own
   // control. Both go through here for the in-flight flag, so the head can show
   // that a page is on its way regardless of which of the two asked — and so the
@@ -1363,6 +1373,38 @@ export function CardField({
   );
 
   if (entries.length === 0) {
+    // AN EMPTY FIELD IS TWO DIFFERENT SITUATIONS, and this used to answer both
+    // with "No memory slices yet — start a conversation first."
+    //
+    // When a strand filter is on, the board bar offers every strand in
+    // `strands.json` (the whole history) while the filter can only see the
+    // loaded window (the newest month). Pick a strand that only occurs further
+    // back and the field emptied out, claimed the memory was empty, and offered
+    // NO WAY OUT — not the head, not a pager, because the empty branch returns
+    // before any of that is built. The reader was stuck until they cleared the
+    // filter, and the app had told them something untrue on the way.
+    //
+    // So the filtered case says what is actually true and keeps the pager.
+    if (filteredOut) {
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-background px-6 text-center">
+          <p className="text-sm text-foreground">{t("filteredOut.title")}</p>
+          <p className="max-w-sm text-xs text-muted-foreground">
+            {t("filteredOut.body")}
+          </p>
+          {hasMore && (
+            <button
+              type="button"
+              data-filtered-out-pager
+              onClick={() => void onNeedOlder()}
+              className="rounded-full px-3 py-1.5 text-xs text-muted-foreground ring-1 ring-border transition-colors hover:text-foreground hover:ring-foreground/30"
+            >
+              {t("filteredOut.loadOlder")}
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="flex h-full w-full items-center justify-center bg-background px-6 text-center text-sm text-muted-foreground">
         {t("fallback.empty")}

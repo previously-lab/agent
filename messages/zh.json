@@ -29,12 +29,7 @@
     "chinese": "中文",
     "versionLabel": "版本",
     "releaseNotes": "更新日志",
-    "howToSync": "如何同步",
-    "mode": {
-      "label": "切换视图",
-      "chat": "对话",
-      "timeline": "时间线"
-    }
+    "howToSync": "如何同步"
   },
   "theme": {
     "light": "浅色",
@@ -243,11 +238,9 @@
       "beginning": "记忆的起点",
       "loadOlder": "加载更早"
     },
-    "seamLoadOlder": "加载更早的对话",
     "seam": {
       "checkpoint": "自动存档 · 对话继续",
       "newConversation": "{date} · 新对话",
-      "loadingOlder": "加载更早的对话…",
       "gapLabel": "距上次对话：{gap}",
       "gap": {
         "justNow": "刚刚",
@@ -265,9 +258,7 @@
     "rail": {
       "label": "屏幕上消息的时间标尺"
     },
-    "gesture": {
-      "openingTimeline": "正在打开时间线…"
-    },
+    "gesture": {},
     "resume": {
       "banner": "继续 {date} 的对话"
     },
@@ -276,7 +267,6 @@
     },
     "search": {
       "title": "搜索记忆",
-      "trigger": "搜索",
       "placeholder": "搜索过去的对话… #线索名 按线索过滤",
       "hint": "输入关键词搜索焦点、摘要、标签与决策；#线索名 按线索过滤。",
       "searching": "搜索中…",
@@ -359,6 +349,11 @@
     "running": {
       "title": "正在写下来…",
       "hint": "回复正在流式传来。回到对话查看。"
+    },
+    "filteredOut": {
+      "title": "这一页没有属于该线索的时间片",
+      "body": "已加载的范围里没有带上这条线索的时间片——它可能出现在更早的地方。",
+      "loadOlder": "加载更早"
     }
   },
   "settings": {

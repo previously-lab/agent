@@ -59,10 +59,12 @@ export const STRANDLESS_GREY = "oklch(0.556 0 0)";
  * with no reading order: colour was being asked to say "which strand is this"
  * for every strand AT ONCE, and no palette survives that. Instead the bundle
  * rests grey and colour is a HIGHLIGHT — it marks the strands the reader has
- * actually singled out, and nothing else. The core line is the exception and
- * is never grey: it is the straight spine down the middle of the cable, it is
- * always the brand blue, and nothing the reader does changes it (see
- * `threadline-scene.tsx`).
+ * actually singled out, and nothing else. The core line is the exception, and
+ * it wears the brand blue ONLY while it is the answer: 「核心时间线」 is the
+ * unfiltered timeline, i.e. the state with nothing picked, so the core is
+ * #0066ff when nothing is picked and the resting grey when something is. Its
+ * WEIGHT never changes either way — it stays the spine. See the frame-loop note
+ * in `threadline-scene.tsx`, which is where that value is decided.
  *
  * This is also what the product asked for from the start: a timeline that is
  * not the loudest thing on the page. A strip of grey threads with one blue

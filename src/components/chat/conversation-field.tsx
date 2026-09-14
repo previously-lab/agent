@@ -139,9 +139,11 @@ export interface ConversationFieldProps {
   /** Called when the reader asks for the older page at the window's head. */
   onNeedOlder: () => void;
   /** The block at the top of the viewport, reported only when it CHANGES.
-   *  Replaces what the virtualized list read off `rangeChanged`: the shell
-   *  publishes the slice for the mode switcher, and the travel clock reads the
-   *  time it is travelling FROM. `sliceId` is null for the live run. */
+   *  Replaces what the virtualized list read off `rangeChanged`. Its one
+   *  consumer is the travel clock, which reads the time it is travelling FROM;
+   *  the slice id used to be published to the deleted mode switcher and is now
+   *  read by nothing, but it is still reported because the clock's caller
+   *  signature carries it. `sliceId` is null for the live run. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
   /** True while older slices are being paged in — shown at the window's head. */
   loadingOlder?: boolean;
@@ -848,8 +850,7 @@ export function ConversationField({
   //
   // It also reports the block at the top of the viewport, but only when that
   // block CHANGES — the same one-read-per-crossing shape the virtualized list
-  // had, and the reason the shell's viewport-slice publication does not tick
-  // per frame.
+  // had, and the reason the reader's position is not published per frame.
   useEffect(() => {
     let raf = 0;
     const tick = () => {

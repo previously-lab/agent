@@ -34,7 +34,7 @@
  * card rung returns to the conversation first, because that is where the reply
  * is going to be written and watching it arrive is the point of sending.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FieldRung } from "@/lib/timeline3d/units";
 
 /** What the composer is told about the form it is being asked to draw. */
@@ -45,20 +45,47 @@ export interface ComposerForm {
   expand: () => void;
 }
 
+/** The gap between the bottom edge the composer hangs from and the bottom of
+ *  the viewport, at each size — the same numbers the container's `bottom-*`
+ *  carries. Named once so the clearance reported upward cannot drift from the
+ *  position actually used. */
+const COMPOSER_OFFSET_PX = 12;
+/** Breathing room between the composer's top edge and the content it floats
+ *  over. Small: the composer is chrome, and a large gap reads as a footer. */
+const COMPOSER_GAP_PX = 16;
+
 export interface ComposerHostProps {
   rung: FieldRung;
   /** The live composer, as a function of the form it should take. */
   composer: (form: ComposerForm) => React.ReactNode;
+  /**
+   * How much room the content must leave at its foot, in px — the composer's
+   * own height plus its offset plus a gap.
+   *
+   * MEASURED, BECAUSE IT CANNOT BE KNOWN. The full form grows with what is
+   * typed into it (a textarea that reaches 160px) and with what is attached to
+   * it (a preview row), so the only honest source for "how much room does this
+   * need" is the thing itself. It was a constant, and the constant was wrong:
+   * the reserve said 144px while the composer could reach 300, so a long draft
+   * put the composer over the newest message — the one thing the reserve exists
+   * to keep visible.
+   */
+  onClearanceChange?: (px: number) => void;
 }
 
-export function ComposerHost({ rung, composer }: ComposerHostProps) {
+export function ComposerHost({
+  rung,
+  composer,
+  onClearanceChange,
+}: ComposerHostProps) {
   const [open, setOpen] = useState(false);
+  const hostRef = useRef<HTMLDivElement>(null);
 
   const onConversation = rung === "conversation";
 
-  // Leaving the conversation rung puts the composer back in its pocket, so a
-  // reader who types, submits and lands on the conversation does not find a
-  // floating card still hanging over it.
+  // ARRIVING at the conversation rung puts the composer back in its pocket, so
+  // a reader who opened the full form at a card rung and then returned does not
+  // find the floating card still hanging over the conversation.
   useEffect(() => {
     if (onConversation) setOpen(false);
   }, [onConversation]);
@@ -67,8 +94,27 @@ export function ComposerHost({ rung, composer }: ComposerHostProps) {
    *  conversation one — see the module header. */
   const collapsed = !onConversation && !open;
 
+  // Report the clearance whenever the composer changes size — a draft growing
+  // the textarea, an attachment arriving, the two forms swapping.
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el || !onClearanceChange) return;
+    const report = (): void => {
+      const h = el.getBoundingClientRect().height;
+      if (h > 0) {
+        onClearanceChange(Math.ceil(h) + COMPOSER_OFFSET_PX + COMPOSER_GAP_PX);
+      }
+    };
+    report();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(report);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onClearanceChange]);
+
   return (
     <div
+      ref={hostRef}
       data-composer
       className={
         collapsed

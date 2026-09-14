@@ -116,7 +116,7 @@
  * sort: the whole gesture is "one of these threads, not those", and a thread
  * that leaves the helix or renders on top of the cable stops being one of them
  * and becomes a second line drawn beside the core. Reduced motion snaps the
- * focus tween and stills the light drift.
+ * focus tween and the group spin's drift.
  *
  * THE LINE-UP JOINT (§2.5): scrolling into a different region changes the top-N
  * set the band draws, and that change is animated rather than cut — a strand
@@ -217,7 +217,6 @@ const SAMPLE_PX_STEP = 12;
  *  band, so the step tightens to keep the weave smooth. */
 const NARROW_SAMPLE_PX_STEP = 6;
 const ROTATION_SPEED = 0.04;
-const LIGHT_DRIFT_PERIOD = 25;
 const PULSE_DURATION = 1.2;
 const PULSE_WIDTH_FACTOR = 0.35;
 /** Viewport margin above and below the widest possible view: the lines always

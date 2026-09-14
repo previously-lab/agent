@@ -170,6 +170,7 @@ export function TimelineScene({
       <div className="relative h-full w-full">
         <CardField
           entries={filtered}
+          filteredOut={entries.length > 0 && filtered.length === 0}
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}
           onOpenSlice={onOpenSlice}

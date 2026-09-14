@@ -24,6 +24,10 @@ export const WIDE_STRAND_LIMIT = 20;
  *  32 px strip (see `AxisBand`), so this is the tier that is actually live in
  *  both views — it is the one number to turn.
  *
+ *  NOTE: the band is 24px on phone/tablet and 32px on laptop/wide
+ *  (`tiers.ts` `railW`), so `MID_STRAND_LIMIT` and `WIDE_STRAND_LIMIT` below
+ *  are unreachable today — this is the tier that is always live.
+ *
  *  IT IS A MOIRÉ DIAL, not just a density dial. A strand's on-screen x is
  *  `R·cos(seat + spin)` and every strand shares one `spin`, so the lines cross
  *  at REGULAR intervals, and 1 px lines crossing regularly is a diffraction

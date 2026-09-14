@@ -29,12 +29,7 @@
     "chinese": "中文",
     "versionLabel": "Version",
     "releaseNotes": "Release notes",
-    "howToSync": "How to sync",
-    "mode": {
-      "label": "Switch view",
-      "chat": "Chat",
-      "timeline": "Timeline"
-    }
+    "howToSync": "How to sync"
   },
   "theme": {
     "light": "Light",
@@ -243,11 +238,9 @@
       "beginning": "The beginning of this memory",
       "loadOlder": "Load earlier"
     },
-    "seamLoadOlder": "Load earlier conversations",
     "seam": {
       "checkpoint": "Auto-archived · conversation continues",
       "newConversation": "{date} · New conversation",
-      "loadingOlder": "Loading earlier conversations…",
       "gapLabel": "Time since the previous conversation: {gap}",
       "gap": {
         "justNow": "just now",
@@ -265,9 +258,7 @@
     "rail": {
       "label": "Timeline of the messages on screen"
     },
-    "gesture": {
-      "openingTimeline": "Opening timeline…"
-    },
+    "gesture": {},
     "resume": {
       "banner": "Continuing the conversation from {date}"
     },
@@ -276,7 +267,6 @@
     },
     "search": {
       "title": "Search memory",
-      "trigger": "Search",
       "placeholder": "Search past conversations… #topic filters by strand",
       "hint": "Search focuses, summaries, tags and decisions. #topic filters by strand.",
       "searching": "Searching…",
@@ -359,6 +349,11 @@
     "running": {
       "title": "Writing it down…",
       "hint": "A reply is streaming. Open the conversation."
+    },
+    "filteredOut": {
+      "title": "Nothing here carries that strand",
+      "body": "The loaded window has no slice tagged with it — the strand may only occur further back.",
+      "loadOlder": "Load earlier"
     }
   },
   "settings": {

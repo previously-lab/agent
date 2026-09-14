@@ -36,8 +36,8 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 │   │       │   └── [live block] <Html> billboard (grows downward)
 │   │       └── StreamTimeIndicator (mobile floating "where am I in time" pill)
 │   └── [time-travel cover] RelativeTimeReadout overlay (never unmounts the field)
-├── [Fixed bottom bar]
-│   └── ChatInput (textarea + image attachments + submit/stop/demo)
+├── [Floating composer] — ComposerHost positions it; the column reserves its height
+│   └── ChatInput (two forms: full = textarea + toolbar, compact = one row)
 ```
 
 HistoricalChatView is gone (v0.10 final wave); the unified stream and the timeline view's right pane cover its roles.
@@ -120,7 +120,6 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport �
 | `markdown.tsx` / `code-block.tsx` | Markdown rendering (react-markdown + GFM + highlight), with custom per-element styling |
 | `message-actions.tsx` | Copy-to-clipboard and Regenerate, shown on hover |
 | `file-name-pill.tsx` | File path badge with code-vs-text icon detection |
-| `theme-toggle.tsx` / `locale-toggle.tsx` | Toolbar buttons (theme cycle, UI language) |
 
 ## Shared Primitives
 
@@ -138,8 +137,8 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport �
 - **Paging is asked for, never inferred.** There is deliberately no scroll-position trigger: an earlier version fired at `target <= LOAD_OLDER_PX` from an effect keyed on the mounted count, and the mounted count changes while the first measurement pass settles, so arriving alone paged history in. A slice read is a repository call in production.
 - **`<Html>` cuts React context.** Every billboard wraps its children in `NextIntlClientProvider`, and the field's own origin does too. This is required, not defensive — see the note in `frame-card.tsx`.
 - **Three-layer separation**: `ChatPage` owns orchestration, `UnifiedChatStream` is the adapter, `ConversationField` renders, and the item model (`src/lib/chat/stream-items.ts`) plus the block model (`src/lib/chat/field-blocks.ts`) are pure and unit-tested.
-- **Timeline as a focal wheel** (the slice/day/week rungs): a full-height column of the slice catalog whose centre row is enlarged; scrolling up goes into the past. A card's turns load when it mounts, through `getSliceContent` — there is NO client cache (`slice-cache.ts` was deleted); the server's Data Cache is what absorbs repeat reads.
-- **Mode switch = search param, context carried both ways**: the chat publishes the slice at the top of its viewport (`src/lib/chat/viewport-slice.ts`) so the timeline opens docked at what the reader was reading, and the timeline returns through `/?at=<sliceId>` — consumed once, then stripped so a refresh never re-jumps.
+- **The card rungs are a FIELD, not a wheel**: `CardField` lays the catalog out as rows in a virtualized R3F scene (oldest at the top, the present at the bottom), one row per unit at the current rung. A card's turns load when it mounts, through `getSliceContent` — there is NO client cache (`slice-cache.ts` was deleted); the server's Data Cache is what absorbs repeat reads.
+- **Navigation IS the rung, and a point is `?at=`**: `?z=<rung>` names the zoom (`src/lib/chat/deep-link.ts`); `?at=<sliceId>` addresses a POINT, consumed once and then stripped so a refresh never re-jumps. The old `?view=` mode switch and its `viewport-slice.ts` publication are gone — the rung replaced them.
 - **Navigation = time travel, landing IN the stream**: a slice jump overlays `RelativeTimeReadout` (the field beneath never unmounts), pages the target into the stream while the clock rolls, then lands on its seam. A miss (catalog exhausted) is an honest error toast, never a fake landing. Submitting a message cancels any in-flight transition and snaps back to the present.
 - **Shared slice-card language**: the travel cover and the empty briefing share one visual identity (`FrameCard`: ring, soft shadow, hairline separators, mono eyebrow row with the primary square marker).
 - **ChatInput owns its images** via `useImageAttachments`: paste, drag-drop and file picker funnel into the same state, previewed as removable thumbnails.

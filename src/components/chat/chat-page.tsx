@@ -973,6 +973,10 @@ function Inner({
 
   const onConversationRung = rung === "conversation";
 
+  /** How much room the floating composer needs at the foot of the column.
+   *  Seeded at 0 so the class default holds until the first measurement. */
+  const [composerClearance, setComposerClearance] = useState(0);
+
   // Tell the shell whether a reply is in flight, so a card rung can draw the
   // running-slice placeholder. This is the ONLY piece of turn state the shell
   // needs, which is why it is a one-boolean callback rather than a store: the
@@ -1020,6 +1024,11 @@ function Inner({
            insetting the pane instead is what produced a solid empty strip
            across the top of the window. ── */}
       <div
+        // `pb-36 sm:pb-32` is the SEED, not the rule — it covers the frame
+        // before the composer has measured itself, and the inline value below
+        // replaces it from then on. See `ComposerHost.onClearanceChange` for
+        // why the number cannot be known in advance.
+        style={composerClearance ? { paddingBottom: composerClearance } : undefined}
         className={`relative flex-1 overflow-hidden pt-24 pb-36 sm:pt-16 sm:pb-32 md:pt-20 transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
@@ -1135,13 +1144,14 @@ function Inner({
         </AnimatePresence>
       </div>
 
-      {/* ── Bottom input bar — the shell provides the flex column, so this is
-           a normal shrink-0 footer rather than a fixed overlay. The wrapper
-           tracks the same CSS column as the stream (same max-width scale and
-           padding), so the composer's edges sit on the content's edges at
-           every width. ── */}
+      {/* ── The composer. A FLOATING overlay, not a footer: it used to be a
+           `shrink-0` child that took its height out of the column, which made
+           it page furniture in an app that has none. `ComposerHost` positions
+           it and reports back how much room it needs, and the content column
+           above reserves exactly that — see `onClearanceChange`. ── */}
       <ComposerHost
         rung={rung}
+        onClearanceChange={setComposerClearance}
         composer={({ collapsed, expand }) => (
           <ChatInput
             collapsed={collapsed}

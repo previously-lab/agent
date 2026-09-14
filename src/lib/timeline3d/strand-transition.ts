@@ -147,7 +147,13 @@ export function bundleFor(
   fallback: readonly string[],
   limit: number,
 ): string[] {
-  if (activeIndex < 0 || anchors.length === 0) return [...fallback];
+  // The range check is on BOTH ends. `activeIndex` comes from
+  // `activeAnchorIndex`, which returns -1 or a valid index, so the upper bound
+  // is not reachable from today's only caller — but this is an exported pure
+  // function whose inputs are a list and an index, and an index is exactly the
+  // argument that shows up out of range the moment a second caller does its own
+  // arithmetic.
+  if (activeIndex < 0 || activeIndex >= anchors.length) return [...fallback];
   const seen = new Set<string>();
   const out: string[] = [];
   const push = (name: string): void => {
@@ -213,11 +219,14 @@ export function spreadSelection(
 
   const slots: (string | null)[] = new Array<string | null>(n).fill(null);
   for (let i = 0; i < k; i++) {
-    // Evenly across the ring. `(i * n) / k` is already an integer when k
-    // divides n; otherwise it rounds, and a rounding collision — reachable only
-    // with more picks than half the seats — steps to the next free seat rather
-    // than overwriting one.
     let seat = Math.round((i * n) / k) % n;
+    // THE COLLISION GUARD IS A SAFETY NET, NOT A CASE. It is provably
+    // unreachable with this spacing: for i < j < k <= n,
+    // `round(j·n/k) − round(i·n/k) ≥ round(n/k) ≥ 1`, so every computed seat is
+    // distinct (checked exhaustively for every n <= 400). It stays because the
+    // failure it guards against is not an overlap but a SILENT DROP — a
+    // colliding seat would overwrite a pick and the band would quietly lose it —
+    // and a loop that cannot run costs less than a formula change that can.
     while (slots[seat] !== null) seat = (seat + 1) % n;
     slots[seat] = chosen[i];
   }

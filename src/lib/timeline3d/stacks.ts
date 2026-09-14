@@ -14,11 +14,11 @@
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { CardVariant } from "@/lib/layout/tiers";
 import { hashString } from "./layout";
+import { normalizeStrandName } from "./ink";
 
 /** Zoom levels: 0 = slice rows · 1 = day stacks · 2 = week stacks. */
 export type StackLevel = 0 | 1 | 2;
 
-export const STACK_LEVELS: StackLevel[] = [0, 1, 2];
 /** Landing level (§R8): day stacks — overview with a readable top card. */
 export const DEFAULT_LEVEL: StackLevel = 1;
 
@@ -346,8 +346,18 @@ export function filterByStrand(
   strands: readonly string[],
 ): TimelineSliceEntry[] {
   if (strands.length === 0) return entries;
-  const wanted = new Set(strands);
-  return entries.filter((e) => e.strands.some((s) => wanted.has(s)));
+  // BOTH SIDES GO THROUGH `normalizeStrandName`, and that is not tidiness.
+  // `strands.json` keeps the FIRST spelling it ever saw for a strand — so the
+  // board bar offers "Fitness" — while a slice's own `tags` keep whatever the
+  // agent wrote that turn, which may be "fitness". Comparing raw strings makes
+  // the band and the field disagree about the same pick: the band (which does
+  // normalise, see `ink.ts`) lights the thread for both spellings, and this
+  // filter drops the slices carrying the other one. The strip then says "these
+  // slices are in that strand" while the pane says "not here".
+  const wanted = new Set(strands.map(normalizeStrandName));
+  return entries.filter((e) =>
+    e.strands.some((s) => wanted.has(normalizeStrandName(s))),
+  );
 }
 
 // ─── Shared animation easing ────────────────────────────────────────────────

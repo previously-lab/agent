@@ -5,21 +5,23 @@
  * views (v0.11 shell refactor). Composes the ThreadlineScene R3F DNA weave,
  * the AmbientScene 2D ruler (NOW dot; year ticks currently suppressed), the
  * RulerYearLabels DOM overlay (not rendered — year scale hidden by decision,
- * kept for the redo), the StrandFilter chip, edge fades, and the
- * strand-selection caption.
+ * kept for the redo), the ScrubLens, edge fades and the jump controls.
+ *
+ * IT READS. IT NO LONGER CARRIES CONTROLS. The strand filter chip and the
+ * strand-selection caption used to live here, and a 24-32px column whose whole
+ * job is to say where in time the reader is cannot also hold a popover that
+ * opens a 256px list — it hung its own label over the content. Both moved to
+ * the board bar (`shell/board-bar.tsx`). What is left on the strip is the
+ * scrubber, which IS a rail affordance.
  *
  * The band renders ONLY when WebGL is available; without it the caller should
- * omit the band and let the content take the full width. It is ONE fixed
- * width — a 32 px strip (`w-8`) — in both views and at every breakpoint, so
- * the same braid is what the user sees whether they are reading the chat or
- * the timeline; nothing about the band is a view-switch affordance any more.
- * The threadline reads its cylinder radius against that live width every
- * frame (see threadline-scene), so the geometry follows the real strip rather
- * than a constant.
- *
- * `showChrome` is the only thing the caller still varies: it gates the two
- * overlays that need horizontal room — the strand filter chip and the
- * selection caption. See `AxisBandProps`.
+ * omit the band and let the content take the full width. Its width comes from
+ * the layout tier — 24px on phone/tablet, 32px on laptop/wide (`tiers.ts`
+ * `railW`) — so the same braid is what the reader sees whether they are
+ * reading the chat or the timeline; nothing about the band is a view-switch
+ * affordance any more. The threadline reads its cylinder radius against that
+ * live width every frame (see threadline-scene), so the geometry follows the
+ * real strip rather than a constant.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
@@ -64,7 +66,7 @@ const ThreadlineScene = dynamic(() => import("./threadline-scene"), {
  * reads the same progressRef in its own rAF and therefore can never be one
  * frame ahead mid-scroll. React state only mounts/unmounts label nodes when
  * the labelled year SET changes. Labels hide when the band is too narrow
- * (`w-14` chat width) or when two would sit closer than MIN_LABEL_GAP_PX
+ * (`RULER_LABEL_MIN_WIDTH_PX`) or when two would sit closer than MIN_LABEL_GAP_PX
  * apart (the older one loses). Theme-aware via the text-foreground token.
  */
 function RulerYearLabels({
@@ -331,24 +333,89 @@ function ScrubLens({
     [seek],
   );
 
+  /**
+   * THE SAME THREE THINGS THE FIELD'S WRAPPER DOES, because this is the same
+   * control: the rail and the field are two views of one scroll position, and
+   * the field has taken Home/End/PageUp/PageDown/arrows since the ladder
+   * landed. The rail took none — it declared `role="slider"` and then could not
+   * be focused, announced no `aria-valuenow`, and answered no key. A slider a
+   * keyboard cannot reach is worse than a plain div: it promises an interaction
+   * that is not there.
+   *
+   * The steps are the field's own fractions, so the two agree about what "a
+   * page" is rather than each inventing one.
+   */
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = e.key === "PageUp" || e.key === "PageDown" ? 0.1 : 0.02;
+      const cur = feed.progress;
+      let next: number | null = null;
+      switch (e.key) {
+        case "ArrowUp":
+        case "PageUp":
+          next = cur - step;
+          break;
+        case "ArrowDown":
+        case "PageDown":
+          next = cur + step;
+          break;
+        case "Home":
+          next = 0;
+          break;
+        case "End":
+          next = 1;
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+      requestSeek(feed, next);
+    },
+    [feed],
+  );
+
+  /** The slider's value, written from the frame loop — `feed.progress` is a
+   *  mutable object read sixty times a second, so React never re-renders on it
+   *  and an `aria-valuenow` prop would be frozen at its first value. */
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    let last = -1;
+    const loop = () => {
+      raf = requestAnimationFrame(loop);
+      const el = surfaceRef.current;
+      if (!el) return;
+      const pct = Math.round(feed.progress * 100);
+      if (pct !== last) {
+        last = pct;
+        el.setAttribute("aria-valuenow", String(pct));
+      }
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [feed]);
+
   return (
     <>
       {/* The pointer surface. Above the two canvases (which set
           `pointer-events: none` inline) and below the strand-filter chip, which
           is later in the DOM and therefore wins where they overlap. */}
       <div
+        ref={surfaceRef}
         data-scrub-surface
         role="slider"
+        tabIndex={0}
         aria-label={t("scrubLabel")}
         aria-orientation="vertical"
         aria-valuemin={0}
         aria-valuemax={100}
+        onKeyDown={onKeyDown}
         // `cursor-pointer`, NOT a resize cursor. The rail is a scrubber, but
         // `ns-resize` says "drag to resize a panel" — it promises a kind of
         // direct manipulation this is not, and reads as a mistake on a surface
         // whose height does not change. The hand is the honest affordance: this
         // is a thing you press.
-        className="absolute inset-0 z-0 cursor-pointer touch-none"
+        className="absolute inset-0 z-0 cursor-pointer touch-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         onPointerDown={(e) => {
           if (e.pointerType === "mouse" && e.button !== 0) return;
           draggingRef.current = true;
