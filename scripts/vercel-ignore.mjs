@@ -64,6 +64,18 @@ async function decide() {
     return 1;
   }
 
+  // An empty list means the commit changed no files at all — an --allow-empty
+  // trigger commit, or a merge with no net diff. "Only data files changed" is
+  // vacuously true there (no file falls outside DATA_DIRS), but the intent
+  // behind such a push is the opposite: it exists to force a deploy. Same rule
+  // as everywhere else in this file — when in doubt, build. This case printed
+  // "only data files changed (0)", a skip that read as "nothing to see" while
+  // meaning "nothing changed".
+  if (files.length === 0) {
+    console.log("[vercel-ignore] empty file list — building (nothing to diff)");
+    return 1;
+  }
+
   const codeChanged = files.some(
     (f) => f && typeof f.filename === "string" && !DATA_DIRS.test(f.filename),
   );
