@@ -522,5 +522,15 @@
       "warning": "Warning",
       "caution": "Caution"
     }
+  },
+  "companion": {
+    "narrateAria": "Narrate this slice",
+    "dockLabel": "Narration",
+    "thinking": "Previously is remembering…",
+    "close": "Close",
+    "retry": "Tell it again",
+    "errorBudget": "That's a lot of story for one day — come back tomorrow.",
+    "errorUnavailable": "Narration isn't available on this setup yet.",
+    "errorGeneric": "Previously lost the thread — nothing came out."
   }
 }

@@ -522,5 +522,15 @@
       "warning": "注意",
       "caution": "警告"
     }
+  },
+  "companion": {
+    "narrateAria": "让 Previously 讲讲这片",
+    "dockLabel": "讲述",
+    "thinking": "Previously 正在回想…",
+    "close": "收起",
+    "retry": "再讲一次",
+    "errorBudget": "今天讲了很多了，明天再讲。",
+    "errorUnavailable": "这里暂时还不支持讲述。",
+    "errorGeneric": "刚才走了神，什么也没讲出来。"
   }
 }

@@ -44,11 +44,16 @@ import {
   parseRungParam,
 } from "@/lib/chat/deep-link";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
+import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { ChatPage } from "@/components/chat/chat-page";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
+import {
+  NarrationDock,
+  type NarrationTarget,
+} from "@/components/companion/narration-dock";
 
 interface AppShellProps {
   /** Server-preloaded user config passed through to ChatPage. */
@@ -146,6 +151,31 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
    *  placeholder from it. See `RunningCard`. */
   const [running, setRunning] = useState(false);
+
+  // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
+  // One narration at a time: each request bumps `gen`, and the dock aborts
+  // the previous reader when a new target lands. The target is owned HERE
+  // (not by the card field) so narration survives rung switches and view
+  // changes — the reader keeps browsing while Previously speaks.
+  const [narrateTarget, setNarrateTarget] = useState<NarrationTarget | null>(
+    null,
+  );
+  const narrateGenRef = useRef(0);
+  const startNarration = useCallback(
+    (sliceId: string, timeLabel?: string) => {
+      narrateGenRef.current += 1;
+      setNarrateTarget({
+        sliceId,
+        timeLabel,
+        gen: narrateGenRef.current,
+      });
+    },
+    [],
+  );
+  // The narrate entry hides on the bridge brain — /api/companion answers 501
+  // there. Tri-state: hidden until the probe resolves (never flash an entry
+  // a bridge client cannot serve); cloud and BYOK clients get it.
+  const bridgeBrain = useBridgeBrainActive();
 
   // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
   // What the chrome covers at the top edge and what the composer covers at the
@@ -403,6 +433,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       hasMore={hasMore}
                       onNeedOlder={loadOlder}
                       onOpenSlice={openSlice}
+                      onNarrate={bridgeBrain === false ? startNarration : undefined}
                       initialAtId={at ?? undefined}
                       strands={strands}
                       feed={feed}
@@ -441,6 +472,24 @@ export function AppShell({ initialConfig }: AppShellProps) {
             competing with the thing they controlled. The rail says where time
             IS; the right edge is where you act on it. */}
         <JumpControls feed={feed} />
+        {/* THE NARRATION DOCK — the mouth's floating panel. Mounted with the
+            shell (not the card field) so a narration keeps streaming through
+            rung switches and view changes. It floats above the room the
+            composer reserves at the foot AND above the two jump arrows that
+            hold the right edge below it (`bottom-32` + two buttons ≈ 208px),
+            so the dock never lands under another control's hit area. */}
+        <AnimatePresence>
+          {narrateTarget && (
+            <NarrationDock
+              key={narrateTarget.gen}
+              target={narrateTarget}
+              onClose={() => setNarrateTarget(null)}
+              onRetry={startNarration}
+              reducedMotion={reducedMotion}
+              bottom={Math.max(composerClearance + 12, 208)}
+            />
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

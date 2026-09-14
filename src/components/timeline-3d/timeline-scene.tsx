@@ -37,6 +37,9 @@ export interface TimelineSceneProps {
   onNeedOlder: () => Promise<void>;
   /** Navigate to the chat anchored at a slice. */
   onOpenSlice: (sliceId: string, start?: string) => void;
+  /** 「讲讲这片」 — narrate a slice via the mouth stream. Absent (bridge
+   *  brain, or the mode probe still out) → no narrate corner action. */
+  onNarrate?: (sliceId: string, timeLabel?: string) => void;
   /** Slice id from `?at=` — the list lands on it, flashed. */
   initialAtId?: string;
   /** The current picks, in order. Empty = 核心时间线 (no filter). */
@@ -150,6 +153,7 @@ export function TimelineScene({
   hasMore,
   onNeedOlder,
   onOpenSlice,
+  onNarrate,
   initialAtId,
   strands,
   feed,
@@ -193,6 +197,7 @@ export function TimelineScene({
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}
           onOpenSlice={onOpenSlice}
+          onNarrate={onNarrate}
           initialAtId={initialAtId}
           genKey={strands.join("|") || "core"}
           reducedMotion={reducedMotion}

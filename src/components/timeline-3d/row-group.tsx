@@ -28,6 +28,8 @@ import {
 } from "@/lib/timeline3d/stacks";
 import { worldScaleFor } from "@/lib/timeline3d/camera";
 import { FrameCardTexts, frameCardLabel, SliceCardFace } from "./frame-card";
+import { SliceNarrateButton, type SliceNarration } from "./slice-narrate-button";
+import { hhmm } from "./cards";
 import {
   DEAL_DURATION,
   DEAL_STAGGER,
@@ -133,6 +135,8 @@ export interface RowGroupProps {
   onActivate: (row: StackRow) => void;
   ariaLabel: string;
   texts: FrameCardTexts;
+  /** The 「讲讲这片」 corner action; absent (bridge brain) → not rendered. */
+  narration?: SliceNarration;
 }
 
 export function RowGroup({
@@ -147,6 +151,7 @@ export function RowGroup({
   onActivate,
   ariaLabel,
   texts,
+  narration,
 }: RowGroupProps) {
   const groupRef = useRef<THREE.Group>(null);
   const size = useThree((s) => s.size);
@@ -276,23 +281,42 @@ export function RowGroup({
         zIndexRange={[30, 21]}
         style={{ pointerEvents: "auto" }}
       >
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={ariaLabel}
-          className="tl-card-in group cursor-pointer select-none"
-          style={{ width: geo.cardW, height: geo.cardH }}
-          onClick={() => onActivate(row)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              onActivate(row);
-            }
-          }}
-          onPointerEnter={() => (rig.current.hoverKey = row.key)}
-          onPointerLeave={() => (rig.current.hoverKey = null)}
-        >
-          <SliceCardFace entry={row.top} geo={geo} flash={flash} texts={texts} />
+        <div className="group/card relative" style={{ width: geo.cardW, height: geo.cardH }}>
+          <div
+            role="button"
+            tabIndex={0}
+            aria-label={ariaLabel}
+            className="tl-card-in group cursor-pointer select-none"
+            style={{ width: geo.cardW, height: geo.cardH }}
+            onClick={() => onActivate(row)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onActivate(row);
+              }
+            }}
+            onPointerEnter={() => (rig.current.hoverKey = row.key)}
+            onPointerLeave={() => (rig.current.hoverKey = null)}
+          >
+            <SliceCardFace entry={row.top} geo={geo} flash={flash} texts={texts} />
+          </div>
+          {/* The narrate corner action — a SIBLING of the role="button" face,
+              never a child (nesting interactives is invalid, and the card's
+              Enter/Space handler would swallow the button's keystrokes). It
+              sits inside the face's own rect, so hovering it does not fire the
+              card's pointer-leave and lift the pile down/up. */}
+          {narration && (
+            <SliceNarrateButton
+              label={narration.label}
+              em={cardEmFor(geo)}
+              onSelect={() =>
+                narration.onSelect(
+                  row.top.id,
+                  `${row.top.date.slice(5).replace("-", "/")} ${hhmm(row.top.start)}`,
+                )
+              }
+            />
+          )}
         </div>
       </Html>
       {/* The pile's second card is REAL — its own slice's original card,

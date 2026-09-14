@@ -115,6 +115,7 @@ import {
 } from "@/lib/timeline3d/field-feed";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
+import type { SliceNarration } from "./slice-narrate-button";
 import { BoundaryRow } from "./boundary-row";
 import { OriginRow } from "./origin-row";
 import { ConversationUnit } from "./conversation-unit";
@@ -137,6 +138,9 @@ export interface CardFieldProps {
   /** L0 card click → dock the reading panel. `start` (the row top's ISO
    *  start) rides along so the chat jump never needs a catalog fetch. */
   onOpenSlice: (sliceId: string, start?: string) => void;
+  /** 「讲讲这片」 — ask the mouth to narrate a slice. Absent (bridge brain,
+   *  or the probe still out) → the card renders no narrate corner action. */
+  onNarrate?: SliceNarration["onSelect"];
   /** ?at= deep link: land at L0 on this slice, flashed. */
   initialAtId?: string;
   /** Identity of the current filter — a change re-plays the deal. */
@@ -330,6 +334,10 @@ interface FieldSceneProps {
   feed: FieldFeed;
   /** Whether this field owns the band. See `CardFieldProps.publishing`. */
   publishing: boolean;
+  /** The 「讲讲这片」 corner action for card faces; undefined → no button
+   *  (bridge brain). Threaded as data because next-intl context does not
+   *  cross the Canvas root into the drei Html portals. */
+  narration?: SliceNarration;
   /** The pane's floating insets — see `CardFieldProps`. The frame loop is the
    *  clamp every other one has to agree with, so it reads them here. */
   insetTop: number;
@@ -356,6 +364,7 @@ function FieldScene({
   onLeavingDone,
   feed,
   publishing,
+  narration,
   insetTop,
   insetBottom,
 }: FieldSceneProps) {
@@ -708,6 +717,7 @@ function FieldScene({
               onActivate={onActivate}
               ariaLabel={arias.get(row.key) ?? ""}
               texts={texts}
+              narration={narration}
             />
             {boundary && (
               <BoundaryRow
@@ -747,6 +757,7 @@ export function CardField({
   filteredOut,
   onNeedOlder,
   onOpenSlice,
+  onNarrate,
   initialAtId,
   genKey = "",
   reducedMotion,
@@ -758,6 +769,7 @@ export function CardField({
   insetBottom = 0,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
+  const tc = useTranslations("companion");
   const locale = useLocale();
   const texts = useMemo<FrameCardTexts>(
     () => ({
@@ -775,6 +787,16 @@ export function CardField({
       fr: (date: string) => t("card.fr", { date }),
     }),
     [t],
+  );
+  // The narrate corner action, as data — the label is translated HERE (the
+  // Canvas root cuts next-intl context off from the drei Html portals, the
+  // same reason `texts` is a prop). Undefined → no button on any card face.
+  const narration = useMemo<SliceNarration | undefined>(
+    () =>
+      onNarrate
+        ? { label: tc("narrateAria"), onSelect: onNarrate }
+        : undefined,
+    [onNarrate, tc],
   );
   // THE RUNG IS THE ZOOM; `level` is derived from it, never stored. `StackLevel`
   // is still what the GROUPING is keyed by (`groupForLevel`, `framePitchFor`,
@@ -1501,6 +1523,7 @@ export function CardField({
           onLeavingDone={onLeavingDone}
           feed={feed}
           publishing={publishing}
+          narration={narration}
           insetTop={insetTop}
           insetBottom={insetBottom}
         />
