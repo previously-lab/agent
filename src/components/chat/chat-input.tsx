@@ -23,8 +23,6 @@ interface ChatInputProps {
   onStop?: () => void;
   /** Demo-mode persona — forwarded to the MemoryDocs server action. */
   persona?: string;
-  /** Whether the selected model accepts image inputs (from /api/models). */
-  visionEnabled?: boolean;
   // Model selection — owned by ChatPage so the request body and the toolbar
   // stay in sync. ChatInput renders the control, ChatPage persists.
   // Thinking is always ON at low effort (pinned server-side in start-turn.ts);
@@ -57,7 +55,6 @@ export function ChatInput({
   isLoading,
   onStop,
   persona,
-  visionEnabled = false,
   currentModelId,
   onModelChange,
   collapsed = false,
@@ -86,7 +83,7 @@ export function ChatInput({
     if (!trimmed && images.length === 0) return;
     if (isLoading) return;
 
-    onSubmit(trimmed, visionEnabled ? images : []);
+    onSubmit(trimmed, images);
     setValue("");
     clearImages();
     if (textareaRef.current) {
@@ -188,10 +185,10 @@ export function ChatInput({
           ? "ring-2 ring-blue-500/50"
           : "ring-foreground/10 focus-within:ring-foreground/30"
       }`}
-      onPaste={visionEnabled ? handlePaste : undefined}
-      onDrop={visionEnabled ? onDrop : undefined}
-      onDragOver={visionEnabled ? onDragOver : undefined}
-      onDragLeave={visionEnabled ? onDragLeave : undefined}
+      onPaste={handlePaste}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
     >
       {/* Top light falloff — the same paper treatment as the timeline's
           frame card and the travel-clock card. */}
@@ -244,28 +241,33 @@ export function ChatInput({
       <div className="flex items-center justify-between gap-2 px-3 pb-2">
         {/* Left side */}
         <div className="flex min-w-0 items-center gap-2">
-          {/* Attach — gated on the selected model's vision capability. Present
-              in the full form only; see the `collapsed` note above. */}
+          {/* Attach — always available. Present in the full form only; see the
+              `collapsed` note above.
+
+              This used to be disabled unless the selected model reported image
+              support. That judgement was a hardcoded guess (providers do not
+              report modalities, and the live catalog falls back to a per-provider
+              default), so a model that gained vision was silently blocked from
+              using it. Attaching is now never prevented; if a model genuinely
+              cannot take the image, the provider says so and the turn surfaces
+              that error rather than us pre-empting it. */}
           <Tooltip>
             <TooltipTrigger
               render={
                 <button
                   type="button"
                   data-attach
-                  disabled={!visionEnabled}
                   onClick={() => fileInputRef.current?.click()}
                   // A tooltip is not an accessible name — it is a description
                   // that appears on hover, which a screen reader never does.
-                  aria-label={visionEnabled ? t("attach") : t("attachUnsupported")}
-                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+                  aria-label={t("attach")}
+                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                 </button>
               }
             />
-            <TooltipContent side="top">
-              {visionEnabled ? t("attach") : t("attachUnsupported")}
-            </TooltipContent>
+            <TooltipContent side="top">{t("attach")}</TooltipContent>
           </Tooltip>
           <input
             ref={fileInputRef}

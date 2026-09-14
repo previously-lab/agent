@@ -776,7 +776,7 @@ export async function webFetchExecute(
  *
  * `source` is either an http(s) URL or `attachment:N` referring to the Nth
  * image attachment extracted from the current turn. The actual vision call is a
- * one-shot infrastructure call to `deepseek-v4-flash-vision-exp` via
+ * one-shot infrastructure call to `describe-image.ts`'s `VISION_MODEL_ID` via
  * `describeImage`. If the vision model is unavailable the tool does not fail:
  * it returns a degraded metadata-only result (dimensions, format, size) that
  * says so explicitly.

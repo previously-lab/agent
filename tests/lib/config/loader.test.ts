@@ -39,8 +39,8 @@ describe("loadUserConfig cache + invalidation", () => {
     const second = await loadUserConfig();
 
     // Demo mode clamps the model to the locked value (see lib/demo/model-lock).
-    expect(first.model.provider).toBe("deepseek-v4-flash-vision-exp");
-    expect(second.model.provider).toBe("deepseek-v4-flash-vision-exp");
+    expect(first.model.provider).toBe("deepseek-flash");
+    expect(second.model.provider).toBe("deepseek-flash");
     // One read, not two.
     expect(mockReadDemo).toHaveBeenCalledTimes(1);
   });
@@ -76,7 +76,7 @@ describe("loadUserConfig cache + invalidation", () => {
     );
 
     const config = await loadUserConfig();
-    expect(config.model.provider).toBe("deepseek-v4-flash-vision-exp");
+    expect(config.model.provider).toBe("deepseek-flash");
     expect(config.model.thinking).toBe(true);
     expect(config.model.reasoningEffort).toBe("low");
   });

@@ -9,7 +9,6 @@ import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
-import { useAvailableModels } from "@/hooks/use-available-models";
 import { UnifiedChatStream } from "./unified-chat-stream";
 import type { ConversationFieldHandle } from "./conversation-field";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
@@ -21,13 +20,12 @@ import { EmptyBriefing } from "./empty-briefing";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   getArrivalState,
-  getBriefingIdentity,
   getEpisodicState,
   getSliceStart,
   type ArrivalState,
-  type BriefingIdentity,
   type SliceSummary,
 } from "@/lib/episodic/actions";
+import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
   type ArrivalDecision,
@@ -374,15 +372,9 @@ function Inner({
   // effort for every turn (see start-turn.ts).
   const locale = useLocale();
   const [selectedModel, setSelectedModel] = useState(
-    initialConfig?.model.provider ?? "deepseek-v4-flash",
+    initialConfig?.model.provider ?? "deepseek-flash",
   );
 
-  // The live catalog (shared fetch with ModelSelector) — gates the image
-  // attach control on the selected model's vision capability.
-  const availableModels = useAvailableModels();
-  const visionSupported =
-    availableModels.find((m) => m.id === selectedModel)?.supportsVision ??
-    false;
 
   const handleModelChange = useCallback((modelId: string) => {
     setSelectedModel(modelId);
@@ -402,10 +394,12 @@ function Inner({
   const [selectedSliceId, setSelectedSliceId] = useState<string | null>("now");
   // The briefing identity — the display name for the "PREVIOUSLY ON {name}"
   // eyebrow over the time-travel readout, plus the persona list in demo mode.
-  // Held HERE and passed down rather than resolved again inside EmptyBriefing:
-  // it was fetched twice per briefing render, and in GitHub mode each fetch can
-  // walk a month of day directories to find a previously.md.
-  const [identity, setIdentity] = useState<BriefingIdentity | null>(null);
+  // Resolved through the SHARED hook and passed down, so nothing below it looks
+  // the name up again — and so the header's brand shares this one request
+  // rather than making a second. The read walks the memory for the newest
+  // previously.md, which in GitHub mode is a network walk over a month of day
+  // directories; see `use-briefing-identity.ts`.
+  const identity = useBriefingIdentity();
   // The time-travel transition currently playing (if any) — an overlay that
   // covers the stream and doubles as the loading state while older pages are
   // paged in beneath it.
@@ -488,12 +482,6 @@ function Inner({
       .finally(() => {
         if (!cancelled) setEpisodicReady(true);
       });
-    // Resolve the display name for the "PREVIOUSLY ON {name}" eyebrow.
-    getBriefingIdentity(persona)
-      .then((id) => {
-        if (!cancelled) setIdentity(id);
-      })
-      .catch(() => {});
     return () => { cancelled = true; };
   }, [persona]);
 
@@ -1186,7 +1174,6 @@ function Inner({
             isLoading={isLoading}
             onStop={handleStop}
             persona={persona}
-            visionEnabled={visionSupported}
             currentModelId={selectedModel}
             onModelChange={handleModelChange}
           />

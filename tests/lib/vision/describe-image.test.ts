@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { DescribeImageResult } from "@/lib/vision/describe-image";
+import {
+  VISION_MODEL_ID,
+  type DescribeImageResult,
+} from "@/lib/vision/describe-image";
 import type { ImageMetadata } from "@/lib/vision/image-meta";
 
 const aiSdk = vi.hoisted(() => ({ generateText: vi.fn() }));
@@ -204,7 +207,9 @@ describe("describeImage", () => {
 
     assertOk(result);
     expect(result.degraded).toBe(true);
-    expect(result.reason).toContain("deepseek-v4-flash-vision-exp");
+    // Asserted against the exported constant, not a literal — a hardcoded id
+    // here is what let this assertion drift out of sync with the model list.
+    expect(result.reason).toContain(VISION_MODEL_ID);
     expect(result.description).toContain("DEGRADED");
     expect(result.metadata.width).toBe(320);
     expect(aiSdk.generateText).not.toHaveBeenCalled();

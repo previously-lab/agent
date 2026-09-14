@@ -2,9 +2,9 @@
  * One-shot vision-model call — turn an image into a text description.
  *
  * This is an INFRASTRUCTURE call: it always reaches the DeepSeek
- * OpenAI-compatible endpoint with the vision-capable
- * `deepseek-v4-flash-vision-exp` model and always needs a `DEEPSEEK_API_KEY`,
- * independent of the user's chosen chat model. When the key (or the model,
+ * OpenAI-compatible endpoint with the vision-capable `VISION_MODEL_ID` model
+ * (see below) and always needs a `DEEPSEEK_API_KEY`, independent of the
+ * user's chosen chat model. When the key (or the model,
  * or the call itself) is unavailable, the result degrades to a metadata-only
  * description — ok:true with degraded:true — instead of an error, so the
  * calling agent still gets dimensions, format, and byte size.
@@ -28,6 +28,16 @@ import {
 const IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024;
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * The DeepSeek model this route describes images with. It MUST stay a LIVE id:
+ * `getModel` resolves it from the curated registry, and a retired id both
+ * resolves (so the degraded check passes) and then fails at the API — the
+ * worst of both. Verified against `GET https://api.deepseek.com/models`
+ * (2026-09): the live ids are `deepseek-flash` and `deepseek-v4-pro`, and
+ * `deepseek-flash` is confirmed to accept image parts.
+ */
+export const VISION_MODEL_ID = "deepseek-flash";
 
 export type DescribeImageInput = {
   image:
@@ -289,9 +299,9 @@ export async function describeImage(
     return degraded("DEEPSEEK_API_KEY is not set");
   }
 
-  const visionModel = getModel("deepseek-v4-flash-vision-exp");
+  const visionModel = getModel(VISION_MODEL_ID);
   if (!visionModel) {
-    return degraded("vision model deepseek-v4-flash-vision-exp is not available");
+    return degraded(`vision model ${VISION_MODEL_ID} is not available`);
   }
 
   try {

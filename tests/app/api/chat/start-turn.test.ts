@@ -225,7 +225,7 @@ describe("startTurn thinking/effort pinning", () => {
     // A stored config that DISAGREES with the pin — must be ignored.
     loader.loadUserConfig.mockResolvedValue({
       model: {
-        provider: "deepseek-v4-flash",
+        provider: "deepseek-flash",
         thinking: false,
         reasoningEffort: "high",
       },
@@ -235,12 +235,12 @@ describe("startTurn thinking/effort pinning", () => {
   it("pins thinking ON and effort LOW, ignoring body + config", async () => {
     await startTurn({
       messages,
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       thinking: false, // client tries to disable — ignored
       effort: "high", // client tries to crank — ignored
     });
     const input = turnInput();
-    expect(input.model).toBe("deepseek-v4-flash");
+    expect(input.model).toBe("deepseek-flash");
     expect(input.thinking).toBe(true);
     expect(input.reasoningEffort).toBe("low");
   });
@@ -264,7 +264,7 @@ describe("startTurn thinking/effort pinning", () => {
 
   it("demo lock wins over the pin when active", async () => {
     demoLock.demoModelLock.mockReturnValue({
-      model: "deepseek-v4-flash-vision-exp",
+      model: "deepseek-flash",
       thinking: true,
       effort: "medium",
     });
@@ -274,7 +274,7 @@ describe("startTurn thinking/effort pinning", () => {
       effort: "high",
     });
     const input = turnInput();
-    expect(input.model).toBe("deepseek-v4-flash-vision-exp");
+    expect(input.model).toBe("deepseek-flash");
     expect(input.thinking).toBe(true);
     expect(input.reasoningEffort).toBe("medium");
   });
@@ -291,7 +291,7 @@ describe("startTurn image attachment handling", () => {
     dataSource.resolveDataSource.mockReturnValue("local");
     demoLock.demoModelLock.mockReturnValue(null);
     loader.loadUserConfig.mockResolvedValue({
-      model: { provider: "deepseek-v4-flash" },
+      model: { provider: "deepseek-flash" },
     });
   });
 
@@ -316,7 +316,9 @@ describe("startTurn image attachment handling", () => {
       } as UIMessage,
     ];
 
-    await startTurn({ messages: msgs, model: "deepseek-v4-flash" });
+    // deepseek-v4-pro is the curated TEXT-ONLY model (verified: it reports
+    // "[Unsupported Image]"), so this is the path that must extract.
+    await startTurn({ messages: msgs, model: "deepseek-v4-pro" });
     const input = turnInput();
     expect(input.imageAttachments).toEqual([imageUrl]);
     expect(Array.isArray(input.modelMessages)).toBe(true);
@@ -335,7 +337,7 @@ describe("startTurn image attachment handling", () => {
       } as UIMessage,
     ];
 
-    await startTurn({ messages: msgs, model: "deepseek-v4-flash-vision-exp" });
+    await startTurn({ messages: msgs, model: "deepseek-flash" });
     const input = turnInput();
     expect(input.imageAttachments).toEqual([]);
   });

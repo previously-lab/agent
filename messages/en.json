@@ -23,6 +23,8 @@
     "settings": "Settings",
     "settingsBusy": "A reply is in progress — settings unlock when it finishes",
     "overflow": "More",
+    "brand": "Previously on",
+    "brandYou": "You",
     "themeLabel": "Theme",
     "languageLabel": "Language",
     "english": "English",
@@ -63,7 +65,6 @@
     "input": {
       "placeholder": "Send a message...",
       "attach": "Attach files",
-      "attachUnsupported": "The selected model doesn't support images",
       "stopTooltip": "Stop generation",
       "sendTooltip": "Send message",
       "modelTooltip": "Switch AI model",

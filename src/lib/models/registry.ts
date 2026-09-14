@@ -248,21 +248,20 @@ export interface ModelConfig {
  */
 export const ALL_MODELS: ModelConfig[] = [
   // ── DeepSeek ────────────────────────────────────────────────────────────
+  // `vision` is NOT guessable here: DeepSeek's /models reports only
+  // {id, object, owned_by}, and a wrong `true` fails SILENTLY — the API
+  // substitutes the literal text "[Unsupported Image]" and returns 200, so the
+  // model answers anyway and the reader never learns the image was dropped.
+  // Both live ids below were therefore verified by hand (2026-09, sending a
+  // solid-colour PNG and checking the answer tracks the colour):
+  //   deepseek-flash   -> answers "Green"/"Blue"    -> real vision
+  //   deepseek-v4-pro  -> "[Unsupported Image]"     -> text-only
+  // Re-verify with a colour probe before changing either. A stale entry is not
+  // harmless: a retired id resolves from this list, passes the availability
+  // check, and then fails at the API.
   {
-    id: "deepseek-v4-flash",
-    name: "DeepSeek V4 Flash",
-    provider: "deepseek",
-    providerName: "DeepSeek",
-    sdk: "deepseek",
-    envKey: "DEEPSEEK_API_KEY",
-    baseURL: "https://api.deepseek.com",
-    capabilities: { thinking: true, vision: false, maxTokens: 393216 },
-    defaultThinking: true,
-    defaultEffort: "low",
-  },
-  {
-    id: "deepseek-v4-flash-vision-exp",
-    name: "DeepSeek V4 Flash Vision (Exp)",
+    id: "deepseek-flash",
+    name: "DeepSeek Flash",
     provider: "deepseek",
     providerName: "DeepSeek",
     sdk: "deepseek",
@@ -345,7 +344,9 @@ export function getModel(id: string): ModelConfig | undefined {
  * preference may predate V4 — map the legacy OpenAI-style names forward.
  */
 const MODEL_ALIASES: Record<string, string> = {
-  "deepseek-chat": "deepseek-v4-flash",
+  // Must resolve to an id that is BOTH live (so it survives the catalog) and
+  // curated (so getModel finds it). `deepseek-v4-flash` is neither any more.
+  "deepseek-chat": "deepseek-flash",
   "deepseek-reasoner": "deepseek-v4-pro",
 };
 
