@@ -51,3 +51,23 @@ export const ISLAND_BAR = `${ISLAND} flex h-9 items-center`;
 /** The size of a control INSIDE a bar. One number, so a bar's height stays
  *  `ISLAND_BAR`'s minus its padding no matter what is put in it. */
 export const BAR_CONTROL = "size-7";
+
+/**
+ * A status PILL at the end of an island bar — a badge that carries its own
+ * filled shape and its own internal padding.
+ *
+ * It pulls itself back toward the bar's edge, and the reason is optical rather
+ * than numeric. A bar pads for a WORD, so the same inset that looks right
+ * beside text looks like a gap beside a filled pill; the pill has to sit
+ * closer for the two to read as one object. The correction lives HERE rather
+ * than as a smaller `pr` on the bar because A BADGE IS CONDITIONAL — the brand
+ * island renders one in demo mode and another that hides itself at runtime
+ * after a fetch — and a bar cannot pad itself differently for a child that
+ * never renders. With no badge, the bar's own even padding is what shows,
+ * which is the case that was wrong: the wordmark sat 6px from the edge on one
+ * side and 12px on the other.
+ *
+ * It composes with `BAR_CONTROL`'s height but not with its box: a badge is
+ * sized by its text, not by the bar's control grid.
+ */
+export const ISLAND_BADGE = "-mr-1.5";

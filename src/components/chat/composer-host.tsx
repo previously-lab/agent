@@ -9,10 +9,15 @@
  * the page furniture rather than one of the app's floating controls, and the
  * app has no page furniture: everything else is an island over an infinite
  * canvas. So at every rung it is now the same thing — a floating card over the
- * content — and the CONTENT reserves the room for it (`chat-page.tsx` pads the
- * column top and bottom by the measured chrome height), which is the one
+ * content — and the CONTENT reserves the room for it, which is the one
  * arrangement that keeps the composer off the text without making it part of
  * the layout.
+ *
+ * THE ROOM COMES OFF THE CONTENT'S EXTENT, NOT OFF THE COLUMN. The column used
+ * to carry this number as a padding, which looked like the same thing and was
+ * not: the column is `overflow-hidden`, so a padding on it CROPS the content at
+ * that edge. The number goes up to the shell instead and comes back down to
+ * both fields as an inset on their camera range — see `minOffsetFor`.
  *
  * The compact form is the card rung's default and never the conversation's.
  *
@@ -34,7 +39,7 @@
  * card rung returns to the conversation first, because that is where the reply
  * is going to be written and watching it arrive is the point of sending.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FieldRung } from "@/lib/timeline3d/units";
 
 /** What the composer is told about the form it is being asked to draw. */
@@ -96,7 +101,14 @@ export function ComposerHost({
 
   // Report the clearance whenever the composer changes size — a draft growing
   // the textarea, an attachment arriving, the two forms swapping.
-  useEffect(() => {
+  //
+  // A LAYOUT EFFECT, because it is the whole reason the first frame is right.
+  // There used to be a `pb-36` seed on the column to cover the gap between
+  // mount and measurement; with the number feeding a camera range instead,
+  // there is nothing for a CSS seed to hold in place, and a passive effect
+  // would let the live edge paint once underneath the composer before moving.
+  // `useEffect` → `useLayoutEffect` is exactly that one frame.
+  useLayoutEffect(() => {
     const el = hostRef.current;
     if (!el || !onClearanceChange) return;
     const report = (): void => {

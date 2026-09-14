@@ -62,6 +62,59 @@ export function originMinOffset(hasOrigin: boolean): number {
   return hasOrigin ? -FIELD_ORIGIN_PX : 0;
 }
 
+/*
+ * ─── THE RANGE, WITH THE FLOATING CHROME TAKEN OFF IT ──────────────────────
+ *
+ * THE ROOM THE CHROME NEEDS COMES OFF THE CONTENT, NOT THE CONTAINER, and the
+ * two are not the same thing here.
+ *
+ * A `padding` on the field's CONTAINER is a reserve made of the container's own
+ * box: it shrinks the viewport, and a viewport that is also `overflow-hidden`
+ * then CROPS the content at that edge. The reader cannot scroll out of it —
+ * the cropped pixels are outside the field, not merely covered — so the
+ * controls end up sitting on a hard cut instead of on live content.
+ *
+ * Taking it off the content's EXTENT instead is what a scroll container's own
+ * padding does, and it is what this pair of numbers is. The field still fills
+ * its pane; only the two ends of the camera's travel move in. Content passes
+ * UNDER the controls while the reader moves (which is the point of a floating
+ * control) and simply comes to REST clear of them.
+ *
+ * BOTH NUMBERS ARE MEASURED, never constants. The top is `useChromeInset`
+ * (the chrome wraps to a second row on a phone, and grows a hint bubble on a
+ * first visit); the foot is `ComposerHost` (the composer grows with what is
+ * typed into it and with what is attached to it). A constant here is a guess
+ * that goes wrong the first time a control gains a row.
+ *
+ * ONE PLACE, both fields: a range whose ends disagree with the clamp is the
+ * failure `field-feed.ts` documents at length, and the two fields share these
+ * so they cannot drift.
+ */
+
+/** The range's LOWER bound — one head above the oldest unit, plus the room the
+ *  top chrome needs, so the head itself can be brought out from under it. */
+export function minOffsetFor(hasOrigin: boolean, insetTop: number): number {
+  return originMinOffset(hasOrigin) - insetTop;
+}
+
+/**
+ * The range's UPPER bound — the newest unit's bottom brought to rest
+ * `insetBottom` above the pane's foot, which is where the composer floats.
+ *
+ * The `minOffset` floor is not decoration: a conversation SHORTER than its
+ * pane has no room to give, and the honest answer there is to pin its head
+ * below the chrome rather than to let the fill fight the reserve. It is the
+ * same floor `originMinOffset` has always implied for a short field.
+ */
+export function maxOffsetFor(
+  totalPx: number,
+  viewportH: number,
+  minOffset: number,
+  insetBottom: number,
+): number {
+  return Math.max(minOffset, totalPx - viewportH + insetBottom);
+}
+
 /** The band index `armedGate` returns for the origin region. */
 export const ORIGIN_REGION = -1;
 

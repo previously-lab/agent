@@ -76,6 +76,17 @@ interface ChatPageProps {
    *  slice that has not closed, so the shell draws the abstract placeholder
    *  instead — and only the chat half knows a reply is in flight. */
   onRunningChange?: (running: boolean) => void;
+  /** The floating chrome's height at the pane's top edge, px — measured once
+   *  by the shell (`use-chrome-inset`) and shared with the card field. */
+  insetTop?: number;
+  /** The floating composer's height at the pane's foot, px — BUBBLED UP rather
+   *  than held here, because the card field floats over the same foot and the
+   *  shell is the only place both fields can read one number from. */
+  insetBottom?: number;
+  /** Report that measurement upward. The composer is the only thing that knows
+   *  how tall it is (a growing textarea, an attachment row), so it is measured
+   *  where it is drawn and the number is owned where both fields can see it. */
+  onComposerClearanceChange?: (px: number) => void;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -94,6 +105,9 @@ export function ChatPage({
   feed,
   publishing,
   onRunningChange,
+  insetTop,
+  insetBottom,
+  onComposerClearanceChange,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -125,6 +139,9 @@ export function ChatPage({
       feed={feed}
       publishing={publishing}
       onRunningChange={onRunningChange}
+      insetTop={insetTop}
+      insetBottom={insetBottom}
+      onComposerClearanceChange={onComposerClearanceChange}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -315,6 +332,9 @@ function Inner({
   feed,
   publishing,
   onRunningChange,
+  insetTop,
+  insetBottom,
+  onComposerClearanceChange,
   persona,
   shouldResume,
   initialMessages,
@@ -333,6 +353,11 @@ function Inner({
   publishing?: boolean;
   /** Whether a turn is streaming — see ChatPageProps. */
   onRunningChange?: (running: boolean) => void;
+  /** The pane's two floating insets — see `ChatPageProps`. */
+  insetTop?: number;
+  insetBottom?: number;
+  /** Report the composer's own measurement upward — see `ChatPageProps`. */
+  onComposerClearanceChange?: (px: number) => void;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -973,10 +998,6 @@ function Inner({
 
   const onConversationRung = rung === "conversation";
 
-  /** How much room the floating composer needs at the foot of the column.
-   *  Seeded at 0 so the class default holds until the first measurement. */
-  const [composerClearance, setComposerClearance] = useState(0);
-
   // Tell the shell whether a reply is in flight, so a card rung can draw the
   // running-slice placeholder. This is the ONLY piece of turn state the shell
   // needs, which is why it is a one-boolean callback rather than a store: the
@@ -1010,26 +1031,18 @@ function Inner({
            this component just fills the right-hand column. The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
            an EMPTY memory falls back to the full-screen empty briefing.
-           THE COLUMN RESERVES BOTH SAFE AREAS. The chrome floats over an
-           infinite canvas, so nothing here is a bar — but content that runs
-           under the controls at REST is content the reader cannot read, so the
-           column keeps clear of them: the top by the chrome's measured height
-           (two rows at phone width, one from `sm` up) and the bottom by the
-           floating composer. Content still passes under both while scrolling,
-           which is the point of a floating control; it just does not come to
-           rest there.
 
-           The inset is on the COLUMN, not on the pane. The R3F field fills the
-           pane and the cards run under the chrome (see `timeline-scene.tsx`) —
-           insetting the pane instead is what produced a solid empty strip
-           across the top of the window. ── */}
+           THE COLUMN RESERVES NOTHING, and that is the point. It used to carry
+           `pt-24 pb-36` as the chrome's and the composer's keep-out, which read
+           as a reserve and behaved as a CROP: this box is `overflow-hidden`, so
+           a padding here shrinks the viewport and cuts the content off at that
+           edge — pixels the reader can never scroll to, because they are
+           outside the field rather than merely behind a control. The room now
+           comes off the CONTENT's own extent instead (the field's range, the
+           scroller's padding below), so the field fills the pane and content
+           passes under the floating chrome on its way past it. ── */}
       <div
-        // `pb-36 sm:pb-32` is the SEED, not the rule — it covers the frame
-        // before the composer has measured itself, and the inline value below
-        // replaces it from then on. See `ComposerHost.onClearanceChange` for
-        // why the number cannot be known in advance.
-        style={composerClearance ? { paddingBottom: composerClearance } : undefined}
-        className={`relative flex-1 overflow-hidden pt-24 pb-36 sm:pt-16 sm:pb-32 md:pt-20 transition-opacity duration-300 ${
+        className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         // Dimmed-and-mounted, not unmounted: this subtree holds the field's
@@ -1040,7 +1053,16 @@ function Inner({
         inert={!onConversationRung || undefined}
       >
         {emptyMemory ? (
-          <div className="h-full overflow-y-auto pb-24">
+          // THIS ONE IS A REAL SCROLLER, and there the padding IS the content
+          // inset: a scroll container's scrollport is its padding box, so
+          // content scrolls INTO the padding and is visible there. It is the
+          // same reserve the field makes with its range — expressed the way a
+          // DOM scroller expresses it, which is the one shape this column could
+          // not use.
+          <div
+            style={{ paddingTop: insetTop, paddingBottom: insetBottom }}
+            className="h-full overflow-y-auto"
+          >
             <EmptyBriefing
               persona={persona}
               identity={identity}
@@ -1063,6 +1085,8 @@ function Inner({
             feed={feed}
             publishing={publishing}
             fieldApiRef={fieldApiRef}
+            insetTop={insetTop}
+            insetBottom={insetBottom}
             briefing={
               showBriefingCard
                 ? {
@@ -1147,11 +1171,13 @@ function Inner({
       {/* ── The composer. A FLOATING overlay, not a footer: it used to be a
            `shrink-0` child that took its height out of the column, which made
            it page furniture in an app that has none. `ComposerHost` positions
-           it and reports back how much room it needs, and the content column
-           above reserves exactly that — see `onClearanceChange`. ── */}
+           it and reports how much room it needs, and that number travels up to
+           the shell — the card field floats over the same foot, so the owner
+           of the number has to be above both fields. See
+           `ChatPageProps.onComposerClearanceChange`. ── */}
       <ComposerHost
         rung={rung}
-        onClearanceChange={setComposerClearance}
+        onClearanceChange={onComposerClearanceChange}
         composer={({ collapsed, expand }) => (
           <ChatInput
             collapsed={collapsed}

@@ -123,7 +123,16 @@ export function LensSwitcher({
       {/* The hint hangs BELOW the bar. It used to sit beside the pill and
           stack above it under `sm`, which was right for a control anchored to
           the bottom-right corner; a control on the top edge has room beneath
-          it at every width, so the two layouts collapse into one. */}
+          it at every width, so the two layouts collapse into one.
+
+          EXCEPT AT PHONE WIDTH, where the room beneath the board bar is the
+          SETTINGS ISLAND. The header wraps at that width, so the island's own
+          row sits directly under this bar — `mt-2` put the bubble's bottom
+          corner on top of it, two controls overlapping. `mt-16` drops the
+          bubble clear of that whole row (`p-2` + `h-9` + `gap-2` + `h-9` +
+          `p-2` = 96px of chrome, measured from the bar's own bottom edge). It
+          reads as a tip under the toolbar, which is what it is; from `sm` up
+          the islands share one line and the bubble hangs where it always did. */}
       <AnimatePresence>
         {hintOpen && (
           <motion.div
@@ -133,7 +142,7 @@ export function LensSwitcher({
             transition={
               reducedMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }
             }
-            className={`${ISLAND} pointer-events-none absolute top-full left-1/2 mt-2 w-max max-w-[70vw] -translate-x-1/2 px-3 py-1.5 text-center text-[11px] text-muted-foreground`}
+            className={`${ISLAND} pointer-events-none absolute top-full left-1/2 mt-16 w-max max-w-[70vw] -translate-x-1/2 px-3 py-1.5 text-center text-[11px] text-muted-foreground sm:mt-2`}
           >
             {coarse ? t("hintTouch") : t("hintDesktop")}
           </motion.div>

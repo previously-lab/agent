@@ -57,6 +57,13 @@ export interface TimelineSceneProps {
    *  catalog only knows CLOSED slices — so it draws the abstract placeholder
    *  instead. See `RunningCard`. */
   running: boolean;
+  /** The pane's two floating insets, px, owned by the shell — the chrome at
+   *  the top edge and the composer at the foot. They come off the card field's
+   *  RANGE, not off this box: the field still fills the pane (see the note on
+   *  the wrapper below), and only the camera's two ends move in, so the cards
+   *  still travel under the controls and simply stop short of resting there. */
+  insetTop?: number;
+  insetBottom?: number;
 }
 
 /**
@@ -151,6 +158,8 @@ export function TimelineScene({
   onRungChange,
   reducedMotion,
   running,
+  insetTop,
+  insetBottom,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
 
@@ -166,7 +175,17 @@ export function TimelineScene({
           this design does not have. The controls float, so nothing needs to
           reserve room for them — the cards pass underneath, and the pills stay
           legible because that is what their own frosted surface is FOR.
-          The field's height is the pane's height, full stop. */}
+          The field's height is the pane's height, full stop.
+
+          THE RESERVE IS OFF THE CONTENT, NOT OFF THIS BOX, and the two are
+          worth telling apart because they look identical in code. Insetting
+          THIS element is what produced the strip, and for a second reason as
+          well: this box is `overflow-hidden`, so an inset here would CROP the
+          cards at that line rather than let them pass under the controls.
+          `insetTop`/`insetBottom` go down to the FIELD instead, where they move
+          the camera's two ends — so the field still fills the pane, the cards
+          still disappear behind the chrome on their way past, and the ends of
+          the list come to rest clear of it. */}
       <div className="relative h-full w-full">
         <CardField
           entries={filtered}
@@ -181,6 +200,8 @@ export function TimelineScene({
           publishing={publishing}
           rung={rung}
           onRungChange={onRungChange}
+          insetTop={insetTop}
+          insetBottom={insetBottom}
         />
         {/* The present, at the bottom, where the present is. */}
         <BottomFade />

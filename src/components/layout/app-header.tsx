@@ -39,9 +39,20 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
     // gone, all three islands share one line, and `justify-between` puts the
     // brand at the start and the settings at the end with the board bar
     // between them.
-    <header className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap sm:p-3 md:p-4">
-      {/* LEFT — brand mark + status badges (status, not actions). */}
-      <div className={`pointer-events-auto ${ISLAND_BAR} gap-1.5 pr-1.5 pl-3`}>
+    // `data-app-header` is the stable hook the chrome's height is measured
+    // through — see `use-chrome-inset.ts`, which reads this element and the
+    // board bar (a SHELL child, so no single owner holds both) to learn how
+    // far down the pane the floating chrome actually reaches.
+    <header
+      data-app-header
+      className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap sm:p-3 md:p-4"
+    >
+      {/* LEFT — brand mark + status badges (status, not actions).
+          EVEN PADDING, and the badges correct it themselves. This used to be
+          `pr-1.5 pl-3`, which compensated for a pill's own filled edge — and
+          was wrong the moment no badge rendered, leaving the wordmark 6px from
+          one edge and 12 from the other. See `ISLAND_BADGE`. */}
+      <div className={`pointer-events-auto ${ISLAND_BAR} gap-1.5 px-3`}>
         <Link
           href="/"
           className="text-sm font-semibold tracking-tight hover:text-foreground/80 transition-colors"

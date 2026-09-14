@@ -36,7 +36,7 @@ ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 │   │       │   └── [live block] <Html> billboard (grows downward)
 │   │       └── StreamTimeIndicator (mobile floating "where am I in time" pill)
 │   └── [time-travel cover] RelativeTimeReadout overlay (never unmounts the field)
-├── [Floating composer] — ComposerHost positions it; the column reserves its height
+├── [Floating composer] — ComposerHost positions it; it reports its height up to the SHELL, which hands it back to BOTH fields as an inset on their camera range (the card field floats over the same foot). The pane reserves nothing: content runs under the chrome and comes to rest clear of it.
 │   └── ChatInput (two forms: full = textarea + toolbar, compact = one row)
 ```
 

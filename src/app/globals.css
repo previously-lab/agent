@@ -561,3 +561,38 @@
     opacity: 0.45;
   }
 }
+
+/* ── A canvas renders; it never receives ─────────────────────────────────
+   THE FIELD CANVASES ARE TAKEN OUT OF HIT-TESTING, and this is not a
+   nicety — it is the fix for the messages that could not be clicked.
+
+   Everything interactive in this app is a DOM island floating OVER a canvas
+   (`<Html>` billboards: the turns, the gates, the card faces). drei gives
+   every one of those containers a computed inline `z-index`
+   (`web/Html.js` → `objectZIndex`), and in this field that computation is
+   meaningless: it projects the `<Html>`'s own LOCAL position as if it were a
+   world position, so the number is arbitrary. Measured on a live field:
+   -68, -4, +2.
+
+   A NEGATIVE z-index on a positioned element paints BELOW an in-flow,
+   non-positioned block box — and the `<canvas>` is exactly that. So any
+   billboard whose z came out negative was drawn UNDER the canvas, and the
+   canvas (`pointer-events` defaults to auto) then swallowed every pointer
+   event over it: no clicks, no text selection, nothing. Which billboards
+   were dead depended on a projected number, so the failure moved around and
+   read as intermittent.
+
+   This rule removes the whole class at the root rather than chasing the
+   z-index. It is SAFE because nothing here raycasts: every `onClick` in the
+   app is on a DOM node, and the fields' own wheel/drag listeners are on the
+   wrapper ELEMENT, which is an ancestor — events still reach it.
+
+   IT MUST TARGET THE `canvas` AND NOT THE CONTAINER. drei appends its
+   `<Html>` containers INSIDE the R3F container div, and `pointer-events` is
+   inherited — putting this on the container would take every island down
+   with it. And if 3D picking is ever wanted, it needs a different answer:
+   this rule says a canvas is a surface, not a control. */
+[data-conversation-field] canvas,
+[data-card-field] canvas {
+  pointer-events: none;
+}

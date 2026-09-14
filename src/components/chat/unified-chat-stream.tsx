@@ -57,6 +57,11 @@ export interface UnifiedChatStreamProps {
   publishing?: boolean;
   /** Filled with the field's imperative handle, for the page's jumps. */
   fieldApiRef?: MutableRefObject<ConversationFieldHandle | null>;
+  /** The floating chrome's height at the pane's top edge, px — carried
+   *  straight through to the field's range. See `use-chrome-inset`. */
+  insetTop?: number;
+  /** The floating composer's height at the pane's foot, px. */
+  insetBottom?: number;
 }
 
 export function UnifiedChatStream({
@@ -70,6 +75,8 @@ export function UnifiedChatStream({
   feed,
   publishing,
   fieldApiRef,
+  insetTop,
+  insetBottom,
 }: UnifiedChatStreamProps) {
   return (
     <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">
@@ -84,6 +91,8 @@ export function UnifiedChatStream({
         feed={feed}
         publishing={publishing}
         apiRef={fieldApiRef}
+        insetTop={insetTop}
+        insetBottom={insetBottom}
       />
     </div>
   );

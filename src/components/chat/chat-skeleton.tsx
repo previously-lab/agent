@@ -27,6 +27,7 @@
  */
 
 import { useTier } from "@/hooks/use-tier";
+import { useChromeInset } from "@/hooks/use-chrome-inset";
 
 const PULSE = "animate-pulse motion-reduce:animate-none bg-foreground/8";
 
@@ -285,15 +286,26 @@ export function ChatInputSkeleton() {
  * move a pixel. The two wrappers below are copied from `chat-page.tsx` and
  * must stay identical to them; they are the reason this is a layout rather
  * than a picture of one.
+ *
+ * The TOP ENTRY IS ITS OWN, though, because at this point in the mount there is
+ * no composer to measure and no field to carry an inset: the chrome's height is
+ * measured here directly and reserved the way a scroller reserves it, which is
+ * also how the real tree's empty-briefing branch does it. The BOTTOM needs
+ * nothing — the input skeleton is in FLOW here (in the real tree the composer
+ * floats), so the stream area already ends where it begins.
  */
 export function ChatPageSkeleton({
   tail = "rounds",
 }: {
   tail?: ChatSkeletonTail;
 }) {
+  const chromeInset = useChromeInset();
   return (
     <>
-      <div className="relative flex-1 overflow-hidden">
+      <div
+        style={{ paddingTop: chromeInset }}
+        className="relative flex-1 overflow-hidden"
+      >
         <ChatStreamSkeleton tail={tail} />
       </div>
       <div className="shrink-0 z-10 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]">

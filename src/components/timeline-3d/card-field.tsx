@@ -102,7 +102,8 @@ import { useTier } from "@/hooks/use-tier";
 import {
   armedGate,
   gateBands,
-  originMinOffset,
+  maxOffsetFor,
+  minOffsetFor,
   ORIGIN_REGION,
   type GateBand,
   type GateSignal,
@@ -153,6 +154,13 @@ export interface CardFieldProps {
    *  runs through the same transition path and is echoed via onRungChange. */
   rung?: FieldRung;
   onRungChange?: (rung: FieldRung) => void;
+  /** The pane's two floating insets, px, owned by the shell: the chrome at the
+   *  top edge and the composer at the foot. They come off the field's RANGE
+   *  (`minOffsetFor`/`maxOffsetFor`), never off its box — the field fills the
+   *  pane and its cards pass UNDER the controls, coming to rest clear of them.
+   *  See `timeline-scene.tsx` for why the box is the wrong lever. */
+  insetTop?: number;
+  insetBottom?: number;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -188,9 +196,18 @@ function centeredScrollForAnchor(
   anchorIdx: number,
   fieldH: number,
   minOffset: number,
+  insetBottom: number,
 ): number {
   const { tops, faceHeights } = layout;
-  const max = Math.max(0, (tops[tops.length - 1] ?? 0) - fieldH);
+  // The same upper bound every other clamp in this file uses, insets included
+  // — a landing aimed at a ceiling the frame loop does not share is a landing
+  // that drifts the moment the reader touches anything. See `maxOffsetFor`.
+  const max = maxOffsetFor(
+    tops[tops.length - 1] ?? 0,
+    fieldH,
+    minOffset,
+    insetBottom,
+  );
   return anchorScrollFor(
     tops,
     anchorIdx,
@@ -313,6 +330,10 @@ interface FieldSceneProps {
   feed: FieldFeed;
   /** Whether this field owns the band. See `CardFieldProps.publishing`. */
   publishing: boolean;
+  /** The pane's floating insets — see `CardFieldProps`. The frame loop is the
+   *  clamp every other one has to agree with, so it reads them here. */
+  insetTop: number;
+  insetBottom: number;
 }
 
 function FieldScene({
@@ -335,6 +356,8 @@ function FieldScene({
   onLeavingDone,
   feed,
   publishing,
+  insetTop,
+  insetBottom,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -362,7 +385,9 @@ function FieldScene({
   // that edge the reader may travel) is one function rather than a ternary
   // re-derived at each clamp.
   const hasOrigin = rows.length > 0;
-  const minOffset = originMinOffset(hasOrigin);
+  // The chrome's room comes off the RANGE, not off the field's box — see
+  // `minOffsetFor`. The field still fills the pane.
+  const minOffset = minOffsetFor(hasOrigin, insetTop);
   /** The oldest time the window holds — the row's oldest ENTRY, because a stack
    *  row's face is its newest slice and the head stands above all of them. */
   const oldestIso = rows[0]?.entries[0]?.start ?? rows[0]?.top.start ?? "";
@@ -436,7 +461,7 @@ function FieldScene({
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
-    const max = Math.max(0, layout.total - size.height);
+    const max = maxOffsetFor(layout.total, size.height, minOffset, insetBottom);
     rigNow.target = THREE.MathUtils.clamp(rigNow.target, minOffset, max);
 
     // A SEEK from the band. Consumed by `gen`, so a request is acted on once
@@ -729,6 +754,8 @@ export function CardField({
   publishing,
   rung: rungProp,
   onRungChange,
+  insetTop = 0,
+  insetBottom = 0,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const locale = useLocale();
@@ -875,7 +902,7 @@ export function CardField({
   // scene and every clamp in this component read the same pair — see
   // `originMinOffset`.
   const hasOrigin = rows.length > 0;
-  const minOffset = originMinOffset(hasOrigin);
+  const minOffset = minOffsetFor(hasOrigin, insetTop);
 
   // Render-time prepend compensation: shift the scroll rig synchronously so the
   // next frame's RowGroup positions use the corrected offset, avoiding a
@@ -1046,7 +1073,8 @@ export function CardField({
               toLayout,
               anchorIdx,
               fieldH,
-              originMinOffset(toRows.length > 0),
+              minOffsetFor(toRows.length > 0, insetTop),
+              insetBottom,
             )
           : scroll;
       // Pre-apply the post-transition scroll so the first rendered frame
@@ -1099,13 +1127,13 @@ export function CardField({
           : [],
       );
     },
-    [entries, geo, fieldSize.h, reducedMotion],
+    [entries, geo, fieldSize.h, reducedMotion, insetTop, insetBottom],
   );
 
   // ── Anchor / scroll position after rows change (rung, filter, paging) ──
   useEffect(() => {
     if (rows.length === 0) return;
-    const max = Math.max(0, layout.total - fieldSize.h);
+    const max = maxOffsetFor(layout.total, fieldSize.h, minOffset, insetBottom);
 
     // Prepend compensation now runs synchronously during render (above).
 
@@ -1115,7 +1143,13 @@ export function CardField({
       const idx = indexForAnchor(rows, anchorId);
       if (idx >= 0) {
         rig.current.anchorIndex = idx;
-        const pos = centeredScrollForAnchor(layout, idx, fieldSize.h, minOffset);
+        const pos = centeredScrollForAnchor(
+          layout,
+          idx,
+          fieldSize.h,
+          minOffset,
+          insetBottom,
+        );
         rig.current.target = pos;
         rig.current.current = pos;
         rig.current.genAt = performance.now();
@@ -1147,7 +1181,7 @@ export function CardField({
     // `layout.total` rather than `count * pitch`: the column's extent is what
     // the frame loop clamps against, and at the turns rung no count times any
     // pitch gives it.
-  }, [rows, geo, layout, metrics, fieldSize.h, tops, minOffset]);
+  }, [rows, geo, layout, metrics, fieldSize.h, tops, minOffset, insetBottom]);
 
   // ── ?at= flash decay ──
   useEffect(() => {
@@ -1339,7 +1373,7 @@ export function CardField({
         return;
       }
       const viewH = e.currentTarget.clientHeight || fieldSize.h;
-      const max = Math.max(0, layout.total - viewH);
+      const max = maxOffsetFor(layout.total, viewH, minOffset, insetBottom);
       const page = Math.max(120, viewH * 0.9);
       let next: number;
       switch (e.key) {
@@ -1369,7 +1403,7 @@ export function CardField({
       e.preventDefault();
       rig.current.target = THREE.MathUtils.clamp(next, minOffset, max);
     },
-    [layout.total, fieldSize.h, minOffset],
+    [layout.total, fieldSize.h, minOffset, insetBottom],
   );
 
   if (entries.length === 0) {
@@ -1463,6 +1497,8 @@ export function CardField({
           onLeavingDone={onLeavingDone}
           feed={feed}
           publishing={publishing}
+          insetTop={insetTop}
+          insetBottom={insetBottom}
         />
       </Canvas>
     </div>

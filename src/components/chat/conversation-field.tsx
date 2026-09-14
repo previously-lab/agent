@@ -70,6 +70,8 @@ import {
   FIELD_ORIGIN_PX,
   gateBands,
   groupBlocks,
+  maxOffsetFor,
+  minOffsetFor,
   ORIGIN_REGION,
   prependHeadCount,
   sliceIdOf,
@@ -158,6 +160,15 @@ export interface ConversationFieldProps {
   /** False while the reader has scrolled away from the live edge — growth must
    *  then move nothing at all. Omitted, the field tracks it itself. */
   following?: boolean;
+  /** How much of the pane's top edge the floating chrome covers, px — measured
+   *  by `use-chrome-inset`. It comes off the camera's extent, never off this
+   *  field's box: the field fills the pane and the content passes UNDER the
+   *  chrome while the reader moves, coming to rest clear of it. See
+   *  `minOffsetFor` for why a container padding is the wrong lever here. */
+  insetTop?: number;
+  /** How much of the pane's foot the floating composer covers, px — measured
+   *  by `ComposerHost` and owned by the shell. The live edge rests above it. */
+  insetBottom?: number;
 }
 
 /** The field lays out exactly the blocks `groupBlocks` produces — the type is
@@ -318,6 +329,10 @@ interface SceneProps {
   locale: string;
   onBlockHeight: (index: number, h: number) => void;
   onLiveHeight: (h: number) => void;
+  /** The live block's measured height, px. A REF like `maxOffsetRef`: it moves
+   *  with every streamed token, and the frame loop needs it to publish the live
+   *  turn's own anchor — see the note on `feed.anchors` below. */
+  liveHeightRef: React.MutableRefObject<number>;
   onMountCount: (n: number) => void;
 }
 
@@ -345,6 +360,7 @@ function FieldScene({
   locale,
   onBlockHeight,
   onLiveHeight,
+  liveHeightRef,
   onMountCount,
 }: SceneProps) {
   const group = useRef<THREE.Group>(null);
@@ -453,6 +469,45 @@ function FieldScene({
         date,
       });
     }
+
+    // THE LIVE TURN IS AN ANCHOR TOO, and this is the one place it could have
+    // been forgotten. It sits inside the field's extent like any block — it is
+    // simply not IN `blocks`, because its height changes every token and the
+    // offset table is built once per settled measurement. `next` above indexes
+    // history only, so the turn being written published NOTHING.
+    //
+    // WHICH IS THE ONE PLACE THE READER USUALLY IS. At the live edge with the
+    // reply filling the pane, `next` is either empty or holds history blocks
+    // already scrolled off the top — so the band had no anchor near the middle
+    // and `activeAnchorIndex` picked whatever was nearest, off-screen. The
+    // braid rested grey and the conversation scrolls underneath it: the band
+    // stopped following the thing it exists to follow, and did it exactly while
+    // the agent was talking.
+    //
+    // It carries the CURRENT slice's strands (`liveItems` are built with
+    // `activeSlice.strands`, the same source the user bubbles are tinted from),
+    // so "now" lights the same threads the card rungs would. The date is the
+    // item's own timestamp — a live turn is happening now, so today is the
+    // honest answer and needs no lookup. Both are `undefined`-safe: an anchor
+    // with no strands simply lights nothing, and one with no date falls back to
+    // the band's fraction readout, as a history block with a non-clock id does.
+    const liveStart = offsets[blocks.length] ?? 0;
+    const liveH = liveHeightRef.current;
+    const live = liveItems[0];
+    if (
+      live?.kind === "live" &&
+      liveH > 0 &&
+      liveStart + liveH > offsetRef.current &&
+      liveStart < offsetRef.current + size.height
+    ) {
+      list.push({
+        y: (liveStart + liveH / 2 - offsetRef.current) / size.height,
+        strands: live.strands ?? [],
+        span: liveH / size.height,
+        date: live.timeIso.slice(0, 10),
+      });
+    }
+
     feed.anchors = list;
   });
 
@@ -574,6 +629,8 @@ export function ConversationField({
   error,
   briefing,
   following,
+  insetTop = 0,
+  insetBottom = 0,
 }: ConversationFieldProps) {
   const messages = useMessages();
   const locale = useLocale();
@@ -586,7 +643,11 @@ export function ConversationField({
   const blocks = useMemo<Block[]>(() => groupBlocks(history), [history]);
   const hasOrigin = history.length > 0;
   const oldestIso = history[0]?.timeIso ?? "";
-  const minOffset = hasOrigin ? -FIELD_ORIGIN_PX : 0;
+  // The chrome's room comes off the RANGE, not off this field's box — see
+  // `minOffsetFor`. The wrapper below is `h-full` of an unpadded pane, so the
+  // viewport the camera measures against is the whole pane and content travels
+  // under the floating controls on its way past them.
+  const minOffset = minOffsetFor(hasOrigin, insetTop);
   const minOffsetRef = useRef(minOffset);
   minOffsetRef.current = minOffset;
   /** The last seek this field acted on — see `SeekRequest.gen`. */
@@ -767,7 +828,15 @@ export function ConversationField({
 
   const historyTotal = offsetsRef.current[blocks.length] ?? 0;
   const totalPx = historyTotal + liveHeightRef.current;
-  const maxOffset = Math.max(minOffset, totalPx - viewportHRef.current);
+  // The live edge comes to rest above the composer rather than under it — see
+  // `maxOffsetFor`. `viewportHRef` is the wrapper's own height, which is the
+  // pane's: nothing insets this field, by design.
+  const maxOffset = maxOffsetFor(
+    totalPx,
+    viewportHRef.current,
+    minOffset,
+    insetBottom,
+  );
   maxOffsetRef.current = maxOffset;
 
   // Honour a jump whose target was still paging in when it was asked for.
@@ -1154,6 +1223,7 @@ export function ConversationField({
           locale={locale}
           onBlockHeight={onBlockHeight}
           onLiveHeight={onLiveHeight}
+          liveHeightRef={liveHeightRef}
           onMountCount={setMountedCount}
         />
       </Canvas>

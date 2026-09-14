@@ -43,6 +43,7 @@ import {
   parseAtParam,
   parseRungParam,
 } from "@/lib/chat/deep-link";
+import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { ChatPage } from "@/components/chat/chat-page";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
@@ -145,6 +146,20 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
    *  placeholder from it. See `RunningCard`. */
   const [running, setRunning] = useState(false);
+
+  // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
+  // What the chrome covers at the top edge and what the composer covers at the
+  // foot, in px. BOTH are measured from the things themselves (see
+  // `use-chrome-inset.ts` and `composer-host.tsx`) and both are OWNED HERE,
+  // because both fields float under the same two controls and the shell is the
+  // only place above both of them.
+  //
+  // They are RANGE insets, not container padding: the fields fill the pane and
+  // the content travels under the controls on its way past them, coming to rest
+  // clear of them. A padding on the pane would crop the content instead — see
+  // `minOffsetFor`.
+  const chromeInset = useChromeInset();
+  const [composerClearance, setComposerClearance] = useState(0);
 
   // NOTE — there is deliberately no `selectedCount` here any more. It was the
   // band caption's number, and it was only ever exact for a SINGLE pick: with
@@ -345,6 +360,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
             feed={feed}
             publishing={!panePublishes}
             onRunningChange={setRunning}
+            insetTop={chromeInset}
+            insetBottom={composerClearance}
+            onComposerClearanceChange={setComposerClearance}
           />
         </div>
 
@@ -393,6 +411,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       onRungChange={setRung}
                       reducedMotion={reducedMotion}
                       running={running}
+                      insetTop={chromeInset}
+                      insetBottom={composerClearance}
                     />
                   </motion.div>
                 )}

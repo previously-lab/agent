@@ -8,6 +8,8 @@ import {
   armedGate,
   gateBands,
   groupBlocks,
+  maxOffsetFor,
+  minOffsetFor,
   originMinOffset,
   prependHeadCount,
   sliceIdOf,
@@ -339,6 +341,53 @@ describe("originMinOffset", () => {
 
   it("bottoms out at the oldest unit's own top edge when there is not", () => {
     expect(originMinOffset(false)).toBe(0);
+  });
+});
+
+describe("the range, with the floating chrome taken off it", () => {
+  const HEAD = FIELD_ORIGIN_PX;
+
+  it("carries the chrome's height BELOW the head, not instead of it", () => {
+    // Additive: the head is a region the reader scrolls INTO, so an inset that
+    // replaced it would put the older-page control under the chrome — the
+    // thing the inset exists to prevent.
+    expect(minOffsetFor(true, 96)).toBe(-HEAD - 96);
+    expect(minOffsetFor(false, 96)).toBe(-96);
+  });
+
+  it("is the untouched bound when there is no chrome to clear", () => {
+    expect(minOffsetFor(true, 0)).toBe(originMinOffset(true));
+    expect(minOffsetFor(false, 0)).toBe(originMinOffset(false));
+  });
+
+  it("stops the live edge above the composer", () => {
+    // 5000px of content in an 800px pane: the ceiling is where the content's
+    // last pixel lands `insetBottom` above the pane's foot.
+    expect(maxOffsetFor(5000, 800, -HEAD, 139)).toBe(5000 - 800 + 139);
+  });
+
+  it("pins a conversation shorter than its pane to the head", () => {
+    // No room to give: the floor wins, so a short fill sits below the chrome
+    // rather than sliding up under it to chase the composer's inset.
+    const min = minOffsetFor(true, 96);
+    expect(maxOffsetFor(200, 800, min, 139)).toBe(min);
+  });
+
+  it("moves each end the way its own inset says", () => {
+    const min = minOffsetFor(true, 96);
+    expect(maxOffsetFor(5000, 800, min, 220)).toBeGreaterThan(
+      maxOffsetFor(5000, 800, min, 60),
+    );
+    expect(minOffsetFor(true, 220)).toBeLessThan(minOffsetFor(true, 60));
+  });
+
+  it("keeps the two ends ordered for any pane", () => {
+    // The clamp is `Math.max(minOffset, …)`, so an inverted pair is not a
+    // crash — it is a field that silently stops answering the camera.
+    for (const total of [0, 1, 400, 800, 5000]) {
+      const min = minOffsetFor(true, 96);
+      expect(maxOffsetFor(total, 800, min, 139)).toBeGreaterThanOrEqual(min);
+    }
   });
 });
 

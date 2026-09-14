@@ -2,6 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ISLAND_BADGE } from "./island";
 
 const DOCS_URL = "https://previously.ldwid.com/docs/deployment";
 
@@ -10,7 +11,7 @@ export function DemoBadge() {
 
   return (
     <Popover>
-      <PopoverTrigger className="inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors cursor-pointer">
+      <PopoverTrigger className={`${ISLAND_BADGE} inline-flex items-center gap-1 rounded-full bg-primary px-2.5 py-0.5 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors cursor-pointer`}>
         {t("badgeLabel")}
       </PopoverTrigger>
       <PopoverContent className="w-72 text-sm">

@@ -153,10 +153,22 @@ export function PhaseIndicator({
 
   // ── Expand / collapse ─────────────────────────────────────────────────
 
-  // In streaming mode, only allow toggle after running completes.
-  const canToggle = mode === "static"
-    ? hasExpandedDetails
-    : hasExpandedDetails && !isRunning;
+  /**
+   * OPENABLE WHILE IT IS STILL RUNNING, in both modes.
+   *
+   * Streaming mode used to be gated on `!isRunning`, which made the row inert
+   * for exactly as long as it had something to say. A reader watching the
+   * agent work is the reader most likely to want the detail, and the row gave
+   * them nothing to aim at — no handler, no cursor, and (below) no chevron —
+   * so a click did nothing and the block read as broken rather than as shut.
+   *
+   * There is no cost argument for the gate either: the REPLY streams through
+   * this same `MarkdownRenderer` (memoized on its content), so re-parsing a
+   * growing block per chunk is what the message body already does. The
+   * subtitle's own line-scroll is a separate element and does not fight the
+   * expanded card.
+   */
+  const canToggle = hasExpandedDetails;
 
   const handleToggle = useCallback(() => {
     if (!canToggle) return;
@@ -243,10 +255,14 @@ export function PhaseIndicator({
           )}
         </span>
 
-        {/* Label */}
+        {/* Label — `font-medium`, not `font-semibold`. This title is CHROME,
+            and it was the heaviest thing on a surface whose whole job is to
+            stay quiet while the agent works. One step down keeps the hierarchy
+            (it is still the only weight above the light meta beside it)
+            without the row shouting over the reply it is describing. */}
         <span
           className={cn(
-            "min-w-0 truncate text-sm font-semibold",
+            "min-w-0 truncate text-sm font-medium",
             isError || isDenied
               ? "text-red-500"
               : isInterrupted
@@ -278,8 +294,10 @@ export function PhaseIndicator({
           </span>
         )}
 
-        {/* Expand chevron */}
-        {canToggle && !isRunning && (
+        {/* Expand chevron — shown wherever the row IS openable. It used to
+            hide while running, which left the row clickable with nothing on
+            screen saying so. */}
+        {canToggle && (
           <ChevronDown
             className={cn(
               "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
