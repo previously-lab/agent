@@ -135,7 +135,7 @@ export function MemoryDocs({ persona }: { persona?: string }) {
           {loading ? (
             <div className="py-4 text-sm text-muted-foreground">{t("docsLoading")}</div>
           ) : content ? (
-            <div className="text-sm leading-relaxed">
+            <div className="font-serif text-sm font-light leading-relaxed">
               <MarkdownRenderer content={content} />
             </div>
           ) : (

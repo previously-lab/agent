@@ -77,7 +77,6 @@ export function BoardBar({
           selected={strands}
           onToggle={onToggleStrand}
           onClear={onClearStrands}
-          showLabel
         />
       </div>
     </div>

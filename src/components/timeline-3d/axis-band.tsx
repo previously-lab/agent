@@ -37,6 +37,7 @@ import {
 } from "@/lib/timeline3d/ruler-math";
 import { requestSeek, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { RollingField } from "@/components/chat/rolling-number";
+import { ISLAND } from "@/components/layout/island";
 
 /** Year scale (DOM labels + canvas ticks) is suppressed by decision — both
  *  views hide it for now; the NOW dot and the threadline stay. Components
@@ -393,18 +394,26 @@ function ScrubLens({
  * they controlled. The rail is where time IS; the right edge is where you act
  * on it, and the zoom lens already lives there, so the two navigation controls
  * now read as one cluster instead of being scattered across the screen.
+ *
+ * AND THEY WEAR THE APP'S CHROME, not a squarer silhouette of their own: the
+ * same frosted island every other floating control uses, so the right edge
+ * reads as one family rather than a pill, a pill, and two tiles. They were
+ * `rounded-md` with a ring and NO shadow, which on a light page left two
+ * hairline squares that read as bare chevrons drifting over the content —
+ * which is precisely how the reader described them.
  */
 export function JumpControls({ feed }: { feed: FieldFeed }) {
   const t = useTranslations("timeline3d");
+  const button = `${ISLAND} pointer-events-auto flex size-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`;
   return (
-    <div className="pointer-events-none absolute right-3 bottom-36 z-40 flex flex-col gap-1 sm:right-5 sm:bottom-32">
+    <div className="pointer-events-none absolute right-3 bottom-36 z-40 flex flex-col gap-1.5 sm:right-5 sm:bottom-32">
       <button
         type="button"
         data-jump="top"
         aria-label={t("jumpTop")}
         title={t("jumpTop")}
         onClick={() => requestSeek(feed, 0)}
-        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-background/75 text-muted-foreground ring-1 ring-border/60 backdrop-blur-md transition-colors hover:text-foreground"
+        className={button}
       >
         <ArrowUpToLine className="size-3.5" />
       </button>
@@ -414,7 +423,7 @@ export function JumpControls({ feed }: { feed: FieldFeed }) {
         aria-label={t("jumpBottom")}
         title={t("jumpBottom")}
         onClick={() => requestSeek(feed, 1)}
-        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-background/75 text-muted-foreground ring-1 ring-border/60 backdrop-blur-md transition-colors hover:text-foreground"
+        className={button}
       >
         <ArrowDownToLine className="size-3.5" />
       </button>

@@ -126,7 +126,7 @@ function RunningCard({
           className={`size-1.5 shrink-0 rounded-[1px] bg-primary ${reducedMotion ? "" : "animate-pulse"}`}
         />
         <span className="min-w-0 flex-1">
-          <span className="block truncate font-serif text-sm text-foreground">
+          <span className="block truncate text-sm text-foreground">
             {t("title")}
           </span>
           <span className="block truncate text-[11px] text-muted-foreground">

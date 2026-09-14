@@ -13,9 +13,15 @@
  * WHAT IT DOES. It is an INTERTITLE. Crossing a boundary is arriving at a new
  * time, and the card says how far that time is — "12 分钟之前" one way, "12
  * 分钟之后" the other, the same distance read in both directions — over the
- * date and the time it lands on, and what that conversation was about. Film
- * intertitles have always worked this way, and so does every other time
- * readout in this app.
+ * time it lands on, the date that time is in, and what that conversation was
+ * about. Film intertitles have always worked this way, and so does every other
+ * time readout in this app.
+ *
+ * THE ARRANGEMENT IS NOT THIS FILE'S. Rows, seats, type and edges come from
+ * `intertitle.tsx`, which the window's head is drawn with too: a gate and a
+ * head differ in ONE seat (the focus below, the older-page control at the
+ * head) and in nothing else, so moving between them never re-lays-out the
+ * region under the reader.
  *
  * ONLY ONE SPEAKS AT A TIME. The field decides which boundary is announcing
  * (`armedGate`) and writes it into the `signal` object this component was
@@ -37,9 +43,8 @@
 
 import { useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
-import { ChevronDown, ChevronUp } from "lucide-react";
-import { DateStamp, TimeStamp } from "./date-stamp";
-import { RelativeStamp } from "./relative-time";
+import { DateStamp } from "./date-stamp";
+import { Intertitle } from "./intertitle";
 import { SLICE_GATE_PX, type GateSignal } from "@/lib/chat/field-blocks";
 
 export interface SliceGateProps {
@@ -74,6 +79,12 @@ function usableFocus(focus: string | undefined): string | null {
  * BOTH FACES READ THE SAME INTERVAL. `anchorIso` is the far side of the gate,
  * so the two faces state the same distance and disagree only about which way
  * it points — which is exactly what "12 分钟之前" and "12 分钟之后" mean.
+ *
+ * THE FACE IS THE SHARED ARRANGEMENT (`Intertitle`) WITH ONE SEAT FILLED: the
+ * destination's focus sits where the window's head puts its older-page
+ * control. It is no longer four centred lines, and that is not a restyle —
+ * the head has always stated this boundary as two edge-aligned rows, and a
+ * reader crossing from one to the other was watching the region re-lay-out.
  */
 function ArmedFace({
   dir,
@@ -90,39 +101,27 @@ function ArmedFace({
   const said = usableFocus(focus);
   return (
     <div
-      className={`gate-face gate-face-${dir} absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-4`}
+      className={`gate-face gate-face-${dir} absolute inset-0 flex flex-col justify-center px-4`}
     >
-      {/* The chevron HANGS OFF the row rather than sitting in it: the card is
-          a centred column, and a leading arrow would push the phrase ~10px to
-          the right of the time and the date below it. */}
-      <span className="relative inline-flex items-baseline font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-        {dir === "past" ? (
-          <ChevronUp
-            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
-            aria-hidden
-          />
-        ) : (
-          <ChevronDown
-            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
-            aria-hidden
-          />
-        )}
-        <RelativeStamp
-          fromIso={anchorIso}
-          toIso={iso}
-          fallback={t(dir === "past" ? "earlier" : "later")}
-        />
-      </span>
-      <TimeStamp timestamp={iso} className="text-3xl tracking-tight text-foreground" />
-      <DateStamp
-        timestamp={iso}
-        className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70"
+      <Intertitle
+        dir={dir}
+        fromIso={anchorIso}
+        toIso={iso}
+        fallback={t(dir === "past" ? "earlier" : "later")}
+        // Row 2's left seat: the destination's focus, which is the one thing a
+        // gate has that the window's head does not. A slice that carries no
+        // focus leaves the seat empty — `usableFocus` has already refused the
+        // literal "(none)" unmarked slices store, because that reads as a bug.
+        // Clipped from the right so a long focus never pushes the date off the
+        // edge it shares with the time.
+        slot={
+          said ? (
+            <span className="min-w-0 truncate text-xs text-foreground/70">
+              {said}
+            </span>
+          ) : null
+        }
       />
-      {said && (
-        <span className="max-w-full truncate text-xs text-foreground/70">
-          {said}
-        </span>
-      )}
     </div>
   );
 }
