@@ -30,7 +30,7 @@ import type { StrandListItem } from "@/lib/episodic/actions";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import { LensSwitcher } from "@/components/timeline-3d/lens-switcher";
 import { StrandFilter } from "@/components/timeline-3d/strand-filter";
-import { ISLAND } from "@/components/layout/island";
+import { ISLAND_BAR } from "@/components/layout/island";
 
 export interface BoardBarProps {
   rung: FieldRung;
@@ -57,19 +57,22 @@ export function BoardBar({
     // faces pin their own portals at z-index 21-30 (see `row-group`'s
     // `zIndexRange`), so the bar must clear every card as they scroll past it.
     //
-    // `top-14` under `sm` and `top-3`/`top-4` above it: at phone width the
-    // header's two islands cannot share a row with this one (three islands and
-    // four lens segments do not fit in 390 px), so the bar drops to a second
-    // line and the header's own islands keep the first. From `sm` up there is
-    // room for all three on one line, and the bar joins them.
+    // WHERE IT SITS, per breakpoint, and it is the READER's arrangement:
+    //
+    //   phone   top-right, beside the brand, with the settings bar wrapping to
+    //           the line below it (see `app-header.tsx`) — three islands and
+    //           four lens segments do not fit on one line at 390px, and the two
+    //           that belong together (the brand, and the control that changes
+    //           what you are looking at) get the first line
+    //   sm+     the middle of three, all on one line
     <div
       data-board-bar
       // Four segments at the phone's `min-h-8` plus a 28 px strand trigger, so
       // a strand pick shortens the LENS's labels rather than pushing the bar
       // off the glass — the ladder is the thing that must stay reachable.
-      className="pointer-events-none fixed top-14 left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 sm:top-3 md:top-4"
+      className="pointer-events-none fixed top-2 right-2 z-50 flex max-w-[calc(100vw-1rem)] sm:top-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:top-4"
     >
-      <div className={`${ISLAND} pointer-events-auto flex items-center gap-1 p-0.5`}>
+      <div className={`${ISLAND_BAR} pointer-events-auto gap-1 p-1`}>
         <LensSwitcher rung={rung} onSelect={onRungChange} reducedMotion={reducedMotion} />
         <span aria-hidden className="h-4 w-px shrink-0 bg-border" />
         <StrandFilter

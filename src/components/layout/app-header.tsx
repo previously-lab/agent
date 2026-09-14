@@ -23,16 +23,24 @@ import { ClientBadge } from "@/components/layout/client-badge";
 import { SettingsLink } from "@/components/layout/settings-link";
 import { SearchPalette } from "@/components/layout/search-palette";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
-import { ISLAND, ISLAND_CONTROL } from "./island";
+import { BAR_CONTROL, ISLAND_BAR, ISLAND_CONTROL } from "./island";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const locale = useLocale();
   const t = useTranslations("nav");
 
   return (
-    <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex items-start justify-between gap-2 p-2 sm:p-3 md:p-4">
+    // THE PHONE ARRANGEMENT IS THE READER'S, and it is a wrap rather than a
+    // breakpoint dance: the brand keeps the first line's left and the BOARD BAR
+    // (which the shell renders, and which sits over this layout) takes its
+    // right, then `w-full` forces the settings onto the second line where
+    // `ml-auto` holds it to the same right edge. From `sm` up the spacer is
+    // gone, all three islands share one line, and `justify-between` puts the
+    // brand at the start and the settings at the end with the board bar
+    // between them.
+    <header className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap sm:p-3 md:p-4">
       {/* LEFT — brand mark + status badges (status, not actions). */}
-      <div className={`pointer-events-auto ${ISLAND} flex items-center gap-1.5 py-1 pr-1.5 pl-3`}>
+      <div className={`pointer-events-auto ${ISLAND_BAR} gap-1.5 pr-1.5 pl-3`}>
         <Link
           href="/"
           className="text-sm font-semibold tracking-tight hover:text-foreground/80 transition-colors"
@@ -56,7 +64,9 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           phone width only fit once they went. The rest folds into the "···"
           overflow menu, which keeps its own labels because it is a list a
           reader reads rather than a row of controls they aim at. */}
-      <nav className={`pointer-events-auto ${ISLAND} flex items-center gap-0.5 p-1`}>
+      <div aria-hidden className="w-full sm:hidden" />
+
+      <nav className={`pointer-events-auto ${ISLAND_BAR} ml-auto gap-0.5 p-1 sm:ml-0`}>
         <SearchPalette />
         <SettingsLink />
         <a
@@ -65,7 +75,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           rel="noopener noreferrer"
           aria-label={t("docs")}
           title={t("docs")}
-          className={`${ISLAND_CONTROL} size-7`}
+          className={`${ISLAND_CONTROL} ${BAR_CONTROL}`}
         >
           <BookOpen className="h-3.5 w-3.5 shrink-0" />
         </a>

@@ -31,3 +31,23 @@ export const ISLAND =
  */
 export const ISLAND_CONTROL =
   "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground";
+
+/**
+ * A BAR — an island that holds controls, at the one height all three of the
+ * top bars share.
+ *
+ * They were the same material and different SHAPES: the brand island sized
+ * itself to its own text (28px), the settings island to its controls (36px),
+ * and the board bar to a mix — three pills of three heights sitting on one
+ * line. `h-9` is fixed here rather than derived so the three cannot drift
+ * apart again when one of them gains a control, and every control inside is
+ * `size-7`, which leaves the bars a uniform 4px of padding.
+ *
+ * A bar sets its own `gap` and its own horizontal padding; only the height and
+ * the alignment are shared.
+ */
+export const ISLAND_BAR = `${ISLAND} flex h-9 items-center`;
+
+/** The size of a control INSIDE a bar. One number, so a bar's height stays
+ *  `ISLAND_BAR`'s minus its padding no matter what is put in it. */
+export const BAR_CONTROL = "size-7";

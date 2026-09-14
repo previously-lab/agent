@@ -199,6 +199,31 @@ try {
     .count();
   check("exactly one lens segment shows its name", lensLabels === 1, `${lensLabels} labels`);
 
+  // ── The three bars are ONE bar, three times ──────────────────────────────
+  // The reader's complaint was that they looked different, and they did: same
+  // material, three heights, because each sized itself to its own contents.
+  // `ISLAND_BAR` pins the height instead. Measured rather than eyeballed,
+  // because "they look the same now" is how they drifted apart the first time.
+  const bars = await page.evaluate(() => {
+    const out = [];
+    const header = document.querySelector("header");
+    if (header) {
+      for (const el of header.children) {
+        const r = el.getBoundingClientRect();
+        if (r.height > 0) out.push({ name: "header", h: Math.round(r.height) });
+      }
+    }
+    const board = document.querySelector("[data-board-bar] > *");
+    if (board) out.push({ name: "board", h: Math.round(board.getBoundingClientRect().height) });
+    return out;
+  });
+  const heights = [...new Set(bars.map((b) => b.h))];
+  check(
+    "all three top bars are the same height",
+    bars.length >= 3 && heights.length === 1,
+    bars.map((b) => `${b.name}=${b.h}`).join(" "),
+  );
+
   // The settings bar: every control is a glyph. It is the LAST island in the
   // header, and its text labels were the widest thing in the chrome.
   const settingsBar = page.locator("header nav");
@@ -224,6 +249,40 @@ try {
     timeout: 60_000,
   });
   await pp.waitForTimeout(6500);
+
+  // ── The PHONE arrangement: brand and board bar share the first line, and
+  //    the settings wrap below them, right-aligned. ────────────────────────
+  const phoneBars = await pp.evaluate(() => {
+    const r = (el) => {
+      const b = el.getBoundingClientRect();
+      return { y: Math.round(b.y), right: Math.round(b.right), left: Math.round(b.left) };
+    };
+    const header = document.querySelector("header");
+    const kids = header ? [...header.children].filter((e) => e.getBoundingClientRect().height > 0) : [];
+    return {
+      brand: kids[0] ? r(kids[0]) : null,
+      settings: kids[kids.length - 1] ? r(kids[kids.length - 1]) : null,
+      board: document.querySelector("[data-board-bar] > *")
+        ? r(document.querySelector("[data-board-bar] > *"))
+        : null,
+    };
+  });
+  const { brand, settings, board: boardP } = phoneBars;
+  check(
+    "phone: the brand and the board bar share the first line",
+    !!brand && !!boardP && Math.abs(brand.y - boardP.y) < 6,
+    brand && boardP ? `brand y=${brand.y}, board y=${boardP.y}` : "missing",
+  );
+  check(
+    "phone: the settings bar wraps to the line below",
+    !!settings && !!brand && settings.y > brand.y + 10,
+    settings && brand ? `settings y=${settings.y}, brand y=${brand.y}` : "missing",
+  );
+  check(
+    "phone: the brand and the board bar do NOT overlap",
+    !!brand && !!boardP && brand.right + 4 <= boardP.left,
+    brand && boardP ? `brand ends ${brand.right}, board starts ${boardP.left}` : "missing",
+  );
 
   const fb = await pp.locator("[data-composer-collapsed]").boundingBox();
   const lb = await pp.getByRole("group", { name: "Lens" }).boundingBox();

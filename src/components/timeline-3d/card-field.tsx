@@ -12,9 +12,19 @@
  *   catalog may hold thousands). Scroll state lives in refs — React only
  *   re-renders when the visible range or the level changes.
  * - Scroll: wheel / one-finger drag move through time (bottom = NOW); the
- *   shared `feed` reports 0..1 to the ambient threadline. Nearing the
- *   top edge prefetches the older catalog window (`onNeedOlder`), and a
- *   prepend shifts the scroll offset so the world never jumps.
+ *   shared `feed` reports 0..1 to the ambient threadline. A prepend shifts the
+ *   scroll offset so the world never jumps.
+ *
+ *   OLDER PAGES LOAD ONLY WHEN ASKED FOR. This field used to fetch the next
+ *   window by itself, on two triggers: crossing into a 320px zone below the
+ *   top, and a 900ms fill pass when the loaded content was shorter than the
+ *   viewport. The first made the window's head unreachable — every approach
+ *   pulled another page in, so the thing the reader was walking toward moved
+ *   away from them, and the "load earlier" control it exists to offer could
+ *   never be pressed. The second filled the screen before anyone had decided
+ *   they wanted more, which is a repository read in production. Both are gone:
+ *   the head is now the ONLY pager, it is reachable, and every page that
+ *   arrives is one the reader asked for. A slice read is a repository call.
  * - The window's HEAD (`OriginRow`): the region above the oldest loaded row,
  *   stating what time it is at that edge and offering the older page. It is
  *   the conversation field's `FieldOrigin` in the same visual language, and it
@@ -146,8 +156,6 @@ export interface CardFieldProps {
 const ZOOM_STEP_PX = 120;
 const PINCH_STEP_PX = 90;
 const ZOOM_ACCUM_IDLE_MS = 350;
-/** Entering this zone from below (px from the content top) prefetches older. */
-const TOP_ZONE_PX = 320;
 
 // ─── Pure helpers ───────────────────────────────────────────────────────────
 
@@ -274,7 +282,7 @@ interface FieldSceneProps {
   geo: FrameGeometry;
   rung: FieldRung;
   /** The offset table, computed ONCE by the field and handed down. It is the
-   *  same table the transitions and the fill pass read, and a second copy
+   *  same table the transitions read, and a second copy
    *  computed here from the same inputs would be one more thing that has to
    *  stay in agreement — with measured heights in the inputs, no longer a
    *  guarantee that holds for free. */
@@ -284,8 +292,8 @@ interface FieldSceneProps {
   onUnitHeight: (key: string, px: number) => void;
   rig: React.MutableRefObject<FieldRig>;
   hasMore: boolean;
-  /** Ask for the older page, once per request however many frames the edge
-   *  stays crossed — see `CardField`'s own `requestOlder`. */
+  /** Ask for the older page. The head's control is the ONLY caller — nothing
+   *  in this file pages on its own. See `CardField`'s own `requestOlder`. */
   requestOlder: () => void;
   /** True while that page is in flight, for the head's control. */
   loadingOlder: boolean;
@@ -370,7 +378,6 @@ function FieldScene({
     camera.updateProjectionMatrix();
   }, [camera, size.height]);
 
-  const prevTopRef = useRef<number | null>(null);
   // The boundary mechanism's per-frame scratch: the band list is refilled in
   // place, the arm signals are MUTABLE OBJECTS kept per row (each gate is its
   // own React root, so arming must not travel as a prop), and `dirRef` is the
@@ -449,18 +456,6 @@ function FieldScene({
       if (Math.abs(rigNow.target - rigNow.current) < 0.05) {
         rigNow.current = rigNow.target;
       }
-    }
-
-    // Top-zone EDGE trigger: only a real scroll up into the zone prefetches.
-    const prevTop = prevTopRef.current;
-    prevTopRef.current = rigNow.target;
-    if (
-      prevTop != null &&
-      prevTop > TOP_ZONE_PX &&
-      rigNow.target <= TOP_ZONE_PX &&
-      hasMore
-    ) {
-      requestOlder();
     }
 
     // THE ONE PLACE THIS FIELD TOUCHES THE FEED, and the ownership test is on
@@ -849,7 +844,7 @@ export function CardField({
     [variant, fieldSize],
   );
   // THE ONE OFFSET TABLE. Every consumer — the scene's placement, the scroll
-  // transitions, the fill pass, the deep-link landing — reads this one, because
+  // transitions, the deep-link landing — reads this one, because
   // with measured heights in the inputs two tables computed from "the same"
   // inputs are two tables that can disagree.
   const metrics = useMemo(
@@ -1143,15 +1138,6 @@ export function CardField({
     // the frame loop clamps against, and at the turns rung no count times any
     // pitch gives it.
   }, [rows, geo, layout, metrics, fieldSize.h, tops, minOffset]);
-
-  // ── Fill pass: content shorter than the field can never reach the top ──
-  useEffect(() => {
-    if (!hasMore || rows.length === 0) return;
-    const timer = setTimeout(() => {
-      if (layout.total <= fieldSize.h + 1) requestOlder();
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [rows, hasMore, requestOlder, layout, fieldSize.h]);
 
   // ── ?at= flash decay ──
   useEffect(() => {

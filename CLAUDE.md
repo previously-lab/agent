@@ -38,10 +38,12 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 1. **Root Layout** (`src/app/layout.tsx`): Geist fonts + `ThemeProvider` + `<Toaster />`
 2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppHeader />` + the page. **There is no sidebar** — chrome is THREE floating islands over an infinite canvas with no page boundaries, so the header element is pointer-transparent and each island re-enables pointer events:
    - **top-left** brand + status badges (`layout/app-header.tsx`)
-   - **top-centre** the board bar — the zoom lens and the strand selector, the two controls that change what the field SHOWS (`shell/board-bar.tsx`). It is rendered by the shell, not by the header, because the strand selection is shell state. Below `sm` it wraps to a second line (three islands and four lens segments do not fit in 390px), which is what the chat content's `pt-24` clears.
+   - **top-centre** the board bar — the zoom lens and the strand selector, the two controls that change what the field SHOWS (`shell/board-bar.tsx`). It is rendered by the shell, not by the header, because the strand selection is shell state.
    - **top-right** settings, icons only. The words were the widest thing in the chrome and three islands only fit on one line at phone width once they went.
 
-   The shared finish is one module, `src/components/layout/island.ts` (`ISLAND` / `ISLAND_CONTROL`) — it was typed out four times before, with four chances to drift.
+   **Below `sm` the arrangement changes**: the brand keeps the first line's left and the board bar takes its right — brand and "what am I looking at" are the pair that belongs together — and a `w-full` spacer wraps the settings to the second line, held to the same right edge. Measured below.
+
+   The shared finish is one module, `src/components/layout/island.ts`. `ISLAND` is the material, `ISLAND_CONTROL` a control sitting on it, and `ISLAND_BAR` a bar that holds controls — `h-9` with `size-7` controls, FIXED rather than derived, because the three bars had drifted to three heights (28, 36, and a mix) while wearing the same material. The finish had been typed out four times before that, with four chances to drift.
 3. **The shell** (`src/components/shell/app-shell.tsx`) is per-page, not per-layout: it owns the left `AxisBand` (the time rail) and the right pane, which holds the conversation field and the card field. The rung decides which is visible.
 4. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
 

@@ -102,7 +102,10 @@ export function LensSwitcher({
               aria-label={t(key)}
               title={t(key)}
               onClick={() => onSelect(segRung)}
-              className={`flex min-h-8 items-center gap-1 rounded-full transition-colors sm:min-h-7 ${
+              // One height for every segment, active or not: the segment that
+              // grows a word must not also grow the BAR, or the whole top row
+              // changes height as you step along the ladder.
+              className={`flex h-7 items-center gap-1 rounded-full transition-colors ${
                 active
                   ? "bg-background px-2.5 text-foreground shadow-sm"
                   : "px-2 text-muted-foreground hover:text-foreground"
