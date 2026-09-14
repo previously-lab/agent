@@ -172,9 +172,10 @@ export function clearFeed(feed: FieldFeed): void {
  * `(offset - minOffset) / (total - minOffset)`. Both are the same statement —
  * "how far into the scrollable range" — about ranges with different lower
  * bounds, and the difference was not a decision anybody made. Stating it as a
- * range makes the one real difference between them (the chat field has an ORIGIN
- * region above its oldest block; the card field's oldest row is the top of the
- * world) a number the caller passes instead of a formula it re-derives.
+ * range makes the lower bound a number the caller passes instead of a formula
+ * it re-derives — and both fields now pass the same one: each has an ORIGIN
+ * region above its oldest unit (`originMinOffset`), so the band's ruler means
+ * the same thing at every rung.
  *
  * Content that fits entirely in the pane reports 1: there is nowhere to scroll
  * to, and the reader is already looking at the present. Reporting 0 there would

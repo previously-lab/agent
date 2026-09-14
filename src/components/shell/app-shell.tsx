@@ -45,7 +45,7 @@ import {
 } from "@/lib/chat/deep-link";
 import { ChatPage } from "@/components/chat/chat-page";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
-import { LensSwitcher } from "@/components/timeline-3d/lens-switcher";
+import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
 
@@ -141,15 +141,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [hasMore, setHasMore] = useState(false);
   const [timelineReady, setTimelineReady] = useState(false);
   const loadingRef = useRef(false);
+  /** A turn is streaming. Reported up by `ChatPage`, which is the only half
+   *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
+   *  placeholder from it. See `RunningCard`. */
+  const [running, setRunning] = useState(false);
 
-  // Only meaningful for a SINGLE pick: with several, the counts overlap (a
-  // slice can carry two chosen strands) and summing them would overcount. A
-  // number that can be wrong is worse than no number, so several picks show
-  // names and no count.
-  const selectedCount = useMemo(() => {
-    if (strands.length !== 1) return null;
-    return strandList.find((s) => s.name === strands[0])?.count ?? null;
-  }, [strands, strandList]);
+  // NOTE — there is deliberately no `selectedCount` here any more. It was the
+  // band caption's number, and it was only ever exact for a SINGLE pick: with
+  // several, the counts overlap (a slice can carry two chosen strands) and
+  // summing them overcounts. The board bar names the picks instead, which
+  // cannot be wrong. A number that can be wrong is worse than no number.
 
   const toggleStrand = useCallback((name: string) => {
     setStrands((prev) =>
@@ -320,16 +321,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
           timeline, the chat stream's slice seams in chat, so the braid winds
           at whatever the user is actually looking at. */}
       <AxisBand
-        showChrome={showCardField}
         range={range}
         feed={feed}
         strands={strands}
-        strandList={strandList}
         ambientStrands={ambientStrands}
-        selectedCount={selectedCount}
         reducedMotion={reducedMotion}
-        onToggleStrand={toggleStrand}
-        onClearStrands={clearStrands}
       />
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
@@ -348,6 +344,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
             onTurnSettled={refreshCatalog}
             feed={feed}
             publishing={!panePublishes}
+            onRunningChange={setRunning}
           />
         </div>
 
@@ -395,6 +392,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       rung={rung}
                       onRungChange={setRung}
                       reducedMotion={reducedMotion}
+                      running={running}
                     />
                   </motion.div>
                 )}
@@ -403,17 +401,19 @@ export function AppShell({ initialConfig }: AppShellProps) {
           )}
         </AnimatePresence>
 
-        {/* THE ZOOM LENS — the only navigation control the app has now, so it
-            is mounted with the SHELL rather than with the card field. It used
-            to live inside `TimelineScene`, which meant the control that would
-            get you back to the conversation disappeared at exactly the moment
-            you were on the conversation. Rendered last so it stacks above the
-            field and above the card faces (which pin their own portals at
-            z-index 21-30 — see `row-group`'s `zIndexRange`). */}
-        <LensSwitcher
+        {/* THE BOARD BAR — the zoom lens and the strand selector, together at
+            the top of the screen. Mounted with the SHELL rather than with the
+            card field, because the control that gets you back to the
+            conversation must not disappear at exactly the moment you are on
+            the conversation. See `board-bar.tsx`. */}
+        <BoardBar
           rung={rung}
-          onSelect={setRung}
+          onRungChange={setRung}
           reducedMotion={reducedMotion}
+          strands={strands}
+          strandList={strandList}
+          onToggleStrand={toggleStrand}
+          onClearStrands={clearStrands}
         />
         {/* The two ends, floating on the same right-hand edge as the lens. They
             used to sit ON the rail, which by then held a thumb, a readout, a

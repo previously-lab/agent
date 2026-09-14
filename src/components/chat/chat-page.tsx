@@ -72,6 +72,10 @@ interface ChatPageProps {
    *  fields are mounted at once while a card rung is up, and two writers on one
    *  feed is what the feed exists to prevent. */
   publishing?: boolean;
+  /** Report whether a turn is streaming. The card rungs have no row for a
+   *  slice that has not closed, so the shell draws the abstract placeholder
+   *  instead — and only the chat half knows a reply is in flight. */
+  onRunningChange?: (running: boolean) => void;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -89,6 +93,7 @@ export function ChatPage({
   onTurnSettled,
   feed,
   publishing,
+  onRunningChange,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -119,6 +124,7 @@ export function ChatPage({
       onTurnSettled={onTurnSettled}
       feed={feed}
       publishing={publishing}
+      onRunningChange={onRunningChange}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -308,6 +314,7 @@ function Inner({
   onTurnSettled,
   feed,
   publishing,
+  onRunningChange,
   persona,
   shouldResume,
   initialMessages,
@@ -324,6 +331,8 @@ function Inner({
   feed?: FieldFeed;
   /** True only while the conversation rung owns the band — see ChatPageProps. */
   publishing?: boolean;
+  /** Whether a turn is streaming — see ChatPageProps. */
+  onRunningChange?: (running: boolean) => void;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -964,6 +973,15 @@ function Inner({
 
   const onConversationRung = rung === "conversation";
 
+  // Tell the shell whether a reply is in flight, so a card rung can draw the
+  // running-slice placeholder. This is the ONLY piece of turn state the shell
+  // needs, which is why it is a one-boolean callback rather than a store: the
+  // card field cannot render a live turn (its rows come from the closed-slice
+  // catalog), so all it can honestly say is "one is happening".
+  useEffect(() => {
+    onRunningChange?.(isLoading);
+  }, [isLoading, onRunningChange]);
+
   /**
    * Sending comes HOME first. At a card rung the composer is collapsed, and a
    * reader who sends from there is answered at the conversation rung — so the
@@ -988,13 +1006,17 @@ function Inner({
            this component just fills the right-hand column. The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
            an EMPTY memory falls back to the full-screen empty briefing.
-           Top padding clears the floating header pills (AppHeader): on mobile
-           p-2 + the h-7 mode-switcher pill bottom out at ~40px, on desktop
-           (md:p-4) at ~52px — the pills overlap the stream at EVERY width
-           (they are equally broken on desktop), so the clearance is shared
-           rather than mobile-gated. pt-12/pt-16 leave an 8-12px gap. ── */}
+           Top padding clears the floating chrome, which is now TWO ROWS at
+           phone width: the header's brand and settings islands share the first
+           line, and the board bar (zoom lens + strand selector) wraps to the
+           second, because three islands and four lens segments do not fit in
+           390px. From `sm` up all three sit on one line. The clearance is the
+           measured height of that chrome plus a gap, per breakpoint:
+             base  8 + 36 + 8 + 36 + 8 = ~96  → pt-24
+             sm   12 + 36 + 8            = ~56  → pt-16
+             md   16 + 36 + 8            = ~60  → pt-20 ── */}
       <div
-        className={`relative flex-1 overflow-hidden pt-12 md:pt-16 transition-opacity duration-300 ${
+        className={`relative flex-1 overflow-hidden pt-24 sm:pt-16 md:pt-20 transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         // Dimmed-and-mounted, not unmounted: this subtree holds the field's
@@ -1116,8 +1138,10 @@ function Inner({
            every width. ── */}
       <ComposerHost
         rung={rung}
-        composer={
+        composer={({ collapsed, expand }) => (
           <ChatInput
+            collapsed={collapsed}
+            onExpand={expand}
             onSubmit={submitFromAnyRung}
             isLoading={isLoading}
             onStop={handleStop}
@@ -1126,7 +1150,7 @@ function Inner({
             currentModelId={selectedModel}
             onModelChange={handleModelChange}
           />
-        }
+        )}
       />
     </>
   );

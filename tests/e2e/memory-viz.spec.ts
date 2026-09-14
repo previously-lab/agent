@@ -190,7 +190,7 @@ test.describe("Memory viz (v0.10)", () => {
       const beforeY = await settledY(anchor);
 
       await armedOrigin(page)
-        .getByRole("button", { name: "Load earlier conversations" })
+        .getByRole("button", { name: "Load earlier" })
         .click();
 
       // The page lands: S00/S01 are in the window and the catalog is exhausted,
@@ -368,7 +368,18 @@ test.describe("Memory viz (v0.10)", () => {
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
-      await expect(page.getByText(/NOW · now/)).toBeVisible();
+      // The 「NOW · 现在」 caption that used to be asserted here is DELETED —
+      // a label with no action sitting in the bottom centre, exactly where the
+      // compact composer puts a button, so readers clicked it expecting the
+      // button. It also said something the field already says: the bottom of
+      // the list is now, and the core line's blue spine marks the present on
+      // the rail. What replaces it as the "this rung is fully assembled"
+      // assertion is the BOARD BAR: the zoom control and the strand selector,
+      // which must exist at every rung because the lens is the only way back
+      // to the conversation.
+      await expect(page.locator("[data-board-bar]")).toBeVisible({
+        timeout: 30_000,
+      });
       await expect(page.locator("canvas").first()).toBeVisible({
         timeout: 30_000,
       });
@@ -400,9 +411,15 @@ test.describe("Memory viz (v0.10)", () => {
 
       await lensButton(page, "Slice").click();
       await expect(page).toHaveURL(/z=slice/);
-      // The composer is still attached under the card field: it collapses to a
-      // button rather than unmounting (see `composer-host.tsx`).
-      await expect(page.locator("textarea")).toBeAttached();
+      // The composer COLLAPSES here rather than staying up: at a card rung the
+      // full box would be an empty card sitting on the field the reader is
+      // looking at. What must not happen is the composer being lost — so the
+      // compact form is on screen, and the textarea is deliberately absent
+      // (this used to assert the opposite, back when the full form was merely
+      // hidden). See `composer-host.tsx` and `chat-input.tsx`'s `collapsed`.
+      await expect(page.locator("[data-composer-collapsed]")).toBeVisible();
+      await expect(page.locator("[data-composer-pill]")).toBeVisible();
+      await expect(page.locator("textarea")).toHaveCount(0);
 
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
@@ -419,7 +436,26 @@ test.describe("Memory viz (v0.10)", () => {
       // the URL goes clean rather than carrying `?z=conversation`.
       await lensButton(page, "Conversation").click();
       await expect(page).not.toHaveURL(/z=/);
-      await expect(page.locator("textarea")).toBeAttached();
+      // THE REAL INVARIANT, and a stronger one than the node identity above:
+      // what the reader typed survives the round trip through a card rung.
+      // That is the reason the composer is one never-unmounted component with
+      // a render-prop form rather than two branches (see `composer-host.tsx`),
+      // and it is the thing the old `toBeAttached()` was standing in for.
+      const area = page.locator("textarea").first();
+      await expect(area).toBeAttached();
+      await area.click();
+      await page.keyboard.type("still here");
+      await expect(area).toHaveValue("still here");
+
+      await lensButton(page, "Slice").click();
+      await expect(page).toHaveURL(/z=slice/);
+      await expect(page.locator("[data-composer-collapsed]")).toBeVisible();
+      await expect(async () => {
+        await page.locator("[data-composer-collapsed]").click();
+        await expect(page.locator("textarea")).toBeVisible({ timeout: 3_000 });
+      }).toPass();
+      await expect(page.locator("textarea")).toHaveValue("still here");
+
       await expect(stream).toBeVisible();
     });
 

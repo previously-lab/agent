@@ -75,6 +75,11 @@ export function MemoryDocs({ persona }: { persona?: string }) {
                 render={
                   <button
                     type="button"
+                    // A tooltip is not an accessible name — it is a description
+                    // that appears on hover, which a screen reader never does.
+                    // This button is in BOTH composer forms, and the compact
+                    // one has no visible label at all beside it.
+                    aria-label={t("docsTooltip")}
                     className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
                   >
                     <BookOpenText className="h-3.5 w-3.5" />

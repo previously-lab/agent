@@ -15,6 +15,11 @@
  *   shared `feed` reports 0..1 to the ambient threadline. Nearing the
  *   top edge prefetches the older catalog window (`onNeedOlder`), and a
  *   prepend shifts the scroll offset so the world never jumps.
+ * - The window's HEAD (`OriginRow`): the region above the oldest loaded row,
+ *   stating what time it is at that edge and offering the older page. It is
+ *   the conversation field's `FieldOrigin` in the same visual language, and it
+ *   scrolls one region past the oldest row (`originMinOffset`) — so the two
+ *   fields have one scroll range shape, not two.
  * - Zoom: ctrl/cmd+wheel or two-finger pinch steps L0 slice ↔ L1 day ↔
  *   L2 week; clicking a stack steps one level finer, anchored on it. The
  *   level is semi-controlled: the shell owns it (for the floating lens
@@ -87,6 +92,8 @@ import { useTier } from "@/hooks/use-tier";
 import {
   armedGate,
   gateBands,
+  originMinOffset,
+  ORIGIN_REGION,
   type GateBand,
   type GateSignal,
 } from "@/lib/chat/field-blocks";
@@ -98,6 +105,7 @@ import {
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { BoundaryRow } from "./boundary-row";
+import { OriginRow } from "./origin-row";
 import { ConversationUnit } from "./conversation-unit";
 import { LeavingCard } from "./leaving-card";
 import type { DealOrigin, FieldRig, LeavingItem } from "./field-rig";
@@ -106,7 +114,10 @@ export interface CardFieldProps {
   /** Catalog window, already strand-filtered (oldest → newest). */
   entries: TimelineSliceEntry[];
   hasMore: boolean;
-  onNeedOlder: () => void;
+  /** Prefetch the next older window. Answers with the read's own promise when
+   *  it has one, which is what lets the head's button show that a page is in
+   *  flight — a caller that pages synchronously simply never sees the spinner. */
+  onNeedOlder: () => void | Promise<void>;
   /** L0 card click → dock the reading panel. `start` (the row top's ISO
    *  start) rides along so the chat jump never needs a catalog fetch. */
   onOpenSlice: (sliceId: string, start?: string) => void;
@@ -157,11 +168,13 @@ function findOldSlot(
 /** Scroll offset that puts `anchorIdx`'s centre at the middle of the field,
  *  clamped to content. The anchor's own height comes off the table — a
  *  conversation unit's is measured, and passing a card's would aim the landing
- *  half a conversation away from the slice the reader asked for. */
+ *  half a conversation away from the slice the reader asked for. The floor is
+ *  the field's own `minOffset` (the head is a place to land like any other). */
 function centeredScrollForAnchor(
   layout: ReturnType<typeof layoutFor>,
   anchorIdx: number,
   fieldH: number,
+  minOffset: number,
 ): number {
   const { tops, faceHeights } = layout;
   const max = Math.max(0, (tops[tops.length - 1] ?? 0) - fieldH);
@@ -170,7 +183,7 @@ function centeredScrollForAnchor(
     anchorIdx,
     faceHeights[anchorIdx] ?? 0,
     fieldH / 2,
-    0,
+    minOffset,
     max,
   );
 }
@@ -271,7 +284,11 @@ interface FieldSceneProps {
   onUnitHeight: (key: string, px: number) => void;
   rig: React.MutableRefObject<FieldRig>;
   hasMore: boolean;
-  onNeedOlder: () => void;
+  /** Ask for the older page, once per request however many frames the edge
+   *  stays crossed — see `CardField`'s own `requestOlder`. */
+  requestOlder: () => void;
+  /** True while that page is in flight, for the head's control. */
+  loadingOlder: boolean;
   reducedMotion: boolean;
   flashId: string | null;
   onActivate: (row: StackRow) => void;
@@ -294,7 +311,8 @@ function FieldScene({
   onUnitHeight,
   rig,
   hasMore,
-  onNeedOlder,
+  requestOlder,
+  loadingOlder,
   reducedMotion,
   flashId,
   onActivate,
@@ -323,6 +341,21 @@ function FieldScene({
   // its text, and `layoutFor` is the only place that difference is known.
   // `layout` itself is the field's, computed once and passed down (see props).
   const tops = layout.tops;
+
+  // THE HEAD OF THE WINDOW. A LEADING region above unit 0, exactly as the
+  // conversation field has always drawn it: the offset table stays anchored on
+  // the oldest unit's own top edge, and the head is the strip of
+  // `FIELD_ORIGIN_PX` that ends there — which is why `minOffset` (how far above
+  // that edge the reader may travel) is one function rather than a ternary
+  // re-derived at each clamp.
+  const hasOrigin = rows.length > 0;
+  const minOffset = originMinOffset(hasOrigin);
+  /** The oldest time the window holds — the row's oldest ENTRY, because a stack
+   *  row's face is its newest slice and the head stands above all of them. */
+  const oldestIso = rows[0]?.entries[0]?.start ?? rows[0]?.top.start ?? "";
+  // The head's own arm signal: it is the one boundary in this field that
+  // belongs to no row, so it cannot be looked up in the per-row map.
+  const originSignal = useRef<GateSignal>({ armed: false, dir: "past" });
 
   // The clip planes follow the viewport, because the camera DISTANCE does
   // (`camera.ts`): at `camZ = 1.87·viewH` R3F's default `far = 1000` is nearer
@@ -392,7 +425,7 @@ function FieldScene({
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
     const max = Math.max(0, layout.total - size.height);
-    rigNow.target = THREE.MathUtils.clamp(rigNow.target, 0, max);
+    rigNow.target = THREE.MathUtils.clamp(rigNow.target, minOffset, max);
 
     // A SEEK from the band. Consumed by `gen`, so a request is acted on once
     // however many frames it stays published. While the pointer is down the
@@ -403,7 +436,7 @@ function FieldScene({
     const seek = feed?.seek;
     if (seek && seek.gen !== seekGenRef.current) {
       seekGenRef.current = seek.gen;
-      const to = offsetFor(seek.progress, 0, max);
+      const to = offsetFor(seek.progress, minOffset, max);
       rigNow.target = to;
       if (seek.dragging) rigNow.current = to;
     }
@@ -427,13 +460,15 @@ function FieldScene({
       rigNow.target <= TOP_ZONE_PX &&
       hasMore
     ) {
-      onNeedOlder();
+      requestOlder();
     }
 
     // THE ONE PLACE THIS FIELD TOUCHES THE FEED, and the ownership test is on
     // the whole block rather than on each write — see `field-feed.ts`.
     const ownsFeed = publishing;
-    if (ownsFeed) feed.progress = progressFor(rigNow.current, 0, max);
+    if (ownsFeed) {
+      feed.progress = progressFor(rigNow.current, minOffset, max);
+    }
 
     // Row-start anchors for the threadline's strand field: every visible row
     // at the CURRENT level is one anchor (L0 slice / L1 day / L2 week), as a
@@ -485,20 +520,28 @@ function FieldScene({
     // This replaces a rule that measured the GAP between rows — a spacing, not
     // a statement, and a different geometry from the conversation's gate
     // midpoint. With a real boundary region both rungs mark the same thing.
+    //
+    // The head is a boundary too, and it takes precedence at the top: being at
+    // the very top IS the announcement, which is what `armedGate`'s origin
+    // branch says. Its own box is the leading region above unit 0, off the same
+    // table the rows are placed from.
     const bands = gateBands(
       bandsRef.current,
       rows.length,
       (i) => i < rows.length - 1,
       tops,
       pitch,
-      false, // the card rungs have no window head; the present is at the bottom
+      hasOrigin,
     );
-    const armed = armedGate(bands, rigNow.current, size.height, 0);
+    const armed = armedGate(bands, rigNow.current, size.height, minOffset);
     let armedBand: GateBand | null = null;
     for (const band of bands) {
       const isArmed = band.index === armed;
       if (isArmed) armedBand = band;
-      const signal = signalFor(rows[band.index].key);
+      const signal =
+        band.index === ORIGIN_REGION
+          ? originSignal.current
+          : signalFor(rows[band.index].key);
       if (signal.armed !== isArmed) signal.armed = isArmed;
       if (isArmed && signal.dir !== dirRef.current) signal.dir = dirRef.current;
     }
@@ -576,6 +619,22 @@ function FieldScene({
 
   return (
     <>
+      {hasOrigin && (
+        <OriginRow
+          // The head's BOTTOM edge is unit 0's top. The table starts at 0, so
+          // this is `tops[0]` today — read off the table rather than written as
+          // 0, because "where does the column start" is the table's answer and
+          // a literal here would be a second one.
+          bottomPx={tops[0] ?? 0}
+          width={geo.cardW}
+          oldestIso={oldestIso}
+          hasMore={hasMore}
+          loading={loadingOlder}
+          onLoadOlder={requestOlder}
+          signal={originSignal.current}
+          rig={rig}
+        />
+      )}
       {visible.map((row, vi) => {
         const index = first + vi;
         const topPx = tops[index] ?? 0;
@@ -732,6 +791,29 @@ export function CardField({
   const initDoneRef = useRef(false);
   const prevFirstKeyRef = useRef<string | null>(null);
 
+  // ── Paging older, and the one place it is asked for ──────────────────────
+  // Two things ask: the top-edge trigger in the frame loop, and the head's own
+  // control. Both go through here for the in-flight flag, so the head can show
+  // that a page is on its way regardless of which of the two asked — and so the
+  // guard is stated once rather than as a habit of one caller. The ref is the
+  // latch (a page takes hundreds of ms and the edge can be crossed many times
+  // in that window); the state is only what the pill paints.
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const olderInFlightRef = useRef(false);
+  const requestOlder = useCallback(() => {
+    if (olderInFlightRef.current) return;
+    const pending = onNeedOlder();
+    // A caller that pages synchronously has nothing to wait on, and the pill
+    // simply does not spin — there is no honest moment to spin it.
+    if (!(pending instanceof Promise)) return;
+    olderInFlightRef.current = true;
+    setLoadingOlder(true);
+    void pending.finally(() => {
+      olderInFlightRef.current = false;
+      setLoadingOlder(false);
+    });
+  }, [onNeedOlder]);
+
   // ── Measured face heights: the turns rung's only input the cards lack ────
   // Keyed by ROW KEY and not by index. A page arriving at the head renumbers
   // every row, and an index-keyed map would hand each arriving slice the height
@@ -784,6 +866,11 @@ export function CardField({
     [rows, rung, geo, measureVersion],
   );
   const tops = layout.tops;
+  // The window's head, and the floor of the scroll range it implies. Both the
+  // scene and every clamp in this component read the same pair — see
+  // `originMinOffset`.
+  const hasOrigin = rows.length > 0;
+  const minOffset = originMinOffset(hasOrigin);
 
   // Render-time prepend compensation: shift the scroll rig synchronously so the
   // next frame's RowGroup positions use the corrected offset, avoiding a
@@ -950,7 +1037,12 @@ export function CardField({
       if (anchorIdx >= 0) rig.current.anchorIndex = anchorIdx;
       const newCurrent =
         anchorIdx >= 0
-          ? centeredScrollForAnchor(toLayout, anchorIdx, fieldH)
+          ? centeredScrollForAnchor(
+              toLayout,
+              anchorIdx,
+              fieldH,
+              originMinOffset(toRows.length > 0),
+            )
           : scroll;
       // Pre-apply the post-transition scroll so the first rendered frame
       // already uses the same current that RowGroup will animate toward.
@@ -1018,7 +1110,7 @@ export function CardField({
       const idx = indexForAnchor(rows, anchorId);
       if (idx >= 0) {
         rig.current.anchorIndex = idx;
-        const pos = centeredScrollForAnchor(layout, idx, fieldSize.h);
+        const pos = centeredScrollForAnchor(layout, idx, fieldSize.h, minOffset);
         rig.current.target = pos;
         rig.current.current = pos;
         rig.current.genAt = performance.now();
@@ -1050,16 +1142,16 @@ export function CardField({
     // `layout.total` rather than `count * pitch`: the column's extent is what
     // the frame loop clamps against, and at the turns rung no count times any
     // pitch gives it.
-  }, [rows, geo, layout, metrics, fieldSize.h, tops]);
+  }, [rows, geo, layout, metrics, fieldSize.h, tops, minOffset]);
 
   // ── Fill pass: content shorter than the field can never reach the top ──
   useEffect(() => {
     if (!hasMore || rows.length === 0) return;
     const timer = setTimeout(() => {
-      if (layout.total <= fieldSize.h + 1) onNeedOlder();
+      if (layout.total <= fieldSize.h + 1) requestOlder();
     }, 900);
     return () => clearTimeout(timer);
-  }, [rows, hasMore, onNeedOlder, layout, fieldSize.h]);
+  }, [rows, hasMore, requestOlder, layout, fieldSize.h]);
 
   // ── ?at= flash decay ──
   useEffect(() => {
@@ -1268,7 +1360,9 @@ export function CardField({
           next = rig.current.target - page;
           break;
         case "Home":
-          next = 0;
+          // The very top is the head of the window, not unit 0's top edge:
+          // Home is where the "load earlier" control lives.
+          next = minOffset;
           break;
         case "End":
           next = max;
@@ -1277,9 +1371,9 @@ export function CardField({
           return;
       }
       e.preventDefault();
-      rig.current.target = THREE.MathUtils.clamp(next, 0, max);
+      rig.current.target = THREE.MathUtils.clamp(next, minOffset, max);
     },
-    [layout.total, fieldSize.h],
+    [layout.total, fieldSize.h, minOffset],
   );
 
   if (entries.length === 0) {
@@ -1330,7 +1424,8 @@ export function CardField({
           onUnitHeight={onUnitHeight}
           rig={rig}
           hasMore={hasMore}
-          onNeedOlder={onNeedOlder}
+          requestOlder={requestOlder}
+          loadingOlder={loadingOlder}
           reducedMotion={reducedMotion}
           flashId={flashId}
           onActivate={onActivate}

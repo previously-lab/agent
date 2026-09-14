@@ -36,7 +36,12 @@ Every chat turn itself runs inside a durable Vercel Workflow run (`src/app/api/c
 ### Layout Hierarchy
 
 1. **Root Layout** (`src/app/layout.tsx`): Geist fonts + `ThemeProvider` + `<Toaster />`
-2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppHeader />` + the page. **There is no sidebar** — chrome is three floating islands (brand/status left, actions right) over an infinite canvas with no page boundaries, so the header element is pointer-transparent and each island re-enables pointer events.
+2. **Locale Layout** (`src/app/[locale]/layout.tsx`): `NextIntlClientProvider` + `<AppHeader />` + the page. **There is no sidebar** — chrome is THREE floating islands over an infinite canvas with no page boundaries, so the header element is pointer-transparent and each island re-enables pointer events:
+   - **top-left** brand + status badges (`layout/app-header.tsx`)
+   - **top-centre** the board bar — the zoom lens and the strand selector, the two controls that change what the field SHOWS (`shell/board-bar.tsx`). It is rendered by the shell, not by the header, because the strand selection is shell state. Below `sm` it wraps to a second line (three islands and four lens segments do not fit in 390px), which is what the chat content's `pt-24` clears.
+   - **top-right** settings, icons only. The words were the widest thing in the chrome and three islands only fit on one line at phone width once they went.
+
+   The shared finish is one module, `src/components/layout/island.ts` (`ISLAND` / `ISLAND_CONTROL`) — it was typed out four times before, with four chances to drift.
 3. **The shell** (`src/components/shell/app-shell.tsx`) is per-page, not per-layout: it owns the left `AxisBand` (the time rail) and the right pane, which holds the conversation field and the card field. The rung decides which is visible.
 4. **Route-level**: Each route has `loading.tsx` and `error.tsx` for full state coverage
 
@@ -96,7 +101,7 @@ Streamed message-part rendering. See `src/components/chat/CLAUDE.md` for full de
 |--------|------|---------|
 | Capabilities | `src/lib/capabilities.ts` | Global app-mode checks: isAIConfigured, isDemo, canWrite, getRepoConfig (delegates data-source decisions to `src/lib/data-source/resolve.ts`) |
 | GitHub Tools | `src/lib/tools/` | readFile/writeFile/listFiles via Octokit — the BASE data utilities. Everything else wraps these; nothing reads memory any other way |
-| Data Cache | `src/lib/cache/data-cache.ts` | The ONE home of the Next cache idiom. `unstable_cache`/`revalidateTag` are imported nowhere else. Per-backend TTLs: github 24h (closed slices) / 60s (indices) / 300s · **demo 30 days** (read-only dataset) · **local uncached** (a dev filesystem is written by things that bypass our write path). Every base read takes `{ fresh: true }` to bypass |
+| Data Cache | `src/lib/cache/data-cache.ts` | The ONE home of the Next cache idiom. `unstable_cache`/`revalidateTag` are imported nowhere else. Per-backend TTLs: github 24h (closed slices) / 60s (indices) / 300s · **demo 30 days over the network, 60s off a local sibling clone** (a published dataset is immutable; a clone is a directory the developer edits, and those writes bypass our write path) · **local uncached** (a dev filesystem is written by things that bypass our write path). Every base read takes `{ fresh: true }` to bypass |
 | Path Whitelist | `src/lib/whitelist/` | Security boundary: memory/tasks/sessions only |
 | Origin Guard | `src/lib/security/origin-guard.ts` | Same-origin guard on POST mutation endpoints (`/api/chat`, `/api/episodic/flush`); optional `ACCESS_SECRET` key check for non-browser callers |
 | Session Manager | `src/lib/session/` | In-memory session state with sliding window (legacy) |
@@ -178,9 +183,10 @@ names the rung (absent = `conversation`, written with `replaceState` because the
 rung changes on every wheel-zoom); `src/lib/chat/deep-link.ts` owns the parsing,
 and `?at=<sliceId>` still addresses a POINT rather than a zoom. The
 `?view=chat|timeline` param and the header pill that drove it are gone — they
-were the coarse half of this same axis. The floating lens
-(`components/timeline-3d/lens-switcher.tsx`) is now the only control that moves
-along it, and it is mounted by the SHELL so it exists at every rung.
+were the coarse half of this same axis. The board bar
+(`components/shell/board-bar.tsx`) is now the only control that moves along it
+— it carries the zoom lens (`timeline-3d/lens-switcher.tsx`) and the strand
+selector — and it is mounted by the SHELL so it exists at every rung.
 
 **Two renderers, deliberately.** The conversation rung is drawn by the chat's
 own field and the three card rungs by `CardField`. They are not two settings of

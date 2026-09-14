@@ -16,11 +16,35 @@
  * is not decoration: the head of the window is the only place where "show me
  * earlier" is a coherent thing to ask, and the reader is standing in it.
  *
+ * THE ARMED FACE IS TWO LINES, EDGE-ALIGNED:
+ *
+ *   ↑ 2 个月前                                          19:08
+ *   7月11日                                          加载更早
+ *
+ * It used to be four centred lines — interval, time, date, control — which
+ * read as a placard stacked in the middle of the region rather than as a time
+ * readout. Two lines let the edges do the work: the LEFT edge carries what
+ * time this is (the interval the head measures by, the date it lands on), the
+ * RIGHT edge carries the time of day and the one action available here. The
+ * faces are the same three components `SliceGate` states its intertitle with
+ * (`RelativeStamp`, `TimeStamp`, `DateStamp`) — this is that readout, not a
+ * second one — and the page control is a pill because it is a button, not a
+ * caption: a label in this position is something readers click and nothing
+ * happens.
+ *
+ * The interval phrase is the head's own question — there is no slice on the
+ * other side to measure against — so it is stated against the PRESENT, stamped
+ * once per mount: a clock that re-read itself every render would restart the
+ * ticker on every unrelated update.
+ *
  * It sits at a CONSTANT world offset one region above block 0, which is what
  * makes loading behave. A page of older slices lands between this region and
  * the old head, so the region is always above everything loaded; combined with
  * the field's camera compensation, the reader's view does not move at all, and
- * the new conversations are off-screen above them to be scrolled into.
+ * the new conversations are off-screen above them to be scrolled into. That
+ * arithmetic is the same at every rung — the card field renders THIS component
+ * inside its own billboard (`timeline-3d/origin-row.tsx`), so the two fields
+ * cannot state their head two different ways.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -51,10 +75,6 @@ export function FieldOrigin({
 }: FieldOriginProps) {
   const t = useTranslations("chat.gate");
   const ref = useRef<HTMLDivElement>(null);
-  // The head's only anchor is the present — there is no other side to measure
-  // from — so "how long ago is this" is the question it answers. Stamped once
-  // per mount: a clock that re-reads itself every render would restart the
-  // ticker on every unrelated update.
   const [nowIso] = useState(() => new Date().toISOString());
   const shownRef = useRef<boolean | null>(null);
 
@@ -92,37 +112,53 @@ export function FieldOrigin({
       {/* ARMED — the reader is at the head, so the head answers. The origin
           has only one face — there is no other side to travel to — so it wears
           the solo class rather than the gate's direction pair. */}
-      <div className="gate-face gate-face-solo absolute inset-0 flex flex-col items-center justify-center gap-2 px-4">
-        <span className="relative inline-flex items-baseline font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
-          <ChevronUp
-            className="absolute right-full top-1/2 mr-1.5 size-3 -translate-y-1/2"
-            aria-hidden
+      <div className="gate-face gate-face-solo absolute inset-0 flex flex-col justify-center gap-2 px-4">
+        {/* LINE 1 — left: how far back the head is. Right: the time it lands
+            on. The chevron rides in the row rather than hanging off it: the
+            row is edge-aligned, so a marker outside the left edge would fall
+            outside the column the head is drawn in. */}
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <ChevronUp className="size-3 shrink-0 self-center" aria-hidden />
+            <span className="inline-flex items-baseline font-mono text-[10px] uppercase tracking-[0.3em] text-muted-foreground">
+              <RelativeStamp
+                fromIso={nowIso}
+                toIso={oldestIso}
+                fallback={t("earlier")}
+              />
+            </span>
+          </span>
+          {/* `shrink-0`: the interval phrase is the side that gives way when
+              the column is at its narrowest — a squeezed "19:08" is a clock
+              face rendered wrong. */}
+          <TimeStamp
+            timestamp={oldestIso}
+            className="shrink-0 text-3xl tracking-tight text-foreground"
           />
-          <RelativeStamp
-            fromIso={nowIso}
-            toIso={oldestIso}
-            fallback={t("earlier")}
+        </div>
+
+        {/* LINE 2 — left: the date; right: the only action this region has.
+            With nothing older to page in there is no control at all: the
+            statement that this is the beginning of the memory belongs to the
+            dormant rule, and saying it twice in one region is one statement
+            too many. */}
+        <div className="flex items-center justify-between gap-3">
+          <DateStamp
+            timestamp={oldestIso}
+            className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70"
           />
-        </span>
-        <TimeStamp
-          timestamp={oldestIso}
-          className="text-3xl tracking-tight text-foreground"
-        />
-        <DateStamp
-          timestamp={oldestIso}
-          className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/70"
-        />
-        {hasMore && (
-          <button
-            type="button"
-            onClick={onLoadOlder}
-            disabled={loading}
-            className="mt-1 pointer-events-auto inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 text-[11px] text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground disabled:opacity-60"
-          >
-            {loading && <Loader2 className="size-3 animate-spin" aria-hidden />}
-            {t("loadOlder")}
-          </button>
-        )}
+          {hasMore && (
+            <button
+              type="button"
+              onClick={onLoadOlder}
+              disabled={loading}
+              className="pointer-events-auto inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-card/90 px-3 py-1.5 text-[11px] text-muted-foreground backdrop-blur-sm transition-colors hover:text-foreground disabled:opacity-60"
+            >
+              {loading && <Loader2 className="size-3 animate-spin" aria-hidden />}
+              {t("loadOlder")}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

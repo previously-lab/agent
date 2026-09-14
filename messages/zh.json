@@ -241,7 +241,7 @@
       "later": "更晚",
       "head": "已加载的最早",
       "beginning": "记忆的起点",
-      "loadOlder": "加载更早的对话"
+      "loadOlder": "加载更早"
     },
     "seamLoadOlder": "加载更早的对话",
     "seam": {
@@ -338,10 +338,6 @@
       "duration": "{min} 分钟",
       "no": "No.{date}·{time}"
     },
-    "now": {
-      "label": "NOW",
-      "sub": "现在"
-    },
     "filter": {
       "label": "筛选时间线",
       "all": "核心时间线",
@@ -359,6 +355,10 @@
       "week": "周",
       "hintDesktop": "Ctrl+滚轮或双指捏合缩放",
       "hintTouch": "双指捏合缩放"
+    },
+    "running": {
+      "title": "正在写下来…",
+      "hint": "回复正在流式传来。回到对话查看。"
     }
   },
   "settings": {
@@ -488,14 +488,35 @@
   },
   "relative": {
     "now": "现在",
-    "moments": { "before": "片刻前", "after": "片刻后" },
+    "moments": {
+      "before": "片刻前",
+      "after": "片刻后"
+    },
     "prefixAfter": "",
-    "minute": { "before": "分钟前", "after": "分钟后" },
-    "hour": { "before": "小时前", "after": "小时后" },
-    "day": { "before": "天前", "after": "天后" },
-    "week": { "before": "周前", "after": "周后" },
-    "month": { "before": "个月前", "after": "个月后" },
-    "year": { "before": "年前", "after": "年后" }
+    "minute": {
+      "before": "分钟前",
+      "after": "分钟后"
+    },
+    "hour": {
+      "before": "小时前",
+      "after": "小时后"
+    },
+    "day": {
+      "before": "天前",
+      "after": "天后"
+    },
+    "week": {
+      "before": "周前",
+      "after": "周后"
+    },
+    "month": {
+      "before": "个月前",
+      "after": "个月后"
+    },
+    "year": {
+      "before": "年前",
+      "after": "年后"
+    }
   },
   "markdown": {
     "alert": {

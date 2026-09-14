@@ -80,6 +80,31 @@ try {
   check("the collapsed composer is present", (await fab.count()) === 1);
   check("the collapsed composer is visible", await fab.isVisible());
 
+  // WHAT THE COLLAPSED FORM CARRIES, which is a design decision and not an
+  // accident of markup. The docs button is in BOTH forms (reading the memory
+  // is not a conversation act); the attach button is in the full form only
+  // (choosing a file is the first half of sending, and there is no send button
+  // on screen); the model picker is in the full form only (it configures the
+  // next message, and there is no next message to write yet).
+  const pill = page.locator("[data-composer-pill]");
+  check("the compact composer is a pill of controls", (await pill.count()) === 1);
+  check(
+    "the compact pill carries the memory-docs button",
+    (await pill.getByRole("button", { name: /docs|文档/i }).count()) === 1,
+  );
+  // By hook, not by name: the attach control's label changes with the selected
+  // model's vision capability ("Attach files" vs "This model can't read
+  // images"), so a name-based probe would pass for the wrong reason on one
+  // model and fail on the other.
+  check(
+    "the compact pill carries NO attach button",
+    (await pill.locator("[data-attach]").count()) === 0,
+  );
+  check(
+    "the compact pill carries no model picker",
+    (await pill.getByText(/V4|Pro|Flash/i).count()) === 0,
+  );
+
   // `click()` includes the "receives pointer events" actionability check, so a
   // covering element fails here rather than silently swallowing the press.
   let clicked = false;
@@ -96,6 +121,15 @@ try {
     await page.waitForTimeout(700);
     const area = page.locator("textarea").first();
     check("clicking it opens the full composer", await area.isVisible());
+    // The two forms differ by MORE than size, and this is the half of that
+    // difference a screenshot cannot prove: the attach button is back.
+    const expanded = page.locator("[data-composer]");
+    const attach = expanded.locator("[data-attach]");
+    check("the full form restores the attach button", (await attach.count()) === 1);
+    // ...and it is REACHABLE, not just present: an icon-only control with no
+    // accessible name is a control a screen reader cannot announce.
+    const attachName = (await attach.getAttribute("aria-label")) ?? "";
+    check("the attach button has an accessible name", attachName.length > 0, attachName);
     // Editable, not just visible: a textarea under `inert` renders and refuses
     // every keystroke, which would look identical in a screenshot.
     await area.click({ timeout: 3000 }).catch(() => {});
@@ -137,6 +171,40 @@ try {
   check(
     "the NOW caption is gone",
     (await page.getByText(/NOW\s*·/).count()) === 0,
+  );
+
+  // ── The three bars, and what each one is allowed to say ──────────────────
+  // The board bar is at the top CENTRE and carries both field controls: the
+  // zoom lens and the strand selector, which used to live on the 24-32px time
+  // rail. The settings bar is at the top right and carries no words.
+  const board = page.locator("[data-board-bar]");
+  check("the board bar exists", (await board.count()) === 1);
+  check(
+    "the board bar carries the zoom lens",
+    (await board.getByRole("group", { name: "Lens" }).count()) === 1,
+  );
+  check(
+    "the board bar carries the strand selector",
+    (await board.getByRole("button", { name: /filter timeline/i }).count()) === 1,
+  );
+  check(
+    "the strand selector left the time rail",
+    (await page.locator("[data-scrub-surface]").getByRole("button", { name: /filter timeline/i }).count()) === 0,
+  );
+  // Only the ACTIVE segment spells itself out — four lit words would state the
+  // destinations and not the position.
+  const lensLabels = await board
+    .getByRole("group", { name: "Lens" })
+    .locator("button span")
+    .count();
+  check("exactly one lens segment shows its name", lensLabels === 1, `${lensLabels} labels`);
+
+  // The settings bar: every control is a glyph. It is the LAST island in the
+  // header, and its text labels were the widest thing in the chrome.
+  const settingsBar = page.locator("header nav");
+  check(
+    "the settings bar shows no text labels",
+    (await settingsBar.locator("span:not(.sr-only)").count()) === 0,
   );
 
   await ctx.close();

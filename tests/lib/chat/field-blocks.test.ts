@@ -8,6 +8,7 @@ import {
   armedGate,
   gateBands,
   groupBlocks,
+  originMinOffset,
   prependHeadCount,
   sliceIdOf,
   splitItems,
@@ -328,6 +329,16 @@ describe("armedGate", () => {
 
   it("is empty-safe", () => {
     expect(armedGate([], 0, viewportH, 0)).toBeNull();
+  });
+});
+
+describe("originMinOffset", () => {
+  it("reaches one head above the oldest unit when there is a head", () => {
+    expect(originMinOffset(true)).toBe(-FIELD_ORIGIN_PX);
+  });
+
+  it("bottoms out at the oldest unit's own top edge when there is not", () => {
+    expect(originMinOffset(false)).toBe(0);
   });
 });
 

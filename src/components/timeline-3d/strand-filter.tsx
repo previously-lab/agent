@@ -30,6 +30,17 @@ export interface StrandFilterProps {
   onToggle: (strand: string) => void;
   /** Back to 核心时间线. */
   onClear: () => void;
+  /**
+   * Spell the selection out beside the swatch.
+   *
+   * The trigger is a single 28 px square by default, which is the right size
+   * for the place it used to live (centred in a 24-32 px time rail, where a
+   * word would have hung over the content). In the board bar there is room,
+   * and a lone coloured square does not say WHICH strand is picked — a reader
+   * who filtered to one strand and then looked away has no way to recover the
+   * name without opening the popover. So the bar grows a word.
+   */
+  showLabel?: boolean;
 }
 
 /** The trigger's swatch: the brand mark when nothing is picked, the one colour
@@ -54,6 +65,7 @@ export function StrandFilter({
   selected,
   onToggle,
   onClear,
+  showLabel = false,
 }: StrandFilterProps) {
   const t = useTranslations("timeline3d.filter");
   const [open, setOpen] = useState(false);
@@ -74,12 +86,27 @@ export function StrandFilter({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="pointer-events-auto flex size-7 items-center justify-center rounded-md bg-card/80 ring-1 ring-foreground/12 backdrop-blur-md transition-[background-color,box-shadow] duration-200 hover:bg-card hover:ring-foreground/25 data-[state=open]:bg-card data-[state=open]:ring-foreground/25"
+        className={`pointer-events-auto flex items-center justify-center transition-[background-color,box-shadow] duration-200 ${
+          showLabel
+            ? // In the board bar: a pill the same height as a lens segment, so
+              // the two halves of the bar read as one control with two parts.
+              "h-8 gap-1.5 rounded-full px-2 text-xs text-muted-foreground hover:text-foreground sm:h-7"
+            : "size-7 rounded-md bg-card/80 ring-1 ring-foreground/12 backdrop-blur-md hover:bg-card hover:ring-foreground/25 data-[state=open]:bg-card data-[state=open]:ring-foreground/25"
+        }`}
         aria-label={label}
       >
         <TriggerSwatch selected={selected} />
+        {showLabel && (
+          <span className="max-w-24 truncate">
+            {selected.length === 0 ? t("all") : selected.join(" + ")}
+          </span>
+        )}
       </PopoverTrigger>
-      <PopoverContent align="start" side="bottom" className="w-64 gap-1 p-1.5">
+      <PopoverContent
+        align={showLabel ? "center" : "start"}
+        side="bottom"
+        className="w-64 gap-1 p-1.5"
+      >
         <div className="flex items-center gap-1.5 rounded-md bg-muted/60 px-2 py-1.5">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input

@@ -26,10 +26,10 @@ export function SettingsLink() {
           render={
             <span
               aria-disabled="true"
-              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground/50 cursor-not-allowed"
+              aria-label={t("settings")}
+              className="flex size-7 cursor-not-allowed items-center justify-center rounded-full text-muted-foreground/50"
             >
               <Settings className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">{t("settings")}</span>
             </span>
           }
         />
@@ -41,10 +41,11 @@ export function SettingsLink() {
   return (
     <Link
       href="/settings"
-      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+      aria-label={t("settings")}
+      title={t("settings")}
+      className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
     >
       <Settings className="h-3.5 w-3.5 shrink-0" />
-      <span className="hidden sm:inline">{t("settings")}</span>
     </Link>
   );
 }

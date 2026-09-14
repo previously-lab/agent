@@ -1,17 +1,32 @@
 "use client";
 
 /**
- * LensSwitcher (v0.12) — the timeline's floating zoom-lens control: a
- * segmented pill 「片 · 日 · 周」 parked at the right pane's bottom-right,
- * in the same frosted-island language as the header pills. It is the visible
- * half of the CardField zoom: clicking a segment requests that StackLevel
- * through the same anchored transition as the ctrl+wheel / pinch gestures,
- * and any level change (gesture included) moves the active segment.
+ * LensSwitcher — the segmented control for the rung ladder: 对话 · 片 · 日 · 周.
+ * It is the visible half of the CardField zoom: clicking a segment requests
+ * that StackLevel through the same anchored transition as the ctrl+wheel /
+ * pinch gestures, and any level change (gesture included) moves the selection.
+ *
+ * IT SAYS THE RUNG'S NAME ONLY FOR THE RUNG YOU ARE ON. Every segment carries
+ * its icon; the selected one grows a word beside it. Two reasons, and the
+ * second is the real one:
+ *
+ *   1. Four labels is a wide control, and this one shares a bar with the
+ *      strand selector.
+ *   2. A ladder is read by comparing where you ARE against where you can go.
+ *      Four lit words state only the destinations; one lit word states the
+ *      position. The icons stay for the rest, so nothing becomes unlabelled —
+ *      each still has its `aria-label` and its tooltip.
+ *
+ * It is INLINE (no positioning of its own). It used to float itself at the
+ * right pane's bottom-right; the shell now seats it in the board bar at the
+ * top of the screen, where it is mounted at every rung — inside the card field
+ * it vanished on the conversation rung, which is precisely where a reader
+ * needs it to get back to the cards.
  *
  * A one-shot hint bubble ("Ctrl+scroll or pinch to zoom" / pinch-first on
- * touch screens) fades in beside the pill and dismisses itself the first
- * time the level changes — the user has discovered zoom either way. The
- * dismissal is remembered in localStorage so it never nags again.
+ * touch screens) fades in below the bar and dismisses itself the first time
+ * the level changes — the user has discovered zoom either way. The dismissal
+ * is remembered in localStorage so it never nags again.
  */
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
@@ -23,12 +38,9 @@ import {
   MessagesSquare,
 } from "lucide-react";
 import { RUNG_ORDER, type FieldRung } from "@/lib/timeline3d/units";
+import { ISLAND } from "@/components/layout/island";
 
 const HINT_KEY = "previously:lens-hint-seen:v1";
-
-/** Shared frosted-pill shell — keep in sync with the header islands. */
-const ISLAND =
-  "rounded-full bg-background/75 ring-1 ring-border/60 backdrop-blur-md shadow-md";
 
 /** Finest first, the order `RUNG_ORDER` states — the segments are that list
  *  wearing icons, so the control cannot drift out of step with the ladder it
@@ -73,39 +85,11 @@ export function LensSwitcher({
   }, [rung]);
 
   return (
-    // z-40: the card faces are drei Html overlays pinned at z-index 21–30
-    // (row-group/leaving-card zIndexRange) — the pill must stack above every
-    // card, yet still below the floating header islands (z-50).
-    // Below `sm` the hint stacks ABOVE the pill instead of beside it, and wraps
-    // inside 68vw. Beside it, `whitespace-nowrap` made the pair wider than a
-    // 320px screen — measured at [-16..146] against a 320px viewport, i.e. the
-    // hint's own left edge off the glass. Stacked, the hint has the full width
-    // to wrap into and the row is never wider than the pill itself.
-    // `bottom-24` on the narrow end, not `bottom-16`: the collapsed composer
-    // is a fixed 48px button centred at the bottom, and at 64px the two controls
-    // overlapped in a corner on a 390px screen. Raising the lens on the phone
-    // clears it without moving the composer off the thumb.
-    <div className="pointer-events-none absolute right-3 bottom-24 z-40 flex flex-col items-end gap-2 sm:right-5 sm:bottom-20 sm:flex-row sm:items-center">
-      <AnimatePresence>
-        {hintOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0 }}
-            transition={
-              reducedMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }
-            }
-            className={`${ISLAND} max-w-[68vw] px-3 py-1.5 text-center text-[11px] text-muted-foreground sm:max-w-none sm:whitespace-nowrap`}
-          >
-            {coarse ? t("hintTouch") : t("hintDesktop")}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
+    <div className="relative">
       <div
         role="group"
         aria-label={t("label")}
-        className={`${ISLAND} pointer-events-auto flex items-center gap-0.5 p-0.5 text-xs`}
+        className={`${ISLAND} flex items-center gap-0.5 p-0.5 text-xs`}
       >
         {RUNG_ORDER.map((segRung) => {
           const { key, Icon } = SEGMENTS[segRung];
@@ -118,18 +102,40 @@ export function LensSwitcher({
               aria-label={t(key)}
               title={t(key)}
               onClick={() => onSelect(segRung)}
-              className={`flex min-h-9 items-center gap-1 rounded-full px-3 transition-colors sm:min-h-7 sm:px-2.5 ${
+              className={`flex min-h-8 items-center gap-1 rounded-full transition-colors sm:min-h-7 ${
                 active
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
+                  ? "bg-background px-2.5 text-foreground shadow-sm"
+                  : "px-2 text-muted-foreground hover:text-foreground"
               }`}
             >
               <Icon className="h-3 w-3 shrink-0" />
-              <span className="hidden sm:inline">{t(key)}</span>
+              {/* The word appears only here, and it appears on BOTH ends of the
+                  ladder — the phone gets the same statement, just narrower. */}
+              {active && <span className="whitespace-nowrap">{t(key)}</span>}
             </button>
           );
         })}
       </div>
+
+      {/* The hint hangs BELOW the bar. It used to sit beside the pill and
+          stack above it under `sm`, which was right for a control anchored to
+          the bottom-right corner; a control on the top edge has room beneath
+          it at every width, so the two layouts collapse into one. */}
+      <AnimatePresence>
+        {hintOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={
+              reducedMotion ? { duration: 0 } : { duration: 0.35, ease: "easeOut" }
+            }
+            className={`${ISLAND} pointer-events-none absolute top-full left-1/2 mt-2 w-max max-w-[70vw] -translate-x-1/2 px-3 py-1.5 text-center text-[11px] text-muted-foreground`}
+          >
+            {coarse ? t("hintTouch") : t("hintDesktop")}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

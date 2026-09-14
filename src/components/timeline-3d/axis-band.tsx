@@ -35,10 +35,8 @@ import {
   RULER_LABEL_MIN_WIDTH_PX,
   RULER_LABEL_RIGHT_PX,
 } from "@/lib/timeline3d/ruler-math";
-import type { StrandListItem } from "@/lib/episodic/actions";
 import { requestSeek, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { RollingField } from "@/components/chat/rolling-number";
-import { StrandFilter } from "./strand-filter";
 
 /** Year scale (DOM labels + canvas ticks) is suppressed by decision — both
  *  views hide it for now; the NOW dot and the threadline stay. Components
@@ -425,12 +423,6 @@ export function JumpControls({ feed }: { feed: FieldFeed }) {
 }
 
 export interface AxisBandProps {
-  /** Whether the band renders its own overlay chrome — the strand filter chip
-   *  and the selection caption. These are timeline-view affordances and they
-   *  need horizontal room; the strip is a fixed 32 px (see the width note in
-   *  the file header), so the caller decides, and the band renders fully
-   *  without them. Does NOT affect the band's width or its braid. */
-  showChrome?: boolean;
   /** Calendar range: oldest loaded slice → today. */
   range: { oldest: string; now: string };
   /** What the right pane publishes, every frame — see `field-feed.ts`. ONE
@@ -440,37 +432,23 @@ export interface AxisBandProps {
    *  whichever field rendered last. */
   feed: FieldFeed;
   /** The current picks, in order. Empty = 核心时间线 (no filter, core line
-   *  leads). The band highlights every picked strand and greys the rest. */
+   *  leads). The band highlights every picked strand and greys the rest — it
+   *  READS the selection and no longer writes it: the control that changes it
+   *  moved to the board bar (see `board-bar.tsx`). */
   strands: readonly string[];
-  /** Strand list for the filter chip. */
-  strandList: StrandListItem[];
   /** Full set of strand names drawn by the threadline (capped). */
   ambientStrands: string[];
-  /** Slice count for the caption — only meaningful for a SINGLE pick, where
-   *  it is exact. Several picks overcount a slice carrying two of them, and a
-   *  number that can be wrong is worse than no number. */
-  selectedCount: number | null;
   /** Reduced-motion preference passed to the threadline. */
   reducedMotion: boolean;
-  /** Add or remove one strand from the picks. */
-  onToggleStrand: (strand: string) => void;
-  /** Clear the picks — back to 核心时间线. */
-  onClearStrands: () => void;
 }
 
 export function AxisBand({
-  showChrome = false,
   range,
   feed,
   strands,
-  strandList,
   ambientStrands,
-  selectedCount,
   reducedMotion,
-  onToggleStrand,
-  onClearStrands,
 }: AxisBandProps) {
-  const t = useTranslations("timeline3d");
   const locale = useLocale();
 
   const bandRef = useRef<HTMLDivElement>(null);
@@ -508,38 +486,11 @@ export function AxisBand({
       <ScrubLens feed={feed} bandRef={bandRef} locale={locale} />
       <div className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-background to-transparent" />
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background/60 to-transparent" />
-      <div
-        className="pointer-events-none absolute inset-x-0 bottom-16 flex justify-center px-2"
-        style={{
-          opacity: showChrome && strands.length > 0 ? 1 : 0,
-          transition: `opacity ${strands.length > 0 ? "400ms" : "200ms"} ${
-            strands.length > 0 ? "600ms" : "0ms"
-          }`,
-        }}
-      >
-        {showChrome && strands.length > 0 && (
-          <span className="max-w-full truncate pb-1 font-mono text-[10px] tracking-[0.15em] text-foreground">
-            {strands.join(" + ")}
-            {selectedCount != null && (
-              <> · {t("selected.slices", { count: selectedCount })}</>
-            )}
-          </span>
-        )}
-      </div>
-      {/* Centred in the strip, not left-aligned: the trigger is a compact
-          square (see StrandFilter), and the strip has no room for a labelled
-          control — the old pill was 127 px wide inside a 32 px band and hung
-          its label over the content. */}
-      {showChrome && (
-        <div className="absolute inset-x-0 top-16 flex justify-center">
-          <StrandFilter
-            strands={strandList}
-            selected={strands}
-            onToggle={onToggleStrand}
-            onClear={onClearStrands}
-          />
-        </div>
-      )}
+      {/* The strand filter trigger and the selection caption used to sit here.
+          Both moved to the board bar: a 256 px popover and a truncating label
+          do not belong in a 24-32 px column whose whole job is to say where in
+          time the reader is. The strip still READS the selection — every
+          picked strand lights in its own colour in `ThreadlineScene` above. */}
     </div>
   );
 }

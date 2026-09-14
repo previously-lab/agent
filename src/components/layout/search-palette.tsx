@@ -129,13 +129,16 @@ export function SearchPalette() {
         type="button"
         onClick={() => setOpen(true)}
         aria-label={t("title")}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        title={t("title")}
+        // GLYPH ONLY. The word and the ⌘K hint used to sit here and were the
+        // widest thing in the settings bar; that bar now has to fit beside two
+        // other islands at phone width, and a tooltip already says what this
+        // is. The shortcut still works — it is simply no longer spelled out on
+        // the button, which is the one place a reader looks AFTER they have
+        // already decided to search.
+        className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
       >
         <SearchIcon className="h-3.5 w-3.5 shrink-0" />
-        <span className="hidden sm:inline">{t("trigger")}</span>
-        <kbd className="hidden rounded border border-border/60 bg-muted/40 px-1 font-mono text-[0.6rem] text-muted-foreground/70 sm:inline">
-          ⌘K
-        </kbd>
       </button>
 
       <CommandDialog

@@ -23,10 +23,7 @@ import { ClientBadge } from "@/components/layout/client-badge";
 import { SettingsLink } from "@/components/layout/settings-link";
 import { SearchPalette } from "@/components/layout/search-palette";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
-
-/** Shared frosted-pill shell for every island. */
-const ISLAND =
-  "pointer-events-auto rounded-full bg-background/75 ring-1 ring-border/60 backdrop-blur-md shadow-md";
+import { ISLAND, ISLAND_CONTROL } from "./island";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const locale = useLocale();
@@ -35,7 +32,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   return (
     <header className="pointer-events-none fixed inset-x-0 top-0 z-50 flex items-start justify-between gap-2 p-2 sm:p-3 md:p-4">
       {/* LEFT — brand mark + status badges (status, not actions). */}
-      <div className={`${ISLAND} flex items-center gap-1.5 py-1 pr-1.5 pl-3`}>
+      <div className={`pointer-events-auto ${ISLAND} flex items-center gap-1.5 py-1 pr-1.5 pl-3`}>
         <Link
           href="/"
           className="text-sm font-semibold tracking-tight hover:text-foreground/80 transition-colors"
@@ -46,27 +43,31 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
         <ClientBadge />
       </div>
 
-      {/* CENTER — deliberately empty. The 「对话 · 时间线」 pill lived here and
-          is gone: it was the coarse half of the same axis the lens switcher
-          already offered (`units.ts` — a rung ladder, not two views), so the
-          header now carries only brand and status on the left and actions on
-          the right. The zoom control moved to the shell's floating layer, at
-          the bottom, where a thumb can reach it. */}
+      {/* CENTER — the board bar (zoom lens + strand selector), which the SHELL
+          renders (`shell/board-bar.tsx`). It cannot live here: the strand
+          selection is shell state, and the layout's header has no access to
+          it. `top-14` under `sm`, `top-3`/`top-4` above — see that file. The
+          「对话 · 时间线」 pill that used to sit here is gone: it was the
+          coarse half of the same axis the lens already offered. */}
 
-      {/* RIGHT — actions. Search / settings / docs stay exposed (icon-only on
-          small screens); the rest folds into the "···" overflow menu so the
-          pill survives phone widths. */}
-      <nav className={`${ISLAND} flex items-center gap-0.5 py-1 pr-1 pl-1.5`}>
+      {/* RIGHT — actions, and NO WORDS. Every item here is a glyph with a
+          tooltip and an accessible name; the labels were the widest thing in
+          the bar and the least load-bearing, and three islands on one line at
+          phone width only fit once they went. The rest folds into the "···"
+          overflow menu, which keeps its own labels because it is a list a
+          reader reads rather than a row of controls they aim at. */}
+      <nav className={`pointer-events-auto ${ISLAND} flex items-center gap-0.5 p-1`}>
         <SearchPalette />
         <SettingsLink />
         <a
           href={`https://previously.ldwid.com/${locale}/docs`}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+          aria-label={t("docs")}
+          title={t("docs")}
+          className={`${ISLAND_CONTROL} size-7`}
         >
           <BookOpen className="h-3.5 w-3.5 shrink-0" />
-          <span className="hidden sm:inline">{t("docs")}</span>
         </a>
         <NavOverflowMenu />
       </nav>

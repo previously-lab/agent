@@ -241,7 +241,7 @@
       "later": "Later",
       "head": "Head of the loaded window",
       "beginning": "The beginning of this memory",
-      "loadOlder": "Load earlier conversations"
+      "loadOlder": "Load earlier"
     },
     "seamLoadOlder": "Load earlier conversations",
     "seam": {
@@ -338,10 +338,6 @@
       "duration": "{min} MIN",
       "no": "No.{date}·{time}"
     },
-    "now": {
-      "label": "NOW",
-      "sub": "now"
-    },
     "filter": {
       "label": "Filter timeline",
       "all": "Core timeline",
@@ -359,6 +355,10 @@
       "week": "Week",
       "hintDesktop": "Ctrl+scroll or pinch to zoom",
       "hintTouch": "Pinch to zoom"
+    },
+    "running": {
+      "title": "Writing it down…",
+      "hint": "A reply is streaming. Open the conversation."
     }
   },
   "settings": {
@@ -488,7 +488,10 @@
   },
   "relative": {
     "now": "Now",
-    "moments": { "before": "moments ago", "after": "in a moment" },
+    "moments": {
+      "before": "moments ago",
+      "after": "in a moment"
+    },
     "prefixAfter": "in ",
     "minute": {
       "before": "{count, plural, one {min ago} other {mins ago}}",

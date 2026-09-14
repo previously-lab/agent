@@ -46,6 +46,22 @@ export const SLICE_GATE_PX = 128;
  */
 export const FIELD_ORIGIN_PX = 128;
 
+/**
+ * The scroll range's LOWER bound — how far above its oldest unit a field can
+ * travel, in px: one full head when there is one, zero when there is not.
+ *
+ * The head is a region the reader scrolls INTO, so a field that has one scrolls
+ * one region above its oldest unit; a field without one bottoms out at its
+ * oldest unit's top edge. Both fields render a head now (the card rungs gained
+ * theirs with `timeline-3d/origin-row.tsx`), and every clamp, every seek and
+ * `progressFor` must be handed the SAME number: a range whose floor disagrees
+ * with the clamp is a progress readout that saturates before the reader reaches
+ * the end — the failure `field-feed.ts` documents at length.
+ */
+export function originMinOffset(hasOrigin: boolean): number {
+  return hasOrigin ? -FIELD_ORIGIN_PX : 0;
+}
+
 /** The band index `armedGate` returns for the origin region. */
 export const ORIGIN_REGION = -1;
 
