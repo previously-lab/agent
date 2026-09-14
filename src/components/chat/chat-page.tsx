@@ -1006,17 +1006,15 @@ function Inner({
            this component just fills the right-hand column. The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
            an EMPTY memory falls back to the full-screen empty briefing.
-           Top padding clears the floating chrome, which is now TWO ROWS at
-           phone width: the header's brand and settings islands share the first
-           line, and the board bar (zoom lens + strand selector) wraps to the
-           second, because three islands and four lens segments do not fit in
-           390px. From `sm` up all three sit on one line. The clearance is the
-           measured height of that chrome plus a gap, per breakpoint:
-             base  8 + 36 + 8 + 36 + 8 = ~96  → pt-24
-             sm   12 + 36 + 8            = ~56  → pt-16
-             md   16 + 36 + 8            = ~60  → pt-20 ── */}
+           NO TOP PADDING. The chrome floats and the content runs UNDER it —
+           that is what a floating island is for, and reserving a strip for the
+           controls turns three pills into a solid bar across the top of the
+           window. This carried pt-12/pt-16 for a long time and a taller
+           pt-24-sm-pt-16-pt-20 for one commit; both are gone. What keeps the
+           pills readable over the stream is the pills' own frosted surface,
+           which is exactly what it is for. ── */}
       <div
-        className={`relative flex-1 overflow-hidden pt-24 sm:pt-16 md:pt-20 transition-opacity duration-300 ${
+        className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         // Dimmed-and-mounted, not unmounted: this subtree holds the field's

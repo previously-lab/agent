@@ -105,9 +105,12 @@
  * modulating each strand's OWN colour (§2.7) — the cylinder puts every strand
  * at one radius, so a line's depth is its angle around the core, and the
  * shading reads that angle: a strand on the near side of the cable catches more
- * of the light than one on the far side. A highlighted line straightens — it
- * stops carrying the shared spin for as long as the focus lasts and runs up its
- * own seat — and brightens, then sends a pulse up it. Reduced motion snaps the
+ * of the light than one on the far side. A highlighted line keeps the shared
+ * spin and simply changes INK — a palette colour against the resting grey — and
+ * sends a pulse up it. It is not straightened and not lifted out of the depth
+ * sort: the whole gesture is "one of these threads, not those", and a thread
+ * that leaves the helix or renders on top of the cable stops being one of them
+ * and becomes a second line drawn beside the core. Reduced motion snaps the
  * focus tween and stills the light drift.
  *
  * THE LINE-UP JOINT (§2.5): scrolling into a different region changes the top-N
@@ -1268,14 +1271,20 @@ function ThreadlineRig(props: ThreadlineRigProps) {
 
       const isHighlighted = highlight.has(normalizeStrandName(name));
       const pulseActive = isHighlighted && pulseActiveGlobal;
-      (line as any).renderOrder = isHighlighted ? 3 : 1;
-      // THE SELECTED LINE IS NEVER OCCLUDED. The tubes depth-test against each
-      // other so that a crossing reads as one thread passing in front of
-      // another, but the strand the reader singled out must not be chopped into
-      // pieces by the grey ones lying nearer the camera — a highlight you have
-      // to hunt for is not a highlight. So it renders last, with depth testing
-      // off, exactly as it did when these were flat ribbons.
-      if (mat) mat.depthTest = !isHighlighted;
+      // THE HIGHLIGHT IS A MEMBER OF THE BRAID, NOT A LINE DRAWN OVER IT.
+      //
+      // A picked strand used to render last with depth testing off, so the grey
+      // threads could not chop it into pieces. That was right for a highlight
+      // that had left the helix — a straight line crossing the braid gets
+      // shredded by it — and it is wrong for one that has not. Lifting it out
+      // of the depth sort is the second half of the same mistake the straightening
+      // made: it pastes the thread ON TOP of the cable instead of lighting one
+      // of its threads, which is precisely what the reader asked not to see.
+      // Now it obeys the same occlusion as everything else, so it passes behind
+      // the threads nearer the camera and in front of the ones behind it — as a
+      // thread wound around a core does.
+      (line as any).renderOrder = 1;
+      if (mat) mat.depthTest = true;
 
       // The joint envelope (§2.5): a joining line is still winding up and a
       // leaving line is unwinding and thinning out; a settled line is at 1.
@@ -1320,12 +1329,29 @@ function ThreadlineRig(props: ThreadlineRigProps) {
       const inkG = ink.g;
       const inkB = ink.b;
 
-      // Focus straightens the selected line — it stops carrying the shared
-      // spin, so it runs up its own seat while the rest of the bundle keeps the
-      // knot; the joint amplitude winds a joining line up and a leaving line
-      // down (§2.5). Both are a scale on the SHARED spin, never a per-strand
-      // rotation of its own, so the line stays on the cylinder throughout.
-      const unwind = (isHighlighted ? 1 - nextF : 1) * jointAmp;
+      // THE HIGHLIGHT DOES NOT STRAIGHTEN.
+      //
+      // It used to: focusing a strand scaled its share of the shared spin to
+      // zero, so the picked thread left the helix and ran straight up its own
+      // seat for as long as the focus lasted. The idea was that a straight line
+      // is easier to follow than a winding one. What it actually did was put a
+      // NEW line on the strip — a second straight vertical, parallel to the
+      // core and beside it, which is not one of the threads the reader was
+      // looking at and does not read as one. The reader's words: highlight one
+      // of the grey curves, do not draw another line.
+      //
+      // So the picked strand keeps the spin, exactly like every other strand,
+      // and stays on the cylinder through the knot. It is singled out by INK
+      // alone — a palette colour against the resting grey — which is the whole
+      // language the strip already states (see the header, and the note on
+      // `BACKDROP_RECEDE`: the highlight separates itself by CHROMA, not by
+      // being the only thing still lit or the only thing still curved).
+      //
+      // The joint amplitude stays: a joining line winds UP while it fades in
+      // and a leaving one winds down (§2.5), which is motion the strand is
+      // entitled to because it is arriving or departing, not because it was
+      // picked.
+      const unwind = jointAmp;
 
       // One instance per segment: placed on the polyline, inked with what that
       // point of the strand is worth. Position and colour are computed in the
@@ -1352,8 +1378,9 @@ function ThreadlineRig(props: ThreadlineRigProps) {
         // spin per height. Away from the knots the spin is 0, so the line is
         // straight at its own seat; through them it winds and comes back onto
         // that same seat. The two knots hand the twist from A to B as the
-        // centre scrubs between them, and `unwind` folds the focus and joint
-        // transitions in as a scale on the spin.
+        // centre scrubs between them, and `unwind` folds the line-up joint in
+        // as a scale on the spin (a joining line winds up, a leaving one down —
+        // the FOCUS no longer scales it; see the `unwind` note above).
         const p0 = strandPointAtKnots(
           y0,
           seat,

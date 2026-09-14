@@ -159,18 +159,15 @@ export function TimelineScene({
       <style>{TIMELINE_KEYFRAMES}</style>
       <AtmosphereBackdrop />
 
-      {/* The field starts BELOW the floating chrome.
-          The chrome is `pointer-events-none` and content scrolling under it is
-          the intended look — on the rail and in the margins. It is not the
-          intended look on a CARD: a card is a 700px-wide panel of text, and
-          the board bar crossing its first line reads as a rendering fault.
-          So the box the canvas fills is inset by the chrome's measured height,
-          per breakpoint (see `chat-page.tsx` for the same numbers): two rows
-          at phone width, one from `sm` up. `box-sizing: border-box` makes
-          `h-full` + `pt-*` resolve to "the pane, minus the chrome", and
-          `frameGeometryFor` derives the cards from the height it is given —
-          so the cards shrink to fit rather than sliding under. */}
-      <div className="relative h-full w-full pt-24 sm:pt-16">
+      {/* THE FIELD FILLS THE PANE — it is NOT inset by the chrome's height.
+          It was, for one commit, and the inset read as a solid bar across the
+          top of the window: an empty strip the colour of the page, with three
+          floating controls sitting on it, which is exactly the page-chrome
+          this design does not have. The controls float, so nothing needs to
+          reserve room for them — the cards pass underneath, and the pills stay
+          legible because that is what their own frosted surface is FOR.
+          The field's height is the pane's height, full stop. */}
+      <div className="relative h-full w-full">
         <CardField
           entries={filtered}
           hasMore={hasMore}
