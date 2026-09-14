@@ -1,8 +1,9 @@
 import { test, expect } from "@playwright/test";
 
-// The app's mobile layout: the top AppHeader stays visible (brand + icon-only
-// nav links), the chat page has no horizontal overflow, and the chat input is
-// usable at phone widths. There is no sidebar drawer.
+// The app's mobile layout: the top AppHeader stays visible (brand + the "···"
+// overflow trigger, since Settings and Docs left the bar in v0.12), the chat
+// page has no horizontal overflow, and the chat input is usable at phone
+// widths. There is no sidebar drawer.
 test.describe("Responsive - Mobile", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
@@ -13,14 +14,20 @@ test.describe("Responsive - Mobile", () => {
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
   });
 
-  test("header stays visible with brand and nav links", async ({ page }) => {
+  test("header stays visible with the brand and a reachable nav menu", async ({
+    page,
+  }) => {
     await page.goto("/en");
     await expect(page.locator("header")).toBeVisible();
     await expect(page.locator('header a[href="/en"]')).toBeVisible();
+    // Docs and Settings are menu rows behind the "···" trigger now; opening it
+    // keeps the original intent — both destinations reachable at 390px.
+    await page.click('header button[data-testid="nav-overflow-trigger"]');
+    const menu = page.locator('[data-slot="dropdown-menu-content"]');
+    await expect(menu.locator('a[href="/en/settings"]')).toBeVisible();
     await expect(
-      page.locator('header a[href="https://previously.ldwid.com/en/docs"]'),
+      menu.locator('a[href="https://previously.ldwid.com/en/docs"]'),
     ).toBeVisible();
-    await expect(page.locator('header a[href="/en/settings"]')).toBeVisible();
   });
 
   test("chat input is usable on mobile", async ({ page }) => {

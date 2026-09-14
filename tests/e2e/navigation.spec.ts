@@ -57,20 +57,26 @@ test.describe("Navigation", () => {
     );
   });
 
-  test("header Docs link points at the external docs site", async ({
-    page,
-  }) => {
+  // Docs and Settings are menu rows in the header's "···" overflow menu
+  // (v0.12 floating islands) — they left the bar when it went tooltips-only.
+  // The menu portals to <body>, so assert inside the popup, not under
+  // <header> (same pattern as the GitHub row below).
+  test("Docs menu row points at the external docs site", async ({ page }) => {
     await page.goto("/en");
-    const docs = page.locator(
-      'header a[href="https://previously.ldwid.com/en/docs"]',
+    await page.click('header button[data-testid="nav-overflow-trigger"]');
+    const menu = page.locator('[data-slot="dropdown-menu-content"]');
+    const docs = menu.locator(
+      'a[href="https://previously.ldwid.com/en/docs"]',
     );
     await expect(docs).toBeVisible();
     await expect(docs).toHaveAttribute("target", "_blank");
   });
 
-  test("header Settings link navigates to settings", async ({ page }) => {
+  test("Settings menu row navigates to settings", async ({ page }) => {
     await page.goto("/en");
-    await page.click('header a[href="/en/settings"]');
+    await page.click('header button[data-testid="nav-overflow-trigger"]');
+    const menu = page.locator('[data-slot="dropdown-menu-content"]');
+    await menu.locator('a[href="/en/settings"]').click();
     await expect(page).toHaveURL(/\/en\/settings/);
   });
 
