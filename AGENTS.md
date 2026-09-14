@@ -47,7 +47,7 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 
 - Agent tools operate on whitelisted paths only: `memory/`, `tasks/`, `sessions/`
 - The flush/episodic write path is further constrained to the active slice's timeline files (strict slice-id validation in `src/app/api/episodic/flush/route.ts`)
-- API mutation endpoints (`POST /api/chat`, `/api/chat/[runId]/cancel`, `/api/episodic/flush`, `/api/episodic/signal`) are same-origin guarded — see `src/lib/security/origin-guard.ts`; non-browser callers need `x-access-key` when `ACCESS_SECRET` is set
+- API mutation endpoints (`POST /api/chat`, `/api/chat/[runId]/cancel`, `/api/episodic/flush`, `/api/episodic/signal`, `/api/companion`) are same-origin guarded — see `src/lib/security/origin-guard.ts`; non-browser callers need `x-access-key` when `ACCESS_SECRET` is set
 - `src/` directory is agent-read-only — no tool may modify it
 - All path validation is server-side; client is untrusted
 - Base UI is the standard shadcn/ui primitive library (not Radix UI)
