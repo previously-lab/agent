@@ -3,11 +3,18 @@
 /**
  * ComposerHost — WHERE the composer sits, which changes with the rung.
  *
- * At the conversation rung it is a full-width bar at the foot of the page,
- * which is what a reader typing a conversation expects. At any card rung it
- * would be an enormous empty box sitting on top of the field the reader is
- * actually looking at, so it gets out of the way: a compact pill at the bottom
- * of the screen that opens into a floating card to type into.
+ * IT ALWAYS FLOATS. It used to be a full-width footer at the conversation rung
+ * — a `shrink-0` child of the shell's column, so it TOOK its height from the
+ * content and pushed the last message up. That made the composer a piece of
+ * the page furniture rather than one of the app's floating controls, and the
+ * app has no page furniture: everything else is an island over an infinite
+ * canvas. So at every rung it is now the same thing — a floating card over the
+ * content — and the CONTENT reserves the room for it (`chat-page.tsx` pads the
+ * column top and bottom by the measured chrome height), which is the one
+ * arrangement that keeps the composer off the text without making it part of
+ * the layout.
+ *
+ * The compact form is the card rung's default and never the conversation's.
  *
  * THE COMPOSER ITSELF IS NEVER UNMOUNTED. That is the whole reason this is a
  * component rather than two branches in `ChatPage`: the composer owns state
@@ -64,27 +71,18 @@ export function ComposerHost({ rung, composer }: ComposerHostProps) {
     <div
       data-composer
       className={
-        onConversation
-          ? "relative z-20 w-full shrink-0 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom,0.5rem))]"
-          : collapsed
-            ? // `w-auto` so the pill is exactly as wide as its own controls.
-              // A fixed width here is how the old round button ended up 44rem
-              // wide with a 48px face centred in it.
-              "fixed bottom-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] left-1/2 z-50 w-auto -translate-x-1/2"
-            : "fixed bottom-[max(0.75rem,env(safe-area-inset-bottom,0.75rem))] left-1/2 z-50 w-[min(44rem,calc(100vw-2rem))] -translate-x-1/2"
+        collapsed
+          ? // `w-auto` so the pill is exactly as wide as its own controls. A
+            // fixed width here is how the old round button ended up 44rem wide
+            // with a 48px face centred in it.
+            "absolute bottom-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] left-1/2 z-50 w-auto -translate-x-1/2"
+          : // One floating card, at BOTH rungs. 44rem is the reading column's
+            // own order of magnitude, so the composer's edges sit near the
+            // content's edges without a second measurement to keep in step.
+            "absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom,0.75rem))] z-20 flex justify-center px-3"
       }
     >
-      <div
-        className={
-          // Only the conversation rung needs a wrapper: it tracks the stream's
-          // own CSS column so the composer's edges sit on the content's edges
-          // at every width. The floating forms are their own shells, drawn by
-          // `ChatInput`, and a wrapper would be a second box around them.
-          onConversation
-            ? "mx-auto w-full max-w-5xl xl:max-w-7xl px-3 sm:px-6 lg:px-8"
-            : ""
-        }
-      >
+      <div className={collapsed ? "" : "w-[min(44rem,100%)]"}>
         {composer({ collapsed, expand: () => setOpen(true) })}
       </div>
     </div>

@@ -1006,15 +1006,21 @@ function Inner({
            this component just fills the right-hand column. The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
            an EMPTY memory falls back to the full-screen empty briefing.
-           NO TOP PADDING. The chrome floats and the content runs UNDER it —
-           that is what a floating island is for, and reserving a strip for the
-           controls turns three pills into a solid bar across the top of the
-           window. This carried pt-12/pt-16 for a long time and a taller
-           pt-24-sm-pt-16-pt-20 for one commit; both are gone. What keeps the
-           pills readable over the stream is the pills' own frosted surface,
-           which is exactly what it is for. ── */}
+           THE COLUMN RESERVES BOTH SAFE AREAS. The chrome floats over an
+           infinite canvas, so nothing here is a bar — but content that runs
+           under the controls at REST is content the reader cannot read, so the
+           column keeps clear of them: the top by the chrome's measured height
+           (two rows at phone width, one from `sm` up) and the bottom by the
+           floating composer. Content still passes under both while scrolling,
+           which is the point of a floating control; it just does not come to
+           rest there.
+
+           The inset is on the COLUMN, not on the pane. The R3F field fills the
+           pane and the cards run under the chrome (see `timeline-scene.tsx`) —
+           insetting the pane instead is what produced a solid empty strip
+           across the top of the window. ── */}
       <div
-        className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
+        className={`relative flex-1 overflow-hidden pt-24 pb-36 sm:pt-16 sm:pb-32 md:pt-20 transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         // Dimmed-and-mounted, not unmounted: this subtree holds the field's
