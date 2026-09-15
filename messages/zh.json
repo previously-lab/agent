@@ -454,6 +454,12 @@
       "applyHint": "改动自动保存，引擎切换即时生效，无需重启——进行中的调用会按旧配置自然跑完。"
     }
   },
+  "game": {
+    "title": "旅店",
+    "loading": "正在布置长廊……",
+    "exit": "离开",
+    "enter": "进入"
+  },
   "memory": {
     "emptyTitle": "暂无记忆",
     "emptyDesc": "使用聊天创建你的第一个记忆文件。让 agent 写入 memory/。",

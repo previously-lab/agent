@@ -1,0 +1,158 @@
+/**
+ * Terrain height for a space — the single source of truth shared by the
+ * renderer (ground displacement in src/components/game/space.tsx) and the
+ * avatar physics (Y snapping in game-canvas). Both must agree exactly, so
+ * this module owns ALL heightfield math; neither consumer may re-derive it.
+ *
+ * Local frame (same as the renderer's): the doorway is at (0, 0), x is
+ * centered on the door axis, and +z points outward from the corridor wall
+ * with the floor plan occupying x ∈ [−width/2, width/2], z ∈ [0, extent].
+ *
+ * PURITY & TOTALITY. terrainHeight is a pure function of the recipe and
+ * coordinates, defined for ANY (localX, localZ) — including outside the
+ * floor plan; nothing is clamped to the plan:
+ *   - flat (meadow, interiors, wonders, snow, …) is GROUND_Y everywhere.
+ *   - rolling (plains, forest) continues as fbm noise beyond the plan edges.
+ *   - sunken (pool, pool-hall, ducks) feathers back to GROUND_Y beyond the
+ *     basin rim; the basin is an ellipse fitted to the water rectangle
+ *     (see waterRectFor), centered on the water, not necessarily the room.
+ * The entrance funnel (a 2.4m-wide strip at the doorway, flattened so the
+ * player can always walk in) applies to every ground kind — for sunken it
+ * matters on small tiers, where the basin rim would otherwise cross the
+ * threshold.
+ *
+ * The returned height is ABSOLUTE local y: it includes the GROUND_Y lift
+ * above the corridor floor (top at y = 0), so the seam at the doorway can
+ * never be coplanar with the corridor floor.
+ *
+ * A value-noise field is constructed per call; the permutation shuffle is
+ * cheap (256 entries), but callers doing heavy work should batch their
+ * samples rather than call this per frame per vertex.
+ */
+
+import { createValueNoise2D, fbm } from "./noise";
+import { ARCHETYPES } from "./space-types";
+import type { SpaceRecipe } from "./space-types";
+
+/** Ground lift above the corridor floor (top at y = 0). */
+export const GROUND_Y = 0.02;
+/** Rolling terrain peak-to-mean amplitude in meters. */
+const ROLLING_AMPLITUDE = 1.2;
+/** Rolling noise frequency: ~1 sample per 11m before octaves. */
+const ROLLING_FREQUENCY = 0.09;
+const ROLLING_OCTAVES = 4;
+/** Sunken basin depth in meters. */
+const BOWL_DEPTH = 1.6;
+/** Basin rim feather, in normalized ellipse-radius units. */
+const BOWL_FEATHER = 0.3;
+/** Half of the 2.4m entrance clear zone. */
+const ENTRANCE_HALF_WIDTH = 1.2;
+/** Depth outward from the wall that counts as "the doorway". */
+const ENTRANCE_DEPTH = 2.5;
+
+/** Scalar smoothstep: 0 below e0, 1 above e1, cubic fade between. */
+function smoothstep(e0: number, e1: number, t: number): number {
+  const x = Math.min(1, Math.max(0, (t - e0) / (e1 - e0)));
+  return x * x * (3 - 2 * x);
+}
+
+/**
+ * Terrain flattening mask at the doorway: 1 everywhere except a funnel
+ * around the door axis near the wall, where it falls to 0.
+ */
+function entranceMask(localX: number, localZ: number): number {
+  return Math.max(
+    smoothstep(ENTRANCE_HALF_WIDTH, ENTRANCE_HALF_WIDTH + 1, Math.abs(localX)),
+    smoothstep(ENTRANCE_DEPTH, ENTRANCE_DEPTH + 2.5, localZ),
+  );
+}
+
+/** Water rectangle in space-local coords (cx/cz center, half extents). */
+export interface WaterRect {
+  cx: number;
+  cz: number;
+  halfX: number;
+  halfZ: number;
+}
+
+/**
+ * Water rectangle for a recipe: covers the archetype's waterCoverage area
+ * fraction, always leaves a walkable deck (≥3m on M+ tiers, 2m on S) on
+ * every side, and is centered along z at the archetype's waterCenter
+ * fraction (beach pushes the shore toward the far wall). Returns null for
+ * dry rooms. The sunken basin, the water plane, and prop water-avoidance
+ * all derive from this one rectangle.
+ */
+export function waterRectFor(recipe: SpaceRecipe): WaterRect | null {
+  const { extent, width } = planDims(recipe);
+  const coverage = ARCHETYPES[recipe.archetype].waterCoverage;
+  if (coverage <= 0) return null;
+  const deck = extent >= 32 ? 3 : 2;
+  const base = extent * Math.sqrt(coverage);
+  const halfZ = Math.max(1, Math.min(base, extent - deck * 2) / 2);
+  const halfX = Math.max(1, Math.min(base, width - deck * 2) / 2);
+  const center = ARCHETYPES[recipe.archetype].waterCenter;
+  const cz = Math.min(
+    Math.max(extent * center, halfZ + deck),
+    extent - halfZ - deck,
+  );
+  return { cx: 0, cz, halfX, halfZ };
+}
+
+/**
+ * LEGACY square water side (the z-side length of the water rectangle),
+ * kept so existing consumers that assume a square, z-centered water area
+ * (game-canvas's wade-depth check) keep working: centered rooms (pool,
+ * lake, ducks, pool-hall — every sunken room) are exact, and offset-water
+ * rooms (beach, ocean) only affect a forgiving gameplay depth clamp. New
+ * code should use waterRectFor.
+ */
+export function waterSideFor(recipe: SpaceRecipe): number {
+  const rect = waterRectFor(recipe);
+  return rect ? rect.halfZ * 2 : 0;
+}
+
+/** Plan dims helper: width (x span) and extent (z depth). */
+function planDims(recipe: SpaceRecipe): { extent: number; width: number } {
+  return { extent: recipe.size.extent, width: recipe.width };
+}
+
+/**
+ * Absolute terrain height (local y, GROUND_Y included) at a space-local
+ * position. Pure, total, and deterministic: the same recipe and coordinates
+ * always yield the same height, on any machine, for any coordinates —
+ * inside or outside the floor plan (see module doc for outside behavior).
+ */
+export function terrainHeight(
+  recipe: SpaceRecipe,
+  localX: number,
+  localZ: number,
+): number {
+  const spec = ARCHETYPES[recipe.archetype];
+  let height = 0;
+  if (spec.ground === "rolling") {
+    const noise = createValueNoise2D(recipe.layoutSeed);
+    height =
+      fbm(
+        noise,
+        localX * ROLLING_FREQUENCY,
+        localZ * ROLLING_FREQUENCY,
+        ROLLING_OCTAVES,
+      ) *
+      ROLLING_AMPLITUDE *
+      entranceMask(localX, localZ);
+  } else if (spec.ground === "sunken") {
+    const rect = waterRectFor(recipe);
+    if (rect) {
+      const rho = Math.hypot(
+        (localX - rect.cx) / rect.halfX,
+        (localZ - rect.cz) / rect.halfZ,
+      );
+      height =
+        -BOWL_DEPTH *
+        (1 - smoothstep(1, 1 + BOWL_FEATHER, rho)) *
+        entranceMask(localX, localZ);
+    }
+  }
+  return GROUND_Y + height;
+}

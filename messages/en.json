@@ -454,6 +454,12 @@
       "applyHint": "Changes save automatically and engine switches apply immediately — no restart needed. In-flight calls finish on the old configuration."
     }
   },
+  "game": {
+    "title": "The Hotel",
+    "loading": "Preparing the corridor…",
+    "exit": "Exit",
+    "enter": "Enter"
+  },
   "memory": {
     "emptyTitle": "No memories yet",
     "emptyDesc": "Use Chat to create your first memory file. Ask the agent to write something to memory/.",
