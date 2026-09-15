@@ -23,6 +23,21 @@ import type { EvolutionStepData } from "@/lib/chat/build-stream";
  * id IS the turn identity (stable across reconnect replays, which is what
  * makes it the toast-dedupe key).
  */
+/**
+ * The structured fields of a done frame the pod panel's debug block renders —
+ * everything the scan can pass through without interpretation.
+ */
+export type EvolutionDetail = Pick<
+  EvolutionStepData,
+  | "changes"
+  | "mutations"
+  | "direction"
+  | "playbooks"
+  | "triggers"
+  | "partial"
+  | "note"
+>;
+
 export type EvolutionActivity =
   | {
       kind: "running";
@@ -47,6 +62,8 @@ export type EvolutionActivity =
        * restored stash — is fact, not news: it lights no toast.
        */
       fresh: boolean;
+      /** Structured frame detail, when the frame carries any. */
+      detail?: EvolutionDetail;
     };
 
 // ── Pub/sub ─────────────────────────────────────────────────────────────────
@@ -119,7 +136,29 @@ export function nextEvolutionEvent(
     hasChanges: frame.hasChanges,
     error: frame.error,
     fresh: state.running.delete(turnId),
+    detail: evolutionDetailFromFrame(frame),
   };
+}
+
+/**
+ * Extract a done frame's structured detail, or undefined when the frame
+ * carries none — the debug surface only shows what exists.
+ */
+export function evolutionDetailFromFrame(
+  frame: EvolutionStepData,
+): EvolutionDetail | undefined {
+  const detail: EvolutionDetail = {
+    changes: frame.changes,
+    mutations: frame.mutations,
+    direction: frame.direction,
+    playbooks: frame.playbooks,
+    triggers: frame.triggers,
+    partial: frame.partial,
+    note: frame.note,
+  };
+  return Object.values(detail).some((v) => v !== undefined)
+    ? detail
+    : undefined;
 }
 
 // ── Consumer reducer: events → pod presence ─────────────────────────────────
@@ -129,7 +168,17 @@ export type EvolutionPresence = {
   /** A run is in flight — the pod's button breathes. */
   working: boolean;
   /** The newest completed run, for the panel's seat when no narration exists. */
-  latest: { turnId: string; summary?: string; failed: boolean } | null;
+  latest: {
+    turnId: string;
+    summary?: string;
+    failed: boolean;
+    /** False = a legitimate no-change run. */
+    hasChanges?: boolean;
+    /** The failure reason, when the run failed. */
+    error?: string;
+    /** Structured frame detail — the panel debug block's payload. */
+    detail?: EvolutionDetail;
+  } | null;
 };
 
 export const EVOLUTION_PRESENCE_IDLE: EvolutionPresence = {
@@ -153,6 +202,9 @@ export function applyEvolutionActivity(
           turnId: event.turnId,
           summary: event.summary,
           failed: Boolean(event.error),
+          hasChanges: event.hasChanges,
+          error: event.error,
+          detail: event.detail,
         },
       };
   }

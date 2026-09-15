@@ -37,15 +37,30 @@
  * run's presence down, so the same button breathes while Previously evolves
  * and the panel replays the newest completion when there is no narration.
  *
+ * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
+ * read-only instrumentation sections — the last evolution run's structured
+ * detail (the full done-frame payload the bus now passes through) and a
+ * memory-map summary (strand/slice/active-slice overview fetched ONCE per
+ * panel open from the existing episodic server actions, never polled, with a
+ * manual refresh). They ride inside the scroll area under whatever the prose
+ * seat shows, and they are why the button now always opens the panel — even
+ * with an empty seat the internals are worth reaching.
+ *
  * The pod renders in the SHELL (not the card field) so a narration survives
  * rung switches and view changes — the same ownership rule the dock had.
  */
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
-import { AudioLines, CircleAlert, X } from "lucide-react";
+import { AudioLines, CircleAlert, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
+import {
+  getEpisodicState,
+  getStrandList,
+  getTimelineCatalog,
+  type StrandListItem,
+} from "@/lib/episodic/actions";
 import {
   NarrateError,
   streamNarration,
@@ -70,8 +85,21 @@ interface LatestNarration {
   timeLabel?: string;
 }
 
+/** The memory-map snapshot the debug block renders — one fetch per panel open. */
+interface MemoryMapSnapshot {
+  strandCount: number;
+  /** The first few strands by most recent activity, with carrier counts. */
+  topStrands: StrandListItem[];
+  sliceCount: number;
+  latestSliceId: string | null;
+  activeSliceId: string | null;
+  activeStatus: string | null;
+}
+
+type CompanionT = ReturnType<typeof useTranslations>;
+
 /** Error codes map to localized, gentle copy; everything else is generic. */
-function errorMessage(code: NarrateErrorCode, t: ReturnType<typeof useTranslations>): string {
+function errorMessage(code: NarrateErrorCode, t: CompanionT): string {
   switch (code) {
     case "budget_exhausted":
       return t("errorBudget");
@@ -80,6 +108,211 @@ function errorMessage(code: NarrateErrorCode, t: ReturnType<typeof useTranslatio
     default:
       return t("errorGeneric");
   }
+}
+
+/** One label/value row of a debug section — the label localized, the value raw. */
+function DebugRow({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex gap-2">
+      <span className="shrink-0 text-muted-foreground/70">{label}</span>
+      <span className={`min-w-0 break-words ${mono ? "font-mono text-[10px]" : ""}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** A titled debug section with a shared data attribute for probing. */
+function DebugSection({
+  id,
+  title,
+  action,
+  children,
+}: {
+  id: string;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section data-companion-pod-debug={id} className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
+          {title}
+        </h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The last evolution run's structured detail — labels localized, values raw. */
+function EvolutionDebugSection({
+  latest,
+  t,
+}: {
+  latest: EvolutionPresence["latest"];
+  t: CompanionT;
+}) {
+  if (!latest) {
+    return (
+      <p className="text-muted-foreground/80">{t("debugEvolutionEmpty")}</p>
+    );
+  }
+  const d = latest.detail;
+  const status = latest.failed
+    ? t("debugStatusFailed")
+    : latest.hasChanges === false
+      ? t("debugStatusNoChanges")
+      : latest.hasChanges === true
+        ? t("debugStatusChanged")
+        : t("debugStatusUnknown");
+  const directionOutcome = d?.direction
+    ? (
+        {
+          no_change: t("debugDirectionNoChange"),
+          updated: t("debugDirectionUpdated"),
+          failed: t("debugDirectionFailed"),
+          rejected: t("debugDirectionRejected"),
+        } as const
+      )[d.direction.outcome]
+    : undefined;
+
+  return (
+    <div className="space-y-1.5">
+      <DebugRow label={t("debugStatus")} value={status} />
+      {latest.error && <DebugRow label={t("debugError")} value={latest.error} />}
+      <DebugRow label={t("debugTurn")} value={latest.turnId} mono />
+      {latest.summary?.trim() && (
+        <DebugRow label={t("debugSummary")} value={latest.summary} />
+      )}
+      {d?.changes && (
+        <DebugRow
+          label={t("debugChangesLabel")}
+          value={t("debugChanges", {
+            added: d.changes.added,
+            reinforced: d.changes.reinforced,
+            demoted: d.changes.demoted,
+            removed: d.changes.removed,
+            superseded: d.changes.superseded,
+          })}
+        />
+      )}
+      {d?.partial && (
+        <p className="text-amber-600 dark:text-amber-400">{t("debugPartial")}</p>
+      )}
+      {d?.direction && (
+        <DebugRow
+          label={t("debugDirection")}
+          value={directionOutcome ?? d.direction.outcome}
+        />
+      )}
+      {d?.direction?.summary?.trim() && (
+        <p className="break-words">{d.direction.summary}</p>
+      )}
+      {d && d.triggers && d.triggers.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+          <span className="shrink-0 text-muted-foreground/70">
+            {t("debugTriggers")}
+          </span>
+          {d.triggers.map((trigger) => (
+            <span key={trigger.bucket} className="font-mono text-[10px]">
+              {`${trigger.bucket} ${trigger.score > 0 ? "+" : ""}${trigger.score}`}
+            </span>
+          ))}
+        </div>
+      )}
+      {d && d.playbooks && d.playbooks.length > 0 && (
+        <ul className="space-y-0.5">
+          {d.playbooks.map((playbook, i) => (
+            <li key={`${playbook.agent}-${i}`} className="break-words">
+              <span className="font-mono text-[10px]">{playbook.agent}</span>
+              {` — ${playbook.summary}`}
+            </li>
+          ))}
+        </ul>
+      )}
+      {d && d.mutations && d.mutations.length > 0 && (
+        <ul className="space-y-0.5">
+          {d.mutations.map((mutation, i) => (
+            <li key={i} className="flex gap-1.5">
+              <span
+                className={
+                  mutation.type === "added"
+                    ? "shrink-0 text-emerald-600 dark:text-emerald-400"
+                    : "shrink-0 text-red-500 dark:text-red-400"
+                }
+              >
+                {mutation.type === "added"
+                  ? t("debugMutationsAdded")
+                  : t("debugMutationsRemoved")}
+              </span>
+              <span className="min-w-0 break-words">{mutation.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {d?.note?.trim() && <DebugRow label={t("debugNote")} value={d.note} />}
+    </div>
+  );
+}
+
+/** The read-only memory-map summary — strand/slice/active-slice overview. */
+function MemoryDebugSection({
+  memory,
+  failed,
+  t,
+}: {
+  memory: MemoryMapSnapshot | null;
+  failed: boolean;
+  t: CompanionT;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {!memory && !failed && <p className="text-muted-foreground/80">{t("debugMemoryLoading")}</p>}
+      {failed && !memory && (
+        <p className="text-muted-foreground/80">{t("debugMemoryFailed")}</p>
+      )}
+      {memory && (
+        <>
+          <DebugRow
+            label={t("debugStrands", { count: memory.strandCount })}
+            value={
+              memory.topStrands.length > 0
+                ? memory.topStrands
+                    .map((s) => `${s.name} ×${s.count}`)
+                    .join("、")
+                : "—"
+            }
+          />
+          <DebugRow
+            label={t("debugSlices", { count: memory.sliceCount })}
+            value={memory.latestSliceId ?? "—"}
+            mono
+          />
+          {memory.activeSliceId && (
+            <DebugRow
+              label={t("debugActiveSlice")}
+              value={`${memory.activeSliceId} (${memory.activeStatus ?? "—"})`}
+              mono
+            />
+          )}
+          {!memory.activeSliceId && (
+            <DebugRow label={t("debugActiveSlice")} value={t("debugNoActive")} />
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 export function CompanionPod({
@@ -178,6 +411,40 @@ export function CompanionPod({
     }
   }, [target, status, text]);
 
+  // ── Debug: the memory-map summary ─────────────────────────────────────────
+  // Fetched ONCE per panel open from the existing episodic server actions —
+  // never polled. Read-only; a manual refresh re-runs the same three reads
+  // (useful right after an evolution run mutates the memory it summarizes).
+  const [memoryMap, setMemoryMap] = useState<MemoryMapSnapshot | null>(null);
+  const [memoryMapFailed, setMemoryMapFailed] = useState(false);
+  const memoryMapSeqRef = useRef(0);
+  const loadMemoryMap = useCallback(async () => {
+    const seq = ++memoryMapSeqRef.current;
+    const [strands, episodic, catalog] = await Promise.all([
+      getStrandList().catch(() => null),
+      getEpisodicState().catch(() => null),
+      getTimelineCatalog().catch(() => null),
+    ]);
+    // A close/reopen superseded this read — its snapshot would be stale.
+    if (seq !== memoryMapSeqRef.current) return;
+    setMemoryMapFailed(!strands && !episodic && !catalog);
+    setMemoryMap(
+      strands || episodic || catalog
+        ? {
+            strandCount: strands?.length ?? 0,
+            topStrands: strands?.slice(0, 5) ?? [],
+            sliceCount: catalog?.length ?? 0,
+            latestSliceId: catalog?.at(-1)?.id ?? null,
+            activeSliceId: episodic?.active?.slice_id ?? null,
+            activeStatus: episodic?.active?.status ?? null,
+          }
+        : null,
+    );
+  }, []);
+  useEffect(() => {
+    if (open) void loadMemoryMap();
+  }, [open, loadMemoryMap]);
+
   const speaking =
     target !== null && (status === "connecting" || status === "streaming");
   const active = speaking || working;
@@ -190,10 +457,10 @@ export function CompanionPod({
   );
 
   const toggle = () => {
-    // Nothing to show yet: no live stream, no remembered one, no evolution
-    // event. The button stays put — a quiet pet does not perform an empty
-    // trick.
-    if (!hasLiveTarget && !latest && !hasEvolution) return;
+    // Debug phase: the button always opens the panel. Even with nothing in
+    // the prose seat the two debug blocks below (evolution detail + memory
+    // map) are worth reaching — the old "quiet pet does not perform an empty
+    // trick" guard went when they arrived.
     setOpen((o) => !o);
   };
 
@@ -250,7 +517,7 @@ export function CompanionPod({
       </button>
 
       <AnimatePresence>
-        {open && (hasLiveTarget || latest || hasEvolution) && (
+        {open && (
           <motion.aside
             key="companion-pod-panel"
             data-companion-pod-panel
@@ -374,6 +641,44 @@ export function CompanionPod({
                   )}
                 </div>
               ) : null}
+
+              {/* Debug instrumentation (dev phase) — additive to whatever the
+                  prose seat above shows. Two read-only blocks: the last
+                  evolution run's structured detail, and a memory-map summary
+                  fetched once per open. Raw values on purpose — this exists
+                  to make internal state visible, not to be pretty. */}
+              <div
+                data-companion-pod-debug
+                className="space-y-3 border-t border-foreground/10 px-4 py-3 font-sans text-[11px] leading-relaxed text-foreground/80"
+              >
+                <DebugSection
+                  id="evolution"
+                  title={t("debugEvolutionTitle")}
+                >
+                  <EvolutionDebugSection latest={evolution?.latest ?? null} t={t} />
+                </DebugSection>
+                <DebugSection
+                  id="memory"
+                  title={t("debugMemoryTitle")}
+                  action={
+                    <button
+                      type="button"
+                      onClick={() => void loadMemoryMap()}
+                      aria-label={t("debugRefresh")}
+                      title={t("debugRefresh")}
+                      className={`${ISLAND_CONTROL} size-5`}
+                    >
+                      <RefreshCw className="size-3" />
+                    </button>
+                  }
+                >
+                  <MemoryDebugSection
+                    memory={memoryMap}
+                    failed={memoryMapFailed}
+                    t={t}
+                  />
+                </DebugSection>
+              </div>
             </div>
           </motion.aside>
         )}

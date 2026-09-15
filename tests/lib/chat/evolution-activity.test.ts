@@ -4,6 +4,7 @@ import {
   createEvolutionScanState,
   EVOLUTION_PRESENCE_IDLE,
   EvolutionToastDedupe,
+  evolutionDetailFromFrame,
   evolutionToastContent,
   nextEvolutionEvent,
   publishEvolutionActivity,
@@ -117,6 +118,75 @@ describe("nextEvolutionEvent (producer scan)", () => {
       live: undefined,
     });
   });
+
+  it("a done frame's structured detail rides the event for the debug surface", () => {
+    const state = createEvolutionScanState();
+    const event = nextEvolutionEvent(state, "msg-1", {
+      status: "done",
+      hasChanges: true,
+      summary: "It remembers the trip.",
+      changes: { added: 2, reinforced: 0, demoted: 1, removed: 0, superseded: 0 },
+      direction: { outcome: "updated", summary: "Direction recalibrated." },
+      playbooks: [{ agent: "recall", summary: "Recall playbook tightened." }],
+      mutations: [{ type: "added", text: "Reader loves fog." }],
+      triggers: [{ bucket: "card", score: 3 }],
+      partial: true,
+      note: "The card drifted.",
+    });
+    expect(event?.kind).toBe("done");
+    if (event?.kind !== "done") return;
+    expect(event.detail).toEqual({
+      changes: { added: 2, reinforced: 0, demoted: 1, removed: 0, superseded: 0 },
+      mutations: [{ type: "added", text: "Reader loves fog." }],
+      direction: { outcome: "updated", summary: "Direction recalibrated." },
+      playbooks: [{ agent: "recall", summary: "Recall playbook tightened." }],
+      triggers: [{ bucket: "card", score: 3 }],
+      partial: true,
+      note: "The card drifted.",
+    });
+  });
+
+  it("a bare done frame carries no detail at all", () => {
+    const state = createEvolutionScanState();
+    const event = nextEvolutionEvent(state, "msg-1", {
+      status: "done",
+      hasChanges: false,
+    });
+    expect(event?.kind).toBe("done");
+    if (event?.kind !== "done") return;
+    expect(event.detail).toBeUndefined();
+  });
+});
+
+describe("evolutionDetailFromFrame", () => {
+  it("is undefined when the frame has no structured fields", () => {
+    expect(
+      evolutionDetailFromFrame({ status: "done", hasChanges: true }),
+    ).toBeUndefined();
+  });
+
+  it("is undefined when only hasChanges is set — that field rides the event top-level", () => {
+    expect(
+      evolutionDetailFromFrame({ status: "done", hasChanges: false }),
+    ).toBeUndefined();
+  });
+
+  it("picks up whichever structured fields exist, ignoring the rest", () => {
+    expect(
+      evolutionDetailFromFrame({
+        status: "done",
+        note: "Nothing forced a change.",
+      }),
+    ).toEqual({
+      changes: undefined,
+      mutations: undefined,
+      direction: undefined,
+      playbooks: undefined,
+      triggers: undefined,
+      partial: undefined,
+      note: "Nothing forced a change.",
+    });
+  });
 });
 
 describe("applyEvolutionActivity (presence reducer)", () => {
@@ -139,6 +209,9 @@ describe("applyEvolutionActivity (presence reducer)", () => {
       turnId: "msg-1",
       summary: "It now remembers the reader's name.",
       failed: false,
+      hasChanges: true,
+      error: undefined,
+      detail: undefined,
     });
   });
 
@@ -165,7 +238,31 @@ describe("applyEvolutionActivity (presence reducer)", () => {
       turnId: "msg-1",
       summary: undefined,
       failed: true,
+      hasChanges: undefined,
+      error: "budget exhausted",
+      detail: undefined,
     });
+  });
+
+  it("a completed run's structured detail lands in the seat for the debug block", () => {
+    const presence = applyEvolutionActivity(EVOLUTION_PRESENCE_IDLE, {
+      kind: "done",
+      turnId: "msg-1",
+      summary: "It remembers the trip.",
+      hasChanges: true,
+      fresh: true,
+      detail: {
+        changes: { added: 1, reinforced: 0, demoted: 0, removed: 0, superseded: 0 },
+        mutations: undefined,
+        direction: { outcome: "no_change" },
+        playbooks: undefined,
+        triggers: undefined,
+        partial: undefined,
+        note: undefined,
+      },
+    });
+    expect(presence.latest?.detail?.changes?.added).toBe(1);
+    expect(presence.latest?.detail?.direction?.outcome).toBe("no_change");
   });
 });
 
