@@ -2,6 +2,17 @@ import { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 import { withWorkflow } from "workflow/next";
 
+// The local workflow world's queue delivers each step to the flow endpoint
+// over HTTP with 30s headers/body timeouts (@workflow/world-local defaults).
+// A housekeeping or doStreamStep turn whose LLM call takes >30s (slow
+// provider, big slice) trips that ceiling: the delivery is killed mid-step,
+// the queue redelivers, and doStreamStep (maxRetries=0 by design) fails the
+// whole run with a spurious FatalError. Steps' own model calls are already
+// bounded at 120s by withFirstByteTimeout (src/lib/models/fetch-timeout.ts),
+// so 300s of transport headroom matches the platform's wall-clock ceiling.
+process.env.WORKFLOW_LOCAL_HEADERS_TIMEOUT_MS ??= "300000";
+process.env.WORKFLOW_LOCAL_BODY_TIMEOUT_MS ??= "300000";
+
 const nextConfig: NextConfig = {
   // Produce .next/standalone ONLY for the client kernel packaging build
   // (NEXT_PUBLIC_PREVIOUSLY_TARGET=client, set by scripts/build-standalone.mjs —
