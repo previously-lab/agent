@@ -51,9 +51,9 @@ import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
 import {
-  NarrationDock,
+  CompanionPod,
   type NarrationTarget,
-} from "@/components/companion/narration-dock";
+} from "@/components/companion/companion-pod";
 
 interface AppShellProps {
   /** Server-preloaded user config passed through to ChatPage. */
@@ -153,10 +153,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [running, setRunning] = useState(false);
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
-  // One narration at a time: each request bumps `gen`, and the dock aborts
+  // One narration at a time: each request bumps `gen`, and the pod aborts
   // the previous reader when a new target lands. The target is owned HERE
-  // (not by the card field) so narration survives rung switches and view
-  // changes — the reader keeps browsing while Previously speaks.
+  // (not by the card field, and not by the pod — the pod streams and renders
+  // it) so narration survives rung switches and view changes — the reader
+  // keeps browsing while Previously speaks.
   const [narrateTarget, setNarrateTarget] = useState<NarrationTarget | null>(
     null,
   );
@@ -472,24 +473,22 @@ export function AppShell({ initialConfig }: AppShellProps) {
             competing with the thing they controlled. The rail says where time
             IS; the right edge is where you act on it. */}
         <JumpControls feed={feed} />
-        {/* THE NARRATION DOCK — the mouth's floating panel. Mounted with the
-            shell (not the card field) so a narration keeps streaming through
-            rung switches and view changes. It floats above the room the
-            composer reserves at the foot AND above the two jump arrows that
-            hold the right edge below it (`bottom-32` + two buttons ≈ 208px),
-            so the dock never lands under another control's hit area. */}
-        <AnimatePresence>
-          {narrateTarget && (
-            <NarrationDock
-              key={narrateTarget.gen}
-              target={narrateTarget}
-              onClose={() => setNarrateTarget(null)}
-              onRetry={startNarration}
-              reducedMotion={reducedMotion}
-              bottom={Math.max(composerClearance + 12, 208)}
-            />
-          )}
-        </AnimatePresence>
+        {/* THE COMPANION POD — the companion stream's floating presence. It
+            holds the narration the 「讲讲这片」 entry starts (pod button +
+            panel in one component, streaming and all) and lives here with the
+            shell, NOT the card field, so a narration survives rung switches
+            and view changes. Its fixed seat on the right edge clears
+            JumpControls' stack by measurement — see companion-pod.tsx. Hidden
+            with the narrate entry when the brain is bridge: /api/companion
+            answers 501 there. */}
+        {bridgeBrain === false && (
+          <CompanionPod
+            target={narrateTarget}
+            onDismiss={() => setNarrateTarget(null)}
+            onRetry={startNarration}
+            reducedMotion={reducedMotion}
+          />
+        )}
       </div>
     </div>
   );

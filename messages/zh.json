@@ -526,6 +526,7 @@
   "companion": {
     "narrateAria": "让 Previously 讲讲这片",
     "dockLabel": "讲述",
+    "podLabel": "它在这里",
     "thinking": "Previously 正在回想…",
     "close": "收起",
     "retry": "再讲一次",

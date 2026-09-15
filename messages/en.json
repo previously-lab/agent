@@ -526,6 +526,7 @@
   "companion": {
     "narrateAria": "Narrate this slice",
     "dockLabel": "Narration",
+    "podLabel": "Previously is here",
     "thinking": "Previously is remembering…",
     "close": "Close",
     "retry": "Tell it again",
