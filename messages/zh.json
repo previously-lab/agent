@@ -532,6 +532,10 @@
     "retry": "再讲一次",
     "errorBudget": "今天讲了很多了，明天再讲。",
     "errorUnavailable": "这里暂时还不支持讲述。",
-    "errorGeneric": "刚才走了神，没能讲完。"
+    "errorGeneric": "刚才走了神，没能讲完。",
+    "evolutionWorking": "Previously 正在进化…",
+    "evolutionFailed": "这次没能完成更新。",
+    "evolvedToast": "它进化了",
+    "evolvedFallback": "记忆里的某些东西被更新了"
   }
 }

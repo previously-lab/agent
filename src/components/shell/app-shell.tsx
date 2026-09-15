@@ -24,10 +24,20 @@ import {
 import { useSearchParams } from "next/navigation";
 import { useReducedMotion } from "motion/react";
 import { AnimatePresence, motion } from "motion/react";
+import { useTranslations } from "next-intl";
+import { Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import { useRouter } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { FieldRung } from "@/lib/timeline3d/units";
+import {
+  applyEvolutionActivity,
+  EVOLUTION_PRESENCE_IDLE,
+  EvolutionToastDedupe,
+  evolutionToastContent,
+  subscribeEvolutionActivity,
+} from "@/lib/chat/evolution-activity";
 import {
   createFieldFeed,
   type FieldFeed,
@@ -177,6 +187,35 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // there. Tri-state: hidden until the probe resolves (never flash an entry
   // a bridge client cannot serve); cloud and BYOK clients get it.
   const bridgeBrain = useBridgeBrainActive();
+
+  // ── THE EVOLUTION STREAM — the pod's second event source ────────────────
+  // ChatPage publishes data-evolution frames onto the module-level bus; here
+  // the shell folds them into the pod's presence (the button breathes while a
+  // run is in flight, the panel replays the newest completion when there is
+  // no narration) and fires the achievement toast on a genuine completion.
+  // The toast is deduped per turn: a durable run's reconnect replay
+  // redelivers the terminal frame, and it must not fire twice. Bridge brain
+  // runs no inline evolution — the bus stays silent and the pod is hidden,
+  // so there is nothing to clean up and no console noise.
+  const tCompanion = useTranslations("companion");
+  const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
+  const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
+  useEffect(() => {
+    return subscribeEvolutionActivity((event) => {
+      setEvolution((prev) => applyEvolutionActivity(prev, event));
+      if (event.kind !== "done") return;
+      const content = evolutionToastContent(event, {
+        title: tCompanion("evolvedToast"),
+        fallback: tCompanion("evolvedFallback"),
+      });
+      if (content && evolutionToastDedupe.current.markToasted(event.turnId)) {
+        toast(content.title, {
+          description: content.description,
+          icon: <Sparkles className="size-4" />,
+        });
+      }
+    });
+  }, [tCompanion]);
 
   // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
   // What the chrome covers at the top edge and what the composer covers at the
@@ -475,18 +514,23 @@ export function AppShell({ initialConfig }: AppShellProps) {
         <JumpControls feed={feed} />
         {/* THE COMPANION POD — the companion stream's floating presence. It
             holds the narration the 「讲讲这片」 entry starts (pod button +
-            panel in one component, streaming and all) and lives here with the
-            shell, NOT the card field, so a narration survives rung switches
-            and view changes. Its fixed seat on the right edge clears
-            JumpControls' stack by measurement — see companion-pod.tsx. Hidden
-            with the narrate entry when the brain is bridge: /api/companion
-            answers 501 there. */}
+            panel in one component, streaming and all) AND the evolution
+            stream's presence — the same button breathes while a run is in
+            flight and the panel replays the newest completion when there is
+            no narration (props from the shell's bus subscription above). It
+            lives here with the shell, NOT the card field, so a narration
+            survives rung switches and view changes. Its fixed seat on the
+            right edge clears JumpControls' stack by measurement — see
+            companion-pod.tsx. Hidden with the narrate entry when the brain is
+            bridge: /api/companion answers 501 there. */}
         {bridgeBrain === false && (
           <CompanionPod
             target={narrateTarget}
             onDismiss={() => setNarrateTarget(null)}
             onRetry={startNarration}
             reducedMotion={reducedMotion}
+            working={evolution.working}
+            evolution={evolution}
           />
         )}
       </div>

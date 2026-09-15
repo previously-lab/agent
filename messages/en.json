@@ -532,6 +532,10 @@
     "retry": "Tell it again",
     "errorBudget": "That's a lot of story for one day — come back tomorrow.",
     "errorUnavailable": "Narration isn't available on this setup yet.",
-    "errorGeneric": "Previously lost the thread and couldn't finish."
+    "errorGeneric": "Previously lost the thread and couldn't finish.",
+    "evolutionWorking": "Previously is evolving…",
+    "evolutionFailed": "The update didn't take this time.",
+    "evolvedToast": "Previously evolved",
+    "evolvedFallback": "Something in its memory was updated."
   }
 }

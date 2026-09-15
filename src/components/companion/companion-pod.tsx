@@ -32,8 +32,10 @@
  * States: idle (calm, muted) / speaking (narration in flight — a slow
  * breathing pulse + the brand-blue accent) / panel open. The activity state
  * is PROP-DRIVEN (`working`), not hard-wired to narration: the evolution
- * stream (a later task) gets a second event source that can light the same
- * button without a narration target.
+ * stream is the second source — the shell subscribes to the
+ * evolution-activity bus (`lib/chat/evolution-activity.ts`) and passes the
+ * run's presence down, so the same button breathes while Previously evolves
+ * and the panel replays the newest completion when there is no narration.
  *
  * The pod renders in the SHELL (not the card field) so a narration survives
  * rung switches and view changes — the same ownership rule the dock had.
@@ -43,6 +45,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
 import { AudioLines, CircleAlert, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
+import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import {
   NarrateError,
   streamNarration,
@@ -85,6 +88,7 @@ export function CompanionPod({
   onRetry,
   reducedMotion,
   working = false,
+  evolution,
 }: {
   target: NarrationTarget | null;
   /** End the narration and put the pod away (shell clears the target; the
@@ -94,11 +98,19 @@ export function CompanionPod({
   onRetry: NarrateRequest;
   reducedMotion: boolean;
   /**
-   * A second event source (the evolution stream, wired later) can drive the
-   * button's working state without a narration. `speaking || working` is what
-   * the button breathes for.
+   * A second event source (the evolution stream, published by the chat page
+   * onto the evolution-activity bus) drives the button's working state
+   * without a narration. `speaking || working` is what the button breathes
+   * for.
    */
   working?: boolean;
+  /**
+   * The evolution stream's presence, same source as `working` — while a run
+   * is in flight the button breathes, and when the panel opens with no
+   * narration to show, the latest evolution event takes the prose seat.
+   * Absent entirely on the bridge brain (no inline evolution there).
+   */
+  evolution?: EvolutionPresence;
 }) {
   const t = useTranslations("companion");
   const locale = useLocale();
@@ -171,11 +183,17 @@ export function CompanionPod({
   const active = speaking || working;
   const hasLiveTarget = target !== null;
   const headerTimeLabel = hasLiveTarget ? target?.timeLabel : latest?.timeLabel;
+  /** An evolution run in flight or a completed one to replay — the panel's
+      fallback seat when there is no narration at all. */
+  const hasEvolution = Boolean(
+    evolution && (evolution.working || evolution.latest),
+  );
 
   const toggle = () => {
-    // Nothing to show yet: no live stream and no remembered one. The button
-    // stays put — a quiet pet does not perform an empty trick.
-    if (!hasLiveTarget && !latest) return;
+    // Nothing to show yet: no live stream, no remembered one, no evolution
+    // event. The button stays put — a quiet pet does not perform an empty
+    // trick.
+    if (!hasLiveTarget && !latest && !hasEvolution) return;
     setOpen((o) => !o);
   };
 
@@ -232,7 +250,7 @@ export function CompanionPod({
       </button>
 
       <AnimatePresence>
-        {open && (hasLiveTarget || latest) && (
+        {open && (hasLiveTarget || latest || hasEvolution) && (
           <motion.aside
             key="companion-pod-panel"
             data-companion-pod-panel
@@ -324,15 +342,38 @@ export function CompanionPod({
                     {t("thinking")}
                   </p>
                 </div>
-              ) : (
+              ) : latest ? (
                 /* The replay — what Previously last said, kept after the
                     stream was dismissed. Read-only: no caret, no retry. */
                 <div aria-live="polite" className="px-4 pb-4 pt-2">
                   <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
-                    {latest?.text}
+                    {latest.text}
                   </p>
                 </div>
-              )}
+              ) : hasEvolution ? (
+                /* The evolution seat — no narration to show, so the pod
+                    shares what it is doing to itself. Modest by design: a
+                    status line while the run is in flight, then the run's
+                    one-line account (or the generic fallback). ✕ just closes;
+                    the event is presence, not a notification to dismiss. */
+                <div aria-live="polite" className="px-4 pb-4 pt-2">
+                  {evolution?.working ? (
+                    <p className="font-serif text-[13px] font-light italic leading-relaxed text-muted-foreground/80">
+                      {t("evolutionWorking")}
+                    </p>
+                  ) : evolution?.latest?.failed ? (
+                    <p className="font-serif text-[13px] font-light leading-relaxed text-muted-foreground">
+                      {t("evolutionFailed")}
+                    </p>
+                  ) : (
+                    <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
+                      {evolution?.latest?.summary?.trim()
+                        ? evolution.latest.summary
+                        : t("evolvedFallback")}
+                    </p>
+                  )}
+                </div>
+              ) : null}
             </div>
           </motion.aside>
         )}

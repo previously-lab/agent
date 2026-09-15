@@ -75,7 +75,7 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport �
    - `reasoning` → merged consecutively into one `ThinkingSteps` block (streaming mode with typewriter subtitle)
    - `tool-*` → merged by `toolCallId` into a single `ToolRenderer` card
    - `data-phase` → compact phases merge by name into ONE `HousekeepingCard` checklist; phases carrying a `tools` array merge into a bridge item (`BridgeToolCard` / `BridgeHousekeepingCard`); other non-compact phases render as `PhaseIndicator`
-   - `data-evolution` → its own `EvolutionCard` at the position the chunks arrive, streaming the live thinking line while running and the settled summary / mutations diff / calibration detail after
+   - `data-evolution` → its own `EvolutionCard` at the position the chunks arrive, streaming the live thinking line while running and the settled summary / mutations diff / calibration detail after. ChatPage ALSO republishes each newly-arrived frame onto the evolution-activity bus (`src/lib/chat/evolution-activity.ts`) — the shell subscribes there to drive the companion pod (button breathing + achievement toast); the card and the pod are independent surfaces until M3
    - `text` → buffered and flushed into `MarkdownRenderer` blocks
 3. Items render in natural stream order inside `AnimatePresence` for enter/exit animations.
 4. The loading tips (`loading-tip.tsx`) are RETIRED (unused, kept for a content refresh) — no streaming indicator or pre-first-chunk placeholder; the input bar's stop state is the in-flight affordance.

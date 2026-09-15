@@ -41,6 +41,12 @@ import type { UserConfig } from "@/lib/config/types";
 import { useTranslations, useLocale } from "next-intl";
 import { toast } from "sonner";
 import { setTurnBusy } from "./turn-busy";
+import {
+  createEvolutionScanState,
+  nextEvolutionEvent,
+  publishEvolutionActivity,
+} from "@/lib/chat/evolution-activity";
+import type { EvolutionStepData } from "@/lib/chat/build-stream";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
 import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/deep-link";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
@@ -665,6 +671,31 @@ function Inner({
     }
   }, [messages, t]);
 
+  // ── Evolution activity → the companion pod ─────────────────────────────
+  // The pod lives in the SHELL (a second surface; the EvolutionCard in this
+  // tree keeps its own rendering until M3), so the frames cross the
+  // module-level evolution-activity bus instead of props. Each turn's LAST
+  // data-evolution part is its current frame; the scan state identity-compares
+  // against the last published frame so only NEWLY ARRIVED chunks publish.
+  // Bridge brain never runs inline evolution, so nothing publishes there.
+  const evolutionScanRef = useRef(createEvolutionScanState());
+  useEffect(() => {
+    const scan = evolutionScanRef.current;
+    for (const message of messages) {
+      const parts = (message.parts ?? []) as Array<{
+        type?: string;
+        data?: unknown;
+      }>;
+      let frame: EvolutionStepData | undefined;
+      for (const part of parts) {
+        if (part.type === "data-evolution") frame = part.data as EvolutionStepData;
+      }
+      if (!frame) continue;
+      const event = nextEvolutionEvent(scan, message.id, frame);
+      if (event) publishEvolutionActivity(event);
+    }
+  }, [messages]);
+
   // ── The stream's item model: [history slice blocks …, resume block, live] ─
   const handleRegenerate = useCallback(
     (messageId: string) => {
@@ -805,7 +836,8 @@ function Inner({
     // v0.7b: self-evolution runs INLINE inside housekeeping (the turn's stream
     // carries data-evolution chunks) — no separate evolution request here.
     // v0.9: buildStream folds those chunks into the housekeeping card, so the
-    // client needs no evolution-specific state at all.
+    // CHAT UI needs no evolution-specific state; the companion pod reads the
+    // same frames off the evolution-activity bus (see the effect below).
   };
 
   // ── Stop means STOP: abort the local stream, cancel the durable run
