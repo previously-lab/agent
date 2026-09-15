@@ -13,7 +13,8 @@
  *   timeout   → a step was platform-killed or a deadline exceeded — the main
  *               agent should CONTINUE (续写) with a bounded re-invocation.
  *   model     → provider/model failure (bad key, quota, rate limit, content
- *               filter) — surface a client-visible explanation.
+ *               filter, provider queue-timeout) — surface a client-visible
+ *               explanation.
  *   terminal  → run cannot recover (corrupted event log, contract mismatch,
  *               not-registered, expired run) — surface an explanation.
  *
@@ -22,6 +23,17 @@
  * the workflow body runs in a separate VM realm where the SDK error classes
  * are distinct objects. The name set mirrors `@workflow/errors@4.1.4` + the
  * `@workflow/core@4.6.0` `classify-error.js` categories.
+ *
+ * Cause-chain behavior: the step runtime re-throws a failed step as a generic
+ * wrapper (`FatalError` / `Step "…" exceeded max retries|failed`), preserving
+ * the original error on `err.cause`. The wrapper's own message usually reduces
+ * to `timeout`, which would burn bounded continuations against a dead provider
+ * (the DeepSeek-outage incident). So when the outer error is such a wrapper
+ * AND its own evidence is vague (timeout/terminal), the classifier walks the
+ * `cause` chain (depth-bounded, same discipline as `formatErrorDetail`) and
+ * prefers a concrete `model`/`transient` root-cause kind over the wrapper's.
+ * A wrapper without an informative cause, or whose root is itself a timeout
+ * (genuine platform kill), classifies exactly as before.
  */
 
 export type WorkflowErrorKind =
@@ -68,6 +80,11 @@ function displayMessage(msg: string, max = 180): string {
  * Classify a workflow-runtime / agent-loop error into an actionable kind.
  * Errors cross the VM realm, so all checks are name/pattern based.
  *
+ * Two layers: `classifyByEvidence` reads the error itself (structured
+ * evidence first, then names, then message regexes); the public
+ * `classifyWorkflowError` adds the cause-chain root-cause preference for
+ * generic step-runtime wrappers (see the module header).
+ *
  * Order of evidence: (1) abort/timeout names, (2) STRUCTURED status codes
  * (AI SDK `APICallError.statusCode`), (3) workflow SDK error names,
  * (4) message regex as a last resort. Unknown errors fall through to
@@ -75,6 +92,59 @@ function displayMessage(msg: string, max = 180): string {
  * burning continuation re-invocations.
  */
 export function classifyWorkflowError(err: unknown): ClassifiedWorkflowError {
+  const outer = classifyByEvidence(err);
+  // Root-cause walk: only generic step-runtime wrappers whose own evidence
+  // reduced to the vague timeout/terminal kinds can be superseded by their
+  // cause. Anything the outer error already pinpoints (model/abort/…) stands.
+  if (outer.kind !== "timeout" && outer.kind !== "terminal") return outer;
+  if (!isStepRuntimeWrapper(err)) return outer;
+  const root = deepestCause(err);
+  if (root === undefined) return outer;
+  const rootResult = classifyByEvidence(root);
+  // A concrete model/transient root (provider outage, auth failure, throttle)
+  // beats the wrapper's generic "the step died" timeout — surface it promptly
+  // instead of burning continuation re-invocations against a dead provider.
+  // A root that is itself a timeout (genuine platform kill) keeps the
+  // wrapper's classification — continuations remain the right answer there.
+  if (rootResult.kind === "model" || rootResult.kind === "transient") {
+    // Keep the wrapper's log-facing message (it carries the step framing and
+    // usually the root text); the client-visible explanation is the root's.
+    return { ...rootResult, message: outer.message };
+  }
+  return outer;
+}
+
+/**
+ * Generic step-runtime wrapper shapes: the `FatalError` the step executor
+ * raises when a step's retries are exhausted, or any error carrying the
+ * `Step "…"` retry preamble. These say HOW the step died, never WHY — the
+ * WHY lives on `err.cause`.
+ */
+function isStepRuntimeWrapper(err: unknown): boolean {
+  if (!isRecord(err)) return false;
+  if (err.name === "FatalError") return true;
+  return typeof err.message === "string" &&
+    /^Step ".+" (exceeded max retries|failed)/.test(err.message);
+}
+
+/**
+ * Deepest `cause` in the chain (bounded by MAX_CAUSE_DEPTH, which alone makes
+ * pathological self-referencing chains terminate). Returns undefined when
+ * there is no cause to walk.
+ */
+function deepestCause(err: unknown): unknown {
+  let current = err;
+  for (let i = 0; i < MAX_CAUSE_DEPTH; i++) {
+    if (!isRecord(current)) break;
+    const cause = current.cause;
+    if (cause === undefined || cause === null) break;
+    current = cause;
+  }
+  return current === err ? undefined : current;
+}
+
+/** Evidence-only classification of a single error value (no cause walk). */
+function classifyByEvidence(err: unknown): ClassifiedWorkflowError {
   if (err === null || err === undefined) {
     return { kind: "terminal", message: "Unknown workflow error (empty)" };
   }
@@ -171,6 +241,20 @@ export function classifyWorkflowError(err: unknown): ClassifiedWorkflowError {
       kind: "model",
       message,
       userMessage: `The local subscription bridge failed: ${displayMessage(message)}`,
+    };
+  }
+
+  // Provider queue-timeout: the upstream admitted it never STARTED
+  // processing ("We were unable to start processing your request within the
+  // N-second timeout limit"). That is a provider-capacity failure, not a
+  // platform kill — and it must win over TIMEOUT_RE's bare "timeout"
+  // substring checked further below.
+  if (/unable to start processing your request/i.test(message)) {
+    return {
+      kind: "model",
+      message,
+      userMessage:
+        "The model provider is overloaded or unreachable right now — your message is safe, please try again in a few minutes.",
     };
   }
 

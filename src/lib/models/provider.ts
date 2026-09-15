@@ -13,15 +13,29 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import type { LanguageModel } from "ai";
 import { createBridgeLanguageModel } from "./bridge-model";
+import {
+  MODEL_FIRST_BYTE_TIMEOUT_MS,
+  withFirstByteTimeout,
+} from "./fetch-timeout";
 import type { ModelConfig } from "./registry";
 
 let _anthropicProvider: ReturnType<typeof createAnthropic> | null = null;
 
 /** createAnthropic({}) reads ANTHROPIC_API_KEY from the environment. */
 function getAnthropicProvider() {
-  if (!_anthropicProvider) _anthropicProvider = createAnthropic({});
+  if (!_anthropicProvider)
+    _anthropicProvider = createAnthropic({ fetch: timedModelFetch });
   return _anthropicProvider;
 }
+
+// Shared first-byte-timeout fetch for every HTTP provider instance. The
+// chat turn's agent.stream() cannot carry a timeout (the workflow sandbox VM
+// has no AbortSignal global), so the bounded-hang guarantee lives at this
+// HTTP boundary instead — see fetch-timeout.ts for the full rationale.
+const timedModelFetch = withFirstByteTimeout(
+  fetch.bind(globalThis),
+  MODEL_FIRST_BYTE_TIMEOUT_MS,
+);
 
 // DeepSeek speaks the OpenAI-compatible protocol via createOpenAICompatible —
 // the dedicated @ai-sdk/deepseek SDK silently dropped non-text message parts
@@ -49,6 +63,7 @@ function getDeepseekProvider(
       name: "deepseek",
       baseURL: baseURL ?? DEEPSEEK_DEFAULT_BASE_URL,
       apiKey: apiKey ?? process.env[envKey],
+      fetch: timedModelFetch,
     });
     deepseekProviders.set(cacheKey, provider);
   }
@@ -71,6 +86,7 @@ function getOpenaiProvider(
       ...(baseURL ? { baseURL } : {}),
       // An explicit config apiKey (BYOK) wins over the environment.
       apiKey: apiKey ?? process.env[envKey],
+      fetch: timedModelFetch,
     });
     openaiProviders.set(cacheKey, provider);
   }

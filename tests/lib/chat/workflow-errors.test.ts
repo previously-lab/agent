@@ -192,6 +192,99 @@ describe("classifyWorkflowError", () => {
     const c = classifyWorkflowError(new Error("Request failed with status 400 from example.com"));
     expect(c.kind).not.toBe("model");
   });
+
+  it("classifies the provider queue-timeout message at top level as model (beats TIMEOUT_RE)", () => {
+    // DeepSeek outage shape: the upstream never started processing. The
+    // message contains "timeout", which must NOT downgrade this to `timeout`.
+    const c = classifyWorkflowError(
+      new Error(
+        "We were unable to start processing your request within the 900-second timeout limit",
+      ),
+    );
+    expect(c.kind).toBe("model");
+    expect(c.userMessage).toContain("overloaded or unreachable");
+  });
+
+  // ── Root-cause classification: step-runtime wrapper + cause chain ──────────
+  describe("root-cause classification (wrapper cause walk)", () => {
+    /** The FatalError the step runtime raises when a step's retries are exhausted. */
+    function stepWrapper(cause?: unknown): Error {
+      const e = new Error(
+        'Step "step//@ai-sdk/workflow@2.0.30//doStreamStep" exceeded max retries (0 retries)',
+      );
+      e.name = "FatalError";
+      if (cause !== undefined) (e as Error & { cause?: unknown }).cause = cause;
+      return e;
+    }
+
+    it("provider queue-timeout as the wrapper's cause → model (not the wrapper's timeout)", () => {
+      const c = classifyWorkflowError(
+        stepWrapper(
+          new Error(
+            "We were unable to start processing your request within the 900-second timeout limit",
+          ),
+        ),
+      );
+      expect(c.kind).toBe("model");
+      expect(c.userMessage).toContain("overloaded or unreachable");
+      // Log-facing message stays the wrapper's (it carries the step framing).
+      expect(c.message).toContain("exceeded max retries");
+    });
+
+    it("transient root cause beats the wrapper's timeout", () => {
+      const c = classifyWorkflowError(
+        stepWrapper(namedError("ThrottleError", "429")),
+      );
+      expect(c.kind).toBe("transient");
+    });
+
+    it("genuine StepTimeoutError as the cause stays timeout (platform kill)", () => {
+      const c = classifyWorkflowError(
+        stepWrapper(namedError("StepTimeoutError", "step killed by platform")),
+      );
+      expect(c.kind).toBe("timeout");
+    });
+
+    it("wrapper with no cause keeps today's behavior (timeout via the wrapper message)", () => {
+      const c = classifyWorkflowError(stepWrapper());
+      expect(c.kind).toBe("timeout");
+    });
+
+    it("pathological self-referencing cause chain respects the depth bound (no hang)", () => {
+      const e = stepWrapper();
+      (e as Error & { cause?: unknown }).cause = e;
+      expect(classifyWorkflowError(e).kind).toBe("timeout");
+    });
+
+    it("deep chain beyond the depth bound is tolerated", () => {
+      // 10-deep chain — deeper than MAX_CAUSE_DEPTH (5). The walk stops at
+      // the bound; the deepest reached error is uninformative, so the
+      // wrapper's own timeout classification stands.
+      let current: Error & { cause?: unknown } = new Error("root");
+      for (let i = 0; i < 10; i++) {
+        const next = new Error(`level-${i}`) as Error & { cause?: unknown };
+        next.cause = current;
+        current = next;
+      }
+      const e = stepWrapper(current);
+      // level-0..level-4 are uninformative; no downgrade, no hang.
+      expect(classifyWorkflowError(e).kind).toBe("timeout");
+    });
+
+    it("does NOT walk the cause when the outer error already classifies as model (bridge case)", () => {
+      const e = namedError(
+        "WorkflowRunFailedError",
+        'Step "step//@ai-sdk/workflow@1.0.22//doStreamStep" failed after 3 retries: Bridge model "bridge/kimi" failed (exit-code)',
+      );
+      (e as Error & { cause?: unknown }).cause = namedError(
+        "ThrottleError",
+        "would-be transient root",
+      );
+      // The bridge prefix in the OUTER message decides; the cause must not
+      // downgrade a deterministic bridge failure to transient.
+      expect(classifyWorkflowError(e).kind).toBe("model");
+    });
+  });
 });
 
 describe("errorMessage", () => {

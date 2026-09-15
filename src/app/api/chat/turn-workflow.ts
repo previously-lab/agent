@@ -21,7 +21,7 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount, type ModelMessage } from "ai";
-import { getWritable } from "workflow";
+import { getWritable, sleep } from "workflow";
 import type { ModelCallStreamPart } from "@ai-sdk/workflow";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
@@ -914,8 +914,13 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
    * (`ReferenceError: AbortSignal is not defined`). And `maxOutputTokens` is a
    * project-wide prohibition: it behaves inconsistently across models — with
    * DeepSeek thinking enabled, the reasoning silently eats the shared cap and
-   * leaves empty/truncated output. Both levers are gone by design; the step is
-   * bounded only by the platform's 300s wall.
+   * leaves empty/truncated output. Both levers stay gone by design.
+   *
+   * The hung-provider bound therefore lives one layer down: every HTTP
+   * provider built by createModel() carries a first-byte fetch deadline
+   * (MODEL_FIRST_BYTE_TIMEOUT_MS, see src/lib/models/fetch-timeout.ts), which
+   * classifies as `timeout` and lands in the continuation path below. Beyond
+   * first byte, the step is bounded by the platform's 300s wall.
    *
    * When a step IS platform-killed (or the model otherwise fails), the error
    * reaches the catch block below where `classifyWorkflowError` decides:
@@ -923,8 +928,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
    *   - terminal / model → surface a client-visible explanation
    *   - timeout / abort → bounded CONTINUATION: rebuild the messages from the
    *     interrupted run's completed steps (tool calls + results + partial text,
-   *     captured via `onStepEnd`) plus a nudge and re-invoke agent.stream(),
-   *     so the agent picks up where it left off instead of dying silently.
+   *     captured via `onStepEnd`) plus a nudge and re-invoke agent.stream()
+   *     after a durable backoff sleep, so the agent picks up where it left off
+   *     instead of dying silently and a short upstream blip isn't rammed twice
+   *     in a row.
    * This is the same mechanism as the token-cap continuation loop below, just
    * triggered from the failure path.
    */
@@ -934,6 +941,22 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   /** Continuation nudge for a step that was interrupted by the platform. */
   const TIMEOUT_CONTINUE_NUDGE =
     "You were interrupted by a timeout. Continue exactly where you left off — do not repeat what you already wrote, and keep your answer focused so it finishes quickly.";
+  /**
+   * Durable backoff before re-invoking after a timeout. A short upstream blip
+   * clears within seconds — re-invoking immediately would ram a still-warming
+   * provider twice in a row (each call hanging minutes).
+   */
+  const TIMEOUT_BACKOFF_FIRST_MS = 30_000;
+  /**
+   * Second-continuation backoff, escalating: an outage that already outlived
+   * the first wait plus a full step attempt is likelier minutes-long than a
+   * blip, so give it longer before the final attempt.
+   */
+  const TIMEOUT_BACKOFF_SECOND_MS = 90_000;
+  const TIMEOUT_BACKOFF_MS = [
+    TIMEOUT_BACKOFF_FIRST_MS,
+    TIMEOUT_BACKOFF_SECOND_MS,
+  ] as const;
 
   // Completed-step snapshots of the in-flight stream, accumulated for the
   // timeout continuation so the re-invoked agent resumes from the COMMITTED
@@ -1113,6 +1136,15 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
         // The snapshots are now committed into currentMessages — clear them so
         // a LATER timeout carries only THAT run's completed steps.
         interruptedSteps = [];
+        // Durable backoff before the re-invocation: `sleep` writes a timer
+        // event into the run's log — it replays correctly and holds no
+        // compute while waiting, unlike an immediate re-invocation that would
+        // ram a still-recovering provider.
+        await sleep(
+          TIMEOUT_BACKOFF_MS[
+            Math.min(timeoutContinuations, TIMEOUT_BACKOFF_MS.length) - 1
+          ],
+        );
         // Loop back to re-invoke agent.stream() with the continuation.
         continue;
       }

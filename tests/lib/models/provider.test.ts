@@ -6,19 +6,31 @@ const {
   createOpenAIMock,
 } = vi.hoisted(() => ({
   createOpenAICompatibleMock: vi.fn(
-    (opts?: { name?: string; baseURL?: string }) => (id: string) => ({
+    (opts?: {
+      name?: string;
+      baseURL?: string;
+      apiKey?: string;
+      fetch?: unknown;
+    }) => (id: string) => ({
       kind: "openai-compatible",
       id,
       name: opts?.name,
       baseURL: opts?.baseURL,
     }),
   ),
-  createAnthropicMock: vi.fn(() => (id: string) => ({ kind: "anthropic", id })),
-  createOpenAIMock: vi.fn((opts?: { baseURL?: string }) => (id: string) => ({
-    kind: "openai",
+  createAnthropicMock: vi.fn((opts?: { fetch?: unknown }) => (id: string) => ({
+    kind: "anthropic",
     id,
-    baseURL: opts?.baseURL,
   })),
+  createOpenAIMock: vi.fn(
+    (opts?: { baseURL?: string; apiKey?: string; fetch?: unknown }) => (
+      id: string,
+    ) => ({
+      kind: "openai",
+      id,
+      baseURL: opts?.baseURL,
+    }),
+  ),
 }));
 
 vi.mock("@ai-sdk/openai-compatible", () => ({
@@ -92,6 +104,11 @@ describe("createModel", () => {
   it("dispatches anthropic-sdk models through createAnthropic", () => {
     const model = createModel(cfg("anthropic", "claude-sonnet-5"));
     expect(createAnthropicMock).toHaveBeenCalledTimes(1);
+    // The singleton provider is built with the first-byte-timeout fetch
+    // wrapper (the module-level cache means this is the ONE factory call).
+    expect(createAnthropicMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fetch: expect.any(Function) }),
+    );
     expect(model).toEqual({ kind: "anthropic", id: "claude-sonnet-5" });
   });
 
@@ -145,5 +162,19 @@ describe("createModel", () => {
       modelId: "bridge/claude",
       specificationVersion: "v3",
     });
+  });
+
+  it("passes the first-byte-timeout fetch wrapper to the per-call HTTP provider factories", () => {
+    // The hung-provider bound lives at the fetch boundary (the workflow VM
+    // blocks agent.stream timeouts) — every HTTP provider must carry it.
+    createModel(cfg("deepseek", "m-deepseek", "https://fetch-check-1.example/v1"));
+    const ocOpts = createOpenAICompatibleMock.mock.calls.at(-1)?.[0];
+    expect(typeof ocOpts?.fetch).toBe("function");
+    // The wrapper must be the SAME instance across factories (and cache hits).
+    createModel(cfg("openai", "m-openai", "https://fetch-check-2.example/v1"));
+    const oaOpts = createOpenAIMock.mock.calls.at(-1)?.[0];
+    expect(oaOpts?.fetch).toBe(ocOpts?.fetch);
+    // (Anthropic is asserted in its own test above — it is a cached singleton.)
+    // The bridge shells out to a CLI (no HTTP fetch) — no wrapper expected.
   });
 });
