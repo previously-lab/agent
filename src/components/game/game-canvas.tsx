@@ -51,14 +51,15 @@
  * back on exit (SPACE_FADE_S), while the corridor dims/undims on its own
  * lerp — the door frame is the only constant between the two worlds.
  *
- * ATMOSPHERE. Background, fog (color/near/far), and the directional sun
- * lerp (factor 1 − e^(−2.5·dt)) between two target moods defined once in
- * resolveAtmosphere: the corridor (the void color, fog 30–90, matching the
- * corridor's end-fade planes) and the active space's palette. Inside a
- * space there is no distance fog — the room's far edge melts into its own
- * shadow (the background IS the palette's atmosphere fog), and fog planes
- * near the camera distance washed the contents into a translucent veil;
- * the sun tints to palette.sunColor × sunIntensity.
+ * ATMOSPHERE. Background and the directional sun lerp (factor 1 −
+ * e^(−2.5·dt)) between two target moods defined once in resolveAtmosphere:
+ * the corridor (the void color) and the active space's palette — inside a
+ * space the background becomes the room's own shadow (the palette's
+ * atmosphere fog), so its far edge melts seamlessly. There is NO scene fog
+ * anywhere: with the camera ~23m above the player, every fog band that
+ * could sell depth also washed the whole visible room into the fog color,
+ * so depth is carried by the background and the corridor's end-fade planes
+ * instead.
  *
  * DETERMINISM. No randomness in this file at all — every generated thing the
  * player sees comes from corridor/space renderers fed by the seed module.
@@ -117,10 +118,8 @@ export { GAME_DEBUG } from "./debug";
 
 /** Scene mood while no space is active — the void color for the active
  *  theme (exported from corridor.tsx so the end-fade planes always match
- *  the background/fog). */
+ *  the background). There is no scene fog anywhere in the game. */
 const SCENE_COLORS = VOID_COLORS;
-const FOG_NEAR = 30;
-const FOG_FAR = 90;
 
 const CAMERA_ZOOM = 34;
 const CAM_OFFSET = { x: -12, y: 16, z: 12 };
@@ -254,9 +253,6 @@ function groundTargetY(
 /** The atmosphere's target mood — one place defines both states. */
 interface AtmosphereTargets {
   background: THREE.Color;
-  fogColor: THREE.Color;
-  fogNear: number;
-  fogFar: number;
   sunColor: THREE.Color;
   sunIntensity: number;
 }
@@ -264,11 +260,12 @@ interface AtmosphereTargets {
 /**
  * Resolve the target atmosphere for the current state into `out` (no
  * per-frame allocation): the corridor mood in the active theme's void
- * color, or the active space's palette under a fog of war — near tightens
- * to arm's length and the far plane covers only a short walk, so a space
- * reveals itself as you explore — with the sun tinted/intensified by the
- * palette. The space branch is theme-independent: a space's palette is
- * seed-fixed, not part of the app dark mode.
+ * color, or the active space's palette — background becomes the room's own
+ * shadow and the sun tints to palette.sunColor × sunIntensity. No fog
+ * targets exist: scene fog has been removed entirely (the camera geometry
+ * made any usable band wash the whole room). The space branch is
+ * theme-independent: a space's palette is seed-fixed, not part of the app
+ * dark mode.
  */
 function resolveAtmosphere(
   space: ActiveSpace | null,
@@ -278,21 +275,14 @@ function resolveAtmosphere(
   if (space !== null) {
     const { palette } = space.recipe;
     // Background uses the recipe's atmosphere fog: a deep, hue-faithful
-    // shadow of the room's own palette (see atmosphereFog in space-recipe).
-    // The background is never fogged, so sharing the fog color makes the
-    // room's far edge melt seamlessly into its own shadow. The fog element
-    // itself is corridor-only (unmounted here — see the JSX), so there are
-    // no fog targets inside a space at all.
+    // shadow of the room's own palette (see atmosphereFog in space-recipe),
+    // so the room's far edge melts seamlessly into its own shadow. There
+    // is no scene fog to target (removed — see Atmosphere).
     out.background.set(palette.fog);
-    out.fogColor.set(palette.fog);
     out.sunColor.set(palette.sunColor);
     out.sunIntensity = SUN_BASE_INTENSITY * palette.sunIntensity;
   } else {
-    const voidColor = SCENE_COLORS[dark ? "night" : "day"];
-    out.background.set(voidColor);
-    out.fogColor.set(voidColor);
-    out.fogNear = FOG_NEAR;
-    out.fogFar = FOG_FAR;
+    out.background.set(SCENE_COLORS[dark ? "night" : "day"]);
     out.sunColor.set(SUN_BASE_COLOR);
     out.sunIntensity = SUN_BASE_INTENSITY;
   }
@@ -348,39 +338,27 @@ function Atmosphere({
   dark: boolean;
 }): JSX.Element {
   const bgRef = useRef<THREE.Color>(null);
-  const fogRef = useRef<THREE.Fog>(null);
   const sunRef = useRef<THREE.DirectionalLight>(null);
   // Reusable target bucket — resolved fresh each frame, never reallocated.
   const [targets] = useState<AtmosphereTargets>(() => ({
     background: new THREE.Color(SCENE_COLORS.night),
-    fogColor: new THREE.Color(SCENE_COLORS.night),
-    fogNear: FOG_NEAR,
-    fogFar: FOG_FAR,
     sunColor: new THREE.Color(SUN_BASE_COLOR),
     sunIntensity: SUN_BASE_INTENSITY,
   }));
 
   useFrame((_, dt) => {
     const bg = bgRef.current;
-    const fog = fogRef.current;
     const sun = sunRef.current;
     if (!bg || !sun) return;
     const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
     resolveAtmosphere(space, dark, targets);
     bg.lerp(targets.background, k);
-    // The fog element unmounts with the corridor (a space owns the frame);
-    // while it exists, ease it toward the corridor's band.
-    if (fog) {
-      fog.color.lerp(targets.fogColor, k);
-      fog.near += (targets.fogNear - fog.near) * k;
-      fog.far += (targets.fogFar - fog.far) * k;
-    }
     sun.color.lerp(targets.sunColor, k);
     sun.intensity += (targets.sunIntensity - sun.intensity) * k;
-    // Probe mirror — lets the browser console read the live fog/background
-    // state when diagnosing "is the veil fog or material alpha".
-    GAME_DEBUG.fogNear = fog ? fog.near : -1;
-    GAME_DEBUG.fogFar = fog ? fog.far : -1;
+    // Probe mirror — lets the browser console read the live background and
+    // light state when diagnosing a room-wide color veil.
+    GAME_DEBUG.fogNear = -1;
+    GAME_DEBUG.fogFar = -1;
     GAME_DEBUG.bg = `#${bg.getHexString()}`;
     GAME_DEBUG.sunColor = `#${sun.color.getHexString()}`;
     GAME_DEBUG.sunIntensity = +sun.intensity.toFixed(3);
@@ -390,13 +368,11 @@ function Atmosphere({
   return (
     <>
       <color ref={bgRef} attach="background" args={[SCENE_COLORS.night]} />
-      {/* Fog belongs to the corridor alone — inside a space the element
-          unmounts and scene.fog is null, so no fog plane can wash the room
-          (the room's far edge melts into its background, which IS the
-          palette's atmosphere fog). */}
-      {space === null && (
-        <fog ref={fogRef} attach="fog" args={[SCENE_COLORS.night, FOG_NEAR, FOG_FAR]} />
-      )}
+      {/* No scene fog anywhere: with the 45° camera parked ~23m above the
+          player, any fog band wide enough to matter covered the whole
+          visible room and washed it into the fog color (the 'translucent
+          room'). Depth is sold by background color and the corridor's
+          end-fade planes instead. */}
       <ambientLight intensity={0.45} />
       <directionalLight
         ref={sunRef}
