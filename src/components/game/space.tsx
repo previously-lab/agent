@@ -92,7 +92,7 @@ const DOOR_GLOW_INTENSITY = 1.6;
 const DOOR_HALO_OPACITY = 0.14;
 /** Jamb/head light-leak seams around the closed slab (the exit landmark
  *  from deep inside a space). */
-const DOOR_SEAM_INTENSITY = 2.2;
+const DOOR_SEAM_INTENSITY = 2.8;
 /** Slab swing, mirroring the corridor face: open within this distance of
  *  the door center, ~100°, always rotating away from the player. */
 const DOOR_OPEN_DIST = 2.2;
@@ -2274,6 +2274,14 @@ function SpaceDoorway({
   // Hinged slab, same rule as the corridor face: open near the player,
   // rotating away from them. Player position is converted into the space's
   // local frame (south doors mirror both axes).
+  //
+  // HINGE SIDE. The corridor slab always hangs on the door.x − half-width
+  // jamb in WORLD space. In the south door's π-rotated frame that jamb is
+  // +x local, so the hinge, slab, knob, and swing sign all mirror — the
+  // handover between the two slabs must never flip the door's handedness.
+  const dir = door.z > 0 ? 1 : -1;
+  const hingeX = -dir * (DOOR_WIDTH / 2 - 0.02);
+  const knobX = -dir * (DOOR_WIDTH - 0.22);
   const hingeRef = useRef<THREE.Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
@@ -2281,12 +2289,11 @@ function SpaceDoorway({
     const hinge = hingeRef.current;
     if (!hinge) return;
     const p = playerRef.current;
-    const dir = door.z > 0 ? 1 : -1;
     const lx = (p.x - door.x) * dir;
     const lz = (p.z - door.z) * dir;
     const near = Math.hypot(lx, lz) < DOOR_OPEN_DIST;
     const away = lz > 0 ? 1 : -1; // inside → swings to the corridor, and back
-    const target = near ? away * DOOR_OPEN_ANGLE : 0;
+    const target = near ? away * dir * DOOR_OPEN_ANGLE : 0;
     const dt = Math.min(delta, 0.05);
     if (!snappedRef.current) {
       angleRef.current = target;
@@ -2347,12 +2354,20 @@ function SpaceDoorway({
       {doorVisible && (
         <>
           {/* The hinged slab — the way back out, swinging on its jamb. */}
-          <group ref={hingeRef} position={[-DOOR_WIDTH / 2 + 0.02, 0, WALL_THICKNESS / 2]}>
-            <mesh position={[DOOR_WIDTH / 2 - 0.02, DOOR_HEIGHT / 2, 0]}>
+          <group ref={hingeRef} position={[hingeX, 0, WALL_THICKNESS / 2]}>
+            <mesh position={[-hingeX, DOOR_HEIGHT / 2, 0]}>
               <boxGeometry args={[DOOR_WIDTH - 0.04, DOOR_HEIGHT - 0.04, 0.05]} />
-              <meshStandardMaterial color="#7b6d5c" roughness={1} flatShading />
+              {/* Backlit slab: a whisper of the doorway glow on the wood so
+                  the closed door never reads as a black hole from inside. */}
+              <meshStandardMaterial
+                color="#7b6d5c"
+                emissive={accent}
+                emissiveIntensity={0.32}
+                roughness={1}
+                flatShading
+              />
             </mesh>
-            <mesh position={[DOOR_WIDTH - 0.22, DOOR_HEIGHT / 2, 0.05]}>
+            <mesh position={[knobX, DOOR_HEIGHT / 2, 0.05]}>
               <boxGeometry args={[0.05, 0.16, 0.05]} />
               <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
             </mesh>

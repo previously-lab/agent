@@ -111,7 +111,13 @@ interface ActiveSpace {
 type PlayerRef = MutableRefObject<PlayerPos>;
 
 /** Live player state exposed for probes/e2e — preallocated, mutated in place. */
-export const GAME_DEBUG = { x: 0, z: 0, space: null as string | null };
+export const GAME_DEBUG = {
+  x: 0,
+  z: 0,
+  space: null as string | null,
+  /** Probe/e2e hook: teleport the player (clamps apply on the next frame). */
+  teleport: undefined as undefined | ((x: number, z: number) => void),
+};
 
 declare global {
   interface Window {
@@ -681,8 +687,13 @@ export default function GameCanvas({
 
   // Probe/e2e debug handle on window (GAME_DEBUG is updated every frame).
   useEffect(() => {
+    GAME_DEBUG.teleport = (x, z) => {
+      playerRef.current.x = x;
+      playerRef.current.z = z;
+    };
     window.__gameDebug = GAME_DEBUG;
     return () => {
+      GAME_DEBUG.teleport = undefined;
       delete window.__gameDebug;
     };
   }, []);
