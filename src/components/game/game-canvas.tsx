@@ -53,12 +53,12 @@
  *
  * ATMOSPHERE. Background, fog (color/near/far), and the directional sun
  * lerp (factor 1 − e^(−2.5·dt)) between two target moods defined once in
- * resolveAtmosphere: the corridor (the active theme's void color — near-
- * black at night, warm off-white by day — fog 30–90, matching the
+ * resolveAtmosphere: the corridor (the void color, fog 30–90, matching the
  * corridor's end-fade planes) and the active space's palette. Inside a
- * space the fog opens up around the player (near 26, far 30 + extent·0.9)
- * so the doorway is clear and only the far end melts into the mist; the sun
- * tints to palette.sunColor × sunIntensity.
+ * space there is no distance fog — the room's far edge melts into its own
+ * shadow (the background IS the palette's atmosphere fog), and fog planes
+ * near the camera distance washed the contents into a translucent veil;
+ * the sun tints to palette.sunColor × sunIntensity.
  *
  * DETERMINISM. No randomness in this file at all — every generated thing the
  * player sees comes from corridor/space renderers fed by the seed module.
@@ -131,18 +131,14 @@ declare global {
 const SCENE_COLORS = VOID_COLORS;
 const FOG_NEAR = 30;
 const FOG_FAR = 90;
-/** Fog inside a space: near sits ~10 m past the camera-to-player distance
- *  (~23 m at CAM_OFFSET (−12, 16, 12)) so the player's immediate
- *  surroundings — the ground underfoot, nearby furniture — stay fully
- *  clear instead of reading as translucent (at 26 the fog line cut right
- *  through the player's bubble); only the walk ahead melts into the mist. */
-const SPACE_FOG_NEAR = 34;
-/** …and far stretches with the plan: far = 30 + extent × 0.9. An XL (96m)
- *  space stays readable to roughly half its depth from the doorway before
- *  the far end melts into the mist; S spaces only faintly haze at the far
- *  corner. */
-const SPACE_FOG_FAR_BASE = 30;
-const SPACE_FOG_FAR_PER_EXTENT = 0.9;
+/** Inside a space there is NO distance fog: the room's own shadow (the
+ *  palette's atmosphere fog, painted as the scene background) already melts
+ *  its far edge away, and any fog plane near the camera-to-player distance
+ *  (~23 m at CAM_OFFSET) washed the whole room in its fog color — the
+ *  floor, the furniture, the player all read as translucent. Pushed past
+ *  any real view distance, fog effectively leaves the room. */
+const SPACE_FOG_NEAR = 500;
+const SPACE_FOG_FAR = 1000;
 
 const CAMERA_ZOOM = 34;
 const CAM_OFFSET = { x: -12, y: 16, z: 12 };
@@ -302,14 +298,13 @@ function resolveAtmosphere(
     // Background uses the recipe's atmosphere fog: a deep, hue-faithful
     // shadow of the room's own palette (see atmosphereFog in space-recipe).
     // The background is never fogged, so sharing the fog color makes the
-    // room's far edge melt seamlessly into its own shadow.
+    // room's far edge melt seamlessly into its own shadow. The room itself
+    // stays fog-free (SPACE_FOG_NEAR/FAR) — fog planes near the camera
+    // distance washed the contents into a translucent veil.
     out.background.set(palette.fog);
     out.fogColor.set(palette.fog);
     out.fogNear = SPACE_FOG_NEAR;
-    out.fogFar =
-      SPACE_FOG_FAR_BASE +
-      Math.max(space.recipe.width, space.recipe.size.extent) *
-        SPACE_FOG_FAR_PER_EXTENT;
+    out.fogFar = SPACE_FOG_FAR;
     out.sunColor.set(palette.sunColor);
     out.sunIntensity = SUN_BASE_INTENSITY * palette.sunIntensity;
   } else {
