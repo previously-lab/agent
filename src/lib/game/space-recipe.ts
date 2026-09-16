@@ -68,12 +68,16 @@ function atmosphereFog(palette: Palette): string {
 /**
  * Door-glow color for a palette — the "content hint" seen through the door
  * frame before the room exists. It must read as the light OF THAT ROOM,
- * not a decorative contrast: take the room's dominant tone (ground toward
- * sky) and lift it toward white so it glows. A butter room's door leaks
- * warm honey light, a pool room's leaks cool blue.
+ * not a decorative contrast, and it must match what the room actually
+ * delivers once the player steps through: the room's world is its ground
+ * under its sky, melting into the palette's own fog shadow. So the glow
+ * takes the room's ground→sky midpoint (its dominant hue) and lifts it
+ * only a touch toward white — enough to glow against the corridor wall,
+ * not enough to bleach the hue away. A butter room's door leaks warm
+ * honey light, a pool room's leaks cool blue.
  */
 export function doorGlowColor(palette: Palette): string {
-  return blendHex(blendHex(palette.ground, palette.sky, 0.35), "#ffffff", 0.22);
+  return blendHex(blendHex(palette.ground, palette.sky, 0.5), "#ffffff", 0.1);
 }
 
 /** World-class draw weights — nature 40 / interior 25 / hybrid 20 / wonder 15. */

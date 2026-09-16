@@ -131,10 +131,12 @@ declare global {
 const SCENE_COLORS = VOID_COLORS;
 const FOG_NEAR = 30;
 const FOG_FAR = 90;
-/** Fog inside a space: near sits just beyond the camera-to-player distance
- *  (~23m at CAM_OFFSET (−12, 16, 12)) so the player's surroundings stay
- *  fully clear — no white soup over the doorway… */
-const SPACE_FOG_NEAR = 26;
+/** Fog inside a space: near sits ~10 m past the camera-to-player distance
+ *  (~23 m at CAM_OFFSET (−12, 16, 12)) so the player's immediate
+ *  surroundings — the ground underfoot, nearby furniture — stay fully
+ *  clear instead of reading as translucent (at 26 the fog line cut right
+ *  through the player's bubble); only the walk ahead melts into the mist. */
+const SPACE_FOG_NEAR = 34;
 /** …and far stretches with the plan: far = 30 + extent × 0.9. An XL (96m)
  *  space stays readable to roughly half its depth from the doorway before
  *  the far end melts into the mist; S spaces only faintly haze at the far
@@ -148,15 +150,6 @@ const CAM_OFFSET = { x: -12, y: 16, z: 12 };
 const CAMERA_LERP_RATE = 6;
 
 const PLAYER_SPEED = 4; // m/s
-/** Corridor visibility staging: the corridor stays rendered while the
- *  player stands in the doorway zone (they can look back through the open
- *  door — the portal moment) and unmounts one step past it, swallowed by
- *  the space's own shadow so the room owns the frame; it remounts just
- *  before a returning player reaches the door-swing distance, so the
- *  doorway never opens onto a void. Hysteresis band prevents flicker at
- *  the boundary. */
-const CORRIDOR_HIDE_Z = WALL_Z + 1.3;
-const CORRIDOR_SHOW_Z = WALL_Z + 1.0;
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
 const MAX_DT = 0.05;
 const BOB_RATE = 9; // rad/s while walking
@@ -585,11 +578,14 @@ function GameLoop({
       clampToCorridor(p, doorXs);
     }
 
-    // 3b. Corridor visibility staging: mounted in the doorway zone, gone a
-    // step past it (see CORRIDOR_HIDE_Z/SHOW_Z).
-    let gone = corridorHidden;
-    if (space === null || az < CORRIDOR_SHOW_Z) gone = false;
-    else if (az > CORRIDOR_HIDE_Z) gone = true;
+    // 3b. Corridor visibility: the instant a space engages — the player has
+    //  crossed the threshold — the world behind them begins to dissolve
+    //  (dim at 6/s, unmount after HIDE_DELAY_MS), so entering a room reads
+    //  as leaving the hotel behind, not as a window next door. The release
+    //  is symmetric: back in the corridor band the hotel returns the same
+    //  frame, remounting dark and easing up (useDimLerp's recovery lerp in
+    //  corridor.tsx), so neither direction pops.
+    const gone = space !== null;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
     // 4. HUD prompt — setState only when the nearest door identity changes.
@@ -737,7 +733,9 @@ export default function GameCanvas({
       <Canvas frameloop="always" dpr={[1, 2]} gl={{ antialias: true }}>
         <Atmosphere space={activeSpace} dark={dark} />
         <CameraRig playerRef={playerRef} />
-        {/* The corridor unmounts a step past the doorway zone. */}
+        {/* The corridor dissolves the moment a space engages (GameLoop above)
+          and unmounts HIDE_DELAY_MS later; on return it remounts dark and
+          eases back up. */}
         <Corridor
           playerRef={playerRef}
           doors={doors}

@@ -147,19 +147,19 @@ const SOUTH_WALL_HEIGHT = WALL_HEIGHT;
 const WALL_THICKNESS = 0.2;
 
 /**
- * Day/night — the corridor follows the app's Tailwind dark mode (the
+ * Day/night — the corridor INTERIOR follows the app's Tailwind dark mode (the
  * integrator reads it via next-themes and passes `dark` down; the R3F
  * reconciler never sees that React context, so it arrives as a plain
- * prop). The void behind the hotel is warm off-white by day (the light
- * mode background family, not a stark pure white), the current dark blue-
- * charcoal by night. Every themed surface color lives in THEME_COLORS;
- * one shared material per role (see HotelMaterials) is lerped between its
- * day and night targets by a single useFrame in Corridor, so a theme
- * toggle eases over ~a second instead of snapping. Exported: the integrator
- * keeps the scene background/fog on VOID_COLORS so the corridor's end-fade
- * planes always match.
+ * prop). The void behind the hotel, though, is always black: the hotel
+ * floats in darkness whatever the app theme, and a bright corridor
+ * suspended in a black void is the liminal look. Every themed surface
+ * color lives in THEME_COLORS; one shared material per role (see
+ * HotelMaterials) is lerped between its day and night targets by a single
+ * useFrame in Corridor, so a theme toggle eases over ~a second instead of
+ * snapping. Exported: the integrator keeps the scene background/fog on
+ * VOID_COLORS so the corridor's end-fade planes always match.
  */
-export const VOID_COLORS = { night: "#101219", day: "#e9e6e0" } as const;
+export const VOID_COLORS = { night: "#101219", day: "#101219" } as const;
 
 /** Surface palette per theme — warm neutrals, day lifted from the night set. */
 const THEME_COLORS = {
@@ -312,8 +312,9 @@ const THEME_LERP_RATE = 2.5;
  * present instead of `levels.full` — so theme changes ease through the
  * same path as dimming. Refs only — no React state, no per-frame
  * allocations — and the flags are read live from the refs, so toggling
- * them never re-renders the tree. The value is also initialized (without
- * lerp) on mount, so a chunk remounting mid-dim does not flash.
+ * them never re-renders the tree. On mount the value starts at the dimmed
+ * level and the recovery lerp eases it toward the live target — remounts
+ * (the corridor returning after a room) fade in instead of popping.
  */
 function useDimLerp(
   dimRef: MutableRefObject<boolean>,
@@ -334,8 +335,13 @@ function useDimLerp(
     return levels.full;
   };
   useEffect(() => {
-    writeRef.current(targetFor(dimRef.current, dayRef?.current ?? false));
-    // Mount-only initialization; the lerp owns the value from here on.
+    // Mount initialization: start at the DIMMED level and let the recovery
+    // lerp ease the value up. Remounts happen on room exit — the corridor
+    // returning — and a corridor that fades in reads; one that snaps to
+    // full brightness in one frame pops (the whole hotel flashing on). The
+    // first mount pays the same brief rise, which reads as the lights
+    // coming on.
+    writeRef.current(levels.dimmed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useFrame((_, rawDt) => {
@@ -1633,13 +1639,14 @@ export function Corridor({
     }
   });
 
-  // Delayed unmount: when a space takes the screen the fade-out above
-  // runs first, and only once it is ~complete (HIDE_DELAY_MS) does the
-  // whole hotel — geometry, glow, every light source — leave the scene, so
-  // nothing residual can light the space and the cut itself is invisible.
-  // Corridor stays mounted throughout, and its chunk-window state lives
-  // above this flag, so when the space ends the hotel remounts exactly
-  // where the player left it.
+  // Delayed unmount: the moment a space engages the player the lights ramp
+  // down (useDimLerp at the descend rate) and only once that is ~complete
+  // (HIDE_DELAY_MS) does the whole hotel — geometry, glow, every light
+  // source — leave the scene, so nothing residual can light the space and
+  // the cut itself is invisible. Corridor stays mounted throughout, and
+  // its chunk-window state lives above this flag, so when the space ends
+  // the hotel remounts exactly where the player left it — dark, easing up
+  // through the same useDimLerp recovery lerp (no pop on exit).
   const [hidden, setHidden] = useState(false);
   useEffect(() => {
     if (!dimmed) {
