@@ -104,6 +104,9 @@ const WALL_OPACITY = 0.5;
 const ENTRANCE_CLEAR_RADIUS = 1.5;
 /** Depth outward from the wall that counts as "the doorway". */
 const ENTRANCE_DEPTH = 2.5;
+/** Mount/unmount crossfade: the room condenses out of (and dissolves back
+ *  into) its own shadow in 150 ms — fast, but never a pop. */
+const SPACE_FADE_S = 0.15;
 const WATER_Y = 0.35;
 /** Water reads too much like empty floor from above: keep it nearly solid,
  *  and tint it blue-green (waterColor below) rather than the raw accent. */
@@ -2381,22 +2384,87 @@ function SpaceDoorway({
  * Render the space described by a fully resolved recipe, extending outward
  * from the corridor wall at `door`. Pure function of (recipe, door) — no
  * fog, background, or lights (the integrator's canvas owns those).
+ *
+ * FADE. The room never pops: every material under the root is captured on
+ * mount (base opacity + transparency) and crossfaded over SPACE_FADE_S —
+ * `fade="in"` condenses the room out of its shadow on entry, `fade="out"`
+ * dissolves it on exit and fires `onFadedOut` so the integrator can
+ * unmount. Once the fade-in completes, materials are restored to their
+ * authored transparency so steady-state rendering is untouched.
  */
 export function SpaceScene({
   recipe,
   door,
   playerRef,
   corridorHidden,
+  fade,
+  onFadedOut,
 }: {
   recipe: SpaceRecipe;
   door: DoorRef;
   playerRef: MutableRefObject<{ x: number; z: number }>;
   corridorHidden: boolean;
+  fade: "in" | "out";
+  onFadedOut: () => void;
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
   const { extent } = recipe.size;
   const width = recipe.width;
   const dir = door.z > 0 ? 1 : -1;
+
+  // Crossfade machinery: capture every material once (the tree is static
+  // per recipe), then scale opacity each frame toward the fade target.
+  const rootRef = useRef<THREE.Group>(null);
+  const fadeMatsRef = useRef<{ mat: THREE.Material; base: number; transparent: boolean }[]>([]);
+  const fadeTRef = useRef(fade === "in" ? 0 : 1);
+  const fadeDoneRef = useRef(false);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const mats: { mat: THREE.Material; base: number; transparent: boolean }[] = [];
+    root.traverse((obj) => {
+      const material = (obj as { material?: THREE.Material | THREE.Material[] }).material;
+      if (material === undefined) return;
+      for (const mat of Array.isArray(material) ? material : [material]) {
+        mats.push({ mat, base: mat.opacity, transparent: mat.transparent });
+      }
+    });
+    fadeMatsRef.current = mats;
+    const k0 = fadeTRef.current;
+    for (const { mat } of mats) {
+      mat.transparent = true;
+      mat.opacity = mat.opacity * k0;
+    }
+  }, []);
+  useFrame((_, delta) => {
+    const mats = fadeMatsRef.current;
+    if (mats.length === 0) return;
+    const dirSign = fade === "in" ? 1 : -1;
+    const t = fadeTRef.current;
+    if ((dirSign > 0 && t >= 1) || (dirSign < 0 && t <= 0)) return;
+    const next = THREE.MathUtils.clamp(
+      t + (dirSign * Math.min(delta, 0.05)) / SPACE_FADE_S,
+      0,
+      1,
+    );
+    fadeTRef.current = next;
+    const k = next * next * (3 - 2 * next);
+    for (const entry of mats) {
+      entry.mat.transparent = true;
+      entry.mat.opacity = entry.base * k;
+    }
+    if (dirSign > 0 && next >= 1) {
+      // Fade-in done: hand materials back to their authored state.
+      for (const entry of mats) {
+        entry.mat.opacity = entry.base;
+        entry.mat.transparent = entry.transparent;
+      }
+    }
+    if (dirSign < 0 && next <= 0 && !fadeDoneRef.current) {
+      fadeDoneRef.current = true;
+      onFadedOut();
+    }
+  });
 
   const waterRect = useMemo(() => waterRectFor(recipe), [recipe]);
 
@@ -2587,6 +2655,7 @@ export function SpaceScene({
 
   return (
     <group
+      ref={rootRef}
       key={recipe.sliceId}
       position={[door.x, 0, door.z]}
       rotation={[0, dir > 0 ? 0 : Math.PI, 0]}

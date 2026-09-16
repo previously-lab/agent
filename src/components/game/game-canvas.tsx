@@ -46,7 +46,10 @@
  * override; re-entering the corridor band through the door gap (|z| < WALL_IN
  * and |x − door.x| < CLEAR_HALF) unmounts it. Unmount is the memory model:
  * corridor chunks stream, at most one space exists, and the corridor dims
- * while a space holds the player.
+ * while a space holds the player. Both sides of the door crossfade instead
+ * of popping: the room condenses out of its shadow on entry and dissolves
+ * back on exit (SPACE_FADE_S), while the corridor dims/undims on its own
+ * lerp — the door frame is the only constant between the two worlds.
  *
  * ATMOSPHERE. Background, fog (color/near/far), and the directional sun
  * lerp (factor 1 − e^(−2.5·dt)) between two target moods defined once in
@@ -638,6 +641,13 @@ export default function GameCanvas({
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
   const hudIdRef = useRef<string | null>(null);
   const [activeSpace, setActiveSpace] = useState<ActiveSpace | null>(null);
+  // The mounted room lags the door manager: on exit it stays mounted for a
+  // short dissolve (fade="out", see SPACE_FADE_S in space.tsx) before
+  // unmounting — the space never pops out of existence behind the player.
+  const [shownSpace, setShownSpace] = useState<ActiveSpace | null>(null);
+  useEffect(() => {
+    if (activeSpace !== null) setShownSpace(activeSpace);
+  }, [activeSpace]);
   const [corridorHidden, setCorridorHidden] = useState(false);
   const [hudDoor, setHudDoor] = useState<CorridorDoor | null>(null);
 
@@ -716,12 +726,15 @@ export default function GameCanvas({
           space={activeSpace}
           waterSide={waterSide}
         />
-        {activeSpace !== null && (
+        {shownSpace !== null && (
           <SpaceScene
-            recipe={activeSpace.recipe}
-            door={activeSpace.door}
+            key={shownSpace.recipe.sliceId}
+            recipe={shownSpace.recipe}
+            door={shownSpace.door}
             playerRef={playerRef}
             corridorHidden={corridorHidden}
+            fade={activeSpace !== null ? "in" : "out"}
+            onFadedOut={() => setShownSpace(null)}
           />
         )}
         <GameLoop
