@@ -58,6 +58,7 @@ import {
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import type { DoorRef } from "@/lib/game/hotel";
+import { GAME_DEBUG } from "./debug";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import {
@@ -2493,8 +2494,12 @@ export function SpaceScene({
   useFrame((_, delta) => {
     const mats = fadeMatsRef.current;
     if (mats.length === 0) return;
+    // Probe mirror — the console reads live crossfade progress (and the
+    // captured material count) to tell a stuck fade from fog.
+    GAME_DEBUG.fadeMats = mats.length;
     const dirSign = fade === "in" ? 1 : -1;
     const t = fadeTRef.current;
+    GAME_DEBUG.fadeT = t;
     if ((dirSign > 0 && t >= 1) || (dirSign < 0 && t <= 0)) return;
     const next = THREE.MathUtils.clamp(
       t + (dirSign * Math.min(delta, 0.05)) / SPACE_FADE_S,
@@ -2518,6 +2523,21 @@ export function SpaceScene({
       fadeDoneRef.current = true;
       onFadedOut();
     }
+  });
+  // Slow probe sampler: every ~0.5s count materials still left transparent
+  // or below their authored opacity after the crossfade should have handed
+  // them back — a nonzero matsFaded pins the "veil" on a stuck material.
+  const probeFrameRef = useRef(0);
+  useFrame(() => {
+    if (probeFrameRef.current++ % 30 !== 0) return;
+    let transparent = 0;
+    let faded = 0;
+    for (const entry of fadeMatsRef.current) {
+      if (entry.mat.transparent) transparent++;
+      if (entry.mat.opacity < entry.base - 0.001) faded++;
+    }
+    GAME_DEBUG.matsTransparent = transparent;
+    GAME_DEBUG.matsFaded = faded;
   });
 
   const waterRect = useMemo(() => waterRectFor(recipe), [recipe]);

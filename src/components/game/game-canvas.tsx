@@ -71,6 +71,7 @@ import { OrthographicCamera } from "@react-three/drei";
 import { useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
+import { GAME_DEBUG } from "./debug";
 import { doorPosition, nearestDoor, type DoorRef } from "@/lib/game/hotel";
 import {
   CLEAR_HALF,
@@ -110,20 +111,9 @@ interface ActiveSpace {
 
 type PlayerRef = MutableRefObject<PlayerPos>;
 
-/** Live player state exposed for probes/e2e — preallocated, mutated in place. */
-export const GAME_DEBUG = {
-  x: 0,
-  z: 0,
-  space: null as string | null,
-  /** Probe/e2e hook: teleport the player (clamps apply on the next frame). */
-  teleport: undefined as undefined | ((x: number, z: number) => void),
-};
-
-declare global {
-  interface Window {
-    __gameDebug?: typeof GAME_DEBUG;
-  }
-}
+/** Live player/atmosphere/fade state for probes — re-exported from the
+ *  shared module (see debug.ts). */
+export { GAME_DEBUG } from "./debug";
 
 /** Scene mood while no space is active — the void color for the active
  *  theme (exported from corridor.tsx so the end-fade planes always match
@@ -393,6 +383,14 @@ function Atmosphere({
     fog.far += (targets.fogFar - fog.far) * k;
     sun.color.lerp(targets.sunColor, k);
     sun.intensity += (targets.sunIntensity - sun.intensity) * k;
+    // Probe mirror — lets the browser console read the live fog/background
+    // state when diagnosing "is the veil fog or material alpha".
+    GAME_DEBUG.fogNear = fog.near;
+    GAME_DEBUG.fogFar = fog.far;
+    GAME_DEBUG.bg = `#${bg.getHexString()}`;
+    GAME_DEBUG.sunColor = `#${sun.color.getHexString()}`;
+    GAME_DEBUG.sunIntensity = +sun.intensity.toFixed(3);
+    GAME_DEBUG.ambient = 0.45;
   });
 
   return (
