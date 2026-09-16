@@ -4,14 +4,14 @@ import { getDemoPersona, listDemoPersonas, setDemoPersona } from "@/lib/demo/dem
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getUserName } from "@/lib/identity";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
-import { readSliceIndex, readSliceBody, parseSlice, sliceIdToFilePath, readPreviously, readAgentTimeline, loadSlice } from "./manager";
+import { readSliceIndex, readSliceBody, parseSlice, sliceIdToFilePath, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
 import { readDirection } from "@/lib/evolution/store";
 import { loadUserConfig } from "@/lib/config/loader";
 import { readTimelineIndex } from "./timeline/store";
 import { readStrandEntity } from "./strand-files";
 import { pageCatalog, type CatalogPage } from "./timeline/paginate";
 import type { TimelineSliceEntry } from "./timeline/types";
-import type { Turn } from "./types";
+import type { StrandIndex, Turn } from "./types";
 
 export interface SliceSummary {
   slice_id: string;
@@ -448,6 +448,21 @@ export async function getStrandList(): Promise<StrandListItem[]> {
     }
   }
   return [...acc.values()].sort((a, b) => b.lastStart.localeCompare(a.lastStart));
+}
+
+/**
+ * The raw strand path lists — strand → slice positions exactly as stored in
+ * `strands.json` (`"2026/06/22/1400"` slash format, NOT normalised to slice
+ * ids). This is the read `getStrandList` doesn't do (v0.11-strand-field §5):
+ * the strand-door graph (`src/lib/game/strand-graph.ts`) builds from it.
+ *
+ * ONE read of the thin index, deliberately — no entity-layer round trips, no
+ * normalisation; shaping the positions is the pure graph builder's job, so
+ * the same payload feeds any consumer's own build. Returns an empty object
+ * when the strand index doesn't exist yet (same fallback as `readStrands`).
+ */
+export async function getStrandPaths(): Promise<StrandIndex> {
+  return readStrands();
 }
 
 // ─── Empty-state briefing identity ─────────────────────────────────────────

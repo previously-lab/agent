@@ -14,16 +14,24 @@
  *
  * CAMERA. Fixed 45° top-down: an orthographic camera parked at a (−12, +16,
  * +12) offset from the player, looking back at them — the corridor runs
- * top-right→bottom-left on screen. It never rotates, never zooms; useFrame
- * only lerps the follow point (factor 1 − e^(−6·dt)), so the view glides
- * instead of snapping.
+ * top-right→bottom-left on screen. It never rotates; useFrame lerps the
+ * follow point (factor 1 − e^(−6·dt)), so the view glides instead of
+ * snapping. The zoom TARGET is CAMERA_ZOOM in the corridor and eases down
+ * by clamp(S, 1, ∞)^ROOM_ZOOM_SCALE_EXP (capped at ~3× pull-back) inside a
+ * scaled room, so a colossal room stays legible as a room instead of
+ * reading as a local patch — the dollhouse stays readable (doc §1 A4).
  *
  * MOVEMENT & CLAMPS. WASD + arrow keys move the player on the XZ plane at
- * 4 m/s, delta-time corrected, screen-relative (screen-up is world
- * (+x, −z), screen-right (+x, +z) for this camera — verified against the
- * lookAt direction). The door manager alternates clampToCorridor and
- * clampToSpace on a hysteresis band around the wall plane (|z| 4.8–5.2
- * with the ten-meter corridor).
+ * 4 m/s in the corridor, delta-time corrected, screen-relative (screen-up
+ * is world (+x, −z), screen-right (+x, +z) for this camera — verified
+ * against the lookAt direction). Inside a space the speed is boosted by
+ * clamp(S, 1, ∞)^ROOM_SPEED_SCALE_EXP so a colossal room feels immense
+ * without wasting the player's time. The door manager alternates
+ * clampToCorridor and clampToSpace on a hysteresis band around the wall
+ * plane (|z| 4.8–5.2 with the ten-meter corridor). All space consumers —
+ * the clamp, the terrain/wade height, the water side — read the SCALED
+ * recipe view (scaledRecipeFor, lib/game/room-plan.ts): the renderer builds
+ * the room at scale, so the physics must measure it at the same scale.
  *
  * CONTAINMENT INVARIANT. While a space is active, its corridor wall is
  * solid in both directions everywhere except the door gap: clampToSpace
@@ -51,15 +59,33 @@
  * back on exit (SPACE_FADE_S), while the corridor dims/undims on its own
  * lerp — the door frame is the only constant between the two worlds.
  *
- * ATMOSPHERE. Background and the directional sun lerp (factor 1 −
+ * ATMOSPHERE & LIGHTING. Background and the directional sun lerp (factor 1 −
  * e^(−2.5·dt)) between two target moods defined once in resolveAtmosphere:
  * the corridor (the void color) and the active space's palette — inside a
  * space the background becomes the room's own shadow (the palette's
- * atmosphere fog), so its far edge melts seamlessly. There is NO scene fog
+ * atmosphere fog), so its far edge melts seamlessly. The lighting model is
+ * a key/fill/ambient hierarchy (v0.11 P2): the sun is the one strong,
+ * shadow-casting KEY light (its shadow camera follows the player so the
+ * whole streaming corridor and every space stay inside the frustum); soft
+ * FILL comes from one scene-wide <Environment> of Lightformer cards (IBL,
+ * no HDRI) that also gives every PBR material something to reflect; the
+ * AMBIENT term is a deliberately low floor so light pools instead of
+ * filling evenly (doc §1 A3). Tone mapping is AgX, not the ACES default —
+ * saturated accent colors clip under ACES.
+ *
+ * DEPTH CUE. There is NO scene fog
  * anywhere: with the camera ~23m above the player, every fog band that
- * could sell depth also washed the whole visible room into the fog color,
- * so depth is carried by the background and the corridor's end-fade planes
- * instead.
+ * could sell depth also washed the whole visible room into the fog color
+ * (commits 9116243/09c757b/d9edf93 — do not re-add). Depth is carried by
+ * things that are camera-distance INDEPENDENT instead: the background
+ * color, the stage backdrop disc the diorama sits on (plain geometry at a
+ * fixed depth — no distance term), the corridor's end-fade planes, and
+ * the post chain — N8AO
+ * (screen-space contact shading) plus a mild Vignette (frame-edge
+ * falloff), both of which darken by geometry and screen position, never
+ * by distance from the camera, so they cannot reproduce the
+ * translucent-room bug. Bloom (threshold 1.0) glows only emissive
+ * fixtures and the sun's hot pools.
  *
  * DETERMINISM. No randomness in this file at all — every generated thing the
  * player sees comes from corridor/space renderers fed by the seed module.
@@ -68,7 +94,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrthographicCamera } from "@react-three/drei";
+import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
+import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
 import { useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
@@ -84,9 +111,62 @@ import {
 } from "@/lib/game/clamps";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
+import { scaledRecipeFor, type ScaleNotation } from "@/lib/game/room-plan";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
-import { Corridor, HIDE_DELAY_MS, VOID_COLORS, type CorridorDoor } from "./corridor";
+import { Corridor, type CorridorDoor } from "./corridor";
 import { SpaceScene } from "./space";
+import { HIDE_DELAY_MS } from "@/lib/game/tuning/hotel";
+import { WATER_Y } from "@/lib/game/tuning/room";
+import {
+  AO_DISTANCE_FALLOFF,
+  AO_INTENSITY,
+  AO_RADIUS,
+  ATMOSPHERE_LERP_RATE,
+  BOB_HEIGHT,
+  BOB_RATE,
+  BLOOM_INTENSITY,
+  BLOOM_LUMINANCE_SMOOTHING,
+  BLOOM_LUMINANCE_THRESHOLD,
+  CAMERA_LERP_RATE,
+  CAMERA_ZOOM,
+  CAM_OFFSET,
+  CORRIDOR_AMBIENT,
+  DOOR_GRAB_DIST,
+  ENV_FORMERS,
+  ENV_INTENSITY,
+  ENV_RESOLUTION,
+  GROUND_LERP_RATE,
+  HUD_DIST,
+  PLAYER_BODY,
+  PLAYER_HEAD,
+  PLAYER_SPEED,
+  POST_MSAA_SAMPLES,
+  ROOM_SPEED_SCALE_EXP,
+  ROOM_ZOOM_MAX_PULLBACK,
+  ROOM_ZOOM_SCALE_EXP,
+  SCENE_COLORS,
+  SPACE_AMBIENT_SCALE,
+  SPAWN,
+  STAGE_BACKDROP_ENABLED,
+  STAGE_BACKDROP_LIFT,
+  STAGE_BACKDROP_OPACITY,
+  STAGE_BACKDROP_RADIUS,
+  STAGE_BACKDROP_Y,
+  STAGE_POOL_RADIUS,
+  SUN_BASE_COLOR,
+  SUN_BASE_INTENSITY,
+  SUN_OFFSET,
+  SUN_SHADOW_BIAS,
+  SUN_SHADOW_EXTENT,
+  SUN_SHADOW_FAR,
+  SUN_SHADOW_MAP_SIZE,
+  SUN_SHADOW_NEAR,
+  SUN_SHADOW_NORMAL_BIAS,
+  TURN_LERP_RATE,
+  VIGNETTE_DARKNESS,
+  VIGNETTE_OFFSET,
+  WADE_DEPTH,
+} from "@/lib/game/tuning/render";
 
 /* ------------------------------------------------------------------ */
 /* Shared types & constants                                            */
@@ -104,10 +184,16 @@ interface Motion {
   moving: boolean;
 }
 
-/** The one space that may be mounted at a time. */
+/** The one space that may be mounted at a time. `recipe` is the authored
+ *  recipe (palette, archetype); `scaledRecipe` is the same recipe with the
+ *  room-language scale notation applied to its plan dims — the ONE scaled
+ *  view (room-plan.ts) that the renderer, the movement clamp, and the
+ *  avatar physics all share. */
 interface ActiveSpace {
   door: DoorRef;
   recipe: SpaceRecipe;
+  scaledRecipe: SpaceRecipe;
+  scale: ScaleNotation;
 }
 
 type PlayerRef = MutableRefObject<PlayerPos>;
@@ -116,49 +202,8 @@ type PlayerRef = MutableRefObject<PlayerPos>;
  *  shared module (see debug.ts). */
 export { GAME_DEBUG } from "./debug";
 
-/** Scene mood while no space is active — the void color for the active
- *  theme (exported from corridor.tsx so the end-fade planes always match
- *  the background). There is no scene fog anywhere in the game. */
-const SCENE_COLORS = VOID_COLORS;
-
-const CAMERA_ZOOM = 34;
-const CAM_OFFSET = { x: -12, y: 16, z: 12 };
-/** Follow smoothing: factor = 1 − e^(−rate·dt). */
-const CAMERA_LERP_RATE = 6;
-
-const PLAYER_SPEED = 4; // m/s
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
 const MAX_DT = 0.05;
-const BOB_RATE = 9; // rad/s while walking
-const BOB_HEIGHT = 0.05;
-const TURN_LERP_RATE = 12;
-/** Avatar Y snapping toward the terrain (or back to corridor floor). */
-const GROUND_LERP_RATE = 10;
-
-const PLAYER_BODY = "#e8935c"; // warm accent
-const PLAYER_HEAD = "#f4d3ae";
-const SUN_BASE_COLOR = "#fff4e0";
-/** Kept low on purpose: the 45° sun hits flat ground at NdotL ≈ 0.87, so
- *  anything above ~0.7 pushed lit floors past 1.0 total irradiance and
- *  washed bright rooms (butter/noon) into a hazy, over-exposed veil. */
-const SUN_BASE_INTENSITY = 0.65;
-/** Ambient floor in the corridor; inside a space the palette's own
- *  `ambient` takes over (it was designed per-palette but never wired). */
-const CORRIDOR_AMBIENT = 0.45;
-/** Background/fog/sun lerp rate when a space opens or closes. */
-const ATMOSPHERE_LERP_RATE = 2.5;
-/** Water plane height — mirrors WATER_Y in space.tsx (module-local there). */
-const WATER_SURFACE_Y = 0.35;
-/** Wade depth below the water plane inside a pool basin. */
-const WADE_DEPTH = 0.25;
-
-/** Door grab distance when resolving which space a wall crossing enters. */
-const DOOR_GRAB_DIST = 2.5;
-/** HUD prompt radius around a door. */
-const HUD_DIST = 1.8;
-
-/** Player spawn: lobby floor, clear of the desk and armchairs. */
-const SPAWN: PlayerPos = { x: 6, z: 0 };
 
 /**
  * Screen-relative key directions for the fixed camera at a (−12, +16, +12)
@@ -209,6 +254,22 @@ function moveVectorFromKeys(keys: ReadonlySet<string>): { x: number; z: number }
   return { x, z };
 }
 
+/** In-room speed factor: clamp(S, 1, ∞)^EXP — miniature rooms keep corridor
+ *  speed; colossal rooms get a sub-linear boost so crossing one is a walk,
+ *  not a commute. */
+function roomSpeedFactor(scaleFactor: number): number {
+  return Math.pow(Math.max(1, scaleFactor), ROOM_SPEED_SCALE_EXP);
+}
+
+/** Ortho zoom pull-back for a scaled room: clamp(S, 1, ∞)^EXP, hard-capped
+ *  so the view never widens past ~ROOM_ZOOM_MAX_PULLBACK× (doc §1 A4). */
+function roomZoomPullback(scaleFactor: number): number {
+  return Math.min(
+    ROOM_ZOOM_MAX_PULLBACK,
+    Math.pow(Math.max(1, scaleFactor), ROOM_ZOOM_SCALE_EXP),
+  );
+}
+
 /**
  * X of every door the slice list materializes, in bay order — the corridor
  * clamp's gap test. Mirrors doorsInChunk's pairing (sliceIds[2i] north,
@@ -229,10 +290,12 @@ function doorXsFor(sliceIds: readonly string[]): number[] {
 /**
  * Avatar ground target at a world position inside an active space: the
  * shared terrainHeight in the space's local frame, with pool basins waded
- * at a fixed depth instead of walked on the floor. The local transform
- * mirrors SpaceScene's group exactly (space.tsx): north doors sit at
- * rotation 0 → local = world − door; south doors rotate π about Y →
- * local = −(world − door).
+ * at a fixed depth instead of walked on the floor. The terrain and the
+ * water rectangle read the SCALED recipe view — the same dims space.tsx
+ * displaced the ground by — so the avatar's feet agree with the rendered
+ * floor at any room scale. The local transform mirrors SpaceScene's group
+ * exactly (space.tsx): north doors sit at rotation 0 → local = world −
+ * door; south doors rotate π about Y → local = −(world − door).
  */
 function groundTargetY(
   space: ActiveSpace,
@@ -240,18 +303,18 @@ function groundTargetY(
   x: number,
   z: number,
 ): number {
-  const { door, recipe } = space;
+  const { door, scaledRecipe } = space;
   const lx = door.z > 0 ? x - door.x : -(x - door.x);
   const lz = door.z > 0 ? z - door.z : -(z - door.z);
-  const terrainY = terrainHeight(recipe, lx, lz);
+  const terrainY = terrainHeight(scaledRecipe, lx, lz);
   const waterHalf = waterSide / 2;
   if (
     waterHalf > 0 &&
-    terrainY < WATER_SURFACE_Y &&
+    terrainY < WATER_Y &&
     Math.abs(lx) <= waterHalf &&
-    Math.abs(lz - recipe.size.extent / 2) <= waterHalf
+    Math.abs(lz - scaledRecipe.size.extent / 2) <= waterHalf
   ) {
-    return Math.max(terrainY, WATER_SURFACE_Y - WADE_DEPTH);
+    return Math.max(terrainY, WATER_Y - WADE_DEPTH);
   }
   return terrainY;
 }
@@ -269,8 +332,10 @@ interface AtmosphereTargets {
  * per-frame allocation): the corridor mood in the active theme's void
  * color, or the active space's palette — background becomes the room's own
  * shadow, the sun tints to palette.sunColor, and the ambient floor uses
- * the palette's own value (a space's lighting is seed-fixed, not part of
- * the app dark mode). No fog targets exist: scene fog has been removed
+ * the palette's own value scaled down into the key/fill/ambient hierarchy
+ * (SPACE_AMBIENT_SCALE; the palette values were authored for the old
+ * ambient-dominant model, and a space's lighting is seed-fixed, not part
+ * of the app dark mode). No fog targets exist: scene fog has been removed
  * entirely (the camera geometry made any usable band wash the whole room).
  */
 function resolveAtmosphere(
@@ -287,7 +352,7 @@ function resolveAtmosphere(
     out.background.set(palette.fog);
     out.sunColor.set(palette.sunColor);
     out.sunIntensity = SUN_BASE_INTENSITY * palette.sunIntensity;
-    out.ambient = palette.ambient;
+    out.ambient = palette.ambient * SPACE_AMBIENT_SCALE;
   } else {
     out.background.set(SCENE_COLORS[dark ? "night" : "day"]);
     out.sunColor.set(SUN_BASE_COLOR);
@@ -301,11 +366,21 @@ function resolveAtmosphere(
 /* Scene parts                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Fixed 45° camera: lerped follow point + constant offset, lookAt player. */
-function CameraRig({ playerRef }: { playerRef: PlayerRef }): JSX.Element {
+/** Fixed 45° camera: lerped follow point + constant offset, lookAt player.
+ *  The ortho zoom lerps (same easing) toward CAMERA_ZOOM divided by the
+ *  active room's bounded pull-back — colossal rooms stay legible as rooms,
+ *  and the corridor eases back to normal. */
+function CameraRig({
+  playerRef,
+  space,
+}: {
+  playerRef: PlayerRef;
+  space: ActiveSpace | null;
+}): JSX.Element {
   const focus = useRef(
     new THREE.Vector3(playerRef.current.x, 0, playerRef.current.z),
   );
+  const zoomRef = useRef(CAMERA_ZOOM);
   const initialPosition = useMemo<[number, number, number]>(
     () => [
       playerRef.current.x + CAM_OFFSET.x,
@@ -325,29 +400,53 @@ function CameraRig({ playerRef }: { playerRef: PlayerRef }): JSX.Element {
       focus.current.z + CAM_OFFSET.z,
     );
     camera.lookAt(focus.current.x, 0, focus.current.z);
+    const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
+    zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
+    const ortho = camera as THREE.OrthographicCamera;
+    ortho.zoom = zoomRef.current;
+    ortho.updateProjectionMatrix();
   });
 
   return <OrthographicCamera makeDefault zoom={CAMERA_ZOOM} position={initialPosition} />;
 }
 
 /**
- * Scene background, fog, and sun — lerp continuously toward the target
- * mood (corridor vs active space palette) instead of swapping on mount.
- * The JSX objects are constructed once (constant args) and mutated in
- * place each frame; resolveAtmosphere is the single source of the targets.
- * `dark` follows the app theme — the corridor branch of the targets uses
- * the theme's void color; a toggle eases through the same lerp.
+ * Scene background, ambient floor, and the KEY light — the one strong,
+ * shadow-casting directional sun. Color/intensity lerp continuously toward
+ * the target mood (corridor vs active space palette) instead of swapping
+ * on mount; resolveAtmosphere is the single source of the targets. `dark`
+ * follows the app theme — the corridor branch of the targets uses the
+ * theme's void color; a toggle eases through the same lerp.
+ *
+ * The sun and its shadow camera FOLLOW the player: the light sits at
+ * player + SUN_OFFSET and its target tracks the player on the ground
+ * plane, so the ortho shadow frustum always covers the visible diorama
+ * down the whole streaming corridor and inside every space; the frustum
+ * half-extent also tracks the room zoom pull-back (up to
+ * ROOM_ZOOM_MAX_PULLBACK) so that stays true while the camera is pulled
+ * back inside a scaled room. The light direction (SUN_OFFSET → origin) is
+ * identical to the old fixed rig, so surface response is unchanged — only
+ * coverage moved.
  */
 function Atmosphere({
   space,
   dark,
+  playerRef,
 }: {
   space: ActiveSpace | null;
   dark: boolean;
+  playerRef: PlayerRef;
 }): JSX.Element {
   const bgRef = useRef<THREE.Color>(null);
   const sunRef = useRef<THREE.DirectionalLight>(null);
   const ambientRef = useRef<THREE.AmbientLight>(null);
+  // The shadow target must live in the scene graph for its matrixWorld to
+  // update; it is positioned per frame on the ground under the player.
+  const [sunTarget] = useState(() => {
+    const target = new THREE.Object3D();
+    target.position.set(playerRef.current.x, 0, playerRef.current.z);
+    return target;
+  });
   // Reusable target bucket — resolved fresh each frame, never reallocated.
   const [targets] = useState<AtmosphereTargets>(() => ({
     background: new THREE.Color(SCENE_COLORS.night),
@@ -367,6 +466,26 @@ function Atmosphere({
     sun.color.lerp(targets.sunColor, k);
     sun.intensity += (targets.sunIntensity - sun.intensity) * k;
     ambient.intensity += (targets.ambient - ambient.intensity) * k;
+    // Keep the key light and its shadow frustum centered on the player.
+    const p = playerRef.current;
+    sun.position.set(p.x + SUN_OFFSET.x, SUN_OFFSET.y, p.z + SUN_OFFSET.z);
+    sunTarget.position.set(p.x, 0, p.z);
+    sunTarget.updateMatrixWorld();
+    // The shadow frustum must cover what the camera shows: inside a scaled
+    // room the ortho zoom pulls back (roomZoomPullback, up to
+    // ROOM_ZOOM_MAX_PULLBACK), so the ±SUN_SHADOW_EXTENT box grows by the
+    // same factor — otherwise most of the visible floor of a big room
+    // leaves the shadow map and the room reads shadowless.
+    const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
+    const shadowExtent = SUN_SHADOW_EXTENT * pullback;
+    const shadowCam = sun.shadow.camera;
+    if (shadowCam.right !== shadowExtent) {
+      shadowCam.left = -shadowExtent;
+      shadowCam.right = shadowExtent;
+      shadowCam.top = shadowExtent;
+      shadowCam.bottom = -shadowExtent;
+      shadowCam.updateProjectionMatrix();
+    }
     // Probe mirror — lets the browser console read the live background and
     // light state when diagnosing a room-wide color veil.
     GAME_DEBUG.fogNear = -1;
@@ -383,16 +502,146 @@ function Atmosphere({
       {/* No scene fog anywhere: with the 45° camera parked ~23m above the
           player, any fog band wide enough to matter covered the whole
           visible room and washed it into the fog color (the 'translucent
-          room'). Depth is sold by background color and the corridor's
-          end-fade planes instead. */}
+          room'). Depth is sold by the background color, the corridor's
+          end-fade planes, and the post chain (N8AO + vignette) instead. */}
       <ambientLight ref={ambientRef} intensity={CORRIDOR_AMBIENT} />
+      <primitive object={sunTarget} />
       <directionalLight
         ref={sunRef}
-        position={[8, 14, 4]}
+        castShadow
+        target={sunTarget}
+        position={[
+          playerRef.current.x + SUN_OFFSET.x,
+          SUN_OFFSET.y,
+          playerRef.current.z + SUN_OFFSET.z,
+        ]}
         intensity={SUN_BASE_INTENSITY}
         color={SUN_BASE_COLOR}
+        shadow-mapSize={[SUN_SHADOW_MAP_SIZE, SUN_SHADOW_MAP_SIZE]}
+        shadow-camera-left={-SUN_SHADOW_EXTENT}
+        shadow-camera-right={SUN_SHADOW_EXTENT}
+        shadow-camera-top={SUN_SHADOW_EXTENT}
+        shadow-camera-bottom={-SUN_SHADOW_EXTENT}
+        shadow-camera-near={SUN_SHADOW_NEAR}
+        shadow-camera-far={SUN_SHADOW_FAR}
+        shadow-bias={SUN_SHADOW_BIAS}
+        shadow-normalBias={SUN_SHADOW_NORMAL_BIAS}
       />
     </>
+  );
+}
+
+/**
+ * Radial gradient texture for the stage pool: white with alpha 1 at the
+ * center, smoothstep-fading to 0 at the rim — the mesh's material color
+ * supplies the hue per frame. Generated in code (DataTexture, no assets)
+ * exactly like the material library's maps (lib/game/materials/three.ts).
+ */
+function createStageGradientTexture(): THREE.DataTexture {
+  const size = 256;
+  const data = new Uint8Array(size * size * 4);
+  const inner = STAGE_POOL_RADIUS / STAGE_BACKDROP_RADIUS;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x + 0.5) / size - 0.5;
+      const dy = (y + 0.5) / size - 0.5;
+      const r = Math.hypot(dx, dy) * 2; // 0 at center → 1 at the circle rim
+      const t = Math.min(1, Math.max(0, (r - inner) / (1 - inner)));
+      const a = 1 - t * t * (3 - 2 * t); // smoothstep falloff
+      const i = (y * size + x) * 4;
+      data[i] = 255;
+      data[i + 1] = 255;
+      data[i + 2] = 255;
+      data[i + 3] = Math.round(a * 255);
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * The stage the diorama sits on: a huge unlit disc parked STAGE_BACKDROP_Y
+ * below the floor, following the player in XZ exactly like the sun rig
+ * does, textured with the radial gradient above. Its color is the SAME
+ * lerped background target the scene background uses (resolveAtmosphere
+ * stays the single source), lifted a touch toward white — so the pool is
+ * always a faint glow of the current mood: the corridor void by default,
+ * the room's own palette shadow while a space is active, easing between
+ * the two on the shared ATMOSPHERE_LERP_RATE.
+ *
+ * Deliberately NOT scene fog and never to be "fixed" back into it: fog
+ * blends by camera distance, and from this 45° camera parked ~23 m up,
+ * every usable fog band washed the whole visible room into the fog color
+ * (the translucent-room bug, commits 9116243/09c757b/d9edf93). This disc
+ * is plain geometry at a fixed depth — its shading has no camera-distance
+ * term, so it structurally cannot reproduce that failure. The disc IS tone
+ * mapped like every lit surface: anything visible through or above the
+ * room's walls must ride the same AgX curve as the room itself, otherwise
+ * the backdrop renders relatively brighter than the tone-mapped scene and
+ * bleeds milk through every opening. The scene background stays the
+ * renderer's clear color (a Color background bypasses tone mapping by
+ * design — WebGLBackground), but the disc covers the entire view and its
+ * transparent rim converges to that exact color at opacity 0, so the two
+ * still meet seamlessly.
+ */
+function StageBackdrop({
+  space,
+  dark,
+  playerRef,
+}: {
+  space: ActiveSpace | null;
+  dark: boolean;
+  playerRef: PlayerRef;
+}): JSX.Element {
+  const meshRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<THREE.MeshBasicMaterial>(null);
+  const gradient = useMemo(() => createStageGradientTexture(), []);
+  useEffect(() => () => gradient.dispose(), [gradient]);
+  const [targets] = useState<AtmosphereTargets>(() => ({
+    background: new THREE.Color(SCENE_COLORS.night),
+    sunColor: new THREE.Color(SUN_BASE_COLOR),
+    sunIntensity: SUN_BASE_INTENSITY,
+    ambient: CORRIDOR_AMBIENT,
+  }));
+  const [scratch] = useState(() => new THREE.Color());
+  const [white] = useState(() => new THREE.Color("#ffffff"));
+  const initializedRef = useRef(false);
+
+  useFrame((_, dt) => {
+    const mesh = meshRef.current;
+    const mat = matRef.current;
+    if (!mesh || !mat) return;
+    const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
+    resolveAtmosphere(space, dark, targets);
+    scratch.copy(targets.background).lerp(white, STAGE_BACKDROP_LIFT);
+    // Snap on the first frame — the material constructs white, and lerping
+    // down from there would flash a bright disc at mount.
+    if (initializedRef.current) {
+      mat.color.lerp(scratch, k);
+    } else {
+      mat.color.copy(scratch);
+      initializedRef.current = true;
+    }
+    const p = playerRef.current;
+    mesh.position.set(p.x, STAGE_BACKDROP_Y, p.z);
+  });
+
+  return (
+    <mesh
+      ref={meshRef}
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[playerRef.current.x, STAGE_BACKDROP_Y, playerRef.current.z]}
+    >
+      <circleGeometry args={[STAGE_BACKDROP_RADIUS, 64]} />
+      <meshBasicMaterial
+        ref={matRef}
+        map={gradient}
+        transparent
+        opacity={STAGE_BACKDROP_OPACITY}
+        depthWrite={false}
+      />
+    </mesh>
   );
 }
 
@@ -452,16 +701,16 @@ function PlayerAvatar({
     <group ref={rootRef}>
       <group ref={bodyRef}>
         {/* Capsule body — total height 0.9 m. */}
-        <mesh position={[0, 0.45, 0]}>
+        <mesh castShadow position={[0, 0.45, 0]}>
           <capsuleGeometry args={[0.26, 0.38, 4, 10]} />
           <meshStandardMaterial color={PLAYER_BODY} roughness={1} flatShading />
         </mesh>
-        <mesh position={[0, 1.04, 0.02]}>
+        <mesh castShadow position={[0, 1.04, 0.02]}>
           <sphereGeometry args={[0.19, 12, 10]} />
           <meshStandardMaterial color={PLAYER_HEAD} roughness={1} flatShading />
         </mesh>
         {/* Visor nub — marks the facing direction (+z local). */}
-        <mesh position={[0, 1.04, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
+        <mesh castShadow position={[0, 1.04, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
           <coneGeometry args={[0.06, 0.14, 6]} />
           <meshStandardMaterial color={PLAYER_BODY} roughness={1} flatShading />
         </mesh>
@@ -515,14 +764,20 @@ function GameLoop({
   useFrame((_, delta) => {
     const p = playerRef.current;
 
-    // 1. Movement — screen-relative, dt-corrected, no acceleration.
+    // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
+    // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
+    // room should feel immense, not waste the player's time; the corridor
+    // stays exactly PLAYER_SPEED.
     const move = moveVectorFromKeys(keysRef.current);
     const moving = move.x !== 0 || move.z !== 0;
     motionRef.current = { x: move.x, z: move.z, moving };
     if (moving) {
       const dt = Math.min(delta, MAX_DT);
-      p.x += move.x * PLAYER_SPEED * dt;
-      p.z += move.z * PLAYER_SPEED * dt;
+      const speed =
+        PLAYER_SPEED *
+        (activeSpace === null ? 1 : roomSpeedFactor(activeSpace.scale.factor));
+      p.x += move.x * speed * dt;
+      p.z += move.z * speed * dt;
     }
 
     // 2. Door manager — hysteresis band around the wall plane. While a
@@ -536,10 +791,12 @@ function GameLoop({
       if (door) {
         const recipe = compileSpaceRecipe(door.sliceId);
         const archetype = archetypeById.get(door.sliceId);
-        space = {
-          door,
-          recipe: archetype === undefined ? recipe : { ...recipe, archetype },
-        };
+        const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
+        // The scaled view is computed ONCE here — room-plan.ts is the single
+        // definition of "how big is this room"; clamps, terrain, and water
+        // below all consume it, matching the geometry space.tsx builds.
+        const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe);
+        space = { door, recipe: finalRecipe, scaledRecipe, scale };
         setActiveSpace(space);
       }
     } else if (az < WALL_IN && space !== null) {
@@ -552,9 +809,12 @@ function GameLoop({
       }
     }
 
-    // 3. Clamps for wherever the player ended up.
+    // 3. Clamps for wherever the player ended up. The space clamp boxes to
+    // the SCALED footprint — the same dims the room was built at, so the
+    // player can reach the far end of a colossal room and cannot walk
+    // through a miniature room's walls.
     if (space !== null) {
-      clampToSpace(p, space.door, space.recipe.width, space.recipe.size.extent);
+      clampToSpace(p, space.door, space.scaledRecipe.width, space.scaledRecipe.size.extent);
     } else {
       clampToCorridor(p, doorXs);
     }
@@ -628,7 +888,8 @@ export default function GameCanvas({
   const [hudDoor, setHudDoor] = useState<CorridorDoor | null>(null);
   // The mounted room follows the door manager the instant the wall plane
   // is crossed, and on exit it stays mounted for a short dissolve
-  // (fade="out", see SPACE_FADE_S in space.tsx) before unmounting — the
+  // (fade="out", see SPACE_FADE_S in lib/game/tuning/room.ts) before
+  // unmounting — the
   // space neither pre-renders nor pops out of existence.
   const [shownSpace, setShownSpace] = useState<ActiveSpace | null>(null);
   useEffect(() => {
@@ -656,9 +917,11 @@ export default function GameCanvas({
     }
     return map;
   }, [doors]);
-  // 0 for every archetype without water (waterCoverage = 0 → side 0).
+  // 0 for every archetype without water (waterCoverage = 0 → side 0). The
+  // scaled view keeps the wade rectangle coincident with the water plane
+  // the renderer built.
   const waterSide = useMemo(
-    () => (activeSpace !== null ? waterSideFor(activeSpace.recipe) : 0),
+    () => (activeSpace !== null ? waterSideFor(activeSpace.scaledRecipe) : 0),
     [activeSpace],
   );
 
@@ -711,9 +974,60 @@ export default function GameCanvas({
 
   return (
     <div className="relative h-full w-full">
-      <Canvas frameloop="always" dpr={[1, 2]} gl={{ antialias: true }}>
-        <Atmosphere space={activeSpace} dark={dark} />
-        <CameraRig playerRef={playerRef} />
+      {/*
+        shadows="percentage" → PCFShadowMap. three 0.185 DEPRECATED
+        PCFSoftShadowMap: WebGLShadowMap now warns and silently rewrites
+        it to PCFShadowMap at render time (WebGLShadowMap.js — "PCFSoftShadowMap
+        has been deprecated. Using PCFShadowMap instead."), so the old
+        shadows="soft" only claimed softness while shipping PCF. This value
+        names what actually runs. Verified against the installed packages:
+        fiber's dist maps "percentage" → THREE.PCFShadowMap.
+        Softer options and why none is taken here: VSM ("variance") leaks
+        light through the thin interior geometry; drei's <SoftShadows>
+        (PCSS) recompiles every material's shader on mount (a hitch per
+        streamed chunk/room); drei <AccumulativeShadows> bakes once and
+        needs a static scene — the corridor is a streaming treadmill whose
+        shadow camera follows the player, so a bake is stale the moment the
+        player moves. Genuinely soft shadows would take a custom PCSS
+        shadow shader or a light that never moves relative to static
+        geometry.
+        Tone mapping: AgX via the gl props — R3F applies plain-object gl
+        props onto the renderer (applyProps) AFTER installing its ACES
+        default on first configure, so this wins; saturated accent colors
+        clip under ACES, and the `flat` prop would disable tone mapping
+        entirely. three 0.185 enum: THREE.AgXToneMapping (6).
+      */}
+      <Canvas
+        frameloop="always"
+        dpr={[1, 2]}
+        gl={{ antialias: true, toneMapping: THREE.AgXToneMapping }}
+        shadows="percentage"
+      >
+        <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
+        {/* The stage pool under the diorama — kills the featureless void
+            around the model. One named constant reverts it:
+            STAGE_BACKDROP_ENABLED (tuning/render.ts). */}
+        {STAGE_BACKDROP_ENABLED && (
+          <StageBackdrop space={activeSpace} dark={dark} playerRef={playerRef} />
+        )}
+        {/* One scene-wide IBL: a few broad Lightformer cards baked into an
+            env map (no HDRI, no assets). This is the soft fill of the
+            key/fill/ambient hierarchy and the shared reflection source for
+            every PBR material the material lanes author. */}
+        <Environment resolution={ENV_RESOLUTION} environmentIntensity={ENV_INTENSITY}>
+          {ENV_FORMERS.map((f, i) => (
+            <Lightformer
+              key={i}
+              form={f.form}
+              color={f.color}
+              intensity={f.intensity}
+              position={[f.position[0], f.position[1], f.position[2]]}
+              rotation={[f.rotation[0], f.rotation[1], f.rotation[2]]}
+              scale={[f.scale[0], f.scale[1], f.scale[2]]}
+            />
+          ))}
+        </Environment>
+        <CameraRig playerRef={playerRef} space={activeSpace} />
         {/* The corridor dissolves the moment a space engages (GameLoop above)
           and unmounts HIDE_DELAY_MS later; on return it remounts dark and
           eases back up. */}
@@ -755,6 +1069,32 @@ export default function GameCanvas({
           hudIdRef={hudIdRef}
           setHudDoor={setHudDoor}
         />
+        {/*
+          Post chain — deliberately conservative. N8AO (half-res) adds
+          screen-space contact shading, Bloom (threshold 1.0) glows only
+          what is genuinely hot (emissive fixtures, sun pools), and a mild
+          Vignette closes the frame. AO + vignette are the depth cue that
+          replaced scene fog: both are camera-distance INDEPENDENT, so
+          neither can wash the whole room into a veil the way distance fog
+          did from this camera (commits 9116243/09c757b). Export names
+          verified against @react-three/postprocessing v3 dist .d.ts.
+        */}
+        <EffectComposer multisampling={POST_MSAA_SAMPLES}>
+          <N8AO
+            halfRes
+            quality="performance"
+            intensity={AO_INTENSITY}
+            aoRadius={AO_RADIUS}
+            distanceFalloff={AO_DISTANCE_FALLOFF}
+          />
+          <Bloom
+            mipmapBlur
+            intensity={BLOOM_INTENSITY}
+            luminanceThreshold={BLOOM_LUMINANCE_THRESHOLD}
+            luminanceSmoothing={BLOOM_LUMINANCE_SMOOTHING}
+          />
+          <Vignette offset={VIGNETTE_OFFSET} darkness={VIGNETTE_DARKNESS} />
+        </EffectComposer>
       </Canvas>
       <Hud door={hudDoor} enterHint={t("enter")} />
     </div>

@@ -11,10 +11,12 @@
  *
  * Every space is an ENCLOSED ROOM — 4m perimeter walls (same height as the
  * corridor) run along all four edges, and a 2.4m doorway gap centered on
- * the entrance (local x = 0, z = 0) is the only opening. Walls are slightly
- * translucent so the camera can hint through the far wall when the player
- * stands near an edge. A clear strip at the doorway (terrain flattened, no
- * props near the door axis) means the player can always walk in.
+ * the entrance (local x = 0, z = 0) is the only opening. Walls are fully
+ * opaque; the interior stays visible from the fixed top-down camera via a
+ * dollhouse cutaway — the walls whose outward face looks toward the camera
+ * are drawn at WALL_SILL_HEIGHT (see wallFacesCamera below). A clear strip
+ * at the doorway (terrain flattened, no props near the door axis) means the
+ * player can always walk in.
  *
  * v2 taxonomy — the recipe's worldClass picks the content family:
  *   - nature:   biomes (meadow/plains/pool/forest + ocean/lake/beach/
@@ -27,6 +29,19 @@
  *               balloons — cute low-poly animals with seeded wander paths
  * Large (L/XL) plans of any class may grow an internal structure: a
  * partition wall with a door gap, or a column grid.
+ *
+ * ROOM LANGUAGE (v0.11 §3). Three seeded facets from lib/game/room-plan.ts
+ * shape every space before any content is placed:
+ *   - scale:  normal / colossal (×8–20) / miniature (×0.05–0.2), applied
+ *             at CONSTRUCTION time — every plan dim and prop size is
+ *             multiplied by the factor, so terrain, water, and the
+ *             movement clamps stay in one coordinate system. The doorway
+ *             (gap, slab, trim, glow) is always human-scale (axiom A4).
+ *   - plan:   rect / l-shape / colonnade silhouettes; the entrance wall
+ *             and its doorway are structurally identical on every plan.
+ *   - composition: one hero element in the far third, a cleared walk path
+ *             from the door to the hero, and clustered (not uniform)
+ *             scatter around seeded centers.
  *
  * Everything rendered here is a pure function of the resolved recipe plus
  * the door position — rebuilding a space from the same recipe yields the
@@ -54,11 +69,13 @@ import {
   useRef,
   type JSX,
   type MutableRefObject,
+  type ReactNode,
 } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import type { DoorRef } from "@/lib/game/hotel";
+import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { GAME_DEBUG } from "./debug";
+import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import {
@@ -69,98 +86,112 @@ import {
 } from "@/lib/game/terrain";
 import {
   ARCHETYPES,
-  VIVID_PALETTES,
   type ArchetypeId,
   type SpaceRecipe,
 } from "@/lib/game/space-types";
+import {
+  composeRoom,
+  distToPath,
+  planContains,
+  roomPlanFor,
+  scaledRecipeFor,
+  scaledWallHeight,
+  wallSegmentsFor,
+  type Composition,
+  type RoomPlan,
+  type WallSegment,
+} from "@/lib/game/room-plan";
+import {
+  createSurfaceMaterial,
+  createWaterSurfaceMaterial,
+} from "@/lib/game/materials";
+import {
+  BALLOON_BUNCHES,
+  BALLOON_COLORS,
+  COLONNADE_BAY,
+  CONCRETE_NORMAL_SCALE,
+  CREATURE_SCALE_EXP,
+  DOOR_GAP_HALF,
+  DOOR_GLOW_INTENSITY,
+  DOOR_HALO_OPACITY,
+  DOOR_HEIGHT,
+  DOOR_OPEN_ANGLE,
+  DOOR_OPEN_DIST,
+  DOOR_SEAM_INTENSITY,
+  DOOR_SWING_RATE,
+  DOOR_TRIM_COLOR,
+  DOOR_WIDTH,
+  DUCK_COUNT,
+  ENTRANCE_CLEAR_RADIUS,
+  ENTRANCE_DEPTH,
+  GROUND_SEGMENTS,
+  GROUND_SEGMENTS_MAX,
+  HERO_CLEAR,
+  HERO_SCALE,
+  LONE_PROB,
+  PARQUET_CELL,
+  PET_COUNT,
+  PET_NEAR_RADIUS_MAX,
+  PORTAL_HEIGHT,
+  PROP_COUNT,
+  PROP_DOOR_DEPTH,
+  PROP_DOOR_HALF,
+  PROP_SCALE_EXP,
+  ROCK_DIVISOR,
+  ROCK_MIN,
+  ROOM_WALL_THICKNESS,
+  SKIRT_OVERHANG,
+  SKIRT_OVERHANG_MIN,
+  SKIRT_Y,
+  SNOW_COUNT_MAX,
+  SPACE_FADE_S,
+  STRUCTURE_MIN_EXTENT,
+  TILE_NORMAL_SCALE,
+  TREE_DIVISOR,
+  TREE_MIN,
+  WALL_CLEARANCE,
+  WALL_SILL_HEIGHT,
+  WATER_Y,
+} from "@/lib/game/tuning/room";
+import { CAM_OFFSET } from "@/lib/game/tuning/render";
 
-const GROUND_SEGMENTS = 48;
-/** Perimeter wall height — unified with the corridor wall (4.0m). Every
- *  space is an enclosed room; the doorway gap is the only opening. */
-const WALL_HEIGHT = 4.0;
-const WALL_THICKNESS = 0.3;
-/** Half of the 2.4m doorway gap in the entrance-edge wall. */
-const DOOR_GAP_HALF = 1.2;
-/** Space-side doorway mirrors the corridor door (1.4 × 3.0 slab, trim
- *  frame, accent glow) — the door is hotel property and reads identically
- *  from both sides. The entrance gets a 3.2m portal surround (filler
- *  panels + lintel) since the wall is 4.0m tall. */
-const DOOR_WIDTH = 1.4;
-const DOOR_HEIGHT = 3.0;
-const PORTAL_HEIGHT = 3.2;
-const DOOR_TRIM_COLOR = "#463f36";
-const DOOR_GLOW_INTENSITY = 1.6;
-const DOOR_HALO_OPACITY = 0.14;
-/** Jamb/head light-leak seams around the closed slab (the exit landmark
- *  from deep inside a space). */
-const DOOR_SEAM_INTENSITY = 2.8;
-/** Slab swing, mirroring the corridor face: open within this distance of
- *  the door center, ~100°, always rotating away from the player. */
-const DOOR_OPEN_DIST = 2.2;
-const DOOR_OPEN_ANGLE = 1.75;
-const DOOR_SWING_RATE = 5;
-/** Scatter keeps this clearance from the wall boxes. */
-const WALL_CLEARANCE = 1;
-/** Wall transparency: at the unified 4m height the walls would hide the
- *  room interior from the 45° camera, so they read as translucent veils —
- *  solid enough to own the space, clear enough to show what is inside. */
-const WALL_OPACITY = 0.5;
-/** No props within this distance of the door axis near the doorway. */
-const ENTRANCE_CLEAR_RADIUS = 1.5;
-/** Depth outward from the wall that counts as "the doorway". */
-const ENTRANCE_DEPTH = 2.5;
-/** Mount/unmount crossfade: the room condenses out of (and dissolves back
- *  into) its own shadow in 150 ms — fast, but never a pop. */
-const SPACE_FADE_S = 0.15;
-const WATER_Y = 0.35;
-/** Water reads too much like empty floor from above: keep it nearly solid,
- *  and tint it blue-green (waterColor below) rather than the raw accent. */
-const WATER_OPACITY = 0.9;
-/** Grounding skirt: dark apron extending this far beyond the walls, so the
- *  space reads as grounded terrain in the mist instead of a floating
- *  board. 40m — the unfoggable background shows past the apron's side
- *  edges at the fixed CAM_OFFSET when the player stands near the door, so
- *  the apron is deliberately oversized (only one space is mounted at a
- *  time, making it free). Sits just below the corridor floor (y = 0). */
-const SKIRT_OVERHANG = 40;
-const SKIRT_Y = -0.005;
-/** Trees / rocks per instance: count = max(min, round(density · extent² / N)). */
-const TREE_DIVISOR = 22;
-const ROCK_DIVISOR = 45;
-const TREE_MIN = 3;
-const ROCK_MIN = 2;
-/** Motif props per size tier — S stays restrained; big plans scale up so
- *  an L/XL room never reads as an empty hangar. */
-const PROP_COUNT: Record<number, number> = {
-  16: 3,
-  32: 5,
-  64: 8,
-  96: 12,
-};
-/** Motif props keep the doorway corridor clear: |x| < 1.8 out to z = 3m. */
-const PROP_DOOR_HALF = 1.8;
-const PROP_DOOR_DEPTH = 3;
-/** Internal structures only on big plans. */
-const STRUCTURE_MIN_EXTENT = 64;
-/** Wonder-animal counts per size tier. */
-const DUCK_COUNT: Record<number, number> = {
-  16: 20,
-  32: 30,
-  64: 45,
-  96: 60,
-};
-const PET_COUNT: Record<number, number> = { 16: 4, 32: 5, 64: 6, 96: 8 };
-/** Balloon bunches per size tier — a big ballroom of a room needs many. */
-const BALLOON_BUNCHES: Record<number, number> = {
-  16: 4,
-  32: 6,
-  64: 10,
-  96: 15,
-};
-/** Parquet checkerboard cell size in meters. */
-const PARQUET_CELL = 4;
-/** Balloon colors come from the vivid palette set. */
-const BALLOON_COLORS = VIVID_PALETTES.map((p) => p.accent);
+/** Horizontal direction from any point toward the fixed camera (world XZ,
+ *  unit length): CAM_OFFSET is a constant world vector and the camera never
+ *  rotates, so this never changes — which walls are "near" is decidable
+ *  once per room, in world space. */
+const CAM_DIR_XZ = (() => {
+  const len = Math.hypot(CAM_OFFSET.x, CAM_OFFSET.z);
+  return { x: CAM_OFFSET.x / len, z: CAM_OFFSET.z / len };
+})();
+
+/**
+ * Dollhouse cutaway test: does this wall segment's OUTWARD face look toward
+ * the camera? The outward normal is found by probing planContains just off
+ * both faces (the side with no walkable plan is the outside), then rotated
+ * to world space (a south door's room is rotated π about Y, so both axes
+ * flip — room-local axes alone would pick the wrong walls). Segments whose
+ * outward normal points within ~45° of the camera direction stand between
+ * the camera and the interior, so they are drawn at WALL_SILL_HEIGHT:
+ * opaque, but low enough to see over. Walls are axis-aligned, so the dot
+ * is exactly ±1/√2 or 0 and the 0.5 threshold splits cleanly.
+ */
+function wallFacesCamera(
+  plan: RoomPlan,
+  wall: WallSegment,
+  dir: number,
+): boolean {
+  const probe = 0.5;
+  let nx = 0;
+  let nz = 0;
+  if (wall.sizeZ <= wall.sizeX) {
+    nz = planContains(plan, wall.x, wall.z + probe, 0) ? -1 : 1;
+  } else {
+    nx = planContains(plan, wall.x + probe, wall.z, 0) ? -1 : 1;
+  }
+  const wx = dir > 0 ? nx : -nx;
+  const wz = dir > 0 ? nz : -nz;
+  return wx * CAM_DIR_XZ.x + wz * CAM_DIR_XZ.z > 0.5;
+}
 
 /** One prop placement in the group's canonical local frame. */
 interface Placement {
@@ -174,50 +205,98 @@ interface Placement {
 }
 
 /**
+ * Draw one scatter candidate: clustered around a seeded composition center
+ * (with a LONE_PROB fraction of uniform draws — a solitary tree far from
+ * any grouping reads as placed, not as leftover), uniform when the room
+ * has no clusters. Positions live in the plan's (scaled) local frame.
+ */
+function drawCandidate(
+  rng: () => number,
+  plan: RoomPlan,
+  comp: Composition,
+  edge: number,
+): { x: number; z: number } {
+  if (comp.clusters.length > 0 && rng() >= LONE_PROB) {
+    const c = comp.clusters[Math.floor(rng() * comp.clusters.length)];
+    // Triangular offsets (sum of two uniforms) concentrate near the center.
+    return {
+      x: c.x + (rng() + rng() - 1) * c.radius,
+      z: c.z + (rng() + rng() - 1) * c.radius,
+    };
+  }
+  return {
+    x: (rng() * 2 - 1) * Math.max(0.1, plan.width / 2 - edge),
+    z: edge + rng() * Math.max(0.1, plan.extent - edge * 2),
+  };
+}
+
+/** Shared placement rules: inside the walkable footprint, out of the
+ *  doorway strip, off the cleared path, and clear of the hero's clearing. */
+function candidateOk(
+  plan: RoomPlan,
+  comp: Composition,
+  x: number,
+  z: number,
+  edge: number,
+  heroClear: number,
+): boolean {
+  if (!planContains(plan, x, z, edge)) return false;
+  if (Math.abs(x) < ENTRANCE_CLEAR_RADIUS && z < ENTRANCE_DEPTH) return false;
+  if (distToPath(comp, x, z) < comp.pathHalf) return false;
+  if (heroClear > 0 && Math.hypot(x - comp.hero.x, z - comp.hero.z) < heroClear) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * Deterministic tree/rock scatter: count = max(minCount, round(density ·
- * extent² / divisor)) whenever density > 0, positions drawn from
- * createRng(recipe.layoutSeed), snapped to the shared terrainHeight.
- * Candidates inside the entrance clear zone or the water rectangle are
- * rejected and redrawn, so the placed count is exact (bounded attempts
- * guard the pathological case).
+ * extent² / divisor)) from the ORIGINAL (unscaled) tier — a colossal room
+ * gets the same authored population, bigger and farther apart — positions
+ * drawn from createRng(recipe.layoutSeed ^ salt), clustered around the
+ * composition's centers, snapped to the shared terrainHeight of the SCALED
+ * recipe view. Candidates outside the footprint, on the cleared path, in
+ * the entrance strip, or in the water are rejected and redrawn (bounded
+ * attempts guard the pathological case), so the placed count is exact.
  */
 function scatter(
   recipe: SpaceRecipe,
+  scaled: SpaceRecipe,
   density: number,
   divisor: number,
   minCount: number,
   water: WaterRect | null,
+  plan: RoomPlan,
+  comp: Composition,
+  edge: number,
+  propScale: number,
+  salt: number,
 ): Placement[] {
   if (density <= 0) return [];
-  const { extent, width } = dims(recipe);
-  // Keep WALL_CLEARANCE meters clear of the wall boxes: the walls hug the
-  // plan edges, so the draw range starts WALL_THICKNESS + WALL_CLEARANCE
-  // inside them.
-  const edge = WALL_THICKNESS + WALL_CLEARANCE;
-  const usableX = width / 2 - edge;
+  // Counts come from the unscaled tier: the room's population is authored
+  // at human scale, then the scale notation stretches the space it lives in.
+  const baseExtent = recipe.size.extent;
   const count = Math.max(
     minCount,
-    Math.round((density * extent * extent) / divisor),
+    Math.round((density * baseExtent * baseExtent) / divisor),
   );
-  const rng = createRng(recipe.layoutSeed);
+  const rng = createRng((recipe.layoutSeed ^ salt) >>> 0);
   const out: Placement[] = [];
+  const heroClear = HERO_CLEAR * propScale;
   const maxAttempts = count * 50 + 200;
   let attempts = 0;
   while (out.length < count && attempts < maxAttempts) {
     attempts += 1;
-    const lx = (rng() * 2 - 1) * usableX;
-    const lz = edge + rng() * (extent - edge * 2);
-    if (Math.abs(lx) < ENTRANCE_CLEAR_RADIUS && lz < ENTRANCE_DEPTH) {
-      continue;
-    }
+    const { x: lx, z: lz } = drawCandidate(rng, plan, comp, edge);
+    if (!candidateOk(plan, comp, lx, lz, edge, heroClear)) continue;
     if (water && insideRect(lx, lz, water, 0.5)) {
       continue;
     }
     out.push({
       x: lx,
-      y: terrainHeight(recipe, lx, lz),
+      y: terrainHeight(scaled, lx, lz),
       z: lz,
-      scale: 0.8 + rng() * 0.5,
+      scale: (0.8 + rng() * 0.5) * propScale,
       rotX: 0,
       rotY: rng() * Math.PI * 2,
       rotZ: 0,
@@ -244,25 +323,65 @@ function insideRect(
   );
 }
 
-/** Water surface: a translucent blue-green plane that breathes (opacity)
- *  and bobs gently (y ±0.02) — cheap transform/material animation only. */
+/** Shadow opt-in for whole prop subtrees: r3f does not cascade
+ *  castShadow/receiveShadow down the graph, and the prop/animal assemblies
+ *  are dozens of tiny meshes each, so one traversal on mount flags every
+ *  descendant mesh. Static subtrees only — geometry never mounts after the
+ *  first render. */
+function Shadowed({ children }: { children: ReactNode }) {
+  const ref = useRef<THREE.Group>(null);
+  useLayoutEffect(() => {
+    ref.current?.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
+  }, []);
+  return <group ref={ref}>{children}</group>;
+}
+
+/** Water surface: a REAL shallow-water material (materials/water-surface.ts)
+ *  — three seamless ripple normal layers scrolling at different scales and
+ *  directions, a rim-to-deep depth tint (ankle-clear at the edge, tinted at
+ *  depth) that always lets the pool floor read through, and a near-glossy
+ *  PBR finish so the environment and key light answer with a specular
+ *  streak. The plane still bobs gently; ripple scroll is a pure function of
+ *  the frame clock. The material is per-room (its tint is palette-derived)
+ *  and disposed on unmount; the ripple textures it samples are shared
+ *  app-lifetime singletons.
+ *  Shadows: RECEIVES only — a shadow caster is rendered through a depth
+ *  material that ignores transparency, so a casting water plane would paint
+ *  an opaque slab shadow over the pool bottom it exists to reveal; receiving
+ *  lets poolside props (ladder, board, loungers) land on the surface. */
 function WaterSurface({
   halfX,
   halfZ,
   cz,
   color,
+  shallowColor,
 }: {
   halfX: number;
   halfZ: number;
   cz: number;
-  color: string | THREE.Color;
+  color: THREE.Color;
+  shallowColor: THREE.Color;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
-  const material = useRef<THREE.MeshStandardMaterial>(null);
+  const water = useMemo(
+    () =>
+      createWaterSurfaceMaterial({
+        color,
+        shallowColor,
+        spanX: halfX * 2,
+        spanY: halfZ * 2,
+      }),
+    [color, shallowColor, halfX, halfZ],
+  );
+  useEffect(() => () => water.dispose(), [water]);
   useFrame(({ clock }) => {
     const t = clock.elapsedTime;
-    const mat = material.current;
-    if (mat) mat.opacity = WATER_OPACITY + Math.sin(t * 1.3) * 0.03;
+    water.update(t);
     const mesh = meshRef.current;
     if (mesh) mesh.position.y = WATER_Y + Math.sin(t * 0.6) * 0.02;
   });
@@ -272,15 +391,10 @@ function WaterSurface({
       position={[0, WATER_Y, cz]}
       rotation={[-Math.PI / 2, 0, 0]}
       renderOrder={1}
+      receiveShadow
+      material={water.material}
     >
       <planeGeometry args={[halfX * 2, halfZ * 2]} />
-      <meshStandardMaterial
-        ref={material}
-        color={color}
-        transparent
-        opacity={WATER_OPACITY}
-        roughness={0.15}
-      />
     </mesh>
   );
 }
@@ -293,8 +407,14 @@ interface RipplePatch {
   phase: number;
 }
 
-/** Deterministic ripple patches scattered inside the water rectangle. */
-function scatterRipples(rng: () => number, water: WaterRect): RipplePatch[] {
+/** Deterministic ripple patches scattered inside the water rectangle.
+ *  Ring sizes ride the room's prop scale so a colossal pool's ripples
+ *  read at its own scale. */
+function scatterRipples(
+  rng: () => number,
+  water: WaterRect,
+  sizeScale: number,
+): RipplePatch[] {
   const count = Math.min(
     6,
     Math.max(2, Math.round((water.halfX * water.halfZ) / 45)),
@@ -306,7 +426,7 @@ function scatterRipples(rng: () => number, water: WaterRect): RipplePatch[] {
     out.push({
       x: water.cx + (rng() * 2 - 1) * spanX,
       z: water.cz + (rng() * 2 - 1) * spanZ,
-      radius: 1.2 + rng() * 1.4,
+      radius: (1.2 + rng() * 1.4) * sizeScale,
       phase: rng(),
     });
   }
@@ -368,17 +488,24 @@ function WaterRipples({
 }
 
 /** Falling snow over the plan — seeded flake positions, recycled fall.
- *  Pure visual motion; layouts stay deterministic. */
+ *  Pure visual motion; layouts stay deterministic. Flake size rides the
+ *  room's creature scale so snow reads at any room scale; the count is
+ *  capped (the area formula explodes quadratically at colossal scale). */
 function Snowfall({
   width,
   extent,
   seed,
+  sizeScale,
 }: {
   width: number;
   extent: number;
   seed: number;
+  sizeScale: number;
 }) {
-  const count = Math.min(400, Math.max(140, Math.round((width * extent) / 10)));
+  const count = Math.min(
+    SNOW_COUNT_MAX,
+    Math.max(140, Math.round((width * extent) / 10)),
+  );
   const { geometry, speeds } = useMemo(() => {
     const rng = createRng(seed);
     const positions = new Float32Array(count * 3);
@@ -408,7 +535,7 @@ function Snowfall({
     <points geometry={geometry}>
       <pointsMaterial
         color="#ffffff"
-        size={0.16}
+        size={0.16 * sizeScale}
         transparent
         opacity={0.9}
         sizeAttenuation
@@ -419,15 +546,17 @@ function Snowfall({
 }
 
 /** Fireflies for dusk/night forests and lakes: warm points wandering slow
- *  circles around seeded centers. */
+ *  circles around seeded centers. Size rides the room's creature scale. */
 function Fireflies({
   width,
   extent,
   seed,
+  sizeScale,
 }: {
   width: number;
   extent: number;
   seed: number;
+  sizeScale: number;
 }) {
   const COUNT = 26;
   const { geometry, centers } = useMemo(() => {
@@ -467,7 +596,7 @@ function Fireflies({
     <points geometry={geometry}>
       <pointsMaterial
         color="#ffe98a"
-        size={0.15}
+        size={0.15 * sizeScale}
         transparent
         opacity={0.9}
         sizeAttenuation
@@ -522,6 +651,7 @@ function FloorParquet({
     <mesh
       position={[0, GROUND_Y + 0.006, extent / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
+      receiveShadow
     >
       <planeGeometry args={[width, extent]} />
       <meshStandardMaterial map={texture} roughness={1} />
@@ -593,6 +723,8 @@ function TreeInstances({
         ref={trunkRef}
         args={[undefined, undefined, placements.length]}
         frustumCulled={false}
+        castShadow
+        receiveShadow
       >
         <cylinderGeometry args={[0.14, 0.2, 1.4, 6]} />
         <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
@@ -601,6 +733,8 @@ function TreeInstances({
         ref={canopyRef}
         args={[undefined, undefined, placements.length]}
         frustumCulled={false}
+        castShadow
+        receiveShadow
       >
         <coneGeometry args={[0.85, 1.7, 6]} />
         <meshStandardMaterial color={canopyColor} roughness={1} flatShading />
@@ -633,6 +767,8 @@ function RockInstances({ placements }: { placements: Placement[] }) {
       ref={meshRef}
       args={[undefined, undefined, placements.length]}
       frustumCulled={false}
+      castShadow
+      receiveShadow
     >
       <dodecahedronGeometry args={[0.5, 0]} />
       <meshStandardMaterial color="#8a8d90" roughness={1} flatShading />
@@ -734,29 +870,52 @@ interface PropPlacement {
 }
 
 /**
- * Deterministic motif scatter: PROP_COUNT[extent] props, kind picked from
- * the given list, positions from the caller's rng stream (the dedicated
- * "props" seed stream — see SpaceScene). Obstacle rules: the doorway
- * corridor (|x| < 1.8, z < 3m) and the wall boxes (1m clearance) are
- * always off-limits; so is the water rectangle, except poolside fixtures,
- * which are placed ON its rim facing the water instead. Snapped to the
- * shared terrainHeight.
+ * Deterministic motif staging. The HERO comes first: one element from the
+ * archetype's kinds, placed at the composition's far-third focal point at
+ * HERO_SCALE — the thing you see when you walk in (it floats if the focal
+ * point lands on water). The remaining PROP_COUNT[extent] props (counted
+ * from the ORIGINAL tier, like the vegetation scatter) cluster around the
+ * composition's centers. Obstacle rules: the doorway corridor
+ * (|x| < 1.8, z < 3m), the walk path, the hero's clearing, the plan
+ * footprint, and the wall boxes are always off-limits; so is the water
+ * rectangle, except poolside fixtures, which are placed ON its rim facing
+ * the water instead. Snapped to the shared terrainHeight of the SCALED
+ * recipe view; sizes carry the room's prop scale.
  */
 function scatterMotifs(
   rng: () => number,
   recipe: SpaceRecipe,
+  scaled: SpaceRecipe,
   kinds: readonly MotifKind[],
   water: WaterRect | null,
+  plan: RoomPlan,
+  comp: Composition,
+  edge: number,
+  propScale: number,
 ): PropPlacement[] {
   if (kinds.length === 0) return [];
-  const { extent, width } = dims(recipe);
-  const edge = WALL_THICKNESS + WALL_CLEARANCE;
-  const usableX = width / 2 - edge;
-  const count = PROP_COUNT[extent] ?? Math.max(3, Math.round(extent / 12));
+  const { extent, width } = dims(scaled);
   const out: PropPlacement[] = [];
+
+  // (a) The hero: far-third focal element, unmistakably the set piece.
+  const heroKind = kinds[Math.floor(rng() * kinds.length)];
+  const heroOnWater = water !== null && insideRect(comp.hero.x, comp.hero.z, water, 0);
+  out.push({
+    kind: heroKind,
+    x: comp.hero.x,
+    y: heroOnWater ? WATER_Y : terrainHeight(scaled, comp.hero.x, comp.hero.z),
+    z: comp.hero.z,
+    rotY: rng() * Math.PI * 2,
+    scale: (0.9 + rng() * 0.25) * HERO_SCALE * propScale,
+  });
+
+  // (b)+(c) The rest: clustered, off the cleared path, out of the hero's
+  // clearing — grouped placement reads as authored, uniform draws as noise.
+  const heroClear = HERO_CLEAR * propScale;
+  const count = PROP_COUNT[recipe.size.extent] ?? Math.max(3, Math.round(recipe.size.extent / 12));
   const maxAttempts = count * 60 + 240;
   let attempts = 0;
-  while (out.length < count && attempts < maxAttempts) {
+  while (out.length < count + 1 && attempts < maxAttempts) {
     attempts += 1;
     const kind = kinds[Math.floor(rng() * kinds.length)];
     let lx: number;
@@ -767,8 +926,8 @@ function scatterMotifs(
       // so the base stays just outside the perimeter wall.
       const side = Math.floor(rng() * 3); // 0:+x 1:-x 2:far(+z)
       const t = (rng() * 2 - 1) * Math.max(0.4, water.halfX - 0.8);
-      const clampX = width / 2 - WALL_THICKNESS - 0.25;
-      const clampZ = extent - WALL_THICKNESS - 0.25;
+      const clampX = width / 2 - ROOM_WALL_THICKNESS - 0.25;
+      const clampZ = extent - ROOM_WALL_THICKNESS - 0.25;
       const offX = water.halfX + 0.3;
       const offZ = water.halfZ + 0.3;
       if (side === 0) {
@@ -782,10 +941,12 @@ function scatterMotifs(
         lz = Math.min(water.cz + offZ, clampZ);
       }
     } else {
-      lx = (rng() * 2 - 1) * usableX;
-      lz = edge + rng() * (extent - edge * 2);
+      ({ x: lx, z: lz } = drawCandidate(rng, plan, comp, edge));
     }
     if (Math.abs(lx) < PROP_DOOR_HALF && lz < PROP_DOOR_DEPTH) {
+      continue;
+    }
+    if (!candidateOk(plan, comp, lx, lz, isPoolside(kind) ? 0 : edge, heroClear)) {
       continue;
     }
     if (!isPoolside(kind) && water && insideRect(lx, lz, water, 0.3)) {
@@ -798,10 +959,10 @@ function scatterMotifs(
     out.push({
       kind,
       x: lx,
-      y: terrainHeight(recipe, lx, lz),
+      y: terrainHeight(scaled, lx, lz),
       z: lz,
       rotY,
-      scale: 0.9 + rng() * 0.25,
+      scale: (0.9 + rng() * 0.25) * propScale,
     });
   }
   return out;
@@ -1686,17 +1847,26 @@ function MotifProp({
 /**
  * Seeded interior furnishing (hotel-room / pool-hall / library / ballroom):
  * fixed per-room checklists wall-anchored with seeded jitter — beds against
- * the far wall, shelf rows facing each other, chandeliers in a grid. Counts
- * scale with the plan; positions come from the "furniture" seed stream.
+ * the far wall, shelf rows facing each other, chandeliers in a grid. These
+ * checklists ARE the interior composition: signature pieces anchor the far
+ * wall (the interior's hero), so no separate hero element is added. Counts
+ * scale with the plan; positions come from the "furniture" seed stream and
+ * the SCALED recipe view, clamped inside the plan's walkable footprint
+ * (an l-shape's abandoned quadrant never receives furniture).
  */
 function furnishInterior(
   rng: () => number,
-  recipe: SpaceRecipe,
+  scaled: SpaceRecipe,
   water: WaterRect | null,
+  plan: RoomPlan,
+  propScale: number,
 ): PropPlacement[] {
-  const { extent, width } = dims(recipe);
+  const { extent, width } = dims(scaled);
   const out: PropPlacement[] = [];
   const jitter = (amount: number) => (rng() * 2 - 1) * amount;
+  // Clearances ride the prop scale: giant furniture needs giant margins,
+  // dollhouse furniture keeps its dollhouse clearances.
+  const m = Math.max(0.2, propScale);
   const put = (
     kind: MotifKind,
     x: number,
@@ -1704,17 +1874,26 @@ function furnishInterior(
     rotY: number,
     scale = 1,
   ) => {
+    let cx = Math.min(Math.max(x, -width / 2 + m), width / 2 - m);
+    const cz = Math.min(Math.max(z, 1.2 * m), extent - 1.2 * m);
+    if (plan.id === "l-shape" && cz > plan.stepZ) {
+      // Beyond the step only the kept half exists.
+      cx =
+        plan.lSide > 0
+          ? Math.min(Math.max(cx, m), width / 2 - m)
+          : Math.min(Math.max(cx, -width / 2 + m), -m);
+    }
     out.push({
       kind,
-      x: Math.min(Math.max(x, -width / 2 + 1), width / 2 - 1),
-      y: terrainHeight(recipe, x, z),
-      z: Math.min(Math.max(z, 1.2), extent - 1.2),
+      x: cx,
+      y: terrainHeight(scaled, cx, cz),
+      z: cz,
       rotY,
       scale,
     });
   };
 
-  switch (recipe.archetype) {
+  switch (scaled.archetype) {
     case "hotel-room": {
       const side = rng() < 0.5 ? 1 : -1;
       const bedX = -width / 4 + jitter(0.5);
@@ -1825,21 +2004,35 @@ function furnishInterior(
 }
 
 /** Internal structure on big plans: a partition wall with a door gap, or
- *  a column grid — seeded, never blocking the entrance corridor. */
+ *  a column grid — seeded, never blocking the entrance corridor, and kept
+ *  inside the plan's footprint (an l-shape's abandoned quadrant never
+ *  grows structure: partitions stop short of the step, column points
+ *  outside the kept leg are dropped). */
 type Structure =
   | { kind: "none" }
   | { kind: "partition"; z: number; gapX: number }
   | { kind: "columns"; points: { x: number; z: number }[] };
 
-function buildStructure(rng: () => number, recipe: SpaceRecipe): Structure {
-  const { extent, width } = dims(recipe);
+function buildStructure(
+  rng: () => number,
+  scaled: SpaceRecipe,
+  plan: RoomPlan,
+): Structure {
+  const { extent, width } = dims(scaled);
   if (extent < STRUCTURE_MIN_EXTENT) return { kind: "none" };
   const roll = rng();
   if (roll < 0.45) return { kind: "none" };
   if (roll < 0.75) {
+    let z = extent * (0.42 + rng() * 0.16);
+    if (plan.id === "l-shape") {
+      // A partition spans the full width, so it only exists in the
+      // full-width near zone — never across the abandoned quadrant.
+      z = Math.min(z, plan.stepZ - 2);
+    }
+    if (z < extent * 0.25) return { kind: "none" };
     return {
       kind: "partition",
-      z: extent * (0.42 + rng() * 0.16),
+      z,
       gapX: (rng() * 2 - 1) * (width / 2 - 2.4),
     };
   }
@@ -1847,12 +2040,14 @@ function buildStructure(rng: () => number, recipe: SpaceRecipe): Structure {
   const points: { x: number; z: number }[] = [];
   for (let i = 0; i < n; i++) {
     for (let j = 0; j < n; j++) {
-      points.push({
-        x: -width / 4 + (i * width) / (2 * (n - 1) || 1),
-        z: extent * 0.3 + (j * extent * 0.5) / (n - 1 || 1),
-      });
+      const x = -width / 4 + (i * width) / (2 * (n - 1) || 1);
+      const z = extent * 0.3 + (j * extent * 0.5) / (n - 1 || 1);
+      if (planContains(plan, x, z, 1)) {
+        points.push({ x, z });
+      }
     }
   }
+  if (points.length < 4) return { kind: "none" };
   return { kind: "columns", points };
 }
 
@@ -1918,6 +2113,8 @@ function Ducks({ ducks }: { ducks: DuckSeed[] }) {
         ref={bodyRef}
         args={[undefined, undefined, count]}
         frustumCulled={false}
+        castShadow
+        receiveShadow
       >
         <sphereGeometry args={[0.26, 9, 7]} />
         <meshStandardMaterial color="#ffd23f" roughness={0.9} flatShading />
@@ -1926,6 +2123,8 @@ function Ducks({ ducks }: { ducks: DuckSeed[] }) {
         ref={headRef}
         args={[undefined, undefined, count]}
         frustumCulled={false}
+        castShadow
+        receiveShadow
       >
         <sphereGeometry args={[0.15, 8, 6]} />
         <meshStandardMaterial color="#ffd23f" roughness={0.9} flatShading />
@@ -1934,6 +2133,8 @@ function Ducks({ ducks }: { ducks: DuckSeed[] }) {
         ref={beakRef}
         args={[undefined, undefined, count]}
         frustumCulled={false}
+        castShadow
+        receiveShadow
       >
         <coneGeometry args={[0.06, 0.14, 6]} />
         <meshStandardMaterial color="#f08a24" roughness={0.9} flatShading />
@@ -2080,7 +2281,9 @@ function PetAnimals({ kind, pets }: { kind: "cat" | "dog"; pets: Pet[] }) {
           }}
           scale={pet.scale}
         >
-          <PetGeometry kind={kind} color={pet.color} />
+          <Shadowed>
+            <PetGeometry kind={kind} color={pet.color} />
+          </Shadowed>
         </group>
       ))}
     </>
@@ -2088,7 +2291,9 @@ function PetAnimals({ kind, pets }: { kind: "cat" | "dog"; pets: Pet[] }) {
 }
 
 /** One balloon bunch: balloons on strings anchored to a gift box — floats
- *  gently (intentionally airborne; everything else in the room stays put). */
+ *  gently (intentionally airborne; everything else in the room stays put).
+ *  `data` is authored at human scale; `scale` (the room's creature scale)
+ *  sizes the visuals so a colossal room gets grand but readable bunches. */
 interface BalloonData {
   x: number;
   z: number;
@@ -2096,81 +2301,95 @@ interface BalloonData {
   balloons: { dx: number; dz: number; y: number; r: number; color: string }[];
 }
 
-function BalloonBunch({ data }: { data: BalloonData }) {
+function BalloonBunch({ data, scale }: { data: BalloonData; scale: number }) {
   const floatRef = useRef<THREE.Group>(null);
   useFrame(({ clock }) => {
     const g = floatRef.current;
     if (!g) return;
     const t = clock.elapsedTime;
-    g.position.y = Math.sin(t * 0.35 + data.phase) * 0.25;
+    g.position.y = Math.sin(t * 0.35 + data.phase) * 0.25 * scale;
     g.rotation.y = Math.sin(t * 0.12 + data.phase) * 0.2;
   });
   return (
-    <group position={[data.x, GROUND_Y, data.z]}>
-      <group ref={floatRef}>
-        {data.balloons.map((b, i) => (
-          <group key={i}>
-            <mesh position={[b.dx, b.y, b.dz]}>
-              <sphereGeometry args={[b.r, 10, 8]} />
-              <meshStandardMaterial color={b.color} roughness={0.6} flatShading />
-            </mesh>
-            <mesh position={[b.dx * 0.5, b.y / 2, b.dz * 0.5]}>
-              <cylinderGeometry args={[0.008, 0.008, b.y, 4]} />
-              <meshStandardMaterial color="#d8d4cc" roughness={1} flatShading />
-            </mesh>
-          </group>
-        ))}
+    <Shadowed>
+      <group position={[data.x, GROUND_Y, data.z]}>
+        <group ref={floatRef}>
+          {data.balloons.map((b, i) => (
+            <group key={i}>
+              <mesh position={[b.dx * scale, b.y * scale, b.dz * scale]}>
+                <sphereGeometry args={[b.r * scale, 10, 8]} />
+                <meshStandardMaterial color={b.color} roughness={0.6} flatShading />
+              </mesh>
+              <mesh position={[(b.dx * scale) / 2, (b.y * scale) / 2, (b.dz * scale) / 2]}>
+                <cylinderGeometry args={[0.008 * scale, 0.008 * scale, b.y * scale, 4]} />
+                <meshStandardMaterial color="#d8d4cc" roughness={1} flatShading />
+              </mesh>
+            </group>
+          ))}
+        </group>
+        {/* The anchor: a gift box the strings are tied to. */}
+        <group scale={scale}>
+          <mesh position={[0, 0.28, 0]}>
+            <boxGeometry args={[0.55, 0.55, 0.55]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.58, 0]}>
+            <boxGeometry args={[0.6, 0.1, 0.6]} />
+            <meshStandardMaterial color="#e0643c" roughness={1} flatShading />
+          </mesh>
+        </group>
       </group>
-      {/* The anchor: a gift box the strings are tied to. */}
-      <mesh position={[0, 0.28, 0]}>
-        <boxGeometry args={[0.55, 0.55, 0.55]} />
-        <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
-      </mesh>
-      <mesh position={[0, 0.58, 0]}>
-        <boxGeometry args={[0.6, 0.1, 0.6]} />
-        <meshStandardMaterial color="#e0643c" roughness={1} flatShading />
-      </mesh>
-    </group>
+    </Shadowed>
   );
 }
 
-/** Wonder-room animal data, all from the "animals" seed stream. */
+/** Wonder-room animal data, all from the "animals" seed stream. Creatures
+ *  scale by the room's creature scale (S^0.5): they are characters whose
+ *  readability matters more than their role as a scale cue — a colossal
+ *  room gets noticeably-large ducks, not building-sized ones. Pet orbits
+ *  are capped at PET_NEAR_RADIUS_MAX so animals stay near the door (where
+ *  the player is) instead of wandering a colossal room's far reach. */
 function buildAnimals(
   rng: () => number,
   recipe: SpaceRecipe,
+  scaled: SpaceRecipe,
   water: WaterRect | null,
+  plan: RoomPlan,
+  creatureScale: number,
 ): {
   ducks: DuckSeed[];
   pets: { kind: "cat" | "dog"; pets: Pet[] };
   balloons: BalloonData[];
 } {
-  const { extent, width } = dims(recipe);
+  const { extent, width } = dims(scaled);
   const ducks: DuckSeed[] = [];
   const pets: Pet[] = [];
   const balloons: BalloonData[] = [];
-  const petCount = PET_COUNT[extent] ?? 4;
+  // Counts are authored per UNscaled tier, like every other population.
+  const baseExtent = recipe.size.extent;
+  const petCount = PET_COUNT[baseExtent] ?? 4;
 
-  if (recipe.archetype === "ducks" && water) {
-    const count = DUCK_COUNT[extent] ?? 30;
+  if (scaled.archetype === "ducks" && water) {
+    const count = DUCK_COUNT[baseExtent] ?? 30;
     for (let i = 0; i < count; i++) {
       ducks.push({
         x: water.cx + (rng() * 2 - 1) * Math.max(0.3, water.halfX - 0.8),
         z: water.cz + (rng() * 2 - 1) * Math.max(0.3, water.halfZ - 0.8),
         phase: rng() * Math.PI * 2,
-        scale: 0.8 + rng() * 0.45,
+        scale: (0.8 + rng() * 0.45) * creatureScale,
         spin: (rng() - 0.5) * 0.4,
         heading: rng() * Math.PI * 2,
       });
     }
   }
 
-  if (recipe.archetype === "cats" || recipe.archetype === "dogs") {
+  if (scaled.archetype === "cats" || scaled.archetype === "dogs") {
     const colors =
-      PET_COLORS[recipe.archetype === "cats" ? "cat" : "dog"];
-    // Waypoints concentrate around the doorway circle (radius extent·0.3)
-    // so an animal crosses the player's view soon after entering; a third
-    // of them roam wider to keep the room alive.
-    const nearR = extent * 0.3;
+      PET_COLORS[scaled.archetype === "cats" ? "cat" : "dog"];
+    // Waypoints concentrate around the doorway circle (radius extent·0.3,
+    // capped for colossal rooms) so an animal crosses the player's view
+    // soon after entering; a third of them roam wider to keep the room alive.
+    const nearR = Math.min(extent * 0.3, PET_NEAR_RADIUS_MAX);
     for (let i = 0; i < petCount; i++) {
       const waypoints: [number, number][] = [];
       const n = 4 + Math.floor(rng() * 2);
@@ -2192,15 +2411,15 @@ function buildAnimals(
       pets.push({
         waypoints,
         speed: 1.0 + rng() * 0.6,
-        scale: 0.85 + rng() * 0.3,
+        scale: (0.85 + rng() * 0.3) * creatureScale,
         color: colors[Math.floor(rng() * colors.length)],
         phase: rng() * Math.PI * 2,
       });
     }
   }
 
-  if (recipe.archetype === "balloons") {
-    const bunches = BALLOON_BUNCHES[extent] ?? 8;
+  if (scaled.archetype === "balloons") {
+    const bunches = BALLOON_BUNCHES[baseExtent] ?? 8;
     for (let b = 0; b < bunches; b++) {
       const balloonCount = 3 + Math.floor(rng() * 5);
       const list: BalloonData["balloons"] = [];
@@ -2215,16 +2434,22 @@ function buildAnimals(
           color: BALLOON_COLORS[Math.floor(rng() * BALLOON_COLORS.length)],
         });
       }
-      // Spread bunches across the whole room; the door corridor and the
-      // wall margin stay clear (the gift-box anchor sits on the floor).
+      // Spread bunches across the whole room; the door corridor, the plan
+      // footprint, and the wall margin stay clear (the gift-box anchor sits
+      // on the floor).
       let bx = 0;
       let bz = extent * 0.4;
       for (let tries = 0; tries < 24; tries++) {
         bx = (rng() * 2 - 1) * (width / 2 - 2);
         bz = extent * (0.12 + rng() * 0.78);
-        if (!(Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH)) break;
+        if (Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH) continue;
+        if (!planContains(plan, bx, bz, 1)) continue;
+        break;
       }
-      if (Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH) {
+      if (
+        (Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH) ||
+        !planContains(plan, bx, bz, 1)
+      ) {
         bz = PROP_DOOR_DEPTH + 1 + rng() * 2;
       }
       balloons.push({
@@ -2239,7 +2464,7 @@ function buildAnimals(
   return {
     ducks,
     pets: {
-      kind: recipe.archetype === "dogs" ? "dog" : "cat",
+      kind: scaled.archetype === "dogs" ? "dog" : "cat",
       pets,
     },
     balloons,
@@ -2315,52 +2540,48 @@ function SpaceDoorway({
       {[-1, 1].map((side) => (
         <mesh
           key={side}
-          position={[side * fillerCenter, PORTAL_HEIGHT / 2, WALL_THICKNESS / 2]}
+          position={[side * fillerCenter, PORTAL_HEIGHT / 2, ROOM_WALL_THICKNESS / 2]}
+          castShadow
+          receiveShadow
         >
-          <boxGeometry args={[fillerWidth, PORTAL_HEIGHT, WALL_THICKNESS]} />
-          <meshStandardMaterial
-            color={wallColor}
-            roughness={1}
-            flatShading
-            transparent
-            opacity={WALL_OPACITY}
-          />
+          <boxGeometry args={[fillerWidth, PORTAL_HEIGHT, ROOM_WALL_THICKNESS]} />
+          <meshStandardMaterial color={wallColor} roughness={1} flatShading />
         </mesh>
       ))}
       {/* Lintel above the slab, up to portal height. */}
       <mesh
-        position={[0, (PORTAL_HEIGHT + DOOR_HEIGHT) / 2, WALL_THICKNESS / 2]}
+        position={[0, (PORTAL_HEIGHT + DOOR_HEIGHT) / 2, ROOM_WALL_THICKNESS / 2]}
+        castShadow
+        receiveShadow
       >
         <boxGeometry
-          args={[DOOR_WIDTH, PORTAL_HEIGHT - DOOR_HEIGHT, WALL_THICKNESS]}
+          args={[DOOR_WIDTH, PORTAL_HEIGHT - DOOR_HEIGHT, ROOM_WALL_THICKNESS]}
         />
-        <meshStandardMaterial
-          color={wallColor}
-          roughness={1}
-          flatShading
-          transparent
-          opacity={WALL_OPACITY}
-        />
+        <meshStandardMaterial color={wallColor} roughness={1} flatShading />
       </mesh>
       {/* Trim frame, proud of the wall face into the space (+z local). */}
       {[-1, 1].map((side) => (
         <mesh
           key={side}
-          position={[side * (DOOR_WIDTH / 2 + 0.05), DOOR_HEIGHT / 2 + 0.05, WALL_THICKNESS + 0.06]}
+          position={[side * (DOOR_WIDTH / 2 + 0.05), DOOR_HEIGHT / 2 + 0.05, ROOM_WALL_THICKNESS + 0.06]}
+          castShadow
         >
           <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
           <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
         </mesh>
       ))}
-      <mesh position={[0, DOOR_HEIGHT + 0.11, WALL_THICKNESS + 0.06]}>
+      <mesh
+        position={[0, DOOR_HEIGHT + 0.11, ROOM_WALL_THICKNESS + 0.06]}
+        castShadow
+      >
         <boxGeometry args={[DOOR_WIDTH + 0.2, 0.12, 0.24]} />
         <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {doorVisible && (
         <>
           {/* The hinged slab — the way back out, swinging on its jamb. */}
-          <group ref={hingeRef} position={[hingeX, 0, WALL_THICKNESS / 2]}>
-            <mesh position={[-hingeX, DOOR_HEIGHT / 2, 0]}>
+          <group ref={hingeRef} position={[hingeX, 0, ROOM_WALL_THICKNESS / 2]}>
+            <mesh position={[-hingeX, DOOR_HEIGHT / 2, 0]} castShadow receiveShadow>
               <boxGeometry args={[DOOR_WIDTH - 0.04, DOOR_HEIGHT - 0.04, 0.05]} />
               {/* Backlit slab: a whisper of the doorway glow on the wood so
                   the closed door never reads as a black hole from inside. */}
@@ -2372,7 +2593,7 @@ function SpaceDoorway({
                 flatShading
               />
             </mesh>
-            <mesh position={[knobX, DOOR_HEIGHT / 2, 0.05]}>
+            <mesh position={[knobX, DOOR_HEIGHT / 2, 0.05]} castShadow>
               <boxGeometry args={[0.05, 0.16, 0.05]} />
               <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
             </mesh>
@@ -2395,7 +2616,7 @@ function SpaceDoorway({
           {[-1, 1].map((side) => (
             <mesh
               key={`seam${side}`}
-              position={[side * (DOOR_WIDTH / 2 - 0.02), DOOR_HEIGHT / 2, WALL_THICKNESS + 0.05]}
+              position={[side * (DOOR_WIDTH / 2 - 0.02), DOOR_HEIGHT / 2, ROOM_WALL_THICKNESS + 0.05]}
             >
               <boxGeometry args={[0.05, DOOR_HEIGHT, 0.04]} />
               <meshStandardMaterial
@@ -2407,7 +2628,7 @@ function SpaceDoorway({
               />
             </mesh>
           ))}
-          <mesh position={[0, DOOR_HEIGHT - 0.02, WALL_THICKNESS + 0.05]}>
+          <mesh position={[0, DOOR_HEIGHT - 0.02, ROOM_WALL_THICKNESS + 0.05]}>
             <boxGeometry args={[DOOR_WIDTH, 0.05, 0.04]} />
             <meshStandardMaterial
               color="#000000"
@@ -2418,7 +2639,7 @@ function SpaceDoorway({
             />
           </mesh>
           {/* Faint additive halo around the opening, facing into the space. */}
-          <mesh position={[0, DOOR_HEIGHT / 2, WALL_THICKNESS + 0.2]}>
+          <mesh position={[0, DOOR_HEIGHT / 2, ROOM_WALL_THICKNESS + 0.2]}>
             <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
             <meshBasicMaterial
               color={accent}
@@ -2463,9 +2684,41 @@ export function SpaceScene({
   onFadedOut: () => void;
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
-  const { extent } = recipe.size;
-  const width = recipe.width;
   const dir = door.z > 0 ? 1 : -1;
+
+  // ROOM LANGUAGE (v0.11 §3): scale notation, plan silhouette, and staging
+  // are pure functions of the slice id (lib/game/room-plan.ts). Scaling is
+  // applied at CONSTRUCTION time: `scaledRecipe` carries the factor in its
+  // plan dims, so terrain, water, and the movement clamps all live in one
+  // (scaled) coordinate system. The doorway is never scaled (axiom A4).
+  const { recipe: scaledRecipe, scale } = useMemo(
+    () => scaledRecipeFor(recipe),
+    [recipe],
+  );
+  const scaleFactor = scale.factor;
+  const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
+  const creatureScale = Math.pow(scaleFactor, CREATURE_SCALE_EXP);
+  const wallHeight = scaledWallHeight(scaleFactor);
+  const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+  const { extent } = scaledRecipe.size;
+  const width = scaledRecipe.width;
+  const plan = useMemo(
+    () =>
+      roomPlanFor(
+        recipe.sliceId,
+        width,
+        extent,
+        COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+      ),
+    [recipe, width, extent, scaleFactor],
+  );
+  const comp = useMemo(
+    () => composeRoom(recipe.sliceId, plan, scaleFactor),
+    [recipe, plan, scaleFactor],
+  );
+  // Scatter clearances ride the prop scale: giant props need giant margins,
+  // dollhouse props keep their dollhouse clearances.
+  const scatterEdge = wallThick + WALL_CLEARANCE * propScale;
 
   // Crossfade machinery: capture every material once (the tree is static
   // per recipe), then scale opacity each frame toward the fade target.
@@ -2507,7 +2760,7 @@ export function SpaceScene({
       1,
     );
     fadeTRef.current = next;
-    const k = next * next * (3 - 2 * next);
+    const k = smoothstep(0, 1, next);
     for (const entry of mats) {
       entry.mat.transparent = true;
       entry.mat.opacity = entry.base * k;
@@ -2540,30 +2793,70 @@ export function SpaceScene({
     GAME_DEBUG.matsFaded = faded;
   });
 
-  const waterRect = useMemo(() => waterRectFor(recipe), [recipe]);
+  const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
 
   const trees = useMemo(
-    () => scatter(recipe, spec.treeDensity, TREE_DIVISOR, TREE_MIN, waterRect),
-    [recipe, spec, waterRect],
+    () =>
+      scatter(
+        recipe,
+        scaledRecipe,
+        spec.treeDensity,
+        TREE_DIVISOR,
+        TREE_MIN,
+        waterRect,
+        plan,
+        comp,
+        scatterEdge,
+        propScale,
+        0,
+      ),
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale],
   );
   const rocks = useMemo(
-    () => scatter(recipe, spec.rockDensity, ROCK_DIVISOR, ROCK_MIN, waterRect),
-    [recipe, spec, waterRect],
+    () =>
+      scatter(
+        recipe,
+        scaledRecipe,
+        spec.rockDensity,
+        ROCK_DIVISOR,
+        ROCK_MIN,
+        waterRect,
+        plan,
+        comp,
+        scatterEdge,
+        propScale,
+        0x9e3779b9, // stream salt: rocks never share the trees' sequence
+      ),
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale],
   );
 
   // Motif layer: one dedicated "props" seed stream. Ripples draw first,
-  // then motif props, in a fixed order, so the whole layer is deterministic
-  // per recipe. Hybrids mix their biome's props with hotel furniture.
+  // then the hero and motif props, in a fixed order, so the whole layer is
+  // deterministic per recipe. Hybrids mix their biome's props with hotel
+  // furniture.
   const motif = useMemo(() => {
     const rng = createRng(deriveSubSeed(WORLD_SEED, recipe.sliceId, "props"));
-    const ripples = waterRect ? scatterRipples(rng, waterRect) : [];
+    const ripples = waterRect ? scatterRipples(rng, waterRect, propScale) : [];
     const base = MOTIF_KINDS[recipe.archetype];
     const kinds =
       recipe.worldClass === "hybrid"
         ? [...base, ...HYBRID_FURNITURE]
         : base;
-    return { ripples, props: scatterMotifs(rng, recipe, kinds, waterRect) };
-  }, [recipe, waterRect]);
+    return {
+      ripples,
+      props: scatterMotifs(
+        rng,
+        recipe,
+        scaledRecipe,
+        kinds,
+        waterRect,
+        plan,
+        comp,
+        scatterEdge,
+        propScale,
+      ),
+    };
+  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale]);
 
   // Interiors AND wonder rooms are dressed by seeded layout (furniture for
   // interiors; oversized rugs for the animal/balloon dioramas).
@@ -2577,24 +2870,25 @@ export function SpaceScene({
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "furniture"),
     );
-    return furnishInterior(rng, recipe, waterRect);
-  }, [recipe, waterRect]);
+    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale);
+  }, [recipe, scaledRecipe, waterRect, plan, propScale]);
 
-  // Internal structure (L/XL only): partition or column grid.
+  // Internal structure (L/XL only, on the scaled tier): partition or
+  // column grid.
   const structure = useMemo(() => {
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "structure"),
     );
-    return buildStructure(rng, recipe);
-  }, [recipe]);
+    return buildStructure(rng, scaledRecipe, plan);
+  }, [recipe, scaledRecipe, plan]);
 
   // Wonder-room animals: ducks / cats+dogs / balloons from one stream.
   const animals = useMemo(() => {
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "animals"),
     );
-    return buildAnimals(rng, recipe, waterRect);
-  }, [recipe, waterRect]);
+    return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale);
+  }, [recipe, scaledRecipe, waterRect, plan, creatureScale]);
 
   // Water tint: the raw accent reads as floor paint on some palettes
   // (dusk/warm are orange). Bias hard toward a bright blue-green so water
@@ -2610,12 +2904,23 @@ export function SpaceScene({
     () => waterColor.clone().lerp(new THREE.Color("#ffffff"), 0.55),
     [waterColor],
   );
+  // Shallow rim tint for the depth gradient: ankle-deep water over tile
+  // reads as the deep tint brightened toward clear; the shader eases
+  // rim → deep across WATER_DEPTH_RAMP_METERS.
+  const waterShallowColor = useMemo(
+    () => waterColor.clone().lerp(new THREE.Color("#ffffff"), 0.65),
+    [waterColor],
+  );
 
   // Grounding skirt: a dark rectangular apron around the plan (hole cut for
-  // the plan itself), darkened ~38% from the ground color.
+  // the plan itself), darkened ~38% from the ground color. The overhang
+  // rides the room scale (a colossal room needs a colossal apron) but never
+  // drops below SKIRT_OVERHANG_MIN — a miniature room still grounds its
+  // diorama in the mist.
   const skirtGeometry = useMemo(() => {
-    const sizeX = width + SKIRT_OVERHANG * 2;
-    const sizeZ = extent + SKIRT_OVERHANG * 2;
+    const overhang = Math.max(SKIRT_OVERHANG_MIN, SKIRT_OVERHANG * scaleFactor);
+    const sizeX = width + overhang * 2;
+    const sizeZ = extent + overhang * 2;
     const halfW = width / 2;
     const halfE = extent / 2;
     const shape = new THREE.Shape();
@@ -2632,7 +2937,7 @@ export function SpaceScene({
     hole.closePath();
     shape.holes.push(hole);
     return new THREE.ShapeGeometry(shape);
-  }, [width, extent]);
+  }, [width, extent, scaleFactor]);
   useEffect(() => () => skirtGeometry.dispose(), [skirtGeometry]);
   const skirtColor = useMemo(
     () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.62),
@@ -2652,42 +2957,107 @@ export function SpaceScene({
     [recipe],
   );
 
-  // Perimeter walls (universal — every space is an enclosed room): two side
-  // walls spanning the z depth, the far wall, and the entrance-edge wall
-  // split in two around a 2.4m doorway gap. Segments overlap the corners by
-  // WALL_THICKNESS so no seam shows between them.
-  const walls = useMemo(() => {
+  // Perimeter walls from the room plan: rect rooms get the legacy
+  // five-segment enclosure; l-shape rooms narrow past a seeded step (two
+  // near sides, a step wall, and the kept leg's own three sides); colonnade
+  // rooms open both sides into column bays. Every plan keeps the entrance
+  // edge as two segments around the 2.4m doorway gap at human thickness —
+  // the door handoff is structurally untouchable. Heights ride the wall
+  // scale (S^0.5, clamped) so colossal rooms stay readable from the fixed
+  // camera. Segments overlap the corners so no seam shows between them.
+  const walls = useMemo(
+    () => wallSegmentsFor(plan, wallThick),
+    [plan, wallThick],
+  );
+
+  // Dollhouse cutaway: entrance segments always keep full height (the door
+  // handoff depends on them); of the rest, the segments whose outward face
+  // looks toward the fixed camera are drawn at sill height — opaque, but
+  // low enough that the interior reads over them.
+  const wallHeights = useMemo(
+    () =>
+      walls.map((wall) =>
+        wall.entrance || !wallFacesCamera(plan, wall, dir)
+          ? wallHeight
+          : Math.min(wallHeight, WALL_SILL_HEIGHT),
+      ),
+    [walls, plan, dir, wallHeight],
+  );
+
+  /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
+   * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
+   * AND bowl sample the shared tile maps with one texture cell per physical
+   * 0.3m tile (repeat = span / TILE_SPAN_METERS — see tuning/room.ts).
+   * Perimeter walls: white tile for the pool rooms (the §2 空泳池 worked
+   * example), board-formed concrete everywhere else. All materials keep the
+   * palette colors as their average (the factory divides out each map's
+   * albedo mean — A5 monochrome discipline); maps add the roughness/normal/
+   * grain variation the PBR hard requirement demands. Materials are cheap
+   * per-room instances (uniforms only) disposed on unmount; the textures
+   * they sample are shared app-lifetime singletons. */
+  const tiledGround = spec.ground === "sunken";
+  const tiledWalls =
+    recipe.archetype === "pool" || recipe.archetype === "pool-hall";
+  const surfaceKind = tiledWalls ? ("tile" as const) : ("concrete" as const);
+  const wallNormalScale = tiledWalls ? TILE_NORMAL_SCALE : CONCRETE_NORMAL_SCALE;
+  const groundMaterial = useMemo(() => {
+    if (!tiledGround) return null;
+    return createSurfaceMaterial({
+      kind: "tile",
+      color: recipe.palette.ground,
+      spanX: width,
+      spanY: extent,
+      flatShading: true,
+      normalScale: TILE_NORMAL_SCALE,
+    });
+  }, [tiledGround, recipe, width, extent]);
+  useEffect(() => () => groundMaterial?.dispose(), [groundMaterial]);
+  const wallMaterials = useMemo(
+    () =>
+      walls.map((wall, i) =>
+        createSurfaceMaterial({
+          kind: surfaceKind,
+          color: wallColor,
+          // A wall box's long axis is its span (u on the box's main faces);
+          // v is the drawn height (sill height on the cutaway sides).
+          spanX: Math.max(wall.sizeX, wall.sizeZ),
+          spanY: wallHeights[i],
+          flatShading: true,
+          normalScale: wallNormalScale,
+        }),
+      ),
+    [walls, wallHeights, wallColor, surfaceKind, wallNormalScale],
+  );
+  useEffect(
+    () => () => {
+      for (const m of wallMaterials) m.dispose();
+    },
+    [wallMaterials],
+  );
+  const partitionMaterials = useMemo(() => {
+    if (structure.kind !== "partition") return null;
     const halfW = width / 2;
-    const y = WALL_HEIGHT / 2;
-    const entranceLength = halfW - DOOR_GAP_HALF + WALL_THICKNESS;
-    const entranceCenter = DOOR_GAP_HALF + entranceLength / 2;
-    const segments: {
-      position: [number, number, number];
-      size: [number, number, number];
-    }[] = [
-      {
-        position: [-(halfW - WALL_THICKNESS / 2), y, extent / 2],
-        size: [WALL_THICKNESS, WALL_HEIGHT, extent],
-      },
-      {
-        position: [halfW - WALL_THICKNESS / 2, y, extent / 2],
-        size: [WALL_THICKNESS, WALL_HEIGHT, extent],
-      },
-      {
-        position: [-entranceCenter, y, WALL_THICKNESS / 2],
-        size: [entranceLength, WALL_HEIGHT, WALL_THICKNESS],
-      },
-      {
-        position: [entranceCenter, y, WALL_THICKNESS / 2],
-        size: [entranceLength, WALL_HEIGHT, WALL_THICKNESS],
-      },
-      {
-        position: [0, y, extent - WALL_THICKNESS / 2],
-        size: [width + WALL_THICKNESS * 2, WALL_HEIGHT, WALL_THICKNESS],
-      },
-    ];
-    return segments;
-  }, [width, extent]);
+    return ([-1, 1] as const).map((side) => {
+      const segLength =
+        side < 0
+          ? structure.gapX - DOOR_GAP_HALF + halfW
+          : halfW - structure.gapX - DOOR_GAP_HALF;
+      return createSurfaceMaterial({
+        kind: surfaceKind,
+        color: wallColor,
+        spanX: Math.max(segLength, 0.1),
+        spanY: wallHeight,
+        flatShading: true,
+        normalScale: wallNormalScale,
+      });
+    });
+  }, [structure, width, wallColor, wallHeight, surfaceKind, wallNormalScale]);
+  useEffect(
+    () => () => {
+      if (partitionMaterials) for (const m of partitionMaterials) m.dispose();
+    },
+    [partitionMaterials],
+  );
 
   // The ground mesh (not the geometry) is rotated -π/2 about X, which maps
   // geometry (x, y, z) onto mesh-local (x, z, -y); the mesh then sits at
@@ -2707,11 +3077,11 @@ export function SpaceScene({
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i);
       const lz = extent / 2 - pos.getY(i);
-      pos.setZ(i, terrainHeight(recipe, lx, lz) - GROUND_Y);
+      pos.setZ(i, terrainHeight(scaledRecipe, lx, lz) - GROUND_Y);
     }
     pos.needsUpdate = true;
     geometry.computeVertexNormals();
-  }, [recipe, extent]);
+  }, [scaledRecipe, extent]);
 
   const snowing = recipe.archetype === "snowfield";
   const fireflies =
@@ -2725,6 +3095,13 @@ export function SpaceScene({
   const capColor = useMemo(
     () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.45),
     [recipe],
+  );
+  // Terrain tessellation rides the prop scale (S^0.75) so colossal rolling
+  // ground doesn't alias against its human-scale noise, capped so the
+  // one-time vertex cost stays bounded.
+  const groundSegments = Math.min(
+    GROUND_SEGMENTS_MAX,
+    Math.max(GROUND_SEGMENTS, Math.round(GROUND_SEGMENTS * propScale)),
   );
 
   return (
@@ -2742,11 +3119,12 @@ export function SpaceScene({
         geometry={skirtGeometry}
         position={[0, SKIRT_Y, extent / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
       >
         <meshStandardMaterial color={skirtColor} roughness={1} />
       </mesh>
 
-      {/* Ground: width × extent plane, 48×48 segments, displaced by the
+      {/* Ground: width × extent plane (scaled dims), displaced by the
           archetype heightfield. Spans local z ∈ [0, extent] with the
           doorway edge at z = 0, flush against the corridor wall, and is
           lifted GROUND_Y above the corridor floor so the seam can never
@@ -2755,15 +3133,19 @@ export function SpaceScene({
         ref={groundRef}
         position={[0, GROUND_Y, extent / 2]}
         rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+        {...(groundMaterial ? { material: groundMaterial } : {})}
       >
         <planeGeometry
-          args={[width, extent, GROUND_SEGMENTS, GROUND_SEGMENTS]}
+          args={[width, extent, groundSegments, groundSegments]}
         />
-        <meshStandardMaterial
-          color={recipe.palette.ground}
-          roughness={1}
-          flatShading
-        />
+        {groundMaterial ? null : (
+          <meshStandardMaterial
+            color={recipe.palette.ground}
+            roughness={1}
+            flatShading
+          />
+        )}
       </mesh>
 
       {/* Parquet dressing: low-contrast checkerboard so big interior/
@@ -2783,6 +3165,7 @@ export function SpaceScene({
             halfZ={waterRect.halfZ}
             cz={waterRect.cz}
             color={waterColor}
+            shallowColor={waterShallowColor}
           />
           <WaterRipples patches={motif.ripples} color={rippleColor} />
         </>
@@ -2802,35 +3185,42 @@ export function SpaceScene({
           rotation={[0, p.rotY, 0]}
           scale={p.scale}
         >
-          <MotifProp
-            kind={p.kind}
-            accent={recipe.palette.accent}
-            canopyColor={canopyColor}
-          />
+          <Shadowed>
+            <MotifProp
+              kind={p.kind}
+              accent={recipe.palette.accent}
+              canopyColor={canopyColor}
+            />
+          </Shadowed>
         </group>
       ))}
 
-      {/* Interior furnishing (hotel-room / pool-hall / library / ballroom). */}
+      {/* Interior furnishing (hotel-room / pool-hall / library / ballroom).
+          Sizes ride the room's prop scale — a colossal hotel room gets a
+          colossal bed; the door stays human. */}
       {furniture.map((p, i) => (
         <group
           key={`f${i}`}
           position={[p.x, p.y, p.z]}
           rotation={[0, p.rotY, 0]}
-          scale={p.scale}
+          scale={p.scale * propScale}
         >
-          <MotifProp
-            kind={p.kind}
-            accent={recipe.palette.accent}
-            canopyColor={canopyColor}
-          />
+          <Shadowed>
+            <MotifProp
+              kind={p.kind}
+              accent={recipe.palette.accent}
+              canopyColor={canopyColor}
+            />
+          </Shadowed>
         </group>
       ))}
 
       {/* Internal structure (L/XL): partition wall with a door gap, or a
-          column grid. Same translucent wall color. */}
+          column grid. Same opaque wall dressing as the perimeter; heights
+          ride the room's wall scale. */}
       {structure.kind === "partition" && (
         <>
-          {([-1, 1] as const).map((side) => {
+          {([-1, 1] as const).map((side, si) => {
             const halfW = width / 2;
             const gapHalf = DOOR_GAP_HALF;
             const segLength =
@@ -2844,24 +3234,31 @@ export function SpaceScene({
             return (
               <group key={side}>
                 <mesh
-                  position={[segCenter, WALL_HEIGHT / 2, structure.z]}
+                  position={[segCenter, wallHeight / 2, structure.z]}
+                  castShadow
+                  receiveShadow
+                  {...(partitionMaterials
+                    ? { material: partitionMaterials[si] }
+                    : {})}
                 >
                   <boxGeometry
-                    args={[segLength, WALL_HEIGHT, WALL_THICKNESS]}
+                    args={[segLength, wallHeight, wallThick]}
                   />
-                  <meshStandardMaterial
-                    color={wallColor}
-                    roughness={1}
-                    flatShading
-                    transparent
-                    opacity={WALL_OPACITY}
-                  />
+                  {partitionMaterials ? null : (
+                    <meshStandardMaterial
+                      color={wallColor}
+                      roughness={1}
+                      flatShading
+                    />
+                  )}
                 </mesh>
                 <mesh
-                  position={[segCenter, WALL_HEIGHT - 0.05, structure.z]}
+                  position={[segCenter, wallHeight - 0.05, structure.z]}
+                  castShadow
+                  receiveShadow
                 >
                   <boxGeometry
-                    args={[segLength + 0.06, 0.1, WALL_THICKNESS + 0.06]}
+                    args={[segLength + 0.06, 0.1, wallThick + 0.06]}
                   />
                   <meshStandardMaterial
                     color={capColor}
@@ -2876,12 +3273,18 @@ export function SpaceScene({
       )}
       {structure.kind === "columns" &&
         structure.points.map((pt, i) => (
-          <group key={i} position={[pt.x, GROUND_Y, pt.z]}>
-            <MotifProp
-              kind="column"
-              accent={recipe.palette.accent}
-              canopyColor={canopyColor}
-            />
+          <group
+            key={i}
+            position={[pt.x, GROUND_Y, pt.z]}
+            scale={wallHeight / WALL_HEIGHT}
+          >
+            <Shadowed>
+              <MotifProp
+                kind="column"
+                accent={recipe.palette.accent}
+                canopyColor={canopyColor}
+              />
+            </Shadowed>
           </group>
         ))}
 
@@ -2892,6 +3295,7 @@ export function SpaceScene({
           width={width}
           extent={extent}
           seed={recipe.lightSeed}
+          sizeScale={creatureScale}
         />
       )}
       {fireflies && (
@@ -2900,6 +3304,7 @@ export function SpaceScene({
           width={width}
           extent={extent}
           seed={recipe.lightSeed}
+          sizeScale={creatureScale}
         />
       )}
 
@@ -2915,32 +3320,60 @@ export function SpaceScene({
         />
       )}
       {animals.balloons.map((b, i) => (
-        <BalloonBunch key={`b${i}`} data={b} />
+        <BalloonBunch key={`b${i}`} data={b} scale={creatureScale} />
       ))}
 
-      {/* Perimeter walls: every space is an enclosed room. 4m-high segments
-          enclose the plan on all four edges — slight transparency lets the
-          camera hint through the far wall. */}
-      {walls.map((wall, i) => (
-        <group key={i}>
-          <mesh position={wall.position}>
-            <boxGeometry args={wall.size} />
-            <meshStandardMaterial
-              color={wallColor}
-              roughness={1}
-              flatShading
-              transparent
-              opacity={WALL_OPACITY}
+      {/* Perimeter walls from the room plan — the silhouette is no longer
+          always a rectangle: l-shape rooms step down to one leg, colonnade
+          rooms open their sides into column bays. The entrance pair is
+          always human-thickness around the 2.4m doorway gap. Fully opaque;
+          the camera-facing segments are cut to sill height (wallHeights)
+          so the interior reads over them — the dollhouse cutaway. */}
+      {walls.map((wall, i) => {
+        const h = wallHeights[i];
+        return (
+          <group key={i}>
+            <mesh
+              position={[wall.x, h / 2, wall.z]}
+              castShadow
+              receiveShadow
+              material={wallMaterials[i]}
+            >
+              <boxGeometry args={[wall.sizeX, h, wall.sizeZ]} />
+            </mesh>
+            {/* Dark cap rail along the wall top: rides the drawn height, so
+                a cut sill keeps its rail and the room boundary stays
+                readable from inside. */}
+            <mesh
+              position={[wall.x, h - 0.05, wall.z]}
+              castShadow
+              receiveShadow
+            >
+              <boxGeometry
+                args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]}
+              />
+              <meshStandardMaterial color={capColor} roughness={1} flatShading />
+            </mesh>
+          </group>
+        );
+      })}
+
+      {/* Colonnade bays: open column rows where the side walls would be —
+          the room spills onto the mist skirt between the columns. Column
+          height matches the walls (wall scale, not prop scale). */}
+      {plan.columns.map((c, i) => (
+        <group
+          key={`bay${i}`}
+          position={[c.x, GROUND_Y, c.z]}
+          scale={wallHeight / WALL_HEIGHT}
+        >
+          <Shadowed>
+            <MotifProp
+              kind="column"
+              accent={recipe.palette.accent}
+              canopyColor={canopyColor}
             />
-          </mesh>
-          {/* Dark cap rail along the wall top: keeps the room boundary
-              readable from inside despite the translucency. */}
-          <mesh position={[wall.position[0], WALL_HEIGHT - 0.05, wall.position[2]]}>
-            <boxGeometry
-              args={[wall.size[0] + 0.06, 0.1, wall.size[2] + 0.06]}
-            />
-            <meshStandardMaterial color={capColor} roughness={1} flatShading />
-          </mesh>
+          </Shadowed>
         </group>
       ))}
 

@@ -1,0 +1,292 @@
+/**
+ * Tests for the room-language module (v0.11 §3): scale notation, plan
+ * variation, and composition. The contract under test: everything is a
+ * deterministic pure function of (worldSeed, sliceId, dims) — same memory,
+ * same room, on any machine (axiom A6) — and the structural invariants the
+ * renderer relies on always hold: the entrance doorway is never narrowed,
+ * scale factors stay inside the §3 notation ranges, the hero sits in the
+ * far third, and the walk path/clusters respect each other.
+ */
+import { describe, it, expect } from "vitest";
+import {
+  composeRoom,
+  distToPath,
+  planContains,
+  roomPlanFor,
+  scaleNotationFor,
+  scaledRecipeFor,
+  scaledWallHeight,
+  wallSegmentsFor,
+} from "@/lib/game/room-plan";
+import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import {
+  DOOR_GAP_HALF,
+  PLAN_NONRECT_MIN_EXTENT,
+  PORTAL_HEIGHT,
+  ROOM_WALL_THICKNESS,
+  SCALE_MINIATURE_MIN,
+  SCALE_MINIATURE_SPAN,
+  WALL_HEIGHT_MAX,
+  WALL_HEIGHT_MIN,
+} from "@/lib/game/tuning/room";
+
+/** 400 fixed slice ids — deterministic input, not Math.random(). */
+const SLICE_IDS = Array.from({ length: 400 }, (_, i) => `2026-09-${i}`);
+
+const COLONNADE_BAY = 4;
+
+describe("scaleNotationFor", () => {
+  it("is deterministic per sliceId", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 30)) {
+      expect(scaleNotationFor(sliceId)).toEqual(scaleNotationFor(sliceId));
+    }
+  });
+
+  it("keeps every factor inside the §3 notation ranges", () => {
+    for (const sliceId of SLICE_IDS) {
+      const s = scaleNotationFor(sliceId);
+      if (s.id === "normal") {
+        expect(s.factor).toBe(1);
+      } else if (s.id === "colossal") {
+        expect(s.factor).toBeGreaterThanOrEqual(8);
+        expect(s.factor).toBeLessThanOrEqual(20);
+      } else {
+        expect(s.factor).toBeGreaterThanOrEqual(SCALE_MINIATURE_MIN);
+        expect(s.factor).toBeLessThanOrEqual(SCALE_MINIATURE_MIN + SCALE_MINIATURE_SPAN);
+      }
+    }
+  });
+
+  it("keeps most rooms normal, with both distortions present", () => {
+    const counts = { normal: 0, colossal: 0, miniature: 0 };
+    for (const sliceId of SLICE_IDS) counts[scaleNotationFor(sliceId).id]++;
+    // Drawn 78/12/10; 400 samples land far inside these bands.
+    expect(counts.normal).toBeGreaterThan(400 * 0.65);
+    expect(counts.colossal).toBeGreaterThan(400 * 0.04);
+    expect(counts.miniature).toBeGreaterThan(400 * 0.03);
+  });
+});
+
+describe("scaledRecipeFor", () => {
+  it("is the identity view for normal rooms", () => {
+    const recipe = compileSpaceRecipe(SLICE_IDS[0]);
+    const { recipe: view, scale } = scaledRecipeFor(recipe);
+    if (scale.factor === 1) {
+      expect(view).toBe(recipe);
+    }
+  });
+
+  it("multiplies only the plan dims by the factor", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 40)) {
+      const recipe = compileSpaceRecipe(sliceId);
+      const { recipe: view, scale } = scaledRecipeFor(recipe);
+      expect(view.width).toBeCloseTo(recipe.width * scale.factor, 10);
+      expect(view.size.extent).toBeCloseTo(recipe.size.extent * scale.factor, 10);
+      expect(view.size.id).toBe(recipe.size.id);
+      expect(view.sliceId).toBe(recipe.sliceId);
+      expect(view.palette).toEqual(recipe.palette);
+      expect(view.layoutSeed).toBe(recipe.layoutSeed);
+    }
+  });
+});
+
+describe("scaledWallHeight", () => {
+  it("stays human at factor 1 and clamped at the extremes", () => {
+    expect(scaledWallHeight(1)).toBeCloseTo(4, 5);
+    expect(scaledWallHeight(20)).toBeLessThanOrEqual(WALL_HEIGHT_MAX);
+    expect(scaledWallHeight(SCALE_MINIATURE_MIN)).toBeGreaterThanOrEqual(WALL_HEIGHT_MIN);
+  });
+
+  it("leaves every normal and colossal value on the S^0.5 curve", () => {
+    // The portal floor (3.5m) only binds below factor ~0.77 — nothing the
+    // normal or colossal draws can reach.
+    expect(scaledWallHeight(1)).toBeCloseTo(4 * Math.sqrt(1), 5);
+    expect(scaledWallHeight(8)).toBeCloseTo(4 * Math.sqrt(8), 5);
+    expect(scaledWallHeight(20)).toBe(WALL_HEIGHT_MAX);
+  });
+
+  it("never lets miniature walls drop below the unscaled doorway", () => {
+    // The door never scales (A4 human-scale anchor), so the wall must
+    // always contain the 3.2m portal — the invariant the old 0.05 floor
+    // silently violated. Sweep the whole miniature range, endpoints
+    // included, plus every factor the scale stream actually draws.
+    for (let i = 0; i <= 100; i++) {
+      const factor = SCALE_MINIATURE_MIN + (i / 100) * SCALE_MINIATURE_SPAN;
+      expect(scaledWallHeight(factor)).toBeGreaterThanOrEqual(PORTAL_HEIGHT);
+    }
+    for (const sliceId of SLICE_IDS) {
+      const s = scaleNotationFor(sliceId);
+      if (s.id === "miniature") {
+        expect(scaledWallHeight(s.factor)).toBeGreaterThanOrEqual(PORTAL_HEIGHT);
+      }
+    }
+  });
+});
+
+describe("roomPlanFor", () => {
+  it("is deterministic per (sliceId, dims)", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 20)) {
+      const a = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      expect(roomPlanFor(sliceId, 48, 64, COLONNADE_BAY)).toEqual(a);
+    }
+  });
+
+  it("never gives small tiers a non-rectangular plan (anti-cramp)", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 16, 16, COLONNADE_BAY);
+      expect(plan.id).toBe("rect");
+      const small = roomPlanFor(sliceId, 21, PLAN_NONRECT_MIN_EXTENT - 1, COLONNADE_BAY);
+      expect(small.id).toBe("rect");
+    }
+  });
+
+  it("produces all three plan kinds across a slice sample", () => {
+    const kinds = new Set<string>();
+    for (const sliceId of SLICE_IDS) {
+      kinds.add(roomPlanFor(sliceId, 48, 64, COLONNADE_BAY).id);
+    }
+    expect(kinds).toContain("rect");
+    expect(kinds).toContain("l-shape");
+    expect(kinds).toContain("colonnade");
+  });
+
+  it("keeps the doorway inside the walkable footprint on every plan", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      // The door axis just inside the threshold must always be walkable.
+      expect(planContains(plan, 0, 1, 0.1)).toBe(true);
+      expect(planContains(plan, DOOR_GAP_HALF * 0.5, 0.5, 0.1)).toBe(true);
+    }
+  });
+
+  it("l-shape abandons exactly one far quadrant", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      if (plan.id !== "l-shape") continue;
+      expect(plan.stepZ).toBeGreaterThan(64 * 0.4);
+      expect(plan.stepZ).toBeLessThan(64 * 0.65);
+      const keptX = plan.lSide * 12;
+      const lostX = -plan.lSide * 12;
+      // Before the step both halves exist; beyond it only the kept half.
+      expect(planContains(plan, keptX, plan.stepZ - 2, 0.5)).toBe(true);
+      expect(planContains(plan, lostX, plan.stepZ - 2, 0.5)).toBe(true);
+      expect(planContains(plan, keptX, plan.stepZ + 6, 0.5)).toBe(true);
+      expect(planContains(plan, lostX, plan.stepZ + 6, 0.5)).toBe(false);
+      // The kept leg is never a cramped corridor: at least a quarter of the
+      // bounding width on the room side of the inner wall.
+      expect(plan.width / 2).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  it("colonnade fills the bounding rect and rows columns on both sides", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      if (plan.id !== "colonnade") continue;
+      expect(planContains(plan, -20, 40, 0.5)).toBe(true);
+      expect(plan.columns.length).toBeGreaterThanOrEqual(4);
+      expect(plan.columns.length % 2).toBe(0);
+      for (const c of plan.columns) {
+        expect(Math.abs(Math.abs(c.x) - 24)).toBeLessThan(1e-9);
+        expect(c.z).toBeGreaterThan(0);
+        expect(c.z).toBeLessThan(64);
+      }
+    }
+  });
+});
+
+describe("wallSegmentsFor", () => {
+  const plans = SLICE_IDS.map((id) => roomPlanFor(id, 48, 64, COLONNADE_BAY));
+
+  it("always leaves the 2.4m doorway gap in the entrance edge", () => {
+    for (const plan of plans) {
+      const segs = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
+      const entrance = segs.filter((s) => s.entrance);
+      expect(entrance).toHaveLength(2);
+      // No entrance segment may intrude into |x| < DOOR_GAP_HALF.
+      for (const s of entrance) {
+        expect(Math.abs(s.x) - s.sizeX / 2).toBeGreaterThanOrEqual(DOOR_GAP_HALF - 1e-9);
+        expect(s.z).toBeLessThan(1);
+      }
+    }
+  });
+
+  it("rect reproduces the legacy five-segment enclosure", () => {
+    const rect = roomPlanFor("rect-probe", 48, 64, COLONNADE_BAY);
+    expect(rect.id).toBe("rect");
+    const segs = wallSegmentsFor(rect, ROOM_WALL_THICKNESS);
+    // 2 entrance + 2 sides + 1 far.
+    expect(segs).toHaveLength(5);
+    const far = segs.find((s) => !s.entrance && s.z > 60);
+    expect(far).toBeDefined();
+  });
+
+  it("keeps every segment inside the bounding box (plus corner overlap)", () => {
+    for (const plan of plans) {
+      const segs = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
+      for (const s of segs) {
+        expect(Math.abs(s.x) - s.sizeX / 2).toBeLessThanOrEqual(plan.width / 2 + 1e-9);
+        expect(s.z - s.sizeZ / 2).toBeGreaterThanOrEqual(-1e-9);
+        expect(s.z + s.sizeZ / 2).toBeLessThanOrEqual(plan.extent + 1e-9);
+      }
+    }
+  });
+
+  it("colonnade replaces side walls with open bays", () => {
+    for (const plan of plans) {
+      if (plan.id !== "colonnade") continue;
+      const segs = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
+      // Entrance pair + far wall only — no side segments at |x| ≈ halfW
+      // running the full depth.
+      const sides = segs.filter(
+        (s) => !s.entrance && s.sizeZ > plan.extent * 0.5,
+      );
+      expect(sides).toHaveLength(0);
+    }
+  });
+});
+
+describe("composeRoom", () => {
+  it("is deterministic per (sliceId, plan)", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 20)) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      expect(composeRoom(sliceId, plan, 1)).toEqual(composeRoom(sliceId, plan, 1));
+    }
+  });
+
+  it("puts the hero in the far third, inside the footprint", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      const comp = composeRoom(sliceId, plan, 1);
+      expect(comp.hero.z).toBeGreaterThanOrEqual(64 * 0.6);
+      expect(comp.hero.z).toBeLessThanOrEqual(64);
+      expect(planContains(plan, comp.hero.x, comp.hero.z, 0)).toBe(true);
+    }
+  });
+
+  it("starts the cleared path at the door and keeps clusters off it", () => {
+    for (const sliceId of SLICE_IDS) {
+      const plan = roomPlanFor(sliceId, 48, 64, COLONNADE_BAY);
+      const comp = composeRoom(sliceId, plan, 1);
+      // The path begins AT the door mouth.
+      expect(distToPath(comp, 0, 0)).toBeLessThan(1e-9);
+      // ...and the doorway strip stays within the cleared half-width.
+      expect(distToPath(comp, 0, 0.5)).toBeLessThanOrEqual(comp.pathHalf);
+      // The path ends at the hero.
+      expect(distToPath(comp, comp.hero.x, comp.hero.z)).toBeLessThan(1e-9);
+      expect(comp.clusters.length).toBeGreaterThanOrEqual(1);
+      for (const c of comp.clusters) {
+        expect(planContains(plan, c.x, c.z, ROOM_WALL_THICKNESS)).toBe(true);
+        expect(distToPath(comp, c.x, c.z)).toBeGreaterThanOrEqual(comp.pathHalf);
+        expect(Math.hypot(c.x - comp.hero.x, c.z - comp.hero.z)).toBeGreaterThanOrEqual(3);
+      }
+    }
+  });
+
+  it("widens the path for colossal rooms and narrows it for miniature", () => {
+    const wide = composeRoom("probe", roomPlanFor("probe", 384, 512, 11), 8);
+    const tiny = composeRoom("probe", roomPlanFor("probe", 3, 4, 1.4), 0.1);
+    const human = composeRoom("probe", roomPlanFor("probe", 48, 64, COLONNADE_BAY), 1);
+    expect(wide.pathHalf).toBeGreaterThan(human.pathHalf);
+    expect(tiny.pathHalf).toBeLessThan(human.pathHalf);
+  });
+});

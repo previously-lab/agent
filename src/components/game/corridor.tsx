@@ -17,7 +17,12 @@
  * THE HALL. The camera looks at the player from (−x, +y, +z), so the north
  * wall (z > 0) is the near wall and the south wall (z < 0) is the far
  * backdrop. Both walls run full height — the corridor reads as one tall
- * hall volume. No ceilings anywhere — open dollhouse.
+ * hall volume. No ceilings anywhere — open dollhouse: nothing spans the
+ * hall overhead, so the top-down camera reads straight down to the floor.
+ * Every wall also carries a
+ * cornice band at the top and a wainscot + chair-rail band at the bottom,
+ * both broken around door gaps, so the wall face no longer reads as one
+ * flat extrusion.
  *
  * WALLS WITH HOLES. A wall run is not one box: for each door the run is
  * split into solid segments plus a lintel box above the door gap, so the
@@ -33,9 +38,12 @@
  * CORRIDOR SCONCES. Every corridor chunk carries CHUNK_DOORS wall sconces
  * on the north (full-height) wall — one per door bay, centered between
  * door centers, so the rhythm is a sconce every 3 m alternating with the
- * doors. A sconce is a dark bracket box plus a warm emissive cone and a
- * fake additive light pool on the floor; the sconce itself is NOT a
- * light. Each chunk also gets exactly one real point light at its center
+ * doors. A sconce is a dark bracket box plus a warm emissive cone, a
+ * radial-gradient light pool on the floor and a soft gradient wash on the
+ * wall behind it — both textured additive quads (shared canvas textures),
+ * not the old bare circles at 0.07/0.15 opacity that read as nothing. The
+ * sconce itself is NOT a light, and the pools are static — calm
+ * incandescent pools, never flickering. Each chunk also gets exactly one real point light at its center
  * so walking stays continuously lit; with the treadmill window that is at
  * most 3 corridor lights + 2 lobby lamps = 5 point lights in the scene.
  * Sconce glow is a constant warm #ffd9a0 — it is architecture, not memory,
@@ -61,7 +69,19 @@
  *
  * THE VOID. The corridor stands in open void — a surrounding dark
  * building mass was tried and rejected (it read as a black shell), so
- * nothing here extends beyond the wall faces.
+ * nothing here extends beyond the wall faces. The treadmill ends are
+ * deliberate: each end-fade curtain dissolves into the void in front of a
+ * soft warm haze glow, so the corridor terminates in light, never in a
+ * black wall (see EndFade).
+ *
+ * MATERIALS. Every shared surface material carries a real physical finish
+ * (MATERIAL_FINISH — waxed-wood floor sheen, satin wainscot, matte
+ * plaster/fabric, darkened-metal trim) plus a seeded mottled roughnessMap
+ * (GRUNGE_*) so reflections vary subtly instead of reading as one uniform
+ * value. No per-material ambient hacks; the finishes are built to come
+ * alive under the scene-wide environment map and shadows. The grunge map
+ * and the sconce/end-glow gradient textures come from the shared procedural
+ * material library (src/lib/game/materials — grunge.ts / glow.ts).
  *
  * CORRIDOR DRESSING. The hall is dressed per chunk, all seeded:
  * a carpet runner with dark binding stripes down the floor's spine,
@@ -70,9 +90,11 @@
  * plants, bins) rejection-sampled clear of doors and art, and glowing
  * date plaques where the calendar day changes between bays. Paintings
  * and props derive from `corridor-chunk-<n>` sub-seeds, so they are
- * architecture: they never reshuffle as slices allocate. The carpet is
- * fixed geometry. The lobby prop layout is likewise seeded but the lobby
- * itself carries no corridor dressing.
+ * architecture: they never reshuffle as slices allocate. The carpet,
+ * cornice, and wainscot are fixed geometry. The lobby prop
+ * layout is likewise seeded; the lobby itself carries no corridor
+ * dressing but wears the seam portal posts that
+ * make it recognisable from far down the hall.
  *
  * SLICE SIGNAGE. Every door wears a plate with its slice's HHMM time
  * (`…-0746` → `0746`) just right of the frame, and each date boundary
@@ -103,8 +125,12 @@ import type {
   PointLight,
 } from "three";
 import {
+  createGrungeRoughnessMap,
+  sharedRadialGlowTexture,
+  sharedWallWashTexture,
+} from "@/lib/game/materials";
+import {
   CHUNK_DOORS,
-  CHUNK_LENGTH,
   CORRIDOR_WIDTH,
   DOOR_SPACING,
   LOBBY_LENGTH,
@@ -116,9 +142,59 @@ import {
   type DoorRef,
   type Side,
 } from "@/lib/game/hotel";
+import { smoothstep } from "@/lib/game/math";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
 import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
 import type { ArchetypeId } from "@/lib/game/space-types";
+import {
+  ART_PALETTE,
+  CHAIR_RAIL_DEPTH,
+  CHAIR_RAIL_HEIGHT,
+  CHUNK_RADIUS,
+  CORNICE_DEPTH,
+  CORNICE_HEIGHT,
+  CORRIDOR_WALL_THICKNESS,
+  DIM_LERP_RATE,
+  DIM_LERP_RATE_DESCEND,
+  DIM_MAX_DT,
+  END_GLOW_COLOR,
+  END_GLOW_HEIGHT,
+  END_GLOW_OFFSET,
+  END_GLOW_WIDTH,
+  FADE_ALPHA_FLOOR,
+  FADE_HEIGHT,
+  FADE_RAMP_Y0,
+  FADE_RAMP_Y1,
+  FADE_WIDTH,
+  GRUNGE_ROLES,
+  HIDE_DELAY_MS,
+  LAMP_COLOR,
+  LIGHT_LEVELS,
+  MATERIAL_FINISH,
+  PAINTING_H,
+  PAINTING_W,
+  PLATE_BG,
+  PLATE_INK,
+  PORTAL_POST_SIZE,
+  SCONCE_COLOR,
+  SCONCE_POOL_OFFSET,
+  SCONCE_POOL_RADIUS,
+  SCONCE_WASH_HEIGHT,
+  SCONCE_WASH_WIDTH,
+  THEME_COLORS,
+  THEME_LERP_RATE,
+  VOID_COLORS,
+  WAINSCOT_DEPTH,
+  WAINSCOT_HEIGHT,
+  type LightLevels,
+} from "@/lib/game/tuning/hotel";
+import {
+  DOOR_HEIGHT,
+  DOOR_OPEN_ANGLE,
+  DOOR_OPEN_DIST,
+  DOOR_SWING_RATE,
+  DOOR_WIDTH,
+} from "@/lib/game/tuning/room";
 
 /** A corridor door as the integrator supplies it. */
 export type CorridorDoor = {
@@ -127,53 +203,11 @@ export type CorridorDoor = {
   archetype?: ArchetypeId; // v1 fixture override
 };
 
-/** Door slab size — tall enough to hold its own on a 4.0 m hall wall. */
-const DOOR_WIDTH = 1.4;
-const DOOR_HEIGHT = 3.0;
-/** The slab swings open when the player comes within this distance of the
- *  door center — a push, never a pull: it always rotates away from them. */
-const DOOR_OPEN_DIST = 2.2;
-/** ~100° — wide enough to read "open", not so far it clips the wall. */
-const DOOR_OPEN_ANGLE = 1.75;
-const DOOR_SWING_RATE = 5;
-
 /** Both corridor walls run full height — the hall reads as one tall volume
  *  and door lintels sit flush inside a continuous wall face. (A low cutaway
  *  wall once existed for a camera on the south side; the camera moved to
  *  the north, and the floating lintels it left read as a cracked wall.) */
 const SOUTH_WALL_HEIGHT = WALL_HEIGHT;
-
-/** Wall thickness; walls are centered on z = ±CORRIDOR_WIDTH / 2. */
-const WALL_THICKNESS = 0.2;
-
-/**
- * Day/night — the corridor INTERIOR follows the app's Tailwind dark mode (the
- * integrator reads it via next-themes and passes `dark` down; the R3F
- * reconciler never sees that React context, so it arrives as a plain
- * prop). The void behind the hotel, though, is always black: the hotel
- * floats in darkness whatever the app theme, and a bright corridor
- * suspended in a black void is the liminal look. Every themed surface
- * color lives in THEME_COLORS; one shared material per role (see
- * HotelMaterials) is lerped between its day and night targets by a single
- * useFrame in Corridor, so a theme toggle eases over ~a second instead of
- * snapping. Exported: the integrator keeps the scene background/fog on
- * VOID_COLORS so the corridor's end-fade planes always match.
- */
-export const VOID_COLORS = { night: "#101219", day: "#101219" } as const;
-
-/** Surface palette per theme — warm neutrals, day lifted from the night set. */
-const THEME_COLORS = {
-  floor: { night: "#6b5d4f", day: "#bfae93" }, // wood; the runner below carries the carpet
-  wall: { night: "#8a7f70", day: "#d9d2c5" }, // greige → warm off-white
-  trim: { night: "#463f36", day: "#8f867a" }, // baseboards, frames, brackets
-  slab: { night: "#7b6d5c", day: "#cbbfa9" }, // door slabs
-  desk: { night: "#7a6a58", day: "#c4b49b" },
-  cushion: { night: "#9c8b76", day: "#ded4c3" },
-  pot: { night: "#5f5648", day: "#a79d8c" },
-  foliage: { night: "#7d8a66", day: "#9cae87" },
-  carpet: { night: "#54222b", day: "#9c626c" }, // corridor runner — deep wine → dusty rose
-  carpetEdge: { night: "#33141b", day: "#6e4249" }, // runner binding stripes
-} as const;
 
 type HotelRole = keyof typeof THEME_COLORS;
 
@@ -194,11 +228,6 @@ const VOID_TARGETS = {
   night: new Color(VOID_COLORS.night),
 };
 
-/** Corridor sconce glow — warm constant, architecture rather than memory. */
-const SCONCE_COLOR = "#ffd9a0";
-const LAMP_COLOR = "#ffb46b";
-
-const CHUNK_RADIUS = 1;
 const WALL_Z = CORRIDOR_WIDTH / 2;
 const FLOOR_THICKNESS = 0.2;
 
@@ -218,14 +247,23 @@ const FLOOR_THICKNESS = 0.2;
  */
 type HotelMaterials = Record<HotelRole, MeshStandardMaterial>;
 
-function createHotelMaterials(night: boolean): HotelMaterials {
-  const make = (role: HotelRole) =>
-    new MeshStandardMaterial({
+function createHotelMaterials(night: boolean): {
+  materials: HotelMaterials;
+  grungeMap: CanvasTexture;
+} {
+  const grungeMap = createGrungeRoughnessMap();
+  const make = (role: HotelRole) => {
+    const material = new MeshStandardMaterial({
       color: THEME_COLORS[role][night ? "night" : "day"],
-      roughness: 1,
-      metalness: 0,
+      roughness: MATERIAL_FINISH[role].roughness,
+      metalness: MATERIAL_FINISH[role].metalness,
     });
-  return {
+    if ((GRUNGE_ROLES as readonly string[]).includes(role)) {
+      material.roughnessMap = grungeMap;
+    }
+    return material;
+  };
+  const materials: HotelMaterials = {
     floor: make("floor"),
     wall: make("wall"),
     trim: make("trim"),
@@ -235,71 +273,21 @@ function createHotelMaterials(night: boolean): HotelMaterials {
     pot: make("pot"),
     carpet: make("carpet"),
     carpetEdge: make("carpetEdge"),
+    wainscot: make("wainscot"),
     // Icosahedron foliage keeps its faceted low-poly read.
     foliage: new MeshStandardMaterial({
       color: THEME_COLORS.foliage[night ? "night" : "day"],
-      roughness: 1,
-      metalness: 0,
+      roughness: MATERIAL_FINISH.foliage.roughness,
+      metalness: MATERIAL_FINISH.foliage.metalness,
       flatShading: true,
     }),
   };
+  return { materials, grungeMap };
 }
 
 /* ------------------------------------------------------------------ */
 /* Dimming — one LIGHT_LEVELS table + the useDimLerp hook              */
 /* ------------------------------------------------------------------ */
-
-/**
- * Full vs dimmed levels for every light and glow material in the scene.
- * Single source of truth: the JSX initial values read `.full` from here
- * and the dimming lerp targets `.dimmed`, so the two can never drift
- * apart. Dimmed emissive/opacity levels are ~30% of full (a ~70% cut);
- * real lights dim to the task-specified levels. Entries with a `day`
- * override use it instead of `full` while the app is in light mode
- * (sconce pools switch off — daylight needs no fake glow — and the
- * hemisphere opens up).
- */
-const LIGHT_LEVELS = {
-  hemisphere: { full: 0.55, dimmed: 0.04, day: 0.85 },
-  chunkLight: { full: 6, dimmed: 0.3 },
-  lobbyLamp: { full: 5, dimmed: 0.5 },
-  lampShade: { full: 1.4, dimmed: 0.42 },
-  sconceShade: { full: 1.2, dimmed: 0.36 },
-  sconcePoolOuter: { full: 0.07, dimmed: 0.021, day: 0 },
-  sconcePoolInner: { full: 0.15, dimmed: 0.045, day: 0 },
-  doorGlow: { full: 1.6, dimmed: 0.48 },
-  doorHalo: { full: 0.14, dimmed: 0.042 },
-  doorStrip: { full: 2.2, dimmed: 0.66 },
-  plaque: { full: 1, dimmed: 0.15 },
-} as const;
-
-interface LightLevels {
-  readonly full: number;
-  readonly dimmed: number;
-  readonly day?: number;
-}
-
-/**
- * Lerp rates for the dimming hook. Recovery (dimmed → full) keeps the
- * game canvas's atmosphere rate (game-canvas.tsx ATMOSPHERE_LERP_RATE,
- * 2.5/s) so the hotel returns gently; the descent toward dimmed runs
- * faster (6/s) because it ends in an unmount — by HIDE_DELAY_MS it is
- * ~95% dark, so removing the last ghost of geometry does not pop. Same
- * dt clamp as the canvas so a background tab never overshoots.
- */
-const DIM_LERP_RATE = 2.5;
-const DIM_LERP_RATE_DESCEND = 6;
-const DIM_MAX_DT = 0.05;
-/**
- * Delay between `dimmed` turning true and the hotel unmounting. Tuned
- * against DIM_LERP_RATE_DESCEND: 0.5 s ≈ three descent time constants.
- * Exported: the game canvas mirrors this delay so the space-side door
- * slab mounts exactly when the corridor's slab unmounts — never both.
- */
-export const HIDE_DELAY_MS = 500;
-
-/** Day/night color & level transitions ease at the atmosphere rate. */
-const THEME_LERP_RATE = 2.5;
 
 /**
  * Smoothly drive one live three.js value between its `levels`, following
@@ -409,6 +397,14 @@ function sconcePositions(xStart: number, xEnd: number): number[] {
   return xs;
 }
 
+/**
+ * Shared glow textures for the sconce floor pools, the sconce wall washes,
+ * and the end-of-world haze live in the material library
+ * (src/lib/game/materials/glow.ts): white falloff gradients painted once
+ * (the material color does the tinting), cached at module scope so every
+ * instance of each kind shares one texture and they are never disposed.
+ */
+
 /* ------------------------------------------------------------------ */
 /* Deterministic lobby layout (module scope: pure, computed once)      */
 /* ------------------------------------------------------------------ */
@@ -481,8 +477,8 @@ function WallBox({
   const length = x1 - x0;
   if (length <= 0) return null;
   return (
-    <mesh position={[(x0 + x1) / 2, height / 2, z]} material={mats.wall}>
-      <boxGeometry args={[length, height, WALL_THICKNESS]} />
+    <mesh position={[(x0 + x1) / 2, height / 2, z]} material={mats.wall} castShadow receiveShadow>
+      <boxGeometry args={[length, height, CORRIDOR_WALL_THICKNESS]} />
     </mesh>
   );
 }
@@ -508,18 +504,45 @@ function WallRun({
     xEnd,
     doors.map((d) => d.x),
   );
+  // Wainscot band + chair rail hug the inner wall face, broken around door
+  // gaps exactly like the wall itself; lintels span the gaps above.
+  const inward = -Math.sign(z); // toward the corridor interior
+  const wainscotZ = z + inward * (CORRIDOR_WALL_THICKNESS / 2 + WAINSCOT_DEPTH / 2 - 0.01);
+  const railZ = z + inward * (CORRIDOR_WALL_THICKNESS / 2 + CHAIR_RAIL_DEPTH / 2 - 0.01);
   return (
     <group>
-      {segments.map((s) => (
-        <WallBox key={`${s.x0}:${s.x1}`} x0={s.x0} x1={s.x1} height={height} z={z} mats={mats} />
-      ))}
+      {segments.map((s) => {
+        const length = s.x1 - s.x0;
+        const cx = (s.x0 + s.x1) / 2;
+        return (
+          <group key={`${s.x0}:${s.x1}`}>
+            <WallBox x0={s.x0} x1={s.x1} height={height} z={z} mats={mats} />
+            <mesh
+              position={[cx, WAINSCOT_HEIGHT / 2, wainscotZ]}
+              material={mats.wainscot}
+              receiveShadow
+            >
+              <boxGeometry args={[length, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
+            </mesh>
+            <mesh
+              position={[cx, WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2, railZ]}
+              material={mats.trim}
+              receiveShadow
+            >
+              <boxGeometry args={[length, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
+            </mesh>
+          </group>
+        );
+      })}
       {doors.map((d) => (
         <mesh
           key={`lintel-${d.index}-${d.side}`}
           position={[d.x, (WALL_HEIGHT + DOOR_HEIGHT) / 2, z]}
           material={mats.wall}
+          castShadow
+          receiveShadow
         >
-          <boxGeometry args={[DOOR_WIDTH, WALL_HEIGHT - DOOR_HEIGHT, WALL_THICKNESS]} />
+          <boxGeometry args={[DOOR_WIDTH, WALL_HEIGHT - DOOR_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
         </mesh>
       ))}
     </group>
@@ -551,9 +574,6 @@ function bayDate(sliceIds: readonly string[], i: number): string | null {
     sliceClock(sliceIds[2 * i + 1] ?? "");
   return clock ? clock.date : null;
 }
-
-const PLATE_BG = "#17130f";
-const PLATE_INK = "#ece2cc";
 
 /**
  * One small dark plaque with light monospace text — shared builder for
@@ -621,7 +641,7 @@ function DoorPlate({
   );
   if (!texture) return null;
   const inward = door.side === "north" ? -1 : 1;
-  const faceZ = door.z + inward * (WALL_THICKNESS / 2);
+  const faceZ = door.z + inward * (CORRIDOR_WALL_THICKNESS / 2);
   const facing = door.side === "north" ? Math.PI : 0;
   return (
     <group
@@ -738,25 +758,35 @@ function DoorAssembly({
       <mesh
         position={[door.x - DOOR_WIDTH / 2 - 0.05, DOOR_HEIGHT / 2 + 0.05, frameZ]}
         material={mats.trim}
+        castShadow
       >
         <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
       </mesh>
       <mesh
         position={[door.x + DOOR_WIDTH / 2 + 0.05, DOOR_HEIGHT / 2 + 0.05, frameZ]}
         material={mats.trim}
+        castShadow
       >
         <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
       </mesh>
-      <mesh position={[door.x, DOOR_HEIGHT + 0.11, frameZ]} material={mats.trim}>
+      <mesh position={[door.x, DOOR_HEIGHT + 0.11, frameZ]} material={mats.trim} castShadow>
         <boxGeometry args={[DOOR_WIDTH + 0.2, 0.12, 0.24]} />
       </mesh>
       {/* Hinged slab — a real door, opaque, swinging on its left jamb. */}
       <group ref={hingeRef} position={[door.x - DOOR_WIDTH / 2 + 0.02, 0, door.z]}>
-        <mesh position={[DOOR_WIDTH / 2 - 0.02, DOOR_HEIGHT / 2, 0]} material={mats.slab}>
+        <mesh
+          position={[DOOR_WIDTH / 2 - 0.02, DOOR_HEIGHT / 2, 0]}
+          material={mats.slab}
+          castShadow
+        >
           <boxGeometry args={[DOOR_WIDTH - 0.04, DOOR_HEIGHT - 0.04, 0.05]} />
         </mesh>
         {/* Handle: a small dark knob on the corridor face, free-end side. */}
-        <mesh position={[DOOR_WIDTH - 0.22, DOOR_HEIGHT / 2, inward * 0.05]} material={mats.trim}>
+        <mesh
+          position={[DOOR_WIDTH - 0.22, DOOR_HEIGHT / 2, inward * 0.05]}
+          material={mats.trim}
+          castShadow
+        >
           <boxGeometry args={[0.05, 0.16, 0.05]} />
         </mesh>
       </group>
@@ -807,8 +837,11 @@ function DoorAssembly({
 /**
  * One wall sconce on the north wall: a dark bracket box, a warm emissive
  * cone shade at ~2.55 m (below the 4.0 m wall top, above the paintings),
- * and a fake light pool on the floor below, faked by two concentric
- * additive circles so the falloff reads soft without any texture.
+ * a radial-gradient light pool on the floor below, and a soft gradient
+ * wash on the wall face behind the shade. Both glows are shared-texture
+ * additive quads — the painted gradient does the falloff, so the pool
+ * actually reads (the old pair of bare circles at 0.07/0.15 opacity did
+ * not). Everything is static: calm incandescent pools, never flickering.
  */
 function WallSconce({
   x,
@@ -821,13 +854,13 @@ function WallSconce({
   darkRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
 }) {
-  const faceZ = WALL_Z - WALL_THICKNESS / 2; // inner face of the north wall
+  const faceZ = WALL_Z - CORRIDOR_WALL_THICKNESS / 2; // inner face of the north wall
 
-  // Shade emissive + pool opacities follow the hotel-wide dimming; the
-  // pools additionally switch off in day mode (daylight needs no fake glow).
+  // Shade emissive + glow opacities follow the hotel-wide dimming; the
+  // glows additionally switch off in day mode (daylight needs no fake glow).
   const shadeMatRef = useRef<MeshStandardMaterial>(null);
-  const poolOuterMatRef = useRef<MeshBasicMaterial>(null);
-  const poolInnerMatRef = useRef<MeshBasicMaterial>(null);
+  const poolMatRef = useRef<MeshBasicMaterial>(null);
+  const washMatRef = useRef<MeshBasicMaterial>(null);
   useDimLerp(
     dimRef,
     LIGHT_LEVELS.sconceShade,
@@ -839,20 +872,20 @@ function WallSconce({
   );
   useDimLerp(
     dimRef,
-    LIGHT_LEVELS.sconcePoolOuter,
-    () => poolOuterMatRef.current?.opacity ?? null,
+    LIGHT_LEVELS.sconcePool,
+    () => poolMatRef.current?.opacity ?? null,
     (v) => {
-      const m = poolOuterMatRef.current;
+      const m = poolMatRef.current;
       if (m) m.opacity = v;
     },
     darkRef,
   );
   useDimLerp(
     dimRef,
-    LIGHT_LEVELS.sconcePoolInner,
-    () => poolInnerMatRef.current?.opacity ?? null,
+    LIGHT_LEVELS.sconceWash,
+    () => washMatRef.current?.opacity ?? null,
     (v) => {
-      const m = poolInnerMatRef.current;
+      const m = washMatRef.current;
       if (m) m.opacity = v;
     },
     darkRef,
@@ -877,25 +910,31 @@ function WallSconce({
           flatShading
         />
       </mesh>
-      {/* Fake light pool on the floor below (double circle = soft falloff). */}
-      <mesh position={[x, 0.012, 2.4]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[1.5, 24]} />
+      {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
+      <mesh
+        position={[x, 0.012, faceZ - SCONCE_POOL_OFFSET]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[SCONCE_POOL_RADIUS * 2, SCONCE_POOL_RADIUS * 2]} />
         <meshBasicMaterial
-          ref={poolOuterMatRef}
+          ref={poolMatRef}
+          map={sharedRadialGlowTexture()}
           color={SCONCE_COLOR}
           transparent
-          opacity={LIGHT_LEVELS.sconcePoolOuter.full}
+          opacity={LIGHT_LEVELS.sconcePool.full}
           blending={AdditiveBlending}
           depthWrite={false}
         />
       </mesh>
-      <mesh position={[x, 0.016, 2.4]} rotation={[-Math.PI / 2, 0, 0]}>
-        <circleGeometry args={[0.8, 20]} />
+      {/* Wall wash behind the shade: a vertical gradient dissolving down. */}
+      <mesh position={[x, SCONCE_WASH_HEIGHT / 2, faceZ - 0.02]} rotation={[0, Math.PI, 0]}>
+        <planeGeometry args={[SCONCE_WASH_WIDTH, SCONCE_WASH_HEIGHT]} />
         <meshBasicMaterial
-          ref={poolInnerMatRef}
+          ref={washMatRef}
+          map={sharedWallWashTexture()}
           color={SCONCE_COLOR}
           transparent
-          opacity={LIGHT_LEVELS.sconcePoolInner.full}
+          opacity={LIGHT_LEVELS.sconceWash.full}
           blending={AdditiveBlending}
           depthWrite={false}
         />
@@ -907,24 +946,6 @@ function WallSconce({
 /* ------------------------------------------------------------------ */
 /* Seeded corridor dressing — art, plants, bins, date plaques          */
 /* ------------------------------------------------------------------ */
-
-/**
- * Muted abstract-art palette for the corridor paintings. A fixed pool —
- * the art hangs in either theme; the lighting moves around it.
- */
-const ART_PALETTE = [
-  "#8a4a3a",
-  "#c8b48a",
-  "#5a6b7a",
-  "#7a8a5a",
-  "#a3748a",
-  "#4a4a58",
-  "#b0643f",
-  "#6d7f8c",
-] as const;
-
-const PAINTING_W = 1.0;
-const PAINTING_H = 1.3;
 
 interface PaintingSpec {
   side: Side;
@@ -988,7 +1009,7 @@ function WallPainting({ spec, mats }: { spec: PaintingSpec; mats: HotelMaterials
       position={[
         spec.x,
         2.2,
-        (WALL_Z - WALL_THICKNESS / 2 - 0.03) * (spec.side === "north" ? 1 : -1),
+        (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.03) * (spec.side === "north" ? 1 : -1),
       ]}
       rotation={[0, spec.side === "north" ? Math.PI : 0, 0]}
     >
@@ -1135,7 +1156,7 @@ function DatePlaqueSide({
   );
   return (
     <group
-      position={[x, 3.2, (WALL_Z - WALL_THICKNESS / 2 - 0.03) * (side === "north" ? 1 : -1)]}
+      position={[x, 3.2, (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.03) * (side === "north" ? 1 : -1)]}
       rotation={[0, side === "north" ? Math.PI : 0, 0]}
     >
       <mesh material={mats.trim}>
@@ -1149,9 +1170,10 @@ function DatePlaqueSide({
   );
 }
 
-/** One treadmill chunk: floor slab, carpet runner, both wall runs,
- *  baseboards, doors, sconces, seeded dressing (paintings, props, date
- *  plaques), and its single real point light. */
+/** One treadmill chunk: floor slab, carpet runner, both wall runs with
+ *  wainscot, baseboards, cornice bands, doors,
+ *  sconces, seeded dressing (paintings, props, date plaques), and its
+ *  single real point light. */
 function CorridorChunk({
   index,
   sliceIds,
@@ -1218,18 +1240,34 @@ function CorridorChunk({
       <mesh
         position={[centerX, -FLOOR_THICKNESS / 2, 0]}
         material={mats.floor}
+        receiveShadow
       >
         <boxGeometry args={[length, FLOOR_THICKNESS, CORRIDOR_WIDTH]} />
       </mesh>
       {/* Carpet runner down the corridor's spine — one stretch per chunk,
           bound by two dark stripes, hovering a hair over the floor. */}
-      <mesh position={[centerX, 0.005, 0]} rotation={[-Math.PI / 2, 0, 0]} material={mats.carpet}>
+      <mesh
+        position={[centerX, 0.005, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        material={mats.carpet}
+        receiveShadow
+      >
         <planeGeometry args={[length, 2.2]} />
       </mesh>
-      <mesh position={[centerX, 0.009, 1.03]} rotation={[-Math.PI / 2, 0, 0]} material={mats.carpetEdge}>
+      <mesh
+        position={[centerX, 0.009, 1.03]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        material={mats.carpetEdge}
+        receiveShadow
+      >
         <planeGeometry args={[length, 0.14]} />
       </mesh>
-      <mesh position={[centerX, 0.009, -1.03]} rotation={[-Math.PI / 2, 0, 0]} material={mats.carpetEdge}>
+      <mesh
+        position={[centerX, 0.009, -1.03]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        material={mats.carpetEdge}
+        receiveShadow
+      >
         <planeGeometry args={[length, 0.14]} />
       </mesh>
       <WallRun
@@ -1250,16 +1288,39 @@ function CorridorChunk({
       />
       {/* Dark baseboards along the inner wall faces. */}
       <mesh
-        position={[centerX, 0.06, WALL_Z - WALL_THICKNESS / 2 - 0.02]}
+        position={[centerX, 0.06, WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.02]}
         material={mats.trim}
       >
         <boxGeometry args={[length, 0.12, 0.04]} />
       </mesh>
       <mesh
-        position={[centerX, 0.06, -WALL_Z + WALL_THICKNESS / 2 + 0.02]}
+        position={[centerX, 0.06, -WALL_Z + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
         material={mats.trim}
       >
         <boxGeometry args={[length, 0.12, 0.04]} />
+      </mesh>
+      {/* Cornice bands crowning both walls, slightly proud of the faces. */}
+      <mesh
+        position={[
+          centerX,
+          WALL_HEIGHT - CORNICE_HEIGHT / 2,
+          WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02,
+        ]}
+        material={mats.trim}
+        receiveShadow
+      >
+        <boxGeometry args={[length, CORNICE_HEIGHT, CORNICE_DEPTH]} />
+      </mesh>
+      <mesh
+        position={[
+          centerX,
+          WALL_HEIGHT - CORNICE_HEIGHT / 2,
+          -WALL_Z + CORRIDOR_WALL_THICKNESS / 2 + CORNICE_DEPTH / 2 - 0.02,
+        ]}
+        material={mats.trim}
+        receiveShadow
+      >
+        <boxGeometry args={[length, CORNICE_HEIGHT, CORNICE_DEPTH]} />
       </mesh>
       {doors.map((door) => (
         <DoorAssembly
@@ -1316,10 +1377,10 @@ function FrontDesk({
 }) {
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
-      <mesh position={[0, 0.525, 0]} material={mats.desk}>
+      <mesh position={[0, 0.525, 0]} material={mats.desk} castShadow>
         <boxGeometry args={[2.0, 1.05, 0.7]} />
       </mesh>
-      <mesh position={[0, 1.1, 0]} material={mats.trim}>
+      <mesh position={[0, 1.1, 0]} material={mats.trim} castShadow receiveShadow>
         <boxGeometry args={[2.2, 0.08, 0.9]} />
       </mesh>
     </group>
@@ -1338,13 +1399,13 @@ function Armchair({
   return (
     <group position={position} rotation={[0, rotationY, 0]}>
       {/* Base + cushion; backrest on local -x, so the chair faces +x. */}
-      <mesh position={[0, 0.24, 0]} material={mats.desk}>
+      <mesh position={[0, 0.24, 0]} material={mats.desk} castShadow>
         <boxGeometry args={[0.72, 0.32, 0.72]} />
       </mesh>
-      <mesh position={[0.03, 0.46, 0]} material={mats.cushion}>
+      <mesh position={[0.03, 0.46, 0]} material={mats.cushion} castShadow receiveShadow>
         <boxGeometry args={[0.64, 0.14, 0.62]} />
       </mesh>
-      <mesh position={[-0.29, 0.68, 0]} material={mats.desk}>
+      <mesh position={[-0.29, 0.68, 0]} material={mats.desk} castShadow>
         <boxGeometry args={[0.14, 0.56, 0.72]} />
       </mesh>
     </group>
@@ -1362,10 +1423,10 @@ function PottedPlant({
 }) {
   return (
     <group position={position} scale={scale}>
-      <mesh position={[0, 0.18, 0]} material={mats.pot}>
+      <mesh position={[0, 0.18, 0]} material={mats.pot} castShadow>
         <cylinderGeometry args={[0.24, 0.19, 0.36, 10]} />
       </mesh>
-      <mesh position={[0, 0.82, 0]} material={mats.foliage}>
+      <mesh position={[0, 0.82, 0]} material={mats.foliage} castShadow>
         <icosahedronGeometry args={[0.4, 0]} />
       </mesh>
     </group>
@@ -1382,10 +1443,10 @@ function TrashBin({
 }) {
   return (
     <group position={position}>
-      <mesh position={[0, 0.28, 0]} material={mats.trim}>
+      <mesh position={[0, 0.28, 0]} material={mats.trim} castShadow>
         <cylinderGeometry args={[0.2, 0.16, 0.56, 10]} />
       </mesh>
-      <mesh position={[0, 0.59, 0]} material={mats.trim}>
+      <mesh position={[0, 0.59, 0]} material={mats.trim} castShadow>
         <cylinderGeometry args={[0.23, 0.2, 0.07, 10]} />
       </mesh>
     </group>
@@ -1425,14 +1486,14 @@ function FloorLamp({
   );
   return (
     <group position={position}>
-      <mesh position={[0, 0.02, 0]} material={mats.trim}>
+      <mesh position={[0, 0.02, 0]} material={mats.trim} castShadow>
         <cylinderGeometry args={[0.16, 0.18, 0.04, 10]} />
       </mesh>
-      <mesh position={[0, 0.78, 0]} material={mats.trim}>
+      <mesh position={[0, 0.78, 0]} material={mats.trim} castShadow>
         <cylinderGeometry args={[0.03, 0.03, 1.52, 8]} />
       </mesh>
       {/* Shade glows — reads as the bulb. */}
-      <mesh position={[0, 1.58, 0]}>
+      <mesh position={[0, 1.58, 0]} castShadow>
         <cylinderGeometry args={[0.16, 0.22, 0.3, 10]} />
         <meshStandardMaterial
           ref={shadeMatRef}
@@ -1467,32 +1528,121 @@ function Lobby({
   const centerX = LOBBY_LENGTH / 2;
   return (
     <group>
-      <mesh position={[centerX, -FLOOR_THICKNESS / 2, 0]} material={mats.floor}>
+      <mesh
+        position={[centerX, -FLOOR_THICKNESS / 2, 0]}
+        material={mats.floor}
+        receiveShadow
+      >
         <boxGeometry args={[LOBBY_LENGTH, FLOOR_THICKNESS, CORRIDOR_WIDTH]} />
       </mesh>
       {/* North wall, full height; south wall, cutaway height; east end, full. */}
-      <mesh position={[centerX, WALL_HEIGHT / 2, WALL_Z]} material={mats.wall}>
-        <boxGeometry args={[LOBBY_LENGTH, WALL_HEIGHT, WALL_THICKNESS]} />
+      <mesh
+        position={[centerX, WALL_HEIGHT / 2, WALL_Z]}
+        material={mats.wall}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[LOBBY_LENGTH, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
       </mesh>
-      <mesh position={[centerX, SOUTH_WALL_HEIGHT / 2, -WALL_Z]} material={mats.wall}>
-        <boxGeometry args={[LOBBY_LENGTH, SOUTH_WALL_HEIGHT, WALL_THICKNESS]} />
+      <mesh
+        position={[centerX, SOUTH_WALL_HEIGHT / 2, -WALL_Z]}
+        material={mats.wall}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[LOBBY_LENGTH, SOUTH_WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
       </mesh>
-      <mesh position={[LOBBY_LENGTH, WALL_HEIGHT / 2, 0]} material={mats.wall}>
-        <boxGeometry args={[WALL_THICKNESS, WALL_HEIGHT, CORRIDOR_WIDTH + WALL_THICKNESS]} />
+      <mesh
+        position={[LOBBY_LENGTH, WALL_HEIGHT / 2, 0]}
+        material={mats.wall}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, CORRIDOR_WIDTH + CORRIDOR_WALL_THICKNESS]} />
       </mesh>
       {/* Baseboards. */}
       <mesh
-        position={[centerX, 0.06, WALL_Z - WALL_THICKNESS / 2 - 0.02]}
+        position={[centerX, 0.06, WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.02]}
         material={mats.trim}
       >
         <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
       </mesh>
       <mesh
-        position={[centerX, 0.06, -WALL_Z + WALL_THICKNESS / 2 + 0.02]}
+        position={[centerX, 0.06, -WALL_Z + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
         material={mats.trim}
       >
         <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
       </mesh>
+      {/* Wainscot + chair rail on the two long walls (no doors to break for). */}
+      {[1, -1].map((s) => (
+        <group key={`wainscot-${s}`}>
+          <mesh
+            position={[
+              centerX,
+              WAINSCOT_HEIGHT / 2,
+              s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01),
+            ]}
+            material={mats.wainscot}
+            receiveShadow
+          >
+            <boxGeometry args={[LOBBY_LENGTH, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
+          </mesh>
+          <mesh
+            position={[
+              centerX,
+              WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2,
+              s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01),
+            ]}
+            material={mats.trim}
+            receiveShadow
+          >
+            <boxGeometry args={[LOBBY_LENGTH, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
+          </mesh>
+        </group>
+      ))}
+      {/* Cornices on all three walls. */}
+      {[1, -1].map((s) => (
+        <mesh
+          key={`cornice-${s}`}
+          position={[
+            centerX,
+            WALL_HEIGHT - CORNICE_HEIGHT / 2,
+            s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02),
+          ]}
+          material={mats.trim}
+          receiveShadow
+        >
+          <boxGeometry args={[LOBBY_LENGTH, CORNICE_HEIGHT, CORNICE_DEPTH]} />
+        </mesh>
+      ))}
+      <mesh
+        position={[
+          LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02,
+          WALL_HEIGHT - CORNICE_HEIGHT / 2,
+          0,
+        ]}
+        material={mats.trim}
+        receiveShadow
+      >
+        <boxGeometry args={[CORNICE_DEPTH, CORNICE_HEIGHT, CORRIDOR_WIDTH]} />
+      </mesh>
+      {/* Portal posts at the corridor seam (x = 0) — the threshold into the
+          hall, visible as the lobby's marker from far down the corridor. */}
+      {[1, -1].map((s) => (
+        <mesh
+          key={`portal-${s}`}
+          position={[
+            0,
+            WALL_HEIGHT / 2,
+            s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - PORTAL_POST_SIZE / 2 + 0.02),
+          ]}
+          material={mats.trim}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[PORTAL_POST_SIZE, WALL_HEIGHT, PORTAL_POST_SIZE]} />
+        </mesh>
+      ))}
       <FrontDesk position={desk.position} rotationY={desk.rotationY} mats={mats} />
       {armchairs.map((chair, i) => (
         <Armchair key={i} position={chair.position} rotationY={chair.rotationY} mats={mats} />
@@ -1521,20 +1671,13 @@ function Lobby({
  * between day and night with everything else; fog is disabled on the
  * material so the curtain stays exactly that color. The texture is shared
  * white — the material color tints it — and is disposed on unmount.
+ *
+ * THE TERMINATION. Behind the curtain (farther from the player) sits a
+ * soft warm haze glow — the shared radial texture, additive, dim-lerped
+ * with everything else — so the corridor ends by dissolving into light.
+ * A bare cut into the void read as an unfinished model; a black wall
+ * would violate the dream anti-patterns. Haze is the deliberate end.
  */
-const FADE_WIDTH = CHUNK_LENGTH;
-const FADE_HEIGHT = WALL_HEIGHT * 3;
-/** Alpha never quite reaches 0 — a whisper of haze keeps the raw floor cut
- *  at the world edge soft even where the gradient bottoms out. */
-const FADE_ALPHA_FLOOR = 0.1;
-const FADE_RAMP_Y0 = 0.2; // meters — gradient starts just above the floor
-const FADE_RAMP_Y1 = WALL_HEIGHT; // opaque from the wall top up
-
-function smoothstep(t: number): number {
-  const c = Math.min(1, Math.max(0, t));
-  return c * c * (3 - 2 * c);
-}
-
 /**
  * Vertical alpha ramp for the end curtain, painted once into a canvas:
  * row 0 (canvas top, plane top) opaque, easing to near-transparent at the
@@ -1553,7 +1696,7 @@ function createEndFadeTexture(): CanvasTexture {
     const y = bottomY + v * FADE_HEIGHT;
     const a =
       FADE_ALPHA_FLOOR +
-      (1 - FADE_ALPHA_FLOOR) * smoothstep((y - FADE_RAMP_Y0) / (FADE_RAMP_Y1 - FADE_RAMP_Y0));
+      (1 - FADE_ALPHA_FLOOR) * smoothstep(0, 1, (y - FADE_RAMP_Y0) / (FADE_RAMP_Y1 - FADE_RAMP_Y0));
     ctx.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
     ctx.fillRect(0, row, canvas.width, 1);
   }
@@ -1562,7 +1705,15 @@ function createEndFadeTexture(): CanvasTexture {
   return texture;
 }
 
-function EndFade({ x, darkRef }: { x: number; darkRef: MutableRefObject<boolean> }) {
+function EndFade({
+  x,
+  dimRef,
+  darkRef,
+}: {
+  x: number;
+  dimRef: MutableRefObject<boolean>;
+  darkRef: MutableRefObject<boolean>;
+}) {
   const texture = useMemo(() => createEndFadeTexture(), []);
   useEffect(() => () => texture.dispose(), [texture]);
   const matRef = useRef<MeshBasicMaterial>(null);
@@ -1572,19 +1723,52 @@ function EndFade({ x, darkRef }: { x: number; darkRef: MutableRefObject<boolean>
     const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(rawDt, DIM_MAX_DT));
     m.color.lerp(darkRef.current ? VOID_TARGETS.night : VOID_TARGETS.day, k);
   });
+  // The haze glow behind the curtain follows the hotel-wide dimming.
+  const glowMatRef = useRef<MeshBasicMaterial>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.endGlow,
+    () => glowMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = glowMatRef.current;
+      if (m) m.opacity = v;
+    },
+    darkRef,
+  );
   return (
-    <mesh position={[x, WALL_HEIGHT / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
-      <planeGeometry args={[FADE_WIDTH, FADE_HEIGHT]} />
-      <meshBasicMaterial
-        ref={matRef}
-        color={VOID_COLORS.night}
-        map={texture}
-        transparent
-        side={DoubleSide}
-        depthWrite={false}
-        fog={false}
-      />
-    </mesh>
+    <group>
+      <mesh position={[x, WALL_HEIGHT / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[FADE_WIDTH, FADE_HEIGHT]} />
+        <meshBasicMaterial
+          ref={matRef}
+          color={VOID_COLORS.night}
+          map={texture}
+          transparent
+          side={DoubleSide}
+          depthWrite={false}
+          fog={false}
+        />
+      </mesh>
+      {/* Warm haze beyond the curtain — the corridor dissolves into light,
+          never into a black wall. */}
+      <mesh
+        position={[x + Math.sign(x) * END_GLOW_OFFSET, WALL_HEIGHT / 2, 0]}
+        rotation={[0, Math.PI / 2, 0]}
+      >
+        <planeGeometry args={[END_GLOW_WIDTH, END_GLOW_HEIGHT]} />
+        <meshBasicMaterial
+          ref={glowMatRef}
+          map={sharedRadialGlowTexture()}
+          color={END_GLOW_COLOR}
+          transparent
+          opacity={LIGHT_LEVELS.endGlow.full}
+          blending={AdditiveBlending}
+          side={DoubleSide}
+          depthWrite={false}
+          fog={false}
+        />
+      </mesh>
+    </group>
   );
 }
 
@@ -1625,12 +1809,13 @@ export function Corridor({
   // disposed with Corridor (R3F only auto-disposes JSX-created materials;
   // these are passed in by reference). One useFrame below eases all eight
   // toward the active theme's targets.
-  const [mats] = useState(() => createHotelMaterials(dark));
+  const [{ materials: mats, grungeMap }] = useState(() => createHotelMaterials(dark));
   useEffect(() => {
     return () => {
       for (const m of Object.values(mats)) m.dispose();
+      grungeMap.dispose();
     };
-  }, [mats]);
+  }, [mats, grungeMap]);
   useFrame((_, rawDt) => {
     const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(rawDt, DIM_MAX_DT));
     const night = darkRef.current;
@@ -1722,8 +1907,8 @@ export function Corridor({
           playerRef={playerRef}
         />
       ))}
-      <EndFade key={`future-${futureEdge}`} x={futureEdge} darkRef={darkRef} />
-      <EndFade key={`past-${pastEdge}`} x={pastEdge} darkRef={darkRef} />
+      <EndFade key={`future-${futureEdge}`} x={futureEdge} dimRef={dimRef} darkRef={darkRef} />
+      <EndFade key={`past-${pastEdge}`} x={pastEdge} dimRef={dimRef} darkRef={darkRef} />
     </group>
   );
 }

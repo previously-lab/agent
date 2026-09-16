@@ -43,6 +43,20 @@ export const SPACE_EDGE_MARGIN = 1;
 /** Lobby east wall clearance. */
 export const LOBBY_CLEAR = 0.6;
 
+/** Margin shrink cap: the effective space margin never exceeds this
+ *  fraction of the room's half-span, so at least half of every span stays
+ *  walkable at any scale. The human-scale constants above remain the
+ *  ceiling — every tier is ≥16 m at ×1, so normal rooms take them
+ *  unchanged and only miniature rooms (where a fixed 1 m margin would
+ *  swallow the whole span) shrink. */
+const MARGIN_HALF_SPAN_CAP = 0.5;
+
+/** Scale-aware margin: the human-scale value, capped so a shrunken room
+ *  keeps a meaningful walkable fraction of its half-span. */
+function scaledMargin(humanMargin: number, halfSpan: number): number {
+  return Math.min(humanMargin, halfSpan * MARGIN_HALF_SPAN_CAP);
+}
+
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
@@ -64,9 +78,12 @@ export function clampToCorridor(
 
 /**
  * Space clamp: the player is boxed to the recipe's rectangular footprint
- * (x within door.x ± (width/2 − SPACE_EDGE_MARGIN), outward z from
- * wall + SPACE_WALL_CLEAR to wall + extent − SPACE_EDGE_MARGIN, mirrored
- * for south doors). `width` is the plan's x span, `extent` its z depth.
+ * (x within door.x ± (width/2 − edge margin), outward z from
+ * wall + wall clear to wall + extent − edge margin, mirrored for south
+ * doors). `width` is the plan's x span, `extent` its z depth — already
+ * scale-adjusted by the caller, so the margins are derived from them via
+ * scaledMargin: SPACE_EDGE_MARGIN / SPACE_WALL_CLEAR at human scale,
+ * shrinking with the room so miniature plans stay walkable.
  * Inside the doorway gap (|x − door.x| < GAP_HALF) the inner bound relaxes
  * to the corridor band so the player can walk back through the wall;
  * everywhere else the wall plane is solid both ways — a player on the
@@ -79,11 +96,13 @@ export function clampToSpace(
   width: number,
   extent: number,
 ): void {
-  const xHalf = width / 2 - SPACE_EDGE_MARGIN;
+  const xHalf = width / 2 - scaledMargin(SPACE_EDGE_MARGIN, width / 2);
   p.x = clamp(p.x, door.x - xHalf, door.x + xHalf);
-  const far = WALL_Z + extent - SPACE_EDGE_MARGIN;
+  const far = WALL_Z + extent - scaledMargin(SPACE_EDGE_MARGIN, extent / 2);
   const inGap = Math.abs(p.x - door.x) < GAP_HALF;
-  const near = inGap ? CORRIDOR_Z_LIMIT : WALL_Z + SPACE_WALL_CLEAR;
+  const near = inGap
+    ? CORRIDOR_Z_LIMIT
+    : WALL_Z + scaledMargin(SPACE_WALL_CLEAR, extent / 2);
   if (door.z > 0) {
     p.z = clamp(p.z, near, far);
   } else {

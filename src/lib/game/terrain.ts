@@ -31,8 +31,10 @@
  */
 
 import { createValueNoise2D, fbm } from "./noise";
+import { smoothstep } from "./math";
 import { ARCHETYPES } from "./space-types";
 import type { SpaceRecipe } from "./space-types";
+import { DOOR_GAP_HALF, ENTRANCE_DEPTH } from "./tuning/room";
 
 /** Ground lift above the corridor floor (top at y = 0). */
 export const GROUND_Y = 0.02;
@@ -45,24 +47,15 @@ const ROLLING_OCTAVES = 4;
 const BOWL_DEPTH = 1.6;
 /** Basin rim feather, in normalized ellipse-radius units. */
 const BOWL_FEATHER = 0.3;
-/** Half of the 2.4m entrance clear zone. */
-const ENTRANCE_HALF_WIDTH = 1.2;
-/** Depth outward from the wall that counts as "the doorway". */
-const ENTRANCE_DEPTH = 2.5;
-
-/** Scalar smoothstep: 0 below e0, 1 above e1, cubic fade between. */
-function smoothstep(e0: number, e1: number, t: number): number {
-  const x = Math.min(1, Math.max(0, (t - e0) / (e1 - e0)));
-  return x * x * (3 - 2 * x);
-}
 
 /**
  * Terrain flattening mask at the doorway: 1 everywhere except a funnel
- * around the door axis near the wall, where it falls to 0.
+ * around the door axis near the wall, where it falls to 0. The funnel
+ * reads the shared doorway clearance constants (tuning/room.ts).
  */
 function entranceMask(localX: number, localZ: number): number {
   return Math.max(
-    smoothstep(ENTRANCE_HALF_WIDTH, ENTRANCE_HALF_WIDTH + 1, Math.abs(localX)),
+    smoothstep(DOOR_GAP_HALF, DOOR_GAP_HALF + 1, Math.abs(localX)),
     smoothstep(ENTRANCE_DEPTH, ENTRANCE_DEPTH + 2.5, localZ),
   );
 }

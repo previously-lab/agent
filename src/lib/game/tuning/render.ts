@@ -1,0 +1,226 @@
+/**
+ * Renderer tuning — every visual constant the integrator
+ * (src/components/game/game-canvas.tsx) consumes: the fixed camera, scene
+ * mood colors, the key/fill/ambient lighting hierarchy (sun base levels,
+ * shadow rig, IBL environment cards), the post-processing chain (bloom,
+ * N8AO, vignette), atmosphere lerp, player avatar colors and motion
+ * rates, wade depth, interaction distances, and spawn. The water plane
+ * height itself is shared with the room renderer and lives in ./room
+ * (WATER_Y). Pure data — no three.js, no React.
+ */
+
+import { VOID_COLORS } from "./hotel";
+
+/** Scene mood while no space is active — the void color for the active
+ *  theme (shared with the corridor so the end-fade planes always match
+ *  the background). There is no scene fog anywhere in the game. */
+export const SCENE_COLORS = VOID_COLORS;
+
+export const CAMERA_ZOOM = 34;
+export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
+/** Follow smoothing: factor = 1 − e^(−rate·dt). */
+export const CAMERA_LERP_RATE = 6;
+/** Colossal-room legibility (first pass, expect tuning): inside a space the
+ *  ortho zoom TARGET divides by clamp(S, 1, ∞)^0.5, lerped with the camera
+ *  easing — otherwise a ×12 room shows only a local patch and "colossal"
+ *  reads merely as slowness. */
+export const ROOM_ZOOM_SCALE_EXP = 0.5;
+/** Hard cap on the pull-back: the view never gets more than ~3× wider than
+ *  normal — the dollhouse must stay readable (doc §1 A4: a human-scale
+ *  anchor must stay legible). */
+export const ROOM_ZOOM_MAX_PULLBACK = 3;
+
+export const PLAYER_SPEED = 4; // m/s
+/** In-room speed boost: while a space is active the player moves at
+ *  PLAYER_SPEED × clamp(S, 1, ∞)^0.75 (the corridor stays exactly 4 m/s) —
+ *  the room should feel immense, not waste the player's time. */
+export const ROOM_SPEED_SCALE_EXP = 0.75;
+export const BOB_RATE = 9; // rad/s while walking
+export const BOB_HEIGHT = 0.05;
+export const TURN_LERP_RATE = 12;
+/** Avatar Y snapping toward the terrain (or back to corridor floor). */
+export const GROUND_LERP_RATE = 10;
+
+export const PLAYER_BODY = "#e8935c"; // warm accent
+export const PLAYER_HEAD = "#f4d3ae";
+export const SUN_BASE_COLOR = "#fff4e0";
+/** Key-light base level. Raised from 0.65 when the lighting model changed
+ *  from ambient-dominant to key/fill/ambient (v0.11 P2): the sun is now
+ *  the ONE strong light that pools (doc §1 A3), while the ambient floor
+ *  dropped to 0.15 and soft fill comes from the IBL environment — so the
+ *  old "anything above ~0.7 washes floors past 1.0 total irradiance"
+ *  ceiling (set when ambient+hemisphere alone summed to ~1.0) no longer
+ *  applies. Inside a space this is multiplied by palette.sunIntensity. */
+export const SUN_BASE_INTENSITY = 1.5;
+/** Ambient floor in the corridor; inside a space the palette's own
+ *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Kept low on
+ *  purpose: fill is the IBL environment's job, and a high ambient is
+ *  exactly the directionless flat light the doc forbids. */
+export const CORRIDOR_AMBIENT = 0.15;
+/** Space palettes still carry ambient values (0.28–0.6) authored for the
+ *  old ambient-dominant model; scale them into the same key-dominant
+ *  hierarchy here (the palette data itself is owned by another lane). */
+export const SPACE_AMBIENT_SCALE = 0.4;
+/** Background/fog/sun lerp rate when a space opens or closes. */
+export const ATMOSPHERE_LERP_RATE = 2.5;
+/** Wade depth below the water plane inside a pool basin. */
+export const WADE_DEPTH = 0.25;
+
+/* ------------------------------------------------------------------ */
+/* Key-light shadow rig (the sun is the one shadow caster)              */
+/* ------------------------------------------------------------------ */
+
+/** Key-light offset from the player. The light + its shadow camera follow
+ *  the player (the target tracks the player on the ground plane), so
+ *  shadows exist down the whole streaming corridor and inside every space;
+ *  the light DIRECTION stays the original (8, 14, 4) → origin, so surface
+ *  response is unchanged. */
+export const SUN_OFFSET = { x: 8, y: 14, z: 4 };
+/** PCF shadow-map resolution for the key light (three 0.185 runs
+ *  PCFShadowMap — PCFSoft was deprecated and is silently rewritten to
+ *  PCF, so the canvas asks for "percentage" to match what ships). */
+export const SUN_SHADOW_MAP_SIZE = 2048;
+/** Ortho shadow-camera half-extent (m) — covers the visible diorama
+ *  (view half-width ≈ 28 m at 1080p / zoom 34) with margin. Inside a
+ *  scaled room the integrator multiplies this by the camera's zoom
+ *  pull-back (up to ROOM_ZOOM_MAX_PULLBACK) so the frustum keeps covering
+ *  the widened view; shadow texel density drops by the same factor. */
+export const SUN_SHADOW_EXTENT = 30;
+export const SUN_SHADOW_NEAR = 1;
+export const SUN_SHADOW_FAR = 60;
+/** Acne guards: small negative depth bias plus a normal offset that suits
+ *  the hotel's box-built geometry. */
+export const SUN_SHADOW_BIAS = -0.0003;
+export const SUN_SHADOW_NORMAL_BIAS = 0.02;
+
+/* ------------------------------------------------------------------ */
+/* IBL — one scene-wide Environment of Lightformer cards (no HDRI)      */
+/* ------------------------------------------------------------------ */
+
+/** scene.environmentIntensity — the soft-fill half of the hierarchy and
+ *  the reflection budget every PBR material in the game shares. */
+export const ENV_INTENSITY = 0.45;
+/** Env cube-map resolution; the map is a few broad emissive cards, so
+ *  256 px is plenty and cheap. */
+export const ENV_RESOLUTION = 256;
+
+/** One emissive card baked into the environment map. */
+export interface EnvFormerSpec {
+  form: "rect" | "circle";
+  color: string;
+  intensity: number;
+  position: readonly [number, number, number];
+  rotation: readonly [number, number, number];
+  scale: readonly [number, number, number];
+}
+
+/** The light cards: a broad soft overhead, two cool fluorescent strips
+ *  (the backrooms register — steady, never flickering per the doc's
+ *  anti-pattern list), one warm side card, and one small red accent
+ *  (Control-style — reflective materials need something worth
+ *  reflecting). Deliberately few and broad: IBL fill, not a photostudio. */
+export const ENV_FORMERS: readonly EnvFormerSpec[] = [
+  {
+    form: "rect",
+    color: "#f2efe6",
+    intensity: 1,
+    position: [0, 5, 0],
+    rotation: [-Math.PI / 2, 0, 0],
+    scale: [9, 9, 1],
+  },
+  {
+    form: "rect",
+    color: "#dcebf2",
+    intensity: 2.5,
+    position: [-3, 4.6, -1],
+    rotation: [-Math.PI / 2, 0, 0],
+    scale: [7, 0.4, 1],
+  },
+  {
+    form: "rect",
+    color: "#dcebf2",
+    intensity: 2.5,
+    position: [3, 4.6, 1],
+    rotation: [-Math.PI / 2, 0, 0],
+    scale: [7, 0.4, 1],
+  },
+  {
+    form: "rect",
+    color: "#ffd9a0",
+    intensity: 1.2,
+    position: [-5, 2, 3],
+    rotation: [0, Math.PI / 2, 0],
+    scale: [4, 2, 1],
+  },
+  {
+    form: "rect",
+    color: "#e8543f",
+    intensity: 1.5,
+    position: [4, 1.2, -4],
+    rotation: [0, -Math.PI / 3, 0],
+    scale: [1.6, 1.6, 1],
+  },
+];
+
+/* ------------------------------------------------------------------ */
+/* Stage backdrop — the diorama sits on a pool, not in a void           */
+/* ------------------------------------------------------------------ */
+
+/** Master switch: set to false to revert to the flat void background
+ *  (game-canvas.tsx mounts the stage plane only while this is true). */
+export const STAGE_BACKDROP_ENABLED = true;
+/** Vertical drop (m) of the stage plane below the corridor floor. Deep
+ *  enough to stay clear of every room's displaced terrain (rolling
+ *  amplitude is ~1.2 m; pool basins wade, never dig), far enough that the
+ *  radial falloff reads as depth rather than as a floor at the model's
+ *  feet. */
+export const STAGE_BACKDROP_Y = -30;
+/** Radial falloff (m): the pool is at full strength inside POOL_RADIUS
+ *  around the player and fades to fully transparent at BACKDROP_RADIUS,
+ *  so the model reads as sitting on a soft pool of its own atmosphere —
+ *  never on a hard-edged disc. */
+export const STAGE_POOL_RADIUS = 26;
+export const STAGE_BACKDROP_RADIUS = 150;
+/** Peak opacity at the pool's center. Kept well under 1: the void color
+ *  keeps lerping through underneath, so the background lerp stays the
+ *  single driver of the mood. */
+export const STAGE_BACKDROP_OPACITY = 0.6;
+/** How far the pool color lifts the CURRENT lerped background color
+ *  toward white (0 = background, 1 = white). Derived per frame from the
+ *  same resolveAtmosphere target as the scene background, so entering a
+ *  room re-tints the stage with the room's palette exactly like the
+ *  void — a shadow of the room's own hue, never a fixed gray. */
+export const STAGE_BACKDROP_LIFT = 0.08;
+
+/* ------------------------------------------------------------------ */
+/* Post-processing chain                                                */
+/* ------------------------------------------------------------------ */
+
+/** MSAA samples for the composer's render target (WebGL2); the package
+ *  default of 8 is wasted at dpr 2 on a mid-range laptop. */
+export const POST_MSAA_SAMPLES = 4;
+/** Bloom — the highest-impact effect for this look. Threshold 1.0 keeps
+ *  it on emissive fixtures and the sun's hot pools, off lit walls, so the
+ *  frame does not turn milky. */
+export const BLOOM_INTENSITY = 0.4;
+export const BLOOM_LUMINANCE_THRESHOLD = 1.0;
+export const BLOOM_LUMINANCE_SMOOTHING = 0.25;
+/** N8AO (half-res, performance quality) — screen-space contact shading;
+ *  the first half of the depth cue that replaced scene fog. Unlike
+ *  distance fog it is camera-distance independent, so it cannot wash the
+ *  whole room into a veil from the 45° camera 23 m up. */
+export const AO_INTENSITY = 1.5;
+export const AO_RADIUS = 1.0;
+export const AO_DISTANCE_FALLOFF = 1.0;
+/** Vignette — mild frame-edge falloff; the second half of the depth cue.
+ *  Screen-space like AO, so it shares the same safety argument. */
+export const VIGNETTE_OFFSET = 0.35;
+export const VIGNETTE_DARKNESS = 0.4;
+
+/** Door grab distance when resolving which space a wall crossing enters. */
+export const DOOR_GRAB_DIST = 2.5;
+/** HUD prompt radius around a door. */
+export const HUD_DIST = 1.8;
+
+/** Player spawn: lobby floor, clear of the desk and armchairs. */
+export const SPAWN = { x: 6, z: 0 };
