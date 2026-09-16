@@ -2281,7 +2281,11 @@ function SpaceDoorway({
   // handover between the two slabs must never flip the door's handedness.
   const dir = door.z > 0 ? 1 : -1;
   const hingeX = -dir * (DOOR_WIDTH / 2 - 0.02);
-  const knobX = -dir * (DOOR_WIDTH - 0.22);
+  // Knob rides the slab's FREE edge: +0.50 local for north, −0.50 local for
+  // south (π-rotated) — i.e. world door.x + 0.50 on both, same as the
+  // corridor face. It offsets FROM the hinge, so its sign is +dir while
+  // the hinge's is −dir.
+  const knobX = dir * (DOOR_WIDTH - 0.22);
   const hingeRef = useRef<THREE.Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
