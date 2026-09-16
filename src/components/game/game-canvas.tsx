@@ -138,7 +138,13 @@ const GROUND_LERP_RATE = 10;
 const PLAYER_BODY = "#e8935c"; // warm accent
 const PLAYER_HEAD = "#f4d3ae";
 const SUN_BASE_COLOR = "#fff4e0";
-const SUN_BASE_INTENSITY = 0.9;
+/** Kept low on purpose: the 45° sun hits flat ground at NdotL ≈ 0.87, so
+ *  anything above ~0.7 pushed lit floors past 1.0 total irradiance and
+ *  washed bright rooms (butter/noon) into a hazy, over-exposed veil. */
+const SUN_BASE_INTENSITY = 0.65;
+/** Ambient floor in the corridor; inside a space the palette's own
+ *  `ambient` takes over (it was designed per-palette but never wired). */
+const CORRIDOR_AMBIENT = 0.45;
 /** Background/fog/sun lerp rate when a space opens or closes. */
 const ATMOSPHERE_LERP_RATE = 2.5;
 /** Water plane height — mirrors WATER_Y in space.tsx (module-local there). */
@@ -255,17 +261,17 @@ interface AtmosphereTargets {
   background: THREE.Color;
   sunColor: THREE.Color;
   sunIntensity: number;
+  ambient: number;
 }
 
 /**
  * Resolve the target atmosphere for the current state into `out` (no
  * per-frame allocation): the corridor mood in the active theme's void
  * color, or the active space's palette — background becomes the room's own
- * shadow and the sun tints to palette.sunColor × sunIntensity. No fog
- * targets exist: scene fog has been removed entirely (the camera geometry
- * made any usable band wash the whole room). The space branch is
- * theme-independent: a space's palette is seed-fixed, not part of the app
- * dark mode.
+ * shadow, the sun tints to palette.sunColor, and the ambient floor uses
+ * the palette's own value (a space's lighting is seed-fixed, not part of
+ * the app dark mode). No fog targets exist: scene fog has been removed
+ * entirely (the camera geometry made any usable band wash the whole room).
  */
 function resolveAtmosphere(
   space: ActiveSpace | null,
@@ -281,10 +287,12 @@ function resolveAtmosphere(
     out.background.set(palette.fog);
     out.sunColor.set(palette.sunColor);
     out.sunIntensity = SUN_BASE_INTENSITY * palette.sunIntensity;
+    out.ambient = palette.ambient;
   } else {
     out.background.set(SCENE_COLORS[dark ? "night" : "day"]);
     out.sunColor.set(SUN_BASE_COLOR);
     out.sunIntensity = SUN_BASE_INTENSITY;
+    out.ambient = CORRIDOR_AMBIENT;
   }
   return out;
 }
@@ -339,22 +347,26 @@ function Atmosphere({
 }): JSX.Element {
   const bgRef = useRef<THREE.Color>(null);
   const sunRef = useRef<THREE.DirectionalLight>(null);
+  const ambientRef = useRef<THREE.AmbientLight>(null);
   // Reusable target bucket — resolved fresh each frame, never reallocated.
   const [targets] = useState<AtmosphereTargets>(() => ({
     background: new THREE.Color(SCENE_COLORS.night),
     sunColor: new THREE.Color(SUN_BASE_COLOR),
     sunIntensity: SUN_BASE_INTENSITY,
+    ambient: CORRIDOR_AMBIENT,
   }));
 
   useFrame((_, dt) => {
     const bg = bgRef.current;
     const sun = sunRef.current;
-    if (!bg || !sun) return;
+    const ambient = ambientRef.current;
+    if (!bg || !sun || !ambient) return;
     const k = 1 - Math.exp(-ATMOSPHERE_LERP_RATE * Math.min(dt, MAX_DT));
     resolveAtmosphere(space, dark, targets);
     bg.lerp(targets.background, k);
     sun.color.lerp(targets.sunColor, k);
     sun.intensity += (targets.sunIntensity - sun.intensity) * k;
+    ambient.intensity += (targets.ambient - ambient.intensity) * k;
     // Probe mirror — lets the browser console read the live background and
     // light state when diagnosing a room-wide color veil.
     GAME_DEBUG.fogNear = -1;
@@ -362,7 +374,7 @@ function Atmosphere({
     GAME_DEBUG.bg = `#${bg.getHexString()}`;
     GAME_DEBUG.sunColor = `#${sun.color.getHexString()}`;
     GAME_DEBUG.sunIntensity = +sun.intensity.toFixed(3);
-    GAME_DEBUG.ambient = 0.45;
+    GAME_DEBUG.ambient = +ambient.intensity.toFixed(3);
   });
 
   return (
@@ -373,7 +385,7 @@ function Atmosphere({
           visible room and washed it into the fog color (the 'translucent
           room'). Depth is sold by background color and the corridor's
           end-fade planes instead. */}
-      <ambientLight intensity={0.45} />
+      <ambientLight ref={ambientRef} intensity={CORRIDOR_AMBIENT} />
       <directionalLight
         ref={sunRef}
         position={[8, 14, 4]}
