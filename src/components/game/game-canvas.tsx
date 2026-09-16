@@ -50,8 +50,8 @@
  *
  * ATMOSPHERE. Background, fog (color/near/far), and the directional sun
  * lerp (factor 1 − e^(−2.5·dt)) between two target moods defined once in
- * resolveAtmosphere: the corridor (the active theme's void color — dark
- * blue-charcoal at night, warm off-white by day — fog 30–90, matching the
+ * resolveAtmosphere: the corridor (the active theme's void color — near-
+ * black at night, warm off-white by day — fog 30–90, matching the
  * corridor's end-fade planes) and the active space's palette. Inside a
  * space the fog opens up around the player (near 26, far 30 + extent·0.9)
  * so the doorway is clear and only the far end melts into the mist; the sun
@@ -133,7 +133,7 @@ const SPACE_FOG_NEAR = 26;
 const SPACE_FOG_FAR_BASE = 30;
 const SPACE_FOG_FAR_PER_EXTENT = 0.9;
 
-const CAMERA_ZOOM = 22;
+const CAMERA_ZOOM = 34;
 const CAM_OFFSET = { x: -12, y: 16, z: 12 };
 /** Follow smoothing: factor = 1 − e^(−rate·dt). */
 const CAMERA_LERP_RATE = 6;
@@ -141,11 +141,13 @@ const CAMERA_LERP_RATE = 6;
 const PLAYER_SPEED = 4; // m/s
 /** Corridor visibility staging: the corridor stays rendered while the
  *  player stands in the doorway zone (they can look back through the open
- *  door) and unmounts a step past it; it remounts just before a returning
- *  player reaches the door-swing distance, so the doorway never opens onto
- *  a void. Hysteresis band prevents flicker at the boundary. */
-const CORRIDOR_HIDE_Z = WALL_Z + 2.7;
-const CORRIDOR_SHOW_Z = WALL_Z + 2.4;
+ *  door — the portal moment) and unmounts one step past it, swallowed by
+ *  the space's own shadow so the room owns the frame; it remounts just
+ *  before a returning player reaches the door-swing distance, so the
+ *  doorway never opens onto a void. Hysteresis band prevents flicker at
+ *  the boundary. */
+const CORRIDOR_HIDE_Z = WALL_Z + 1.3;
+const CORRIDOR_SHOW_Z = WALL_Z + 1.0;
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
 const MAX_DT = 0.05;
 const BOB_RATE = 9; // rad/s while walking
@@ -295,9 +297,10 @@ function resolveAtmosphere(
 ): AtmosphereTargets {
   if (space !== null) {
     const { palette } = space.recipe;
-    // Background uses the (desaturated, darkened) recipe fog color, not the
-    // raw sky — the background is never fogged, so a raw sky would read as a
-    // bare void in the frame corners beyond the ground skirt.
+    // Background uses the recipe's atmosphere fog: a deep, hue-faithful
+    // shadow of the room's own palette (see atmosphereFog in space-recipe).
+    // The background is never fogged, so sharing the fog color makes the
+    // room's far edge melt seamlessly into its own shadow.
     out.background.set(palette.fog);
     out.fogColor.set(palette.fog);
     out.fogNear = SPACE_FOG_NEAR;

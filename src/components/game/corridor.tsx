@@ -158,7 +158,7 @@ const WALL_THICKNESS = 0.2;
  * keeps the scene background/fog on VOID_COLORS so the corridor's end-fade
  * planes always match.
  */
-export const VOID_COLORS = { night: "#1a1d24", day: "#e9e6e0" } as const;
+export const VOID_COLORS = { night: "#101219", day: "#e9e6e0" } as const;
 
 /** Surface palette per theme — warm neutrals, day lifted from the night set. */
 const THEME_COLORS = {

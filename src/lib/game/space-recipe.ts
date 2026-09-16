@@ -50,16 +50,18 @@ function scaleHex(a: string, k: number): string {
 }
 
 /**
- * Fog-of-war color for a palette. The raw palette fog is sky-adjacent and
- * reads as paint at 45° top-down (pink/orange soup that swallows the room).
- * Tie it to the sky, desaturate 40% toward neutral gray, darken 15% — the
- * fog becomes "air", not a white wall. Applied to EVERY palette including
- * the vivid set, so saturated rooms keep breathable distance cues.
+ * Fog-of-war color for a palette — the room's own shadow. The fog doubles
+ * as the scene background beyond the plan, so it IS the void the room
+ * floats in: tie it to the palette's fog/sky hue, desaturate only 15%
+ * toward neutral gray (the hue must survive — a butter room casts a honey
+ * shadow, not a gray one), then darken hard (~55%) so the space melts
+ * into a deeper tone of itself at the fog line. Applied to EVERY palette
+ * including the vivid set.
  */
 function atmosphereFog(palette: Palette): string {
   return scaleHex(
-    blendHex(blendHex(palette.fog, palette.sky, 0.5), "#8a8f94", 0.4),
-    0.85,
+    blendHex(blendHex(palette.fog, palette.sky, 0.5), "#8a8f94", 0.15),
+    0.45,
   );
 }
 
