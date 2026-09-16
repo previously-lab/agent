@@ -89,6 +89,9 @@ const PORTAL_HEIGHT = 3.2;
 const DOOR_TRIM_COLOR = "#463f36";
 const DOOR_GLOW_INTENSITY = 1.6;
 const DOOR_HALO_OPACITY = 0.14;
+/** Jamb/head light-leak seams around the closed slab (the exit landmark
+ *  from deep inside a space). */
+const DOOR_SEAM_INTENSITY = 2.2;
 /** Slab swing, mirroring the corridor face: open within this distance of
  *  the door center, ~100°, always rotating away from the player. */
 const DOOR_OPEN_DIST = 2.2;
@@ -2243,11 +2246,13 @@ function buildAnimals(
 
 /**
  * The space-side face of the corridor door. Filler panels, lintel, and
- * trim frame are wall dressing and always render; the slab + glow + halo
- * only mount once the corridor is gone (corridorHidden) — while the
- * corridor is still visible its own DoorAssembly slab is the one physical
- * door, seen from behind. The slab is real: hinged on the left jamb,
- * swinging away from the player as they come within DOOR_OPEN_DIST.
+ * trim frame are wall dressing and always render; the slab + glow + seams
+ * + halo only mount once the corridor is fully gone (corridorGone, delayed
+ * by the corridor's own HIDE_DELAY_MS) — while the corridor is still
+ * visible its own DoorAssembly slab is the one physical door, seen from
+ * behind, so the doorway never holds two slabs at once. The slab is real:
+ * hinged on the left jamb, swinging away from the player as they come
+ * within DOOR_OPEN_DIST.
  */
 function SpaceDoorway({
   accent,
@@ -2362,6 +2367,35 @@ function SpaceDoorway({
               metalness={0}
             />
           </mesh>
+          {/* Light leak: thin emissive seams along the jambs and head,
+              proud of the closed slab on the room side, so the way back
+              reads as a glowing door outline even from deep inside the
+              space (the slab itself occludes the glow plane when shut). */}
+          {[-1, 1].map((side) => (
+            <mesh
+              key={`seam${side}`}
+              position={[side * (DOOR_WIDTH / 2 - 0.02), DOOR_HEIGHT / 2, WALL_THICKNESS + 0.05]}
+            >
+              <boxGeometry args={[0.05, DOOR_HEIGHT, 0.04]} />
+              <meshStandardMaterial
+                color="#000000"
+                emissive={accent}
+                emissiveIntensity={DOOR_SEAM_INTENSITY}
+                roughness={1}
+                metalness={0}
+              />
+            </mesh>
+          ))}
+          <mesh position={[0, DOOR_HEIGHT - 0.02, WALL_THICKNESS + 0.05]}>
+            <boxGeometry args={[DOOR_WIDTH, 0.05, 0.04]} />
+            <meshStandardMaterial
+              color="#000000"
+              emissive={accent}
+              emissiveIntensity={DOOR_SEAM_INTENSITY}
+              roughness={1}
+              metalness={0}
+            />
+          </mesh>
           {/* Faint additive halo around the opening, facing into the space. */}
           <mesh position={[0, DOOR_HEIGHT / 2, WALL_THICKNESS + 0.2]}>
             <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
@@ -2396,14 +2430,14 @@ export function SpaceScene({
   recipe,
   door,
   playerRef,
-  corridorHidden,
+  corridorGone,
   fade,
   onFadedOut,
 }: {
   recipe: SpaceRecipe;
   door: DoorRef;
   playerRef: MutableRefObject<{ x: number; z: number }>;
-  corridorHidden: boolean;
+  corridorGone: boolean;
   fade: "in" | "out";
   onFadedOut: () => void;
 }): JSX.Element {
@@ -2878,7 +2912,7 @@ export function SpaceScene({
         wallColor={wallColor}
         playerRef={playerRef}
         door={door}
-        doorVisible={corridorHidden}
+        doorVisible={corridorGone}
       />
     </group>
   );

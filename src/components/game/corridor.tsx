@@ -292,8 +292,10 @@ const DIM_MAX_DT = 0.05;
 /**
  * Delay between `dimmed` turning true and the hotel unmounting. Tuned
  * against DIM_LERP_RATE_DESCEND: 0.5 s ≈ three descent time constants.
+ * Exported: the game canvas mirrors this delay so the space-side door
+ * slab mounts exactly when the corridor's slab unmounts — never both.
  */
-const HIDE_DELAY_MS = 500;
+export const HIDE_DELAY_MS = 500;
 
 /** Day/night color & level transitions ease at the atmosphere rate. */
 const THEME_LERP_RATE = 2.5;

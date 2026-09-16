@@ -83,7 +83,7 @@ import {
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
-import { Corridor, VOID_COLORS, type CorridorDoor } from "./corridor";
+import { Corridor, HIDE_DELAY_MS, VOID_COLORS, type CorridorDoor } from "./corridor";
 import { SpaceScene } from "./space";
 
 /* ------------------------------------------------------------------ */
@@ -151,6 +151,12 @@ const PLAYER_SPEED = 4; // m/s
  *  the boundary. */
 const CORRIDOR_HIDE_Z = WALL_Z + 1.3;
 const CORRIDOR_SHOW_Z = WALL_Z + 1.0;
+/** Visual mount line for the room itself: the space's logic (clamps,
+ *  terrain) activates at the wall plane, but the room only RENDERS once
+ *  the player has stepped a shoulder-width past it. Approaching the open
+ *  door from the corridor therefore shows only the glow hint through the
+ *  frame — the world beyond never pre-renders over the wall. */
+const SPACE_SHOW_Z = WALL_Z + 0.7;
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
 const MAX_DT = 0.05;
 const BOB_RATE = 9; // rad/s while walking
@@ -515,6 +521,8 @@ function GameLoop({
   setActiveSpace,
   corridorHidden,
   setCorridorHidden,
+  spaceVisual,
+  setSpaceVisual,
   hudIdRef,
   setHudDoor,
 }: {
@@ -529,6 +537,8 @@ function GameLoop({
   setActiveSpace: (space: ActiveSpace | null) => void;
   corridorHidden: boolean;
   setCorridorHidden: (hidden: boolean) => void;
+  spaceVisual: boolean;
+  setSpaceVisual: (visible: boolean) => void;
   hudIdRef: MutableRefObject<string | null>;
   setHudDoor: (door: CorridorDoor | null) => void;
 }): null {
@@ -586,6 +596,16 @@ function GameLoop({
     else if (az > CORRIDOR_HIDE_Z) gone = true;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
+    // 3c. Room visual mount: the room renders only once the player is a
+    // shoulder-width past the wall plane (SPACE_SHOW_Z) and stays mounted
+    // until the door manager releases the space — so the open door only
+    // ever shows the glow hint through the frame, never the world beyond
+    // spilling over the wall while the player is still outside.
+    let vis = spaceVisual;
+    if (space === null) vis = false;
+    else if (az > SPACE_SHOW_Z) vis = true;
+    if (vis !== spaceVisual) setSpaceVisual(vis);
+
     // 4. HUD prompt — setState only when the nearest door identity changes.
     const near = nearestDoor(p.x, p.z, sliceIds, HUD_DIST);
     const nearId = near ? near.sliceId : null;
@@ -641,15 +661,30 @@ export default function GameCanvas({
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
   const hudIdRef = useRef<string | null>(null);
   const [activeSpace, setActiveSpace] = useState<ActiveSpace | null>(null);
+  const [corridorHidden, setCorridorHidden] = useState(false);
+  const [hudDoor, setHudDoor] = useState<CorridorDoor | null>(null);
+  // Visual mount gate: the room renders only once the player is past
+  // SPACE_SHOW_Z (see GameLoop 3c) — the logic state activeSpace leads.
+  const [spaceVisual, setSpaceVisual] = useState(false);
   // The mounted room lags the door manager: on exit it stays mounted for a
   // short dissolve (fade="out", see SPACE_FADE_S in space.tsx) before
   // unmounting — the space never pops out of existence behind the player.
   const [shownSpace, setShownSpace] = useState<ActiveSpace | null>(null);
   useEffect(() => {
-    if (activeSpace !== null) setShownSpace(activeSpace);
-  }, [activeSpace]);
-  const [corridorHidden, setCorridorHidden] = useState(false);
-  const [hudDoor, setHudDoor] = useState<CorridorDoor | null>(null);
+    if (activeSpace !== null && spaceVisual) setShownSpace(activeSpace);
+  }, [activeSpace, spaceVisual]);
+  // Door-slab handover: the corridor keeps the one physical slab until it
+  // unmounts (HIDE_DELAY_MS after the hide threshold); the space's own
+  // slab mounts exactly then — never two doors in one frame.
+  const [corridorGone, setCorridorGone] = useState(false);
+  useEffect(() => {
+    if (!corridorHidden) {
+      setCorridorGone(false);
+      return;
+    }
+    const timer = setTimeout(() => setCorridorGone(true), HIDE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [corridorHidden]);
 
   const sliceIds = useMemo(() => doors.map((d) => d.sliceId), [doors]);
   const doorXs = useMemo(() => doorXsFor(sliceIds), [sliceIds]);
@@ -732,7 +767,7 @@ export default function GameCanvas({
             recipe={shownSpace.recipe}
             door={shownSpace.door}
             playerRef={playerRef}
-            corridorHidden={corridorHidden}
+            corridorGone={corridorGone}
             fade={activeSpace !== null ? "in" : "out"}
             onFadedOut={() => setShownSpace(null)}
           />
@@ -749,6 +784,8 @@ export default function GameCanvas({
           setActiveSpace={setActiveSpace}
           corridorHidden={corridorHidden}
           setCorridorHidden={setCorridorHidden}
+          spaceVisual={spaceVisual}
+          setSpaceVisual={setSpaceVisual}
           hudIdRef={hudIdRef}
           setHudDoor={setHudDoor}
         />
