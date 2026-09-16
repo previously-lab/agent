@@ -59,6 +59,7 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import type { DoorRef } from "@/lib/game/hotel";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import { doorGlowColor } from "@/lib/game/space-recipe";
 import {
   GROUND_Y,
   terrainHeight,
@@ -2908,7 +2909,7 @@ export function SpaceScene({
           the hinged slab mounts once the corridor is gone — before that
           the corridor's own slab is the one physical door. */}
       <SpaceDoorway
-        accent={recipe.palette.accent}
+        accent={doorGlowColor(recipe.palette)}
         wallColor={wallColor}
         playerRef={playerRef}
         door={door}

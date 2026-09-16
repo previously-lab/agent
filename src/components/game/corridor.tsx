@@ -24,10 +24,11 @@
  * wall face stays continuous and the top edge is one straight line.
  *
  * DOOR GLOW. Each door's glow color comes from
- * `compileSpaceRecipe(door.sliceId).palette.accent` — deterministic per
- * slice. Glow is emissive material only: a plane behind the recessed slab
- * plus a strip above the lintel and a faint additive halo. No per-door
- * point lights (too many lights).
+ * `doorGlowColor(compileSpaceRecipe(door.sliceId).palette)` — the room's
+ * own tone (ground→sky, lifted), deterministic per slice, so the glimpse
+ * through the frame reads as THAT room's light. Glow is emissive material
+ * only: a plane behind the recessed slab plus a strip above the lintel
+ * and a faint additive halo. No per-door point lights (too many lights).
  *
  * CORRIDOR SCONCES. Every corridor chunk carries CHUNK_DOORS wall sconces
  * on the north (full-height) wall — one per door bay, centered between
@@ -116,7 +117,7 @@ import {
   type Side,
 } from "@/lib/game/hotel";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
-import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
 import type { ArchetypeId } from "@/lib/game/space-types";
 
 /** A corridor door as the integrator supplies it. */
@@ -653,9 +654,14 @@ function DoorAssembly({
   mats: HotelMaterials;
   playerRef: MutableRefObject<{ x: number; z: number }>;
 }) {
-  const accent = useMemo(() => {
+  // The doorway light is the room's own tone (ground→sky, lifted), not a
+  // decorative accent — the glimpse through the frame must read as THAT
+  // room's light before the room itself ever renders.
+  const glowColor = useMemo(() => {
     const recipe = compileSpaceRecipe(door.sliceId);
-    return (archetype === undefined ? recipe : { ...recipe, archetype }).palette.accent;
+    return doorGlowColor(
+      (archetype === undefined ? recipe : { ...recipe, archetype }).palette,
+    );
   }, [door.sliceId, archetype]);
 
   const inward = door.side === "north" ? -1 : 1; // toward the corridor interior
@@ -754,7 +760,7 @@ function DoorAssembly({
         <meshStandardMaterial
           ref={glowMatRef}
           color="#000000"
-          emissive={accent}
+          emissive={glowColor}
           emissiveIntensity={LIGHT_LEVELS.doorGlow.full}
           roughness={1}
           metalness={0}
@@ -765,7 +771,7 @@ function DoorAssembly({
         <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
         <meshBasicMaterial
           ref={haloMatRef}
-          color={accent}
+          color={glowColor}
           transparent
           opacity={LIGHT_LEVELS.doorHalo.full}
           blending={AdditiveBlending}
@@ -780,7 +786,7 @@ function DoorAssembly({
         <meshStandardMaterial
           ref={stripMatRef}
           color="#000000"
-          emissive={accent}
+          emissive={glowColor}
           emissiveIntensity={LIGHT_LEVELS.doorStrip.full}
           roughness={1}
           metalness={0}
