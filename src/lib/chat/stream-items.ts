@@ -1,7 +1,7 @@
 /**
  * The unified message stream's data model (v0.10 design §1.5) — pure, no React.
  *
- * The Virtuoso list renders one flat item array, oldest → newest:
+ * The chat stream renders one flat item array, oldest → newest:
  *
  *   [seam?] turn turn … [seam?] turn … [seam?] [resume-banner?] turn … live…
  *   └──────── historical slice blocks (one seam header + flat turns) ───────┘
@@ -86,9 +86,9 @@ export type HistoryStreamItem =
 
 /** A live turn — the message in flight. The component appends these from
  *  `useChat`; this module never builds one, which is why it lives here as a
- *  type only. Kept beside the history union because BOTH renderers of the
- *  stream — the virtualized list and the conversation field — take the same
- *  `ChatStreamItem[]` and must not describe it twice. */
+ *  type only. Kept beside the history union because every consumer of the
+ *  stream — the chat surface, the tests, the timeline's own renderers —
+ *  takes the same `ChatStreamItem[]` and must not describe it twice. */
 export interface LiveStreamItem {
   kind: "live";
   key: string;
@@ -227,10 +227,10 @@ export function buildHistoryItems(
  * Pages are exclusive by cursor, so duplicates only occur on overlap edge
  * cases (e.g. a slice file landing between two page fetches) — dedupe by id
  * defensively. `addedItemCount` is the exact number of stream items the
- * prepend introduces — the delta Virtuoso's `firstItemIndex` must shift by to
- * hold the scroll position. It accounts for the seam the old head slice gains
- * (a seam only exists between two loaded slices), so callers never re-derive
- * it.
+ * prepend introduces. It accounts for the seam the old head slice gains (a
+ * seam only exists between two loaded slices), so callers never re-derive it.
+ * The DOM stream needs no index delta — it compensates a prepend by measured
+ * height — but the count is how the paging tests assert what a page added.
  */
 export function prependPage(
   existing: readonly SliceWithContent[],

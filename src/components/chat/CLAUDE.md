@@ -4,11 +4,11 @@
 
 The chat rendering system pipes Vercel AI SDK `UIMessage` parts (text, reasoning, tool-invocations, data-phase, data-evolution) through a unified stream pipeline — recall context, reasoning, tool calls, and final response — rendered inside each assistant message. The top-level container (`ChatPage`) uses `useChat` with `@ai-sdk/workflow`'s `WorkflowChatTransport`: every turn runs inside a durable Vercel Workflow run and is resumable after a dropped connection.
 
-The home page is a single shell — the left time axis is persistent, and the right pane shows the conversation or the card field depending on the RUNG. There is no view mode: `?z=<rung>` names the rung (absent = `conversation`) and `src/lib/chat/deep-link.ts` owns the parsing. The card field (`src/components/timeline-3d/`) renders inside the shell's right pane at slice/day/week; the header's segmented pill is gone and the board bar (`shell/board-bar.tsx`, top centre) is the only control that moves along the ladder — it holds the zoom lens and the strand selector, which used to sit on the 24-32px time rail. The conversation field stays mounted at every rung (its content held at `opacity-0` + `inert`) so its camera position and the live useChat stream survive — and its COMPOSER stays interactive, taking a COMPACT form (`composer-host.tsx` + `chat-input.tsx`'s `collapsed`) rather than disappearing.
+The home page is a single shell — the left time axis is persistent, and the right pane shows the conversation or the card field depending on the RUNG. There is no view mode: `?z=<rung>` names the rung (absent = `conversation`) and `src/lib/chat/deep-link.ts` owns the parsing. The card field (`src/components/timeline-3d/`) renders inside the shell's right pane at slice/day/week; the header's segmented pill is gone and the board bar (`shell/board-bar.tsx`, top centre) is the only control that moves along the ladder — it holds the zoom lens and the strand selector, which used to sit on the 24-32px time rail. The conversation stream stays mounted at every rung (its content held at `opacity-0` + `inert`) so its scroll position and the live useChat stream survive — and its COMPOSER stays interactive, taking a COMPACT form (`composer-host.tsx` + `chat-input.tsx`'s `collapsed`) rather than disappearing.
 
 **THE CARD FIELD PAGES ONLY WHEN ASKED.** Its window head (`FieldOrigin`, via `origin-row.tsx`) is the only thing that loads an older page. Two automatic triggers were removed: a 320px top-zone edge trigger, which made the head unreachable — every approach pulled another page in, so the control moved away from the reader walking toward it — and a 900ms fill pass, which filled the screen before anyone had decided they wanted more. A page request is a repository read in production.
 
-**THE CONVERSATION HAS NO SCROLL CONTAINER** (v0.12). Position is a number we own — a camera offset — and every block is an R3F billboard. See `conversation-field.tsx`, and read its header before changing anything about layout: the whole design follows from "a billboard is anchored by its top edge". The old react-virtuoso list is gone from this view entirely; nothing here imports it.
+**THE CONVERSATION IS A DOM SCROLLER AGAIN** (v0.11 §13/§14.5). R3F renders only what has already happened — the closed time slices; the conversation in flight (new turns + the streaming reply) is plain DOM: selectable, copyable, screen-reader readable, scrolled by the browser's own wheel/touch/keyboard. The R3F conversation field (`conversation-field.tsx`) is deleted; `unified-chat-stream.tsx` is the surface, and its header documents which of the field's guarantees survived the move (windowed mounting, prepend compensation, the live-edge pin, the one-writer band feed).
 
 The content area is ONE unified stream: historical slice blocks above, the live turns below, older slices paged in at the window's head on request. Slice navigation never leaves the stream — a jump (search palette, recall references bar, `?at=` from the timeline) lands on the target slice's seam and plays the time-travel clock as the loading cover. On arrival, `getArrivalState` restores a still-alive newest slice's turns straight into the stream ("继续 <date> 的对话" banner) — cross-device, from the slice, not localStorage.
 
@@ -18,59 +18,51 @@ The content area is ONE unified stream: historical slice blocks above, the live 
 ChatPage (chat-page.tsx)  ← "use client", top-level useChat container
 ├── Content area (one centered column)
 │   ├── EmptyBriefing (empty-memory fallback only — the full-screen variant)
-│   ├── UnifiedChatStream (unified-chat-stream.tsx — a thin adapter over ConversationField)
-│   │   └── ConversationField (conversation-field.tsx — the renderer)
-│   │       ├── [R3F Canvas, orthographic, zoom 1]
-│   │       │   ├── FieldOrigin    ← the head of the loaded window ("load earlier")
-│   │       │   ├── [per mounted block] <Html> billboard
-│   │       │   │   ├── SliceGate        ← the boundary that closes the block
-│   │       │   │   ├── HistoryTurn      ← plain-body bubbles
-│   │       │   │   ├── ResumeBanner     ← "继续 <date> 的对话"
-│   │       │   │   └── ChatMessage      ← live turns only
-│   │       │   │       ├── HousekeepingCard  ← compact data-phase group
-│   │       │   │       ├── EvolutionCard     ← data-evolution parts
-│   │       │   │       ├── ThinkingSteps     ← reasoning parts
-│   │       │   │       ├── PhaseIndicator    ← non-compact data-phase parts
-│   │       │   │       ├── ToolRenderer      ← dispatches tool-* parts
-│   │       │   │       └── MarkdownRenderer  ← text parts
-│   │       │   └── [live block] <Html> billboard (grows downward)
-│   │       └── StreamTimeIndicator (mobile floating "where am I in time" pill)
-│   └── [time-travel cover] RelativeTimeReadout overlay (never unmounts the field)
-├── [Floating composer] — ComposerHost positions it; it reports its height up to the SHELL, which hands it back to BOTH fields as an inset on their camera range (the card field floats over the same foot). The pane reserves nothing: content runs under the chrome and comes to rest clear of it.
+│   ├── UnifiedChatStream (unified-chat-stream.tsx — THE DOM SURFACE: native
+│   │   scroll container + windowed mounting, offsets from lib/chat/stream-layout)
+│   │   ├── FieldOrigin    ← the head of the loaded window ("load earlier")
+│   │   ├── SliceSeam      ← the boundary between two slices (hairline / date pill)
+│   │   ├── HistoryTurn    ← plain-body bubbles
+│   │   ├── ResumeBanner   ← "继续 <date> 的对话"
+│   │   ├── ChatMessage    ← live turns only
+│   │   │   ├── HousekeepingCard  ← compact data-phase group
+│   │   │   ├── EvolutionCard     ← data-evolution parts
+│   │   │   ├── ThinkingSteps     ← reasoning parts
+│   │   │   ├── PhaseIndicator    ← non-compact data-phase parts
+│   │   │   ├── ToolRenderer      ← dispatches tool-* parts
+│   │   │   └── MarkdownRenderer  ← text parts
+│   │   └── StreamTimeIndicator (mobile floating "where am I in time" pill)
+│   └── [time-travel cover] RelativeTimeReadout overlay (never unmounts the stream)
+├── [Floating composer] — ComposerHost positions it; it reports its height up to the SHELL, which hands it back to BOTH surfaces as an inset (the card field floats over the same foot). The pane reserves nothing: content runs under the chrome and comes to rest clear of it.
 │   └── ChatInput (two forms: full = textarea + toolbar, compact = one row)
 ```
 
 HistoricalChatView is gone (v0.10 final wave); the unified stream and the timeline view's right pane cover its roles.
 
-## The field's model (read this before touching layout)
+## The stream's model (read this before touching layout)
 
-Four ideas carry the whole thing. Each one exists because its absence was a measured bug.
+Three ideas carry the DOM surface. Each one exists because its absence was a measured bug — the first two are inherited from the R3F field that preceded it, restated for a native scroller.
 
-**1. Every block is a billboard, anchored by its TOP edge.** A block that grows grows DOWNWARD and moves nothing above it. That is why a finished history block can be measured once and frozen, and why the live turn can grow token by token underneath it without disturbing anything. The camera decides whether to follow the growth: it follows only if the reader is already at the live edge.
+**1. Only the visible rows exist.** `lib/chat/stream-layout.ts` keeps the offset table: a measured height per item KEY (a prepend renumbers indices, so the height travels with the row, never with its position), an estimate until the row mounts. The mounted window is the viewport plus ~one screen of overscan. A long conversation mounts a handful of rows.
 
-**2. The position is a number we own.** `offsetRef` is the world-Y of the viewport top. Inputs (wheel, pointer drag with our own inertia) write `targetRef`; a rAF eases `offsetRef` toward it. There is no `scrollTop` to be corrected under the reader, no estimated total height, no anchoring fight — the class of bug the old stack had (measured: `scrollHeight` reporting 13,471 px for ~1,000 px of content, and `scrollTop` landing 32–64 px away) cannot occur.
+**2. Paging older is COMPENSATION, not anchoring.** A page arriving ABOVE the reader is the one case a native scroller gets wrong on its own. When items land at the head, the stream shifts `scrollTop` by exactly the height they add — estimates first, then each newly-mounted row's real height as a second correction (a row re-measuring above the viewport top shifts `scrollTop` by the delta). The reader's view of what they were reading is pixel-identical. `overflow-anchor: none` on the scroller keeps the browser's own anchoring out of it: two compensations fighting was the old stack's measured bug (`scrollHeight` reporting 13,471 px for ~1,000 px of real content; `scrollTop` landing 32–64 px away from where it was set).
 
-**3. Paging older is COMPENSATION, not anchoring.** This is the one direction idea 1 does not cover: a block arriving ABOVE the reader is exactly the case where "grows downward, moves nothing above" gives no protection. So when the block list gains blocks at its head, `relayout` moves the camera by exactly the height they add. The reader's view of what they were reading is pixel-identical, and the new conversations sit off-screen above, to be scrolled into. Measured: a 7,365 px prepend moves the visible text by **zero** pixels.
-
-Two things make that exact, and both are easy to break:
-- **A gate belongs to the block it CLOSES**, not the one it opens (`groupBlocks`). Attach the seam to the slice it opens and the seam that arrives with a new page lands inside the reader's own block, growing it by a gate's height under them.
-- **Block heights are re-indexed on prepend.** `heightsRef` is indexed by block position; a prepend renumbers every block, so the array is shifted by the same amount. Otherwise each arriving block inherits the height of whichever block used to sit at its index, and the blocks the reader is looking at fall back to an estimate.
+**3. The live edge is a PIN, not a trigger.** The reader is either following (parked at the bottom) or not. Growth pins the scroll to the tail only while following; scrolling away releases the pin, scrolling back re-arms it, and sending a message re-pins deliberately. A reader walking history is never yanked by the reply being written below.
 
 **4. Colour is a HIGHLIGHT, not an identity, and the band draws the MOMENT rather than the window.** The left band rests grey; the core line carries the brand blue until something is singled out, and then the core steps back and the picked threads light in their own palette colours. See `src/lib/timeline3d/ink.ts`.
 
 Which threads it draws is decided by the anchor at the CENTRE of the viewport — the same one the knot is wound around — not by a ranking over everything in view (`lineUpFor` in `strand-transition.ts`, `activeAnchorIndex` in `winding.ts`). That is what lets a strand filter narrow the field without emptying the band: filtering drops CARDS, and a card still carries its whole strand set, so the bundle the highlight stands against survives the pick. Grey lines stay anonymous — the reader never needs to know which grey is which thread — and the selection is merged in and never dropped, so a highlight cannot vanish mid-scroll.
 
-## Boundaries and the announcing gate
+## Boundaries: gates in the timeline, a head in the stream
 
-- **`SliceGate`** is an INTERTITLE: crossing a boundary is arriving at a new time, and the card states HOW FAR it is — "5 天前" one way, "5 天后" the other, the same interval read in both directions — over the animated time, the date and the destination's focus. It is a FIXED height (`SLICE_GATE_PX`) with the dormant and armed faces stacked absolutely inside it — if arming changed the box, arming would move every block below.
-- **`FieldOrigin`** is the window's head: the same intertitle language for the one edge with no slice beyond it. It says either "the beginning of this memory" or offers the older page, and the page control lives HERE because the head is the only place where "show me earlier" is a coherent thing to ask.
-- **Exactly one boundary announces at a time**, decided by `armedGate` in `field-blocks.ts`: the nearest boundary actually in view, with the origin taking precedence at the head. An earlier version kept ONE direction flag for the whole field, so a single wheel tick flipped every gate on screen at once.
-- **Arm state travels as a MUTABLE OBJECT** (`GateSignal`), read by the gate's own frame loop. drei's `<Html>` mounts into a separate React root, so a prop change per crossing would re-render the portal to swap two words.
-- **The band's anchor dot** (`CrossingDot` in `axis-band.tsx`) marks where the announcing boundary sits on the core line. The field publishes it through the shared `FieldFeed` (`lib/timeline3d/field-feed.ts`) — the same object the card field fills in the timeline view, and the same object the band reads its progress and zoom from. **A field publishes only while it OWNS the pane**: the chat field stays mounted behind the timeline, so the shell hands out a lease rather than letting both write. See the module header for why four refs with four private ownership rules was the bug.
+- **`SliceGate`** (timeline only, since v0.11 §14.5) is an INTERTITLE: crossing a boundary is arriving at a new time, and the card states HOW FAR it is — "5 天前" one way, "5 天后" the other — over the animated time, the date and the destination's focus. It is a FIXED height (`SLICE_GATE_PX`) with the dormant and armed faces stacked absolutely inside it — if arming changed the box, arming would move every block below. The DOM stream renders the plain `SliceSeam` instead (hairline checkpoint / date-pill boundary): the gate's announcing behaviour belongs to the fields that have a camera to read it with.
+- **`FieldOrigin`** is the window's head in BOTH surfaces: the same intertitle language for the one edge with no slice beyond it. It says either "the beginning of this memory" or offers the older page, and the page control lives HERE because the head is the only place where "show me earlier" is a coherent thing to ask. In the DOM stream it arms when `scrollTop` is inside the head region — the same mutable `GateSignal`, driven by a scroll position instead of a camera.
+- **Arm state travels as a MUTABLE OBJECT** (`GateSignal`), read by the boundary's own frame loop — a prop change per crossing would re-render the region to swap two words.
+- **The band feed has ONE WRITER.** The stream publishes progress and block anchors through the shared `FieldFeed` (`lib/timeline3d/field-feed.ts`) and consumes its seek requests — but only while it OWNS the pane: the stream stays mounted behind the timeline, so the shell hands out a lease rather than letting both write. See the module header for why four refs with four private ownership rules was the bug. The stream publishes no `crossing` mark — it has no announcing gate.
 
 ## Message Part Flow
 
-1. `useChat` (in `ChatPage`) receives a `UIMessage` with typed `parts[]`; the field wraps each as a live item rendered by `ChatMessage`.
+1. `useChat` (in `ChatPage`) receives a `UIMessage` with typed `parts[]`; the stream wraps each as a live item rendered by `ChatMessage`.
 2. `ChatMessage.buildStream()` classifies each part in a single pass:
    - `reasoning` → merged consecutively into one `ThinkingSteps` block (streaming mode with typewriter subtitle)
    - `tool-*` → merged by `toolCallId` into a single `ToolRenderer` card
@@ -86,15 +78,15 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport �
 | File | Description |
 |------|-------------|
 | `chat-page.tsx` | Top-level `"use client"` container: `useChat` hook, `WorkflowChatTransport` wiring, the arrival verdict (run reconnect + `getArrivalState` resume gate), the stream's item model, slice-jump paging/positioning (bus + `?at=`), the rung-aware `ComposerHost` |
-| `conversation-field.tsx` | **THE RENDERER.** The camera-driven field: block layout, the eased follow, the prepend compensation, per-boundary arming, the imperative handle (`scrollToKey`/`scrollToOffset`/`scrollToBottom`). Its header is the design document; read it first |
-| `unified-chat-stream.tsx` | A thin adapter over `ConversationField` — the seam between the page and the surface. It used to BE the renderer (virtuoso list, bottom-follow workaround, per-frame seam measurement); all of it is gone |
-| `field-blocks.ts` + `tests/lib/chat/field-blocks.test.ts` | **Pure block model** (`src/lib/chat/`): `splitItems`, `sliceIdOf`, `groupBlocks`, `prependHeadCount`, `armedGate`, and the fixed sizes (`SLICE_GATE_PX`, `FIELD_ORIGIN_PX`). Unit-tested — this is where the layout arithmetic lives |
-| `slice-gate.tsx` | The boundary between two conversations, as an intertitle. Dormant = a quiet rule; armed = the shared `Intertitle` arrangement with the destination's focus in its slot. Arm state arrives as a `GateSignal` |
-| `field-origin.tsx` | The head of the loaded window — "the beginning of this memory", or the older-page control. The same `Intertitle` arrangement, with the older-page control in that one slot |
+| `unified-chat-stream.tsx` | **THE SURFACE.** A native DOM scroll container with windowed mounting: the offset table, the prepend/remeasure scroll compensation, the live-edge pin, the imperative handle (`scrollToKey`/`scrollToOffset`/`scrollToBottom`), the band-feed publishing. Its header is the design document; read it first |
+| `stream-layout.ts` + `tests/lib/chat/stream-layout.test.ts` | **Pure layout model** (`src/lib/chat/`): height estimates, the running offset table, the mounted-window range, the top-item lookup. Unit-tested — this is where the stream's arithmetic lives |
+| `field-blocks.ts` + `tests/lib/chat/field-blocks.test.ts` | **Pure block model** (`src/lib/chat/`): `splitItems`, `sliceIdOf`, `groupBlocks`, `prependHeadCount`, `armedGate`, and the fixed sizes (`SLICE_GATE_PX`, `FIELD_ORIGIN_PX`). Served the deleted conversation field first; now serves the timeline's fields, and the DOM stream reuses its sizes and `sliceIdOf` |
+| `slice-gate.tsx` | The boundary between two conversations, as an intertitle — TIMELINE ONLY since v0.11 §14.5 (the DOM stream renders `SliceSeam` instead). Dormant = a quiet rule; armed = the shared `Intertitle` arrangement with the destination's focus in its slot. Arm state arrives as a `GateSignal` |
+| `field-origin.tsx` | The head of the loaded window — "the beginning of this memory", or the older-page control. The same `Intertitle` arrangement, with the older-page control in that one slot. Shared by the DOM stream and the timeline's origin row |
 | `intertitle.tsx` | **The arrangement both intertitles are drawn with** — two edge-aligned rows: interval + chevron over the stateful slot on the left, the clock over its date on the right. The gate and the head differ in that one seat and nowhere else, so moving between them never re-lays-out the region |
-| `slice-seam.tsx` | The seam's shared pieces (date formatting, the gap marker). The gate renders the boundary; this module owns the interval language |
+| `slice-seam.tsx` | The seam between two slices in the DOM stream (hairline checkpoint / date-pill boundary) plus the shared pieces (date formatting, the gap marker) |
 | `history-turn.tsx` | One historical turn as pure-body bubbles (no tool state) |
-| `resume-banner.tsx` | The "继续 <date> 的对话" banner over a restored live slice. Extracted from the stream component so the field does not depend on it |
+| `resume-banner.tsx` | The "继续 <date> 的对话" banner over a restored live slice. Extracted from the stream component so the surface does not depend on it |
 | `stream-time-indicator.tsx` | The transient floating time pill (mobile): top-edge, visible while scrolling, fades ~1s after stop |
 | `rolling-number.tsx` | The odometer rolling-digit family (`useRollingNumber`/`RollingDigit`/`RollingField`/`RollingTime`) — the timeline wheel's central readout and the band's year labels |
 | `date-stamp.tsx` | The ANIMATED date and time faces (`DateStamp`/`TimeStamp` + the pure `dateStampParts`/`timeStampParts`): the locale decides the structure, `NumberTicker` springs the parts that are numeric, and the year rolls up from twenty years back. Revived from the retired `DateGroupHeader`/`SliceTimeMarker` — it is what the gate and the window's head render |
@@ -132,14 +124,13 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport �
 
 - **Arrival = in-flight work, a LIVE slice, or the briefing** (v0.10 §2): on mount, `ChatPage` asks the server TWO things before `Inner`/`useChat` mount — whether the persisted run is still pending/running (`isChatRunActive`) and whether the newest slice is still inside the idle gap (`getArrivalState`). A live run → restore from the localStorage stash + `resume`. An alive slice (and no live run) → its turns re-enter the message stream from the SLICE itself (cross-device), under a "继续 <date> 的对话" banner. Anything else → the arrival briefing. A terminal/absent run drops the stash: completed conversation is restored from slices, never from localStorage.
 - **The page streams before it can be slow.** The config read lives in its own async boundary inside the page's `<Suspense>`, and `[locale]/loading.tsx` gives the route an instant placeholder — both render `ChatStreamSkeleton`, so the reader sees the conversation's own loading face from ~270 ms and the swap is invisible.
-- **The field owns the position, so nothing else may.** Every programmatic move goes through `setTarget` (clamping + follow state + direction together), and `scrollToKey` does NOT fetch: the caller pages until the key exists and calls again. `scrollToKey` also remembers an unloaded target and lands when it appears — the jump caller scrolls on the frame after paging resolves, which is before React has committed the new blocks.
-- **The imperative handle is a ref object, not a component ref.** `fieldApiRef` is a `MutableRefObject` handshake; this codebase has no `forwardRef`/`useImperativeHandle` anywhere. The band feed is the same idea taken one step further: it is the mutable object ITSELF, not a ref to one — a ref would be a second layer of the same idea and the one that gets forgotten when a new field is added.
+- **The scroller is native; the position guarantees are the stream's own.** Programmatic moves go through the imperative handle, and `scrollToKey` does NOT fetch: the caller pages until the key exists and calls again. `scrollToKey` also remembers an unloaded target and lands when it appears — the jump caller scrolls on the frame after paging resolves, which is before React has committed the new items.
+- **The imperative handle is a ref object, not a component ref.** `apiRef` is a `MutableRefObject` handshake; this codebase has no `forwardRef`/`useImperativeHandle` anywhere. The band feed is the same idea taken one step further: it is the mutable object ITSELF, not a ref to one — a ref would be a second layer of the same idea and the one that gets forgotten when a new field is added.
 - **Paging is asked for, never inferred.** There is deliberately no scroll-position trigger: an earlier version fired at `target <= LOAD_OLDER_PX` from an effect keyed on the mounted count, and the mounted count changes while the first measurement pass settles, so arriving alone paged history in. A slice read is a repository call in production.
-- **`<Html>` cuts React context.** Every billboard wraps its children in `NextIntlClientProvider`, and the field's own origin does too. This is required, not defensive — see the note in `frame-card.tsx`.
-- **Three-layer separation**: `ChatPage` owns orchestration, `UnifiedChatStream` is the adapter, `ConversationField` renders, and the item model (`src/lib/chat/stream-items.ts`) plus the block model (`src/lib/chat/field-blocks.ts`) are pure and unit-tested.
+- **Layer separation**: `ChatPage` owns orchestration, `UnifiedChatStream` renders, and the item model (`src/lib/chat/stream-items.ts`), the layout arithmetic (`src/lib/chat/stream-layout.ts`) and the shared block model (`src/lib/chat/field-blocks.ts`) are pure and unit-tested.
 - **The card rungs are a FIELD, not a wheel**: `CardField` lays the catalog out as rows in a virtualized R3F scene (oldest at the top, the present at the bottom), one row per unit at the current rung. A card's turns load when it mounts, through `getSliceContent` — there is NO client cache (`slice-cache.ts` was deleted); the server's Data Cache is what absorbs repeat reads.
 - **Navigation IS the rung, and a point is `?at=`**: `?z=<rung>` names the zoom (`src/lib/chat/deep-link.ts`); `?at=<sliceId>` addresses a POINT, consumed once and then stripped so a refresh never re-jumps. The old `?view=` mode switch and its `viewport-slice.ts` publication are gone — the rung replaced them.
-- **Navigation = time travel, landing IN the stream**: a slice jump overlays `RelativeTimeReadout` (the field beneath never unmounts), pages the target into the stream while the clock rolls, then lands on its seam. A miss (catalog exhausted) is an honest error toast, never a fake landing. Submitting a message cancels any in-flight transition and snaps back to the present.
+- **Navigation = time travel, landing IN the stream**: a slice jump overlays `RelativeTimeReadout` (the stream beneath never unmounts), pages the target into the stream while the clock rolls, then lands on its seam. A miss (catalog exhausted) is an honest error toast, never a fake landing. Submitting a message cancels any in-flight transition and snaps back to the present.
 - **Shared slice-card language**: the travel cover and the empty briefing share one visual identity (`FrameCard`: ring, soft shadow, hairline separators, mono eyebrow row with the primary square marker).
 - **ChatInput owns its images** via `useImageAttachments`: paste, drag-drop and file picker funnel into the same state, previewed as removable thumbnails.
 - **MarkdownRenderer is not `prose`-only**: custom per-element styles (tables, links, code blocks) instead of relying solely on Tailwind typography.

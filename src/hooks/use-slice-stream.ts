@@ -24,17 +24,18 @@ export interface SliceStream {
   initialLoaded: boolean;
   /**
    * Prepend one older page. Resolves to the exact number of STREAM ITEMS the
-   * prepend adds (seams + turns) — the delta the caller must subtract from
-   * Virtuoso's firstItemIndex to hold the scroll position. 0 when nothing was
-   * added (exhausted, in flight, or a failed fetch).
+   * prepend adds (seams + turns) — informational for the caller's paging
+   * logic; the DOM stream holds the reader's place by compensating its
+   * scroll position with the page's measured height, so no index delta is
+   * needed. 0 when nothing was added (exhausted, in flight, or a failed
+   * fetch).
    */
   loadOlder: () => Promise<number>;
   /**
    * Page backwards until `sliceId` is loaded (wheel jump to an unloaded
    * slice). `onPrepend` fires after each page with the exact stream-item
-   * delta — the caller shifts Virtuoso's firstItemIndex by it. Resolves true
-   * when the slice is in the loaded window; false when the catalog was
-   * exhausted (or paging stalled) without it.
+   * delta. Resolves true when the slice is in the loaded window; false when
+   * the catalog was exhausted (or paging stalled) without it.
    */
   loadUntilSlice: (
     sliceId: string,
@@ -135,7 +136,7 @@ export function useSliceStream(
       // Fast path: ONE server round trip loads the whole missing stretch
       // between the target and the loaded window (the server reads the
       // timeline index once and loads every slice file in parallel). The
-      // result prepends as a single page, so firstItemIndex shifts once.
+      // result prepends as a single page, so the stream compensates once.
       if (!loadingRef.current) {
         loadingRef.current = true;
         setLoadingOlder(true);

@@ -1028,8 +1028,8 @@ export function CardField({
   useEffect(() => {
     if (!publishing) return;
     // Relax on ACQUIRE as well as on release — see the note in
-    // `conversation-field.tsx`. A field that mounts but never reaches its frame
-    // loop (an empty catalog renders no canvas) would otherwise leave the band
+    // `chat/unified-chat-stream.tsx`. A pane that mounts but never publishes
+    // (an empty catalog renders nothing) would otherwise leave the band
     // holding the other pane's winding.
     clearFeed(feed);
     return () => clearFeed(feed);

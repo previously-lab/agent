@@ -5,8 +5,8 @@
  *
  * Producers: the search command palette (mounted in the header) and the recall
  * references bar (inside a chat message). Consumer: ChatPage registers its
- * slice-select path (page-until-loaded + Virtuoso scrollToIndex + the
- * time-travel clock as the loading state).
+ * slice-select path (page-until-loaded + scroll-to-seam + the time-travel
+ * clock as the loading state).
  *
  * A jump requested while the chat page is NOT mounted (the palette used from
  * another route) is stashed as `pending`; the producer then navigates home and
