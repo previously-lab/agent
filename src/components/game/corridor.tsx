@@ -13,8 +13,12 @@
  * prop); a window switch is a data swap, never a coordinate change. The
  * corridor's far end is either the PAGE DOOR into the next-older hotel's
  * lobby or — at the oldest window — a plain wall (§10: "直到尽头就什么都
- * 没有了"). The lobby carries the RETURN DOOR you arrived through (§10.2a)
- * whenever the integrator says there is one.
+ * 没有了"). The lobby carries the RETURN DOORS the trips in came through
+ * (§10.5): one per wall (north junction wall / south leg wall) the nav
+ * stack's trips entered from, hung whenever the integrator says that side
+ * has a trip. The lobby's south wall also wears the REGISTER BOARD above
+ * the front desk (§9.2/§10.3 — the window's slices and their gaps, the
+ * hotel's identity, the older-hotel promise; R3F panel, DOM text per §13).
  *
  * ACCENT (§11.1). Every hotel has one accent color (the `accent` prop —
  * brand blue for the core timeline, another brand-family member for strand
@@ -158,6 +162,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import { AdditiveBlending, CanvasTexture, Color, DoubleSide, MeshStandardMaterial, SRGBColorSpace } from "three";
 import type { JSX, MutableRefObject } from "react";
 import type {
@@ -193,6 +198,7 @@ import {
   type CorridorLayout,
 } from "@/lib/game/corridor-pitch";
 import { sliceClock } from "@/lib/game/slice-clock";
+import { sliceIdToMs } from "@/lib/game/strand-graph";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
 import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
 import type { ArchetypeId } from "@/lib/game/space-types";
@@ -222,6 +228,10 @@ import {
   PLATE_BG,
   PLATE_INK,
   PORTAL_POST_SIZE,
+  REGISTER_BOARD_H,
+  REGISTER_BOARD_W,
+  REGISTER_BOARD_Y,
+  RETURN_DOOR_SOUTH_X,
   RETURN_DOOR_X,
   SCONCE_COLOR,
   SCONCE_LIGHT_HEIGHT,
@@ -638,6 +648,38 @@ function buildLobbyLayout(): LobbyLayout {
 }
 
 const LOBBY_LAYOUT = buildLobbyLayout();
+
+/**
+ * Walkable-space blockers for the lobby leg (the integrator's movement
+ * clamp): the front desk and the armchair pair, inflated by a body radius.
+ * The leg is walkable (the register board and the south return door must be
+ * approachable), and these are the only pieces big enough to read as solid.
+ * Small props (plants, lamps) stay clip-through, like every corridor prop.
+ */
+export interface LobbyBlocker {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
+const LOBBY_BLOCKER_PAD = 0.35;
+
+function lobbyBlockerBox(cx: number, cz: number, halfW: number, halfD: number): LobbyBlocker {
+  return {
+    x0: cx - halfW - LOBBY_BLOCKER_PAD,
+    x1: cx + halfW + LOBBY_BLOCKER_PAD,
+    z0: cz - halfD - LOBBY_BLOCKER_PAD,
+    z1: cz + halfD + LOBBY_BLOCKER_PAD,
+  };
+}
+
+export const LOBBY_BLOCKERS: readonly LobbyBlocker[] = [
+  lobbyBlockerBox(LOBBY_LAYOUT.desk.position[0], LOBBY_LAYOUT.desk.position[2], 1.1, 0.45),
+  ...LOBBY_LAYOUT.armchairs.map((chair) =>
+    lobbyBlockerBox(chair.position[0], chair.position[2], 0.36, 0.36),
+  ),
+];
 
 /* ------------------------------------------------------------------ */
 /* Small static building blocks                                        */
@@ -1940,6 +1982,191 @@ function FloorLamp({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Lobby register board (§9.2/§10.3 — 目录板)                          */
+/* ------------------------------------------------------------------ */
+
+const REGISTER_DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface LobbyRegisterEntry {
+  sliceId: string;
+  /** "09·15" / "0746" from the id's own clock; null for non-id fixtures. */
+  date: string | null;
+  time: string | null;
+}
+
+export interface LobbyRegister {
+  /** The window's slices, newest first (the corridor's own order). */
+  entries: LobbyRegisterEntry[];
+  /** gaps[i] = whole days from entries[i] (newer) back to entries[i+1]
+   *  (older); null when either timestamp is unknown. Length
+   *  entries.length − 1. */
+  gaps: readonly (number | null)[];
+}
+
+/**
+ * The register's data: every slice in ONE window with the time gaps
+ * between them — the corridor's pitch story re-homed to the lobby
+ * (§10.3: "间隔"要在大堂安家). Gaps come from the same timestamps the
+ * corridor's layout consumes (the ISO `start`, falling back to the slice
+ * id through strand-graph's parser — corridor-pitch's exact rule), so the
+ * board and the hall never disagree about an interval.
+ */
+export function buildLobbyRegister(
+  doors: readonly CorridorDoor[],
+  windowIndex: number,
+): LobbyRegister {
+  const windowDoors = doors.slice(
+    windowIndex * WINDOW_SLICES,
+    (windowIndex + 1) * WINDOW_SLICES,
+  );
+  const entries = windowDoors.map((door) => ({
+    sliceId: door.sliceId,
+    date: sliceClock(door.sliceId)?.date ?? null,
+    time: sliceClock(door.sliceId)?.time ?? null,
+  }));
+  const starts = windowDoors.map((door) => {
+    if (door.start !== undefined) {
+      const ms = Date.parse(door.start);
+      if (!Number.isNaN(ms)) return ms;
+    }
+    return sliceIdToMs(door.sliceId);
+  });
+  const gaps: (number | null)[] = [];
+  for (let i = 0; i + 1 < starts.length; i++) {
+    const newer = starts[i];
+    const older = starts[i + 1];
+    gaps.push(
+      newer !== null && older !== null
+        ? Math.max(0, Math.trunc((newer - older) / REGISTER_DAY_MS))
+        : null,
+    );
+  }
+  return { entries, gaps };
+}
+
+/**
+ * The register board: a framed dark panel on the lobby's south wall above
+ * the front desk — the classic rate-board spot, the one fixed place every
+ * arrival faces (§10.2a) — and the future anchor for the 2.5D jump
+ * (§13: 锚定物, so it hangs where the player can walk up to it). Panel
+ * and frame are R3F; every glyph is DOM (§13: 文字永远 DOM, 空间永远
+ * R3F). It reads as a hotel notice board, not a UI control: the hotel's
+ * name and window number in the hotel's accent (§11.1 — brand blue for
+ * the core timeline), then each slice's clock with the gap back to the
+ * next-older one, and — while an older hotel exists — the page door's
+ * promise at the foot.
+ */
+function LobbyRegisterBoard({
+  register,
+  hotelName,
+  windowIndex,
+  olderClock,
+  accent,
+  mats,
+}: {
+  register: LobbyRegister;
+  hotelName: string;
+  windowIndex: number;
+  /** The page door's plate (the next-older hotel's first room clock) —
+   *  null at the oldest window: nothing lies beyond. */
+  olderClock: string | null;
+  accent: string;
+  mats: HotelMaterials;
+}) {
+  // 200 px per world unit (drei Html: 400 / distanceFactor) — the DOM is
+  // sized to exactly cover the R3F panel behind it.
+  const PX_PER_M = 200;
+  const inkDim = "rgba(236,226,204,0.55)";
+  return (
+    <group
+      position={[
+        LOBBY_LAYOUT.desk.position[0],
+        REGISTER_BOARD_Y,
+        -LOBBY_SOUTH_REACH + CORRIDOR_WALL_THICKNESS / 2 + 0.03,
+      ]}
+    >
+      <mesh material={mats.trim} castShadow>
+        <boxGeometry args={[REGISTER_BOARD_W + 0.14, REGISTER_BOARD_H + 0.14, 0.07]} />
+      </mesh>
+      <mesh position={[0, 0, 0.04]}>
+        <planeGeometry args={[REGISTER_BOARD_W, REGISTER_BOARD_H]} />
+        <meshStandardMaterial color={PLATE_BG} roughness={0.9} metalness={0} />
+      </mesh>
+      <Html
+        transform
+        center
+        distanceFactor={2}
+        position={[0, 0, 0.08]}
+        zIndexRange={[5, 0]}
+        style={{ pointerEvents: "none" }}
+      >
+        <div
+          style={{
+            width: REGISTER_BOARD_W * PX_PER_M - 24,
+            height: REGISTER_BOARD_H * PX_PER_M - 24,
+            boxSizing: "border-box",
+            padding: "20px 28px",
+            display: "flex",
+            flexDirection: "column",
+            fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+            color: PLATE_INK,
+            userSelect: "none",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              color: accent,
+              fontWeight: 700,
+              fontSize: 34,
+              letterSpacing: 5,
+              paddingBottom: 12,
+              borderBottom: `2px solid ${inkDim}`,
+            }}
+          >
+            <span>{hotelName}</span>
+            <span>W{windowIndex}</span>
+          </div>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-evenly" }}>
+            {register.entries.map((entry, i) => (
+              <div
+                key={entry.sliceId}
+                style={{ display: "flex", alignItems: "baseline", gap: 22 }}
+              >
+                <span style={{ fontWeight: 700, fontSize: 54 }}>{entry.time ?? "····"}</span>
+                <span style={{ color: inkDim, fontSize: 34 }}>{entry.date ?? ""}</span>
+                <span style={{ flex: 1 }} />
+                {i < register.gaps.length && (
+                  <span style={{ color: inkDim, fontSize: 26 }}>
+                    {register.gaps[i] === null ? "·" : `${register.gaps[i]}d`}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          {olderClock !== null && (
+            <div
+              style={{
+                borderTop: `2px solid ${inkDim}`,
+                paddingTop: 12,
+                color: accent,
+                fontWeight: 700,
+                fontSize: 30,
+                letterSpacing: 3,
+              }}
+            >
+              ← {olderClock}
+            </div>
+          )}
+        </div>
+      </Html>
+    </group>
+  );
+}
+
 /** The lobby — the L's short leg. The junction band (corridor width)
  *  keeps its north wall and the seam portal posts; its south side is
  *  OPEN — the corridor's south wall stops at the seam and the floor runs
@@ -1947,21 +2174,36 @@ function FloorLamp({
  *  turn into a separate room. The leg's far walls (south/east) run full
  *  height; its west wall faces the camera and stays a low cutaway
  *  parapet. The desk stands against the south wall, facing the turn.
- *  When `returnDoor` is set the junction's north wall carries the door
- *  the player arrived through (§10.2a — HD3): it hangs at RETURN_DOOR_X
- *  with the hotel's accent glow, leading back to wherever the trip
- *  started. No door without a trip: the newest hotel's lobby is the
- *  beginning of the world. */
+ *  RETURN DOORS (§10.5 — 大堂南北墙各挂一扇): the lobby carries one return
+ *  door per SIDE the trip in on the nav stack came from — a room entered
+ *  from the corridor's north wall leaves its way back on the lobby's north
+ *  wall (RETURN_DOOR_X, the junction band), a south-wall room on the leg's
+ *  far south wall (RETURN_DOOR_SOUTH_X, west of the desk). Both walls carry
+ *  a door when the stack holds trips from both sides; each leads back with
+ *  the hotel's accent glow and carries no number (it leads back, not to a
+ *  slice). No door without a trip: the newest hotel's lobby is the
+ *  beginning of the world. The south wall also wears the REGISTER BOARD
+ *  above the desk (§9.2/§10.3 — the one fixed place every arrival sees). */
 function Lobby({
   dimRef,
   mats,
-  returnDoor,
+  returnDoors,
+  register,
+  hotelName,
+  windowIndex,
+  olderClock,
   accent,
   playerRef,
 }: {
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
-  returnDoor: boolean;
+  /** Which lobby walls carry a return door (§10.5) — the lateral sides
+   *  the nav stack's trips came in from. */
+  returnDoors: { north: boolean; south: boolean };
+  register: LobbyRegister;
+  hotelName: string;
+  windowIndex: number;
+  olderClock: string | null;
   accent: string;
   playerRef: MutableRefObject<{ x: number; z: number }>;
 }) {
@@ -1975,9 +2217,13 @@ function Lobby({
   const legDepth = LOBBY_SOUTH_REACH - WALL_Z;
   const legCenterZ = (-WALL_Z + southZ) / 2;
   // The junction's north wall: one solid run, or split around the return
-  // door's gap exactly like a corridor wall run (segments + lintel).
-  const northWall = returnDoor
+  // door's gap exactly like a corridor wall run (segments + lintel). The
+  // leg's far south wall splits the same way around its own return door.
+  const northWall = returnDoors.north
     ? wallSegments(0, LOBBY_LENGTH, [RETURN_DOOR_X])
+    : [{ x0: 0, x1: LOBBY_LENGTH }];
+  const southWall = returnDoors.south
+    ? wallSegments(0, LOBBY_LENGTH, [RETURN_DOOR_SOUTH_X])
     : [{ x0: 0, x1: LOBBY_LENGTH }];
   return (
     <group>
@@ -2002,7 +2248,7 @@ function Lobby({
           <boxGeometry args={[s.x1 - s.x0, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
         </mesh>
       ))}
-      {returnDoor && (
+      {returnDoors.north && (
         <>
           <mesh
             position={[RETURN_DOOR_X, (WALL_HEIGHT + DOOR_HEIGHT) / 2, WALL_Z]}
@@ -2030,7 +2276,9 @@ function Lobby({
           />
         </>
       )}
-      {/* Far walls: east and south, full height — the backdrop. */}
+      {/* Far walls: east and south, full height — the backdrop. The south
+          wall splits around its own return door (§10.5) exactly like the
+          junction's north wall does. */}
       <mesh
         position={[LOBBY_LENGTH, WALL_HEIGHT / 2, centerZ]}
         material={mats.wall}
@@ -2039,14 +2287,45 @@ function Lobby({
       >
         <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, floorDepth + CORRIDOR_WALL_THICKNESS]} />
       </mesh>
-      <mesh
-        position={[centerX, WALL_HEIGHT / 2, southZ]}
-        material={mats.wall}
-        castShadow
-        receiveShadow
-      >
-        <boxGeometry args={[LOBBY_LENGTH + CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
-      </mesh>
+      {southWall.map((s) => (
+        <mesh
+          key={`south-${s.x0}:${s.x1}`}
+          position={[(s.x0 + s.x1) / 2, WALL_HEIGHT / 2, southZ]}
+          material={mats.wall}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[s.x1 - s.x0, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
+        </mesh>
+      ))}
+      {returnDoors.south && (
+        <>
+          <mesh
+            position={[RETURN_DOOR_SOUTH_X, (WALL_HEIGHT + DOOR_HEIGHT) / 2, southZ]}
+            material={mats.wall}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[DOOR_WIDTH, WALL_HEIGHT - DOOR_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
+          </mesh>
+          {/* The south-side way back (§10.5): a south-wall room's trip
+              home. Accent glow, no number — it leads back, not to a slice. */}
+          <DoorAssembly
+            door={{
+              index: 0,
+              side: "south",
+              sliceId: "",
+              x: RETURN_DOOR_SOUTH_X,
+              z: southZ,
+            }}
+            dimRef={dimRef}
+            mats={mats}
+            playerRef={playerRef}
+            glowOverride={accent}
+            plateClock={null}
+          />
+        </>
+      )}
       {/* The leg's west wall faces the camera: a low parapet with a trim
           cap, so the 45° camera reads the leg's floor over it. */}
       <mesh
@@ -2065,8 +2344,8 @@ function Lobby({
       >
         <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.1, LOBBY_CUTAWAY_CAP, legDepth + 0.1]} />
       </mesh>
-      {/* Baseboards on the three full-height walls — the north one breaks
-          around the return door's gap like the wall itself does. */}
+      {/* Baseboards on the three full-height walls — the north and south
+          ones break around their return door gaps like the walls do. */}
       {northWall.map((s) => (
         <mesh
           key={`baseboard-n-${s.x0}:${s.x1}`}
@@ -2076,12 +2355,15 @@ function Lobby({
           <boxGeometry args={[s.x1 - s.x0, 0.12, 0.04]} />
         </mesh>
       ))}
-      <mesh
-        position={[centerX, 0.06, southZ + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
-        material={mats.trim}
-      >
-        <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
-      </mesh>
+      {southWall.map((s) => (
+        <mesh
+          key={`baseboard-s-${s.x0}:${s.x1}`}
+          position={[(s.x0 + s.x1) / 2, 0.06, southZ + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
+          material={mats.trim}
+        >
+          <boxGeometry args={[s.x1 - s.x0, 0.12, 0.04]} />
+        </mesh>
+      ))}
       <mesh
         position={[LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - 0.02, 0.06, centerZ]}
         material={mats.trim}
@@ -2089,7 +2371,7 @@ function Lobby({
         <boxGeometry args={[0.04, 0.12, floorDepth]} />
       </mesh>
       {/* Wainscot + chair rail on the three full-height walls — the north
-          wall's bands break around the return door's gap. */}
+          and south walls' bands break around their return door gaps. */}
       {[1, -1].map((s) => {
         const wz = s > 0
           ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01
@@ -2097,7 +2379,7 @@ function Lobby({
         const rz = s > 0
           ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01
           : southZ + CORRIDOR_WALL_THICKNESS / 2 + CHAIR_RAIL_DEPTH / 2 - 0.01;
-        const spans = s > 0 ? northWall : [{ x0: 0, x1: LOBBY_LENGTH }];
+        const spans = s > 0 ? northWall : southWall;
         return (
           <group key={`wainscot-${s}`}>
             {spans.map((span) => (
@@ -2191,6 +2473,17 @@ function Lobby({
         </mesh>
       ))}
       <FrontDesk position={desk.position} rotationY={desk.rotationY} mats={mats} />
+      {/* The register board above the desk (§9.2/§10.3): the window's
+          slices and their gaps, the hotel's identity, and the older-hotel
+          promise — DOM text on an R3F panel (§13). */}
+      <LobbyRegisterBoard
+        register={register}
+        hotelName={hotelName}
+        windowIndex={windowIndex}
+        olderClock={olderClock}
+        accent={accent}
+        mats={mats}
+      />
       {armchairs.map((chair, i) => (
         <Armchair key={i} position={chair.position} rotationY={chair.rotationY} mats={mats} />
       ))}
@@ -2516,7 +2809,8 @@ export function Corridor({
   doors,
   windowIndex,
   accent,
-  returnDoor,
+  returnDoors,
+  hotelName,
   dimmed = false,
   dark = true,
 }: {
@@ -2527,11 +2821,16 @@ export function Corridor({
   doors: readonly CorridorDoor[];
   windowIndex: number;
   /** The hotel's accent (§11.1): door-plate ink, page-door glow, return-
-   *  door glow. Brand blue for the core timeline. */
+   *  door glow, the register board's header. Brand blue for the core
+   *  timeline. */
   accent: string;
-  /** Whether the lobby carries the return door you arrived through
-   *  (§10.2a). False only for the hotel the run spawns in. */
-  returnDoor: boolean;
+  /** Which lobby walls carry a return door (§10.5): one per lateral side
+   *  the nav stack's trips came in from. Both false only for the hotel
+   *  the run spawns in. */
+  returnDoors: { north: boolean; south: boolean };
+  /** The hotel's display name on the register board — "PREVIOUSLY" for the
+   *  core timeline's hotel, the strand name otherwise. */
+  hotelName: string;
   dimmed?: boolean; // true while a space is active
   dark?: boolean; // false = light mode (the app theme, read by the integrator)
 }): JSX.Element {
@@ -2557,6 +2856,12 @@ export function Corridor({
     const nextNewest = sliceIds[(windowIndex + 1) * WINDOW_SLICES];
     return nextNewest ? (sliceClock(nextNewest)?.time ?? null) : null;
   }, [hasOlder, sliceIds, windowIndex]);
+  // The register board's rows: this window's slices and the gaps between
+  // them (§10.3 — the corridor's intervals, re-homed to the lobby).
+  const register = useMemo(
+    () => buildLobbyRegister(doors, windowIndex),
+    [doors, windowIndex],
+  );
   const doorArchetypes = useMemo(() => {
     const map = new Map<string, ArchetypeId | undefined>();
     for (const door of doors) map.set(door.sliceId, door.archetype);
@@ -2641,7 +2946,11 @@ export function Corridor({
       <Lobby
         dimRef={dimRef}
         mats={mats}
-        returnDoor={returnDoor}
+        returnDoors={returnDoors}
+        register={register}
+        hotelName={hotelName}
+        windowIndex={windowIndex}
+        olderClock={pagePlate}
         accent={accent}
         playerRef={playerRef}
       />

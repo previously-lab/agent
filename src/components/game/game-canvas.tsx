@@ -104,10 +104,13 @@
  * (lobby at x ∈ [0, LOBBY_LENGTH), corridor at negative x), so a hotel
  * switch is a data swap plus a teleport, never new geometry math. Three
  * doors move the player between hotels: the PAGE DOOR at the corridor's
- * far end (same timeline, next-older window), the RETURN DOOR in every
- * lobby you arrived into (pops the navigation stack — page-door arrivals
- * land back in the lobby, strand-door arrivals land back inside the room
- * they left), and the strand doors below. The oldest window's end wall
+ * far end (same timeline, next-older window), the RETURN DOORS in every
+ * lobby you arrived into — one per wall the trips in came from (§10.5:
+ * a north-wall room's way back hangs on the lobby's north wall, a
+ * south-wall room's on the south wall; each door unwinds the newest trip
+ * of its own lateral — page-door arrivals land back in the lobby,
+ * strand-door arrivals land back inside the room they left) — and the
+ * strand doors below. The oldest window's end wall
  * carries no page door — the timeline simply ends.
  *
  * STRAND DOORS (doc 附录 B.11, HD4). A room grows one extra door per
@@ -137,6 +140,8 @@ import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
 import { GAME_DEBUG } from "./debug";
 import {
+  LOBBY_LENGTH,
+  LOBBY_SOUTH_REACH,
   WINDOW_SLICES,
   chunkBounds,
   doorPosition,
@@ -153,7 +158,10 @@ import {
 } from "@/lib/game/corridor-pitch";
 import {
   CLEAR_HALF,
+  CORRIDOR_Z_LIMIT,
   GAP_HALF,
+  GAP_Z_LIMIT,
+  LOBBY_CLEAR,
   WALL_IN,
   WALL_OUT,
   WALL_Z,
@@ -185,13 +193,15 @@ import {
   templatePlanFor,
 } from "@/lib/game/room-templates";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
-import { Corridor, type CorridorDoor } from "./corridor";
+import { Corridor, LOBBY_BLOCKERS, type CorridorDoor } from "./corridor";
 import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
 import {
   HIDE_DELAY_MS,
   HOTEL_ACCENT_CORE,
   LOBBY_ARRIVAL_INSET,
   PAGE_DOOR_CROSS_DEPTH,
+  RETURN_DOOR_SOUTH_CROSS_DEPTH,
+  RETURN_DOOR_SOUTH_X,
   RETURN_DOOR_X,
 } from "@/lib/game/tuning/hotel";
 import {
@@ -576,10 +586,109 @@ export function reduceStrandTransition(
  * strand-door hop — the room and strand door the player left by, so the
  * lobby's return door can land them back INSIDE that room (§10.2a). A
  * page-door hop records `returnTo: null` — the return lands in the lobby.
+ *
+ * `side` is the trip's LATERAL (§10.5): which corridor wall the departed
+ * room's door hung on, so the lobby can hang the way back on the matching
+ * wall (north-wall room → north return door, south-wall room → south).
+ * Page-door and travel hops are east-west trips with no lateral — they
+ * default to the north wall (the original single-door behavior).
  */
-interface NavEntry {
+export interface NavEntry {
   readonly hotel: HotelRef;
   readonly returnTo: { readonly sliceId: string; readonly key: string } | null;
+  readonly side: Side;
+}
+
+/** Which lobby walls carry a return door (§10.5): one per lateral side
+ *  the stack's trips came in from — the same side never hangs two doors,
+ *  and both walls carry one when the stack holds trips from both sides. */
+export function returnDoorSides(
+  stack: readonly NavEntry[],
+): { north: boolean; south: boolean } {
+  let north = false;
+  let south = false;
+  for (const entry of stack) {
+    if (entry.side === "north") north = true;
+    else south = true;
+  }
+  return { north, south };
+}
+
+/**
+ * Walking through one wall's return door: split off the stack down to and
+ * including the NEWEST trip of that lateral — the entry the door returns
+ * to, and the stack as it becomes (everything pushed after that trip is
+ * left behind: the player walked straight back past those hotels without
+ * unwinding them). Null when no trip of that side exists (the door is not
+ * hung then, so this never fires from geometry).
+ */
+export function splitReturnTrip(
+  stack: readonly NavEntry[],
+  side: Side,
+): { entry: NavEntry; rest: NavEntry[] } | null {
+  for (let i = stack.length - 1; i >= 0; i--) {
+    if (stack[i].side === side) {
+      return { entry: stack[i], rest: stack.slice(0, i) };
+    }
+  }
+  return null;
+}
+
+/** The lobby leg's south-wall passage: inside the south return door's gap
+ *  the south bound relaxes this far past the wall plane so the crossing
+ *  trigger (RETURN_DOOR_SOUTH_CROSS_DEPTH) is reachable — the same
+ *  overtravel the page door gets (END_WALL_PASS_DEPTH). */
+const LOBBY_SOUTH_PASS_DEPTH = 0.6;
+/** West parapet clearance, deep in the lobby leg (the cutaway wall at
+ *  x = 0 is low but it is still a wall). */
+const LOBBY_PARAPET_CLEAR = 0.5;
+
+/**
+ * The hotel clamp — clampToCorridor PLUS the lobby leg (§10.5: the south
+ * return door and the register board must be approachable). clamps.ts owns
+ * the corridor band and is not extended; this wrapper owns the lobby band
+ * (x > 0, the L's short leg) and delegates everything west of the seam.
+ * In the leg the player may walk south to the far wall (kept LOBBY_CLEAR
+ * off it, or past its plane inside the south return door's gap), the west
+ * parapet blocks x, and the front desk and armchairs are solid
+ * (LOBBY_BLOCKERS — pushed out along the shallowest axis). The north side
+ * keeps the corridor's exact rule (gap windows over the same doorXs).
+ */
+export function clampToHotel(
+  p: { x: number; z: number },
+  doorXs: readonly number[],
+  end: CorridorEnd | undefined,
+  southReturnDoorX: number | null,
+): void {
+  if (p.x <= 0) {
+    clampToCorridor(p, doorXs, end);
+    return;
+  }
+  if (p.x > LOBBY_LENGTH - LOBBY_CLEAR) p.x = LOBBY_LENGTH - LOBBY_CLEAR;
+  const inGap = doorXs.some((dx) => Math.abs(p.x - dx) < GAP_HALF);
+  const zHi = inGap ? GAP_Z_LIMIT : CORRIDOR_Z_LIMIT;
+  const inSouthGap =
+    southReturnDoorX !== null && Math.abs(p.x - southReturnDoorX) < GAP_HALF;
+  const zLo = inSouthGap
+    ? -(LOBBY_SOUTH_REACH + LOBBY_SOUTH_PASS_DEPTH)
+    : -(LOBBY_SOUTH_REACH - LOBBY_CLEAR);
+  p.z = Math.min(zHi, Math.max(zLo, p.z));
+  if (p.z < -CORRIDOR_Z_LIMIT && p.x < LOBBY_PARAPET_CLEAR) {
+    p.x = LOBBY_PARAPET_CLEAR;
+  }
+  for (const b of LOBBY_BLOCKERS) {
+    if (p.x > b.x0 && p.x < b.x1 && p.z > b.z0 && p.z < b.z1) {
+      const west = p.x - b.x0;
+      const east = b.x1 - p.x;
+      const south = p.z - b.z0;
+      const north = b.z1 - p.z;
+      const min = Math.min(west, east, south, north);
+      if (min === west) p.x = b.x0;
+      else if (min === east) p.x = b.x1;
+      else if (min === south) p.z = b.z0;
+      else p.z = b.z1;
+    }
+  }
 }
 
 /** The corridor door materialized for a flat slice-list index (within ONE
@@ -1078,6 +1187,7 @@ function GameLoop({
   layout,
   corridorEnd,
   returnDoorX,
+  returnDoorSouthX,
   onPageDoor,
   onReturnDoor,
   hotelLabel,
@@ -1110,14 +1220,17 @@ function GameLoop({
   /** The corridor's far end (HD2/HD3): x is capped at the end wall —
    *  solid at the oldest window, relaxed inside the page door's gap. */
   corridorEnd: CorridorEnd;
-  /** The lobby's return door x when the nav stack is non-empty, else
-   *  null (no return door — the spawn hotel's lobby has none). */
+  /** The lobby's NORTH return door x when the nav stack holds a
+   *  north-lateral trip, else null (no door on that wall). */
   returnDoorX: number | null;
-  /** Hotel hops (HD3): the player pushed through the page door / the
-   *  return door. Called from inside the frame; the handlers teleport and
-   *  switch the integrator's location state. */
+  /** The lobby's SOUTH return door x when the nav stack holds a
+   *  south-lateral trip, else null (§10.5). */
+  returnDoorSouthX: number | null;
+  /** Hotel hops (HD3): the player pushed through the page door / one
+   *  wall's return door. Called from inside the frame; the handlers
+   *  teleport and switch the integrator's location state. */
   onPageDoor: () => void;
-  onReturnDoor: () => void;
+  onReturnDoor: (side: Side) => void;
   /** "timelineId@windowIndex" — written to GAME_DEBUG.hotel every frame. */
   hotelLabel: string;
   archetypeById: ReadonlyMap<string, ArchetypeId>;
@@ -1164,8 +1277,10 @@ function GameLoop({
       // in the corridor: the page door at the far end (the end clamp
       // relaxed inside its gap; pushing PAGE_DOOR_CROSS_DEPTH past the wall
       // plane hops to the next-older window's lobby) and the lobby's return
-      // door (past the north wall plane inside its gap — pops the nav
-      // stack). Both teleport: skip the rest of this frame.
+      // doors — one per wall the trip in came from (§10.5): the north
+      // door's trigger sits past the junction's north wall plane, the south
+      // door's past the leg's far south wall plane, each inside its own
+      // gap. All teleport: skip the rest of this frame.
       if (space === null) {
         if (
           corridorEnd.pageDoor &&
@@ -1180,7 +1295,15 @@ function GameLoop({
           p.z > WALL_OUT &&
           Math.abs(p.x - returnDoorX) < GAP_HALF
         ) {
-          onReturnDoor();
+          onReturnDoor("north");
+          return;
+        }
+        if (
+          returnDoorSouthX !== null &&
+          p.z < -(LOBBY_SOUTH_REACH + RETURN_DOOR_SOUTH_CROSS_DEPTH) &&
+          Math.abs(p.x - returnDoorSouthX) < GAP_HALF
+        ) {
+          onReturnDoor("south");
           return;
         }
       }
@@ -1248,7 +1371,7 @@ function GameLoop({
           roomPlan,
         );
       } else {
-        clampToCorridor(p, doorXs, corridorEnd);
+        clampToHotel(p, doorXs, corridorEnd, returnDoorSouthX);
       }
     } else {
       // Frozen mid-crossing: report "not moving" so the avatar settles
@@ -1470,15 +1593,24 @@ export default function GameCanvas({
   // Hotels (HD2/HD3): WHERE the player is — one timeline at one window.
   // The navigation stack records how they got here: each entry is the
   // hotel to return to plus, for a strand-door hop, the room and door the
-  // player left by (the return door lands them back inside that room).
-  // The stack lives in a ref (mutated from frame handlers); `stackDepth`
-  // is its render-visible shadow — it gates the lobby's return door.
+  // player left by (the return door lands them back inside that room),
+  // and the trip's lateral side (§10.5 — which lobby wall the way back
+  // hangs on). The stack lives in a ref (mutated from frame handlers);
+  // `returnSides` is its render-visible shadow — it gates the lobby's
+  // return doors, one per side.
   const [location, setLocation] = useState<HotelRef>({
     timelineId: CORE_TIMELINE_ID,
     windowIndex: 0,
   });
   const navStackRef = useRef<NavEntry[]>([]);
-  const [stackDepth, setStackDepth] = useState(0);
+  const [returnSides, setReturnSides] = useState<{ north: boolean; south: boolean }>({
+    north: false,
+    south: false,
+  });
+  /** Re-derive the render-visible shadow after every stack mutation. */
+  const syncNavStack = (): void => {
+    setReturnSides(returnDoorSides(navStackRef.current));
+  };
   const keysRef = useRef<Set<string>>(new Set());
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
   const hudIdRef = useRef<string | null>(null);
@@ -1594,12 +1726,13 @@ export default function GameCanvas({
       ? HOTEL_ACCENT_CORE
       : strandAccentFor(location.timelineId);
   // Clamp door gaps: the window's materialized doors plus the lobby's
-  // return door (its gap opens the north wall once the nav stack is
-  // non-empty).
+  // NORTH return door (its gap opens the junction's north wall once the
+  // nav stack holds a north-lateral trip). The south return door's gap is
+  // the lobby clamp's own business (clampToHotel's southReturnDoorX).
   const doorXs = useMemo(() => {
     const xs = materializedDoorXs(windowIds, layout);
-    return stackDepth > 0 ? [...xs, RETURN_DOOR_X] : xs;
-  }, [windowIds, layout, stackDepth]);
+    return returnSides.north ? [...xs, RETURN_DOOR_X] : xs;
+  }, [windowIds, layout, returnSides]);
   const archetypeById = useMemo(() => {
     const map = new Map<string, ArchetypeId>();
     for (const door of currentDoors) {
@@ -1669,10 +1802,11 @@ export default function GameCanvas({
 
   /** Page door (HD3): the corridor's far end leads to the NEXT-OLDER window
    *  of the same timeline. Push the current hotel, page forward, arrive in
-   *  the (identical) lobby. */
+   *  the (identical) lobby. An east-west trip has no lateral — its way
+   *  back hangs on the north wall (the original single-door behavior). */
   const handlePageDoor = (): void => {
-    navStackRef.current.push({ hotel: location, returnTo: null });
-    setStackDepth(navStackRef.current.length);
+    navStackRef.current.push({ hotel: location, returnTo: null, side: "north" });
+    syncNavStack();
     setLocation({
       timelineId: location.timelineId,
       windowIndex: location.windowIndex + 1,
@@ -1680,14 +1814,18 @@ export default function GameCanvas({
     arriveInLobby();
   };
 
-  /** Return door (HD3): pop the navigation stack. A page-door entry lands
-   *  back in that hotel's lobby; a strand-door entry lands back INSIDE the
-   *  room the player left, at the strand door they left by (HD4) — the
-   *  thread walk reads as one continuous passage. */
-  const handleReturnDoor = (): void => {
-    const entry = navStackRef.current.pop();
-    if (entry === undefined) return;
-    setStackDepth(navStackRef.current.length);
+  /** Return door (HD3/§10.5): each lobby wall's door unwinds the NEWEST
+   *  trip of ITS lateral — trips taken after it (from the other side) are
+   *  walked past, not unwound. A page-door entry lands back in that
+   *  hotel's lobby; a strand-door entry lands back INSIDE the room the
+   *  player left, at the strand door they left by (HD4) — the thread walk
+   *  reads as one continuous passage. */
+  const handleReturnDoor = (side: Side): void => {
+    const trip = splitReturnTrip(navStackRef.current, side);
+    if (trip === null) return;
+    navStackRef.current = trip.rest;
+    syncNavStack();
+    const entry = trip.entry;
     setLocation(entry.hotel);
     const returnTo = entry.returnTo;
     if (returnTo === null) {
@@ -1796,8 +1934,12 @@ export default function GameCanvas({
     navStackRef.current.push({
       hotel: location,
       returnTo: { sliceId: shownSpace.door.sliceId, key: strandTransition.key },
+      // §10.5: the lateral this trip came in from — the corridor wall the
+      // departed room's door hangs on — so the destination lobby hangs the
+      // way back on the matching wall.
+      side: shownSpace.door.side,
     });
-    setStackDepth(navStackRef.current.length);
+    syncNavStack();
     setLocation(strandTransition.destination);
     setShownSpace(null);
     arriveInLobby();
@@ -1806,15 +1948,17 @@ export default function GameCanvas({
 
   // Probe/e2e debug handle on window (GAME_DEBUG is updated every frame).
   // `travel` hops straight to any hotel (nav stack pushed, lobby arrival)
-  // so probes and e2e can reach strand hotels without walking the thread.
+  // so probes and e2e can reach strand hotels without walking the thread;
+  // the optional side fakes the trip's lateral (§10.5) so both return-door
+  // walls are reachable from a probe.
   useEffect(() => {
     GAME_DEBUG.teleport = (x, z) => {
       playerRef.current.x = x;
       playerRef.current.z = z;
     };
-    GAME_DEBUG.travel = (timelineId, windowIndex) => {
-      navStackRef.current.push({ hotel: location, returnTo: null });
-      setStackDepth(navStackRef.current.length);
+    GAME_DEBUG.travel = (timelineId, windowIndex, side = "north") => {
+      navStackRef.current.push({ hotel: location, returnTo: null, side });
+      syncNavStack();
       setLocation({ timelineId, windowIndex });
       arriveInLobby();
     };
@@ -1930,7 +2074,12 @@ export default function GameCanvas({
             doors={currentDoors}
             windowIndex={location.windowIndex}
             accent={accent}
-            returnDoor={stackDepth > 0}
+            returnDoors={returnSides}
+            hotelName={
+              location.timelineId === CORE_TIMELINE_ID
+                ? "PREVIOUSLY"
+                : location.timelineId
+            }
             dimmed={corridorHidden}
             dark={dark}
           />
@@ -1969,7 +2118,8 @@ export default function GameCanvas({
           doorXs={doorXs}
           layout={layout}
           corridorEnd={corridorEnd}
-          returnDoorX={stackDepth > 0 ? RETURN_DOOR_X : null}
+          returnDoorX={returnSides.north ? RETURN_DOOR_X : null}
+          returnDoorSouthX={returnSides.south ? RETURN_DOOR_SOUTH_X : null}
           onPageDoor={handlePageDoor}
           onReturnDoor={handleReturnDoor}
           hotelLabel={`${location.timelineId}@${location.windowIndex}`}

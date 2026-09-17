@@ -95,10 +95,39 @@ export const LAMP_COLOR = "#ffb46b";
  *  hotel's accent; the core hotel's accent is this. */
 export const HOTEL_ACCENT_CORE = "#0066ff";
 
-/** Where the lobby's return door hangs: on the junction band's north wall
- *  (z = +CORRIDOR_WIDTH/2), this far along x. Clear of the portal posts at
- *  the corridor seam and of the lobby's east wall. */
+/** Where the lobby's NORTH return door hangs: on the junction band's north
+ *  wall (z = +CORRIDOR_WIDTH/2), this far along x. Clear of the portal posts
+ *  at the corridor seam and of the lobby's east wall. */
 export const RETURN_DOOR_X = 10;
+
+/** Where the lobby's SOUTH return door hangs (§10.5: 大堂南北墙各挂一扇 —
+ *  the wall you find your way back on is the side you came from). The south
+ *  wall is the leg's far wall (z = −LOBBY_SOUTH_REACH, the front desk's
+ *  wall); the door sits at this x — west of the desk (desk centers at
+ *  x ≥ 5.5) and clear of the west-corner plant and the armchair pair. */
+export const RETURN_DOOR_SOUTH_X = 2.6;
+
+/** Crossing trigger of the south return door: the player has pushed this
+ *  far past the south wall's plane inside the door gap — mirrors the north
+ *  door's WALL_OUT hysteresis (clamps.ts). */
+export const RETURN_DOOR_SOUTH_CROSS_DEPTH = 0.2;
+
+/* ------------------------------------------------------------------ */
+/* Lobby register board (§9.2/§10.3 — the 目录板)                       */
+/* ------------------------------------------------------------------ */
+
+/** The register board hangs on the lobby's south wall ABOVE the front desk
+ *  — the classic hotel rate-board spot, the one fixed place every arrival
+ *  faces (§10.2a). Its center x follows the desk (LOBBY_LAYOUT's desk x
+ *  band). */
+export const REGISTER_BOARD_Y = 2.35;
+/** Board width/height in meters (the R3F backing panel the DOM text sits
+ *  on). Big on purpose: the fixed ortho camera maps ~44 px to a meter, so
+ *  an 8-slice register only stays readable when the board spans a real
+ *  notice board's share of the wall (floor-to-cornice tall behind the
+ *  desk, like a rate board that means it). */
+export const REGISTER_BOARD_W = 4.4;
+export const REGISTER_BOARD_H = 3.0;
 
 /** How far the arriving player stands off the return door, facing the
  *  lobby interior (§10.2a: arrival is always in the lobby, the door you

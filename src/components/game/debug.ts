@@ -16,8 +16,11 @@ export const GAME_DEBUG = {
   hotel: "",
   /** Probe/e2e hook: teleport the player (clamps apply on the next frame). */
   teleport: undefined as undefined | ((x: number, z: number) => void),
-  /** Probe/e2e hook: hop to a hotel (nav stack pushed, lobby arrival). */
-  travel: undefined as undefined | ((timelineId: string, windowIndex: number) => void),
+  /** Probe/e2e hook: hop to a hotel (nav stack pushed, lobby arrival).
+   *  `side` fakes the trip's lateral (§10.5) — default "north". */
+  travel: undefined as
+    | undefined
+    | ((timelineId: string, windowIndex: number, side?: "north" | "south") => void),
   /** Live scene fog + background (written by Atmosphere every frame). */
   fogNear: 0,
   fogFar: 0,
