@@ -44,23 +44,34 @@ export const GROUND_LERP_RATE = 10;
 export const PLAYER_BODY = "#e8935c"; // warm accent
 export const PLAYER_HEAD = "#f4d3ae";
 export const SUN_BASE_COLOR = "#fff4e0";
-/** Key-light base level. Raised from 0.65 when the lighting model changed
- *  from ambient-dominant to key/fill/ambient (v0.11 P2): the sun is now
- *  the ONE strong light that pools (doc §1 A3), while the ambient floor
- *  dropped to 0.15 and soft fill comes from the IBL environment — so the
- *  old "anything above ~0.7 washes floors past 1.0 total irradiance"
- *  ceiling (set when ambient+hemisphere alone summed to ~1.0) no longer
- *  applies. Inside a space this is multiplied by palette.sunIntensity. */
-export const SUN_BASE_INTENSITY = 1.5;
+/** Key-light base level. The sun is the ONE strong, shadow-casting light
+ *  that pools (doc §1 A3). 2.5 (measured, v0.11 shadow fix): with the fill
+ *  levels below (ENV_INTENSITY 0.12, ambient floors ~0.04–0.09), a sunlit
+ *  interior floor lands at ~135/255 display luminance while its shadowed
+ *  floor sits at ~20–90 — a cast shadow reads clearly at every palette.
+ *  History: 0.65 under the old ambient-dominant model; 1.5 in the first
+ *  key/fill/ambient pass, which measured as INVISIBLE shadows — ambient +
+ *  IBL fill alone lit floors to ~112/255 and AgX's shoulder compressed the
+ *  sun's added term to a ~13/255 step, so removing it (a shadow) was a ~5%
+ *  dip. The key must dominate the fill by a wide margin for shadows to
+ *  exist perceptually, not just mathematically. Inside a space this is
+ *  multiplied by palette.sunIntensity. */
+export const SUN_BASE_INTENSITY = 2.5;
 /** Ambient floor in the corridor; inside a space the palette's own
- *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Kept low on
+ *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Kept very low on
  *  purpose: fill is the IBL environment's job, and a high ambient is
- *  exactly the directionless flat light the doc forbids. */
-export const CORRIDOR_AMBIENT = 0.15;
+ *  exactly the directionless flat light the doc forbids — and the fill
+ *  level is what a cast shadow drops to, so every point of ambient
+ *  directly erases shadow contrast (measured: ambient 0.15 + env 0.45 put
+ *  the corridor's no-sun floor at ~84/255, swallowing the sun's ~13-unit
+ *  contribution). */
+export const CORRIDOR_AMBIENT = 0.06;
 /** Space palettes still carry ambient values (0.28–0.6) authored for the
  *  old ambient-dominant model; scale them into the same key-dominant
- *  hierarchy here (the palette data itself is owned by another lane). */
-export const SPACE_AMBIENT_SCALE = 0.4;
+ *  hierarchy here (the palette data itself is owned by another lane). 0.15
+ *  lands the in-room ambient floor at 0.04–0.09 — the level the shadow-
+ *  visibility measurements (see SUN_BASE_INTENSITY) were taken at. */
+export const SPACE_AMBIENT_SCALE = 0.15;
 /** Background/fog/sun lerp rate when a space opens or closes. */
 export const ATMOSPHERE_LERP_RATE = 2.5;
 /** Wade depth below the water plane inside a pool basin. */
@@ -98,8 +109,14 @@ export const SUN_SHADOW_NORMAL_BIAS = 0.02;
 /* ------------------------------------------------------------------ */
 
 /** scene.environmentIntensity — the soft-fill half of the hierarchy and
- *  the reflection budget every PBR material in the game shares. */
-export const ENV_INTENSITY = 0.45;
+ *  the reflection budget every PBR material in the game shares. 0.12
+ *  (measured, v0.11 shadow fix): the five Lightformer cards carry their
+ *  own intensities (1–2.5), so even 0.45 of them flooded every floor to
+ *  ~112/255 display luminance with the sun off — the key light only added
+ *  ~13 more after AgX compression and cast shadows (~5% dips) were
+ *  invisible. At 0.12 the no-sun floor sits low enough that the sun owns
+ *  the room and shadows ground the furniture (doc §2 req 1). */
+export const ENV_INTENSITY = 0.12;
 /** Env cube-map resolution; the map is a few broad emissive cards, so
  *  256 px is plenty and cheap. */
 export const ENV_RESOLUTION = 256;
