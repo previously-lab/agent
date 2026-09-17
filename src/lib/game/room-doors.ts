@@ -395,6 +395,62 @@ export function hostableWallsFor(
 }
 
 /**
+ * Hostable wall metres under a template's affordance (v0.11-room-interiors
+ * §7, Finding A): the total USABLE run of the walls the affordance permits,
+ * net of the domestic end pad on each segment — the raw material door
+ * capacity is measured from. Measured on the SCALED walls the caller already
+ * built, so a miniature room's shortened wall reports shortened metres and
+ * scale notation can no longer hide behind a tier-sized capacity claim.
+ * `hostable` (optional) restricts the measure to the caller's full-height
+ * walls, exactly like the ladder's primary rung; omit it to measure every
+ * solid permitted wall. Pure.
+ */
+export function hostableWallMetersFor(
+  plan: RoomPlan,
+  walls: readonly WallSegment[],
+  hostable: readonly boolean[] | null = null,
+  affordance?: DoorAffordance,
+): number {
+  let metres = 0;
+  walls.forEach((wall, i) => {
+    if (wall.entrance) return;
+    if (affordance && !affordance.walls.includes(wallRoleFor(plan, wall))) return;
+    if (hostable && !hostable[i]) return;
+    metres += Math.max(0, wallLength(wall) - 2 * ROOM_DOOR_END_PAD);
+  });
+  return metres;
+}
+
+/**
+ * Graceful door capacity under a template's affordance (Finding A): how
+ * many strand doors the plan's PERMITTED walls absorb at the authored
+ * domestic spacing — the ladder's primary rung, the rung that does not
+ * relax. This is the same per-wall `capacity(run, spacing)` math tryPlace
+ * uses, summed over the same host set, so the number selection steers by is
+ * the number placement can actually honour without loosening the ladder.
+ * Measured, never declared: a ×0.2 miniature's 13m door wall yields the
+ * four doors it truly hosts, not the tier-sized figure its template was
+ * authored with (the template's declared doorCapacity remains as a CEILING,
+ * applied by the caller, so a colossal room cannot demand an absurd count).
+ */
+export function doorCapacityFor(
+  plan: RoomPlan,
+  walls: readonly WallSegment[],
+  hostable: readonly boolean[] | null = null,
+  affordance?: DoorAffordance,
+): number {
+  const rung = LADDER[0];
+  let total = 0;
+  walls.forEach((wall, i) => {
+    if (wall.entrance) return;
+    if (affordance && !affordance.walls.includes(wallRoleFor(plan, wall))) return;
+    if (hostable && !hostable[i]) return;
+    total += capacity(wallLength(wall) - 2 * rung.endPad, rung.spacing);
+  });
+  return total;
+}
+
+/**
  * Compose `count` strand doors onto the plan's solid walls. Deterministic
  * in (worldSeed, sliceId, plan, walls, hostable, count): the same slice
  * with the same door count always grows the same doorway positions.

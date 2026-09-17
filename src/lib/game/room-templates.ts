@@ -18,6 +18,17 @@
  * a 20-strand day selects a template that can absorb 20 doors instead of
  * cramming them into a closet.
  *
+ * CAPACITY IS MEASURED, NOT TIER-CLAIMED (Finding A, 2026-10): the
+ * template's `doorCapacity` is a declared CEILING (a huge room may not
+ * demand an absurd door count), but the capacity selection steers by is
+ * measured in hostable wall metres on the SCALED plan the caller already
+ * computes — room-doors.ts's doorCapacityFor over the template's permitted
+ * wall roles at the ladder's domestic spacing. A miniature ×0.2 colossal
+ * room then gets the four doors its 13m door wall truly hosts, not the 24
+ * its tier was authored for. Callers pass the measurement in via
+ * resolveRoomTemplate's optional `capacityFor`; omitting it reproduces the
+ * pre-measurement selection exactly (declared ceiling only).
+ *
  * Determinism (A6): selection is a pure function of
  * (worldSeed, sliceId, worldClass, archetype, extent tier, door count) via
  * its own hash-derived stream ("room-template"), independent of every other
@@ -80,9 +91,17 @@ export interface RoomTemplate {
   /** Minimum UNSCALED extent tier (16/32/64/96): a small room never picks
    *  a hall. */
   minExtent: number;
-  /** Maximum strand doors this layout absorbs gracefully. Selection
-   *  guarantees doorCount ≤ capacity whenever any eligible template fits. */
+  /** Declared CEILING on the strand doors this layout may be asked to
+   *  absorb: a huge room cannot demand an absurd door count. The capacity
+   *  selection actually steers by is min(this ceiling, the measured
+   *  capacity of the scaled plan's permitted walls) — see the module
+   *  header (Finding A). */
   doorCapacity: number;
+  /** Optional minimum door count (Finding B): a door-absorber layout only
+   *  reads as designed when it genuinely carries many doors, so it stays
+   *  INELIGIBLE below this count and can never steal an ordinary room from
+   *  the domestic templates. Undefined = eligible at any count. */
+  minDoors?: number;
   /** Wall roles that may carry strand doors — never the shelf-run wall,
    *  never the niche wall (§7.2). Positions stay seed-drawn. */
   doorWalls: readonly WallRole[];
@@ -98,7 +117,7 @@ export interface RoomTemplate {
 }
 
 /* ------------------------------------------------------------------ */
-/* The three interior templates (§7.5)                                  */
+/* The interior templates (§7.5's three + Finding B's mid-capacity hall) */
 /* ------------------------------------------------------------------ */
 
 export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
@@ -172,6 +191,47 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     weight: 2,
   },
   {
+    // 列门厅 — a hall whose FAR wall is a designed row of doors (Finding
+    // B): the mid-capacity interior the set was missing. Where a busy day
+    // asks an M-tier library or hotel room for a dozen strand doors, the
+    // reading hall (ceiling 4) and guest room (ceiling 5) had to loosen
+    // their wall bans; this hall was authored for exactly that load. The
+    // minDoors gate keeps it ineligible below six doors — one more than
+    // the largest domestic ceiling — so an ordinary room never loses its
+    // reading hall or guest room to a door wall it does not need.
+    id: "door-hall",
+    label: "列门厅",
+    worldClasses: ["interior"],
+    archetypes: ["library", "ballroom", "hotel-room"],
+    footprint: "rect",
+    minExtent: 32,
+    minDoors: 6,
+    doorCapacity: 16,
+    doorWalls: ["far"],
+    features: [
+      // The door row is the dressing: pilasters rhythm the door wall, an
+      // inlay band leads down the hall's axis toward it.
+      { kind: "pilaster-rhythm", at: "far" },
+      { kind: "floor-inlay", at: "floor", span: [0.3, 0.7] },
+    ],
+    heroKit: "reading", // the one hero-eligible kit whitelisted for all
+    // three archetypes — an armchair facing the door row, the calm trace.
+    zones: [
+      // 厅心焦点(门墙之前)
+      { kind: "hero", rect: { x: [0.36, 0.64], z: [0.52, 0.74] } },
+      // 两侧陪衬簇
+      { kind: "cluster", rect: { x: [0.06, 0.28], z: [0.12, 0.55] } },
+      { kind: "cluster", rect: { x: [0.72, 0.94], z: [0.12, 0.55] } },
+      // 中央通道留白(入口到焦点的轴)
+      { kind: "keep-empty", rect: { x: [0.42, 0.58], z: [0, 0.5] } },
+      // 门墙前围裙留白 — the door row keeps its approach, wall to wall
+      { kind: "keep-empty", rect: { x: [0, 1], z: [0.8, 1] } },
+    ],
+    weight: 1, // below the domestic templates and the gallery: it wins
+    // only where it is the sole fitting candidate, or shares an overflow
+    // pool at the low ticket.
+  },
+  {
     // 画廊 — a colonnade with a floor inlay and ONE WHOLE WALL built to
     // carry many doors: the template that absorbs a 20-strand day. The
     // colonnade's sides are open bays (no segments, never hosts), so every
@@ -211,17 +271,23 @@ export function roomTemplateById(id: string): RoomTemplate | undefined {
 /* ------------------------------------------------------------------ */
 
 /** Templates a room of this class/archetype/tier may select (before the
- *  door-capacity pass). */
+ *  door-capacity pass). `doorCount` (optional, default 0) additionally
+ *  gates the door-absorber layouts on their declared `minDoors` — an
+ *  ordinary room never even sees the door hall. Omitting it reproduces
+ *  the pre-Finding-B eligibility exactly (no template then declared a
+ *  minimum). */
 export function eligibleTemplates(
   worldClass: string,
   archetype: string,
   baseExtent: number,
+  doorCount: number = 0,
 ): readonly RoomTemplate[] {
   return ROOM_TEMPLATES.filter(
     (t) =>
       (t.worldClasses as readonly string[]).includes(worldClass) &&
       (!t.archetypes || (t.archetypes as readonly string[]).includes(archetype)) &&
-      baseExtent >= t.minExtent,
+      baseExtent >= t.minExtent &&
+      doorCount >= (t.minDoors ?? 0),
   );
 }
 
@@ -230,10 +296,18 @@ export function eligibleTemplates(
  * door count ⇒ same template, always.
  *
  * The door count is a SELECTION input, not a placement constraint (§7.2):
- * candidates that can absorb `doorCount` within their declared capacity are
- * preferred; when none can (more strands than any template's capacity), the
- * highest-capacity candidates carry the overflow and room-doors.ts's
+ * candidates that can absorb `doorCount` within their effective capacity
+ * are preferred; when none can (more strands than any candidate holds),
+ * the highest-capacity candidates carry the overflow and room-doors.ts's
  * spacing ladder does what it always did — relax, never drop.
+ *
+ * `capacityFor` (optional, Finding A) measures one candidate's graceful
+ * capacity on THIS room's scaled plan — room-doors.ts's doorCapacityFor
+ * over the candidate's permitted wall roles. The effective capacity is
+ * min(the declared ceiling, the measurement), so a miniature room's
+ * shortened wall shrinks the claim while a colossal room stays capped.
+ * Omitting it steers by the declared ceilings alone — exactly the
+ * pre-measurement behaviour.
  *
  * Returns null when no template fits at all (today: every non-interior
  * world class — the template set covers interior only, §7.5's first step).
@@ -245,15 +319,18 @@ export function resolveRoomTemplate(
   baseExtent: number,
   doorCount: number = 0,
   worldSeed: string = WORLD_SEED,
+  capacityFor?: (template: RoomTemplate) => number,
 ): RoomTemplate | null {
-  const eligible = eligibleTemplates(worldClass, archetype, baseExtent);
+  const eligible = eligibleTemplates(worldClass, archetype, baseExtent, doorCount);
   if (eligible.length === 0) return null;
-  const fitting = eligible.filter((t) => t.doorCapacity >= doorCount);
+  const effective = (t: RoomTemplate): number =>
+    capacityFor ? Math.min(t.doorCapacity, capacityFor(t)) : t.doorCapacity;
+  const fitting = eligible.filter((t) => effective(t) >= doorCount);
   const pool =
     fitting.length > 0
       ? fitting
       : eligible.filter(
-          (t) => t.doorCapacity === Math.max(...eligible.map((u) => u.doorCapacity)),
+          (t) => effective(t) === Math.max(...eligible.map(effective)),
         );
   const rng = createRng(hashString(`${worldSeed}:${sliceId}:room-template`));
   let ticket = rng() * pool.reduce((sum, t) => sum + t.weight, 0);

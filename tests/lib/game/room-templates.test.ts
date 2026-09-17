@@ -2,13 +2,18 @@
  * Tests for the layout-template layer (v0.11-room-interiors §7). The
  * contract under test:
  *
- *  - The three §7.5 templates are sound DATA: every doorWall / feature
- *    attachment exists on the template's footprint, zones stay normalized,
- *    capacity is positive, and the audit agrees.
+ *  - The §7.5 templates plus Finding B's mid-capacity door hall are sound
+ *    DATA: every doorWall / feature attachment exists on the template's
+ *    footprint, zones stay normalized, capacity is positive, and the audit
+ *    agrees.
  *  - resolveRoomTemplate is deterministic (A6), respects worldClass /
- *    archetype / minExtent eligibility, and prefers templates whose door
- *    capacity absorbs the slice's strand-door count (the 20-door day picks
- *    the gallery, never the closet).
+ *    archetype / minExtent / minDoors eligibility, and prefers templates
+ *    whose door capacity absorbs the slice's strand-door count (the
+ *    20-door day picks the gallery, never the closet). Capacity is
+ *    MEASURED (Finding A): when the caller passes capacityFor, selection
+ *    steers by min(declared ceiling, the scaled plan's hostable-wall
+ *    capacity); omitted, it steers by the ceilings alone — the
+ *    pre-measurement behaviour.
  *  - The consumption adapters feed the EXISTING pure modules: the template
  *    plan declares the silhouette, the affordance bans its walls, the zones
  *    resolve to absolute plan coordinates (l-shape zones mirror with the
@@ -40,6 +45,7 @@ import {
   wallSegmentsFor,
 } from "@/lib/game/room-plan";
 import {
+  doorCapacityFor,
   hostableWallsFor,
   inDoorApproach,
   placeRoomDoors,
@@ -61,15 +67,17 @@ const byId = (id: string): RoomTemplate => {
 };
 
 describe("template data (§7.2/§7.5)", () => {
-  it("ships exactly the three §7.5 interior templates", () => {
+  it("ships the three §7.5 interior templates plus Finding B's door hall", () => {
     expect(ROOM_TEMPLATES.map((t) => t.id)).toEqual([
       "reading-hall",
       "guest-room",
+      "door-hall",
       "gallery",
     ]);
     expect(ROOM_TEMPLATES.map((t) => t.label)).toEqual([
       "阅览厅",
       "客房",
+      "列门厅",
       "画廊",
     ]);
   });
@@ -111,6 +119,26 @@ describe("template data (§7.2/§7.5)", () => {
     expect(
       Math.max(...ROOM_TEMPLATES.map((t) => t.doorCapacity)),
     ).toBe(gallery.doorCapacity);
+  });
+
+  it("declares the door hall as the mid-capacity interior (Finding B)", () => {
+    const hall = byId("door-hall");
+    // Hall-sized, M tier and up, every interior archetype that overruns.
+    expect(hall.footprint).toBe("rect");
+    expect(hall.minExtent).toBe(32);
+    expect(hall.archetypes).toEqual(
+      expect.arrayContaining(["library", "ballroom", "hotel-room"]),
+    );
+    // One designed door wall, a dozen-plus ceiling — strictly between the
+    // domestic templates and the gallery.
+    expect(hall.doorWalls).toEqual(["far"]);
+    expect(hall.doorCapacity).toBeGreaterThanOrEqual(12);
+    expect(hall.doorCapacity).toBeLessThan(byId("gallery").doorCapacity);
+    expect(hall.doorCapacity).toBeGreaterThan(byId("guest-room").doorCapacity);
+    // The gate: eligible only above the largest domestic ceiling, so it
+    // can never steal an ordinary room from the reading hall / guest room.
+    expect(hall.minDoors).toBeGreaterThan(byId("guest-room").doorCapacity);
+    expect(hall.minDoors).toBeGreaterThan(byId("reading-hall").doorCapacity);
   });
 });
 
@@ -161,10 +189,83 @@ describe("resolveRoomTemplate (§7.2 selection)", () => {
   });
 
   it("falls back to the highest-capacity eligible template on overflow", () => {
-    // hotel-room XL with 30 doors: only guest-room is eligible (cap 5) —
-    // selection keeps it (placement relaxes, never drops).
+    // hotel-room XL with 30 doors: beyond even the door hall's ceiling, so
+    // the highest-capacity eligible candidate carries the overflow —
+    // the door hall (16), never the guest room (5) — and placement
+    // relaxes, never drops.
     const t = resolveRoomTemplate("2026-10-01", "interior", "hotel-room", 96, 30);
-    expect(t!.id).toBe("guest-room");
+    expect(t!.id).toBe("door-hall");
+    // Below the gate the same room keeps its domestic template.
+    expect(
+      resolveRoomTemplate("2026-10-01", "interior", "hotel-room", 96, 5)!.id,
+    ).toBe("guest-room");
+  });
+
+  it("gates the door hall behind minDoors — ordinary rooms are never stolen", () => {
+    for (let i = 0; i < 30; i++) {
+      // M/L-tier library & ballroom at domestic door counts: the door hall
+      // is not even eligible, so these selections are exactly the
+      // pre-Finding-B ones.
+      expect(
+        resolveRoomTemplate(`2026-10-${i}`, "interior", "library", 32, 4)!.id,
+      ).toBe("reading-hall");
+      expect(
+        resolveRoomTemplate(`2026-10-${i}`, "interior", "hotel-room", 64, 5)!.id,
+      ).toBe("guest-room");
+      const ballroom = resolveRoomTemplate(`2026-10-${i}`, "interior", "ballroom", 96, 5);
+      expect(ballroom!.id).not.toBe("door-hall");
+    }
+  });
+
+  it("routes the busy M-tier day to the door hall (Finding B)", () => {
+    // 12 strand doors at M tier: the reading hall (ceiling 4) and guest
+    // room (ceiling 5) cannot absorb them, the gallery is not eligible at
+    // this tier — the door hall is the sole fitting candidate.
+    for (let i = 0; i < 30; i++) {
+      expect(
+        resolveRoomTemplate(`2026-10-${i}`, "interior", "library", 32, 12)!.id,
+      ).toBe("door-hall");
+      expect(
+        resolveRoomTemplate(`2026-10-${i}`, "interior", "hotel-room", 32, 12)!.id,
+      ).toBe("door-hall");
+    }
+  });
+
+  it("steers by min(declared ceiling, measured) when capacityFor is given", () => {
+    // XL ballroom, 10 doors. Declared ceilings say the gallery (24) fits
+    // — but a miniature scale notation shortens its door wall, so the
+    // measured capacity says it does not.
+    const measured = new Map([
+      ["reading-hall", 1],
+      ["door-hall", 3],
+      ["gallery", 3],
+    ]);
+    const capacityFor = (t: RoomTemplate) => measured.get(t.id)!;
+    for (let i = 0; i < 30; i++) {
+      const t = resolveRoomTemplate(
+        `2026-10-${i}`, "interior", "ballroom", 96, 10, WORLD_SEED, capacityFor,
+      );
+      // Nothing fits: the overflow pool is the highest MEASURED capacity
+      // (door hall and gallery tie at 3) — never the reading hall, whose
+      // ceiling-first claim (4 > 3) would have won before Finding A.
+      expect(t!.id).not.toBe("reading-hall");
+    }
+    // And when the measurement fits where a bigger ceiling does not, the
+    // measurement wins: door hall measured 12 beats gallery measured 3.
+    for (let i = 0; i < 30; i++) {
+      const t = resolveRoomTemplate(
+        `2026-10-${i}`, "interior", "ballroom", 96, 10, WORLD_SEED,
+        (tpl) => (tpl.id === "door-hall" ? 12 : 3),
+      );
+      expect(t!.id).toBe("door-hall");
+    }
+    // Omitting capacityFor keeps the ceiling-only behaviour: the 10-door
+    // day goes to the gallery (24 ≥ 10, the door hall's 16 also fits —
+    // the weighted draw decides between the two, never the reading hall).
+    for (let i = 0; i < 30; i++) {
+      const t = resolveRoomTemplate(`2026-10-${i}`, "interior", "ballroom", 96, 10);
+      expect(["door-hall", "gallery"]).toContain(t!.id);
+    }
   });
 
   it("respects weights among fitting candidates", () => {
@@ -274,10 +375,11 @@ describe("real data pass (memory/episodic)", () => {
     kits: number;
     heroes: number;
     violations: number;
+    capacitySum: number;
   }
   const blank = (): TemplateStats => ({
     rooms: 0, doors: 0, maxDoors: 0, overCapacity: 0,
-    relaxed: 0, kits: 0, heroes: 0, violations: 0,
+    relaxed: 0, kits: 0, heroes: 0, violations: 0, capacitySum: 0,
   });
 
   function runChain() {
@@ -290,8 +392,31 @@ describe("real data pass (memory/episodic)", () => {
     for (const sliceId of sliceIds) {
       const recipe = compileSpaceRecipe(sliceId);
       const doorCount = strandDoorsForSlice(graph, sliceId).length;
+      // The scaled plan dims exactly as the renderer computes them — the
+      // measurement Finding A steers selection by (a miniature room's
+      // shortened door wall yields a shrunken capacity).
+      const { recipe: scaled, scale } = scaledRecipeFor(recipe);
+      const scaleFactor = scale.factor;
+      const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+      const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
+      const planForTemplate = (t: RoomTemplate) =>
+        roomPlanFor(sliceId, scaled.width, scaled.size.extent, bay, WORLD_SEED,
+          templatePlanFor(t));
+      const capacityFor = (t: RoomTemplate) => {
+        const p = planForTemplate(t);
+        const w = wallSegmentsFor(p, wallThick);
+        // Hostable flags are NOT part of the measure: the cutaway-sill
+        // distinction is the camera's orientation (a per-slice accident —
+        // at dir=1 the far wall is always a sill), while capacity is a
+        // property of the wall's length. A sill-hosted door still stands
+        // full height from the floor at the same domestic spacing.
+        return doorCapacityFor(p, w, null, doorAffordanceFor(t));
+      };
+      const effectiveCapacity = (t: RoomTemplate) =>
+        Math.min(t.doorCapacity, capacityFor(t));
       const template = resolveRoomTemplate(
-        sliceId, recipe.worldClass, recipe.archetype, recipe.size.extent, doorCount,
+        sliceId, recipe.worldClass, recipe.archetype, recipe.size.extent,
+        doorCount, WORLD_SEED, capacityFor,
       );
       selectionLog.push([sliceId, template?.id ?? null]);
       if (recipe.worldClass !== "interior") {
@@ -308,19 +433,14 @@ describe("real data pass (memory/episodic)", () => {
       stats.rooms += 1;
       stats.doors += doorCount;
       stats.maxDoors = Math.max(stats.maxDoors, doorCount);
-      if (doorCount > template.doorCapacity) stats.overCapacity += 1;
+      const effCapacity = effectiveCapacity(template);
+      stats.capacitySum += effCapacity;
+      if (doorCount > effCapacity) stats.overCapacity += 1;
 
       // The full chain, exactly as the renderer will run it once it adopts
       // templates: declared plan → walls → affordance doors → zones kits.
-      const { recipe: scaled, scale } = scaledRecipeFor(recipe);
-      const scaleFactor = scale.factor;
       const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
-      const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
-      const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
-      const plan = roomPlanFor(
-        sliceId, scaled.width, scaled.size.extent, bay, WORLD_SEED,
-        templatePlanFor(template),
-      );
+      const plan = planForTemplate(template);
       const walls = wallSegmentsFor(plan, wallThick);
       const hostable = hostableWallsFor(plan, walls, 1);
       const layout = placeRoomDoors(
@@ -378,7 +498,8 @@ describe("real data pass (memory/episodic)", () => {
       const s = perTemplate.get(t.id) ?? blank();
       console.log(
         `  ${t.label} (${t.id}): rooms=${s.rooms}, doors total=${s.doors} ` +
-          `max=${s.maxDoors} (capacity=${t.doorCapacity}, ` +
+          `max=${s.maxDoors} (ceiling=${t.doorCapacity}, ` +
+          `measuredCapacityAvg=${s.rooms ? (s.capacitySum / s.rooms).toFixed(1) : "—"}, ` +
           `overCapacityRooms=${s.overCapacity}), relaxedLayouts=${s.relaxed}, ` +
           `kits avg=${s.rooms ? (s.kits / s.rooms).toFixed(1) : "—"}, ` +
           `heroPlaced=${s.heroes}/${s.rooms}, clearanceViolations=${s.violations}`,

@@ -11,6 +11,8 @@
 import { describe, it, expect } from "vitest";
 import {
   crossedRoomDoor,
+  doorCapacityFor,
+  hostableWallMetersFor,
   hostableWallsFor,
   placeRoomDoors,
   plaqueLabelFor,
@@ -398,5 +400,70 @@ describe("door affordance parameter (§7) — additive", () => {
     ).toEqual(
       placeRoomDoors("2026-11-01", plan, walls, hostable, 4, undefined, affordance),
     );
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Measured capacity (v0.11-room-interiors §7, Finding A): capacity is   */
+/* a function of the hostable wall, not the size tier.                   */
+/* ------------------------------------------------------------------ */
+
+describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
+  it("measures capacity on the scaled wall, not the tier", () => {
+    // The same XL gallery footprint at ×1 and at miniature ×0.2: the
+    // declared ceiling (24) cannot tell them apart, the wall can.
+    const affordance = { walls: ["far"] as const };
+    const full = colonnadePlan(96, 96);
+    const fullWalls = wallSegmentsFor(full, THICK);
+    const mini = colonnadePlan(19.2, 19.2);
+    const miniWalls = wallSegmentsFor(mini, THICK);
+    const capFull = doorCapacityFor(full, fullWalls, null, affordance);
+    const capMini = doorCapacityFor(mini, miniWalls, null, affordance);
+    expect(capFull).toBeGreaterThanOrEqual(24);
+    expect(capMini).toBeLessThanOrEqual(8);
+    // The metres scale with the notation (the fixed wall thickness and
+    // end pads do not, so the ratio undershoots ×0.2 — the miniature's
+    // run is SHORTER than a fifth, which is the point).
+    const mFull = hostableWallMetersFor(full, fullWalls, null, affordance);
+    const mMini = hostableWallMetersFor(mini, miniWalls, null, affordance);
+    expect(mFull).toBeCloseTo(96 + 2 * THICK - 2 * 1.8, 6);
+    expect(mMini).toBeCloseTo(19.2 + 2 * THICK - 2 * 1.8, 6);
+    expect(mMini).toBeLessThan(mFull * 0.2);
+  });
+
+  it("restricts the measure to the permitted roles and the hostable flags", () => {
+    const plan = rectPlan(48, 32);
+    const walls = wallSegmentsFor(plan, THICK);
+    // No affordance: every solid non-entrance wall counts (3 walls).
+    const all = doorCapacityFor(plan, walls);
+    // Reading-hall affordance: the far wall drops out of the measure.
+    const sides = doorCapacityFor(plan, walls, null, { walls: ["left", "right"] });
+    const farOnly = doorCapacityFor(plan, walls, null, { walls: ["far"] });
+    expect(sides).toBeGreaterThan(0);
+    expect(farOnly).toBeGreaterThan(0);
+    expect(sides + farOnly).toBe(all);
+    // Hostable flags bite: mark nothing hostable and the measure is zero,
+    // exactly like the ladder's primary rung.
+    expect(
+      doorCapacityFor(plan, walls, walls.map(() => false), { walls: ["far"] }),
+    ).toBe(0);
+  });
+
+  it("is exactly the largest count the ladder places WITHOUT relaxing", () => {
+    // The number selection steers by is the number placement honours.
+    for (const [w, e] of [[48, 32], [96, 64], [19.2, 19.2]] as const) {
+      const plan = rectPlan(w, e);
+      const walls = wallSegmentsFor(plan, THICK);
+      const hostable = hostableWallsFor(plan, walls, 1);
+      const affordance = { walls: ["left", "right", "far"] as const };
+      const cap = doorCapacityFor(plan, walls, hostable, affordance);
+      expect(cap).toBeGreaterThan(0);
+      const atCap = placeRoomDoors("2026-12-01", plan, walls, hostable, cap, undefined, affordance);
+      expect(atCap.doors).toHaveLength(cap);
+      expect(atCap.relaxed).toBe(false);
+      const over = placeRoomDoors("2026-12-01", plan, walls, hostable, cap + 1, undefined, affordance);
+      expect(over.doors).toHaveLength(cap + 1);
+      expect(over.relaxed).toBe(true);
+    }
   });
 });
