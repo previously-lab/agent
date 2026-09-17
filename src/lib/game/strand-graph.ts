@@ -106,7 +106,8 @@ export function gapDaysBetween(from: string, to: string): number | null {
   const a = sliceIdToMs(from);
   const b = sliceIdToMs(to);
   if (a === null || b === null) return null;
-  return Math.trunc((b - a) / DAY_MS);
+  const days = Math.trunc((b - a) / DAY_MS);
+  return days === 0 ? 0 : days; // no -0
 }
 
 // ─── Graph ──────────────────────────────────────────────────────────────────
