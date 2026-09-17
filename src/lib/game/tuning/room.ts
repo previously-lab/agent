@@ -373,3 +373,87 @@ export const DADO_FULL_MARGIN = 0.15;
 /** Snow point-count cap — the area formula explodes quadratically at
  *  colossal scale; density beyond this adds nothing at the fixed camera. */
 export const SNOW_COUNT_MAX = 1500;
+
+/* ------------------------------------------------------------------ */
+/* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
+/* 2026-09-18): this world has NO outdoors, so every lit surface must  */
+/* have a findable source. Every room grows a LAMP (shade + bulb + a   */
+/* real point light + a floor pool) and a WINDOW (frame + bright pane  */
+/* + spill; in interior rooms its spot is the room's KEY light and     */
+/* casts the strong shadows); outdoor-class sets (nature/wonder/hybrid, */
+/* plus the pool hall — §2's worked example: water needs a skylight to */
+/* reflect) add a SKYLIGHT that justifies the overall key. Consumed by */
+/* space.tsx; placement is seeded (a dedicated "fixtures" stream, the  */
+/* room-plan.ts convention). Sizes ride the room's own scale laws: the */
+/* lamp is furniture (×propScale), the window/skylight are             */
+/* architecture (×wall scale). Light reach scales with the fixture: a  */
+/* decay-2 light whose pool radius grows by k needs intensity ×k².     */
+/* ------------------------------------------------------------------ */
+
+/** Floor lamp: pole height, shade/bulb heights (m, ×propScale). */
+export const LAMP_POLE_HEIGHT = 1.8;
+export const LAMP_SHADE_Y = 2.0;
+export const LAMP_BULB_Y = 1.82;
+/** Tungsten warm — the hotel's architecture color (the corridor sconce's
+ *  constant), not palette-bound: a lamp reads as hotel property. */
+export const LAMP_COLOR = "#ffd9a0";
+/** Point-light level at human scale (×propScale² in the renderer so a
+ *  colossal room's giant lamp actually reaches its giant floor). Matches
+ *  the corridor's measured chunk light (6, decay 2). */
+export const LAMP_LIGHT_INTENSITY = 7;
+/** Hard cutoff (m, ×propScale) — bounds the light's influence like the
+ *  corridor chunk light's distance term. */
+export const LAMP_LIGHT_DISTANCE = 9;
+export const LAMP_SHADE_EMISSIVE = 1.6;
+/** Above the bloom threshold (1.0): the bulb is the one hot core. */
+export const LAMP_BULB_EMISSIVE = 2.2;
+/** Additive floor pool under the lamp (m / peak opacity, ×propScale). */
+export const LAMP_POOL_RADIUS = 2.3;
+export const LAMP_POOL_OPACITY = 0.42;
+
+/** Window: pane size and sill height (m, ×wall scale — a window is
+ *  architecture, scaled like the dado band). */
+export const WINDOW_WIDTH = 2.4;
+export const WINDOW_HEIGHT = 1.9;
+export const WINDOW_SILL_Y = 1.0;
+/** Bright face — the bloom threshold is 1.0, so the pane reads as a lit
+ *  opening, not a picture of one. Color comes from palette.sunColor. */
+export const WINDOW_PANE_EMISSIVE = 2.4;
+/** The interior KEY light: a spot just inside the pane, aimed down into
+ *  the room (×wall scale²). 60 candela lands ≈2.5 at the spill pool's
+ *  center (~5 m out) — the level the old full sun delivered, now with a
+ *  source you can point at. It casts the room's strong shadows. */
+export const WINDOW_SPOT_INTENSITY = 60;
+export const WINDOW_SPOT_ANGLE = 0.62;
+export const WINDOW_SPOT_PENUMBRA = 0.5;
+/** Spot shadow rig (interior key): one 1024² map per mounted room. */
+export const WINDOW_SPOT_SHADOW_MAP = 1024;
+export const WINDOW_SPOT_SHADOW_NEAR = 0.4;
+/** Shadow far plane (×wall scale): must reach the floor across the cone. */
+export const WINDOW_SPOT_SHADOW_FAR = 26;
+/** Additive spill quad on the floor in front of the pane (m / peak
+ *  opacity; length ×wall scale) — the visible "light spilling inward". */
+export const WINDOW_SPILL_LENGTH = 4.2;
+export const WINDOW_SPILL_OPACITY = 0.3;
+/** Clearance between the window frame and any door on the same wall (m). */
+export const WINDOW_DOOR_CLEAR = 1.0;
+
+/** Skylight: opening half-size (m, ×wall scale) and how far the frame
+ *  floats above the drawn wall top — the rooms have no ceilings (the
+ *  dollhouse IS the point), so the opening hangs like the chandelier
+ *  does: present, glowing, unmoorable. */
+export const SKYLIGHT_HALF = 1.7;
+export const SKYLIGHT_LIFT = 0.6;
+export const SKYLIGHT_PANE_EMISSIVE = 2.6;
+/** The spot through the opening (×wall scale²): ~80 candela puts a hot
+ *  ~3.5 pool on the floor directly under a 4.6 m opening at human scale —
+ *  the visible light column's landing. Never casts (the sun owns the
+ *  outdoor shadows; two near-coincident shadow casters would double-print). */
+export const SKYLIGHT_SPOT_INTENSITY = 80;
+export const SKYLIGHT_SPOT_ANGLE = 0.55;
+export const SKYLIGHT_SPOT_PENUMBRA = 0.6;
+/** Additive shaft quads along the sun's direction + the floor pool where
+ *  it lands (peak opacities; pool radius m ×wall scale). */
+export const SKYLIGHT_SHAFT_OPACITY = 0.14;
+export const SKYLIGHT_POOL_RADIUS = 2.8;
+export const SKYLIGHT_POOL_OPACITY = 0.28;

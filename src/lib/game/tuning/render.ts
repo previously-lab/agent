@@ -67,7 +67,9 @@ export const SUN_BASE_COLOR = "#fff4e0";
  *  sun's added term to a ~13/255 step, so removing it (a shadow) was a ~5%
  *  dip. The key must dominate the fill by a wide margin for shadows to
  *  exist perceptually, not just mathematically. Inside a space this is
- *  multiplied by palette.sunIntensity. */
+ *  multiplied by palette.sunIntensity — and, per B.13, by
+ *  ROOM_INTERIOR_SUN_FILL in interior rooms, where the key moves to the
+ *  room's own fixtures and this light is only the fill/studio overall. */
 export const SUN_BASE_INTENSITY = 2.5;
 /** Ambient floor in the corridor; inside a space the palette's own
  *  `ambient` (scaled by SPACE_AMBIENT_SCALE) takes over. Kept very low on
@@ -78,6 +80,17 @@ export const SUN_BASE_INTENSITY = 2.5;
  *  the corridor's no-sun floor at ~84/255, swallowing the sun's ~13-unit
  *  contribution). */
 export const CORRIDOR_AMBIENT = 0.06;
+/** In-room directional level for INTERIOR rooms, as a fraction of the
+ *  palette-authored sun term (doc B.13, user 2026-09-18 — "everything is
+ *  indoors": an interior's key must come from its own fixtures, so the
+ *  sun drops to a FILL here; outdoor-class sets keep it at 1 as the
+ *  soundstage's overall key, justified by the skylight). It stays
+ *  shadow-casting at the reduced level — the fill still grounds furniture
+ *  with a soft shadow everywhere, while the window's spot is the room's
+ *  true key with the strong motivated shadows. 0.4 keeps the measured
+ *  shadow separation comfortably open (the fill's shadow-to-lit step is
+ *  proportional, and the key adds on top of the lit side only). */
+export const ROOM_INTERIOR_SUN_FILL = 0.4;
 /** Space palettes still carry ambient values (0.28–0.6) authored for the
  *  old ambient-dominant model; scale them into the same key-dominant
  *  hierarchy here (the palette data itself is owned by another lane). 0.15

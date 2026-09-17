@@ -67,14 +67,18 @@
  * the corridor (the void color) and the active space's palette — inside a
  * space the background becomes the room's own shadow (the palette's
  * atmosphere fog), so its far edge melts seamlessly. The lighting model is
- * a key/fill/ambient hierarchy (v0.11 P2): the sun is the one strong,
- * shadow-casting KEY light (its shadow camera follows the player so the
- * whole streaming corridor and every space stay inside the frustum); soft
- * FILL comes from one scene-wide <Environment> of Lightformer cards (IBL,
- * no HDRI) that also gives every PBR material something to reflect; the
- * AMBIENT term is a deliberately low floor so light pools instead of
- * filling evenly (doc §1 A3). Tone mapping is AgX, not the ACES default —
- * saturated accent colors clip under ACES.
+ * a key/fill/ambient hierarchy (v0.11 P2), re-anchored by B.13 「摄影棚论」
+ * (this world has no outdoors): the directional "sun" is the STUDIO key —
+ * full strength in the corridor and in outdoor-class sets (nature/wonder/
+ * hybrid, where the room's skylight is its visible source), dropped to
+ * ROOM_INTERIOR_SUN_FILL inside interior rooms, whose key is the window
+ * spot mounted by space.tsx. It is always the one broad shadow caster (its
+ * shadow camera follows the player so the whole streaming corridor and
+ * every space stay inside the frustum); soft FILL comes from one scene-wide
+ * <Environment> of Lightformer cards (IBL, no HDRI) that also gives every
+ * PBR material something to reflect; the AMBIENT term is a deliberately low
+ * floor so light pools instead of filling evenly (doc §1 A3). Tone mapping
+ * is AgX, not the ACES default — saturated accent colors clip under ACES.
  *
  * DEPTH CUE. There is NO scene fog
  * anywhere: with the camera ~23m above the player, every fog band that
@@ -181,6 +185,7 @@ import {
   PLAYER_HEAD,
   PLAYER_SPEED,
   POST_MSAA_SAMPLES,
+  ROOM_INTERIOR_SUN_FILL,
   ROOM_SPEED_SCALE_EXP,
   ROOM_ZOOM_MAX_PULLBACK,
   ROOM_ZOOM_SCALE_EXP,
@@ -376,7 +381,17 @@ function resolveAtmosphere(
     // is no scene fog to target (removed — see Atmosphere).
     out.background.set(palette.fog);
     out.sunColor.set(palette.sunColor);
-    out.sunIntensity = SUN_BASE_INTENSITY * palette.sunIntensity;
+    // B.13 摄影棚论 (user 2026-09-18): nothing here is lit by a sun
+    // overhead. INTERIOR rooms get the directional at FILL level only —
+    // the key moves to the room's own fixtures (the window's spot carries
+    // the strong shadows) — while outdoor-class sets keep it at full
+    // strength as the soundstage's overall key, justified by the visible
+    // skylight. The fill keeps casting: furniture stays grounded by a
+    // soft shadow everywhere the key's pool does not reach.
+    out.sunIntensity =
+      SUN_BASE_INTENSITY *
+      palette.sunIntensity *
+      (space.recipe.worldClass === "interior" ? ROOM_INTERIOR_SUN_FILL : 1);
     out.ambient = palette.ambient * SPACE_AMBIENT_SCALE;
   } else {
     out.background.set(SCENE_COLORS[dark ? "night" : "day"]);
@@ -618,12 +633,15 @@ function CameraRig({
 }
 
 /**
- * Scene background, ambient floor, and the KEY light — the one strong,
- * shadow-casting directional sun. Color/intensity lerp continuously toward
- * the target mood (corridor vs active space palette) instead of swapping
- * on mount; resolveAtmosphere is the single source of the targets. `dark`
- * follows the app theme — the corridor branch of the targets uses the
- * theme's void color; a toggle eases through the same lerp.
+ * Scene background, ambient floor, and the directional "sun" — B.13's STUDIO
+ * light, not a sun: full-strength key in the corridor and on outdoor-class
+ * sets (where the room's skylight is its visible source), dropped to fill
+ * level (ROOM_INTERIOR_SUN_FILL) inside interior rooms, whose own fixtures
+ * carry the key. Color/intensity lerp continuously toward the target mood
+ * (corridor vs active space palette) instead of swapping on mount;
+ * resolveAtmosphere is the single source of the targets. `dark` follows the
+ * app theme — the corridor branch of the targets uses the theme's void
+ * color; a toggle eases through the same lerp.
  *
  * The sun and its shadow camera FOLLOW the player: the light sits at
  * player + SUN_OFFSET and its target tracks the player on the ground

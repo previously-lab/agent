@@ -81,6 +81,25 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
   return [day, time].filter(Boolean).join(" · ");
 }
 
+/**
+ * The door NUMBER (B.14 用户定稿 rule 1): the slice's own 4-digit clock
+ * (`…-0746` → `0746`), so the same slice hangs the same number on its
+ * corridor plate and on every strand door that leads to it. This regex and
+ * the group-4 extraction are corridor.tsx's `sliceClock` VERBATIM — the
+ * corridor is the authority for the number and is frozen, so the rule is
+ * mirrored here rather than imported; the two must never drift (same
+ * anchored pattern, same capture group). Ids that do not match (fixtures,
+ * tests) get no number — the corridor's own "no signage" case. Never derive
+ * this from `formatDoorLabel`'s time half: that one is locale-local time
+ * rendered from the UTC `start`, which can differ from the id's clock.
+ */
+const SLICE_ID_RE = /^(\d{4})-(\d{2})-(\d{2})-(\d{4})$/;
+
+function sliceClockTime(sliceId: string): string | null {
+  const m = SLICE_ID_RE.exec(sliceId);
+  return m ? m[4] : null;
+}
+
 export function GameShell() {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -131,14 +150,22 @@ export function GameShell() {
               graph,
               sliceIds: corridorDoors.map((door) => door.sliceId),
               // Plaque: the strand name + the destination's date, in the
-              // corridor doors' own label format ("工作 → Sep 15 · 07:46").
-              // Unlit doors are labeled by the resolver with the bare name.
+              // corridor doors' own label format ("工作 → Sep 15 · 07:46"),
+              // plus the destination slice's door NUMBER as a `#HHMM`
+              // suffix (B.14 rule 1) — the room renderer splits the suffix
+              // off (before any truncation) and hangs it on its own small
+              // plate, the corridor plate's twin. Unlit doors are labeled
+              // by the resolver with the bare name and get no number: an
+              // unlit door has no destination (B.4).
               label: ({ strand, destinationSliceId }) => {
                 const entry = entryById.get(destinationSliceId);
                 const date = entry
                   ? formatDoorLabel(entry.date, entry.start, locale)
                   : destinationSliceId;
-                return `${strand} → ${date}`;
+                const clock = sliceClockTime(destinationSliceId);
+                return clock
+                  ? `${strand} → ${date}#${clock}`
+                  : `${strand} → ${date}`;
               },
             }),
           );

@@ -53,8 +53,11 @@
  * the door position — rebuilding a space from the same recipe yields the
  * identical scene. Layout (positions, counts, waypoints, phases) is seed-
  * deterministic; only visual motion (bobbing, sway, snowfall, wandering)
- * reads the clock. Scene fog, background, and lights are owned by the
- * integrator's canvas and are deliberately NOT rendered here.
+ * reads the clock. Scene fog and background are owned by the integrator's
+ * canvas; the room's own lights live HERE, on their fixtures (B.13
+ * 「摄影棚论」: motivated light — the lamp's point light, the window's
+ * spot, the skylight's column — while the canvas's directional sun drops
+ * to a fill in interior rooms).
  *
  * Terrain heights come from src/lib/game/terrain.ts — the single shared
  * heightfield the avatar physics also snaps to. This file never re-derives
@@ -73,6 +76,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type JSX,
   type MutableRefObject,
   type ReactNode,
@@ -83,7 +87,7 @@ import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG } from "./debug";
 import { smoothstep } from "@/lib/game/math";
-import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import {
   GROUND_Y,
@@ -121,7 +125,14 @@ import {
 import {
   createSurfaceMaterial,
   createWaterSurfaceMaterial,
+  sharedRadialGlowTexture,
+  sharedWallWashTexture,
 } from "@/lib/game/materials";
+import {
+  SUN_SHADOW_BIAS,
+  SUN_SHADOW_NORMAL_BIAS,
+  SUN_OFFSET,
+} from "@/lib/game/tuning/render";
 import {
   planArea,
   stageInteriorKits,
@@ -160,6 +171,16 @@ import {
   GROUND_SEGMENTS_MAX,
   HERO_CLEAR,
   HERO_SCALE,
+  LAMP_BULB_EMISSIVE,
+  LAMP_BULB_Y,
+  LAMP_COLOR,
+  LAMP_LIGHT_DISTANCE,
+  LAMP_LIGHT_INTENSITY,
+  LAMP_POOL_OPACITY,
+  LAMP_POOL_RADIUS,
+  LAMP_POLE_HEIGHT,
+  LAMP_SHADE_EMISSIVE,
+  LAMP_SHADE_Y,
   LONE_PROB,
   PARQUET_CELL,
   PARQUET_TONE_LIFT,
@@ -178,6 +199,15 @@ import {
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
+  SKYLIGHT_HALF,
+  SKYLIGHT_LIFT,
+  SKYLIGHT_PANE_EMISSIVE,
+  SKYLIGHT_POOL_OPACITY,
+  SKYLIGHT_POOL_RADIUS,
+  SKYLIGHT_SHAFT_OPACITY,
+  SKYLIGHT_SPOT_ANGLE,
+  SKYLIGHT_SPOT_INTENSITY,
+  SKYLIGHT_SPOT_PENUMBRA,
   SNOW_COUNT_MAX,
   SPACE_FADE_S,
   STRUCTURE_MIN_EXTENT,
@@ -187,6 +217,19 @@ import {
   WALL_CLEARANCE,
   WALL_SILL_HEIGHT,
   WATER_Y,
+  WINDOW_DOOR_CLEAR,
+  WINDOW_HEIGHT,
+  WINDOW_PANE_EMISSIVE,
+  WINDOW_SILL_Y,
+  WINDOW_SPILL_LENGTH,
+  WINDOW_SPILL_OPACITY,
+  WINDOW_SPOT_ANGLE,
+  WINDOW_SPOT_INTENSITY,
+  WINDOW_SPOT_PENUMBRA,
+  WINDOW_SPOT_SHADOW_FAR,
+  WINDOW_SPOT_SHADOW_MAP,
+  WINDOW_SPOT_SHADOW_NEAR,
+  WINDOW_WIDTH,
 } from "@/lib/game/tuning/room";
 
 /**
@@ -3253,6 +3296,20 @@ function SpaceDoorway({
 /* Strand doors (v0.11-hotel-rooms §B.8/B.11)                           */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Split a strand door's label into the NAME half (strand + destination
+ * date, for the existing name plaque) and the door NUMBER (B.14 rule 1).
+ * The data lane (game-shell.tsx) appends the destination slice's 4-digit
+ * clock as a `#HHMM` suffix; the greedy match takes the LAST `#`, so a `#`
+ * inside a strand name can never eat the number. Splitting happens BEFORE
+ * plaqueLabelFor's length cap runs on the name, so the number can never be
+ * ellipsized away. No date maths here — the number arrives pre-derived.
+ */
+function splitStrandLabel(label: string): { name: string; clock: string | null } {
+  const m = /^([\s\S]*)#(\d{4})$/.exec(label);
+  return m ? { name: m[1], clock: m[2] } : { name: label, clock: null };
+}
+
 /** A strand door's label plaque: the corridor's createPlaqueTexture
  *  approach (one dark canvas-textured plate, light monospace ink), wider
  *  with a shrink-to-fit font since strand labels are words, not times.
@@ -3284,12 +3341,45 @@ function createStrandPlaqueTexture(text: string): THREE.CanvasTexture | null {
 }
 
 /**
+ * The strand door's NUMBER plate (B.14 rule 1): the destination slice's
+ * 4-digit clock on its own small plate, the corridor DoorPlate's twin —
+ * same 384×192 canvas, same PLATE_BG field with the faint border, same
+ * PLATE_INK 900-weight monospace digits, so a number read in a room is
+ * unmistakably the same sign as the same number read in the corridor.
+ * Four digits always fit at the corridor's own font size, so no
+ * shrink-to-fit is needed.
+ */
+function createClockPlateTexture(clock: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 384;
+  canvas.height = 192;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = PLATE_BG;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = "rgba(236,226,204,0.45)";
+    ctx.lineWidth = 8;
+    ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
+    ctx.fillStyle = PLATE_INK;
+    ctx.font = "900 104px ui-monospace, Menlo, Consolas, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(clock, canvas.width / 2, canvas.height / 2 + 6);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
  * One strand door: a wormhole to the next slice on its strand (B.11). The
  * geometry speaks the corridor's door language at human scale (A4) —
  * filler panels dressing the 2.4m wall gap down to the 1.4m slab, lintel,
  * a transom closing the gap above the portal on full-height walls, a trim
  * frame proud of the inner face, a threshold strip at the floor, and a
- * plaque carrying the strand's label beside the frame. The whole assembly
+ * plaque carrying the strand's label beside the frame — with the door
+ * NUMBER plate (the destination slice's HHMM clock, B.14 rule 1) stacked
+ * just under it, the corridor DoorPlate's twin. The whole assembly
  * stands from the floor, so a door placed on a cutaway sill wall still
  * reads as a doorframe, not a notch.
  *
@@ -3353,8 +3443,19 @@ function RoomDoorAssembly({
     hinge.rotation.y = angleRef.current;
   });
 
-  const plaque = useMemo(() => createStrandPlaqueTexture(plaqueLabelFor(label)), [label]);
+  // The label carries the door number as a `#HHMM` suffix (B.14 rule 1);
+  // the name plaque shows the rest, the number gets its own plate below it.
+  const { name: plaqueName, clock } = splitStrandLabel(label);
+  const plaque = useMemo(
+    () => createStrandPlaqueTexture(plaqueLabelFor(plaqueName)),
+    [plaqueName],
+  );
   useEffect(() => () => plaque?.dispose(), [plaque]);
+  const clockPlate = useMemo(
+    () => (clock ? createClockPlateTexture(clock) : null),
+    [clock],
+  );
+  useEffect(() => () => clockPlate?.dispose(), [clockPlate]);
 
   return (
     <group
@@ -3513,6 +3614,489 @@ function RoomDoorAssembly({
           </mesh>
         </group>
       )}
+      {/* The door NUMBER (B.14 rule 1): the destination slice's HHMM clock
+          on its own small plate — the corridor DoorPlate's geometry and
+          texture, stacked just under the name plaque so the two signs read
+          as one door's signage and never overlap. Unlit doors carry no
+          number: no destination, nothing to match in the corridor (B.4). */}
+      {clockPlate && (
+        <group position={[DOOR_WIDTH / 2 + 0.55, 1.71, thick / 2 + 0.03]}>
+          <mesh castShadow>
+            <boxGeometry args={[0.84, 0.46, 0.03]} />
+            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0, 0.017]}>
+            <planeGeometry args={[0.76, 0.38]} />
+            <meshBasicMaterial map={clockPlate} transparent />
+          </mesh>
+        </group>
+      )}
+    </group>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
+/* 2026-09-18): this world has NO outdoors. Every lit surface must     */
+/* have a findable source — so every room grows a LAMP (shade + bulb   */
+/* with a real point light and a floor pool) and a WINDOW (frame,      */
+/* bright pane, spill on the floor; in interior rooms its spot is the  */
+/* room's KEY light and casts the strong shadows), and outdoor-class   */
+/* sets add a SKYLIGHT that justifies their overall key.               */
+/* ------------------------------------------------------------------ */
+
+/** Where one window hangs: center on the host wall's line, the probed
+ *  inward normal, and the host's drawn dimensions. */
+interface WindowFixture {
+  x: number;
+  z: number;
+  nx: number;
+  nz: number;
+  thick: number;
+  /** The host wall's DRAWN height (sill height on a cutaway wall). */
+  drawnHeight: number;
+}
+
+interface RoomFixtures {
+  lamp: { x: number; z: number };
+  window: WindowFixture;
+  skylight: { x: number; z: number } | null;
+}
+
+/**
+ * Seeded fixture placement — a dedicated stream (`…:fixtures`, the
+ * room-plan.ts facet convention) so adding fixtures never perturbs the
+ * layout/prop/furniture draws around them (A6: same slice, same room,
+ * fixtures included).
+ *
+ * LAMP: a piece of furniture — drawn inside the footprint, out of the
+ * entrance strip, the strand-door approaches, the water, and (first pass)
+ * the cleared path; it may stand near the hero (a lit set piece reads
+ * well). WINDOW: wall dressing — prefers a FULL-HEIGHT non-entrance wall
+ * (a window punched in a 1.1m dollhouse sill would float), falls back to
+ * the entrance wall beside the door (architecturally natural, never cut),
+ * and keeps clear of every door sharing the host wall. SKYLIGHT: overhead,
+ * so only the plan footprint constrains it; center-third biased.
+ */
+function buildRoomFixtures(
+  recipe: SpaceRecipe,
+  scaled: SpaceRecipe,
+  plan: RoomPlan,
+  comp: Composition,
+  walls: WallSegment[],
+  wallHeight: number,
+  dir: number,
+  water: WaterRect | null,
+  doors: readonly RoomDoorPlacement[],
+  propScale: number,
+  wallScale: number,
+  hasSkylight: boolean,
+): RoomFixtures {
+  const rng = createRng(hashString(`${WORLD_SEED}:${recipe.sliceId}:fixtures`));
+  const { extent } = scaled.size;
+  const width = scaled.width;
+
+  // --- Lamp -------------------------------------------------------------
+  const lampEdge = ROOM_WALL_THICKNESS + 0.9 * propScale;
+  let lamp: RoomFixtures["lamp"] | null = null;
+  for (let pass = 0; pass < 2 && lamp === null; pass++) {
+    for (let tries = 0; tries < 24 && lamp === null; tries++) {
+      const x = (rng() * 2 - 1) * Math.max(0.5, width / 2 - lampEdge);
+      const z = lampEdge + rng() * Math.max(0.5, extent - lampEdge * 2);
+      if (!planContains(plan, x, z, lampEdge)) continue;
+      if (Math.abs(x) < ENTRANCE_CLEAR_RADIUS && z < ENTRANCE_DEPTH) continue;
+      if (doors.length > 0 && inDoorApproach(x, z, doors)) continue;
+      if (water && insideRect(x, z, water, 0.6 * propScale)) continue;
+      if (pass === 0 && distToPath(comp, x, z) < comp.pathHalf + 0.3 * propScale) {
+        continue;
+      }
+      lamp = { x, z };
+    }
+  }
+  // Footprint-safe fallback: beside the path bend, mid-depth.
+  if (lamp === null) {
+    lamp = {
+      x: comp.path.bx <= 0 ? lampEdge + 0.6 * propScale : -(lampEdge + 0.6 * propScale),
+      z: Math.min(Math.max(extent * 0.45, lampEdge + 0.5), extent - lampEdge),
+    };
+  }
+
+  // --- Window -----------------------------------------------------------
+  const winHalf = (WINDOW_WIDTH * wallScale) / 2 + 0.35; // frame margin
+  const endPad = 1;
+  const fits = (w: WallSegment) =>
+    Math.max(w.sizeX, w.sizeZ) >= (winHalf + endPad) * 2;
+  const fullHeight = walls.filter((w) => !w.entrance && !wallFacesCamera(plan, w, dir));
+  let hostPool = fullHeight.filter(fits);
+  if (hostPool.length === 0) hostPool = walls.filter((w) => w.entrance && fits(w));
+  if (hostPool.length === 0) {
+    // Pathological miniature: hang it on the longest wall regardless.
+    hostPool = [...walls].sort(
+      (a, b) => Math.max(b.sizeX, b.sizeZ) - Math.max(a.sizeX, a.sizeZ),
+    ).slice(0, 1);
+  }
+  const host = hostPool[Math.floor(rng() * hostPool.length)];
+  const hostIndex = walls.indexOf(host);
+  const horizontal = host.sizeZ <= host.sizeX;
+  const len = horizontal ? host.sizeX : host.sizeZ;
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, host.x, host.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, host.x + 0.5, host.z, 0) ? 1 : -1;
+  }
+  const drawnHeight =
+    host.entrance || !wallFacesCamera(plan, host, dir)
+      ? wallHeight
+      : Math.min(wallHeight, WALL_SILL_HEIGHT);
+  // Offset along the run, clear of the entrance gap and of every strand
+  // door sharing this wall.
+  const doorClear = winHalf + DOOR_WIDTH / 2 + WINDOW_DOOR_CLEAR;
+  const hostDoors = doors.filter((d) => d.wall === hostIndex);
+  const lo = -len / 2 + winHalf + endPad;
+  const hi = len / 2 - winHalf - endPad;
+  let along = 0;
+  for (let tries = 0; tries < 16; tries++) {
+    const a = lo >= hi ? 0 : lo + rng() * (hi - lo);
+    const cx = host.x + (horizontal ? a : 0);
+    if (host.entrance && Math.abs(cx) < DOOR_GAP_HALF + winHalf + 0.6) continue;
+    if (hostDoors.some((d) => Math.abs(a - d.along) < doorClear)) continue;
+    along = a;
+    break;
+  }
+  const window: WindowFixture = {
+    x: host.x + (horizontal ? along : 0),
+    z: host.z + (horizontal ? 0 : along),
+    nx,
+    nz,
+    thick: horizontal ? host.sizeZ : host.sizeX,
+    drawnHeight,
+  };
+
+  // --- Skylight ---------------------------------------------------------
+  let skylight: RoomFixtures["skylight"] = null;
+  if (hasSkylight) {
+    const half = SKYLIGHT_HALF * wallScale + 0.6;
+    let sx = 0;
+    let sz = extent / 2;
+    for (let tries = 0; tries < 24; tries++) {
+      const x = (rng() * 2 - 1) * Math.max(0.5, width / 2 - half);
+      const z = extent * (0.3 + rng() * 0.4);
+      if (!planContains(plan, x, z, half)) continue;
+      sx = x;
+      sz = z;
+      break;
+    }
+    skylight = { x: sx, z: sz };
+  }
+
+  return { lamp, window, skylight };
+}
+
+/**
+ * The room's lamp: base, pole, an emissive shade over a hot bulb, the ONE
+ * real point light, and an additive floor pool (the corridor sconce idiom —
+ * the painted gradient does the falloff). Everything scales with the room's
+ * prop scale, light included: with decay 2, a pool radius grown by k needs
+ * intensity ×k² to land the same brightness, so a colossal room's giant
+ * lamp actually reaches its giant floor. Calm incandescent — never
+ * flickering (the anti-pattern list).
+ */
+function RoomLamp({
+  x,
+  z,
+  y,
+  scale,
+}: {
+  x: number;
+  z: number;
+  y: number;
+  scale: number;
+}): JSX.Element {
+  return (
+    <group position={[x, y, z]} scale={scale}>
+      <mesh position={[0, 0.03, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.2, 0.26, 0.06, 10]} />
+        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+      </mesh>
+      <mesh position={[0, LAMP_POLE_HEIGHT / 2, 0]} castShadow>
+        <cylinderGeometry args={[0.03, 0.045, LAMP_POLE_HEIGHT, 7]} />
+        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+      </mesh>
+      {/* Shade — emissive cone, apex up over the bulb like the sconce's. */}
+      <mesh position={[0, LAMP_SHADE_Y, 0]} castShadow>
+        <coneGeometry args={[0.42, 0.5, 9]} />
+        <meshStandardMaterial
+          color="#000000"
+          emissive={LAMP_COLOR}
+          emissiveIntensity={LAMP_SHADE_EMISSIVE}
+          roughness={1}
+          metalness={0}
+          flatShading
+        />
+      </mesh>
+      <mesh position={[0, LAMP_BULB_Y, 0]}>
+        <sphereGeometry args={[0.09, 8, 6]} />
+        <meshStandardMaterial
+          color="#000000"
+          emissive={LAMP_COLOR}
+          emissiveIntensity={LAMP_BULB_EMISSIVE}
+          roughness={1}
+          metalness={0}
+        />
+      </mesh>
+      {/* The real light in the lamp (its params ignore the group scale —
+          intensity and distance are scaled explicitly). */}
+      <pointLight
+        position={[0, LAMP_BULB_Y, 0]}
+        color={LAMP_COLOR}
+        intensity={LAMP_LIGHT_INTENSITY * scale * scale}
+        distance={LAMP_LIGHT_DISTANCE * scale}
+        decay={2}
+      />
+      {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
+      <mesh position={[0, 0.035, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[LAMP_POOL_RADIUS * 2, LAMP_POOL_RADIUS * 2]} />
+        <meshBasicMaterial
+          map={sharedRadialGlowTexture()}
+          color={LAMP_COLOR}
+          transparent
+          opacity={LAMP_POOL_OPACITY}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * The room's window: a dark reveal sunk into the wall face, a bright
+ * emissive pane (the source you can point at), an architrave frame and
+ * sill in the door-trim material, and an additive spill quad on the floor
+ * in front — brightest at the wall, dissolving into the room (the wall-
+ * wash gradient, laid flat). In INTERIOR rooms the window is also the
+ * key light: a real spot just inside the pane, aimed down into the room,
+ * carrying the room's strong motivated shadows (the sun has dropped to a
+ * fill — B.13 rule 2). Outdoor-class sets keep the window emissive-only:
+ * their real light comes from the skylight and the overall key.
+ */
+function RoomWindow({
+  fixture,
+  wallScale,
+  paneColor,
+  isKey,
+}: {
+  fixture: WindowFixture;
+  wallScale: number;
+  paneColor: THREE.Color;
+  isKey: boolean;
+}): JSX.Element {
+  const ws = wallScale;
+  const w = WINDOW_WIDTH * ws;
+  // Clamp the pane into the host wall's DRAWN height (a relaxed fallback
+  // host may be a cutaway sill wall — the window then sits low and short).
+  const h = Math.min(WINDOW_HEIGHT * ws, Math.max(0.6, fixture.drawnHeight - 0.4));
+  const sill = Math.min(WINDOW_SILL_Y * ws, Math.max(0.15, fixture.drawnHeight - h - 0.15));
+  const spillL = WINDOW_SPILL_LENGTH * ws;
+  const [spotTarget] = useState(() => new THREE.Object3D());
+  return (
+    <group
+      position={[fixture.x, 0, fixture.z]}
+      rotation={[0, Math.atan2(fixture.nx, fixture.nz), 0]}
+    >
+      {/* Dark reveal — the opening reads as a hole in the wall. */}
+      <mesh position={[0, sill + h / 2, fixture.thick / 2 - 0.02]}>
+        <boxGeometry args={[w + 0.24, h + 0.24, 0.05]} />
+        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+      </mesh>
+      {/* The bright face. */}
+      <mesh position={[0, sill + h / 2, fixture.thick / 2 + 0.011]}>
+        <planeGeometry args={[w, h]} />
+        <meshStandardMaterial
+          color="#000000"
+          emissive={paneColor}
+          emissiveIntensity={WINDOW_PANE_EMISSIVE}
+          roughness={1}
+          metalness={0}
+        />
+      </mesh>
+      {/* Architrave frame + sill, proud of the wall face. */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          position={[side * (w / 2 + 0.06), sill + h / 2, fixture.thick / 2 + 0.05]}
+          castShadow
+        >
+          <boxGeometry args={[0.12, h + 0.24, 0.12]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      ))}
+      <mesh position={[0, sill + h + 0.06, fixture.thick / 2 + 0.05]} castShadow>
+        <boxGeometry args={[w + 0.24, 0.12, 0.12]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      <mesh position={[0, sill - 0.04, fixture.thick / 2 + 0.08]} castShadow receiveShadow>
+        <boxGeometry args={[w + 0.3, 0.08, 0.2]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      {/* Light spilling inward: the wall-wash gradient laid flat, bright
+          edge at the wall (texture up maps to -z = the wall side). */}
+      <mesh
+        position={[0, 0.05, fixture.thick / 2 + spillL / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[w * 1.4, spillL]} />
+        <meshBasicMaterial
+          map={sharedWallWashTexture()}
+          color={paneColor}
+          transparent
+          opacity={WINDOW_SPILL_OPACITY}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* The interior key: a real spot through the opening, casting the
+          room's strong shadows. */}
+      {isKey && (
+        <>
+          <primitive
+            object={spotTarget}
+            position={[0, 0, fixture.thick / 2 + spillL * 0.8]}
+          />
+          <spotLight
+            position={[0, sill + h * 0.55, fixture.thick / 2 + 0.3]}
+            target={spotTarget}
+            color={paneColor}
+            intensity={WINDOW_SPOT_INTENSITY * ws * ws}
+            angle={WINDOW_SPOT_ANGLE}
+            penumbra={WINDOW_SPOT_PENUMBRA}
+            decay={2}
+            castShadow
+            shadow-mapSize={[WINDOW_SPOT_SHADOW_MAP, WINDOW_SPOT_SHADOW_MAP]}
+            shadow-camera-near={WINDOW_SPOT_SHADOW_NEAR}
+            shadow-camera-far={WINDOW_SPOT_SHADOW_FAR * ws}
+            shadow-bias={SUN_SHADOW_BIAS}
+            shadow-normalBias={SUN_SHADOW_NORMAL_BIAS}
+          />
+        </>
+      )}
+    </group>
+  );
+}
+
+/**
+ * The outdoor set's skylight: a square opening floating at the wall top
+ * (the rooms have no ceilings — the chandelier already floats; that is the
+ * grammar), a bright pane visible from both sides, two crossed additive
+ * shaft quads descending ALONG THE SUN'S DIRECTION to the floor pool where
+ * the column lands, and a real spot through the opening. This is what
+ * justifies the set's overall key (B.13 rule 3): walk to the wall and the
+ * "sun" was a stage light all along. The spot never casts — the sun owns
+ * the outdoor shadows, and two near-coincident casters would double-print.
+ */
+function RoomSkylight({
+  fixture,
+  y,
+  wallScale,
+  paneColor,
+}: {
+  fixture: { x: number; z: number };
+  y: number;
+  wallScale: number;
+  paneColor: THREE.Color;
+}): JSX.Element {
+  const ws = wallScale;
+  const half = SKYLIGHT_HALF * ws;
+  // Sun direction: light travels from SUN_OFFSET toward the origin, so the
+  // column lands k·(SUN_OFFSET.x, SUN_OFFSET.z) back from the opening.
+  const k = y / SUN_OFFSET.y;
+  const fx = fixture.x - SUN_OFFSET.x * k;
+  const fz = fixture.z - SUN_OFFSET.z * k;
+  const sunLen = Math.hypot(SUN_OFFSET.x, SUN_OFFSET.y, SUN_OFFSET.z);
+  const shaftLen = y * (sunLen / SUN_OFFSET.y);
+  const yaw = Math.atan2(SUN_OFFSET.x, SUN_OFFSET.z);
+  const slant = Math.atan2(Math.hypot(SUN_OFFSET.x, SUN_OFFSET.z), SUN_OFFSET.y);
+  const [spotTarget] = useState(() => new THREE.Object3D());
+  return (
+    <group>
+      {/* The opening: dark frame ring + bright pane (both faces — the
+          top-down camera sees its upper face). */}
+      <group position={[fixture.x, y, fixture.z]}>
+        {[-1, 1].map((side) => (
+          <mesh key={`fx${side}`} position={[side * (half + 0.1), 0, 0]} castShadow>
+            <boxGeometry args={[0.2, 0.14, half * 2 + 0.4]} />
+            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+          </mesh>
+        ))}
+        {[-1, 1].map((side) => (
+          <mesh key={`fz${side}`} position={[0, 0, side * (half + 0.1)]} castShadow>
+            <boxGeometry args={[half * 2 + 0.4, 0.14, 0.2]} />
+            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+          </mesh>
+        ))}
+        <mesh rotation={[Math.PI / 2, 0, 0]}>
+          <planeGeometry args={[half * 2, half * 2]} />
+          <meshStandardMaterial
+            color="#000000"
+            emissive={paneColor}
+            emissiveIntensity={SKYLIGHT_PANE_EMISSIVE}
+            roughness={1}
+            metalness={0}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      </group>
+      {/* The light column: two crossed quads along the sun's direction,
+          bright at the opening and dissolving toward the floor (the wall-
+          wash gradient, hung from its bright edge). */}
+      <group
+        position={[(fixture.x + fx) / 2, y / 2, (fixture.z + fz) / 2]}
+        rotation={[0, yaw, 0]}
+      >
+        <group rotation={[slant, 0, 0]}>
+          {[0, Math.PI / 2].map((a) => (
+            <mesh key={a} rotation={[0, a, 0]}>
+              <planeGeometry args={[half * 2, shaftLen]} />
+              <meshBasicMaterial
+                map={sharedWallWashTexture()}
+                color={paneColor}
+                transparent
+                opacity={SKYLIGHT_SHAFT_OPACITY}
+                blending={THREE.AdditiveBlending}
+                depthWrite={false}
+                side={THREE.DoubleSide}
+              />
+            </mesh>
+          ))}
+        </group>
+      </group>
+      {/* The pool where the column lands, stretched along the throw. */}
+      <group position={[fx, 0.06, fz]} rotation={[0, yaw, 0]}>
+        <mesh rotation={[-Math.PI / 2, 0, 0]} scale={[1, 1.35, 1]}>
+          <planeGeometry args={[SKYLIGHT_POOL_RADIUS * 2 * ws, SKYLIGHT_POOL_RADIUS * 2 * ws]} />
+          <meshBasicMaterial
+            map={sharedRadialGlowTexture()}
+            color={paneColor}
+            transparent
+            opacity={SKYLIGHT_POOL_OPACITY}
+            blending={THREE.AdditiveBlending}
+            depthWrite={false}
+          />
+        </mesh>
+      </group>
+      {/* The real light through the opening. */}
+      <primitive object={spotTarget} position={[fx, 0, fz]} />
+      <spotLight
+        position={[fixture.x, y - 0.05, fixture.z]}
+        target={spotTarget}
+        color={paneColor}
+        intensity={SKYLIGHT_SPOT_INTENSITY * ws * ws}
+        angle={SKYLIGHT_SPOT_ANGLE}
+        penumbra={SKYLIGHT_SPOT_PENUMBRA}
+        decay={2}
+      />
     </group>
   );
 }
@@ -3562,10 +4146,12 @@ function authoredMaterialState(mat: THREE.Material): {
  * untouched.
  */
 /** One strand door the room should grow (v0.11 §B.8): arrives RESOLVED
- *  and ORDERED from the data lane — `label` is pre-formatted plaque text,
- *  `lit` marks whether the strand has a next slice within the corridor
- *  window (unlit = the unwritten continuation: the door is present but
- *  dark, never missing). Placement, geometry, signage, and crossing
+ *  and ORDERED from the data lane — `label` is pre-formatted plaque text
+ *  with the destination slice's door number as a `#HHMM` suffix (B.14
+ *  rule 1; split off here — see splitStrandLabel), `lit` marks whether the
+ *  strand has a next slice within the corridor window (unlit = the
+ *  unwritten continuation: the door is present but dark, never missing,
+ *  and carries no number). Placement, geometry, signage, and crossing
  *  detection are the room's own job (lib/game/room-doors.ts). */
 export interface SpaceRoomDoor {
   key: string;
@@ -3907,6 +4493,41 @@ export function SpaceScene({
     );
     return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout.doors);
   }, [recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout]);
+
+  // MOTIVATED FIXTURES (B.13): the lamp, the window, and (outdoor-class
+  // sets + the pool hall) the skylight — the findable source of every lit
+  // surface. The pool hall is interior by class but keeps §2's worked
+  // example: its water needs a skylight to reflect.
+  const hasSkylight =
+    recipe.worldClass !== "interior" || recipe.archetype === "pool-hall";
+  const fixtures = useMemo(
+    () =>
+      buildRoomFixtures(
+        recipe,
+        scaledRecipe,
+        plan,
+        comp,
+        walls,
+        wallHeight,
+        dir,
+        waterRect,
+        doorLayout.doors,
+        propScale,
+        wallHeight / WALL_HEIGHT,
+        hasSkylight,
+      ),
+    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, doorLayout, propScale, hasSkylight],
+  );
+  // Fixture faces take the palette's own sun color (the room's one light
+  // register, A5), lifted toward white so the hue survives the bloom.
+  const windowPaneColor = useMemo(
+    () => new THREE.Color(recipe.palette.sunColor).lerp(new THREE.Color("#ffffff"), 0.25),
+    [recipe],
+  );
+  const skylightPaneColor = useMemo(
+    () => new THREE.Color(recipe.palette.sunColor).lerp(new THREE.Color("#ffffff"), 0.1),
+    [recipe],
+  );
 
   // Water tint: the raw accent reads as floor paint on some palettes
   // (dusk/warm are orange). Bias hard toward a bright blue-green so water
@@ -4474,6 +5095,31 @@ export function SpaceScene({
           </Shadowed>
         </group>
         ))}
+
+      {/* Motivated fixtures (B.13): the findable source of every lit
+          surface — a lamp with a real point light, a window whose spot is
+          the interior rooms' shadow-casting KEY, and (outdoor-class sets +
+          pool hall) the skylight that justifies the overall key. */}
+      <RoomLamp
+        x={fixtures.lamp.x}
+        z={fixtures.lamp.z}
+        y={terrainHeight(scaledRecipe, fixtures.lamp.x, fixtures.lamp.z)}
+        scale={propScale}
+      />
+      <RoomWindow
+        fixture={fixtures.window}
+        wallScale={wallHeight / WALL_HEIGHT}
+        paneColor={windowPaneColor}
+        isKey={recipe.worldClass === "interior"}
+      />
+      {fixtures.skylight && (
+        <RoomSkylight
+          fixture={fixtures.skylight}
+          y={wallHeight + SKYLIGHT_LIFT * (wallHeight / WALL_HEIGHT)}
+          wallScale={wallHeight / WALL_HEIGHT}
+          paneColor={skylightPaneColor}
+        />
+      )}
 
       {/* The door from inside: same frame and glow as the corridor face;
           the hinged slab mounts once the corridor is gone — before that
