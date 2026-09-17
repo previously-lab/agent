@@ -5,7 +5,9 @@
  * grunge map, sconce/lamp colors, the dimming tables and lerp rates,
  * signage palettes, painting palette and dimensions, the corridor-form
  * constants (cornice, wainscot, portal), the
- * sconce light pools, and the end-fade curtain + end-glow termination. The door slab geometry itself is shared with the
+ * sconce light pools, the fixture-light layout constants (B.13 灯廊: real
+ * lights live ON fixtures — sconces, the baseboard light line, floor
+ * lamps), and the end-fade curtain + end-glow termination. The door slab geometry itself is shared with the
  * space renderer and lives in ./room. Pure data — no three.js, no React.
  */
 
@@ -125,12 +127,21 @@ export const CORRIDOR_WALL_THICKNESS = 0.2;
  * apart. Dimmed emissive/opacity levels are ~30% of full (a ~70% cut);
  * real lights dim to the task-specified levels. Entries with a `day`
  * override use it instead of `full` while the app is in light mode
- * (sconce pools switch off — daylight needs no fake glow — and the
- * hemisphere opens up).
+ * (the fake-glow decals — sconce pools, wall washes, the light line's
+ * wash and floor glow — switch off: daylight needs no fake glow; the
+ * fixtures' real lights stay on, lamps burning in a bright hotel — and
+ * the hemisphere opens up).
+ *
+ * B.13 灯廊: the hemisphere keeps only the "we are indoors" floor; the
+ * mood is carried by fixture lights — sconceLight at the sconces,
+ * stripLight along the baseboard light line, the floor lamps. There is
+ * no abstract mid-hall chunk light any more.
  */
 export const LIGHT_LEVELS = {
-  hemisphere: { full: 0.55, dimmed: 0.04, day: 0.85 },
-  chunkLight: { full: 6, dimmed: 0.3 },
+  hemisphere: { full: 0.4, dimmed: 0.04, day: 0.85 },
+  sconceLight: { full: 4.5, dimmed: 0.25 },
+  stripLight: { full: 3.5, dimmed: 0.2 },
+  corridorLamp: { full: 4, dimmed: 0.4 },
   lobbyLamp: { full: 5, dimmed: 0.5 },
   lampShade: { full: 1.4, dimmed: 0.42 },
   sconceShade: { full: 1.2, dimmed: 0.36 },
@@ -139,6 +150,12 @@ export const LIGHT_LEVELS = {
   // old bare-circle pair (0.07/0.15) that read as nothing.
   sconcePool: { full: 0.5, dimmed: 0.15, day: 0 },
   sconceWash: { full: 0.35, dimmed: 0.1, day: 0 },
+  // The light line: the strip itself is the visible fixture, so it only
+  // tones down in day (a cove line burning in a bright hotel); its wash
+  // and floor glow are fake-glow decals and switch off like the sconce's.
+  stripGlow: { full: 1.6, dimmed: 0.48, day: 0.4 },
+  stripWash: { full: 0.3, dimmed: 0.09, day: 0 },
+  stripPool: { full: 0.22, dimmed: 0.07, day: 0 },
   doorGlow: { full: 1.6, dimmed: 0.48 },
   doorHalo: { full: 0.14, dimmed: 0.042 },
   doorStrip: { full: 2.2, dimmed: 0.66 },
@@ -230,6 +247,43 @@ export const SCONCE_WASH_WIDTH = 2.4; // wall-wash quad width, m
 export const SCONCE_WASH_HEIGHT = 2.7; // wall-wash quad height (floor → shade), m
 /* The glow gradient textures themselves (and GLOW_TEXTURE_SIZE) live in the
  * material library: src/lib/game/materials/glow.ts. */
+
+/* ------------------------------------------------------------------ */
+/* Fixture lights — real point lights live ON fixtures (B.13 灯廊)      */
+/* ------------------------------------------------------------------ */
+
+/** A sconce's real point light hangs just under and in front of its shade
+ *  — the fixture IS the source, nothing floats mid-hall. */
+export const SCONCE_LIGHT_HEIGHT = 2.45; // m, just below the shade at 2.55
+export const SCONCE_LIGHT_INSET = 0.5; // m in from the inner wall face
+/** Real-light budget per chunk: every sconce is lit up to this count; a
+ *  longer chunk (a silent stretch) thins the lit set to an even spread
+ *  with a proportionally longer reach, so shader cost stays bounded while
+ *  the lamp rhythm (shades + pool decals on every sconce) never breaks. */
+export const SCONCE_LIGHT_MAX_PER_CHUNK = 6;
+
+/** The baseboard light line — the south wall's own fixture: a continuous
+ *  low cove strip just above the baseboard (no ceiling exists in the
+ *  dollhouse cutaway, so the cove lives at ankle height). Warm, a touch
+ *  deeper than the sconce glow for variety. */
+export const STRIP_COLOR = "#ffc98a";
+export const STRIP_HEIGHT = 0.35; // strip center above the floor, m
+export const STRIP_WASH_HEIGHT = 1.5; // wall wash above the strip, m
+export const STRIP_POOL_WIDTH = 1.6; // floor glow width along the wall, m
+/** The line's real lights: low and close to the wall, so their grazing
+ *  pools read as cast by the strip itself. */
+export const STRIP_LIGHT_HEIGHT = 0.55;
+export const STRIP_LIGHT_INSET = 0.7; // m in from the inner wall face
+export const STRIP_LIGHT_TARGET_SPACING = 12; // m between strip lights
+export const STRIP_LIGHT_MAX_PER_CHUNK = 6;
+
+/** Corridor floor lamps — the lobby fixture, at intervals along the hall
+ *  on the fixed architectural grid, alternating walls by grid parity and
+ *  skipping positions a door swings through. */
+export const FLOOR_LAMP_SPACING = 24; // m — every fourth sconce grid point
+export const FLOOR_LAMP_Z = 4.35; // hugs the wall like the plants
+export const FLOOR_LAMP_DOOR_CLEARANCE = 2; // m from any bay door center
+export const FLOOR_LAMP_LIGHT_DISTANCE = 10; // shorter reach than the lobby's 13
 
 /* ------------------------------------------------------------------ */
 /* End-of-world termination — haze, never a black wall                */

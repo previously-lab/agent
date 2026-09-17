@@ -46,21 +46,30 @@
  * independent of room dimensions; a room merely mounts at its door's
  * position.
  *
- * CORRIDOR SCONCES. Sconces hang on the corridor's FIXED architectural
- * grid — one every 6 m on the north (full-height) wall, anchored at the
- * lobby, independent of the bays: the house's rhythm stays periodic while
- * the doors (content) move with time, so a long silent stretch shows a
- * longer bare wall with its lamp rhythm intact and a dense cluster keeps
- * the old look. A sconce is a dark bracket box plus a warm emissive cone, a
- * radial-gradient light pool on the floor and a soft gradient wash on the
- * wall behind it — both textured additive quads (shared canvas textures),
- * not the old bare circles at 0.07/0.15 opacity that read as nothing. The
- * sconce itself is NOT a light, and the pools are static — calm
- * incandescent pools, never flickering. Each chunk also gets exactly one real point light at its center
- * so walking stays continuously lit; with the treadmill window that is at
- * most 3 corridor lights + 2 lobby lamps = 5 point lights in the scene.
- * Sconce glow is a constant warm #ffd9a0 — it is architecture, not memory,
- * so it deliberately does not derive from any slice recipe.
+ * CORRIDOR LAMPS (灯廊 — hotel-rooms §B.13). The corridor is not lit from
+ * overhead; it is lit by its fixtures, and every real point light sits ON
+ * one. Sconces hang on the corridor's FIXED architectural grid — one every
+ * 6 m on the north (full-height) wall, anchored at the lobby, independent
+ * of the bays: the house's rhythm stays periodic while the doors (content)
+ * move with time, so a long silent stretch shows a longer bare wall with
+ * its lamp rhythm intact and a dense cluster keeps the old look. A sconce
+ * is a dark bracket box plus a warm emissive cone, a radial-gradient light
+ * pool on the floor and a soft gradient wash on the wall behind it — both
+ * textured additive quads (shared canvas textures), not the old bare
+ * circles at 0.07/0.15 opacity that read as nothing — and, for up to
+ * SCONCE_LIGHT_MAX_PER_CHUNK per chunk, a REAL short-range point light just
+ * under the shade. Longer chunks thin the lit set to an even spread with a
+ * proportionally longer reach, so the real-light budget stays bounded while
+ * every sconce keeps its shade and decals. The south wall answers with the
+ * LIGHT LINE: a continuous warm cove strip just above the baseboard (the
+ * dollhouse has no ceiling, so the cove lives at ankle height), a soft wash
+ * up the wall, a glow along the floor's edge, and a few low real point
+ * lights spread along it. FLOOR LAMPS — the lobby's fixture — stand at
+ * intervals along the hall on a 24 m grid, alternating walls, skipping
+ * door swings, real light included. Everything is static: calm
+ * incandescent pools, never flickering. Sconce glow is a constant warm
+ * #ffd9a0 — it is architecture, not memory, so it deliberately does not
+ * derive from any slice recipe.
  *
  * DIMMING & HIDING. While a door space is active (`dimmed` prop) the
  * hotel goes dark behind the player so the space owns the screen — and
@@ -117,10 +126,11 @@
  * on unmount.
  *
  * WHAT THIS FILE OWNS vs THE INTEGRATOR. This component supplies the
- * diorama fill light (one hemisphere light — without it the corridor is
- * pitch black between lamps). It does NOT set the scene fog; the fog
- * color #1a1d24 is referenced here (end-fade curtains) but the fog itself
- * is the canvas owner's job. The camera is also the canvas owner's job.
+ * indoor floor light (one hemisphere light — B.13: only the "we are
+ * indoors" base; the fixtures carry the mood). It does NOT set the scene
+ * fog; the fog color #1a1d24 is referenced here (end-fade curtains) but
+ * the fog itself is the canvas owner's job. The camera is also the canvas
+ * owner's job.
  *
  * DETERMINISM. The lobby prop layout and all corridor dressing derive
  * from `deriveSubSeed(WORLD_SEED, …)` streams — same world seed, same
@@ -144,7 +154,6 @@ import {
 } from "@/lib/game/materials";
 import {
   CHUNK_DOORS,
-  CHUNK_LENGTH,
   CORRIDOR_WIDTH,
   DOOR_SPACING,
   LOBBY_LENGTH,
@@ -185,6 +194,10 @@ import {
   FADE_RAMP_Y0,
   FADE_RAMP_Y1,
   FADE_WIDTH,
+  FLOOR_LAMP_DOOR_CLEARANCE,
+  FLOOR_LAMP_LIGHT_DISTANCE,
+  FLOOR_LAMP_SPACING,
+  FLOOR_LAMP_Z,
   GRUNGE_ROLES,
   HIDE_DELAY_MS,
   LAMP_COLOR,
@@ -196,10 +209,21 @@ import {
   PLATE_INK,
   PORTAL_POST_SIZE,
   SCONCE_COLOR,
+  SCONCE_LIGHT_HEIGHT,
+  SCONCE_LIGHT_INSET,
+  SCONCE_LIGHT_MAX_PER_CHUNK,
   SCONCE_POOL_OFFSET,
   SCONCE_POOL_RADIUS,
   SCONCE_WASH_HEIGHT,
   SCONCE_WASH_WIDTH,
+  STRIP_COLOR,
+  STRIP_HEIGHT,
+  STRIP_LIGHT_HEIGHT,
+  STRIP_LIGHT_INSET,
+  STRIP_LIGHT_MAX_PER_CHUNK,
+  STRIP_LIGHT_TARGET_SPACING,
+  STRIP_POOL_WIDTH,
+  STRIP_WASH_HEIGHT,
   THEME_COLORS,
   THEME_LERP_RATE,
   VOID_COLORS,
@@ -431,6 +455,88 @@ function sconcePositions(xStart: number, xEnd: number): number[] {
     xs.push(base + k * DOOR_SPACING);
   }
   return xs;
+}
+
+/**
+ * Which of a chunk's sconces carry a REAL point light, and how far it
+ * reaches. Every sconce is lit up to SCONCE_LIGHT_MAX_PER_CHUNK; past that
+ * (a long silent stretch) the lit set thins to an even spread and the reach
+ * grows to cover the gap, so the floor between fixtures stays readable
+ * while the shader's light count stays bounded. The unlit sconces keep
+ * their emissive shade and pool decals — the rhythm of lamps never breaks.
+ * Pure function of the sconce count (the grid is uniform), so deterministic
+ * per chunk (A6).
+ */
+function litSconceSelection(count: number): { lit: boolean[]; distance: number } {
+  if (count <= SCONCE_LIGHT_MAX_PER_CHUNK) {
+    return {
+      lit: Array.from({ length: count }, () => true),
+      distance: DOOR_SPACING + 3,
+    };
+  }
+  const picks = SCONCE_LIGHT_MAX_PER_CHUNK;
+  const lit = Array.from({ length: count }, () => false);
+  for (let i = 0; i < picks; i++) {
+    lit[Math.round((i * (count - 1)) / (picks - 1))] = true;
+  }
+  const spacing = ((count - 1) / (picks - 1)) * DOOR_SPACING;
+  return { lit, distance: spacing + 3 };
+}
+
+interface FloorLampSpec {
+  x: number;
+  z: number;
+}
+
+/**
+ * Corridor floor lamps on the FIXED architectural grid: one every
+ * FLOOR_LAMP_SPACING meters, anchored at the lobby exactly like the
+ * sconces, alternating walls by grid parity. A lamp whose position a bay
+ * door would swing through is skipped — door positions come from the
+ * corridor layout, not the materialized slices (same rule as the props),
+ * so lamps never reshuffle as doors allocate. Pure; deterministic per
+ * chunk (A6).
+ */
+function floorLampLayout(
+  index: number,
+  xStart: number,
+  xEnd: number,
+  layout: CorridorLayout,
+): FloorLampSpec[] {
+  const base = xEnd <= 0 ? 0 : LOBBY_LENGTH;
+  const doorXs = Array.from({ length: CHUNK_DOORS }, (_, k) =>
+    bayCenterX(layout, k - index * CHUNK_DOORS),
+  );
+  const lamps: FloorLampSpec[] = [];
+  for (
+    let k = Math.floor((xStart - base) / FLOOR_LAMP_SPACING) + 1;
+    base + k * FLOOR_LAMP_SPACING <= xEnd + 1e-6;
+    k++
+  ) {
+    const x = base + k * FLOOR_LAMP_SPACING;
+    if (doorXs.some((dx) => Math.abs(x - dx) < FLOOR_LAMP_DOOR_CLEARANCE)) continue;
+    lamps.push({ x, z: (k % 2 === 0 ? 1 : -1) * FLOOR_LAMP_Z });
+  }
+  return lamps;
+}
+
+/**
+ * The light line's real lights, spread evenly over a corridor span: about
+ * one per STRIP_LIGHT_TARGET_SPACING meters (never fewer than 2, never
+ * more than STRIP_LIGHT_MAX_PER_CHUNK), each reaching just past its
+ * neighbors so the south side of the floor never goes unreadable. Pure;
+ * deterministic per chunk (A6).
+ */
+function stripLightLayout(length: number): { offsets: number[]; distance: number } {
+  const count = Math.min(
+    STRIP_LIGHT_MAX_PER_CHUNK,
+    Math.max(2, Math.round(length / STRIP_LIGHT_TARGET_SPACING)),
+  );
+  const spacing = length / count;
+  return {
+    offsets: Array.from({ length: count }, (_, i) => (i + 0.5) * spacing),
+    distance: spacing / 2 + 5,
+  };
 }
 
 /**
@@ -877,15 +983,21 @@ function DoorAssembly({
  * wash on the wall face behind the shade. Both glows are shared-texture
  * additive quads — the painted gradient does the falloff, so the pool
  * actually reads (the old pair of bare circles at 0.07/0.15 opacity did
- * not). Everything is static: calm incandescent pools, never flickering.
+ * not). When `lit`, the sconce also carries a REAL point light just under
+ * the shade (灯廊 — the fixture is the source; nothing floats mid-hall).
+ * Everything is static: calm incandescent pools, never flickering.
  */
 function WallSconce({
   x,
+  lit,
+  lightDistance,
   dimRef,
   darkRef,
   mats,
 }: {
   x: number;
+  lit: boolean;
+  lightDistance: number;
   dimRef: MutableRefObject<boolean>;
   darkRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
@@ -926,6 +1038,18 @@ function WallSconce({
     },
     darkRef,
   );
+  // The sconce's real light follows the dimming too. On unlit sconces the
+  // ref never resolves and the lerp reads null — a no-op.
+  const lightRef = useRef<PointLight>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.sconceLight,
+    () => lightRef.current?.intensity ?? null,
+    (v) => {
+      const l = lightRef.current;
+      if (l) l.intensity = v;
+    },
+  );
 
   return (
     <group>
@@ -946,6 +1070,17 @@ function WallSconce({
           flatShading
         />
       </mesh>
+      {/* The real light, hanging just under the shade it belongs to. */}
+      {lit && (
+        <pointLight
+          ref={lightRef}
+          position={[x, SCONCE_LIGHT_HEIGHT, faceZ - SCONCE_LIGHT_INSET]}
+          color={SCONCE_COLOR}
+          intensity={LIGHT_LEVELS.sconceLight.full}
+          distance={lightDistance}
+          decay={2}
+        />
+      )}
       {/* Light pool on the floor: one radial-gradient quad, soft edge. */}
       <mesh
         position={[x, 0.012, faceZ - SCONCE_POOL_OFFSET]}
@@ -975,6 +1110,159 @@ function WallSconce({
           depthWrite={false}
         />
       </mesh>
+    </group>
+  );
+}
+
+/**
+ * One of the light line's real point lights — low and close to the south
+ * wall, so its grazing pool reads as cast by the strip itself.
+ */
+function StripLight({
+  x,
+  distance,
+  dimRef,
+}: {
+  x: number;
+  distance: number;
+  dimRef: MutableRefObject<boolean>;
+}) {
+  const lightRef = useRef<PointLight>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.stripLight,
+    () => lightRef.current?.intensity ?? null,
+    (v) => {
+      const l = lightRef.current;
+      if (l) l.intensity = v;
+    },
+  );
+  return (
+    <pointLight
+      ref={lightRef}
+      position={[x, STRIP_LIGHT_HEIGHT, -(WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - STRIP_LIGHT_INSET)]}
+      color={STRIP_COLOR}
+      intensity={LIGHT_LEVELS.stripLight.full}
+      distance={distance}
+      decay={2}
+    />
+  );
+}
+
+/**
+ * The baseboard light line — the south wall's own lamp (灯廊: the sconces
+ * belong to the north wall; the south wall answers with a low cove line).
+ * A continuous warm emissive strip just above the baseboard — the
+ * dollhouse cutaway has no ceiling, so the cove lives at ankle height —
+ * a soft gradient wash up the wall (brightest at the strip, dissolving
+ * upward), a glow along the floor's edge, and a few low real point lights
+ * spread along it. Everything is static and follows the hotel-wide
+ * dimming; the fake-glow decals switch off in day mode like the sconce
+ * pools, while the strip itself merely tones down — a cove line burning
+ * in a bright hotel.
+ */
+function LightLine({
+  xStart,
+  xEnd,
+  dimRef,
+  darkRef,
+}: {
+  xStart: number;
+  xEnd: number;
+  dimRef: MutableRefObject<boolean>;
+  darkRef: MutableRefObject<boolean>;
+}) {
+  const length = xEnd - xStart;
+  const centerX = (xStart + xEnd) / 2;
+  const faceZ = -(WALL_Z - CORRIDOR_WALL_THICKNESS / 2); // inner face, south wall
+  const { offsets, distance } = useMemo(() => stripLightLayout(length), [length]);
+
+  // Strip emissive + wash/pool opacities follow the hotel-wide dimming.
+  const stripMatRef = useRef<MeshStandardMaterial>(null);
+  const washMatRef = useRef<MeshBasicMaterial>(null);
+  const poolMatRef = useRef<MeshBasicMaterial>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.stripGlow,
+    () => stripMatRef.current?.emissiveIntensity ?? null,
+    (v) => {
+      const m = stripMatRef.current;
+      if (m) m.emissiveIntensity = v;
+    },
+    darkRef,
+  );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.stripWash,
+    () => washMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = washMatRef.current;
+      if (m) m.opacity = v;
+    },
+    darkRef,
+  );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.stripPool,
+    () => poolMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = poolMatRef.current;
+      if (m) m.opacity = v;
+    },
+    darkRef,
+  );
+
+  return (
+    <group>
+      {/* The strip itself — the visible fixture, proud of the wainscot. */}
+      <mesh position={[centerX, STRIP_HEIGHT, faceZ + 0.07]}>
+        <boxGeometry args={[length, 0.05, 0.04]} />
+        <meshStandardMaterial
+          ref={stripMatRef}
+          color="#000000"
+          emissive={STRIP_COLOR}
+          emissiveIntensity={LIGHT_LEVELS.stripGlow.full}
+          roughness={1}
+          metalness={0}
+        />
+      </mesh>
+      {/* Wash up the wall: the sconce wash texture turned upside down, so
+          it is brightest at the strip and dissolves upward. */}
+      <mesh
+        position={[centerX, STRIP_HEIGHT + STRIP_WASH_HEIGHT / 2, faceZ + 0.05]}
+        rotation={[0, 0, Math.PI]}
+      >
+        <planeGeometry args={[length, STRIP_WASH_HEIGHT]} />
+        <meshBasicMaterial
+          ref={washMatRef}
+          map={sharedWallWashTexture()}
+          color={STRIP_COLOR}
+          transparent
+          opacity={LIGHT_LEVELS.stripWash.full}
+          blending={AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* Glow along the floor's edge, in front of the wainscot. */}
+      <mesh
+        position={[centerX, 0.011, faceZ + STRIP_POOL_WIDTH / 2 + 0.08]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[length, STRIP_POOL_WIDTH]} />
+        <meshBasicMaterial
+          ref={poolMatRef}
+          map={sharedRadialGlowTexture()}
+          color={STRIP_COLOR}
+          transparent
+          opacity={LIGHT_LEVELS.stripPool.full}
+          blending={AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* The line's real lights — low, grazing, spread along it. */}
+      {offsets.map((off) => (
+        <StripLight key={off} x={xStart + off} distance={distance} dimRef={dimRef} />
+      ))}
     </group>
   );
 }
@@ -1209,8 +1497,9 @@ function DatePlaqueSide({
 
 /** One treadmill chunk: floor slab, carpet runner, both wall runs with
  *  wainscot, baseboards, cornice bands, doors,
- *  sconces, seeded dressing (paintings, props, date plaques), and its
- *  single real point light. */
+ *  sconces (the lit subset carrying real light at the shade), the
+ *  baseboard light line with its own low lights, floor lamps at grid
+ *  intervals, and seeded dressing (paintings, props, date plaques). */
 function CorridorChunk({
   index,
   sliceIds,
@@ -1240,6 +1529,13 @@ function CorridorChunk({
   const northDoors = doors.filter((d) => d.side === "north");
   const southDoors = doors.filter((d) => d.side === "south");
   const sconces = useMemo(() => sconcePositions(xStart, xEnd), [xStart, xEnd]);
+  // Which sconces carry the chunk's real light, and how far it reaches.
+  const sconceLights = useMemo(() => litSconceSelection(sconces.length), [sconces.length]);
+  // Floor lamps on their own 24 m grid; props must keep clear of them.
+  const lamps = useMemo(
+    () => floorLampLayout(index, xStart, xEnd, layout),
+    [index, xStart, xEnd, layout],
+  );
   // Interior points of the fixed architectural grid (minus the far seam, so
   // a frame never straddles a chunk boundary) — where paintings hang. The
   // grid is independent of the bays: art keeps the house's rhythm while the
@@ -1250,8 +1546,11 @@ function CorridorChunk({
   );
   const paintings = useMemo(() => paintingLayout(index, gapXs), [index, gapXs]);
   const props = useMemo(
-    () => propLayout(index, xStart, length, gapXs, layout),
-    [index, xStart, length, gapXs, layout],
+    () =>
+      propLayout(index, xStart, length, gapXs, layout).filter((p) =>
+        lamps.every((l) => Math.sign(p.z) !== Math.sign(l.z) || Math.abs(p.x - l.x) >= 1.2),
+      ),
+    [index, xStart, length, gapXs, layout, lamps],
   );
   // A date plaque goes up at the BAY boundary (the seam between bay m − 1
   // and bay m, x = -cumulative[m]) wherever the calendar day changes across
@@ -1270,18 +1569,6 @@ function CorridorChunk({
     }
     return plaques;
   }, [index, sliceIds, layout]);
-
-  // The chunk's real light follows the hotel-wide dimming.
-  const lightRef = useRef<PointLight>(null);
-  useDimLerp(
-    dimRef,
-    LIGHT_LEVELS.chunkLight,
-    () => lightRef.current?.intensity ?? null,
-    (v) => {
-      const l = lightRef.current;
-      if (l) l.intensity = v;
-    },
-  );
 
   return (
     <group>
@@ -1381,9 +1668,31 @@ function CorridorChunk({
           playerRef={playerRef}
         />
       ))}
-      {/* North-wall sconces + the chunk's one real light. */}
-      {sconces.map((x) => (
-        <WallSconce key={x} x={x} dimRef={dimRef} darkRef={darkRef} mats={mats} />
+      {/* North-wall sconces — the lit subset carries the chunk's real
+          light at the shade; the south wall answers with the light line. */}
+      {sconces.map((x, i) => (
+        <WallSconce
+          key={x}
+          x={x}
+          lit={sconceLights.lit[i]}
+          lightDistance={sconceLights.distance}
+          dimRef={dimRef}
+          darkRef={darkRef}
+          mats={mats}
+        />
+      ))}
+      <LightLine xStart={xStart} xEnd={xEnd} dimRef={dimRef} darkRef={darkRef} />
+      {/* Floor lamps at grid intervals along the hall — the lobby fixture,
+          real light included. */}
+      {lamps.map((l) => (
+        <FloorLamp
+          key={l.x}
+          position={[l.x, 0, l.z]}
+          dimRef={dimRef}
+          mats={mats}
+          levels={LIGHT_LEVELS.corridorLamp}
+          distance={FLOOR_LAMP_LIGHT_DISTANCE}
+        />
       ))}
       {/* Seeded dressing: paintings, wall-hugging props, date plaques. */}
       {paintings.map((p) => (
@@ -1399,19 +1708,6 @@ function CorridorChunk({
       {datePlaques.map((p) => (
         <DatePlaque key={p.x} x={p.x} label={p.label} dimRef={dimRef} mats={mats} />
       ))}
-      {/* The chunk's one real light. Its reach grows with the chunk: bays
-          can now run far past DOOR_SPACING, and a fixed 16 m cutoff would
-          leave the far end of a long silent stretch unlit (the anti-pattern
-          list forbids unreadably dark corridor). A uniform chunk keeps the
-          original 16 exactly. */}
-      <pointLight
-        ref={lightRef}
-        position={[centerX, 3.0, 0]}
-        color={SCONCE_COLOR}
-        intensity={LIGHT_LEVELS.chunkLight.full}
-        distance={16 + Math.max(0, length - CHUNK_LENGTH) / 2}
-        decay={2}
-      />
     </group>
   );
 }
@@ -1507,22 +1803,28 @@ function TrashBin({
   );
 }
 
-/** One of the two real point lights in the scene (plus the hemisphere). */
+/** A floor lamp with its real point light at the shade — the lobby pair
+ *  and, at grid intervals, the corridor's own lamps (same fixture; the
+ *  corridor's burn a touch softer and reach less far). */
 function FloorLamp({
   position,
   dimRef,
   mats,
+  levels = LIGHT_LEVELS.lobbyLamp,
+  distance = 13,
 }: {
   position: Vec3;
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
+  levels?: LightLevels;
+  distance?: number;
 }) {
   // The lamp's real light and its glowing shade follow the dimming.
   const lightRef = useRef<PointLight>(null);
   const shadeMatRef = useRef<MeshStandardMaterial>(null);
   useDimLerp(
     dimRef,
-    LIGHT_LEVELS.lobbyLamp,
+    levels,
     () => lightRef.current?.intensity ?? null,
     (v) => {
       const l = lightRef.current;
@@ -1562,8 +1864,8 @@ function FloorLamp({
         ref={lightRef}
         position={[0, 1.5, 0]}
         color={LAMP_COLOR}
-        intensity={LIGHT_LEVELS.lobbyLamp.full}
-        distance={13}
+        intensity={levels.full}
+        distance={distance}
         decay={2}
       />
     </group>
@@ -1946,8 +2248,9 @@ export function Corridor({
 
   return (
     <group>
-      {/* Diorama fill light — without it the corridor is black between
-          lamps. Follows the hotel-wide dimming. */}
+      {/* The "we are indoors" floor — B.13: the fixtures carry the mood;
+          this only keeps the hall from ever reading as outdoor dark.
+          Follows the hotel-wide dimming. */}
       <hemisphereLight
         ref={hemisphereRef}
         args={["#cfc4b4", "#3a332b", LIGHT_LEVELS.hemisphere.full]}
