@@ -13,6 +13,8 @@ import {
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
+import { GAME_DEBUG } from "./debug";
+import { RoomNarrationPanel } from "./room-narration-panel";
 
 /**
  * v1 door cap. Corridor streaming can present far more, but the first version
@@ -105,6 +107,12 @@ export function GameShell() {
   // until the strand read resolves, and stays empty if it fails — the game
   // must work exactly as it does today without strands.
   const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(NO_ROOM_DOORS);
+  // The mounted room's slice — feeds the narration panel. INTERIM FEED:
+  // polled from the canvas's own debug handle (GAME_DEBUG.space is written
+  // every frame by the door manager). The canvas lane will replace this with
+  // a push callback — `onActiveSliceChange?: (sliceId: string | null) => void`
+  // fired from an effect on its activeSpace state — and this poller goes away.
+  const [activeSliceId, setActiveSliceId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,6 +206,23 @@ export function GameShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [router]);
 
+  // Poll the canvas's live debug handle for the mounted room (see the
+  // activeSliceId state above). Cheap, read-only, and identity-guarded so
+  // steady frames cost no re-render.
+  useEffect(() => {
+    const id = setInterval(() => {
+      setActiveSliceId((prev) => {
+        const next = GAME_DEBUG.space;
+        return prev === next ? prev : next;
+      });
+    }, 400);
+    return () => clearInterval(id);
+  }, []);
+
+  const activeDoorLabel = activeSliceId
+    ? doors?.find((door) => door.sliceId === activeSliceId)?.label
+    : undefined;
+
   return (
     <div className="relative h-full w-full">
       {/* Top-left overlay: title + exit. The container is pointer-transparent
@@ -218,6 +243,14 @@ export function GameShell() {
       ) : (
         <GameLoading />
       )}
+      {/* Previously's voice in the room — bottom-left, clear of the title
+          (top-left) and the door HUD (bottom-center). Renders nothing in
+          the corridor; a narration failure shows up inside the panel and
+          never touches the canvas. */}
+      <RoomNarrationPanel
+        sliceId={activeSliceId}
+        {...(activeDoorLabel ? { label: activeDoorLabel } : {})}
+      />
     </div>
   );
 }

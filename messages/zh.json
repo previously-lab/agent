@@ -458,7 +458,12 @@
     "title": "旅店",
     "loading": "正在布置长廊……",
     "exit": "离开",
-    "enter": "进入"
+    "enter": "进入",
+    "replyPlaceholder": "和 Previously 说点什么……",
+    "replySend": "发送",
+    "replySending": "正在告诉 Previously……",
+    "replySent": "Previously 会记住的。",
+    "replyFailed": "没能送出去，话还留在这里。"
   },
   "memory": {
     "emptyTitle": "暂无记忆",
