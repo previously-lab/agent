@@ -18,6 +18,15 @@
  * x < 0 (past door 0 sits nearest the lobby) and the future corridor is
  * x > LOBBY_LENGTH.
  *
+ * THE LOBBY IS THE L'S SHORT LEG (v0.11-room-interiors §10: 短边 = 大厅,
+ * 长边 = 走廊). Its floor extends SOUTH of the corridor band to
+ * z = -LOBBY_SOUTH_REACH, so the lobby's own axis runs across the corridor,
+ * not along it — arriving from the hall reads as a turn into a separate
+ * room. Chunk addressing is blind to this: ownership is decided purely
+ * along x (chunk 0 keeps the whole lobby, whatever its z), so the leg
+ * changes no layout math below — LOBBY_SOUTH_REACH exists for the renderer
+ * and the movement clamp, not for the chunk grid.
+ *
  * DOOR INDICES ARE SIGNED. A non-negative index addresses a PAST door. With
  * no layout, door i is centered at x = -(i + 0.5) * DOOR_SPACING — the
  * legacy uniform grid. With a CorridorLayout, bay i is exactly pitches[i]
@@ -104,6 +113,13 @@ export const CHUNK_LENGTH = DOOR_SPACING * CHUNK_DOORS;
 
 /** Lobby length along X; the lobby occupies x ∈ [0, LOBBY_LENGTH). */
 export const LOBBY_LENGTH = 14;
+
+/** The lobby's south wall sits at z = −LOBBY_SOUTH_REACH — the lobby is the
+ *  L's short leg (see the module doc): its floor runs south from the
+ *  corridor band (z = −CORRIDOR_WIDTH / 2) to this wall, perpendicular to
+ *  the corridor. Purely a footprint constant for the renderer and the
+ *  movement clamp; the chunk grid never reads it (ownership is along x). */
+export const LOBBY_SOUTH_REACH = 17;
 
 /** Which corridor wall a door is set into. */
 export type Side = "north" | "south";

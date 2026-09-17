@@ -14,6 +14,7 @@ import {
   CHUNK_DOORS,
   CHUNK_LENGTH,
   LOBBY_LENGTH,
+  LOBBY_SOUTH_REACH,
   type DoorRef,
   doorPosition,
   chunkIndexForX,
@@ -45,6 +46,7 @@ describe("layout constants", () => {
     expect(CHUNK_DOORS).toBe(4);
     expect(CHUNK_LENGTH).toBe(24);
     expect(LOBBY_LENGTH).toBe(14);
+    expect(LOBBY_SOUTH_REACH).toBe(17);
   });
 });
 

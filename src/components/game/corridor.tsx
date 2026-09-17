@@ -28,6 +28,17 @@
  * split into solid segments plus a lintel box above the door gap, so the
  * wall face stays continuous and the top edge is one straight line.
  *
+ * THE LOBBY IS THE SHORT LEG OF THE L (v0.11-room-interiors §10: 短边 =
+ * 大厅, 长边 = 走廊). The corridor is the long leg; the lobby turns across
+ * it. Its floor keeps the corridor's junction band (x ∈ [0, LOBBY_LENGTH])
+ * and extends SOUTH to z = −LOBBY_SOUTH_REACH, so the room's own axis is
+ * perpendicular to the hall: the junction's south side is open (the
+ * corridor's south wall stops at the seam), the leg's west wall — the
+ * camera side — is a low cutaway parapet, and the far walls run full
+ * height with the front desk against the south one, facing the arriving
+ * player. Chunk ownership is unchanged: chunk 0 owns the lobby along x
+ * whatever its z extent, and no corridor geometry moves (see hotel.ts).
+ *
  * DOOR GLOW. Each door's glow color comes from
  * `doorGlowColor(compileSpaceRecipe(door.sliceId).palette)` — the room's
  * own tone (ground→sky, lifted), deterministic per slice, so the glimpse
@@ -157,6 +168,7 @@ import {
   CORRIDOR_WIDTH,
   DOOR_SPACING,
   LOBBY_LENGTH,
+  LOBBY_SOUTH_REACH,
   WALL_HEIGHT,
   chunkBounds,
   chunkIndexForX,
@@ -203,6 +215,8 @@ import {
   HIDE_DELAY_MS,
   LAMP_COLOR,
   LIGHT_LEVELS,
+  LOBBY_CUTAWAY_CAP,
+  LOBBY_CUTAWAY_HEIGHT,
   MATERIAL_FINISH,
   PAINTING_H,
   PAINTING_W,
@@ -563,36 +577,69 @@ interface LobbyLayout {
 
 function buildLobbyLayout(): LobbyLayout {
   const rng = createRng(deriveSubSeed(WORLD_SEED, "lobby", "layout"));
+  // The desk stands against the leg's far (south) wall, counter facing
+  // north — the thing the arriving player sees straight ahead after the
+  // turn into the leg.
+  const deskX = rangeInt(rng, 55, 85) / 10;
   const desk = {
-    position: [rangeInt(rng, 95, 108) / 10, 0, rangeInt(rng, -6, 6) / 10] as Vec3,
-    rotationY: 0, // counter faces west, toward the lobby entrance
+    position: [
+      deskX,
+      0,
+      -(LOBBY_SOUTH_REACH - 1.1 - rangeInt(rng, 0, 4) / 10),
+    ] as Vec3,
+    rotationY: 0, // long axis east-west; the counter face looks up the leg
   };
-  const chairX = rangeInt(rng, 42, 56) / 10;
-  const chairOffset = rangeInt(rng, 12, 18) / 10;
-  const chairAngle = pick(rng, [-0.35, -0.2, 0.2, 0.35] as const);
+  // Two armchairs on the guest side, facing the desk (south), angled a
+  // touch inward — the conversation pair across the counter.
+  const chairAngle = pick(rng, [0.15, 0.25, 0.35] as const);
+  const chairZ = -(LOBBY_SOUTH_REACH - rangeInt(rng, 42, 50) / 10);
+  const chairGap = rangeInt(rng, 16, 20) / 10;
   const armchairs = [
     {
-      position: [chairX, 0, chairOffset] as Vec3,
-      rotationY: -Math.PI / 2 + chairAngle, // faces the desk (+x-ish)
+      position: [deskX - chairGap, 0, chairZ] as Vec3,
+      rotationY: Math.PI / 2 - chairAngle, // faces south, toward the desk
     },
     {
-      position: [chairX + rangeInt(rng, -3, 3) / 10, 0, -chairOffset] as Vec3,
-      rotationY: Math.PI / 2 - chairAngle,
+      position: [deskX + chairGap, 0, chairZ + rangeInt(rng, -3, 3) / 10] as Vec3,
+      rotationY: Math.PI / 2 + chairAngle,
     },
   ];
-  const plantX = rangeInt(rng, 12, 24) / 10;
-  const plantZ = rangeInt(rng, 20, 25) / 10;
-  const plantSign = pick(rng, [1, -1] as const);
+  // Plants hold the leg's far corners; one more greets at the portal.
+  const cornerInset = rangeInt(rng, 12, 15) / 10;
   const plants = [
-    { position: [plantX, 0, plantSign * plantZ] as Vec3, scale: rangeInt(rng, 9, 11) / 10 },
     {
-      position: [plantX + rangeInt(rng, 8, 14) / 10, 0, -plantSign * plantZ] as Vec3,
+      position: [
+        cornerInset,
+        0,
+        -(LOBBY_SOUTH_REACH - rangeInt(rng, 8, 11) / 10),
+      ] as Vec3,
+      scale: rangeInt(rng, 9, 11) / 10,
+    },
+    {
+      position: [
+        LOBBY_LENGTH - cornerInset,
+        0,
+        -(LOBBY_SOUTH_REACH - rangeInt(rng, 8, 11) / 10),
+      ] as Vec3,
+      scale: rangeInt(rng, 8, 10) / 10,
+    },
+    {
+      position: [rangeInt(rng, 11, 14) / 10, 0, rangeInt(rng, 34, 40) / 10] as Vec3,
       scale: rangeInt(rng, 8, 10) / 10,
     },
   ];
+  // Floor lamps flank the desk; one more lights the vestibule.
+  const lampGap = rangeInt(rng, 26, 30) / 10;
   const lamps = [
-    { position: [rangeInt(rng, 30, 45) / 10, 0, rangeInt(rng, -14, 14) / 10] as Vec3 },
-    { position: [rangeInt(rng, 72, 88) / 10, 0, rangeInt(rng, -14, 14) / 10] as Vec3 },
+    { position: [deskX - lampGap, 0, -(LOBBY_SOUTH_REACH - 1.2)] as Vec3 },
+    { position: [deskX + lampGap, 0, -(LOBBY_SOUTH_REACH - 1.2)] as Vec3 },
+    {
+      position: [
+        LOBBY_LENGTH - rangeInt(rng, 13, 17) / 10,
+        0,
+        rangeInt(rng, 32, 40) / 10,
+      ] as Vec3,
+    },
   ];
   return { desk, armchairs, plants, lamps };
 }
@@ -1869,7 +1916,13 @@ function FloorLamp({
   );
 }
 
-/** The lobby: floor, three walls (west end open into the corridor), props. */
+/** The lobby — the L's short leg. The junction band (corridor width)
+ *  keeps its north wall and the seam portal posts; its south side is
+ *  OPEN — the corridor's south wall stops at the seam and the floor runs
+ *  on south to the leg's far wall, so arriving from the hall reads as a
+ *  turn into a separate room. The leg's far walls (south/east) run full
+ *  height; its west wall faces the camera and stays a low cutaway
+ *  parapet. The desk stands against the south wall, facing the turn. */
 function Lobby({
   dimRef,
   mats,
@@ -1879,16 +1932,24 @@ function Lobby({
 }) {
   const { desk, armchairs, plants, lamps } = LOBBY_LAYOUT;
   const centerX = LOBBY_LENGTH / 2;
+  // The floor spans the junction band plus the leg: z ∈ [−reach, +WALL_Z].
+  const southZ = -LOBBY_SOUTH_REACH;
+  const floorDepth = LOBBY_SOUTH_REACH + WALL_Z;
+  const centerZ = (WALL_Z - LOBBY_SOUTH_REACH) / 2;
+  // The leg proper (south of the corridor band) — the parapet's span.
+  const legDepth = LOBBY_SOUTH_REACH - WALL_Z;
+  const legCenterZ = (-WALL_Z + southZ) / 2;
   return (
     <group>
       <mesh
-        position={[centerX, -FLOOR_THICKNESS / 2, 0]}
+        position={[centerX, -FLOOR_THICKNESS / 2, centerZ]}
         material={mats.floor}
         receiveShadow
       >
-        <boxGeometry args={[LOBBY_LENGTH, FLOOR_THICKNESS, CORRIDOR_WIDTH]} />
+        <boxGeometry args={[LOBBY_LENGTH, FLOOR_THICKNESS, floorDepth]} />
       </mesh>
-      {/* North wall, full height; south wall, cutaway height; east end, full. */}
+      {/* Junction band: north wall full height (the corridor's north wall
+          runs straight on); the south side is open — the turn. */}
       <mesh
         position={[centerX, WALL_HEIGHT / 2, WALL_Z]}
         material={mats.wall}
@@ -1897,23 +1958,42 @@ function Lobby({
       >
         <boxGeometry args={[LOBBY_LENGTH, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
       </mesh>
+      {/* Far walls: east and south, full height — the backdrop. */}
       <mesh
-        position={[centerX, SOUTH_WALL_HEIGHT / 2, -WALL_Z]}
+        position={[LOBBY_LENGTH, WALL_HEIGHT / 2, centerZ]}
         material={mats.wall}
         castShadow
         receiveShadow
       >
-        <boxGeometry args={[LOBBY_LENGTH, SOUTH_WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, floorDepth + CORRIDOR_WALL_THICKNESS]} />
       </mesh>
       <mesh
-        position={[LOBBY_LENGTH, WALL_HEIGHT / 2, 0]}
+        position={[centerX, WALL_HEIGHT / 2, southZ]}
         material={mats.wall}
         castShadow
         receiveShadow
       >
-        <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, CORRIDOR_WIDTH + CORRIDOR_WALL_THICKNESS]} />
+        <boxGeometry args={[LOBBY_LENGTH + CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
       </mesh>
-      {/* Baseboards. */}
+      {/* The leg's west wall faces the camera: a low parapet with a trim
+          cap, so the 45° camera reads the leg's floor over it. */}
+      <mesh
+        position={[0, LOBBY_CUTAWAY_HEIGHT / 2, legCenterZ]}
+        material={mats.wall}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS, LOBBY_CUTAWAY_HEIGHT, legDepth]} />
+      </mesh>
+      <mesh
+        position={[0, LOBBY_CUTAWAY_HEIGHT + LOBBY_CUTAWAY_CAP / 2, legCenterZ]}
+        material={mats.trim}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.1, LOBBY_CUTAWAY_CAP, legDepth + 0.1]} />
+      </mesh>
+      {/* Baseboards on the three full-height walls. */}
       <mesh
         position={[centerX, 0.06, WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.02]}
         material={mats.trim}
@@ -1921,46 +2001,78 @@ function Lobby({
         <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
       </mesh>
       <mesh
-        position={[centerX, 0.06, -WALL_Z + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
+        position={[centerX, 0.06, southZ + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
         material={mats.trim}
       >
         <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
       </mesh>
-      {/* Wainscot + chair rail on the two long walls (no doors to break for). */}
-      {[1, -1].map((s) => (
-        <group key={`wainscot-${s}`}>
-          <mesh
-            position={[
-              centerX,
-              WAINSCOT_HEIGHT / 2,
-              s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01),
-            ]}
-            material={mats.wainscot}
-            receiveShadow
-          >
-            <boxGeometry args={[LOBBY_LENGTH, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
-          </mesh>
-          <mesh
-            position={[
-              centerX,
-              WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2,
-              s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01),
-            ]}
-            material={mats.trim}
-            receiveShadow
-          >
-            <boxGeometry args={[LOBBY_LENGTH, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
-          </mesh>
-        </group>
-      ))}
-      {/* Cornices on all three walls. */}
+      <mesh
+        position={[LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - 0.02, 0.06, centerZ]}
+        material={mats.trim}
+      >
+        <boxGeometry args={[0.04, 0.12, floorDepth]} />
+      </mesh>
+      {/* Wainscot + chair rail on the three full-height walls. */}
+      {[1, -1].map((s) => {
+        const wz = s > 0
+          ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01
+          : southZ + CORRIDOR_WALL_THICKNESS / 2 + WAINSCOT_DEPTH / 2 - 0.01;
+        const rz = s > 0
+          ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01
+          : southZ + CORRIDOR_WALL_THICKNESS / 2 + CHAIR_RAIL_DEPTH / 2 - 0.01;
+        return (
+          <group key={`wainscot-${s}`}>
+            <mesh
+              position={[centerX, WAINSCOT_HEIGHT / 2, wz]}
+              material={mats.wainscot}
+              receiveShadow
+            >
+              <boxGeometry args={[LOBBY_LENGTH, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
+            </mesh>
+            <mesh
+              position={[centerX, WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2, rz]}
+              material={mats.trim}
+              receiveShadow
+            >
+              <boxGeometry args={[LOBBY_LENGTH, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
+            </mesh>
+          </group>
+        );
+      })}
+      <group key="wainscot-east">
+        <mesh
+          position={[
+            LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01,
+            WAINSCOT_HEIGHT / 2,
+            centerZ,
+          ]}
+          material={mats.wainscot}
+          receiveShadow
+        >
+          <boxGeometry args={[WAINSCOT_DEPTH, WAINSCOT_HEIGHT, floorDepth]} />
+        </mesh>
+        <mesh
+          position={[
+            LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01,
+            WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2,
+            centerZ,
+          ]}
+          material={mats.trim}
+          receiveShadow
+        >
+          <boxGeometry args={[CHAIR_RAIL_DEPTH, CHAIR_RAIL_HEIGHT, floorDepth]} />
+        </mesh>
+      </group>
+      {/* Cornices on the three full-height walls. */}
       {[1, -1].map((s) => (
         <mesh
           key={`cornice-${s}`}
           position={[
             centerX,
             WALL_HEIGHT - CORNICE_HEIGHT / 2,
-            s * (WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02),
+            s > 0
+              ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02
+              : southZ + CORRIDOR_WALL_THICKNESS / 2 + CORNICE_DEPTH / 2 - 0.02,
           ]}
           material={mats.trim}
           receiveShadow
@@ -1972,12 +2084,12 @@ function Lobby({
         position={[
           LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - CORNICE_DEPTH / 2 + 0.02,
           WALL_HEIGHT - CORNICE_HEIGHT / 2,
-          0,
+          centerZ,
         ]}
         material={mats.trim}
         receiveShadow
       >
-        <boxGeometry args={[CORNICE_DEPTH, CORNICE_HEIGHT, CORRIDOR_WIDTH]} />
+        <boxGeometry args={[CORNICE_DEPTH, CORNICE_HEIGHT, floorDepth]} />
       </mesh>
       {/* Portal posts at the corridor seam (x = 0) — the threshold into the
           hall, visible as the lobby's marker from far down the corridor. */}

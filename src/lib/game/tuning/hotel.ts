@@ -237,6 +237,14 @@ export const CHAIR_RAIL_DEPTH = 0.06;
  *  recognise from far down the hall. */
 export const PORTAL_POST_SIZE = 0.3; // square cross-section, m
 
+/** The lobby's west leg wall (x = 0, south of the corridor band) faces the
+ *  camera (−x side), so it stays a low parapet — the dollhouse cutaway that
+ *  lets the 45° camera read the leg's floor and the desk against its far
+ *  wall. The far (south/east) walls run full height as the backdrop. */
+export const LOBBY_CUTAWAY_HEIGHT = 1.1; // m
+/** Trim cap crowning the cutaway parapet, slightly proud of its faces. */
+export const LOBBY_CUTAWAY_CAP = 0.06; // m tall
+
 /* ------------------------------------------------------------------ */
 /* Sconce light pools — textured quads, not bare additive circles     */
 /* ------------------------------------------------------------------ */
