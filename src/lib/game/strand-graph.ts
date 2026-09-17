@@ -205,8 +205,10 @@ export function nextOnStrand(
 
 /**
  * The previous slice on a strand before `sliceId`, or null when unknown /
- * at the strand's first active position. Direction of travel is forward-only
- * (B.4: 回退走走廊) — this exists for narrator context, not navigation.
+ * at the strand's first active position. The resolution layer
+ * (strand-doors.ts) uses this for the backward fallback (B.8 用户定稿
+ * 2026-09-18): a strand door whose thread has no further active slice
+ * leads back along the same thread instead of standing dark.
  */
 export function previousOnStrand(
   graph: StrandGraph,
