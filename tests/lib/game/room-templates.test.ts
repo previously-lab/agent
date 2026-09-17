@@ -50,7 +50,7 @@ import {
   inDoorApproach,
   placeRoomDoors,
 } from "@/lib/game/room-doors";
-import { planArea, stageInteriorKits, type KitZones } from "@/lib/game/kits";
+import { kitsFor, planArea, stageInteriorKits, type KitZones } from "@/lib/game/kits";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import { buildStrandGraph, strandDoorsForSlice } from "@/lib/game/strand-graph";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
@@ -67,18 +67,24 @@ const byId = (id: string): RoomTemplate => {
 };
 
 describe("template data (§7.2/§7.5)", () => {
-  it("ships the three §7.5 interior templates plus Finding B's door hall", () => {
+  it("ships the §7.5 three, Finding B's door hall, and the abundance pass's three", () => {
     expect(ROOM_TEMPLATES.map((t) => t.id)).toEqual([
       "reading-hall",
       "guest-room",
       "door-hall",
       "gallery",
+      "salon",
+      "twin-suite",
+      "lido",
     ]);
     expect(ROOM_TEMPLATES.map((t) => t.label)).toEqual([
       "阅览厅",
       "客房",
       "列门厅",
       "画廊",
+      "沙龙",
+      "双拼套房",
+      "池厅",
     ]);
   });
 
@@ -137,8 +143,41 @@ describe("template data (§7.2/§7.5)", () => {
     expect(hall.doorCapacity).toBeGreaterThan(byId("guest-room").doorCapacity);
     // The gate: eligible only above the largest domestic ceiling, so it
     // can never steal an ordinary room from the reading hall / guest room.
+    // Every DOMESTIC template (the authored living layouts — never the
+    // door absorbers) keeps its ceiling at 5 or below, so 6 still reads
+    // as "one more than the largest domestic ceiling".
+    const domestic = ROOM_TEMPLATES.filter(
+      (t) => t.id !== "door-hall" && t.id !== "gallery",
+    );
+    for (const t of domestic) {
+      expect(t.doorCapacity).toBeLessThanOrEqual(5);
+    }
     expect(hall.minDoors).toBeGreaterThan(byId("guest-room").doorCapacity);
     expect(hall.minDoors).toBeGreaterThan(byId("reading-hall").doorCapacity);
+  });
+
+  it("covers the pool hall with the lido (the abundance pass's §8 deck pair)", () => {
+    // pool-hall had NO template before: the lido is its first, and its
+    // only one at M tier.
+    const lido = byId("lido");
+    expect(lido.archetypes).toEqual(["pool-hall"]);
+    expect(lido.minExtent).toBe(32);
+    expect(lido.doorWalls).toEqual(["left", "right"]); // never the far deck
+  });
+
+  it("pins every template's hero to a kit that is hero-eligible for its rooms", () => {
+    // A heroKit pin degrades to the seeded draw when the kit is not
+    // whitelisted for the room (kits.ts) — so a pin that is eligible for
+    // NONE of the template's archetypes would be dead data.
+    for (const t of ROOM_TEMPLATES) {
+      if (!t.heroKit) continue;
+      const eligibleSomewhere = (t.archetypes ?? []).some((a) =>
+        kitsFor("interior", a, 96).some(
+          (k) => k.id === t.heroKit && k.heroSlot,
+        ),
+      );
+      expect(eligibleSomewhere).toBe(true);
+    }
   });
 });
 
@@ -195,10 +234,14 @@ describe("resolveRoomTemplate (§7.2 selection)", () => {
     // relaxes, never drops.
     const t = resolveRoomTemplate("2026-10-01", "interior", "hotel-room", 96, 30);
     expect(t!.id).toBe("door-hall");
-    // Below the gate the same room keeps its domestic template.
+    // Below the gate the same room keeps a DOMESTIC template — the guest
+    // room or, since the abundance pass, the twin suite (both ceiling 5;
+    // the weighted draw decides between them).
     expect(
+      ["guest-room", "twin-suite"],
+    ).toContain(
       resolveRoomTemplate("2026-10-01", "interior", "hotel-room", 96, 5)!.id,
-    ).toBe("guest-room");
+    );
   });
 
   it("gates the door hall behind minDoors — ordinary rooms are never stolen", () => {
@@ -209,9 +252,10 @@ describe("resolveRoomTemplate (§7.2 selection)", () => {
       expect(
         resolveRoomTemplate(`2026-10-${i}`, "interior", "library", 32, 4)!.id,
       ).toBe("reading-hall");
-      expect(
-        resolveRoomTemplate(`2026-10-${i}`, "interior", "hotel-room", 64, 5)!.id,
-      ).toBe("guest-room");
+      // hotel-room L at a domestic count draws a domestic suite — the
+      // guest room or the twin suite, never the door hall.
+      const hotel = resolveRoomTemplate(`2026-10-${i}`, "interior", "hotel-room", 64, 5);
+      expect(["guest-room", "twin-suite"]).toContain(hotel!.id);
       const ballroom = resolveRoomTemplate(`2026-10-${i}`, "interior", "ballroom", 96, 5);
       expect(ballroom!.id).not.toBe("door-hall");
     }
@@ -239,6 +283,7 @@ describe("resolveRoomTemplate (§7.2 selection)", () => {
       ["reading-hall", 1],
       ["door-hall", 3],
       ["gallery", 3],
+      ["salon", 3],
     ]);
     const capacityFor = (t: RoomTemplate) => measured.get(t.id)!;
     for (let i = 0; i < 30; i++) {

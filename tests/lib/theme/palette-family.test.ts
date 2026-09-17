@@ -57,6 +57,14 @@ const ACCENT_ASSIGNMENT: Record<string, number> = {
   peach: 21,
   grass: 29,
   salt: 15,
+  // The abundance pass (2026-10): moss's violet opposes the dark green,
+  // haze takes the family's deep teal endpoint (the blue band is too
+  // close to its grey-violet ground), teal and plum wear the same
+  // rose↔cyan-teal pair in opposite directions.
+  moss: 28,
+  haze: 0,
+  teal: 47,
+  plum: 19,
 };
 
 function collisionStats(slots: number[]) {

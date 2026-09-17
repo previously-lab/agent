@@ -117,7 +117,8 @@ export interface RoomTemplate {
 }
 
 /* ------------------------------------------------------------------ */
-/* The interior templates (§7.5's three + Finding B's mid-capacity hall) */
+/* The interior templates (§7.5's three + Finding B's mid-capacity     */
+/* hall + the abundance pass's salon / twin-suite / lido, §8 modular)  */
 /* ------------------------------------------------------------------ */
 
 export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
@@ -256,6 +257,118 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
       { kind: "cluster", rect: { x: [0.7, 0.92], z: [0.15, 0.7] } },
       // 中央通道留白(门到焦点的轴)
       { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0, 0.55] } },
+    ],
+    weight: 2,
+  },
+
+  /* -------------------------------------------------------------- */
+  /* The abundance pass (2026-10): three more layouts, authored in    */
+  /* §8's modular spirit — each one says WHICH functional modules it  */
+  /* combines (a living module, a bedroom wing, a deck pair) and HOW  */
+  /* they connect, instead of one big room to scatter into. Domestic  */
+  /* ceilings stay ≤ 5 so the door hall's minDoors gate (6) still     */
+  /* reads as "one more than the largest domestic ceiling".           */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 沙龙 — the reception module writ large: a conversation pair as the
+    // composed centrepiece, reading and bench clusters along both
+    // pilastered sides, a far-side row of quiet corners. Doors break the
+    // side walls only; the far composition wall stays whole.
+    id: "salon",
+    label: "沙龙",
+    worldClasses: ["interior"],
+    archetypes: ["ballroom", "library"],
+    footprint: "rect",
+    minExtent: 64,
+    doorCapacity: 5,
+    doorWalls: ["left", "right"],
+    features: [
+      { kind: "floor-inlay", at: "floor", span: [0.2, 0.8] },
+      { kind: "pilaster-rhythm", at: "left" },
+      { kind: "pilaster-rhythm", at: "right" },
+    ],
+    heroKit: "sofa-group",
+    zones: [
+      // 对坐沙发(厅心)
+      { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.74] } },
+      // 两侧陪衬簇
+      { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.15, 0.6] } },
+      { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.15, 0.6] } },
+      // 远端静角排
+      { kind: "cluster", rect: { x: [0.1, 0.9], z: [0.8, 0.96] } },
+      // 入口围裙 + 中央走道留白
+      { kind: "keep-empty", rect: { x: [0, 1], z: [0, 0.08] } },
+      { kind: "keep-empty", rect: { x: [0.42, 0.58], z: [0.08, 0.46] } },
+    ],
+    weight: 2,
+  },
+  {
+    // 双拼套房 — two modules joined at the l-shape's step (§8's 组合):
+    // the near zone is the LIVING module (sofa group as its focus,
+    // luggage by the door), the kept wing is the BEDROOM module (the
+    // bed corner and its companions). The hall spine and the wing
+    // crossing stay empty so the two modules read as connected, not
+    // merged. Doors line the hall walls and the step; the bedroom wing's
+    // own walls never carry one.
+    id: "twin-suite",
+    label: "双拼套房",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room"],
+    footprint: "l-shape",
+    minExtent: 64,
+    doorCapacity: 5,
+    doorWalls: ["left", "right", "step"],
+    features: [{ kind: "floor-inlay", at: "floor", span: [0.3, 0.7] }],
+    heroKit: "sofa-group",
+    zones: [
+      // 起居模块焦点(近区 — the step sits at 45–60% depth, this is
+      // always before it)
+      { kind: "hero", rect: { x: [0.12, 0.42], z: [0.14, 0.42] } },
+      // 卧室翼(保留翼深处 — authored for lSide = +1, mirrored otherwise)
+      {
+        kind: "cluster",
+        rect: { x: [0.55, 0.95], z: [0.62, 0.95] },
+        mirrorWithLSide: true,
+      },
+      // 行李区(门厅旁)
+      { kind: "cluster", rect: { x: [0.66, 0.94], z: [0.1, 0.48] } },
+      // 门厅脊线留白 — door to wing crossing
+      { kind: "keep-empty", rect: { x: [0.46, 0.62], z: [0, 0.52] } },
+    ],
+    weight: 1,
+  },
+  {
+    // 池厅 — the pool hall's deck pair (§8: two side-deck modules joined
+    // by the water between them): loungers and towel stations face the
+    // pool from both sides, the composed centrepiece is the lounger pair
+    // on the far deck, and the pool's near rim keeps its walkway. Doors
+    // break the side decks' walls only — the far deck's composition wall
+    // and the water itself never carry one.
+    id: "lido",
+    label: "池厅",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    footprint: "rect",
+    minExtent: 32,
+    doorCapacity: 5,
+    doorWalls: ["left", "right"],
+    features: [
+      { kind: "floor-inlay", at: "floor", span: [0.15, 0.85] },
+      { kind: "pilaster-rhythm", at: "left" },
+      { kind: "pilaster-rhythm", at: "right" },
+    ],
+    heroKit: "pool-loungers",
+    zones: [
+      // 远岸甲板焦点(the pool's water spans ~z 0.33–0.78 of depth —
+      // the hero stands clear of it on the far deck)
+      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.82, 0.94] } },
+      // 两侧甲板簇
+      { kind: "cluster", rect: { x: [0.02, 0.22], z: [0.06, 0.95] } },
+      { kind: "cluster", rect: { x: [0.78, 0.98], z: [0.06, 0.95] } },
+      // 入口围裙 + 近岸步道留白
+      { kind: "keep-empty", rect: { x: [0, 1], z: [0, 0.06] } },
+      { kind: "keep-empty", rect: { x: [0, 1], z: [0.24, 0.32] } },
     ],
     weight: 2,
   },

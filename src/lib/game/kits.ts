@@ -71,7 +71,18 @@ export type KitKind =
   | "umbrellastand"
   | "bucket"
   | "tray"
-  | "bookpile";
+  | "bookpile"
+  // The renderer's remaining INTERIOR vocabulary (abundance pass): a sofa
+  // group, a tv corner and a shelf run were unbuildable while these were
+  // missing — the props existed, no kit could name them.
+  | "sofa"
+  | "tv"
+  | "bookshelf"
+  | "column"
+  // Pool-deck pieces — the pool hall's water-facing kits (§3.1 pool set).
+  | "lounger"
+  | "umbrella"
+  | "ring";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -170,8 +181,10 @@ export function placeKit(kit: Kit, t: KitTransform): PlacedKitPiece[] {
 }
 
 /* ------------------------------------------------------------------ */
-/* The eight interior kits (§3.1, N1). Every piece is a real prop of    */
-/* its own kind — the renderer builds each one as actual geometry.      */
+/* The interior kits (§3.1): N1's original eight, then the abundance   */
+/* pass's eight — every piece is a real prop of its own kind, and every */
+/* kit has a function and something it faces (§4): a door, the path,   */
+/* the hero, or the water.                                              */
 /* ------------------------------------------------------------------ */
 
 export const INTERIOR_KITS: readonly Kit[] = [
@@ -308,6 +321,151 @@ export const INTERIOR_KITS: readonly Kit[] = [
       { kind: "bench", dx: 0, dz: 0, rotY: 0 },
       { kind: "coatstand", dx: -0.95, dz: -0.15, rotY: 0 },
       { kind: "umbrellastand", dx: 0.95, dz: -0.15, rotY: 0 },
+    ],
+  },
+
+  /* -------------------------------------------------------------- */
+  /* The abundance pass (2026-10): eight more hand-written groups so  */
+  /* one room reads as SEVERAL different small scenes, never the same */
+  /* kit eight times (the eight-identical-luggage-carts failure).     */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 沙发 + 电视 + 落地灯 + 边柜 — the living corner: sofa back to the
+    // wall, the tv facing it across the rug. Faces the room's center.
+    id: "tv-corner",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "ballroom"],
+    anchor: "wall",
+    backOffset: 0.55,
+    facing: "center",
+    footprint: 2.0,
+    pieces: [
+      { kind: "rug", dx: 0, dz: 0.5, rotY: 0, scale: 1.2 },
+      { kind: "sofa", dx: 0, dz: 0, rotY: 0 },
+      { kind: "tv", dx: 0, dz: 1.55, rotY: Math.PI },
+      { kind: "floorlamp", dx: -1.15, dz: -0.15, rotY: 0 },
+      { kind: "nightstand", dx: 1.15, dz: -0.1, rotY: 0 },
+    ],
+  },
+  {
+    // 三联书架 + 书堆 + 面向书墙的扶手椅 — the shelf wall: three shelves
+    // in a run, loose piles at their feet, one chair turned toward the
+    // spines. The library's signature wall.
+    id: "bookshelf-run",
+    worldClasses: ["interior"],
+    archetypes: ["library", "ballroom"],
+    anchor: "wall",
+    backOffset: 0.3,
+    facing: "center",
+    footprint: 2.6,
+    pieces: [
+      { kind: "bookshelf", dx: -1.6, dz: 0, rotY: 0 },
+      { kind: "bookshelf", dx: 0, dz: 0, rotY: 0 },
+      { kind: "bookshelf", dx: 1.6, dz: 0, rotY: 0 },
+      { kind: "bookpile", dx: -0.8, dz: 0.7, rotY: 0.2 },
+      { kind: "bookpile", dx: 0.85, dz: 0.75, rotY: -0.3 },
+      { kind: "readingchair", dx: 0, dz: 1.15, rotY: Math.PI },
+    ],
+  },
+  {
+    // 写字台 + 椅 + 台灯 + 书堆 — the writing desk against the wall, its
+    // chair pulled up to it, the lamp ON the desktop: work paused, not
+    // abandoned (I4).
+    id: "writing-desk",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "library"],
+    anchor: "wall",
+    backOffset: 0.5,
+    facing: "center",
+    footprint: 1.6,
+    pieces: [
+      { kind: "rug", dx: 0, dz: 0.35, rotY: 0, scale: 0.9 },
+      { kind: "desk", dx: 0, dz: 0, rotY: 0 },
+      { kind: "chair", dx: 0, dz: 0.85, rotY: Math.PI },
+      { kind: "desklamp", dx: 0.55, dz: -0.15, rotY: 0, dy: 0.8 },
+      { kind: "bookpile", dx: -0.75, dz: 0.55, rotY: 0.3 },
+    ],
+  },
+  {
+    // 两张对坐的沙发 + 茶几 + 落地灯 — the conversation pair: two sofas
+    // facing each other across a low table on one rug. Free-standing,
+    // turned toward the path; the salon's composed centrepiece (I5).
+    id: "sofa-group",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "library", "ballroom"],
+    heroSlot: true,
+    facing: "path",
+    footprint: 2.4,
+    pieces: [
+      { kind: "rug", dx: 0, dz: 0, rotY: 0, scale: 1.4 },
+      { kind: "sofa", dx: -1.15, dz: 0, rotY: Math.PI / 2 },
+      { kind: "sofa", dx: 1.15, dz: 0, rotY: -Math.PI / 2 },
+      { kind: "nightstand", dx: 0, dz: -0.8, rotY: 0 },
+      { kind: "floorlamp", dx: 0, dz: 0.85, rotY: 0 },
+    ],
+  },
+  {
+    // 长凳 + 摊开的书 + 衣帽架 — the gallery bench: one bench facing the
+    // room's focus, a book left OPEN on the seat (the doc's own calm
+    // trace, §1 I4), a coat stand keeping it company.
+    id: "gallery-bench",
+    worldClasses: ["interior"],
+    archetypes: ["ballroom", "library"],
+    minExtent: 64,
+    facing: "hero",
+    footprint: 1.3,
+    pieces: [
+      { kind: "bench", dx: 0, dz: 0, rotY: 0 },
+      { kind: "bookpile", dx: 0.35, dz: 0.05, rotY: 0.2, dy: 0.45 },
+      { kind: "coatstand", dx: -1.05, dz: -0.1, rotY: 0 },
+    ],
+  },
+  {
+    // 两把躺椅 + 边桌 + 遮阳伞立座 + 毛巾 — the pool deck's signature
+    // pair (§3.1 loungers), turned toward the water; umbrella on its
+    // STAND, nothing hangs (I2).
+    id: "pool-loungers",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    heroSlot: true,
+    facing: "water",
+    footprint: 2.1,
+    pieces: [
+      { kind: "lounger", dx: -0.75, dz: 0, rotY: 0 },
+      { kind: "lounger", dx: 0.75, dz: 0, rotY: 0 },
+      { kind: "umbrella", dx: 0, dz: -0.9, rotY: 0 },
+      { kind: "nightstand", dx: 0, dz: 0.2, rotY: 0, scale: 0.9 },
+      { kind: "towelstack", dx: 1.4, dz: 0.5, rotY: 0.2 },
+    ],
+  },
+  {
+    // 毛巾堆 + 长凳 + 水桶 — the towel station: dry towels waiting by the
+    // water, a bench to sit on while drying off. Faces the water.
+    id: "towel-station",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    facing: "water",
+    footprint: 1.4,
+    pieces: [
+      { kind: "towelstack", dx: -0.55, dz: 0, rotY: 0 },
+      { kind: "towelstack", dx: 0.5, dz: 0.1, rotY: 0.2, scale: 0.8 },
+      { kind: "bench", dx: 0, dz: 0.85, rotY: 0 },
+      { kind: "bucket", dx: 1.05, dz: 0.6, rotY: 0 },
+    ],
+  },
+  {
+    // 救生圈立柱 + 毛巾 — the lifeguard post: two rings on their stands
+    // at the pool's edge, towels beneath. Faces the water.
+    id: "ring-post",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    facing: "water",
+    footprint: 1.1,
+    pieces: [
+      { kind: "ring", dx: 0, dz: 0, rotY: 0 },
+      { kind: "ring", dx: 0.7, dz: 0.3, rotY: 0.4, scale: 0.9 },
+      { kind: "towelstack", dx: -0.6, dz: 0.4, rotY: 0 },
     ],
   },
 ];

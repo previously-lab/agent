@@ -4,9 +4,11 @@
  *
  *  - placeKit is pure placement math: deterministic, offsets rotated with
  *    the renderer's three.js Y convention, scales multiplied through.
- *  - The eight interior kits match the doc's enumeration: 3–6 pieces
- *    each, every offset inside the declared footprint disc, wall-anchored
- *    kits declaring their back offset.
+ *  - The sixteen interior kits match the doc's enumeration (N1's eight
+ *    plus the abundance pass's eight): 3–6 pieces each, every offset
+ *    inside the declared footprint disc, wall-anchored kits declaring
+ *    their back offset, and a function with something to face (the
+ *    pool hall's kits face the water).
  *  - Every referenced kind exists in the renderer's vocabulary. KitKind
  *    is a compile-time subset of space.tsx's MotifKind (the renderer
  *    passes staged pieces straight into its prop dispatcher, so tsc
@@ -90,6 +92,16 @@ const KIT_IDS = [
   "housekeeping",
   "dining",
   "coat-bench",
+  // The abundance pass (2026-10): living/library corners, the salon's
+  // conversation pair, and the pool hall's water-facing deck kits.
+  "tv-corner",
+  "bookshelf-run",
+  "writing-desk",
+  "sofa-group",
+  "gallery-bench",
+  "pool-loungers",
+  "towel-station",
+  "ring-post",
 ];
 
 const kitById = (id: string): Kit => {
@@ -99,7 +111,7 @@ const kitById = (id: string): Kit => {
 };
 
 describe("kit data (§3.1)", () => {
-  it("ships exactly the eight interior kits of the N1 milestone", () => {
+  it("ships the sixteen interior kits (N1's eight + the abundance pass's eight)", () => {
     expect(INTERIOR_KITS.map((k) => k.id)).toEqual(KIT_IDS);
   });
 
@@ -135,11 +147,22 @@ describe("kit data (§3.1)", () => {
   });
 
   it("offers at least one hero-eligible kit per flat interior archetype", () => {
-    for (const archetype of ["hotel-room", "library", "ballroom"]) {
+    for (const archetype of ["hotel-room", "library", "ballroom", "pool-hall"]) {
       const heroes = kitsFor("interior", archetype, 16).filter(
         (k) => k.heroSlot,
       );
       expect(heroes.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("gives the pool hall a deck of water-facing kits (§3.1 pool set)", () => {
+    const pool = kitsFor("interior", "pool-hall", 16);
+    const waterFacing = pool.filter((k) => k.facing === "water");
+    // Loungers + towel station + ring post: several DIFFERENT small
+    // scenes around the same water — the anti-eight-luggage-carts bar.
+    expect(waterFacing.length).toBeGreaterThanOrEqual(3);
+    for (const k of waterFacing) {
+      expect(k.archetypes).toEqual(["pool-hall"]);
     }
   });
 
@@ -269,6 +292,27 @@ describe("stageInteriorKits", () => {
     const a = stageFor(SLICE_IDS[0], 32).pieces;
     const b = stageFor(SLICE_IDS[1], 32).pieces;
     expect(a).not.toEqual(b);
+  });
+
+  it("reads as several different scenes, never one kit many times (§6)", () => {
+    // The "eight identical luggage carts in one yellow room" failure: with
+    // sixteen kits in the deck, a furnished room must host a spread of kit
+    // types, and no type may account for half the room's placements.
+    for (const extent of [32, 64, 96]) {
+      for (const sliceId of SLICE_IDS.slice(0, 24)) {
+        const { pieces } = stageFor(sliceId, extent);
+        const byIndex = new Map<number, string>();
+        for (const p of pieces) byIndex.set(p.kitIndex, p.kitId);
+        const ids = [...byIndex.values()];
+        if (ids.length < 8) continue; // sparse small rooms are exempt
+        expect(new Set(ids).size).toBeGreaterThanOrEqual(7);
+        const counts = new Map<string, number>();
+        for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
+        for (const n of counts.values()) {
+          expect(n).toBeLessThanOrEqual(Math.ceil(ids.length / 2));
+        }
+      }
+    }
   });
 
   it("places a composed hero in the far third of the room", () => {
@@ -760,13 +804,16 @@ describe("template zones parameter (§7) — additive", () => {
     });
   }
 
-  /** [sliceId, extent, archetype, widthFactor, pinNoDoors, pinWithDoors]. */
+  /** [sliceId, extent, archetype, widthFactor, pinNoDoors, pinWithDoors].
+   *  Recaptured 2026-10 after the kit deck grew from eight to sixteen:
+   *  the pin's job is unchanged — omitting `zones` must reproduce the
+   *  zones-less staging of the CURRENT deck byte-for-byte. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6811:3720701659", "5405:4111958670"],
-    ["2026-10-12", 32, "library", 1.5, "16311:44563849", "16332:1568161479"],
-    ["2026-10-13", 64, "ballroom", 0.66, "33284:1695980458", "33560:3930209615"],
-    ["2026-10-14", 96, "hotel-room", 1, "52989:4204386079", "53176:3427402656"],
-    ["2026-10-15", 32, "pool-hall", 1, "15157:1153994297", "15135:4211988083"],
+    ["2026-10-11", 16, "hotel-room", 1, "6260:350771846", "5852:694438820"],
+    ["2026-10-12", 32, "library", 1.5, "17590:167720260", "18157:1965912997"],
+    ["2026-10-13", 64, "ballroom", 0.66, "34135:2518707809", "33597:3515700738"],
+    ["2026-10-14", 96, "hotel-room", 1, "53776:1375517861", "54046:2982003027"],
+    ["2026-10-15", 32, "pool-hall", 1, "15877:2034756678", "15307:3196329797"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {
