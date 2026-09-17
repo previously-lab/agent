@@ -5,10 +5,84 @@
  * seen from both sides, so there is exactly one definition, here.
  *
  * Wall HEIGHT is shared too, but lives with the layout math: WALL_HEIGHT
- * in ../hotel. Pure data — no three.js, no React, no seeding.
+ * in ../hotel. Pure data and pure functions — no three.js, no React, no
+ * seeding.
  */
 
 import { VIVID_PALETTES } from "../space-types";
+
+/* ------------------------------------------------------------------ */
+/* Room orientation (the door-side rule — ONE derivation, every        */
+/* consumer shares it).                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The room's orientation about its corridor door. A room is built in a
+ * local frame whose +z axis points OUTWARD from the corridor wall and
+ * whose origin sits on the door axis: a north door (door.z > 0) maps the
+ * local frame to world unchanged (root rotation 0); a south door rotates
+ * it π about Y (mirroring both axes), so the room extends toward −z.
+ *
+ * WHY THIS IS THE UNIQUE RULE. Three hard constraints pin the room's
+ * world transform to exactly one value per door side: (1) the doorway
+ * must stay glued to the corridor door at (door.x, door.z) — the door
+ * slab handoff and the movement clamp's gap both anchor there; (2) the
+ * entrance wall must stay flush with the corridor wall plane, so the
+ * local x axis maps to ±world x (any other rotation would slice the room
+ * through the corridor wall); (3) the room must extend OUTWARD — the
+ * door manager's whole containment model (the |z| hysteresis band in
+ * game-canvas.tsx and clamps.ts) assumes the room lies beyond the wall
+ * plane; a room extending into the corridor band would share the
+ * corridor's z-range and the manager could no longer tell "in the
+ * corridor" from "in the room". Together these leave exactly one
+ * orientation per side — every transform that preserves the attachment
+ * is this one, and any other "rotation" either detaches the room from
+ * its door or is a relabeling of the same world map.
+ *
+ * CONSEQUENCE (the felt flip). With the camera fixed at CAM_OFFSET, a
+ * north-door room presents with its entrance on the far screen edge and
+ * its interior opening toward the camera, a south-door room mirrored —
+ * the two sides are 180° apart ON SCREEN and that difference is forced
+ * by the corridor having two door walls, not by anything in the room's
+ * construction. The arrival itself is continuous: the doorway is
+ * world-rigid through the crossing and the camera never rotates, so the
+ * door you pushed is exactly where it was when you turn around.
+ *
+ * Consumers: the renderer's root group (space.tsx), the local-frame
+ * transforms of the door swing / strand-door swing / strand-door
+ * crossing detection (space.tsx), the movement clamp's geometry
+ * derivation (roomGeometryForSpace, game-canvas.tsx), and the avatar
+ * terrain height (game-canvas.tsx). clamps.ts derives the same
+ * convention inline (it is another lane's module); the unit tests pin
+ * the agreement.
+ */
+export interface RoomOrientation {
+  /** Local-frame mirror: local = (world − door) · dir on both axes. */
+  readonly dir: 1 | -1;
+  /** The root group's rotation.y mapping the local frame to world. */
+  readonly rotationY: number;
+}
+
+const NORTH_ROOM_ORIENTATION: RoomOrientation = { dir: 1, rotationY: 0 };
+const SOUTH_ROOM_ORIENTATION: RoomOrientation = {
+  dir: -1,
+  rotationY: Math.PI,
+};
+
+/** The one orientation derivation — deterministic in the door alone (A6). */
+export function roomOrientationFor(door: { z: number }): RoomOrientation {
+  return door.z > 0 ? NORTH_ROOM_ORIENTATION : SOUTH_ROOM_ORIENTATION;
+}
+
+/** World → room-local: the doorway is the origin, +z points into the room. */
+export function roomLocalFor(
+  door: { x: number; z: number },
+  x: number,
+  z: number,
+): { lx: number; lz: number } {
+  const { dir } = roomOrientationFor(door);
+  return { lx: (x - door.x) * dir, lz: (z - door.z) * dir };
+}
 
 export const GROUND_SEGMENTS = 48;
 /** Room perimeter wall thickness — deliberately NOT the corridor wall

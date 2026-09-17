@@ -13,7 +13,6 @@ import {
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
-import { GAME_DEBUG } from "./debug";
 import { RoomNarrationPanel } from "./room-narration-panel";
 
 /**
@@ -107,11 +106,9 @@ export function GameShell() {
   // until the strand read resolves, and stays empty if it fails — the game
   // must work exactly as it does today without strands.
   const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(NO_ROOM_DOORS);
-  // The mounted room's slice — feeds the narration panel. INTERIM FEED:
-  // polled from the canvas's own debug handle (GAME_DEBUG.space is written
-  // every frame by the door manager). The canvas lane will replace this with
-  // a push callback — `onActiveSliceChange?: (sliceId: string | null) => void`
-  // fired from an effect on its activeSpace state — and this poller goes away.
+  // The mounted room's slice — feeds the narration panel. Pushed by the
+  // canvas through onActiveSliceChange (an effect on its activeSpace
+  // state), so it tracks the door manager exactly.
   const [activeSliceId, setActiveSliceId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -206,19 +203,6 @@ export function GameShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [router]);
 
-  // Poll the canvas's live debug handle for the mounted room (see the
-  // activeSliceId state above). Cheap, read-only, and identity-guarded so
-  // steady frames cost no re-render.
-  useEffect(() => {
-    const id = setInterval(() => {
-      setActiveSliceId((prev) => {
-        const next = GAME_DEBUG.space;
-        return prev === next ? prev : next;
-      });
-    }, 400);
-    return () => clearInterval(id);
-  }, []);
-
   const activeDoorLabel = activeSliceId
     ? doors?.find((door) => door.sliceId === activeSliceId)?.label
     : undefined;
@@ -239,7 +223,11 @@ export function GameShell() {
         </Link>
       </div>
       {doors ? (
-        <GameCanvas doors={doors} roomDoors={roomDoors} />
+        <GameCanvas
+          doors={doors}
+          roomDoors={roomDoors}
+          onActiveSliceChange={setActiveSliceId}
+        />
       ) : (
         <GameLoading />
       )}

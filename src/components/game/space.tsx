@@ -146,11 +146,16 @@ import {
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
 import {
+  applyPoolCaustics,
   createSurfaceMaterial,
   createWaterSurfaceMaterial,
   sharedRadialGlowTexture,
   sharedWallWashTexture,
 } from "@/lib/game/materials";
+// The wave modules are not re-exported from the materials index yet (the
+// index is sibling-lane-owned); import them from their modules directly.
+import { createWaveDriver } from "@/lib/game/materials/wave-driver";
+import { waveRectContains } from "@/lib/game/materials/wave-sim";
 import {
   SUN_SHADOW_BIAS,
   SUN_SHADOW_NORMAL_BIAS,
@@ -269,6 +274,7 @@ import {
   WINDOW_SPOT_SHADOW_MAP,
   WINDOW_SPOT_SHADOW_NEAR,
   WINDOW_WIDTH,
+  roomOrientationFor,
 } from "@/lib/game/tuning/room";
 
 /**
@@ -1041,13 +1047,16 @@ function Shadowed({ children }: { children: ReactNode }) {
 
 /** Water surface: a REAL shallow-water material (materials/water-surface.ts)
  *  — three seamless ripple normal layers scrolling at different scales and
- *  directions, a rim-to-deep depth tint (ankle-clear at the edge, tinted at
- *  depth) that always lets the pool floor read through, and a near-glossy
- *  PBR finish so the environment and key light answer with a specular
- *  streak. The plane still bobs gently; ripple scroll is a pure function of
- *  the frame clock. The material is per-room (its tint is palette-derived)
- *  and disposed on unmount; the ripple textures it samples are shared
- *  app-lifetime singletons.
+ *  directions, Beer–Lambert depth absorption rebuilt analytically from the
+ *  terrain bowl (ankle-clear at the corners, tinted at depth) that always
+ *  lets the pool floor read through, and a near-glossy PBR finish so the
+ *  environment and key light answer with a specular streak. A wave-equation
+ *  sim (materials/wave-driver.ts) adds live wading ripples: a splash on
+ *  entry, footsteps every ~0.5 m of travel inside the rect. The plane still
+ *  bobs gently; all motion is a pure function of the frame clock plus the
+ *  player's own steps. The material and driver are per-room and disposed on
+ *  unmount; the ripple textures they sample are shared app-lifetime
+ *  singletons.
  *  Shadows: RECEIVES only — a shadow caster is rendered through a depth
  *  material that ignores transparency, so a casting water plane would paint
  *  an opaque slab shadow over the pool bottom it exists to reveal; receiving
@@ -1058,14 +1067,22 @@ function WaterSurface({
   cz,
   color,
   shallowColor,
+  playerRef,
+  door,
+  dir,
 }: {
   halfX: number;
   halfZ: number;
   cz: number;
   color: THREE.Color;
   shallowColor: THREE.Color;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
+  door: DoorRef;
+  dir: 1 | -1;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
+  const rect = useMemo(() => ({ cx: 0, cz, halfX, halfZ }), [cz, halfX, halfZ]);
+  const driver = useMemo(() => createWaveDriver(rect), [rect]);
   const water = useMemo(
     () =>
       createWaterSurfaceMaterial({
@@ -1073,15 +1090,51 @@ function WaterSurface({
         shallowColor,
         spanX: halfX * 2,
         spanY: halfZ * 2,
+        centerZ: cz,
+        waveTexture: driver.texture,
+        waveTexelMeters: driver.texelMeters,
       }),
-    [color, shallowColor, halfX, halfZ],
+    [color, shallowColor, halfX, halfZ, cz, driver],
   );
-  useEffect(() => () => water.dispose(), [water]);
-  useFrame(({ clock }) => {
+  useEffect(
+    () => () => {
+      water.dispose();
+      driver.dispose();
+    },
+    [water, driver],
+  );
+  // Wading impulses: a step every ~0.5 m of travel inside the water rect,
+  // amplitude ∝ speed; one splash on entry. Sim steps on a fixed clock.
+  const wadeRef = useRef({ x: 0, z: 0, acc: 0, inside: false });
+  useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime;
     water.update(t);
     const mesh = meshRef.current;
     if (mesh) mesh.position.y = WATER_Y + Math.sin(t * 0.6) * 0.02;
+
+    const p = playerRef.current;
+    const lx = (p.x - door.x) * dir;
+    const lz = (p.z - door.z) * dir;
+    const w = wadeRef.current;
+    if (waveRectContains(lx, lz, rect)) {
+      if (!w.inside) {
+        driver.addImpulse(lx, lz, -0.12, 0.3); // entry splash
+      } else {
+        w.acc += Math.hypot(lx - w.x, lz - w.z);
+        if (w.acc >= 0.5) {
+          const speed = w.acc / Math.max(delta, 1e-3);
+          driver.addImpulse(lx, lz, Math.max(-0.14, -0.05 - 0.02 * speed), 0.2);
+          w.acc = 0;
+        }
+      }
+      w.inside = true;
+    } else {
+      w.inside = false;
+      w.acc = 0;
+    }
+    w.x = lx;
+    w.z = lz;
+    driver.step(delta);
   });
   return (
     <mesh
@@ -1094,94 +1147,6 @@ function WaterSurface({
     >
       <planeGeometry args={[halfX * 2, halfZ * 2]} />
     </mesh>
-  );
-}
-
-/** One ripple patch: rings expand from `radius` and fade on a loop. */
-interface RipplePatch {
-  x: number;
-  z: number;
-  radius: number;
-  phase: number;
-}
-
-/** Deterministic ripple patches scattered inside the water rectangle.
- *  Ring sizes ride the room's prop scale so a colossal pool's ripples
- *  read at its own scale. */
-function scatterRipples(
-  rng: () => number,
-  water: WaterRect,
-  sizeScale: number,
-): RipplePatch[] {
-  const count = Math.min(
-    6,
-    Math.max(2, Math.round((water.halfX * water.halfZ) / 45)),
-  );
-  const spanX = Math.max(0.5, water.halfX - 1.2);
-  const spanZ = Math.max(0.5, water.halfZ - 1.2);
-  const out: RipplePatch[] = [];
-  for (let i = 0; i < count; i++) {
-    out.push({
-      x: water.cx + (rng() * 2 - 1) * spanX,
-      z: water.cz + (rng() * 2 - 1) * spanZ,
-      radius: (1.2 + rng() * 1.4) * sizeScale,
-      phase: rng(),
-    });
-  }
-  return out;
-}
-
-/** Expanding ripple rings: each ring scales up and fades out on a loop
- *  (staggered within its patch), so the water surface reads as alive. */
-function WaterRipples({
-  patches,
-  color,
-}: {
-  patches: RipplePatch[];
-  color: THREE.Color;
-}) {
-  const refs = useRef<(THREE.Mesh | null)[]>([]);
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
-    let k = 0;
-    for (const p of patches) {
-      for (let j = 0; j < 3; j++) {
-        const mesh = refs.current[k];
-        k += 1;
-        if (!mesh) continue;
-        const local = (t * 0.22 + p.phase + j * 0.33) % 1;
-        const s = 0.7 + local * 1.2;
-        mesh.scale.set(s, s, 1);
-        (mesh.material as THREE.MeshStandardMaterial).opacity =
-          0.3 + 0.35 * (1 - local);
-      }
-    }
-  });
-  return (
-    <>
-      {patches.map((p, i) =>
-        [0, 1, 2].map((j) => (
-          <mesh
-            key={`${i}-${j}`}
-            ref={(m) => {
-              refs.current[i * 3 + j] = m;
-            }}
-            position={[p.x, WATER_Y + 0.04 + j * 0.004, p.z]}
-            rotation={[-Math.PI / 2, 0, 0]}
-            renderOrder={2}
-          >
-            <ringGeometry args={[Math.max(0.14, p.radius - 0.14), p.radius, 26]} />
-            <meshStandardMaterial
-              color={color}
-              transparent
-              opacity={0.55}
-              roughness={0.4}
-              depthWrite={false}
-            />
-          </mesh>
-        )),
-      )}
-    </>
   );
 }
 
@@ -3673,7 +3638,7 @@ function SpaceDoorway({
   // jamb in WORLD space. In the south door's π-rotated frame that jamb is
   // +x local, so the hinge, slab, knob, and swing sign all mirror — the
   // handover between the two slabs must never flip the door's handedness.
-  const dir = door.z > 0 ? 1 : -1;
+  const dir = roomOrientationFor(door).dir;
   const hingeX = -dir * (DOOR_WIDTH / 2 - 0.02);
   // Knob rides the slab's FREE edge: +0.50 local for north, −0.50 local for
   // south (π-rotated) — i.e. world door.x + 0.50 on both, same as the
@@ -3950,7 +3915,7 @@ function RoomDoorAssembly({
   const fillerCenter = DOOR_WIDTH / 2 + fillerWidth / 2;
   // The group is rotated so local +z is the inward (room-side) normal;
   // the slab's hinge sits on the −x jamb and swings AWAY from the player.
-  const dir = door.z > 0 ? 1 : -1;
+  const dir = roomOrientationFor(door).dir;
   const hingeRef = useRef<THREE.Group>(null);
   const angleRef = useRef(0);
   const snappedRef = useRef(false);
@@ -4808,7 +4773,7 @@ export function SpaceScene({
   onRoomDoor?: (key: string) => void;
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
-  const dir = door.z > 0 ? 1 : -1;
+  const { dir, rotationY } = roomOrientationFor(door);
 
   // Mount-cost trace (see MOUNT_TRACE): first render only.
   const traceT0Ref = useRef(-1);
@@ -5096,20 +5061,17 @@ export function SpaceScene({
     [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, doorLayout],
   );
 
-  // Motif layer: one dedicated "props" seed stream. Ripples draw first,
-  // then the hero and motif props, in a fixed order, so the whole layer is
-  // deterministic per recipe. Hybrids mix their biome's props with hotel
-  // furniture.
+  // Motif layer: one dedicated "props" seed stream. The hero and motif
+  // props draw in a fixed order, so the whole layer is deterministic per
+  // recipe. Hybrids mix their biome's props with hotel furniture.
   const motif = useMemo(() => {
     const rng = createRng(deriveSubSeed(WORLD_SEED, recipe.sliceId, "props"));
-    const ripples = waterRect ? scatterRipples(rng, waterRect, propScale) : [];
     const base = MOTIF_KINDS[recipe.archetype];
     const kinds =
       recipe.worldClass === "hybrid"
         ? [...base, ...HYBRID_FURNITURE]
         : base;
     return {
-      ripples,
       props: scatterMotifs(
         rng,
         recipe,
@@ -5250,13 +5212,10 @@ export function SpaceScene({
         .lerp(new THREE.Color("#ffffff"), 0.08),
     [recipe],
   );
-  const rippleColor = useMemo(
-    () => waterColor.clone().lerp(new THREE.Color("#ffffff"), 0.55),
-    [waterColor],
-  );
-  // Shallow rim tint for the depth gradient: ankle-deep water over tile
-  // reads as the deep tint brightened toward clear; the shader eases
-  // rim → deep across WATER_DEPTH_RAMP_METERS.
+  // Shallow tint for the Beer–Lambert depth absorption: ankle-clear water
+  // over tile reads as the deep tint brightened toward clear; the shader
+  // derives depth analytically from the terrain bowl (the old rim ramp no
+  // longer exists).
   const waterShallowColor = useMemo(
     () => waterColor.clone().lerp(new THREE.Color("#ffffff"), 0.65),
     [waterColor],
@@ -5430,6 +5389,22 @@ export function SpaceScene({
     });
   }, [tiledGround, recipe, width, extent]);
   useEffect(() => () => groundMaterial?.dispose(), [groundMaterial]);
+  // Pool-floor caustics (materials/caustics-surface.ts): a two-layer light
+  // web patched onto the ground material's shader, masked to the water
+  // rectangle. Uniforms only — nothing extra to dispose; per-frame scroll
+  // is driven below, a pure function of the frame clock.
+  const caustics = useMemo(() => {
+    if (!groundMaterial || !waterRect) return null;
+    return applyPoolCaustics(groundMaterial, {
+      rect: waterRect,
+      spanX: width,
+      spanY: extent,
+      // B.13: caustics are refracted KEY light — tint toward the skylight.
+      color: "#ffffff",
+      intensity: 1,
+    });
+  }, [groundMaterial, waterRect, width, extent]);
+  useFrame((state) => caustics?.update(state.clock.elapsedTime));
   const wallMaterials = useMemo(
     () =>
       wallRuns.map(({ wall }, i) =>
@@ -5533,7 +5508,7 @@ export function SpaceScene({
       ref={rootRef}
       key={recipe.sliceId}
       position={[door.x, 0, door.z]}
-      rotation={[0, dir > 0 ? 0 : Math.PI, 0]}
+      rotation={[0, rotationY, 0]}
       visible={!prewarm}
     >
       {/* Grounding skirt: dark apron extending SKIRT_OVERHANG meters beyond
@@ -5595,16 +5570,16 @@ export function SpaceScene({
       )}
 
       {waterRect && (
-        <>
-          <WaterSurface
-            halfX={waterRect.halfX}
-            halfZ={waterRect.halfZ}
-            cz={waterRect.cz}
-            color={waterColor}
-            shallowColor={waterShallowColor}
-          />
-          <WaterRipples patches={motif.ripples} color={rippleColor} />
-        </>
+        <WaterSurface
+          halfX={waterRect.halfX}
+          halfZ={waterRect.halfZ}
+          cz={waterRect.cz}
+          color={waterColor}
+          shallowColor={waterShallowColor}
+          playerRef={playerRef}
+          door={door}
+          dir={dir}
+        />
       )}
 
       {trees.length > 0 && (

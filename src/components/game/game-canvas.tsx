@@ -165,6 +165,8 @@ import {
   COLONNADE_BAY,
   ROOM_WALL_THICKNESS,
   WATER_Y,
+  roomLocalFor,
+  roomOrientationFor,
 } from "@/lib/game/tuning/room";
 import {
   AO_DISTANCE_FALLOFF,
@@ -347,9 +349,10 @@ function roomZoomPullback(scaleFactor: number): number {
  * at a fixed depth instead of walked on the floor. The terrain and the
  * water rectangle read the SCALED recipe view — the same dims space.tsx
  * displaced the ground by — so the avatar's feet agree with the rendered
- * floor at any room scale. The local transform mirrors SpaceScene's group
- * exactly (space.tsx): north doors sit at rotation 0 → local = world −
- * door; south doors rotate π about Y → local = −(world − door).
+ * floor at any room scale. The local transform is roomLocalFor — the same
+ * shared derivation SpaceScene's root group uses (tuning/room.ts): north
+ * doors sit at rotation 0 → local = world − door; south doors rotate π
+ * about Y → local = −(world − door).
  */
 function groundTargetY(
   space: ActiveSpace,
@@ -358,8 +361,7 @@ function groundTargetY(
   z: number,
 ): number {
   const { door, scaledRecipe } = space;
-  const lx = door.z > 0 ? x - door.x : -(x - door.x);
-  const lz = door.z > 0 ? z - door.z : -(z - door.z);
+  const { lx, lz } = roomLocalFor(door, x, z);
   const terrainY = terrainHeight(scaledRecipe, lx, lz);
   const waterHalf = waterSide / 2;
   if (
@@ -612,7 +614,7 @@ function roomGeometryForSpace(
   );
   if (count <= 0) return { plan, doors: [] };
   const walls = wallSegmentsFor(plan, wallThick);
-  const hostable = hostableWallsFor(plan, walls, door.z > 0 ? 1 : -1);
+  const hostable = hostableWallsFor(plan, walls, roomOrientationFor(door).dir);
   const { doors } = placeRoomDoors(
     recipe.sliceId,
     plan,
@@ -1339,12 +1341,17 @@ function RenderTrace(): null {
 export default function GameCanvas({
   doors,
   roomDoors,
+  onActiveSliceChange,
 }: {
   doors: readonly CorridorDoor[];
   /** Strand doors per room, keyed by sliceId — pre-resolved by the data
    *  lane (game-shell.tsx / lib/game/strand-doors.ts). Absent while that
    *  lane is off; rooms then grow no extra doors and nothing here runs. */
   roomDoors?: ReadonlyMap<string, readonly StrandDoorSpec[]>;
+  /** Push feed for the narration panel (game-shell.tsx): the mounted
+   *  room's slice id, or null in the corridor. Fired from an effect on
+   *  activeSpace, so it tracks the door manager exactly. */
+  onActiveSliceChange?: (sliceId: string | null) => void;
 }): JSX.Element {
   const t = useTranslations("game");
   // App dark mode, read OUTSIDE the Canvas — React context never crosses
@@ -1370,6 +1377,10 @@ export default function GameCanvas({
   useEffect(() => {
     if (activeSpace !== null) setShownSpace(activeSpace);
   }, [activeSpace]);
+  // Narration panel feed (game-shell.tsx): push the mounted room's slice.
+  useEffect(() => {
+    onActiveSliceChange?.(activeSpace === null ? null : activeSpace.door.sliceId);
+  }, [activeSpace, onActiveSliceChange]);
   // Prewarm (responsiveness): the nearest door within ROOM_PREWARM_DIST
   // (GameLoop step 2b) gets its room mounted invisible in the ONE room
   // slot below — geometry built, root group visible=false, so it draws
