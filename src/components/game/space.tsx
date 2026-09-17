@@ -4652,6 +4652,37 @@ const AUTHORED_MATERIAL_STATE = new WeakMap<
   { opacity: number; transparent: boolean }
 >();
 
+/**
+ * Mount-cost trace (responsiveness probe): one record per room mount.
+ * SpaceScene writes its own spans (render body = plan/scatter/material
+ * creation, fade capture = the mount layout effect's full-tree traverse,
+ * commit = door-manager request → first frame tick); the integrator
+ * (game-canvas.tsx) writes tRequest and the per-frame gl.render times, and
+ * mirrors the whole record onto window.__gameMountTrace so the teleport
+ * probes can read where a room mount's milliseconds go. Numbers only — a
+ * few performance.now() calls per mount, no per-frame cost here.
+ */
+export const MOUNT_TRACE = {
+  seq: 0,
+  sliceId: null as string | null,
+  /** Door-manager mark: the wall plane was crossed (performance.now). */
+  tRequest: -1,
+  /** SpaceScene first render body: plan, scatter, materials (all useMemo). */
+  bodyMs: -1,
+  /** Fade material capture (the mount layout effect's full-tree traverse). */
+  captureMs: -1,
+  /** tRequest → first frame tick after mount (React commit + scheduling). */
+  commitMs: -1,
+  /** Door-manager mark: the prewarm (hidden) mount committed. */
+  prewarmAt: -1,
+  /** Main-thread block of the last LightConfigCompiler gl.compile run. */
+  compileSyncMs: -1,
+  /** Unused since the sync-compile redesign (field kept for probe compat). */
+  compileMs: -1,
+  /** gl.render wall time per frame: [t, ms, programCount], ring-buffered. */
+  frames: [] as [number, number, number][],
+};
+
 function authoredMaterialState(mat: THREE.Material): {
   opacity: number;
   transparent: boolean;
@@ -4663,6 +4694,17 @@ function authoredMaterialState(mat: THREE.Material): {
   }
   return authored;
 }
+
+/**
+ * The mounted room's root group (at most one SpaceScene exists — the
+ * integrator's single room slot), exported so the integrator's
+ * LightConfigCompiler can stage light configurations around it: flipped
+ * visible for the span of a synchronous gl.compile it JOINS the light
+ * gather (compile collects lights via traverseVisible), while every actual
+ * RENDER keeps it hidden — the prewarmed room's programs get compiled
+ * without the room ever drawing a pixel.
+ */
+export const ROOM_ROOT: { current: THREE.Group | null } = { current: null };
 
 /**
  * Render the space described by a fully resolved recipe, extending outward
@@ -4738,6 +4780,7 @@ export function SpaceScene({
   playerRef,
   corridorGone,
   fade,
+  prewarm = false,
   onFadedOut,
   roomDoors,
   onRoomDoor,
@@ -4747,6 +4790,15 @@ export function SpaceScene({
   playerRef: MutableRefObject<{ x: number; z: number }>;
   corridorGone: boolean;
   fade: "in" | "out";
+  /** Prewarm (responsiveness): the room is mounted while the player walks
+   *  toward the door — fully built but with its root group visible=false,
+   *  so it draws nothing, contributes no lights, and casts no shadows —
+   *  letting the integrator precompile the scene's shader programs
+   *  (LightConfigCompiler) before the threshold is crossed. The crossfade
+   *  stays parked at 0 and onFadedOut never fires in this state; flipping
+   *  prewarm off (the same mounted instance) shows the root and starts
+   *  the ordinary fade-in from 0. */
+  prewarm?: boolean;
   onFadedOut: () => void;
   /** Strand doors for this slice — absent/empty = today's single-entrance
    *  room. */
@@ -4757,6 +4809,19 @@ export function SpaceScene({
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
   const dir = door.z > 0 ? 1 : -1;
+
+  // Mount-cost trace (see MOUNT_TRACE): first render only.
+  const traceT0Ref = useRef(-1);
+  if (traceT0Ref.current < 0) {
+    traceT0Ref.current = performance.now();
+    MOUNT_TRACE.seq += 1;
+    MOUNT_TRACE.sliceId = recipe.sliceId;
+    MOUNT_TRACE.bodyMs = -1;
+    MOUNT_TRACE.captureMs = -1;
+    MOUNT_TRACE.commitMs = -1;
+    MOUNT_TRACE.prewarmAt = prewarm ? traceT0Ref.current : -1;
+    MOUNT_TRACE.frames.length = 0;
+  }
 
   // ROOM LANGUAGE (v0.11 §3): scale notation, plan silhouette, and staging
   // are pure functions of the slice id (lib/game/room-plan.ts). Scaling is
@@ -4837,6 +4902,8 @@ export function SpaceScene({
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
+    ROOM_ROOT.current = root;
+    const captureT0 = performance.now();
     const mats: { mat: THREE.Material; base: number; transparent: boolean }[] = [];
     root.traverse((obj) => {
       const material = (obj as { material?: THREE.Material | THREE.Material[] }).material;
@@ -4861,7 +4928,20 @@ export function SpaceScene({
       // double-dim.
       mat.opacity = base * k0;
     }
+    MOUNT_TRACE.captureMs = performance.now() - captureT0;
+    return () => {
+      if (ROOM_ROOT.current === root) ROOM_ROOT.current = null;
+    };
   }, []);
+  // Mount-cost trace: the first frame tick after mount closes the commit
+  // span (door-manager request → React commit → rAF tick).
+  const firstFrameRef = useRef(true);
+  useFrame(() => {
+    if (!firstFrameRef.current) return;
+    firstFrameRef.current = false;
+    MOUNT_TRACE.commitMs =
+      MOUNT_TRACE.tRequest >= 0 ? performance.now() - MOUNT_TRACE.tRequest : -1;
+  });
   useFrame((_, delta) => {
     const mats = fadeMatsRef.current;
     if (mats.length === 0) return;
@@ -4871,6 +4951,14 @@ export function SpaceScene({
     const dirSign = fade === "in" ? 1 : -1;
     const t = fadeTRef.current;
     GAME_DEBUG.fadeT = t;
+    // Prewarm: parked invisible (root visible=false; opacity 0 from the
+    // capture pass) while the player approaches — no fade runs and no
+    // handshake can fire.
+    if (prewarm) return;
+    // A fade-in re-arms the exit handshake: a prewarmed instance may reuse
+    // a fiber whose previous life already completed a fade-out (exit →
+    // immediate re-approach), and its next fade-out must handshake again.
+    if (dirSign > 0) fadeDoneRef.current = false;
     // End states are STATES, not events: any frame that observes the end
     // value settles the side effects exactly once. (The old code did the
     // hand-back only inside the frame where `next` first crossed 1 — one
@@ -5434,12 +5522,19 @@ export function SpaceScene({
     Math.max(GROUND_SEGMENTS, Math.round(GROUND_SEGMENTS * propScale)),
   );
 
+  // Mount-cost trace: close the first render body span (all useMemo work:
+  // plan, scatter, furniture, material creation).
+  if (MOUNT_TRACE.bodyMs < 0 && traceT0Ref.current >= 0) {
+    MOUNT_TRACE.bodyMs = performance.now() - traceT0Ref.current;
+  }
+
   return (
     <group
       ref={rootRef}
       key={recipe.sliceId}
       position={[door.x, 0, door.z]}
       rotation={[0, dir > 0 ? 0 : Math.PI, 0]}
+      visible={!prewarm}
     >
       {/* Grounding skirt: dark apron extending SKIRT_OVERHANG meters beyond
           the walls on every side (hole cut for the plan). Below the corridor

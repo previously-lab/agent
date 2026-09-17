@@ -111,9 +111,9 @@
  * player sees comes from corridor/space renderers fed by the seed module.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame } from "@react-three/fiber";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
 import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
 import { useTranslations } from "next-intl";
@@ -159,7 +159,7 @@ import {
 } from "@/lib/game/room-templates";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
 import { Corridor, type CorridorDoor } from "./corridor";
-import { SpaceScene, roomTemplateForDoorCount } from "./space";
+import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
 import { HIDE_DELAY_MS } from "@/lib/game/tuning/hotel";
 import {
   COLONNADE_BAY,
@@ -191,6 +191,7 @@ import {
   PLAYER_SPEED,
   POST_MSAA_SAMPLES,
   ROOM_INTERIOR_SUN_FILL,
+  ROOM_PREWARM_DIST,
   ROOM_SPEED_SCALE_EXP,
   ROOM_ZOOM_MAX_PULLBACK,
   ROOM_ZOOM_SCALE_EXP,
@@ -264,6 +265,13 @@ type PlayerRef = MutableRefObject<PlayerPos>;
 /** Live player/atmosphere/fade state for probes — re-exported from the
  *  shared module (see debug.ts). */
 export { GAME_DEBUG } from "./debug";
+
+declare global {
+  interface Window {
+    /** Mount-cost trace (see MOUNT_TRACE in space.tsx) — probe mirror. */
+    __gameMountTrace?: typeof MOUNT_TRACE;
+  }
+}
 
 /** Clamp per-frame dt so a background tab can't tunnel the player through a wall. */
 const MAX_DT = 0.05;
@@ -1025,6 +1033,8 @@ function GameLoop({
   setCorridorHidden,
   hudIdRef,
   setHudDoor,
+  prewarmIdRef,
+  setPrewarmDoor,
   transitionActive,
   roomDoors,
   roomPlan,
@@ -1043,6 +1053,9 @@ function GameLoop({
   setCorridorHidden: (hidden: boolean) => void;
   hudIdRef: MutableRefObject<string | null>;
   setHudDoor: (door: CorridorDoor | null) => void;
+  /** Prewarm target identity guard + setter (see step 2b). */
+  prewarmIdRef: MutableRefObject<string | null>;
+  setPrewarmDoor: (door: DoorRef | null) => void;
   transitionActive: boolean;
   /** The active space's placed strand doors (plan-local frame) — the
    *  clamp's passage windows; empty when the room grows none. */
@@ -1085,6 +1098,7 @@ function GameLoop({
           // room-plan.ts is the single definition of "how big is this room";
           // clamps, terrain, and water below all consume it, matching the
           // geometry space.tsx builds.
+          MOUNT_TRACE.tRequest = performance.now();
           space = resolveSpaceForDoor(door, archetypeById);
           setActiveSpace(space);
         }
@@ -1095,6 +1109,24 @@ function GameLoop({
         if (Math.abs(p.x - space.door.x) < CLEAR_HALF) {
           space = null;
           setActiveSpace(null);
+        }
+      }
+
+      // 2b. Prewarm — while no space is active, the nearest door within
+      // the prewarm radius gets its room mounted invisible (root
+      // visible=false) and the scene's programs precompiled
+      // (LightConfigCompiler), so the crossing frame has nothing left to
+      // build or compile.
+      // Identity-guarded like the HUD prompt. Left stale while a space is
+      // active (the room slot ignores it then) — recomputed on the first
+      // frame back in the corridor, where it also hands the just-exited
+      // room's fiber back as the (invisible) prewarm mount.
+      if (space === null) {
+        const pre = nearestDoor(p.x, p.z, sliceIds, ROOM_PREWARM_DIST, layout);
+        const preId = pre ? pre.sliceId : null;
+        if (preId !== prewarmIdRef.current) {
+          prewarmIdRef.current = preId;
+          setPrewarmDoor(pre);
         }
       }
 
@@ -1173,6 +1205,133 @@ function Hud({
   );
 }
 
+/**
+ * Shader prewarm (responsiveness). three keys every material's program on
+ * the scene's LIGHT CONFIGURATION, so mounting a room (its lamp, window
+ * spot, skylight join the corridor's ~23 lights) re-keys every program in
+ * the scene — measured as a ~1 s synchronous compile inside the mount
+ * frame's render (SwiftShader; MOUNT_TRACE), with a second wave when the
+ * corridor's lights unmount (HIDE_DELAY_MS after entry) and smaller ones
+ * on exit/return. After any commit that can change the light configuration
+ * (the `epoch` string) this precompiles the programs the NEXT renders will
+ * need with synchronous gl.compile calls, staging the light configuration
+ * with visibility flags — three 0.185 WebGLRenderer.compile gathers lights
+ * via traverseVisible (invisible subtrees contribute none) but materials
+ * via traverse (visibility-independent):
+ *   - prewarm: the room root (ROOM_ROOT — mounted visible=false) is
+ *     flipped visible for the call, so every program compiles under the
+ *     corridor+room config while the room stays invisible to all renders;
+ *   - crossed: the corridor wrapper is hidden for the call, so the room's
+ *     programs also exist under the room-only config the corridor's
+ *     unmount (HIDE_DELAY_MS) will switch to;
+ *   - exit: the room is dissolving and the corridor is back with FRESH
+ *     materials (its old ones were disposed with the unmount) — compile
+ *     once under the live corridor+room config, and once with the room's
+ *     lights hidden (the corridor-only config the room's unmount will
+ *     switch to ~SPACE_FADE_S later, enough lead time for the links).
+ * All flips are restored inside the same JS task, so no render ever sees
+ * them. compile() only SUBMITS compile/link (with
+ * KHR_parallel_shader_compile the driver work runs off the main thread),
+ * so these calls cost a traversal plus a few main-thread ms and no RENDER
+ * pays the storm. three's compileAsync is deliberately NOT used: its
+ * readiness poll crashes when a material is disposed mid-poll (the
+ * properties WeakMap entry is gone → undefined.isReady()).
+ */
+function LightConfigCompiler({
+  epoch,
+  phase,
+  corridorRef,
+}: {
+  epoch: string;
+  /** Which light configuration the coming renders will need (see above). */
+  phase: "prewarm" | "crossed" | "exit" | "plain";
+  /** The corridor's wrapper group (hidden around the crossed compile). */
+  corridorRef: MutableRefObject<THREE.Group | null>;
+}): null {
+  const gl = useThree((s) => s.gl);
+  const scene = useThree((s) => s.scene);
+  const camera = useThree((s) => s.camera);
+  const firstRef = useRef(true);
+  useLayoutEffect(() => {
+    // The initial corridor-only scene compiles on its first render already
+    // (startup is masked by page load) — don't double-compile it here. But
+    // a spawn-time PREWARM (a door within ROOM_PREWARM_DIST of SPAWN) is
+    // invisible to that first render, so its programs only compile here.
+    if (firstRef.current) {
+      firstRef.current = false;
+      if (phase === "plain") return;
+    }
+    const run = () => {
+      const t0 = performance.now();
+      const root = ROOM_ROOT.current;
+      const corridor = corridorRef.current;
+      if (phase === "prewarm" && root) {
+        const was = root.visible;
+        root.visible = true;
+        gl.compile(scene, camera);
+        root.visible = was;
+      } else if (phase === "crossed" && corridor) {
+        corridor.visible = false;
+        gl.compile(scene, camera);
+        corridor.visible = true;
+      } else if (phase === "exit" && root) {
+        gl.compile(scene, camera);
+        const roomLights: THREE.Light[] = [];
+        root.traverse((obj) => {
+          if ((obj as THREE.Light).isLight) {
+            roomLights.push(obj as THREE.Light);
+          }
+        });
+        for (const light of roomLights) light.visible = false;
+        gl.compile(scene, camera);
+        for (const light of roomLights) light.visible = true;
+      } else {
+        gl.compile(scene, camera);
+      }
+      MOUNT_TRACE.compileSyncMs = performance.now() - t0;
+    };
+    run();
+    // The corridor's hide→unmount rides its OWN HIDE_DELAY_MS timer
+    // (corridor.tsx, a different reconciler root — effect order across
+    // roots is not guaranteed), which can land a commit after this one;
+    // recompile once more shortly after so that light-removal is covered
+    // either way. A no-change run is pure program-cache hits.
+    const timer = setTimeout(run, 150);
+    return () => clearTimeout(timer);
+  }, [epoch, phase, gl, scene, camera, corridorRef]);
+  return null;
+}
+
+/**
+ * Mount-cost probe (responsiveness): wraps gl.render to wall-clock every
+ * render call and ring-buffer [t, ms, programCount] into MOUNT_TRACE.frames.
+ * This is where shader compilation shows up: three compiles material
+ * programs synchronously inside the render call that first draws them, so
+ * the mount frame's render ms IS the compile storm (plus texture uploads).
+ * Two performance.now() calls per render pass — negligible next to a draw.
+ */
+function RenderTrace(): null {
+  const gl = useThree((s) => s.gl);
+  useEffect(() => {
+    const render = gl.render.bind(gl);
+    gl.render = (scene: THREE.Object3D, camera: THREE.Camera) => {
+      const t0 = performance.now();
+      render(scene as THREE.Scene, camera);
+      const frames = MOUNT_TRACE.frames;
+      frames.push([
+        t0,
+        performance.now() - t0,
+        gl.info.programs ? gl.info.programs.length : -1,
+      ]);
+      if (frames.length > 300) frames.splice(0, frames.length - 300);
+    };
+    return () => {
+      gl.render = render;
+    };
+  }, [gl]);
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* GameCanvas                                                          */
 /* ------------------------------------------------------------------ */
@@ -1211,6 +1370,22 @@ export default function GameCanvas({
   useEffect(() => {
     if (activeSpace !== null) setShownSpace(activeSpace);
   }, [activeSpace]);
+  // Prewarm (responsiveness): the nearest door within ROOM_PREWARM_DIST
+  // (GameLoop step 2b) gets its room mounted invisible in the ONE room
+  // slot below — geometry built, root group visible=false, so it draws
+  // nothing and lights nothing — while LightConfigCompiler precompiles
+  // the scene's programs under the new light configuration. Crossing the
+  // threshold then only flips the root visible and starts the crossfade
+  // on the already-mounted, already-compiled instance (same key), instead
+  // of paying construction + the measured ~1 s compile storm inside the
+  // visible frame. At most one SpaceScene exists at any moment: the slot
+  // holds the shown space when there is one, the prewarm space otherwise.
+  const [prewarmDoor, setPrewarmDoor] = useState<DoorRef | null>(null);
+  const prewarmIdRef = useRef<string | null>(null);
+  // Wrapper around the corridor so LightConfigCompiler can exclude its
+  // lights from a proxy compile (compile gathers lights via
+  // traverseVisible) without touching corridor.tsx.
+  const corridorGroupRef = useRef<THREE.Group>(null);
   // Door-slab handover: the corridor keeps the one physical slab until it
   // unmounts (HIDE_DELAY_MS after the hide threshold); the space's own
   // slab mounts exactly then — never two doors in one frame.
@@ -1272,6 +1447,34 @@ export default function GameCanvas({
     () => (activeSpace !== null ? waterSideFor(activeSpace.scaledRecipe) : 0),
     [activeSpace],
   );
+  // The prewarm target's space, resolved through the SAME construction the
+  // door manager uses — a prewarmed room is identical to a crossed-into
+  // one (A6).
+  const prewarmSpace = useMemo(
+    () =>
+      prewarmDoor === null
+        ? null
+        : resolveSpaceForDoor(prewarmDoor, archetypeById),
+    [prewarmDoor, archetypeById],
+  );
+  // The one room slot: the shown space (active or dissolving) wins; the
+  // prewarm space fills it while the corridor is walked.
+  const mountedSpace = shownSpace ?? prewarmSpace;
+  const mountedIsPrewarm = shownSpace === null && mountedSpace !== null;
+  // Light-config epoch for LightConfigCompiler: any identity/visibility
+  // change that can add or remove scene lights — prewarm mount/unmount,
+  // room mount/unmount, the corridor's hide→unmount and return.
+  const compileEpoch = `${prewarmDoor?.sliceId ?? ""}|${shownSpace?.recipe.sliceId ?? ""}|${corridorHidden ? 1 : 0}|${corridorGone ? 1 : 0}`;
+  // Which configuration the coming renders will need (the proxy compiles
+  // are staged per phase — see LightConfigCompiler).
+  const compilePhase: "prewarm" | "crossed" | "exit" | "plain" =
+    mountedIsPrewarm
+      ? "prewarm"
+      : shownSpace !== null && corridorHidden && !corridorGone
+        ? "crossed"
+        : shownSpace !== null && !corridorHidden
+          ? "exit"
+          : "plain";
   // The active room's plan + placed strand doors for the movement clamp:
   // the same pure derivation (roomGeometryForSpace — template, plan,
   // doors) the mounted SpaceScene renders — one chain, two call sites,
@@ -1345,6 +1548,7 @@ export default function GameCanvas({
     // like a defect in review). Gated by STRAND_TELEPORT_CAMERA_SNAP.
     cameraSnapRef.current = true;
     setShownSpace(null);
+    MOUNT_TRACE.tRequest = performance.now();
     setActiveSpace(resolveSpaceForDoor(destDoor, archetypeById));
     setStrandTransition(reduceStrandTransition(strandTransition, { type: "fadedOut" }));
   };
@@ -1356,9 +1560,11 @@ export default function GameCanvas({
       playerRef.current.z = z;
     };
     window.__gameDebug = GAME_DEBUG;
+    window.__gameMountTrace = MOUNT_TRACE;
     return () => {
       GAME_DEBUG.teleport = undefined;
       delete window.__gameDebug;
+      delete window.__gameMountTrace;
     };
   }, []);
 
@@ -1428,6 +1634,7 @@ export default function GameCanvas({
         shadows="percentage"
       >
         <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
+        <RenderTrace />
         {/* The stage pool under the diorama — kills the featureless void
             around the model. One named constant reverts it:
             STAGE_BACKDROP_ENABLED (tuning/render.ts). */}
@@ -1454,32 +1661,42 @@ export default function GameCanvas({
         <CameraRig playerRef={playerRef} space={activeSpace} snapRef={cameraSnapRef} />
         {/* The corridor dissolves the moment a space engages (GameLoop above)
           and unmounts HIDE_DELAY_MS later; on return it remounts dark and
-          eases back up. */}
-        <Corridor
-          playerRef={playerRef}
-          doors={doors}
-          dimmed={corridorHidden}
-          dark={dark}
-        />
+          eases back up. The wrapper group lets LightConfigCompiler stage
+          light configurations around it (visibility flips that no render
+          ever sees). */}
+        <group ref={corridorGroupRef}>
+          <Corridor
+            playerRef={playerRef}
+            doors={doors}
+            dimmed={corridorHidden}
+            dark={dark}
+          />
+        </group>
         <PlayerAvatar
           playerRef={playerRef}
           motionRef={motionRef}
           space={activeSpace}
           waterSide={waterSide}
         />
-        {shownSpace !== null && (
+        {mountedSpace !== null && (
           <SpaceScene
-            key={shownSpace.recipe.sliceId}
-            recipe={shownSpace.recipe}
-            door={shownSpace.door}
+            key={mountedSpace.recipe.sliceId}
+            recipe={mountedSpace.recipe}
+            door={mountedSpace.door}
             playerRef={playerRef}
             corridorGone={corridorGone}
-            fade={activeSpace !== null ? "in" : "out"}
+            fade={activeSpace !== null || mountedIsPrewarm ? "in" : "out"}
+            prewarm={mountedIsPrewarm}
             onFadedOut={handleFadedOut}
-            roomDoors={roomDoors?.get(shownSpace.recipe.sliceId)}
+            roomDoors={roomDoors?.get(mountedSpace.recipe.sliceId)}
             onRoomDoor={handleRoomDoor}
           />
         )}
+        <LightConfigCompiler
+          epoch={compileEpoch}
+          phase={compilePhase}
+          corridorRef={corridorGroupRef}
+        />
         <GameLoop
           playerRef={playerRef}
           keysRef={keysRef}
@@ -1495,6 +1712,8 @@ export default function GameCanvas({
           setCorridorHidden={setCorridorHidden}
           hudIdRef={hudIdRef}
           setHudDoor={setHudDoor}
+          prewarmIdRef={prewarmIdRef}
+          setPrewarmDoor={setPrewarmDoor}
           transitionActive={strandTransition.phase !== "idle"}
           roomDoors={activeRoomGeometry?.doors ?? []}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}

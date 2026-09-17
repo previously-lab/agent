@@ -263,6 +263,17 @@ export const VIGNETTE_DARKNESS = 0.4;
 
 /** Door grab distance when resolving which space a wall crossing enters. */
 export const DOOR_GRAB_DIST = 2.5;
+/** Room prewarm radius (responsiveness): while the player walks the
+ *  corridor within this distance of a door and no space is active, the
+ *  door's room is mounted with its root group visible=false (it draws
+ *  nothing and lights nothing) and the scene's shader programs are
+ *  precompiled with staged gl.compile calls (LightConfigCompiler) — the
+ *  mount frame's measured ~1 s compile storm (plus the React/geometry
+ *  construction) happens during the approach, so crossing the threshold
+ *  only flips the root visible and starts the crossfade. At 4 m/s this
+ *  gives ~2 s of head start along the wall; a walk-by that never enters
+ *  pays one hidden mount and an unmount, never a visible stall. */
+export const ROOM_PREWARM_DIST = 9;
 /** HUD prompt radius around a door. */
 export const HUD_DIST = 1.8;
 
