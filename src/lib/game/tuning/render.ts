@@ -84,13 +84,14 @@ export const CORRIDOR_AMBIENT = 0.06;
  *  palette-authored sun term (doc B.13, user 2026-09-18 — "everything is
  *  indoors": an interior's key must come from its own fixtures, so the
  *  sun drops to a FILL here; outdoor-class sets keep it at 1 as the
- *  soundstage's overall key, justified by the skylight). It stays
+ *  soundstage's overall key, justified by the clerestory band). It stays
  *  shadow-casting at the reduced level — the fill still grounds furniture
  *  with a soft shadow everywhere, while the window's spot is the room's
- *  true key with the strong motivated shadows. 0.4 keeps the measured
+ *  true key with the strong motivated shadows. 0.32 keeps the measured
  *  shadow separation comfortably open (the fill's shadow-to-lit step is
- *  proportional, and the key adds on top of the lit side only). */
-export const ROOM_INTERIOR_SUN_FILL = 0.4;
+ *  proportional, and the key adds on top of the lit side only) while the
+ *  lamp and window visibly own the room. */
+export const ROOM_INTERIOR_SUN_FILL = 0.32;
 /** Space palettes still carry ambient values (0.28–0.6) authored for the
  *  old ambient-dominant model; scale them into the same key-dominant
  *  hierarchy here (the palette data itself is owned by another lane). 0.15

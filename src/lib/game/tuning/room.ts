@@ -527,14 +527,18 @@ export const INLAY_MIN_SPAN = 1.6;
 /* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
 /* 2026-09-18): this world has NO outdoors, so every lit surface must  */
 /* have a findable source. Every room grows a LAMP (shade + bulb + a   */
-/* real point light + a floor pool) and a WINDOW (frame + bright pane  */
-/* + spill; in interior rooms its spot is the room's KEY light and     */
-/* casts the strong shadows); outdoor-class sets (nature/wonder/hybrid, */
-/* plus the pool hall — §2's worked example: water needs a skylight to */
-/* reflect) add a SKYLIGHT that justifies the overall key. Consumed by */
-/* space.tsx; placement is seeded (a dedicated "fixtures" stream, the  */
+/* real point light + a floor pool) and a WINDOW (frame + a layered    */
+/* outside view + mullions + spill; in interior rooms its spot is the  */
+/* room's KEY light and casts the strong shadows); outdoor-class sets  */
+/* (nature/wonder/hybrid, plus the pool hall — §2's worked example:    */
+/* water needs a bright source to reflect) add a CLERESTORY — a high   */
+/* window band along a full-height wall — that justifies the overall   */
+/* key: light arrives from one side and above, never from a floating   */
+/* panel (the transparent ceiling made the old skylight read as a      */
+/* levitating plate; user 2026-09-19). Consumed by space.tsx;          */
+/* placement is seeded (a dedicated "fixtures" stream, the             */
 /* room-plan.ts convention). Sizes ride the room's own scale laws: the */
-/* lamp is furniture (×propScale), the window/skylight are             */
+/* lamp is furniture (×propScale), the window/clerestory are           */
 /* architecture (×wall scale). Light reach scales with the fixture: a  */
 /* decay-2 light whose pool radius grows by k needs intensity ×k².     */
 /* ------------------------------------------------------------------ */
@@ -565,14 +569,32 @@ export const LAMP_POOL_OPACITY = 0.42;
 export const WINDOW_WIDTH = 2.4;
 export const WINDOW_HEIGHT = 1.9;
 export const WINDOW_SILL_Y = 1.0;
-/** Bright face — the bloom threshold is 1.0, so the pane reads as a lit
- *  opening, not a picture of one. Color comes from palette.sunColor. */
-export const WINDOW_PANE_EMISSIVE = 2.4;
+/** The pane is a VIEW, not a glowing plate (§11.2): a layered outside —
+ *  sky gradient + sun halo + far/near silhouettes, all palette-driven —
+ *  baked by materials/window-view.ts and shown on an unlit plane. These
+ *  gains are the plane's color multiplier: >1 in daylight so the sky
+ *  just clears the bloom threshold, a cool half-strength wash at night
+ *  (the window goes dark and cold, never black). */
+export const WINDOW_VIEW_DAY_GAIN = 1.35;
+export const WINDOW_VIEW_NIGHT_GAIN = 0.5;
+export const WINDOW_VIEW_NIGHT_TINT = "#8ea0c8";
+/** Cross bars over the view (m, ×wall scale) — what makes it a window
+ *  and not a screen. */
+export const WINDOW_MULLION = 0.07;
+/** Faint glass sheen over the view (opacity; glass is one of the two
+ *  sanctioned alpha materials). */
+export const WINDOW_SHEEN_OPACITY = 0.1;
 /** The interior KEY light: a spot just inside the pane, aimed down into
- *  the room (×wall scale²). 60 candela lands ≈2.5 at the spill pool's
+ *  the room (×wall scale²). 68 candela lands ≈2.6 at the spill pool's
  *  center (~5 m out) — the level the old full sun delivered, now with a
- *  source you can point at. It casts the room's strong shadows. */
-export const WINDOW_SPOT_INTENSITY = 60;
+ *  source you can point at. It casts the room's strong shadows. At night
+ *  the spot cools and dims (×WINDOW_NIGHT_SPOT_SCALE) and the lamp takes
+ *  over as the room's primary. */
+export const WINDOW_SPOT_INTENSITY = 68;
+export const WINDOW_NIGHT_SPOT_SCALE = 0.5;
+/** The lamp burns a little brighter after dark (×LAMP_NIGHT_BOOST) so
+ *  the room's readability never depends on the window. */
+export const LAMP_NIGHT_BOOST = 1.2;
 export const WINDOW_SPOT_ANGLE = 0.62;
 export const WINDOW_SPOT_PENUMBRA = 0.5;
 /** Spot shadow rig (interior key): one 1024² map per mounted room. */
@@ -587,22 +609,48 @@ export const WINDOW_SPILL_OPACITY = 0.3;
 /** Clearance between the window frame and any door on the same wall (m). */
 export const WINDOW_DOOR_CLEAR = 1.0;
 
-/** Skylight: opening half-size (m, ×wall scale) and how far the frame
- *  floats above the drawn wall top — the rooms have no ceilings (the
- *  dollhouse IS the point), so the opening hangs like the chandelier
- *  does: present, glowing, unmoorable. */
-export const SKYLIGHT_HALF = 1.7;
-export const SKYLIGHT_LIFT = 0.6;
-export const SKYLIGHT_PANE_EMISSIVE = 2.6;
-/** The spot through the opening (×wall scale²): ~80 candela puts a hot
- *  ~3.5 pool on the floor directly under a 4.6 m opening at human scale —
- *  the visible light column's landing. Never casts (the sun owns the
- *  outdoor shadows; two near-coincident shadow casters would double-print). */
-export const SKYLIGHT_SPOT_INTENSITY = 80;
-export const SKYLIGHT_SPOT_ANGLE = 0.55;
-export const SKYLIGHT_SPOT_PENUMBRA = 0.6;
-/** Additive shaft quads along the sun's direction + the floor pool where
- *  it lands (peak opacities; pool radius m ×wall scale). */
-export const SKYLIGHT_SHAFT_OPACITY = 0.14;
-export const SKYLIGHT_POOL_RADIUS = 2.8;
-export const SKYLIGHT_POOL_OPACITY = 0.28;
+/** Clerestory (the skylight's replacement): a window BAND high on a
+ *  full-height wall. Band height and the drop below the wall top (m,
+ *  ×wall scale); the span is the host wall's length minus END_PAD per
+ *  side. Mullion bays repeat the view texture every UNIT meters. */
+export const CLERESTORY_HEIGHT = 1.05;
+export const CLERESTORY_DROP = 0.45;
+export const CLERESTORY_END_PAD = 0.8;
+export const CLERESTORY_UNIT = 2.3;
+/** The spot through the band (×wall scale²): ~80 candela from a 3.5 m
+ *  sill throws a broad warm wash across the floor — the outdoor set's
+ *  "soundstage sky" with a source you can point at (walk to the wall and
+ *  the sun was a row of high windows all along). Never casts (the sun
+ *  owns the outdoor shadows; two near-coincident casters double-print). */
+export const CLERESTORY_SPOT_INTENSITY = 80;
+export const CLERESTORY_SPOT_ANGLE = 0.72;
+export const CLERESTORY_SPOT_PENUMBRA = 0.7;
+/** How far into the room the band's light is aimed (m, ×wall scale). */
+export const CLERESTORY_SPOT_THROW = 5.5;
+/** Additive floor wash below the band (m / peak opacity, ×wall scale). */
+export const CLERESTORY_SPILL_LENGTH = 4.6;
+export const CLERESTORY_SPILL_OPACITY = 0.26;
+
+/** Light registers (v0.11-hotel-rooms §3, design §11.2 item 4): one
+ *  room, one light mood, derived deterministically from the recipe's
+ *  lightSeed. The register TINTS the window/clerestory light so it never
+ *  fights the room's mood; the lamp stays hotel-tungsten (architecture,
+ *  not palette). Ember is kept warm-soft — a late-evening glow, never a
+ *  horror red (the anti-pattern list). */
+export const LIGHT_REGISTER_TINTS = {
+  tungsten: "#ffd9a8",
+  fluorescent: "#cfe2ff",
+  daylight: "#fff4dc",
+  ember: "#ffb08a",
+} as const;
+export type LightRegister = keyof typeof LIGHT_REGISTER_TINTS;
+/** Draw weights: tungsten 40 / fluorescent 25 / daylight 25 / ember 10. */
+export const LIGHT_REGISTER_WEIGHTS: readonly {
+  id: LightRegister;
+  weight: number;
+}[] = [
+  { id: "tungsten", weight: 0.4 },
+  { id: "fluorescent", weight: 0.25 },
+  { id: "daylight", weight: 0.25 },
+  { id: "ember", weight: 0.1 },
+];

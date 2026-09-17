@@ -69,8 +69,8 @@
  * reads the clock. Scene fog and background are owned by the integrator's
  * canvas; the room's own lights live HERE, on their fixtures (B.13
  * 「摄影棚论」: motivated light — the lamp's point light, the window's
- * spot, the skylight's column — while the canvas's directional sun drops
- * to a fill in interior rooms).
+ * spot, the clerestory band's wash — while the canvas's directional sun
+ * drops to a fill in interior rooms).
  *
  * Terrain heights come from src/lib/game/terrain.ts — the single shared
  * heightfield the avatar physics also snaps to. This file never re-derives
@@ -147,19 +147,18 @@ import {
 } from "@/lib/game/room-doors";
 import {
   applyPoolCaustics,
+  buildWindowViewImage,
   createSurfaceMaterial,
   createWaterSurfaceMaterial,
+  createWaveDriver,
+  createWindowViewTexture,
   sharedRadialGlowTexture,
   sharedWallWashTexture,
+  waveRectContains,
 } from "@/lib/game/materials";
-// The wave modules are not re-exported from the materials index yet (the
-// index is sibling-lane-owned); import them from their modules directly.
-import { createWaveDriver } from "@/lib/game/materials/wave-driver";
-import { waveRectContains } from "@/lib/game/materials/wave-sim";
 import {
   SUN_SHADOW_BIAS,
   SUN_SHADOW_NORMAL_BIAS,
-  SUN_OFFSET,
 } from "@/lib/game/tuning/render";
 import {
   planArea,
@@ -207,11 +206,14 @@ import {
   LAMP_COLOR,
   LAMP_LIGHT_DISTANCE,
   LAMP_LIGHT_INTENSITY,
+  LAMP_NIGHT_BOOST,
   LAMP_POOL_OPACITY,
   LAMP_POOL_RADIUS,
   LAMP_POLE_HEIGHT,
   LAMP_SHADE_EMISSIVE,
   LAMP_SHADE_Y,
+  LIGHT_REGISTER_TINTS,
+  LIGHT_REGISTER_WEIGHTS,
   LONE_PROB,
   NICHE_DOOR_CLEAR,
   NICHE_HEIGHT,
@@ -243,15 +245,16 @@ import {
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
-  SKYLIGHT_HALF,
-  SKYLIGHT_LIFT,
-  SKYLIGHT_PANE_EMISSIVE,
-  SKYLIGHT_POOL_OPACITY,
-  SKYLIGHT_POOL_RADIUS,
-  SKYLIGHT_SHAFT_OPACITY,
-  SKYLIGHT_SPOT_ANGLE,
-  SKYLIGHT_SPOT_INTENSITY,
-  SKYLIGHT_SPOT_PENUMBRA,
+  CLERESTORY_DROP,
+  CLERESTORY_END_PAD,
+  CLERESTORY_HEIGHT,
+  CLERESTORY_SPILL_LENGTH,
+  CLERESTORY_SPILL_OPACITY,
+  CLERESTORY_SPOT_ANGLE,
+  CLERESTORY_SPOT_INTENSITY,
+  CLERESTORY_SPOT_PENUMBRA,
+  CLERESTORY_SPOT_THROW,
+  CLERESTORY_UNIT,
   SNOW_COUNT_MAX,
   SPACE_FADE_S,
   STRUCTURE_MIN_EXTENT,
@@ -263,7 +266,9 @@ import {
   WATER_Y,
   WINDOW_DOOR_CLEAR,
   WINDOW_HEIGHT,
-  WINDOW_PANE_EMISSIVE,
+  WINDOW_MULLION,
+  WINDOW_NIGHT_SPOT_SCALE,
+  WINDOW_SHEEN_OPACITY,
   WINDOW_SILL_Y,
   WINDOW_SPILL_LENGTH,
   WINDOW_SPILL_OPACITY,
@@ -273,9 +278,52 @@ import {
   WINDOW_SPOT_SHADOW_FAR,
   WINDOW_SPOT_SHADOW_MAP,
   WINDOW_SPOT_SHADOW_NEAR,
+  WINDOW_VIEW_DAY_GAIN,
+  WINDOW_VIEW_NIGHT_GAIN,
+  WINDOW_VIEW_NIGHT_TINT,
   WINDOW_WIDTH,
   roomOrientationFor,
+  type LightRegister,
 } from "@/lib/game/tuning/room";
+
+/**
+ * App dark mode, read from the <html> class. React context never crosses
+ * the R3F Canvas boundary (the integrator reads `useTheme` OUTSIDE the
+ * canvas for the same reason — game-canvas.tsx), so the room's fixtures
+ * watch the class next-themes writes (attribute="class", app/layout.tsx)
+ * and re-render on the flip. Day/night only re-tints fixture colors and
+ * gains; geometry is theme-invariant.
+ */
+function useAppDark(): boolean {
+  const [dark, setDark] = useState(
+    () =>
+      typeof document !== "undefined" &&
+      document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const el = document.documentElement;
+    const observer = new MutationObserver(() =>
+      setDark(el.classList.contains("dark")),
+    );
+    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return dark;
+}
+
+/** The room's light register (v0.11-hotel-rooms §3, design §11.2 item 4):
+ *  one mood per room, drawn from the recipe's lightSeed on a dedicated
+ *  stream so the fixtures never perturb snowfall/fireflies sharing that
+ *  seed. */
+function lightRegisterFor(recipe: SpaceRecipe): LightRegister {
+  const r = createRng((recipe.lightSeed ^ 0x51f15e) >>> 0)();
+  let acc = 0;
+  for (const entry of LIGHT_REGISTER_WEIGHTS) {
+    acc += entry.weight;
+    if (r < acc) return entry.id;
+  }
+  return "tungsten";
+}
 
 /**
  * dado-band (v0.11-room-interiors §3.2): a baseboard plus a panelled
@@ -4136,10 +4184,11 @@ function RoomDoorAssembly({
 /* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
 /* 2026-09-18): this world has NO outdoors. Every lit surface must     */
 /* have a findable source — so every room grows a LAMP (shade + bulb   */
-/* with a real point light and a floor pool) and a WINDOW (frame,      */
-/* bright pane, spill on the floor; in interior rooms its spot is the  */
-/* room's KEY light and casts the strong shadows), and outdoor-class   */
-/* sets add a SKYLIGHT that justifies their overall key.               */
+/* with a real point light and a floor pool) and a WINDOW (frame, a    */
+/* layered view of the outside, spill on the floor; in interior rooms  */
+/* its spot is the room's KEY light and casts the strong shadows), and */
+/* outdoor-class sets add a CLERESTORY — a high window band on a       */
+/* full-height wall — that justifies their overall key.                */
 /* ------------------------------------------------------------------ */
 
 /** Where one window hangs: center on the host wall's line, the probed
@@ -4154,10 +4203,16 @@ interface WindowFixture {
   drawnHeight: number;
 }
 
+/** The clerestory is the same wall anchoring plus the host wall's run
+ *  length — the band spans most of it. */
+interface ClerestoryFixture extends WindowFixture {
+  len: number;
+}
+
 interface RoomFixtures {
   lamp: { x: number; z: number };
   window: WindowFixture;
-  skylight: { x: number; z: number } | null;
+  clerestory: ClerestoryFixture | null;
 }
 
 /**
@@ -4172,8 +4227,9 @@ interface RoomFixtures {
  * well). WINDOW: wall dressing — prefers a FULL-HEIGHT non-entrance wall
  * (a window punched in a 1.1m dollhouse sill would float), falls back to
  * the entrance wall beside the door (architecturally natural, never cut),
- * and keeps clear of every door sharing the host wall. SKYLIGHT: overhead,
- * so only the plan footprint constrains it; center-third biased.
+ * and keeps clear of every door sharing the host wall. CLERESTORY: the
+ * same anchoring rules, preferring a DIFFERENT full-height wall than the
+ * window's so the room's two sources read from two directions.
  */
 function buildRoomFixtures(
   recipe: SpaceRecipe,
@@ -4187,7 +4243,7 @@ function buildRoomFixtures(
   doors: readonly RoomDoorPlacement[],
   propScale: number,
   wallScale: number,
-  hasSkylight: boolean,
+  hasClerestory: boolean,
 ): RoomFixtures {
   const rng = createRng(hashString(`${WORLD_SEED}:${recipe.sliceId}:fixtures`));
   const { extent } = scaled.size;
@@ -4271,24 +4327,53 @@ function buildRoomFixtures(
     drawnHeight,
   };
 
-  // --- Skylight ---------------------------------------------------------
-  let skylight: RoomFixtures["skylight"] = null;
-  if (hasSkylight) {
-    const half = SKYLIGHT_HALF * wallScale + 0.6;
-    let sx = 0;
-    let sz = extent / 2;
-    for (let tries = 0; tries < 24; tries++) {
-      const x = (rng() * 2 - 1) * Math.max(0.5, width / 2 - half);
-      const z = extent * (0.3 + rng() * 0.4);
-      if (!planContains(plan, x, z, half)) continue;
-      sx = x;
-      sz = z;
-      break;
+  // --- Clerestory -------------------------------------------------------
+  // A high window BAND, not an overhead opening: it hangs just under the
+  // top of a full-height wall, so the set's overall key arrives from one
+  // side and above — a source you can walk up to and point at.
+  let clerestory: RoomFixtures["clerestory"] = null;
+  if (hasClerestory) {
+    const minRun = (CLERESTORY_END_PAD * 2 + CLERESTORY_UNIT) * wallScale;
+    const runFits = (w: WallSegment) =>
+      Math.max(w.sizeX, w.sizeZ) >= minRun;
+    // Prefer a full-height wall that is NOT the window's host (two
+    // sources, two directions); degrade gracefully to any run that fits.
+    let bandPool = fullHeight.filter((w) => w !== host && runFits(w));
+    if (bandPool.length === 0) bandPool = fullHeight.filter(runFits);
+    if (bandPool.length === 0) {
+      bandPool = walls.filter((w) => w.entrance && runFits(w));
     }
-    skylight = { x: sx, z: sz };
+    if (bandPool.length > 0) {
+      const bandHost = bandPool[Math.floor(rng() * bandPool.length)];
+      const bandHorizontal = bandHost.sizeZ <= bandHost.sizeX;
+      const bandLen = bandHorizontal ? bandHost.sizeX : bandHost.sizeZ;
+      let bnx = 0;
+      let bnz = 0;
+      if (bandHorizontal) {
+        bnz = planContains(plan, bandHost.x, bandHost.z + 0.5, 0) ? 1 : -1;
+      } else {
+        bnx = planContains(plan, bandHost.x + 0.5, bandHost.z, 0) ? 1 : -1;
+      }
+      // The band spans the host's run minus the end pads, centered — a
+      // transom over the doorway reads naturally when the entrance wall
+      // is the only host, and centering keeps the span inside the run
+      // by construction.
+      clerestory = {
+        x: bandHost.x,
+        z: bandHost.z,
+        nx: bnx,
+        nz: bnz,
+        thick: bandHorizontal ? bandHost.sizeZ : bandHost.sizeX,
+        drawnHeight:
+          bandHost.entrance || !wallFacesCamera(plan, bandHost, dir)
+            ? wallHeight
+            : Math.min(wallHeight, WALL_SILL_HEIGHT),
+        len: bandLen,
+      };
+    }
   }
 
-  return { lamp, window, skylight };
+  return { lamp, window, clerestory };
 }
 
 /**
@@ -4298,18 +4383,23 @@ function buildRoomFixtures(
  * prop scale, light included: with decay 2, a pool radius grown by k needs
  * intensity ×k² to land the same brightness, so a colossal room's giant
  * lamp actually reaches its giant floor. Calm incandescent — never
- * flickering (the anti-pattern list).
+ * flickering (the anti-pattern list). After dark it burns a little
+ * brighter (`boost`): the window cools and dims, and the lamp becomes the
+ * room's primary so no corner ever goes unreadable.
  */
 function RoomLamp({
   x,
   z,
   y,
   scale,
+  boost = 1,
 }: {
   x: number;
   z: number;
   y: number;
   scale: number;
+  /** Night multiplier on the light and pool (geometry never changes). */
+  boost?: number;
 }): JSX.Element {
   return (
     <group position={[x, y, z]} scale={scale}>
@@ -4348,7 +4438,7 @@ function RoomLamp({
       <pointLight
         position={[0, LAMP_BULB_Y, 0]}
         color={LAMP_COLOR}
-        intensity={LAMP_LIGHT_INTENSITY * scale * scale}
+        intensity={LAMP_LIGHT_INTENSITY * scale * scale * boost}
         distance={LAMP_LIGHT_DISTANCE * scale}
         decay={2}
       />
@@ -4359,7 +4449,7 @@ function RoomLamp({
           map={sharedRadialGlowTexture()}
           color={LAMP_COLOR}
           transparent
-          opacity={LAMP_POOL_OPACITY}
+          opacity={LAMP_POOL_OPACITY * boost}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
@@ -4369,26 +4459,36 @@ function RoomLamp({
 }
 
 /**
- * The room's window: a dark reveal sunk into the wall face, a bright
- * emissive pane (the source you can point at), an architrave frame and
+ * The room's window: a dark reveal sunk into the wall face, then a VIEW —
+ * the layered outside baked by materials/window-view.ts (sky gradient +
+ * sun halo + far/near silhouettes, all palette-driven) on an unlit plane,
+ * crossed by mullions under a faint glass sheen — an architrave frame and
  * sill in the door-trim material, and an additive spill quad on the floor
  * in front — brightest at the wall, dissolving into the room (the wall-
  * wash gradient, laid flat). In INTERIOR rooms the window is also the
  * key light: a real spot just inside the pane, aimed down into the room,
  * carrying the room's strong motivated shadows (the sun has dropped to a
- * fill — B.13 rule 2). Outdoor-class sets keep the window emissive-only:
- * their real light comes from the skylight and the overall key.
+ * fill — B.13 rule 2). Outdoor-class sets keep the window view-only:
+ * their real light comes from the clerestory band and the overall key.
+ * `paneColor` is the light color (register- and theme-modulated, computed
+ * by the scene); `viewColor` is the view plane's day/night multiplier.
  */
 function RoomWindow({
   fixture,
   wallScale,
   paneColor,
+  view,
+  viewColor,
   isKey,
+  night,
 }: {
   fixture: WindowFixture;
   wallScale: number;
   paneColor: THREE.Color;
+  view: THREE.Texture;
+  viewColor: THREE.Color;
   isKey: boolean;
+  night: boolean;
 }): JSX.Element {
   const ws = wallScale;
   const w = WINDOW_WIDTH * ws;
@@ -4397,6 +4497,7 @@ function RoomWindow({
   const h = Math.min(WINDOW_HEIGHT * ws, Math.max(0.6, fixture.drawnHeight - 0.4));
   const sill = Math.min(WINDOW_SILL_Y * ws, Math.max(0.15, fixture.drawnHeight - h - 0.15));
   const spillL = WINDOW_SPILL_LENGTH * ws;
+  const mullion = WINDOW_MULLION * ws;
   const [spotTarget] = useState(() => new THREE.Object3D());
   return (
     <group
@@ -4408,16 +4509,34 @@ function RoomWindow({
         <boxGeometry args={[w + 0.24, h + 0.24, 0.05]} />
         <meshStandardMaterial color="#101014" roughness={1} flatShading />
       </mesh>
-      {/* The bright face. */}
+      {/* The outside: sky, sun halo, and two silhouette strata — unlit,
+          so it never goes black in a shadowed corner; the scene's
+          viewColor carries the day/night state. */}
       <mesh position={[0, sill + h / 2, fixture.thick / 2 + 0.011]}>
         <planeGeometry args={[w, h]} />
-        <meshStandardMaterial
-          color="#000000"
-          emissive={paneColor}
-          emissiveIntensity={WINDOW_PANE_EMISSIVE}
-          roughness={1}
-          metalness={0}
+        <meshBasicMaterial map={view} color={viewColor} toneMapped />
+      </mesh>
+      {/* Glass sheen — one of the two sanctioned alpha materials. */}
+      <mesh position={[0, sill + h / 2, fixture.thick / 2 + 0.018]}>
+        <planeGeometry args={[w, h]} />
+        <meshBasicMaterial
+          map={sharedWallWashTexture()}
+          color="#ffffff"
+          transparent
+          opacity={WINDOW_SHEEN_OPACITY}
+          depthWrite={false}
         />
+      </mesh>
+      {/* Mullions: the cross that makes it a window, not a screen. They
+          sit inside the spot's cone, so the key prints the cross on the
+          floor — the cheapest motivated detail in the room. */}
+      <mesh position={[0, sill + h / 2, fixture.thick / 2 + 0.03]} castShadow>
+        <boxGeometry args={[mullion, h, mullion]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      <mesh position={[0, sill + h / 2, fixture.thick / 2 + 0.03]} castShadow>
+        <boxGeometry args={[w, mullion, mullion]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
       </mesh>
       {/* Architrave frame + sill, proud of the wall face. */}
       {[-1, 1].map((side) => (
@@ -4455,7 +4574,8 @@ function RoomWindow({
         />
       </mesh>
       {/* The interior key: a real spot through the opening, casting the
-          room's strong shadows. */}
+          room's strong shadows. At night it cools and dims — the lamp
+          takes over as the primary. */}
       {isKey && (
         <>
           <primitive
@@ -4466,7 +4586,9 @@ function RoomWindow({
             position={[0, sill + h * 0.55, fixture.thick / 2 + 0.3]}
             target={spotTarget}
             color={paneColor}
-            intensity={WINDOW_SPOT_INTENSITY * ws * ws}
+            intensity={
+              WINDOW_SPOT_INTENSITY * ws * ws * (night ? WINDOW_NIGHT_SPOT_SCALE : 1)
+            }
             angle={WINDOW_SPOT_ANGLE}
             penumbra={WINDOW_SPOT_PENUMBRA}
             decay={2}
@@ -4484,114 +4606,111 @@ function RoomWindow({
 }
 
 /**
- * The outdoor set's skylight: a square opening floating at the wall top
- * (the rooms have no ceilings — the chandelier already floats; that is the
- * grammar), a bright pane visible from both sides, two crossed additive
- * shaft quads descending ALONG THE SUN'S DIRECTION to the floor pool where
- * the column lands, and a real spot through the opening. This is what
- * justifies the set's overall key (B.13 rule 3): walk to the wall and the
- * "sun" was a stage light all along. The spot never casts — the sun owns
- * the outdoor shadows, and two near-coincident casters would double-print.
+ * The outdoor set's clerestory: a window BAND hung just under the top of
+ * a full-height wall — a dark reveal, the same layered outside view as
+ * the window (tiled one bay per mullion), mullions and rails, an additive
+ * floor wash along the wall, and a real spot aimed from the band down
+ * into the room. This is what justifies the set's overall key (B.13
+ * rule 3): light arrives from one side and above, and walking to the wall
+ * reveals the "sun" was a row of high windows all along — a soundstage,
+ * not a floating panel (the transparent ceiling made the old skylight
+ * read as a levitating plate). The spot never casts — the sun owns the
+ * outdoor shadows, and two near-coincident casters would double-print.
  */
-function RoomSkylight({
+function RoomClerestory({
   fixture,
-  y,
   wallScale,
   paneColor,
+  view,
+  viewColor,
+  night,
 }: {
-  fixture: { x: number; z: number };
-  y: number;
+  fixture: ClerestoryFixture;
   wallScale: number;
   paneColor: THREE.Color;
+  view: THREE.Texture;
+  viewColor: THREE.Color;
+  night: boolean;
 }): JSX.Element {
   const ws = wallScale;
-  const half = SKYLIGHT_HALF * ws;
-  // Sun direction: light travels from SUN_OFFSET toward the origin, so the
-  // column lands k·(SUN_OFFSET.x, SUN_OFFSET.z) back from the opening.
-  const k = y / SUN_OFFSET.y;
-  const fx = fixture.x - SUN_OFFSET.x * k;
-  const fz = fixture.z - SUN_OFFSET.z * k;
-  const sunLen = Math.hypot(SUN_OFFSET.x, SUN_OFFSET.y, SUN_OFFSET.z);
-  const shaftLen = y * (sunLen / SUN_OFFSET.y);
-  const yaw = Math.atan2(SUN_OFFSET.x, SUN_OFFSET.z);
-  const slant = Math.atan2(Math.hypot(SUN_OFFSET.x, SUN_OFFSET.z), SUN_OFFSET.y);
+  // Clamp the band into the host wall's DRAWN height (a relaxed fallback
+  // host may be a cutaway sill — the band then shrinks to what fits).
+  const bandH = Math.min(CLERESTORY_HEIGHT * ws, Math.max(0.4, fixture.drawnHeight * 0.5));
+  const bandY = Math.max(
+    bandH / 2 + 0.1,
+    fixture.drawnHeight - CLERESTORY_DROP * ws - bandH / 2,
+  );
+  const span = Math.max(CLERESTORY_UNIT * ws, fixture.len - 2 * CLERESTORY_END_PAD * ws);
+  const bays = Math.max(1, Math.round(span / (CLERESTORY_UNIT * ws)));
+  const spillL = CLERESTORY_SPILL_LENGTH * ws;
+  const mullion = WINDOW_MULLION * 1.4 * ws;
   const [spotTarget] = useState(() => new THREE.Object3D());
   return (
-    <group>
-      {/* The opening: dark frame ring + bright pane (both faces — the
-          top-down camera sees its upper face). */}
-      <group position={[fixture.x, y, fixture.z]}>
-        {[-1, 1].map((side) => (
-          <mesh key={`fx${side}`} position={[side * (half + 0.1), 0, 0]} castShadow>
-            <boxGeometry args={[0.2, 0.14, half * 2 + 0.4]} />
-            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
-          </mesh>
-        ))}
-        {[-1, 1].map((side) => (
-          <mesh key={`fz${side}`} position={[0, 0, side * (half + 0.1)]} castShadow>
-            <boxGeometry args={[half * 2 + 0.4, 0.14, 0.2]} />
-            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
-          </mesh>
-        ))}
-        <mesh rotation={[Math.PI / 2, 0, 0]}>
-          <planeGeometry args={[half * 2, half * 2]} />
-          <meshStandardMaterial
-            color="#000000"
-            emissive={paneColor}
-            emissiveIntensity={SKYLIGHT_PANE_EMISSIVE}
-            roughness={1}
-            metalness={0}
-            side={THREE.DoubleSide}
-          />
+    <group
+      position={[fixture.x, 0, fixture.z]}
+      rotation={[0, Math.atan2(fixture.nx, fixture.nz), 0]}
+    >
+      {/* Dark reveal behind the band. */}
+      <mesh position={[0, bandY, fixture.thick / 2 - 0.02]}>
+        <boxGeometry args={[span + 0.24, bandH + 0.24, 0.05]} />
+        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+      </mesh>
+      {/* The outside, tiled one view per bay (the texture's repeat was
+          set by the scene to match the bay count). */}
+      <mesh position={[0, bandY, fixture.thick / 2 + 0.011]}>
+        <planeGeometry args={[span, bandH]} />
+        <meshBasicMaterial map={view} color={viewColor} toneMapped />
+      </mesh>
+      {/* Top and bottom rails. */}
+      <mesh position={[0, bandY + bandH / 2 + 0.05, fixture.thick / 2 + 0.05]} castShadow>
+        <boxGeometry args={[span + 0.24, 0.1, 0.12]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      <mesh position={[0, bandY - bandH / 2 - 0.05, fixture.thick / 2 + 0.05]} castShadow>
+        <boxGeometry args={[span + 0.24, 0.1, 0.12]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      {/* Mullions, one per bay boundary. */}
+      {Array.from({ length: bays + 1 }, (_, i) => (
+        <mesh
+          key={i}
+          position={[-span / 2 + (span / bays) * i, bandY, fixture.thick / 2 + 0.03]}
+          castShadow
+        >
+          <boxGeometry args={[mullion, bandH, mullion]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
         </mesh>
-      </group>
-      {/* The light column: two crossed quads along the sun's direction,
-          bright at the opening and dissolving toward the floor (the wall-
-          wash gradient, hung from its bright edge). */}
-      <group
-        position={[(fixture.x + fx) / 2, y / 2, (fixture.z + fz) / 2]}
-        rotation={[0, yaw, 0]}
+      ))}
+      {/* The floor wash below the band: the wall-wash gradient laid flat,
+          bright edge at the wall. */}
+      <mesh
+        position={[0, 0.05, fixture.thick / 2 + spillL / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
       >
-        <group rotation={[slant, 0, 0]}>
-          {[0, Math.PI / 2].map((a) => (
-            <mesh key={a} rotation={[0, a, 0]}>
-              <planeGeometry args={[half * 2, shaftLen]} />
-              <meshBasicMaterial
-                map={sharedWallWashTexture()}
-                color={paneColor}
-                transparent
-                opacity={SKYLIGHT_SHAFT_OPACITY}
-                blending={THREE.AdditiveBlending}
-                depthWrite={false}
-                side={THREE.DoubleSide}
-              />
-            </mesh>
-          ))}
-        </group>
-      </group>
-      {/* The pool where the column lands, stretched along the throw. */}
-      <group position={[fx, 0.06, fz]} rotation={[0, yaw, 0]}>
-        <mesh rotation={[-Math.PI / 2, 0, 0]} scale={[1, 1.35, 1]}>
-          <planeGeometry args={[SKYLIGHT_POOL_RADIUS * 2 * ws, SKYLIGHT_POOL_RADIUS * 2 * ws]} />
-          <meshBasicMaterial
-            map={sharedRadialGlowTexture()}
-            color={paneColor}
-            transparent
-            opacity={SKYLIGHT_POOL_OPACITY}
-            blending={THREE.AdditiveBlending}
-            depthWrite={false}
-          />
-        </mesh>
-      </group>
-      {/* The real light through the opening. */}
-      <primitive object={spotTarget} position={[fx, 0, fz]} />
+        <planeGeometry args={[span, spillL]} />
+        <meshBasicMaterial
+          map={sharedWallWashTexture()}
+          color={paneColor}
+          transparent
+          opacity={CLERESTORY_SPILL_OPACITY}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* The real light through the band, aimed down and into the room. */}
+      <primitive
+        object={spotTarget}
+        position={[0, 0, fixture.thick / 2 + CLERESTORY_SPOT_THROW * ws]}
+      />
       <spotLight
-        position={[fixture.x, y - 0.05, fixture.z]}
+        position={[0, bandY, fixture.thick / 2 + 0.4]}
         target={spotTarget}
         color={paneColor}
-        intensity={SKYLIGHT_SPOT_INTENSITY * ws * ws}
-        angle={SKYLIGHT_SPOT_ANGLE}
-        penumbra={SKYLIGHT_SPOT_PENUMBRA}
+        intensity={
+          CLERESTORY_SPOT_INTENSITY * ws * ws * (night ? WINDOW_NIGHT_SPOT_SCALE : 1)
+        }
+        angle={CLERESTORY_SPOT_ANGLE}
+        penumbra={CLERESTORY_SPOT_PENUMBRA}
         decay={2}
       />
     </group>
@@ -5168,10 +5287,10 @@ export function SpaceScene({
   }, [recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout]);
 
   // MOTIVATED FIXTURES (B.13): the lamp, the window, and (outdoor-class
-  // sets + the pool hall) the skylight — the findable source of every lit
-  // surface. The pool hall is interior by class but keeps §2's worked
-  // example: its water needs a skylight to reflect.
-  const hasSkylight =
+  // sets + the pool hall) the clerestory band — the findable source of
+  // every lit surface. The pool hall is interior by class but keeps §2's
+  // worked example: its water needs a bright source to reflect.
+  const hasClerestory =
     recipe.worldClass !== "interior" || recipe.archetype === "pool-hall";
   const fixtures = useMemo(
     () =>
@@ -5187,20 +5306,103 @@ export function SpaceScene({
         doorLayout.doors,
         propScale,
         wallHeight / WALL_HEIGHT,
-        hasSkylight,
+        hasClerestory,
       ),
-    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, doorLayout, propScale, hasSkylight],
+    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, doorLayout, propScale, hasClerestory],
   );
-  // Fixture faces take the palette's own sun color (the room's one light
-  // register, A5), lifted toward white so the hue survives the bloom.
-  const windowPaneColor = useMemo(
-    () => new THREE.Color(recipe.palette.sunColor).lerp(new THREE.Color("#ffffff"), 0.25),
+  // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
+  // and cool at night while the lamp burns brighter (readability never
+  // depends on the window).
+  const night = useAppDark();
+  // Fixture LIGHT takes the palette's own sun color (the room's one light
+  // register, A5), lifted toward white so the hue survives the bloom, then
+  // modulated by the room's seeded light register (§11.2 item 4: the
+  // window's color never fights the room's mood). At night it lerps cool
+  // and drops to WINDOW_NIGHT_SPOT_SCALE of its strength.
+  const lightRegister = useMemo(() => lightRegisterFor(recipe), [recipe]);
+  const windowPaneColor = useMemo(() => {
+    const c = new THREE.Color(recipe.palette.sunColor)
+      .lerp(new THREE.Color("#ffffff"), 0.25)
+      .lerp(new THREE.Color(LIGHT_REGISTER_TINTS[lightRegister]), 0.45);
+    if (night) c.lerp(new THREE.Color(WINDOW_VIEW_NIGHT_TINT), 0.55);
+    return c;
+  }, [recipe, lightRegister, night]);
+  // The view plane's multiplier: daylight pushes the sky just past the
+  // bloom threshold (scaled by the palette's own sun intensity); night is
+  // a cool half-strength wash — dark, never black.
+  const windowViewColor = useMemo(() => {
+    if (night) {
+      return new THREE.Color(WINDOW_VIEW_NIGHT_TINT).multiplyScalar(
+        WINDOW_VIEW_NIGHT_GAIN,
+      );
+    }
+    return new THREE.Color(recipe.palette.sunColor)
+      .lerp(new THREE.Color("#ffffff"), 0.55)
+      .multiplyScalar(
+        WINDOW_VIEW_DAY_GAIN * Math.min(1.2, Math.max(0.6, recipe.palette.sunIntensity)),
+      );
+  }, [recipe, night]);
+  // The baked outside, one per room: sky gradient + sun halo + far/near
+  // silhouettes, every color from this room's palette (§11.2 — the blue
+  // room admits pale-blue daylight). The window samples it once; the
+  // clerestory tiles it one view per mullion bay.
+  const windowView = useMemo(
+    () =>
+      createWindowViewTexture(
+        buildWindowViewImage({
+          seed: (recipe.lightSeed ^ 0x2c1b3d) >>> 0,
+          sky: recipe.palette.sky,
+          fog: recipe.palette.fog,
+          ground: recipe.palette.ground,
+          sunColor: recipe.palette.sunColor,
+        }),
+      ),
     [recipe],
   );
-  const skylightPaneColor = useMemo(
-    () => new THREE.Color(recipe.palette.sunColor).lerp(new THREE.Color("#ffffff"), 0.1),
-    [recipe],
-  );
+  useEffect(() => () => windowView.dispose(), [windowView]);
+  // Probe/e2e aid (GAME_DEBUG is a plain object; the fixture block is
+  // optional debug surface, typed loosely to keep debug.ts untouched).
+  useEffect(() => {
+    (GAME_DEBUG as unknown as Record<string, unknown>).fixtures = {
+      register: lightRegister,
+      lamp: fixtures.lamp,
+      window: {
+        x: fixtures.window.x,
+        z: fixtures.window.z,
+        nx: fixtures.window.nx,
+        nz: fixtures.window.nz,
+      },
+      clerestory: fixtures.clerestory
+        ? {
+            x: fixtures.clerestory.x,
+            z: fixtures.clerestory.z,
+            nx: fixtures.clerestory.nx,
+            nz: fixtures.clerestory.nz,
+          }
+        : null,
+    };
+  }, [fixtures, lightRegister]);
+  const clerestoryBays = fixtures.clerestory
+    ? Math.max(
+        1,
+        Math.round(
+          Math.max(
+            CLERESTORY_UNIT * (wallHeight / WALL_HEIGHT),
+            fixtures.clerestory.len -
+              2 * CLERESTORY_END_PAD * (wallHeight / WALL_HEIGHT),
+          ) /
+            (CLERESTORY_UNIT * (wallHeight / WALL_HEIGHT)),
+        ),
+      )
+    : 1;
+  const clerestoryView = useMemo(() => {
+    const t = windowView.clone();
+    t.wrapS = THREE.RepeatWrapping;
+    t.repeat.x = clerestoryBays;
+    t.needsUpdate = true;
+    return t;
+  }, [windowView, clerestoryBays]);
+  useEffect(() => () => clerestoryView.dispose(), [clerestoryView]);
 
   // Water tint: the raw accent reads as floor paint on some palettes
   // (dusk/warm are orange). Bias hard toward a bright blue-green so water
@@ -5399,7 +5601,8 @@ export function SpaceScene({
       rect: waterRect,
       spanX: width,
       spanY: extent,
-      // B.13: caustics are refracted KEY light — tint toward the skylight.
+      // B.13: caustics are refracted KEY light — tint toward the
+      // clerestory band's wash.
       color: "#ffffff",
       intensity: 1,
     });
@@ -5884,27 +6087,34 @@ export function SpaceScene({
         ))}
 
       {/* Motivated fixtures (B.13): the findable source of every lit
-          surface — a lamp with a real point light, a window whose spot is
-          the interior rooms' shadow-casting KEY, and (outdoor-class sets +
-          pool hall) the skylight that justifies the overall key. */}
+          surface — a lamp with a real point light, a window onto a
+          layered outside whose spot is the interior rooms' shadow-casting
+          KEY, and (outdoor-class sets + pool hall) the clerestory band
+          that justifies the overall key. */}
       <RoomLamp
         x={fixtures.lamp.x}
         z={fixtures.lamp.z}
         y={terrainHeight(scaledRecipe, fixtures.lamp.x, fixtures.lamp.z)}
         scale={propScale}
+        boost={night ? LAMP_NIGHT_BOOST : 1}
       />
       <RoomWindow
         fixture={fixtures.window}
         wallScale={wallHeight / WALL_HEIGHT}
         paneColor={windowPaneColor}
+        view={windowView}
+        viewColor={windowViewColor}
         isKey={recipe.worldClass === "interior"}
+        night={night}
       />
-      {fixtures.skylight && (
-        <RoomSkylight
-          fixture={fixtures.skylight}
-          y={wallHeight + SKYLIGHT_LIFT * (wallHeight / WALL_HEIGHT)}
+      {fixtures.clerestory && (
+        <RoomClerestory
+          fixture={fixtures.clerestory}
           wallScale={wallHeight / WALL_HEIGHT}
-          paneColor={skylightPaneColor}
+          paneColor={windowPaneColor}
+          view={clerestoryView}
+          viewColor={windowViewColor}
+          night={night}
         />
       )}
 

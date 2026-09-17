@@ -62,3 +62,13 @@ export {
   sharedWallWashTexture,
   GLOW_TEXTURE_SIZE,
 } from "./glow";
+export {
+  buildWindowViewImage,
+  createWindowViewTexture,
+  WINDOW_VIEW_WIDTH,
+  WINDOW_VIEW_HEIGHT,
+} from "./window-view";
+export type { WindowViewImage, WindowViewOptions } from "./window-view";
+export { createWaveDriver } from "./wave-driver";
+export type { WaveDriver } from "./wave-driver";
+export { waveRectContains } from "./wave-sim";
