@@ -87,7 +87,9 @@ export function GameShell() {
         }
         // The catalog arrives oldest → newest; corridor door index 0 is the
         // door NEAREST the lobby — the NEWEST slice — so present it reversed,
-        // capped to the newest MAX_DOORS.
+        // capped to the newest MAX_DOORS. `start` goes along: the corridor's
+        // door spacing is a function of the time gaps between slices, and it
+        // computes those from the timestamps without parsing ids.
         setDoors(
           catalog
             .slice(-MAX_DOORS)
@@ -95,6 +97,7 @@ export function GameShell() {
             .map((entry) => ({
               sliceId: entry.id,
               label: formatDoorLabel(entry.date, entry.start, locale),
+              start: entry.start,
             })),
         );
       } catch (err) {

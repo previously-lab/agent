@@ -100,7 +100,11 @@ import { useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
 import { GAME_DEBUG } from "./debug";
-import { doorPosition, nearestDoor, type DoorRef } from "@/lib/game/hotel";
+import { materializedDoorXs, nearestDoor, type DoorRef } from "@/lib/game/hotel";
+import {
+  corridorLayoutFromDoors,
+  type CorridorLayout,
+} from "@/lib/game/corridor-pitch";
 import {
   CLEAR_HALF,
   WALL_IN,
@@ -268,23 +272,6 @@ function roomZoomPullback(scaleFactor: number): number {
     ROOM_ZOOM_MAX_PULLBACK,
     Math.pow(Math.max(1, scaleFactor), ROOM_ZOOM_SCALE_EXP),
   );
-}
-
-/**
- * X of every door the slice list materializes, in bay order — the corridor
- * clamp's gap test. Mirrors doorsInChunk's pairing (sliceIds[2i] north,
- * sliceIds[2i + 1] south of bay i); both sides share one x per bay.
- */
-function doorXsFor(sliceIds: readonly string[]): number[] {
-  const xs: number[] = [];
-  for (let i = 0; ; i++) {
-    const northId = sliceIds[2 * i];
-    const southId = sliceIds[2 * i + 1];
-    if (northId === undefined && southId === undefined) break;
-    if (northId !== undefined) xs.push(doorPosition(i, "north").x);
-    if (southId !== undefined) xs.push(doorPosition(i, "south").x);
-  }
-  return xs;
 }
 
 /**
@@ -739,6 +726,7 @@ function GameLoop({
   doors,
   sliceIds,
   doorXs,
+  layout,
   archetypeById,
   activeSpace,
   setActiveSpace,
@@ -753,6 +741,7 @@ function GameLoop({
   doors: readonly CorridorDoor[];
   sliceIds: readonly string[];
   doorXs: readonly number[];
+  layout: CorridorLayout;
   archetypeById: ReadonlyMap<string, ArchetypeId>;
   activeSpace: ActiveSpace | null;
   setActiveSpace: (space: ActiveSpace | null) => void;
@@ -787,7 +776,7 @@ function GameLoop({
     let space = activeSpace;
     const az = Math.abs(p.z);
     if (az > WALL_OUT && space === null) {
-      const door = nearestDoor(p.x, p.z, sliceIds, DOOR_GRAB_DIST);
+      const door = nearestDoor(p.x, p.z, sliceIds, DOOR_GRAB_DIST, layout);
       if (door) {
         const recipe = compileSpaceRecipe(door.sliceId);
         const archetype = archetypeById.get(door.sliceId);
@@ -830,7 +819,7 @@ function GameLoop({
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
     // 4. HUD prompt — setState only when the nearest door identity changes.
-    const near = nearestDoor(p.x, p.z, sliceIds, HUD_DIST);
+    const near = nearestDoor(p.x, p.z, sliceIds, HUD_DIST, layout);
     const nearId = near ? near.sliceId : null;
     if (nearId !== hudIdRef.current) {
       hudIdRef.current = nearId;
@@ -909,7 +898,11 @@ export default function GameCanvas({
   }, [corridorHidden]);
 
   const sliceIds = useMemo(() => doors.map((d) => d.sliceId), [doors]);
-  const doorXs = useMemo(() => doorXsFor(sliceIds), [sliceIds]);
+  const layout = useMemo(() => corridorLayoutFromDoors(doors), [doors]);
+  const doorXs = useMemo(
+    () => materializedDoorXs(sliceIds, layout),
+    [sliceIds, layout],
+  );
   const archetypeById = useMemo(() => {
     const map = new Map<string, ArchetypeId>();
     for (const door of doors) {
@@ -1061,6 +1054,7 @@ export default function GameCanvas({
           doors={doors}
           sliceIds={sliceIds}
           doorXs={doorXs}
+          layout={layout}
           archetypeById={archetypeById}
           activeSpace={activeSpace}
           setActiveSpace={setActiveSpace}

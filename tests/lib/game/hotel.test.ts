@@ -19,10 +19,12 @@ import {
   chunkIndexForX,
   chunkBounds,
   doorsInChunk,
+  materializedDoorXs,
   visibleChunkIndices,
   nearestDoor,
 } from "@/lib/game/hotel";
 import { WORLD_SEED, deriveSubSeed, createRng } from "@/lib/game/seed";
+import type { CorridorLayout } from "@/lib/game/corridor-pitch";
 
 /** Deterministic slice ids from the real seed module — same ids every run. */
 function makeSliceIds(count: number): string[] {
@@ -257,5 +259,137 @@ describe("nearestDoor", () => {
     const nearUnallocated = nearestDoor(-9.5, 4.9, ids);
     const allocated = nearUnallocated as DoorRef | null;
     expect(allocated === null || allocated.index <= 1).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Variable-pitch layout — chunks own door-index ranges, not meters    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A hand-built layout with four allocated bays of deliberately uneven
+ * pitches: 6, 18, 24, 6 meters. Cumulative sums [0, 6, 24, 48, 54] make
+ * every expected position below readable at a glance. Bays past index 3
+ * extend at DOOR_SPACING (== DOOR_PITCH_BASE, pinned in
+ * corridor-pitch.test.ts).
+ */
+const UNEVEN: CorridorLayout = {
+  pitches: [6, 18, 24, 6],
+  cumulative: [0, 6, 24, 48, 54],
+  doorXs: [-3, -15, -36, -51],
+};
+
+describe("doorPosition with a layout", () => {
+  it("centers each past door in its own pitched bay", () => {
+    expect(doorPosition(0, "north", UNEVEN)).toEqual({ x: -3, z: 5 });
+    expect(doorPosition(1, "north", UNEVEN)).toEqual({ x: -15, z: 5 });
+    expect(doorPosition(2, "south", UNEVEN)).toEqual({ x: -36, z: -5 });
+    expect(doorPosition(3, "north", UNEVEN)).toEqual({ x: -51, z: 5 });
+  });
+
+  it("extends unallocated bays at base pitch, seamlessly", () => {
+    expect(doorPosition(4, "north", UNEVEN).x).toBe(-(54 + 3));
+    expect(doorPosition(5, "north", UNEVEN).x).toBe(-(54 + 9));
+  });
+
+  it("leaves the future side uniform — no future slices exist to gap", () => {
+    expect(doorPosition(-1, "north", UNEVEN)).toEqual({
+      x: LOBBY_LENGTH + 3,
+      z: 5,
+    });
+  });
+});
+
+describe("chunk grid with a layout", () => {
+  it("chunk length is the sum of its bays' pitches", () => {
+    // Chunk 0 owns bays 0..3: 6 + 18 + 24 + 6 = 54 m of corridor, plus the
+    // lobby as always.
+    expect(chunkBounds(0, UNEVEN)).toEqual({ index: 0, xStart: -54, xEnd: 14 });
+    // Chunk -1 owns bays 4..7 — all unallocated, so 4 × 6 = 24 m.
+    expect(chunkBounds(-1, UNEVEN)).toEqual({ index: -1, xStart: -78, xEnd: -54 });
+  });
+
+  it("keeps boundary ownership total and non-overlapping", () => {
+    // Contiguity: each past chunk's xEnd is the next chunk's xStart.
+    for (const c of [-3, -2, -1]) {
+      expect(chunkBounds(c, UNEVEN).xEnd).toBe(chunkBounds(c + 1, UNEVEN).xStart);
+    }
+    // The past grid meets the lobby and the future grid at 0 / LOBBY_LENGTH.
+    expect(chunkBounds(-1, UNEVEN).xEnd).toBe(chunkBounds(0, UNEVEN).xStart);
+    expect(chunkBounds(0, UNEVEN).xEnd).toBe(chunkBounds(1, UNEVEN).xStart);
+    // Exact boundary points go to the DEEPER chunk (ceil convention).
+    expect(chunkIndexForX(-54, UNEVEN)).toBe(-1);
+    expect(chunkIndexForX(-78, UNEVEN)).toBe(-2);
+    expect(chunkIndexForX(0, UNEVEN)).toBe(0);
+    // Interior points agree with chunkBounds everywhere, allocated or not.
+    for (const index of [-4, -3, -2, -1, 0, 1]) {
+      const { xStart, xEnd } = chunkBounds(index, UNEVEN);
+      for (const f of [0.25, 0.5, 0.75]) {
+        const x = xStart + (xEnd - xStart) * f;
+        if (x > 0 && x <= LOBBY_LENGTH) continue; // lobby interior → chunk 0
+        if (x > LOBBY_LENGTH) continue; // future side is layout-free
+        expect(chunkIndexForX(x, UNEVEN)).toBe(index);
+      }
+    }
+  });
+
+  it("agrees with the uniform grid when the layout is dense", () => {
+    // A layout of pure BASE pitches must reproduce the legacy tiling.
+    const dense: CorridorLayout = {
+      pitches: [6, 6, 6, 6, 6, 6, 6, 6],
+      cumulative: [0, 6, 12, 18, 24, 30, 36, 42, 48],
+      doorXs: [-3, -9, -15, -21, -27, -33, -39, -45],
+    };
+    expect(chunkBounds(0, dense)).toEqual(chunkBounds(0));
+    expect(chunkBounds(-1, dense)).toEqual(chunkBounds(-1));
+    for (const x of [-47.5, -24, -23.5, -0.5]) {
+      expect(chunkIndexForX(x, dense)).toBe(chunkIndexForX(x));
+    }
+  });
+});
+
+describe("doorsInChunk with a layout", () => {
+  it("pairs slices exactly as before, at the pitched positions", () => {
+    const ids = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    expect(doorsInChunk(0, ids, UNEVEN)).toEqual([
+      { sliceId: "a", index: 0, side: "north", x: -3, z: 5 },
+      { sliceId: "b", index: 0, side: "south", x: -3, z: -5 },
+      { sliceId: "c", index: 1, side: "north", x: -15, z: 5 },
+      { sliceId: "d", index: 1, side: "south", x: -15, z: -5 },
+      { sliceId: "e", index: 2, side: "north", x: -36, z: 5 },
+      { sliceId: "f", index: 2, side: "south", x: -36, z: -5 },
+      { sliceId: "g", index: 3, side: "north", x: -51, z: 5 },
+      { sliceId: "h", index: 3, side: "south", x: -51, z: -5 },
+    ]);
+  });
+});
+
+describe("nearestDoor with a layout", () => {
+  it("finds the door at its pitched position", () => {
+    const ids = makeSliceIds(16);
+    const door = nearestDoor(-35.6, 4.9, ids, 1.6, UNEVEN);
+    expect(door).not.toBeNull();
+    expect(door!.index).toBe(2);
+    expect(door!.sliceId).toBe(ids[4]);
+  });
+
+  it("finds nothing at the uniform position the door moved away from", () => {
+    const ids = makeSliceIds(16);
+    // Door 2 left x = -15 for x = -36; door 1 still sits at -15 but on the
+    // north wall only the layout position counts — z = 0 keeps both walls
+    // beyond the default reach, so nothing answers here anymore.
+    expect(nearestDoor(-21, 0, ids, 1.6, UNEVEN)).toBeNull();
+  });
+});
+
+describe("materializedDoorXs", () => {
+  it("matches the legacy bay-order list without a layout", () => {
+    const ids = ["a", "b", "c"];
+    expect(materializedDoorXs(ids)).toEqual([-3, -3, -9]);
+  });
+
+  it("returns pitched centers with a layout, paired per bay", () => {
+    const ids = ["a", "b", "c", "d", "e"];
+    expect(materializedDoorXs(ids, UNEVEN)).toEqual([-3, -3, -15, -15, -36]);
   });
 });

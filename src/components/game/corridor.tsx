@@ -35,10 +35,23 @@
  * only: a plane behind the recessed slab plus a strip above the lintel
  * and a faint additive halo. No per-door point lights (too many lights).
  *
- * CORRIDOR SCONCES. Every corridor chunk carries CHUNK_DOORS wall sconces
- * on the north (full-height) wall — one per door bay, centered between
- * door centers, so the rhythm is a sconce every 3 m alternating with the
- * doors. A sconce is a dark bracket box plus a warm emissive cone, a
+ * DOOR PITCH. The corridor is the timeline, and a timeline is intervals
+ * (v0.11-strand-field §1): the distance between two doors is a function of
+ * the time gap between their slices (corridor-pitch.ts — log10 of the gap
+ * in days, clamped between 5 and 24 m). A busy week walks dense; a silent
+ * month walks long. The layout is built once from the doors' start
+ * timestamps and threaded through every layout query; when every gap is
+ * one day or less the grid collapses onto the legacy uniform 6 m spacing
+ * bit for bit. The pitch lives purely in corridor space — it is
+ * independent of room dimensions; a room merely mounts at its door's
+ * position.
+ *
+ * CORRIDOR SCONCES. Sconces hang on the corridor's FIXED architectural
+ * grid — one every 6 m on the north (full-height) wall, anchored at the
+ * lobby, independent of the bays: the house's rhythm stays periodic while
+ * the doors (content) move with time, so a long silent stretch shows a
+ * longer bare wall with its lamp rhythm intact and a dense cluster keeps
+ * the old look. A sconce is a dark bracket box plus a warm emissive cone, a
  * radial-gradient light pool on the floor and a soft gradient wash on the
  * wall behind it — both textured additive quads (shared canvas textures),
  * not the old bare circles at 0.07/0.15 opacity that read as nothing. The
@@ -131,17 +144,23 @@ import {
 } from "@/lib/game/materials";
 import {
   CHUNK_DOORS,
+  CHUNK_LENGTH,
   CORRIDOR_WIDTH,
   DOOR_SPACING,
   LOBBY_LENGTH,
   WALL_HEIGHT,
   chunkBounds,
   chunkIndexForX,
-  doorPosition,
   doorsInChunk,
   type DoorRef,
   type Side,
 } from "@/lib/game/hotel";
+import {
+  bayBoundaryX,
+  bayCenterX,
+  corridorLayoutFromDoors,
+  type CorridorLayout,
+} from "@/lib/game/corridor-pitch";
 import { smoothstep } from "@/lib/game/math";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
 import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
@@ -200,6 +219,11 @@ import {
 export type CorridorDoor = {
   sliceId: string;
   label: string;
+  /** Slice start (ISO 8601). The corridor's door spacing is a function of
+   *  the time gaps between slices, computed from these timestamps — no id
+   *  parsing needed (v0.11-strand-field §1: the timeline is its intervals).
+   *  When absent or invalid, the layout falls back to parsing the sliceId. */
+  start?: string;
   archetype?: ArchetypeId; // v1 fixture override
 };
 
@@ -373,26 +397,38 @@ function wallSegments(
 
 /** Chunk 0 owns the lobby too; the lobby draws its own floor/walls, so the
  *  corridor part of chunk 0 stops at x = 0 where the lobby begins. */
-function corridorSpan(index: number): { xStart: number; xEnd: number } {
-  const { xStart, xEnd } = chunkBounds(index);
+function corridorSpan(
+  index: number,
+  layout: CorridorLayout,
+): { xStart: number; xEnd: number } {
+  const { xStart, xEnd } = chunkBounds(index, layout);
   return index === 0 ? { xStart, xEnd: 0 } : { xStart, xEnd };
 }
 
 /**
- * X positions of the north-wall sconces for one chunk: one per door bay
- * (CHUNK_DOORS of them), each centered between two door centers — door
- * centers sit half a bay in from the chunk edges, so bays step
- * DOOR_SPACING from xStart + DOOR_SPACING through xEnd inclusive. Every
- * chunk span is exactly CHUNK_DOORS bays, and each boundary sconce is
- * owned by the chunk whose xEnd it is, so adjacent chunks never draw the
- * same sconce and the rhythm continues seamlessly across boundaries.
- * Independent of door materialization: a bay whose slice is not allocated
- * yet still gets its lamp.
+ * X positions of the north-wall sconces for one chunk, on the corridor's
+ * FIXED architectural grid: one sconce every DOOR_SPACING meters, anchored
+ * at the lobby seam on the past side (x = -6, -12, …) and at the lobby's
+ * far wall on the future side (LOBBY_LENGTH + 6, …). The grid deliberately
+ * does NOT follow the bays — door spacing now varies with the time gaps
+ * between slices, but the house's own grammar stays periodic: a long silent
+ * stretch reads as a longer bare wall with its regular rhythm of lamps
+ * intact, while a dense cluster (every bay 6 m) reproduces today's look
+ * exactly. Content varies; architecture does not. Each sconce is owned by
+ * the chunk whose (xStart, xEnd] span contains it, so adjacent chunks never
+ * draw the same sconce and the rhythm continues seamlessly across chunk
+ * boundaries however long the chunks are. Independent of door
+ * materialization: an unallocated stretch still gets its lamps.
  */
 function sconcePositions(xStart: number, xEnd: number): number[] {
+  const base = xEnd <= 0 ? 0 : LOBBY_LENGTH;
   const xs: number[] = [];
-  for (let x = xStart + DOOR_SPACING; x <= xEnd + 1e-6; x += DOOR_SPACING) {
-    xs.push(x);
+  for (
+    let k = Math.floor((xStart - base) / DOOR_SPACING) + 1;
+    base + k * DOOR_SPACING <= xEnd + 1e-6;
+    k++
+  ) {
+    xs.push(base + k * DOOR_SPACING);
   }
   return xs;
 }
@@ -1064,18 +1100,19 @@ interface PropSpec {
  * and bins — never blocking a door, a painting, or each other. Candidates
  * are rejection-sampled from the chunk's own stream; the layout is
  * deterministic per chunk index regardless of slice allocation (bay door
- * positions come from hotel.ts, not the materialized doors).
+ * positions come from the corridor layout, not the materialized doors).
  */
 function propLayout(
   index: number,
   xStart: number,
   length: number,
   gapXs: readonly number[],
+  layout: CorridorLayout,
 ): PropSpec[] {
   const rng = createRng(deriveSubSeed(WORLD_SEED, `corridor-chunk-${index}`, "layout"));
   const count = rangeInt(rng, 0, 2);
   const doorXs = Array.from({ length: CHUNK_DOORS }, (_, k) =>
-    doorPosition(k - index * CHUNK_DOORS, "north").x,
+    bayCenterX(layout, k - index * CHUNK_DOORS),
   );
   const props: PropSpec[] = [];
   for (let n = 0; n < count; n++) {
@@ -1177,6 +1214,7 @@ function DatePlaqueSide({
 function CorridorChunk({
   index,
   sliceIds,
+  layout,
   doorArchetypes,
   dimRef,
   darkRef,
@@ -1185,42 +1223,53 @@ function CorridorChunk({
 }: {
   index: number;
   sliceIds: readonly string[];
+  layout: CorridorLayout;
   doorArchetypes: ReadonlyMap<string, ArchetypeId | undefined>;
   dimRef: MutableRefObject<boolean>;
   darkRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
   playerRef: MutableRefObject<{ x: number; z: number }>;
 }) {
-  const { xStart, xEnd } = corridorSpan(index);
+  const { xStart, xEnd } = corridorSpan(index, layout);
   const length = xEnd - xStart;
   const centerX = (xStart + xEnd) / 2;
-  const doors = useMemo(() => doorsInChunk(index, sliceIds), [index, sliceIds]);
+  const doors = useMemo(
+    () => doorsInChunk(index, sliceIds, layout),
+    [index, sliceIds, layout],
+  );
   const northDoors = doors.filter((d) => d.side === "north");
   const southDoors = doors.filter((d) => d.side === "south");
   const sconces = useMemo(() => sconcePositions(xStart, xEnd), [xStart, xEnd]);
-  // Interior wall gaps (bay midpoints minus the far seam) — where paintings
-  // hang and where the date plaques check for a calendar-day change. The
-  // sconce helper already owns this arithmetic; reuse it rather than
-  // re-deriving bay positions here.
-  const gapXs = useMemo(() => sconces.slice(0, CHUNK_DOORS - 1), [sconces]);
+  // Interior points of the fixed architectural grid (minus the far seam, so
+  // a frame never straddles a chunk boundary) — where paintings hang. The
+  // grid is independent of the bays: art keeps the house's rhythm while the
+  // doors move with time.
+  const gapXs = useMemo(
+    () => sconces.filter((x) => x < xEnd - 1e-9),
+    [sconces, xEnd],
+  );
   const paintings = useMemo(() => paintingLayout(index, gapXs), [index, gapXs]);
   const props = useMemo(
-    () => propLayout(index, xStart, length, gapXs),
-    [index, xStart, length, gapXs],
+    () => propLayout(index, xStart, length, gapXs, layout),
+    [index, xStart, length, gapXs, layout],
   );
-  // Sconce j sits at the boundary BEFORE bay (base + CHUNK_DOORS − 1 − j);
-  // a date plaque goes up wherever the calendar day changes across it.
+  // A date plaque goes up at the BAY boundary (the seam between bay m − 1
+  // and bay m, x = -cumulative[m]) wherever the calendar day changes across
+  // it — signage follows the bays, not the sconce grid. Boundary m = base
+  // sits at this chunk's xEnd; the boundary at xStart belongs to the deeper
+  // chunk, so ownership stays total.
   const datePlaques = useMemo(() => {
     const base = -index * CHUNK_DOORS;
     const plaques: { x: number; label: string }[] = [];
-    sconces.forEach((x, j) => {
-      const i = base + CHUNK_DOORS - 1 - j;
-      const prev = bayDate(sliceIds, i - 1);
-      const cur = bayDate(sliceIds, i);
-      if (prev && cur && prev !== cur) plaques.push({ x, label: cur });
-    });
+    for (let m = base; m < base + CHUNK_DOORS; m++) {
+      const prev = bayDate(sliceIds, m - 1);
+      const cur = bayDate(sliceIds, m);
+      if (prev && cur && prev !== cur) {
+        plaques.push({ x: bayBoundaryX(layout, m), label: cur });
+      }
+    }
     return plaques;
-  }, [index, sliceIds, sconces]);
+  }, [index, sliceIds, layout]);
 
   // The chunk's real light follows the hotel-wide dimming.
   const lightRef = useRef<PointLight>(null);
@@ -1350,12 +1399,17 @@ function CorridorChunk({
       {datePlaques.map((p) => (
         <DatePlaque key={p.x} x={p.x} label={p.label} dimRef={dimRef} mats={mats} />
       ))}
+      {/* The chunk's one real light. Its reach grows with the chunk: bays
+          can now run far past DOOR_SPACING, and a fixed 16 m cutoff would
+          leave the far end of a long silent stretch unlit (the anti-pattern
+          list forbids unreadably dark corridor). A uniform chunk keeps the
+          original 16 exactly. */}
       <pointLight
         ref={lightRef}
         position={[centerX, 3.0, 0]}
         color={SCONCE_COLOR}
         intensity={LIGHT_LEVELS.chunkLight.full}
-        distance={16}
+        distance={16 + Math.max(0, length - CHUNK_LENGTH) / 2}
         decay={2}
       />
     </group>
@@ -1788,6 +1842,10 @@ export function Corridor({
   dark?: boolean; // false = light mode (the app theme, read by the integrator)
 }): JSX.Element {
   const sliceIds = useMemo(() => doors.map((d) => d.sliceId), [doors]);
+  // The variable grid: time gaps between slices → bay pitches → door
+  // positions (corridor-pitch.ts). All ≤ 1-day gaps reproduce the legacy
+  // uniform grid bit for bit, so a dense timeline looks exactly as before.
+  const layout = useMemo(() => corridorLayoutFromDoors(doors), [doors]);
   const doorArchetypes = useMemo(() => {
     const map = new Map<string, ArchetypeId | undefined>();
     for (const door of doors) map.set(door.sliceId, door.archetype);
@@ -1857,10 +1915,10 @@ export function Corridor({
   );
 
   // Visible window, future-ward first — same order as
-  // visibleChunkIndices(playerX, CHUNK_RADIUS). Seeded from the player's
+  // visibleChunkIndices(playerX, CHUNK_RADIUS, layout). Seeded from the player's
   // initial position; after that only useFrame updates it.
   const [chunkIndices, setChunkIndices] = useState<number[]>(() => {
-    const center = chunkIndexForX(playerRef.current.x);
+    const center = chunkIndexForX(playerRef.current.x, layout);
     const indices: number[] = [];
     for (let i = center + CHUNK_RADIUS; i >= center - CHUNK_RADIUS; i--) {
       indices.push(i);
@@ -1869,7 +1927,7 @@ export function Corridor({
   });
 
   useFrame(() => {
-    const center = chunkIndexForX(playerRef.current.x);
+    const center = chunkIndexForX(playerRef.current.x, layout);
     // Guarded update: same center → same array reference → React bails out
     // with no re-render and zero allocations on the (common) steady frames.
     setChunkIndices((prev) =>
@@ -1879,8 +1937,8 @@ export function Corridor({
     );
   });
 
-  const futureEdge = chunkBounds(chunkIndices[0]).xEnd + 0.4;
-  const pastEdge = chunkBounds(chunkIndices[chunkIndices.length - 1]).xStart - 0.4;
+  const futureEdge = chunkBounds(chunkIndices[0], layout).xEnd + 0.4;
+  const pastEdge = chunkBounds(chunkIndices[chunkIndices.length - 1], layout).xStart - 0.4;
 
   // Fully faded out inside a space: render nothing, but keep this component
   // (and its chunk window) mounted so the hotel returns intact on exit.
@@ -1900,6 +1958,7 @@ export function Corridor({
           key={index}
           index={index}
           sliceIds={sliceIds}
+          layout={layout}
           doorArchetypes={doorArchetypes}
           dimRef={dimRef}
           darkRef={darkRef}

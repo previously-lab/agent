@@ -84,6 +84,34 @@ export const LAMP_COLOR = "#ffb46b";
 
 export const CHUNK_RADIUS = 1;
 
+/* ------------------------------------------------------------------ */
+/* Door pitch — time gaps become door spacing (v0.11-strand-field §1:  */
+/* 时间线 = 间隔 — a timeline is intervals, so the corridor shows them) */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Pitch formula (implemented in src/lib/game/corridor-pitch.ts):
+ *
+ *   doorPitchMeters(gapDays) = clamp(
+ *     DOOR_PITCH_MIN,
+ *     DOOR_PITCH_BASE + DOOR_PITCH_GAIN * log10(max(1, gapDays)),
+ *     DOOR_PITCH_MAX,
+ *   )
+ *
+ * where gapDays is the gap between chronologically adjacent slices in the
+ * corridor's door order. The pitch lives purely in corridor space — it is
+ * independent of room dimensions; a room merely mounts at its door's
+ * position.
+ */
+/** Under a day apart → today's spacing, unchanged. */
+export const DOOR_PITCH_BASE = 6;
+/** Meters of pitch added per decade of silence (per log10 of the gap). */
+export const DOOR_PITCH_GAIN = 12;
+/** A bay never shrinks tighter than this, however dense the slices. */
+export const DOOR_PITCH_MIN = 5;
+/** ≈4× a dense stretch: felt, not tedious at 4 m/s. */
+export const DOOR_PITCH_MAX = 24;
+
 /** Corridor/lobby wall thickness; walls are centered on
  *  z = ±CORRIDOR_WIDTH / 2. Deliberately NOT the room wall thickness
  *  (ROOM_WALL_THICKNESS in ./room, 0.3): different walls, different
