@@ -15,8 +15,16 @@
  * otherwise re-clamps the player into the space. The release zone
  * (CLEAR_HALF) is deliberately wider than the physical gap (GAP_HALF) so a
  * player hugging the door frame never oscillates between modes.
+ *
+ * STRAND DOORS (v0.11 B.8/B.11) get the same treatment on the room's other
+ * walls: within a placed door's along-wall window the box clamp relaxes to
+ * the wall plane + ROOM_DOOR_PASS_DEPTH so the crossing trigger is
+ * reachable; outside those windows the box holds exactly as before. The
+ * placements come from room-doors.ts placeRoomDoors — the one pure layout
+ * the renderer also consumes.
  */
 import { CORRIDOR_WIDTH, LOBBY_LENGTH, type DoorRef } from "./hotel";
+import type { RoomDoorPlacement } from "./room-doors";
 
 /** Corridor half-width — walls sit at ±WALL_Z. */
 export const WALL_Z = CORRIDOR_WIDTH / 2;
@@ -42,6 +50,14 @@ export const SPACE_WALL_CLEAR = 0.4;
 export const SPACE_EDGE_MARGIN = 1;
 /** Lobby east wall clearance. */
 export const LOBBY_CLEAR = 0.6;
+/** Strand-door passage (v0.11 B.8/B.11): inside a placed door's along-wall
+ *  window the box clamp relaxes out to the wall's own plane plus this
+ *  overtravel, so the crossing trigger (ROOM_DOOR_CROSS_DEPTH = 0.55,
+ *  measured inward from the plane) is comfortably reachable — the same
+ *  overtravel the entrance gets past the corridor wall (GAP_Z_LIMIT). The
+ *  relaxation is bounded by BOTH the GAP_HALF window and this plane: the
+ *  player can stand between the jambs, never escape past them. */
+export const ROOM_DOOR_PASS_DEPTH = 0.6;
 
 /** Margin shrink cap: the effective space margin never exceeds this
  *  fraction of the room's half-span, so at least half of every span stays
@@ -89,13 +105,30 @@ export function clampToCorridor(
  * everywhere else the wall plane is solid both ways — a player on the
  * corridor side outside the gap is pushed back into the space rather than
  * through the wall.
+ *
+ * STRAND-DOOR PASSAGES. `roomDoors` carries the room's placed strand doors
+ * in the plan's local frame (room-doors.ts placeRoomDoors — the SAME pure
+ * placement the renderer builds; never a second derivation). For each door
+ * whose along-wall window (|along| < GAP_HALF, the slab passage — same as
+ * the crossing trigger) contains the player, the bound on that wall's
+ * normal axis widens out to the wall plane + ROOM_DOOR_PASS_DEPTH, exactly
+ * as the entrance gap relaxes the corridor wall: without it the edge
+ * margin keeps the player ≥ 0.85 m short of the wall and the 0.55 m
+ * crossing band is unreachable. The widened interval is re-applied to the
+ * PRE-clamp position so the overshoot the box just swallowed is restored.
+ * Walls without a door — and every position outside a door's window —
+ * clamp byte-identically to the plain box; interior walls (an l-shape's
+ * step/inner walls) widen nothing because the box never bounded them.
  */
 export function clampToSpace(
   p: { x: number; z: number },
   door: DoorRef,
   width: number,
   extent: number,
+  roomDoors: readonly RoomDoorPlacement[] = [],
 ): void {
+  const rawX = p.x;
+  const rawZ = p.z;
   const xHalf = width / 2 - scaledMargin(SPACE_EDGE_MARGIN, width / 2);
   p.x = clamp(p.x, door.x - xHalf, door.x + xHalf);
   const far = WALL_Z + extent - scaledMargin(SPACE_EDGE_MARGIN, extent / 2);
@@ -107,5 +140,34 @@ export function clampToSpace(
     p.z = clamp(p.z, near, far);
   } else {
     p.z = clamp(p.z, -far, -near);
+  }
+
+  if (roomDoors.length === 0) return;
+  // Local frame (doorway at (0,0), +z outward — the placement's frame and
+  // the mirror of SpaceScene's group transform), with the box bounds
+  // expressed in it: x ∈ [−xHalf, xHalf], z ∈ [near, far] − WALL_Z.
+  const dir = door.z > 0 ? 1 : -1;
+  const lx = (p.x - door.x) * dir;
+  const lz = (p.z - door.z) * dir;
+  const zLo = near - WALL_Z;
+  const zHi = far - WALL_Z;
+  for (const d of roomDoors) {
+    const along = -(lx - d.x) * d.nz + (lz - d.z) * d.nx;
+    if (Math.abs(along) >= GAP_HALF) continue;
+    if (d.nx !== 0) {
+      // Vertical wall (normal ±x): widen only the wall's own side out to
+      // the plane + overtravel; interior walls min/max to a no-op.
+      const lo = d.nx > 0 ? Math.min(-xHalf, d.x - ROOM_DOOR_PASS_DEPTH) : -xHalf;
+      const hi = d.nx < 0 ? Math.max(xHalf, d.x + ROOM_DOOR_PASS_DEPTH) : xHalf;
+      if (lo !== -xHalf || hi !== xHalf) {
+        p.x = door.x + dir * clamp((rawX - door.x) * dir, lo, hi);
+      }
+    } else {
+      const lo = d.nz > 0 ? Math.min(zLo, d.z - ROOM_DOOR_PASS_DEPTH) : zLo;
+      const hi = d.nz < 0 ? Math.max(zHi, d.z + ROOM_DOOR_PASS_DEPTH) : zHi;
+      if (lo !== zLo || hi !== zHi) {
+        p.z = door.z + dir * clamp((rawZ - door.z) * dir, lo, hi);
+      }
+    }
   }
 }

@@ -87,6 +87,19 @@
  * translucent-room bug. Bloom (threshold 1.0) glows only emissive
  * fixtures and the sun's hot pools.
  *
+ * STRAND DOORS (doc 附录 B.11). A room grows one extra door per strand
+ * passing through its slice, each a WORMHOLE to the next slice on that
+ * strand — never room-local geometry: the current room dissolves on the
+ * ordinary fade machinery, the player is moved to the destination slice's
+ * own corridor door position, and the door manager's usual mount path
+ * builds that slice's room there. The corridor itself never appears (the
+ * door manager keeps its hide/show state latched for the whole crossing),
+ * and the player's position on the timeline follows the strands they walk.
+ * The transition is a pure reducer (reduceStrandTransition below); this
+ * file only feeds it events and executes its phases. The corridor door
+ * remains the only way back out to the corridor — entrance semantics are
+ * untouched.
+ *
  * DETERMINISM. No randomness in this file at all — every generated thing the
  * player sees comes from corridor/space renderers fed by the seed module.
  */
@@ -100,7 +113,13 @@ import { useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
 import { GAME_DEBUG } from "./debug";
-import { materializedDoorXs, nearestDoor, type DoorRef } from "@/lib/game/hotel";
+import {
+  doorPosition,
+  materializedDoorXs,
+  nearestDoor,
+  type DoorRef,
+  type Side,
+} from "@/lib/game/hotel";
 import {
   corridorLayoutFromDoors,
   type CorridorLayout,
@@ -115,12 +134,26 @@ import {
 } from "@/lib/game/clamps";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
-import { scaledRecipeFor, type ScaleNotation } from "@/lib/game/room-plan";
+import {
+  roomPlanFor,
+  scaledRecipeFor,
+  wallSegmentsFor,
+  type ScaleNotation,
+} from "@/lib/game/room-plan";
+import {
+  hostableWallsFor,
+  placeRoomDoors,
+  type RoomDoorPlacement,
+} from "@/lib/game/room-doors";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
 import { Corridor, type CorridorDoor } from "./corridor";
 import { SpaceScene } from "./space";
 import { HIDE_DELAY_MS } from "@/lib/game/tuning/hotel";
-import { WATER_Y } from "@/lib/game/tuning/room";
+import {
+  COLONNADE_BAY,
+  ROOM_WALL_THICKNESS,
+  WATER_Y,
+} from "@/lib/game/tuning/room";
 import {
   AO_DISTANCE_FALLOFF,
   AO_INTENSITY,
@@ -157,6 +190,7 @@ import {
   STAGE_BACKDROP_RADIUS,
   STAGE_BACKDROP_Y,
   STAGE_POOL_RADIUS,
+  STRAND_DOOR_ARRIVAL_INSET,
   SUN_BASE_COLOR,
   SUN_BASE_INTENSITY,
   SUN_OFFSET,
@@ -347,6 +381,176 @@ function resolveAtmosphere(
     out.ambient = CORRIDOR_AMBIENT;
   }
   return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* Strand-door wormhole (doc 附录 B.11) — pure state machine           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One strand door in a room, pre-resolved by the data lane
+ * (lib/game/strand-doors.ts) and handed to the canvas keyed by sliceId.
+ * `destinationIndex` is the FLAT index into the corridor's newest-first
+ * slice list (the same list `doors`/`sliceIds` are built from). `lit:
+ * false` or a null destination means the strand has no next slice inside
+ * the rendered corridor — the door is a promise, not a passage (doc 附录
+ * B.4/B.11). The list carries no positions: where a door hangs on the
+ * walls is staging, owned by the room renderer.
+ */
+export interface StrandDoorSpec {
+  readonly key: string;
+  readonly label: string;
+  readonly lit: boolean;
+  readonly destinationIndex: number | null;
+}
+
+/**
+ * Strand-door transition phases — a strand door is a wormhole between two
+ * corridor positions, so there is no room-local crossing geometry at all:
+ *
+ *   idle ──cross (valid)──▶ fadingOut ──fadedOut──▶ mounting ──activated──▶ idle
+ *     ▲                        │                      │
+ *     │                        └─ cross: DROPPED       └─ cross: DROPPED
+ *     └─ invalid cross: DROPPED      (the latch — one crossing at a time)
+ *
+ * idle: no crossing in flight. fadingOut: latched — the current room is
+ * dissolving on the ordinary fade machinery (activeSpace → null flips
+ * SpaceScene to fade="out"); movement and the corridor door manager are
+ * suspended so the player cannot wander the void and the half-dissolved
+ * room cannot re-engage. mounting: the fade completed; the canvas has
+ * moved the player to the destination slice's corridor door and mounted
+ * that slice's room there. The latch releases only on `activated` — the
+ * destination room observed as the ACTIVE space — after which the ordinary
+ * door manager owns the player again (and the corridor door is once more
+ * the way back out). `abort` (destination unresolvable at fade completion)
+ * drops the latch so the current room can fade back in.
+ */
+export type StrandTransition =
+  | { readonly phase: "idle" }
+  | { readonly phase: "fadingOut"; readonly key: string; readonly destinationIndex: number }
+  | { readonly phase: "mounting"; readonly key: string; readonly destinationIndex: number };
+
+export type StrandTransitionEvent =
+  | {
+      readonly type: "cross";
+      readonly key: string;
+      readonly lit: boolean;
+      readonly destinationIndex: number | null;
+      /** Rendered corridor door count — destinations outside it are dropped. */
+      readonly doorCount: number;
+      /** Flat slice index of the room the player stands in; null = none active. */
+      readonly currentIndex: number | null;
+    }
+  | { readonly type: "fadedOut" }
+  | { readonly type: "activated"; readonly destinationIndex: number }
+  | { readonly type: "abort" };
+
+/**
+ * The reducer. Trust nothing from geometry: a crossing latches only from
+ * idle, only for a LIT door whose destination is an integer inside the
+ * rendered corridor and not the room the player is already in; every other
+ * event/phase combination is a no-op, so stale or double deliveries can
+ * never wedge the machine.
+ */
+export function reduceStrandTransition(
+  state: StrandTransition,
+  event: StrandTransitionEvent,
+): StrandTransition {
+  switch (event.type) {
+    case "cross": {
+      if (state.phase !== "idle") return state;
+      const ok =
+        event.lit &&
+        event.destinationIndex !== null &&
+        Number.isInteger(event.destinationIndex) &&
+        event.destinationIndex >= 0 &&
+        event.destinationIndex < event.doorCount &&
+        event.currentIndex !== null &&
+        event.destinationIndex !== event.currentIndex;
+      return ok
+        ? { phase: "fadingOut", key: event.key, destinationIndex: event.destinationIndex }
+        : state;
+    }
+    case "fadedOut":
+      return state.phase === "fadingOut"
+        ? { phase: "mounting", key: state.key, destinationIndex: state.destinationIndex }
+        : state;
+    case "activated":
+      return state.phase === "mounting" && event.destinationIndex === state.destinationIndex
+        ? { phase: "idle" }
+        : state;
+    case "abort":
+      return state.phase === "idle" ? state : { phase: "idle" };
+  }
+}
+
+/** Flat slice-list index of a corridor door: bay i holds sliceIds[2i] on
+ *  the north wall and sliceIds[2i + 1] on the south wall (hotel.ts). */
+function flatDoorIndex(door: DoorRef): number {
+  return door.index * 2 + (door.side === "south" ? 1 : 0);
+}
+
+/** The corridor door materialized for a flat slice-list index, or null
+ *  when the index falls outside the rendered list — an unresolvable
+ *  strand-door destination is dropped, never a missing-coordinate crash
+ *  (doc B.11's boundary rule). */
+function doorRefForFlatIndex(
+  flatIndex: number,
+  sliceIds: readonly string[],
+  layout: CorridorLayout,
+): DoorRef | null {
+  const sliceId = sliceIds[flatIndex];
+  if (sliceId === undefined) return null;
+  const bay = Math.floor(flatIndex / 2);
+  const side: Side = flatIndex % 2 === 0 ? "north" : "south";
+  return { index: bay, side, sliceId, ...doorPosition(bay, side, layout) };
+}
+
+/** Build the ActiveSpace for a corridor door — the ONE construction shared
+ *  by the door manager's wall-crossing mount and the strand-door wormhole,
+ *  so a room mounted either way is identical (recipe, archetype override,
+ *  and the single scaled view the clamps and terrain consume). */
+function resolveSpaceForDoor(
+  door: DoorRef,
+  archetypeById: ReadonlyMap<string, ArchetypeId>,
+): ActiveSpace {
+  const recipe = compileSpaceRecipe(door.sliceId);
+  const archetype = archetypeById.get(door.sliceId);
+  const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
+  const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe);
+  return { door, recipe: finalRecipe, scaledRecipe, scale };
+}
+
+/**
+ * The active room's strand-door placements, derived through the exact pure
+ * chain the renderer (space.tsx) builds its doors from: the ActiveSpace's
+ * scaledRecipe (scaledRecipeFor) → roomPlanFor → wallSegmentsFor →
+ * hostableWallsFor → placeRoomDoors, with the renderer's own colonnade-bay
+ * and wall-thickness formulas. Everything is deterministic in
+ * (sliceId, dims, scale, dir, count), so the movement clamp relaxes at the
+ * same doors the renderer draws — the two call sites share the pure
+ * functions AND their inputs rather than handing placements through props
+ * (SpaceScene owns its memo; its prop contract is unchanged).
+ */
+function roomDoorPlacementsForSpace(
+  space: ActiveSpace,
+  count: number,
+): readonly RoomDoorPlacement[] {
+  if (count <= 0) return [];
+  const { door, scaledRecipe, scale } = space;
+  const scaleFactor = scale.factor;
+  const plan = roomPlanFor(
+    scaledRecipe.sliceId,
+    scaledRecipe.width,
+    scaledRecipe.size.extent,
+    COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+  );
+  const walls = wallSegmentsFor(
+    plan,
+    ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35),
+  );
+  const hostable = hostableWallsFor(plan, walls, door.z > 0 ? 1 : -1);
+  return placeRoomDoors(scaledRecipe.sliceId, plan, walls, hostable, count).doors;
 }
 
 /* ------------------------------------------------------------------ */
@@ -718,6 +922,14 @@ function PlayerAvatar({
  * wall was somehow crossed outside the gap; the player is re-clamped into
  * the space (clampToSpace pushes them back through the solid wall side)
  * instead of being released.
+ *
+ * Strand-door latch: while a room→room crossing is in flight
+ * (`transitionActive`) the world is FROZEN — no movement, no clamps, and
+ * the door manager is suspended, because the player is standing inside a
+ * dissolving room whose activeSpace is already null: an unsuspended
+ * manager would resolve the nearest door and re-mount the very room that
+ * is fading out. The corridor stays dissolved for the whole crossing too
+ * (step 3b) — the wormhole must never flash the hotel into view.
  */
 function GameLoop({
   playerRef,
@@ -734,6 +946,8 @@ function GameLoop({
   setCorridorHidden,
   hudIdRef,
   setHudDoor,
+  transitionActive,
+  roomDoors,
 }: {
   playerRef: PlayerRef;
   keysRef: MutableRefObject<Set<string>>;
@@ -749,63 +963,79 @@ function GameLoop({
   setCorridorHidden: (hidden: boolean) => void;
   hudIdRef: MutableRefObject<string | null>;
   setHudDoor: (door: CorridorDoor | null) => void;
+  transitionActive: boolean;
+  /** The active space's placed strand doors (plan-local frame) — the
+   *  clamp's passage windows; empty when the room grows none. */
+  roomDoors: readonly RoomDoorPlacement[];
 }): null {
   useFrame((_, delta) => {
     const p = playerRef.current;
-
-    // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
-    // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
-    // room should feel immense, not waste the player's time; the corridor
-    // stays exactly PLAYER_SPEED.
-    const move = moveVectorFromKeys(keysRef.current);
-    const moving = move.x !== 0 || move.z !== 0;
-    motionRef.current = { x: move.x, z: move.z, moving };
-    if (moving) {
-      const dt = Math.min(delta, MAX_DT);
-      const speed =
-        PLAYER_SPEED *
-        (activeSpace === null ? 1 : roomSpeedFactor(activeSpace.scale.factor));
-      p.x += move.x * speed * dt;
-      p.z += move.z * speed * dt;
-    }
-
-    // 2. Door manager — hysteresis band around the wall plane. While a
-    // space is active ONLY its own door can matter: a big room spans many
-    // door bays, and re-resolving nearestDoor here would let the player
-    // "walk through the wall" into the neighboring door's space.
     let space = activeSpace;
-    const az = Math.abs(p.z);
-    if (az > WALL_OUT && space === null) {
-      const door = nearestDoor(p.x, p.z, sliceIds, DOOR_GRAB_DIST, layout);
-      if (door) {
-        const recipe = compileSpaceRecipe(door.sliceId);
-        const archetype = archetypeById.get(door.sliceId);
-        const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
-        // The scaled view is computed ONCE here — room-plan.ts is the single
-        // definition of "how big is this room"; clamps, terrain, and water
-        // below all consume it, matching the geometry space.tsx builds.
-        const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe);
-        space = { door, recipe: finalRecipe, scaledRecipe, scale };
-        setActiveSpace(space);
-      }
-    } else if (az < WALL_IN && space !== null) {
-      // Release only through THE door gap: inside the corridor band and
-      // near the door's x. Outside that zone the wall is solid both ways —
-      // stay in space mode and let clampToSpace push the player back in.
-      if (Math.abs(p.x - space.door.x) < CLEAR_HALF) {
-        space = null;
-        setActiveSpace(null);
-      }
-    }
 
-    // 3. Clamps for wherever the player ended up. The space clamp boxes to
-    // the SCALED footprint — the same dims the room was built at, so the
-    // player can reach the far end of a colossal room and cannot walk
-    // through a miniature room's walls.
-    if (space !== null) {
-      clampToSpace(p, space.door, space.scaledRecipe.width, space.scaledRecipe.size.extent);
+    if (!transitionActive) {
+      // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
+      // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
+      // room should feel immense, not waste the player's time; the corridor
+      // stays exactly PLAYER_SPEED.
+      const move = moveVectorFromKeys(keysRef.current);
+      const moving = move.x !== 0 || move.z !== 0;
+      motionRef.current = { x: move.x, z: move.z, moving };
+      if (moving) {
+        const dt = Math.min(delta, MAX_DT);
+        const speed =
+          PLAYER_SPEED *
+          (space === null ? 1 : roomSpeedFactor(space.scale.factor));
+        p.x += move.x * speed * dt;
+        p.z += move.z * speed * dt;
+      }
+
+      // 2. Door manager — hysteresis band around the wall plane. While a
+      // space is active ONLY its own door can matter: a big room spans many
+      // door bays, and re-resolving nearestDoor here would let the player
+      // "walk through the wall" into the neighboring door's space.
+      const az = Math.abs(p.z);
+      if (az > WALL_OUT && space === null) {
+        const door = nearestDoor(p.x, p.z, sliceIds, DOOR_GRAB_DIST, layout);
+        if (door) {
+          // The scaled view is computed ONCE inside resolveSpaceForDoor —
+          // room-plan.ts is the single definition of "how big is this room";
+          // clamps, terrain, and water below all consume it, matching the
+          // geometry space.tsx builds.
+          space = resolveSpaceForDoor(door, archetypeById);
+          setActiveSpace(space);
+        }
+      } else if (az < WALL_IN && space !== null) {
+        // Release only through THE door gap: inside the corridor band and
+        // near the door's x. Outside that zone the wall is solid both ways —
+        // stay in space mode and let clampToSpace push the player back in.
+        if (Math.abs(p.x - space.door.x) < CLEAR_HALF) {
+          space = null;
+          setActiveSpace(null);
+        }
+      }
+
+      // 3. Clamps for wherever the player ended up. The space clamp boxes to
+      // the SCALED footprint — the same dims the room was built at, so the
+      // player can reach the far end of a colossal room and cannot walk
+      // through a miniature room's walls. It also receives the room's
+      // placed strand doors (same pure placements the renderer draws), so
+      // each door's passage relaxes the wall bound enough for the crossing
+      // trigger to fire — every other wall stays exactly as boxed.
+      if (space !== null) {
+        clampToSpace(
+          p,
+          space.door,
+          space.scaledRecipe.width,
+          space.scaledRecipe.size.extent,
+          roomDoors,
+        );
+      } else {
+        clampToCorridor(p, doorXs);
+      }
     } else {
-      clampToCorridor(p, doorXs);
+      // Frozen mid-crossing: report "not moving" so the avatar settles
+      // instead of bobbing in place while its room dissolves.
+      motionRef.current = { x: 0, z: 0, moving: false };
     }
 
     // 3b. Corridor visibility: the instant a space engages — the player has
@@ -814,8 +1044,10 @@ function GameLoop({
     //  as leaving the hotel behind, not as a window next door. The release
     //  is symmetric: back in the corridor band the hotel returns the same
     //  frame, remounting dark and easing up (useDimLerp's recovery lerp in
-    //  corridor.tsx), so neither direction pops.
-    const gone = space !== null;
+    //  corridor.tsx), so neither direction pops. A strand-door crossing
+    //  holds the corridor dissolved for the whole wormhole — it must never
+    //  flash into view between the two rooms.
+    const gone = space !== null || transitionActive;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
     // 4. HUD prompt — setState only when the nearest door identity changes.
@@ -860,8 +1092,13 @@ function Hud({
 
 export default function GameCanvas({
   doors,
+  roomDoors,
 }: {
   doors: readonly CorridorDoor[];
+  /** Strand doors per room, keyed by sliceId — pre-resolved by the data
+   *  lane (game-shell.tsx / lib/game/strand-doors.ts). Absent while that
+   *  lane is off; rooms then grow no extra doors and nothing here runs. */
+  roomDoors?: ReadonlyMap<string, readonly StrandDoorSpec[]>;
 }): JSX.Element {
   const t = useTranslations("game");
   // App dark mode, read OUTSIDE the Canvas — React context never crosses
@@ -897,6 +1134,34 @@ export default function GameCanvas({
     return () => clearTimeout(timer);
   }, [corridorHidden]);
 
+  // Strand-door wormhole (doc B.11): the transition's phase lives in a
+  // pure reducer (reduceStrandTransition); the effects below only execute
+  // its phases — dissolve the current room on latch, release the latch
+  // once the destination room is the active space.
+  const [strandTransition, setStrandTransition] = useState<StrandTransition>({
+    phase: "idle",
+  });
+  // A latched crossing dissolves the current room exactly like a corridor
+  // exit does: activeSpace → null flips the mounted SpaceScene to
+  // fade="out" (its onFadedOut handshake below finishes the wormhole).
+  useEffect(() => {
+    if (strandTransition.phase === "fadingOut" && activeSpace !== null) {
+      setActiveSpace(null);
+    }
+  }, [strandTransition, activeSpace]);
+  // Latch release: the crossing completes when the destination room is the
+  // ACTIVE space — from then on the ordinary door manager owns the player.
+  useEffect(() => {
+    if (strandTransition.phase === "mounting" && activeSpace !== null) {
+      setStrandTransition(
+        reduceStrandTransition(strandTransition, {
+          type: "activated",
+          destinationIndex: flatDoorIndex(activeSpace.door),
+        }),
+      );
+    }
+  }, [strandTransition, activeSpace]);
+
   const sliceIds = useMemo(() => doors.map((d) => d.sliceId), [doors]);
   const layout = useMemo(() => corridorLayoutFromDoors(doors), [doors]);
   const doorXs = useMemo(
@@ -917,6 +1182,76 @@ export default function GameCanvas({
     () => (activeSpace !== null ? waterSideFor(activeSpace.scaledRecipe) : 0),
     [activeSpace],
   );
+  // The active room's placed strand doors for the movement clamp: the same
+  // pure placements (roomDoorPlacementsForSpace) the mounted SpaceScene
+  // renders — one derivation chain, two call sites, identical results (A6).
+  const activeRoomDoors = useMemo(
+    () =>
+      activeSpace === null
+        ? []
+        : roomDoorPlacementsForSpace(
+            activeSpace,
+            roomDoors?.get(activeSpace.recipe.sliceId)?.length ?? 0,
+          ),
+    [activeSpace, roomDoors],
+  );
+
+  /** Room-renderer callback: the player walked through the strand door
+   *  `key`. The reducer re-validates everything (lit, destination inside
+   *  the rendered corridor, a room actually active) before latching. */
+  const handleRoomDoor = (key: string): void => {
+    const spec = roomDoors
+      ?.get(activeSpace?.recipe.sliceId ?? "")
+      ?.find((d) => d.key === key);
+    setStrandTransition((prev) =>
+      reduceStrandTransition(prev, {
+        type: "cross",
+        key,
+        lit: spec?.lit ?? false,
+        destinationIndex: spec?.destinationIndex ?? null,
+        doorCount: sliceIds.length,
+        currentIndex: activeSpace === null ? null : flatDoorIndex(activeSpace.door),
+      }),
+    );
+  };
+
+  /** SpaceScene fade-out handshake: either the ordinary corridor exit
+   *  (unmount the dissolved room) or, with a crossing latched, the
+   *  wormhole's midpoint — move the player to the destination slice's
+   *  corridor door and mount that slice's room through the same
+   *  construction the door manager uses. */
+  const handleFadedOut = (): void => {
+    if (strandTransition.phase !== "fadingOut") {
+      setShownSpace(null);
+      return;
+    }
+    const destDoor = doorRefForFlatIndex(
+      strandTransition.destinationIndex,
+      sliceIds,
+      layout,
+    );
+    if (destDoor === null || shownSpace === null) {
+      // The destination fell out of the rendered corridor mid-fade (the
+      // door list changed under us): abort the crossing and bring the
+      // current room back. It must REMOUNT, not just flip back to
+      // fade="in" — SpaceScene fires onFadedOut once per mount
+      // (fadeDoneRef), so a reused instance would never handshake a later
+      // exit again.
+      setShownSpace(null);
+      setActiveSpace(shownSpace);
+      setStrandTransition(reduceStrandTransition(strandTransition, { type: "abort" }));
+      return;
+    }
+    // Arrive just inside the destination room, on its door axis — the
+    // room condenses around the player and the corridor never appears.
+    playerRef.current = {
+      x: destDoor.x,
+      z: destDoor.z + Math.sign(destDoor.z) * STRAND_DOOR_ARRIVAL_INSET,
+    };
+    setShownSpace(null);
+    setActiveSpace(resolveSpaceForDoor(destDoor, archetypeById));
+    setStrandTransition(reduceStrandTransition(strandTransition, { type: "fadedOut" }));
+  };
 
   // Probe/e2e debug handle on window (GAME_DEBUG is updated every frame).
   useEffect(() => {
@@ -1044,7 +1379,9 @@ export default function GameCanvas({
             playerRef={playerRef}
             corridorGone={corridorGone}
             fade={activeSpace !== null ? "in" : "out"}
-            onFadedOut={() => setShownSpace(null)}
+            onFadedOut={handleFadedOut}
+            roomDoors={roomDoors?.get(shownSpace.recipe.sliceId)}
+            onRoomDoor={handleRoomDoor}
           />
         )}
         <GameLoop
@@ -1062,6 +1399,8 @@ export default function GameCanvas({
           setCorridorHidden={setCorridorHidden}
           hudIdRef={hudIdRef}
           setHudDoor={setHudDoor}
+          transitionActive={strandTransition.phase !== "idle"}
+          roomDoors={activeRoomDoors}
         />
         {/*
           Post chain — deliberately conservative. N8AO (half-res) adds

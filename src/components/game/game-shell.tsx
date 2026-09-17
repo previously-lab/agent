@@ -4,8 +4,13 @@ import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
 import { Link, useRouter } from "@/i18n/navigation";
-import { getTimelineCatalog } from "@/lib/episodic/actions";
+import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
+import { buildStrandGraph } from "@/lib/game/strand-graph";
+import {
+  buildRoomDoorMap,
+  type RoomDoorMap,
+} from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
 
 /**
@@ -29,6 +34,15 @@ const FALLBACK_DOORS: readonly CorridorDoor[] = [
 
 /** The fetch-failure warning logs once per session — the fallback is already up. */
 let warnedCatalogFailure = false;
+/** Same once-per-session treatment for the strand read; empty doors are the fallback. */
+let warnedStrandFailure = false;
+
+/**
+ * No-strand-data default: every room renders exactly as before strand doors
+ * (v0.11-hotel-rooms 附录 B) existed. Referentially stable so the canvas
+ * never re-renders on a fresh empty map.
+ */
+const NO_ROOM_DOORS: RoomDoorMap = new Map();
 
 const GameCanvas = dynamic(() => import("./game-canvas"), {
   ssr: false,
@@ -74,6 +88,10 @@ export function GameShell() {
   // null = the catalog is still in flight; the corridor mounts only once the
   // doors resolve (to the timeline, or to the fallback on empty/error).
   const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(null);
+  // The strand-door map (slice id → the room's strand doors, B.11). Empty
+  // until the strand read resolves, and stays empty if it fails — the game
+  // must work exactly as it does today without strands.
+  const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(NO_ROOM_DOORS);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,16 +108,50 @@ export function GameShell() {
         // capped to the newest MAX_DOORS. `start` goes along: the corridor's
         // door spacing is a function of the time gaps between slices, and it
         // computes those from the timestamps without parsing ids.
-        setDoors(
-          catalog
-            .slice(-MAX_DOORS)
-            .reverse()
-            .map((entry) => ({
-              sliceId: entry.id,
-              label: formatDoorLabel(entry.date, entry.start, locale),
-              start: entry.start,
-            })),
-        );
+        const corridorDoors = catalog
+          .slice(-MAX_DOORS)
+          .reverse()
+          .map((entry) => ({
+            sliceId: entry.id,
+            label: formatDoorLabel(entry.date, entry.start, locale),
+            start: entry.start,
+          }));
+        setDoors(corridorDoors);
+
+        // Strand doors (附录 B.11, resolution layer): one door per strand
+        // through each slice, leading to the next slice on that strand. Its
+        // own try/catch — a strand-read failure must degrade to "no strand
+        // doors", never take the corridor down with it.
+        try {
+          const graph = buildStrandGraph(await getStrandPaths());
+          if (cancelled) return;
+          const entryById = new Map(catalog.map((entry) => [entry.id, entry]));
+          setRoomDoors(
+            buildRoomDoorMap({
+              graph,
+              sliceIds: corridorDoors.map((door) => door.sliceId),
+              // Plaque: the strand name + the destination's date, in the
+              // corridor doors' own label format ("工作 → Sep 15 · 07:46").
+              // Unlit doors are labeled by the resolver with the bare name.
+              label: ({ strand, destinationSliceId }) => {
+                const entry = entryById.get(destinationSliceId);
+                const date = entry
+                  ? formatDoorLabel(entry.date, entry.start, locale)
+                  : destinationSliceId;
+                return `${strand} → ${date}`;
+              },
+            }),
+          );
+        } catch (err) {
+          if (cancelled) return;
+          if (!warnedStrandFailure) {
+            warnedStrandFailure = true;
+            console.warn(
+              "[game] getStrandPaths failed; rooms render without strand doors",
+              err,
+            );
+          }
+        }
       } catch (err) {
         if (cancelled) return;
         if (!warnedCatalogFailure) {
@@ -140,7 +192,11 @@ export function GameShell() {
           {t("exit")}
         </Link>
       </div>
-      {doors ? <GameCanvas doors={doors} /> : <GameLoading />}
+      {doors ? (
+        <GameCanvas doors={doors} roomDoors={roomDoors} />
+      ) : (
+        <GameLoading />
+      )}
     </div>
   );
 }

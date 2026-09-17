@@ -239,5 +239,11 @@ export const DOOR_GRAB_DIST = 2.5;
 /** HUD prompt radius around a door. */
 export const HUD_DIST = 1.8;
 
+/** Strand-door wormhole (doc 附录 B.11): how far past the destination
+ *  door's wall plane the player materializes, on the door axis — inside
+ *  the room and clear of the doorway hysteresis band, so the room
+ *  condenses around them and the corridor never appears. */
+export const STRAND_DOOR_ARRIVAL_INSET = 1;
+
 /** Player spawn: lobby floor, clear of the desk and armchairs. */
 export const SPAWN = { x: 6, z: 0 };

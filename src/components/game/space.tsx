@@ -10,12 +10,15 @@
  * width/2], where `width` is seeded per recipe (0.66 / 1 / 1.5 × extent).
  *
  * Every space is an ENCLOSED ROOM — 4m perimeter walls (same height as the
- * corridor) run along all four edges, and a 2.4m doorway gap centered on
- * the entrance (local x = 0, z = 0) is the only opening. Walls are fully
- * opaque; the interior stays visible from the fixed top-down camera via a
- * dollhouse cutaway — the walls whose outward face looks toward the camera
- * are drawn at WALL_SILL_HEIGHT (see wallFacesCamera below). A clear strip
- * at the doorway (terrain flattened, no props near the door axis) means the
+ * corridor) run along all four edges, with a 2.4m doorway gap centered on
+ * the entrance (local x = 0, z = 0) plus one doorway per STRAND passing
+ * through the slice (v0.11 §B.8: `roomDoors` prop, placed on solid walls
+ * by lib/game/room-doors.ts — composed like the doors of a home, clustered
+ * and uneven, never on the entrance wall). Walls are fully opaque; the
+ * interior stays visible from the fixed top-down camera via a dollhouse
+ * cutaway — the walls whose outward face looks toward the camera are drawn
+ * at WALL_SILL_HEIGHT (see wallFacesCamera below). A clear strip at the
+ * doorway (terrain flattened, no props near the door axis) means the
  * player can always walk in.
  *
  * v2 taxonomy — the recipe's worldClass picks the content family:
@@ -77,6 +80,7 @@ import {
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
+import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG } from "./debug";
 import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
@@ -104,6 +108,14 @@ import {
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
+import {
+  crossedRoomDoor,
+  inDoorApproach,
+  placeRoomDoors,
+  plaqueLabelFor,
+  splitWallsForDoors,
+  type RoomDoorPlacement,
+} from "@/lib/game/room-doors";
 import {
   createSurfaceMaterial,
   createWaterSurfaceMaterial,
@@ -148,6 +160,7 @@ import {
   HERO_SCALE,
   LONE_PROB,
   PARQUET_CELL,
+  PARQUET_TONE_LIFT,
   PET_COUNT,
   PET_NEAR_RADIUS_MAX,
   PORTAL_HEIGHT,
@@ -157,6 +170,8 @@ import {
   PROP_SCALE_EXP,
   ROCK_DIVISOR,
   ROCK_MIN,
+  ROOM_DOOR_CLEAR_DEPTH,
+  ROOM_DOOR_CLEAR_HALF,
   ROOM_WALL_THICKNESS,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
@@ -371,7 +386,8 @@ function drawCandidate(
 }
 
 /** Shared placement rules: inside the walkable footprint, out of the
- *  doorway strip, off the cleared path, and clear of the hero's clearing. */
+ *  doorway strip, off every strand door's approach strip (B.11), off the
+ *  cleared path, and clear of the hero's clearing. */
 function candidateOk(
   plan: RoomPlan,
   comp: Composition,
@@ -379,9 +395,11 @@ function candidateOk(
   z: number,
   edge: number,
   heroClear: number,
+  doors: readonly RoomDoorPlacement[],
 ): boolean {
   if (!planContains(plan, x, z, edge)) return false;
   if (Math.abs(x) < ENTRANCE_CLEAR_RADIUS && z < ENTRANCE_DEPTH) return false;
+  if (doors.length > 0 && inDoorApproach(x, z, doors)) return false;
   if (distToPath(comp, x, z) < comp.pathHalf) return false;
   if (heroClear > 0 && Math.hypot(x - comp.hero.x, z - comp.hero.z) < heroClear) {
     return false;
@@ -396,7 +414,8 @@ function candidateOk(
  * drawn from createRng(recipe.layoutSeed ^ salt), clustered around the
  * composition's centers, snapped to the shared terrainHeight of the SCALED
  * recipe view. Candidates outside the footprint, on the cleared path, in
- * the entrance strip, or in the water are rejected and redrawn (bounded
+ * the entrance strip, in a strand door's approach strip (B.11), or in the
+ * water are rejected and redrawn (bounded
  * attempts guard the pathological case), so the placed count is exact.
  */
 function scatter(
@@ -411,6 +430,7 @@ function scatter(
   edge: number,
   propScale: number,
   salt: number,
+  doors: readonly RoomDoorPlacement[],
 ): Placement[] {
   if (density <= 0) return [];
   // Counts come from the unscaled tier: the room's population is authored
@@ -428,7 +448,7 @@ function scatter(
   while (out.length < count && attempts < maxAttempts) {
     attempts += 1;
     const { x: lx, z: lz } = drawCandidate(rng, plan, comp, edge);
-    if (!candidateOk(plan, comp, lx, lz, edge, heroClear)) continue;
+    if (!candidateOk(plan, comp, lx, lz, edge, heroClear, doors)) continue;
     if (water && insideRect(lx, lz, water, 0.5)) {
       continue;
     }
@@ -747,10 +767,13 @@ function Fireflies({
   );
 }
 
-/** Low-contrast checkerboard parquet for interior/wonder floors: a
+/** Near-tone-on-tone checkerboard parquet for interior/wonder floors: a
  *  code-generated 2×2 canvas texture (no asset files), repeated at
- *  PARQUET_CELL meters. Only flat-floor interior/wonder rooms get it —
- *  nature ground stays untouched. Sits a hair above the ground plane. */
+ *  PARQUET_CELL meters. The light cell lifts the base color by only
+ *  PARQUET_TONE_LIFT — visual review found a stronger contrast was the
+ *  loudest thing in frame; at this level the floor reads as material and
+ *  the furniture reads first. Only flat-floor interior/wonder rooms get
+ *  it — nature ground stays untouched. Sits a hair above the ground plane. */
 function FloorParquet({
   width,
   extent,
@@ -762,7 +785,7 @@ function FloorParquet({
 }) {
   const texture = useMemo(() => {
     const light = new THREE.Color(base)
-      .lerp(new THREE.Color("#ffffff"), 0.13)
+      .lerp(new THREE.Color("#ffffff"), PARQUET_TONE_LIFT)
       .getStyle();
     const canvas = document.createElement("canvas");
     canvas.width = 2;
@@ -1017,7 +1040,8 @@ interface PropPlacement {
  * point lands on water). The remaining PROP_COUNT[extent] props (counted
  * from the ORIGINAL tier, like the vegetation scatter) cluster around the
  * composition's centers. Obstacle rules: the doorway corridor
- * (|x| < 1.8, z < 3m), the walk path, the hero's clearing, the plan
+ * (|x| < 1.8, z < 3m), every strand door's approach strip (B.11), the
+ * walk path, the hero's clearing, the plan
  * footprint, and the wall boxes are always off-limits; so is the water
  * rectangle, except poolside fixtures, which are placed ON its rim facing
  * the water instead. Snapped to the shared terrainHeight of the SCALED
@@ -1033,6 +1057,7 @@ function scatterMotifs(
   comp: Composition,
   edge: number,
   propScale: number,
+  doors: readonly RoomDoorPlacement[],
 ): PropPlacement[] {
   if (kinds.length === 0) return [];
   const { extent, width } = dims(scaled);
@@ -1087,7 +1112,7 @@ function scatterMotifs(
     if (Math.abs(lx) < PROP_DOOR_HALF && lz < PROP_DOOR_DEPTH) {
       continue;
     }
-    if (!candidateOk(plan, comp, lx, lz, isPoolside(kind) ? 0 : edge, heroClear)) {
+    if (!candidateOk(plan, comp, lx, lz, isPoolside(kind) ? 0 : edge, heroClear, doors)) {
       continue;
     }
     if (!isPoolside(kind) && water && insideRect(lx, lz, water, 0.3)) {
@@ -2005,6 +2030,7 @@ function furnishInterior(
   water: WaterRect | null,
   plan: RoomPlan,
   propScale: number,
+  doors: readonly RoomDoorPlacement[],
 ): PropPlacement[] {
   const { extent, width } = dims(scaled);
   const out: PropPlacement[] = [];
@@ -2028,6 +2054,11 @@ function furnishInterior(
           ? Math.min(Math.max(cx, m), width / 2 - m)
           : Math.min(Math.max(cx, -width / 2 + m), -m);
     }
+    // Strand-door approaches (B.11): a solid fixture that lands in a door's
+    // strip is dropped, never nudged (determinism: the draw is consumed
+    // either way). Flat rugs are exempt — they are floor dressing you walk
+    // OVER, and the entrance corridor already tolerates them.
+    if (kind !== "rug" && inDoorApproach(cx, cz, doors)) return;
     out.push({
       kind,
       x: cx,
@@ -2096,16 +2127,59 @@ function furnishInterior(
  *  a column grid — seeded, never blocking the entrance corridor, and kept
  *  inside the plan's footprint (an l-shape's abandoned quadrant never
  *  grows structure: partitions stop short of the step, column points
- *  outside the kept leg are dropped). */
+ *  outside the kept leg are dropped). Strand-door approaches (B.11) stay
+ *  clear too: column points inside a door's strip are dropped, and a
+ *  partition that would cross ANY door's strip is forfeited (the wall
+ *  would split the approach off from the room — dropping it keeps the
+ *  door walkable-to; nudging it would perturb the seeded stream). */
 type Structure =
   | { kind: "none" }
   | { kind: "partition"; z: number; gapX: number }
   | { kind: "columns"; points: { x: number; z: number }[] };
 
+/** Axis-aligned bounds of one door's approach strip (ROOM_DOOR_CLEAR_*
+ *  shaping: half to each side along the wall, depth inward along the
+ *  probed normal). */
+function doorStripBounds(
+  d: RoomDoorPlacement,
+): { x0: number; x1: number; z0: number; z1: number } {
+  return {
+    x0: d.x + (d.nx !== 0 ? Math.min(0, d.nx * ROOM_DOOR_CLEAR_DEPTH) : -ROOM_DOOR_CLEAR_HALF),
+    x1: d.x + (d.nx !== 0 ? Math.max(0, d.nx * ROOM_DOOR_CLEAR_DEPTH) : ROOM_DOOR_CLEAR_HALF),
+    z0: d.z + (d.nz !== 0 ? Math.min(0, d.nz * ROOM_DOOR_CLEAR_DEPTH) : -ROOM_DOOR_CLEAR_HALF),
+    z1: d.z + (d.nz !== 0 ? Math.max(0, d.nz * ROOM_DOOR_CLEAR_DEPTH) : ROOM_DOOR_CLEAR_HALF),
+  };
+}
+
+/** Does a full-width partition at zp (gap at gapX) cross any door's
+ *  approach strip? The partition's solid runs are [−halfW, gapX −
+ *  DOOR_GAP_HALF] and [gapX + DOOR_GAP_HALF, halfW]. */
+function partitionBlocksDoor(
+  zp: number,
+  gapX: number,
+  halfW: number,
+  doors: readonly RoomDoorPlacement[],
+): boolean {
+  // Conservative z band for the partition's thickness.
+  const pz0 = zp - 0.5;
+  const pz1 = zp + 0.5;
+  for (const d of doors) {
+    const s = doorStripBounds(d);
+    if (s.z1 < pz0 || s.z0 > pz1) continue;
+    const ox0 = Math.max(s.x0, -halfW);
+    const ox1 = Math.min(s.x1, halfW);
+    if (ox1 < ox0) continue;
+    // The strip only survives the partition where the gap covers it.
+    if (ox0 < gapX - DOOR_GAP_HALF || ox1 > gapX + DOOR_GAP_HALF) return true;
+  }
+  return false;
+}
+
 function buildStructure(
   rng: () => number,
   scaled: SpaceRecipe,
   plan: RoomPlan,
+  doors: readonly RoomDoorPlacement[],
 ): Structure {
   const { extent, width } = dims(scaled);
   if (extent < STRUCTURE_MIN_EXTENT) return { kind: "none" };
@@ -2119,10 +2193,14 @@ function buildStructure(
       z = Math.min(z, plan.stepZ - 2);
     }
     if (z < extent * 0.25) return { kind: "none" };
+    const gapX = (rng() * 2 - 1) * (width / 2 - 2.4);
+    if (partitionBlocksDoor(z, gapX, width / 2, doors)) {
+      return { kind: "none" };
+    }
     return {
       kind: "partition",
       z,
-      gapX: (rng() * 2 - 1) * (width / 2 - 2.4),
+      gapX,
     };
   }
   const n = rng() < 0.5 ? 2 : 3;
@@ -2131,7 +2209,7 @@ function buildStructure(
     for (let j = 0; j < n; j++) {
       const x = -width / 4 + (i * width) / (2 * (n - 1) || 1);
       const z = extent * 0.3 + (j * extent * 0.5) / (n - 1 || 1);
-      if (planContains(plan, x, z, 1)) {
+      if (planContains(plan, x, z, 1) && !inDoorApproach(x, z, doors)) {
         points.push({ x, z });
       }
     }
@@ -2445,6 +2523,7 @@ function buildAnimals(
   water: WaterRect | null,
   plan: RoomPlan,
   creatureScale: number,
+  doors: readonly RoomDoorPlacement[],
 ): {
   ducks: DuckSeed[];
   pets: { kind: "cat" | "dog"; pets: Pet[] };
@@ -2461,9 +2540,20 @@ function buildAnimals(
   if (scaled.archetype === "ducks" && water) {
     const count = DUCK_COUNT[baseExtent] ?? 30;
     for (let i = 0; i < count; i++) {
+      // Strand-door approaches (B.11): a duck's bob/drift is clock-driven
+      // and may wander through a strip at runtime, but its seeded base
+      // never STARTS parked in front of a door. Bounded redraw; rooms
+      // without doors spend the exact same draws as before.
+      let dx = water.cx;
+      let dz = water.cz;
+      for (let tries = 0; tries < 12; tries++) {
+        dx = water.cx + (rng() * 2 - 1) * Math.max(0.3, water.halfX - 0.8);
+        dz = water.cz + (rng() * 2 - 1) * Math.max(0.3, water.halfZ - 0.8);
+        if (doors.length === 0 || !inDoorApproach(dx, dz, doors)) break;
+      }
       ducks.push({
-        x: water.cx + (rng() * 2 - 1) * Math.max(0.3, water.halfX - 0.8),
-        z: water.cz + (rng() * 2 - 1) * Math.max(0.3, water.halfZ - 0.8),
+        x: dx,
+        z: dz,
         phase: rng() * Math.PI * 2,
         scale: (0.8 + rng() * 0.45) * creatureScale,
         spin: (rng() - 0.5) * 0.4,
@@ -2483,19 +2573,29 @@ function buildAnimals(
       const waypoints: [number, number][] = [];
       const n = 4 + Math.floor(rng() * 2);
       for (let w = 0; w < n; w++) {
-        if (rng() < 0.7) {
-          const a = rng() * Math.PI * 2;
-          const r = Math.sqrt(rng()) * nearR;
-          waypoints.push([
-            Math.cos(a) * r,
-            Math.min(Math.max(extent * 0.12 + Math.sin(a) * r, 1.8), extent - 1.8),
-          ]);
-        } else {
-          waypoints.push([
-            (rng() * 2 - 1) * Math.max(8, (width / 2 - 1.8) * 0.75),
-            2 + rng() * (extent - 4),
-          ]);
+        // Strand-door approaches (B.11): waypoints are where a pet walks
+        // AND LINGERS — none may sit in a door's strip. Bounded redraw;
+        // rooms without doors spend the exact same draws as before.
+        let cand: [number, number] = [0, extent * 0.4];
+        for (let tries = 0; tries < 12; tries++) {
+          if (rng() < 0.7) {
+            const a = rng() * Math.PI * 2;
+            const r = Math.sqrt(rng()) * nearR;
+            cand = [
+              Math.cos(a) * r,
+              Math.min(Math.max(extent * 0.12 + Math.sin(a) * r, 1.8), extent - 1.8),
+            ];
+          } else {
+            cand = [
+              (rng() * 2 - 1) * Math.max(8, (width / 2 - 1.8) * 0.75),
+              2 + rng() * (extent - 4),
+            ];
+          }
+          if (doors.length === 0 || !inDoorApproach(cand[0], cand[1], doors)) {
+            break;
+          }
         }
+        waypoints.push(cand);
       }
       pets.push({
         waypoints,
@@ -2523,23 +2623,30 @@ function buildAnimals(
           color: BALLOON_COLORS[Math.floor(rng() * BALLOON_COLORS.length)],
         });
       }
-      // Spread bunches across the whole room; the door corridor, the plan
+      // Spread bunches across the whole room; the door corridor, every
+      // strand door's approach strip (B.11), the plan
       // footprint, and the wall margin stay clear (the gift-box anchor sits
       // on the floor).
+      const okAnchor = (x: number, z: number) =>
+        !(Math.abs(x) < PROP_DOOR_HALF && z < PROP_DOOR_DEPTH) &&
+        planContains(plan, x, z, 1) &&
+        !inDoorApproach(x, z, doors);
       let bx = 0;
       let bz = extent * 0.4;
       for (let tries = 0; tries < 24; tries++) {
         bx = (rng() * 2 - 1) * (width / 2 - 2);
         bz = extent * (0.12 + rng() * 0.78);
-        if (Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH) continue;
-        if (!planContains(plan, bx, bz, 1)) continue;
-        break;
+        if (okAnchor(bx, bz)) break;
       }
-      if (
-        (Math.abs(bx) < PROP_DOOR_HALF && bz < PROP_DOOR_DEPTH) ||
-        !planContains(plan, bx, bz, 1)
-      ) {
+      if (!okAnchor(bx, bz)) {
         bz = PROP_DOOR_DEPTH + 1 + rng() * 2;
+        // The nudge can itself land in a strand door's strip — bounded
+        // redraw before giving up (a pathological micro-room keeps the
+        // last draw, as before).
+        for (let tries = 0; tries < 8 && !okAnchor(bx, bz); tries++) {
+          bx = (rng() * 2 - 1) * (width / 2 - 2);
+          bz = extent * (0.12 + rng() * 0.78);
+        }
       }
       balloons.push({
         x: bx,
@@ -2745,6 +2852,274 @@ function SpaceDoorway({
   );
 }
 
+/* ------------------------------------------------------------------ */
+/* Strand doors (v0.11-hotel-rooms §B.8/B.11)                           */
+/* ------------------------------------------------------------------ */
+
+/** A strand door's label plaque: the corridor's createPlaqueTexture
+ *  approach (one dark canvas-textured plate, light monospace ink), wider
+ *  with a shrink-to-fit font since strand labels are words, not times.
+ *  The text itself is decided by plaqueLabelFor (lib/game/room-doors.ts,
+ *  pure); this is only the rasterization. */
+function createStrandPlaqueTexture(text: string): THREE.CanvasTexture | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 168;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = PLATE_BG;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "rgba(236,226,204,0.45)";
+  ctx.lineWidth = 7;
+  ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+  ctx.fillStyle = PLATE_INK;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let size = 84;
+  for (; size > 24; size -= 6) {
+    ctx.font = `700 ${size}px ui-monospace, Menlo, Consolas, monospace`;
+    if (ctx.measureText(text).width <= canvas.width - 64) break;
+  }
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * One strand door: a wormhole to the next slice on its strand (B.11). The
+ * geometry speaks the corridor's door language at human scale (A4) —
+ * filler panels dressing the 2.4m wall gap down to the 1.4m slab, lintel,
+ * a transom closing the gap above the portal on full-height walls, a trim
+ * frame proud of the inner face, a threshold strip at the floor, and a
+ * plaque carrying the strand's label beside the frame. The whole assembly
+ * stands from the floor, so a door placed on a cutaway sill wall still
+ * reads as a doorframe, not a notch.
+ *
+ * LIT doors (the strand continues): a hinged slab that swings open away
+ * from the approaching player (same rule as the corridor face), the next
+ * room's light behind the gap, light-leak seams, and a faint halo.
+ * UNLIT doors (the strand's unwritten continuation — B.4): the same door,
+ * present but dark — closed static slab, no glow, no seams, no halo.
+ * Every part is opaque geometry; only the halo is additive light (hard
+ * requirement #5).
+ */
+function RoomDoorAssembly({
+  placement,
+  label,
+  lit,
+  accent,
+  wallColor,
+  thick,
+  drawnHeight,
+  playerRef,
+  door,
+}: {
+  placement: RoomDoorPlacement;
+  label: string;
+  lit: boolean;
+  accent: string;
+  wallColor: THREE.Color;
+  /** The host wall's thickness (minor axis). */
+  thick: number;
+  /** The host wall's DRAWN height (sill height on cutaway walls). */
+  drawnHeight: number;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
+  door: DoorRef;
+}): JSX.Element {
+  const fillerWidth = DOOR_GAP_HALF - DOOR_WIDTH / 2;
+  const fillerCenter = DOOR_WIDTH / 2 + fillerWidth / 2;
+  // The group is rotated so local +z is the inward (room-side) normal;
+  // the slab's hinge sits on the −x jamb and swings AWAY from the player.
+  const dir = door.z > 0 ? 1 : -1;
+  const hingeRef = useRef<THREE.Group>(null);
+  const angleRef = useRef(0);
+  const snappedRef = useRef(false);
+  useFrame((_, delta) => {
+    if (!lit) return; // an unlit door never opens — the seam stays dark
+    const hinge = hingeRef.current;
+    if (!hinge) return;
+    const p = playerRef.current;
+    const lx = (p.x - door.x) * dir - placement.x;
+    const lz = (p.z - door.z) * dir - placement.z;
+    const perp = lx * placement.nx + lz * placement.nz;
+    const near = Math.hypot(lx, lz) < DOOR_OPEN_DIST;
+    const away = perp > 0 ? 1 : -1;
+    const target = near ? away * DOOR_OPEN_ANGLE : 0;
+    const dt = Math.min(delta, 0.05);
+    if (!snappedRef.current) {
+      angleRef.current = target;
+      snappedRef.current = true;
+    } else {
+      angleRef.current += (target - angleRef.current) * (1 - Math.exp(-DOOR_SWING_RATE * dt));
+    }
+    hinge.rotation.y = angleRef.current;
+  });
+
+  const plaque = useMemo(() => createStrandPlaqueTexture(plaqueLabelFor(label)), [label]);
+  useEffect(() => () => plaque?.dispose(), [plaque]);
+
+  return (
+    <group
+      position={[placement.x, 0, placement.z]}
+      rotation={[0, Math.atan2(placement.nx, placement.nz), 0]}
+    >
+      {/* Filler panels closing the 2.4m gap down to the 1.4m door. */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          position={[side * fillerCenter, PORTAL_HEIGHT / 2, 0]}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[fillerWidth, PORTAL_HEIGHT, thick]} />
+          <meshStandardMaterial color={wallColor} roughness={1} flatShading />
+        </mesh>
+      ))}
+      {/* Lintel above the slab, up to portal height. */}
+      <mesh
+        position={[0, (PORTAL_HEIGHT + DOOR_HEIGHT) / 2, 0]}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry
+          args={[DOOR_WIDTH, PORTAL_HEIGHT - DOOR_HEIGHT, thick]}
+        />
+        <meshStandardMaterial color={wallColor} roughness={1} flatShading />
+      </mesh>
+      {/* Transom: closes the gap above the portal up to the wall top
+          (full-height walls only — a sill wall leaves the portal standing
+          free, which reads as the dollhouse it is). */}
+      {drawnHeight > PORTAL_HEIGHT + 0.05 && (
+        <mesh
+          position={[0, (drawnHeight + PORTAL_HEIGHT) / 2, 0]}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry
+            args={[DOOR_GAP_HALF * 2, drawnHeight - PORTAL_HEIGHT, thick]}
+          />
+          <meshStandardMaterial color={wallColor} roughness={1} flatShading />
+        </mesh>
+      )}
+      {/* Trim frame, proud of the wall's inner face. */}
+      {[-1, 1].map((side) => (
+        <mesh
+          key={side}
+          position={[side * (DOOR_WIDTH / 2 + 0.05), DOOR_HEIGHT / 2 + 0.05, thick / 2 + 0.06]}
+          castShadow
+        >
+          <boxGeometry args={[0.1, DOOR_HEIGHT + 0.1, 0.24]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      ))}
+      <mesh
+        position={[0, DOOR_HEIGHT + 0.11, thick / 2 + 0.06]}
+        castShadow
+      >
+        <boxGeometry args={[DOOR_WIDTH + 0.2, 0.12, 0.24]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      {/* Threshold: a real sill strip across the doorway at floor level. */}
+      <mesh position={[0, 0.022, 0]} receiveShadow>
+        <boxGeometry args={[DOOR_WIDTH + 0.2, 0.045, thick + 0.4]} />
+        <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+      </mesh>
+      {/* The slab: hinged and backlit when lit; a plain closed door when
+          the strand's continuation is unwritten — present, never missing,
+          never glowing. */}
+      <group ref={hingeRef} position={[-(DOOR_WIDTH / 2 - 0.02), 0, 0]}>
+        <mesh position={[DOOR_WIDTH / 2 - 0.02, DOOR_HEIGHT / 2, 0]} castShadow receiveShadow>
+          <boxGeometry args={[DOOR_WIDTH - 0.04, DOOR_HEIGHT - 0.04, 0.05]} />
+          {lit ? (
+            <meshStandardMaterial
+              color="#7b6d5c"
+              emissive={accent}
+              emissiveIntensity={0.32}
+              roughness={1}
+              flatShading
+            />
+          ) : (
+            <meshStandardMaterial color="#564d43" roughness={1} flatShading />
+          )}
+        </mesh>
+        <mesh position={[DOOR_WIDTH - 0.22, DOOR_HEIGHT / 2, 0.05]} castShadow>
+          <boxGeometry args={[0.05, 0.16, 0.05]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      </group>
+      {lit && (
+        <>
+          {/* The next room's light behind the gap, revealed on the swing. */}
+          <mesh position={[0, DOOR_HEIGHT / 2, -0.02]}>
+            <planeGeometry args={[DOOR_WIDTH, DOOR_HEIGHT]} />
+            <meshStandardMaterial
+              color="#000000"
+              emissive={accent}
+              emissiveIntensity={DOOR_GLOW_INTENSITY}
+              roughness={1}
+              metalness={0}
+            />
+          </mesh>
+          {/* Light leak around the closed slab, so the door reads as a way
+              through from deep inside the space. */}
+          {[-1, 1].map((side) => (
+            <mesh
+              key={`seam${side}`}
+              position={[side * (DOOR_WIDTH / 2 - 0.02), DOOR_HEIGHT / 2, thick / 2 + 0.05]}
+            >
+              <boxGeometry args={[0.05, DOOR_HEIGHT, 0.04]} />
+              <meshStandardMaterial
+                color="#000000"
+                emissive={accent}
+                emissiveIntensity={DOOR_SEAM_INTENSITY}
+                roughness={1}
+                metalness={0}
+              />
+            </mesh>
+          ))}
+          <mesh position={[0, DOOR_HEIGHT - 0.02, thick / 2 + 0.05]}>
+            <boxGeometry args={[DOOR_WIDTH, 0.05, 0.04]} />
+            <meshStandardMaterial
+              color="#000000"
+              emissive={accent}
+              emissiveIntensity={DOOR_SEAM_INTENSITY}
+              roughness={1}
+              metalness={0}
+            />
+          </mesh>
+          {/* Faint additive halo facing into the room. */}
+          <mesh position={[0, DOOR_HEIGHT / 2, thick / 2 + 0.2]}>
+            <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
+            <meshBasicMaterial
+              color={accent}
+              transparent
+              opacity={DOOR_HALO_OPACITY}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
+              side={THREE.DoubleSide}
+            />
+          </mesh>
+        </>
+      )}
+      {/* The plaque: the strand's name beside the frame at handle height,
+          on the room face — lit or unlit, the door keeps its name (B.3.3). */}
+      {plaque && (
+        <group position={[DOOR_WIDTH / 2 + 0.55, 2.2, thick / 2 + 0.03]}>
+          <mesh castShadow>
+            <boxGeometry args={[1.0, 0.36, 0.03]} />
+            <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0, 0.017]}>
+            <planeGeometry args={[0.92, 0.3]} />
+            <meshBasicMaterial map={plaque} transparent />
+          </mesh>
+        </group>
+      )}
+    </group>
+  );
+}
+
 /**
  * Authored material state, recorded ONCE per material instance, keyed on the
  * material itself. The crossfade below mutates opacity/transparent in place,
@@ -2789,6 +3164,18 @@ function authoredMaterialState(mat: THREE.Material): {
  * restored to their authored transparency so steady-state rendering is
  * untouched.
  */
+/** One strand door the room should grow (v0.11 §B.8): arrives RESOLVED
+ *  and ORDERED from the data lane — `label` is pre-formatted plaque text,
+ *  `lit` marks whether the strand has a next slice within the corridor
+ *  window (unlit = the unwritten continuation: the door is present but
+ *  dark, never missing). Placement, geometry, signage, and crossing
+ *  detection are the room's own job (lib/game/room-doors.ts). */
+export interface SpaceRoomDoor {
+  key: string;
+  label: string;
+  lit: boolean;
+}
+
 export function SpaceScene({
   recipe,
   door,
@@ -2796,6 +3183,8 @@ export function SpaceScene({
   corridorGone,
   fade,
   onFadedOut,
+  roomDoors,
+  onRoomDoor,
 }: {
   recipe: SpaceRecipe;
   door: DoorRef;
@@ -2803,6 +3192,12 @@ export function SpaceScene({
   corridorGone: boolean;
   fade: "in" | "out";
   onFadedOut: () => void;
+  /** Strand doors for this slice — absent/empty = today's single-entrance
+   *  room. */
+  roomDoors?: readonly SpaceRoomDoor[];
+  /** Fires once per strand door when the player walks through it (latched
+   *  per door per mount; never fires for the entrance). */
+  onRoomDoor?: (key: string) => void;
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
   const dir = door.z > 0 ? 1 : -1;
@@ -2937,6 +3332,45 @@ export function SpaceScene({
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
 
+  // Perimeter walls from the room plan: rect rooms get the legacy
+  // five-segment enclosure; l-shape rooms narrow past a seeded step (two
+  // near sides, a step wall, and the kept leg's own three sides); colonnade
+  // rooms open both sides into column bays. Every plan keeps the entrance
+  // edge as two segments around the 2.4m doorway gap at human thickness —
+  // the door handoff is structurally untouchable. Heights ride the wall
+  // scale (S^0.5, clamped) so colossal rooms stay readable from the fixed
+  // camera. Segments overlap the corners so no seam shows between them.
+  // Hoisted above every furnishing memo: strand doors are placed on THESE
+  // walls, and every placement layer keeps their approaches clear (B.11).
+  const walls = useMemo(
+    () => wallSegmentsFor(plan, wallThick),
+    [plan, wallThick],
+  );
+
+  // STRAND DOORS (B.8/B.11): compose one doorway per strand through the
+  // slice onto the solid walls — seeded per slice (A6), clustered like the
+  // doors of a home, never on the entrance wall, the colonnade's open
+  // sides, or facing the l-shape's abandoned quadrant (room-doors.ts
+  // probes planContains for every normal). Hostable walls are the solid
+  // FULL-HEIGHT ones; the layout's spacing ladder may relax onto the
+  // cutaway sills when a small room has many doors (never dropping one).
+  const roomDoorCount = roomDoors?.length ?? 0;
+  const doorLayout = useMemo(() => {
+    if (roomDoorCount === 0) return { doors: [], relaxed: false };
+    const hostable = walls.map(
+      (wall) => !wall.entrance && !wallFacesCamera(plan, wall, dir),
+    );
+    return placeRoomDoors(recipe.sliceId, plan, walls, hostable, roomDoorCount);
+  }, [recipe, plan, walls, dir, roomDoorCount]);
+
+  // The perimeter cut around every doorway: each host wall becomes the
+  // runs between its door gaps (the entrance-pair split generalized),
+  // every run inheriting its source segment's drawn height and material.
+  const wallRuns = useMemo(
+    () => splitWallsForDoors(walls, doorLayout.doors),
+    [walls, doorLayout],
+  );
+
   const trees = useMemo(
     () =>
       scatter(
@@ -2951,8 +3385,9 @@ export function SpaceScene({
         scatterEdge,
         propScale,
         0,
+        doorLayout.doors,
       ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale],
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, doorLayout],
   );
   const rocks = useMemo(
     () =>
@@ -2968,8 +3403,9 @@ export function SpaceScene({
         scatterEdge,
         propScale,
         0x9e3779b9, // stream salt: rocks never share the trees' sequence
+        doorLayout.doors,
       ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale],
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, doorLayout],
   );
 
   // Motif layer: one dedicated "props" seed stream. Ripples draw first,
@@ -2996,9 +3432,10 @@ export function SpaceScene({
         comp,
         scatterEdge,
         propScale,
+        doorLayout.doors,
       ),
     };
-  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale, doorLayout]);
 
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
@@ -3033,10 +3470,11 @@ export function SpaceScene({
         propScale,
         wallThick,
         water: waterRect,
+        doors: doorLayout.doors,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       };
       if (recipe.archetype === "pool-hall") {
-        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale);
+        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, doorLayout.doors);
         const obstacles = legacy.map((p) => ({
           x: p.x,
           z: p.z,
@@ -3055,8 +3493,8 @@ export function SpaceScene({
       }
       return stageInteriorKits({ ...staging, baseArea }).map(toPlacement);
     }
-    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale);
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick]);
+    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, doorLayout.doors);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, doorLayout]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid.
@@ -3064,16 +3502,16 @@ export function SpaceScene({
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "structure"),
     );
-    return buildStructure(rng, scaledRecipe, plan);
-  }, [recipe, scaledRecipe, plan]);
+    return buildStructure(rng, scaledRecipe, plan, doorLayout.doors);
+  }, [recipe, scaledRecipe, plan, doorLayout]);
 
   // Wonder-room animals: ducks / cats+dogs / balloons from one stream.
   const animals = useMemo(() => {
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "animals"),
     );
-    return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale);
-  }, [recipe, scaledRecipe, waterRect, plan, creatureScale]);
+    return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout.doors);
+  }, [recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout]);
 
   // Water tint: the raw accent reads as floor paint on some palettes
   // (dusk/warm are orange). Bias hard toward a bright blue-green so water
@@ -3148,32 +3586,50 @@ export function SpaceScene({
     [wallColor],
   );
 
-  // Perimeter walls from the room plan: rect rooms get the legacy
-  // five-segment enclosure; l-shape rooms narrow past a seeded step (two
-  // near sides, a step wall, and the kept leg's own three sides); colonnade
-  // rooms open both sides into column bays. Every plan keeps the entrance
-  // edge as two segments around the 2.4m doorway gap at human thickness —
-  // the door handoff is structurally untouchable. Heights ride the wall
-  // scale (S^0.5, clamped) so colossal rooms stay readable from the fixed
-  // camera. Segments overlap the corners so no seam shows between them.
-  const walls = useMemo(
-    () => wallSegmentsFor(plan, wallThick),
-    [plan, wallThick],
-  );
+  // Strand-door crossing detection: the entrance's hysteresis-band pattern
+  // (clamps.ts WALL_IN/WALL_OUT) applied per door — the player must be
+  // between the jambs AND past the wall's inner face. Latched per door per
+  // mount so a lingering player never re-fires, and structurally unable to
+  // fire for the entrance (no placement exists on its wall). Waits for
+  // corridorGone: before that the player is still at the corridor door.
+  const crossedDoorsRef = useRef<Set<number>>(new Set());
+  useFrame(() => {
+    if (!onRoomDoor || doorLayout.doors.length === 0 || !corridorGone) return;
+    const p = playerRef.current;
+    const lx = (p.x - door.x) * dir;
+    const lz = (p.z - door.z) * dir;
+    const hit = crossedRoomDoor(lx, lz, doorLayout.doors);
+    if (hit !== null && !crossedDoorsRef.current.has(hit)) {
+      crossedDoorsRef.current.add(hit);
+      onRoomDoor(roomDoors?.[hit]?.key ?? "");
+    }
+  });
 
   // Dollhouse cutaway: entrance segments always keep full height (the door
   // handoff depends on them); of the rest, the segments whose outward face
   // looks toward the fixed camera are drawn at sill height — opaque, but
-  // low enough that the interior reads over them.
+  // low enough that the interior reads over them. Runs inherit their
+  // source segment's orientation, so the test holds after the door splits.
   const wallHeights = useMemo(
     () =>
-      walls.map((wall) =>
+      wallRuns.map(({ wall }) =>
         wall.entrance || !wallFacesCamera(plan, wall, dir)
           ? wallHeight
           : Math.min(wallHeight, WALL_SILL_HEIGHT),
       ),
-    [walls, plan, dir, wallHeight],
+    [wallRuns, plan, dir, wallHeight],
   );
+
+  // Drawn height per ORIGINAL wall index (every run of a source shares its
+  // cutaway state) — the strand-door assemblies need it to close their
+  // transom up to the wall top on full-height walls.
+  const sourceWallHeights = useMemo(() => {
+    const map = new Map<number, number>();
+    wallRuns.forEach((run, i) => {
+      if (!map.has(run.source)) map.set(run.source, wallHeights[i]);
+    });
+    return map;
+  }, [wallRuns, wallHeights]);
 
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
@@ -3205,7 +3661,7 @@ export function SpaceScene({
   useEffect(() => () => groundMaterial?.dispose(), [groundMaterial]);
   const wallMaterials = useMemo(
     () =>
-      walls.map((wall, i) =>
+      wallRuns.map(({ wall }, i) =>
         createSurfaceMaterial({
           kind: surfaceKind,
           color: wallColor,
@@ -3217,7 +3673,7 @@ export function SpaceScene({
           normalScale: wallNormalScale,
         }),
       ),
-    [walls, wallHeights, wallColor, surfaceKind, wallNormalScale],
+    [wallRuns, wallHeights, wallColor, surfaceKind, wallNormalScale],
   );
   useEffect(
     () => () => {
@@ -3519,10 +3975,12 @@ export function SpaceScene({
       {/* Perimeter walls from the room plan — the silhouette is no longer
           always a rectangle: l-shape rooms step down to one leg, colonnade
           rooms open their sides into column bays. The entrance pair is
-          always human-thickness around the 2.4m doorway gap. Fully opaque;
-          the camera-facing segments are cut to sill height (wallHeights)
-          so the interior reads over them — the dollhouse cutaway. */}
-      {walls.map((wall, i) => {
+          always human-thickness around the 2.4m doorway gap, and strand
+          doors split their host walls the same way (wallRuns). Fully
+          opaque; the camera-facing segments are cut to sill height
+          (wallHeights) so the interior reads over them — the dollhouse
+          cutaway. */}
+      {wallRuns.map(({ wall }, i) => {
         const h = wallHeights[i];
         return (
           <group key={i}>
@@ -3557,7 +4015,7 @@ export function SpaceScene({
           doorway (the entrance segments already split around the gap) and
           follows the cutaway (short camera-side walls keep only the band
           parts that fit under their drawn top). */}
-      {walls.map((wall, i) => (
+      {wallRuns.map(({ wall }, i) => (
         <DadoBand
           key={`dado${i}`}
           wall={wall}
@@ -3569,10 +4027,44 @@ export function SpaceScene({
         />
       ))}
 
+      {/* Strand doors (B.8): one per strand through the slice, composed
+          like the doors of a home — clustered, framed, with thresholds
+          and name plaques. Unlit doors are the strand's unwritten
+          continuation: present, closed, dark — never missing, never
+          glowing. */}
+      {roomDoors &&
+        doorLayout.doors.map((placement) => {
+          const spec = roomDoors[placement.index];
+          if (!spec) return null;
+          return (
+            <RoomDoorAssembly
+              key={spec.key}
+              placement={placement}
+              label={spec.label}
+              lit={spec.lit}
+              accent={doorGlowColor(recipe.palette)}
+              wallColor={wallColor}
+              thick={Math.min(
+                walls[placement.wall].sizeX,
+                walls[placement.wall].sizeZ,
+              )}
+              drawnHeight={sourceWallHeights.get(placement.wall) ?? wallHeight}
+              playerRef={playerRef}
+              door={door}
+            />
+          );
+        })}
+
       {/* Colonnade bays: open column rows where the side walls would be —
           the room spills onto the mist skirt between the columns. Column
-          height matches the walls (wall scale, not prop scale). */}
-      {plan.columns.map((c, i) => (
+          height matches the walls (wall scale, not prop scale). A pier
+          that lands in a strand door's approach strip (only possible when
+          the spacing ladder relaxed a door near the corner, below the
+          primary end pad) is dropped — the door stays walkable-to (B.11);
+          one missing pier in the bay rhythm beats a buried door. */}
+      {plan.columns
+        .filter((c) => !inDoorApproach(c.x, c.z, doorLayout.doors))
+        .map((c, i) => (
         <group
           key={`bay${i}`}
           position={[c.x, GROUND_Y, c.z]}
@@ -3586,7 +4078,7 @@ export function SpaceScene({
             />
           </Shadowed>
         </group>
-      ))}
+        ))}
 
       {/* The door from inside: same frame and glow as the corridor face;
           the hinged slab mounts once the corridor is gone — before that

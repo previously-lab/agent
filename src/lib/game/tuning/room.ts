@@ -103,8 +103,54 @@ export const BALLOON_BUNCHES: Record<number, number> = {
 };
 /** Parquet checkerboard cell size in meters. */
 export const PARQUET_CELL = 4;
+/** How far the parquet's light checker cell is lerped from the floor's base
+ *  color toward white. Visual review (2026-09) found the checkerboard was
+ *  the loudest thing in frame at 0.13 — it fought every prop in the room.
+ *  At near-tone-on-tone the floor reads as MATERIAL and the furniture reads
+ *  first. The pattern itself stays; only its contrast is budgeted. */
+export const PARQUET_TONE_LIFT = 0.045;
 /** Balloon colors come from the vivid palette set. */
 export const BALLOON_COLORS = VIVID_PALETTES.map((p) => p.accent);
+
+/* ------------------------------------------------------------------ */
+/* Strand doors (v0.11-hotel-rooms B.8/B.11): one extra door per        */
+/* strand through the slice, composed like the doors of a home —        */
+/* clustered, never evenly sprinkled, always human-scale (A4). All      */
+/* parts are opaque objects (hard requirement #5). Consumed by          */
+/* lib/game/room-doors.ts (pure layout) and space.tsx (geometry).       */
+/* ------------------------------------------------------------------ */
+
+/** Clear wall between two strand doors' frames on the same wall (m):
+ *  center spacing = DOOR_WIDTH + this = 3.0m — the spacing of bedroom
+ *  doors off a hall, close enough to read as a cluster, never touching. */
+export const ROOM_DOOR_MIN_GAP = 1.6;
+/** A door's center keeps this far from its wall segment's ends (m):
+ *  the 1.2m gap half plus jamb room, so a door never crowds a corner. */
+export const ROOM_DOOR_END_PAD = DOOR_GAP_HALF + 0.6;
+/** Composition: probability that the next door sticks to the same wall as
+ *  the previous one (capacity permitting) — doors collect into domestic
+ *  clusters instead of being dealt evenly around the perimeter. */
+export const ROOM_DOOR_CLUSTER_STICK = 0.55;
+/** Crossing detection: the player has "walked through" a strand door when
+ *  their inward distance from the wall plane drops below this (m), inside
+ *  the gap — past the wall's inner face, genuinely between the jambs.
+ *  MUST stay reachable under the door manager's gap clearance. */
+export const ROOM_DOOR_CROSS_DEPTH = 0.55;
+/** Plaque labels are pre-formatted by the data lane; this caps the glyph
+ *  count so a long strand name still fits the plate (deterministic
+ *  truncation with an ellipsis — pure, unit-tested in room-doors.ts). */
+export const ROOM_DOOR_PLAQUE_MAX_CHARS = 24;
+/** Strand-door approach clearance (B.11): the strip in front of every
+ *  strand door is kept exactly as clear as the entrance's own doorway
+ *  corridor — same shaping (the doorway gap plus a body's margin) — so no
+ *  kit piece, prop, animal or column can park in front of a door and make
+ *  it unreachable. Deliberately UNSCALED: the door never scales (A4) and
+ *  neither does the human walking up to it. Door centers sit
+ *  ≥ ROOM_DOOR_END_PAD from corners and ≥ DOOR_WIDTH + gap apart, so
+ *  strips this size can neither swallow the entrance's approach (which is
+ *  the same size) nor a neighbouring door's. */
+export const ROOM_DOOR_CLEAR_HALF = PROP_DOOR_HALF;
+export const ROOM_DOOR_CLEAR_DEPTH = PROP_DOOR_DEPTH;
 
 /* ------------------------------------------------------------------ */
 /* Procedural material wiring (lib/game/materials → room surfaces).    */

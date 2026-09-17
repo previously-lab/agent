@@ -12,10 +12,22 @@ import {
   CORRIDOR_Z_LIMIT,
   GAP_HALF,
   LOBBY_CLEAR,
+  ROOM_DOOR_PASS_DEPTH,
   WALL_Z,
   clampToCorridor,
   clampToSpace,
 } from "@/lib/game/clamps";
+import {
+  crossedRoomDoor,
+  hostableWallsFor,
+  placeRoomDoors,
+  type RoomDoorPlacement,
+} from "@/lib/game/room-doors";
+import { wallSegmentsFor, type RoomPlan } from "@/lib/game/room-plan";
+import {
+  ROOM_DOOR_CROSS_DEPTH,
+  ROOM_WALL_THICKNESS,
+} from "@/lib/game/tuning/room";
 
 const NORTH_DOOR: DoorRef = {
   index: 0,
@@ -236,5 +248,238 @@ describe("scale-aware margins", () => {
     const returning = { x: NORTH_DOOR.x + 0.3, z: WALL_Z - 0.5 };
     clampToSpace(returning, NORTH_DOOR, M * 0.05, M * 0.05);
     expect(returning.z).toBe(WALL_Z - 0.5);
+  });
+});
+
+describe("strand-door passages", () => {
+  // The clamp's strand-door relaxation (v0.11 B.8/B.11): inside a placed
+  // door's along-wall window the box bound widens to the wall plane +
+  // ROOM_DOOR_PASS_DEPTH so the crossing trigger (perp < ROOM_DOOR_CROSS_DEPTH)
+  // is reachable; everywhere else the box holds byte-identically. Fixtures
+  // run the SAME pure chain the renderer and the canvas integrator use —
+  // wallSegmentsFor → hostableWallsFor → placeRoomDoors — on the plans in
+  // use (rect / l-shape / colonnade) at normal, miniature, and colossal
+  // scale, so these tests would have caught the original gap (the plain
+  // box kept the player ≥ 0.55 m off the wall: the band was unreachable).
+
+  const BASE = 32; // M-tier footprint before scaling
+  const DOOR_COUNT = 3;
+
+  function rectPlan(width: number, extent: number): RoomPlan {
+    return { id: "rect", width, extent, lSide: 1, stepZ: 0, columns: [] };
+  }
+  function lPlan(width: number, extent: number): RoomPlan {
+    return { id: "l-shape", width, extent, lSide: 1, stepZ: extent * 0.5, columns: [] };
+  }
+  function colonnadePlan(width: number, extent: number): RoomPlan {
+    return { id: "colonnade", width, extent, lSide: 1, stepZ: 0, columns: [] };
+  }
+
+  const CASES = [
+    { name: "rect", make: rectPlan },
+    { name: "l-shape", make: lPlan },
+    { name: "colonnade", make: colonnadePlan },
+  ].flatMap((p) =>
+    [0.35, 1, 3].map((factor) => ({ ...p, factor })),
+  );
+
+  interface Fixture {
+    doors: readonly RoomDoorPlacement[];
+    width: number;
+    extent: number;
+  }
+
+  /** The shared derivation: plan → walls → hostable → placements, with the
+   *  renderer's wall-thickness formula, for a north door (dir 1). */
+  function fixtureFor(
+    name: string,
+    make: (w: number, e: number) => RoomPlan,
+    factor: number,
+    door: DoorRef = NORTH_DOOR,
+  ): Fixture {
+    const width = BASE * factor;
+    const extent = BASE * factor;
+    const plan = make(width, extent);
+    const thick = ROOM_WALL_THICKNESS * Math.max(factor, 0.35);
+    const walls = wallSegmentsFor(plan, thick);
+    const dir = door.z > 0 ? 1 : -1;
+    const hostable = hostableWallsFor(plan, walls, dir);
+    const { doors } = placeRoomDoors(
+      `clamp-passage-${name}-${factor}`,
+      plan,
+      walls,
+      hostable,
+      DOOR_COUNT,
+    );
+    expect(doors).toHaveLength(DOOR_COUNT);
+    return { doors, width, extent };
+  }
+
+  const dirOf = (door: DoorRef) => (door.z > 0 ? 1 : -1);
+  const toWorld = (door: DoorRef, lx: number, lz: number) => ({
+    x: door.x + dirOf(door) * lx,
+    z: door.z + dirOf(door) * lz,
+  });
+  const toLocal = (door: DoorRef, p: { x: number; z: number }) => ({
+    lx: (p.x - door.x) * dirOf(door),
+    lz: (p.z - door.z) * dirOf(door),
+  });
+  /** Local position at along-offset `a` and inward-perp `t` from a door. */
+  const atDoor = (d: RoomDoorPlacement, a: number, t: number) => ({
+    lx: d.x - d.nz * a + d.nx * t,
+    lz: d.z + d.nx * a + d.nz * t,
+  });
+  const perpOf = (d: RoomDoorPlacement, l: { lx: number; lz: number }) =>
+    (l.lx - d.x) * d.nx + (l.lz - d.z) * d.nz;
+  const alongOf = (d: RoomDoorPlacement, l: { lx: number; lz: number }) =>
+    -(l.lx - d.x) * d.nz + (l.lz - d.z) * d.nx;
+
+  it.each(CASES)(
+    "$name ×$factor: the crossing band is reachable at EVERY placed door (and was not without the relaxation)",
+    ({ name, make, factor }) => {
+      const { doors, width, extent } = fixtureFor(name, make, factor);
+      for (const d of doors) {
+        for (const perp of [ROOM_DOOR_CROSS_DEPTH - 0.25, -0.3]) {
+          const target = atDoor(d, 0, perp);
+          const p = toWorld(NORTH_DOOR, target.lx, target.lz);
+          clampToSpace(p, NORTH_DOOR, width, extent, doors);
+          const after = toLocal(NORTH_DOOR, p);
+          // The perp coordinate survives the clamp (only the along axis may
+          // move, and only for a door sitting past the box's corner bound),
+          // the final position is between the jambs, and the crossing
+          // trigger fires there.
+          expect(perpOf(d, after)).toBeCloseTo(perp, 9);
+          expect(Math.abs(alongOf(d, after))).toBeLessThan(GAP_HALF);
+          expect(crossedRoomDoor(after.lx, after.lz, doors)).not.toBeNull();
+          // The plain box (no doors handed) would have held the player
+          // strictly farther off the wall — the original gap. (Only where
+          // the box bound this wall at all: an l-shape's interior step wall
+          // is outside the rectangular box entirely, so it was never
+          // blocked — the relaxation is a no-op there by design.)
+          const plain = toWorld(NORTH_DOOR, target.lx, target.lz);
+          clampToSpace(plain, NORTH_DOOR, width, extent);
+          const plainLocal = toLocal(NORTH_DOOR, plain);
+          const moved =
+            Math.abs(plainLocal.lx - target.lx) > 1e-9 ||
+            Math.abs(plainLocal.lz - target.lz) > 1e-9;
+          if (moved) {
+            expect(perpOf(d, plainLocal)).toBeGreaterThan(perp + 0.2);
+          }
+        }
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "$name ×$factor: the passage is bounded by the wall plane + overtravel",
+    ({ name, make, factor }) => {
+      const { doors, width, extent } = fixtureFor(name, make, factor);
+      let exercised = 0;
+      for (const d of doors) {
+        // Deep outside the room through the doorway. Two honest outcomes:
+        // a BOUNDARY wall's passage stops the player exactly at the plane +
+        // ROOM_DOOR_PASS_DEPTH; an INTERIOR wall (an l-shape's step wall)
+        // was never box-bound, so the relaxation is a no-op and the plain
+        // box result stands — the passage never loosens anything else.
+        const target = atDoor(d, 0, -5);
+        const p = toWorld(NORTH_DOOR, target.lx, target.lz);
+        const plain = { ...p };
+        clampToSpace(p, NORTH_DOOR, width, extent, doors);
+        clampToSpace(plain, NORTH_DOOR, width, extent);
+        if (p.x === plain.x && p.z === plain.z) continue;
+        exercised += 1;
+        const after = toLocal(NORTH_DOOR, p);
+        expect(perpOf(d, after)).toBeCloseTo(-ROOM_DOOR_PASS_DEPTH, 9);
+      }
+      // Every fixture places at least one door on a boundary wall.
+      expect(exercised).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(CASES)(
+    "$name ×$factor: a door's flanks clamp byte-identically to the plain box",
+    ({ name, make, factor }) => {
+      const { doors, width, extent } = fixtureFor(name, make, factor);
+      for (const d of doors) {
+        // Probe just outside the window on the flank toward the wall's
+        // midpoint (the outward flank of a corner-hugging door can sit
+        // inside the window AFTER the box clamp — a genuine pass-through
+        // position, not a flank).
+        const inward = d.along === 0 ? 1 : -Math.sign(d.along);
+        const a = inward * (GAP_HALF + 0.01);
+        for (const perp of [-2, 0.1, 3]) {
+          const target = atDoor(d, a, perp);
+          const withDoors = toWorld(NORTH_DOOR, target.lx, target.lz);
+          const plain = { ...withDoors };
+          clampToSpace(withDoors, NORTH_DOOR, width, extent, doors);
+          clampToSpace(plain, NORTH_DOOR, width, extent);
+          expect(withDoors.x).toBe(plain.x);
+          expect(withDoors.z).toBe(plain.z);
+        }
+      }
+    },
+  );
+
+  it.each(CASES)(
+    "$name ×$factor: only door windows ever differ from the plain box (perimeter sweep)",
+    ({ name, make, factor }) => {
+      const { doors, width, extent } = fixtureFor(name, make, factor);
+      const halfW = width / 2;
+      // Sweep a grid over and beyond the whole footprint; wherever the
+      // relaxed clamp deviates from the plain box, the deviated position
+      // must sit inside some door's window and no further out than the
+      // plane + overtravel.
+      for (let ix = 0; ix <= 8; ix++) {
+        for (let iz = 0; iz <= 8; iz++) {
+          const lx = -halfW - 2 + ((width + 4) * ix) / 8;
+          const lz = -1 + ((extent + 3) * iz) / 8;
+          const withDoors = toWorld(NORTH_DOOR, lx, lz);
+          const plain = { ...withDoors };
+          clampToSpace(withDoors, NORTH_DOOR, width, extent, doors);
+          clampToSpace(plain, NORTH_DOOR, width, extent);
+          if (withDoors.x === plain.x && withDoors.z === plain.z) continue;
+          const after = toLocal(NORTH_DOOR, withDoors);
+          const host = doors.find(
+            (d) =>
+              Math.abs(alongOf(d, after)) < GAP_HALF &&
+              perpOf(d, after) >= -ROOM_DOOR_PASS_DEPTH - 1e-9,
+          );
+          expect(host, `deviation at local (${lx}, ${lz}) outside every door window`).toBeDefined();
+        }
+      }
+    },
+  );
+
+  it("mirrors the passages for a south door", () => {
+    const { doors, width, extent } = fixtureFor("rect", rectPlan, 1, SOUTH_DOOR);
+    for (const d of doors) {
+      const target = atDoor(d, 0, 0.3);
+      const p = toWorld(SOUTH_DOOR, target.lx, target.lz);
+      clampToSpace(p, SOUTH_DOOR, width, extent, doors);
+      const after = toLocal(SOUTH_DOOR, p);
+      expect(perpOf(d, after)).toBeCloseTo(0.3, 9);
+      expect(crossedRoomDoor(after.lx, after.lz, doors)).not.toBeNull();
+    }
+  });
+
+  it("places doors on more than one wall when the tall walls run out (relaxed ladder), all reachable", () => {
+    // 12 doors on a 32×32 rect exceed the single hostable wall's rung-0
+    // capacity, so the ladder relaxes onto every solid wall — the passage
+    // relaxation must work on all of them (horizontal and vertical alike).
+    const plan = rectPlan(32, 32);
+    const walls = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    const layout = placeRoomDoors("clamp-passage-crowded", plan, walls, hostable, 12);
+    expect(layout.relaxed).toBe(true);
+    expect(layout.doors).toHaveLength(12);
+    expect(new Set(layout.doors.map((d) => d.wall)).size).toBeGreaterThan(1);
+    for (const d of layout.doors) {
+      const target = atDoor(d, 0, 0.3);
+      const p = toWorld(NORTH_DOOR, target.lx, target.lz);
+      clampToSpace(p, NORTH_DOOR, 32, 32, layout.doors);
+      const after = toLocal(NORTH_DOOR, p);
+      expect(perpOf(d, after)).toBeCloseTo(0.3, 9);
+      expect(crossedRoomDoor(after.lx, after.lz, layout.doors)).not.toBeNull();
+    }
   });
 });

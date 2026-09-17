@@ -18,6 +18,11 @@
  *    the doorway strip clear, keeps every piece inside the walkable
  *    footprint and out of the water, and never covers more than 65% of
  *    the floor with kit footprint discs (≥35% stays empty, §4.5).
+ *  - Strand doors (v0.11-hotel-rooms B.11): every strand door's approach
+ *    strip stays exactly as clear as the entrance's — no kit piece may
+ *    land in the rectangle extending inward from a door's wall plane
+ *    (inDoorApproach), on ANY plan shape (l-shape step/inner walls,
+ *    colonnade far wall) and at ANY room scale (miniature included).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -39,6 +44,12 @@ import {
 } from "@/lib/game/room-plan";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import {
+  inDoorApproach,
+  placeRoomDoors,
+  type RoomDoorPlacement,
+} from "@/lib/game/room-doors";
+import { wallSegmentsFor } from "@/lib/game/room-plan";
+import {
   COLONNADE_BAY,
   HERO_CLEAR,
   KIT_COUNT_MAX,
@@ -46,6 +57,8 @@ import {
   KIT_PATH_CLEAR,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
+  ROOM_DOOR_CLEAR_DEPTH,
+  ROOM_DOOR_CLEAR_HALF,
   ROOM_WALL_THICKNESS,
 } from "@/lib/game/tuning/room";
 
@@ -451,6 +464,248 @@ describe("density report (I3 + §4.5)", () => {
       if (extent > 16) {
         expect(avg(counts)).toBeGreaterThan(3);
       }
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Strand-door approach clearances (v0.11-hotel-rooms B.11).           */
+/* ------------------------------------------------------------------ */
+
+interface StagedWithDoors extends Staged {
+  doors: RoomDoorPlacement[];
+}
+
+/**
+ * Stage one room exactly the way space.tsx does (scaled plan dims,
+ * S^0.75 prop scale, human-scale door clearance), with `doorCount`
+ * strand doors composed onto every solid non-entrance wall — a superset
+ * of the renderer's hostable set (it also excludes camera-facing sills),
+ * so passing here is strictly stronger than the shipped configuration.
+ */
+function stagePlan(
+  sliceId: string,
+  plan: RoomPlan,
+  scale: number,
+  doorCount: number,
+  baseExtent: number,
+  archetype = "hotel-room",
+): StagedWithDoors {
+  const comp = composeRoom(sliceId, plan, scale);
+  const propScale = Math.pow(scale, 0.75);
+  const wallThick = ROOM_WALL_THICKNESS * Math.max(scale, 0.35);
+  const walls = wallSegmentsFor(plan, wallThick);
+  const hostable = walls.map((w) => !w.entrance);
+  const { doors } = placeRoomDoors(sliceId, plan, walls, hostable, doorCount);
+  const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+  const pieces = stageInteriorKits({
+    rng,
+    archetype,
+    plan,
+    comp,
+    baseArea: planArea(plan) / (scale * scale),
+    baseExtent,
+    propScale,
+    wallThick,
+    water: null,
+    doors,
+    heightAt: () => 0,
+  });
+  return { pieces, plan, comp, doors };
+}
+
+function stageWithDoors(
+  sliceId: string,
+  extent: number,
+  doorCount: number,
+  scale = 1,
+  archetype = "hotel-room",
+): StagedWithDoors {
+  const plan = roomPlanFor(
+    sliceId,
+    extent * scale,
+    extent * scale,
+    COLONNADE_BAY * Math.sqrt(Math.max(scale, 0.35)),
+  );
+  return stagePlan(sliceId, plan, scale, doorCount, extent, archetype);
+}
+
+const lPlan = (extent: number, lSide: 1 | -1, stepZ: number): RoomPlan => ({
+  id: "l-shape",
+  width: extent,
+  extent,
+  lSide,
+  stepZ,
+  columns: [],
+});
+
+const colonnadePlan = (extent: number): RoomPlan => ({
+  id: "colonnade",
+  width: extent,
+  extent,
+  lSide: 1,
+  stepZ: 0,
+  columns: [],
+});
+
+describe("inDoorApproach (B.11 strip geometry)", () => {
+  // One door on each wall orientation of a 16×16 rect, placed by hand.
+  const handmade: RoomDoorPlacement[] = [
+    { index: 0, wall: 0, x: -8, z: 8, nx: 1, nz: 0, along: 0 }, // left wall
+    { index: 1, wall: 1, x: 8, z: 8, nx: -1, nz: 0, along: 0 }, // right wall
+    { index: 2, wall: 2, x: 3, z: 16, nx: 0, nz: -1, along: 0 }, // far wall
+  ];
+
+  it("flags the strip inward of each door's own wall and normal", () => {
+    expect(inDoorApproach(-7, 8, handmade)).toBe(true); // 1m in from left
+    expect(inDoorApproach(7, 8, handmade)).toBe(true); // 1m in from right
+    expect(inDoorApproach(3, 15, handmade)).toBe(true); // 1m in from far
+    expect(inDoorApproach(3, 16 - ROOM_DOOR_CLEAR_DEPTH + 0.1, handmade)).toBe(true);
+  });
+
+  it("does not flag outside the strip: behind the wall, past the depth, past the margin", () => {
+    expect(inDoorApproach(-9, 8, handmade)).toBe(false); // behind the wall
+    expect(inDoorApproach(-8 + ROOM_DOOR_CLEAR_DEPTH + 0.1, 8, handmade)).toBe(false);
+    expect(inDoorApproach(-7, 8 + ROOM_DOOR_CLEAR_HALF + 0.1, handmade)).toBe(false);
+    expect(inDoorApproach(-7, 8 - ROOM_DOOR_CLEAR_HALF - 0.1, handmade)).toBe(false);
+    expect(inDoorApproach(0, 8, [])).toBe(false); // no doors, no strips
+  });
+});
+
+describe("strand-door approach clearances (B.11)", () => {
+  const DOOR_COUNTS = [1, 2, 4];
+
+  it("keeps every strand door's strip clear of kit pieces (rect rooms)", () => {
+    for (const extent of TIERS) {
+      for (const sliceId of SLICE_IDS.slice(0, 24)) {
+        for (const n of DOOR_COUNTS) {
+          const { pieces, doors } = stageWithDoors(sliceId, extent, n);
+          expect(doors).toHaveLength(n);
+          for (const p of pieces) {
+            expect(inDoorApproach(p.x, p.z, doors)).toBe(false);
+          }
+        }
+      }
+    }
+  });
+
+  it("keeps strips clear on l-shape and colonnade plans (doors on step/inner/far walls)", () => {
+    const plans = [
+      lPlan(48, 1, 24),
+      lPlan(48, -1, 21.6),
+      colonnadePlan(64),
+    ];
+    let doorPiecesChecked = 0;
+    for (const plan of plans) {
+      for (const sliceId of SLICE_IDS.slice(0, 16)) {
+        for (const n of DOOR_COUNTS) {
+          const { pieces, doors } = stagePlan(sliceId, plan, 1, n, 48);
+          expect(doors).toHaveLength(n);
+          for (const p of pieces) {
+            doorPiecesChecked += 1;
+            expect(inDoorApproach(p.x, p.z, doors)).toBe(false);
+          }
+        }
+      }
+    }
+    // The sweep must actually exercise furnished rooms with doors.
+    expect(doorPiecesChecked).toBeGreaterThan(0);
+  });
+
+  it("keeps strips clear at miniature scale (the door and its approach never scale, A4)", () => {
+    // Tier 32 at ×0.25 → an 8m dollhouse room; propScale = 0.25^0.75.
+    for (const sliceId of SLICE_IDS.slice(0, 16)) {
+      for (const n of [1, 2]) {
+        const { pieces, doors, plan } = stageWithDoors(sliceId, 32, n, 0.25);
+        expect(doors).toHaveLength(n);
+        expect(plan.extent).toBeCloseTo(8, 6);
+        for (const p of pieces) {
+          expect(inDoorApproach(p.x, p.z, doors)).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("never swallows the entrance's approach or another door's (strip ≤ strip)", () => {
+    for (const extent of [16, 32, 64]) {
+      for (const sliceId of SLICE_IDS.slice(0, 24)) {
+        const { doors } = stageWithDoors(sliceId, extent, 4);
+        // The entrance approach corridor's midpoint stays outside every
+        // strand door's strip.
+        expect(inDoorApproach(0, 1.5, doors)).toBe(false);
+        // No door's own approach (1m in front of it) is covered by a
+        // DIFFERENT door's strip.
+        for (const d of doors) {
+          const others = doors.filter((o) => o.index !== d.index);
+          expect(inDoorApproach(d.x + d.nx, d.z + d.nz, others)).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("keeps the existing clearances intact with strand doors present", () => {
+    for (const extent of [16, 32, 64]) {
+      for (const sliceId of SLICE_IDS.slice(0, 24)) {
+        const { pieces, plan, comp } = stageWithDoors(sliceId, extent, 3);
+        for (const p of pieces) {
+          // Entrance doorway strip.
+          expect(
+            Math.abs(p.x) < PROP_DOOR_HALF && p.z < PROP_DOOR_DEPTH,
+          ).toBe(false);
+          // Inside the walkable footprint.
+          expect(planContains(plan, p.x, p.z, 0)).toBe(true);
+          // Off the cleared path (the path leads TO the hero — exempted).
+          const nearHero =
+            Math.hypot(p.x - comp.hero.x, p.z - comp.hero.z) <
+            HERO_CLEAR + 3;
+          if (!nearHero) {
+            expect(distToPath(comp, p.x, p.z)).toBeGreaterThanOrEqual(
+              comp.pathHalf + KIT_PATH_CLEAR - 1e-9,
+            );
+          }
+        }
+        // The ≥35%-empty-floor rule still holds (scaled coverage).
+        expect(coverageOf({ pieces, plan, comp })).toBeLessThanOrEqual(
+          1 - KIT_EMPTY_FLOOR_MIN + 1e-9,
+        );
+      }
+    }
+  });
+});
+
+describe("density with strand doors (B.11 cost report)", () => {
+  it("prints the kit-count cost of door clearances per tier", () => {
+    const archetypes = ["hotel-room", "library", "ballroom"] as const;
+    for (const extent of TIERS) {
+      let withDoorsTotal = 0;
+      let baselineTotal = 0;
+      let heroDropped = 0;
+      let emptyRooms = 0;
+      for (const sliceId of SLICE_IDS) {
+        const archetype = archetypes[sliceId.length % archetypes.length];
+        const baseline = stageFor(sliceId, extent, archetype);
+        const withDoors = stageWithDoors(sliceId, extent, 3, 1, archetype);
+        baselineTotal += kitCountOf(baseline.pieces);
+        withDoorsTotal += kitCountOf(withDoors.pieces);
+        const heroOf = (s: Staged) =>
+          s.pieces.some(
+            (p) =>
+              Math.hypot(p.x - s.comp.hero.x, p.z - s.comp.hero.z) < 3.5,
+          );
+        if (heroOf(baseline) && !heroOf(withDoors)) heroDropped += 1;
+        if (withDoors.pieces.length === 0) emptyRooms += 1;
+      }
+      console.log(
+        `tier ${extent}m with 3 strand doors: kits ${withDoorsTotal} ` +
+          `(baseline ${baselineTotal}, dropped ${baselineTotal - withDoorsTotal}), ` +
+          `hero lost in ${heroDropped}/${SLICE_IDS.length} rooms, ` +
+          `empty rooms ${emptyRooms}`,
+      );
+      // Door clearances shrink the available area by design; the room
+      // settles for fewer kits rather than violating a strip. The cost
+      // must stay modest — half the population vanishing would mean the
+      // clearance is miscalibrated, not that the rooms are small.
+      expect(withDoorsTotal).toBeGreaterThan(baselineTotal * 0.5);
     }
   });
 });

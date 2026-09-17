@@ -32,6 +32,7 @@ import {
   type Composition,
   type RoomPlan,
 } from "./room-plan";
+import { inDoorApproach, type RoomDoorPlacement } from "./room-doors";
 import {
   HERO_CLEAR,
   KIT_AREA_PER_KIT,
@@ -347,6 +348,11 @@ export interface KitStaging {
   /** Perimeter wall thickness (scaled, m). */
   wallThick: number;
   water: KitWater | null;
+  /** Strand doors (B.11) — every door's approach strip stays as clear as
+   *  the entrance's: no piece may land in the rectangle extending inward
+   *  from a door's wall plane (inDoorApproach, room-doors.ts). Empty /
+   *  absent = today's single-entrance room. */
+  doors?: readonly RoomDoorPlacement[];
   /** Already-occupied discs kits must not touch (e.g. a pool-hall's
    *  water-anchored fixtures placed by the legacy furnishing path). */
   obstacles?: readonly { x: number; z: number; r: number }[];
@@ -536,9 +542,13 @@ function drawKitTransform(
  *     per kit, never touching each other (KIT_GAP), and hard-capped so at
  *     least KIT_EMPTY_FLOOR_MIN of the scaled floor stays empty.
  *  3. CLEARANCES: every piece stays inside the walkable footprint, out of
- *     the doorway strip, off the cleared path (pathHalf + KIT_PATH_CLEAR —
- *     the ≥1.4 m promise is measured to kit geometry), and out of the
- *     water. Kits are dry furniture; nothing hangs, nothing floats (I2).
+ *     the doorway strip AND out of every strand door's approach strip
+ *     (B.11 — a door must stay walkable-to), off the cleared path
+ *     (pathHalf + KIT_PATH_CLEAR — the ≥1.4 m promise is measured to kit
+ *     geometry), and out of the water. Kits are dry furniture; nothing
+ *     hangs, nothing floats (I2). When door approaches shrink a small
+ *     room past what its density target wants, the room places FEWER
+ *     kits — a clearance is never violated to hit the target.
  *
  * Pure function of the inputs: same rng stream, same room (A6).
  */
@@ -569,6 +579,9 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       if (Math.abs(p.x) < PROP_DOOR_HALF + pieceClear && p.z < PROP_DOOR_DEPTH + pieceClear) {
         return null;
       }
+      // Strand-door approaches (B.11): the same doorway-strip shaping,
+      // following each door's own wall and probed inward normal.
+      if (o.doors && inDoorApproach(p.x, p.z, o.doors)) return null;
       if (
         !opts.skipPathCheck &&
         distToPath(comp, p.x, p.z) < comp.pathHalf + pieceClear
