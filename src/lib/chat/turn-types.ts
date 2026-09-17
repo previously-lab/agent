@@ -89,6 +89,20 @@ export interface TurnInput {
    * to 1568px before upload.
    */
   imageAttachments: string[];
+  /**
+   * Optional machine context block (v0.11 §13) — an engine-built scene log
+   * from the client (the game's visit log, see src/lib/game/visit-log.ts)
+   * saying where the user has been this turn. It rides THIS run's input, so a
+   * redelivered or reconnected run keeps "where the user was" — that ride is
+   * the persistence; the block is deliberately NOT written into the slice's
+   * user turn (it is not user speech, and a stored copy would poison the
+   * client-history match). The workflow injects it as its own marked section
+   * appended to the last user message's OUTBOUND copy — never into the
+   * slice-frozen system prompt. ABSENT on plain chat turns: the field is
+   * omitted entirely when the client sends none, and the turn is then
+   * byte-identical to before.
+   */
+  machineContext?: string;
 }
 
 /** Summary of a synchronous card evolution run (v0.7b — inline in housekeeping). */

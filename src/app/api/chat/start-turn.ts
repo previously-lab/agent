@@ -44,6 +44,10 @@ export interface StartTurnArgs {
   /** True on the client regenerate action (SDK trigger "regenerate-message") —
    *  the turn re-runs the previous user message; see TurnInput.regenerate. */
   regenerate?: boolean;
+  /** Optional engine-built machine context block (v0.11 §13 — the game
+   *  client's visit log). Free text; sanitized + capped server-side, omitted
+   *  from TurnInput when absent. */
+  machineContext?: string;
 }
 
 /** Extract the latest user message text from raw UI messages. */
@@ -88,6 +92,30 @@ async function resolveModelConfig(id: string): Promise<{
 
 /** Max image attachments extracted per turn when the main model lacks vision. */
 const MAX_IMAGE_ATTACHMENTS = 4;
+
+/**
+ * Upper bound for the optional machine context block (v0.11 §13). A visit log
+ * is a few hundred characters by construction (visit-log.ts caps its own
+ * trail); this is the safety valve against a misbehaving client, in the same
+ * spirit as MAX_HISTORY_MESSAGES.
+ */
+export const MAX_MACHINE_CONTEXT_CHARS = 2000;
+
+/**
+ * Sanitize the optional machine context block: trim, drop when empty, cap.
+ * Pure. Returns undefined when nothing usable was sent, so the TurnInput
+ * field is OMITTED and the turn stays byte-identical to a plain chat turn.
+ */
+export function sanitizeMachineContext(
+  raw: string | undefined,
+): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  // A mid-string cut can split the block's closing fence — acceptable: the
+  // workflow's own injection section closes the context regardless.
+  return trimmed.slice(0, MAX_MACHINE_CONTEXT_CHARS);
+}
 
 /**
  * For non-vision main models: extract image file parts into a per-turn
@@ -234,6 +262,11 @@ export async function startTurn(
   const userMessages = inbound.filter((m) => m.role === "user");
   const lastUserMessage = extractLastUserText(userMessages[userMessages.length - 1]);
 
+  // Optional machine context block (v0.11 §13) — sanitized once here so the
+  // field is OMITTED from TurnInput when the client sent none (a plain chat
+  // turn's input stays unchanged).
+  const machineContext = sanitizeMachineContext(args.machineContext);
+
   const input: TurnInput = {
     modelMessages,
     recentTurns,
@@ -253,6 +286,7 @@ export async function startTurn(
     turnId,
     imageAttachments,
     ...(args.regenerate === true ? { regenerate: true } : {}),
+    ...(machineContext ? { machineContext } : {}),
   };
 
   // Pin the run to Hong Kong. The run's state, queue dispatch and streams live

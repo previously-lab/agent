@@ -34,6 +34,7 @@ import {
   startTurn,
   summarizeModelContent,
   extractImageAttachments,
+  MAX_MACHINE_CONTEXT_CHARS,
 } from "@/app/api/chat/start-turn";
 
 describe("summarizeModelContent", () => {
@@ -340,5 +341,59 @@ describe("startTurn image attachment handling", () => {
     await startTurn({ messages: msgs, model: "deepseek-flash" });
     const input = turnInput();
     expect(input.imageAttachments).toEqual([]);
+  });
+});
+
+// ─── startTurn: machine context block (v0.11 §13) ─────────────────────────
+// The optional engine-built scene log rides TurnInput into the durable run —
+// sanitized here, and OMITTED entirely when the client sends none, so a plain
+// chat turn's input is byte-identical to before.
+
+describe("startTurn machineContext carriage", () => {
+  const messages: UIMessage[] = [
+    { id: "m1", role: "user", parts: [{ type: "text", text: "hi" }] } as UIMessage,
+  ];
+
+  /** The TurnInput handed to the workflow run. */
+  function turnInput(): Record<string, unknown> {
+    const call = workflow.start.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const args = call as unknown as [unknown, [Record<string, unknown>]];
+    return args[1][0];
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dataSource.resolveDataSource.mockReturnValue("local");
+    demoLock.demoModelLock.mockReturnValue(null);
+    loader.loadUserConfig.mockResolvedValue({
+      model: { provider: "deepseek-flash" },
+    });
+  });
+
+  it("carries a trimmed block into the durable run input", async () => {
+    await startTurn({
+      messages,
+      machineContext: " [visit-log]\n池厅(09:41)\n[/visit-log] ",
+    });
+    expect(turnInput().machineContext).toBe(
+      "[visit-log]\n池厅(09:41)\n[/visit-log]",
+    );
+  });
+
+  it("OMITS the field when absent — the default turn input is unchanged", async () => {
+    await startTurn({ messages });
+    const input = turnInput();
+    expect("machineContext" in input).toBe(false);
+  });
+
+  it("omits the field for a whitespace-only block", async () => {
+    await startTurn({ messages, machineContext: "   " });
+    expect("machineContext" in turnInput()).toBe(false);
+  });
+
+  it("caps an oversized block at MAX_MACHINE_CONTEXT_CHARS", async () => {
+    await startTurn({ messages, machineContext: ` ${"x".repeat(5000)} ` });
+    expect(turnInput().machineContext).toHaveLength(MAX_MACHINE_CONTEXT_CHARS);
   });
 });

@@ -25,6 +25,7 @@ export async function POST(request: Request): Promise<Response> {
       timezone?: unknown;
       locale?: unknown;
       regenerate?: unknown;
+      machineContext?: unknown;
     };
 
     const { messages } = body;
@@ -47,6 +48,12 @@ export async function POST(request: Request): Promise<Response> {
           ? body.locale
           : undefined,
       regenerate: body.regenerate === true,
+      // Optional engine-built machine context (v0.11 §13) — same optional-string
+      // style as timezone; sanitized + capped in startTurn, omitted when absent.
+      machineContext:
+        typeof body.machineContext === "string"
+          ? body.machineContext
+          : undefined,
     });
 
     return createUIMessageStreamResponse({

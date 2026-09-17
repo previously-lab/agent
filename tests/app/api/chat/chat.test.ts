@@ -111,4 +111,35 @@ describe("POST /api/chat durable turn", () => {
       })
     );
   });
+
+  it("forwards an optional machineContext block to startTurn (v0.11 §13)", async () => {
+    await POST(
+      createRequest({
+        messages: [{ role: "user", content: "hi" }],
+        machineContext: "[visit-log]\n池厅(09:41)\n[/visit-log]",
+      })
+    );
+    const call = mockStartTurn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.machineContext).toBe("[visit-log]\n池厅(09:41)\n[/visit-log]");
+  });
+
+  it("passes machineContext as undefined when absent or not a string — the default turn is unchanged", async () => {
+    // Two POSTs in one test: each needs a FRESH readable (a resolved-value
+    // mock would hand the second call the first call's locked stream).
+    mockStartTurn.mockImplementation(() =>
+      Promise.resolve({ runId: "wrun_test123", readable: new ReadableStream() })
+    );
+    await POST(createRequest({ messages: [{ role: "user", content: "hi" }] }));
+    let call = mockStartTurn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.machineContext).toBeUndefined();
+
+    await POST(
+      createRequest({
+        messages: [{ role: "user", content: "hi" }],
+        machineContext: 42,
+      })
+    );
+    call = mockStartTurn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.machineContext).toBeUndefined();
+  });
 });
