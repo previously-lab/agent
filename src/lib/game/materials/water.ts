@@ -48,9 +48,11 @@ function fade(t: number): number {
 /**
  * Toroidal value noise: a `period × period` lattice of seeded random values
  * indexed with modulo in both axes, so the field has an exact period of
- * `period` lattice cells in x and y. Output in [-1, 1].
+ * `period` lattice cells in x and y. Output in [-1, 1]. Exported for the
+ * other seamless builders in this library (caustics.ts); not part of the
+ * public index.ts API.
  */
-function createTilingValueNoise2D(
+export function createTilingValueNoise2D(
   seed: number,
   period: number,
 ): (x: number, y: number) => number {
@@ -78,7 +80,7 @@ function createTilingValueNoise2D(
 }
 
 /** fbm over the tiling field; every octave is an integer-period multiple. */
-function tilingFbm(
+export function tilingFbm(
   noise: (x: number, y: number) => number,
   x: number,
   y: number,

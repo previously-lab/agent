@@ -59,11 +59,14 @@ export const TILE_BEVEL = 0.0125;
 /** How far grime reaches from the grout edge into the face, in cell units. */
 const GRIME_REACH = 0.16;
 /**
- * Normal strength: groove slope multiplier (height is in cell units). 1.4
- * lit the shallow seam like a deep channel; 0.5 keeps a soft shading that
- * matches the hairline joint.
+ * Normal strength: groove slope multiplier (height is in cell units). The
+ * art rule is that grout is a GRID LINE, not a modelled groove — the joint
+ * reads through its albedo/roughness line, and the normal channel only adds
+ * a whisper of shading so a raking highlight still breaks at the seam. 1.4
+ * lit the seam like a deep channel, 0.5 still read as a chamfered groove;
+ * 0.12 flattens the faces toward zero while keeping that hairline break.
  */
-export const TILE_NORMAL_STRENGTH = 0.5;
+export const TILE_NORMAL_STRENGTH = 0.12;
 /**
  * Base grout albedo: clean, maintained pool joints read light grey, not
  * black (the grime beside them supplies the contrast instead).
@@ -149,12 +152,16 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
         (0.6 + 0.4 * fbm(mottle, u * 3, v * 3, 3));
 
       // Face albedo: near-white, faint cool glaze, per-tile tone drift,
-      // low-frequency mottling, darkened by grime near the grout.
+      // low-frequency mottling, darkened by grime near the grout. With the
+      // groove normals flattened (TILE_NORMAL_STRENGTH), the SURFACE carries
+      // the detail — so the tone drift and glaze mottling run a little wider
+      // than a grooved tile could afford (still zero-mean: TILE_ALBEDO_MEAN
+      // is untouched).
       const face =
         0.955 +
-        tone * 0.02 +
+        tone * 0.028 +
         fbm(mottle, u * 1.5, v * 1.5, 3) * 0.015 +
-        fbm(glaze, u * 24, v * 24, 2) * 0.008;
+        fbm(glaze, u * 24, v * 24, 2) * 0.012;
       const grimeDarken = 1 - 0.13 * Math.max(0, grime);
       const faceR = (face - 0.012) * grimeDarken;
       const faceG = (face - 0.004) * grimeDarken;
@@ -173,9 +180,15 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
       albedo[p + 3] = 255;
 
       // Roughness: glaze nearly glossy, grout matte. Grime is slightly
-      // rougher than the glaze around it.
+      // rougher than the glaze around it. The glaze band is where the
+      // "surface, not grooves" effort lives: a wider per-tile gloss spread
+      // (0.075–0.145) plus TWO mottle octaves (broad clouding at 12/cell,
+      // fine speckle at 48/cell), so each tile catches the key light with
+      // its own soft sheen map instead of one uniform gloss.
       const faceRough = clamp01(
-        0.08 + gloss * 0.05 + fbm(glaze, u * 12 + 40, v * 12 + 40, 2) * 0.015 +
+        0.075 + gloss * 0.07 +
+          fbm(glaze, u * 12 + 40, v * 12 + 40, 2) * 0.025 +
+          fbm(glaze, u * 48 + 90, v * 48 + 90, 2) * 0.015 +
           Math.max(0, grime) * 0.1,
       );
       const groutRough = clamp01(

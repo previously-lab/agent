@@ -73,7 +73,7 @@ describe("buildTileMaps", () => {
       const faceR = roughnessAt(maps, face, face);
       const groutR = roughnessAt(maps, boundary, face);
       expect(faceR).toBeGreaterThanOrEqual(0.03);
-      expect(faceR).toBeLessThanOrEqual(0.18);
+      expect(faceR).toBeLessThanOrEqual(0.2);
       expect(groutR).toBeGreaterThanOrEqual(0.68);
       expect(groutR).toBeLessThanOrEqual(0.92);
       expect(faceR).toBeLessThan(groutR);
@@ -131,11 +131,12 @@ describe("buildTileMaps", () => {
 
   it("pins the grout tuning surface to the 1px-line cut", () => {
     // Full joint width 3–4% of a cell; bevel band (both sides) ≤ 3%;
-    // soft seam shading; light-grey joint base.
+    // near-flat seam shading (the joint reads through albedo/roughness,
+    // not modelled grooves); light-grey joint base.
     expect(2 * TILE_GROUT_HALF).toBeGreaterThanOrEqual(0.03);
     expect(2 * TILE_GROUT_HALF).toBeLessThanOrEqual(0.04);
     expect(2 * TILE_BEVEL).toBeLessThanOrEqual(0.03);
-    expect(TILE_NORMAL_STRENGTH).toBe(0.5);
+    expect(TILE_NORMAL_STRENGTH).toBe(0.12);
     expect(TILE_GROUT_ALBEDO).toBeGreaterThanOrEqual(0.7);
   });
 

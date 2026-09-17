@@ -13,9 +13,10 @@
  *
  * Cache key: `${kind}:${size}[:cells]` — the builders' deterministic output
  * depends only on those parameters (all entropy derives from WORLD_SEED).
- * In practice the cache holds exactly three entries at default parameters:
- *   tile:256:8 · concrete:256 · water:256:3
- * = 9 GPU textures total (3 maps × tile/concrete + 3 water normal layers).
+ * In practice the cache holds exactly four entries at default parameters:
+ *   tile:256:8 · concrete:256 · water:256:3 · caustics:256:2
+ * = 11 GPU textures total (3 maps × tile/concrete + 3 water normal layers
+ * + 2 caustics web layers).
  *
  * Node-safe: DataTexture needs no DOM, so this module (unlike grunge.ts /
  * glow.ts) can be imported anywhere.
@@ -30,6 +31,7 @@ import {
   type MaterialTextures,
 } from "./three";
 import { buildWaterNormalMaps } from "./water";
+import { buildCausticsMaps } from "./caustics";
 
 const cache = new Map<string, MaterialTextures | DataTexture[]>();
 
@@ -67,6 +69,37 @@ export function sharedWaterNormalTextures(): DataTexture[] {
   let entry = cache.get(key);
   if (!entry) {
     const { layers, size } = buildWaterNormalMaps();
+    entry = layers.map((data) => {
+      const texture = new DataTexture(
+        data,
+        size,
+        size,
+        RGBAFormat,
+        FloatType,
+      );
+      texture.wrapS = RepeatWrapping;
+      texture.wrapT = RepeatWrapping;
+      applyTextureSampling(texture);
+      texture.needsUpdate = true;
+      return texture;
+    });
+    cache.set(key, entry);
+  }
+  return entry as DataTexture[];
+}
+
+/**
+ * The two caustics light-web layers as DataTextures, built once. Same
+ * contract as the water normals above: FloatType RGBA, raw values (here a
+ * [0,1] intensity in R), RepeatWrapping so the pool-floor patch may scroll
+ * them freely — every layer wraps seamlessly in both axes. Linear light
+ * energy: no SRGBColorSpace.
+ */
+export function sharedCausticsTextures(): DataTexture[] {
+  const key = "caustics:256:2";
+  let entry = cache.get(key);
+  if (!entry) {
+    const { layers, size } = buildCausticsMaps();
     entry = layers.map((data) => {
       const texture = new DataTexture(
         data,

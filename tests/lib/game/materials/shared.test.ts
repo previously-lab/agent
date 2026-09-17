@@ -151,7 +151,7 @@ describe("createWaterSurfaceMaterial", () => {
     spanY: 8,
   };
 
-  it("compiles the layered raw-normal blend and the rim-depth tint", () => {
+  it("compiles the layered raw-normal blend and the Beer–Lambert depth model", () => {
     const water = createWaterSurfaceMaterial(opts);
     const layers = sharedWaterNormalTextures();
     expect(water.material.normalMap).toBe(layers[0]);
@@ -164,7 +164,8 @@ describe("createWaterSurfaceMaterial", () => {
     expect(shader.uniforms.uWaterNormalC.value).toBe(layers[2]);
     expect(shader.fragmentShader).toContain("waterNA");
     expect(shader.fragmentShader).not.toContain(PACKED_MAPN_LINE);
-    expect(shader.fragmentShader).toContain("uWaterDepthRamp");
+    expect(shader.fragmentShader).toContain("uWaterSigma");
+    expect(shader.fragmentShader).toContain("uWaveHeight");
     // Per-layer repeat is span / wavelength, isotropic per axis.
     const scrollA = shader.uniforms.uWaterScrollA.value as {
       x: number;
