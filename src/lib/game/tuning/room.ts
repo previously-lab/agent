@@ -236,6 +236,78 @@ export const LONE_PROB = 0.15;
 /** Pet waypoint radius cap (m): in colossal rooms pets stay near the door,
  *  where the player actually is, instead of wandering a 150m orbit. */
 export const PET_NEAR_RADIUS_MAX = 24;
+
+/* ------------------------------------------------------------------ */
+/* Kits (v0.11-room-interiors §3.1) — composed furnishing groups.      */
+/* ------------------------------------------------------------------ */
+
+/** Floor area (m² of the UNSCALED tier) per kit — the I3 density target.
+ *  S/M tiers sit in the doc's 12–18 m²/kit band (the "empty room" complaint
+ *  was loudest at human scale); L/XL taper upward hard so a great hall
+ *  keeps its sweep instead of becoming a furniture warehouse (§6 塞满). */
+export const KIT_AREA_PER_KIT: Record<number, number> = {
+  16: 15,
+  32: 20,
+  64: 32,
+  96: 48,
+};
+/** Absolute kit-count ceiling per tier — the taper's hard backstop, and a
+ *  draw-call budget: kit pieces are real meshes, not instanced scatter. */
+export const KIT_COUNT_MAX: Record<number, number> = {
+  16: 10,
+  32: 20,
+  64: 40,
+  96: 60,
+};
+/** The 留白 hard floor (I1 / §4.5): kit footprint discs may cover at most
+ *  (1 − this) of the actual scaled floor — at least 35% stays empty. */
+export const KIT_EMPTY_FLOOR_MIN = 0.35;
+/** Gap kept between two kits' footprint discs (m, ×prop scale) — every kit
+ *  owns its breathing room; kits never touch. */
+export const KIT_GAP = 0.6;
+/** Per-piece clearance from the cleared walk path (m, ×prop scale): the
+ *  path's ≥1.4 m promise is measured to kit GEOMETRY, not kit centers. */
+export const KIT_PATH_CLEAR = 0.5;
+/** Per-piece margin from the walls (m, ×prop scale). */
+export const KIT_WALL_CLEAR = 0.35;
+/** Rejection-sampling budget per wanted kit before the room settles for
+ *  fewer (a narrow plan physically cannot host every kit). */
+export const KIT_PLACE_ATTEMPTS = 40;
+
+/* ------------------------------------------------------------------ */
+/* dado-band (v0.11-room-interiors §3.2): baseboard + panelled          */
+/* wainscot along the room's walls — a geometric feature, not a         */
+/* texture. Heights are authored at human scale and multiplied by the   */
+/* wall scale ratio (drawn wall height / WALL_HEIGHT) at render time,   */
+/* so a colossal room gets a colossal dado and a miniature room a       */
+/* dollhouse one. All parts are opaque (hard requirement #5) and        */
+/* wall-supported (I2).                                                 */
+/* ------------------------------------------------------------------ */
+
+/** Baseboard height / inward projection from the wall face (m, ×wall
+ *  scale). Runs on every wall tall enough to hold it, including the low
+ *  cutaway sills. */
+export const DADO_BASE_HEIGHT = 0.14;
+export const DADO_BASE_PROJECT = 0.06;
+/** Top of the wainscot (the chair-rail line, m ×wall scale) — classic
+ *  dado height, safely below the 1.1 m cutaway sill at normal scale. */
+export const DADO_TOP = 0.9;
+/** Chair-rail strip height / projection (m, ×wall scale). */
+export const DADO_RAIL_HEIGHT = 0.07;
+export const DADO_RAIL_PROJECT = 0.05;
+/** Panel stile width / projection (m, ×wall scale) and the target bay
+ *  width between stiles. */
+export const DADO_STILE_WIDTH = 0.09;
+export const DADO_STILE_PROJECT = 0.035;
+export const DADO_PANEL_SPAN = 1.2;
+/** Stiles per wall run capped — past this the bays widen instead of
+ *  emitting hundreds of boxes down a colossal XL wall. */
+export const DADO_PANEL_MAX = 24;
+/** The full band (rail + stiles) is drawn only when the wall's DRAWN
+ *  height clears the dado top by this margin (m, ×wall scale); a shorter
+ *  (cutaway) wall keeps just the baseboard — a band running past the top
+ *  of a short wall is a bug. */
+export const DADO_FULL_MARGIN = 0.15;
 /** Snow point-count cap — the area formula explodes quadratically at
  *  colossal scale; density beyond this adds nothing at the fixed camera. */
 export const SNOW_COUNT_MAX = 1500;

@@ -22,7 +22,10 @@
  *   - nature:   biomes (meadow/plains/pool/forest + ocean/lake/beach/
  *               snowfield) with trees, rocks, water, and biome motif props
  *   - interior: hotel-room / pool-hall / library / ballroom — flat floor,
- *               seeded furniture layouts, no vegetation
+ *               furnished by KITS (lib/game/kits.ts): composed, wall-
+ *               anchored groupings that face the path/door/hero, staged
+ *               area-densely with a hard empty-floor budget; the pool hall
+ *               keeps its water-anchored fixtures; no vegetation
  *   - hybrid:   a nature biome dressed with hotel furniture that does not
  *               belong (a bed on the grass, a TV in the forest)
  *   - wonder:   ducks (a pool full of bobbing rubber ducks), cats, dogs,
@@ -106,11 +109,26 @@ import {
   createWaterSurfaceMaterial,
 } from "@/lib/game/materials";
 import {
+  planArea,
+  stageInteriorKits,
+  type StagedKitPiece,
+} from "@/lib/game/kits";
+import {
   BALLOON_BUNCHES,
   BALLOON_COLORS,
   COLONNADE_BAY,
   CONCRETE_NORMAL_SCALE,
   CREATURE_SCALE_EXP,
+  DADO_BASE_HEIGHT,
+  DADO_BASE_PROJECT,
+  DADO_FULL_MARGIN,
+  DADO_PANEL_MAX,
+  DADO_PANEL_SPAN,
+  DADO_RAIL_HEIGHT,
+  DADO_RAIL_PROJECT,
+  DADO_STILE_PROJECT,
+  DADO_STILE_WIDTH,
+  DADO_TOP,
   DOOR_GAP_HALF,
   DOOR_GLOW_INTENSITY,
   DOOR_HALO_OPACITY,
@@ -191,6 +209,128 @@ function wallFacesCamera(
   const wx = dir > 0 ? nx : -nx;
   const wz = dir > 0 ? nz : -nz;
   return wx * CAM_DIR_XZ.x + wz * CAM_DIR_XZ.z > 0.5;
+}
+
+/**
+ * dado-band (v0.11-room-interiors §3.2): a baseboard plus a panelled
+ * wainscot band along the INNER face of one perimeter wall segment — a
+ * geometric feature, not a texture, and fully opaque (hard requirement
+ * #5). The band breaks at the doorway for free: the entrance wall is
+ * already two segments split around the 2.4m gap. It follows the
+ * cutaway: every part is derived from the wall's DRAWN height, so a
+ * camera-side sill keeps only what fits under its top (the baseboard
+ * always; the rail and panel stiles only when the full dado clears the
+ * top by DADO_FULL_MARGIN — a band running past a short wall is a bug).
+ * Heights ride the wall scale ratio, so a colossal room gets a colossal
+ * dado and a miniature room a dollhouse one.
+ */
+function DadoBand({
+  wall,
+  height,
+  plan,
+  wallScale,
+  trimColor,
+  panelColor,
+}: {
+  wall: WallSegment;
+  height: number;
+  plan: RoomPlan;
+  wallScale: number;
+  trimColor: THREE.Color;
+  panelColor: THREE.Color;
+}) {
+  // Inward normal (toward the walkable plan) via the same probe trick as
+  // the cutaway test: the side where planContains answers true is inside.
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, wall.x + 0.5, wall.z, 0) ? 1 : -1;
+  }
+  const len = horizontal ? wall.sizeX : wall.sizeZ;
+  const thick = horizontal ? wall.sizeZ : wall.sizeX;
+
+  const k = wallScale;
+  const baseH = DADO_BASE_HEIGHT * k;
+  if (height < baseH) return null;
+
+  // One band box: `along` is the offset along the wall's run from its
+  // center; the box hugs the inner face (a 2mm sink into the wall kills
+  // any z-fight with the wall surface).
+  const band = (
+    key: string,
+    along: number,
+    y: number,
+    h: number,
+    proj: number,
+    w: number,
+    color: THREE.Color,
+  ) => {
+    const off = thick / 2 + proj / 2 - 0.002;
+    const x = wall.x + (horizontal ? along : nx * off);
+    const z = wall.z + (horizontal ? nz * off : along);
+    return (
+      <mesh key={key} position={[x, y, z]} castShadow receiveShadow>
+        <boxGeometry
+          args={horizontal ? [w, h, proj] : [proj, h, w]}
+        />
+        <meshStandardMaterial color={color} roughness={1} flatShading />
+      </mesh>
+    );
+  };
+
+  const parts: ReactNode[] = [
+    band("base", 0, baseH / 2, baseH, DADO_BASE_PROJECT * k, len, trimColor),
+  ];
+
+  // Rail + panel stiles, only when the drawn wall height clears the full
+  // dado top by the margin (the cutaway rule above).
+  if (height >= (DADO_TOP + DADO_FULL_MARGIN) * k) {
+    const railH = DADO_RAIL_HEIGHT * k;
+    const railTop = DADO_TOP * k;
+    parts.push(
+      band(
+        "rail",
+        0,
+        railTop - railH / 2,
+        railH,
+        DADO_RAIL_PROJECT * k,
+        len,
+        trimColor,
+      ),
+    );
+    // Panel stiles between baseboard and rail: evenly spaced bays, the
+    // count capped so a colossal XL wall widens its bays instead of
+    // emitting hundreds of boxes.
+    const endPad = thick;
+    const run = len - endPad * 2;
+    const stileTop = railTop - railH;
+    const stileH = stileTop - baseH;
+    if (run > 0 && stileH > 0.02) {
+      const n = Math.max(
+        1,
+        Math.min(DADO_PANEL_MAX, Math.round(run / (DADO_PANEL_SPAN * k))),
+      );
+      const spacing = run / n;
+      for (let i = 0; i <= n; i++) {
+        const along = -len / 2 + endPad + i * spacing;
+        parts.push(
+          band(
+            `stile${i}`,
+            along,
+            baseH + stileH / 2,
+            stileH,
+            DADO_STILE_PROJECT * k,
+            DADO_STILE_WIDTH * k,
+            panelColor,
+          ),
+        );
+      }
+    }
+  }
+  return <group>{parts}</group>;
 }
 
 /** One prop placement in the group's canonical local frame. */
@@ -776,8 +916,9 @@ function RockInstances({ placements }: { placements: Placement[] }) {
   );
 }
 
-/** Motif prop kinds — every archetype has at least three (interiors are
- *  furnished by layout instead; see furnishInterior). */
+/** Motif prop kinds — every archetype has at least three (the flat
+ *  interiors are furnished by kits instead; see lib/game/kits.ts and the
+ *  furniture memo below). */
 type MotifKind =
   // pool / water fixtures
   | "ladder"
@@ -1845,14 +1986,18 @@ function MotifProp({
 }
 
 /**
- * Seeded interior furnishing (hotel-room / pool-hall / library / ballroom):
- * fixed per-room checklists wall-anchored with seeded jitter — beds against
- * the far wall, shelf rows facing each other, chandeliers in a grid. These
- * checklists ARE the interior composition: signature pieces anchor the far
- * wall (the interior's hero), so no separate hero element is added. Counts
- * scale with the plan; positions come from the "furniture" seed stream and
- * the SCALED recipe view, clamped inside the plan's walkable footprint
- * (an l-shape's abandoned quadrant never receives furniture).
+ * Legacy seeded layout for the rooms kits do NOT cover: the pool-hall's
+ * water-anchored fixtures (ladder on the rim, loungers on the far deck,
+ * columns at the water corners — pool-side kits are milestone N2) and the
+ * wonder dioramas' oversized accent rugs. The flat interior archetypes
+ * (hotel-room / library / ballroom) are furnished by kits instead — see
+ * stageInteriorKits (lib/game/kits.ts), which replaced this function's
+ * old fixed checklists with composed, wall-anchored groupings.
+ *
+ * Positions come from the "furniture" seed stream and the SCALED recipe
+ * view, clamped inside the plan's walkable footprint (an l-shape's
+ * abandoned quadrant never receives furniture); returned scales are
+ * ABSOLUTE (prop scale already folded in), matching the kit path.
  */
 function furnishInterior(
   rng: () => number,
@@ -1889,67 +2034,11 @@ function furnishInterior(
       y: terrainHeight(scaled, cx, cz),
       z: cz,
       rotY,
-      scale,
+      scale: scale * propScale,
     });
   };
 
   switch (scaled.archetype) {
-    case "hotel-room": {
-      const side = rng() < 0.5 ? 1 : -1;
-      const bedX = -width / 4 + jitter(0.5);
-      put("rug", jitter(0.4), extent * 0.55, 0);
-      put("bed", bedX, extent - 1.6, Math.PI);
-      put("nightstand", bedX - 1.5, extent - 0.8, 0);
-      put("nightstand", bedX + 1.5, extent - 0.8, 0);
-      put("tv", side * (width / 2 - 0.7), extent * 0.55, -side * (Math.PI / 2));
-      put("sofa", -side * (width / 2 - 1.0), extent * 0.5, side * (Math.PI / 2));
-      if (extent >= 64) {
-        put("floorlamp", -side * (width / 2 - 1.0), extent * 0.5 - 2.2, 0);
-        put("desk", width / 4, 2.4, Math.PI);
-      }
-      break;
-    }
-    case "library": {
-      const shelfStep = 2.6;
-      for (const rowSide of [-1, 1]) {
-        const x = rowSide * (width / 2 - 1.1);
-        for (let z = 2.8; z <= extent - 2.8; z += shelfStep) {
-          put("bookshelf", x, z + jitter(0.2), -rowSide * (Math.PI / 2));
-        }
-      }
-      for (let z = 4.5; z <= extent - 3; z += 5.2) {
-        // Chairs spread across the room's width (not just the center
-        // column) so wide plans read furnished from the doorway too.
-        const cx = (width / 2 - 4) * (rng() * 2 - 1);
-        put("readingchair", cx + jitter(0.5), z + jitter(0.4), Math.PI + jitter(0.4));
-        put("desklamp", cx + 1.1, z + jitter(0.3), 0);
-      }
-      put("rug", 0, extent / 2, 0, extent >= 64 ? 1.6 : 1.2);
-      if (extent >= 64) {
-        put("rug", 0, extent * 0.25, 0, 1.2);
-        put("rug", 0, extent * 0.75, 0, 1.2);
-      }
-      break;
-    }
-    case "ballroom": {
-      put("rug", 0, extent / 2, 0, 1.6);
-      if (extent >= 64) {
-        put("rug", -width / 4, extent * 0.28, 0, 1.2);
-        put("rug", width / 4, extent * 0.72, 0, 1.2);
-      }
-      const n = extent >= 64 ? 4 : 2;
-      for (let i = 0; i < n; i++) {
-        const gx = n === 4 ? (i % 2 === 0 ? -1 : 1) * (width / 4) : 0;
-        const gz = n === 4 ? (i < 2 ? 0.35 : 0.65) * extent : (i === 0 ? 0.35 : 0.65) * extent;
-        put("chandelier", gx, gz, 0);
-      }
-      for (const colSide of [-1, 1]) {
-        for (let z = 3; z <= extent - 3; z += 4.5) {
-          put("column", colSide * (width / 2 - 1.0), z + jitter(0.3), 0);
-        }
-      }
-      break;
-    }
     case "balloons":
     case "cats":
     case "dogs": {
@@ -2657,16 +2746,48 @@ function SpaceDoorway({
 }
 
 /**
+ * Authored material state, recorded ONCE per material instance, keyed on the
+ * material itself. The crossfade below mutates opacity/transparent in place,
+ * and React may RE-RUN the capture layout effect on the same fiber with refs
+ * intact — R3F mounts the whole scene under a Suspense boundary (react-three-
+ * fiber.esm.js: `jsx(React.Suspense, …)`), so a sibling suspension hides and
+ * re-reveals committed content and replays layout effects; measured live:
+ * the effect fired twice, 1.6 s apart, the second run mid-fade. Without this
+ * map the second run records the fade machinery's own mutations as
+ * "authored" and the hand-back then faithfully restores the corrupted values
+ * (every material stuck in the transparent pass — the "veil"). First capture
+ * is always pristine because it runs before this file has touched the
+ * material. Do NOT "simplify" this back to reading mat.opacity at capture.
+ */
+const AUTHORED_MATERIAL_STATE = new WeakMap<
+  THREE.Material,
+  { opacity: number; transparent: boolean }
+>();
+
+function authoredMaterialState(mat: THREE.Material): {
+  opacity: number;
+  transparent: boolean;
+} {
+  let authored = AUTHORED_MATERIAL_STATE.get(mat);
+  if (!authored) {
+    authored = { opacity: mat.opacity, transparent: mat.transparent };
+    AUTHORED_MATERIAL_STATE.set(mat, authored);
+  }
+  return authored;
+}
+
+/**
  * Render the space described by a fully resolved recipe, extending outward
  * from the corridor wall at `door`. Pure function of (recipe, door) — no
  * fog, background, or lights (the integrator's canvas owns those).
  *
  * FADE. The room never pops: every material under the root is captured on
- * mount (base opacity + transparency) and crossfaded over SPACE_FADE_S —
- * `fade="in"` condenses the room out of its shadow on entry, `fade="out"`
- * dissolves it on exit and fires `onFadedOut` so the integrator can
- * unmount. Once the fade-in completes, materials are restored to their
- * authored transparency so steady-state rendering is untouched.
+ * mount (authored opacity + transparency — see AUTHORED_MATERIAL_STATE) and
+ * crossfaded over SPACE_FADE_S — `fade="in"` condenses the room out of its
+ * shadow on entry, `fade="out"` dissolves it on exit and fires `onFadedOut`
+ * so the integrator can unmount. Once the fade-in completes, materials are
+ * restored to their authored transparency so steady-state rendering is
+ * untouched.
  */
 export function SpaceScene({
   recipe,
@@ -2726,6 +2847,7 @@ export function SpaceScene({
   const fadeMatsRef = useRef<{ mat: THREE.Material; base: number; transparent: boolean }[]>([]);
   const fadeTRef = useRef(fade === "in" ? 0 : 1);
   const fadeDoneRef = useRef(false);
+  const restoredRef = useRef(false);
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
@@ -2734,14 +2856,24 @@ export function SpaceScene({
       const material = (obj as { material?: THREE.Material | THREE.Material[] }).material;
       if (material === undefined) return;
       for (const mat of Array.isArray(material) ? material : [material]) {
-        mats.push({ mat, base: mat.opacity, transparent: mat.transparent });
+        // Idempotent capture: the authored state comes from the WeakMap
+        // (first, pristine capture wins), NEVER from the material's current
+        // — possibly already fade-mutated — fields. See the WeakMap comment.
+        const authored = authoredMaterialState(mat);
+        mats.push({ mat, base: authored.opacity, transparent: authored.transparent });
       }
     });
     fadeMatsRef.current = mats;
+    // A re-run of this effect re-corrupts the materials below, so the
+    // frame loop must re-run the hand-back when it next sees the end state.
+    restoredRef.current = false;
     const k0 = fadeTRef.current;
-    for (const { mat } of mats) {
+    for (const { mat, base } of mats) {
       mat.transparent = true;
-      mat.opacity = mat.opacity * k0;
+      // Multiply the AUTHORED base, not mat.opacity: on a mid-fade effect
+      // replay mat.opacity is already faded and multiplying it again would
+      // double-dim.
+      mat.opacity = base * k0;
     }
   }, []);
   useFrame((_, delta) => {
@@ -2753,7 +2885,28 @@ export function SpaceScene({
     const dirSign = fade === "in" ? 1 : -1;
     const t = fadeTRef.current;
     GAME_DEBUG.fadeT = t;
-    if ((dirSign > 0 && t >= 1) || (dirSign < 0 && t <= 0)) return;
+    // End states are STATES, not events: any frame that observes the end
+    // value settles the side effects exactly once. (The old code did the
+    // hand-back only inside the frame where `next` first crossed 1 — one
+    // missed or replayed branch left materials stuck.)
+    if (dirSign > 0 && t >= 1) {
+      if (!restoredRef.current) {
+        // Fade-in done: hand materials back to their authored state.
+        restoredRef.current = true;
+        for (const entry of mats) {
+          entry.mat.opacity = entry.base;
+          entry.mat.transparent = entry.transparent;
+        }
+      }
+      return;
+    }
+    if (dirSign < 0 && t <= 0) {
+      if (!fadeDoneRef.current) {
+        fadeDoneRef.current = true;
+        onFadedOut();
+      }
+      return;
+    }
     const next = THREE.MathUtils.clamp(
       t + (dirSign * Math.min(delta, 0.05)) / SPACE_FADE_S,
       0,
@@ -2764,17 +2917,6 @@ export function SpaceScene({
     for (const entry of mats) {
       entry.mat.transparent = true;
       entry.mat.opacity = entry.base * k;
-    }
-    if (dirSign > 0 && next >= 1) {
-      // Fade-in done: hand materials back to their authored state.
-      for (const entry of mats) {
-        entry.mat.opacity = entry.base;
-        entry.mat.transparent = entry.transparent;
-      }
-    }
-    if (dirSign < 0 && next <= 0 && !fadeDoneRef.current) {
-      fadeDoneRef.current = true;
-      onFadedOut();
     }
   });
   // Slow probe sampler: every ~0.5s count materials still left transparent
@@ -2858,20 +3000,63 @@ export function SpaceScene({
     };
   }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale]);
 
-  // Interiors AND wonder rooms are dressed by seeded layout (furniture for
-  // interiors; oversized rugs for the animal/balloon dioramas).
+  // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
+  // wall-anchored groupings that face the path/door/hero, staged by
+  // lib/game/kits.ts (the "furniture" stream). The pool hall keeps its
+  // water-anchored legacy fixtures — the pool IS its content and pool-side
+  // kits are milestone N2 — and draws its deck kits around them, the
+  // fixtures' positions handed over as obstacle discs. Wonder rooms keep
+  // their seeded oversized rugs.
   const furniture = useMemo(() => {
-    if (
-      recipe.worldClass !== "interior" &&
-      recipe.worldClass !== "wonder"
-    ) {
+    if (recipe.worldClass !== "interior" && recipe.worldClass !== "wonder") {
       return [];
     }
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "furniture"),
     );
+    const toPlacement = (p: StagedKitPiece): PropPlacement => ({
+      kind: p.kind,
+      x: p.x,
+      y: p.y,
+      z: p.z,
+      rotY: p.rotY,
+      scale: p.scale,
+    });
+    if (recipe.worldClass === "interior") {
+      const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+      const staging = {
+        rng,
+        archetype: recipe.archetype,
+        plan,
+        comp,
+        baseExtent: recipe.size.extent,
+        propScale,
+        wallThick,
+        water: waterRect,
+        heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
+      };
+      if (recipe.archetype === "pool-hall") {
+        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale);
+        const obstacles = legacy.map((p) => ({
+          x: p.x,
+          z: p.z,
+          r: Math.max(0.5, p.scale),
+        }));
+        const waterArea = waterRect
+          ? (waterRect.halfX * 2 * waterRect.halfZ * 2) /
+            (scaleFactor * scaleFactor)
+          : 0;
+        const kits = stageInteriorKits({
+          ...staging,
+          baseArea: Math.max(0, baseArea - waterArea),
+          obstacles,
+        });
+        return [...legacy, ...kits.map(toPlacement)];
+      }
+      return stageInteriorKits({ ...staging, baseArea }).map(toPlacement);
+    }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale);
-  }, [recipe, scaledRecipe, waterRect, plan, propScale]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid.
@@ -2955,6 +3140,12 @@ export function SpaceScene({
   const wallColor = useMemo(
     () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.8),
     [recipe],
+  );
+  // Dado panel stiles sit a touch lighter than the wall they panel (the
+  // baseboard and rail reuse the dark cap-rail trim color).
+  const dadoPanelColor = useMemo(
+    () => wallColor.clone().multiplyScalar(1.12),
+    [wallColor],
   );
 
   // Perimeter walls from the room plan: rect rooms get the legacy
@@ -3195,15 +3386,17 @@ export function SpaceScene({
         </group>
       ))}
 
-      {/* Interior furnishing (hotel-room / pool-hall / library / ballroom).
-          Sizes ride the room's prop scale — a colossal hotel room gets a
-          colossal bed; the door stays human. */}
+      {/* Interior furnishing: kit-staged groupings (plus the pool hall's
+          legacy water fixtures and the wonder rooms' rugs). Scales are
+          ABSOLUTE — both paths bake the room's prop scale in — so a
+          colossal hotel room gets colossal furniture; the door stays
+          human. */}
       {furniture.map((p, i) => (
         <group
           key={`f${i}`}
           position={[p.x, p.y, p.z]}
           rotation={[0, p.rotY, 0]}
-          scale={p.scale * propScale}
+          scale={p.scale}
         >
           <Shadowed>
             <MotifProp
@@ -3357,6 +3550,24 @@ export function SpaceScene({
           </group>
         );
       })}
+
+      {/* dado-band (§3.2): baseboard + panelled wainscot on the inner face
+          of every perimeter wall — the room reads as a place at its
+          boundary, which is where the eye looks for craft. Breaks at the
+          doorway (the entrance segments already split around the gap) and
+          follows the cutaway (short camera-side walls keep only the band
+          parts that fit under their drawn top). */}
+      {walls.map((wall, i) => (
+        <DadoBand
+          key={`dado${i}`}
+          wall={wall}
+          height={wallHeights[i]}
+          plan={plan}
+          wallScale={wallHeight / WALL_HEIGHT}
+          trimColor={capColor}
+          panelColor={dadoPanelColor}
+        />
+      ))}
 
       {/* Colonnade bays: open column rows where the side walls would be —
           the room spills onto the mist skirt between the columns. Column
