@@ -118,7 +118,10 @@ export interface Palette {
   fog: string;
   /** Base ground color before archetype detail. */
   ground: string;
-  /** Accent color for props, trims, and water highlights. */
+  /** Accent color for props, trims, and water highlights. Always a member
+   *  of the brand palette family (src/lib/theme/palette-family.ts) — the
+   *  palette's dominant hues stay its own, the one contrast colour comes
+   *  from the brand arc (design §11.1). */
   accent: string;
   /** Directional "sun" (or moon) light color. */
   sunColor: string;
@@ -128,14 +131,16 @@ export interface Palette {
   ambient: number;
 }
 
-/** The six original palettes — restrained, nature-friendly. */
+/** The six original palettes — restrained, nature-friendly. Every accent
+ *  is a brand-family member (palette-family.ts); the family index is noted
+ *  beside it. */
 export const PALETTES: readonly Palette[] = [
   {
     id: "dawn",
     sky: "#f3d9c8",
     fog: "#e9d2c2",
     ground: "#9aa78a",
-    accent: "#e0a184",
+    accent: "#8b71b2", // family #27 — violet, complement of the sage ground
     sunColor: "#ffd9b3",
     sunIntensity: 0.7,
     ambient: 0.45,
@@ -145,7 +150,7 @@ export const PALETTES: readonly Palette[] = [
     sky: "#cfe4ee",
     fog: "#dcebf0",
     ground: "#a9b78f",
-    accent: "#f0e6c8",
+    accent: "#7168a3", // family #10 — deep violet against the light ground
     sunColor: "#fff4e0",
     sunIntensity: 1.0,
     ambient: 0.6,
@@ -155,7 +160,7 @@ export const PALETTES: readonly Palette[] = [
     sky: "#d9b8c4",
     fog: "#cbb3c0",
     ground: "#8f9a7f",
-    accent: "#d98d6e",
+    accent: "#656ca6", // family #9 — indigo, darkest band against mid ground
     sunColor: "#f5b78f",
     sunIntensity: 0.5,
     ambient: 0.35,
@@ -165,7 +170,7 @@ export const PALETTES: readonly Palette[] = [
     sky: "#232b3a",
     fog: "#2f3849",
     ground: "#3d4536",
-    accent: "#7f95b8",
+    accent: "#93c1fa", // family #87 — light periwinkle, reads against the dark
     sunColor: "#a9bde0",
     sunIntensity: 0.35,
     ambient: 0.28,
@@ -175,7 +180,7 @@ export const PALETTES: readonly Palette[] = [
     sky: "#ecd9b0",
     fog: "#e6d3ab",
     ground: "#a99a72",
-    accent: "#d9925f",
+    accent: "#647ebc", // family #24 — brand-side blue, complement of honey
     sunColor: "#ffdf9e",
     sunIntensity: 0.8,
     ambient: 0.5,
@@ -185,7 +190,7 @@ export const PALETTES: readonly Palette[] = [
     sky: "#c2d4d8",
     fog: "#cddfe2",
     ground: "#8fa39a",
-    accent: "#a8c4c9",
+    accent: "#ad6689", // family #31 — rose, warm counterweight to the teal-grey
     sunColor: "#e6f2f0",
     sunIntensity: 0.7,
     ambient: 0.5,
@@ -193,14 +198,16 @@ export const PALETTES: readonly Palette[] = [
 ];
 
 /** The vivid v2 palettes — high-saturation room colors. Interior and
- *  wonder rooms draw from this set first (see space-recipe.ts). */
+ *  wonder rooms draw from this set first (see space-recipe.ts). Every
+ *  accent is a brand-family member (palette-family.ts); the family index
+ *  is noted beside it. */
 export const VIVID_PALETTES: readonly Palette[] = [
   {
     id: "coral",
     sky: "#ffd9c9",
     fog: "#ffc9b8",
     ground: "#e86a58",
-    accent: "#ffe14d",
+    accent: "#13808b", // family #3 — deep cyan, complement of coral
     sunColor: "#fff0e0",
     sunIntensity: 0.9,
     ambient: 0.55,
@@ -210,7 +217,7 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#d8f5e8",
     fog: "#cdf0e0",
     ground: "#63c88e",
-    accent: "#ff7fa0",
+    accent: "#a76895", // family #30 — mauve, complement of mint
     sunColor: "#f0fff4",
     sunIntensity: 0.9,
     ambient: 0.55,
@@ -220,7 +227,7 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#fff3c4",
     fog: "#ffedb0",
     ground: "#e8c34e",
-    accent: "#5fc4e8",
+    accent: "#5970a6", // family #8 — deep blue-violet, complement of butter
     sunColor: "#fff8dc",
     sunIntensity: 1.0,
     ambient: 0.6,
@@ -230,7 +237,9 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#e2d4f5",
     fog: "#d9c8f0",
     ground: "#a68cd0",
-    accent: "#ffd966",
+    accent: "#339377", // family #16 — teal; lavender's true complement is
+    // yellow-green, which the family excludes on principle — the teal arc
+    // endpoint is the nearest legible member
     sunColor: "#f5ecff",
     sunIntensity: 0.9,
     ambient: 0.55,
@@ -240,7 +249,8 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#bfe8ff",
     fog: "#cdeeff",
     ground: "#6fb7e8",
-    accent: "#ff9a62",
+    accent: "#8d5e8e", // family #13 — plum; the orange complement is outside
+    // the family, so the rose end supplies the contrast
     sunColor: "#f0faff",
     sunIntensity: 1.0,
     ambient: 0.6,
@@ -250,7 +260,7 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#ffe3cf",
     fog: "#ffd9c0",
     ground: "#f0a070",
-    accent: "#7fd0c0",
+    accent: "#328bb0", // family #21 — steel blue, complement of peach
     sunColor: "#fff4e8",
     sunIntensity: 0.9,
     ambient: 0.55,
@@ -260,7 +270,7 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#d0f0c0",
     fog: "#c8e8b8",
     ground: "#58b058",
-    accent: "#ff8a5c",
+    accent: "#9f6aa0", // family #29 — mauve, complement of grass
     sunColor: "#f4ffe8",
     sunIntensity: 0.9,
     ambient: 0.55,
@@ -270,7 +280,8 @@ export const VIVID_PALETTES: readonly Palette[] = [
     sky: "#dff4f8",
     fog: "#d8f0f5",
     ground: "#8fc4d4",
-    accent: "#ffb84d",
+    accent: "#995b79", // family #15 — deep rose; the amber complement is
+    // outside the family, the rose end is the contrast instead
     sunColor: "#f4fcff",
     sunIntensity: 1.0,
     ambient: 0.6,
