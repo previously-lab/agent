@@ -375,6 +375,81 @@ export const DADO_FULL_MARGIN = 0.15;
 export const SNOW_COUNT_MAX = 1500;
 
 /* ------------------------------------------------------------------ */
+/* Template feature geometry (v0.11-room-interiors §7.2 feature slots:  */
+/* niche / pilaster-rhythm / floor-inlay — §3.2's dressing, declared    */
+/* by the layout templates as DATA and built by space.tsx as            */
+/* architecture: opaque, wall/floor-material, lit only by the room's    */
+/* own fixtures (B.13 — a niche must NOT glow; this world has no        */
+/* outdoors, so nothing may shine without a fixture). Sizes ride the    */
+/* wall scale (these are architecture, like the dado band), so a        */
+/* colossal room gets colossal features and a miniature room a          */
+/* dollhouse set. Placement math lives in space.tsx (buildRoomFeatures) */
+/* on top of room-plan.ts's wall roles and the door-split wall runs —   */
+/* the pure modules keep owning the geometry.                           */
+/* ------------------------------------------------------------------ */
+
+/** Niche (凹龛): a TRUE recess opened in a full-height wall — the host
+ *  run is rebuilt as two flank boxes plus a header over the opening, so
+ *  the alcove reads with real depth. Never on a cutaway sill (a niche in
+ *  a 1.1m wall is a hole in nothing) and never where it would swallow a
+ *  doorway or a strand-door approach. Opening width / height (m, ×wall
+ *  scale); the top stays below the wall top so the header and cap rail
+ *  keep the wall's top edge continuous. */
+export const NICHE_WIDTH = 1.8;
+export const NICHE_HEIGHT = 2.2;
+/** Recess depth (m, unscaled): capped at wall thickness − 0.08 so the
+ *  alcove always keeps a real back panel inside the wall instead of
+ *  punching through. */
+export const NICHE_MAX_DEPTH = 0.26;
+/** Clear margin between the niche opening and any strand door's gap on
+ *  the same wall (m) — the template data already bans doors on niche
+ *  walls; this is the renderer's own backstop (a relaxed door ladder
+ *  near the opening forfeits the niche, never the door). */
+export const NICHE_DOOR_CLEAR = 1.0;
+/** The plinth standing in the alcove (§3.2: 内部放长凳/盆/台座): height
+ *  (m, ×wall scale) and the fraction of the opening width it fills. */
+export const NICHE_PEDESTAL_HEIGHT = 0.5;
+export const NICHE_PEDESTAL_FILL = 0.55;
+
+/** Pilaster rhythm (壁柱节奏): flat strips repeating along a wall run,
+ *  standing ON the dado band (they start at the chair-rail line and stop
+ *  below the cap rail) and breaking at every opening — the runs are
+ *  already split at door gaps, so per-run placement breaks the rhythm
+ *  for free. Cutaway sills get none: a pilaster needs the full dado to
+ *  stand on (the same DADO_FULL_MARGIN rule the band itself uses).
+ *  Strip width / projection from the wall face (m, ×wall scale). */
+export const PILASTER_WIDTH = 0.34;
+export const PILASTER_PROJECT = 0.09;
+/** Target bay spacing and the end pad from a run's ends (m, ×wall
+ *  scale) — corners and door frames stay clean. */
+export const PILASTER_SPAN = 2.6;
+export const PILASTER_END_PAD = 0.9;
+/** A slightly wider, slightly prouder cap block finishes each strip
+ *  below the wall top (m, ×wall scale). */
+export const PILASTER_CAP_HEIGHT = 0.14;
+/** Runs shorter than this (m, ×wall scale) get no pilaster — a lone stub
+ *  between two doors reads as leftover, not rhythm. */
+export const PILASTER_MIN_RUN = 2.4;
+/** A pilaster shorter than this (m, ×wall scale) between the dado rail and
+ *  its cap is not a pilaster — this is what keeps the rhythm OFF cutaway
+ *  sills (a 1.1m wall passes the dado's own full-band test but has no room
+ *  for a strip above the rail). */
+export const PILASTER_MIN_STRIP = 0.6;
+
+/** Floor inlay (地面镶边): a border band in a contrasting stone, flat on
+ *  the floor. Lifted 14mm — above the parquet's 6mm dressing plane so
+ *  the two never z-fight, low enough to read as flush. The band is a
+ *  calm, narrow frame: it must not fight the room's checker (A3 — the
+ *  room's pattern budget belongs to light). Flat-floor rooms only:
+ *  rolling terrain would clip straight through it. */
+export const INLAY_LIFT = 0.014;
+/** Band width (m, ×wall scale). */
+export const INLAY_BAND_WIDTH = 0.4;
+/** Smallest figure side (m, ×wall scale) that still reads as a figure —
+ *  below this the feature is skipped. */
+export const INLAY_MIN_SPAN = 1.6;
+
+/* ------------------------------------------------------------------ */
 /* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
 /* 2026-09-18): this world has NO outdoors, so every lit surface must  */
 /* have a findable source. Every room grows a LAMP (shade + bulb + a   */

@@ -7,6 +7,7 @@ import { Link, useRouter } from "@/i18n/navigation";
 import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import { buildStrandGraph } from "@/lib/game/strand-graph";
+import { sliceClockTime } from "@/lib/game/slice-clock";
 import {
   buildRoomDoorMap,
   type RoomDoorMap,
@@ -84,21 +85,14 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
 /**
  * The door NUMBER (B.14 用户定稿 rule 1): the slice's own 4-digit clock
  * (`…-0746` → `0746`), so the same slice hangs the same number on its
- * corridor plate and on every strand door that leads to it. This regex and
- * the group-4 extraction are corridor.tsx's `sliceClock` VERBATIM — the
- * corridor is the authority for the number and is frozen, so the rule is
- * mirrored here rather than imported; the two must never drift (same
- * anchored pattern, same capture group). Ids that do not match (fixtures,
- * tests) get no number — the corridor's own "no signage" case. Never derive
- * this from `formatDoorLabel`'s time half: that one is locale-local time
- * rendered from the UTC `start`, which can differ from the id's clock.
+ * corridor plate and on every strand door that leads to it. The rule lives
+ * in lib/game/slice-clock.ts — the single source both this file and the
+ * corridor import (previously a mirrored copy kept in sync by comment).
+ * Ids that do not match (fixtures, tests) get no number — the corridor's
+ * own "no signage" case. Never derive this from `formatDoorLabel`'s time
+ * half: that one is locale-local time rendered from the UTC `start`, which
+ * can differ from the id's clock.
  */
-const SLICE_ID_RE = /^(\d{4})-(\d{2})-(\d{2})-(\d{4})$/;
-
-function sliceClockTime(sliceId: string): string | null {
-  const m = SLICE_ID_RE.exec(sliceId);
-  return m ? m[4] : null;
-}
 
 export function GameShell() {
   const t = useTranslations("game");

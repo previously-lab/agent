@@ -49,6 +49,19 @@
  *             from the door to the hero, and clustered (not uniform)
  *             scatter around seeded centers.
  *
+ * LAYOUT TEMPLATES (v0.11-room-interiors §7). Interior rooms may resolve a
+ * pre-authored layout template (lib/game/room-templates.ts) from the slice,
+ * its UNSCALED tier, and the real strand-door count (capacity measured on
+ * each candidate's declared footprint — Finding A). The template only
+ * DECLARES: its footprint feeds roomPlanFor, its permitted wall roles feed
+ * placeRoomDoors, its content zones feed stageInteriorKits — the pure
+ * modules keep owning all geometry, and an untemplated room passes
+ * `undefined` everywhere, behaving byte-for-byte as before. The template's
+ * declared feature slots (niche / pilaster-rhythm / floor-inlay) are built
+ * HERE, after the door split, as opaque architecture lit only by the
+ * room's own fixtures (buildRoomFeatures — never on cutaway sills, never
+ * across a doorway or a strand-door approach, never fighting the parquet).
+ *
  * Everything rendered here is a pure function of the resolved recipe plus
  * the door position — rebuilding a space from the same recipe yields the
  * identical scene. Layout (positions, counts, waypoints, phases) is seed-
@@ -107,13 +120,23 @@ import {
   roomPlanFor,
   scaledRecipeFor,
   scaledWallHeight,
+  wallRoleFor,
   wallSegmentsFor,
   type Composition,
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
 import {
+  doorAffordanceFor,
+  resolveRoomTemplate,
+  templatePlanFor,
+  templateZonesFor,
+  type RoomTemplate,
+} from "@/lib/game/room-templates";
+import type { SplitWall } from "@/lib/game/room-doors";
+import {
   crossedRoomDoor,
+  doorCapacityFor,
   hostableWallsFor,
   inDoorApproach,
   placeRoomDoors,
@@ -171,6 +194,9 @@ import {
   GROUND_SEGMENTS_MAX,
   HERO_CLEAR,
   HERO_SCALE,
+  INLAY_BAND_WIDTH,
+  INLAY_LIFT,
+  INLAY_MIN_SPAN,
   LAMP_BULB_EMISSIVE,
   LAMP_BULB_Y,
   LAMP_COLOR,
@@ -182,10 +208,23 @@ import {
   LAMP_SHADE_EMISSIVE,
   LAMP_SHADE_Y,
   LONE_PROB,
+  NICHE_DOOR_CLEAR,
+  NICHE_HEIGHT,
+  NICHE_MAX_DEPTH,
+  NICHE_PEDESTAL_FILL,
+  NICHE_PEDESTAL_HEIGHT,
+  NICHE_WIDTH,
   PARQUET_CELL,
   PARQUET_TONE_LIFT,
   PET_COUNT,
   PET_NEAR_RADIUS_MAX,
+  PILASTER_CAP_HEIGHT,
+  PILASTER_END_PAD,
+  PILASTER_MIN_RUN,
+  PILASTER_MIN_STRIP,
+  PILASTER_PROJECT,
+  PILASTER_SPAN,
+  PILASTER_WIDTH,
   PORTAL_HEIGHT,
   PROP_COUNT,
   PROP_DOOR_DEPTH,
@@ -352,6 +391,483 @@ function DadoBand({
     }
   }
   return <group>{parts}</group>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Template feature slots (v0.11-room-interiors §7.2): niche,           */
+/* pilaster-rhythm, floor-inlay. The templates DECLARE these slots as   */
+/* data; this section resolves them against the plan's wall roles and   */
+/* the door-split wall runs (the existing modules' outputs — nothing    */
+/* re-implements their math) and builds the geometry. Every feature is  */
+/* architecture: opaque, wall/floor-material, lit only by the room's    */
+/* own fixtures (B.13 — a niche must NOT glow). No RNG anywhere: the    */
+/* same slice under the same template always grows the same features    */
+/* (A6), and a room without a template builds nothing here.             */
+/* ------------------------------------------------------------------ */
+
+/** A resolved niche: the host wall RUN is rebuilt around the opening. */
+interface NicheFeature {
+  /** Index into wallRuns. */
+  run: number;
+  /** Opening center offset along the run from its center (m). */
+  along: number;
+  width: number;
+  height: number;
+  /** Recess depth into the wall (m), capped to keep a real back panel. */
+  depth: number;
+  pedestalH: number;
+}
+
+/** A resolved pilaster rhythm: strip positions along one wall run. */
+interface PilasterFeature {
+  /** Index into wallRuns. */
+  run: number;
+  alongs: number[];
+}
+
+/** A resolved floor inlay: the figure's outer rectangle (local frame). */
+interface InlayFeature {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
+interface RoomFeatures {
+  niches: NicheFeature[];
+  pilasters: PilasterFeature[];
+  inlay: InlayFeature | null;
+}
+
+/**
+ * Resolve the template's declared feature slots into placements.
+ *
+ * Placement rules (the hard constraints from §7.2 and B.11):
+ *  - NICHE: full-height runs of the declared wall role only — never a
+ *    cutaway sill (a niche in a 1.1m wall is a hole in nothing) — and
+ *    never where it would swallow a doorway: any strand door within
+ *    NICHE_DOOR_CLEAR of the opening forfeits the niche (the template
+ *    already bans doors on its niche wall; this is the backstop).
+ *  - PILASTER: per door-split RUN, so the rhythm breaks at every opening
+ *    for free; strips stand ON the dado band and need PILASTER_MIN_STRIP
+ *    of shaft above the rail, which keeps them off cutaway sills; the end
+ *    pad keeps corners and door frames clean.
+ *  - INLAY: flat floors only (rolling terrain would clip through); the
+ *    whole band is shrunk inside the walkable footprint (an l-shape's
+ *    abandoned quadrant takes no stone), and the figure lifts 14mm —
+ *    above the parquet's 6mm plane, so the two never z-fight.
+ */
+function buildRoomFeatures({
+  template,
+  plan,
+  walls,
+  wallRuns,
+  wallHeights,
+  wallHeight,
+  wallThick,
+  doors,
+  flatFloor,
+}: {
+  template: RoomTemplate | null;
+  plan: RoomPlan;
+  walls: readonly WallSegment[];
+  wallRuns: readonly SplitWall[];
+  wallHeights: readonly number[];
+  wallHeight: number;
+  wallThick: number;
+  doors: readonly RoomDoorPlacement[];
+  flatFloor: boolean;
+}): RoomFeatures {
+  const out: RoomFeatures = { niches: [], pilasters: [], inlay: null };
+  if (!template) return out;
+  const ws = wallHeight / WALL_HEIGHT;
+
+  for (const slot of template.features) {
+    if (slot.kind === "niche") {
+      const half = (NICHE_WIDTH * ws) / 2;
+      for (let i = 0; i < wallRuns.length; i++) {
+        const run = wallRuns[i];
+        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
+        // Never on a cutaway sill.
+        if (wallHeights[i] < wallHeight - 1e-6) continue;
+        const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+        const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
+        const span = slot.span ?? [0.4, 0.6];
+        const along = ((span[0] + span[1]) / 2 - 0.5) * len;
+        // The opening must sit fully on the run, clear of its ends…
+        if (Math.abs(along) + half > len / 2 - 0.3) continue;
+        // …and never swallow a doorway or its approach.
+        if (
+          doors.some(
+            (d) =>
+              d.wall === run.source &&
+              Math.abs(d.along - along) < half + DOOR_GAP_HALF + NICHE_DOOR_CLEAR,
+          )
+        ) {
+          continue;
+        }
+        const thick = horizontal ? run.wall.sizeZ : run.wall.sizeX;
+        out.niches.push({
+          run: i,
+          along,
+          width: NICHE_WIDTH * ws,
+          height: NICHE_HEIGHT * ws,
+          depth: Math.max(0.1, Math.min(NICHE_MAX_DEPTH, thick - 0.08)),
+          pedestalH: NICHE_PEDESTAL_HEIGHT * ws,
+        });
+        break; // one niche per declared slot
+      }
+    } else if (slot.kind === "pilaster-rhythm") {
+      const stripMin =
+        (DADO_TOP + DADO_FULL_MARGIN + PILASTER_MIN_STRIP) * ws;
+      for (let i = 0; i < wallRuns.length; i++) {
+        const run = wallRuns[i];
+        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
+        // Breaking at the dado band: a pilaster stands ON the full band —
+        // cutaway sills (baseboard only, no shaft room) get none.
+        if (wallHeights[i] < stripMin) continue;
+        const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+        const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
+        const pad = PILASTER_END_PAD * ws;
+        const runLen = len - pad * 2;
+        if (runLen < PILASTER_MIN_RUN * ws) continue;
+        const n = Math.max(1, Math.round(runLen / (PILASTER_SPAN * ws)));
+        const spacing = runLen / n;
+        // Runs are already split at door gaps; defensively drop any strip
+        // that would still land on a door frame.
+        const alongs: number[] = [];
+        for (let k = 0; k < n; k++) {
+          const a = -len / 2 + pad + (k + 0.5) * spacing;
+          if (
+            doors.some(
+              (d) =>
+                d.wall === run.source &&
+                Math.abs(d.along - a) < DOOR_GAP_HALF + (PILASTER_WIDTH * ws) / 2 + 0.1,
+            )
+          ) {
+            continue;
+          }
+          alongs.push(a);
+        }
+        if (alongs.length > 0) out.pilasters.push({ run: i, alongs });
+      }
+    } else if (slot.kind === "floor-inlay" && flatFloor && out.inlay === null) {
+      const span = slot.span ?? [0.25, 0.75];
+      const band = INLAY_BAND_WIDTH * ws;
+      let x0 = (span[0] - 0.5) * plan.width;
+      let x1 = (span[1] - 0.5) * plan.width;
+      let z0 = span[0] * plan.extent;
+      let z1 = span[1] * plan.extent;
+      // An l-shape's abandoned quadrant takes no inlay: fold the figure
+      // onto the kept wing when it would cross the step.
+      if (plan.id === "l-shape" && z1 > plan.stepZ) {
+        if (plan.lSide > 0) x0 = Math.max(x0, 0);
+        else x1 = Math.min(x1, 0);
+      }
+      // Shrink toward the center until the whole band (outer edge plus
+      // its width) sits inside the walkable footprint — a colonnade's
+      // open bays keep the stone in.
+      const margin = band + wallThick + 0.1;
+      const fits = () =>
+        (
+          [
+            [x0, z0],
+            [x0, z1],
+            [x1, z0],
+            [x1, z1],
+          ] as const
+        ).every(([cx, cz]) => planContains(plan, cx, cz, margin));
+      for (let tries = 0; tries < 8 && !fits(); tries++) {
+        x0 += 0.25;
+        x1 -= 0.25;
+        z0 += 0.25;
+        z1 -= 0.25;
+      }
+      if (
+        fits() &&
+        x1 - x0 >= INLAY_MIN_SPAN * ws &&
+        z1 - z0 >= INLAY_MIN_SPAN * ws
+      ) {
+        out.inlay = { x0, x1, z0, z1 };
+      }
+    }
+    // raised-platform / water-rill / mezzanine: no §7.5 template declares
+    // them yet — the slot kinds are data for later milestones.
+  }
+  return out;
+}
+
+/**
+ * The wall run hosting a niche, rebuilt around the opening: two flank
+ * boxes plus a header above (the door-gap split generalized to an opening
+ * that stops at NICHE_HEIGHT), so the alcove behind is a TRUE recess —
+ * back panel and cheeks set into the wall's own thickness, capped to keep
+ * 8cm of wall behind the back panel. A trim architrave frames the opening
+ * and a low plinth stands inside (§3.2: 内部放长凳/盆/台座). Everything
+ * is opaque wall/trim material — no emissive anywhere (B.13: the niche is
+ * lit by the room's fixtures, never by itself). The cap rail still spans
+ * the run: the header reaches the wall top, so the top edge stays one
+ * straight line.
+ */
+function NicheWallRun({
+  wall,
+  height,
+  niche,
+  plan,
+  material,
+  trimColor,
+  capColor,
+  alcoveColor,
+  stoneColor,
+}: {
+  wall: WallSegment;
+  height: number;
+  niche: NicheFeature;
+  plan: RoomPlan;
+  material: THREE.Material;
+  trimColor: string;
+  capColor: THREE.Color;
+  alcoveColor: THREE.Color;
+  stoneColor: THREE.Color;
+}) {
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  const len = horizontal ? wall.sizeX : wall.sizeZ;
+  const thick = horizontal ? wall.sizeZ : wall.sizeX;
+  // Inward normal via the dado/window probe trick.
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, wall.x + 0.5, wall.z, 0) ? 1 : -1;
+  }
+  // Position from along-run offset + outward-perpendicular offset.
+  const pos = (
+    along: number,
+    y: number,
+    off: number,
+  ): [number, number, number] =>
+    horizontal
+      ? [wall.x + along, y, wall.z + nz * off]
+      : [wall.x + nx * off, y, wall.z + along];
+  const box = (
+    sizeAlong: number,
+    h: number,
+    sizePerp: number,
+  ): [number, number, number] =>
+    horizontal ? [sizeAlong, h, sizePerp] : [sizePerp, h, sizeAlong];
+
+  const a0 = -len / 2;
+  const a1 = len / 2;
+  const n0 = niche.along - niche.width / 2;
+  const n1 = niche.along + niche.width / 2;
+  const face = thick / 2; // inner face offset from the wall line
+  const parts: ReactNode[] = [];
+  // Flanks + header, in the run's own wall material.
+  if (n0 - a0 > 1e-3) {
+    parts.push(
+      <mesh key="fl" position={pos((a0 + n0) / 2, height / 2, 0)} castShadow receiveShadow material={material}>
+        <boxGeometry args={box(n0 - a0, height, thick)} />
+      </mesh>,
+    );
+  }
+  if (a1 - n1 > 1e-3) {
+    parts.push(
+      <mesh key="fr" position={pos((n1 + a1) / 2, height / 2, 0)} castShadow receiveShadow material={material}>
+        <boxGeometry args={box(a1 - n1, height, thick)} />
+      </mesh>,
+    );
+  }
+  parts.push(
+    <mesh key="hd" position={pos(niche.along, (height + niche.height) / 2, 0)} castShadow receiveShadow material={material}>
+      <boxGeometry args={box(niche.width, height - niche.height, thick)} />
+    </mesh>,
+  );
+  // The alcove: back panel + cheeks, the wall's plaster in its own shadow.
+  parts.push(
+    <mesh key="bk" position={pos(niche.along, niche.height / 2, face - niche.depth + 0.025)} receiveShadow>
+      <boxGeometry args={box(niche.width, niche.height, 0.05)} />
+      <meshStandardMaterial color={alcoveColor} roughness={1} flatShading />
+    </mesh>,
+  );
+  for (const side of [-1, 1] as const) {
+    parts.push(
+      <mesh
+        key={`ck${side}`}
+        position={pos(niche.along + side * (niche.width / 2 - 0.025), niche.height / 2, face - niche.depth / 2)}
+        receiveShadow
+      >
+        <boxGeometry args={box(0.05, niche.height, niche.depth)} />
+        <meshStandardMaterial color={alcoveColor} roughness={1} flatShading />
+      </mesh>,
+    );
+  }
+  // Trim architrave, proud of the inner face.
+  for (const side of [-1, 1] as const) {
+    parts.push(
+      <mesh
+        key={`tr${side}`}
+        position={pos(niche.along + side * (niche.width / 2 + 0.05), niche.height / 2 + 0.05, face + 0.04)}
+        castShadow
+      >
+        <boxGeometry args={box(0.1, niche.height + 0.1, 0.12)} />
+        <meshStandardMaterial color={trimColor} roughness={1} flatShading />
+      </mesh>,
+    );
+  }
+  parts.push(
+    <mesh key="tt" position={pos(niche.along, niche.height + 0.06, face + 0.04)} castShadow>
+      <boxGeometry args={box(niche.width + 0.2, 0.12, 0.12)} />
+      <meshStandardMaterial color={trimColor} roughness={1} flatShading />
+    </mesh>,
+  );
+  // The plinth standing in the alcove (floor-supported, I2).
+  const pedW = niche.width * NICHE_PEDESTAL_FILL;
+  const pedD = niche.depth * 0.8;
+  parts.push(
+    <mesh
+      key="pd"
+      position={pos(niche.along, GROUND_Y + niche.pedestalH / 2, face - niche.depth + pedD / 2 + 0.01)}
+      castShadow
+      receiveShadow
+    >
+      <boxGeometry args={box(pedW, niche.pedestalH, pedD)} />
+      <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+    </mesh>,
+  );
+  // Cap rail along the run top, identical to a plain run's.
+  parts.push(
+    <mesh key="cap" position={[wall.x, height - 0.05, wall.z]} castShadow receiveShadow>
+      <boxGeometry args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]} />
+      <meshStandardMaterial color={capColor} roughness={1} flatShading />
+    </mesh>,
+  );
+  return <group>{parts}</group>;
+}
+
+/**
+ * Pilaster rhythm along one wall run: flat strips standing ON the dado
+ * band (from the chair-rail line to just under the cap rail), each
+ * finished with a slightly wider, slightly prouder cap block. Positions
+ * are precomputed by buildRoomFeatures — evenly spread within the run's
+ * padded span, already broken at door gaps and never on cutaway sills.
+ * Same plaster as the dado's panel stiles, fully opaque.
+ */
+function PilasterRun({
+  wall,
+  height,
+  alongs,
+  plan,
+  wallScale,
+  color,
+}: {
+  wall: WallSegment;
+  height: number;
+  alongs: readonly number[];
+  plan: RoomPlan;
+  wallScale: number;
+  color: THREE.Color;
+}) {
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  const thick = horizontal ? wall.sizeZ : wall.sizeX;
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, wall.x + 0.5, wall.z, 0) ? 1 : -1;
+  }
+  const k = wallScale;
+  const w = PILASTER_WIDTH * k;
+  const proj = PILASTER_PROJECT * k;
+  const capH = PILASTER_CAP_HEIGHT * k;
+  const y0 = DADO_TOP * k;
+  const stripH = height - capH - y0;
+  if (stripH <= 0.02) return null;
+  const off = thick / 2 + proj / 2 - 0.002; // 2mm sink, the dado convention
+  const capProj = proj * 1.35;
+  const capOff = thick / 2 + capProj / 2 - 0.002;
+  return (
+    <group>
+      {alongs.map((a, i) => {
+        const x = wall.x + (horizontal ? a : nx * off);
+        const z = wall.z + (horizontal ? nz * off : a);
+        const cx = wall.x + (horizontal ? a : nx * capOff);
+        const cz = wall.z + (horizontal ? nz * capOff : a);
+        return (
+          <group key={i}>
+            <mesh position={[x, y0 + stripH / 2, z]} castShadow receiveShadow>
+              <boxGeometry args={horizontal ? [w, stripH, proj] : [proj, stripH, w]} />
+              <meshStandardMaterial color={color} roughness={1} flatShading />
+            </mesh>
+            <mesh position={[cx, height - capH / 2, cz]} castShadow receiveShadow>
+              <boxGeometry
+                args={horizontal ? [w * 1.3, capH, capProj] : [capProj, capH, w * 1.3]}
+              />
+              <meshStandardMaterial color={color} roughness={1} flatShading />
+            </mesh>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+/**
+ * Floor inlay: a border band of contrasting stone, flat on the floor —
+ * a ShapeGeometry ring (outer rect minus the band-inset inner rect),
+ * lifted INLAY_LIFT so it floats above the parquet's dressing plane with
+ * no z-fight and reads as flush. Opaque, receiveShadow; the room's own
+ * fixtures light it (A3: the band is stone, not a light effect).
+ */
+function FloorInlay({
+  inlay,
+  band,
+  color,
+}: {
+  inlay: InlayFeature;
+  band: number;
+  color: THREE.Color;
+}) {
+  const geometry = useMemo(() => {
+    // Shape (x, y) maps to local (x, -z) under the -π/2 rotation.
+    const rect = (
+      x0: number,
+      z0: number,
+      x1: number,
+      z1: number,
+      path: THREE.Path,
+    ) => {
+      path.moveTo(x0, -z0);
+      path.lineTo(x1, -z0);
+      path.lineTo(x1, -z1);
+      path.lineTo(x0, -z1);
+      path.closePath();
+    };
+    const shape = new THREE.Shape();
+    rect(inlay.x0, inlay.z0, inlay.x1, inlay.z1, shape);
+    const hole = new THREE.Path();
+    rect(
+      inlay.x0 + band,
+      inlay.z0 + band,
+      inlay.x1 - band,
+      inlay.z1 - band,
+      hole,
+    );
+    shape.holes.push(hole);
+    return new THREE.ShapeGeometry(shape);
+  }, [inlay, band]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  return (
+    <mesh
+      geometry={geometry}
+      position={[0, GROUND_Y + INLAY_LIFT, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      receiveShadow
+    >
+      <meshStandardMaterial color={color} roughness={1} />
+    </mesh>
+  );
 }
 
 /** One prop placement in the group's canonical local frame. */
@@ -4201,6 +4717,46 @@ export function SpaceScene({
   const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
   const { extent } = scaledRecipe.size;
   const width = scaledRecipe.width;
+
+  // LAYOUT TEMPLATE (v0.11-room-interiors §7): the design layer above the
+  // plan. Selection is a pure function of the slice, its class/archetype,
+  // the UNSCALED extent tier, and the REAL strand-door count — a 20-door
+  // day selects a template built to absorb 20 doors (room-templates.ts
+  // owns the rule and its own seed stream). Capacity steers by MEASUREMENT
+  // (Finding A): each candidate's graceful door load is measured on ITS
+  // declared footprint at this room's scaled dims, so a miniature room's
+  // shortened wall shrinks the claim (hostable flags stay out of the
+  // measure — the cutaway is the camera's accident, not the wall's
+  // length). null = no template fits (today: every non-interior class and
+  // S-tier interiors) and every downstream call then gets `undefined`,
+  // reproducing today's behaviour byte-for-byte. Consumption follows the
+  // room-templates.test.ts chain: measured selection → declared plan →
+  // walls → affordance doors → zone staging.
+  const roomDoorCount = roomDoors?.length ?? 0;
+  const template = useMemo(() => {
+    const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
+    const capacityFor = (t: RoomTemplate) => {
+      const p = roomPlanFor(
+        recipe.sliceId,
+        width,
+        extent,
+        bay,
+        WORLD_SEED,
+        templatePlanFor(t),
+      );
+      const w = wallSegmentsFor(p, wallThick);
+      return doorCapacityFor(p, w, null, doorAffordanceFor(t));
+    };
+    return resolveRoomTemplate(
+      recipe.sliceId,
+      recipe.worldClass,
+      recipe.archetype,
+      recipe.size.extent,
+      roomDoorCount,
+      WORLD_SEED,
+      capacityFor,
+    );
+  }, [recipe, roomDoorCount, width, extent, scaleFactor, wallThick]);
   const plan = useMemo(
     () =>
       roomPlanFor(
@@ -4208,8 +4764,12 @@ export function SpaceScene({
         width,
         extent,
         COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+        WORLD_SEED,
+        // The template DECLARES the silhouette; without one the legacy
+        // probability-table draw runs unchanged.
+        template ? templatePlanFor(template) : undefined,
       ),
-    [recipe, width, extent, scaleFactor],
+    [recipe, width, extent, scaleFactor, template],
   );
   const comp = useMemo(
     () => composeRoom(recipe.sliceId, plan, scaleFactor),
@@ -4337,12 +4897,23 @@ export function SpaceScene({
   // probes planContains for every normal). Hostable walls are the solid
   // FULL-HEIGHT ones; the layout's spacing ladder may relax onto the
   // cutaway sills when a small room has many doors (never dropping one).
-  const roomDoorCount = roomDoors?.length ?? 0;
+  // A resolved template additionally restricts hosting to its DECLARED
+  // wall roles (doorAffordanceFor — the shelf-run and niche walls never
+  // grow a door, on any ladder rung); positions stay seed-drawn either
+  // way, so an untemplated room's doors are placed exactly as today.
   const doorLayout = useMemo(() => {
     if (roomDoorCount === 0) return { doors: [], relaxed: false };
     const hostable = hostableWallsFor(plan, walls, dir);
-    return placeRoomDoors(recipe.sliceId, plan, walls, hostable, roomDoorCount);
-  }, [recipe, plan, walls, dir, roomDoorCount]);
+    return placeRoomDoors(
+      recipe.sliceId,
+      plan,
+      walls,
+      hostable,
+      roomDoorCount,
+      WORLD_SEED,
+      template ? doorAffordanceFor(template) : undefined,
+    );
+  }, [recipe, plan, walls, dir, roomDoorCount, template]);
 
   // The perimeter cut around every doorway: each host wall becomes the
   // runs between its door gaps (the entrance-pair split generalized),
@@ -4452,6 +5023,10 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: doorLayout.doors,
+        // The template's content zones (§7), resolved to absolute plan
+        // coordinates: the hero's pin, the kit-cluster rects, the
+        // keep-empty apron. Absent = today's seeded staging, byte-for-byte.
+        zones: template ? templateZonesFor(template, plan) : undefined,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       };
       if (recipe.archetype === "pool-hall") {
@@ -4475,7 +5050,7 @@ export function SpaceScene({
       return stageInteriorKits({ ...staging, baseArea }).map(toPlacement);
     }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, doorLayout.doors);
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, doorLayout]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, doorLayout, template]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid.
@@ -4601,6 +5176,23 @@ export function SpaceScene({
     () => wallColor.clone().multiplyScalar(1.12),
     [wallColor],
   );
+  // Feature materials: the alcove interior is the wall's own plaster in
+  // its own shadow (darker, never emissive — B.13); the inlay is a
+  // contrasting stone pulled from the room's existing stone register
+  // (the column order's #9a938a) toward the floor's tone, so it reads as
+  // the same quarry in a different cut and never fights the parquet (A5).
+  const alcoveColor = useMemo(
+    () => wallColor.clone().multiplyScalar(0.85),
+    [wallColor],
+  );
+  const inlayColor = useMemo(
+    () =>
+      new THREE.Color(recipe.palette.ground).lerp(
+        new THREE.Color("#9a938a"),
+        0.6,
+      ),
+    [recipe],
+  );
 
   // Strand-door crossing detection: the entrance's hysteresis-band pattern
   // (clamps.ts WALL_IN/WALL_OUT) applied per door — the player must be
@@ -4646,6 +5238,33 @@ export function SpaceScene({
     });
     return map;
   }, [wallRuns, wallHeights]);
+
+  // TEMPLATE FEATURES (§7.2): the niche, pilaster rhythm, and floor inlay
+  // the resolved template declares. Resolved AFTER the door split (wallRuns
+  // + wallHeights) so features follow the cutaway and break at openings;
+  // consumes only the plan/walls/doors the existing modules already
+  // produced. No template → no features, and nothing else in this file
+  // changes. Flat-floor gate keeps the inlay off rolling terrain.
+  const roomFeatures = useMemo(
+    () =>
+      buildRoomFeatures({
+        template,
+        plan,
+        walls,
+        wallRuns,
+        wallHeights,
+        wallHeight,
+        wallThick,
+        doors: doorLayout.doors,
+        flatFloor: spec.ground === "flat",
+      }),
+    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, doorLayout, spec],
+  );
+  const nicheByRun = useMemo(() => {
+    const map = new Map<number, NicheFeature>();
+    for (const n of roomFeatures.niches) map.set(n.run, n);
+    return map;
+  }, [roomFeatures]);
 
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
@@ -4818,6 +5437,17 @@ export function SpaceScene({
           width={width}
           extent={extent}
           base={recipe.palette.ground}
+        />
+      )}
+
+      {/* Floor inlay (template feature, §7.2): a calm stone border band
+          flat on the floor — lifted above the parquet's plane, never
+          fighting its checker (A3). Flat-floor rooms only. */}
+      {roomFeatures.inlay && (
+        <FloorInlay
+          inlay={roomFeatures.inlay}
+          band={INLAY_BAND_WIDTH * (wallHeight / WALL_HEIGHT)}
+          color={inlayColor}
         />
       )}
 
@@ -4998,6 +5628,25 @@ export function SpaceScene({
           cutaway. */}
       {wallRuns.map(({ wall }, i) => {
         const h = wallHeights[i];
+        const niche = nicheByRun.get(i);
+        // A run hosting a niche is rebuilt around the opening (flanks +
+        // header + the recessed alcove) instead of drawn as one box.
+        if (niche) {
+          return (
+            <NicheWallRun
+              key={i}
+              wall={wall}
+              height={h}
+              niche={niche}
+              plan={plan}
+              material={wallMaterials[i]}
+              trimColor={DOOR_TRIM_COLOR}
+              capColor={capColor}
+              alcoveColor={alcoveColor}
+              stoneColor={dadoPanelColor}
+            />
+          );
+        }
         return (
           <group key={i}>
             <mesh
@@ -5030,16 +5679,36 @@ export function SpaceScene({
           boundary, which is where the eye looks for craft. Breaks at the
           doorway (the entrance segments already split around the gap) and
           follows the cutaway (short camera-side walls keep only the band
-          parts that fit under their drawn top). */}
-      {wallRuns.map(({ wall }, i) => (
-        <DadoBand
-          key={`dado${i}`}
-          wall={wall}
-          height={wallHeights[i]}
+          parts that fit under their drawn top). A niche's host run skips
+          the band: the wainscot would cross the alcove's opening — the
+          architrave trim dresses that wall instead. */}
+      {wallRuns.map(({ wall }, i) =>
+        nicheByRun.has(i) ? null : (
+          <DadoBand
+            key={`dado${i}`}
+            wall={wall}
+            height={wallHeights[i]}
+            plan={plan}
+            wallScale={wallHeight / WALL_HEIGHT}
+            trimColor={capColor}
+            panelColor={dadoPanelColor}
+          />
+        ),
+      )}
+
+      {/* Pilaster rhythm (template feature, §7.2): strips standing on the
+          dado band, evenly spread per run — the door-split runs break the
+          rhythm at every opening for free, and cutaway sills are skipped
+          (no shaft room above the rail). */}
+      {roomFeatures.pilasters.map((p) => (
+        <PilasterRun
+          key={`pil${p.run}`}
+          wall={wallRuns[p.run].wall}
+          height={wallHeights[p.run]}
+          alongs={p.alongs}
           plan={plan}
           wallScale={wallHeight / WALL_HEIGHT}
-          trimColor={capColor}
-          panelColor={dadoPanelColor}
+          color={dadoPanelColor}
         />
       ))}
 

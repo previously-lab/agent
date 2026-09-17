@@ -171,6 +171,7 @@ import {
   type CorridorLayout,
 } from "@/lib/game/corridor-pitch";
 import { smoothstep } from "@/lib/game/math";
+import { sliceClock } from "@/lib/game/slice-clock";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
 import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
 import type { ArchetypeId } from "@/lib/game/space-types";
@@ -699,15 +700,11 @@ function WallRun({
  * Time-slice ids encode their own clock: `2026-09-15-0746` is Sep 15,
  * 07:46. The corridor signage reads those parts straight off the id — a
  * door plate wears the HHMM half, a date plaque the MM·DD half — so a
- * slice always hangs its own time on the wall, on any machine. Ids that
- * do not match the format (fixtures, tests) simply get no signage.
+ * slice always hangs its own time on the wall, on any machine. The rule
+ * lives in lib/game/slice-clock.ts (single source; the game-shell's strand
+ * door numbers come from the same function). Ids that do not match the
+ * format (fixtures, tests) simply get no signage.
  */
-const SLICE_ID_RE = /^(\d{4})-(\d{2})-(\d{2})-(\d{4})$/;
-
-function sliceClock(sliceId: string): { date: string; time: string } | null {
-  const m = SLICE_ID_RE.exec(sliceId);
-  return m ? { date: `${m[2]}·${m[3]}`, time: m[4] } : null;
-}
 
 /** The calendar date of a door bay (north slice first, south fallback). */
 function bayDate(sliceIds: readonly string[], i: number): string | null {
