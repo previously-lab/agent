@@ -1,24 +1,23 @@
 /**
  * Tests for the strand-door resolution layer (src/lib/game/strand-doors.ts) —
- * the first third of the B.11 contract in v0.11-hotel-rooms, plus the B.14
- * 用户定稿 (2026-09-18) destination dedupe. These lock down what the room
- * lane and the door-manager lane build against: lit doors sharing a
- * destination slice merge into ONE door (unlit doors never merge — no
- * destination to share), the merged door keeps its most-active member's
- * position (inherited order, A6), its key is destination-derived and stable,
- * a lit FORWARD door resolves when the strand's next slice is inside the
- * window, a lit BACKWARD door when the thread has no further active slice
- * but a previous one exists inside the window (B.8 用户定稿 2026-09-18 —
- * the fallback replaces the unlit door, never adds a second), unlit doors
- * stay in the list with `destinationIndex: null` (single-slice thread's
- * beginning AND out-of-window destination, either direction), and
- * `destinationIndex` is the EXACT index into the corridor's newest-first
- * slice list.
+ * the B.11 contract in v0.11-hotel-rooms, hotel-ified (HD4), plus the B.14
+ * 用户定稿 (2026-09-18) destination dedupe extended to the two-stage merge.
+ * These lock down what the room lane and the integrator build against:
+ * a lit door's destination is a HOTEL — the destination slice's own strand
+ * at the window holding that slice (`{timelineId, windowIndex, sliceId}`);
+ * lit doors sharing a destination slice merge into ONE door (stage 1,
+ * unchanged), groups sharing a destination hotel merge again (stage 2 —
+ * unreachable from one room today, kept as the contract's safety net);
+ * unlit doors never merge; a lit FORWARD door resolves whenever the strand
+ * has a next slice (HD4 dropped B.11's out-of-window rule — the
+ * destination's own hotel always exists), a lit BACKWARD door when the
+ * thread has no next slice but a previous one (B.8 用户定稿 2026-09-18);
+ * unlit is exactly one case left: the just-begun, single-slice thread.
  *
  * The final describe block is a real-data pass over the repo's own
  * `memory/episodic/strands.json` + `timeline/index.json`: it asserts the map
  * resolves against the corridor window and PRINTS the door-count numbers
- * before → after the B.14 dedupe (how many doors a room gets, the busiest
+ * before → after the dedupe (how many doors a room gets, the busiest
  * room, the totals) — coordination data, not just assertions.
  */
 import { readFileSync } from "node:fs";
@@ -31,9 +30,13 @@ import {
 } from "@/lib/game/strand-graph";
 import {
   buildRoomDoorMap,
+  strandAccentFor,
+  CORE_TIMELINE_ID,
   type RoomDoorMap,
   type StrandDoorLabelQuery,
 } from "@/lib/game/strand-doors";
+import { WINDOW_SLICES } from "@/lib/game/hotel";
+import { PALETTES, VIVID_PALETTES } from "@/lib/game/space-types";
 
 /** A label callback that just records its arguments — assertions read them back. */
 const testLabel = (d: StrandDoorLabelQuery) =>
@@ -58,27 +61,37 @@ describe("buildRoomDoorMap", () => {
 
   it("resolves one door per strand through the slice, in inherited order", () => {
     // No two lit doors share a destination here, so nothing merges; lit
-    // keys are destination-derived (B.14), unlit keys stay strand names.
+    // keys are destination-HOTEL-derived (HD4), unlit keys stay strand
+    // names. 家庭's next slice is outside the corridor window — lit all
+    // the same (HD4: its own hotel exists).
     expect(map.get("2026-06-22-0900")).toEqual([
       {
-        key: "to:2026-06-22-1400",
+        key: "to:工作:0",
         label: "forward:工作@2026-06-22-1400#0",
         lit: true,
-        destinationIndex: 1,
+        destination: {
+          timelineId: "工作",
+          windowIndex: 0,
+          sliceId: "2026-06-22-1400",
+        },
         strands: ["工作"],
       },
       {
-        key: "家庭",
-        label: "家庭",
-        lit: false,
-        destinationIndex: null,
+        key: "to:家庭:0",
+        label: "forward:家庭@2026-10-01-1200#101",
+        lit: true,
+        destination: {
+          timelineId: "家庭",
+          windowIndex: 0,
+          sliceId: "2026-10-01-1200",
+        },
         strands: ["家庭"],
       },
       {
         key: "跑步",
         label: "跑步",
         lit: false,
-        destinationIndex: null,
+        destination: null,
         strands: ["跑步"],
       },
     ]);
@@ -86,46 +99,52 @@ describe("buildRoomDoorMap", () => {
 
   it("turns a thread's end into a LIT backward door (B.8 用户定稿 2026-09-18)", () => {
     // 工作 ends at 2026-09-15-0746 — no next slice, but a previous one
-    // (2026-06-22-1400) inside the window: the door now leads BACK along
-    // the same thread, labeled with direction "backward" and a NEGATIVE gap.
+    // (2026-06-22-1400): the door leads BACK along the same thread,
+    // labeled with direction "backward" and a NEGATIVE gap.
     expect(map.get("2026-09-15-0746")).toEqual([
       {
-        key: "to:2026-06-22-1400",
+        key: "to:工作:0",
         label: "backward:工作@2026-06-22-1400#-84",
         lit: true,
-        destinationIndex: 1,
+        destination: {
+          timelineId: "工作",
+          windowIndex: 0,
+          sliceId: "2026-06-22-1400",
+        },
         strands: ["工作"],
       },
     ]);
-    expect(SLICE_IDS[map.get("2026-09-15-0746")![0].destinationIndex!]).toBe(
-      "2026-06-22-1400",
-    );
   });
 
   it("keeps a single-slice strand (neither next nor previous) unlit — B.4's not-written-yet door", () => {
-    // 跑步's only position is 2026-06-22-0900: no direction is walkable.
+    // 跑步's only position is 2026-06-22-0900: no direction exists. This is
+    // the ONLY unlit case left (HD4).
     const door = map.get("2026-06-22-0900")!.find((d) => d.key === "跑步")!;
     expect(door).toEqual({
       key: "跑步",
       label: "跑步",
       lit: false,
-      destinationIndex: null,
+      destination: null,
       strands: ["跑步"],
     });
   });
 
-  it("marks a destination outside the corridor window unlit (B.11 boundary rule)", () => {
-    // 家庭's next slice (2026-10-01-1200) is not in SLICE_IDS. The backward
-    // fallback must NOT fire here: a forward destination exists, it is just
-    // outside the rendered window.
-    const door = map.get("2026-06-22-0900")!.find((d) => d.key === "家庭")!;
-    expect(door.lit).toBe(false);
-    expect(door.destinationIndex).toBeNull();
+  it("lights a destination outside the corridor window — its own hotel exists (HD4)", () => {
+    // 家庭's next slice (2026-10-01-1200) is not in SLICE_IDS. B.11's
+    // boundary rule is gone: the door is lit and leads to 家庭's own
+    // timeline, window 0 (a 2-slice strand fits one window).
+    const door = map.get("2026-06-22-0900")!.find((d) => d.key === "to:家庭:0")!;
+    expect(door.lit).toBe(true);
+    expect(door.destination).toEqual({
+      timelineId: "家庭",
+      windowIndex: 0,
+      sliceId: "2026-10-01-1200",
+    });
   });
 
-  it("keeps the door unlit when the BACKWARD destination is outside the window", () => {
-    // The boundary rule applies to the fallback too: 远方's previous slice
-    // (2026-05-01-0900) is not rendered, so the door stays dark.
+  it("lights the backward door even when the previous slice is outside the window (HD4)", () => {
+    // Same rule on the fallback direction: 远方's previous slice
+    // (2026-05-01-0900) is not rendered, but its hotel is derivable.
     const g = buildStrandGraph({
       远方: ["2026/05/01/0900", "2026/09/15/0746"],
     });
@@ -136,13 +155,55 @@ describe("buildRoomDoorMap", () => {
     });
     expect(m.get("2026-09-15-0746")).toEqual([
       {
-        key: "远方",
-        label: "远方",
-        lit: false,
-        destinationIndex: null,
+        key: "to:远方:0",
+        label: "backward:远方@2026-05-01-0900#-136",
+        lit: true,
+        destination: {
+          timelineId: "远方",
+          windowIndex: 0,
+          sliceId: "2026-05-01-0900",
+        },
         strands: ["远方"],
       },
     ]);
+  });
+
+  it("computes the destination WINDOW from the strand's own timeline (HD4)", () => {
+    // A 10-slice strand spans two windows (WINDOW_SLICES per window). The
+    // destination's flat index in the newest-first door list is
+    // path.length − 1 − i, so the strand's OLDEST slice lands in window 1.
+    const positions = Array.from(
+      { length: 10 },
+      (_, k) => `2026/01/${String(k + 1).padStart(2, "0")}/0900`,
+    );
+    const g = buildStrandGraph({ 长途: positions });
+    const m = buildRoomDoorMap({
+      graph: g,
+      sliceIds: ["2026-01-10-0900"],
+      label: testLabel,
+    });
+    // From the newest slice the thread ends → backward fallback to
+    // 2026-01-09-0900 (flat index 1 → window 0).
+    const door = m.get("2026-01-10-0900")![0];
+    expect(door.destination).toEqual({
+      timelineId: "长途",
+      windowIndex: 0,
+      sliceId: "2026-01-09-0900",
+    });
+    // From the OLDEST slice the forward destination is the second-oldest
+    // (flat index 8 → window 1).
+    const m2 = buildRoomDoorMap({
+      graph: g,
+      sliceIds: ["2026-01-01-0900"],
+      label: testLabel,
+    });
+    expect(m2.get("2026-01-01-0900")![0].destination).toEqual({
+      timelineId: "长途",
+      windowIndex: 1,
+      sliceId: "2026-01-02-0900",
+    });
+    // Sanity: flat 8 really is window 1 under the hotel's own rule.
+    expect(Math.floor(8 / WINDOW_SLICES)).toBe(1);
   });
 
   it("never emits more doors than strands, and never drops an unlit one", () => {
@@ -150,9 +211,9 @@ describe("buildRoomDoorMap", () => {
       const doors = map.get(sliceId)!;
       const strandCount = strandDoorsForSlice(graph, sliceId).length;
       expect(doors.length).toBeLessThanOrEqual(strandCount);
-      // Every unlit strand keeps its own door (B.14 merges lit doors only).
+      // Every unlit strand keeps its own door (the merge is lit-only).
       expect(doors.filter((d) => !d.lit).length).toBe(
-        doors.filter((d) => d.destinationIndex === null).length,
+        doors.filter((d) => d.destination === null).length,
       );
       // Every strand in the room appears in exactly one door's group.
       expect(doors.flatMap((d) => d.strands).sort()).toEqual(
@@ -163,10 +224,11 @@ describe("buildRoomDoorMap", () => {
     }
   });
 
-  it("gives the EXACT index of the destination in the newest-first slice list", () => {
-    // 工作's door at 0900 points at 1400, which sits at index 1 of SLICE_IDS.
+  it("points the destination at the exact slice on the strand's own path", () => {
+    // 工作's door at 0900 leads to 1400 — the next position on 工作's path.
     const door = map.get("2026-06-22-0900")![0];
-    expect(SLICE_IDS[door.destinationIndex!]).toBe("2026-06-22-1400");
+    expect(door.destination!.sliceId).toBe("2026-06-22-1400");
+    expect(door.destination!.timelineId).toBe("工作");
   });
 
   it("enters every window slice in the map, even with no strands (empty list)", () => {
@@ -210,7 +272,26 @@ describe("buildRoomDoorMap", () => {
       "backward:工作@2026-06-22-1400#-84", // from 2026-09-15-0746 (window order: newest first)
       "forward:工作@2026-09-15-0746#84", // from 2026-06-22-1400
       "forward:工作@2026-06-22-1400#0", // from 2026-06-22-0900
+      "forward:家庭@2026-10-01-1200#101", // from 2026-06-22-0900 (lit — HD4)
     ]);
+  });
+
+  it("passes the destination hotel to the label callback (additive, HD4)", () => {
+    const seen: StrandDoorLabelQuery[] = [];
+    buildRoomDoorMap({
+      graph,
+      sliceIds: SLICE_IDS,
+      label: (d) => {
+        seen.push(d);
+        return "x";
+      },
+    });
+    const q = seen.find((d) => d.destinationSliceId === "2026-10-01-1200")!;
+    expect(q.destination).toEqual({
+      timelineId: "家庭",
+      windowIndex: 0,
+      sliceId: "2026-10-01-1200",
+    });
   });
 
   it("is byte-for-byte stable across independent builds (determinism, A6)", () => {
@@ -238,14 +319,11 @@ describe("buildRoomDoorMap", () => {
       label: testLabel,
     }).get("2026-06-22-0900")!;
     expect(doors.map((d) => d.strands[0])).toEqual(["alpha", "zeta"]);
-    expect(doors.map((d) => d.key)).toEqual([
-      "to:2026-06-22-1600",
-      "to:2026-06-22-1400",
-    ]);
+    expect(doors.map((d) => d.key)).toEqual(["to:alpha:0", "to:zeta:0"]);
   });
 });
 
-describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)", () => {
+describe("two-stage destination dedupe (B.14 用户定稿 2026-09-18, HD4)", () => {
   // alpha and beta both lead forward to the SAME slice from 0900.
   const MERGED_ENTRIES: RawStrandEntries = {
     beta: ["2026/06/22/0900", "2026/09/15/0746"],
@@ -258,7 +336,7 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
     "2026-06-22-0900",
   ] as const;
 
-  it("collapses two strands with the same destination into ONE door", () => {
+  it("collapses two strands with the same destination slice into ONE door (stage 1)", () => {
     const m = buildRoomDoorMap({
       graph: buildStrandGraph(MERGED_ENTRIES),
       sliceIds: MERGED_SLICES,
@@ -267,20 +345,28 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
     const doors = m.get("2026-06-22-0900")!;
     // Three strands, two destinations → two doors. Activity is tied
     // (2 positions each), so the code-unit name tiebreak orders alpha
-    // first; its group claims position 0.
+    // first; its group claims position 0 and the door's hotel is alpha's.
     expect(doors).toEqual([
       {
-        key: "to:2026-09-15-0746",
+        key: "to:alpha:0",
         label: "forward:alpha@2026-09-15-0746#84",
         lit: true,
-        destinationIndex: 0,
+        destination: {
+          timelineId: "alpha",
+          windowIndex: 0,
+          sliceId: "2026-09-15-0746",
+        },
         strands: ["alpha", "beta"],
       },
       {
-        key: "to:2026-07-01-1200",
+        key: "to:solo:0",
         label: "forward:solo@2026-07-01-1200#9",
         lit: true,
-        destinationIndex: 1,
+        destination: {
+          timelineId: "solo",
+          windowIndex: 0,
+          sliceId: "2026-07-01-1200",
+        },
         strands: ["solo"],
       },
     ]);
@@ -322,6 +408,7 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
     expect(merged.strand).toBe("alpha"); // primary
     expect(merged.strands).toEqual(["alpha", "beta"]);
     expect(merged.direction).toBe("forward");
+    expect(merged.destination.timelineId).toBe("alpha");
   });
 
   it("keeps the group's position at its most-active member's place (A6)", () => {
@@ -354,7 +441,7 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
       ["busy", "quiet"], // the merged door inherits busy's position 0
       ["mid"],
     ]);
-    expect(doors[0].key).toBe("to:2026-09-15-0746");
+    expect(doors[0].key).toBe("to:busy:0");
   });
 
   it("merges a backward fallback group on the same destination", () => {
@@ -371,10 +458,14 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
     }).get("2026-06-22-0900")!;
     expect(doors).toEqual([
       {
-        key: "to:2026-06-01-0600",
+        key: "to:alpha:0",
         label: "backward:alpha@2026-06-01-0600#-21",
         lit: true,
-        destinationIndex: 1,
+        destination: {
+          timelineId: "alpha",
+          windowIndex: 0,
+          sliceId: "2026-06-01-0600",
+        },
         strands: ["alpha", "beta"],
       },
     ]);
@@ -384,27 +475,37 @@ describe("B.14 destination dedupe (按目的地去重, 用户定稿 2026-09-18)"
     const g = buildStrandGraph({
       lit: ["2026/06/22/0900", "2026/09/15/0746"],
       begun: ["2026/06/22/0900"], // only position: unlit
-      outside: ["2026/06/22/0900", "2027/01/01/0000"], // next out of window: unlit
+      faraway: ["2026/06/22/0900", "2027/01/01/0000"], // far ahead: lit (HD4)
     });
     const doors = buildRoomDoorMap({
       graph: g,
       sliceIds: ["2026-09-15-0746", "2026-06-22-0900"],
       label: testLabel,
     }).get("2026-06-22-0900")!;
-    // outside (3... 2 positions) ties with lit (2 positions): name order
-    // lit < outside; begun (1 position) last. All three strands present.
+    // lit and faraway tie on activity (2 positions): code-unit name order
+    // faraway < lit; begun (1 position) last. All three strands present.
     expect(doors.map((d) => d.strands)).toEqual([
+      ["faraway"],
       ["lit"],
-      ["outside"],
       ["begun"],
     ]);
-    expect(doors.filter((d) => !d.lit).map((d) => d.key)).toEqual([
-      "outside",
-      "begun",
-    ]);
-    expect(doors.find((d) => d.key === "to:2026-09-15-0746")!.strands).toEqual(
-      ["lit"],
-    );
+    expect(doors.filter((d) => !d.lit).map((d) => d.key)).toEqual(["begun"]);
+    expect(doors.find((d) => d.key === "to:lit:0")!.strands).toEqual(["lit"]);
+  });
+});
+
+describe("strandAccentFor / CORE_TIMELINE_ID (§11.1)", () => {
+  const accents = [...PALETTES, ...VIVID_PALETTES].map((p) => p.accent);
+
+  it("picks one of the 15 palette accents, deterministically per strand", () => {
+    for (const name of ["工作", "家庭", "Kafka", "alpha"]) {
+      expect(accents).toContain(strandAccentFor(name));
+      expect(strandAccentFor(name)).toBe(strandAccentFor(name));
+    }
+  });
+
+  it("names the core timeline 'core'", () => {
+    expect(CORE_TIMELINE_ID).toBe("core");
   });
 });
 
@@ -432,18 +533,15 @@ describe("real data pass (memory/episodic)", () => {
     label: testLabel,
   });
 
-  it("resolves against the corridor window and prints the door numbers (before → after B.14)", () => {
+  it("resolves against the corridor window and prints the door numbers (before → after dedupe)", () => {
     let roomsWithDoors = 0;
     let litForward = 0;
     let litBackward = 0;
     let unlit = 0;
-    let unlitOnlyPosition = 0;
-    let unlitOutOfWindow = 0;
     let mergedDoors = 0; // doors representing 2+ strands
     let strandsMerged = 0; // strand-doors absorbed into a group
     const doorCounts: number[] = [];
     const beforeCounts: number[] = [];
-    const inWindow = new Set(sliceIds);
 
     for (const [sliceId, doors] of map) {
       // Before-dedupe count: one door per strand (what B.11 alone gave).
@@ -465,35 +563,37 @@ describe("real data pass (memory/episodic)", () => {
         const next = path[i + 1] as string | undefined;
         const prev = i > 0 ? path[i - 1] : undefined;
         if (door.lit) {
-          const destination = sliceIds[door.destinationIndex!];
-          // The index must land exactly on a slice whose id round-trips,
-          // and the key must be derived from that same destination.
-          expect(destination).toBeDefined();
-          expect(door.key).toBe(`to:${destination}`);
-          expect(typeof door.destinationIndex).toBe("number");
-          if (next !== undefined && destination === next) {
+          const destination = door.destination!;
+          // The destination slice id round-trips through the label query,
+          // and the key is derived from the destination HOTEL.
+          expect(destination.sliceId).toBeDefined();
+          expect(door.key).toBe(
+            `to:${destination.timelineId}:${destination.windowIndex}`,
+          );
+          expect(destination.timelineId).toBe(door.strands[0]);
+          // The window must be exactly the one holding the destination on
+          // the strand's own newest-first timeline.
+          const destIndex = path.indexOf(destination.sliceId);
+          expect(destIndex).toBeGreaterThanOrEqual(0);
+          expect(destination.windowIndex).toBe(
+            Math.floor((path.length - 1 - destIndex) / WINDOW_SLICES),
+          );
+          if (next !== undefined && destination.sliceId === next) {
             litForward += 1;
           } else {
             // A backward door must point EXACTLY at the previous slice.
             expect(prev).toBeDefined();
-            expect(destination).toBe(prev);
+            expect(destination.sliceId).toBe(prev);
             litBackward += 1;
           }
         } else {
           unlit += 1;
-          expect(door.destinationIndex).toBeNull();
+          expect(door.destination).toBeNull();
           expect(door.strands).toEqual([door.strands[0]]);
           expect(door.key).toBe(door.strands[0]);
-          // Classify: a just-begun thread (no previous position) vs a
-          // destination (either direction) outside the window.
-          if (next === undefined && prev === undefined) {
-            unlitOnlyPosition += 1;
-          } else if (
-            (next !== undefined && !inWindow.has(next)) ||
-            (next === undefined && prev !== undefined && !inWindow.has(prev))
-          ) {
-            unlitOutOfWindow += 1;
-          }
+          // HD4: the ONLY unlit case left is the just-begun thread.
+          expect(next).toBeUndefined();
+          expect(prev).toBeUndefined();
         }
       }
     }
@@ -515,9 +615,7 @@ describe("real data pass (memory/episodic)", () => {
         `max=${doorCounts[doorCounts.length - 1]} total=${totalAfter}\n` +
         `  mergedDoors=${mergedDoors} strandsMerged=${strandsMerged} ` +
         `(saved=${totalBefore - totalAfter})\n` +
-        `  litForward=${litForward} litBackward=${litBackward} ` +
-        `unlit=${unlit} (onlyPosition=${unlitOnlyPosition}, ` +
-        `outOfWindow=${unlitOutOfWindow})`,
+        `  litForward=${litForward} litBackward=${litBackward} unlit=${unlit}`,
     );
 
     expect(roomsWithDoors).toBeGreaterThan(0);

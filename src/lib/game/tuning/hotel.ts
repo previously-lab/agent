@@ -1,17 +1,18 @@
 /**
  * Hotel visual tuning — every visual constant the corridor renderer
- * (src/components/game/corridor.tsx) consumes: streaming radius, wall
+ * (src/components/game/corridor.tsx) consumes: wall
  * thickness, theme/void palettes, per-role PBR finishes and the shared
  * grunge map, sconce/lamp colors, the dimming tables and lerp rates,
  * signage palettes, painting palette and dimensions, the corridor-form
  * constants (cornice, wainscot, portal), the
  * sconce light pools, the fixture-light layout constants (B.13 灯廊: real
  * lights live ON fixtures — sconces, the baseboard light line, floor
- * lamps), and the end-fade curtain + end-glow termination. The door slab geometry itself is shared with the
+ * lamps), and the hotel-door constants (page door, return door, accent —
+ * HD3/§11.1). The door slab geometry itself is shared with the
  * space renderer and lives in ./room. Pure data — no three.js, no React.
  */
 
-import { CHUNK_LENGTH, WALL_HEIGHT } from "../hotel";
+import { WALL_HEIGHT } from "../hotel";
 
 /**
  * Day/night — the corridor INTERIOR follows the app's Tailwind dark mode (the
@@ -84,7 +85,31 @@ export const GRUNGE_ROLES = ["floor", "wall", "trim", "slab", "desk", "pot", "wa
 export const SCONCE_COLOR = "#ffd9a0";
 export const LAMP_COLOR = "#ffb46b";
 
-export const CHUNK_RADIUS = 1;
+/* ------------------------------------------------------------------ */
+/* Hotel doors beyond rooms — the page door and the return door (HD3)   */
+/* ------------------------------------------------------------------ */
+
+/** Brand blue — the core timeline's hotel accent (v0.11-room-interiors
+ *  §11.1: what belongs to Previously itself wears #0066ff). Corridor door
+ *  plates, the page door, and the lobby's return door take the current
+ *  hotel's accent; the core hotel's accent is this. */
+export const HOTEL_ACCENT_CORE = "#0066ff";
+
+/** Where the lobby's return door hangs: on the junction band's north wall
+ *  (z = +CORRIDOR_WIDTH/2), this far along x. Clear of the portal posts at
+ *  the corridor seam and of the lobby's east wall. */
+export const RETURN_DOOR_X = 10;
+
+/** How far the arriving player stands off the return door, facing the
+ *  lobby interior (§10.2a: arrival is always in the lobby, the door you
+ *  came through hangs on the wall behind you). */
+export const LOBBY_ARRIVAL_INSET = 1.6;
+
+/** Page-door crossing trigger: the player has pushed this far past the end
+ *  wall's plane (inside the door gap) — mirrors the room doors'
+ *  ROOM_DOOR_CROSS_DEPTH pattern. Reachable through the clamp's
+ *  END_WALL_PASS_DEPTH overtravel (clamps.ts). */
+export const PAGE_DOOR_CROSS_DEPTH = 0.3;
 
 /* ------------------------------------------------------------------ */
 /* Door pitch — time gaps become door spacing (v0.11-strand-field §1:  */
@@ -160,7 +185,6 @@ export const LIGHT_LEVELS = {
   doorHalo: { full: 0.14, dimmed: 0.042 },
   doorStrip: { full: 2.2, dimmed: 0.66 },
   plaque: { full: 1, dimmed: 0.15 },
-  endGlow: { full: 0.45, dimmed: 0.14, day: 0.3 }, // haze glow past the end-fade curtains
 } as const;
 
 export interface LightLevels {
@@ -211,14 +235,6 @@ export const ART_PALETTE = [
 
 export const PAINTING_W = 1.0;
 export const PAINTING_H = 1.3;
-
-export const FADE_WIDTH = CHUNK_LENGTH;
-export const FADE_HEIGHT = WALL_HEIGHT * 3;
-/** Alpha never quite reaches 0 — a whisper of haze keeps the raw floor cut
- *  at the world edge soft even where the gradient bottoms out. */
-export const FADE_ALPHA_FLOOR = 0.1;
-export const FADE_RAMP_Y0 = 0.2; // meters — gradient starts just above the floor
-export const FADE_RAMP_Y1 = WALL_HEIGHT; // opaque from the wall top up
 
 /* ------------------------------------------------------------------ */
 /* Corridor form — wall detail, lobby anchor                           */
@@ -293,13 +309,3 @@ export const FLOOR_LAMP_Z = 4.35; // hugs the wall like the plants
 export const FLOOR_LAMP_DOOR_CLEARANCE = 2; // m from any bay door center
 export const FLOOR_LAMP_LIGHT_DISTANCE = 10; // shorter reach than the lobby's 13
 
-/* ------------------------------------------------------------------ */
-/* End-of-world termination — haze, never a black wall                */
-/* ------------------------------------------------------------------ */
-
-/** Warm haze glow behind each end-fade curtain: the corridor dissolves
- *  into light, not darkness (the anti-pattern list forbids a black end). */
-export const END_GLOW_COLOR = "#f0e2c4";
-export const END_GLOW_WIDTH = 9; // glow plane size, m
-export const END_GLOW_HEIGHT = 5.5;
-export const END_GLOW_OFFSET = 0.7; // sits this far beyond the fade curtain

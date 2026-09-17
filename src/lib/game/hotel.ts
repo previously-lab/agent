@@ -1,15 +1,27 @@
 /**
- * Hotel layout math — the pure geometry of the lobby + infinite corridor.
+ * Hotel layout math — the pure geometry of the lobby + one window of
+ * corridor.
  *
- * WHY THIS EXISTS. The hotel is streamed: only chunks near the player are
- * materialized, doors are opened on demand, and the whole world must rebuild
- * identically from seeds alone. That is only possible if every position,
- * chunk assignment, and door lookup is a pure function of integers, caller-
+ * WHY THIS EXISTS. A hotel is ONE window (v0.11-room-interiors §10.4: the
+ * window IS the chunk): only the player's current window is materialized,
+ * plus the room they stand in, and the whole world must rebuild identically
+ * from seeds alone. That is only possible if every position, chunk/window
+ * assignment, and door lookup is a pure function of integers, caller-
  * supplied slice ids, and a caller-supplied CorridorLayout — so this module
  * owns ALL addressing, and no other file is allowed to do layout arithmetic.
  * Renderers consume; they never compute. (The layout itself — time gaps →
  * bay pitches → cumulative sums — is built by corridor-pitch.ts; this module
- * consumes it.)
+ * consumes it. corridor-pitch.ts also owns the window VIEW of a layout —
+ * windowLayout — which re-bases one window's bays at x = 0, so every hotel
+ * renders in the same local frame; this module stays frame-agnostic.)
+ *
+ * WINDOWS (HD2/HD3). Window `w` owns flat slice-list indices
+ * [w * WINDOW_SLICES, (w + 1) * WINDOW_SLICES) — exactly chunk −w of the
+ * global grid (CHUNK_DOORS bays × two walls). Window 0 is the NEWEST hotel.
+ * The treadmill is gone: the corridor no longer streams deeper chunks as
+ * the player walks; a page door at the window's far end leads to window
+ * w + 1's lobby, and the oldest window's far end is a plain wall
+ * (§10: "直到尽头就什么都没有了").
  *
  * COORDINATES. X runs along the corridor (negative = the past, positive =
  * the future), Z runs across it (north wall at +Z, south wall at -Z), Y is
@@ -65,9 +77,9 @@
  * Boundary ownership is unchanged and remains TOTAL and NON-OVERLAPPING:
  * every x belongs to exactly one chunk, and exact boundary points go to the
  * deeper chunk (the ceil convention — e.g. on the uniform grid x =
- * -CHUNK_LENGTH is chunk -1's far edge and x = 0 is chunk 0's). The
- * streaming treadmill depends on this: a point claimed twice double-mounts
- * geometry, a point claimed by none drops it.
+ * -CHUNK_LENGTH is chunk -1's far edge and x = 0 is chunk 0's). Ownership
+ * decides which window a point belongs to: a point claimed twice would
+ * double-mount geometry, a point claimed by none would drop it.
  *
  * SLICE PAIRING. Past door index i is one PAIR element in the flat slice
  * sequence the caller passes in: the north door (sliceIds[2i]) and the
@@ -104,6 +116,10 @@ export const WALL_HEIGHT = 4.0;
 
 /** Doors per chunk per side; a full chunk is one north + one south row. */
 export const CHUNK_DOORS = 4;
+
+/** Slices per window (hotel): CHUNK_DOORS bays × two walls. A window IS a
+ *  chunk (§10.4) — window `w` owns chunk −w's door range. */
+export const WINDOW_SLICES = CHUNK_DOORS * 2;
 
 /** Uniform-grid chunk length along X — CHUNK_DOORS door bays of
  *  DOOR_SPACING each. With a layout, a chunk's length is the sum of its
@@ -261,8 +277,8 @@ export function chunkBounds(
  * north door of bay k consumes sliceIds[2i] and the south door
  * sliceIds[2i + 1] — the flat sequence is pairs, one pair per door index,
  * shared by both walls (see module doc). sliceIds shorter than 2i + 2
- * simply yields fewer doors: a slice that has not been allocated yet
- * means the door is not materialized yet, and the treadmill skips it.
+ * simply yields fewer doors: a slice that has not been allocated yet means
+ * the door is not materialized.
  *
  * Chunk c ≥ 1 (the future corridor) returns [] in v1 — the future chunk
  * grid and doorPosition already handle future x, but no future slices are
@@ -324,34 +340,44 @@ export function materializedDoorXs(
 }
 
 /**
- * The treadmill window: the chunk containing playerX plus `radius`
- * neighbors in both directions, ordered future-ward first (descending
- * index), so visibleChunkIndices(0) === [1, 0, -1].
+ * The treadmill window is gone (HD2): exactly ONE window is materialized at
+ * a time, chosen by the integrator's location state, not by a radius around
+ * the player. These helpers are the single definition of "which slice
+ * belongs to which window" (§10.4: window = chunk; hotel.ts stays the only
+ * truth). windowIndex 0 is the newest hotel; windowIndex w owns chunk −w.
  */
-export function visibleChunkIndices(
-  playerX: number,
-  radius = 1,
-  layout?: CorridorLayout,
-): number[] {
-  const center = chunkIndexForX(playerX, layout);
-  const indices: number[] = [];
-  for (let i = center + radius; i >= center - radius; i--) {
-    indices.push(i);
-  }
-  return indices;
+
+/** Window (hotel) owning flat slice-list index `flatIndex` (0 = newest). */
+export function windowIndexForFlatIndex(flatIndex: number): number {
+  return Math.floor(flatIndex / WINDOW_SLICES);
+}
+
+/** How many windows a slice list fills — the last window may be partial. */
+export function windowCountForSlices(count: number): number {
+  return Math.ceil(count / WINDOW_SLICES);
+}
+
+/** Flat slice-list range of window `windowIndex`: [start, end). */
+export function windowSliceRange(windowIndex: number): {
+  start: number;
+  end: number;
+} {
+  return {
+    start: windowIndex * WINDOW_SLICES,
+    end: (windowIndex + 1) * WINDOW_SLICES,
+  };
 }
 
 /**
  * Door nearest to the (x, z) position within maxDist meters — the
  * interact-key query. Distance is Euclidean in the XZ plane (Y ignored:
- * doors span the full wall height). Scans the player's chunk and its two
- * neighbors, which always covers maxDist ≤ DOOR_SPACING / 2; a larger
- * maxDist is still correct because the scan window grows with radius 1
- * (three chunks span at least 2 * CHUNK_DOORS bays to either side, ≥ 40 m
- * even at minimum pitch). "Within maxDist" is inclusive. Ties resolve to
- * the earliest door in scan order (north before south within a pair),
- * keeping the result deterministic. Returns null when no door is within
- * maxDist.
+ * doors span the full wall height). Scans the player's OWN chunk, plus an
+ * adjacent chunk only when its seam lies within maxDist — with one window
+ * materialized there is no deeper corridor to reach into, and a door the
+ * player cannot see never answers. "Within maxDist" is inclusive. Ties
+ * resolve to the earliest door in scan order (north before south within a
+ * pair), keeping the result deterministic. Returns null when no door is
+ * within maxDist.
  */
 export function nearestDoor(
   x: number,
@@ -360,10 +386,15 @@ export function nearestDoor(
   maxDist = 1.6,
   layout?: CorridorLayout,
 ): DoorRef | null {
+  const center = chunkIndexForX(x, layout);
+  const scan = [center];
+  const bounds = chunkBounds(center, layout);
+  if (x - bounds.xStart <= maxDist) scan.push(center - 1);
+  if (bounds.xEnd - x <= maxDist) scan.push(center + 1);
   let best: DoorRef | null = null;
   let bestSq = Infinity;
   const maxSq = maxDist * maxDist;
-  for (const chunkIndex of visibleChunkIndices(x, 1, layout)) {
+  for (const chunkIndex of scan) {
     for (const door of doorsInChunk(chunkIndex, sliceIds, layout)) {
       const dx = door.x - x;
       const dz = door.z - z;

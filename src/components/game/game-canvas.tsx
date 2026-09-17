@@ -16,8 +16,9 @@
  * +12) offset from the player, looking back at them — the corridor runs
  * top-right→bottom-left on screen. It never rotates; useFrame lerps the
  * follow point (factor 1 − e^(−6·dt)), so the view glides instead of
- * snapping — except on a strand-door wormhole, whose ~90 m teleport snaps
- * the focus on the spot (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
+ * snapping — except on a hotel hop (page/return/strand door), whose
+ * cross-hotel teleport snaps the focus on the spot
+ * (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
  * The zoom TARGET is CAMERA_ZOOM (44 — pulled in ~29% per doc B.12) in the
  * corridor and eases down
  * by clamp(S, 1, ∞)^ROOM_ZOOM_SCALE_EXP (capped at ~3× pull-back) inside a
@@ -56,7 +57,8 @@
  * SpaceScene with compileSpaceRecipe(sliceId) plus the fixture's archetype
  * override; re-entering the corridor band through the door gap (|z| < WALL_IN
  * and |x − door.x| < CLEAR_HALF) unmounts it. Unmount is the memory model:
- * corridor chunks stream, at most one space exists, and the corridor dims
+ * exactly one window is materialized per hotel, at most one space exists,
+ * and the corridor dims
  * while a space holds the player. Both sides of the door crossfade instead
  * of popping: the room condenses out of its shadow on entry and dissolves
  * back on exit (SPACE_FADE_S), while the corridor dims/undims on its own
@@ -86,7 +88,7 @@
  * (commits 9116243/09c757b/d9edf93 — do not re-add). Depth is carried by
  * things that are camera-distance INDEPENDENT instead: the background
  * color, the stage backdrop disc the diorama sits on (plain geometry at a
- * fixed depth — no distance term), the corridor's end-fade planes, and
+ * fixed depth — no distance term), and
  * the post chain — N8AO
  * (screen-space contact shading) plus a mild Vignette (frame-edge
  * falloff), both of which darken by geometry and screen position, never
@@ -94,15 +96,29 @@
  * translucent-room bug. Bloom (threshold 1.0) glows only emissive
  * fixtures and the sun's hot pools.
  *
- * STRAND DOORS (doc 附录 B.11). A room grows one extra door per strand
- * passing through its slice, each a WORMHOLE to the next slice on that
- * strand — never room-local geometry: the current room dissolves on the
- * ordinary fade machinery, the player is moved to the destination slice's
- * own corridor door position, and the door manager's usual mount path
- * builds that slice's room there. The corridor itself never appears (the
- * door manager keeps its hide/show state latched for the whole crossing),
- * and the player's position on the timeline follows the strands they walk.
- * The transition is a pure reducer (reduceStrandTransition below); this
+ * HOTELS (HD2/HD3/HD4). The world is a chain of HOTELS: one per timeline
+ * (the core timeline plus one per strand), each hotel showing ONE window
+ * of its timeline — CHUNK_DOORS bays × two walls — at a time. The
+ * integrator's `location` state is the (timelineId, windowIndex) pair;
+ * the corridor renderer re-bases every hotel into the same local frame
+ * (lobby at x ∈ [0, LOBBY_LENGTH), corridor at negative x), so a hotel
+ * switch is a data swap plus a teleport, never new geometry math. Three
+ * doors move the player between hotels: the PAGE DOOR at the corridor's
+ * far end (same timeline, next-older window), the RETURN DOOR in every
+ * lobby you arrived into (pops the navigation stack — page-door arrivals
+ * land back in the lobby, strand-door arrivals land back inside the room
+ * they left), and the strand doors below. The oldest window's end wall
+ * carries no page door — the timeline simply ends.
+ *
+ * STRAND DOORS (doc 附录 B.11, HD4). A room grows one extra door per
+ * strand passing through its slice, each leading to that strand's OWN
+ * hotel (the window holding the destination slice — strand-doors.ts
+ * resolves the destination). Crossing dissolves the current room on the
+ * ordinary fade machinery, pushes the current hotel onto the navigation
+ * stack (remembering the room and door the player left by), and lands the
+ * player in the destination hotel's LOBBY — arrival is always in the
+ * lobby (§10.2a), the return door hangs on the wall behind them. The
+ * transition is a pure reducer (reduceStrandTransition below); this
  * file only feeds it events and executes its phases. The corridor door
  * remains the only way back out to the corridor — entrance semantics are
  * untouched.
@@ -121,6 +137,8 @@ import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
 import { GAME_DEBUG } from "./debug";
 import {
+  WINDOW_SLICES,
+  chunkBounds,
   doorPosition,
   materializedDoorXs,
   nearestDoor,
@@ -129,18 +147,27 @@ import {
 } from "@/lib/game/hotel";
 import {
   corridorLayoutFromDoors,
+  windowCountForLayout,
+  windowLayout,
   type CorridorLayout,
 } from "@/lib/game/corridor-pitch";
 import {
   CLEAR_HALF,
+  GAP_HALF,
   WALL_IN,
   WALL_OUT,
   WALL_Z,
   clampToCorridor,
   clampToSpace,
+  type CorridorEnd,
 } from "@/lib/game/clamps";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
+import {
+  CORE_TIMELINE_ID,
+  strandAccentFor,
+  type StrandDestination,
+} from "@/lib/game/strand-doors";
 import {
   roomPlanFor,
   scaledRecipeFor,
@@ -160,7 +187,13 @@ import {
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
 import { Corridor, type CorridorDoor } from "./corridor";
 import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
-import { HIDE_DELAY_MS } from "@/lib/game/tuning/hotel";
+import {
+  HIDE_DELAY_MS,
+  HOTEL_ACCENT_CORE,
+  LOBBY_ARRIVAL_INSET,
+  PAGE_DOOR_CROSS_DEPTH,
+  RETURN_DOOR_X,
+} from "@/lib/game/tuning/hotel";
 import {
   COLONNADE_BAY,
   ROOM_WALL_THICKNESS,
@@ -261,6 +294,12 @@ const NO_ROOM_PLAN: RoomPlan = {
   stepZ: 0,
   columns: [],
 };
+
+/** Referentially stable empty door list — the current hotel's list when a
+ *  strand hotel is missing from `timelines` (the strand lane off, or a
+ *  stale destination). Referential stability keeps the derived memos from
+ *  re-running every render. */
+const NO_TIMELINE_DOORS: readonly CorridorDoor[] = [];
 
 type PlayerRef = MutableRefObject<PlayerPos>;
 
@@ -429,31 +468,41 @@ function resolveAtmosphere(
 }
 
 /* ------------------------------------------------------------------ */
-/* Strand-door wormhole (doc 附录 B.11) — pure state machine           */
+/* Strand-door hotel hop (doc 附录 B.11, HD4) — pure state machine      */
 /* ------------------------------------------------------------------ */
+
+/**
+ * One hotel: a timeline at one window — the integrator's location state
+ * and the strand doors' destination shape (HD4). The core timeline's id
+ * is CORE_TIMELINE_ID ("core"); every other hotel's id is its strand
+ * name.
+ */
+export interface HotelRef {
+  readonly timelineId: string;
+  readonly windowIndex: number;
+}
 
 /**
  * One strand door in a room, pre-resolved by the data lane
  * (lib/game/strand-doors.ts) and handed to the canvas keyed by sliceId.
- * `destinationIndex` is the FLAT index into the corridor's newest-first
- * slice list (the same list `doors`/`sliceIds` are built from). `lit:
- * false` or a null destination means the strand has no next slice inside
- * the rendered corridor — the door is a promise, not a passage (doc 附录
- * B.4/B.11). The list carries no positions: where a door hangs on the
- * walls is staging, owned by the room renderer.
+ * `destination` is the HOTEL the door leads to (the destination slice's
+ * own strand, at the window holding that slice) — `lit: false` or a null
+ * destination means the strand has no chapter to lead to (B.4: the door
+ * is a promise, not a passage). The list carries no positions: where a
+ * door hangs on the walls is staging, owned by the room renderer.
  */
 export interface StrandDoorSpec {
   readonly key: string;
   readonly label: string;
   readonly lit: boolean;
-  readonly destinationIndex: number | null;
+  readonly destination: StrandDestination | null;
 }
 
 /**
- * Strand-door transition phases — a strand door is a wormhole between two
- * corridor positions, so there is no room-local crossing geometry at all:
+ * Strand-door transition phases — a strand door hops between two HOTELS,
+ * so there is no room-local crossing geometry at all:
  *
- *   idle ──cross (valid)──▶ fadingOut ──fadedOut──▶ mounting ──activated──▶ idle
+ *   idle ──cross (valid)──▶ fadingOut ──fadedOut──▶ mounting ──arrived──▶ idle
  *     ▲                        │                      │
  *     │                        └─ cross: DROPPED       └─ cross: DROPPED
  *     └─ invalid cross: DROPPED      (the latch — one crossing at a time)
@@ -463,39 +512,36 @@ export interface StrandDoorSpec {
  * SpaceScene to fade="out"); movement and the corridor door manager are
  * suspended so the player cannot wander the void and the half-dissolved
  * room cannot re-engage. mounting: the fade completed; the canvas has
- * moved the player to the destination slice's corridor door and mounted
- * that slice's room there. The latch releases only on `activated` — the
- * destination room observed as the ACTIVE space — after which the ordinary
- * door manager owns the player again (and the corridor door is once more
- * the way back out). `abort` (destination unresolvable at fade completion)
- * drops the latch so the current room can fade back in.
+ * pushed the current hotel onto the navigation stack, switched the
+ * location to the destination hotel, and landed the player in its LOBBY
+ * (§10.2a: arrival is always in the lobby). `arrived` releases the latch
+ * — the player is in an ordinary corridor again and the door manager owns
+ * them. `abort` (the crossing cannot complete at fade completion) drops
+ * the latch so the current room can fade back in.
  */
 export type StrandTransition =
   | { readonly phase: "idle" }
-  | { readonly phase: "fadingOut"; readonly key: string; readonly destinationIndex: number }
-  | { readonly phase: "mounting"; readonly key: string; readonly destinationIndex: number };
+  | { readonly phase: "fadingOut"; readonly key: string; readonly destination: HotelRef }
+  | { readonly phase: "mounting"; readonly key: string; readonly destination: HotelRef };
 
 export type StrandTransitionEvent =
   | {
       readonly type: "cross";
       readonly key: string;
       readonly lit: boolean;
-      readonly destinationIndex: number | null;
-      /** Rendered corridor door count — destinations outside it are dropped. */
-      readonly doorCount: number;
-      /** Flat slice index of the room the player stands in; null = none active. */
-      readonly currentIndex: number | null;
+      readonly destination: HotelRef | null;
+      /** The hotel the player stands in; null = none (no room active). */
+      readonly current: HotelRef | null;
     }
   | { readonly type: "fadedOut" }
-  | { readonly type: "activated"; readonly destinationIndex: number }
+  | { readonly type: "arrived" }
   | { readonly type: "abort" };
 
 /**
  * The reducer. Trust nothing from geometry: a crossing latches only from
- * idle, only for a LIT door whose destination is an integer inside the
- * rendered corridor and not the room the player is already in; every other
- * event/phase combination is a no-op, so stale or double deliveries can
- * never wedge the machine.
+ * idle, only for a LIT door whose destination is a real hotel OTHER than
+ * the one the player stands in; every other event/phase combination is a
+ * no-op, so stale or double deliveries can never wedge the machine.
  */
 export function reduceStrandTransition(
   state: StrandTransition,
@@ -506,39 +552,40 @@ export function reduceStrandTransition(
       if (state.phase !== "idle") return state;
       const ok =
         event.lit &&
-        event.destinationIndex !== null &&
-        Number.isInteger(event.destinationIndex) &&
-        event.destinationIndex >= 0 &&
-        event.destinationIndex < event.doorCount &&
-        event.currentIndex !== null &&
-        event.destinationIndex !== event.currentIndex;
+        event.destination !== null &&
+        event.current !== null &&
+        (event.destination.timelineId !== event.current.timelineId ||
+          event.destination.windowIndex !== event.current.windowIndex);
       return ok
-        ? { phase: "fadingOut", key: event.key, destinationIndex: event.destinationIndex }
+        ? { phase: "fadingOut", key: event.key, destination: event.destination }
         : state;
     }
     case "fadedOut":
       return state.phase === "fadingOut"
-        ? { phase: "mounting", key: state.key, destinationIndex: state.destinationIndex }
+        ? { phase: "mounting", key: state.key, destination: state.destination }
         : state;
-    case "activated":
-      return state.phase === "mounting" && event.destinationIndex === state.destinationIndex
-        ? { phase: "idle" }
-        : state;
+    case "arrived":
+      return state.phase === "mounting" ? { phase: "idle" } : state;
     case "abort":
       return state.phase === "idle" ? state : { phase: "idle" };
   }
 }
 
-/** Flat slice-list index of a corridor door: bay i holds sliceIds[2i] on
- *  the north wall and sliceIds[2i + 1] on the south wall (hotel.ts). */
-function flatDoorIndex(door: DoorRef): number {
-  return door.index * 2 + (door.side === "south" ? 1 : 0);
+/**
+ * One navigation-stack entry (HD3): the hotel to return to, and — for a
+ * strand-door hop — the room and strand door the player left by, so the
+ * lobby's return door can land them back INSIDE that room (§10.2a). A
+ * page-door hop records `returnTo: null` — the return lands in the lobby.
+ */
+interface NavEntry {
+  readonly hotel: HotelRef;
+  readonly returnTo: { readonly sliceId: string; readonly key: string } | null;
 }
 
-/** The corridor door materialized for a flat slice-list index, or null
- *  when the index falls outside the rendered list — an unresolvable
- *  strand-door destination is dropped, never a missing-coordinate crash
- *  (doc B.11's boundary rule). */
+/** The corridor door materialized for a flat slice-list index (within ONE
+ *  window's slice list and re-based layout), or null when the index falls
+ *  outside the list — an unresolvable return-to-room landing falls back to
+ *  the lobby, never a missing-coordinate crash. */
 function doorRefForFlatIndex(
   flatIndex: number,
   sliceIds: readonly string[],
@@ -552,9 +599,10 @@ function doorRefForFlatIndex(
 }
 
 /** Build the ActiveSpace for a corridor door — the ONE construction shared
- *  by the door manager's wall-crossing mount and the strand-door wormhole,
- *  so a room mounted either way is identical (recipe, archetype override,
- *  and the single scaled view the clamps and terrain consume). */
+ *  by the door manager's wall-crossing mount and the return door's
+ *  back-into-the-room landing, so a room mounted either way is identical
+ *  (recipe, archetype override, and the single scaled view the clamps and
+ *  terrain consume). */
 function resolveSpaceForDoor(
   door: DoorRef,
   archetypeById: ReadonlyMap<string, ArchetypeId>,
@@ -1028,6 +1076,11 @@ function GameLoop({
   sliceIds,
   doorXs,
   layout,
+  corridorEnd,
+  returnDoorX,
+  onPageDoor,
+  onReturnDoor,
+  hotelLabel,
   archetypeById,
   activeSpace,
   setActiveSpace,
@@ -1044,10 +1097,29 @@ function GameLoop({
   playerRef: PlayerRef;
   keysRef: MutableRefObject<Set<string>>;
   motionRef: MutableRefObject<Motion>;
+  /** The CURRENT hotel's full door list (the HUD's label source) — the
+   *  integrator swaps it on a hotel hop. */
   doors: readonly CorridorDoor[];
+  /** The current window's slice ids (≤ WINDOW_SLICES) — the materialized
+   *  doors, positioned by the window's re-based layout. */
   sliceIds: readonly string[];
   doorXs: readonly number[];
+  /** The current window's layout, re-based so its lobby sits at
+   *  x ∈ [0, LOBBY_LENGTH) (windowLayout, corridor-pitch.ts). */
   layout: CorridorLayout;
+  /** The corridor's far end (HD2/HD3): x is capped at the end wall —
+   *  solid at the oldest window, relaxed inside the page door's gap. */
+  corridorEnd: CorridorEnd;
+  /** The lobby's return door x when the nav stack is non-empty, else
+   *  null (no return door — the spawn hotel's lobby has none). */
+  returnDoorX: number | null;
+  /** Hotel hops (HD3): the player pushed through the page door / the
+   *  return door. Called from inside the frame; the handlers teleport and
+   *  switch the integrator's location state. */
+  onPageDoor: () => void;
+  onReturnDoor: () => void;
+  /** "timelineId@windowIndex" — written to GAME_DEBUG.hotel every frame. */
+  hotelLabel: string;
   archetypeById: ReadonlyMap<string, ArchetypeId>;
   activeSpace: ActiveSpace | null;
   setActiveSpace: (space: ActiveSpace | null) => void;
@@ -1086,6 +1158,31 @@ function GameLoop({
           (space === null ? 1 : roomSpeedFactor(space.scale.factor));
         p.x += move.x * speed * dt;
         p.z += move.z * speed * dt;
+      }
+
+      // 1b. HOTEL DOORS (HD3) — checked before the room door manager, only
+      // in the corridor: the page door at the far end (the end clamp
+      // relaxed inside its gap; pushing PAGE_DOOR_CROSS_DEPTH past the wall
+      // plane hops to the next-older window's lobby) and the lobby's return
+      // door (past the north wall plane inside its gap — pops the nav
+      // stack). Both teleport: skip the rest of this frame.
+      if (space === null) {
+        if (
+          corridorEnd.pageDoor &&
+          p.x < corridorEnd.endX - PAGE_DOOR_CROSS_DEPTH &&
+          Math.abs(p.z) < GAP_HALF
+        ) {
+          onPageDoor();
+          return;
+        }
+        if (
+          returnDoorX !== null &&
+          p.z > WALL_OUT &&
+          Math.abs(p.x - returnDoorX) < GAP_HALF
+        ) {
+          onReturnDoor();
+          return;
+        }
       }
 
       // 2. Door manager — hysteresis band around the wall plane. While a
@@ -1151,7 +1248,7 @@ function GameLoop({
           roomPlan,
         );
       } else {
-        clampToCorridor(p, doorXs);
+        clampToCorridor(p, doorXs, corridorEnd);
       }
     } else {
       // Frozen mid-crossing: report "not moving" so the avatar settles
@@ -1166,8 +1263,8 @@ function GameLoop({
     //  is symmetric: back in the corridor band the hotel returns the same
     //  frame, remounting dark and easing up (useDimLerp's recovery lerp in
     //  corridor.tsx), so neither direction pops. A strand-door crossing
-    //  holds the corridor dissolved for the whole wormhole — it must never
-    //  flash into view between the two rooms.
+    //  holds the corridor dissolved for the whole hotel hop — it must never
+    //  flash into view between the two hotels.
     const gone = space !== null || transitionActive;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
@@ -1183,6 +1280,7 @@ function GameLoop({
     GAME_DEBUG.x = p.x;
     GAME_DEBUG.z = p.z;
     GAME_DEBUG.space = space === null ? null : space.door.sliceId;
+    GAME_DEBUG.hotel = hotelLabel;
   });
   return null;
 }
@@ -1341,13 +1439,20 @@ function RenderTrace(): null {
 export default function GameCanvas({
   doors,
   roomDoors,
+  timelines,
   onActiveSliceChange,
 }: {
+  /** The CORE timeline's door list (newest first) — the spawn hotel. */
   doors: readonly CorridorDoor[];
   /** Strand doors per room, keyed by sliceId — pre-resolved by the data
    *  lane (game-shell.tsx / lib/game/strand-doors.ts). Absent while that
    *  lane is off; rooms then grow no extra doors and nothing here runs. */
   roomDoors?: ReadonlyMap<string, readonly StrandDoorSpec[]>;
+  /** The strand hotels (HD4): strand name → its timeline's door list
+   *  (newest first), same shape as `doors`. Absent while the strand lane
+   *  is off — strand doors then never resolve lit, so no hop can reference
+   *  a missing hotel. */
+  timelines?: ReadonlyMap<string, readonly CorridorDoor[]>;
   /** Push feed for the narration panel (game-shell.tsx): the mounted
    *  room's slice id, or null in the corridor. Fired from an effect on
    *  activeSpace, so it tracks the door manager exactly. */
@@ -1359,9 +1464,21 @@ export default function GameCanvas({
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
   const playerRef = useRef<PlayerPos>({ ...SPAWN });
-  /** One-shot flag: the strand-door wormhole teleported the player, so the
+  /** One-shot flag: a hotel hop teleported the player, so the
    *  camera rig snaps its lerped focus instead of gliding (see CameraRig). */
   const cameraSnapRef = useRef(false);
+  // Hotels (HD2/HD3): WHERE the player is — one timeline at one window.
+  // The navigation stack records how they got here: each entry is the
+  // hotel to return to plus, for a strand-door hop, the room and door the
+  // player left by (the return door lands them back inside that room).
+  // The stack lives in a ref (mutated from frame handlers); `stackDepth`
+  // is its render-visible shadow — it gates the lobby's return door.
+  const [location, setLocation] = useState<HotelRef>({
+    timelineId: CORE_TIMELINE_ID,
+    windowIndex: 0,
+  });
+  const navStackRef = useRef<NavEntry[]>([]);
+  const [stackDepth, setStackDepth] = useState(0);
   const keysRef = useRef<Set<string>>(new Set());
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
   const hudIdRef = useRef<string | null>(null);
@@ -1425,32 +1542,71 @@ export default function GameCanvas({
       setActiveSpace(null);
     }
   }, [strandTransition, activeSpace]);
-  // Latch release: the crossing completes when the destination room is the
-  // ACTIVE space — from then on the ordinary door manager owns the player.
+  // Latch release: the hop completes the moment the fade-out handshake has
+  // landed the player in the destination hotel's LOBBY (handleFadedOut) —
+  // no destination room mounts (§10.2a: arrival is always in the lobby),
+  // so mounting flips straight back to idle on the next render.
   useEffect(() => {
-    if (strandTransition.phase === "mounting" && activeSpace !== null) {
+    if (strandTransition.phase === "mounting") {
       setStrandTransition(
-        reduceStrandTransition(strandTransition, {
-          type: "activated",
-          destinationIndex: flatDoorIndex(activeSpace.door),
-        }),
+        reduceStrandTransition(strandTransition, { type: "arrived" }),
       );
     }
-  }, [strandTransition, activeSpace]);
+  }, [strandTransition]);
 
-  const sliceIds = useMemo(() => doors.map((d) => d.sliceId), [doors]);
-  const layout = useMemo(() => corridorLayoutFromDoors(doors), [doors]);
-  const doorXs = useMemo(
-    () => materializedDoorXs(sliceIds, layout),
-    [sliceIds, layout],
+  // The CURRENT hotel's door list and its one materialized window (HD2):
+  // the core timeline renders `doors`, a strand hotel renders its entry
+  // from `timelines`. Every hotel shares one local frame — the window
+  // layout re-bases the current window's CHUNK_DOORS bays so the lobby
+  // always sits at x ∈ [0, LOBBY_LENGTH) (windowLayout).
+  const currentDoors = useMemo(
+    () =>
+      location.timelineId === CORE_TIMELINE_ID
+        ? doors
+        : (timelines?.get(location.timelineId) ?? NO_TIMELINE_DOORS),
+    [location, doors, timelines],
   );
+  const sliceIds = useMemo(() => currentDoors.map((d) => d.sliceId), [currentDoors]);
+  const globalLayout = useMemo(() => corridorLayoutFromDoors(currentDoors), [currentDoors]);
+  const layout = useMemo(
+    () => windowLayout(globalLayout, location.windowIndex),
+    [globalLayout, location.windowIndex],
+  );
+  const windowIds = useMemo(
+    () =>
+      sliceIds.slice(
+        location.windowIndex * WINDOW_SLICES,
+        (location.windowIndex + 1) * WINDOW_SLICES,
+      ),
+    [sliceIds, location.windowIndex],
+  );
+  // The far end: a page door while an older window exists, a plain wall
+  // at the oldest (§10: "直到尽头就什么都没有了").
+  const hasOlder = location.windowIndex + 1 < windowCountForLayout(globalLayout);
+  const corridorEnd = useMemo<CorridorEnd>(
+    () => ({ endX: chunkBounds(0, layout).xStart, pageDoor: hasOlder }),
+    [layout, hasOlder],
+  );
+  // The hotel's accent (§11.1): brand blue for the core timeline, the
+  // strand's deterministic palette accent otherwise.
+  const accent =
+    location.timelineId === CORE_TIMELINE_ID
+      ? HOTEL_ACCENT_CORE
+      : strandAccentFor(location.timelineId);
+  // Clamp door gaps: the window's materialized doors plus the lobby's
+  // return door (its gap opens the north wall once the nav stack is
+  // non-empty).
+  const doorXs = useMemo(() => {
+    const xs = materializedDoorXs(windowIds, layout);
+    return stackDepth > 0 ? [...xs, RETURN_DOOR_X] : xs;
+  }, [windowIds, layout, stackDepth]);
   const archetypeById = useMemo(() => {
     const map = new Map<string, ArchetypeId>();
-    for (const door of doors) {
+    for (const door of currentDoors) {
       if (door.archetype !== undefined) map.set(door.sliceId, door.archetype);
     }
     return map;
-  }, [doors]);
+  }, [currentDoors]);
   // 0 for every archetype without water (waterCoverage = 0 → side 0). The
   // scaled view keeps the wade rectangle coincident with the water plane
   // the renderer built.
@@ -1502,9 +1658,109 @@ export default function GameCanvas({
     [activeSpace, roomDoors],
   );
 
+  /** Land the player in the CURRENT hotel's lobby, just inside the return
+   *  door on the north wall — the one arrival point every hotel hop shares
+   *  (§10.2a: arrival is always in the lobby, the door you came through on
+   *  the wall behind you). The camera snaps (STRAND_TELEPORT_CAMERA_SNAP). */
+  const arriveInLobby = (): void => {
+    playerRef.current = { x: RETURN_DOOR_X, z: WALL_Z - LOBBY_ARRIVAL_INSET };
+    cameraSnapRef.current = true;
+  };
+
+  /** Page door (HD3): the corridor's far end leads to the NEXT-OLDER window
+   *  of the same timeline. Push the current hotel, page forward, arrive in
+   *  the (identical) lobby. */
+  const handlePageDoor = (): void => {
+    navStackRef.current.push({ hotel: location, returnTo: null });
+    setStackDepth(navStackRef.current.length);
+    setLocation({
+      timelineId: location.timelineId,
+      windowIndex: location.windowIndex + 1,
+    });
+    arriveInLobby();
+  };
+
+  /** Return door (HD3): pop the navigation stack. A page-door entry lands
+   *  back in that hotel's lobby; a strand-door entry lands back INSIDE the
+   *  room the player left, at the strand door they left by (HD4) — the
+   *  thread walk reads as one continuous passage. */
+  const handleReturnDoor = (): void => {
+    const entry = navStackRef.current.pop();
+    if (entry === undefined) return;
+    setStackDepth(navStackRef.current.length);
+    setLocation(entry.hotel);
+    const returnTo = entry.returnTo;
+    if (returnTo === null) {
+      arriveInLobby();
+      return;
+    }
+    // Resolve the room in the RESTORED hotel — computed inline, not from
+    // the memos above (those still describe the hotel being left this
+    // render; they re-derive on the location change).
+    const backDoors =
+      entry.hotel.timelineId === CORE_TIMELINE_ID
+        ? doors
+        : (timelines?.get(entry.hotel.timelineId) ?? []);
+    const backIds = backDoors.map((d) => d.sliceId);
+    const backLayout = windowLayout(
+      corridorLayoutFromDoors(backDoors),
+      entry.hotel.windowIndex,
+    );
+    const backWindowIds = backIds.slice(
+      entry.hotel.windowIndex * WINDOW_SLICES,
+      (entry.hotel.windowIndex + 1) * WINDOW_SLICES,
+    );
+    const flatIndex = backWindowIds.indexOf(returnTo.sliceId);
+    const door =
+      flatIndex >= 0
+        ? doorRefForFlatIndex(flatIndex, backWindowIds, backLayout)
+        : null;
+    if (door === null) {
+      // The room fell out of its window (the timeline changed under the
+      // stack): land in the lobby rather than dropping the return.
+      arriveInLobby();
+      return;
+    }
+    const backArchetypes = new Map<string, ArchetypeId>();
+    for (const d of backDoors) {
+      if (d.archetype !== undefined) backArchetypes.set(d.sliceId, d.archetype);
+    }
+    const space = resolveSpaceForDoor(door, backArchetypes);
+    // The strand door the player left by: land just inside the room at
+    // that door. placement.index is the placement's index into the room's
+    // door list (room-doors.ts), so the spec's own index finds it.
+    const specs = roomDoors?.get(door.sliceId) ?? [];
+    const specIndex = specs.findIndex((s) => s.key === returnTo.key);
+    const placement =
+      specIndex >= 0
+        ? roomGeometryForSpace(space, specs.length).doors.find(
+            (pl) => pl.index === specIndex,
+          )
+        : undefined;
+    if (placement === undefined) {
+      // The strand door is gone from the room (the door set changed):
+      // arrive by the corridor entrance instead.
+      playerRef.current = {
+        x: door.x,
+        z: door.z + Math.sign(door.z) * STRAND_DOOR_ARRIVAL_INSET,
+      };
+    } else {
+      // Placement frame → world (mirror of clampToSpace's local frame):
+      // lx = (x − door.x)·dir, lz = (z − door.z)·dir.
+      const dir = door.z > 0 ? 1 : -1;
+      const lx = placement.x + placement.nx * STRAND_DOOR_ARRIVAL_INSET;
+      const lz = placement.z + placement.nz * STRAND_DOOR_ARRIVAL_INSET;
+      playerRef.current = { x: door.x + dir * lx, z: door.z + dir * lz };
+    }
+    cameraSnapRef.current = true;
+    setShownSpace(null);
+    MOUNT_TRACE.tRequest = performance.now();
+    setActiveSpace(space);
+  };
+
   /** Room-renderer callback: the player walked through the strand door
-   *  `key`. The reducer re-validates everything (lit, destination inside
-   *  the rendered corridor, a room actually active) before latching. */
+   *  `key`. The reducer re-validates everything (lit, a real destination
+   *  hotel, a room actually active) before latching. */
   const handleRoomDoor = (key: string): void => {
     const spec = roomDoors
       ?.get(activeSpace?.recipe.sliceId ?? "")
@@ -1514,70 +1770,63 @@ export default function GameCanvas({
         type: "cross",
         key,
         lit: spec?.lit ?? false,
-        destinationIndex: spec?.destinationIndex ?? null,
-        doorCount: sliceIds.length,
-        currentIndex: activeSpace === null ? null : flatDoorIndex(activeSpace.door),
+        destination: spec?.destination ?? null,
+        current: activeSpace === null ? null : location,
       }),
     );
   };
 
   /** SpaceScene fade-out handshake: either the ordinary corridor exit
-   *  (unmount the dissolved room) or, with a crossing latched, the
-   *  wormhole's midpoint — move the player to the destination slice's
-   *  corridor door and mount that slice's room through the same
-   *  construction the door manager uses. */
+   *  (unmount the dissolved room) or, with a crossing latched, the hop's
+   *  midpoint — push the current hotel (remembering the room and strand
+   *  door the player is leaving by, for the return door) and land in the
+   *  destination hotel's LOBBY (§10.2a: arrival is always in the lobby;
+   *  the destination room does NOT mount). */
   const handleFadedOut = (): void => {
     if (strandTransition.phase !== "fadingOut") {
       setShownSpace(null);
       return;
     }
-    const destDoor = doorRefForFlatIndex(
-      strandTransition.destinationIndex,
-      sliceIds,
-      layout,
-    );
-    if (destDoor === null || shownSpace === null) {
-      // The destination fell out of the rendered corridor mid-fade (the
-      // door list changed under us): abort the crossing and bring the
-      // current room back. It must REMOUNT, not just flip back to
-      // fade="in" — SpaceScene fires onFadedOut once per mount
-      // (fadeDoneRef), so a reused instance would never handshake a later
-      // exit again.
-      setShownSpace(null);
-      setActiveSpace(shownSpace);
+    if (shownSpace === null) {
+      // The room vanished mid-fade: abort the crossing — there is nothing
+      // to leave from any more, and nothing to bring back.
       setStrandTransition(reduceStrandTransition(strandTransition, { type: "abort" }));
       return;
     }
-    // Arrive just inside the destination room, on its door axis — the
-    // room condenses around the player and the corridor never appears.
-    playerRef.current = {
-      x: destDoor.x,
-      z: destDoor.z + Math.sign(destDoor.z) * STRAND_DOOR_ARRIVAL_INSET,
-    };
-    // Tell the camera rig the player just teleported: it snaps its smoothed
-    // focus here instead of gliding the ~90 m over ~1 s (a slide that read
-    // like a defect in review). Gated by STRAND_TELEPORT_CAMERA_SNAP.
-    cameraSnapRef.current = true;
+    navStackRef.current.push({
+      hotel: location,
+      returnTo: { sliceId: shownSpace.door.sliceId, key: strandTransition.key },
+    });
+    setStackDepth(navStackRef.current.length);
+    setLocation(strandTransition.destination);
     setShownSpace(null);
-    MOUNT_TRACE.tRequest = performance.now();
-    setActiveSpace(resolveSpaceForDoor(destDoor, archetypeById));
+    arriveInLobby();
     setStrandTransition(reduceStrandTransition(strandTransition, { type: "fadedOut" }));
   };
 
   // Probe/e2e debug handle on window (GAME_DEBUG is updated every frame).
+  // `travel` hops straight to any hotel (nav stack pushed, lobby arrival)
+  // so probes and e2e can reach strand hotels without walking the thread.
   useEffect(() => {
     GAME_DEBUG.teleport = (x, z) => {
       playerRef.current.x = x;
       playerRef.current.z = z;
     };
+    GAME_DEBUG.travel = (timelineId, windowIndex) => {
+      navStackRef.current.push({ hotel: location, returnTo: null });
+      setStackDepth(navStackRef.current.length);
+      setLocation({ timelineId, windowIndex });
+      arriveInLobby();
+    };
     window.__gameDebug = GAME_DEBUG;
     window.__gameMountTrace = MOUNT_TRACE;
     return () => {
       GAME_DEBUG.teleport = undefined;
+      GAME_DEBUG.travel = undefined;
       delete window.__gameDebug;
       delete window.__gameMountTrace;
     };
-  }, []);
+  }, [location]);
 
   // Keyboard: track pressed keys, swallow the arrows' page scroll, and clear
   // the set on window blur so a released key can never stick.
@@ -1678,7 +1927,10 @@ export default function GameCanvas({
         <group ref={corridorGroupRef}>
           <Corridor
             playerRef={playerRef}
-            doors={doors}
+            doors={currentDoors}
+            windowIndex={location.windowIndex}
+            accent={accent}
+            returnDoor={stackDepth > 0}
             dimmed={corridorHidden}
             dark={dark}
           />
@@ -1712,10 +1964,15 @@ export default function GameCanvas({
           playerRef={playerRef}
           keysRef={keysRef}
           motionRef={motionRef}
-          doors={doors}
-          sliceIds={sliceIds}
+          doors={currentDoors}
+          sliceIds={windowIds}
           doorXs={doorXs}
           layout={layout}
+          corridorEnd={corridorEnd}
+          returnDoorX={stackDepth > 0 ? RETURN_DOOR_X : null}
+          onPageDoor={handlePageDoor}
+          onReturnDoor={handleReturnDoor}
+          hotelLabel={`${location.timelineId}@${location.windowIndex}`}
           archetypeById={archetypeById}
           activeSpace={activeSpace}
           setActiveSpace={setActiveSpace}

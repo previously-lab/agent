@@ -71,6 +71,11 @@ export const LOBBY_CLEAR = 0.6;
  *  relaxation is bounded by BOTH the GAP_HALF window and this plane: the
  *  player can stand between the jambs, never escape past them. */
 export const ROOM_DOOR_PASS_DEPTH = 0.6;
+/** End-wall (page door) passage: inside the page door's gap the far-end
+ *  clamp relaxes past the wall plane by this much, so the page-door
+ *  crossing trigger (PAGE_DOOR_CROSS_DEPTH, tuning/hotel.ts) is reachable
+ *  — the same overtravel a strand door gets. */
+export const END_WALL_PASS_DEPTH = 0.6;
 
 /** Margin shrink cap: the effective space margin never exceeds this
  *  fraction of the room's half-span, so at least half of every span stays
@@ -91,15 +96,43 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /**
+ * The corridor's far (past) end — the window's boundary (HD2/HD3). With a
+ * page door the end wall carries one doorway (centered on the hall, z = 0)
+ * into the next-older hotel's lobby; without one (the oldest window) the
+ * end is a plain wall — "直到尽头就什么都没有了".
+ */
+export interface CorridorEnd {
+  /** X of the end wall's plane. */
+  endX: number;
+  /** True when the end wall carries the page door: inside its gap the
+   *  player may push past the wall plane to trigger the crossing. */
+  pageDoor: boolean;
+}
+
+/**
  * Corridor clamp: z boxed to ±CORRIDOR_Z_LIMIT except within a door gap,
  * where the wall opening lets the player reach past the wall plane; the
- * lobby east wall caps x, the past corridor runs unbounded.
+ * lobby east wall caps x. The corridor is a FIXED length now (HD2 — no
+ * treadmill): when `end` is given, x is also capped at the window's far
+ * end — solid at endX + LOBBY_CLEAR, or, inside the page door's gap
+ * (|z| < GAP_HALF), relaxed out to endX − END_WALL_PASS_DEPTH so the
+ * page-door crossing trigger stays reachable, exactly like a room door's
+ * slab passage. Without `end` the past corridor stays unbounded (legacy
+ * behaviour, kept total for callers that predate windows).
  */
 export function clampToCorridor(
   p: { x: number; z: number },
   doorXs: readonly number[],
+  end?: CorridorEnd,
 ): void {
   if (p.x > LOBBY_LENGTH - LOBBY_CLEAR) p.x = LOBBY_LENGTH - LOBBY_CLEAR;
+  if (end !== undefined) {
+    const inPageGap = end.pageDoor && Math.abs(p.z) < GAP_HALF;
+    const minX = inPageGap
+      ? end.endX - END_WALL_PASS_DEPTH
+      : end.endX + LOBBY_CLEAR;
+    if (p.x < minX) p.x = minX;
+  }
   const inGap = doorXs.some((dx) => Math.abs(p.x - dx) < GAP_HALF);
   const limit = inGap ? GAP_Z_LIMIT : CORRIDOR_Z_LIMIT;
   p.z = clamp(p.z, -limit, limit);

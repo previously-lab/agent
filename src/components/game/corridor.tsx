@@ -1,18 +1,26 @@
 "use client";
 
 /**
- * Corridor — the hotel diorama: lobby + infinite treadmill corridor.
+ * Corridor — the hotel diorama: lobby + ONE window of corridor (HD2).
  *
  * WHAT IT IS. The render half of the hotel. All layout arithmetic lives in
- * `src/lib/game/hotel.ts`; this file only draws what those functions return.
- * The world streams: `useFrame` reads the player's x from `playerRef`,
- * resolves it to a chunk via `chunkIndexForX`, and keeps the visible window
- * (`visibleChunkIndices(playerX, 1)` — current chunk plus one neighbor each
- * way) in React state. Chunks outside the window unmount, and because every
- * mesh here is built from JSX geometry/material, R3F disposes the GPU
- * resources for free. The state update is guarded (same center → same
- * array reference), so unchanged frames cost one `Math.ceil` and zero
- * allocations, no setState, no re-render.
+ * `src/lib/game/hotel.ts` + `corridor-pitch.ts`; this file only draws what
+ * those functions return. The treadmill is gone (v0.11-room-interiors
+ * §9/§10): exactly ONE window — hotel.ts's chunk, CHUNK_DOORS bays × two
+ * walls — is materialized at a time, in the ONE local frame every hotel
+ * shares (lobby at x ∈ [0, LOBBY_LENGTH), corridor at negative x). Which
+ * window is showing is the integrator's location state (`windowIndex`
+ * prop); a window switch is a data swap, never a coordinate change. The
+ * corridor's far end is either the PAGE DOOR into the next-older hotel's
+ * lobby or — at the oldest window — a plain wall (§10: "直到尽头就什么都
+ * 没有了"). The lobby carries the RETURN DOOR you arrived through (§10.2a)
+ * whenever the integrator says there is one.
+ *
+ * ACCENT (§11.1). Every hotel has one accent color (the `accent` prop —
+ * brand blue for the core timeline, another brand-family member for strand
+ * timelines): the door plates' ink, the page door's glow, and the return
+ * door's glow all take it, so a hotel reads as belonging to its timeline.
+ *
  *
  * THE HALL. The camera looks at the player from (−x, +y, +z), so the north
  * wall (z > 0) is the near wall and the south wall (z < 0) is the far
@@ -102,10 +110,10 @@
  *
  * THE VOID. The corridor stands in open void — a surrounding dark
  * building mass was tried and rejected (it read as a black shell), so
- * nothing here extends beyond the wall faces. The treadmill ends are
- * deliberate: each end-fade curtain dissolves into the void in front of a
- * soft warm haze glow, so the corridor terminates in light, never in a
- * black wall (see EndFade).
+ * nothing here extends beyond the wall faces. The corridor's far end is
+ * deliberate: the window's end wall carries either the page door into the
+ * next-older hotel or — at the oldest window — a plain wall (see
+ * CorridorEnd).
  *
  * MATERIALS. Every shared surface material carries a real physical finish
  * (MATERIAL_FINISH — waxed-wood floor sheen, satin wainscot, matte
@@ -139,8 +147,8 @@
  * WHAT THIS FILE OWNS vs THE INTEGRATOR. This component supplies the
  * indoor floor light (one hemisphere light — B.13: only the "we are
  * indoors" base; the fixtures carry the mood). It does NOT set the scene
- * fog; the fog color #1a1d24 is referenced here (end-fade curtains) but
- * the fog itself is the canvas owner's job. The camera is also the canvas
+ * fog; the fog color #1a1d24 belongs to the canvas owner (the hotel
+ * floats in it). The camera is also the canvas
  * owner's job.
  *
  * DETERMINISM. The lobby prop layout and all corridor dressing derive
@@ -170,8 +178,8 @@ import {
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
   WALL_HEIGHT,
+  WINDOW_SLICES,
   chunkBounds,
-  chunkIndexForX,
   doorsInChunk,
   type DoorRef,
   type Side,
@@ -180,9 +188,10 @@ import {
   bayBoundaryX,
   bayCenterX,
   corridorLayoutFromDoors,
+  windowCountForLayout,
+  windowLayout,
   type CorridorLayout,
 } from "@/lib/game/corridor-pitch";
-import { smoothstep } from "@/lib/game/math";
 import { sliceClock } from "@/lib/game/slice-clock";
 import { WORLD_SEED, createRng, deriveSubSeed, pick, rangeInt } from "@/lib/game/seed";
 import { compileSpaceRecipe, doorGlowColor } from "@/lib/game/space-recipe";
@@ -191,22 +200,12 @@ import {
   ART_PALETTE,
   CHAIR_RAIL_DEPTH,
   CHAIR_RAIL_HEIGHT,
-  CHUNK_RADIUS,
   CORNICE_DEPTH,
   CORNICE_HEIGHT,
   CORRIDOR_WALL_THICKNESS,
   DIM_LERP_RATE,
   DIM_LERP_RATE_DESCEND,
   DIM_MAX_DT,
-  END_GLOW_COLOR,
-  END_GLOW_HEIGHT,
-  END_GLOW_OFFSET,
-  END_GLOW_WIDTH,
-  FADE_ALPHA_FLOOR,
-  FADE_HEIGHT,
-  FADE_RAMP_Y0,
-  FADE_RAMP_Y1,
-  FADE_WIDTH,
   FLOOR_LAMP_DOOR_CLEARANCE,
   FLOOR_LAMP_LIGHT_DISTANCE,
   FLOOR_LAMP_SPACING,
@@ -223,6 +222,7 @@ import {
   PLATE_BG,
   PLATE_INK,
   PORTAL_POST_SIZE,
+  RETURN_DOOR_X,
   SCONCE_COLOR,
   SCONCE_LIGHT_HEIGHT,
   SCONCE_LIGHT_INSET,
@@ -241,7 +241,6 @@ import {
   STRIP_WASH_HEIGHT,
   THEME_COLORS,
   THEME_LERP_RATE,
-  VOID_COLORS,
   WAINSCOT_DEPTH,
   WAINSCOT_HEIGHT,
   type LightLevels,
@@ -284,12 +283,6 @@ const THEME_TARGETS: Record<HotelRole, { day: Color; night: Color }> =
       { day: new Color(THEME_COLORS[role].day), night: new Color(THEME_COLORS[role].night) },
     ]),
   ) as Record<HotelRole, { day: Color; night: Color }>;
-
-/** The void targets, likewise preallocated (EndFade lerps between them). */
-const VOID_TARGETS = {
-  day: new Color(VOID_COLORS.day),
-  night: new Color(VOID_COLORS.night),
-};
 
 const WALL_Z = CORRIDOR_WIDTH / 2;
 const FLOOR_THICKNESS = 0.2;
@@ -765,9 +758,11 @@ function bayDate(sliceIds: readonly string[], i: number): string | null {
  * One small dark plaque with light monospace text — shared builder for
  * door plates and date plaques (`glow` bakes a soft halo for the latter).
  * 2:1 canvas at 384×192 so the digits survive the diorama camera's long
- * view down to a readable glyph.
+ * view down to a readable glyph. The ink defaults to the house cream; the
+ * hotel's ACCENT (§11.1) replaces it on door plates so a hotel's signage
+ * reads as its timeline's color.
  */
-function createPlaqueTexture(text: string, glow: boolean): CanvasTexture {
+function createPlaqueTexture(text: string, glow: boolean, ink: string = PLATE_INK): CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 384;
   canvas.height = 192;
@@ -778,12 +773,12 @@ function createPlaqueTexture(text: string, glow: boolean): CanvasTexture {
     ctx.strokeStyle = "rgba(236,226,204,0.45)";
     ctx.lineWidth = 8;
     ctx.strokeRect(12, 12, canvas.width - 24, canvas.height - 24);
-    ctx.fillStyle = PLATE_INK;
+    ctx.fillStyle = ink;
     ctx.font = "900 104px ui-monospace, Menlo, Consolas, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     if (glow) {
-      ctx.shadowColor = PLATE_INK;
+      ctx.shadowColor = ink;
       ctx.shadowBlur = 22;
     }
     ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 6);
@@ -805,15 +800,24 @@ function DoorPlate({
   door,
   dimRef,
   mats,
+  ink,
+  clock,
 }: {
   door: DoorRef;
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
+  /** Hotel accent ink (§11.1); defaults to the house cream. */
+  ink?: string;
+  /** Text override — the page door shows the NEXT window's newest slice's
+   *  clock, which is not this door's own slice. Default: the door slice's
+   *  own HHMM; an explicit null suppresses the plate (the return door
+   *  carries no number — it leads back, not to a slice). */
+  clock?: string | null;
 }) {
   const texture = useMemo(() => {
-    const clock = sliceClock(door.sliceId);
-    return clock ? createPlaqueTexture(clock.time, false) : null;
-  }, [door.sliceId]);
+    const text = clock !== undefined ? clock : (sliceClock(door.sliceId)?.time ?? null);
+    return text ? createPlaqueTexture(text, false, ink) : null;
+  }, [door.sliceId, clock, ink]);
   useEffect(() => () => texture?.dispose(), [texture]);
   const faceMatRef = useRef<MeshBasicMaterial>(null);
   useDimLerp(
@@ -859,22 +863,33 @@ function DoorAssembly({
   dimRef,
   mats,
   playerRef,
+  glowOverride,
+  plateInk,
+  plateClock,
 }: {
   door: DoorRef;
   archetype?: ArchetypeId;
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
   playerRef: MutableRefObject<{ x: number; z: number }>;
+  /** Accent-colored glow for the hotel's own doors (page door, return
+   *  door) — replaces the room-palette glow a slice door derives (§11.1). */
+  glowOverride?: string;
+  /** Door-plate ink (the hotel accent) and text override — see DoorPlate. */
+  plateInk?: string;
+  plateClock?: string | null;
 }) {
   // The doorway light is the room's own tone (ground→sky, lifted), not a
   // decorative accent — the glimpse through the frame must read as THAT
-  // room's light before the room itself ever renders.
+  // room's light before the room itself ever renders. The hotel's OWN
+  // doors (page/return) take the timeline accent instead.
   const glowColor = useMemo(() => {
+    if (glowOverride !== undefined) return glowOverride;
     const recipe = compileSpaceRecipe(door.sliceId);
     return doorGlowColor(
       (archetype === undefined ? recipe : { ...recipe, archetype }).palette,
     );
-  }, [door.sliceId, archetype]);
+  }, [door.sliceId, archetype, glowOverride]);
 
   const inward = door.side === "north" ? -1 : 1; // toward the corridor interior
   const frameZ = door.z + inward * 0.06;
@@ -1015,7 +1030,7 @@ function DoorAssembly({
         />
       </mesh>
       {/* Room number — the slice's HHMM time on a plaque by the frame. */}
-      <DoorPlate door={door} dimRef={dimRef} mats={mats} />
+      <DoorPlate door={door} dimRef={dimRef} mats={mats} ink={plateInk} clock={plateClock} />
     </group>
   );
 }
@@ -1333,8 +1348,8 @@ interface PaintingSpec {
  * slices allocate or unmount. Draw order is fixed (north gaps, then
  * south), keeping the rng stream stable.
  */
-function paintingLayout(index: number, gapXs: readonly number[]): PaintingSpec[] {
-  const rng = createRng(deriveSubSeed(WORLD_SEED, `corridor-chunk-${index}`, "style"));
+function paintingLayout(seedIndex: number, gapXs: readonly number[]): PaintingSpec[] {
+  const rng = createRng(deriveSubSeed(WORLD_SEED, `corridor-chunk-${seedIndex}`, "style"));
   const paintings: PaintingSpec[] = [];
   for (const side of ["north", "south"] as const) {
     for (const x of gapXs) {
@@ -1436,12 +1451,13 @@ interface PropSpec {
  */
 function propLayout(
   index: number,
+  seedIndex: number,
   xStart: number,
   length: number,
   gapXs: readonly number[],
   layout: CorridorLayout,
 ): PropSpec[] {
-  const rng = createRng(deriveSubSeed(WORLD_SEED, `corridor-chunk-${index}`, "layout"));
+  const rng = createRng(deriveSubSeed(WORLD_SEED, `corridor-chunk-${seedIndex}`, "layout"));
   const count = rangeInt(rng, 0, 2);
   const doorXs = Array.from({ length: CHUNK_DOORS }, (_, k) =>
     bayCenterX(layout, k - index * CHUNK_DOORS),
@@ -1539,25 +1555,32 @@ function DatePlaqueSide({
   );
 }
 
-/** One treadmill chunk: floor slab, carpet runner, both wall runs with
+/** One window's corridor: floor slab, carpet runner, both wall runs with
  *  wainscot, baseboards, cornice bands, doors,
  *  sconces (the lit subset carrying real light at the shade), the
  *  baseboard light line with its own low lights, floor lamps at grid
- *  intervals, and seeded dressing (paintings, props, date plaques). */
+ *  intervals, and seeded dressing (paintings, props, date plaques).
+ *  `index` is the GEOMETRY chunk (always 0 — the window renders in the
+ *  local frame); `seedIndex` feeds the dressing seeds, so each window's
+ *  hotel gets its own art and props ("整体相同、个别不同", §9.2). */
 function CorridorChunk({
   index,
+  seedIndex,
   sliceIds,
   layout,
   doorArchetypes,
+  plateInk,
   dimRef,
   darkRef,
   mats,
   playerRef,
 }: {
   index: number;
+  seedIndex: number;
   sliceIds: readonly string[];
   layout: CorridorLayout;
   doorArchetypes: ReadonlyMap<string, ArchetypeId | undefined>;
+  plateInk?: string;
   dimRef: MutableRefObject<boolean>;
   darkRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
@@ -1588,13 +1611,13 @@ function CorridorChunk({
     () => sconces.filter((x) => x < xEnd - 1e-9),
     [sconces, xEnd],
   );
-  const paintings = useMemo(() => paintingLayout(index, gapXs), [index, gapXs]);
+  const paintings = useMemo(() => paintingLayout(seedIndex, gapXs), [seedIndex, gapXs]);
   const props = useMemo(
     () =>
-      propLayout(index, xStart, length, gapXs, layout).filter((p) =>
+      propLayout(index, seedIndex, xStart, length, gapXs, layout).filter((p) =>
         lamps.every((l) => Math.sign(p.z) !== Math.sign(l.z) || Math.abs(p.x - l.x) >= 1.2),
       ),
-    [index, xStart, length, gapXs, layout, lamps],
+    [index, seedIndex, xStart, length, gapXs, layout, lamps],
   );
   // A date plaque goes up at the BAY boundary (the seam between bay m − 1
   // and bay m, x = -cumulative[m]) wherever the calendar day changes across
@@ -1710,6 +1733,7 @@ function CorridorChunk({
           dimRef={dimRef}
           mats={mats}
           playerRef={playerRef}
+          plateInk={plateInk}
         />
       ))}
       {/* North-wall sconces — the lit subset carries the chunk's real
@@ -1922,13 +1946,24 @@ function FloorLamp({
  *  on south to the leg's far wall, so arriving from the hall reads as a
  *  turn into a separate room. The leg's far walls (south/east) run full
  *  height; its west wall faces the camera and stays a low cutaway
- *  parapet. The desk stands against the south wall, facing the turn. */
+ *  parapet. The desk stands against the south wall, facing the turn.
+ *  When `returnDoor` is set the junction's north wall carries the door
+ *  the player arrived through (§10.2a — HD3): it hangs at RETURN_DOOR_X
+ *  with the hotel's accent glow, leading back to wherever the trip
+ *  started. No door without a trip: the newest hotel's lobby is the
+ *  beginning of the world. */
 function Lobby({
   dimRef,
   mats,
+  returnDoor,
+  accent,
+  playerRef,
 }: {
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
+  returnDoor: boolean;
+  accent: string;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
 }) {
   const { desk, armchairs, plants, lamps } = LOBBY_LAYOUT;
   const centerX = LOBBY_LENGTH / 2;
@@ -1939,6 +1974,11 @@ function Lobby({
   // The leg proper (south of the corridor band) — the parapet's span.
   const legDepth = LOBBY_SOUTH_REACH - WALL_Z;
   const legCenterZ = (-WALL_Z + southZ) / 2;
+  // The junction's north wall: one solid run, or split around the return
+  // door's gap exactly like a corridor wall run (segments + lintel).
+  const northWall = returnDoor
+    ? wallSegments(0, LOBBY_LENGTH, [RETURN_DOOR_X])
+    : [{ x0: 0, x1: LOBBY_LENGTH }];
   return (
     <group>
       <mesh
@@ -1949,15 +1989,47 @@ function Lobby({
         <boxGeometry args={[LOBBY_LENGTH, FLOOR_THICKNESS, floorDepth]} />
       </mesh>
       {/* Junction band: north wall full height (the corridor's north wall
-          runs straight on); the south side is open — the turn. */}
-      <mesh
-        position={[centerX, WALL_HEIGHT / 2, WALL_Z]}
-        material={mats.wall}
-        castShadow
-        receiveShadow
-      >
-        <boxGeometry args={[LOBBY_LENGTH, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
-      </mesh>
+          runs straight on), split around the return door when there is
+          one; the south side is open — the turn. */}
+      {northWall.map((s) => (
+        <mesh
+          key={`${s.x0}:${s.x1}`}
+          position={[(s.x0 + s.x1) / 2, WALL_HEIGHT / 2, WALL_Z]}
+          material={mats.wall}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[s.x1 - s.x0, WALL_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
+        </mesh>
+      ))}
+      {returnDoor && (
+        <>
+          <mesh
+            position={[RETURN_DOOR_X, (WALL_HEIGHT + DOOR_HEIGHT) / 2, WALL_Z]}
+            material={mats.wall}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[DOOR_WIDTH, WALL_HEIGHT - DOOR_HEIGHT, CORRIDOR_WALL_THICKNESS]} />
+          </mesh>
+          {/* The door you came through (§10.2a): accent glow, no number —
+              it leads back, not to a slice. */}
+          <DoorAssembly
+            door={{
+              index: 0,
+              side: "north",
+              sliceId: "",
+              x: RETURN_DOOR_X,
+              z: WALL_Z,
+            }}
+            dimRef={dimRef}
+            mats={mats}
+            playerRef={playerRef}
+            glowOverride={accent}
+            plateClock={null}
+          />
+        </>
+      )}
       {/* Far walls: east and south, full height — the backdrop. */}
       <mesh
         position={[LOBBY_LENGTH, WALL_HEIGHT / 2, centerZ]}
@@ -1993,13 +2065,17 @@ function Lobby({
       >
         <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.1, LOBBY_CUTAWAY_CAP, legDepth + 0.1]} />
       </mesh>
-      {/* Baseboards on the three full-height walls. */}
-      <mesh
-        position={[centerX, 0.06, WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.02]}
-        material={mats.trim}
-      >
-        <boxGeometry args={[LOBBY_LENGTH, 0.12, 0.04]} />
-      </mesh>
+      {/* Baseboards on the three full-height walls — the north one breaks
+          around the return door's gap like the wall itself does. */}
+      {northWall.map((s) => (
+        <mesh
+          key={`baseboard-n-${s.x0}:${s.x1}`}
+          position={[(s.x0 + s.x1) / 2, 0.06, WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - 0.02]}
+          material={mats.trim}
+        >
+          <boxGeometry args={[s.x1 - s.x0, 0.12, 0.04]} />
+        </mesh>
+      ))}
       <mesh
         position={[centerX, 0.06, southZ + CORRIDOR_WALL_THICKNESS / 2 + 0.02]}
         material={mats.trim}
@@ -2012,7 +2088,8 @@ function Lobby({
       >
         <boxGeometry args={[0.04, 0.12, floorDepth]} />
       </mesh>
-      {/* Wainscot + chair rail on the three full-height walls. */}
+      {/* Wainscot + chair rail on the three full-height walls — the north
+          wall's bands break around the return door's gap. */}
       {[1, -1].map((s) => {
         const wz = s > 0
           ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01
@@ -2020,22 +2097,27 @@ function Lobby({
         const rz = s > 0
           ? WALL_Z - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01
           : southZ + CORRIDOR_WALL_THICKNESS / 2 + CHAIR_RAIL_DEPTH / 2 - 0.01;
+        const spans = s > 0 ? northWall : [{ x0: 0, x1: LOBBY_LENGTH }];
         return (
           <group key={`wainscot-${s}`}>
-            <mesh
-              position={[centerX, WAINSCOT_HEIGHT / 2, wz]}
-              material={mats.wainscot}
-              receiveShadow
-            >
-              <boxGeometry args={[LOBBY_LENGTH, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
-            </mesh>
-            <mesh
-              position={[centerX, WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2, rz]}
-              material={mats.trim}
-              receiveShadow
-            >
-              <boxGeometry args={[LOBBY_LENGTH, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
-            </mesh>
+            {spans.map((span) => (
+              <group key={`${span.x0}:${span.x1}`}>
+                <mesh
+                  position={[(span.x0 + span.x1) / 2, WAINSCOT_HEIGHT / 2, wz]}
+                  material={mats.wainscot}
+                  receiveShadow
+                >
+                  <boxGeometry args={[span.x1 - span.x0, WAINSCOT_HEIGHT, WAINSCOT_DEPTH]} />
+                </mesh>
+                <mesh
+                  position={[(span.x0 + span.x1) / 2, WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2, rz]}
+                  material={mats.trim}
+                  receiveShadow
+                >
+                  <boxGeometry args={[span.x1 - span.x0, CHAIR_RAIL_HEIGHT, CHAIR_RAIL_DEPTH]} />
+                </mesh>
+              </group>
+            ))}
           </group>
         );
       })}
@@ -2123,116 +2205,304 @@ function Lobby({
 }
 
 /**
- * Fog-colored fade at one open end of the treadmill — hides the pop when a
- * chunk unmounts. A solid "white board" version of this plane used to stand
- * across the corridor (very visible in day mode) and, worse, read as a hard
- * veil slicing walls and doors whenever the window scrolled. Now the curtain
- * DISSOLVES into the void: a CanvasTexture alpha gradient, fully opaque
- * above the wall line — where the world ends and the void begins, and the
- * color is identical to the scene background — easing to nearly transparent
- * at floor level, where the rendered floor and the far doorway stay
- * untouched. The base color is the void color for the active theme (the
- * canvas owner keeps the scene background/fog on the same value) and eases
- * between day and night with everything else; fog is disabled on the
- * material so the curtain stays exactly that color. The texture is shared
- * white — the material color tints it — and is disposed on unmount.
+ * The corridor's far end (HD2/HD3) — the wall across the window's xStart,
+ * spanning z ∈ [−WALL_Z, +WALL_Z]. Two forms:
  *
- * THE TERMINATION. Behind the curtain (farther from the player) sits a
- * soft warm haze glow — the shared radial texture, additive, dim-lerped
- * with everything else — so the corridor ends by dissolving into light.
- * A bare cut into the void read as an unfinished model; a black wall
- * would violate the dream anti-patterns. Haze is the deliberate end.
+ * - THE OLDEST WINDOW: a plain solid wall. The timeline simply ends here
+ *   (§10: "直到尽头就什么都没有了") — no glow, no door, just the house's
+ *   own trim so it reads as architecture, not an unfinished model.
+ * - EVERY OTHER WINDOW: the PAGE DOOR. The wall splits around a door gap
+ *   at z = 0 (two segments + a lintel, exactly like a corridor wall run),
+ *   and the gap carries a real hinged slab that swings open away from the
+ *   approaching player, an accent-colored glow plane on the far side, a
+ *   halo, a lintel strip, and a plate showing the NEXT window's newest
+ *   slice's HHMM — where this door leads. Walking through it (the
+ *   integrator's clamp lets the player overtravel the wall plane inside
+ *   the gap) pages to the next-older hotel.
  */
-/**
- * Vertical alpha ramp for the end curtain, painted once into a canvas:
- * row 0 (canvas top, plane top) opaque, easing to near-transparent at the
- * floor line and below. World y maps linearly from −(FADE_HEIGHT −
- * WALL_HEIGHT)/2 at the bottom row to that plus FADE_HEIGHT at the top.
- */
-function createEndFadeTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 16;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return new CanvasTexture(canvas);
-  const bottomY = WALL_HEIGHT / 2 - FADE_HEIGHT / 2;
-  for (let row = 0; row < canvas.height; row++) {
-    const v = 1 - row / (canvas.height - 1); // 1 at canvas top
-    const y = bottomY + v * FADE_HEIGHT;
-    const a =
-      FADE_ALPHA_FLOOR +
-      (1 - FADE_ALPHA_FLOOR) * smoothstep(0, 1, (y - FADE_RAMP_Y0) / (FADE_RAMP_Y1 - FADE_RAMP_Y0));
-    ctx.fillStyle = `rgba(255,255,255,${a.toFixed(3)})`;
-    ctx.fillRect(0, row, canvas.width, 1);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
-}
-
-function EndFade({
-  x,
+function CorridorEnd({
+  endX,
+  pageDoor,
+  plate,
+  accent,
   dimRef,
-  darkRef,
+  mats,
+  playerRef,
 }: {
-  x: number;
+  endX: number;
+  pageDoor: boolean;
+  /** The page door's plate text — the next window's newest slice's HHMM.
+   *  Ignored when `pageDoor` is false. */
+  plate: string | null;
+  accent: string;
   dimRef: MutableRefObject<boolean>;
-  darkRef: MutableRefObject<boolean>;
+  mats: HotelMaterials;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
 }) {
-  const texture = useMemo(() => createEndFadeTexture(), []);
-  useEffect(() => () => texture.dispose(), [texture]);
-  const matRef = useRef<MeshBasicMaterial>(null);
-  useFrame((_, rawDt) => {
-    const m = matRef.current;
-    if (!m) return;
-    const k = 1 - Math.exp(-THEME_LERP_RATE * Math.min(rawDt, DIM_MAX_DT));
-    m.color.lerp(darkRef.current ? VOID_TARGETS.night : VOID_TARGETS.day, k);
+  // Solid z-spans of the end wall: one full span, or two around the page
+  // door's gap. A half-thickness overhang past ±WALL_Z closes the seam
+  // with the corridor walls' end faces.
+  const segments = pageDoor
+    ? [
+        { z0: -WALL_Z - CORRIDOR_WALL_THICKNESS / 2, z1: -DOOR_WIDTH / 2 },
+        { z0: DOOR_WIDTH / 2, z1: WALL_Z + CORRIDOR_WALL_THICKNESS / 2 },
+      ]
+    : [{ z0: -WALL_Z - CORRIDOR_WALL_THICKNESS / 2, z1: WALL_Z + CORRIDOR_WALL_THICKNESS / 2 }];
+
+  // Hinged slab: the hinge group sits on the z < 0 jamb at the wall plane;
+  // the slab hangs +z off it. The swing pushes AWAY from the player
+  // (toward −x, into the next hotel), easing like the room doors.
+  const hingeRef = useRef<Group>(null);
+  const angleRef = useRef(0);
+  const snappedRef = useRef(false);
+  useFrame((_, delta) => {
+    const hinge = hingeRef.current;
+    if (!hinge) return;
+    const p = playerRef.current;
+    const near = Math.hypot(p.x - endX, p.z) < DOOR_OPEN_DIST;
+    const target = near ? -DOOR_OPEN_ANGLE : 0;
+    const dt = Math.min(delta, 0.05);
+    if (!snappedRef.current) {
+      angleRef.current = target;
+      snappedRef.current = true;
+    } else {
+      angleRef.current += (target - angleRef.current) * (1 - Math.exp(-DOOR_SWING_RATE * dt));
+    }
+    hinge.rotation.y = angleRef.current;
   });
-  // The haze glow behind the curtain follows the hotel-wide dimming.
-  const glowMatRef = useRef<MeshBasicMaterial>(null);
+
+  // Glow materials follow the hotel-wide dimming — one ref pair per face
+  // (the door is dressed on BOTH faces; the camera only sees −x).
+  const glowMatRef = useRef<MeshStandardMaterial>(null);
+  const haloMatRef = useRef<MeshBasicMaterial>(null);
+  const haloMatRef2 = useRef<MeshBasicMaterial>(null);
+  const stripMatRef = useRef<MeshStandardMaterial>(null);
+  const stripMatRef2 = useRef<MeshStandardMaterial>(null);
   useDimLerp(
     dimRef,
-    LIGHT_LEVELS.endGlow,
-    () => glowMatRef.current?.opacity ?? null,
+    LIGHT_LEVELS.doorGlow,
+    () => glowMatRef.current?.emissiveIntensity ?? null,
     (v) => {
       const m = glowMatRef.current;
-      if (m) m.opacity = v;
+      if (m) m.emissiveIntensity = v;
     },
-    darkRef,
   );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.doorHalo,
+    () => haloMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = haloMatRef.current;
+      if (m) m.opacity = v;
+      const m2 = haloMatRef2.current;
+      if (m2) m2.opacity = v;
+    },
+  );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.doorStrip,
+    () => stripMatRef.current?.emissiveIntensity ?? null,
+    (v) => {
+      const m = stripMatRef.current;
+      if (m) m.emissiveIntensity = v;
+      const m2 = stripMatRef2.current;
+      if (m2) m2.emissiveIntensity = v;
+    },
+  );
+
+  // The page door's plate: the NEXT window's newest slice's HHMM in the
+  // hotel's accent ink (§11.1), beside the frame at handle height.
+  const plateTexture = useMemo(
+    () => (pageDoor && plate ? createPlaqueTexture(plate, false, accent) : null),
+    [pageDoor, plate, accent],
+  );
+  useEffect(() => () => plateTexture?.dispose(), [plateTexture]);
+  const plateMatRef = useRef<MeshBasicMaterial>(null);
+  const plateMatRef2 = useRef<MeshBasicMaterial>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.plaque,
+    () => plateMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = plateMatRef.current;
+      if (m) m.opacity = v;
+      const m2 = plateMatRef2.current;
+      if (m2) m2.opacity = v;
+    },
+  );
+
   return (
     <group>
-      <mesh position={[x, WALL_HEIGHT / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
-        <planeGeometry args={[FADE_WIDTH, FADE_HEIGHT]} />
-        <meshBasicMaterial
-          ref={matRef}
-          color={VOID_COLORS.night}
-          map={texture}
-          transparent
-          side={DoubleSide}
-          depthWrite={false}
-          fog={false}
-        />
-      </mesh>
-      {/* Warm haze beyond the curtain — the corridor dissolves into light,
-          never into a black wall. */}
-      <mesh
-        position={[x + Math.sign(x) * END_GLOW_OFFSET, WALL_HEIGHT / 2, 0]}
-        rotation={[0, Math.PI / 2, 0]}
-      >
-        <planeGeometry args={[END_GLOW_WIDTH, END_GLOW_HEIGHT]} />
-        <meshBasicMaterial
-          ref={glowMatRef}
-          map={sharedRadialGlowTexture()}
-          color={END_GLOW_COLOR}
-          transparent
-          opacity={LIGHT_LEVELS.endGlow.full}
-          blending={AdditiveBlending}
-          side={DoubleSide}
-          depthWrite={false}
-          fog={false}
-        />
-      </mesh>
+      {segments.map((s) => (
+        <mesh
+          key={`${s.z0}:${s.z1}`}
+          position={[endX, WALL_HEIGHT / 2, (s.z0 + s.z1) / 2]}
+          material={mats.wall}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, s.z1 - s.z0]} />
+        </mesh>
+      ))}
+      {/* Baseboard + cornice on BOTH faces — the wall reads as the house's
+          own architecture either way (the camera looks at the −x face; the
+          player walks up the +x one). */}
+      {[1, -1].map((side) =>
+        segments.map((s) => (
+          <mesh
+            key={`bb-${side}-${s.z0}:${s.z1}`}
+            position={[endX + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.02), 0.06, (s.z0 + s.z1) / 2]}
+            material={mats.trim}
+          >
+            <boxGeometry args={[0.04, 0.12, s.z1 - s.z0]} />
+          </mesh>
+        )),
+      )}
+      {[1, -1].map((side) => (
+        <mesh
+          key={`cornice-${side}`}
+          position={[
+            endX + side * (CORRIDOR_WALL_THICKNESS / 2 + CORNICE_DEPTH / 2 - 0.02),
+            WALL_HEIGHT - CORNICE_HEIGHT / 2,
+            0,
+          ]}
+          material={mats.trim}
+          receiveShadow
+        >
+          <boxGeometry
+            args={[CORNICE_DEPTH, CORNICE_HEIGHT, CORRIDOR_WIDTH + CORRIDOR_WALL_THICKNESS]}
+          />
+        </mesh>
+      ))}
+      {pageDoor && (
+        <>
+          {/* Lintel above the gap, flush with the wall faces. */}
+          <mesh
+            position={[endX, (WALL_HEIGHT + DOOR_HEIGHT) / 2, 0]}
+            material={mats.wall}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT - DOOR_HEIGHT, DOOR_WIDTH]} />
+          </mesh>
+          {/* Frame posts + header, centered on the wall plane so they read
+              proud of BOTH faces — the fixed camera looks at the −x face,
+              the approaching player at the +x one. */}
+          <mesh
+            position={[endX, DOOR_HEIGHT / 2 + 0.05, -DOOR_WIDTH / 2 - 0.05]}
+            material={mats.trim}
+            castShadow
+          >
+            <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, DOOR_HEIGHT + 0.1, 0.1]} />
+          </mesh>
+          <mesh
+            position={[endX, DOOR_HEIGHT / 2 + 0.05, DOOR_WIDTH / 2 + 0.05]}
+            material={mats.trim}
+            castShadow
+          >
+            <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, DOOR_HEIGHT + 0.1, 0.1]} />
+          </mesh>
+          <mesh position={[endX, DOOR_HEIGHT + 0.11, 0]} material={mats.trim} castShadow>
+            <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, 0.12, DOOR_WIDTH + 0.2]} />
+          </mesh>
+          {/* Hinged slab — a real door, opaque, swinging on its z < 0
+              jamb, away from the arriving player (toward the camera). */}
+          <group ref={hingeRef} position={[endX, 0, -DOOR_WIDTH / 2 + 0.02]}>
+            <mesh
+              position={[0, DOOR_HEIGHT / 2, DOOR_WIDTH / 2 - 0.02]}
+              material={mats.slab}
+              castShadow
+            >
+              <boxGeometry args={[0.05, DOOR_HEIGHT - 0.04, DOOR_WIDTH - 0.04]} />
+            </mesh>
+            {/* Handles: a small dark knob on each face, free-end side. */}
+            {[1, -1].map((side) => (
+              <mesh
+                key={`handle-${side}`}
+                position={[side * 0.05, DOOR_HEIGHT / 2, DOOR_WIDTH - 0.22]}
+                material={mats.trim}
+                castShadow
+              >
+                <boxGeometry args={[0.05, 0.16, 0.05]} />
+              </mesh>
+            ))}
+          </group>
+          {/* Accent glow inside the gap, revealed when the slab swings
+              aside — the next hotel's light. Double-sided: it must read
+              through the opening from both faces. */}
+          <mesh position={[endX, DOOR_HEIGHT / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+            <planeGeometry args={[DOOR_WIDTH, DOOR_HEIGHT]} />
+            <meshStandardMaterial
+              ref={glowMatRef}
+              color="#000000"
+              emissive={accent}
+              emissiveIntensity={LIGHT_LEVELS.doorGlow.full}
+              roughness={1}
+              metalness={0}
+              side={DoubleSide}
+            />
+          </mesh>
+          {/* Faint additive halo around the opening, both faces. */}
+          {[1, -1].map((side) => (
+            <mesh
+              key={`halo-${side}`}
+              position={[endX + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.03), DOOR_HEIGHT / 2, 0]}
+              rotation={[0, Math.PI / 2, 0]}
+            >
+              <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
+              <meshBasicMaterial
+                ref={side > 0 ? haloMatRef : haloMatRef2}
+                color={accent}
+                transparent
+                opacity={LIGHT_LEVELS.doorHalo.full}
+                blending={AdditiveBlending}
+                depthWrite={false}
+                side={DoubleSide}
+              />
+            </mesh>
+          ))}
+          {/* Emissive strip above the lintel — the fake fixture, both faces. */}
+          {[1, -1].map((side) => (
+            <mesh
+              key={`strip-${side}`}
+              position={[endX + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.06), WALL_HEIGHT - 0.14, 0]}
+            >
+              <boxGeometry args={[0.08, 0.06, DOOR_WIDTH]} />
+              <meshStandardMaterial
+                ref={side > 0 ? stripMatRef : stripMatRef2}
+                color="#000000"
+                emissive={accent}
+                emissiveIntensity={LIGHT_LEVELS.doorStrip.full}
+                roughness={1}
+                metalness={0}
+              />
+            </mesh>
+          ))}
+          {/* Where this door leads: the next window's newest slice's HHMM,
+              in accent ink beside the frame — both faces (the camera only
+              ever sees the −x one). */}
+          {plateTexture &&
+            [1, -1].map((side) => (
+              <group
+                key={`plate-${side}`}
+                position={[endX + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.03), 2.2, DOOR_WIDTH / 2 + 0.5]}
+                rotation={[0, (side * Math.PI) / 2, 0]}
+              >
+                <mesh material={mats.trim}>
+                  <boxGeometry args={[0.84, 0.46, 0.03]} />
+                </mesh>
+                <mesh position={[0, 0, 0.016]}>
+                  <planeGeometry args={[0.76, 0.38]} />
+                  <meshBasicMaterial
+                    ref={side > 0 ? plateMatRef : plateMatRef2}
+                    map={plateTexture}
+                    transparent
+                  />
+                </mesh>
+              </group>
+            ))}
+        </>
+      )}
     </group>
   );
 }
@@ -2244,11 +2514,24 @@ function EndFade({
 export function Corridor({
   playerRef,
   doors,
+  windowIndex,
+  accent,
+  returnDoor,
   dimmed = false,
   dark = true,
 }: {
   playerRef: MutableRefObject<{ x: number; z: number }>;
+  /** The hotel's FULL timeline (newest first) — all of it, not one
+   *  window's worth. Which 8-slice window is materialized is the
+   *  integrator's location state, passed as `windowIndex`. */
   doors: readonly CorridorDoor[];
+  windowIndex: number;
+  /** The hotel's accent (§11.1): door-plate ink, page-door glow, return-
+   *  door glow. Brand blue for the core timeline. */
+  accent: string;
+  /** Whether the lobby carries the return door you arrived through
+   *  (§10.2a). False only for the hotel the run spawns in. */
+  returnDoor: boolean;
   dimmed?: boolean; // true while a space is active
   dark?: boolean; // false = light mode (the app theme, read by the integrator)
 }): JSX.Element {
@@ -2257,6 +2540,23 @@ export function Corridor({
   // positions (corridor-pitch.ts). All ≤ 1-day gaps reproduce the legacy
   // uniform grid bit for bit, so a dense timeline looks exactly as before.
   const layout = useMemo(() => corridorLayoutFromDoors(doors), [doors]);
+  // ONE window materialized: the w-th CHUNK_DOORS-bay slice of the full
+  // layout, re-based so its lobby sits at x ∈ [0, LOBBY_LENGTH) like every
+  // hotel's (windowLayout in corridor-pitch.ts).
+  const wLayout = useMemo(() => windowLayout(layout, windowIndex), [layout, windowIndex]);
+  const windowIds = useMemo(
+    () => sliceIds.slice(windowIndex * WINDOW_SLICES, (windowIndex + 1) * WINDOW_SLICES),
+    [sliceIds, windowIndex],
+  );
+  const hasOlder = windowIndex + 1 < windowCountForLayout(layout);
+  const endX = chunkBounds(0, wLayout).xStart;
+  // The page door's plate shows where it leads: the NEXT (older) window's
+  // newest slice's HHMM — the first door you'd meet there.
+  const pagePlate = useMemo(() => {
+    if (!hasOlder) return null;
+    const nextNewest = sliceIds[(windowIndex + 1) * WINDOW_SLICES];
+    return nextNewest ? (sliceClock(nextNewest)?.time ?? null) : null;
+  }, [hasOlder, sliceIds, windowIndex]);
   const doorArchetypes = useMemo(() => {
     const map = new Map<string, ArchetypeId | undefined>();
     for (const door of doors) map.set(door.sliceId, door.archetype);
@@ -2325,34 +2625,8 @@ export function Corridor({
     darkRef,
   );
 
-  // Visible window, future-ward first — same order as
-  // visibleChunkIndices(playerX, CHUNK_RADIUS, layout). Seeded from the player's
-  // initial position; after that only useFrame updates it.
-  const [chunkIndices, setChunkIndices] = useState<number[]>(() => {
-    const center = chunkIndexForX(playerRef.current.x, layout);
-    const indices: number[] = [];
-    for (let i = center + CHUNK_RADIUS; i >= center - CHUNK_RADIUS; i--) {
-      indices.push(i);
-    }
-    return indices;
-  });
-
-  useFrame(() => {
-    const center = chunkIndexForX(playerRef.current.x, layout);
-    // Guarded update: same center → same array reference → React bails out
-    // with no re-render and zero allocations on the (common) steady frames.
-    setChunkIndices((prev) =>
-      prev[CHUNK_RADIUS] === center
-        ? prev
-        : Array.from({ length: CHUNK_RADIUS * 2 + 1 }, (_, i) => center + CHUNK_RADIUS - i),
-    );
-  });
-
-  const futureEdge = chunkBounds(chunkIndices[0], layout).xEnd + 0.4;
-  const pastEdge = chunkBounds(chunkIndices[chunkIndices.length - 1], layout).xStart - 0.4;
-
   // Fully faded out inside a space: render nothing, but keep this component
-  // (and its chunk window) mounted so the hotel returns intact on exit.
+  // mounted so the hotel returns intact on exit.
   if (hidden) return <group />;
 
   return (
@@ -2364,22 +2638,37 @@ export function Corridor({
         ref={hemisphereRef}
         args={["#cfc4b4", "#3a332b", LIGHT_LEVELS.hemisphere.full]}
       />
-      <Lobby dimRef={dimRef} mats={mats} />
-      {chunkIndices.map((index) => (
-        <CorridorChunk
-          key={index}
-          index={index}
-          sliceIds={sliceIds}
-          layout={layout}
-          doorArchetypes={doorArchetypes}
-          dimRef={dimRef}
-          darkRef={darkRef}
-          mats={mats}
-          playerRef={playerRef}
-        />
-      ))}
-      <EndFade key={`future-${futureEdge}`} x={futureEdge} dimRef={dimRef} darkRef={darkRef} />
-      <EndFade key={`past-${pastEdge}`} x={pastEdge} dimRef={dimRef} darkRef={darkRef} />
+      <Lobby
+        dimRef={dimRef}
+        mats={mats}
+        returnDoor={returnDoor}
+        accent={accent}
+        playerRef={playerRef}
+      />
+      {/* The ONE materialized window: index 0 of the re-based window
+          layout, seeded by the window index so each window's dressing is
+          stable and distinct. */}
+      <CorridorChunk
+        index={0}
+        seedIndex={-windowIndex}
+        sliceIds={windowIds}
+        layout={wLayout}
+        doorArchetypes={doorArchetypes}
+        plateInk={accent}
+        dimRef={dimRef}
+        darkRef={darkRef}
+        mats={mats}
+        playerRef={playerRef}
+      />
+      <CorridorEnd
+        endX={endX}
+        pageDoor={hasOlder}
+        plate={pagePlate}
+        accent={accent}
+        dimRef={dimRef}
+        mats={mats}
+        playerRef={playerRef}
+      />
     </group>
   );
 }

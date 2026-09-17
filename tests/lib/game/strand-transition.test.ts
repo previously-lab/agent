@@ -1,8 +1,8 @@
 /**
- * Strand-door wormhole state machine (doc 附录 B.11) — the pure reducer
- * behind the room→room crossing in game-canvas.tsx. The reducer owns every
- * accept/drop decision, so these tests pin the latch semantics: which
- * crossings start a transition, which are ignored, and how the latch
+ * Strand-door hotel-hop state machine (doc 附录 B.11, HD4) — the pure
+ * reducer behind the room→hotel crossing in game-canvas.tsx. The reducer
+ * owns every accept/drop decision, so these tests pin the latch semantics:
+ * which crossings start a transition, which are ignored, and how the latch
  * releases.
  */
 import { describe, expect, it, vi } from "vitest";
@@ -17,30 +17,46 @@ vi.mock("@teispace/next-themes", () => ({
 
 import {
   reduceStrandTransition,
+  type HotelRef,
   type StrandTransition,
   type StrandTransitionEvent,
 } from "@/components/game/game-canvas";
 
 const IDLE: StrandTransition = { phase: "idle" };
 
+/** The hotel the player stands in (a strand timeline at some window). */
+const CURRENT: HotelRef = { timelineId: "core", windowIndex: 0 };
+/** A valid destination: a DIFFERENT hotel (the strand's own timeline). */
+const DEST: HotelRef = { timelineId: "Kafka", windowIndex: 2 };
+
 function cross(overrides: Partial<Extract<StrandTransitionEvent, { type: "cross" }>> = {}) {
   return {
     type: "cross" as const,
-    key: "strand: Kafka",
+    key: "to:Kafka:2",
     lit: true,
-    destinationIndex: 7,
-    doorCount: 10,
-    currentIndex: 3,
+    destination: DEST as HotelRef | null,
+    current: CURRENT as HotelRef | null,
     ...overrides,
   };
 }
+
+const FADING: StrandTransition = {
+  phase: "fadingOut",
+  key: "to:Kafka:2",
+  destination: DEST,
+};
+const MOUNTING: StrandTransition = {
+  phase: "mounting",
+  key: "to:Kafka:2",
+  destination: DEST,
+};
 
 describe("reduceStrandTransition — cross", () => {
   it("latches a valid crossing from idle", () => {
     expect(reduceStrandTransition(IDLE, cross())).toEqual({
       phase: "fadingOut",
-      key: "strand: Kafka",
-      destinationIndex: 7,
+      key: "to:Kafka:2",
+      destination: DEST,
     });
   });
 
@@ -48,118 +64,62 @@ describe("reduceStrandTransition — cross", () => {
     expect(reduceStrandTransition(IDLE, cross({ lit: false }))).toBe(IDLE);
   });
 
-  it("drops a null destination (strand has no next slice)", () => {
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: null }))).toBe(IDLE);
+  it("drops a null destination (the strand has no chapter to lead to)", () => {
+    expect(reduceStrandTransition(IDLE, cross({ destination: null }))).toBe(IDLE);
   });
 
-  it("drops destinations outside the rendered corridor", () => {
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: 10 }))).toBe(IDLE);
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: -1 }))).toBe(IDLE);
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: 2.5 }))).toBe(IDLE);
+  it("drops a crossing whose destination is the hotel the player is in", () => {
+    expect(reduceStrandTransition(IDLE, cross({ destination: CURRENT }))).toBe(IDLE);
   });
 
-  it("drops a crossing whose destination is the room the player is in", () => {
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: 3 }))).toBe(IDLE);
+  it("accepts a destination on the same timeline at a different window", () => {
+    const sameTimeline: HotelRef = { timelineId: "core", windowIndex: 1 };
+    expect(
+      reduceStrandTransition(IDLE, cross({ destination: sameTimeline })).phase,
+    ).toBe("fadingOut");
   });
 
   it("drops a crossing when no room is active (mid-exit to the corridor)", () => {
-    expect(reduceStrandTransition(IDLE, cross({ currentIndex: null }))).toBe(IDLE);
-  });
-
-  it("accepts the boundary destinations of the rendered corridor", () => {
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: 0 })).phase).toBe("fadingOut");
-    expect(reduceStrandTransition(IDLE, cross({ destinationIndex: 9 })).phase).toBe("fadingOut");
+    expect(reduceStrandTransition(IDLE, cross({ current: null }))).toBe(IDLE);
   });
 
   it("drops a crossing while one is already in flight (the latch)", () => {
-    const inFlight: StrandTransition = {
-      phase: "fadingOut",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(inFlight, cross({ key: "other", destinationIndex: 4 }))).toBe(
-      inFlight,
-    );
-    const mounting: StrandTransition = {
-      phase: "mounting",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(mounting, cross())).toBe(mounting);
+    expect(
+      reduceStrandTransition(
+        FADING,
+        cross({ key: "to:other:0", destination: { timelineId: "other", windowIndex: 0 } }),
+      ),
+    ).toBe(FADING);
+    expect(reduceStrandTransition(MOUNTING, cross())).toBe(MOUNTING);
   });
 });
 
 describe("reduceStrandTransition — fade handshake", () => {
   it("fadedOut advances fadingOut → mounting, keeping the destination", () => {
-    const inFlight: StrandTransition = {
-      phase: "fadingOut",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(inFlight, { type: "fadedOut" })).toEqual({
-      phase: "mounting",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    });
+    expect(reduceStrandTransition(FADING, { type: "fadedOut" })).toEqual(MOUNTING);
   });
 
   it("fadedOut is a no-op outside fadingOut (ordinary corridor exit)", () => {
     expect(reduceStrandTransition(IDLE, { type: "fadedOut" })).toBe(IDLE);
-    const mounting: StrandTransition = {
-      phase: "mounting",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(mounting, { type: "fadedOut" })).toBe(mounting);
+    expect(reduceStrandTransition(MOUNTING, { type: "fadedOut" })).toBe(MOUNTING);
   });
 });
 
 describe("reduceStrandTransition — latch release", () => {
-  const mounting: StrandTransition = {
-    phase: "mounting",
-    key: "strand: Kafka",
-    destinationIndex: 7,
-  };
-
-  it("releases when the destination room becomes the active space", () => {
-    expect(
-      reduceStrandTransition(mounting, { type: "activated", destinationIndex: 7 }),
-    ).toEqual({ phase: "idle" });
+  it("arrived releases mounting → idle (the player stands in the destination lobby)", () => {
+    expect(reduceStrandTransition(MOUNTING, { type: "arrived" })).toEqual({ phase: "idle" });
   });
 
-  it("stays latched when a different room reports active", () => {
-    expect(
-      reduceStrandTransition(mounting, { type: "activated", destinationIndex: 4 }),
-    ).toBe(mounting);
-  });
-
-  it("ignores activation outside mounting", () => {
-    expect(reduceStrandTransition(IDLE, { type: "activated", destinationIndex: 7 })).toBe(IDLE);
-    const fading: StrandTransition = {
-      phase: "fadingOut",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(fading, { type: "activated", destinationIndex: 7 })).toBe(
-      fading,
-    );
+  it("ignores arrived outside mounting", () => {
+    expect(reduceStrandTransition(IDLE, { type: "arrived" })).toBe(IDLE);
+    expect(reduceStrandTransition(FADING, { type: "arrived" })).toBe(FADING);
   });
 });
 
 describe("reduceStrandTransition — abort", () => {
   it("drops the latch from either in-flight phase", () => {
-    const fading: StrandTransition = {
-      phase: "fadingOut",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(fading, { type: "abort" })).toEqual({ phase: "idle" });
-    const mounting: StrandTransition = {
-      phase: "mounting",
-      key: "strand: Kafka",
-      destinationIndex: 7,
-    };
-    expect(reduceStrandTransition(mounting, { type: "abort" })).toEqual({ phase: "idle" });
+    expect(reduceStrandTransition(FADING, { type: "abort" })).toEqual({ phase: "idle" });
+    expect(reduceStrandTransition(MOUNTING, { type: "abort" })).toEqual({ phase: "idle" });
   });
 
   it("is a no-op from idle", () => {
@@ -173,13 +133,21 @@ describe("reduceStrandTransition — full crossing", () => {
     state = reduceStrandTransition(state, cross());
     expect(state.phase).toBe("fadingOut");
     // A second crossing during the dissolve is dropped, not queued.
-    const latched = reduceStrandTransition(state, cross({ key: "other", destinationIndex: 1 }));
+    const latched = reduceStrandTransition(
+      state,
+      cross({ key: "to:other:0", destination: { timelineId: "other", windowIndex: 0 } }),
+    );
     expect(latched).toBe(state);
     state = reduceStrandTransition(state, { type: "fadedOut" });
     expect(state.phase).toBe("mounting");
-    state = reduceStrandTransition(state, { type: "activated", destinationIndex: 7 });
+    state = reduceStrandTransition(state, { type: "arrived" });
     expect(state).toEqual({ phase: "idle" });
     // The machine is reusable: the next crossing latches normally.
-    expect(reduceStrandTransition(state, cross({ destinationIndex: 2 })).phase).toBe("fadingOut");
+    expect(
+      reduceStrandTransition(
+        state,
+        cross({ destination: { timelineId: "Proust", windowIndex: 0 } }),
+      ).phase,
+    ).toBe("fadingOut");
   });
 });

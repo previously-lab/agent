@@ -15,14 +15,17 @@ import {
   CHUNK_LENGTH,
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
+  WINDOW_SLICES,
   type DoorRef,
   doorPosition,
   chunkIndexForX,
   chunkBounds,
   doorsInChunk,
   materializedDoorXs,
-  visibleChunkIndices,
   nearestDoor,
+  windowCountForSlices,
+  windowIndexForFlatIndex,
+  windowSliceRange,
 } from "@/lib/game/hotel";
 import { WORLD_SEED, deriveSubSeed, createRng } from "@/lib/game/seed";
 import type { CorridorLayout } from "@/lib/game/corridor-pitch";
@@ -189,18 +192,39 @@ describe("doorsInChunk", () => {
   });
 });
 
-describe("visibleChunkIndices", () => {
-  it("centers the window on the player's chunk, future-ward first", () => {
-    expect(visibleChunkIndices(0)).toEqual([1, 0, -1]);
+describe("windows (one window = one hotel = one chunk, §10.4)", () => {
+  it("pins a window at CHUNK_DOORS bays × two walls", () => {
+    expect(WINDOW_SLICES).toBe(8);
+    expect(WINDOW_SLICES).toBe(CHUNK_DOORS * 2);
   });
 
-  it("centers on chunk -1 at x = -30", () => {
-    expect(visibleChunkIndices(-30)).toEqual([0, -1, -2]);
+  it("maps flat slice-list indices to windows, newest first", () => {
+    expect(windowIndexForFlatIndex(0)).toBe(0);
+    expect(windowIndexForFlatIndex(7)).toBe(0);
+    expect(windowIndexForFlatIndex(8)).toBe(1);
+    expect(windowIndexForFlatIndex(15)).toBe(1);
+    expect(windowIndexForFlatIndex(16)).toBe(2);
   });
 
-  it("grows with radius", () => {
-    expect(visibleChunkIndices(0, 2)).toEqual([2, 1, 0, -1, -2]);
-    expect(visibleChunkIndices(-30, 0)).toEqual([-1]);
+  it("counts windows with a partial last one", () => {
+    expect(windowCountForSlices(0)).toBe(0);
+    expect(windowCountForSlices(1)).toBe(1);
+    expect(windowCountForSlices(8)).toBe(1);
+    expect(windowCountForSlices(9)).toBe(2);
+    expect(windowCountForSlices(16)).toBe(2);
+    expect(windowCountForSlices(17)).toBe(3);
+  });
+
+  it("owns the same flat range chunk −w owns on the global grid", () => {
+    expect(windowSliceRange(0)).toEqual({ start: 0, end: 8 });
+    expect(windowSliceRange(2)).toEqual({ start: 16, end: 24 });
+    // Consistency with the door grid: window w's range is exactly the
+    // sliceIds doorsInChunk(−w) consumes (2 indices per door index).
+    const ids = makeSliceIds(24);
+    const { start } = windowSliceRange(1);
+    const doors = doorsInChunk(-1, ids);
+    expect(doors[0].sliceId).toBe(ids[start]);
+    expect(doors[doors.length - 1].sliceId).toBe(ids[start + 7]);
   });
 });
 

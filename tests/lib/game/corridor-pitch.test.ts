@@ -22,6 +22,8 @@ import {
   cumulativePitchBefore,
   doorPitchMeters,
   layoutPitchAt,
+  windowCountForLayout,
+  windowLayout,
 } from "@/lib/game/corridor-pitch";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -161,6 +163,48 @@ describe("accessors extend unallocated bays at base pitch", () => {
     expect(cumulativePitchBefore(layout, 4)).toBe(42 + 2 * DOOR_PITCH_BASE);
     expect(bayCenterX(layout, 2)).toBe(-(42 + 3));
     expect(bayBoundaryX(layout, 5)).toBe(-(42 + 3 * DOOR_PITCH_BASE));
+  });
+});
+
+describe("window views — one window is one hotel (HD2)", () => {
+  it("counts windows over the allocated bays, partial last one included", () => {
+    const layout = buildCorridorLayout(
+      Array.from({ length: 18 }, (_, k) => T0 - k * 12 * HOUR_MS),
+    ); // 18 slices → 9 bays → 3 windows (4 + 4 + 1 bays)
+    expect(layout.pitches).toHaveLength(9);
+    expect(windowCountForLayout(layout)).toBe(3);
+    expect(windowCountForLayout(buildCorridorLayout([]))).toBe(0);
+  });
+
+  it("re-bases the window's bays at x = 0, keeping their pitches", () => {
+    const H = HOUR_MS;
+    const starts = [
+      T0, T0 - H, T0 - H - 10 * DAY_MS, T0 - 2 * H - 10 * DAY_MS,
+      T0 - 3 * H - 10 * DAY_MS, T0 - 4 * H - 10 * DAY_MS,
+      T0 - 4 * H - 110 * DAY_MS, T0 - 5 * H - 110 * DAY_MS,
+      T0 - 6 * H - 110 * DAY_MS, T0 - 7 * H - 110 * DAY_MS,
+    ];
+    const global = buildCorridorLayout(starts); // 5 bays: 18, 6, 24, 6, 6
+    expect(global.pitches).toEqual([18, 6, 24, 6, 6]);
+    const w1 = windowLayout(global, 1);
+    expect(w1.pitches).toEqual([6, 6, 6, 6]); // bay 4 allocated, 5..7 extend at BASE
+    expect(w1.cumulative).toEqual([0, 6, 12, 18, 24]);
+    expect(w1.doorXs).toEqual([-3, -9, -15, -21]);
+  });
+
+  it("extends a partial last window at base pitch, like the global frame", () => {
+    const global = buildCorridorLayout([T0, T0 - HOUR_MS]); // one bay
+    const w0 = windowLayout(global, 0);
+    expect(w0.pitches).toEqual([DOOR_PITCH_BASE, DOOR_PITCH_BASE, DOOR_PITCH_BASE, DOOR_PITCH_BASE]);
+    expect(w0.cumulative).toEqual([0, 6, 12, 18, 24]);
+    expect(w0.doorXs).toEqual([-3, -9, -15, -21]);
+  });
+
+  it("window 0 of a dense layout reproduces the legacy uniform chunk", () => {
+    const starts = Array.from({ length: 8 }, (_, k) => T0 - k * 12 * HOUR_MS);
+    const w0 = windowLayout(buildCorridorLayout(starts), 0);
+    expect(w0.doorXs).toEqual([-3, -9, -15, -21]);
+    expect(w0.cumulative[4]).toBe(24);
   });
 });
 

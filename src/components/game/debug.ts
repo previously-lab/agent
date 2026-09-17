@@ -12,8 +12,12 @@ export const GAME_DEBUG = {
   x: 0,
   z: 0,
   space: null as string | null,
+  /** The current hotel: "timelineId@windowIndex" (written by GameLoop). */
+  hotel: "",
   /** Probe/e2e hook: teleport the player (clamps apply on the next frame). */
   teleport: undefined as undefined | ((x: number, z: number) => void),
+  /** Probe/e2e hook: hop to a hotel (nav stack pushed, lobby arrival). */
+  travel: undefined as undefined | ((timelineId: string, windowIndex: number) => void),
   /** Live scene fog + background (written by Atmosphere every frame). */
   fogNear: 0,
   fogFar: 0,

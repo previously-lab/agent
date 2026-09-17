@@ -46,6 +46,10 @@ let warnedStrandFailure = false;
  */
 const NO_ROOM_DOORS: RoomDoorMap = new Map();
 
+/** No-strand-data default for the strand hotels (HD4): referentially
+ *  stable like NO_ROOM_DOORS. */
+const NO_TIMELINES: ReadonlyMap<string, readonly CorridorDoor[]> = new Map();
+
 const GameCanvas = dynamic(() => import("./game-canvas"), {
   ssr: false,
   loading: () => <GameLoading />,
@@ -106,6 +110,11 @@ export function GameShell() {
   // until the strand read resolves, and stays empty if it fails — the game
   // must work exactly as it does today without strands.
   const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(NO_ROOM_DOORS);
+  // The strand hotels (HD4): strand name → its timeline as a corridor door
+  // list (newest first, same shape as `doors`). Empty until the strand read
+  // resolves, and stays empty if it fails.
+  const [timelines, setTimelines] =
+    useState<ReadonlyMap<string, readonly CorridorDoor[]>>(NO_TIMELINES);
   // The mounted room's slice — feeds the narration panel. Pushed by the
   // canvas through onActiveSliceChange (an effect on its activeSpace
   // state), so it tracks the door manager exactly.
@@ -144,6 +153,27 @@ export function GameShell() {
           const graph = buildStrandGraph(await getStrandPaths());
           if (cancelled) return;
           const entryById = new Map(catalog.map((entry) => [entry.id, entry]));
+          // The strand hotels (HD4): each strand's path (chronological)
+          // becomes a corridor door list, newest first like the core
+          // corridor. Labels come from the catalog entry when one exists;
+          // a strand-only slice (not on the core timeline) gets its bare id.
+          const strandTimelines = new Map<string, readonly CorridorDoor[]>();
+          for (const [name, path] of graph.paths) {
+            strandTimelines.set(
+              name,
+              [...path].reverse().map((id) => {
+                const entry = entryById.get(id);
+                return {
+                  sliceId: id,
+                  label: entry
+                    ? formatDoorLabel(entry.date, entry.start, locale)
+                    : id,
+                  start: entry?.start,
+                };
+              }),
+            );
+          }
+          setTimelines(strandTimelines);
           setRoomDoors(
             buildRoomDoorMap({
               graph,
@@ -232,6 +262,7 @@ export function GameShell() {
         <GameCanvas
           doors={doors}
           roomDoors={roomDoors}
+          timelines={timelines}
           onActiveSliceChange={setActiveSliceId}
         />
       ) : (

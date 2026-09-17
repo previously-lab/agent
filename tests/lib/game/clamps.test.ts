@@ -12,6 +12,7 @@ import type { DoorRef } from "@/lib/game/hotel";
 import {
   CLEAR_HALF,
   CORRIDOR_Z_LIMIT,
+  END_WALL_PASS_DEPTH,
   GAP_HALF,
   LOBBY_CLEAR,
   ROOM_DOOR_PASS_DEPTH,
@@ -156,6 +157,28 @@ describe("clampToCorridor", () => {
     const p = { x: NORTH_DOOR.x + GAP_HALF + 0.01, z: WALL_Z + 0.5 };
     clampToCorridor(p, [NORTH_DOOR.x]);
     expect(p.z).toBe(WALL_Z - 0.5);
+  });
+
+  it("caps x at the window's far end — a solid wall at the oldest window (HD2)", () => {
+    const p = { x: -100, z: 0 };
+    clampToCorridor(p, [], { endX: -24, pageDoor: false });
+    expect(p.x).toBe(-24 + LOBBY_CLEAR);
+    // Even inside the z range a page door WOULD occupy, a solid end holds.
+    const q = { x: -100, z: 0.2 };
+    clampToCorridor(q, [], { endX: -24, pageDoor: false });
+    expect(q.x).toBe(-24 + LOBBY_CLEAR);
+  });
+
+  it("relaxes the far end inside the page door's gap only (HD3)", () => {
+    // Inside |z| < GAP_HALF the player may push END_WALL_PASS_DEPTH past
+    // the end wall plane — the page-door crossing trigger lives there.
+    const p = { x: -100, z: 0 };
+    clampToCorridor(p, [], { endX: -24, pageDoor: true });
+    expect(p.x).toBe(-24 - END_WALL_PASS_DEPTH);
+    // Just outside the gap the end wall is solid like any other.
+    const q = { x: -100, z: GAP_HALF + 0.01 };
+    clampToCorridor(q, [], { endX: -24, pageDoor: true });
+    expect(q.x).toBe(-24 + LOBBY_CLEAR);
   });
 });
 

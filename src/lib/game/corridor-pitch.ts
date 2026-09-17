@@ -25,9 +25,17 @@
  * DOOR_PITCH_BASE and the positions collapse onto the legacy uniform grid
  * x = -(i + 0.5) * 6 — bit for bit (the regression test pins this), which
  * is what lets the machine be swapped in without changing the picture.
- * `cumulative` is exposed (length pitches.length + 1, starting at 0) so a
- * future loop/ring (hotel-rooms §4) can close the corridor: its last entry
- * is the corridor's total length.
+ * `cumulative` is exposed (length pitches.length + 1, starting at 0) so
+ * window views (below) and boundary math never re-derive sums.
+ *
+ * WINDOWS (v0.11-room-interiors §10.4 — HD2). The corridor is no longer an
+ * infinite treadmill: one WINDOW (hotel.ts's chunk — CHUNK_DOORS bays × two
+ * walls) is one hotel, and only one hotel is materialized at a time. Every
+ * hotel renders in the SAME local frame — lobby at x ∈ [0, LOBBY_LENGTH),
+ * corridor at negative x — so `windowLayout` re-bases one window's bays at
+ * x = 0 and the integrator swaps data, never coordinates. The pitch
+ * aesthetic survives intact: a window's bays keep the gaps its slices
+ * earned; the window boundaries simply stop the hall.
  *
  * PURITY. No randomness, no I/O, no wall clock — the layout is a pure
  * function of the caller-supplied timestamps, on any machine (axiom A6).
@@ -42,6 +50,7 @@ import {
   DOOR_PITCH_MAX,
   DOOR_PITCH_MIN,
 } from "./tuning/hotel";
+import { CHUNK_DOORS } from "./hotel";
 import { sliceIdToMs } from "./strand-graph";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -148,7 +157,7 @@ export function corridorLayoutFromDoors(
 
 /**
  * Pitch of any bay, allocated or not: bays past the end of the layout take
- * DOOR_PITCH_BASE, so the treadmill can stream bare corridor forever.
+ * DOOR_PITCH_BASE, so a window's bare stretch keeps the dense rhythm.
  */
 export function layoutPitchAt(layout: CorridorLayout, bay: number): number {
   return bay < layout.pitches.length ? layout.pitches[bay] : DOOR_PITCH_BASE;
@@ -194,4 +203,44 @@ export function bayGeometry(
     length: xEnd - xStart,
     doorX: bayCenterX(layout, bay),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Window views — one window (chunk) is one hotel (HD2)                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * How many windows (hotels) the layout's bays fill; the last window may be
+ * partial. Window w owns bays [w * CHUNK_DOORS, (w + 1) * CHUNK_DOORS) —
+ * hotel.ts's chunk −w, so "which slice belongs to which window" stays
+ * hotel.ts's single truth and this is only the bay-side count of it.
+ */
+export function windowCountForLayout(layout: CorridorLayout): number {
+  return Math.ceil(layout.pitches.length / CHUNK_DOORS);
+}
+
+/**
+ * The window view of a corridor layout: window `windowIndex`'s bays
+ * re-based at x = 0, so every hotel renders in the ONE local frame (lobby
+ * at x ∈ [0, LOBBY_LENGTH), corridor at negative x) and a window switch is
+ * a data swap, never a coordinate change. Bays the window owns beyond the
+ * layout's allocated end extend at DOOR_PITCH_BASE through the same
+ * accessors the global frame uses — a partial last window keeps the dense
+ * rhythm for its unallocated stretch.
+ */
+export function windowLayout(
+  layout: CorridorLayout,
+  windowIndex: number,
+): CorridorLayout {
+  const first = windowIndex * CHUNK_DOORS;
+  const pitches: number[] = [];
+  const cumulative: number[] = [0];
+  const doorXs: number[] = [];
+  for (let k = 0; k < CHUNK_DOORS; k++) {
+    const pitch = layoutPitchAt(layout, first + k);
+    pitches.push(pitch);
+    doorXs.push(-(cumulative[k] + pitch / 2));
+    cumulative.push(cumulative[k] + pitch);
+  }
+  return { pitches, cumulative, doorXs };
 }
