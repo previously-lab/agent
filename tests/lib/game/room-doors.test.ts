@@ -11,6 +11,7 @@
 import { describe, it, expect } from "vitest";
 import {
   crossedRoomDoor,
+  hostableWallsFor,
   placeRoomDoors,
   plaqueLabelFor,
   splitWallsForDoors,
@@ -18,11 +19,15 @@ import {
 } from "@/lib/game/room-doors";
 import {
   planContains,
+  roomPlanFor,
+  wallRoleFor,
   wallSegmentsFor,
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
+import { hashString } from "@/lib/game/seed";
 import {
+  COLONNADE_BAY,
   DOOR_GAP_HALF,
   DOOR_WIDTH,
   ROOM_DOOR_MIN_GAP,
@@ -293,5 +298,105 @@ describe("plaqueLabelFor", () => {
     expect(out.endsWith("…")).toBe(true);
     expect(out.startsWith("a very long")).toBe(true);
     expect(plaqueLabelFor(long)).toBe(out);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Template affordance (v0.11-room-interiors §7): the optional           */
+/* DoorAffordance parameter. ADDITIVE-ONLY PIN: the hashes below were    */
+/* captured from this module BEFORE the parameter existed, over the      */
+/* fixed matrix — omitting it must reproduce today's layouts            */
+/* byte-for-byte.                                                       */
+/* ------------------------------------------------------------------ */
+
+describe("door affordance parameter (§7) — additive", () => {
+  const pin = (v: unknown) => {
+    const s = JSON.stringify(v);
+    return `${s.length}:${hashString(s)}`;
+  };
+  /** [sliceId, width, extent] — plans drawn exactly as the capture did. */
+  const CASES: [string, number, number][] = [
+    ["2026-10-02", 32, 32],
+    ["2026-10-03", 48, 32],
+    ["2026-10-04", 64, 64],
+    ["2026-10-05", 96, 96],
+    ["2026-10-06", 144, 96],
+    ["2026-10-07", 21.12, 32],
+    ["2026-10-08", 64, 64],
+  ];
+  /** Pins per case, in count order [0, 2, 5, 12]. */
+  const PINS: string[][] = [
+    ["28:572605569", "217:3734579729", "507:1897690691", "1180:1595498093"],
+    ["28:572605569", "218:45983427", "505:2635510601", "1179:3353548360"],
+    ["28:572605569", "220:1256333126", "507:2010783316", "1172:3586942758"],
+    ["28:572605569", "219:1513487658", "504:860977800", "1180:3354572437"],
+    ["28:572605569", "217:2787794349", "504:3971847597", "1161:3357926252"],
+    ["28:572605569", "218:730247303", "503:242676963", "1171:424305385"],
+    ["28:572605569", "221:3212720819", "506:4130105954", "1160:3633062894"],
+  ];
+  const COUNTS = [0, 2, 5, 12];
+
+  it("reproduces the pre-affordance layouts byte-for-byte when omitted", () => {
+    CASES.forEach(([id, w, e], ci) => {
+      const plan = roomPlanFor(id, w, e, COLONNADE_BAY);
+      const walls = wallSegmentsFor(plan, THICK);
+      const hostable = hostableWallsFor(plan, walls, 1);
+      COUNTS.forEach((count, ki) => {
+        expect(pin(placeRoomDoors(id, plan, walls, hostable, count))).toBe(
+          PINS[ci][ki],
+        );
+      });
+    });
+  });
+
+  it("treats an explicit undefined exactly as omitted", () => {
+    const plan = roomPlanFor("2026-10-04", 64, 64, COLONNADE_BAY);
+    const walls = wallSegmentsFor(plan, THICK);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    expect(
+      placeRoomDoors("2026-10-04", plan, walls, hostable, 5, undefined, undefined),
+    ).toEqual(placeRoomDoors("2026-10-04", plan, walls, hostable, 5));
+  });
+
+  it("hangs every door on the permitted wall roles only — even when relaxed", () => {
+    // The gallery's affordance: the far wall is the door wall.
+    const plan = colonnadePlan(96, 64);
+    const walls = wallSegmentsFor(plan, THICK);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    const layout = placeRoomDoors("2026-10-30", plan, walls, hostable, 20, undefined, {
+      walls: ["far"],
+    });
+    expect(layout.doors).toHaveLength(20); // never drops a door
+    for (const d of layout.doors) {
+      expect(wallRoleFor(plan, walls[d.wall])).toBe("far");
+    }
+  });
+
+  it("never places a door on a template-banned wall in tight rooms", () => {
+    // Reading-hall affordance (left/right only) on a small rect asked for
+    // more doors than the sides can hold at domestic spacing: the ladder
+    // relaxes, but the far wall stays doorless.
+    const plan = rectPlan(21.12, 32);
+    const walls = wallSegmentsFor(plan, THICK);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    const layout = placeRoomDoors("2026-10-31", plan, walls, hostable, 12, undefined, {
+      walls: ["left", "right"],
+    });
+    expect(layout.doors).toHaveLength(12);
+    for (const d of layout.doors) {
+      expect(["left", "right"]).toContain(wallRoleFor(plan, walls[d.wall]));
+    }
+  });
+
+  it("is deterministic under an affordance (A6)", () => {
+    const plan = rectPlan(48, 32);
+    const walls = wallSegmentsFor(plan, THICK);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    const affordance = { walls: ["left", "right"] as const };
+    expect(
+      placeRoomDoors("2026-11-01", plan, walls, hostable, 4, undefined, affordance),
+    ).toEqual(
+      placeRoomDoors("2026-11-01", plan, walls, hostable, 4, undefined, affordance),
+    );
   });
 });

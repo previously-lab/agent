@@ -32,6 +32,7 @@ import {
   planArea,
   stageInteriorKits,
   type Kit,
+  type KitZones,
   type StagedKitPiece,
 } from "@/lib/game/kits";
 import {
@@ -42,8 +43,9 @@ import {
   type Composition,
   type RoomPlan,
 } from "@/lib/game/room-plan";
-import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import {
+  hostableWallsFor,
   inDoorApproach,
   placeRoomDoors,
   type RoomDoorPlacement,
@@ -710,5 +712,136 @@ describe("density with strand doors (B.11 cost report)", () => {
       // clearance is miscalibrated, not that the rooms are small.
       expect(withDoorsTotal).toBeGreaterThan(baselineTotal * 0.5);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Template zones (v0.11-room-interiors §7): the optional `zones` field  */
+/* on KitStaging. ADDITIVE-ONLY PIN: the hashes below were captured from */
+/* this module BEFORE the field existed, over the fixed matrix —         */
+/* omitting it must reproduce today's staging byte-for-byte.            */
+/* ------------------------------------------------------------------ */
+
+describe("template zones parameter (§7) — additive", () => {
+  const pin = (v: unknown) => {
+    const s = JSON.stringify(v);
+    return `${s.length}:${hashString(s)}`;
+  };
+
+  /** Replay of the capture chain: plan → composition → doors → staging. */
+  function stageChain(
+    sliceId: string,
+    extent: number,
+    archetype: string,
+    widthFactor: number,
+    withDoors: boolean,
+    zones?: KitZones,
+  ): StagedKitPiece[] {
+    const width = extent * widthFactor;
+    const plan = roomPlanFor(sliceId, width, extent, COLONNADE_BAY);
+    const comp = composeRoom(sliceId, plan, 1);
+    const walls = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
+    const hostable = hostableWallsFor(plan, walls, 1);
+    const doors = placeRoomDoors(sliceId, plan, walls, hostable, 3).doors;
+    const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+    return stageInteriorKits({
+      rng,
+      archetype,
+      plan,
+      comp,
+      baseArea: planArea(plan),
+      baseExtent: extent,
+      propScale: 1,
+      wallThick: ROOM_WALL_THICKNESS,
+      water: null,
+      doors: withDoors ? doors : undefined,
+      zones,
+      heightAt: () => 0,
+    });
+  }
+
+  /** [sliceId, extent, archetype, widthFactor, pinNoDoors, pinWithDoors]. */
+  const PINS: [string, number, string, number, string, string][] = [
+    ["2026-10-11", 16, "hotel-room", 1, "6811:3720701659", "5405:4111958670"],
+    ["2026-10-12", 32, "library", 1.5, "16311:44563849", "16332:1568161479"],
+    ["2026-10-13", 64, "ballroom", 0.66, "33284:1695980458", "33560:3930209615"],
+    ["2026-10-14", 96, "hotel-room", 1, "52989:4204386079", "53176:3427402656"],
+    ["2026-10-15", 32, "pool-hall", 1, "15157:1153994297", "15135:4211988083"],
+  ];
+
+  it("reproduces the pre-zones staging byte-for-byte when omitted", () => {
+    for (const [id, extent, arch, wf, pinNo, pinYes] of PINS) {
+      expect(pin(stageChain(id, extent, arch, wf, false))).toBe(pinNo);
+      expect(pin(stageChain(id, extent, arch, wf, true))).toBe(pinYes);
+    }
+  });
+
+  it("treats an explicit undefined exactly as omitted", () => {
+    expect(stageChain("2026-10-12", 32, "library", 1.5, true, undefined)).toEqual(
+      stageChain("2026-10-12", 32, "library", 1.5, true),
+    );
+  });
+
+  it("keeps every piece out of the keep-empty zones", () => {
+    // Keep the whole floor empty except a central strip x ∈ (−2, 2).
+    // The room is 42.24×64 (0.66 width factor): the two rects cover the
+    // rest. Pieces may still land in the strip beyond the doorway apron.
+    const zones: KitZones = {
+      keepEmpty: [
+        { x0: -21, z0: 0, x1: -2, z1: 64 },
+        { x0: 2, z0: 0, x1: 32, z1: 64 },
+      ],
+    };
+    const pieces = stageChain("2026-10-13", 64, "ballroom", 0.66, false, zones);
+    expect(pieces.length).toBeGreaterThan(0);
+    for (const p of pieces) {
+      expect(Math.abs(p.x)).toBeLessThanOrEqual(2);
+    }
+  });
+
+  it("restricts side kits to the cluster zones", () => {
+    // One cluster pad in the room's south-east; nothing else.
+    const zones: KitZones = {
+      clusters: [{ x0: 10, z0: 30, x1: 28, z1: 55 }],
+      keepEmpty: [{ x0: -32, z0: 0, x1: 32, z1: 12 }], // entry apron
+    };
+    const pieces = stageChain("2026-10-13", 64, "ballroom", 0.66, false, zones);
+    const side = pieces.filter((p) => p.kitIndex > 0);
+    expect(side.length).toBeGreaterThan(0);
+    for (const p of side) {
+      // A piece may ride its kit's offset out of the rect — the ORIGIN was
+      // placed inside; footprints stay within 3m at scale 1.
+      expect(p.x).toBeGreaterThanOrEqual(10 - 3);
+      expect(p.x).toBeLessThanOrEqual(28 + 3);
+      expect(p.z).toBeGreaterThanOrEqual(30 - 3);
+      expect(p.z).toBeLessThanOrEqual(55 + 3);
+    }
+  });
+
+  it("pins the hero kit into the hero zone when the kit is eligible", () => {
+    // ballroom: dining is whitelisted and hero-eligible — the reading
+    // hall's long-table pin works here.
+    const zones: KitZones = {
+      hero: { x0: 4, z0: 20, x1: 12, z1: 30 },
+      heroKit: "dining",
+    };
+    const pieces = stageChain("2026-10-13", 64, "ballroom", 0.66, false, zones);
+    const hero = pieces.filter((p) => p.kitIndex === 0);
+    expect(hero.length).toBeGreaterThan(0);
+    for (const p of hero) expect(p.kitId).toBe("dining");
+    // The hero's origin is the zone rect's center (8, 25); its pieces
+    // cluster around it.
+    const cx = hero.reduce((s, p) => s + p.x, 0) / hero.length;
+    const cz = hero.reduce((s, p) => s + p.z, 0) / hero.length;
+    expect(Math.hypot(cx - 8, cz - 25)).toBeLessThan(2);
+  });
+
+  it("ignores a hero pin whose kit is not eligible for the room", () => {
+    // library: dining is NOT whitelisted — the pin must degrade to the
+    // seeded hero draw, never widen the whitelist by itself.
+    const zones: KitZones = { heroKit: "dining" };
+    const pieces = stageChain("2026-10-12", 32, "library", 1.5, false, zones);
+    expect(pieces.filter((p) => p.kitId === "dining")).toHaveLength(0);
+    expect(pieces.length).toBeGreaterThan(0);
   });
 });

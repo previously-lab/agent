@@ -31,7 +31,13 @@
  * wall reads as a frame rising above a half wall, not a hole in the air.
  */
 import { GAP_HALF } from "./clamps";
-import { planContains, type RoomPlan, type WallSegment } from "./room-plan";
+import {
+  planContains,
+  wallRoleFor,
+  type RoomPlan,
+  type WallRole,
+  type WallSegment,
+} from "./room-plan";
 import { createRng, hashString, WORLD_SEED } from "./seed";
 import { CAM_OFFSET } from "./tuning/render";
 import {
@@ -93,6 +99,17 @@ function inwardNormal(
     return { nx: 0, nz: planContains(plan, x, z + 0.5, 0) ? 1 : -1 };
   }
   return { nx: planContains(plan, x + 0.5, z, 0) ? 1 : -1, nz: 0 };
+}
+
+/**
+ * A layout template's door affordance (v0.11-room-interiors §7): which wall
+ * ROLES may carry strand doors. The template declares, this module enforces
+ * — a banned wall (the shelf run, the niche wall) never receives a door on
+ * ANY ladder rung, tight cases included; the template's door capacity is
+ * enforced upstream at selection time, not by dropping doors here.
+ */
+export interface DoorAffordance {
+  walls: readonly WallRole[];
 }
 
 interface Host {
@@ -179,7 +196,9 @@ function samplePositions(
 }
 
 /** One placement attempt at one ladder rung. Null when the walls cannot
- *  hold `count` doors at this spacing; otherwise exactly count doors. */
+ *  hold `count` doors at this spacing; otherwise exactly count doors.
+ *  `permitted` (template affordance) bans wall roles outright, on every
+ *  rung; null = every solid non-entrance wall may host. */
 function tryPlace(
   rng: () => number,
   plan: RoomPlan,
@@ -187,10 +206,12 @@ function tryPlace(
   hostable: readonly boolean[],
   count: number,
   rung: LadderRung,
+  permitted: readonly boolean[] | null,
 ): RoomDoorPlacement[] | null {
   const hosts: Host[] = [];
   walls.forEach((wall, i) => {
     if (wall.entrance) return; // the corridor doorway is untouchable (B.3.1)
+    if (permitted && !permitted[i]) return; // template-banned wall role
     if (rung.hostableOnly && !hostable[i]) return;
     const len = wallLength(wall);
     hosts.push({
@@ -267,11 +288,13 @@ function forcePlace(
   plan: RoomPlan,
   walls: readonly WallSegment[],
   count: number,
+  permitted: readonly boolean[] | null,
 ): RoomDoorPlacement[] {
   const endPad = 1.0;
   const hosts: Host[] = [];
   walls.forEach((wall, i) => {
     if (wall.entrance) return;
+    if (permitted && !permitted[i]) return;
     const len = wallLength(wall);
     hosts.push({
       wall: i,
@@ -280,6 +303,11 @@ function forcePlace(
       run: Math.max(0.2, len - 2 * endPad),
     });
   });
+  if (hosts.length === 0 && permitted) {
+    // A template that bans every solid wall would strand its doors — the
+    // never-drop rule (B.8) outranks the ban in this degenerate case only.
+    return forcePlace(rng, plan, walls, count, null);
+  }
   if (hosts.length === 0) return [];
   const totalRun = hosts.reduce((a, h) => a + h.run, 0);
   // Quota per wall ∝ run, rounded, with the remainder dealt to the
@@ -373,6 +401,11 @@ export function hostableWallsFor(
  * `hostable[i]` marks walls the renderer wants doors on (solid AND
  * full-height); the ladder may fall back to any solid non-entrance wall.
  * Exactly `count` doors are returned — never fewer.
+ *
+ * `affordance` (optional, v0.11-room-interiors §7) restricts hosting to the
+ * template's permitted wall roles — on every rung of the ladder, so a wall
+ * carrying a shelf run or a niche never grows a door even in tight rooms.
+ * Omitting it reproduces the legacy placement exactly.
  */
 export function placeRoomDoors(
   sliceId: string,
@@ -381,14 +414,20 @@ export function placeRoomDoors(
   hostable: readonly boolean[],
   count: number,
   worldSeed: string = WORLD_SEED,
+  affordance?: DoorAffordance,
 ): RoomDoorLayout {
   if (count <= 0) return { doors: [], relaxed: false };
+  const permitted = affordance
+    ? walls.map((wall) =>
+        wall.entrance ? false : affordance.walls.includes(wallRoleFor(plan, wall)),
+      )
+    : null;
   const rng = createRng(hashString(`${worldSeed}:${sliceId}:strand-doors`));
   for (let r = 0; r < LADDER.length; r++) {
-    const doors = tryPlace(rng, plan, walls, hostable, count, LADDER[r]);
+    const doors = tryPlace(rng, plan, walls, hostable, count, LADDER[r], permitted);
     if (doors) return { doors, relaxed: r > 0 };
   }
-  return { doors: forcePlace(rng, plan, walls, count), relaxed: true };
+  return { doors: forcePlace(rng, plan, walls, count, permitted), relaxed: true };
 }
 
 /** One drawable wall run after splitting: a plain wall segment plus the

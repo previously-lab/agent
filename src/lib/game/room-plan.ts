@@ -168,10 +168,45 @@ export interface RoomPlan {
   columns: { x: number; z: number }[];
 }
 
+/** The plan a layout template (v0.11-room-interiors §7) is built on. When
+ *  supplied, the template DECLARES the silhouette instead of drawing it
+ *  from the probability table; the seeded parameters of that silhouette
+ *  (l-shape side/step) still come from the "plan" stream, so the same
+ *  slice under the same template always gets the same plan (A6). */
+export interface TemplatePlan {
+  plan: PlanId;
+}
+
+/** Column centers for a colonnade of the given dims: along both side wall
+ *  lines, first/last bay inset half a bay from the corners so the corner
+ *  posts read as piers. Shared by the legacy draw and the template path —
+ *  the geometry is owned here, never re-implemented by a template. */
+function colonnadeColumns(
+  width: number,
+  extent: number,
+  colonnadeBay: number,
+): { x: number; z: number }[] {
+  const bay = Math.max(1.2, colonnadeBay);
+  const columns: { x: number; z: number }[] = [];
+  const halfW = width / 2;
+  for (let z = bay / 2; z <= extent - bay / 2 + 1e-6; z += bay) {
+    columns.push({ x: -halfW, z });
+    columns.push({ x: halfW, z });
+  }
+  return columns;
+}
+
 /**
  * Draw the plan for a space. S tiers are always rect (anti-cramp); on
  * eligible tiers the "plan" stream draws 70% rect / 15% l-shape / 15%
  * colonnade. The entrance wall exists on every plan — see wallSegmentsFor.
+ *
+ * With a `template` the silhouette is DECLARED, not drawn, and the S-tier
+ * guard is bypassed: template selection (room-templates.ts) already enforces
+ * the template's minExtent against the UNSCALED tier, and construction-time
+ * scaling may push the scaled extent below PLAN_NONRECT_MIN_EXTENT for a
+ * miniature room whose layout is still the template's. Omitting the
+ * parameter reproduces the legacy draw exactly.
  */
 export function roomPlanFor(
   sliceId: string,
@@ -179,8 +214,22 @@ export function roomPlanFor(
   extent: number,
   colonnadeBay: number,
   worldSeed: string = WORLD_SEED,
+  template?: TemplatePlan,
 ): RoomPlan {
   const base: RoomPlan = { id: "rect", width, extent, lSide: 1, stepZ: 0, columns: [] };
+  if (template) {
+    if (template.plan === "rect") return base;
+    const rng = facetRng(worldSeed, sliceId, "plan");
+    if (template.plan === "l-shape") {
+      return {
+        ...base,
+        id: "l-shape",
+        lSide: rng() < 0.5 ? 1 : -1,
+        stepZ: extent * (L_STEP_MIN + rng() * L_STEP_SPAN),
+      };
+    }
+    return { ...base, id: "colonnade", columns: colonnadeColumns(width, extent, colonnadeBay) };
+  }
   if (extent < PLAN_NONRECT_MIN_EXTENT) return base;
   const rng = facetRng(worldSeed, sliceId, "plan");
   const r = rng();
@@ -195,14 +244,7 @@ export function roomPlanFor(
   }
   // Colonnade: column centers along both side wall lines, first/last bay
   // inset half a bay from the corners so the corner posts read as piers.
-  const bay = Math.max(1.2, colonnadeBay);
-  const columns: { x: number; z: number }[] = [];
-  const halfW = width / 2;
-  for (let z = bay / 2; z <= extent - bay / 2 + 1e-6; z += bay) {
-    columns.push({ x: -halfW, z });
-    columns.push({ x: halfW, z });
-  }
-  return { ...base, id: "colonnade", columns };
+  return { ...base, id: "colonnade", columns: colonnadeColumns(width, extent, colonnadeBay) };
 }
 
 /**
@@ -304,6 +346,41 @@ export function wallSegmentsFor(
     );
   }
   return [...entrancePair, ...segs];
+}
+
+/**
+ * A wall segment's role in the room's composition — the vocabulary layout
+ * templates (v0.11-room-interiors §7) use to declare which walls may carry
+ * doors or features ("never the shelf wall", "the far wall is the door
+ * wall"). Classified geometrically, never by segment index, so the roles
+ * survive any change to wallSegmentsFor's emission order:
+ *
+ *   entrance — the entrance pair (owns the corridor doorway; never hosts).
+ *   far      — the wall closing the plan at z = extent.
+ *   step     — l-shape only: the wall closing the abandoned quadrant.
+ *   inner    — l-shape only: the kept leg's inner side, on the center line.
+ *   left/right — any full side wall off the center line (the rect's sides,
+ *              the l-shape's near-zone sides and kept leg's outer side).
+ *
+ * Colonnade plans have no side segments at all (open bays), so "left" and
+ * "right" simply match nothing there — a template permitting doors on the
+ * sides gets the colonnade's far wall only.
+ */
+export type WallRole = "entrance" | "left" | "right" | "far" | "step" | "inner";
+
+/** The role of one perimeter segment of `plan` (see WallRole). Pure. */
+export function wallRoleFor(plan: RoomPlan, wall: WallSegment): WallRole {
+  if (wall.entrance) return "entrance";
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  if (horizontal) {
+    // The far wall's outer face sits exactly at z = extent; every other
+    // horizontal wall (the l-shape's step wall) lies strictly inside.
+    return wall.z + wall.sizeZ / 2 >= plan.extent - 1e-6 ? "far" : "step";
+  }
+  // Vertical walls: off the center line they are side walls (left = −x);
+  // on it (an l-shape's kept-leg inner side) they are the inner wall.
+  if (Math.abs(wall.x) > plan.width / 4) return wall.x < 0 ? "left" : "right";
+  return "inner";
 }
 
 /* ------------------------------------------------------------------ */

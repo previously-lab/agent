@@ -338,6 +338,50 @@ export interface KitWater {
   halfZ: number;
 }
 
+/** An axis-aligned rectangle in the plan's local frame (absolute meters,
+ *  scaled coordinates — what the renderer built). */
+export interface KitZoneRect {
+  x0: number;
+  z0: number;
+  x1: number;
+  z1: number;
+}
+
+/**
+ * A layout template's content zones (v0.11-room-interiors §7.2), resolved
+ * to absolute plan coordinates by room-templates.ts and consumed here. All
+ * fields optional; an absent `zones` (or an absent field) reproduces the
+ * legacy staging exactly.
+ *
+ *   hero      — the composed centrepiece stands at this rect's center
+ *               (falling back to comp.hero when the rect is off-plan),
+ *               instead of the seeded far-third slot.
+ *   heroKit   — pin the hero to this kit id when it is hero-eligible for
+ *               the room (the reading hall's long table); otherwise the
+ *               hero is drawn as today.
+ *   clusters  — side kits are placed only with their origin inside one of
+ *               these rects (the shelf walls' feet, the bedroom wing).
+ *   keepEmpty — no kit piece may land inside, and no kit's footprint disc
+ *               may overlap (the entrance apron, the hall spine).
+ */
+export interface KitZones {
+  hero?: KitZoneRect;
+  heroKit?: string;
+  clusters?: readonly KitZoneRect[];
+  keepEmpty?: readonly KitZoneRect[];
+}
+
+function inZoneRect(x: number, z: number, r: KitZoneRect): boolean {
+  return x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1;
+}
+
+/** Disc–rect overlap (center distance to the rect < radius). */
+function discTouchesZone(x: number, z: number, radius: number, r: KitZoneRect): boolean {
+  const cx = Math.max(r.x0, Math.min(x, r.x1));
+  const cz = Math.max(r.z0, Math.min(z, r.z1));
+  return Math.hypot(x - cx, z - cz) < radius;
+}
+
 export interface KitStaging {
   /** Seeded stream for this room's kit layer (one stream per room, drawn
    *  in a fixed order — determinism is the whole point). */
@@ -365,6 +409,9 @@ export interface KitStaging {
   /** Already-occupied discs kits must not touch (e.g. a pool-hall's
    *  water-anchored fixtures placed by the legacy furnishing path). */
   obstacles?: readonly { x: number; z: number; r: number }[];
+  /** Layout-template content zones (§7) — see KitZones. Absent = today's
+   *  seeded staging, byte-for-byte. */
+  zones?: KitZones;
   /** Terrain snap for piece y (the shared heightfield). */
   heightAt: (x: number, z: number) => number;
 }
@@ -598,11 +645,23 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         return null;
       }
       if (water && insideWater(p.x, p.z, water, pieceClear)) return null;
+      // Template keep-empty zones (§7): the entrance apron, the hall
+      // spine — authored voids the furnishing must respect.
+      if (o.zones?.keepEmpty) {
+        for (const r of o.zones.keepEmpty) {
+          if (inZoneRect(p.x, p.z, r)) return null;
+        }
+      }
     }
     const r = kit.footprint * t.scale;
     for (const d of discs) {
       if (Math.hypot(t.x - d.x, t.z - d.z) < r + d.r + KIT_GAP * propScale) {
         return null;
+      }
+    }
+    if (o.zones?.keepEmpty) {
+      for (const zone of o.zones.keepEmpty) {
+        if (discTouchesZone(t.x, t.z, r, zone)) return null;
       }
     }
     return placed.map((p) => ({
@@ -618,13 +677,28 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   // 1. The hero: composed centrepiece at the far-third slot. The path
   //    leads TO it, so the path check is skipped for the hero itself; the
   //    hero's clearing keeps everything else off its stage.
+  //    Template zones (§7) may pin the hero's kit and stand it at the
+  //    template's hero rect instead of the seeded slot.
   const heroKits = kits.filter((k) => k.heroSlot);
   if (heroKits.length > 0) {
-    const kit = heroKits[Math.floor(rng() * heroKits.length)];
+    const pinned = o.zones?.heroKit
+      ? heroKits.find((k) => k.id === o.zones!.heroKit)
+      : undefined;
+    const kit = pinned ?? heroKits[Math.floor(rng() * heroKits.length)];
+    let hx = comp.hero.x;
+    let hz = comp.hero.z;
+    if (o.zones?.hero) {
+      const zx = (o.zones.hero.x0 + o.zones.hero.x1) / 2;
+      const zz = (o.zones.hero.z0 + o.zones.hero.z1) / 2;
+      if (planContains(plan, zx, zz, wallInset)) {
+        hx = zx;
+        hz = zz;
+      }
+    }
     const t: KitTransform = {
-      x: comp.hero.x,
-      z: comp.hero.z,
-      rotY: Math.atan2(-comp.hero.x, -comp.hero.z),
+      x: hx,
+      z: hz,
+      rotY: Math.atan2(-hx, -hz),
       scale: propScale,
     };
     const pieces = pushKit(kit, t, { skipPathCheck: true }, nextKitIndex);
@@ -661,6 +735,11 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       if (covered + cov > coverageCap) continue;
       const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
       if (!t) continue;
+      // Template cluster zones (§7): side kits live where the template put
+      // its content areas — the shelf walls' feet, the bedroom wing.
+      if (o.zones?.clusters && o.zones.clusters.length > 0) {
+        if (!o.zones.clusters.some((r) => inZoneRect(t.x, t.z, r))) continue;
+      }
       const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
       if (!pieces) continue;
       nextKitIndex += 1;

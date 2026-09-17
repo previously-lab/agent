@@ -16,9 +16,12 @@ import {
   scaleNotationFor,
   scaledRecipeFor,
   scaledWallHeight,
+  wallRoleFor,
   wallSegmentsFor,
+  type RoomPlan,
 } from "@/lib/game/room-plan";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { hashString, WORLD_SEED } from "@/lib/game/seed";
 import {
   DOOR_GAP_HALF,
   PLAN_NONRECT_MIN_EXTENT,
@@ -301,5 +304,122 @@ describe("composeRoom", () => {
     const human = composeRoom("probe", roomPlanFor("probe", 48, 64, COLONNADE_BAY), 1);
     expect(wide.pathHalf).toBeGreaterThan(human.pathHalf);
     expect(tiny.pathHalf).toBeLessThan(human.pathHalf);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Template layer (v0.11-room-interiors §7): the optional TemplatePlan   */
+/* parameter and the WallRole classifier. ADDITIVE-ONLY PIN: the hashes  */
+/* below were captured from this module BEFORE the parameter existed,    */
+/* over the fixed input matrix — omitting it must reproduce today's     */
+/* output byte-for-byte.                                                */
+/* ------------------------------------------------------------------ */
+
+describe("template plan parameter (§7) — additive", () => {
+  const pin = (v: unknown) => {
+    const s = JSON.stringify(v);
+    return `${s.length}:${hashString(s)}`;
+  };
+  /** [sliceId, width, extent, "jsonLength:hash"] captured pre-change. */
+  const PINS: [string, number, number, string][] = [
+    ["2026-10-01", 16, 16, "69:285685599"],
+    ["2026-10-02", 32, 32, "69:1603428468"],
+    ["2026-10-03", 48, 32, "69:879735255"],
+    ["2026-10-04", 64, 64, "69:3973435005"],
+    ["2026-10-05", 96, 96, "88:2123447320"],
+    ["2026-10-06", 144, 96, "90:1466743983"],
+    ["2026-10-07", 21.12, 32, "93:439924525"],
+    ["2026-10-08", 64, 64, "69:3973435005"],
+  ];
+
+  it("reproduces the pre-template output byte-for-byte when omitted", () => {
+    for (const [id, w, e, expected] of PINS) {
+      expect(pin(roomPlanFor(id, w, e, COLONNADE_BAY))).toBe(expected);
+    }
+  });
+
+  it("treats an explicit undefined exactly as omitted", () => {
+    for (const [id, w, e] of PINS) {
+      expect(roomPlanFor(id, w, e, COLONNADE_BAY, WORLD_SEED, undefined)).toEqual(
+        roomPlanFor(id, w, e, COLONNADE_BAY),
+      );
+    }
+  });
+
+  it("declares the silhouette when a template is supplied, deterministically", () => {
+    const args = ["2026-10-20", 48, 32, COLONNADE_BAY, WORLD_SEED] as const;
+    const l = roomPlanFor(...args, { plan: "l-shape" });
+    expect(l.id).toBe("l-shape");
+    expect(l.stepZ).toBeGreaterThanOrEqual(32 * 0.45);
+    expect(l.stepZ).toBeLessThanOrEqual(32 * 0.6);
+    expect(roomPlanFor(...args, { plan: "l-shape" })).toEqual(l); // A6
+    const c = roomPlanFor(...args, { plan: "colonnade" });
+    expect(c.id).toBe("colonnade");
+    expect(c.columns.length).toBeGreaterThan(0);
+    expect(roomPlanFor(...args, { plan: "rect" }).id).toBe("rect");
+  });
+
+  it("honours the template even below the legacy non-rect extent guard", () => {
+    // A miniature M-tier room (scaled extent < 32) keeps its template's
+    // layout — sizing is the template's minExtent job, done at selection.
+    const plan = roomPlanFor("2026-10-21", 6.4, 6.4, COLONNADE_BAY, WORLD_SEED, {
+      plan: "l-shape",
+    });
+    expect(plan.id).toBe("l-shape");
+    // Without the template the same dims draw the legacy S-tier rect.
+    expect(roomPlanFor("2026-10-21", 6.4, 6.4, COLONNADE_BAY).id).toBe("rect");
+  });
+});
+
+describe("wallRoleFor (§7 wall roles)", () => {
+  const rolesOf = (plan: RoomPlan) =>
+    wallSegmentsFor(plan, ROOM_WALL_THICKNESS).map((w) => wallRoleFor(plan, w));
+
+  it("classifies the rect perimeter", () => {
+    expect(rolesOf(roomPlanFor("2026-10-01", 16, 16, COLONNADE_BAY))).toEqual([
+      "entrance",
+      "entrance",
+      "left",
+      "right",
+      "far",
+    ]);
+  });
+
+  it("classifies the colonnade perimeter (no side walls at all)", () => {
+    const colonnade = roomPlanFor("2026-10-20", 48, 32, COLONNADE_BAY, WORLD_SEED, {
+      plan: "colonnade",
+    });
+    expect(rolesOf(colonnade)).toEqual(["entrance", "entrance", "far"]);
+  });
+
+  it("classifies the l-shape perimeter, both kept sides", () => {
+    const plus = rolesOf(
+      roomPlanFor("2026-10-20", 48, 32, COLONNADE_BAY, WORLD_SEED, { plan: "l-shape" }),
+    );
+    // lSide is seeded; try a few ids until both signs are covered.
+    let sawMinus = plus.includes("inner");
+    for (let i = 0; i < 30 && sawMinus; i++) {
+      const p = roomPlanFor(`2026-11-${i}`, 48, 32, COLONNADE_BAY, WORLD_SEED, {
+        plan: "l-shape",
+      });
+      if (p.lSide < 0) {
+        expect(rolesOf(p)).toEqual([
+          "entrance",
+          "entrance",
+          "left",
+          "right",
+          "step",
+          "inner",
+          "left",
+          "far",
+        ]);
+        sawMinus = false;
+      }
+    }
+    expect(sawMinus).toBe(false);
+    expect(plus.filter((r) => r === "entrance")).toHaveLength(2);
+    expect(plus.filter((r) => r === "step")).toHaveLength(1);
+    expect(plus.filter((r) => r === "inner")).toHaveLength(1);
+    expect(plus.filter((r) => r === "far")).toHaveLength(1);
   });
 });
