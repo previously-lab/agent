@@ -28,10 +28,10 @@
  * shader rebuilds the exact floor height under each pixel and no depth
  * pass is needed. Alpha becomes 1 − mean(T): ankle-clear in the rect's
  * shallow corners (the bowl feathers OUTSIDE rho = 1, so inside the
- * rectangle only the corners are shallow), deep turquoise across the
- * full-depth bowl, and the tile floor ALWAYS reads through (at the 1.93 m
- * center α ≈ 0.63 < 1 — a flat opaque disc remains the forbidden
- * anti-pattern).
+ * rectangle only the corners are shallow), a legible ladder through half
+ * and one meter, and deep turquoise across the full-depth bowl — while
+ * the tile floor ALWAYS reads through (at the 1.93 m center α ≈ 0.68 < 1
+ * — a flat opaque disc remains the forbidden anti-pattern).
  *
  * RAW NORMALS, no texture clones: same patching discipline as surface.ts —
  * shared ripple textures stay at repeat 1, scrolling lives in uniforms, and
@@ -72,12 +72,15 @@ import { sharedWaterNormalTextures } from "./shared";
  * the light's down-and-back path through the water column into one
  * exponent (standard practice for top-down water), so d is the plain
  * water depth. The RATIO is physical — clear water transmits blue ≈ 4×
- * and green ≈ 2.5× better than red; the SCALE is tuned so the rect's
- * shallow corners (d ≈ 0.33 m) read ankle-clear (α ≈ 0.18) and the
- * full-depth bowl (d ≈ 1.93 m across the inscribed ellipse) reads
- * genuinely deep (α ≈ 0.63, green transmittance 0.42).
+ * and green ≈ 2× better than red; the SCALE is tuned so the depth ladder
+ * the user asked for reads at a glance: the rect's shallow corners
+ * (d ≈ 0.33 m) stay ankle-clear (α ≈ 0.21, tile and caustics fully
+ * visible), half a meter reads as a first tint (α ≈ 0.29), one meter is
+ * unmistakably deeper (α ≈ 0.47, floor veiled), and the full-depth bowl
+ * (d ≈ 1.93 m) goes saturated turquoise (α ≈ 0.68, green transmittance
+ * 0.35) while the tile floor ALWAYS reads through.
  */
-export const WATER_ABSORPTION_SIGMA = new Vector3(1.1, 0.45, 0.28);
+export const WATER_ABSORPTION_SIGMA = new Vector3(1.4, 0.55, 0.32);
 
 /**
  * Mirror of terrain.ts's private basin constants (BOWL_DEPTH, BOWL_FEATHER)

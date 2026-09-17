@@ -161,4 +161,49 @@ describe("applyPoolCaustics", () => {
     caustics.update(20);
     expect(scroll.x).not.toBe(first.x);
   });
+
+  it("is idempotent: re-applying to the same material returns the original driver and injects nothing twice", () => {
+    const material = mappedMaterial();
+    const first = applyPoolCaustics(material, { rect: RECT, ...SPAN });
+    const chainedOnBeforeCompile = material.onBeforeCompile;
+    const second = applyPoolCaustics(material, {
+      rect: { cx: 1, cz: 2, halfX: 3, halfZ: 4 },
+      spanX: 99,
+      spanY: 99,
+    });
+    // Same driver object; the patch layer is untouched by the second call.
+    expect(second).toBe(first);
+    expect(material.onBeforeCompile).toBe(chainedOnBeforeCompile);
+    expect(
+      material.customProgramCacheKey().split(":caustics-v1").length,
+    ).toBe(2);
+
+    const shader = fakeShader();
+    material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+    for (const decl of [
+      "uniform sampler2D uCausticsA;",
+      "uniform sampler2D uCausticsB;",
+      "uniform vec4 uCausticsScroll;",
+    ]) {
+      expect(shader.fragmentShader.split(decl).length).toBe(2);
+    }
+    // The original rect survived the idempotent second call.
+    const rect = shader.uniforms.uCausticsRect.value as { y: number };
+    expect(rect.y).toBe(RECT.cz);
+  });
+
+  it("never re-injects a shader that already carries the declarations (double-injection guard)", () => {
+    const material = mappedMaterial();
+    applyPoolCaustics(material, { rect: RECT, ...SPAN });
+    const shader = fakeShader();
+    material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+    const oncePatched = shader.fragmentShader;
+    // Simulate the same program text passing through the hook again (any
+    // other patching path): the declarations must survive exactly once.
+    material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+    expect(shader.fragmentShader).toBe(oncePatched);
+    expect(
+      shader.fragmentShader.split("uniform sampler2D uCausticsA;").length,
+    ).toBe(2);
+  });
 });

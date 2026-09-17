@@ -1,13 +1,16 @@
 /**
  * White glazed ceramic tile — the poolroom flagship material.
  *
- * The look: near-white glazed faces with a faint per-tile tone drift, light
- * grey grout seated EXACTLY on a `cells × cells` grid (so a caller can map
- * one texture cell to one real-world tile), a narrow beveled groove in the
- * normal map along every grout line, and subtle grime accumulating just
- * beside the grout. Physically the glaze is nearly glossy
- * (roughness ≈ 0.05–0.15) while the grout is matte (≈ 0.7–0.9) — that
- * contrast is what sells "wet ceramic" under correct lighting.
+ * The look: near-white glazed faces with a faint per-tile tone AND
+ * warm/cool hue drift (the 色差 of a real tile batch), broad sparse water
+ * stains a couple of tiles across, light grey grout seated EXACTLY on a
+ * `cells × cells` grid (so a caller can map one texture cell to one
+ * real-world tile), a narrow beveled groove in the normal map along every
+ * grout line, and subtle grime accumulating just beside the grout.
+ * Physically the glaze is nearly glossy (roughness ≈ 0.06–0.16, varying
+ * per tile so neighbours answer the key light with different sheens)
+ * while the grout is matte (≈ 0.7–0.9) — that contrast is what sells
+ * "wet ceramic" under correct lighting.
  *
  * Deterministic by contract: every per-tile decision comes from a
  * createRng/hashString stream keyed by (seed, cellX, cellY); the mottling
@@ -97,21 +100,27 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
   const mottle = createValueNoise2D(hashString(`${seed}:tile:mottle`));
   const glaze = createValueNoise2D(hashString(`${seed}:tile:glaze`));
   const groutNoise = createValueNoise2D(hashString(`${seed}:tile:grout`));
+  const stainNoise = createValueNoise2D(hashString(`${seed}:tile:stain`));
 
   // Per-tile tone is a function of (cellX, cellY) only; cache per cell so
   // we pay for one rng stream per tile, not per pixel.
   const toneCache = new Float32Array(cells * cells);
   const glossCache = new Float32Array(cells * cells);
+  const hueCache = new Float32Array(cells * cells);
   const cached = new Uint8Array(cells * cells);
-  const cellParams = (cx: number, cy: number): { tone: number; gloss: number } => {
+  const cellParams = (
+    cx: number,
+    cy: number,
+  ): { tone: number; gloss: number; hue: number } => {
     const i = cy * cells + cx;
     if (!cached[i]) {
       const rng = createRng(hashString(`${seed}:tile:cell:${cx}:${cy}`));
       toneCache[i] = rng() * 2 - 1; // albedo drift
       glossCache[i] = rng(); // face roughness offset
+      hueCache[i] = rng() * 2 - 1; // warm/cool drift
       cached[i] = 1;
     }
-    return { tone: toneCache[i], gloss: glossCache[i] };
+    return { tone: toneCache[i], gloss: glossCache[i], hue: hueCache[i] };
   };
 
   const albedo = new Uint8ClampedArray(size * size * 4);
@@ -136,7 +145,7 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
       // exactly on the integer grid of u/v.
       const d = Math.min(fx, 1 - fx, fy, 1 - fy);
 
-      const { tone, gloss } = cellParams(cx, cy);
+      const { tone, gloss, hue } = cellParams(cx, cy);
 
       // Grout mask with a ~1px anti-aliased edge, clamped to the grout
       // half-width so the hairline joint still reaches full strength on its
@@ -151,21 +160,30 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
         (1 - smoothstep(TILE_GROUT_HALF, TILE_GROUT_HALF + GRIME_REACH, d)) *
         (0.6 + 0.4 * fbm(mottle, u * 3, v * 3, 3));
 
-      // Face albedo: near-white, faint cool glaze, per-tile tone drift,
-      // low-frequency mottling, darkened by grime near the grout. With the
-      // groove normals flattened (TILE_NORMAL_STRENGTH), the SURFACE carries
-      // the detail — so the tone drift and glaze mottling run a little wider
-      // than a grooved tile could afford (still zero-mean: TILE_ALBEDO_MEAN
-      // is untouched).
+      // Water staining: broad, sparse blotches a couple of tiles across —
+      // the faint tide-marks a maintained pool still carries. One-sided
+      // (darkening only) and very light, so TILE_ALBEDO_MEAN stays honest.
+      const stain =
+        smoothstep(0.42, 0.9, fbm(stainNoise, u * 0.55 + 13, v * 0.55 + 29, 2)) *
+        (1 - groutMask);
+
+      // Face albedo: near-white, faint cool glaze, per-tile tone drift AND
+      // per-tile warm/cool hue drift (the 色差 of a real tile batch — zero-
+      // mean, so TILE_ALBEDO_MEAN is untouched), low-frequency mottling,
+      // darkened by grime near the grout and by the broad water stains.
       const face =
         0.955 +
         tone * 0.028 +
         fbm(mottle, u * 1.5, v * 1.5, 3) * 0.015 +
         fbm(glaze, u * 24, v * 24, 2) * 0.012;
+      const stainDarken = 1 - 0.045 * stain;
       const grimeDarken = 1 - 0.13 * Math.max(0, grime);
-      const faceR = (face - 0.012) * grimeDarken;
-      const faceG = (face - 0.004) * grimeDarken;
-      const faceB = (face + 0.006) * (1 - 0.16 * Math.max(0, grime)); // grime kills the cool tint first
+      const faceR = (face - 0.012 + hue * 0.007) * grimeDarken * stainDarken;
+      const faceG = (face - 0.004) * grimeDarken * stainDarken;
+      const faceB =
+        (face + 0.006 - hue * 0.007) *
+        (1 - 0.16 * Math.max(0, grime)) *
+        stainDarken; // grime kills the cool tint first
 
       // Grout albedo: light grey (clean joints read light, not black), with
       // its own unevenness.
@@ -180,16 +198,19 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
       albedo[p + 3] = 255;
 
       // Roughness: glaze nearly glossy, grout matte. Grime is slightly
-      // rougher than the glaze around it. The glaze band is where the
-      // "surface, not grooves" effort lives: a wider per-tile gloss spread
-      // (0.075–0.145) plus TWO mottle octaves (broad clouding at 12/cell,
-      // fine speckle at 48/cell), so each tile catches the key light with
-      // its own soft sheen map instead of one uniform gloss.
+      // rougher than the glaze around it; a water stain is rougher still
+      // (mineral deposit). The glaze band is where the "surface, not
+      // grooves" effort lives: a wide per-tile gloss spread (0.06–0.16, so
+      // neighbouring tiles answer the key light with visibly different
+      // sheens) plus TWO mottle octaves (broad clouding at 12/cell, fine
+      // speckle at 48/cell), so each tile catches the key light with its
+      // own soft sheen map instead of one uniform gloss.
       const faceRough = clamp01(
-        0.075 + gloss * 0.07 +
+        0.06 + gloss * 0.1 +
           fbm(glaze, u * 12 + 40, v * 12 + 40, 2) * 0.025 +
           fbm(glaze, u * 48 + 90, v * 48 + 90, 2) * 0.015 +
-          Math.max(0, grime) * 0.1,
+          Math.max(0, grime) * 0.1 +
+          stain * 0.06,
       );
       const groutRough = clamp01(
         0.8 + fbm(groutNoise, u * 9 + 80, v * 9 + 80, 2) * 0.07,

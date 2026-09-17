@@ -28,6 +28,15 @@
  * The material must carry a map (vMapUv is the coordinate carrier) — the
  * tile ground material always does.
  *
+ * IDEMPOTENT. The patch is recorded in a WeakMap: applying it twice to the
+ * SAME material returns the original driver without chaining another
+ * onBeforeCompile layer (a re-run of the caller's useMemo — e.g. a new
+ * waterRect identity with an unchanged groundMaterial — must not re-inject:
+ * prepending FRAGMENT_DECLS a second time redeclares the uniforms and the
+ * program fails to compile). The injection itself also checks whether the
+ * declarations are already present in the shader text, so a patch layered
+ * by any other path is skipped rather than duplicated.
+ *
  * LIGHT-SOURCE DISCIPLINE (design axiom B.13 — this world has no outdoors,
  * every light needs a findable source): caustics are refracted KEY light,
  * so pass the skylight/window color as `color`; default is white.
@@ -143,13 +152,28 @@ function buildCausticsEmissive(): string {
 
 const CAUSTICS_PROGRAM_CACHE_TAG = ":caustics-v1";
 
+/** The declarations the patch prepends — the idempotency probe below keys
+ *  on this exact line. */
+const CAUSTICS_DECLS_PROBE = "uniform sampler2D uCausticsA;";
+
+/**
+ * Materials already patched, mapped to their driver. The patch chains
+ * onBeforeCompile and prepends the uniform declarations, neither of which
+ * is safe to apply twice: a second chain would prepend FRAGMENT_DECLS
+ * again and the redeclared uniforms fail program validation
+ * (`'uCausticsA' : redefinition`).
+ */
+const patchedMaterials = new WeakMap<MeshStandardMaterial, PoolCaustics>();
+
 /**
  * Patch `material` (the tile basin floor) with the additive caustics web.
  * Chains onto the material's existing onBeforeCompile / cache key, so it
- * composes with surface.ts's tiling patch in either order. Returns the
- * per-frame driver; call `update(elapsed)` from the room's useFrame. The
- * shared caustics textures must NOT be disposed; the material stays owned
- * by its creator.
+ * composes with surface.ts's tiling patch in either order. Idempotent:
+ * calling it again on the SAME material returns the original driver
+ * untouched — no second onBeforeCompile layer, no re-injection. Returns
+ * the per-frame driver; call `update(elapsed)` from the room's useFrame.
+ * The shared caustics textures must NOT be disposed; the material stays
+ * owned by its creator.
  */
 export function applyPoolCaustics(
   material: MeshStandardMaterial,
@@ -160,6 +184,8 @@ export function applyPoolCaustics(
       "materials/caustics-surface: the caustics patch needs vMapUv — the target material must carry a map (the tile ground material does)",
     );
   }
+  const existing = patchedMaterials.get(material);
+  if (existing) return existing;
   const layers = sharedCausticsTextures();
   if (layers.length !== 2) {
     throw new Error(
@@ -199,14 +225,19 @@ export function applyPoolCaustics(
       uCausticsColor: { value: new Color(opts.color ?? 0xffffff) },
       uCausticsIntensity: { value: opts.intensity ?? 1 },
     });
-    if (!shader.fragmentShader.includes(EMISSIVE_INCLUDE)) {
-      throw new Error(
-        "materials/caustics-surface: fragment shader has no emissivemap_fragment include",
-      );
+    if (!shader.fragmentShader.includes(CAUSTICS_DECLS_PROBE)) {
+      if (!shader.fragmentShader.includes(EMISSIVE_INCLUDE)) {
+        throw new Error(
+          "materials/caustics-surface: fragment shader has no emissivemap_fragment include",
+        );
+      }
+      shader.fragmentShader =
+        FRAGMENT_DECLS +
+        shader.fragmentShader.replace(
+          EMISSIVE_INCLUDE,
+          buildCausticsEmissive(),
+        );
     }
-    shader.fragmentShader =
-      FRAGMENT_DECLS +
-      shader.fragmentShader.replace(EMISSIVE_INCLUDE, buildCausticsEmissive());
   };
 
   const previousCacheKey = material.customProgramCacheKey.bind(material);
@@ -215,7 +246,7 @@ export function applyPoolCaustics(
 
   material.needsUpdate = true;
 
-  return {
+  const driver: PoolCaustics = {
     update(elapsed: number) {
       scroll.x = (elapsed * CAUSTICS_SCROLL_A.vx) % 1;
       scroll.y = (elapsed * CAUSTICS_SCROLL_A.vy) % 1;
@@ -223,4 +254,6 @@ export function applyPoolCaustics(
       scroll.w = (elapsed * CAUSTICS_SCROLL_B.vy) % 1;
     },
   };
+  patchedMaterials.set(material, driver);
+  return driver;
 }
