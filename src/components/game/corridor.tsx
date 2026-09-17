@@ -2181,7 +2181,10 @@ function LobbyRegisterBoard({
  *  far south wall (RETURN_DOOR_SOUTH_X, west of the desk). Both walls carry
  *  a door when the stack holds trips from both sides; each leads back with
  *  the hotel's accent glow and carries no number (it leads back, not to a
- *  slice). No door without a trip: the newest hotel's lobby is the
+ *  slice). The EAST wall carries the ARRIVAL DOOR (§10.5 西出东进) once an
+ *  east-west trip (page door / travel) is on the stack: the corridor's
+ *  west end is the way out, this east-wall door is the way back. No door
+ *  without a trip: the newest hotel's lobby is the
  *  beginning of the world. The south wall also wears the REGISTER BOARD
  *  above the desk (§9.2/§10.3 — the one fixed place every arrival sees). */
 function Lobby({
@@ -2197,9 +2200,9 @@ function Lobby({
 }: {
   dimRef: MutableRefObject<boolean>;
   mats: HotelMaterials;
-  /** Which lobby walls carry a return door (§10.5) — the lateral sides
-   *  the nav stack's trips came in from. */
-  returnDoors: { north: boolean; south: boolean };
+  /** Which lobby walls carry a door back (§10.5) — the sides the nav
+   *  stack's trips came in from; `east` is the arrival door (西出东进). */
+  returnDoors: { north: boolean; south: boolean; east: boolean };
   register: LobbyRegister;
   hotelName: string;
   windowIndex: number;
@@ -2225,6 +2228,24 @@ function Lobby({
   const southWall = returnDoors.south
     ? wallSegments(0, LOBBY_LENGTH, [RETURN_DOOR_SOUTH_X])
     : [{ x0: 0, x1: LOBBY_LENGTH }];
+  // The leg's far EAST wall: one solid z-run, or split around the arrival
+  // door's gap at z = 0 (two segments + a lintel) — the mirror of the
+  // corridor's west-end page door (§10.5 西出东进). The wall spans a
+  // half-thickness past both corner seams, like CorridorEnd's end wall.
+  const eastWall = returnDoors.east
+    ? [
+        { z0: southZ - CORRIDOR_WALL_THICKNESS / 2, z1: -DOOR_WIDTH / 2 },
+        { z0: DOOR_WIDTH / 2, z1: WALL_Z + CORRIDOR_WALL_THICKNESS / 2 },
+      ]
+    : [{ z0: southZ - CORRIDOR_WALL_THICKNESS / 2, z1: WALL_Z + CORRIDOR_WALL_THICKNESS / 2 }];
+  // The east wall's interior-face trim (baseboard, wainscot, chair rail)
+  // spans [southZ, WALL_Z] and breaks around the same gap.
+  const eastTrim = returnDoors.east
+    ? [
+        { z0: southZ, z1: -DOOR_WIDTH / 2 },
+        { z0: DOOR_WIDTH / 2, z1: WALL_Z },
+      ]
+    : [{ z0: southZ, z1: WALL_Z }];
   return (
     <group>
       <mesh
@@ -2276,17 +2297,41 @@ function Lobby({
           />
         </>
       )}
-      {/* Far walls: east and south, full height — the backdrop. The south
-          wall splits around its own return door (§10.5) exactly like the
-          junction's north wall does. */}
-      <mesh
-        position={[LOBBY_LENGTH, WALL_HEIGHT / 2, centerZ]}
-        material={mats.wall}
-        castShadow
-        receiveShadow
-      >
-        <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, floorDepth + CORRIDOR_WALL_THICKNESS]} />
-      </mesh>
+      {/* Far walls: east and south, full height — the backdrop. The east
+          wall splits around the ARRIVAL DOOR's gap at z = 0 when an
+          east-west trip is on the stack (§10.5 西出东进); the south wall
+          splits around its own return door exactly like the junction's
+          north wall does. */}
+      {eastWall.map((s) => (
+        <mesh
+          key={`east-${s.z0}:${s.z1}`}
+          position={[LOBBY_LENGTH, WALL_HEIGHT / 2, (s.z0 + s.z1) / 2]}
+          material={mats.wall}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT, s.z1 - s.z0]} />
+        </mesh>
+      ))}
+      {returnDoors.east && (
+        <>
+          {/* Lintel above the arrival door's gap, flush with the wall. */}
+          <mesh
+            position={[LOBBY_LENGTH, (WALL_HEIGHT + DOOR_HEIGHT) / 2, 0]}
+            material={mats.wall}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[CORRIDOR_WALL_THICKNESS, WALL_HEIGHT - DOOR_HEIGHT, DOOR_WIDTH]} />
+          </mesh>
+          <ArrivalDoor
+            accent={accent}
+            dimRef={dimRef}
+            mats={mats}
+            playerRef={playerRef}
+          />
+        </>
+      )}
       {southWall.map((s) => (
         <mesh
           key={`south-${s.x0}:${s.x1}`}
@@ -2364,12 +2409,15 @@ function Lobby({
           <boxGeometry args={[s.x1 - s.x0, 0.12, 0.04]} />
         </mesh>
       ))}
-      <mesh
-        position={[LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - 0.02, 0.06, centerZ]}
-        material={mats.trim}
-      >
-        <boxGeometry args={[0.04, 0.12, floorDepth]} />
-      </mesh>
+      {eastTrim.map((s) => (
+        <mesh
+          key={`baseboard-e-${s.z0}:${s.z1}`}
+          position={[LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - 0.02, 0.06, (s.z0 + s.z1) / 2]}
+          material={mats.trim}
+        >
+          <boxGeometry args={[0.04, 0.12, s.z1 - s.z0]} />
+        </mesh>
+      ))}
       {/* Wainscot + chair rail on the three full-height walls — the north
           and south walls' bands break around their return door gaps. */}
       {[1, -1].map((s) => {
@@ -2404,28 +2452,32 @@ function Lobby({
         );
       })}
       <group key="wainscot-east">
-        <mesh
-          position={[
-            LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01,
-            WAINSCOT_HEIGHT / 2,
-            centerZ,
-          ]}
-          material={mats.wainscot}
-          receiveShadow
-        >
-          <boxGeometry args={[WAINSCOT_DEPTH, WAINSCOT_HEIGHT, floorDepth]} />
-        </mesh>
-        <mesh
-          position={[
-            LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01,
-            WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2,
-            centerZ,
-          ]}
-          material={mats.trim}
-          receiveShadow
-        >
-          <boxGeometry args={[CHAIR_RAIL_DEPTH, CHAIR_RAIL_HEIGHT, floorDepth]} />
-        </mesh>
+        {eastTrim.map((s) => (
+          <group key={`we-${s.z0}:${s.z1}`}>
+            <mesh
+              position={[
+                LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - WAINSCOT_DEPTH / 2 + 0.01,
+                WAINSCOT_HEIGHT / 2,
+                (s.z0 + s.z1) / 2,
+              ]}
+              material={mats.wainscot}
+              receiveShadow
+            >
+              <boxGeometry args={[WAINSCOT_DEPTH, WAINSCOT_HEIGHT, s.z1 - s.z0]} />
+            </mesh>
+            <mesh
+              position={[
+                LOBBY_LENGTH - CORRIDOR_WALL_THICKNESS / 2 - CHAIR_RAIL_DEPTH / 2 + 0.01,
+                WAINSCOT_HEIGHT + CHAIR_RAIL_HEIGHT / 2,
+                (s.z0 + s.z1) / 2,
+              ]}
+              material={mats.trim}
+              receiveShadow
+            >
+              <boxGeometry args={[CHAIR_RAIL_DEPTH, CHAIR_RAIL_HEIGHT, s.z1 - s.z0]} />
+            </mesh>
+          </group>
+        ))}
       </group>
       {/* Cornices on the three full-height walls. */}
       {[1, -1].map((s) => (
@@ -2492,6 +2544,187 @@ function Lobby({
       ))}
       {lamps.map((lamp, i) => (
         <FloorLamp key={i} position={lamp.position} dimRef={dimRef} mats={mats} />
+      ))}
+    </group>
+  );
+}
+
+/**
+ * The lobby's EAST arrival door (§10.5 西出东进) — the mirror of the
+ * corridor's west-end page door: every page-door/travel hop comes IN
+ * through this door, and walking back out through it returns to the
+ * departure hotel's west end. Same dressing as CorridorEnd's page door
+ * (frame, hinged slab swinging away from the player — here toward +x,
+ * into the void beyond the wall — an accent glow in the gap, halos and a
+ * lintel strip on both faces), but NO plate: it leads back, not to a
+ * slice. Hangs at z = 0 on the lobby's east wall (x = LOBBY_LENGTH).
+ */
+function ArrivalDoor({
+  accent,
+  dimRef,
+  mats,
+  playerRef,
+}: {
+  accent: string;
+  dimRef: MutableRefObject<boolean>;
+  mats: HotelMaterials;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
+}) {
+  // Hinged slab: the hinge group sits on the z < 0 jamb at the wall plane;
+  // the slab hangs +z off it. The swing pushes AWAY from the player
+  // (toward +x, back toward the hotel they came from), easing like the
+  // room doors — the mirror of CorridorEnd's −x swing.
+  const hingeRef = useRef<Group>(null);
+  const angleRef = useRef(0);
+  const snappedRef = useRef(false);
+  useFrame((_, delta) => {
+    const hinge = hingeRef.current;
+    if (!hinge) return;
+    const p = playerRef.current;
+    const near = Math.hypot(p.x - LOBBY_LENGTH, p.z) < DOOR_OPEN_DIST;
+    const target = near ? DOOR_OPEN_ANGLE : 0;
+    const dt = Math.min(delta, 0.05);
+    if (!snappedRef.current) {
+      angleRef.current = target;
+      snappedRef.current = true;
+    } else {
+      angleRef.current += (target - angleRef.current) * (1 - Math.exp(-DOOR_SWING_RATE * dt));
+    }
+    hinge.rotation.y = angleRef.current;
+  });
+
+  // Glow materials follow the hotel-wide dimming — one ref pair per face
+  // (the door is dressed on BOTH faces; the camera only sees −x).
+  const glowMatRef = useRef<MeshStandardMaterial>(null);
+  const haloMatRef = useRef<MeshBasicMaterial>(null);
+  const haloMatRef2 = useRef<MeshBasicMaterial>(null);
+  const stripMatRef = useRef<MeshStandardMaterial>(null);
+  const stripMatRef2 = useRef<MeshStandardMaterial>(null);
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.doorGlow,
+    () => glowMatRef.current?.emissiveIntensity ?? null,
+    (v) => {
+      const m = glowMatRef.current;
+      if (m) m.emissiveIntensity = v;
+    },
+  );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.doorHalo,
+    () => haloMatRef.current?.opacity ?? null,
+    (v) => {
+      const m = haloMatRef.current;
+      if (m) m.opacity = v;
+      const m2 = haloMatRef2.current;
+      if (m2) m2.opacity = v;
+    },
+  );
+  useDimLerp(
+    dimRef,
+    LIGHT_LEVELS.doorStrip,
+    () => stripMatRef.current?.emissiveIntensity ?? null,
+    (v) => {
+      const m = stripMatRef.current;
+      if (m) m.emissiveIntensity = v;
+      const m2 = stripMatRef2.current;
+      if (m2) m2.emissiveIntensity = v;
+    },
+  );
+
+  return (
+    <group>
+      {/* Frame posts + header, centered on the wall plane so they read
+          proud of BOTH faces. */}
+      <mesh
+        position={[LOBBY_LENGTH, DOOR_HEIGHT / 2 + 0.05, -DOOR_WIDTH / 2 - 0.05]}
+        material={mats.trim}
+        castShadow
+      >
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, DOOR_HEIGHT + 0.1, 0.1]} />
+      </mesh>
+      <mesh
+        position={[LOBBY_LENGTH, DOOR_HEIGHT / 2 + 0.05, DOOR_WIDTH / 2 + 0.05]}
+        material={mats.trim}
+        castShadow
+      >
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, DOOR_HEIGHT + 0.1, 0.1]} />
+      </mesh>
+      <mesh position={[LOBBY_LENGTH, DOOR_HEIGHT + 0.11, 0]} material={mats.trim} castShadow>
+        <boxGeometry args={[CORRIDOR_WALL_THICKNESS + 0.14, 0.12, DOOR_WIDTH + 0.2]} />
+      </mesh>
+      {/* Hinged slab — a real door, opaque, swinging on its z < 0 jamb,
+          away from the arriving player (toward +x). */}
+      <group ref={hingeRef} position={[LOBBY_LENGTH, 0, -DOOR_WIDTH / 2 + 0.02]}>
+        <mesh
+          position={[0, DOOR_HEIGHT / 2, DOOR_WIDTH / 2 - 0.02]}
+          material={mats.slab}
+          castShadow
+        >
+          <boxGeometry args={[0.05, DOOR_HEIGHT - 0.04, DOOR_WIDTH - 0.04]} />
+        </mesh>
+        {/* Handles: a small dark knob on each face, free-end side. */}
+        {[1, -1].map((side) => (
+          <mesh
+            key={`handle-${side}`}
+            position={[side * 0.05, DOOR_HEIGHT / 2, DOOR_WIDTH - 0.22]}
+            material={mats.trim}
+            castShadow
+          >
+            <boxGeometry args={[0.05, 0.16, 0.05]} />
+          </mesh>
+        ))}
+      </group>
+      {/* Accent glow inside the gap, revealed when the slab swings aside —
+          the last hotel's light. Double-sided: it must read through the
+          opening from both faces. */}
+      <mesh position={[LOBBY_LENGTH, DOOR_HEIGHT / 2, 0]} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[DOOR_WIDTH, DOOR_HEIGHT]} />
+        <meshStandardMaterial
+          ref={glowMatRef}
+          color="#000000"
+          emissive={accent}
+          emissiveIntensity={LIGHT_LEVELS.doorGlow.full}
+          roughness={1}
+          metalness={0}
+          side={DoubleSide}
+        />
+      </mesh>
+      {/* Faint additive halo around the opening, both faces. */}
+      {[1, -1].map((side) => (
+        <mesh
+          key={`halo-${side}`}
+          position={[LOBBY_LENGTH + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.03), DOOR_HEIGHT / 2, 0]}
+          rotation={[0, Math.PI / 2, 0]}
+        >
+          <planeGeometry args={[DOOR_WIDTH + 0.5, DOOR_HEIGHT + 0.4]} />
+          <meshBasicMaterial
+            ref={side > 0 ? haloMatRef : haloMatRef2}
+            color={accent}
+            transparent
+            opacity={LIGHT_LEVELS.doorHalo.full}
+            blending={AdditiveBlending}
+            depthWrite={false}
+            side={DoubleSide}
+          />
+        </mesh>
+      ))}
+      {/* Emissive strip above the lintel — the fake fixture, both faces. */}
+      {[1, -1].map((side) => (
+        <mesh
+          key={`strip-${side}`}
+          position={[LOBBY_LENGTH + side * (CORRIDOR_WALL_THICKNESS / 2 + 0.06), WALL_HEIGHT - 0.14, 0]}
+        >
+          <boxGeometry args={[0.08, 0.06, DOOR_WIDTH]} />
+          <meshStandardMaterial
+            ref={side > 0 ? stripMatRef : stripMatRef2}
+            color="#000000"
+            emissive={accent}
+            emissiveIntensity={LIGHT_LEVELS.doorStrip.full}
+            roughness={1}
+            metalness={0}
+          />
+        </mesh>
       ))}
     </group>
   );
@@ -2824,10 +3057,11 @@ export function Corridor({
    *  door glow, the register board's header. Brand blue for the core
    *  timeline. */
   accent: string;
-  /** Which lobby walls carry a return door (§10.5): one per lateral side
-   *  the nav stack's trips came in from. Both false only for the hotel
+  /** Which lobby walls carry a door back (§10.5): one per side the nav
+   *  stack's trips came in from — north/south return doors, and the east
+   *  wall's arrival door (西出东进). All false only for the hotel
    *  the run spawns in. */
-  returnDoors: { north: boolean; south: boolean };
+  returnDoors: { north: boolean; south: boolean; east: boolean };
   /** The hotel's display name on the register board — "PREVIOUSLY" for the
    *  core timeline's hotel, the strand name otherwise. */
   hotelName: string;

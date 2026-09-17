@@ -7,8 +7,8 @@
  * constants (cornice, wainscot, portal), the
  * sconce light pools, the fixture-light layout constants (B.13 灯廊: real
  * lights live ON fixtures — sconces, the baseboard light line, floor
- * lamps), and the hotel-door constants (page door, return door, accent —
- * HD3/§11.1). The door slab geometry itself is shared with the
+ * lamps), and the hotel-door constants (page door, return doors, arrival
+ * door, accent — HD3/§11.1). The door slab geometry itself is shared with the
  * space renderer and lives in ./room. Pure data — no three.js, no React.
  */
 
@@ -139,6 +139,23 @@ export const LOBBY_ARRIVAL_INSET = 1.6;
  *  ROOM_DOOR_CROSS_DEPTH pattern. Reachable through the clamp's
  *  END_WALL_PASS_DEPTH overtravel (clamps.ts). */
 export const PAGE_DOOR_CROSS_DEPTH = 0.3;
+
+/** Arrival-door crossing trigger (§10.5 西出东进): the player has pushed
+ *  this far past the lobby EAST wall's plane inside the arrival door's gap
+ *  — mirrors the south return door's RETURN_DOOR_SOUTH_CROSS_DEPTH. */
+export const ARRIVAL_DOOR_CROSS_DEPTH = 0.2;
+
+/** The lobby east wall's passage: inside the arrival door's gap the east
+ *  bound relaxes this far past the wall plane so the crossing trigger is
+ *  reachable — the same overtravel the south return door gets
+ *  (LOBBY_SOUTH_PASS_DEPTH, game-canvas.tsx). */
+export const EAST_DOOR_PASS_DEPTH = 0.6;
+
+/** Walking BACK through an arrival door lands the player this far inside
+ *  the departure hotel's west end (past the page door's gap), facing the
+ *  corridor — the mirror of LOBBY_ARRIVAL_INSET: out the west end, in at
+ *  the east (§10.5 西出东进). */
+export const WEST_END_ARRIVAL_INSET = 1.2;
 
 /* ------------------------------------------------------------------ */
 /* Door pitch — time gaps become door spacing (v0.11-strand-field §1:  */
