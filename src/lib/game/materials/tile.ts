@@ -1,13 +1,13 @@
 /**
  * White glazed ceramic tile — the poolroom flagship material.
  *
- * The look: near-white glazed faces with a faint per-tile tone drift, dark
+ * The look: near-white glazed faces with a faint per-tile tone drift, light
  * grey grout seated EXACTLY on a `cells × cells` grid (so a caller can map
- * one texture cell to one real-world tile), a beveled groove in the normal
- * map along every grout line, and subtle grime accumulating just beside the
- * grout. Physically the glaze is nearly glossy (roughness ≈ 0.05–0.15)
- * while the grout is matte (≈ 0.7–0.9) — that contrast is what sells
- * "wet ceramic" under correct lighting.
+ * one texture cell to one real-world tile), a narrow beveled groove in the
+ * normal map along every grout line, and subtle grime accumulating just
+ * beside the grout. Physically the glaze is nearly glossy
+ * (roughness ≈ 0.05–0.15) while the grout is matte (≈ 0.7–0.9) — that
+ * contrast is what sells "wet ceramic" under correct lighting.
  *
  * Deterministic by contract: every per-tile decision comes from a
  * createRng/hashString stream keyed by (seed, cellX, cellY); the mottling
@@ -32,22 +32,43 @@ const DEFAULT_SIZE = 256;
 const DEFAULT_CELLS = 8;
 
 /**
- * Mean albedo of the whole texture (white glaze faces ≈ 0.95 with ~9% grout
- * coverage at ≈ 0.58). Consumers pre-divide their base color by this so the
+ * Mean albedo of the whole texture (white glaze faces ≈ 0.95 with ~3.5%
+ * grout coverage at ≈ 0.78, minus a couple of points of grime darkening
+ * beside the joints). Consumers pre-divide their base color by this so the
  * palette stays the AVERAGE and the texture adds variation around it.
  */
-export const TILE_ALBEDO_MEAN = 0.92;
+export const TILE_ALBEDO_MEAN = 0.94;
 
-/** Grout half-width as a fraction of one cell (full width ≈ 9% of a tile). */
-const GROUT_HALF = 0.045;
+/**
+ * Grout half-width as a fraction of one cell: full joint ≈ 3.5% of a tile.
+ * Real pool joints are 2–3 mm on a 30 cm tile (~1%), but at the game's
+ * fixed camera 1 screen px ≈ 1.15 cm, so a joint that survives as a clean
+ * "1px line" on screen is ≈ 3.5% of a cell. At the default 256px / 8-cell
+ * grid that is ≈ 1.1 texture px, so the joint also survives the first mip
+ * instead of aliasing into moiré. (The old 9% read as thick dark diamonds.)
+ */
+export const TILE_GROUT_HALF = 0.0175;
 /** Grout bottom half-width: inside this the groove is at full depth. */
-const GROUT_BOTTOM = 0.025;
-/** Bevel run from grout bottom back up to the face, in cell units. */
-const BEVEL = 0.07;
+export const TILE_GROUT_BOTTOM = 0.006;
+/**
+ * Bevel run from grout bottom back up to the face, in cell units. The whole
+ * groove-shaded band (grout + bevel, both sides) is ≈ 6% of a cell; the old
+ * 23% looked like a wide chamfer around every tile, not a joint.
+ */
+export const TILE_BEVEL = 0.0125;
 /** How far grime reaches from the grout edge into the face, in cell units. */
 const GRIME_REACH = 0.16;
-/** Normal strength: groove slope multiplier (height is in cell units). */
-const NORMAL_STRENGTH = 1.4;
+/**
+ * Normal strength: groove slope multiplier (height is in cell units). 1.4
+ * lit the shallow seam like a deep channel; 0.5 keeps a soft shading that
+ * matches the hairline joint.
+ */
+export const TILE_NORMAL_STRENGTH = 0.5;
+/**
+ * Base grout albedo: clean, maintained pool joints read light grey, not
+ * black (the grime beside them supplies the contrast instead).
+ */
+export const TILE_GROUT_ALBEDO = 0.78;
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
@@ -59,7 +80,7 @@ function clamp01(v: number): number {
  * centreline in cell units.
  */
 function grooveHeight(d: number): number {
-  return smoothstep(GROUT_BOTTOM, GROUT_BOTTOM + BEVEL, d);
+  return smoothstep(TILE_GROUT_BOTTOM, TILE_GROUT_BOTTOM + TILE_BEVEL, d);
 }
 
 export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
@@ -114,14 +135,17 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
 
       const { tone, gloss } = cellParams(cx, cy);
 
-      // Grout mask with a ~1px anti-aliased edge.
-      const aa = 1 / pxPerCell;
-      const groutMask = 1 - smoothstep(GROUT_HALF - aa, GROUT_HALF + aa, d);
+      // Grout mask with a ~1px anti-aliased edge, clamped to the grout
+      // half-width so the hairline joint still reaches full strength on its
+      // centreline instead of being blurred away by its own AA ramp.
+      const aa = Math.min(1 / pxPerCell, TILE_GROUT_HALF);
+      const groutMask =
+        1 - smoothstep(TILE_GROUT_HALF - aa, TILE_GROUT_HALF + aa, d);
 
       // Grime: strongest right at the grout edge, fading into the face.
       const grime =
         (1 - groutMask) *
-        (1 - smoothstep(GROUT_HALF, GROUT_HALF + GRIME_REACH, d)) *
+        (1 - smoothstep(TILE_GROUT_HALF, TILE_GROUT_HALF + GRIME_REACH, d)) *
         (0.6 + 0.4 * fbm(mottle, u * 3, v * 3, 3));
 
       // Face albedo: near-white, faint cool glaze, per-tile tone drift,
@@ -136,8 +160,9 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
       const faceG = (face - 0.004) * grimeDarken;
       const faceB = (face + 0.006) * (1 - 0.16 * Math.max(0, grime)); // grime kills the cool tint first
 
-      // Grout albedo: darker and greyer, with its own unevenness.
-      const g = 0.58 + fbm(groutNoise, u * 6, v * 6, 3) * 0.06;
+      // Grout albedo: light grey (clean joints read light, not black), with
+      // its own unevenness.
+      const g = TILE_GROUT_ALBEDO + fbm(groutNoise, u * 6, v * 6, 3) * 0.05;
       const groutR = g * 0.985;
       const groutG = g;
       const groutB = g * 1.015;
@@ -169,7 +194,7 @@ export function buildTileMaps(opts: TileOptions = {}): MaterialMaps {
 
   // Pass 2: normals from the groove heightfield (central differences,
   // clamped at the texture edges — this map is not required to tile).
-  const heightScale = pxPerCell * NORMAL_STRENGTH;
+  const heightScale = pxPerCell * TILE_NORMAL_STRENGTH;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = y * size + x;

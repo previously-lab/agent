@@ -7,7 +7,11 @@
  * ShaderChunk strings they rewrite stay pinned against the installed three.
  */
 import { describe, it, expect } from "vitest";
-import { RepeatWrapping } from "three";
+import {
+  LinearFilter,
+  LinearMipmapLinearFilter,
+  RepeatWrapping,
+} from "three";
 import type { WebGLProgramParametersWithUniforms } from "three";
 import {
   sharedConcreteTextures,
@@ -52,6 +56,26 @@ describe("shared texture cache", () => {
     for (const layer of layers) {
       expect(layer.wrapS).toBe(RepeatWrapping);
       expect(layer.wrapT).toBe(RepeatWrapping);
+    }
+  });
+
+  it("samples every cached texture set linearly with mipmaps (the moiré fix)", () => {
+    const tile = sharedTileTextures();
+    const concrete = sharedConcreteTextures();
+    const textures = [
+      tile.albedo,
+      tile.roughness,
+      tile.normal,
+      concrete.albedo,
+      concrete.roughness,
+      concrete.normal,
+      ...sharedWaterNormalTextures(),
+    ];
+    for (const texture of textures) {
+      expect(texture.magFilter).toBe(LinearFilter);
+      expect(texture.minFilter).toBe(LinearMipmapLinearFilter);
+      expect(texture.generateMipmaps).toBe(true);
+      expect(texture.anisotropy).toBeGreaterThanOrEqual(8);
     }
   });
 });

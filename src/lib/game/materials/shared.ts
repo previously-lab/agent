@@ -25,6 +25,7 @@ import { DataTexture, FloatType, RepeatWrapping, RGBAFormat } from "three";
 import { buildConcreteMaps } from "./concrete";
 import { buildTileMaps } from "./tile";
 import {
+  applyTextureSampling,
   createMaterialTextures,
   type MaterialTextures,
 } from "./three";
@@ -76,6 +77,7 @@ export function sharedWaterNormalTextures(): DataTexture[] {
       );
       texture.wrapS = RepeatWrapping;
       texture.wrapT = RepeatWrapping;
+      applyTextureSampling(texture);
       texture.needsUpdate = true;
       return texture;
     });

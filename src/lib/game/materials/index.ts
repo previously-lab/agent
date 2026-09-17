@@ -12,14 +12,27 @@
  */
 
 export type { MaterialMaps } from "./types";
-export { buildTileMaps, TILE_ALBEDO_MEAN } from "./tile";
+export {
+  buildTileMaps,
+  TILE_ALBEDO_MEAN,
+  TILE_GROUT_HALF,
+  TILE_GROUT_BOTTOM,
+  TILE_BEVEL,
+  TILE_NORMAL_STRENGTH,
+  TILE_GROUT_ALBEDO,
+} from "./tile";
 export type { TileOptions } from "./tile";
 export { buildConcreteMaps, CONCRETE_ALBEDO_MEAN } from "./concrete";
 export type { ConcreteOptions } from "./concrete";
 export { buildWaterNormalMaps } from "./water";
 export type { WaterNormalMaps, WaterNormalOptions } from "./water";
-export { createMaterialTextures, disposeMaterialTextures } from "./three";
-export type { MaterialTextures } from "./three";
+export {
+  applyTextureSampling,
+  createMaterialTextures,
+  disposeMaterialTextures,
+  DEFAULT_TEXTURE_ANISOTROPY,
+} from "./three";
+export type { MaterialTextures, MaterialTextureOptions } from "./three";
 export {
   sharedTileTextures,
   sharedConcreteTextures,
