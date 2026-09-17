@@ -2,13 +2,15 @@
  * Procedural material library — public API.
  *
  * Pure builders (node-safe, fully deterministic): buildTileMaps,
- * buildConcreteMaps, buildWaterNormalMaps. Browser-coupled surfaces:
- *   - three.ts        DataTexture adapter (createMaterialTextures)
- *   - shared.ts       app-lifetime shared texture cache (node-safe)
- *   - surface.ts      tile/concrete PBR material factory (uTiling patch)
- *   - water-surface.ts shallow-water material (scrolling ripples + depth tint)
- *   - grunge.ts       seeded mottled roughnessMap (absorbed from corridor.tsx)
- *   - glow.ts         radial glow / wall-wash gradient textures (idem)
+ * buildConcreteMaps, buildWaterNormalMaps, buildCausticsMaps. Browser-
+ * coupled surfaces:
+ *   - three.ts           DataTexture adapter (createMaterialTextures)
+ *   - shared.ts          app-lifetime shared texture cache (node-safe)
+ *   - surface.ts         tile/concrete PBR material factory (uTiling patch)
+ *   - water-surface.ts   shallow-water material (scrolling ripples + depth tint)
+ *   - caustics-surface.ts additive pool-floor light web (patch + scroll driver)
+ *   - grunge.ts          seeded mottled roughnessMap (absorbed from corridor.tsx)
+ *   - glow.ts            radial glow / wall-wash gradient textures (idem)
  */
 
 export type { MaterialMaps } from "./types";
@@ -26,6 +28,8 @@ export { buildConcreteMaps, CONCRETE_ALBEDO_MEAN } from "./concrete";
 export type { ConcreteOptions } from "./concrete";
 export { buildWaterNormalMaps } from "./water";
 export type { WaterNormalMaps, WaterNormalOptions } from "./water";
+export { buildCausticsMaps } from "./caustics";
+export type { CausticsMaps, CausticsMapsOptions } from "./caustics";
 export {
   applyTextureSampling,
   createMaterialTextures,
@@ -37,11 +41,14 @@ export {
   sharedTileTextures,
   sharedConcreteTextures,
   sharedWaterNormalTextures,
+  sharedCausticsTextures,
 } from "./shared";
 export { createSurfaceMaterial } from "./surface";
 export type { SurfaceKind, SurfaceMaterialOptions } from "./surface";
 export { createWaterSurfaceMaterial } from "./water-surface";
 export type { WaterSurfaceMaterial, WaterSurfaceOptions } from "./water-surface";
+export { applyPoolCaustics, CAUSTICS_CELL_METERS } from "./caustics-surface";
+export type { PoolCaustics, PoolCausticsOptions } from "./caustics-surface";
 export {
   createGrungeRoughnessMap,
   GRUNGE_MAP_BASE,
