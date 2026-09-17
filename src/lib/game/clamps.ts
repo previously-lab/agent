@@ -22,9 +22,22 @@
  * reachable; outside those windows the box holds exactly as before. The
  * placements come from room-doors.ts placeRoomDoors — the one pure layout
  * the renderer also consumes.
+ *
+ * PLAN-AWARE CONTAINMENT. The rectangular box is only the plan's BOUNDING
+ * box: an l-shape's abandoned quadrant lies inside it but outside the
+ * room, so the plain box let the player walk straight through the step
+ * and inner walls. clampToSpace therefore also takes the room's plan
+ * (the same roomPlanFor derivation the renderer builds, template-declared
+ * silhouette included) and, after the box, projects any position in the
+ * abandoned quadrant back to the nearest walkable point — except inside
+ * a strand door's slab passage, whose doorway is an opening in the plan's
+ * boundary exactly like the entrance gap. rect and colonnade plans fill
+ * their bounding box, so the plan step is a no-op for them and the clamp
+ * stays byte-identical to the plain box.
  */
 import { CORRIDOR_WIDTH, LOBBY_LENGTH, type DoorRef } from "./hotel";
 import type { RoomDoorPlacement } from "./room-doors";
+import type { RoomPlan } from "./room-plan";
 
 /** Corridor half-width — walls sit at ±WALL_Z. */
 export const WALL_Z = CORRIDOR_WIDTH / 2;
@@ -117,15 +130,31 @@ export function clampToCorridor(
  * crossing band is unreachable. The widened interval is re-applied to the
  * PRE-clamp position so the overshoot the box just swallowed is restored.
  * Walls without a door — and every position outside a door's window —
- * clamp byte-identically to the plain box; interior walls (an l-shape's
- * step/inner walls) widen nothing because the box never bounded them.
+ * clamp byte-identically to the plain box.
+ *
+ * PLAN CONTAINMENT. `plan` is the room's floor plan (room-plan.ts
+ * roomPlanFor — the one derivation the renderer also builds). The box
+ * above is only the plan's bounding box, so for an l-shape the clamp then
+ * projects any position in the abandoned quadrant (past the step, on the
+ * dropped side) back to the NEAREST walkable point: across the step wall
+ * (whose near face IS the step plane) or sideways past the inner wall's
+ * margin line, whichever is closer — closed form, idempotent, no search.
+ * A strand door on the step or inner wall carves its slab passage out of
+ * the forbidden zone exactly like a boundary doorway: inside the door's
+ * along-window AND already within ±ROOM_DOOR_PASS_DEPTH of the wall plane
+ * the position is legal (between the jambs), with the normal axis held
+ * from the pre-clamp position. The band is gated on the CLAMPED position
+ * so a far-flung point merely aligned with a door is projected, never
+ * dragged across the room into a doorway. rect and colonnade plans fill
+ * their bounding box, so this step is a no-op for them (byte-identical).
  */
 export function clampToSpace(
   p: { x: number; z: number },
   door: DoorRef,
   width: number,
   extent: number,
-  roomDoors: readonly RoomDoorPlacement[] = [],
+  roomDoors: readonly RoomDoorPlacement[],
+  plan: RoomPlan,
 ): void {
   const rawX = p.x;
   const rawZ = p.z;
@@ -142,32 +171,77 @@ export function clampToSpace(
     p.z = clamp(p.z, -far, -near);
   }
 
-  if (roomDoors.length === 0) return;
   // Local frame (doorway at (0,0), +z outward — the placement's frame and
   // the mirror of SpaceScene's group transform), with the box bounds
   // expressed in it: x ∈ [−xHalf, xHalf], z ∈ [near, far] − WALL_Z.
   const dir = door.z > 0 ? 1 : -1;
-  const lx = (p.x - door.x) * dir;
-  const lz = (p.z - door.z) * dir;
-  const zLo = near - WALL_Z;
-  const zHi = far - WALL_Z;
-  for (const d of roomDoors) {
-    const along = -(lx - d.x) * d.nz + (lz - d.z) * d.nx;
-    if (Math.abs(along) >= GAP_HALF) continue;
-    if (d.nx !== 0) {
-      // Vertical wall (normal ±x): widen only the wall's own side out to
-      // the plane + overtravel; interior walls min/max to a no-op.
-      const lo = d.nx > 0 ? Math.min(-xHalf, d.x - ROOM_DOOR_PASS_DEPTH) : -xHalf;
-      const hi = d.nx < 0 ? Math.max(xHalf, d.x + ROOM_DOOR_PASS_DEPTH) : xHalf;
-      if (lo !== -xHalf || hi !== xHalf) {
-        p.x = door.x + dir * clamp((rawX - door.x) * dir, lo, hi);
-      }
-    } else {
-      const lo = d.nz > 0 ? Math.min(zLo, d.z - ROOM_DOOR_PASS_DEPTH) : zLo;
-      const hi = d.nz < 0 ? Math.max(zHi, d.z + ROOM_DOOR_PASS_DEPTH) : zHi;
-      if (lo !== zLo || hi !== zHi) {
-        p.z = door.z + dir * clamp((rawZ - door.z) * dir, lo, hi);
+  if (roomDoors.length > 0) {
+    const lx = (p.x - door.x) * dir;
+    const lz = (p.z - door.z) * dir;
+    const zLo = near - WALL_Z;
+    const zHi = far - WALL_Z;
+    for (const d of roomDoors) {
+      const along = -(lx - d.x) * d.nz + (lz - d.z) * d.nx;
+      if (Math.abs(along) >= GAP_HALF) continue;
+      if (d.nx !== 0) {
+        // Vertical wall (normal ±x): widen only the wall's own side out to
+        // the plane + overtravel; interior walls min/max to a no-op.
+        const lo = d.nx > 0 ? Math.min(-xHalf, d.x - ROOM_DOOR_PASS_DEPTH) : -xHalf;
+        const hi = d.nx < 0 ? Math.max(xHalf, d.x + ROOM_DOOR_PASS_DEPTH) : xHalf;
+        if (lo !== -xHalf || hi !== xHalf) {
+          p.x = door.x + dir * clamp((rawX - door.x) * dir, lo, hi);
+        }
+      } else {
+        const lo = d.nz > 0 ? Math.min(zLo, d.z - ROOM_DOOR_PASS_DEPTH) : zLo;
+        const hi = d.nz < 0 ? Math.max(zHi, d.z + ROOM_DOOR_PASS_DEPTH) : zHi;
+        if (lo !== zLo || hi !== zHi) {
+          p.z = door.z + dir * clamp((rawZ - door.z) * dir, lo, hi);
+        }
       }
     }
+  }
+
+  if (plan.id !== "l-shape") return;
+  // Plan containment (see the doc comment): the abandoned quadrant is
+  // (lz past the step) on the dropped side of the inner wall's margin
+  // line. The margin mirrors the box's own side-wall margin, so the kept
+  // leg holds the player exactly as far off its inner wall as off every
+  // outer wall; the step wall needs no margin — the band to its doors'
+  // crossing trigger (0.55 m from a plane only thick/2 past the step)
+  // must stay reachable, and the wall's near face lies on the step plane.
+  const kept = plan.lSide;
+  const innerMargin = width / 2 - xHalf;
+  const plx = (p.x - door.x) * dir;
+  const plz = (p.z - door.z) * dir;
+  const onDroppedSide = kept > 0 ? plx < innerMargin : plx > -innerMargin;
+  if (plz <= plan.stepZ || !onDroppedSide) return;
+
+  // Door carve: a strand door's slab passage opens the forbidden zone.
+  const rawLx = (rawX - door.x) * dir;
+  const rawLz = (rawZ - door.z) * dir;
+  for (const d of roomDoors) {
+    const along = -(plx - d.x) * d.nz + (plz - d.z) * d.nx;
+    if (Math.abs(along) >= GAP_HALF) continue;
+    const perp = (plx - d.x) * d.nx + (plz - d.z) * d.nz;
+    if (Math.abs(perp) > ROOM_DOOR_PASS_DEPTH + 1e-9) continue;
+    const rawPerp = (rawLx - d.x) * d.nx + (rawLz - d.z) * d.nz;
+    const held = clamp(rawPerp, -ROOM_DOOR_PASS_DEPTH, ROOM_DOOR_PASS_DEPTH);
+    if (d.nx !== 0) {
+      p.x = door.x + dir * (d.x + d.nx * held);
+    } else {
+      p.z = door.z + dir * (d.z + d.nz * held);
+    }
+    return;
+  }
+
+  // No doorway: project to the nearest walkable point. Both candidates
+  // are clamp fixed points, so the projection never oscillates; a tie
+  // takes the step wall.
+  const toStep = plz - plan.stepZ;
+  const toInner = kept > 0 ? innerMargin - plx : plx + innerMargin;
+  if (toStep <= toInner) {
+    p.z = door.z + dir * plan.stepZ;
+  } else {
+    p.x = door.x + dir * (kept * innerMargin);
   }
 }

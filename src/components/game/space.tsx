@@ -456,8 +456,10 @@ interface RoomFeatures {
  *    whole band is shrunk inside the walkable footprint (an l-shape's
  *    abandoned quadrant takes no stone), and the figure lifts 14mm —
  *    above the parquet's 6mm plane, so the two never z-fight.
+ *
+ * Exported (pure) for the unit tests in tests/lib/game/room-features.test.ts.
  */
-function buildRoomFeatures({
+export function buildRoomFeatures({
   template,
   plan,
   walls,
@@ -496,12 +498,20 @@ function buildRoomFeatures({
         const along = ((span[0] + span[1]) / 2 - 0.5) * len;
         // The opening must sit fully on the run, clear of its ends…
         if (Math.abs(along) + half > len / 2 - 0.3) continue;
-        // …and never swallow a doorway or its approach.
+        // …and never swallow a doorway or its approach. Door `along`s are
+        // measured from the SOURCE segment's center, this run's `along`
+        // from the run's center — shift into one frame before comparing
+        // (a door-split run's center is not the wall's center).
+        const src = walls[run.source];
+        const runShift = horizontal
+          ? run.wall.x - src.x
+          : run.wall.z - src.z;
         if (
           doors.some(
             (d) =>
               d.wall === run.source &&
-              Math.abs(d.along - along) < half + DOOR_GAP_HALF + NICHE_DOOR_CLEAR,
+              Math.abs(d.along - runShift - along) <
+                half + DOOR_GAP_HALF + NICHE_DOOR_CLEAR,
           )
         ) {
           continue;
@@ -534,7 +544,13 @@ function buildRoomFeatures({
         const n = Math.max(1, Math.round(runLen / (PILASTER_SPAN * ws)));
         const spacing = runLen / n;
         // Runs are already split at door gaps; defensively drop any strip
-        // that would still land on a door frame.
+        // that would still land on a door frame. Same frame shift as the
+        // niche check above: door `along`s are source-segment-relative,
+        // strip positions run-relative.
+        const srcWall = walls[run.source];
+        const runShift = horizontal
+          ? run.wall.x - srcWall.x
+          : run.wall.z - srcWall.z;
         const alongs: number[] = [];
         for (let k = 0; k < n; k++) {
           const a = -len / 2 + pad + (k + 0.5) * spacing;
@@ -542,7 +558,7 @@ function buildRoomFeatures({
             doors.some(
               (d) =>
                 d.wall === run.source &&
-                Math.abs(d.along - a) < DOOR_GAP_HALF + (PILASTER_WIDTH * ws) / 2 + 0.1,
+                Math.abs(d.along - runShift - a) < DOOR_GAP_HALF + (PILASTER_WIDTH * ws) / 2 + 0.1,
             )
           ) {
             continue;
@@ -4675,6 +4691,47 @@ export interface SpaceRoomDoor {
   lit: boolean;
 }
 
+/**
+ * The room's layout template for a given strand-door count — the ONE
+ * selection both door-placement call sites share (the mounted SpaceScene
+ * below and the movement clamp's placement derivation in game-canvas.tsx):
+ * selection steers the template's declared plan silhouette AND its wall-role
+ * door affordance, so two copies of this logic would place two different
+ * door sets (the clamp would relax at doors the room never drew). Pure:
+ * deterministic in (recipe, scaled dims, scale, wallThick, count).
+ */
+export function roomTemplateForDoorCount(
+  recipe: SpaceRecipe,
+  width: number,
+  extent: number,
+  scaleFactor: number,
+  wallThick: number,
+  roomDoorCount: number,
+): RoomTemplate | null {
+  const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
+  const capacityFor = (t: RoomTemplate) => {
+    const p = roomPlanFor(
+      recipe.sliceId,
+      width,
+      extent,
+      bay,
+      WORLD_SEED,
+      templatePlanFor(t),
+    );
+    const w = wallSegmentsFor(p, wallThick);
+    return doorCapacityFor(p, w, null, doorAffordanceFor(t));
+  };
+  return resolveRoomTemplate(
+    recipe.sliceId,
+    recipe.worldClass,
+    recipe.archetype,
+    recipe.size.extent,
+    roomDoorCount,
+    WORLD_SEED,
+    capacityFor,
+  );
+}
+
 export function SpaceScene({
   recipe,
   door,
@@ -4731,32 +4788,23 @@ export function SpaceScene({
   // S-tier interiors) and every downstream call then gets `undefined`,
   // reproducing today's behaviour byte-for-byte. Consumption follows the
   // room-templates.test.ts chain: measured selection → declared plan →
-  // walls → affordance doors → zone staging.
+  // walls → affordance doors → zone staging. Selection goes through the
+  // exported roomTemplateForDoorCount so the movement clamp's door
+  // derivation (game-canvas.tsx) selects the SAME template — two copies
+  // of the capacity measure once placed two different door sets.
   const roomDoorCount = roomDoors?.length ?? 0;
-  const template = useMemo(() => {
-    const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
-    const capacityFor = (t: RoomTemplate) => {
-      const p = roomPlanFor(
-        recipe.sliceId,
+  const template = useMemo(
+    () =>
+      roomTemplateForDoorCount(
+        recipe,
         width,
         extent,
-        bay,
-        WORLD_SEED,
-        templatePlanFor(t),
-      );
-      const w = wallSegmentsFor(p, wallThick);
-      return doorCapacityFor(p, w, null, doorAffordanceFor(t));
-    };
-    return resolveRoomTemplate(
-      recipe.sliceId,
-      recipe.worldClass,
-      recipe.archetype,
-      recipe.size.extent,
-      roomDoorCount,
-      WORLD_SEED,
-      capacityFor,
-    );
-  }, [recipe, roomDoorCount, width, extent, scaleFactor, wallThick]);
+        scaleFactor,
+        wallThick,
+        roomDoorCount,
+      ),
+    [recipe, roomDoorCount, width, extent, scaleFactor, wallThick],
+  );
   const plan = useMemo(
     () =>
       roomPlanFor(

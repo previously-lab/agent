@@ -145,6 +145,7 @@ import {
   roomPlanFor,
   scaledRecipeFor,
   wallSegmentsFor,
+  type RoomPlan,
   type ScaleNotation,
 } from "@/lib/game/room-plan";
 import {
@@ -152,9 +153,13 @@ import {
   placeRoomDoors,
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
+import {
+  doorAffordanceFor,
+  templatePlanFor,
+} from "@/lib/game/room-templates";
 import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
 import { Corridor, type CorridorDoor } from "./corridor";
-import { SpaceScene } from "./space";
+import { SpaceScene, roomTemplateForDoorCount } from "./space";
 import { HIDE_DELAY_MS } from "@/lib/game/tuning/hotel";
 import {
   COLONNADE_BAY,
@@ -242,6 +247,17 @@ interface ActiveSpace {
   scaledRecipe: SpaceRecipe;
   scale: ScaleNotation;
 }
+
+/** Stand-in plan while no space is active — the space clamp never runs
+ *  then, and rect is the plain box even for a stray call. */
+const NO_ROOM_PLAN: RoomPlan = {
+  id: "rect",
+  width: 0,
+  extent: 0,
+  lSide: 1,
+  stepZ: 0,
+  columns: [],
+};
 
 type PlayerRef = MutableRefObject<PlayerPos>;
 
@@ -541,35 +557,64 @@ function resolveSpaceForDoor(
 }
 
 /**
- * The active room's strand-door placements, derived through the exact pure
- * chain the renderer (space.tsx) builds its doors from: the ActiveSpace's
- * scaledRecipe (scaledRecipeFor) → roomPlanFor → wallSegmentsFor →
- * hostableWallsFor → placeRoomDoors, with the renderer's own colonnade-bay
- * and wall-thickness formulas. Everything is deterministic in
- * (sliceId, dims, scale, dir, count), so the movement clamp relaxes at the
- * same doors the renderer draws — the two call sites share the pure
- * functions AND their inputs rather than handing placements through props
- * (SpaceScene owns its memo; its prop contract is unchanged).
+ * The active room's geometry for the movement clamp — its floor plan AND
+ * its placed strand doors — derived through the exact pure chain the
+ * renderer (space.tsx) builds its room from: the ActiveSpace's recipes →
+ * resolveRoomTemplate (measured selection, UNSCALED extent tier, real
+ * door count) → roomPlanFor (template-declared silhouette when one
+ * resolves) → wallSegmentsFor → hostableWallsFor → placeRoomDoors
+ * (template affordance when one resolved), with the renderer's own
+ * colonnade-bay and wall-thickness formulas. Everything is deterministic
+ * in (sliceId, dims, scale, dir, count), so the movement clamp contains
+ * to the same plan and relaxes at the same doors the renderer draws —
+ * the two call sites share the pure functions AND their inputs rather
+ * than handing geometry through props (SpaceScene owns its memo; its
+ * prop contract is unchanged). The plan is returned even when the room
+ * grows no strand doors: plan-aware containment needs it regardless.
  */
-function roomDoorPlacementsForSpace(
+function roomGeometryForSpace(
   space: ActiveSpace,
   count: number,
-): readonly RoomDoorPlacement[] {
-  if (count <= 0) return [];
-  const { door, scaledRecipe, scale } = space;
+): { plan: RoomPlan; doors: readonly RoomDoorPlacement[] } {
+  const { door, recipe, scaledRecipe, scale } = space;
   const scaleFactor = scale.factor;
+  const width = scaledRecipe.width;
+  const extent = scaledRecipe.size.extent;
+  const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
+  const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+  // The template declares the silhouette (v0.11-room-interiors §7):
+  // selected through the renderer's OWN helper (space.tsx
+  // roomTemplateForDoorCount) — one source for the measured selection, so
+  // the clamp can never drift onto a plan the room was not built on.
+  const template = roomTemplateForDoorCount(
+    recipe,
+    width,
+    extent,
+    scaleFactor,
+    wallThick,
+    count,
+  );
   const plan = roomPlanFor(
-    scaledRecipe.sliceId,
-    scaledRecipe.width,
-    scaledRecipe.size.extent,
-    COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+    recipe.sliceId,
+    width,
+    extent,
+    bay,
+    undefined,
+    template ? templatePlanFor(template) : undefined,
   );
-  const walls = wallSegmentsFor(
-    plan,
-    ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35),
-  );
+  if (count <= 0) return { plan, doors: [] };
+  const walls = wallSegmentsFor(plan, wallThick);
   const hostable = hostableWallsFor(plan, walls, door.z > 0 ? 1 : -1);
-  return placeRoomDoors(scaledRecipe.sliceId, plan, walls, hostable, count).doors;
+  const { doors } = placeRoomDoors(
+    recipe.sliceId,
+    plan,
+    walls,
+    hostable,
+    count,
+    undefined,
+    template ? doorAffordanceFor(template) : undefined,
+  );
+  return { plan, doors };
 }
 
 /* ------------------------------------------------------------------ */
@@ -982,6 +1027,7 @@ function GameLoop({
   setHudDoor,
   transitionActive,
   roomDoors,
+  roomPlan,
 }: {
   playerRef: PlayerRef;
   keysRef: MutableRefObject<Set<string>>;
@@ -1001,6 +1047,10 @@ function GameLoop({
   /** The active space's placed strand doors (plan-local frame) — the
    *  clamp's passage windows; empty when the room grows none. */
   roomDoors: readonly RoomDoorPlacement[];
+  /** The active space's floor plan (same derivation as roomDoors) — the
+   *  clamp's plan-aware containment; a placeholder rect when no space is
+   *  active (the space clamp never runs then). */
+  roomPlan: RoomPlan;
 }): null {
   useFrame((_, delta) => {
     const p = playerRef.current;
@@ -1051,10 +1101,12 @@ function GameLoop({
       // 3. Clamps for wherever the player ended up. The space clamp boxes to
       // the SCALED footprint — the same dims the room was built at, so the
       // player can reach the far end of a colossal room and cannot walk
-      // through a miniature room's walls. It also receives the room's
-      // placed strand doors (same pure placements the renderer draws), so
-      // each door's passage relaxes the wall bound enough for the crossing
-      // trigger to fire — every other wall stays exactly as boxed.
+      // through a miniature room's walls. It also receives the room's plan
+      // and placed strand doors (same pure derivation the renderer draws):
+      // the plan keeps the player out of an l-shape's abandoned quadrant
+      // (the plain box is only the plan's bounding box), and each door's
+      // passage relaxes the wall bound enough for the crossing trigger to
+      // fire — every other wall stays exactly as boxed.
       if (space !== null) {
         clampToSpace(
           p,
@@ -1062,6 +1114,7 @@ function GameLoop({
           space.scaledRecipe.width,
           space.scaledRecipe.size.extent,
           roomDoors,
+          roomPlan,
         );
       } else {
         clampToCorridor(p, doorXs);
@@ -1219,14 +1272,16 @@ export default function GameCanvas({
     () => (activeSpace !== null ? waterSideFor(activeSpace.scaledRecipe) : 0),
     [activeSpace],
   );
-  // The active room's placed strand doors for the movement clamp: the same
-  // pure placements (roomDoorPlacementsForSpace) the mounted SpaceScene
-  // renders — one derivation chain, two call sites, identical results (A6).
-  const activeRoomDoors = useMemo(
+  // The active room's plan + placed strand doors for the movement clamp:
+  // the same pure derivation (roomGeometryForSpace — template, plan,
+  // doors) the mounted SpaceScene renders — one chain, two call sites,
+  // identical results (A6). Memoised per room: the per-frame clamp then
+  // costs a handful of closed-form compares, never a plan rebuild.
+  const activeRoomGeometry = useMemo(
     () =>
       activeSpace === null
-        ? []
-        : roomDoorPlacementsForSpace(
+        ? null
+        : roomGeometryForSpace(
             activeSpace,
             roomDoors?.get(activeSpace.recipe.sliceId)?.length ?? 0,
           ),
@@ -1441,7 +1496,8 @@ export default function GameCanvas({
           hudIdRef={hudIdRef}
           setHudDoor={setHudDoor}
           transitionActive={strandTransition.phase !== "idle"}
-          roomDoors={activeRoomDoors}
+          roomDoors={activeRoomGeometry?.doors ?? []}
+          roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
         />
         {/*
           Post chain — deliberately conservative. N8AO (half-res) adds
