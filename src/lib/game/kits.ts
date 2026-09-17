@@ -19,12 +19,12 @@
  * Y-rotation θ maps +z to (sin θ, cos θ) and +x to (cos θ, −sin θ), so
  * facing a target is always rotY = atan2(tx − x, tz − z).
  *
- * VOCABULARY. Kit pieces only reference prop kinds the renderer already
- * knows how to build (the MotifKind union in components/game/space.tsx —
- * no new geometry in this milestone). `KitKind` is a strict subset of
- * that union; the renderer passes staged pieces straight into its prop
- * dispatcher, so TypeScript rejects any kit kind the renderer drops, and
- * tests/lib/game/kits.test.ts mirrors the full list for a runtime check.
+ * VOCABULARY. Kit pieces reference prop kinds the renderer knows how to
+ * build (the MotifKind union in components/game/space.tsx). `KitKind` is a
+ * strict subset of that union; the renderer passes staged pieces straight
+ * into its prop dispatcher, so TypeScript rejects any kit kind the
+ * renderer drops, and tests/lib/game/kits.test.ts mirrors the full list
+ * for a runtime check.
  */
 import {
   distToPath,
@@ -59,7 +59,19 @@ export type KitKind =
   | "readingchair"
   | "floorlamp"
   | "bookshelf"
-  | "umbrella";
+  | "umbrella"
+  | "suitcase"
+  | "luggagecart"
+  | "bell"
+  | "register"
+  | "towelstack"
+  | "lockerrow"
+  | "chair"
+  | "coatstand"
+  | "umbrellastand"
+  | "bucket"
+  | "tray"
+  | "bookpile";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -75,6 +87,11 @@ export interface KitPiece {
   rotY: number;
   /** Per-piece size multiplier (default 1). */
   scale?: number;
+  /** Lift above the floor (m, default 0) for pieces that sit ON another
+   *  piece — the bell and register on the counter, the tray on the dining
+   *  table. Supported by the furniture beneath them, never floating (I2);
+   *  scaled with the kit like the horizontal offsets. */
+  dy?: number;
 }
 
 /** A hand-written furnishing group (§3.1). */
@@ -125,6 +142,9 @@ export interface PlacedKitPiece {
   z: number;
   rotY: number;
   scale: number;
+  /** Floor-relative lift (scaled) — 0 for everything that stands on the
+   *  floor; >0 only for pieces resting on another piece of the same kit. */
+  dy: number;
 }
 
 /**
@@ -144,14 +164,14 @@ export function placeKit(kit: Kit, t: KitTransform): PlacedKitPiece[] {
       z: t.z - dx * s + dz * c,
       rotY: t.rotY + p.rotY,
       scale: (p.scale ?? 1) * t.scale,
+      dy: (p.dy ?? 0) * t.scale,
     };
   });
 }
 
 /* ------------------------------------------------------------------ */
-/* The eight interior kits (§3.1, N1). Pieces reference only existing   */
-/* renderer kinds — substitutions are marked where the doc's piece has  */
-/* no exact kind yet (no new geometry in this milestone).               */
+/* The eight interior kits (§3.1, N1). Every piece is a real prop of    */
+/* its own kind — the renderer builds each one as actual geometry.      */
 /* ------------------------------------------------------------------ */
 
 export const INTERIOR_KITS: readonly Kit[] = [
@@ -177,26 +197,21 @@ export const INTERIOR_KITS: readonly Kit[] = [
   },
   {
     // 两三只箱包 + 行李车 — the calm trace (I4): someone's bags, waiting.
-    // SUBSTITUTIONS: no suitcase or luggage-cart kinds exist — giftboxes
-    // stand in for the luggage (a lidded box reads as a hatbox/suitcase)
-    // and a low bench for the cart/rack.
     id: "luggage",
     worldClasses: ["interior"],
     facing: "door",
     footprint: 1.4,
     pieces: [
-      { kind: "bench", dx: 0, dz: -0.3, rotY: 0 },
-      { kind: "giftbox", dx: 0.42, dz: 0.45, rotY: 0.3 },
-      { kind: "giftbox", dx: -0.35, dz: 0.5, rotY: -0.25, scale: 0.85 },
-      { kind: "giftbox", dx: 0.02, dz: 0.95, rotY: 0.15, scale: 0.9 },
+      { kind: "luggagecart", dx: 0, dz: -0.3, rotY: 0 },
+      { kind: "suitcase", dx: 0.42, dz: 0.45, rotY: 0.3 },
+      { kind: "suitcase", dx: -0.35, dz: 0.5, rotY: -0.25, scale: 0.85 },
+      { kind: "suitcase", dx: 0.02, dz: 0.95, rotY: 0.15, scale: 0.9 },
     ],
   },
   {
     // 柜台 + 铃 + 登记簿 + 椅 — the greeter: counter with the clerk's
-    // chair behind it, facing the door. SUBSTITUTIONS: the bell is a
-    // small desklamp beside the counter (a small lit object is the
-    // closest "service point" kind), the register book a half-size
-    // giftbox at the counter's end.
+    // chair behind it, bell and ledger ON the counter (dy lifts them onto
+    // the desktop — supported by it, never floating), facing the door.
     id: "reception",
     worldClasses: ["interior"],
     archetypes: ["ballroom", "library"],
@@ -206,16 +221,15 @@ export const INTERIOR_KITS: readonly Kit[] = [
     footprint: 1.7,
     pieces: [
       { kind: "desk", dx: 0, dz: 0, rotY: 0 },
-      { kind: "readingchair", dx: 0, dz: -1.05, rotY: 0 },
-      { kind: "desklamp", dx: 0.9, dz: -0.3, rotY: 0 },
-      { kind: "giftbox", dx: -0.85, dz: 0.35, rotY: 0.2, scale: 0.5 },
+      { kind: "chair", dx: 0, dz: -1.05, rotY: 0 },
+      { kind: "bell", dx: 0.55, dz: 0.15, rotY: 0, dy: 0.8 },
+      { kind: "register", dx: -0.5, dz: 0.1, rotY: 0.15, dy: 0.8 },
     ],
   },
   {
     // 扶手椅 + 边桌 + 落地灯 + 书堆 — the reading corner, chair facing
-    // the room (and the hero when free-standing). SUBSTITUTIONS: the side
-    // table is a nightstand; the book pile is a bookshelf behind the
-    // chair (no loose-book kind exists).
+    // the room (and the hero when free-standing): a loose book pile on
+    // the floor beside the chair, lamp on the other side.
     id: "reading",
     worldClasses: ["interior"],
     archetypes: ["library", "hotel-room", "ballroom"],
@@ -229,47 +243,44 @@ export const INTERIOR_KITS: readonly Kit[] = [
       { kind: "readingchair", dx: 0, dz: 0, rotY: 0 },
       { kind: "nightstand", dx: 0.8, dz: -0.1, rotY: 0 },
       { kind: "floorlamp", dx: -0.75, dz: -0.35, rotY: 0 },
-      { kind: "bookshelf", dx: -0.05, dz: -1.15, rotY: 0 },
+      { kind: "bookpile", dx: -0.55, dz: 0.55, rotY: 0.3 },
     ],
   },
   {
-    // 一排储物柜，其中一扇虚掩 — a cabinet row along the wall, the middle
-    // unit pulled slightly forward: the "one ajar" beat, kept calm (I4).
-    // SUBSTITUTION: no locker kind exists — bookshelves are the closest
-    // tall cabinet geometry.
+    // 一排储物柜，其中一扇虚掩 — the changing corner: one locker cabinet
+    // along the wall (its middle door ajar — baked into the lockerrow
+    // geometry), a bench in front, towels waiting on the side.
     id: "lockers",
     worldClasses: ["interior"],
     archetypes: ["pool-hall", "library", "ballroom"],
     anchor: "wall",
-    backOffset: 0.25,
+    backOffset: 0.3,
     facing: "center",
     footprint: 2.9,
     pieces: [
-      { kind: "bookshelf", dx: -1.9, dz: 0, rotY: 0 },
-      { kind: "bookshelf", dx: 0, dz: 0.18, rotY: 0.06 },
-      { kind: "bookshelf", dx: 1.9, dz: 0, rotY: 0 },
+      { kind: "lockerrow", dx: 0, dz: 0, rotY: 0 },
+      { kind: "bench", dx: 0, dz: 0.95, rotY: 0 },
+      { kind: "towelstack", dx: 1.15, dz: 0.6, rotY: -0.2, scale: 0.9 },
     ],
   },
   {
     // 推车 + 毛巾堆 + 水桶 — housekeeping, paused mid-round (calm, never
-    // abandoned-in-a-hurry — I4). SUBSTITUTIONS: the cart is a low bench,
-    // the towel piles small giftboxes; the bucket is omitted (no close
-    // kind) — the kit stays inside the 3–6 piece rule regardless.
+    // abandoned-in-a-hurry — I4): the trolley, two towel piles, a bucket.
     id: "housekeeping",
     worldClasses: ["interior"],
     facing: "path",
     footprint: 1.3,
     pieces: [
-      { kind: "bench", dx: 0, dz: 0, rotY: 0, scale: 0.9 },
-      { kind: "giftbox", dx: 0.55, dz: 0.45, rotY: 0.2, scale: 0.8 },
-      { kind: "giftbox", dx: 0.45, dz: 0.95, rotY: -0.15, scale: 0.65 },
+      { kind: "luggagecart", dx: 0, dz: 0, rotY: 0, scale: 0.95 },
+      { kind: "towelstack", dx: 0.62, dz: 0.4, rotY: 0.2 },
+      { kind: "towelstack", dx: 0.5, dz: 0.85, rotY: -0.15, scale: 0.75 },
+      { kind: "bucket", dx: -0.5, dz: 0.55, rotY: 0 },
     ],
   },
   {
     // 餐桌 + 两椅 + 桌布 + 餐具 — two chairs facing each other across the
-    // table. SUBSTITUTIONS: the tablecloth is a rug under the setting
-    // (nothing may float — I2 — so floor dressing carries it), the
-    // tableware a small lamp beside the table as the centrepiece.
+    // table; the rug under the setting carries the tablecloth (floor
+    // dressing, I2), a tray with cups ON the table is the tableware.
     id: "dining",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom"],
@@ -279,16 +290,14 @@ export const INTERIOR_KITS: readonly Kit[] = [
     pieces: [
       { kind: "rug", dx: 0, dz: 0, rotY: 0, scale: 1.15 },
       { kind: "desk", dx: 0, dz: 0, rotY: 0 },
-      { kind: "readingchair", dx: 0, dz: 0.85, rotY: Math.PI },
-      { kind: "readingchair", dx: 0, dz: -0.85, rotY: 0 },
-      { kind: "desklamp", dx: 0.85, dz: 0.3, rotY: 0, scale: 1.1 },
+      { kind: "chair", dx: 0, dz: 0.85, rotY: Math.PI },
+      { kind: "chair", dx: 0, dz: -0.85, rotY: 0 },
+      { kind: "tray", dx: 0.15, dz: 0.05, rotY: 0.4, dy: 0.8 },
     ],
   },
   {
-    // 衣帽架 + 长凳 + 伞架 — the threshold corner. SUBSTITUTIONS: no
-    // coat-rack kind exists — a floor lamp at 0.9 scale stands in (a tall
-    // slim pole beside the bench); the umbrella kind plays the umbrella
-    // stand, drawn smaller.
+    // 衣帽架 + 长凳 + 伞架 — the threshold corner: coat stand, bench,
+    // umbrella stand with its umbrellas.
     id: "coat-bench",
     worldClasses: ["interior"],
     anchor: "wall",
@@ -297,8 +306,8 @@ export const INTERIOR_KITS: readonly Kit[] = [
     footprint: 1.5,
     pieces: [
       { kind: "bench", dx: 0, dz: 0, rotY: 0 },
-      { kind: "floorlamp", dx: -0.95, dz: -0.15, rotY: 0, scale: 0.9 },
-      { kind: "umbrella", dx: 0.95, dz: -0.15, rotY: 0, scale: 0.7 },
+      { kind: "coatstand", dx: -0.95, dz: -0.15, rotY: 0 },
+      { kind: "umbrellastand", dx: 0.95, dz: -0.15, rotY: 0 },
     ],
   },
 ];
@@ -598,7 +607,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
     }
     return placed.map((p) => ({
       ...p,
-      y: o.heightAt(p.x, p.z),
+      y: o.heightAt(p.x, p.z) + p.dy,
       kitId: kit.id,
       kitIndex,
     }));

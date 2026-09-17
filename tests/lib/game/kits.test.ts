@@ -73,6 +73,9 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   "shell", "snowman", "icestone",
   "bed", "nightstand", "tv", "sofa", "rug", "bookshelf", "readingchair",
   "desklamp", "chandelier", "floorlamp", "desk", "giftbox", "column",
+  "suitcase", "luggagecart", "bell", "register", "towelstack",
+  "lockerrow", "chair", "coatstand", "umbrellastand", "bucket", "tray",
+  "bookpile",
   "yarn", "cattree", "scratchpost", "doghouse", "bone", "ball",
 ];
 

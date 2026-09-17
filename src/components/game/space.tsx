@@ -17,7 +17,7 @@
  * and uneven, never on the entrance wall). Walls are fully opaque; the
  * interior stays visible from the fixed top-down camera via a dollhouse
  * cutaway — the walls whose outward face looks toward the camera are drawn
- * at WALL_SILL_HEIGHT (see wallFacesCamera below). A clear strip at the
+ * at WALL_SILL_HEIGHT (wallFacesCamera, lib/game/room-doors.ts). A clear strip at the
  * doorway (terrain flattened, no props near the door axis) means the
  * player can always walk in.
  *
@@ -38,7 +38,7 @@
  *
  * ROOM LANGUAGE (v0.11 §3). Three seeded facets from lib/game/room-plan.ts
  * shape every space before any content is placed:
- *   - scale:  normal / colossal (×8–20) / miniature (×0.05–0.2), applied
+ *   - scale:  normal / colossal (×2.5–3.5) / miniature (×0.2–0.35), applied
  *             at CONSTRUCTION time — every plan dim and prop size is
  *             multiplied by the factor, so terrain, water, and the
  *             movement clamps stay in one coordinate system. The doorway
@@ -110,10 +110,12 @@ import {
 } from "@/lib/game/room-plan";
 import {
   crossedRoomDoor,
+  hostableWallsFor,
   inDoorApproach,
   placeRoomDoors,
   plaqueLabelFor,
   splitWallsForDoors,
+  wallFacesCamera,
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
 import {
@@ -186,45 +188,6 @@ import {
   WALL_SILL_HEIGHT,
   WATER_Y,
 } from "@/lib/game/tuning/room";
-import { CAM_OFFSET } from "@/lib/game/tuning/render";
-
-/** Horizontal direction from any point toward the fixed camera (world XZ,
- *  unit length): CAM_OFFSET is a constant world vector and the camera never
- *  rotates, so this never changes — which walls are "near" is decidable
- *  once per room, in world space. */
-const CAM_DIR_XZ = (() => {
-  const len = Math.hypot(CAM_OFFSET.x, CAM_OFFSET.z);
-  return { x: CAM_OFFSET.x / len, z: CAM_OFFSET.z / len };
-})();
-
-/**
- * Dollhouse cutaway test: does this wall segment's OUTWARD face look toward
- * the camera? The outward normal is found by probing planContains just off
- * both faces (the side with no walkable plan is the outside), then rotated
- * to world space (a south door's room is rotated π about Y, so both axes
- * flip — room-local axes alone would pick the wrong walls). Segments whose
- * outward normal points within ~45° of the camera direction stand between
- * the camera and the interior, so they are drawn at WALL_SILL_HEIGHT:
- * opaque, but low enough to see over. Walls are axis-aligned, so the dot
- * is exactly ±1/√2 or 0 and the 0.5 threshold splits cleanly.
- */
-function wallFacesCamera(
-  plan: RoomPlan,
-  wall: WallSegment,
-  dir: number,
-): boolean {
-  const probe = 0.5;
-  let nx = 0;
-  let nz = 0;
-  if (wall.sizeZ <= wall.sizeX) {
-    nz = planContains(plan, wall.x, wall.z + probe, 0) ? -1 : 1;
-  } else {
-    nx = planContains(plan, wall.x + probe, wall.z, 0) ? -1 : 1;
-  }
-  const wx = dir > 0 ? nx : -nx;
-  const wz = dir > 0 ? nz : -nz;
-  return wx * CAM_DIR_XZ.x + wz * CAM_DIR_XZ.z > 0.5;
-}
 
 /**
  * dado-band (v0.11-room-interiors §3.2): a baseboard plus a panelled
@@ -982,6 +945,19 @@ type MotifKind =
   | "desk"
   | "giftbox"
   | "column"
+  // hotel kit pieces (the rooms' crafted props — kits.ts)
+  | "suitcase"
+  | "luggagecart"
+  | "bell"
+  | "register"
+  | "towelstack"
+  | "lockerrow"
+  | "chair"
+  | "coatstand"
+  | "umbrellastand"
+  | "bucket"
+  | "tray"
+  | "bookpile"
   // wonder props
   | "yarn"
   | "cattree"
@@ -1816,6 +1792,427 @@ function MotifGeometry({
           <mesh position={[0, WALL_HEIGHT / 2 + 0.1, 0]}>
             <cylinderGeometry args={[0.3, 0.34, WALL_HEIGHT, 10]} />
             <meshStandardMaterial color="#b0a99e" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "suitcase":
+      // Upright trolley case: shell, a proud lid-seam band around the
+      // middle, and a two-stub handle on top.
+      return (
+        <group>
+          <mesh position={[0, 0.33, 0]}>
+            <boxGeometry args={[0.44, 0.62, 0.2]} />
+            <meshStandardMaterial color="#8a6642" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.42, 0]}>
+            <boxGeometry args={[0.46, 0.035, 0.22]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+          {[-0.1, 0.1].map((x) => (
+            <mesh key={x} position={[x, 0.66, 0]}>
+              <boxGeometry args={[0.03, 0.06, 0.03]} />
+              <meshStandardMaterial
+                color="#3a3a3e"
+                roughness={0.6}
+                metalness={0.3}
+                flatShading
+              />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.7, 0]}>
+            <boxGeometry args={[0.23, 0.03, 0.04]} />
+            <meshStandardMaterial
+              color="#3a3a3e"
+              roughness={0.6}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "luggagecart":
+      // Bellhop trolley: a low deck on four castors, two brass uprights
+      // and the stack rail across their tops.
+      return (
+        <group>
+          <mesh position={[0, 0.2, 0]}>
+            <boxGeometry args={[0.6, 0.06, 1.0]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {[-0.24, 0.24].flatMap((x) =>
+            [-0.42, 0.42].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.07, z]}>
+                <sphereGeometry args={[0.07, 7, 5]} />
+                <meshStandardMaterial
+                  color="#3a3a3e"
+                  roughness={0.6}
+                  metalness={0.3}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          {[-0.26, 0.26].map((x) => (
+            <mesh key={x} position={[x, 0.98, -0.42]}>
+              <cylinderGeometry args={[0.03, 0.03, 1.56, 6]} />
+              <meshStandardMaterial
+                color="#c8b06a"
+                roughness={0.4}
+                metalness={0.6}
+                flatShading
+              />
+            </mesh>
+          ))}
+          <mesh
+            position={[0, 1.76, -0.42]}
+            rotation={[0, 0, Math.PI / 2]}
+          >
+            <cylinderGeometry args={[0.03, 0.03, 0.58, 6]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "bell":
+      // Reception bell: dark plinth, brass dome, button. Sits on a counter
+      // (kits lift it with dy — supported, never floating).
+      return (
+        <group>
+          <mesh position={[0, 0.02, 0]}>
+            <cylinderGeometry args={[0.1, 0.12, 0.04, 10]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.055, 0]} scale={[1, 0.68, 1]}>
+            <sphereGeometry args={[0.085, 10, 7]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.3}
+              metalness={0.7}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.125, 0]}>
+            <cylinderGeometry args={[0.012, 0.012, 0.03, 5]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.3}
+              metalness={0.7}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "register":
+      // The ledger: cover boards around a cream page block, ribbon marker.
+      return (
+        <group>
+          <mesh position={[0, 0.015, 0]}>
+            <boxGeometry args={[0.4, 0.03, 0.3]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.055, 0]}>
+            <boxGeometry args={[0.36, 0.05, 0.26]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.095, 0]}>
+            <boxGeometry args={[0.4, 0.03, 0.3]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.12, 0.112, 0]}>
+            <boxGeometry args={[0.03, 0.006, 0.3]} />
+            <meshStandardMaterial color={accent} roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "towelstack":
+      // Three folded towels, slightly uneven, one rolled on top.
+      return (
+        <group>
+          <mesh position={[0, 0.05, 0]}>
+            <boxGeometry args={[0.42, 0.1, 0.32]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.01, 0.145, 0]}>
+            <boxGeometry args={[0.4, 0.09, 0.3]} />
+            <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[-0.01, 0.235, 0]} rotation={[0, 0.12, 0]}>
+            <boxGeometry args={[0.36, 0.09, 0.28]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          <mesh
+            position={[0, 0.34, 0]}
+            rotation={[0, 0.35, Math.PI / 2]}
+          >
+            <cylinderGeometry args={[0.055, 0.055, 0.3, 8]} />
+            <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "lockerrow":
+      // A three-door locker cabinet on a plinth — the middle door ajar
+      // (hinged at its left edge, swung into the room): the "someone was
+      // just here" beat, baked into the geometry.
+      return (
+        <group>
+          <mesh position={[0, 0.05, 0]}>
+            <boxGeometry args={[1.64, 0.1, 0.54]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.0, 0]}>
+            <boxGeometry args={[1.6, 1.9, 0.5]} />
+            <meshStandardMaterial
+              color="#8a949e"
+              roughness={0.6}
+              metalness={0.4}
+              flatShading
+            />
+          </mesh>
+          {[-0.53, 0.53].map((x) => (
+            <group key={x}>
+              <mesh position={[x, 1.0, 0.26]}>
+                <boxGeometry args={[0.5, 1.78, 0.03]} />
+                <meshStandardMaterial
+                  color="#94a0aa"
+                  roughness={0.55}
+                  metalness={0.4}
+                  flatShading
+                />
+              </mesh>
+              <mesh position={[x + 0.19 * Math.sign(x) * -1, 1.0, 0.29]}>
+                <boxGeometry args={[0.03, 0.12, 0.03]} />
+                <meshStandardMaterial
+                  color="#3a3a3e"
+                  roughness={0.6}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+          {/* The ajar door: hinge group on its left jamb, swung open. */}
+          <group position={[-0.26, 0, 0.26]} rotation={[0, -0.55, 0]}>
+            <mesh position={[0.26, 1.0, 0]}>
+              <boxGeometry args={[0.5, 1.78, 0.03]} />
+              <meshStandardMaterial
+                color="#94a0aa"
+                roughness={0.55}
+                metalness={0.4}
+                flatShading
+              />
+            </mesh>
+            <mesh position={[0.44, 1.0, 0.03]}>
+              <boxGeometry args={[0.03, 0.12, 0.03]} />
+              <meshStandardMaterial
+                color="#3a3a3e"
+                roughness={0.6}
+                flatShading
+              />
+            </mesh>
+          </group>
+        </group>
+      );
+    case "chair":
+      // A plain side chair — four legs, seat, backrest. Deliberately
+      // sparer than the cushioned readingchair (cylinder base, wrap back)
+      // so the two never read as the same piece.
+      return (
+        <group>
+          {[-0.18, 0.18].flatMap((x) =>
+            [-0.18, 0.18].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.225, z]}>
+                <boxGeometry args={[0.05, 0.45, 0.05]} />
+                <meshStandardMaterial
+                  color="#6b4f3a"
+                  roughness={1}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 0.48, 0]}>
+            <boxGeometry args={[0.44, 0.06, 0.44]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.78, -0.19]}>
+            <boxGeometry args={[0.44, 0.54, 0.06]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "coatstand":
+      // Pole on a disc foot, three pegs near the top, a knob.
+      return (
+        <group>
+          <mesh position={[0, 0.03, 0]}>
+            <cylinderGeometry args={[0.24, 0.28, 0.06, 10]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.9, 0]}>
+            <cylinderGeometry args={[0.035, 0.045, 1.75, 7]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.82, 0]}>
+            <sphereGeometry args={[0.055, 7, 6]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {[0, (Math.PI * 2) / 3, (Math.PI * 4) / 3].map((a) => (
+            <group key={a} rotation={[0, a, 0]}>
+              <mesh
+                position={[0.1, 1.58, 0]}
+                rotation={[0, 0, -0.5]}
+              >
+                <cylinderGeometry args={[0.02, 0.02, 0.22, 5]} />
+                <meshStandardMaterial
+                  color="#6b4f3a"
+                  roughness={1}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      );
+    case "umbrellastand":
+      // A tall cylindrical stand with two closed umbrellas — slim cones
+      // tip-down, handles up, leaning against each other.
+      return (
+        <group>
+          <mesh position={[0, 0.26, 0]}>
+            <cylinderGeometry args={[0.16, 0.13, 0.52, 10]} />
+            <meshStandardMaterial
+              color="#3a3a3e"
+              roughness={0.6}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          {(
+            [
+              [0.04, 0.03, 0.14, accent],
+              [-0.05, -0.04, -0.18, "#f2ede2"],
+            ] as const
+          ).map(([x, z, lean, color]) => (
+            <group
+              key={`${x}${z}`}
+              position={[x, 0, z]}
+              rotation={[0, 0, lean]}
+            >
+              <mesh position={[0, 0.62, 0]}>
+                <cylinderGeometry args={[0.015, 0.015, 0.95, 5]} />
+                <meshStandardMaterial
+                  color="#6b4f3a"
+                  roughness={1}
+                  flatShading
+                />
+              </mesh>
+              <mesh position={[0, 0.62, 0]} rotation={[Math.PI, 0, 0]}>
+                <coneGeometry args={[0.055, 0.55, 6]} />
+                <meshStandardMaterial
+                  color={color}
+                  roughness={1}
+                  flatShading
+                />
+              </mesh>
+              <mesh position={[0, 1.13, 0]}>
+                <sphereGeometry args={[0.03, 6, 5]} />
+                <meshStandardMaterial
+                  color="#6b4f3a"
+                  roughness={1}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+        </group>
+      );
+    case "bucket":
+      // Tapered pail, darker inset so it reads hollow, arched handle.
+      return (
+        <group>
+          <mesh position={[0, 0.15, 0]}>
+            <cylinderGeometry args={[0.2, 0.14, 0.3, 10]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.5}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.26, 0]}>
+            <cylinderGeometry args={[0.17, 0.17, 0.03, 10]} />
+            <meshStandardMaterial color="#3a4a52" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.3, 0]}>
+            <torusGeometry args={[0.17, 0.015, 5, 10, Math.PI]} />
+            <meshStandardMaterial
+              color="#3a3a3e"
+              roughness={0.6}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "tray":
+      // Serving tray with a raised lip on the long sides and two cups —
+      // the dining table's tableware (lifted onto it with dy).
+      return (
+        <group>
+          <mesh position={[0, 0.015, 0]}>
+            <boxGeometry args={[0.5, 0.03, 0.34]} />
+            <meshStandardMaterial color="#8a6642" roughness={1} flatShading />
+          </mesh>
+          {[-0.16, 0.16].map((z) => (
+            <mesh key={z} position={[0, 0.05, z]}>
+              <boxGeometry args={[0.5, 0.04, 0.02]} />
+              <meshStandardMaterial
+                color="#6b4f3a"
+                roughness={1}
+                flatShading
+              />
+            </mesh>
+          ))}
+          {[-0.12, 0.12].map((x) => (
+            <mesh key={x} position={[x, 0.075, 0]}>
+              <cylinderGeometry args={[0.04, 0.032, 0.09, 8]} />
+              <meshStandardMaterial
+                color="#f2ede2"
+                roughness={1}
+                flatShading
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "bookpile":
+      // A loose stack of books, each rotated a little, one leaning against
+      // the pile — the bookshelf's colors, freed from the shelf.
+      return (
+        <group>
+          {(
+            [
+              [0, 0.025, 0.34, 0.05, 0.26, 0, "#c4553f"],
+              [0.01, 0.075, 0.3, 0.045, 0.24, 0.2, "#5a7a44"],
+              [-0.01, 0.12, 0.32, 0.045, 0.25, -0.15, "#e8c95a"],
+              [0, 0.165, 0.26, 0.04, 0.2, 0.35, "#7a6a55"],
+            ] as const
+          ).map(([x, y, w, h, d, r, color]) => (
+            <mesh key={y} position={[x, y, 0]} rotation={[0, r, 0]}>
+              <boxGeometry args={[w, h, d]} />
+              <meshStandardMaterial
+                color={color}
+                roughness={1}
+                flatShading
+              />
+            </mesh>
+          ))}
+          <mesh position={[0.26, 0.09, 0]} rotation={[0, 0.1, 0.35]}>
+            <boxGeometry args={[0.05, 0.24, 0.2]} />
+            <meshStandardMaterial color="#c4553f" roughness={1} flatShading />
           </mesh>
         </group>
       );
@@ -3357,9 +3754,7 @@ export function SpaceScene({
   const roomDoorCount = roomDoors?.length ?? 0;
   const doorLayout = useMemo(() => {
     if (roomDoorCount === 0) return { doors: [], relaxed: false };
-    const hostable = walls.map(
-      (wall) => !wall.entrance && !wallFacesCamera(plan, wall, dir),
-    );
+    const hostable = hostableWallsFor(plan, walls, dir);
     return placeRoomDoors(recipe.sliceId, plan, walls, hostable, roomDoorCount);
   }, [recipe, plan, walls, dir, roomDoorCount]);
 
