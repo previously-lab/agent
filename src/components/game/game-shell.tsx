@@ -207,6 +207,12 @@ export function GameShell() {
     ? doors?.find((door) => door.sliceId === activeSliceId)?.label
     : undefined;
 
+  // Previously's voice is OFF until the user specifies how and when it should
+  // speak: today it fires on room entry, which they have asked to change. The
+  // panel, its narration store and its i18n keys are all in place, so flipping
+  // this to true restores the current behaviour.
+  const NARRATION_ENABLED = false;
+
   return (
     <div className="relative h-full w-full">
       {/* Top-left overlay: title + exit. The container is pointer-transparent
@@ -234,11 +240,13 @@ export function GameShell() {
       {/* Previously's voice in the room — bottom-left, clear of the title
           (top-left) and the door HUD (bottom-center). Renders nothing in
           the corridor; a narration failure shows up inside the panel and
-          never touches the canvas. */}
-      <RoomNarrationPanel
-        sliceId={activeSliceId}
-        {...(activeDoorLabel ? { label: activeDoorLabel } : {})}
-      />
+          never touches the canvas. Gated by NARRATION_ENABLED above. */}
+      {NARRATION_ENABLED ? (
+        <RoomNarrationPanel
+          sliceId={activeSliceId}
+          {...(activeDoorLabel ? { label: activeDoorLabel } : {})}
+        />
+      ) : null}
     </div>
   );
 }
