@@ -16,7 +16,10 @@
  * +12) offset from the player, looking back at them — the corridor runs
  * top-right→bottom-left on screen. It never rotates; useFrame lerps the
  * follow point (factor 1 − e^(−6·dt)), so the view glides instead of
- * snapping. The zoom TARGET is CAMERA_ZOOM in the corridor and eases down
+ * snapping — except on a strand-door wormhole, whose ~90 m teleport snaps
+ * the focus on the spot (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
+ * The zoom TARGET is CAMERA_ZOOM (44 — pulled in ~29% per doc B.12) in the
+ * corridor and eases down
  * by clamp(S, 1, ∞)^ROOM_ZOOM_SCALE_EXP (capped at ~3× pull-back) inside a
  * scaled room, so a colossal room stays legible as a room instead of
  * reading as a local patch — the dollhouse stays readable (doc §1 A4).
@@ -191,6 +194,7 @@ import {
   STAGE_BACKDROP_Y,
   STAGE_POOL_RADIUS,
   STRAND_DOOR_ARRIVAL_INSET,
+  STRAND_TELEPORT_CAMERA_SNAP,
   SUN_BASE_COLOR,
   SUN_BASE_INTENSITY,
   SUN_OFFSET,
@@ -560,13 +564,20 @@ function roomDoorPlacementsForSpace(
 /** Fixed 45° camera: lerped follow point + constant offset, lookAt player.
  *  The ortho zoom lerps (same easing) toward CAMERA_ZOOM divided by the
  *  active room's bounded pull-back — colossal rooms stay legible as rooms,
- *  and the corridor eases back to normal. */
+ *  and the corridor eases back to normal. One exception to the glide: a
+ *  strand-door wormhole teleports the player ~90 m down the timeline, so
+ *  `snapRef` (set by the transition's fade-out midpoint) snaps the smoothed
+ *  focus to the new position on that frame — gated by
+ *  STRAND_TELEPORT_CAMERA_SNAP (tuning/render.ts); flip it to false if the
+ *  glide is ever wanted back. */
 function CameraRig({
   playerRef,
   space,
+  snapRef,
 }: {
   playerRef: PlayerRef;
   space: ActiveSpace | null;
+  snapRef: MutableRefObject<boolean>;
 }): JSX.Element {
   const focus = useRef(
     new THREE.Vector3(playerRef.current.x, 0, playerRef.current.z),
@@ -582,6 +593,11 @@ function CameraRig({
   );
 
   useFrame(({ camera }, dt) => {
+    if (STRAND_TELEPORT_CAMERA_SNAP && snapRef.current) {
+      snapRef.current = false;
+      focus.current.x = playerRef.current.x;
+      focus.current.z = playerRef.current.z;
+    }
     const k = 1 - Math.exp(-CAMERA_LERP_RATE * Math.min(dt, MAX_DT));
     focus.current.x += (playerRef.current.x - focus.current.x) * k;
     focus.current.z += (playerRef.current.z - focus.current.z) * k;
@@ -1106,6 +1122,9 @@ export default function GameCanvas({
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme !== "light";
   const playerRef = useRef<PlayerPos>({ ...SPAWN });
+  /** One-shot flag: the strand-door wormhole teleported the player, so the
+   *  camera rig snaps its lerped focus instead of gliding (see CameraRig). */
+  const cameraSnapRef = useRef(false);
   const keysRef = useRef<Set<string>>(new Set());
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
   const hudIdRef = useRef<string | null>(null);
@@ -1248,6 +1267,10 @@ export default function GameCanvas({
       x: destDoor.x,
       z: destDoor.z + Math.sign(destDoor.z) * STRAND_DOOR_ARRIVAL_INSET,
     };
+    // Tell the camera rig the player just teleported: it snaps its smoothed
+    // focus here instead of gliding the ~90 m over ~1 s (a slide that read
+    // like a defect in review). Gated by STRAND_TELEPORT_CAMERA_SNAP.
+    cameraSnapRef.current = true;
     setShownSpace(null);
     setActiveSpace(resolveSpaceForDoor(destDoor, archetypeById));
     setStrandTransition(reduceStrandTransition(strandTransition, { type: "fadedOut" }));
@@ -1355,7 +1378,7 @@ export default function GameCanvas({
             />
           ))}
         </Environment>
-        <CameraRig playerRef={playerRef} space={activeSpace} />
+        <CameraRig playerRef={playerRef} space={activeSpace} snapRef={cameraSnapRef} />
         {/* The corridor dissolves the moment a space engages (GameLoop above)
           and unmounts HIDE_DELAY_MS later; on return it remounts dark and
           eases back up. */}

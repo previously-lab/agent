@@ -6,7 +6,9 @@
  *
  * THREE ORTHOGONAL FACETS, each drawn from its own hash-derived stream:
  *
- *   scale  — the room's scale notation: normal (×1), colossal (×8–20) or
+ *   scale  — the room's scale notation: normal (×1), colossal (×2.5–3.5 —
+ *            B.12 capped the old ×8–20 at ~×3: recognizability comes from
+ *            light and set-dressing, not area) or
  *            miniature (×0.2–0.35 — floored so the room stays enterable). Implemented as CONSTRUCTION-TIME
  *            scaling: the renderer multiplies every plan dimension and
  *            prop size by the factor when it builds the room, instead of
@@ -90,7 +92,7 @@ export interface ScaleNotation {
 
 /**
  * The room's scale notation, drawn from the "scale" stream: 78% normal,
- * 12% colossal (×8–20), 10% miniature (×0.2–0.35). Most rooms stay
+ * 12% colossal (×2.5–3.5, B.12), 10% miniature (×0.2–0.35). Most rooms stay
  * human-scale so the distortion reads as an event (A2), not the baseline.
  */
 export function scaleNotationFor(

@@ -24,6 +24,8 @@ import {
   PLAN_NONRECT_MIN_EXTENT,
   PORTAL_HEIGHT,
   ROOM_WALL_THICKNESS,
+  SCALE_COLOSSAL_MIN,
+  SCALE_COLOSSAL_SPAN,
   SCALE_MINIATURE_MIN,
   SCALE_MINIATURE_SPAN,
   WALL_HEIGHT_MAX,
@@ -42,14 +44,15 @@ describe("scaleNotationFor", () => {
     }
   });
 
-  it("keeps every factor inside the §3 notation ranges", () => {
+  it("keeps every factor inside the §3/B.12 notation ranges", () => {
     for (const sliceId of SLICE_IDS) {
       const s = scaleNotationFor(sliceId);
       if (s.id === "normal") {
         expect(s.factor).toBe(1);
       } else if (s.id === "colossal") {
-        expect(s.factor).toBeGreaterThanOrEqual(8);
-        expect(s.factor).toBeLessThanOrEqual(20);
+        // B.12 (user, 2026-09-18): colossal collapsed from ×8–20 to ~×3.
+        expect(s.factor).toBeGreaterThanOrEqual(SCALE_COLOSSAL_MIN);
+        expect(s.factor).toBeLessThanOrEqual(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN);
       } else {
         expect(s.factor).toBeGreaterThanOrEqual(SCALE_MINIATURE_MIN);
         expect(s.factor).toBeLessThanOrEqual(SCALE_MINIATURE_MIN + SCALE_MINIATURE_SPAN);
@@ -99,9 +102,17 @@ describe("scaledWallHeight", () => {
 
   it("leaves every normal and colossal value on the S^0.5 curve", () => {
     // The portal floor (3.5m) only binds below factor ~0.77 — nothing the
-    // normal or colossal draws can reach.
+    // normal or colossal draws can reach — and the new colossal ceiling
+    // (×3.5, B.12) tops out at ~7.5m, far under WALL_HEIGHT_MAX.
     expect(scaledWallHeight(1)).toBeCloseTo(4 * Math.sqrt(1), 5);
-    expect(scaledWallHeight(8)).toBeCloseTo(4 * Math.sqrt(8), 5);
+    expect(scaledWallHeight(SCALE_COLOSSAL_MIN)).toBeCloseTo(
+      4 * Math.sqrt(SCALE_COLOSSAL_MIN),
+      5,
+    );
+    expect(
+      scaledWallHeight(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN),
+    ).toBeCloseTo(4 * Math.sqrt(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN), 5);
+    // The clamp rail still works for any larger factor a future draw adds.
     expect(scaledWallHeight(20)).toBe(WALL_HEIGHT_MAX);
   });
 
@@ -283,7 +294,9 @@ describe("composeRoom", () => {
   });
 
   it("widens the path for colossal rooms and narrows it for miniature", () => {
-    const wide = composeRoom("probe", roomPlanFor("probe", 384, 512, 11), 8);
+    // ×3.5 = top of the B.12 colossal range — past the clamp(S,…,2) knee,
+    // so the widened path still exercises the same clamp the old ×8 hit.
+    const wide = composeRoom("probe", roomPlanFor("probe", 168, 224, 7), 3.5);
     const tiny = composeRoom("probe", roomPlanFor("probe", 3, 4, 1.4), 0.1);
     const human = composeRoom("probe", roomPlanFor("probe", 48, 64, COLONNADE_BAY), 1);
     expect(wide.pathHalf).toBeGreaterThan(human.pathHalf);

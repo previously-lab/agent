@@ -16,18 +16,30 @@ import { VOID_COLORS } from "./hotel";
  *  the background). There is no scene fog anywhere in the game. */
 export const SCENE_COLORS = VOID_COLORS;
 
-export const CAMERA_ZOOM = 34;
+/** Ortho zoom for the fixed camera. 44 (doc 附录 B.12, user 2026-09-18:
+ *  "closer reads as more immersive") — pulled in ~29% from the old 34, so
+ *  the view half-width at 1080p shrinks from ≈28 m to ≈22 m. The corridor
+ *  still frames ~7 dense bays (6 m pitch) down to ~2 sparse ones (24 m
+ *  pitch, corridor-pitch.ts) per screen. */
+export const CAMERA_ZOOM = 44;
 export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
 /** Follow smoothing: factor = 1 − e^(−rate·dt). */
 export const CAMERA_LERP_RATE = 6;
+/** Wormhole hand-off (doc B.11): when a strand door teleports the player
+ *  ~90 m down the timeline, snap the camera's smoothed focus to the new
+ *  position on that frame instead of letting the lerp glide the new room
+ *  into frame over ~1 s (review flagged the slide as reading like a
+ *  defect). Set to false to re-enable the glide. */
+export const STRAND_TELEPORT_CAMERA_SNAP = true;
 /** Colossal-room legibility (first pass, expect tuning): inside a space the
  *  ortho zoom TARGET divides by clamp(S, 1, ∞)^0.5, lerped with the camera
- *  easing — otherwise a ×12 room shows only a local patch and "colossal"
+ *  easing — otherwise a ×3 room shows only a local patch and "colossal"
  *  reads merely as slowness. */
 export const ROOM_ZOOM_SCALE_EXP = 0.5;
 /** Hard cap on the pull-back: the view never gets more than ~3× wider than
  *  normal — the dollhouse must stay readable (doc §1 A4: a human-scale
- *  anchor must stay legible). */
+ *  anchor must stay legible). With colossal capped at ×2.5–3.5 (B.12) the
+ *  real pull-back tops out near ~1.9×; this stays as a safety rail. */
 export const ROOM_ZOOM_MAX_PULLBACK = 3;
 
 export const PLAYER_SPEED = 4; // m/s
@@ -92,11 +104,13 @@ export const SUN_OFFSET = { x: 8, y: 14, z: 4 };
  *  PCF, so the canvas asks for "percentage" to match what ships). */
 export const SUN_SHADOW_MAP_SIZE = 2048;
 /** Ortho shadow-camera half-extent (m) — covers the visible diorama
- *  (view half-width ≈ 28 m at 1080p / zoom 34) with margin. Inside a
+ *  (view half-width ≈ 22 m at 1080p / zoom 44, B.12's closer camera) with
+ *  margin. Derived from the view width, not left generous: a tighter
+ *  frustum is better shadow texel density on the same 2048² map. Inside a
  *  scaled room the integrator multiplies this by the camera's zoom
  *  pull-back (up to ROOM_ZOOM_MAX_PULLBACK) so the frustum keeps covering
  *  the widened view; shadow texel density drops by the same factor. */
-export const SUN_SHADOW_EXTENT = 30;
+export const SUN_SHADOW_EXTENT = 24;
 export const SUN_SHADOW_NEAR = 1;
 export const SUN_SHADOW_FAR = 60;
 /** Acne guards: small negative depth bias plus a normal offset that suits

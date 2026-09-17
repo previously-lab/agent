@@ -211,16 +211,20 @@ export const SCALE_NORMAL_PROB = 0.78;
 /** Scale draw: 12% colossal; the remaining 10% are miniature (slightly
  *  rarer — tiny rooms risk readability more than huge ones). */
 export const SCALE_COLOSSAL_PROB = 0.12;
-/** Colossal factor = MIN + r·SPAN → ×8–20 per the §3 scale notation. */
-export const SCALE_COLOSSAL_MIN = 8;
-export const SCALE_COLOSSAL_SPAN = 12;
+/** Colossal factor = MIN + r·SPAN → ×2.5–3.5, centered on ×3 (doc 附录
+ *  B.12, user 2026-09-18: a merely big space is worth little — "colossal"
+ *  keeps the bigger-than-expected surprise but no longer sprawls into an
+ *  empty floor; recognizability now comes from light/material/set-dressing,
+ *  not area). Was ×8–20 per the original §3 notation. */
+export const SCALE_COLOSSAL_MIN = 2.5;
+export const SCALE_COLOSSAL_SPAN = 1;
 /** Miniature factor = MIN + r·SPAN → ×0.2–0.35: small enough to read as a
  *  room built too small for you, large enough to actually walk into — an
  *  M-tier (32m) room lands 6.4–11.2m across, never near the player's own
  *  0.9m capsule (the old 0.05 floor built unenterable 1.6m boxes). */
 export const SCALE_MINIATURE_MIN = 0.2;
 export const SCALE_MINIATURE_SPAN = 0.15;
-/** Wall height scales by S^0.5, not S: full-S walls (32m at ×8) would make
+/** Wall height scales by S^0.5, not S: full-S walls (14m at ×3.5) would make
  *  the far walls the only thing on screen at the fixed camera (the near
  *  walls are cut to WALL_SILL_HEIGHT, so they no longer veil the room). */
 export const WALL_SCALE_EXP = 0.5;
@@ -288,37 +292,49 @@ export const PET_NEAR_RADIUS_MAX = 24;
 /* ------------------------------------------------------------------ */
 
 /** Floor area (m² of the UNSCALED tier) per kit — the I3 density target.
- *  S/M tiers sit in the doc's 12–18 m²/kit band (the "empty room" complaint
- *  was loudest at human scale); L/XL taper upward hard so a great hall
- *  keeps its sweep instead of becoming a furniture warehouse (§6 塞满). */
+ *  B.12 (user, 2026-09-18): strong cast shadows amplify emptiness and the
+ *  closer camera sees less floor, so density rose ~+43% (areas ÷ ~1.43
+ *  from 15/20/32/48). S/M tiers now sit past the doc's old 12–18 m²/kit
+ *  band; L/XL keep the upward taper so a great hall keeps its sweep
+ *  instead of becoming a furniture warehouse (§6 塞满). The area law's
+ *  demand sits above KIT_COUNT_MAX at every tier, so the cap below is
+ *  what actually binds — the same regime as before this change. */
 export const KIT_AREA_PER_KIT: Record<number, number> = {
-  16: 15,
-  32: 20,
-  64: 32,
-  96: 48,
+  16: 10,
+  32: 14,
+  64: 22,
+  96: 34,
 };
 /** Absolute kit-count ceiling per tier — the taper's hard backstop, and a
- *  draw-call budget: kit pieces are real meshes, not instanced scatter. */
+ *  draw-call budget: kit pieces are real meshes, not instanced scatter.
+ *  This cap is the operative density constraint at every tier (the area
+ *  law above always demands more), so B.12's +40% density rise lands
+ *  here: 10/20/40/60 → 14/28/56/84. */
 export const KIT_COUNT_MAX: Record<number, number> = {
-  16: 10,
-  32: 20,
-  64: 40,
-  96: 60,
+  16: 14,
+  32: 28,
+  64: 56,
+  96: 84,
 };
 /** The 留白 hard floor (I1 / §4.5): kit footprint discs may cover at most
  *  (1 − this) of the actual scaled floor — at least 35% stays empty. */
 export const KIT_EMPTY_FLOOR_MIN = 0.35;
 /** Gap kept between two kits' footprint discs (m, ×prop scale) — every kit
- *  owns its breathing room; kits never touch. */
-export const KIT_GAP = 0.6;
+ *  owns its breathing room; kits never touch. 0.4 (was 0.6): B.12's density
+ *  rise needs small rooms to fit closer to their target, and 0.4 m still
+ *  reads as deliberate spacing at the closer camera. */
+export const KIT_GAP = 0.4;
 /** Per-piece clearance from the cleared walk path (m, ×prop scale): the
  *  path's ≥1.4 m promise is measured to kit GEOMETRY, not kit centers. */
 export const KIT_PATH_CLEAR = 0.5;
 /** Per-piece margin from the walls (m, ×prop scale). */
 export const KIT_WALL_CLEAR = 0.35;
 /** Rejection-sampling budget per wanted kit before the room settles for
- *  fewer (a narrow plan physically cannot host every kit). */
-export const KIT_PLACE_ATTEMPTS = 40;
+ *  fewer (a narrow plan physically cannot host every kit). 120 (was 40):
+ *  B.12 raised the targets, and at 40 the small tiers settled short of
+ *  them even when a legal spot existed — the budget is pure CPU at mount
+ *  time, no draw-call cost. */
+export const KIT_PLACE_ATTEMPTS = 120;
 
 /* ------------------------------------------------------------------ */
 /* dado-band (v0.11-room-interiors §3.2): baseboard + panelled          */
