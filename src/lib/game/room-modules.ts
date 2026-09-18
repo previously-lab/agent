@@ -31,6 +31,19 @@
  * hashString(`${worldSeed}:${sliceId}:room-composition`), independent of
  * every other facet's stream and never perturbing them. No three.js, no
  * React, no Math.random, no wall clock.
+ *
+ * WIRING (2026-10, the renderer adoption). The renderer and the movement
+ * clamp both derive the room's dims from ONE recipe view — room-plan.ts's
+ * scaledRecipeFor — which swaps the tier dims for the composition's
+ * width/extent for interior rooms via `compositionForRecipe` below. That
+ * path is a pure function of the recipe ALONE (the clamp's call chain in
+ * game-canvas.tsx can never see the runtime strand-door count), so the live
+ * resolution pins `doorCount = 0` and steers the module count by the SIZE
+ * TIER instead (§8.3: "large" is MORE modules — S keeps a single module, M
+ * two, L three, XL four). A day busier than the composition's declared
+ * ceiling rides the §10.5 placement ladder (double-row screens, then axial
+ * overflow) exactly as the template layer's overflows always did — the
+ * door-load growth below stays available to any caller that HAS the count.
  */
 import {
   INTERIOR_KITS,
@@ -43,7 +56,7 @@ import type {
   TemplateZone,
 } from "./room-templates";
 import { createRng, hashString, WORLD_SEED } from "./seed";
-import type { ArchetypeId, WorldClass } from "./space-types";
+import type { ArchetypeId, SpaceRecipe, WorldClass } from "./space-types";
 
 /* ------------------------------------------------------------------ */
 /* The data model (§8.2)                                               */
@@ -894,8 +907,16 @@ function compositionRng(worldSeed: string, sliceId: string): () => number {
  * every non-interior world class — the module set covers interior only,
  * matching the template layer's first-step scope).
  *
+ * `countHint` (optional, §8.3 convergence) pins the seeded module count —
+ * the size tier's say in how many units the room joins ("large" is MORE
+ * modules, never bigger ones). The rng draw that would have picked the
+ * count is still consumed, so a hinted and an unhinted resolution of the
+ * same slice draw the same primary and companions. The door load may still
+ * push the count upward from the hint.
+ *
  * Deterministic: same (worldSeed, sliceId, worldClass, archetype,
- * doorCount) ⇒ same composition, always; independent of call order.
+ * doorCount, countHint) ⇒ same composition, always; independent of call
+ * order.
  */
 export function resolveRoomComposition(
   sliceId: string,
@@ -903,6 +924,7 @@ export function resolveRoomComposition(
   archetype: string,
   doorCount: number = 0,
   worldSeed: string = WORLD_SEED,
+  countHint?: number,
 ): RoomComposition | null {
   const primaries = primaryModulesFor(worldClass, archetype);
   if (primaries.length === 0) return null;
@@ -921,7 +943,9 @@ export function resolveRoomComposition(
   };
 
   // Seeded module count, weighted toward two (the suite reads as the
-  // default home); the door load may push it upward below.
+  // default home); the door load may push it upward below. A countHint
+  // (§8.3 — the size tier's say) overrides the draw but still consumes it,
+  // so the streams of hinted and unhinted resolutions stay aligned.
   const countWeights = [1, 3, 2, 1];
   let countTicket = rng() * countWeights.reduce((a, b) => a + b, 0);
   let count = 1;
@@ -932,6 +956,9 @@ export function resolveRoomComposition(
       break;
     }
     count = i + 1;
+  }
+  if (countHint !== undefined) {
+    count = Math.max(1, Math.min(4, Math.round(countHint)));
   }
 
   // Candidate counts: the seeded count first, then upward while the door
@@ -984,6 +1011,47 @@ export function resolveRoomComposition(
     capacity: 0,
   };
   return buildComposition(rng, b.modules, b.rects, b.topology, boundsOf(b.rects));
+}
+
+/* ------------------------------------------------------------------ */
+/* The renderer's entry point (§8.3 convergence)                        */
+/* ------------------------------------------------------------------ */
+
+/** The size tier's module count (§8.3: "large" is MORE modules, never a
+ *  bigger one): S keeps a single standard room, M joins two, L three, XL
+ *  four. The composition's bounding box — not the tier's extent — then
+ *  sizes the room (scaledRecipeFor). */
+export const TIER_MODULE_COUNTS: Record<SpaceRecipe["size"]["id"], number> = {
+  S: 1,
+  M: 2,
+  L: 3,
+  XL: 4,
+};
+
+/**
+ * The composition of one recipe's room — the ONE resolution the whole
+ * render/contain chain shares (scaledRecipeFor sizes the plan from it;
+ * the renderer's template branch folds the same value into a synthetic
+ * RoomTemplate). Pure function of the recipe alone: the runtime strand-door
+ * count never reaches the recipe layer (the movement clamp's call chain
+ * could not see it), so the door load is pinned to 0 and busy days ride
+ * the §10.5 placement ladder instead — see the module header. Returns null
+ * for every non-interior class, where the room stays byte-for-byte as it
+ * was before modules.
+ */
+export function compositionForRecipe(
+  recipe: SpaceRecipe,
+  worldSeed: string = WORLD_SEED,
+): RoomComposition | null {
+  if (recipe.worldClass !== "interior") return null;
+  return resolveRoomComposition(
+    recipe.sliceId,
+    recipe.worldClass,
+    recipe.archetype,
+    0,
+    worldSeed,
+    TIER_MODULE_COUNTS[recipe.size.id],
+  );
 }
 
 /** Fold a successful placement into the resolved composition: shift to
@@ -1242,7 +1310,14 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
 /* re-implemented here)                                                 */
 /* ------------------------------------------------------------------ */
 
-const KIT_IDS = new Set(INTERIOR_KITS.map((k) => k.id));
+// Lazy: room-plan.ts imports this module for scaledRecipeFor while kits.ts
+// imports room-plan.ts back — an eager Set over INTERIOR_KITS would read the
+// kit catalogue before its module finished evaluating on that entry order.
+let KIT_IDS: Set<string> | null = null;
+function kitIds(): Set<string> {
+  KIT_IDS ??= new Set(INTERIOR_KITS.map((k) => k.id));
+  return KIT_IDS;
+}
 
 /** Catalogue soundness: every module's whitelist names real kits, its
  *  heroKit is a whitelisted heroSlot kit, its zones are normalized with at
@@ -1257,7 +1332,7 @@ export function auditModule(module: RoomModule): string[] {
   }
   if (module.kits.length === 0) problems.push(`${module.id}: empty kit whitelist`);
   for (const id of module.kits) {
-    if (!KIT_IDS.has(id)) problems.push(`${module.id}: unknown kit "${id}"`);
+    if (!kitIds().has(id)) problems.push(`${module.id}: unknown kit "${id}"`);
   }
   if (module.heroKit) {
     const kit = INTERIOR_KITS.find((k) => k.id === module.heroKit);

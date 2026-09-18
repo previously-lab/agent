@@ -21,6 +21,10 @@ import {
   type RoomPlan,
 } from "@/lib/game/room-plan";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import {
+  compositionForRecipe,
+  TIER_MODULE_COUNTS,
+} from "@/lib/game/room-modules";
 import { hashString, WORLD_SEED } from "@/lib/game/seed";
 import {
   DOOR_GAP_HALF,
@@ -86,13 +90,56 @@ describe("scaledRecipeFor", () => {
     for (const sliceId of SLICE_IDS.slice(0, 40)) {
       const recipe = compileSpaceRecipe(sliceId);
       const { recipe: view, scale } = scaledRecipeFor(recipe);
-      expect(view.width).toBeCloseTo(recipe.width * scale.factor, 10);
-      expect(view.size.extent).toBeCloseTo(recipe.size.extent * scale.factor, 10);
+      // Modular rooms (§8): interior rooms take their plan dims from the
+      // module composition, not the tier — the factor multiplies THOSE.
+      const composition = compositionForRecipe(recipe);
+      const baseWidth = composition ? composition.width : recipe.width;
+      const baseExtent = composition ? composition.extent : recipe.size.extent;
+      expect(view.width).toBeCloseTo(baseWidth * scale.factor, 10);
+      expect(view.size.extent).toBeCloseTo(baseExtent * scale.factor, 10);
       expect(view.size.id).toBe(recipe.size.id);
       expect(view.sliceId).toBe(recipe.sliceId);
       expect(view.palette).toEqual(recipe.palette);
       expect(view.layoutSeed).toBe(recipe.layoutSeed);
     }
+  });
+
+  it("leaves non-interior rooms byte-identical (no composition)", () => {
+    for (const sliceId of SLICE_IDS) {
+      const recipe = compileSpaceRecipe(sliceId);
+      if (recipe.worldClass === "interior") continue;
+      const { recipe: view, scale } = scaledRecipeFor(recipe);
+      expect(compositionForRecipe(recipe)).toBeNull();
+      expect(view.width).toBeCloseTo(recipe.width * scale.factor, 10);
+      expect(view.size.extent).toBeCloseTo(recipe.size.extent * scale.factor, 10);
+      if (scale.factor === 1) expect(view).toBe(recipe);
+    }
+  });
+
+  it("sizes interior rooms by their composition, scaled like any dims", () => {
+    let composed = 0;
+    for (const sliceId of SLICE_IDS) {
+      const recipe = compileSpaceRecipe(sliceId);
+      const composition = compositionForRecipe(recipe);
+      if (!composition) continue;
+      composed += 1;
+      const { recipe: view, scale } = scaledRecipeFor(recipe);
+      expect(view.width).toBeCloseTo(composition.width * scale.factor, 10);
+      expect(view.size.extent).toBeCloseTo(composition.extent * scale.factor, 10);
+      // §8.3 convergence: the tier hints the module count (S=1, M=2, L=3,
+      // XL=4) — more modules, never a bigger one. The hint is a REQUEST:
+      // an archetype-gated catalogue may not supply four joinable modules
+      // (a pool-hall's companions are few), so the resolver falls down
+      // deterministically — L/XL land at 3–4, S stays a single module.
+      if (recipe.size.id === "S") {
+        expect(composition.modules.length).toBe(1);
+      } else {
+        expect(composition.modules.length).toBeGreaterThanOrEqual(2);
+        expect(composition.modules.length).toBeLessThanOrEqual(4);
+      }
+    }
+    // The 400-slice sample draws interior at 25% — far above the noise floor.
+    expect(composed).toBeGreaterThan(40);
   });
 });
 

@@ -23,8 +23,10 @@ import { describe, it, expect } from "vitest";
 import {
   ROOM_MODULES,
   TOPOLOGY_COUNTS,
+  TIER_MODULE_COUNTS,
   auditComposition,
   auditModule,
+  compositionForRecipe,
   compositionTemplateFor,
   moduleKitsFor,
   primaryModulesFor,
@@ -33,6 +35,9 @@ import {
   roomModuleById,
   type RoomModule,
 } from "@/lib/game/room-modules";
+import { roomTemplateForDoorCount } from "@/components/game/space";
+import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { scaledRecipeFor } from "@/lib/game/room-plan";
 import { auditTemplate } from "@/lib/game/room-templates";
 import {
   composeRoom,
@@ -502,6 +507,118 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
         resolveRoomComposition(id, "interior", "library", 5)!,
       );
       expect(t1).toEqual(t2);
+    }
+  });
+});
+
+
+/* ------------------------------------------------------------------ */
+/* The renderer wiring (§8.3 convergence + the recipe-level resolution) */
+/* ------------------------------------------------------------------ */
+
+describe("countHint + TIER_MODULE_COUNTS (§8.3 convergence)", () => {
+  it("pins the seeded module count while still consuming the draw", () => {
+    for (let i = 0; i < 20; i++) {
+      const id = `2028-01-${i}`;
+      const hinted = resolveRoomComposition(id, "interior", "hotel-room", 0, WORLD_SEED, 4)!;
+      expect(hinted.modules.length).toBeGreaterThanOrEqual(3);
+      expect(hinted.modules.length).toBeLessThanOrEqual(4);
+      // Determinism with the hint (A6).
+      expect(resolveRoomComposition(id, "interior", "hotel-room", 0, WORLD_SEED, 4)).toEqual(hinted);
+      // The hint consumes the same stream prefix: the PRIMARY module is the
+      // one the unhinted resolution also picked.
+      const unhinted = resolveRoomComposition(id, "interior", "hotel-room", 0)!;
+      expect(hinted.modules[0].module.id).toBe(unhinted.modules[0].module.id);
+    }
+  });
+
+  it("S stays a single module; M/L/XL grow by modules, never by size", () => {
+    const counts = TIER_MODULE_COUNTS;
+    expect(counts.S).toBe(1);
+    expect(counts.M).toBe(2);
+    for (let i = 0; i < 30; i++) {
+      const id = `2028-02-${i}`;
+      const s = resolveRoomComposition(id, "interior", "library", 0, WORLD_SEED, counts.S)!;
+      expect(s.modules.length).toBe(1);
+      // A single module's footprint is the promised 8–16 m — "large" is
+      // never ONE module stretched.
+      expect(s.width).toBeLessThanOrEqual(16);
+      expect(s.extent).toBeLessThanOrEqual(16);
+      const m = resolveRoomComposition(id, "interior", "library", 0, WORLD_SEED, counts.M)!;
+      expect(m.modules.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("every module stays inside the composition's bounding box", () => {
+    for (const a of INTERIOR_ROOMS) {
+      for (let i = 0; i < 10; i++) {
+        const comp = resolveRoomComposition(`2028-03-${i}`, "interior", a, 0, WORLD_SEED, 3)!;
+        for (const p of comp.modules) {
+          expect(p.rect.x0).toBeGreaterThanOrEqual(-comp.width / 2 - 1e-6);
+          expect(p.rect.x1).toBeLessThanOrEqual(comp.width / 2 + 1e-6);
+          expect(p.rect.z0).toBeGreaterThanOrEqual(-1e-6);
+          expect(p.rect.z1).toBeLessThanOrEqual(comp.extent + 1e-6);
+        }
+      }
+    }
+  });
+});
+
+describe("compositionForRecipe (the render/contain chain's one resolution)", () => {
+  it("is null outside the interior class and deterministic per recipe", () => {
+    for (let i = 0; i < 200; i++) {
+      const recipe = compileSpaceRecipe(`2028-04-${i}`);
+      const comp = compositionForRecipe(recipe);
+      if (recipe.worldClass !== "interior") {
+        expect(comp).toBeNull();
+        continue;
+      }
+      expect(comp).not.toBeNull();
+      expect(compositionForRecipe(recipe)).toEqual(comp);
+      // The tier convergence holds through the recipe-level entry point.
+      if (recipe.size.id === "S") expect(comp!.modules.length).toBe(1);
+      else expect(comp!.modules.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+});
+
+describe("roomTemplateForDoorCount composition branch (the renderer's selection)", () => {
+  it("returns the composition's synthetic template for interior rooms", () => {
+    for (let i = 0; i < 30; i++) {
+      const recipe = compileSpaceRecipe(`2028-05-${i}`);
+      const comp = compositionForRecipe(recipe);
+      if (!comp) continue;
+      const { recipe: scaled, scale } = scaledRecipeFor(recipe);
+      const template = roomTemplateForDoorCount(
+        recipe,
+        scaled.width,
+        scaled.size.extent,
+        scale.factor,
+        ROOM_WALL_THICKNESS * Math.max(scale.factor, 0.35),
+        3,
+      );
+      expect(template).not.toBeNull();
+      expect(template!.id).toBe(`comp:${comp.modules.map((p) => p.module.id).join("+")}`);
+      expect(template).toEqual(compositionTemplateFor(comp));
+    }
+  });
+
+  it("never lets the composition branch touch non-interior rooms", () => {
+    for (let i = 0; i < 100; i++) {
+      const recipe = compileSpaceRecipe(`2028-06-${i}`);
+      if (recipe.worldClass === "interior") continue;
+      const { recipe: scaled, scale } = scaledRecipeFor(recipe);
+      const template = roomTemplateForDoorCount(
+        recipe,
+        scaled.width,
+        scaled.size.extent,
+        scale.factor,
+        ROOM_WALL_THICKNESS * Math.max(scale.factor, 0.35),
+        0,
+      );
+      // Non-interior rooms resolve no template at all (today's behaviour)
+      // — and crucially, never a `comp:` one.
+      expect(template?.id.startsWith("comp:") ?? false).toBe(false);
     }
   });
 });

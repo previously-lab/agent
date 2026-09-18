@@ -42,6 +42,7 @@
  * "compose" — independent of, and never perturbing, the existing streams.
  */
 import { createRng, hashString, WORLD_SEED } from "./seed";
+import { compositionForRecipe } from "./room-modules";
 import type { SpaceRecipe } from "./space-types";
 import {
   CLUSTER_COUNT_BASE,
@@ -114,19 +115,30 @@ export function scaleNotationFor(
  * all read dims off the recipe, so feeding them THIS view keeps the
  * renderer, the avatar physics, and the movement clamp in one (scaled)
  * coordinate system. Normal-scale rooms get the identity view.
+ *
+ * MODULAR ROOMS (v0.11-room-interiors §8): for interior rooms the plan dims
+ * come from the slice's MODULE COMPOSITION (room-modules.ts
+ * compositionForRecipe — "large" is MORE modules, never a bigger tier),
+ * scaled like any other dims. The composition is a pure function of the
+ * recipe, so the renderer and the movement clamp derive the same room
+ * without ever sharing state. Rooms the catalogue cannot serve (every
+ * non-interior class today) keep the tier dims byte-for-byte.
  */
 export function scaledRecipeFor(recipe: SpaceRecipe): {
   recipe: SpaceRecipe;
   scale: ScaleNotation;
 } {
   const scale = scaleNotationFor(recipe.sliceId);
-  if (scale.factor === 1) return { recipe, scale };
+  const composition = compositionForRecipe(recipe);
+  const baseWidth = composition ? composition.width : recipe.width;
+  const baseExtent = composition ? composition.extent : recipe.size.extent;
+  if (scale.factor === 1 && !composition) return { recipe, scale };
   return {
     scale,
     recipe: {
       ...recipe,
-      width: recipe.width * scale.factor,
-      size: { ...recipe.size, extent: recipe.size.extent * scale.factor },
+      width: baseWidth * scale.factor,
+      size: { ...recipe.size, extent: baseExtent * scale.factor },
     },
   };
 }

@@ -116,6 +116,7 @@ import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/see
 import { doorGlowColor } from "@/lib/game/space-recipe";
 import {
   GROUND_Y,
+  POOL_DEPTH,
   terrainHeight,
   waterRectFor,
   type WaterRect,
@@ -145,6 +146,10 @@ import {
   templateZonesFor,
   type RoomTemplate,
 } from "@/lib/game/room-templates";
+import {
+  compositionForRecipe,
+  compositionTemplateFor,
+} from "@/lib/game/room-modules";
 import type { SplitWall } from "@/lib/game/room-doors";
 import {
   crossedRoomDoor,
@@ -1118,17 +1123,16 @@ function Shadowed({ children }: { children: ReactNode }) {
 }
 
 /** Water surface: a REAL shallow-water material (materials/water-surface.ts)
- *  — three seamless ripple normal layers scrolling at different scales and
- *  directions, Beer–Lambert depth absorption rebuilt analytically from the
- *  terrain bowl (ankle-clear at the corners, tinted at depth) that always
- *  lets the pool floor read through, and a near-glossy PBR finish so the
- *  environment and key light answer with a specular streak. A wave-equation
- *  sim (materials/wave-driver.ts) adds live wading ripples: a splash on
- *  entry, footsteps every ~0.5 m of travel inside the rect. The plane still
- *  bobs gently; all motion is a pure function of the frame clock plus the
- *  player's own steps. The material and driver are per-room and disposed on
- *  unmount; the ripple textures they sample are shared app-lifetime
- *  singletons.
+ *  — Beer–Lambert depth absorption rebuilt analytically from the terrain
+ *  bowl (ankle-clear at the corners, tinted at depth) that always lets the
+ *  pool floor read through, and a near-glossy PBR finish so the environment
+ *  and key light answer with a specular streak. A wave-equation sim
+ *  (materials/wave-driver.ts) supplies the surface normals and the live
+ *  wading ripples: a splash on entry, footsteps every ~0.5 m of travel
+ *  inside the rect. The plane still bobs gently; all motion is a pure
+ *  function of the frame clock plus the player's own steps. The material
+ *  and driver are per-room and disposed on unmount; the textures they
+ *  sample are shared app-lifetime singletons.
  *  Shadows: RECEIVES only — a shadow caster is rendered through a depth
  *  material that ignores transparency, so a casting water plane would paint
  *  an opaque slab shadow over the pool bottom it exists to reveal; receiving
@@ -5634,6 +5638,14 @@ export function roomTemplateForDoorCount(
   wallThick: number,
   roomDoorCount: number,
 ): RoomTemplate | null {
+  // MODULAR COMPOSITION (§8): an interior room's template IS its module
+  // composition folded into the renderer's existing input — the same
+  // resolution scaledRecipeFor already sized the plan from, so the template
+  // can never disagree with the floor it zones. The measured-capacity
+  // machinery below is the legacy catalogue's; the composition's declared
+  // ceiling rides placeRoomDoors' ladder on overflow, unchanged.
+  const composition = compositionForRecipe(recipe);
+  if (composition) return compositionTemplateFor(composition);
   const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
   const capacityFor = (t: RoomTemplate) => {
     const p = roomPlanFor(
@@ -5733,15 +5745,24 @@ export function SpaceScene({
   // declared footprint at this room's scaled dims, so a miniature room's
   // shortened wall shrinks the claim (hostable flags stay out of the
   // measure — the cutaway is the camera's accident, not the wall's
-  // length). null = no template fits (today: every non-interior class and
-  // S-tier interiors) and every downstream call then gets `undefined`,
-  // reproducing today's behaviour byte-for-byte. Consumption follows the
-  // room-templates.test.ts chain: measured selection → declared plan →
-  // walls → affordance doors → zone staging. Selection goes through the
-  // exported roomTemplateForDoorCount so the movement clamp's door
-  // derivation (game-canvas.tsx) selects the SAME template — two copies
-  // of the capacity measure once placed two different door sets.
+  // length). null = no template fits (every non-interior class) and every
+  // downstream call then gets `undefined`, reproducing today's behaviour
+  // byte-for-byte. Consumption follows the room-templates.test.ts chain:
+  // measured selection → declared plan → walls → affordance doors → zone
+  // staging. Selection goes through the exported roomTemplateForDoorCount
+  // so the movement clamp's door derivation (game-canvas.tsx) selects the
+  // SAME template — two copies of the capacity measure once placed two
+  // different door sets.
+  //
+  // MODULAR COMPOSITION (§8): an interior room no longer draws from the §7
+  // catalogue — its template is the slice's MODULE COMPOSITION folded into
+  // the same RoomTemplate shape (room-modules.ts compositionTemplateFor),
+  // so the plan/walls/doors/zones chain below runs unchanged. The plan's
+  // dims already ARE the composition's (scaledRecipeFor swapped them), and
+  // the composition's own detail — the interior seams, the per-module kit
+  // whitelist, the floor roles — rides `roomComposition` below.
   const roomDoorCount = roomDoors?.length ?? 0;
+  const roomComposition = useMemo(() => compositionForRecipe(recipe), [recipe]);
   const template = useMemo(
     () =>
       roomTemplateForDoorCount(
@@ -6025,6 +6046,74 @@ export function SpaceScene({
     [doorScreens],
   );
 
+  // INTERIOR SEAMS (§8): the partition walls between a composition's
+  // joined modules — the visible evidence the room is a composition, not
+  // one floor. Each consented seam draws a real-thickness wall broken
+  // around its seeded opening: two jambs at full height plus a header
+  // above (openings stay human-height, A4 — the doorway never scales).
+  // Flank ends run wallThick PAST the seam line's ends so the T-junctions
+  // with perimeter walls and crossing seams never show a gap. A seam too
+  // short to hold a walkable opening at this room's scale (miniature
+  // dollhouse rooms) is left open instead of growing an unenterable
+  // doorway — the modules read as one merged space there.
+  const seamPartitions = useMemo(() => {
+    const out: { flanks: WallSegment[]; header: WallSegment }[] = [];
+    if (!roomComposition) return out;
+    const jamb = Math.max(0.3, wallThick);
+    for (const seam of roomComposition.seams) {
+      const horizontal = Math.abs(seam.line.z0 - seam.line.z1) < 1e-9;
+      const sx0 = seam.line.x0 * scaleFactor;
+      const sz0 = seam.line.z0 * scaleFactor;
+      const sx1 = seam.line.x1 * scaleFactor;
+      const sz1 = seam.line.z1 * scaleFactor;
+      const len = horizontal ? sx1 - sx0 : sz1 - sz0;
+      const openW = Math.min(seam.opening.width, len - jamb * 2);
+      if (openW < 1.2) continue;
+      const at = Math.min(
+        Math.max(seam.opening.at * scaleFactor, jamb + openW / 2),
+        len - jamb - openW / 2,
+      );
+      const o0 = at - openW / 2;
+      const o1 = at + openW / 2;
+      const flank = (a: number, b: number): WallSegment =>
+        horizontal
+          ? { x: sx0 + (a + b) / 2, z: sz0, sizeX: b - a, sizeZ: wallThick, entrance: false }
+          : { x: sx0, z: sz0 + (a + b) / 2, sizeX: wallThick, sizeZ: b - a, entrance: false };
+      const flanks = [flank(-wallThick, o0), flank(o1, len + wallThick)].filter(
+        (s) => Math.max(s.sizeX, s.sizeZ) > 0.05,
+      );
+      const header: WallSegment = horizontal
+        ? { x: sx0 + at, z: sz0, sizeX: openW + wallThick, sizeZ: wallThick, entrance: false }
+        : { x: sx0, z: sz0 + at, sizeX: wallThick, sizeZ: openW + wallThick, entrance: false };
+      out.push({ flanks, header });
+    }
+    return out;
+  }, [roomComposition, scaleFactor, wallThick]);
+
+  // Kit clearance (§8): the seam partitions are real walls — furniture
+  // must not phase through them. Obstacle discs along the jamb runs (the
+  // opening stays clear) feed stageInteriorKits' existing obstacle
+  // channel, the same one the pool hall's water fixtures use.
+  const seamObstacles = useMemo(() => {
+    const discs: { x: number; z: number; r: number }[] = [];
+    for (const sp of seamPartitions) {
+      for (const seg of sp.flanks) {
+        const len = Math.max(seg.sizeX, seg.sizeZ);
+        const alongX = seg.sizeX >= seg.sizeZ;
+        const n = Math.max(1, Math.ceil(len));
+        for (let i = 0; i < n; i++) {
+          const t = (i + 0.5) / n - 0.5;
+          discs.push({
+            x: seg.x + (alongX ? t * len : 0),
+            z: seg.z + (alongX ? 0 : t * len),
+            r: Math.min(seg.sizeX, seg.sizeZ) / 2 + 0.3,
+          });
+        }
+      }
+    }
+    return discs;
+  }, [seamPartitions]);
+
   const trees = useMemo(
     () =>
       scatter(
@@ -6112,6 +6201,13 @@ export function SpaceScene({
     });
     if (recipe.worldClass === "interior") {
       const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+      // §8: a composed room furnishes from its modules' OWN whitelists
+      // (the union of the placed modules' kits — each module's character
+      // is that short list, 少而准) and keeps its kit pieces off the seam
+      // partitions (the opening stays walkable).
+      const kitIds = roomComposition
+        ? [...new Set(roomComposition.modules.flatMap((p) => p.module.kits))]
+        : undefined;
       const staging = {
         rng,
         archetype: recipe.archetype,
@@ -6122,6 +6218,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
+        kitIds,
         // The template's content zones (§7), resolved to absolute plan
         // coordinates: the hero's pin, the kit-cluster rects, the
         // keep-empty apron. Absent = today's seeded staging, byte-for-byte.
@@ -6130,11 +6227,14 @@ export function SpaceScene({
       };
       if (recipe.archetype === "pool-hall") {
         const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
-        const obstacles = legacy.map((p) => ({
-          x: p.x,
-          z: p.z,
-          r: Math.max(0.5, p.scale),
-        }));
+        const obstacles = [
+          ...legacy.map((p) => ({
+            x: p.x,
+            z: p.z,
+            r: Math.max(0.5, p.scale),
+          })),
+          ...seamObstacles,
+        ];
         const waterArea = waterRect
           ? (waterRect.halfX * 2 * waterRect.halfZ * 2) /
             (scaleFactor * scaleFactor)
@@ -6146,19 +6246,26 @@ export function SpaceScene({
         });
         return [...legacy, ...kits.map(toPlacement)];
       }
-      return stageInteriorKits({ ...staging, baseArea }).map(toPlacement);
+      return stageInteriorKits({
+        ...staging,
+        baseArea,
+        obstacles: seamObstacles.length > 0 ? seamObstacles : undefined,
+      }).map(toPlacement);
     }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
-  // column grid.
+  // column grid. A COMPOSED room (§8) already carries its interior
+  // architecture — the module seams ARE the partitions — so the legacy
+  // structure draw stands down (it would double-partition the suite).
   const structure = useMemo(() => {
+    if (roomComposition) return { kind: "none" as const };
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "structure"),
     );
     return buildStructure(rng, scaledRecipe, plan, clearanceDoors);
-  }, [recipe, scaledRecipe, plan, clearanceDoors]);
+  }, [recipe, scaledRecipe, plan, clearanceDoors, roomComposition]);
 
   // Wonder-room animals: ducks / cats+dogs / balloons from one stream.
   const animals = useMemo(() => {
@@ -6561,6 +6668,30 @@ export function SpaceScene({
     },
     [partitionMaterials],
   );
+  // The seam partitions share the perimeter's material wiring exactly —
+  // one surface material per segment (jambs + header), full room height.
+  const seamMaterials = useMemo(
+    () =>
+      seamPartitions.map((sp) =>
+        [...sp.flanks, sp.header].map((seg) =>
+          createSurfaceMaterial({
+            kind: surfaceKind,
+            color: wallColor,
+            spanX: Math.max(seg.sizeX, seg.sizeZ),
+            spanY: wallHeight,
+            flatShading: true,
+            normalScale: wallNormalScale,
+          }),
+        ),
+      ),
+    [seamPartitions, surfaceKind, wallColor, wallHeight, wallNormalScale],
+  );
+  useEffect(
+    () => () => {
+      for (const group of seamMaterials) for (const m of group) m.dispose();
+    },
+    [seamMaterials],
+  );
 
   // The ground mesh (not the geometry) is rotated -π/2 about X, which maps
   // geometry (x, y, z) onto mesh-local (x, z, -y); the mesh then sits at
@@ -6595,6 +6726,20 @@ export function SpaceScene({
   const parquet =
     (recipe.worldClass === "interior" || recipe.worldClass === "wonder") &&
     spec.ground === "flat";
+  // Per-module floor roles (§8.2/A5): each module's floor MATERIAL role
+  // tints its own footprint — timber/carpet/tile read off the palette's
+  // four-layer slots (wood/fabric/wall), so the joined modules read as
+  // different rooms underfoot. Translucent veils over the parquet, one
+  // plane per module, flush-abutting (no overlap, no double blend).
+  const moduleFloors = useMemo(() => {
+    if (!roomComposition || !parquet) return [];
+    const p = recipe.palette;
+    const slotFor = { timber: p.wood, carpet: p.fabric, tile: p.wall, deck: p.wood };
+    return roomComposition.modules.map((placed) => ({
+      rect: placed.rect,
+      color: new THREE.Color(slotFor[placed.module.floor] ?? p.ground),
+    }));
+  }, [roomComposition, parquet, recipe]);
   const capColor = useMemo(
     () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.45),
     [recipe],
@@ -6605,6 +6750,76 @@ export function SpaceScene({
   const groundSegments = Math.min(
     GROUND_SEGMENTS_MAX,
     Math.max(GROUND_SEGMENTS, Math.round(GROUND_SEGMENTS * propScale)),
+  );
+
+  // BASIN CURB WALLS (F2's debt): the sunken basin's analytic field is
+  // straight-walled (terrain.ts), but the ground MESH resolves that step on
+  // a fixed grid, so the pool wall rendered as a ~one-cell steep band.
+  // These freestanding vertical boxes ARE the pool walls: the inner face sits exactly
+  // on the water rectangle's boundary (terrain, water plane, caustics mask,
+  // wave boundary, and prop avoidance all keep reading waterRectFor — none
+  // of them move), the body extends OUTWARD over the grid's residual slope
+  // cell (hiding it), and the top rises just past the water surface so the
+  // brimming slab's edge meets tile, not air — a raised pool curb, the same
+  // language as the fountain's ring wall. The near side opens where the
+  // entrance funnel's ramp walks down into the water (terrain.ts's
+  // entranceMask), so the wade-in path is never walled off.
+  const basinCurbs = useMemo(() => {
+    if (!tiledGround || !waterRect) return null;
+    const cell = Math.max(width / groundSegments, extent / groundSegments);
+    const curb = Math.min(1.4, Math.max(0.5, cell + 0.25));
+    const yBottom = GROUND_Y - POOL_DEPTH - 0.05;
+    const yTop = WATER_Y + 0.02;
+    const height = yTop - yBottom;
+    const yMid = (yTop + yBottom) / 2;
+    const { halfX, halfZ, cz } = waterRect;
+    const segs: WallSegment[] = [];
+    // Far side + flanks, extended `curb` past the side faces (corners).
+    segs.push({
+      x: 0, z: cz + halfZ + curb / 2,
+      sizeX: (halfX + curb) * 2, sizeZ: curb, entrance: false,
+    });
+    const nearZ = cz - halfZ - curb / 2;
+    const funnelReaches = cz - halfZ < ENTRANCE_DEPTH + 2.5;
+    const gapHalf = DOOR_GAP_HALF + 1.2; // the funnel's full-width mark
+    if (funnelReaches && halfX > gapHalf + 0.3) {
+      const flankLen = halfX + curb - gapHalf;
+      segs.push(
+        { x: -(gapHalf + flankLen / 2), z: nearZ, sizeX: flankLen, sizeZ: curb, entrance: false },
+        { x: gapHalf + flankLen / 2, z: nearZ, sizeX: flankLen, sizeZ: curb, entrance: false },
+      );
+    } else if (!funnelReaches) {
+      segs.push({
+        x: 0, z: nearZ,
+        sizeX: (halfX + curb) * 2, sizeZ: curb, entrance: false,
+      });
+    }
+    // Side walls between the far/near curbs (corners already covered).
+    segs.push(
+      { x: -halfX - curb / 2, z: cz, sizeX: curb, sizeZ: halfZ * 2, entrance: false },
+      { x: halfX + curb / 2, z: cz, sizeX: curb, sizeZ: halfZ * 2, entrance: false },
+    );
+    return { segs, height, yMid };
+  }, [tiledGround, waterRect, width, extent, groundSegments]);
+  const basinMaterials = useMemo(
+    () =>
+      (basinCurbs?.segs ?? []).map((seg) =>
+        createSurfaceMaterial({
+          kind: "tile",
+          color: recipe.palette.ground,
+          spanX: Math.max(seg.sizeX, seg.sizeZ),
+          spanY: basinCurbs?.height ?? 1,
+          flatShading: true,
+          normalScale: TILE_NORMAL_SCALE,
+        }),
+      ),
+    [basinCurbs, recipe],
+  );
+  useEffect(
+    () => () => {
+      for (const m of basinMaterials) m.dispose();
+    },
+    [basinMaterials],
   );
 
   // Mount-cost trace: close the first render body span (all useMemo work:
@@ -6668,6 +6883,35 @@ export function SpaceScene({
         />
       )}
 
+      {/* Per-module floor tint (§8.2): each joined module's footprint
+          takes its floor role's palette slot — the composition reads as
+          rooms-within-rooms underfoot. Sits between the parquet and the
+          inlay planes; translucent, so the checker still textures it. */}
+      {moduleFloors.map((mf, i) => {
+        const w = (mf.rect.x1 - mf.rect.x0) * scaleFactor;
+        const d = (mf.rect.z1 - mf.rect.z0) * scaleFactor;
+        return (
+          <mesh
+            key={`modfloor${i}`}
+            position={[
+              ((mf.rect.x0 + mf.rect.x1) / 2) * scaleFactor,
+              GROUND_Y + 0.009,
+              ((mf.rect.z0 + mf.rect.z1) / 2) * scaleFactor,
+            ]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            receiveShadow
+          >
+            <planeGeometry args={[w, d]} />
+            <meshStandardMaterial
+              color={mf.color}
+              roughness={1}
+              transparent
+              opacity={0.5}
+            />
+          </mesh>
+        );
+      })}
+
       {/* Floor inlay (template feature, §7.2): a calm stone border band
           flat on the floor — lifted above the parquet's plane, never
           fighting its checker (A3). Flat-floor rooms only. */}
@@ -6691,6 +6935,23 @@ export function SpaceScene({
           dir={dir}
         />
       )}
+
+      {/* Basin curb walls (sunken rooms): the pool's true vertical sides —
+          the heightfield's step is exact analytically but the ground mesh
+          resolves it as a steep band; these boxes put a straight tiled face
+          on the water rectangle's boundary and bury the residual slope cell
+          inside the curb. */}
+      {basinCurbs?.segs.map((s, i) => (
+        <mesh
+          key={`basin${i}`}
+          position={[s.x, basinCurbs.yMid, s.z]}
+          castShadow
+          receiveShadow
+          material={basinMaterials[i]}
+        >
+          <boxGeometry args={[s.sizeX, basinCurbs.height, s.sizeZ]} />
+        </mesh>
+      ))}
 
       {trees.length > 0 && (
         <TreeInstances placements={trees} canopyColor={canopyColor} />
@@ -6968,6 +7229,53 @@ export function SpaceScene({
             </mesh>
           </group>
         ));
+      })}
+
+      {/* Module seam partitions (§8): the walls BETWEEN a composition's
+          modules — real thickness, broken around a walkable opening with a
+          header above (human door height, never scaled). Same opaque wall
+          language and cap rail as the perimeter; full height even on the
+          cutaway side (they are interior architecture, not the room's
+          silhouette). */}
+      {seamPartitions.map((sp, si) => {
+        const mats = seamMaterials[si];
+        const headerH = Math.max(0.05, wallHeight - DOOR_HEIGHT);
+        return (
+          <group key={`seam${si}`}>
+            {sp.flanks.map((seg, fi) => (
+              <group key={`seam${si}-f${fi}`}>
+                <mesh
+                  position={[seg.x, wallHeight / 2, seg.z]}
+                  castShadow
+                  receiveShadow
+                  material={mats[fi]}
+                >
+                  <boxGeometry args={[seg.sizeX, wallHeight, seg.sizeZ]} />
+                </mesh>
+                <mesh
+                  position={[seg.x, wallHeight - 0.05, seg.z]}
+                  castShadow
+                  receiveShadow
+                >
+                  <boxGeometry
+                    args={[seg.sizeX + 0.06, 0.1, seg.sizeZ + 0.06]}
+                  />
+                  <meshStandardMaterial color={capColor} roughness={1} flatShading />
+                </mesh>
+              </group>
+            ))}
+            <mesh
+              position={[sp.header.x, DOOR_HEIGHT + headerH / 2, sp.header.z]}
+              castShadow
+              receiveShadow
+              material={mats[sp.flanks.length]}
+            >
+              <boxGeometry
+                args={[sp.header.sizeX, headerH, sp.header.sizeZ]}
+              />
+            </mesh>
+          </group>
+        );
       })}
 
       {/* Strand doors (B.8): one per strand through the slice, composed

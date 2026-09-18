@@ -274,17 +274,6 @@ export const WATER_DEPTH_RAMP_METERS = 2.2;
 /** Near-glossy so the IBL environment and key light answer with a real
  *  specular streak on the ripples. */
 export const WATER_ROUGHNESS = 0.08;
-/** Ripple normal strength (material.normalScale). */
-export const WATER_NORMAL_SCALE = 0.75;
-/** The three scrolling ripple layers: `meters` = one texture repeat's
- *  physical span (the builder's base period of 6 cells/repeat puts ripple
- *  features at meters/6 ≈ 0.4–1.2m), vx/vy = scroll velocity in uv/sec.
- *  Different scales, directions, and speeds so the sum never correlates. */
-export const WATER_RIPPLE_LAYERS = [
-  { meters: 7, vx: 0.021, vy: 0.013 },
-  { meters: 4.5, vx: -0.017, vy: 0.026 },
-  { meters: 2.5, vx: 0.033, vy: -0.009 },
-] as const;
 
 /* ------------------------------------------------------------------ */
 /* Room language (v0.11 §3): scale notation, plan, composition.        */
