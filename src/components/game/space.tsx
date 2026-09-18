@@ -7189,9 +7189,9 @@ export function SpaceScene({
           dado band, evenly spread per run — the door-split runs break the
           rhythm at every opening for free, and cutaway sills are skipped
           (no shaft room above the rail). */}
-      {roomFeatures.pilasters.map((p) => (
+      {roomFeatures.pilasters.map((p, i) => (
         <PilasterRun
-          key={`pil${p.run}`}
+          key={`pil${p.run}-${i}`}
           wall={wallRuns[p.run].wall}
           height={wallHeights[p.run]}
           alongs={p.alongs}
