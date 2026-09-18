@@ -162,7 +162,9 @@ describe("template data (§7.2/§7.5)", () => {
     const lido = byId("lido");
     expect(lido.archetypes).toEqual(["pool-hall"]);
     expect(lido.minExtent).toBe(32);
-    expect(lido.doorWalls).toEqual(["left", "right"]); // never the far deck
+    // §10.5 axial semantics: doors take the far (horizontal) wall — the
+    // side decks belong to windows and light.
+    expect(lido.doorWalls).toEqual(["far"]);
   });
 
   it("pins every template's hero to a kit that is hero-eligible for its rooms", () => {
@@ -492,12 +494,17 @@ describe("real data pass (memory/episodic)", () => {
         sliceId, plan, walls, hostable, doorCount, WORLD_SEED,
         doorAffordanceFor(template),
       );
-      // Never a dropped door, never a door on a banned wall role.
+      // Never a dropped door. A door on a banned wall role counts as a
+      // violation only while the room sits INSIDE its effective capacity —
+      // past it the never-drop / never-overlap rules outrank the template
+      // ban (§10.5's east/west overflow, room-doors.ts's header).
       expect(layout.doors).toHaveLength(doorCount);
       if (layout.relaxed) stats.relaxed += 1;
-      for (const d of layout.doors) {
-        const role = wallRoleFor(plan, walls[d.wall]);
-        if (!template.doorWalls.includes(role)) stats.violations += 1;
+      if (doorCount <= effCapacity) {
+        for (const d of layout.doors) {
+          const role = wallRoleFor(plan, walls[d.wall]);
+          if (!template.doorWalls.includes(role)) stats.violations += 1;
+        }
       }
 
       const comp = composeRoom(sliceId, plan, scaleFactor);

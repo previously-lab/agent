@@ -82,7 +82,29 @@ export type KitKind =
   // Pool-deck pieces — the pool hall's water-facing kits (§3.1 pool set).
   | "lounger"
   | "umbrella"
-  | "ring";
+  | "ring"
+  // The craft pass (2026-10, 简化的 3D ≠ 简化的细节): the data lane's
+  // wanted-but-unbuildable list — a vanity with a real (faked-gloss)
+  // mirror, floor plants and their pedestals, a laid dining table, a
+  // stack of chairs, a fountain basin, poolside benches, a freestanding
+  // pool ladder and the existing diving board, a grandfather clock, a
+  // true reception counter, plus the pass's own additions (folding
+  // screen, sideboard, towel rail, ring post).
+  | "vanity"
+  | "plant"
+  | "pedestal"
+  | "diningtable"
+  | "chairstack"
+  | "fountain"
+  | "poolbench"
+  | "ringpost"
+  | "grandfatherclock"
+  | "counter"
+  | "screen"
+  | "sideboard"
+  | "towelrail"
+  | "poolladder"
+  | "board";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -222,21 +244,22 @@ export const INTERIOR_KITS: readonly Kit[] = [
     ],
   },
   {
-    // 柜台 + 铃 + 登记簿 + 椅 — the greeter: counter with the clerk's
-    // chair behind it, bell and ledger ON the counter (dy lifts them onto
-    // the desktop — supported by it, never floating), facing the door.
+    // 柜台 + 铃 + 登记簿 + 椅 — the greeter: a TRUE reception counter
+    // (craft pass: the desk stand-in is gone) with the clerk's chair
+    // behind it, bell and ledger ON the countertop (dy lifts them onto
+    // it — supported by it, never floating), facing the door.
     id: "reception",
     worldClasses: ["interior"],
-    archetypes: ["ballroom", "library"],
+    archetypes: ["ballroom", "library", "hotel-room"],
     anchor: "wall",
     backOffset: 1.4,
     facing: "door",
     footprint: 1.7,
     pieces: [
-      { kind: "desk", dx: 0, dz: 0, rotY: 0 },
+      { kind: "counter", dx: 0, dz: 0, rotY: 0 },
       { kind: "chair", dx: 0, dz: -1.05, rotY: 0 },
-      { kind: "bell", dx: 0.55, dz: 0.15, rotY: 0, dy: 0.8 },
-      { kind: "register", dx: -0.5, dz: 0.1, rotY: 0.15, dy: 0.8 },
+      { kind: "bell", dx: 0.55, dz: 0.15, rotY: 0, dy: 1.02 },
+      { kind: "register", dx: -0.5, dz: 0.1, rotY: 0.15, dy: 1.02 },
     ],
   },
   {
@@ -291,9 +314,10 @@ export const INTERIOR_KITS: readonly Kit[] = [
     ],
   },
   {
-    // 餐桌 + 两椅 + 桌布 + 餐具 — two chairs facing each other across the
-    // table; the rug under the setting carries the tablecloth (floor
-    // dressing, I2), a tray with cups ON the table is the tableware.
+    // 餐桌 + 两椅 + 桌布 + 餐具 — a LAID table now (craft pass): the long
+    // diningtable carries its cloth, plates and candlesticks; two chairs
+    // face each other across its long sides; a serving tray waits beside
+    // the settings. The rug under the setting carries the floor dressing.
     id: "dining",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom"],
@@ -302,10 +326,10 @@ export const INTERIOR_KITS: readonly Kit[] = [
     footprint: 1.85,
     pieces: [
       { kind: "rug", dx: 0, dz: 0, rotY: 0, scale: 1.15 },
-      { kind: "desk", dx: 0, dz: 0, rotY: 0 },
-      { kind: "chair", dx: 0, dz: 0.85, rotY: Math.PI },
-      { kind: "chair", dx: 0, dz: -0.85, rotY: 0 },
-      { kind: "tray", dx: 0.15, dz: 0.05, rotY: 0.4, dy: 0.8 },
+      { kind: "diningtable", dx: 0, dz: 0, rotY: 0 },
+      { kind: "chair", dx: -0.55, dz: 0.8, rotY: Math.PI },
+      { kind: "chair", dx: 0.55, dz: -0.8, rotY: 0 },
+      { kind: "tray", dx: 0.85, dz: 0.05, rotY: 0.4, dy: 0.78 },
     ],
   },
   {
@@ -468,6 +492,159 @@ export const INTERIOR_KITS: readonly Kit[] = [
       { kind: "towelstack", dx: -0.6, dz: 0.4, rotY: 0 },
     ],
   },
+
+  /* -------------------------------------------------------------- */
+  /* The craft pass (2026-10): the data lane's wanted-but-unbuildable */
+  /* list, made real — a vanity with a mirror, plants on pedestals,   */
+  /* a laid table's companions, stacked chairs, a fountain court,     */
+  /* poolside furniture, the hall's clock. Every group keeps the §6   */
+  /* rules: 3–6 pieces, never an equidistant repeat, something it     */
+  /* faces.                                                           */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 梳妆台 + 凳 + 屏风 — the vanity corner: the mirror table against
+    // the wall, its stool pulled up, a folding screen half-screening the
+    // corner (the room's one piece of mid-room layering — it stands on
+    // the floor, nothing hangs).
+    id: "vanity-corner",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room"],
+    anchor: "wall",
+    backOffset: 0.5,
+    facing: "center",
+    footprint: 1.7,
+    pieces: [
+      { kind: "rug", dx: 0, dz: 0.55, rotY: 0, scale: 0.9 },
+      { kind: "vanity", dx: 0, dz: 0, rotY: 0 },
+      { kind: "chair", dx: 0, dz: 0.75, rotY: Math.PI, scale: 0.9 },
+      { kind: "screen", dx: -1.25, dz: 0.15, rotY: 0.5 },
+    ],
+  },
+  {
+    // 盆栽 + 基座 — the plant pair (§3.1): a pedestal with its little
+    // vase and two floor plants of different sizes, standing loose —
+    // the cheapest vertical rhythm a room can have.
+    id: "plant-pedestal",
+    worldClasses: ["interior"],
+    facing: "center",
+    footprint: 1.2,
+    pieces: [
+      { kind: "pedestal", dx: 0, dz: 0, rotY: 0 },
+      { kind: "plant", dx: 0.85, dz: 0.3, rotY: 0 },
+      { kind: "plant", dx: -0.7, dz: 0.55, rotY: 0.8, scale: 0.8 },
+    ],
+  },
+  {
+    // 落地大钟 + 基座 + 盆栽 — the clock nook: the tall case against the
+    // wall, flanked by a pedestal and a plant — a hall's quiet corner.
+    id: "clock-nook",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "library", "ballroom"],
+    anchor: "wall",
+    backOffset: 0.35,
+    facing: "center",
+    footprint: 1.5,
+    pieces: [
+      { kind: "grandfatherclock", dx: 0, dz: 0, rotY: 0 },
+      { kind: "pedestal", dx: 1.1, dz: 0.1, rotY: 0 },
+      { kind: "plant", dx: -1.0, dz: 0.25, rotY: 0.4, scale: 0.9 },
+    ],
+  },
+  {
+    // 一叠椅子 + 衣帽架 — stacked chairs against the wall (§3.1): the
+    // room hosts gatherings often enough to keep spares. Calm, stored —
+    // never toppled (I4).
+    id: "chair-stack",
+    worldClasses: ["interior"],
+    archetypes: ["library", "ballroom", "hotel-room"],
+    anchor: "wall",
+    backOffset: 0.45,
+    facing: "center",
+    footprint: 1.4,
+    pieces: [
+      { kind: "chairstack", dx: 0, dz: 0, rotY: 0 },
+      { kind: "chairstack", dx: 1.05, dz: 0.15, rotY: 0.35, scale: 0.92 },
+      { kind: "coatstand", dx: -1.05, dz: 0.1, rotY: 0 },
+    ],
+  },
+  {
+    // 矮柜 + 镜 + 扶手椅 — the sideboard (§3.1): the credenza with its
+    // leaning mirror and vase against the wall, a chair angled toward it.
+    id: "sideboard",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "ballroom"],
+    anchor: "wall",
+    backOffset: 0.4,
+    facing: "center",
+    footprint: 1.7,
+    pieces: [
+      { kind: "rug", dx: 0, dz: 0.55, rotY: 0, scale: 0.9 },
+      { kind: "sideboard", dx: 0, dz: 0, rotY: 0 },
+      { kind: "readingchair", dx: 1.4, dz: 0.6, rotY: -0.5 },
+    ],
+  },
+  {
+    // 喷泉盆 + 两条长凳 — the fountain court (§3.1 fountain): a dry-ish
+    // basin with a skin of water, benches facing it from both sides — a
+    // composed centrepiece for the big quiet rooms (I5).
+    id: "fountain-court",
+    worldClasses: ["interior"],
+    archetypes: ["ballroom", "library"],
+    minExtent: 64,
+    heroSlot: true,
+    facing: "center",
+    footprint: 2.4,
+    pieces: [
+      { kind: "fountain", dx: 0, dz: 0, rotY: 0 },
+      { kind: "poolbench", dx: 0, dz: 1.75, rotY: Math.PI },
+      { kind: "poolbench", dx: 0, dz: -1.75, rotY: 0 },
+      { kind: "plant", dx: 1.85, dz: 0.9, rotY: 0.6, scale: 0.9 },
+    ],
+  },
+  {
+    // 水边长凳 + 毛巾 + 救生圈立柱 — the poolside bench (§3.1
+    // shallow-bench's dry twin): sit down, dry off, the ring on its post.
+    id: "poolside-bench",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    facing: "water",
+    footprint: 1.3,
+    pieces: [
+      { kind: "poolbench", dx: 0, dz: 0, rotY: 0 },
+      { kind: "towelstack", dx: 0.9, dz: 0.2, rotY: 0.2 },
+      { kind: "ringpost", dx: -0.95, dz: 0.15, rotY: 0 },
+    ],
+  },
+  {
+    // 扶梯 + 跳板 + 长凳 — the pool's working edge (§3.1 ladder-board):
+    // the A-frame ladder stands on the deck (freestanding — never bound
+    // to the basin's geometry), the board on its pillar, a bench nearby.
+    id: "ladder-board",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    facing: "water",
+    footprint: 2.2,
+    pieces: [
+      { kind: "poolladder", dx: 0, dz: 0, rotY: 0 },
+      { kind: "board", dx: 1.7, dz: 0.35, rotY: 0 },
+      { kind: "poolbench", dx: -1.55, dz: 0.55, rotY: 0.3 },
+    ],
+  },
+  {
+    // 毛巾架 + 毛巾堆 + 水桶 — the towel rail (§3.1 towel-rail): fresh
+    // towels draped on their rail, spares folded beneath. Faces the water.
+    id: "towel-rail",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    facing: "water",
+    footprint: 1.1,
+    pieces: [
+      { kind: "towelrail", dx: 0, dz: 0, rotY: 0 },
+      { kind: "towelstack", dx: 0.75, dz: 0.25, rotY: 0.2, scale: 0.9 },
+      { kind: "bucket", dx: -0.7, dz: 0.3, rotY: 0 },
+    ],
+  },
 ];
 
 /** Kits a room of this class/archetype/tier may draw. */
@@ -570,6 +747,12 @@ export interface KitStaging {
   /** Layout-template content zones (§7) — see KitZones. Absent = today's
    *  seeded staging, byte-for-byte. */
   zones?: KitZones;
+  /** Per-module kit whitelist (§8's modular rooms, 2026-10): when present,
+   *  only these kit ids may be drawn — a composed room's module lands its
+   *  OWN authored set (room-modules.ts's `kits` lists, filtered through
+   *  the same archetype eligibility above, so the whitelist never widens
+   *  a kit's gate). Omitted = the full deck, byte-for-byte as today. */
+  kitIds?: readonly string[];
   /** Terrain snap for piece y (the shared heightfield). */
   heightAt: (x: number, z: number) => number;
 }
@@ -767,7 +950,9 @@ function drawKitTransform(
  * Pure function of the inputs: same rng stream, same room (A6).
  */
 export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
-  const kits = kitsFor("interior", o.archetype, o.baseExtent);
+  const kits = kitsFor("interior", o.archetype, o.baseExtent).filter(
+    (k) => !o.kitIds || o.kitIds.includes(k.id),
+  );
   if (kits.length === 0) return [];
   const { rng, plan, comp, propScale, water } = o;
   const wallInset = o.wallThick + KIT_WALL_CLEAR * propScale;

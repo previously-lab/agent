@@ -12,8 +12,10 @@ import { describe, it, expect } from "vitest";
 import {
   crossedRoomDoor,
   doorCapacityFor,
+  doorClearanceSet,
   hostableWallMetersFor,
   hostableWallsFor,
+  inDoorApproach,
   placeRoomDoors,
   plaqueLabelFor,
   splitWallsForDoors,
@@ -34,6 +36,7 @@ import {
   DOOR_WIDTH,
   ROOM_DOOR_MIN_GAP,
   ROOM_DOOR_PLAQUE_MAX_CHARS,
+  ROOM_DOOR_ROW_DEPTH,
 } from "@/lib/game/tuning/room";
 import { GAP_HALF } from "@/lib/game/clamps";
 
@@ -308,7 +311,10 @@ describe("plaqueLabelFor", () => {
 /* DoorAffordance parameter. ADDITIVE-ONLY PIN: the hashes below were    */
 /* captured from this module BEFORE the parameter existed, over the      */
 /* fixed matrix — omitting it must reproduce today's layouts            */
-/* byte-for-byte.                                                       */
+/* byte-for-byte. Recaptured 2026-10 for §10.5 axial semantics: doors    */
+/* moved onto the north/south walls (double bank before east/west        */
+/* overflow) and the layout gained the row/doubleRow/axialOverflow       */
+/* fields, so every hash changed by design.                             */
 /* ------------------------------------------------------------------ */
 
 describe("door affordance parameter (§7) — additive", () => {
@@ -328,13 +334,13 @@ describe("door affordance parameter (§7) — additive", () => {
   ];
   /** Pins per case, in count order [0, 2, 5, 12]. */
   const PINS: string[][] = [
-    ["28:572605569", "217:3734579729", "507:1897690691", "1180:1595498093"],
-    ["28:572605569", "218:45983427", "505:2635510601", "1179:3353548360"],
-    ["28:572605569", "220:1256333126", "507:2010783316", "1172:3586942758"],
-    ["28:572605569", "219:1513487658", "504:860977800", "1180:3354572437"],
-    ["28:572605569", "217:2787794349", "504:3971847597", "1161:3357926252"],
-    ["28:572605569", "218:730247303", "503:242676963", "1171:424305385"],
-    ["28:572605569", "221:3212720819", "506:4130105954", "1160:3633062894"],
+    ["68:1928360129", "272:1601945087", "588:1107131762", "1309:4095168044"],
+    ["68:1928360129", "276:3109923037", "582:1351921678", "1306:4243981065"],
+    ["68:1928360129", "276:252809807", "592:1169334783", "1330:2218811389"],
+    ["68:1928360129", "299:82331892", "640:604345039", "1461:1850437613"],
+    ["68:1928360129", "287:3768484092", "602:2559410064", "1345:1396917248"],
+    ["68:1928360129", "276:2746448142", "616:1180243909", "1397:4014092061"],
+    ["68:1928360129", "278:2919930811", "586:2449078566", "1322:854269867"],
   ];
   const COUNTS = [0, 2, 5, 12];
 
@@ -434,14 +440,16 @@ describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
   it("restricts the measure to the permitted roles and the hostable flags", () => {
     const plan = rectPlan(48, 32);
     const walls = wallSegmentsFor(plan, THICK);
-    // No affordance: every solid non-entrance wall counts (3 walls).
+    // §10.5 axial semantics: capacity is measured on the north/south
+    // (horizontal) walls only — the east/west walls host windows and
+    // light, so a side-wall affordance measures ZERO and the far wall
+    // carries the whole measure.
     const all = doorCapacityFor(plan, walls);
-    // Reading-hall affordance: the far wall drops out of the measure.
     const sides = doorCapacityFor(plan, walls, null, { walls: ["left", "right"] });
     const farOnly = doorCapacityFor(plan, walls, null, { walls: ["far"] });
-    expect(sides).toBeGreaterThan(0);
+    expect(sides).toBe(0);
     expect(farOnly).toBeGreaterThan(0);
-    expect(sides + farOnly).toBe(all);
+    expect(farOnly).toBe(all);
     // Hostable flags bite: mark nothing hostable and the measure is zero,
     // exactly like the ladder's primary rung.
     expect(
@@ -451,10 +459,13 @@ describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
 
   it("is exactly the largest count the ladder places WITHOUT relaxing", () => {
     // The number selection steers by is the number placement honours.
+    // dir = -1 keeps the far (axial) wall full-height: rung 0 — the only
+    // non-relaxing rung — is hostableOnly, so the measure must be taken
+    // against a hostable flag set that HAS an axial host.
     for (const [w, e] of [[48, 32], [96, 64], [19.2, 19.2]] as const) {
       const plan = rectPlan(w, e);
       const walls = wallSegmentsFor(plan, THICK);
-      const hostable = hostableWallsFor(plan, walls, 1);
+      const hostable = hostableWallsFor(plan, walls, -1);
       const affordance = { walls: ["left", "right", "far"] as const };
       const cap = doorCapacityFor(plan, walls, hostable, affordance);
       expect(cap).toBeGreaterThan(0);
@@ -465,5 +476,157 @@ describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
       expect(over.doors).toHaveLength(cap + 1);
       expect(over.relaxed).toBe(true);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Axial semantics (v0.11-room-interiors §10.5): doors live on the       */
+/* north/south (horizontal) walls; the east/west walls belong to         */
+/* windows. The retreat order is ① longer N/S wall → ② same-wall        */
+/* double bank (门厅式, the freestanding screen row) → ③ east/west       */
+/* overflow — and no two door frames ever overlap, on any rung.          */
+/* ------------------------------------------------------------------ */
+
+describe("axial semantics (§10.5)", () => {
+  /** Pairwise 3D clearance between every two door centers. */
+  function minPairwiseDistance(doors: readonly RoomDoorPlacement[]): number {
+    let min = Infinity;
+    for (let i = 0; i < doors.length; i++) {
+      for (let j = i + 1; j < doors.length; j++) {
+        min = Math.min(
+          min,
+          Math.hypot(doors[i].x - doors[j].x, doors[i].z - doors[j].z),
+        );
+      }
+    }
+    return min;
+  }
+
+  const horizontalRole = (plan: RoomPlan, walls: readonly WallSegment[], d: RoomDoorPlacement) =>
+    walls[d.wall].sizeZ <= walls[d.wall].sizeX;
+
+  it("seats a full house on the axial walls alone when they are long enough", () => {
+    // 16 doors on a 48×32 rect: the far wall's rung-0 run absorbs every
+    // door — no second row, no east/west, not even relaxed.
+    const plan = rectPlan(48, 32);
+    const walls = wallSegmentsFor(plan, THICK);
+    const layout = placeRoomDoors("2026-12-20", plan, walls, allSolid(walls), 16);
+    expect(layout.doors).toHaveLength(16);
+    expect(layout.relaxed).toBe(false);
+    expect(layout.doubleRow).toBe(false);
+    expect(layout.axialOverflow).toBe(false);
+    for (const d of layout.doors) {
+      expect(horizontalRole(plan, walls, d)).toBe(true);
+      expect(d.row).toBe(0);
+    }
+    expect(minPairwiseDistance(layout.doors)).toBeGreaterThanOrEqual(DOOR_WIDTH);
+  });
+
+  it("grows the same-wall second bank (门厅式) before touching east/west", () => {
+    // 16 doors on a 24×16 rect: the far wall's single row holds eight, so
+    // the ladder takes fallback ② — a staggered freestanding screen row —
+    // while the east/west walls stay doorless.
+    const plan = rectPlan(24, 16);
+    const walls = wallSegmentsFor(plan, THICK);
+    const layout = placeRoomDoors("2026-12-21", plan, walls, allSolid(walls), 16);
+    expect(layout.doors).toHaveLength(16);
+    expect(layout.doubleRow).toBe(true);
+    expect(layout.axialOverflow).toBe(false);
+    const rows = new Set(layout.doors.map((d) => d.row));
+    expect(rows).toEqual(new Set([0, 1]));
+    for (const d of layout.doors) {
+      expect(horizontalRole(plan, walls, d)).toBe(true);
+    }
+    // The screen row stands its depth inward of the host wall.
+    const far = walls[walls.length - 1];
+    for (const d of layout.doors) {
+      const offWall = Math.abs(d.z - far.z);
+      expect(offWall).toBeCloseTo(d.row === 0 ? 0 : ROOM_DOOR_ROW_DEPTH, 9);
+    }
+    // Staggered: no two frames touch, across rows included.
+    expect(minPairwiseDistance(layout.doors)).toBeGreaterThanOrEqual(DOOR_WIDTH);
+  });
+
+  it("overflows east/west only once the axial walls are genuinely full — and never overlaps", () => {
+    // 16 doors on a 12×8 room: the axial rungs top out well below sixteen,
+    // so fallback ③ engages — flagged, relaxed, but every door placed and
+    // every pair of frames clear of each other, corner diagonals included.
+    const plan = rectPlan(12, 8);
+    const walls = wallSegmentsFor(plan, THICK);
+    const layout = placeRoomDoors("2026-12-22", plan, walls, allSolid(walls), 16);
+    expect(layout.doors).toHaveLength(16);
+    expect(layout.relaxed).toBe(true);
+    expect(layout.axialOverflow).toBe(true);
+    expect(layout.doors.some((d) => !horizontalRole(plan, walls, d))).toBe(true);
+    expect(minPairwiseDistance(layout.doors)).toBeGreaterThanOrEqual(DOOR_WIDTH);
+  });
+
+  it("splitWallsForDoors leaves the perimeter uncut for second-row doors", () => {
+    const plan = rectPlan(24, 16);
+    const walls = wallSegmentsFor(plan, THICK);
+    const layout = placeRoomDoors("2026-12-21", plan, walls, allSolid(walls), 16);
+    expect(layout.doubleRow).toBe(true);
+    const row0 = layout.doors.filter((d) => d.row === 0);
+    expect(row0.length).toBeGreaterThan(0);
+    expect(row0.length).toBeLessThan(layout.doors.length);
+    // The split over the full layout is the split over the wall row alone:
+    // row-1 doors cut their own screen (the renderer's half), never the
+    // perimeter.
+    expect(splitWallsForDoors(walls, layout.doors)).toEqual(
+      splitWallsForDoors(walls, row0),
+    );
+    // And no perimeter run covers a wall-row door's center.
+    const runs = splitWallsForDoors(walls, layout.doors);
+    for (const d of row0) {
+      for (const { wall, source } of runs) {
+        if (source !== d.wall) continue;
+        const horizontal = wall.sizeZ <= wall.sizeX;
+        const lo = (horizontal ? wall.x - wall.sizeX / 2 : wall.z - wall.sizeZ / 2);
+        const doorAt = (horizontal ? walls[d.wall].x : walls[d.wall].z) + d.along;
+        const inside =
+          doorAt > Math.min(lo, lo + (horizontal ? wall.sizeX : wall.sizeZ)) + 1e-6 &&
+          doorAt < Math.max(lo, lo + (horizontal ? wall.sizeX : wall.sizeZ)) - 1e-6;
+        expect(inside).toBe(false);
+      }
+    }
+  });
+});
+
+describe("doorClearanceSet (§10.5 vestibule band)", () => {
+  it("mirrors every second-row door so the band behind the screen stays clear too", () => {
+    const screen: RoomDoorPlacement = {
+      index: 0,
+      wall: 2,
+      x: 3,
+      z: 14.2, // the screen line, ROOM_DOOR_ROW_DEPTH in from a far wall at 16
+      nx: 0,
+      nz: -1,
+      along: 3,
+      row: 1,
+    };
+    const wall: RoomDoorPlacement = {
+      index: 1,
+      wall: 2,
+      x: -4,
+      z: 16,
+      nx: 0,
+      nz: -1,
+      along: -4,
+      row: 0,
+    };
+    const set = doorClearanceSet([screen, wall]);
+    expect(set).toHaveLength(3); // the wall-row door is NOT mirrored
+    const mirror = set[2];
+    expect(mirror.x).toBe(screen.x);
+    expect(mirror.z).toBe(screen.z);
+    expect(mirror.nx).toBe(-screen.nx);
+    expect(mirror.nz).toBe(-screen.nz);
+    expect(mirror.wall).toBe(screen.wall);
+    expect(mirror.along).toBe(screen.along);
+    // In front of the screen: flagged by the original. Behind it (the
+    // vestibule band between screen and wall): flagged only by the mirror.
+    expect(inDoorApproach(3, 13.2, set)).toBe(true);
+    expect(inDoorApproach(3, 15.2, [screen])).toBe(false);
+    expect(inDoorApproach(3, 15.2, set)).toBe(true);
   });
 });

@@ -151,14 +151,21 @@ describe("module catalogue (§8.2)", () => {
     expect(gallery.openings).toEqual(["e", "w"]);
   });
 
-  it("never offers doors on the entrance-side edge, and bans doors on the authored walls", () => {
+  it("never offers doors off the axial (north) edge, and bans doors on the authored walls", () => {
+    // §10.5 axial semantics: doors live on the north/south walls only —
+    // for a module that is its far (north) edge; east/west belong to
+    // windows and light. The audit (room-modules.ts) enforces the same.
     for (const m of ROOM_MODULES) {
       expect(m.doorEdges).not.toContain("s");
+      expect(m.doorEdges.every((e) => e === "n")).toBe(true);
     }
-    // The shelf walls and the daylight wall never carry a door.
-    expect(byId("reading-room").doorEdges).not.toContain("n");
-    expect(byId("study").doorEdges).not.toContain("n");
-    expect(byId("sunroom").doorEdges).not.toContain("n");
+    // The shelf walls, the daylight wall, and the water's edge carry NO
+    // doors at all — they declare no door edges rather than break their
+    // own wall.
+    expect(byId("reading-room").doorEdges).toEqual([]);
+    expect(byId("study").doorEdges).toEqual([]);
+    expect(byId("sunroom").doorEdges).toEqual([]);
+    expect(byId("pool-deck").doorEdges).toEqual([]);
   });
 });
 
@@ -272,8 +279,17 @@ describe("resolveRoomComposition (§8.2 selection + placement)", () => {
       // a primary with a designed back wall cannot join four modules, and
       // the overflow then relaxes at placement — room-doors.ts's rule.)
       expect(busy.doorCapacity).toBeGreaterThanOrEqual(calm.doorCapacity);
-      // And a busy day never ends up a lone module.
-      expect(busy.modules.length).toBeGreaterThan(1);
+      // Under §10.5's axial capacities a busy day may legitimately TOP
+      // OUT lone: capacity counts only door-eligible north edges now, so
+      // when no multi-module placement joins with more capacity than the
+      // lone primary, the highest-capacity fallback is that primary (the
+      // overflow relaxes at placement, never drops — room-doors.ts).
+      if (busy.modules.length === 1) {
+        expect(
+          calm.modules.length === 1 ||
+            busy.doorCapacity > calm.doorCapacity,
+        ).toBe(true);
+      }
     }
   });
 
@@ -376,13 +392,18 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
     for (let i = 0; i < 40; i++) {
       const comp = resolveRoomComposition(`2027-09-${i}`, "interior", "ballroom", 4)!;
       const template = compositionTemplateFor(comp);
-      expect(template.doorWalls.length).toBeGreaterThan(0);
-      // The far wall may host only when some module with a north door edge
-      // actually touches the room's north perimeter.
+      // §10.5: the only door-eligible edge is the north one, so the far
+      // wall is the ONLY role the mapping can produce — and when no
+      // module exposes a door-eligible north edge (every authored north
+      // wall is a shelf/glass/water wall), the composition falls back to
+      // the room's structural north wall so placement stays axial.
+      expect(template.doorWalls).toEqual(["far"]);
       const farExpected = comp.modules.some(
         (p) => p.exposed.n && p.module.doorEdges.includes("n"),
       );
-      expect(template.doorWalls.includes("far")).toBe(farExpected);
+      expect(template.doorWalls.includes("far")).toBe(true);
+      // A mapped (non-fallback) far wall always has its exposing module.
+      if (farExpected) expect(template.doorWalls).toContain("far");
     }
   });
 
@@ -412,12 +433,18 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
           { walls: template.doorWalls },
         );
         expect(layout.doors).toHaveLength(doorCount);
-        for (const d of layout.doors) {
-          expect(template.doorWalls).toContain(wallRoleFor(plan, walls[d.wall]));
-        }
         // The measured capacity of the permitted walls is a real number
         // (Finding A's discipline applies unchanged to compositions).
-        expect(doorCapacityFor(plan, walls, null, { walls: template.doorWalls })).toBeGreaterThan(0);
+        const measured = doorCapacityFor(plan, walls, null, { walls: template.doorWalls });
+        expect(measured).toBeGreaterThan(0);
+        // Doors stay on the permitted roles while the room is INSIDE the
+        // measured capacity; past it the never-drop / never-overlap rules
+        // outrank the template ban (§10.5's overflow, room-doors.ts).
+        if (doorCount <= measured) {
+          for (const d of layout.doors) {
+            expect(template.doorWalls).toContain(wallRoleFor(plan, walls[d.wall]));
+          }
+        }
 
         const compo = composeRoom(sliceId, plan, 1);
         const zones = {

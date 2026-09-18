@@ -27,9 +27,10 @@ import {
   placeRoomDoors,
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
-import { wallSegmentsFor, type RoomPlan } from "@/lib/game/room-plan";
+import { wallRoleFor, wallSegmentsFor, type RoomPlan } from "@/lib/game/room-plan";
 import {
   ROOM_DOOR_CROSS_DEPTH,
+  ROOM_DOOR_ROW_DEPTH,
   ROOM_WALL_THICKNESS,
 } from "@/lib/game/tuning/room";
 
@@ -477,7 +478,21 @@ describe("strand-door passages", () => {
         if (p.x === plain.x && p.z === plain.z) continue;
         exercised += 1;
         const after = toLocal(NORTH_DOOR, p);
-        expect(perpOf(d, after)).toBeCloseTo(-ROOM_DOOR_PASS_DEPTH, 9);
+        const perp = perpOf(d, after);
+        // Two honest bounds: the door's OWN plane + overtravel (a wall-row
+        // door, or a screen-row door on an interior wall whose carve
+        // measures perp from the door itself), or — a screen-row (row 1)
+        // door on a boundary wall whose staggered wall-row neighbour's
+        // window overlaps its along — the HOST WALL's plane + overtravel,
+        // i.e. ROW_DEPTH deeper. Never anything in between or beyond.
+        const ownBound = Math.abs(perp + ROOM_DOOR_PASS_DEPTH) < 1e-9;
+        const hostBound =
+          d.row === 1 &&
+          Math.abs(perp + ROOM_DOOR_ROW_DEPTH + ROOM_DOOR_PASS_DEPTH) < 1e-9;
+        expect(
+          ownBound || hostBound,
+          `door row ${d.row} bounded at perp ${perp}`,
+        ).toBe(true);
       }
       // Every fixture places at least one door on a boundary wall.
       expect(exercised).toBeGreaterThan(0);
@@ -501,6 +516,20 @@ describe("strand-door passages", () => {
           const plain = { ...withDoors };
           clampToSpace(withDoors, NORTH_DOOR, width, extent, doors, plan);
           clampToSpace(plain, NORTH_DOOR, width, extent, [], plan);
+          if (d.row === 1) {
+            // A screen-row door's own window never relaxes the box (the
+            // screen stands inside the room, off the box face) — but its
+            // staggered wall-row neighbours' windows may overlap the
+            // probe's along, and THOSE relax legitimately. Only where no
+            // wall-row window covers the probe must the clamp be inert.
+            const covered = doors.some(
+              (o) =>
+                o.row === 0 &&
+                o.wall === d.wall &&
+                Math.abs(o.along - (d.along + a)) < GAP_HALF,
+            );
+            if (covered) continue;
+          }
           expect(withDoors.x).toBe(plain.x);
           expect(withDoors.z).toBe(plain.z);
         }
@@ -556,17 +585,23 @@ describe("strand-door passages", () => {
     }
   });
 
-  it("places doors on more than one wall when the tall walls run out (relaxed ladder), all reachable", () => {
-    // 12 doors on a 32×32 rect exceed the single hostable wall's rung-0
-    // capacity, so the ladder relaxes onto every solid wall — the passage
-    // relaxation must work on all of them (horizontal and vertical alike).
+  it("packs a crowded room onto the axial wall's double bank (relaxed ladder), all reachable", () => {
+    // 12 doors on a 32×32 rect exceed the far wall's single-row run, so
+    // the ladder relaxes into §10.5 fallback ② — the same-wall second
+    // bank (门厅式) — BEFORE any east/west overflow: every door still
+    // hangs on the axial (far) wall, half of them on the freestanding
+    // screen row. The passage relaxation must work for both rows.
     const plan = rectPlan(32, 32);
     const walls = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
     const hostable = hostableWallsFor(plan, walls, 1);
     const layout = placeRoomDoors("clamp-passage-crowded", plan, walls, hostable, 12);
     expect(layout.relaxed).toBe(true);
     expect(layout.doors).toHaveLength(12);
-    expect(new Set(layout.doors.map((d) => d.wall)).size).toBeGreaterThan(1);
+    expect(layout.doubleRow).toBe(true);
+    expect(layout.axialOverflow).toBe(false);
+    for (const d of layout.doors) {
+      expect(wallRoleFor(plan, walls[d.wall])).toBe("far");
+    }
     for (const d of layout.doors) {
       const target = atDoor(d, 0, 0.3);
       const p = toWorld(NORTH_DOOR, target.lx, target.lz);
@@ -752,6 +787,7 @@ describe("plan-aware containment", () => {
       nx: 0,
       nz: -1,
       along: 0,
+      row: 0,
     };
     const innerDoor: RoomDoorPlacement = {
       index: 1,
@@ -761,6 +797,7 @@ describe("plan-aware containment", () => {
       nx: 1,
       nz: 0,
       along: 0,
+      row: 0,
     };
     const doors = [stepDoor, innerDoor];
     for (const d of doors) {
@@ -810,6 +847,7 @@ describe("plan-aware containment", () => {
       nx: 0,
       nz: -1,
       along: 0,
+      row: 0,
     };
     const doors = [farDoor];
     for (const perp of [ROOM_DOOR_CROSS_DEPTH - 0.25, -0.3]) {

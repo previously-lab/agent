@@ -80,6 +80,11 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   "suitcase", "luggagecart", "bell", "register", "towelstack",
   "lockerrow", "chair", "coatstand", "umbrellastand", "bucket", "tray",
   "bookpile",
+  // The craft pass (2026-10): vanity/plant/pedestal/dining/clock/counter
+  // roomcraft plus the pool hall's water-edge fittings.
+  "vanity", "plant", "pedestal", "diningtable", "chairstack", "fountain",
+  "poolbench", "ringpost", "grandfatherclock", "counter", "screen",
+  "sideboard", "towelrail", "poolladder",
   "yarn", "cattree", "scratchpost", "doghouse", "bone", "ball",
 ];
 
@@ -102,6 +107,17 @@ const KIT_IDS = [
   "pool-loungers",
   "towel-station",
   "ring-post",
+  // The craft pass (2026-10): roomcraft corners and the pool hall's
+  // water-edge kits (fountain-court is the ballroom/library hero).
+  "vanity-corner",
+  "plant-pedestal",
+  "clock-nook",
+  "chair-stack",
+  "sideboard",
+  "fountain-court",
+  "poolside-bench",
+  "ladder-board",
+  "towel-rail",
 ];
 
 const kitById = (id: string): Kit => {
@@ -111,7 +127,7 @@ const kitById = (id: string): Kit => {
 };
 
 describe("kit data (§3.1)", () => {
-  it("ships the sixteen interior kits (N1's eight + the abundance pass's eight)", () => {
+  it("ships the twenty-five interior kits (N1's eight + the abundance pass's eight + the craft pass's nine)", () => {
     expect(INTERIOR_KITS.map((k) => k.id)).toEqual(KIT_IDS);
   });
 
@@ -600,9 +616,9 @@ const colonnadePlan = (extent: number): RoomPlan => ({
 describe("inDoorApproach (B.11 strip geometry)", () => {
   // One door on each wall orientation of a 16×16 rect, placed by hand.
   const handmade: RoomDoorPlacement[] = [
-    { index: 0, wall: 0, x: -8, z: 8, nx: 1, nz: 0, along: 0 }, // left wall
-    { index: 1, wall: 1, x: 8, z: 8, nx: -1, nz: 0, along: 0 }, // right wall
-    { index: 2, wall: 2, x: 3, z: 16, nx: 0, nz: -1, along: 0 }, // far wall
+    { index: 0, wall: 0, x: -8, z: 8, nx: 1, nz: 0, along: 0, row: 0 }, // left wall
+    { index: 1, wall: 1, x: 8, z: 8, nx: -1, nz: 0, along: 0, row: 0 }, // right wall
+    { index: 2, wall: 2, x: 3, z: 16, nx: 0, nz: -1, along: 0, row: 0 }, // far wall
   ];
 
   it("flags the strip inward of each door's own wall and normal", () => {
@@ -807,13 +823,14 @@ describe("template zones parameter (§7) — additive", () => {
   /** [sliceId, extent, archetype, widthFactor, pinNoDoors, pinWithDoors].
    *  Recaptured 2026-10 after the kit deck grew from eight to sixteen:
    *  the pin's job is unchanged — omitting `zones` must reproduce the
-   *  zones-less staging of the CURRENT deck byte-for-byte. */
+   *  zones-less staging of the CURRENT deck byte-for-byte. Recaptured
+   *  again 2026-10 for the craft pass (25 kits) + §10.5 axial doors. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6260:350771846", "5852:694438820"],
-    ["2026-10-12", 32, "library", 1.5, "17590:167720260", "18157:1965912997"],
-    ["2026-10-13", 64, "ballroom", 0.66, "34135:2518707809", "33597:3515700738"],
-    ["2026-10-14", 96, "hotel-room", 1, "53776:1375517861", "54046:2982003027"],
-    ["2026-10-15", 32, "pool-hall", 1, "15877:2034756678", "15307:3196329797"],
+    ["2026-10-11", 16, "hotel-room", 1, "6467:1955045619", "5385:1947765648"],
+    ["2026-10-12", 32, "library", 1.5, "16696:1752736629", "16585:1666843699"],
+    ["2026-10-13", 64, "ballroom", 0.66, "34289:2571048912", "32379:364227140"],
+    ["2026-10-14", 96, "hotel-room", 1, "51582:402388874", "51528:2164671650"],
+    ["2026-10-15", 32, "pool-hall", 1, "14553:3784513238", "15478:848847481"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {
@@ -890,5 +907,77 @@ describe("template zones parameter (§7) — additive", () => {
     const pieces = stageChain("2026-10-12", 32, "library", 1.5, false, zones);
     expect(pieces.filter((p) => p.kitId === "dining")).toHaveLength(0);
     expect(pieces.length).toBeGreaterThan(0);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* kitIds filter (the craft pass, 2026-10): KitStaging.kitIds restricts   */
+/* the deck to a module's whitelist so composed rooms stage per module.   */
+/* Omitting it must behave byte-for-byte as before.                       */
+/* ------------------------------------------------------------------ */
+
+describe("kitIds filter (module whitelists)", () => {
+  function stageFiltered(
+    sliceId: string,
+    extent: number,
+    archetype: string,
+    kitIds?: readonly string[],
+  ): StagedKitPiece[] {
+    const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+    const comp = composeRoom(sliceId, plan, 1);
+    const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+    return stageInteriorKits({
+      rng,
+      archetype,
+      plan,
+      comp,
+      baseArea: planArea(plan),
+      baseExtent: extent,
+      propScale: 1,
+      wallThick: ROOM_WALL_THICKNESS,
+      water: null,
+      kitIds,
+      heightAt: () => 0,
+    });
+  }
+
+  it("stages only whitelisted kits when kitIds is given", () => {
+    // The bedroom module's whitelist (§8.2, 少而准).
+    const whitelist = [
+      "bed-corner",
+      "writing-desk",
+      "tv-corner",
+      "luggage",
+      "reading",
+      "vanity-corner",
+    ];
+    for (const sliceId of SLICE_IDS.slice(0, 16)) {
+      const pieces = stageFiltered(sliceId, 48, "hotel-room", whitelist);
+      expect(pieces.length).toBeGreaterThan(0);
+      for (const p of pieces) {
+        expect(whitelist).toContain(p.kitId);
+      }
+    }
+  });
+
+  it("a one-kit whitelist stages that kit and nothing else", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 8)) {
+      const pieces = stageFiltered(sliceId, 48, "library", ["bookshelf-run"]);
+      for (const p of pieces) {
+        expect(p.kitId).toBe("bookshelf-run");
+      }
+    }
+  });
+
+  it("omitting kitIds reproduces the unfiltered staging byte-for-byte", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 12)) {
+      expect(stageFiltered(sliceId, 48, "hotel-room", undefined)).toEqual(
+        stageFiltered(sliceId, 48, "hotel-room"),
+      );
+    }
+  });
+
+  it("an empty whitelist stages nothing (a module with no drawable kits)", () => {
+    expect(stageFiltered("2026-10-0", 48, "hotel-room", [])).toHaveLength(0);
   });
 });

@@ -29,6 +29,23 @@
  * non-hostable; the tight-case fallback may re-include them — the door's
  * portal dressing stands full height from the floor, so a door in a sill
  * wall reads as a frame rising above a half wall, not a hole in the air.
+ *
+ * AXIAL SEMANTICS (v0.11-room-interiors §10.5, user 2026-10): doors live
+ * on the NORTH/SOUTH walls — the plan's horizontal segments, parallel to
+ * the corridor's door walls — so "change timeline" and "turn back" always
+ * face the same way; the east/west walls belong to windows and light.
+ * The spacing ladder below bakes in the doc's retreat order: ① the
+ * template/module layer steers the room toward longer N/S walls by
+ * MEASURED capacity (doorCapacityFor, Finding A — now measured on the
+ * axial rungs, so the number selection steers by is the number placement
+ * honours); ② a same-wall SECOND bank (门厅式, the hotel-corridor move:
+ * a freestanding screen row ROOM_DOOR_ROW_DEPTH inward, staggered so no
+ * two frames touch — `doubleRow` reports it); ③ east/west overflow only
+ * once ①② are full (`axialOverflow` reports it — never the norm). Two
+ * rules outrank even the axis and the template bans: a door is never
+ * DROPPED (B.8), and doors never OVERLAP (forcePlace re-runs over every
+ * solid wall before it would space two frames tighter than a door's
+ * width).
  */
 import { GAP_HALF } from "./clamps";
 import {
@@ -50,6 +67,7 @@ import {
   ROOM_DOOR_END_PAD,
   ROOM_DOOR_MIN_GAP,
   ROOM_DOOR_PLAQUE_MAX_CHARS,
+  ROOM_DOOR_ROW_DEPTH,
 } from "./tuning/room";
 
 /** One placed strand door, in the plan's local frame (doorway at (0,0),
@@ -59,7 +77,8 @@ export interface RoomDoorPlacement {
   index: number;
   /** Index into the walls array passed to placeRoomDoors. */
   wall: number;
-  /** Door center on the wall line. */
+  /** Door center on the wall line (row 0), or on the freestanding screen
+   *  line ROW_DEPTH inward of it (row 1). */
   x: number;
   z: number;
   /** Inward unit normal (axis-aligned), PROBED toward the walkable plan. */
@@ -67,13 +86,28 @@ export interface RoomDoorPlacement {
   nz: number;
   /** Offset along the wall's run from the segment center (m). */
   along: number;
+  /** 0 = hung on the perimeter wall; 1 = the second bank (§10.5 fallback
+   *  ② 门厅式): a freestanding door on the shallow screen standing
+   *  ROOM_DOOR_ROW_DEPTH inward of its host wall, staggered against the
+   *  wall row so no two frames ever touch. Row-1 doors do NOT cut the
+   *  perimeter (splitWallsForDoors skips them) — the renderer builds
+   *  their screen. */
+  row: 0 | 1;
 }
 
 export interface RoomDoorLayout {
   doors: RoomDoorPlacement[];
   /** True when the spacing ladder had to relax (denser spacing, camera-
-   *  side walls, or both) to place every requested door. */
+   *  side walls, the second row, or east/west overflow) to place every
+   *  requested door. */
   relaxed: boolean;
+  /** True when any door landed on the second (screen) row — §10.5's
+   *  fallback ② engaged. */
+  doubleRow: boolean;
+  /** True when any door spilled onto an east/west wall — §10.5's
+   *  fallback ③ engaged (never the norm: the axial rungs are exhausted
+   *  first). */
+  axialOverflow: boolean;
 }
 
 /** A wall's run direction: horizontal walls run along x. (Same convention
@@ -127,19 +161,36 @@ interface Host {
  * rungs open every solid non-entrance wall and pack denser. The primary
  * rung is the authored domestic spacing; everything below it is the
  * tight-case fallback and flips `relaxed` on the layout.
+ *
+ * AXIAL SEMANTICS (v0.11-room-interiors §10.5): north/south walls — the
+ * plan's HORIZONTAL segments, parallel to the corridor's door walls —
+ * are the door walls; east/west walls belong to windows and light. The
+ * ladder honours the retreat order the doc fixes:
+ *   ① single row on the N/S walls (the template/module layer already
+ *     steered the room toward longer N/S walls by measured capacity);
+ *   ② `rows: 2` — a second bank of doors on the SAME wall (门厅式: the
+ *     hotel-corridor move, a freestanding screen row off the wall);
+ *   ③ `axialOnly: false` — east/west overflow, only once ①② are full.
  */
 interface LadderRung {
   hostableOnly: boolean;
   spacing: number;
   endPad: number;
+  /** 1 = the wall row only; 2 = the freestanding screen row may take the
+   *  overflow (per-wall capacity doubles). */
+  rows: 1 | 2;
+  /** true: only horizontal (north/south) wall segments may host. */
+  axialOnly: boolean;
 }
 
 const LADDER: readonly LadderRung[] = [
-  // The home: full-height walls only, doors 3.0m on center, corners clear.
+  // The home: full-height N/S walls only, doors 3.0m on center, corners clear.
   {
     hostableOnly: true,
     spacing: DOOR_WIDTH + ROOM_DOOR_MIN_GAP,
     endPad: ROOM_DOOR_END_PAD,
+    rows: 1,
+    axialOnly: true,
   },
   // Too many doors for the tall walls: the cutaway sills may host too
   // (the portal dressing stands from the floor, so the door still works).
@@ -147,11 +198,29 @@ const LADDER: readonly LadderRung[] = [
     hostableOnly: false,
     spacing: DOOR_WIDTH + ROOM_DOOR_MIN_GAP,
     endPad: ROOM_DOOR_END_PAD,
+    rows: 1,
+    axialOnly: true,
+  },
+  // ② 门厅式: the same N/S walls grow a second, freestanding bank.
+  {
+    hostableOnly: false,
+    spacing: DOOR_WIDTH + ROOM_DOOR_MIN_GAP,
+    endPad: ROOM_DOOR_END_PAD,
+    rows: 2,
+    axialOnly: true,
   },
   // Denser: corridor-tight spacing, reduced corner pad.
-  { hostableOnly: false, spacing: 2.4, endPad: 1.5 },
+  { hostableOnly: false, spacing: 2.4, endPad: 1.5, rows: 2, axialOnly: true },
+  // ③ East/west overflow — the N/S walls are genuinely full.
+  { hostableOnly: false, spacing: 2.4, endPad: 1.5, rows: 2, axialOnly: false },
   // Emergency: doors just clear of each other's frames.
-  { hostableOnly: false, spacing: DOOR_WIDTH + 0.5, endPad: 1.3 },
+  {
+    hostableOnly: false,
+    spacing: DOOR_WIDTH + 0.5,
+    endPad: 1.3,
+    rows: 2,
+    axialOnly: false,
+  },
 ];
 
 /** Wall capacity at a center spacing: n doors need run ≥ (n−1)·spacing. */
@@ -198,7 +267,10 @@ function samplePositions(
 /** One placement attempt at one ladder rung. Null when the walls cannot
  *  hold `count` doors at this spacing; otherwise exactly count doors.
  *  `permitted` (template affordance) bans wall roles outright, on every
- *  rung; null = every solid non-entrance wall may host. */
+ *  rung; null = every solid non-entrance wall may host. Axial rungs
+ *  additionally skip the east/west (vertical) segments. A rows-2 rung
+ *  seats each wall's overflow on the freestanding screen row, staggered
+ *  half a spacing against the wall row so no two frames ever touch. */
 function tryPlace(
   rng: () => number,
   plan: RoomPlan,
@@ -213,15 +285,32 @@ function tryPlace(
     if (wall.entrance) return; // the corridor doorway is untouchable (B.3.1)
     if (permitted && !permitted[i]) return; // template-banned wall role
     if (rung.hostableOnly && !hostable[i]) return;
+    const horizontal = isHorizontal(wall);
+    if (rung.axialOnly && !horizontal) return; // §10.5: doors face N/S
     const len = wallLength(wall);
     hosts.push({
       wall: i,
-      horizontal: isHorizontal(wall),
+      horizontal,
       len,
       run: len - 2 * rung.endPad,
     });
   });
-  const remaining = hosts.map((h) => capacity(h.run, rung.spacing));
+  // A rows-2 rung adds each host's screen-row seats: the screen samples in
+  // a run shrunk by the stagger (see below), so its capacity is measured
+  // on the shrunken run exactly as it will be placed. On the rungs where
+  // ADJACENT (east/west) walls may also host, the screen's run gives up
+  // the corner diagonal too: a screen door ROW_DEPTH in from its wall
+  // line sits that much closer to the neighbouring wall's doors, so its
+  // end pad grows by the row depth. The axial rungs host on non-adjacent
+  // walls only (rect: the far wall; l-shape: the parallel far/step), where
+  // the corner case cannot arise.
+  const stagger = rung.spacing / 2;
+  const screenPad = rung.endPad + (rung.axialOnly ? 0 : ROOM_DOOR_ROW_DEPTH);
+  const screenSpan = (h: Host) => h.len - 2 * screenPad - stagger;
+  const rowCapacity = (h: Host) => capacity(h.run, rung.spacing);
+  const screenCapacity = (h: Host) =>
+    rung.rows === 2 ? capacity(screenSpan(h), rung.spacing) : 0;
+  const remaining = hosts.map((h) => rowCapacity(h) + screenCapacity(h));
   const total = remaining.reduce((a, b) => a + b, 0);
   if (total < count) return null;
 
@@ -251,12 +340,29 @@ function tryPlace(
     cur = pickWall();
   }
 
-  // Positions per host wall, then geometry.
+  // Positions per host wall: the wall row fills first; the overflow takes
+  // the screen row, staggered half a spacing against the wall row so a
+  // screen door never stands directly in front of a wall door. The
+  // stagger is an INJECTIVE shift — sample in the run shrunk by the
+  // stagger, then shift forward — never a wrap: on a full run the
+  // fallback's exact-spacing positions would wrap onto each other (two
+  // screen doors at the same spot), and the never-overlap rule outranks
+  // the stagger's aesthetics.
   const counts = new Map<number, number>();
   assignment.forEach((h) => counts.set(h, (counts.get(h) ?? 0) + 1));
-  const positions = new Map<number, number[]>();
+  const rows = new Map<number, { wall: number[]; screen: number[] }>();
   for (const [h, k] of counts) {
-    positions.set(h, samplePositions(rng, hosts[h].run, k, rung.spacing));
+    const wallCap = rowCapacity(hosts[h]);
+    const k0 = Math.min(k, wallCap);
+    const k1 = k - k0;
+    const onWall = samplePositions(rng, hosts[h].run, k0, rung.spacing);
+    const onScreen = samplePositions(
+      rng,
+      screenSpan(hosts[h]),
+      k1,
+      rung.spacing,
+    ).map((p) => p + stagger);
+    rows.set(h, { wall: onWall, screen: onScreen });
   }
   const used = new Map<number, number>();
   const doors: RoomDoorPlacement[] = [];
@@ -264,14 +370,23 @@ function tryPlace(
     const h = hosts[assignment[d]];
     const slot = used.get(assignment[d]) ?? 0;
     used.set(assignment[d], slot + 1);
-    const offset = rung.endPad + (positions.get(assignment[d]) ?? [0])[slot];
+    const r = rows.get(assignment[d]) ?? { wall: [0], screen: [] };
+    const wallCap = r.wall.length;
+    const row: 0 | 1 = slot < wallCap ? 0 : 1;
+    const pos = row === 0 ? r.wall[slot] : r.screen[slot - wallCap];
+    const offset = (row === 0 ? rung.endPad : screenPad) + pos;
     const wall = walls[h.wall];
     // From segment start along the run: start = center − len/2.
     const along = offset - h.len / 2;
-    const x = h.horizontal ? wall.x + along : wall.x;
-    const z = h.horizontal ? wall.z : wall.z + along;
+    let x = h.horizontal ? wall.x + along : wall.x;
+    let z = h.horizontal ? wall.z : wall.z + along;
     const { nx, nz } = inwardNormal(plan, wall, x, z);
-    doors.push({ index: d, wall: h.wall, x, z, nx, nz, along });
+    if (row === 1) {
+      // The screen row stands off the wall, toward the walkable plan.
+      x += nx * ROOM_DOOR_ROW_DEPTH;
+      z += nz * ROOM_DOOR_ROW_DEPTH;
+    }
+    doors.push({ index: d, wall: h.wall, x, z, nx, nz, along, row });
   }
   return doors;
 }
@@ -322,6 +437,16 @@ function forcePlace(
     counts[order[i]] += 1;
     left -= 1;
   }
+  // No-overlap guard (user, 2026-10: 门不许挤到重叠): if the permitted
+  // hosts alone would space doors tighter than a frame's width, re-run
+  // over EVERY solid wall — the never-overlap rule outranks the
+  // template's ban exactly as never-drop does.
+  if (permitted) {
+    const tight = hosts.some(
+      (h, i) => counts[i] > 1 && h.run / (counts[i] - 1) < DOOR_WIDTH + 0.4,
+    );
+    if (tight) return forcePlace(rng, plan, walls, count, null);
+  }
   const doors: RoomDoorPlacement[] = [];
   hosts.forEach((h, hi) => {
     const k = counts[hi];
@@ -333,7 +458,7 @@ function forcePlace(
       const x = h.horizontal ? wall.x + along : wall.x;
       const z = h.horizontal ? wall.z : wall.z + along;
       const { nx, nz } = inwardNormal(plan, wall, x, z);
-      doors.push({ index: doors.length, wall: h.wall, x, z, nx, nz, along });
+      doors.push({ index: doors.length, wall: h.wall, x, z, nx, nz, along, row: 0 });
     }
   });
   // Consume one draw so forcePlace's rng stream is not the identity.
@@ -414,6 +539,7 @@ export function hostableWallMetersFor(
   let metres = 0;
   walls.forEach((wall, i) => {
     if (wall.entrance) return;
+    if (!isHorizontal(wall)) return; // §10.5: door capacity lives on N/S walls
     if (affordance && !affordance.walls.includes(wallRoleFor(plan, wall))) return;
     if (hostable && !hostable[i]) return;
     metres += Math.max(0, wallLength(wall) - 2 * ROOM_DOOR_END_PAD);
@@ -443,6 +569,7 @@ export function doorCapacityFor(
   let total = 0;
   walls.forEach((wall, i) => {
     if (wall.entrance) return;
+    if (!isHorizontal(wall)) return; // §10.5: the ladder's rungs are N/S-first
     if (affordance && !affordance.walls.includes(wallRoleFor(plan, wall))) return;
     if (hostable && !hostable[i]) return;
     total += capacity(wallLength(wall) - 2 * rung.endPad, rung.spacing);
@@ -472,7 +599,9 @@ export function placeRoomDoors(
   worldSeed: string = WORLD_SEED,
   affordance?: DoorAffordance,
 ): RoomDoorLayout {
-  if (count <= 0) return { doors: [], relaxed: false };
+  if (count <= 0) {
+    return { doors: [], relaxed: false, doubleRow: false, axialOverflow: false };
+  }
   const permitted = affordance
     ? walls.map((wall) =>
         wall.entrance ? false : affordance.walls.includes(wallRoleFor(plan, wall)),
@@ -481,9 +610,42 @@ export function placeRoomDoors(
   const rng = createRng(hashString(`${worldSeed}:${sliceId}:strand-doors`));
   for (let r = 0; r < LADDER.length; r++) {
     const doors = tryPlace(rng, plan, walls, hostable, count, LADDER[r], permitted);
-    if (doors) return { doors, relaxed: r > 0 };
+    if (doors) return finish(doors, walls, r > 0);
   }
-  return { doors: forcePlace(rng, plan, walls, count, permitted), relaxed: true };
+  return finish(forcePlace(rng, plan, walls, count, permitted), walls, true);
+}
+
+/** Fold a placement set into the layout report: the relaxed flag comes
+ *  from the ladder rung, the two fallback flags from where doors landed. */
+function finish(
+  doors: RoomDoorPlacement[],
+  walls: readonly WallSegment[],
+  relaxed: boolean,
+): RoomDoorLayout {
+  return {
+    doors,
+    relaxed,
+    doubleRow: doors.some((d) => d.row === 1),
+    axialOverflow: doors.some((d) => !isHorizontal(walls[d.wall])),
+  };
+}
+
+/**
+ * The set clearance consumers (kit staging, scatter, fixtures, structures)
+ * should test approaches against: the doors themselves, PLUS a mirrored
+ * copy of every second-row door — its approach strip then also covers the
+ * shallow vestibule band BETWEEN the screen and its host wall, so no
+ * furniture can be tucked behind the screen where the row-0 doors are
+ * reached from. Pure; indexes are preserved (consumers never read them).
+ */
+export function doorClearanceSet(
+  doors: readonly RoomDoorPlacement[],
+): RoomDoorPlacement[] {
+  const out = [...doors];
+  for (const d of doors) {
+    if (d.row === 1) out.push({ ...d, nx: -d.nx, nz: -d.nz });
+  }
+  return out;
 }
 
 /** One drawable wall run after splitting: a plain wall segment plus the
@@ -509,6 +671,7 @@ export function splitWallsForDoors(
 ): SplitWall[] {
   const byWall = new Map<number, RoomDoorPlacement[]>();
   for (const d of doors) {
+    if (d.row !== 0) continue; // screen-row doors cut their own screen, not the perimeter
     const list = byWall.get(d.wall) ?? [];
     list.push(d);
     byWall.set(d.wall, list);

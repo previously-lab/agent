@@ -225,6 +225,18 @@ export const ROOM_DOOR_PLAQUE_MAX_CHARS = 24;
  *  the same size) nor a neighbouring door's. */
 export const ROOM_DOOR_CLEAR_HALF = PROP_DOOR_HALF;
 export const ROOM_DOOR_CLEAR_DEPTH = PROP_DOOR_DEPTH;
+/** 门厅式 double bank (§10.5 fallback ②): how far inward of its host wall
+ *  the freestanding screen row stands (m). Deep enough that the band
+ *  between screen and wall reads as a shallow vestibule and two staggered
+ *  frames never touch (the diagonal between rows always exceeds the door
+ *  width), shallow enough that the room keeps its floor. Deliberately
+ *  UNSCALED, like every door measure (A4). */
+export const ROOM_DOOR_ROW_DEPTH = 1.8;
+/** Thickness of the freestanding door screen the second row hangs on (m) —
+ *  a shallow slab in the same opaque wall language, thick enough to read
+ *  as architecture and to carry a door frame, thin enough to stay a
+ *  screen. UNSCALED like the doors themselves (A4). */
+export const ROOM_DOOR_SCREEN_THICK = 0.15;
 
 /* ------------------------------------------------------------------ */
 /* Procedural material wiring (lib/game/materials → room surfaces).    */

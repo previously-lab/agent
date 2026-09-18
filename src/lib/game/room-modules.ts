@@ -102,7 +102,11 @@ export interface RoomModule {
    *  opens). */
   openings: readonly ModuleEdge[];
   /** Edges that may carry STRAND DOORS when they land on the room's
-   *  perimeter (the shelf wall and the sunroom's daylight wall never do). */
+   *  perimeter — §10.5 轴向语义: only the NORTH edge (which maps to the
+   *  room's far wall, a north/south face) may ever host, so a module
+   *  whose north edge is already authored (the shelf wall, the daylight
+   *  glass, the water's edge) declares NO door edges and zero capacity
+   *  instead of breaking its own wall. */
   doorEdges: readonly ModuleEdge[];
   /** Declared CEILING on the strand doors this module absorbs — like the
    *  template's doorCapacity: a declared cap, with the measured capacity
@@ -142,13 +146,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
     size: { w: 10, d: 8 },
     openings: ["n", "e", "w"],
-    doorEdges: ["e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 3,
     floor: "tile",
     wall: "panelling",
     light: "quiet",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.35, 0.65] }],
-    kits: ["coat-bench", "luggage", "housekeeping"],
+    kits: ["coat-bench", "luggage", "housekeeping", "reception"],
     zones: [
       { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.9] } },
       { kind: "cluster", rect: { x: [0.7, 0.96], z: [0.1, 0.9] } },
@@ -165,13 +169,20 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room"],
     size: { w: 12, d: 10 },
     openings: ["s", "e", "w"],
-    doorEdges: ["e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 3,
     floor: "carpet",
     wall: "plaster",
     light: "quiet",
     features: [{ kind: "niche", at: "e", span: [0.35, 0.65] }],
-    kits: ["bed-corner", "writing-desk", "tv-corner", "luggage", "reading"],
+    kits: [
+      "bed-corner",
+      "writing-desk",
+      "tv-corner",
+      "luggage",
+      "reading",
+      "vanity-corner",
+    ],
     heroKit: "bed-corner",
     zones: [
       { kind: "hero", rect: { x: [0.28, 0.72], z: [0.62, 0.94] } },
@@ -182,21 +193,22 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     weight: 3,
   },
   {
-    // 书房 — the writing desk is the altar: shelves on the north wall (never
-    // a door, never an opening), one chair turned toward the spines.
+    // 书房 — the writing desk is the altar: shelves on the north wall.
+    // §10.5: the north edge is the only legal door edge, and it is the
+    // shelf wall — so the study hosts NO doors at all.
     id: "study",
     label: "书房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library"],
     size: { w: 10, d: 10 },
     openings: ["s", "e", "w"],
-    doorEdges: ["e", "w"],
-    doorCapacity: 2,
+    doorEdges: [],
+    doorCapacity: 0,
     floor: "timber",
     wall: "shelf",
     light: "task",
     features: [{ kind: "pilaster-rhythm", at: "n" }],
-    kits: ["writing-desk", "bookshelf-run", "reading"],
+    kits: ["writing-desk", "bookshelf-run", "reading", "plant-pedestal"],
     heroKit: "reading",
     zones: [
       { kind: "hero", rect: { x: [0.3, 0.7], z: [0.56, 0.86] } },
@@ -208,16 +220,16 @@ export const ROOM_MODULES: readonly RoomModule[] = [
   },
   {
     // 阅览室 — the library hall in one unit: a shelf wall across the whole
-    // north face, a bench to sit with a book, a reading corner. Its shelf
-    // wall never opens and never carries a door.
+    // north face, a bench to sit with a book, a reading corner. §10.5: the
+    // shelf wall is the only legal door edge, so the room hosts none.
     id: "reading-room",
     label: "阅览室",
     worldClasses: ["interior"],
     archetypes: ["library", "ballroom"],
     size: { w: 14, d: 12 },
     openings: ["s", "e", "w"],
-    doorEdges: ["e", "w"],
-    doorCapacity: 3,
+    doorEdges: [],
+    doorCapacity: 0,
     floor: "timber",
     wall: "shelf",
     light: "wash",
@@ -225,7 +237,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
       { kind: "pilaster-rhythm", at: "n" },
       { kind: "floor-inlay", at: "floor", span: [0.3, 0.7] },
     ],
-    kits: ["bookshelf-run", "reading", "gallery-bench"],
+    kits: [
+      "bookshelf-run",
+      "reading",
+      "gallery-bench",
+      "clock-nook",
+      "plant-pedestal",
+    ],
     heroKit: "reading",
     zones: [
       { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.76] } },
@@ -245,13 +263,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room", "ballroom"],
     size: { w: 10, d: 8 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 2,
     floor: "tile",
     wall: "tile",
     light: "task",
     features: [],
-    kits: ["dining", "housekeeping", "coat-bench"],
+    kits: ["dining", "housekeeping", "coat-bench", "chair-stack"],
     heroKit: "dining",
     zones: [
       { kind: "hero", rect: { x: [0.28, 0.72], z: [0.55, 0.9] } },
@@ -271,13 +289,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["pool-hall"],
     size: { w: 8, d: 8 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 2,
     floor: "tile",
     wall: "tile",
     light: "wash",
     features: [],
-    kits: ["lockers", "towel-station", "coat-bench"],
+    kits: ["lockers", "towel-station", "coat-bench", "towel-rail"],
     zones: [
       { kind: "cluster", rect: { x: [0.04, 0.96], z: [0.68, 0.95] } },
       { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.6] } },
@@ -294,13 +312,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
     size: { w: 8, d: 8 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 2,
     floor: "timber",
     wall: "panelling",
     light: "quiet",
     features: [],
-    kits: ["luggage", "housekeeping", "coat-bench"],
+    kits: ["luggage", "housekeeping", "coat-bench", "chair-stack"],
     zones: [
       { kind: "cluster", rect: { x: [0.06, 0.45], z: [0.12, 0.9] } },
       { kind: "cluster", rect: { x: [0.55, 0.94], z: [0.12, 0.9] } },
@@ -327,7 +345,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
       { kind: "pilaster-rhythm", at: "n" },
       { kind: "floor-inlay", at: "floor", span: [0.15, 0.85] },
     ],
-    kits: ["gallery-bench", "reading", "bookshelf-run"],
+    kits: [
+      "gallery-bench",
+      "reading",
+      "bookshelf-run",
+      "plant-pedestal",
+      "clock-nook",
+    ],
     heroKit: "reading", // an armchair facing the long wall — gallery-bench
     // is the wall's companion, but kits.ts only grants the hero slot to
     // composed centrepieces, so the pin goes to the hero-eligible chair.
@@ -348,13 +372,20 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room", "ballroom", "library"],
     size: { w: 12, d: 12 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 3,
     floor: "carpet",
     wall: "plaster",
     light: "quiet",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.25, 0.75] }],
-    kits: ["sofa-group", "tv-corner", "reading", "coat-bench"],
+    kits: [
+      "sofa-group",
+      "tv-corner",
+      "reading",
+      "coat-bench",
+      "sideboard",
+      "plant-pedestal",
+    ],
     heroKit: "sofa-group",
     zones: [
       { kind: "hero", rect: { x: [0.28, 0.72], z: [0.52, 0.82] } },
@@ -366,21 +397,27 @@ export const ROOM_MODULES: readonly RoomModule[] = [
   },
   {
     // 日光房 — the room whose north wall is glass (the daylight wall: never
-    // a door, never an opening): a chair in the sun, plants' worth of empty
-    // floor, the inlay band marking where the light falls.
+    // a door, never an opening). §10.5: the only legal door edge is the
+    // glass one, so the sunroom hosts NO doors — it is the room of light.
     id: "sunroom",
     label: "日光房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom", "library"],
     size: { w: 12, d: 8 },
     openings: ["s", "e", "w"],
-    doorEdges: ["e", "w"],
-    doorCapacity: 2,
+    doorEdges: [],
+    doorCapacity: 0,
     floor: "tile",
     wall: "plaster",
     light: "daylight",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.2, 0.8] }],
-    kits: ["reading", "coat-bench", "gallery-bench"],
+    kits: [
+      "reading",
+      "coat-bench",
+      "gallery-bench",
+      "plant-pedestal",
+      "fountain-court",
+    ],
     heroKit: "reading",
     zones: [
       { kind: "hero", rect: { x: [0.3, 0.7], z: [0.6, 0.9] } },
@@ -392,21 +429,29 @@ export const ROOM_MODULES: readonly RoomModule[] = [
   },
   {
     // 泳池甲板 — the dry edge of the water: the lounger pair facing the
-    // pool, towels and ring posts along the sides. Its north edge opens
-    // onto the water itself, so it never carries a door there.
+    // pool, towels and ring posts along the sides. §10.5: the only legal
+    // door edge is the north one, and that edge belongs to the water —
+    // so the deck hosts NO doors.
     id: "pool-deck",
     label: "泳池甲板",
     worldClasses: ["interior"],
     archetypes: ["pool-hall"],
     size: { w: 16, d: 10 },
     openings: ["e", "w"],
-    doorEdges: ["e", "w"],
-    doorCapacity: 4,
+    doorEdges: [],
+    doorCapacity: 0,
     floor: "deck",
     wall: "tile",
     light: "pool-bounce",
     features: [{ kind: "water-rill", at: "floor", span: [0.1, 0.9] }],
-    kits: ["pool-loungers", "towel-station", "ring-post"],
+    kits: [
+      "pool-loungers",
+      "towel-station",
+      "ring-post",
+      "poolside-bench",
+      "ladder-board",
+      "towel-rail",
+    ],
     heroKit: "pool-loungers",
     zones: [
       { kind: "hero", rect: { x: [0.3, 0.7], z: [0.55, 0.85] } },
@@ -426,13 +471,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["ballroom", "hotel-room"],
     size: { w: 14, d: 10 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 4,
     floor: "timber",
     wall: "panelling",
     light: "task",
     features: [{ kind: "pilaster-rhythm", at: "n" }],
-    kits: ["dining", "housekeeping", "gallery-bench"],
+    kits: ["dining", "housekeeping", "gallery-bench", "chair-stack", "sideboard"],
     heroKit: "dining",
     zones: [
       { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.8] } },
@@ -453,13 +498,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     archetypes: ["hotel-room", "library", "ballroom"],
     size: { w: 10, d: 10 },
     openings: ["n", "s", "e", "w"],
-    doorEdges: ["n", "e", "w"],
+    doorEdges: ["n"],
     doorCapacity: 2,
     floor: "timber",
     wall: "panelling",
     light: "task",
     features: [],
-    kits: ["writing-desk", "lockers", "housekeeping", "coat-bench"],
+    kits: ["writing-desk", "lockers", "housekeeping", "coat-bench", "chair-stack"],
     // No heroKit pin: none of the workshop's whitelisted kits is a
     // heroSlot centrepiece, so the hero falls back to the seeded draw
     // among the room's hero-eligible kits (kits.ts's rule, unchanged).
@@ -1132,6 +1177,11 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
       if (role) doorWalls.add(role);
     }
   }
+  // §10.5: when NO module exposes a door-eligible edge (every authored
+  // north wall is a shelf/glass/water wall), an empty list would read as
+  // a total ban and push placement into the scatter fallback — off the
+  // axis. The room's structural north wall still carries the doors.
+  if (doorWalls.size === 0) doorWalls.add("far");
 
   // Features: floor features keep their kind with the module's room-span;
   // wall-bound features attach only to EXPOSED edges, spanned to the
@@ -1235,6 +1285,13 @@ export function auditModule(module: RoomModule): string[] {
   // module south).
   if (module.doorEdges.includes("s")) {
     problems.push(`${module.id}: doorEdges includes the south (entrance-side) edge`);
+  }
+  // §10.5 轴向语义: the north edge (the room's far wall) is the ONLY edge
+  // that may carry a door — east/west edges belong to windows and light.
+  for (const e of module.doorEdges) {
+    if (e !== "n") {
+      problems.push(`${module.id}: doorEdges includes the non-axial "${e}" edge`);
+    }
   }
   // Module-level留白 (§4.5/§6): the authored cluster + hero zones may
   // claim at most ~65% of the module's floor — the furnishing budget

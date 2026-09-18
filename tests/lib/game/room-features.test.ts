@@ -61,6 +61,7 @@ describe("buildRoomFeatures niche/door frame alignment", () => {
     nx: 0,
     nz: -1,
     along,
+    row: 0,
   });
   // Two doors on the far wall, splitting it into three runs.
   const doors = [doorAt(0, -8), doorAt(1, -1.2)];

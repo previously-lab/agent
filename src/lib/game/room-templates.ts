@@ -124,8 +124,9 @@ export interface RoomTemplate {
 export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
   {
     // 阅览厅 — shelf runs on three walls, a long central table, a niche at
-    // the far end. The niche wall never carries a door; doors break the
-    // side shelf runs only (domestic, low capacity).
+    // the far end. §10.5 轴向语义: doors live on the far (north/south)
+    // wall, flanking the niche (NICHE_DOOR_CLEAR keeps their margin); the
+    // side shelf runs never break.
     id: "reading-hall",
     label: "阅览厅",
     worldClasses: ["interior"],
@@ -133,7 +134,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     footprint: "rect",
     minExtent: 32,
     doorCapacity: 4,
-    doorWalls: ["left", "right"],
+    doorWalls: ["far"],
     features: [
       { kind: "niche", at: "far", span: [0.4, 0.6] },
       { kind: "pilaster-rhythm", at: "left" },
@@ -159,8 +160,8 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
   {
     // 客房 — an l-shape whose near zone is the entrance-ish 门厅 and whose
     // kept wing is the bedroom: bed corner deep in the wing, luggage by the
-    // hall. Doors line the hall walls and the step wall; the bed corner's
-    // far wall and the wing's inner wall never carry one.
+    // hall. §10.5: doors line the far wall and the step wall (the plan's
+    // two north/south faces); the side walls belong to the windows.
     id: "guest-room",
     label: "客房",
     worldClasses: ["interior"],
@@ -168,7 +169,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     footprint: "l-shape",
     minExtent: 32,
     doorCapacity: 5,
-    doorWalls: ["left", "right", "step"],
+    doorWalls: ["far", "step"],
     features: [{ kind: "floor-inlay", at: "floor", span: [0.3, 0.7] }],
     heroKit: "bed-corner",
     zones: [
@@ -273,8 +274,9 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
   {
     // 沙龙 — the reception module writ large: a conversation pair as the
     // composed centrepiece, reading and bench clusters along both
-    // pilastered sides, a far-side row of quiet corners. Doors break the
-    // side walls only; the far composition wall stays whole.
+    // pilastered sides, a far-side row of quiet corners. §10.5: doors
+    // take the far (north/south) wall; the pilastered sides keep their
+    // rhythm and their windows.
     id: "salon",
     label: "沙龙",
     worldClasses: ["interior"],
@@ -282,7 +284,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     footprint: "rect",
     minExtent: 64,
     doorCapacity: 5,
-    doorWalls: ["left", "right"],
+    doorWalls: ["far"],
     features: [
       { kind: "floor-inlay", at: "floor", span: [0.2, 0.8] },
       { kind: "pilaster-rhythm", at: "left" },
@@ -309,8 +311,9 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     // luggage by the door), the kept wing is the BEDROOM module (the
     // bed corner and its companions). The hall spine and the wing
     // crossing stay empty so the two modules read as connected, not
-    // merged. Doors line the hall walls and the step; the bedroom wing's
-    // own walls never carry one.
+    // merged. §10.5: doors take the far wall and the step wall (the
+    // plan's north/south faces); the wing's own walls and the flanks
+    // never carry one.
     id: "twin-suite",
     label: "双拼套房",
     worldClasses: ["interior"],
@@ -318,7 +321,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     footprint: "l-shape",
     minExtent: 64,
     doorCapacity: 5,
-    doorWalls: ["left", "right", "step"],
+    doorWalls: ["far", "step"],
     features: [{ kind: "floor-inlay", at: "floor", span: [0.3, 0.7] }],
     heroKit: "sofa-group",
     zones: [
@@ -342,9 +345,9 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     // 池厅 — the pool hall's deck pair (§8: two side-deck modules joined
     // by the water between them): loungers and towel stations face the
     // pool from both sides, the composed centrepiece is the lounger pair
-    // on the far deck, and the pool's near rim keeps its walkway. Doors
-    // break the side decks' walls only — the far deck's composition wall
-    // and the water itself never carry one.
+    // on the far deck, and the pool's near rim keeps its walkway. §10.5:
+    // doors take the far (north/south) wall beyond the water; the side
+    // decks' walls belong to the windows.
     id: "lido",
     label: "池厅",
     worldClasses: ["interior"],
@@ -352,7 +355,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     footprint: "rect",
     minExtent: 32,
     doorCapacity: 5,
-    doorWalls: ["left", "right"],
+    doorWalls: ["far"],
     features: [
       { kind: "floor-inlay", at: "floor", span: [0.15, 0.85] },
       { kind: "pilaster-rhythm", at: "left" },

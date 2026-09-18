@@ -21,6 +21,18 @@
  * doorway (terrain flattened, no props near the door axis) means the
  * player can always walk in.
  *
+ * AXIAL SEMANTICS (§10.5): strand doors live on the NORTH/SOUTH (plan-
+ * horizontal) walls — "change timeline" and "turn back" face the same way
+ * as the corridor's own doors — while the east/west walls belong to
+ * windows and light (buildRoomFixtures hosts the window there first).
+ * When one axial wall can't hold the count, the same wall grows a SECOND
+ * bank (门厅式): a freestanding screen ROOM_DOOR_ROW_DEPTH inward, built
+ * here from the same opaque wall language and split by the same splitter
+ * (doorScreens/screenRuns); east/west overflow is the last resort, never
+ * the norm. Furniture clearance tests run against doorClearanceSet — the
+ * doors plus a mirrored copy of each screen-row door — so the shallow
+ * vestibule behind a screen stays walkable, not furnished.
+ *
  * v2 taxonomy — the recipe's worldClass picks the content family:
  *   - nature:   biomes (meadow/plains/pool/forest + ocean/lake/beach/
  *               snowfield) with trees, rocks, water, and biome motif props
@@ -137,6 +149,7 @@ import type { SplitWall } from "@/lib/game/room-doors";
 import {
   crossedRoomDoor,
   doorCapacityFor,
+  doorClearanceSet,
   hostableWallsFor,
   inDoorApproach,
   placeRoomDoors,
@@ -241,6 +254,8 @@ import {
   ROCK_MIN,
   ROOM_DOOR_CLEAR_DEPTH,
   ROOM_DOOR_CLEAR_HALF,
+  ROOM_DOOR_ROW_DEPTH,
+  ROOM_DOOR_SCREEN_THICK,
   ROOM_WALL_THICKNESS,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
@@ -263,6 +278,7 @@ import {
   TREE_MIN,
   WALL_CLEARANCE,
   WALL_SILL_HEIGHT,
+  WATER_ROUGHNESS,
   WATER_Y,
   WINDOW_DOOR_CLEAR,
   WINDOW_HEIGHT,
@@ -1079,12 +1095,20 @@ function insideRect(
  *  castShadow/receiveShadow down the graph, and the prop/animal assemblies
  *  are dozens of tiny meshes each, so one traversal on mount flags every
  *  descendant mesh. Static subtrees only — geometry never mounts after the
- *  first render. */
+ *  first render. Meshes tagged `userData.noCastShadow` (fountain water and
+ *  other alpha surfaces) only RECEIVE: a shadow caster renders through a
+ *  depth material that ignores transparency, so a casting water disc would
+ *  paint an opaque slab shadow over the basin it exists to fill. */
 function Shadowed({ children }: { children: ReactNode }) {
   const ref = useRef<THREE.Group>(null);
   useLayoutEffect(() => {
     ref.current?.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
+        if (obj.userData.noCastShadow) {
+          obj.castShadow = false;
+          obj.receiveShadow = true;
+          return;
+        }
         obj.castShadow = true;
         obj.receiveShadow = true;
       }
@@ -1546,6 +1570,23 @@ type MotifKind =
   | "bucket"
   | "tray"
   | "bookpile"
+  // craft pass (2026-10): the finer room dressing — real mirrors, plants,
+  // a laid table, stacked chairs, a fountain, poolside furniture, the
+  // hall clock and the true reception counter. 简化的 3D ≠ 简化的细节.
+  | "vanity"
+  | "plant"
+  | "pedestal"
+  | "diningtable"
+  | "chairstack"
+  | "fountain"
+  | "poolbench"
+  | "ringpost"
+  | "grandfatherclock"
+  | "counter"
+  | "screen"
+  | "sideboard"
+  | "towelrail"
+  | "poolladder"
   // wonder props
   | "yarn"
   | "cattree"
@@ -2801,6 +2842,758 @@ function MotifGeometry({
           <mesh position={[0.26, 0.09, 0]} rotation={[0, 0.1, 0.35]}>
             <boxGeometry args={[0.05, 0.24, 0.2]} />
             <meshStandardMaterial color="#c4553f" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    /* ------------------------------------------------------------ */
+    /* The craft pass (2026-10): finer room dressing. Every piece is  */
+    /* real geometry at human scale (the avatar is 1.7m), in the      */
+    /* hotel's material language — oiled woods, brass, cream fabric,  */
+    /* one dark gloss for mirrors and clock glass. The only alphas    */
+    /* are water (the fountain's skin).                               */
+    /* ------------------------------------------------------------ */
+    case "vanity":
+      // Dressing table: a slim top on two drawer stacks, the mirror
+      // rising from its back edge — the "mirror" is a dark polished
+      // panel (low roughness, high metalness — a sheen, never a real
+      // reflection), plus a perfume bottle and a powder box on the top.
+      return (
+        <group>
+          {[-0.48, 0.48].map((x) => (
+            <mesh key={x} position={[x, 0.36, 0]}>
+              <boxGeometry args={[0.24, 0.72, 0.42]} />
+              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {[-0.48, 0.48].map((x) =>
+            [0.2, 0.42, 0.62].map((y) => (
+              <mesh key={`${x}${y}`} position={[x, y, 0.215]}>
+                <boxGeometry args={[0.05, 0.03, 0.02]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 0.75, 0]}>
+            <boxGeometry args={[1.2, 0.06, 0.46]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {/* Mirror frame + polished panel, standing on the top's back edge. */}
+          <mesh position={[0, 1.35, -0.19]}>
+            <boxGeometry args={[0.86, 1.1, 0.05]} />
+            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.35, -0.16]}>
+            <boxGeometry args={[0.74, 0.98, 0.02]} />
+            <meshStandardMaterial
+              color="#232c38"
+              roughness={0.08}
+              metalness={0.85}
+              flatShading
+            />
+          </mesh>
+          {/* Dressing items: a perfume flacon and a powder box. */}
+          <mesh position={[0.32, 0.85, 0.08]}>
+            <cylinderGeometry args={[0.03, 0.04, 0.14, 7]} />
+            <meshStandardMaterial
+              color="#8a949e"
+              roughness={0.25}
+              metalness={0.5}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0.32, 0.94, 0.08]}>
+            <sphereGeometry args={[0.02, 6, 5]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[-0.3, 0.81, 0.05]}>
+            <cylinderGeometry args={[0.07, 0.07, 0.05, 10]} />
+            <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "plant":
+      // Potted floor plant: a tapered terracotta pot with its soil disc,
+      // three stems carrying flattened foliage crowns in the room's
+      // canopy color — the cheapest vertical rhythm a room can have.
+      return (
+        <group>
+          <mesh position={[0, 0.18, 0]}>
+            <cylinderGeometry args={[0.17, 0.22, 0.36, 10]} />
+            <meshStandardMaterial color="#9c5f45" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.365, 0]}>
+            <cylinderGeometry args={[0.15, 0.15, 0.03, 10]} />
+            <meshStandardMaterial color="#3a2f26" roughness={1} flatShading />
+          </mesh>
+          {(
+            [
+              [0, 0.75, 0, 0.06],
+              [0.1, 0.62, 0.08, -0.12],
+              [-0.11, 0.6, -0.06, 0.14],
+            ] as const
+          ).map(([x, y, z, tilt], i) => (
+            <mesh key={i} position={[x / 2, y / 2 + 0.18, z / 2]} rotation={[tilt, 0, tilt]}>
+              <cylinderGeometry args={[0.018, 0.024, y - 0.36, 5]} />
+              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {(
+            [
+              [0, 0.98, 0, 0.34],
+              [0.16, 0.78, 0.12, 0.24],
+              [-0.17, 0.74, -0.1, 0.22],
+              [0.02, 0.82, -0.16, 0.2],
+            ] as const
+          ).map(([x, y, z, r], i) => (
+            <mesh key={i} position={[x, y, z]} scale={[1, 0.72, 1]}>
+              <sphereGeometry args={[r, 8, 6]} />
+              <meshStandardMaterial
+                color={canopyColor}
+                roughness={1}
+                flatShading
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "pedestal":
+      // Display pedestal: stepped base, a slight-entasis shaft, a cap —
+      // and the little amphora it exists to show (accent-glazed, the
+      // room's one quiet color tie).
+      return (
+        <group>
+          <mesh position={[0, 0.07, 0]}>
+            <boxGeometry args={[0.44, 0.14, 0.44]} />
+            <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.52, 0]}>
+            <cylinderGeometry args={[0.13, 0.16, 0.76, 10]} />
+            <meshStandardMaterial color="#c4c0b4" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.94, 0]}>
+            <boxGeometry args={[0.38, 0.08, 0.38]} />
+            <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading />
+          </mesh>
+          {/* The amphora: belly, neck, lip. */}
+          <mesh position={[0, 1.11, 0]} scale={[1, 1.15, 1]}>
+            <sphereGeometry args={[0.11, 9, 7]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+          <mesh position={[0, 1.26, 0]}>
+            <cylinderGeometry args={[0.045, 0.06, 0.12, 8]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+          <mesh position={[0, 1.33, 0]}>
+            <cylinderGeometry args={[0.07, 0.05, 0.03, 8]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+        </group>
+      );
+    case "diningtable":
+      // The laid table (一张摆着东西的桌子): a long top under a cloth
+      // whose skirt hangs past the edge, four settings (plate + cup),
+      // two candlesticks and a low bowl — "eating" reads at a glance.
+      return (
+        <group>
+          {[-0.95, 0.95].flatMap((x) =>
+            [-0.35, 0.35].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.36, z]}>
+                <boxGeometry args={[0.08, 0.72, 0.08]} />
+                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 0.73, 0]}>
+            <boxGeometry args={[2.2, 0.06, 0.95]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {/* The cloth: a slightly oversized slab plus a hanging skirt. */}
+          <mesh position={[0, 0.775, 0]}>
+            <boxGeometry args={[2.3, 0.025, 1.05]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          {[-1, 1].map((s) => (
+            <mesh key={`sk${s}`} position={[0, 0.65, s * 0.52]}>
+              <boxGeometry args={[2.3, 0.24, 0.02]} />
+              <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {[-1, 1].map((s) => (
+            <mesh key={`ske${s}`} position={[s * 1.14, 0.65, 0]}>
+              <boxGeometry args={[0.02, 0.24, 1.05]} />
+              <meshStandardMaterial color="#e8e4da" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {/* Four settings. */}
+          {(
+            [
+              [-0.55, 0.28],
+              [0.55, 0.28],
+              [-0.55, -0.28],
+              [0.55, -0.28],
+            ] as const
+          ).map(([x, z], i) => (
+            <group key={i} position={[x, 0, z]}>
+              <mesh position={[0, 0.8, 0]}>
+                <cylinderGeometry args={[0.11, 0.09, 0.025, 12]} />
+                <meshStandardMaterial color="#f2ede2" roughness={0.6} flatShading />
+              </mesh>
+              <mesh position={[0.14, 0.83, 0.05]}>
+                <cylinderGeometry args={[0.035, 0.03, 0.07, 8]} />
+                <meshStandardMaterial color="#e8e4da" roughness={0.6} flatShading />
+              </mesh>
+            </group>
+          ))}
+          {/* Candlesticks (unlit — the room's fixtures own the light, B.13). */}
+          {[-0.25, 0.25].map((x) => (
+            <group key={x} position={[x, 0, 0]}>
+              <mesh position={[0, 0.8, 0]}>
+                <cylinderGeometry args={[0.05, 0.06, 0.02, 8]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+              <mesh position={[0, 0.87, 0]}>
+                <cylinderGeometry args={[0.015, 0.03, 0.13, 6]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+              <mesh position={[0, 0.99, 0]}>
+                <cylinderGeometry args={[0.018, 0.018, 0.12, 6]} />
+                <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+              </mesh>
+            </group>
+          ))}
+          <mesh position={[0, 0.81, 0]} scale={[1, 0.5, 1]}>
+            <sphereGeometry args={[0.14, 10, 6]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "chairstack":
+      // A stack of four side chairs against the wall (这里常有人聚):
+      // three right-side-up, seat on seat with a little rotation, the
+      // top one flipped — stored calmly, never toppled (I4).
+      return (
+        <group>
+          {[0, 1, 2].map((i) => (
+            <group key={i} position={[0, i * 0.47, 0]} rotation={[0, i * 0.16 - 0.12, 0]}>
+              {[-0.17, 0.17].flatMap((x) =>
+                [-0.17, 0.17].map((z) => (
+                  <mesh key={`${x}${z}`} position={[x, 0.225, z]}>
+                    <boxGeometry args={[0.045, 0.45, 0.045]} />
+                    <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+                  </mesh>
+                )),
+              )}
+              <mesh position={[0, 0.47, 0]}>
+                <boxGeometry args={[0.42, 0.05, 0.42]} />
+                <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[0, 0.72, -0.18]}>
+                <boxGeometry args={[0.42, 0.45, 0.05]} />
+                <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+              </mesh>
+            </group>
+          ))}
+          {/* The top chair, flipped onto the stack. */}
+          <group position={[0, 1.78, 0]} rotation={[Math.PI, 0.3, 0]}>
+            {[-0.17, 0.17].flatMap((x) =>
+              [-0.17, 0.17].map((z) => (
+                <mesh key={`${x}${z}`} position={[x, 0.225, z]}>
+                  <boxGeometry args={[0.045, 0.45, 0.045]} />
+                  <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+                </mesh>
+              )),
+            )}
+            <mesh position={[0, 0.47, 0]}>
+              <boxGeometry args={[0.42, 0.05, 0.42]} />
+              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+            </mesh>
+            <mesh position={[0, 0.72, -0.18]}>
+              <boxGeometry args={[0.42, 0.45, 0.05]} />
+              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+            </mesh>
+          </group>
+        </group>
+      );
+    case "fountain":
+      // Fountain basin (§3.1 fountain, nearly dry): a stone ring wall
+      // with its rim, the tiled basin floor, a SKIN of water (alpha —
+      // the one sanctioned transparency besides glass), and the center
+      // plinth with its upper bowl. The water never casts a shadow (the
+      // pool-surface rule: a casting alpha plane paints an opaque slab).
+      return (
+        <group>
+          <mesh position={[0, 0.25, 0]}>
+            <cylinderGeometry args={[1.15, 1.22, 0.5, 18, 1, true]} />
+            <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading side={THREE.DoubleSide} />
+          </mesh>
+          <mesh position={[0, 0.51, 0]} rotation={[Math.PI / 2, 0, 0]}>
+            <torusGeometry args={[1.16, 0.07, 8, 20]} />
+            <meshStandardMaterial color="#c4c0b4" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.06, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <circleGeometry args={[1.14, 18]} />
+            <meshStandardMaterial color="#5f8a94" roughness={0.7} flatShading />
+          </mesh>
+          <mesh
+            position={[0, 0.32, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            userData={{ noCastShadow: true }}
+          >
+            <circleGeometry args={[1.1, 18]} />
+            <meshStandardMaterial
+              color="#4a8f9b"
+              transparent
+              opacity={0.55}
+              roughness={WATER_ROUGHNESS}
+              metalness={0.1}
+              flatShading
+            />
+          </mesh>
+          {/* Center plinth and its upper bowl. */}
+          <mesh position={[0, 0.45, 0]}>
+            <cylinderGeometry args={[0.14, 0.2, 0.8, 10]} />
+            <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.9, 0]}>
+            <cylinderGeometry args={[0.44, 0.28, 0.16, 14]} />
+            <meshStandardMaterial color="#c4c0b4" roughness={1} flatShading />
+          </mesh>
+          <mesh
+            position={[0, 0.96, 0]}
+            rotation={[-Math.PI / 2, 0, 0]}
+            userData={{ noCastShadow: true }}
+          >
+            <circleGeometry args={[0.38, 14]} />
+            <meshStandardMaterial
+              color="#4a8f9b"
+              transparent
+              opacity={0.55}
+              roughness={WATER_ROUGHNESS}
+              metalness={0.1}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "poolbench":
+      // Poolside bench: two stone feet, three wood slats, no back — a
+      // bench you sit on wet, reading toward the water.
+      return (
+        <group>
+          {[-0.6, 0.6].map((x) => (
+            <mesh key={x} position={[x, 0.18, 0]}>
+              <boxGeometry args={[0.14, 0.36, 0.5]} />
+              <meshStandardMaterial color="#b8b4a8" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {[-0.17, 0, 0.17].map((z) => (
+            <mesh key={z} position={[0, 0.385, z]}>
+              <boxGeometry args={[1.6, 0.045, 0.14]} />
+              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "ringpost":
+      // Life ring on its post (救生圈立柱): a slim stand, the ring hung
+      // vertically on a bracket — present and calm, never an alarm.
+      return (
+        <group>
+          <mesh position={[0, 0.03, 0]}>
+            <cylinderGeometry args={[0.16, 0.2, 0.06, 10]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.65, 0]}>
+            <cylinderGeometry args={[0.035, 0.045, 1.25, 7]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 1.05, 0.1]} rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[0.02, 0.02, 0.22, 5]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 1.05, 0.2]}>
+            <torusGeometry args={[0.3, 0.09, 6, 14]} />
+            <meshStandardMaterial color="#e0643c" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "grandfatherclock":
+      // Grandfather clock: stepped base, the long waist with its dark
+      // glass door (the pendulum hinted behind it), the head with a real
+      // face — hands, tick marks — under a little pediment. 2.2m tall.
+      return (
+        <group>
+          <mesh position={[0, 0.12, 0]}>
+            <boxGeometry args={[0.56, 0.24, 0.36]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.98, 0]}>
+            <boxGeometry args={[0.46, 1.5, 0.3]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {/* The waist's glass door, pendulum hinted behind the gloss. */}
+          <mesh position={[0, 0.95, 0.14]}>
+            <boxGeometry args={[0.28, 1.1, 0.03]} />
+            <meshStandardMaterial
+              color="#232c38"
+              roughness={0.08}
+              metalness={0.85}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.95, 0.13]}>
+            <cylinderGeometry args={[0.012, 0.012, 0.7, 5]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.62, 0.13]}>
+            <cylinderGeometry args={[0.07, 0.07, 0.02, 10]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          {/* The head and its face. */}
+          <mesh position={[0, 1.92, 0]}>
+            <boxGeometry args={[0.56, 0.5, 0.34]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.92, 0.16]} rotation={[Math.PI / 2, 0, 0]}>
+            <cylinderGeometry args={[0.18, 0.18, 0.03, 16]} />
+            <meshStandardMaterial color="#f2ede2" roughness={0.7} flatShading />
+          </mesh>
+          {[0, Math.PI / 2, Math.PI, (Math.PI * 3) / 2].map((a) => (
+            <mesh
+              key={a}
+              position={[Math.sin(a) * 0.14, 1.92 + Math.cos(a) * 0.14, 0.18]}
+              rotation={[0, 0, -a]}
+            >
+              <boxGeometry args={[0.015, 0.04, 0.01]} />
+              <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0.03, 1.95, 0.18]} rotation={[0, 0, -0.9]}>
+            <boxGeometry args={[0.015, 0.09, 0.01]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[-0.01, 1.9, 0.18]} rotation={[0, 0, 0.5]}>
+            <boxGeometry args={[0.02, 0.13, 0.01]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          {/* Pediment crown. */}
+          <mesh position={[0, 2.2, 0]}>
+            <boxGeometry args={[0.6, 0.06, 0.38]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 2.28, 0]} rotation={[0, 0, Math.PI / 4]} scale={[1, 0.5, 1]}>
+            <boxGeometry args={[0.3, 0.3, 0.3]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "counter":
+      // The true reception counter (craft pass — no more desk stand-in):
+      // a panelled body with a toe-kick, the top slab overhanging the
+      // guest side, and the luggage-tag rack standing on the clerk's end
+      // (brass rail, four tags waiting).
+      return (
+        <group>
+          <mesh position={[0, 0.06, 0]}>
+            <boxGeometry args={[2.3, 0.12, 0.5]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.56, 0]}>
+            <boxGeometry args={[2.4, 0.9, 0.55]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {/* Panelled front: two inset fields, proud of the face. */}
+          {[-0.6, 0.6].map((x) => (
+            <mesh key={x} position={[x, 0.56, 0.283]}>
+              <boxGeometry args={[0.9, 0.62, 0.02]} />
+              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0, 1.04, 0.02]}>
+            <boxGeometry args={[2.55, 0.06, 0.68]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {/* The tag rack on the clerk's end. */}
+          <mesh position={[-0.95, 1.24, -0.12]}>
+            <boxGeometry args={[0.5, 0.34, 0.03]} />
+            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[-0.95, 1.32, -0.1]} rotation={[Math.PI / 2, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[0.012, 0.012, 0.44, 5]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          {[-1.09, -1.0, -0.9, -0.81].map((x, i) => (
+            <mesh key={x} position={[x, 1.24, -0.09]} rotation={[0, 0, i % 2 === 0 ? 0.06 : -0.05]}>
+              <boxGeometry args={[0.07, 0.1, 0.012]} />
+              <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "screen":
+      // Folding screen: three framed fabric panels hinged at slight
+      // angles on little bar feet — the room's one piece of mid-air
+      // layering that still stands on the floor (I2).
+      return (
+        <group>
+          {(
+            [
+              [-0.62, 0, 0.32],
+              [0, 0.1, 0],
+              [0.62, 0, -0.32],
+            ] as const
+          ).map(([x, z, ry], i) => (
+            <group key={i} position={[x, 0, z]} rotation={[0, ry, 0]}>
+              <mesh position={[0, 0.9, 0]}>
+                <boxGeometry args={[0.6, 1.7, 0.04]} />
+                <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[0, 0.9, 0.005]}>
+                <boxGeometry args={[0.5, 1.58, 0.04]} />
+                <meshStandardMaterial color="#ddd6c4" roughness={1} flatShading />
+              </mesh>
+              {[-0.22, 0.22].map((fx) => (
+                <mesh key={fx} position={[fx, 0.03, 0]}>
+                  <boxGeometry args={[0.06, 0.06, 0.3]} />
+                  <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+                </mesh>
+              ))}
+            </group>
+          ))}
+        </group>
+      );
+    case "sideboard":
+      // Credenza with its leaning mirror and vase (§3.1 sideboard): two
+      // door fronts on short legs; the mirror rests ON the top against
+      // the wall behind (wall-supported, never hung); a little vase.
+      return (
+        <group>
+          {[-0.75, 0.75].flatMap((x) =>
+            [-0.15, 0.15].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.06, z]}>
+                <boxGeometry args={[0.06, 0.12, 0.06]} />
+                <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 0.45, 0]}>
+            <boxGeometry args={[1.8, 0.66, 0.45]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {[-0.44, 0.44].map((x) => (
+            <group key={x}>
+              <mesh position={[x, 0.45, 0.23]}>
+                <boxGeometry args={[0.8, 0.54, 0.02]} />
+                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[x + 0.3 * Math.sign(x), 0.45, 0.25]}>
+                <sphereGeometry args={[0.025, 6, 5]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+          <mesh position={[0, 0.8, 0]}>
+            <boxGeometry args={[1.86, 0.04, 0.48]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {/* The leaning mirror, resting on the top's back edge. */}
+          <group position={[0.2, 0.82, -0.16]} rotation={[-0.12, 0, 0]}>
+            <mesh position={[0, 0.48, 0]}>
+              <boxGeometry args={[0.72, 0.96, 0.04]} />
+              <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+            </mesh>
+            <mesh position={[0, 0.48, 0.025]}>
+              <boxGeometry args={[0.6, 0.84, 0.02]} />
+              <meshStandardMaterial
+                color="#232c38"
+                roughness={0.08}
+                metalness={0.85}
+                flatShading
+              />
+            </mesh>
+          </group>
+          <mesh position={[-0.6, 0.9, 0.05]} scale={[1, 1.2, 1]}>
+            <sphereGeometry args={[0.07, 8, 6]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+          <mesh position={[-0.6, 1.0, 0.05]}>
+            <cylinderGeometry args={[0.03, 0.04, 0.08, 7]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+        </group>
+      );
+    case "towelrail":
+      // Freestanding towel rail (§3.1 towel-rail): two posts, two bars,
+      // fresh towels draped over the top bar — one cream, one in the
+      // room's accent, hanging from their own rail (never the ceiling).
+      return (
+        <group>
+          {[-0.45, 0.45].map((x) => (
+            <group key={x}>
+              <mesh position={[x, 0.03, 0]}>
+                <cylinderGeometry args={[0.12, 0.15, 0.06, 8]} />
+                <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[x, 0.58, 0]}>
+                <cylinderGeometry args={[0.025, 0.03, 1.1, 6]} />
+                <meshStandardMaterial
+                  color="#9aa0a6"
+                  roughness={0.5}
+                  metalness={0.3}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+          {[1.1, 0.75].map((y) => (
+            <mesh key={y} position={[0, y, 0]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.018, 0.018, 0.95, 6]} />
+              <meshStandardMaterial
+                color="#9aa0a6"
+                roughness={0.5}
+                metalness={0.3}
+                flatShading
+              />
+            </mesh>
+          ))}
+          {/* Draped towels: a fold over the top bar, two hanging skirts. */}
+          <mesh position={[-0.2, 1.1, 0]}>
+            <boxGeometry args={[0.36, 0.04, 0.12]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          {[-0.045, 0.045].map((z) => (
+            <mesh key={z} position={[-0.2, 0.78, z]}>
+              <boxGeometry args={[0.36, 0.62, 0.03]} />
+              <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0.22, 1.1, 0]}>
+            <boxGeometry args={[0.3, 0.04, 0.12]} />
+            <meshStandardMaterial color={accent} roughness={1} flatShading />
+          </mesh>
+          {[-0.045, 0.045].map((z) => (
+            <mesh key={z} position={[0.22, 0.82, z]}>
+              <boxGeometry args={[0.3, 0.54, 0.03]} />
+              <meshStandardMaterial color={accent} roughness={1} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "poolladder":
+      // A-frame pool ladder (扶梯, freestanding — it reads as pool
+      // equipment without leaning on any basin geometry): two inclined
+      // rail pairs, steps up both sides, a little top platform with
+      // grab rails.
+      return (
+        <group>
+          {[-0.28, 0.28].map((x) =>
+            [-1, 1].map((s) => (
+              <mesh
+                key={`${x}${s}`}
+                position={[x, 0.72, s * 0.42]}
+                rotation={[s * 0.42, 0, 0]}
+              >
+                <cylinderGeometry args={[0.028, 0.028, 1.65, 6]} />
+                <meshStandardMaterial
+                  color="#9aa0a6"
+                  roughness={0.5}
+                  metalness={0.3}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          {[0.35, 0.7, 1.05].flatMap((y) =>
+            [-1, 1].map((s) => (
+              <mesh key={`${y}${s}`} position={[0, y, s * (0.62 - y * 0.32)]}>
+                <boxGeometry args={[0.5, 0.035, 0.14]} />
+                <meshStandardMaterial
+                  color="#9aa0a6"
+                  roughness={0.5}
+                  metalness={0.3}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          <mesh position={[0, 1.42, 0]}>
+            <boxGeometry args={[0.6, 0.05, 0.44]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          {[-0.28, 0.28].map((x) => (
+            <mesh key={x} position={[x, 1.68, 0]}>
+              <cylinderGeometry args={[0.024, 0.024, 0.5, 6]} />
+              <meshStandardMaterial
+                color="#9aa0a6"
+                roughness={0.5}
+                metalness={0.3}
+                flatShading
+              />
+            </mesh>
+          ))}
+          <mesh position={[0, 1.92, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[0.02, 0.02, 0.56, 6]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.3}
+              flatShading
+            />
           </mesh>
         </group>
       );
@@ -4280,7 +5073,14 @@ function buildRoomFixtures(
   const fits = (w: WallSegment) =>
     Math.max(w.sizeX, w.sizeZ) >= (winHalf + endPad) * 2;
   const fullHeight = walls.filter((w) => !w.entrance && !wallFacesCamera(plan, w, dir));
-  let hostPool = fullHeight.filter(fits);
+  const fitsFull = fullHeight.filter(fits);
+  // AXIAL SEMANTICS (§10.5): the east/west (vertical) walls belong to
+  // windows and light — the strand doors took the north/south
+  // (horizontal) ones. Try vertical hosts first, then degrade through
+  // the same ladder as before (any full-height fit, then the entrance
+  // pair, then the longest wall).
+  const verticalHosts = fitsFull.filter((w) => w.sizeZ > w.sizeX);
+  let hostPool = verticalHosts.length > 0 ? verticalHosts : fitsFull;
   if (hostPool.length === 0) hostPool = walls.filter((w) => w.entrance && fits(w));
   if (hostPool.length === 0) {
     // Pathological miniature: hang it on the longest wall regardless.
@@ -5122,7 +5922,8 @@ export function SpaceScene({
   // grow a door, on any ladder rung); positions stay seed-drawn either
   // way, so an untemplated room's doors are placed exactly as today.
   const doorLayout = useMemo(() => {
-    if (roomDoorCount === 0) return { doors: [], relaxed: false };
+    if (roomDoorCount === 0)
+      return { doors: [], relaxed: false, doubleRow: false, axialOverflow: false };
     const hostable = hostableWallsFor(plan, walls, dir);
     return placeRoomDoors(
       recipe.sliceId,
@@ -5135,12 +5936,93 @@ export function SpaceScene({
     );
   }, [recipe, plan, walls, dir, roomDoorCount, template]);
 
+  // Clearance consumers (scatter, kits, fixtures, structures, features)
+  // test approaches against the clearance SET: the doors themselves plus a
+  // mirrored copy of every second-row (screen) door, so the shallow
+  // vestibule band between a screen and its host wall also stays
+  // furniture-free (§10.5, room-doors.ts doorClearanceSet). Rendering, the
+  // perimeter split, and the strand-crossing test keep the raw placements.
+  const clearanceDoors = useMemo(
+    () => doorClearanceSet(doorLayout.doors),
+    [doorLayout],
+  );
+
   // The perimeter cut around every doorway: each host wall becomes the
   // runs between its door gaps (the entrance-pair split generalized),
   // every run inheriting its source segment's drawn height and material.
   const wallRuns = useMemo(
     () => splitWallsForDoors(walls, doorLayout.doors),
     [walls, doorLayout],
+  );
+
+  // SECOND-ROW SCREENS (§10.5 fallback ② 门厅式): every host wall's row-1
+  // doors hang on a freestanding screen ROOM_DOOR_ROW_DEPTH inward of the
+  // wall — a shallow opaque slab in the perimeter's own material language,
+  // split around its door gaps by the same splitter. The doors' `along`
+  // offsets are measured from the host segment's center and the screen's
+  // center differs only along the inward normal, so the run coordinates
+  // transfer unchanged; only the wall index is re-origined for the split.
+  const doorScreens = useMemo(() => {
+    const byWall = new Map<number, RoomDoorPlacement[]>();
+    for (const d of doorLayout.doors) {
+      if (d.row !== 1) continue;
+      const list = byWall.get(d.wall) ?? [];
+      list.push(d);
+      byWall.set(d.wall, list);
+    }
+    const out: {
+      screen: WallSegment;
+      source: number;
+      doors: RoomDoorPlacement[];
+    }[] = [];
+    for (const [source, doors] of byWall) {
+      const wall = walls[source];
+      const horizontal = wall.sizeZ <= wall.sizeX;
+      const len = Math.max(wall.sizeX, wall.sizeZ);
+      const { nx, nz } = doors[0]; // probed inward normal, shared per wall
+      const cx = wall.x + nx * ROOM_DOOR_ROW_DEPTH;
+      const cz = wall.z + nz * ROOM_DOOR_ROW_DEPTH;
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const d of doors) {
+        lo = Math.min(lo, d.along);
+        hi = Math.max(hi, d.along);
+      }
+      const pad = DOOR_GAP_HALF + 0.6;
+      lo = Math.max(-len / 2, lo - pad);
+      hi = Math.min(len / 2, hi + pad);
+      const span = Math.max(ROOM_DOOR_SCREEN_THICK, hi - lo);
+      const mid = (lo + hi) / 2;
+      const screen: WallSegment = horizontal
+        ? {
+            x: cx + mid,
+            z: cz,
+            sizeX: span,
+            sizeZ: ROOM_DOOR_SCREEN_THICK,
+            entrance: false,
+          }
+        : {
+            x: cx,
+            z: cz + mid,
+            sizeX: ROOM_DOOR_SCREEN_THICK,
+            sizeZ: span,
+            entrance: false,
+          };
+      out.push({
+        screen,
+        source,
+        doors: doors.map((d) => ({ ...d, wall: 0, along: d.along - mid })),
+      });
+    }
+    return out;
+  }, [doorLayout, walls]);
+  const screenRuns = useMemo(
+    () =>
+      doorScreens.map(({ screen, source, doors }) => ({
+        runs: splitWallsForDoors([screen], doors),
+        source,
+      })),
+    [doorScreens],
   );
 
   const trees = useMemo(
@@ -5157,9 +6039,9 @@ export function SpaceScene({
         scatterEdge,
         propScale,
         0,
-        doorLayout.doors,
+        clearanceDoors,
       ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, doorLayout],
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors],
   );
   const rocks = useMemo(
     () =>
@@ -5175,9 +6057,9 @@ export function SpaceScene({
         scatterEdge,
         propScale,
         0x9e3779b9, // stream salt: rocks never share the trees' sequence
-        doorLayout.doors,
+        clearanceDoors,
       ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, doorLayout],
+    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors],
   );
 
   // Motif layer: one dedicated "props" seed stream. The hero and motif
@@ -5201,10 +6083,10 @@ export function SpaceScene({
         comp,
         scatterEdge,
         propScale,
-        doorLayout.doors,
+        clearanceDoors,
       ),
     };
-  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale, doorLayout]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors]);
 
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
@@ -5239,7 +6121,7 @@ export function SpaceScene({
         propScale,
         wallThick,
         water: waterRect,
-        doors: doorLayout.doors,
+        doors: clearanceDoors,
         // The template's content zones (§7), resolved to absolute plan
         // coordinates: the hero's pin, the kit-cluster rects, the
         // keep-empty apron. Absent = today's seeded staging, byte-for-byte.
@@ -5247,7 +6129,7 @@ export function SpaceScene({
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       };
       if (recipe.archetype === "pool-hall") {
-        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, doorLayout.doors);
+        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
         const obstacles = legacy.map((p) => ({
           x: p.x,
           z: p.z,
@@ -5266,8 +6148,8 @@ export function SpaceScene({
       }
       return stageInteriorKits({ ...staging, baseArea }).map(toPlacement);
     }
-    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, doorLayout.doors);
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, doorLayout, template]);
+    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid.
@@ -5275,16 +6157,16 @@ export function SpaceScene({
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "structure"),
     );
-    return buildStructure(rng, scaledRecipe, plan, doorLayout.doors);
-  }, [recipe, scaledRecipe, plan, doorLayout]);
+    return buildStructure(rng, scaledRecipe, plan, clearanceDoors);
+  }, [recipe, scaledRecipe, plan, clearanceDoors]);
 
   // Wonder-room animals: ducks / cats+dogs / balloons from one stream.
   const animals = useMemo(() => {
     const rng = createRng(
       deriveSubSeed(WORLD_SEED, recipe.sliceId, "animals"),
     );
-    return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout.doors);
-  }, [recipe, scaledRecipe, waterRect, plan, creatureScale, doorLayout]);
+    return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors);
+  }, [recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors]);
 
   // MOTIVATED FIXTURES (B.13): the lamp, the window, and (outdoor-class
   // sets + the pool hall) the clerestory band — the findable source of
@@ -5303,12 +6185,12 @@ export function SpaceScene({
         wallHeight,
         dir,
         waterRect,
-        doorLayout.doors,
+        clearanceDoors,
         propScale,
         wallHeight / WALL_HEIGHT,
         hasClerestory,
       ),
-    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, doorLayout, propScale, hasClerestory],
+    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory],
   );
   // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
   // and cool at night while the lamp burns brighter (readability never
@@ -5552,10 +6434,10 @@ export function SpaceScene({
         wallHeights,
         wallHeight,
         wallThick,
-        doors: doorLayout.doors,
+        doors: clearanceDoors,
         flatFloor: spec.ground === "flat",
       }),
-    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, doorLayout, spec],
+    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, clearanceDoors, spec],
   );
   const nicheByRun = useMemo(() => {
     const map = new Map<number, NicheFeature>();
@@ -5629,6 +6511,31 @@ export function SpaceScene({
       for (const m of wallMaterials) m.dispose();
     },
     [wallMaterials],
+  );
+  // The door screens' runs share the perimeter's material wiring exactly —
+  // one surface material per run, drawn at the HOST wall's height (a
+  // cutaway sill's screen stays low with it).
+  const screenMaterials = useMemo(
+    () =>
+      screenRuns.map(({ runs, source }) =>
+        runs.map(({ wall }) =>
+          createSurfaceMaterial({
+            kind: surfaceKind,
+            color: wallColor,
+            spanX: Math.max(wall.sizeX, wall.sizeZ),
+            spanY: sourceWallHeights.get(source) ?? wallHeight,
+            flatShading: true,
+            normalScale: wallNormalScale,
+          }),
+        ),
+      ),
+    [screenRuns, sourceWallHeights, wallHeight, wallColor, surfaceKind, wallNormalScale],
+  );
+  useEffect(
+    () => () => {
+      for (const group of screenMaterials) for (const m of group) m.dispose();
+    },
+    [screenMaterials],
   );
   const partitionMaterials = useMemo(() => {
     if (structure.kind !== "partition") return null;
@@ -6033,11 +6940,42 @@ export function SpaceScene({
         />
       ))}
 
+      {/* Second-row door screens (§10.5 fallback ②): the freestanding
+          slabs the double-bank doors hang on — same boxes, same cap rail,
+          same opaque language as the perimeter, drawn at the host wall's
+          height so a cutaway side keeps its screen low. */}
+      {screenRuns.map(({ runs, source }, si) => {
+        const h = sourceWallHeights.get(source) ?? wallHeight;
+        return runs.map(({ wall }, ri) => (
+          <group key={`screen${si}-${ri}`}>
+            <mesh
+              position={[wall.x, h / 2, wall.z]}
+              castShadow
+              receiveShadow
+              material={screenMaterials[si][ri]}
+            >
+              <boxGeometry args={[wall.sizeX, h, wall.sizeZ]} />
+            </mesh>
+            <mesh
+              position={[wall.x, h - 0.05, wall.z]}
+              castShadow
+              receiveShadow
+            >
+              <boxGeometry
+                args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]}
+              />
+              <meshStandardMaterial color={capColor} roughness={1} flatShading />
+            </mesh>
+          </group>
+        ));
+      })}
+
       {/* Strand doors (B.8): one per strand through the slice, composed
           like the doors of a home — clustered, framed, with thresholds
           and name plaques. Unlit doors are the strand's unwritten
           continuation: present, closed, dark — never missing, never
-          glowing. */}
+          glowing. Second-row doors hang on their screen (screen
+          thickness), not on the perimeter wall. */}
       {roomDoors &&
         doorLayout.doors.map((placement) => {
           const spec = roomDoors[placement.index];
@@ -6050,10 +6988,14 @@ export function SpaceScene({
               lit={spec.lit}
               accent={doorGlowColor(recipe.palette)}
               wallColor={wallColor}
-              thick={Math.min(
-                walls[placement.wall].sizeX,
-                walls[placement.wall].sizeZ,
-              )}
+              thick={
+                placement.row === 1
+                  ? ROOM_DOOR_SCREEN_THICK
+                  : Math.min(
+                      walls[placement.wall].sizeX,
+                      walls[placement.wall].sizeZ,
+                    )
+              }
               drawnHeight={sourceWallHeights.get(placement.wall) ?? wallHeight}
               playerRef={playerRef}
               door={door}
@@ -6069,7 +7011,7 @@ export function SpaceScene({
           primary end pad) is dropped — the door stays walkable-to (B.11);
           one missing pier in the bay rhythm beats a buried door. */}
       {plan.columns
-        .filter((c) => !inDoorApproach(c.x, c.z, doorLayout.doors))
+        .filter((c) => !inDoorApproach(c.x, c.z, clearanceDoors))
         .map((c, i) => (
         <group
           key={`bay${i}`}
