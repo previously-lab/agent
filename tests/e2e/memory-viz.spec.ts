@@ -400,15 +400,20 @@ test.describe("Memory viz (v0.10)", () => {
 
       await lensButton(page, "Slice").click();
       await expect(page).toHaveURL(/z=slice/);
-      // The composer COLLAPSES here rather than staying up: at a card rung the
-      // full box would be an empty card sitting on the field the reader is
-      // looking at. What must not happen is the composer being lost — so the
-      // compact form is on screen, and the textarea is deliberately absent
-      // (this used to assert the opposite, back when the full form was merely
-      // hidden). See `composer-host.tsx` and `chat-input.tsx`'s `collapsed`.
-      await expect(page.locator("[data-composer-collapsed]")).toBeVisible();
-      await expect(page.locator("[data-composer-pill]")).toBeVisible();
-      await expect(page.locator("textarea")).toHaveCount(0);
+      // The conversation layer COLLAPSES TO ITS PILL here (v0.11 §14.1): at a
+      // card rung the reader came to look at the cards, so the panel's default
+      // tier is the quiet floating button. What must not happen is the
+      // conversation being UNMOUNTED — the panel (and its textarea) stays in
+      // the DOM, slid offscreen and inert (translated boxes still read as
+      // "visible" to Playwright, so the assertion is on `inert`). See
+      // `conversation-panel.tsx`.
+      await expect(
+        page.getByRole("button", { name: "Open the conversation" }),
+      ).toBeVisible();
+      await expect(page.locator("#conversation-panel")).toHaveJSProperty(
+        "inert",
+        true,
+      );
 
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
@@ -438,12 +443,21 @@ test.describe("Memory viz (v0.10)", () => {
 
       await lensButton(page, "Slice").click();
       await expect(page).toHaveURL(/z=slice/);
-      await expect(page.locator("[data-composer-collapsed]")).toBeVisible();
+      // The pill is the collapsed tier again; opening it restores the dock
+      // with the SAME composer instance — the draft survives, which is the
+      // invariant the never-unmounted render prop was standing in for.
+      await expect(
+        page.getByRole("button", { name: "Open the conversation" }),
+      ).toBeVisible();
       await expect(async () => {
-        await page.locator("[data-composer-collapsed]").click();
-        await expect(page.locator("textarea")).toBeVisible({ timeout: 3_000 });
+        await page
+          .getByRole("button", { name: "Open the conversation" })
+          .click();
+        await expect(page.locator("textarea").first()).toBeVisible({
+          timeout: 3_000,
+        });
       }).toPass();
-      await expect(page.locator("textarea")).toHaveValue("still here");
+      await expect(page.locator("textarea").first()).toHaveValue("still here");
 
       await expect(stream).toBeVisible();
     });

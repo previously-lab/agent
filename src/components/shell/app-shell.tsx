@@ -2,12 +2,15 @@
 
 /**
  * AppShell (v0.11) — the single-route shell that hosts both chat and timeline
- * views on `/`. The view is selected by the `?view=timeline` search param
- * (absent = chat view). The left time axis (AxisBand) is always mounted; the
- * right pane switches between the persistent chat stream and the timeline
- * scene. The chat stream stays MOUNTED when the timeline is open (hidden and
- * pointer-events-disabled) so Virtuoso scroll state and the live useChat stream
- * survive the view switch.
+ * views on `/`. The rung (`?z=`, absent = conversation) is the only
+ * navigation. The left time axis (AxisBand) is always mounted; the right pane
+ * holds the card field at a card rung, with the CONVERSATION LAYER
+ * (`chat/conversation-panel.tsx`) floating over everything as a persistent
+ * three-tier panel (pill / dock / fullscreen, §14.1). The chat stream stays
+ * MOUNTED at every tier — pill slides the panel offscreen instead of
+ * unmounting — so Virtuoso scroll state and the live useChat stream survive
+ * every collapse, and FULLSCREEN freezes the card field's frame loop
+ * (`paused` → frameloop="never") without unmounting it.
  *
  * Catalog loading is lazy: the timeline data layer (catalog window + strand
  * list) is fetched on the first switch to the timeline view. A deep link
@@ -56,6 +59,10 @@ import {
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { ChatPage } from "@/components/chat/chat-page";
+import {
+  ConversationPanel,
+  type ConversationPanelMode,
+} from "@/components/chat/conversation-panel";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
@@ -161,6 +168,22 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
    *  placeholder from it. See `RunningCard`. */
   const [running, setRunning] = useState(false);
+
+  // ── THE CONVERSATION LAYER'S TIER (§14.1) ───────────────────────────────
+  // One conversation, three sizes — the tier lives HERE, not inside the
+  // panel, because the shell must react to it: a card rung defaults to the
+  // pill (the reader came to look at the cards), the conversation rung
+  // defaults to the dock, and FULLSCREEN freezes the card field's frame
+  // loop (paused → frameloop="never", below). The effect fires only on the
+  // world boundary — zooming BETWEEN card rungs keeps the tier the reader
+  // picked (a docked conversation survives slice → day).
+  const [panelMode, setPanelMode] =
+    useState<ConversationPanelMode>("dock");
+  const worldKind = rung === "conversation" ? "conversation" : "cards";
+  useEffect(() => {
+    setPanelMode(worldKind === "conversation" ? "dock" : "pill");
+  }, [worldKind]);
+  const worldFrozen = panelMode === "fullscreen";
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
   // One narration at a time: each request bumps `gen`, and the pod aborts
@@ -415,26 +438,34 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
-        {/* NOT dimmed as a whole. The composer lives inside `ChatPage`, and at
-            a card rung the reader still needs to be able to send a message —
-            the collapsed form of the composer is the whole point of it. So
-            `ChatPage` dims its own CONTENT region and leaves the composer
-            alone; dimming the pane here would take the send button with it. */}
-        <div className="absolute inset-0 flex flex-col">
+        {/* THE CONVERSATION LAYER — one persistent panel over the world
+            (§14.1), not a view of its own any more. The panel OVERLAYS the
+            pane (position: fixed): the card field behind it keeps its size,
+            so opening or docking never triggers a canvas resize. ChatPage
+            keeps publishing to the band only while the conversation rung
+            owns it, and still receives `suppressAtJump` at a card rung —
+            but its OWN rung is pinned to "conversation": tier visibility is
+            the panel's job now, and the composer is the full form at every
+            tier. insetTop={0} because the panel's own slim bar replaced the
+            floating chrome's keep-out inside it. */}
+        <ConversationPanel
+          mode={panelMode}
+          onModeChange={setPanelMode}
+          insetTop={chromeInset}
+        >
           <ChatPage
             initialConfig={initialConfig}
             suppressAtJump={showCardField}
-            rung={rung}
-            onRungChange={setRung}
+            rung="conversation"
             onTurnSettled={refreshCatalog}
             feed={feed}
             publishing={!panePublishes}
             onRunningChange={setRunning}
-            insetTop={chromeInset}
+            insetTop={0}
             insetBottom={composerClearance}
             onComposerClearanceChange={setComposerClearance}
           />
-        </div>
+        </ConversationPanel>
 
         <AnimatePresence>
           {showCardField && (
@@ -484,6 +515,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       running={running}
                       insetTop={chromeInset}
                       insetBottom={composerClearance}
+                      // §14.1 rule 2: a fullscreen conversation FREEZES the
+                      // world (frameloop="never" down this prop) without
+                      // unmounting it — returning is instant.
+                      paused={worldFrozen}
                     />
                   </motion.div>
                 )}

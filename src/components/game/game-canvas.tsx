@@ -1630,6 +1630,7 @@ export default function GameCanvas({
   roomDoors,
   timelines,
   onActiveSliceChange,
+  paused = false,
 }: {
   /** The CORE timeline's door list (newest first) — the spawn hotel. */
   doors: readonly CorridorDoor[];
@@ -1646,6 +1647,10 @@ export default function GameCanvas({
    *  room's slice id, or null in the corridor. Fired from an effect on
    *  activeSpace, so it tracks the door manager exactly. */
   onActiveSliceChange?: (sliceId: string | null) => void;
+  /** Freeze the frame loop (frameloop="never") while the conversation panel
+   *  is fullscreen (§14.1 rule 2): the world pauses but stays MOUNTED —
+   *  scene, programs, last frame — so closing the panel resumes instantly. */
+  paused?: boolean;
 }): JSX.Element {
   const t = useTranslations("game");
   // App dark mode, read OUTSIDE the Canvas — React context never crosses
@@ -2151,7 +2156,7 @@ export default function GameCanvas({
         entirely. three 0.185 enum: THREE.AgXToneMapping (6).
       */}
       <Canvas
-        frameloop="always"
+        frameloop={paused ? "never" : "always"}
         dpr={[1, 2]}
         gl={{ antialias: true, toneMapping: THREE.AgXToneMapping }}
         shadows="percentage"

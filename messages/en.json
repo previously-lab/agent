@@ -454,6 +454,13 @@
       "applyHint": "Changes save automatically and engine switches apply immediately — no restart needed. In-flight calls finish on the old configuration."
     }
   },
+  "conversationPanel": {
+    "title": "Conversation",
+    "open": "Open the conversation",
+    "collapse": "Collapse the conversation",
+    "expand": "Expand to full screen",
+    "exitFullscreen": "Exit full screen"
+  },
   "game": {
     "title": "The Hotel",
     "loading": "Preparing the corridor…",

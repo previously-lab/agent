@@ -165,6 +165,9 @@ export interface CardFieldProps {
    *  See `timeline-scene.tsx` for why the box is the wrong lever. */
   insetTop?: number;
   insetBottom?: number;
+  /** Freeze the frame loop (Canvas frameloop="never") while the
+   *  conversation layer is fullscreen — pause, never unmount (§14.1). */
+  paused?: boolean;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -767,6 +770,7 @@ export function CardField({
   onRungChange,
   insetTop = 0,
   insetBottom = 0,
+  paused = false,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
@@ -1489,6 +1493,12 @@ export function CardField({
     >
       <Canvas
         dpr={[1, 1.75]}
+        // "never" while the conversation layer is fullscreen (§14.1 rule
+        // 2): the world FREEZES but is not unmounted — the scene, its
+        // compiled programs and the last presented frame all survive, so
+        // collapsing the panel resumes instantly. R3F applies a frameloop
+        // prop change live.
+        frameloop={paused ? "never" : "always"}
         // Dead-on camera: cards on the z=0 plane always face the viewer
         // square-on (no keystone tilt). A pile's depth comes from its own
         // sheet offsets/tilts/shadows, not from the camera angle.

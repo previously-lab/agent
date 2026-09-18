@@ -14,6 +14,11 @@ import {
 } from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
 import { RoomNarrationPanel } from "./room-narration-panel";
+import { ChatPage } from "@/components/chat/chat-page";
+import {
+  ConversationPanel,
+  type ConversationPanelMode,
+} from "@/components/chat/conversation-panel";
 
 /**
  * v1 door cap. Corridor streaming can present far more, but the first version
@@ -119,6 +124,20 @@ export function GameShell() {
   // canvas through onActiveSliceChange (an effect on its activeSpace
   // state), so it tracks the door manager exactly.
   const [activeSliceId, setActiveSliceId] = useState<string | null>(null);
+
+  // ── THE CONVERSATION LAYER (§14.1) ──────────────────────────────────────
+  // The game does not own the conversation — the same DOM panel as the `/`
+  // shell floats over it, defaulted to the quiet PILL (bottom-right, out of
+  // the sightline). FULLSCREEN freezes the world: `paused` switches the
+  // canvas frameloop to "never" WITHOUT unmounting, so closing the panel
+  // resumes instantly. The chat subtree mounts LAZILY on first open (a
+  // fresh ChatPage = arrival fetches + a useChat session — no reason to pay
+  // it for a visitor who never talks) and stays mounted from then on.
+  const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
+  const [chatMounted, setChatMounted] = useState(false);
+  useEffect(() => {
+    if (panelMode !== "pill") setChatMounted(true);
+  }, [panelMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -227,11 +246,32 @@ export function GameShell() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") router.push("/");
+      if (event.key !== "Escape") return;
+      // An Escape aimed at a portaled overlay (the model selector's popover
+      // & co. render outside the panel's subtree) belongs to that overlay —
+      // one Escape closes it, the next collapses the panel.
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest(
+          '[data-slot="popover-content"], [role="dialog"], [role="menu"], [role="listbox"]',
+        )
+      ) {
+        return;
+      }
+      // The panel's own Escape beats the route exit: an open conversation
+      // collapses to the pill first; only a closed panel lets Escape leave
+      // the hotel. (Escapes typed INSIDE the panel never reach this
+      // listener — the panel stopPropagations them.)
+      if (panelMode !== "pill") {
+        setPanelMode("pill");
+        return;
+      }
+      router.push("/");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [router]);
+  }, [router, panelMode]);
 
   const activeDoorLabel = activeSliceId
     ? doors?.find((door) => door.sliceId === activeSliceId)?.label
@@ -264,6 +304,7 @@ export function GameShell() {
           roomDoors={roomDoors}
           timelines={timelines}
           onActiveSliceChange={setActiveSliceId}
+          paused={panelMode === "fullscreen"}
         />
       ) : (
         <GameLoading />
@@ -278,6 +319,13 @@ export function GameShell() {
           {...(activeDoorLabel ? { label: activeDoorLabel } : {})}
         />
       ) : null}
+      {/* The conversation layer, over the game (§14.1): a quiet pill by
+          default, a docked overlay on open, a fullscreen surface that
+          freezes (never unmounts) the world behind it. insetTop=0 — the
+          game route has no floating chrome to clear. */}
+      <ConversationPanel mode={panelMode} onModeChange={setPanelMode}>
+        {chatMounted ? <ChatPage /> : null}
+      </ConversationPanel>
     </div>
   );
 }

@@ -67,6 +67,10 @@ export interface TimelineSceneProps {
    *  still travel under the controls and simply stop short of resting there. */
   insetTop?: number;
   insetBottom?: number;
+  /** Freeze the field's frame loop (Canvas frameloop="never") while the
+   *  conversation layer is fullscreen — the world pauses WITHOUT unmounting
+   *  (§14.1 rule 2), so returning to it is instant. */
+  paused?: boolean;
 }
 
 /**
@@ -164,6 +168,7 @@ export function TimelineScene({
   running,
   insetTop,
   insetBottom,
+  paused,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
 
@@ -207,6 +212,7 @@ export function TimelineScene({
           onRungChange={onRungChange}
           insetTop={insetTop}
           insetBottom={insetBottom}
+          paused={paused}
         />
         {/* The present, at the bottom, where the present is. */}
         <BottomFade />
