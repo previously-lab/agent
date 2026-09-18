@@ -16,11 +16,7 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand } from "@/lib/timeline3d/stacks";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
-import {
-  AtmosphereBackdrop,
-  AtmosphereVignette,
-  TIMELINE_KEYFRAMES,
-} from "./atmosphere";
+import { AtmosphereVignette } from "./atmosphere";
 import dynamic from "next/dynamic";
 
 const CardField = dynamic(
@@ -67,10 +63,12 @@ export interface TimelineSceneProps {
    *  still travel under the controls and simply stop short of resting there. */
   insetTop?: number;
   insetBottom?: number;
-  /** Freeze the field's frame loop (Canvas frameloop="never") while the
-   *  conversation layer is fullscreen — the world pauses WITHOUT unmounting
-   *  (§14.1 rule 2), so returning to it is instant. */
-  paused?: boolean;
+  /** Horizontal camera shift for the card field (world units = CSS px): the
+   *  shared canvas spans the band AND the pane (§14 merge), so the field's
+   *  camera parks left of centre by half the band's width to keep the card
+   *  column centred in the pane. Owned by the shell, which owns the band's
+   *  rect. */
+  camXOffset?: number;
 }
 
 /**
@@ -168,14 +166,16 @@ export function TimelineScene({
   running,
   insetTop,
   insetBottom,
-  paused,
+  camXOffset,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
 
   return (
     <div className="relative h-full w-full overflow-hidden">
-      <style>{TIMELINE_KEYFRAMES}</style>
-      <AtmosphereBackdrop />
+      {/* The AtmosphereBackdrop (and its keyframes) moved to the SHELL,
+          BELOW the shared canvas (§14 merge) — the field's scene is no
+          longer a canvas inside this box, so the page atmosphere the
+          transparent render floats over lives under it now. */}
 
       {/* THE FIELD FILLS THE PANE — it is NOT inset by the chrome's height.
           It was, for one commit, and the inset read as a solid bar across the
@@ -212,7 +212,7 @@ export function TimelineScene({
           onRungChange={onRungChange}
           insetTop={insetTop}
           insetBottom={insetBottom}
-          paused={paused}
+          camXOffset={camXOffset}
         />
         {/* The present, at the bottom, where the present is. */}
         <BottomFade />

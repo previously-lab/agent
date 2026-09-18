@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
-import { Link, useRouter } from "@/i18n/navigation";
 import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import { buildStrandGraph } from "@/lib/game/strand-graph";
@@ -13,11 +12,6 @@ import {
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
-import { ChatPage } from "@/components/chat/chat-page";
-import {
-  ConversationPanel,
-  type ConversationPanelMode,
-} from "@/components/chat/conversation-panel";
 
 /**
  * v1 door cap. Corridor streaming can present far more, but the first version
@@ -103,10 +97,31 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
  * can differ from the id's clock.
  */
 
-export function GameShell() {
+/**
+ * GameShell — the game VIEW under the single route (§14 merge): it owns the
+ * hotel's data lane (catalog → corridor doors, strand graph → room doors and
+ * strand hotels) and the minimal overlay chrome. Two things it NO LONGER
+ * owns:
+ *
+ *   - the canvas — `game-canvas.tsx` renders its scene subtree into the
+ *     app's ONE shared canvas (world-canvas.tsx) through the world slot.
+ *   - the conversation — the shell's persistent three-tier panel
+ *     (§14.1) floats over this view exactly as it does over the field;
+ *     the app shell owns its state and the world's fullscreen freeze.
+ *
+ * `onExit` leaves the view (the app shell switches back to the field world);
+ * `focusSlice` is the shared `?slice=` address — the canvas enters the
+ * slice's own hotel window when it resolves (see game-canvas.tsx).
+ */
+export function GameShell({
+  onExit,
+  focusSlice = null,
+}: {
+  onExit: () => void;
+  focusSlice?: string | null;
+}) {
   const t = useTranslations("game");
   const locale = useLocale();
-  const router = useRouter();
   // null = the catalog is still in flight; the corridor mounts only once the
   // doors resolve (to the timeline, or to the fallback on empty/error).
   const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(null);
@@ -120,19 +135,9 @@ export function GameShell() {
   const [timelines, setTimelines] =
     useState<ReadonlyMap<string, readonly CorridorDoor[]>>(NO_TIMELINES);
 
-  // ── THE CONVERSATION LAYER (§14.1) ──────────────────────────────────────
-  // The game does not own the conversation — the same DOM panel as the `/`
-  // shell floats over it, defaulted to the quiet PILL (bottom-right, out of
-  // the sightline). FULLSCREEN freezes the world: `paused` switches the
-  // canvas frameloop to "never" WITHOUT unmounting, so closing the panel
-  // resumes instantly. The chat subtree mounts LAZILY on first open (a
-  // fresh ChatPage = arrival fetches + a useChat session — no reason to pay
-  // it for a visitor who never talks) and stays mounted from then on.
-  const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
-  const [chatMounted, setChatMounted] = useState(false);
-  useEffect(() => {
-    if (panelMode !== "pill") setChatMounted(true);
-  }, [panelMode]);
+  // The conversation layer is NOT here (§14 merge): the app shell's panel
+  // floats over this view too, and Escape's panel-then-view precedence lives
+  // with the shell, which owns the panel's mode.
 
   useEffect(() => {
     let cancelled = false;
@@ -239,67 +244,33 @@ export function GameShell() {
     };
   }, [locale]);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape") return;
-      // An Escape aimed at a portaled overlay (the model selector's popover
-      // & co. render outside the panel's subtree) belongs to that overlay —
-      // one Escape closes it, the next collapses the panel.
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        target.closest(
-          '[data-slot="popover-content"], [role="dialog"], [role="menu"], [role="listbox"]',
-        )
-      ) {
-        return;
-      }
-      // The panel's own Escape beats the route exit: an open conversation
-      // collapses to the pill first; only a closed panel lets Escape leave
-      // the hotel. (Escapes typed INSIDE the panel never reach this
-      // listener — the panel stopPropagations them.)
-      if (panelMode !== "pill") {
-        setPanelMode("pill");
-        return;
-      }
-      router.push("/");
-    }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [router, panelMode]);
-
   return (
     <div className="relative h-full w-full">
       {/* Top-left overlay: title + exit. The container is pointer-transparent
-          so it never blocks walking; only the link re-enables pointer events. */}
+          so it never blocks walking; only the button re-enables pointer
+          events. Exit is a WORLD SWITCH now (§14), not a navigation. */}
       <div className="pointer-events-none absolute left-4 top-4 z-10 sm:left-6 sm:top-6">
         <p className="text-sm font-semibold tracking-tight text-neutral-100">
           {t("title")}
         </p>
-        <Link
-          href="/"
+        <button
+          type="button"
+          onClick={onExit}
           className="pointer-events-auto text-xs text-neutral-400 transition-colors hover:text-neutral-200"
         >
           {t("exit")}
-        </Link>
+        </button>
       </div>
       {doors ? (
         <GameCanvas
           doors={doors}
           roomDoors={roomDoors}
           timelines={timelines}
-          paused={panelMode === "fullscreen"}
+          focusSlice={focusSlice}
         />
       ) : (
         <GameLoading />
       )}
-      {/* The conversation layer, over the game (§14.1): a quiet pill by
-          default, a docked overlay on open, a fullscreen surface that
-          freezes (never unmounts) the world behind it. insetTop=0 — the
-          game route has no floating chrome to clear. */}
-      <ConversationPanel mode={panelMode} onModeChange={setPanelMode}>
-        {chatMounted ? <ChatPage /> : null}
-      </ConversationPanel>
     </div>
   );
 }

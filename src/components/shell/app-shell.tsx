@@ -25,10 +25,11 @@ import {
   useState,
 } from "react";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTranslations } from "next-intl";
-import { Sparkles } from "lucide-react";
+import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
@@ -56,8 +57,10 @@ import {
   parseAtParam,
   parseRungParam,
 } from "@/lib/chat/deep-link";
+import { ISLAND } from "@/components/layout/island";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
+import { useTier } from "@/hooks/use-tier";
 import { ChatPage } from "@/components/chat/chat-page";
 import {
   ConversationPanel,
@@ -67,6 +70,28 @@ import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
+import type { WorldKind } from "@/components/timeline-3d/world-contract";
+import {
+  AtmosphereBackdrop,
+  TIMELINE_KEYFRAMES,
+} from "@/components/timeline-3d/atmosphere";
+
+// THE CANVAS AND THE GAME LOAD AS THEIR OWN CHUNKS (§13.2): the shared
+// canvas pulls in three/fiber, the game its postprocessing chain — a visitor
+// who never leaves the conversation pays neither. Both are client-only
+// (WebGL), so ssr: false exactly like the canvases they replace.
+const WorldCanvas = dynamic(
+  () =>
+    import("@/components/timeline-3d/world-canvas").then((m) => m.WorldCanvas),
+  { ssr: false, loading: () => null },
+);
+// The provider half is plain context — safe to import statically (and it must
+// be the same module instance as the canvas's).
+import { WorldSceneProvider } from "@/components/timeline-3d/world-slot";
+const GameShell = dynamic(
+  () => import("@/components/game/game-shell").then((m) => m.GameShell),
+  { ssr: false, loading: () => null },
+);
 import {
   CompanionPod,
   type NarrationTarget,
@@ -88,6 +113,18 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // at a named slice wants the field one step coarser than the conversation.
   const rungParam = parseRungParam(rawSearch);
   const at = parseAtParam(rawSearch);
+  // THE WORLD SWITCH (§14): `?view=game` mounts the hotel instead of the
+  // field world; absent (or the old `?view=timeline` alias) is the field.
+  // The override is the in-session toggle — the URL param is the arrival.
+  // `?slice=` is the SHARED ADDRESS: the field focuses the slice's card
+  // (lands on the slice rung, flashed), the game stands at its door
+  // (game-canvas.tsx). It is deliberately separate from `?at=`, whose
+  // remaining meaning is a CONVERSATION jump (see the rung note below).
+  const sliceParam = searchParams.get("slice");
+  const viewParam = searchParams.get("view");
+  const [viewOverride, setViewOverride] = useState<WorldKind | null>(null);
+  const view: WorldKind =
+    viewOverride ?? (viewParam === "game" ? "game" : "field");
   const reducedMotion = useReducedMotion() ?? false;
 
   // ── Shared timeline state (owned by the shell so the left AxisBand and the
@@ -115,8 +152,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  remaining callers mean by it — a slice JUMP, which the conversation
    *  performs (`openSlice`, the search palette). Forcing `slice` opened the
    *  card field on top of the jump and the conversation never happened; the
-   *  e2e caught it. `?z=slice&at=…` still asks for the card rung at a slice. */
-  const [rung, setRung] = useState<FieldRung>(rungParam ?? DEFAULT_RUNG);
+   *  e2e caught it. `?z=slice&at=…` still asks for the card rung at a slice.
+   *
+   *  `?slice=` DOES seed the slice rung — but only in the field world: the
+   *  shared address means "look at this slice", and the field's way of looking
+   *  is the slice rung with the card flashed. In the game world it addresses
+   *  the hotel instead (the reader stands at its door), so the rung keeps the
+   *  conversation default. */
+  const [rung, setRung] = useState<FieldRung>(
+    rungParam ?? (sliceParam && view !== "game" ? "slice" : DEFAULT_RUNG),
+  );
 
   // The rung lives in the URL so a refresh or a share keeps the zoom — the view
   // param used to be the only thing that survived, which meant the one piece of
@@ -127,13 +172,17 @@ export function AppShell({ initialConfig }: AppShellProps) {
     const params = new URLSearchParams(window.location.search);
     if (rung === DEFAULT_RUNG) params.delete("z");
     else params.set("z", rung);
+    // The world rides the URL too: a refresh or a share of `/?view=game`
+    // reopens the hotel. The field is the default, so it writes nothing.
+    if (view === "game") params.set("view", "game");
+    else params.delete("view");
     const q = params.toString();
     window.history.replaceState(
       null,
       "",
       `${window.location.pathname}${q ? `?${q}` : ""}`,
     );
-  }, [rung]);
+  }, [rung, view]);
 
   // `Cmd/Ctrl+.` — the shortcut the deleted mode switcher owned. Kept because
   // it is the fastest round trip between the cards and the conversation, and it
@@ -181,9 +230,34 @@ export function AppShell({ initialConfig }: AppShellProps) {
     useState<ConversationPanelMode>("dock");
   const worldKind = rung === "conversation" ? "conversation" : "cards";
   useEffect(() => {
-    setPanelMode(worldKind === "conversation" ? "dock" : "pill");
-  }, [worldKind]);
+    // The game world is a LOOKING view like the card rungs — the conversation
+    // arrives as the pill there too.
+    setPanelMode(
+      view === "game" || worldKind !== "conversation" ? "pill" : "dock",
+    );
+  }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
+
+  // A conversation jump (`?at=` — `openSlice`, the search palette) is a FIELD
+  // world act: arriving on one clears an in-session game override so the
+  // linked slice is never buried under the hotel.
+  useEffect(() => {
+    if (at) setViewOverride(null);
+  }, [at]);
+
+  // Escape in the game world: panel first (anything open folds to the pill),
+  // then the view itself (back to the field). The panel's own Escape lives on
+  // its container with stopPropagation, so the two never fire together.
+  useEffect(() => {
+    if (view !== "game") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (panelMode !== "pill") setPanelMode("pill");
+      else setViewOverride("field");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, panelMode]);
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
   // One narration at a time: each request bumps `gen`, and the pod aborts
@@ -221,6 +295,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // runs no inline evolution — the bus stays silent and the pod is hidden,
   // so there is nothing to clean up and no console noise.
   const tCompanion = useTranslations("companion");
+  const tGame = useTranslations("game");
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
   useEffect(() => {
@@ -294,14 +369,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
   }, [strandList.length]);
 
   // ── Lazy catalog load on the first CARD rung (or a deep link that starts on
-  //    one). `?at=` loads the full catalog so the linked slice is always
-  //    resolvable; otherwise loads the latest month window. ──────────────────
+  //    one). A slice address (`?at=`, or the shared `?slice=` in the field
+  //    world) loads the full catalog so the linked slice is always resolvable;
+  //    otherwise loads the latest month window. ──────────────────────────────
+  const focusId = at ?? sliceParam;
   useEffect(() => {
     if (rung === "conversation" || timelineReady) return;
     let cancelled = false;
     (async () => {
       try {
-        if (at) {
+        if (focusId) {
           const catalog = await getTimelineCatalog();
           if (cancelled) return;
           setEntries(catalog);
@@ -323,7 +400,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
     return () => {
       cancelled = true;
     };
-  }, [rung, at, timelineReady]);
+  }, [rung, focusId, timelineReady]);
 
   /**
    * Re-read the newest catalog page after a turn settles, and APPEND.
@@ -419,22 +496,72 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  nothing, which is why this is a lease rather than a merge. */
   const panePublishes = showCardField;
 
+  // ── THE ONE CANVAS (§14 merge) ───────────────────────────────────────────
+  // Both worlds render in the shell-owned WorldCanvas — the card field's two
+  // canvases (the pane's card field and the band's braid) are subtrees of it
+  // now, and the game joins it as the other world. The band's rect comes
+  // from the same tier spec the AxisBand sizes itself by, so the braid's
+  // scissor window lands exactly under the band's DOM; `camXOffset` parks
+  // the card field's camera half a band-width left of the canvas centre so
+  // the cards stay centred in the PANE (a parallel shift, not a turn).
+  const { spec } = useTier();
+  const bandX = spec.railMargin;
+  const bandW = spec.railW;
+  const camXOffset = -(bandX + bandW) / 2;
+
   return (
-    <div className="flex h-dvh overflow-hidden">
+    // The world-slot provider must sit ABOVE both the canvas and the worlds'
+    // DOM-side owners (they are siblings here) — see world-canvas.tsx.
+    <WorldSceneProvider>
+    <div className="relative flex h-dvh overflow-hidden">
+      {/* The field world's page atmosphere, UNDER the canvas (the canvas is
+          transparent; the aurora used to sit behind the pane's own canvas,
+          now it sits behind the shared one). Inset past the band so the
+          strip keeps the plain page background it has always had. Mounted
+          only at a card rung, exactly as before. */}
+      {view === "field" && showCardField && (
+        <>
+          <style>{TIMELINE_KEYFRAMES}</style>
+          <div
+            aria-hidden
+            className="absolute inset-y-0 right-0 z-0"
+            style={{ left: bandX + bandW }}
+          >
+            <AtmosphereBackdrop />
+          </div>
+        </>
+      )}
+      {/* The floating chrome (app-header) is a FIELD-world fixture; the game
+          keeps only its own overlay. Hidden with a style tag because the
+          header itself is not this file's to change. */}
+      {view === "game" && <style>{`[data-app-header]{display:none}`}</style>}
+      <WorldCanvas
+        world={view}
+        paused={worldFrozen}
+        band={
+          view === "field"
+            ? {
+                x: bandX,
+                width: bandW,
+                strands: ambientStrands,
+                selected: strands,
+                feed,
+                range,
+                reducedMotion,
+              }
+            : null
+        }
+      />
       {/* LEFT: the time axis, present in BOTH views. It is not a timeline-view
           affordance — it is where the app's strands live, and it stays put
-          across the switch (which also keeps the R3F canvas and its WebGL
-          context alive, so the braid is never re-mounted). The right pane
-          supplies the anchors either way: the card field's rows in the
-          timeline, the chat stream's slice seams in chat, so the braid winds
-          at whatever the user is actually looking at. */}
-      <AxisBand
-        range={range}
-        feed={feed}
-        strands={strands}
-        ambientStrands={ambientStrands}
-        reducedMotion={reducedMotion}
-      />
+          across the switch. Its braid renders in the shared canvas (scissored
+          to this strip's rect); what mounts here is the band's DOM half, so
+          the scrub lens and fades sit above the canvas by DOM order. The
+          right pane supplies the anchors either way: the card field's rows
+          in the timeline, the chat stream's slice seams in chat, so the
+          braid winds at whatever the user is actually looking at. Field
+          world only — the game owns the whole viewport. */}
+      {view === "field" && <AxisBand range={range} feed={feed} />}
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
@@ -467,15 +594,20 @@ export function AppShell({ initialConfig }: AppShellProps) {
           />
         </ConversationPanel>
 
+        {view === "field" && (
+          <>
         <AnimatePresence>
           {showCardField && (
             <motion.div
               key="timeline"
-              initial={{ opacity: 0, x: 24 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: 24 }}
+              // Opacity-only (§14 merge): the cards render in the shell's
+              // shared canvas now, so this DOM layer can no longer slide the
+              // scene with it — a fade keeps the two in step.
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0 z-10 flex flex-col bg-background"
+              className="absolute inset-0 z-10 flex flex-col"
             >
               {/* Catalog-loading crossfade: the arrival swaps a structured
                   skeleton for the live scene without a hard cut. */}
@@ -505,7 +637,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       onNeedOlder={loadOlder}
                       onOpenSlice={openSlice}
                       onNarrate={bridgeBrain === false ? startNarration : undefined}
-                      initialAtId={at ?? undefined}
+                      initialAtId={focusId ?? undefined}
                       strands={strands}
                       feed={feed}
                       publishing={panePublishes}
@@ -515,10 +647,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       running={running}
                       insetTop={chromeInset}
                       insetBottom={composerClearance}
-                      // §14.1 rule 2: a fullscreen conversation FREEZES the
-                      // world (frameloop="never" down this prop) without
-                      // unmounting it — returning is instant.
-                      paused={worldFrozen}
+                      // §14.1 rule 2's freeze now lives on the shared canvas
+                      // itself (WorldCanvas frameloop="never" while the panel
+                      // is fullscreen) — pause, never unmount.
+                      camXOffset={camXOffset}
                     />
                   </motion.div>
                 )}
@@ -568,7 +700,32 @@ export function AppShell({ initialConfig }: AppShellProps) {
             evolution={evolution}
           />
         )}
+
+        {/* THE WORLD SWITCH (§14) — the field world's way into the hotel. A
+            quiet island button at the pane's foot, clear of the composer; the
+            way back is the game's own exit button or Escape. */}
+        <button
+          type="button"
+          onClick={() => setViewOverride("game")}
+          aria-label={tGame("title")}
+          title={tGame("title")}
+          className={`${ISLAND} pointer-events-auto absolute bottom-4 left-4 z-10 flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
+        >
+          <Hotel className="size-4" />
+        </button>
+          </>
+        )}
+
+        {view === "game" && (
+          <div className="relative flex-1 min-h-0">
+            <GameShell
+              onExit={() => setViewOverride("field")}
+              focusSlice={sliceParam}
+            />
+          </div>
+        )}
       </div>
     </div>
+    </WorldSceneProvider>
   );
 }

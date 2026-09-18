@@ -42,9 +42,9 @@ export default async function HomePage({
     setDemoPersona(persona || "user");
   }
 
-  // v0.11 single-shell page: chat and timeline are views of `/` selected by
-  // the `?view=timeline` search param. AppShell owns the left time axis and
-  // the switchable right pane.
+  // v0.11 single-shell page: chat, the timeline field and the game are all
+  // views of `/` — the rung (`?z=`) picks the zoom, `?view=game` the hotel
+  // world. AppShell owns the left time axis and the one shared canvas.
   return (
     <>
       {/* Window-level error listeners — catch anything the SDK transport or

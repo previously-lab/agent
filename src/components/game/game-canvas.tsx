@@ -134,13 +134,14 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
 import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
 import { useTranslations } from "next-intl";
 import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject } from "react";
 import { GAME_DEBUG } from "./debug";
+import { useWorldScene } from "@/components/timeline-3d/world-slot";
 import {
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
@@ -1630,7 +1631,7 @@ export default function GameCanvas({
   roomDoors,
   timelines,
   onActiveSliceChange,
-  paused = false,
+  focusSlice = null,
 }: {
   /** The CORE timeline's door list (newest first) — the spawn hotel. */
   doors: readonly CorridorDoor[];
@@ -1647,10 +1648,11 @@ export default function GameCanvas({
    *  room's slice id, or null in the corridor. Fired from an effect on
    *  activeSpace, so it tracks the door manager exactly. */
   onActiveSliceChange?: (sliceId: string | null) => void;
-  /** Freeze the frame loop (frameloop="never") while the conversation panel
-   *  is fullscreen (§14.1 rule 2): the world pauses but stays MOUNTED —
-   *  scene, programs, last frame — so closing the panel resumes instantly. */
-  paused?: boolean;
+  /** The shared `?slice=` address (§14): enter the slice's own hotel window
+   *  and stand at its door. Resolved once per value, through the same pure
+   *  layout math the door manager uses; an unknown id is ignored (the
+   *  corridor opens at its spawn, exactly as without the param). */
+  focusSlice?: string | null;
 }): JSX.Element {
   const t = useTranslations("game");
   // App dark mode, read OUTSIDE the Canvas — React context never crosses
@@ -2096,6 +2098,50 @@ export default function GameCanvas({
     };
   }, [location]);
 
+  // ── THE SHARED ADDRESS (?slice=, §14) ──────────────────────────────────
+  // The field focuses the slice's card; the game stands at the slice's DOOR,
+  // in the hotel window that holds it. Resolution reuses the return door's
+  // own math (flat index → window → door position); the hotel hop itself is
+  // the same setLocation + snap + one-frame guard every handler here uses,
+  // minus the nav stack — a deep link ARRIVES, it does not travel. The core
+  // timeline is searched first, then each strand hotel (they resolve a frame
+  // later than the core doors, so an unresolved id simply waits for them).
+  const focusAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusSlice || focusAppliedRef.current === focusSlice) return;
+    let timelineId = CORE_TIMELINE_ID;
+    let list: readonly CorridorDoor[] = doors;
+    let idx = doors.findIndex((d) => d.sliceId === focusSlice);
+    if (idx < 0 && timelines) {
+      for (const [name, strandDoors] of timelines) {
+        const i = strandDoors.findIndex((d) => d.sliceId === focusSlice);
+        if (i >= 0) {
+          timelineId = name;
+          list = strandDoors;
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx < 0) return;
+    focusAppliedRef.current = focusSlice;
+    const windowIndex = Math.floor(idx / WINDOW_SLICES);
+    const layout = windowLayout(corridorLayoutFromDoors(list), windowIndex);
+    const windowIds = list.slice(
+      windowIndex * WINDOW_SLICES,
+      (windowIndex + 1) * WINDOW_SLICES,
+    );
+    const door = doorRefForFlatIndex(idx % WINDOW_SLICES, windowIds.map((d) => d.sliceId), layout);
+    if (timelineId !== location.timelineId || windowIndex !== location.windowIndex) {
+      setLocation({ timelineId, windowIndex });
+    }
+    if (door) {
+      playerRef.current = { x: door.x, z: 0 };
+      cameraSnapRef.current = true;
+      hopGuardRef.current = true;
+    }
+  }, [focusSlice, doors, timelines, location]);
+
   // Keyboard: track pressed keys, swallow the arrows' page scroll, and clear
   // the set on window blur so a released key can never stick.
   useEffect(() => {
@@ -2130,38 +2176,24 @@ export default function GameCanvas({
     };
   }, [keysRef]);
 
-  return (
-    <div className="relative h-full w-full">
-      {/*
-        shadows="percentage" → PCFShadowMap. three 0.185 DEPRECATED
-        PCFSoftShadowMap: WebGLShadowMap now warns and silently rewrites
-        it to PCFShadowMap at render time (WebGLShadowMap.js — "PCFSoftShadowMap
-        has been deprecated. Using PCFShadowMap instead."), so the old
-        shadows="soft" only claimed softness while shipping PCF. This value
-        names what actually runs. Verified against the installed packages:
-        fiber's dist maps "percentage" → THREE.PCFShadowMap.
-        Softer options and why none is taken here: VSM ("variance") leaks
-        light through the thin interior geometry; drei's <SoftShadows>
-        (PCSS) recompiles every material's shader on mount (a hitch per
-        streamed chunk/room); drei <AccumulativeShadows> bakes once and
-        needs a static scene — the corridor is a streaming treadmill whose
-        shadow camera follows the player, so a bake is stale the moment the
-        player moves. Genuinely soft shadows would take a custom PCSS
-        shadow shader or a light that never moves relative to static
-        geometry.
-        Tone mapping: AgX via the gl props — R3F applies plain-object gl
-        props onto the renderer (applyProps) AFTER installing its ACES
-        default on first configure, so this wins; saturated accent colors
-        clip under ACES, and the `flat` prop would disable tone mapping
-        entirely. three 0.185 enum: THREE.AgXToneMapping (6).
-      */}
-      <Canvas
-        frameloop={paused ? "never" : "always"}
-        dpr={[1, 2]}
-        gl={{ antialias: true, toneMapping: THREE.AgXToneMapping }}
-        shadows="percentage"
-      >
-        <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
+  // THE CANVAS IS THE SHELL'S (§14 merge). This component keeps every
+  // cross-module decision and the DOM HUD; the scene subtree renders in the
+  // app's ONE shared canvas through the world slot (`useWorldScene`). The
+  // renderer-level props the old standalone canvas carried moved to the
+  // WORLD CONTRACT (world-canvas.tsx / world-contract.ts), applied whenever
+  // the game world is mounted:
+  //   shadows="percentage" → PCFShadowMap (three 0.185 deprecated PCFSoft),
+  //   AgX tone mapping (saturated accents clip under the ACES default),
+  //   and the §14.1 frameloop freeze is the shared canvas's `paused` prop.
+  // Softer shadows stay rejected: VSM leaks through thin interior geometry,
+  // drei <SoftShadows> recompiles every material per streamed room, and
+  // AccumulativeShadows needs a static scene.
+  //
+  // Registered on every render — the element is a description, and this
+  // component re-renders only when its own state does.
+  useWorldScene(
+    <>
+      <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
         <RenderTrace />
         {/* The stage pool under the diorama — kills the featureless void
             around the model. One named constant reverts it:
@@ -2289,7 +2321,11 @@ export default function GameCanvas({
           />
           <Vignette offset={VIGNETTE_OFFSET} darkness={VIGNETTE_DARKNESS} />
         </EffectComposer>
-      </Canvas>
+    </>
+  );
+
+  return (
+    <div className="relative h-full w-full">
       <Hud door={hudDoor} enterHint={t("enter")} />
     </div>
   );

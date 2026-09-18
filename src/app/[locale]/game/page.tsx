@@ -1,9 +1,9 @@
 import { setRequestLocale } from "next-intl/server";
-import { GameShell } from "@/components/game/game-shell";
+import { redirect } from "@/i18n/navigation";
 
-// Immersive fullscreen route: skip prerendering so the locale request config
-// is set fresh per request, same as the settings page.
-export const dynamic = "force-dynamic";
+// §14 merge: the hotel is a WORLD of the single route now (`/?view=game`),
+// not a route of its own. The old URL stays as a redirect so existing links
+// keep landing in the game.
 
 export default async function GamePage({
   params,
@@ -13,9 +13,5 @@ export default async function GamePage({
   const { locale } = await params;
   setRequestLocale(locale);
 
-  return (
-    <div className="fixed inset-0 bg-neutral-950">
-      <GameShell />
-    </div>
-  );
+  redirect({ href: "/?view=game", locale });
 }

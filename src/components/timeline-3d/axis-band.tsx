@@ -2,10 +2,13 @@
 
 /**
  * AxisBand — the persistent left time axis shared by the chat and timeline
- * views (v0.11 shell refactor). Composes the ThreadlineScene R3F DNA weave,
- * the AmbientScene 2D ruler (NOW dot; year ticks currently suppressed), the
- * RulerYearLabels DOM overlay (not rendered — year scale hidden by decision,
- * kept for the redo), the ScrubLens, edge fades and the jump controls.
+ * views (v0.11 shell refactor). The strand-field braid that used to mount
+ * its own canvas here (`threadline-scene.tsx`) now renders in the app's ONE
+ * shared canvas (`world-canvas.tsx`, §14 merge) — this component keeps the
+ * band's DOM half: the AmbientScene 2D ruler (NOW dot; year ticks currently
+ * suppressed), the RulerYearLabels DOM overlay (not rendered — year scale
+ * hidden by decision, kept for the redo), the ScrubLens, edge fades and the
+ * jump controls.
  *
  * IT READS. IT NO LONGER CARRIES CONTROLS. The strand filter chip and the
  * strand-selection caption used to live here, and a 24-32px column whose whole
@@ -14,8 +17,7 @@
  * the board bar (`shell/board-bar.tsx`). What is left on the strip is the
  * scrubber, which IS a rail affordance.
  *
- * The band renders ONLY when WebGL is available; without it the caller should
- * omit the band and let the content take the full width. Its width comes from
+ * Its width comes from
  * the layout tier — 24px on phone/tablet, 32px on laptop/wide (`tiers.ts`
  * `railW`) — so the same braid is what the reader sees whether they are
  * reading the chat or the timeline; nothing about the band is a view-switch
@@ -48,10 +50,6 @@ import { ISLAND } from "@/components/layout/island";
 const SHOW_YEAR_RULER = false;
 
 const AmbientScene = dynamic(() => import("./ambient-scene"), {
-  ssr: false,
-  loading: () => null,
-});
-const ThreadlineScene = dynamic(() => import("./threadline-scene"), {
   ssr: false,
   loading: () => null,
 });
@@ -507,24 +505,9 @@ export interface AxisBandProps {
    *  props with four private ownership rules is how the band came to read
    *  whichever field rendered last. */
   feed: FieldFeed;
-  /** The current picks, in order. Empty = 核心时间线 (no filter, core line
-   *  leads). The band highlights every picked strand and greys the rest — it
-   *  READS the selection and no longer writes it: the control that changes it
-   *  moved to the board bar (see `board-bar.tsx`). */
-  strands: readonly string[];
-  /** Full set of strand names drawn by the threadline (capped). */
-  ambientStrands: string[];
-  /** Reduced-motion preference passed to the threadline. */
-  reducedMotion: boolean;
 }
 
-export function AxisBand({
-  range,
-  feed,
-  strands,
-  ambientStrands,
-  reducedMotion,
-}: AxisBandProps) {
+export function AxisBand({ range, feed }: AxisBandProps) {
   const locale = useLocale();
 
   const bandRef = useRef<HTMLDivElement>(null);
@@ -547,13 +530,9 @@ export function AxisBand({
       className="relative shrink-0"
       style={{ marginLeft: spec.railMargin, width: spec.railW }}
     >
-      <ThreadlineScene
-        strands={ambientStrands}
-        selected={strands}
-        feed={feed}
-        range={range}
-        reducedMotion={reducedMotion}
-      />
+      {/* The braid itself renders in the shared canvas (world-canvas.tsx),
+          scissored to this strip's exact rect — what remains here is the
+          band's DOM half. */}
       <AmbientScene feed={feed} range={range} />
       {SHOW_YEAR_RULER && <RulerYearLabels feed={feed} range={range} />}
       {/* Fade-out at the ruler band's edges (bottom weaker so the NOW
@@ -566,7 +545,8 @@ export function AxisBand({
           Both moved to the board bar: a 256 px popover and a truncating label
           do not belong in a 24-32 px column whose whole job is to say where in
           time the reader is. The strip still READS the selection — every
-          picked strand lights in its own colour in `ThreadlineScene` above. */}
+          picked strand lights in its own colour in the braid, which the
+          shared canvas draws into this strip. */}
     </div>
   );
 }

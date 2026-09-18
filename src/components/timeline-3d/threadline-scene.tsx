@@ -1,10 +1,17 @@
 "use client";
 
 /**
- * ThreadlineScene (v0.11) — the timeline view's LEFT band: the strand field
+ * ThreadlineRig (v0.11) — the timeline view's LEFT band: the strand field
  * (doc/design/v0.11-strand-field.md §2).
  *
- * A perspective R3F canvas fills the narrow band. The brand-blue core runs the
+ * THE CANVAS IS GONE (§14 merge): this band used to mount its own
+ * `<Canvas>`; it now renders through the app's ONE shared canvas
+ * (`world-canvas.tsx`), which portals this rig into a dedicated
+ * THREE.Scene with its own camera and a band-sized `size` override — so
+ * everything below still reads the strip's dimensions from `useThree`
+ * exactly as it did when the band owned a canvas.
+ *
+ * The braid fills the narrow band. The brand-blue core runs the
  * full height, with a companion hairline beside it. The band is a COAXIAL
  * CABLE: the core is the centre conductor, the band's lines are the shield
  * braid. Each line runs the WHOLE height — no start, no end — and every line
@@ -131,8 +138,7 @@
  */
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { useTheme } from "@teispace/next-themes";
+import { useFrame, useThree } from "@react-three/fiber";
 import { oklchToHex } from "@/lib/timeline3d/layout";
 import {
   normalizeStrandName,
@@ -173,6 +179,10 @@ import {
 
 const FOV = 30;
 const BASE_Z = 9;
+/** Exported for the shared canvas (`world-canvas.tsx`): the braid's portal
+ *  camera is built with the same numbers its standalone canvas used. */
+export const THREADLINE_FOV = FOV;
+export const THREADLINE_BASE_Z = BASE_Z;
 /** The strand cylinder's radius — ONE value for the WHOLE bundle: every strand
  *  sits exactly this far from the core at every height, so the cross-section is
  *  a circle and the winding only ever moves a line AROUND it (never in or out).
@@ -761,7 +771,7 @@ interface ThreadlineRigProps extends ThreadlineSceneProps {
   dark: boolean;
 }
 
-function ThreadlineRig(props: ThreadlineRigProps) {
+export function ThreadlineRig(props: ThreadlineRigProps) {
   const {
     strands,
     selected,
@@ -1560,21 +1570,7 @@ function ThreadlineRig(props: ThreadlineRigProps) {
   );
 }
 
-export default function ThreadlineScene(props: ThreadlineSceneProps) {
-  const { resolvedTheme } = useTheme();
-  const dark = resolvedTheme !== "light";
-
-  return (
-    <div className="absolute inset-0" style={{ pointerEvents: "none" }}>
-      <Canvas
-        dpr={[1, 2]}
-        camera={{ position: [0, 0, BASE_Z], fov: FOV }}
-        gl={{ antialias: true, alpha: true }}
-        onCreated={(state) => state.gl.setClearColor(0x000000, 0)}
-        style={{ position: "absolute", inset: 0 }}
-      >
-        <ThreadlineRig {...props} dark={dark} />
-      </Canvas>
-    </div>
-  );
-}
+// The braid used to end this file with its own `<Canvas>` (the default
+// `ThreadlineScene` export). That canvas is retired (§14.3): the shared
+// `world-canvas.tsx` owns the only canvas, and mounts this rig through a
+// portal with the band's own scene/camera/size.

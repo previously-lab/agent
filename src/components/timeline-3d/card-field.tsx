@@ -2,8 +2,10 @@
 
 /**
  * CardField (Rev 12) — the timeline's right field: the cards ARE the scene.
- * One R3F canvas renders the current zoom level's rows as big film-frame
- * cards on the z=0 plane; each stack (L1/L2) is a real 3D deck — the top
+ * The scene renders in the app's ONE shared canvas (`world-canvas.tsx`,
+ * §14 merge — this field no longer mounts its own `<Canvas>`); what lives
+ * HERE is everything that is not GL: the current zoom level's rows as big
+ * film-frame cards on the z=0 plane; each stack (L1/L2) is a real 3D deck — the top
  * card is the full original slice card (never a summary), and 1–6 backing
  * sheets of the SAME size/radius/color cascade behind it (`backingSheets`
  * tiers in stacks.ts) so a pile reads as thick without rendering its count.
@@ -59,7 +61,7 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
-import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useLocale, useTranslations } from "next-intl";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import {
@@ -75,7 +77,6 @@ import {
 } from "@/lib/timeline3d/stacks";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import {
-  FIELD_FOV,
   camZFor,
   clipPlanesFor,
   worldScaleFor,
@@ -115,6 +116,7 @@ import {
 } from "@/lib/timeline3d/field-feed";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
+import { useWorldScene } from "./world-slot";
 import type { SliceNarration } from "./slice-narrate-button";
 import { BoundaryRow } from "./boundary-row";
 import { OriginRow } from "./origin-row";
@@ -165,9 +167,12 @@ export interface CardFieldProps {
    *  See `timeline-scene.tsx` for why the box is the wrong lever. */
   insetTop?: number;
   insetBottom?: number;
-  /** Freeze the frame loop (Canvas frameloop="never") while the
-   *  conversation layer is fullscreen — pause, never unmount (§14.1). */
-  paused?: boolean;
+  /** Horizontal camera shift, world units (= CSS px at the z=0 plane). The
+   *  shared canvas spans the band AND the pane (§14 merge), so the camera
+   *  parks this far left of centre to keep the card column centred in the
+   *  PANE — the shell computes it from the band's rect. Parallel shift, no
+   *  turn: the dead-on framing rule below is untouched. */
+  camXOffset?: number;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -345,6 +350,8 @@ interface FieldSceneProps {
    *  clamp every other one has to agree with, so it reads them here. */
   insetTop: number;
   insetBottom: number;
+  /** Horizontal camera shift — see `CardFieldProps.camXOffset`. */
+  camXOffset: number;
 }
 
 function FieldScene({
@@ -370,6 +377,7 @@ function FieldScene({
   narration,
   insetTop,
   insetBottom,
+  camXOffset,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -610,11 +618,11 @@ function FieldScene({
     if (!reducedMotion) {
       const p = feed.progress; // 0..1 (0 = oldest/top, 1 = newest/bottom)
       const cy = (p - 0.5) * 2 * 0.14 * worldScale; // ±0.14 old world units
-      camera.position.set(0, cy, camZ);
-      camera.lookAt(0, cy, 0);
+      camera.position.set(camXOffset, cy, camZ);
+      camera.lookAt(camXOffset, cy, 0);
     } else {
-      camera.position.set(0, 0, camZ);
-      camera.lookAt(0, 0, 0);
+      camera.position.set(camXOffset, 0, camZ);
+      camera.lookAt(camXOffset, 0, 0);
     }
 
     // Which way the reader is travelling, for the boundary that speaks. Read
@@ -770,7 +778,7 @@ export function CardField({
   onRungChange,
   insetTop = 0,
   insetBottom = 0,
-  paused = false,
+  camXOffset = 0,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
@@ -1436,6 +1444,42 @@ export function CardField({
     [layout.total, fieldSize.h, minOffset, insetBottom],
   );
 
+  // THE CANVAS IS THE SHELL'S (§14 merge). This component keeps everything
+  // that is NOT GL — the gesture surface, the rung/deal state, the offset
+  // table — and hands the scene subtree to the shared canvas through the
+  // world slot (`useWorldScene`). Registered on every render (the element
+  // is a description; the canvas re-renders only when this field does) and
+  // cleared on unmount. Empty states register NOTHING — there is no scene.
+  useWorldScene(
+    entries.length === 0 ? null : (
+      <FieldScene
+        rows={rows}
+        geo={geo}
+        rung={rung}
+        layout={layout}
+        metrics={metrics}
+        onUnitHeight={onUnitHeight}
+        rig={rig}
+        hasMore={hasMore}
+        requestOlder={requestOlder}
+        loadingOlder={loadingOlder}
+        reducedMotion={reducedMotion}
+        flashId={flashId}
+        onActivate={onActivate}
+        arias={arias}
+        texts={texts}
+        leaving={leaving}
+        onLeavingDone={onLeavingDone}
+        feed={feed}
+        publishing={publishing}
+        narration={narration}
+        insetTop={insetTop}
+        insetBottom={insetBottom}
+        camXOffset={camXOffset}
+      />
+    ),
+  );
+
   if (entries.length === 0) {
     // AN EMPTY FIELD IS TWO DIFFERENT SITUATIONS, and this used to answer both
     // with "No memory slices yet — start a conversation first."
@@ -1484,60 +1528,16 @@ export function CardField({
       // listen. `tabIndex={0}` on a scrollable region is the standard advice
       // and it is what this is: the cards inside are reachable by Tab either
       // way, but the SPACE between them is only reachable from here.
+      //
+      // The div is the field's whole DOM presence now: the scene it
+      // controls renders in the shell's shared canvas (§14 merge), and the
+      // card faces arrive back over it as drei Html portals.
       tabIndex={0}
       role="group"
       aria-label={t("fieldLabel")}
       onKeyDown={onKeyDown}
       className="relative h-full w-full outline-none"
       style={{ touchAction: "none" }}
-    >
-      <Canvas
-        dpr={[1, 1.75]}
-        // "never" while the conversation layer is fullscreen (§14.1 rule
-        // 2): the world FREEZES but is not unmounted — the scene, its
-        // compiled programs and the last presented frame all survive, so
-        // collapsing the panel resumes instantly. R3F applies a frameloop
-        // prop change live.
-        frameloop={paused ? "never" : "always"}
-        // Dead-on camera: cards on the z=0 plane always face the viewer
-        // square-on (no keystone tilt). A pile's depth comes from its own
-        // sheet offsets/tilts/shadows, not from the camera angle.
-        //
-        // The distance is DERIVED from the field height (`camera.ts`) and
-        // re-set every frame by the drift; this initial value only covers the
-        // frame before the loop starts. `fov` is fixed — the distance moving is
-        // what makes the field 1 world unit per CSS px.
-        camera={{
-          position: [0, 0, camZFor(fieldSize.h || 800)],
-          fov: FIELD_FOV,
-        }}
-        gl={{ antialias: true, alpha: true }}
-      >
-        <FieldScene
-          rows={rows}
-          geo={geo}
-          rung={rung}
-          layout={layout}
-          metrics={metrics}
-          onUnitHeight={onUnitHeight}
-          rig={rig}
-          hasMore={hasMore}
-          requestOlder={requestOlder}
-          loadingOlder={loadingOlder}
-          reducedMotion={reducedMotion}
-          flashId={flashId}
-          onActivate={onActivate}
-          arias={arias}
-          texts={texts}
-          leaving={leaving}
-          onLeavingDone={onLeavingDone}
-          feed={feed}
-          publishing={publishing}
-          narration={narration}
-          insetTop={insetTop}
-          insetBottom={insetBottom}
-        />
-      </Canvas>
-    </div>
+    />
   );
 }
