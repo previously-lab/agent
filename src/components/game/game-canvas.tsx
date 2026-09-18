@@ -137,11 +137,25 @@ import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
 import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
+import { useReducedMotion } from "motion/react";
 import { useTheme } from "@teispace/next-themes";
-import type { JSX, MutableRefObject } from "react";
+import type { JSX, MutableRefObject, ReactNode } from "react";
 import { GAME_DEBUG } from "./debug";
 import { useWorldScene } from "@/components/timeline-3d/world-slot";
+import { AnchorTerminal } from "@/lib/game/anchor-terminal";
+import {
+  anchorNavPlan,
+  LOBBY_TERMINAL_ANCHOR,
+  LOBBY_TERMINAL_BLOCKER,
+  roomTerminalFor,
+  TERMINAL_D,
+  TERMINAL_DEPART,
+  TERMINAL_FLARE_MS,
+  TERMINAL_REACH_LOBBY,
+  TERMINAL_REACH_ROOM,
+  type TerminalAnchor,
+} from "@/lib/game/anchor";
 import {
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
@@ -183,6 +197,7 @@ import {
   roomPlanFor,
   scaledRecipeFor,
   wallSegmentsFor,
+  composeRoom,
   type RoomPlan,
   type ScaleNotation,
 } from "@/lib/game/room-plan";
@@ -195,8 +210,8 @@ import {
   doorAffordanceFor,
   templatePlanFor,
 } from "@/lib/game/room-templates";
-import { terrainHeight, waterSideFor } from "@/lib/game/terrain";
-import { Corridor, LOBBY_BLOCKERS, type CorridorDoor } from "./corridor";
+import { terrainHeight, waterRectFor, waterSideFor } from "@/lib/game/terrain";
+import { Corridor, LOBBY_BLOCKERS, buildLobbyRegister, type CorridorDoor, type LobbyRegister } from "./corridor";
 import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
 import {
   ARRIVAL_DOOR_CROSS_DEPTH,
@@ -212,6 +227,7 @@ import {
 } from "@/lib/game/tuning/hotel";
 import {
   COLONNADE_BAY,
+  PROP_SCALE_EXP,
   ROOM_WALL_THICKNESS,
   WATER_Y,
   roomLocalFor,
@@ -324,6 +340,14 @@ const NO_ROOM_PLAN: RoomPlan = {
 const NO_TIMELINE_DOORS: readonly CorridorDoor[] = [];
 
 type PlayerRef = MutableRefObject<PlayerPos>;
+
+/** The anchor HUD payload (§13.1) — set while the player stands in reach
+ *  of a terminal; wins over the door prompt in the Hud. */
+interface AnchorHud {
+  kind: "room" | "lobby";
+  sliceId: string;
+  label: string;
+}
 
 /** Live player/atmosphere/fade state for probes — re-exported from the
  *  shared module (see debug.ts). */
@@ -693,6 +717,7 @@ export function clampToHotel(
   end: CorridorEnd | undefined,
   southReturnDoorX: number | null,
   eastArrivalDoor: boolean,
+  terminalBlocker?: { x0: number; x1: number; z0: number; z1: number } | null,
 ): void {
   if (p.x <= 0) {
     clampToCorridor(p, doorXs, end);
@@ -729,6 +754,15 @@ export function clampToHotel(
       else if (min === east) p.x = b.x1;
       else if (min === south) p.z = b.z0;
       else p.z = b.z1;
+    }
+  }
+  // The lobby's anchor terminal is solid like the desk (clip-through a
+  // console you're interacting with would read as a bug, not a stylistic
+  // choice like the small props).
+  if (terminalBlocker) {
+    const b = terminalBlocker;
+    if (p.x > b.x0 && p.x < b.x1 && p.z > b.z0 && p.z < b.z1) {
+      p.x = b.x0;
     }
   }
 }
@@ -783,11 +817,20 @@ function resolveSpaceForDoor(
  * than handing geometry through props (SpaceScene owns its memo; its
  * prop contract is unchanged). The plan is returned even when the room
  * grows no strand doors: plan-aware containment needs it regardless.
+ *
+ * Also resolves the room's ANCHOR TERMINAL (§13.1) through the renderer's
+ * own inputs — same comp, same plan, same prop scale — so the proximity
+ * prompt and the interaction measure the exact machine space.tsx drew
+ * (the A6 double-call-site discipline; lib/game/anchor.ts).
  */
 function roomGeometryForSpace(
   space: ActiveSpace,
   count: number,
-): { plan: RoomPlan; doors: readonly RoomDoorPlacement[] } {
+): {
+  plan: RoomPlan;
+  doors: readonly RoomDoorPlacement[];
+  terminal: TerminalAnchor;
+} {
   const { door, recipe, scaledRecipe, scale } = space;
   const scaleFactor = scale.factor;
   const width = scaledRecipe.width;
@@ -814,7 +857,13 @@ function roomGeometryForSpace(
     undefined,
     template ? templatePlanFor(template) : undefined,
   );
-  if (count <= 0) return { plan, doors: [] };
+  if (count <= 0) {
+    return {
+      plan,
+      doors: [],
+      terminal: terminalForSpace(space, plan),
+    };
+  }
   const walls = wallSegmentsFor(plan, wallThick);
   const hostable = hostableWallsFor(plan, walls, roomOrientationFor(door).dir);
   const { doors } = placeRoomDoors(
@@ -826,7 +875,30 @@ function roomGeometryForSpace(
     undefined,
     template ? doorAffordanceFor(template) : undefined,
   );
-  return { plan, doors };
+  return { plan, doors, terminal: terminalForSpace(space, plan) };
+}
+
+/**
+ * The room terminal's anchor through the SAME pure inputs space.tsx
+ * renders from: the composition over the same plan at the same scale
+ * factor, the renderer's wall thickness, the prop scale (scaleFactor^
+ * PROP_SCALE_EXP — the room's furniture scale), and the scaled water
+ * rect. Called from roomGeometryForSpace only.
+ */
+function terminalForSpace(space: ActiveSpace, plan: RoomPlan): TerminalAnchor {
+  const { recipe, scaledRecipe, scale } = space;
+  const scaleFactor = scale.factor;
+  const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+  const comp = composeRoom(recipe.sliceId, plan, scaleFactor);
+  return roomTerminalFor({
+    sliceId: recipe.sliceId,
+    plan,
+    comp,
+    width: scaledRecipe.width,
+    wallThick,
+    propScale: Math.pow(scaleFactor, PROP_SCALE_EXP),
+    water: waterRectFor(scaledRecipe),
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1202,6 +1274,88 @@ function PlayerAvatar({
 }
 
 /**
+ * The lobby terminal's screen content — the whole-window index as DOM
+ * (§13: 文字走 DOM), the register board's own data at terminal scale.
+ * Rendered through drei Html INSIDE the machine's bezel
+ * (AnchorTerminal's screenOverlay); monospace phosphor on the dark
+ * glass, the hotel name and window number in the timeline accent.
+ */
+function LobbyIndexScreen({
+  register,
+  hotelName,
+  windowIndex,
+  accent,
+}: {
+  register: LobbyRegister;
+  hotelName: string;
+  windowIndex: number;
+  accent: string;
+}): JSX.Element {
+  const inkDim = "rgba(236,226,204,0.55)";
+  const entries = register.entries.slice(0, 10);
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        boxSizing: "border-box",
+        padding: "7px 9px",
+        display: "flex",
+        flexDirection: "column",
+        fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+        color: "#ece2cc",
+        userSelect: "none",
+        // Nearly opaque so the DOM glyphs ride on the emissive plane's
+        // light — the screen still BREATHES and the depart flare still
+        // swells through (an opaque backing would hide both).
+        background: "rgba(10,13,12,0.88)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          color: accent,
+          fontWeight: 700,
+          fontSize: 11,
+          letterSpacing: 1,
+          paddingBottom: 3,
+          borderBottom: "1px solid rgba(236,226,204,0.25)",
+        }}
+      >
+        <span style={{ maxWidth: "72%", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {hotelName}
+        </span>
+        <span>W{windowIndex}</span>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-evenly",
+        }}
+      >
+        {entries.map((entry) => (
+          <div
+            key={entry.sliceId}
+            style={{ display: "flex", alignItems: "baseline", gap: 6, lineHeight: 1 }}
+          >
+            <span style={{ fontWeight: 700, fontSize: 10 }}>{entry.time ?? "····"}</span>
+            <span style={{ color: inkDim, fontSize: 8 }}>{entry.date ?? ""}</span>
+          </div>
+        ))}
+        {entries.length === 0 && (
+          <span style={{ color: inkDim, fontSize: 9 }}>—</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The per-frame game loop: integrates movement, runs the door manager
  * (mount/release activeSpace on a hysteresis band around the wall plane),
  * applies the corridor/space clamps, and refreshes the HUD door prompt —
@@ -1252,6 +1406,11 @@ function GameLoop({
   roomDoors,
   roomDoorCountFor,
   roomPlan,
+  roomTerminal,
+  lobbyAnchorLabel,
+  departingRef,
+  anchorHudRef,
+  setHudAnchor,
 }: {
   playerRef: PlayerRef;
   keysRef: MutableRefObject<Set<string>>;
@@ -1314,6 +1473,19 @@ function GameLoop({
    *  clamp's plan-aware containment; a placeholder rect when no space is
    *  active (the space clamp never runs then). */
   roomPlan: RoomPlan;
+  /** The active room's anchor terminal (room-local frame — the same pure
+   *  resolution space.tsx rendered; null when no space is active, then the
+   *  lobby machine is the anchor candidate). */
+  roomTerminal: TerminalAnchor | null;
+  /** Localized label for the lobby terminal's HUD prompt. */
+  lobbyAnchorLabel: string;
+  /** Latched by the anchor interaction: freezes movement while the
+   *  depart flare plays and the view dissolves to the catalog. */
+  departingRef: MutableRefObject<boolean>;
+  /** The latest in-reach anchor (also read by the interact key handler
+   *  and the GAME_DEBUG probe mirror). */
+  anchorHudRef: MutableRefObject<AnchorHud | null>;
+  setHudAnchor: (anchor: AnchorHud | null) => void;
 }): null {
   useFrame((_, delta) => {
     const p = playerRef.current;
@@ -1329,7 +1501,7 @@ function GameLoop({
       // next frame runs on the committed hotel.
       hopGuard.current = false;
       motionRef.current = { x: 0, z: 0, moving: false };
-    } else if (!transitionActive) {
+    } else if (!transitionActive && !departingRef.current) {
       // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
       // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
       // room should feel immense, not waste the player's time; the corridor
@@ -1455,7 +1627,14 @@ function GameLoop({
           roomPlan,
         );
       } else {
-        clampToHotel(p, doorXs, corridorEnd, returnDoorSouthX, eastArrivalDoor);
+        clampToHotel(
+          p,
+          doorXs,
+          corridorEnd,
+          returnDoorSouthX,
+          eastArrivalDoor,
+          LOBBY_TERMINAL_BLOCKER,
+        );
       }
     } else {
       // Frozen mid-crossing: report "not moving" so the avatar settles
@@ -1475,15 +1654,72 @@ function GameLoop({
     const gone = space !== null || transitionActive;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
-    // 4. HUD prompt — setState only when the nearest door identity changes.
-    const near = nearestDoor(p.x, p.z, sliceIds, HUD_DIST, layout);
+    // 4. THE ANCHOR TERMINAL (§13.1): proximity of the one machine that
+    // matters right now — the room's terminal while a space is active, the
+    // lobby's index terminal otherwise. The interaction point is the world
+    // transform of the renderer's anchor (room-local → world through the
+    // same door/dir mirror the clamp and the return-door landing use),
+    // so the thing measured here IS the thing space.tsx drew.
+    let ax = 0;
+    let az = 0;
+    let aKind: "" | "room" | "lobby" = "";
+    let aSlice: string | null = null;
+    let aReach = TERMINAL_REACH_LOBBY;
+    if (space !== null && roomTerminal !== null) {
+      const dir = space.door.z > 0 ? 1 : -1;
+      const front = (TERMINAL_D * roomTerminal.scale) / 2;
+      ax = space.door.x + dir * roomTerminal.x;
+      az = space.door.z + dir * (roomTerminal.z + front);
+      aKind = "room";
+      aSlice = space.door.sliceId;
+      aReach = TERMINAL_REACH_ROOM;
+    } else if (space === null) {
+      const t = LOBBY_TERMINAL_ANCHOR;
+      ax = t.x - (TERMINAL_D * t.scale) / 2;
+      az = t.z;
+      aKind = "lobby";
+      aSlice = sliceIds[0] ?? null;
+    }
+    const aDist = Math.hypot(p.x - ax, p.z - az);
+    const aHud: AnchorHud | null =
+      aSlice !== null && aDist <= aReach
+        ? {
+            kind: aKind as "room" | "lobby",
+            sliceId: aSlice,
+            label:
+              aKind === "lobby"
+                ? lobbyAnchorLabel
+                : (doors.find((d) => d.sliceId === aSlice)?.label ?? aSlice),
+          }
+        : null;
+    const prevAnchor = anchorHudRef.current;
+    if (
+      (prevAnchor === null) !== (aHud === null) ||
+      prevAnchor?.kind !== aHud?.kind ||
+      prevAnchor?.sliceId !== aHud?.sliceId
+    ) {
+      anchorHudRef.current = aHud;
+      setHudAnchor(aHud);
+    }
+    // Probe mirror — single writer, mutated in place.
+    const dbgAnchor = GAME_DEBUG.anchor;
+    dbgAnchor.active = aHud !== null;
+    dbgAnchor.kind = aKind;
+    dbgAnchor.x = ax;
+    dbgAnchor.z = az;
+    dbgAnchor.sliceId = aSlice;
+    dbgAnchor.near = aSlice !== null ? Math.max(0, 1 - aDist / aReach) : 0;
+
+    // 5. HUD prompt — setState only when the nearest door identity changes.
+    // The anchor wins while in reach (its prompt replaces the door's).
+    const near = aHud !== null ? null : nearestDoor(p.x, p.z, sliceIds, HUD_DIST, layout);
     const nearId = near ? near.sliceId : null;
     if (nearId !== hudIdRef.current) {
       hudIdRef.current = nearId;
       setHudDoor(nearId === null ? null : (doors.find((d) => d.sliceId === nearId) ?? null));
     }
 
-    // 5. Probe/e2e debug handle — mutate the preallocated object, no re-render.
+    // 6. Probe/e2e debug handle — mutate the preallocated object, no re-render.
     GAME_DEBUG.x = p.x;
     GAME_DEBUG.z = p.z;
     GAME_DEBUG.space = space === null ? null : space.door.sliceId;
@@ -1492,19 +1728,24 @@ function GameLoop({
   return null;
 }
 
-/** Bottom-center door prompt — label + localized hint, pointer-transparent. */
+/** Bottom-center prompt — label + localized hint, pointer-transparent.
+ *  The anchor terminal (§13.1) wins over a door while the player stands
+ *  in reach; the hint is the same "Enter" the doors use (E works too). */
 function Hud({
   door,
+  anchor,
   enterHint,
 }: {
   door: CorridorDoor | null;
+  anchor: AnchorHud | null;
   enterHint: string;
 }): JSX.Element | null {
-  if (door === null) return null;
+  const label = anchor ? anchor.label : door?.label;
+  if (label === undefined) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center">
       <div className="rounded-full bg-black/35 px-4 py-1.5 font-serif text-sm text-neutral-300 backdrop-blur-sm">
-        <span className="text-neutral-100">{door.label}</span>
+        <span className="text-neutral-100">{label}</span>
         <span className="mx-2 text-neutral-500">·</span>
         <span>{enterHint}</span>
       </div>
@@ -1672,6 +1913,42 @@ export default function GameCanvas({
   focusSlice?: string | null;
 }): JSX.Element {
   const t = useTranslations("game");
+  const locale = useLocale();
+  const reducedMotion = useReducedMotion() ?? false;
+  // THE ANCHOR INTERACTION (§13.1): interactRef fires the depart flare +
+  // catalog jump when a terminal is in reach (Enter/E key and the
+  // GAME_DEBUG.interact probe share it). departingRef latches so a double
+  // press can never double-navigate, and freezes movement in GameLoop.
+  const [hudAnchor, setHudAnchor] = useState<AnchorHud | null>(null);
+  const anchorHudRef = useRef<AnchorHud | null>(null);
+  const departingRef = useRef(false);
+  const interactRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    interactRef.current = () => {
+      const anchor = anchorHudRef.current;
+      if (anchor === null || departingRef.current) return;
+      departingRef.current = true;
+      TERMINAL_DEPART.t0 = performance.now();
+      const nav = anchorNavPlan(window.location.search, locale, anchor.sliceId);
+      window.setTimeout(
+        () => {
+          if (nav.mode === "push") {
+            // The soft path rides Next's own patched History API: an
+            // external pushState is picked up by the app router
+            // (ACTION_RESTORE), so useSearchParams re-renders WITHOUT a
+            // router dependency — game-canvas stays importable from
+            // node-side unit tests. The query-only URL keeps the locale
+            // path; Next copies its internal history state, so Back
+            // returns to the hotel.
+            window.history.pushState({}, "", nav.href);
+          } else {
+            window.location.assign(nav.href);
+          }
+        },
+        reducedMotion ? 0 : TERMINAL_FLARE_MS,
+      );
+    };
+  }, [locale, reducedMotion]);
   // The runtime strand-door count for a slice — the data lane's pure
   // derivation (buildRoomDoorMap in game-shell.tsx), read off the map.
   // Every room resolution (prewarm, wall crossing, return landing) freezes
@@ -1807,6 +2084,20 @@ export default function GameCanvas({
         ? doors
         : (timelines?.get(location.timelineId) ?? NO_TIMELINE_DOORS),
     [location, doors, timelines],
+  );
+  // The current hotel's display name — the corridor's header, and the
+  // lobby terminal's HUD label: "PREVIOUSLY · Enter" reads as the
+  // invitation into the catalog that the machine is.
+  const hotelName =
+    location.timelineId === CORE_TIMELINE_ID
+      ? "PREVIOUSLY"
+      : location.timelineId;
+  // The lobby terminal's screen content (§13.1): the whole-window index,
+  // the register board's own data (buildLobbyRegister) re-rendered as DOM
+  // on the machine's screen — 文字走 DOM, 空间永远 R3F.
+  const lobbyRegister = useMemo<LobbyRegister>(
+    () => buildLobbyRegister(currentDoors, location.windowIndex),
+    [currentDoors, location.windowIndex],
   );
   const sliceIds = useMemo(() => currentDoors.map((d) => d.sliceId), [currentDoors]);
   const globalLayout = useMemo(() => corridorLayoutFromDoors(currentDoors), [currentDoors]);
@@ -2140,11 +2431,15 @@ export default function GameCanvas({
       if (side === "east") arriveAtEastDoor();
       else arriveInLobby();
     };
+    // Probe/e2e: the anchor interaction itself — fires only when a
+    // terminal is in reach, exactly like the Enter/E key.
+    GAME_DEBUG.interact = () => interactRef.current();
     window.__gameDebug = GAME_DEBUG;
     window.__gameMountTrace = MOUNT_TRACE;
     return () => {
       GAME_DEBUG.teleport = undefined;
       GAME_DEBUG.travel = undefined;
+      GAME_DEBUG.interact = undefined;
       delete window.__gameDebug;
       delete window.__gameMountTrace;
     };
@@ -2208,6 +2503,18 @@ export default function GameCanvas({
     }
     function onKeyDown(event: KeyboardEvent): void {
       const key = event.key.toLowerCase();
+      // THE ANCHOR INTERACTION (§13.1): Enter (the same word the door
+      // prompt shows) or E fires the terminal in reach. Only swallowed
+      // when one IS in reach, so focused buttons and inputs keep their
+      // default keys otherwise.
+      if (key === "enter" || key === "e") {
+        if (isEditableTarget(event.target)) return;
+        if (anchorHudRef.current !== null) {
+          event.preventDefault();
+          interactRef.current();
+        }
+        return;
+      }
       if (!HANDLED_KEYS.has(key) || isEditableTarget(event.target)) return;
       event.preventDefault();
       pressed.add(key);
@@ -2283,14 +2590,40 @@ export default function GameCanvas({
             windowIndex={location.windowIndex}
             accent={accent}
             returnDoors={returnSides}
-            hotelName={
-              location.timelineId === CORE_TIMELINE_ID
-                ? "PREVIOUSLY"
-                : location.timelineId
-            }
+            hotelName={hotelName}
             dimmed={corridorHidden}
             dark={dark}
           />
+          {/* The lobby's anchor terminal (§13.1): one size bigger, screen
+              carrying the whole-window index as DOM. Lives in the corridor
+              wrapper so it unmounts with the corridor (HIDE_DELAY_MS after
+              a room engages) and eases down with the same dissolve
+              (`dimmed`). Emissive-only, so the light configuration — and
+              the compile budget — never changes. */}
+          {!corridorGone && (
+            <group
+              position={[
+                LOBBY_TERMINAL_ANCHOR.x,
+                0,
+                LOBBY_TERMINAL_ANCHOR.z,
+              ]}
+              rotation={[0, LOBBY_TERMINAL_ANCHOR.rotY, 0]}
+              scale={LOBBY_TERMINAL_ANCHOR.scale}
+            >
+              <AnchorTerminal
+                accent={accent}
+                dimmed={corridorHidden}
+                screenOverlay={
+                  <LobbyIndexScreen
+                    register={lobbyRegister}
+                    hotelName={hotelName}
+                    windowIndex={location.windowIndex}
+                    accent={accent}
+                  />
+                }
+              />
+            </group>
+          )}
         </group>
         <PlayerAvatar
           playerRef={playerRef}
@@ -2348,6 +2681,11 @@ export default function GameCanvas({
           roomDoors={activeRoomGeometry?.doors ?? []}
           roomDoorCountFor={roomDoorCountFor}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
+          roomTerminal={activeRoomGeometry?.terminal ?? null}
+          lobbyAnchorLabel={hotelName}
+          departingRef={departingRef}
+          anchorHudRef={anchorHudRef}
+          setHudAnchor={setHudAnchor}
         />
         {/*
           Post chain — deliberately conservative. N8AO (half-res) adds
@@ -2380,7 +2718,7 @@ export default function GameCanvas({
 
   return (
     <div className="relative h-full w-full">
-      <Hud door={hudDoor} enterHint={t("enter")} />
+      <Hud door={hudDoor} anchor={hudAnchor} enterHint={t("enter")} />
     </div>
   );
 }

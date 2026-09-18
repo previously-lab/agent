@@ -139,6 +139,8 @@ import {
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
+import { AnchorTerminal } from "@/lib/game/anchor-terminal";
+import { roomTerminalFor } from "@/lib/game/anchor";
 import {
   doorAffordanceFor,
   resolveRoomTemplate,
@@ -7395,6 +7397,28 @@ export function SpaceScene({
   });
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
+  // THE ANCHOR TERMINAL (§13.1): every room grows the one machine beside
+  // the doorway on the entrance wall — lib/game/anchor.ts resolves the
+  // spot (seeded side, feasibility-clamped clear of the strip, the walk
+  // path, the hero clearing, and the water); the integrator resolves the
+  // SAME anchor through the same pure call for the proximity prompt and
+  // the interaction (A6 — two call sites, one answer). Mounted inside the
+  // room root, so the fade capture carries it through the crossfade; its
+  // glow is emissive-only (no light), so the light configuration — and
+  // the compile storm budget — is untouched.
+  const terminalAnchor = useMemo(
+    () =>
+      roomTerminalFor({
+        sliceId: recipe.sliceId,
+        plan,
+        comp,
+        width,
+        wallThick,
+        propScale,
+        water: waterRect,
+      }),
+    [recipe, plan, comp, width, wallThick, propScale, waterRect],
+  );
   // The pool's wave-equation driver (materials/wave-driver.ts): created
   // HERE, not in the WaterSurface component, because the pool-floor
   // caustics patch below also samples the driver's height texture (the
@@ -9107,6 +9131,18 @@ export function SpaceScene({
           night={night}
         />
       )}
+
+      {/* The anchor terminal (§13.1): the room's machine, breathing by the
+          door. Walk up, interact, and the view dissolves to the 2.5D
+          catalog focused on this slice — the game → catalog half of the
+          shared ?slice= address. */}
+      <group
+        position={[terminalAnchor.x, GROUND_Y, terminalAnchor.z]}
+        rotation={[0, terminalAnchor.rotY, 0]}
+        scale={terminalAnchor.scale}
+      >
+        <AnchorTerminal accent={recipe.palette.accent} />
+      </group>
 
       {/* The door from inside: same frame and glow as the corridor face;
           the hinged slab mounts once the corridor is gone — before that

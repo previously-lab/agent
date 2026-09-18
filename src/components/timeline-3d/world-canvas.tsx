@@ -38,6 +38,7 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -179,6 +180,35 @@ export function WorldCanvas({
   // us in the shell, see WorldSceneProvider).
   const worldScene = useContext(WorldSceneNodeContext);
 
+  // THE WORLD DISSOLVE (§13.2's cheap half). The swap itself is a subtree
+  // swap in this one canvas — the leaving world is gone the frame the slot
+  // changes — so a true cross-fade would need both worlds alive at once
+  // (the shell mounts exactly one; §14's contract). What the canvas CAN
+  // honestly do is dissolve the INCOMING world in over ~300ms, the same
+  // opacity beat the shell's DOM layers already use — paired with the
+  // game-side depart flare (the machine's screen swells, the view
+  // dissolves to the catalog) it carries the transition's intent without
+  // risking the one-world contract. First mount paints immediately; a
+  // reduced-motion reader gets the plain switch.
+  const [worldFadedIn, setWorldFadedIn] = useState(true);
+  const firstWorldRef = useRef(true);
+  useEffect(() => {
+    if (firstWorldRef.current) {
+      firstWorldRef.current = false;
+      return;
+    }
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    setWorldFadedIn(false);
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => setWorldFadedIn(true));
+    });
+    return () => {
+      cancelAnimationFrame(r1);
+      cancelAnimationFrame(r2);
+    };
+  }, [world]);
+
   return (
       <div
         data-world-canvas
@@ -187,7 +217,9 @@ export function WorldCanvas({
         // and pointer events behave exactly as they did when each world had
         // its own canvas (the card field's gestures bind its own wrapper;
         // neither world raycasts).
-        className="absolute inset-0 z-0"
+        className={`absolute inset-0 z-0 transition-opacity duration-300 ease-out ${
+          worldFadedIn ? "opacity-100" : "opacity-0"
+        }`}
       >
         <Canvas
           dpr={[1, 2]}

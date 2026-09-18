@@ -1,3 +1,5 @@
+import { TERMINAL_DEPART } from "@/lib/game/anchor";
+
 /**
  * Live game-state probe shared by the integrator and the space renderer.
  * WHY A MODULE. Both game-canvas (atmosphere/fog) and space (room fade)
@@ -117,6 +119,32 @@ export const GAME_DEBUG = {
    *  derivation the compositions freeze — §8.4). Empty map until the
    *  strand read resolves. */
   doorCounts: {} as Record<string, number>,
+  /** Probe/e2e mirror of the anchor terminal (§13.1) — SINGLE WRITER:
+   *  GameLoop recomputes it every frame (world position of the active
+   *  machine's interaction point, its target slice, and the live proximity
+   *  0..1). `active` is false whenever no terminal is in reach (corridor
+   *  far from the lobby machine, a room without resolvable target, …).
+   *  Probes assert the game → catalog jump from these instead of entering
+   *  the scene graph; GAME_DEBUG.interact() fires the interaction when in
+   *  reach, exactly like pressing the key. */
+  anchor: {
+    active: false,
+    kind: "" as "" | "room" | "lobby",
+    /** World XZ of the interaction point (in front of the screen). */
+    x: 0,
+    z: 0,
+    /** The slice the interaction focuses (null = no target right now). */
+    sliceId: null as string | null,
+    /** 1 at the screen, 0 at the reach radius. */
+    near: 0,
+  },
+  /** Probe/e2e hook: fire the anchor interaction if one is in reach (the
+   *  same path as the Enter/E key). Set by GameCanvas, cleared on unmount. */
+  interact: undefined as undefined | (() => void),
+  /** The depart-flare clock (§13.2's screen-lit beat) — the shared record
+   *  every terminal's frame loop reads. Probes can stamp t0 to stage the
+   *  flare (or read it to time the real one). */
+  depart: TERMINAL_DEPART,
 };
 
 declare global {
