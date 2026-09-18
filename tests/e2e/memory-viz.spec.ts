@@ -17,8 +17,10 @@ import {
  * field is deleted, and the stream is a native scroll container again — the
  * wheel moves it, `scrollTop` is the position, and the specs read the DOM
  * contract back (`data-armed` on the window's armed head, seam text in the
- * viewport). Read `unified-chat-stream.tsx`'s header before changing how any
- * of this moves.
+ * viewport). That scroller lives in the conversation PANEL (§14.1) — a fixed
+ * overlay on the right edge, never the page's width — so a wheel reaches it
+ * only with the pointer over the panel; `wheelUp` below aims there. Read
+ * `unified-chat-stream.tsx`'s header before changing how any of this moves.
  *
  * All specs seed slice files + the timeline catalog straight into the
  * isolated MEMORY_ROOT (see memory-fixture.ts) — no chat turn ever runs, so
@@ -42,11 +44,15 @@ function sentinel(slice: FixtureSlice, role: "user" | "agent"): string {
  *
  * The stream is a native scroll container (v0.11 §14.5), so the wheel is
  * simply the reader's own input — the pointer only has to be over the pane
- * for the scroller to receive the event.
+ * for the scroller to receive the event. The pane is the conversation PANEL
+ * on the right edge (v0.11 §14.1), not the page: a wheel aimed at a
+ * viewport-relative point lands on the world canvas beside the panel and the
+ * scroller never sees it (the panel is a fixed overlay ~420–520px wide, and
+ * 60% of a 1280px viewport is left of its edge), so the pointer is parked on
+ * the conversation field itself — what a reader does before scrolling.
  */
 async function wheelUp(page: Page, px: number): Promise<void> {
-  const size = page.viewportSize()!;
-  await page.mouse.move(size.width * 0.6, size.height * 0.55);
+  await conversationField(page).hover();
   await page.mouse.wheel(0, -px);
 }
 
