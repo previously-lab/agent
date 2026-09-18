@@ -186,9 +186,27 @@ import {
   type StagedKitPiece,
 } from "@/lib/game/kits";
 import {
+  ARCH_HEADROOM,
+  ARCH_MIN_RUN,
+  ARCH_POST,
+  ARCH_SPRING_Y,
+  ARCH_TUBE,
+  ARCH_WIDTH,
+  ARCH_DOOR_CLEAR,
   BALLOON_BUNCHES,
   BALLOON_COLORS,
   COLONNADE_BAY,
+  COLUMN_CAPITAL_HEIGHT,
+  COLUMN_CAPITAL_SIZE,
+  COLUMN_DOOR_CLEAR,
+  COLUMN_END_PAD,
+  COLUMN_MIN_RUN,
+  COLUMN_OFF_WALL,
+  COLUMN_PLINTH_HEIGHT,
+  COLUMN_PLINTH_SIZE,
+  COLUMN_SHAFT_HEIGHT,
+  COLUMN_SHAFT_RADIUS,
+  COLUMN_SPAN,
   CONCRETE_NORMAL_SCALE,
   CREATURE_SCALE_EXP,
   DADO_BASE_HEIGHT,
@@ -235,6 +253,12 @@ import {
   LIGHT_REGISTER_TINTS,
   LIGHT_REGISTER_WEIGHTS,
   LONE_PROB,
+  MEZZANINE_DECK_Y,
+  MEZZANINE_DEPTH,
+  MEZZANINE_HEADROOM,
+  MEZZANINE_MIN_RUN,
+  MEZZANINE_PARAPET,
+  MEZZANINE_SLAB,
   NICHE_DOOR_CLEAR,
   NICHE_HEIGHT,
   NICHE_MAX_DEPTH,
@@ -243,6 +267,7 @@ import {
   NICHE_WIDTH,
   PARQUET_CELL,
   PARQUET_TONE_LIFT,
+  PATH_HALF,
   PET_COUNT,
   PET_NEAR_RADIUS_MAX,
   PILASTER_CAP_HEIGHT,
@@ -253,6 +278,12 @@ import {
   PILASTER_SPAN,
   PILASTER_WIDTH,
   PORTAL_HEIGHT,
+  PLATFORM_DEPTH,
+  PLATFORM_DOOR_CLEAR,
+  PLATFORM_HEIGHT,
+  PLATFORM_MIN_RUN,
+  PLATFORM_RAIL_HEIGHT,
+  PLATFORM_STEP_DEPTH,
   PROP_COUNT,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
@@ -264,6 +295,12 @@ import {
   ROOM_DOOR_ROW_DEPTH,
   ROOM_DOOR_SCREEN_THICK,
   ROOM_WALL_THICKNESS,
+  RILL_BED,
+  RILL_MIN_LENGTH,
+  RILL_PATH_CLEAR,
+  RILL_RIM_HEIGHT,
+  RILL_WATER_DEPTH,
+  RILL_WIDTH,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
@@ -471,15 +508,18 @@ function DadoBand({
 }
 
 /* ------------------------------------------------------------------ */
-/* Template feature slots (v0.11-room-interiors §7.2): niche,           */
-/* pilaster-rhythm, floor-inlay. The templates DECLARE these slots as   */
-/* data; this section resolves them against the plan's wall roles and   */
-/* the door-split wall runs (the existing modules' outputs — nothing    */
-/* re-implements their math) and builds the geometry. Every feature is  */
-/* architecture: opaque, wall/floor-material, lit only by the room's    */
-/* own fixtures (B.13 — a niche must NOT glow). No RNG anywhere: the    */
-/* same slice under the same template always grows the same features    */
-/* (A6), and a room without a template builds nothing here.             */
+/* Template feature slots (v0.11-room-interiors §3.2/§7.2): the        */
+/* geometric dressing the template/module layer DECLARES as data —     */
+/* dado + niche + pilaster rhythm + floor inlay + the N3/N4 set        */
+/* (raised platform, mezzanine, arch frame, column order, water rill). */
+/* This section resolves the declared slots against the plan's wall    */
+/* roles and the door-split wall runs (the existing modules' outputs — */
+/* nothing re-implements their math) and builds the geometry. Every    */
+/* feature is architecture: opaque, wall/floor-material, lit only by   */
+/* the room's own fixtures (B.13 — a niche must NOT glow). No RNG      */
+/* anywhere: the same slice under the same template always grows the   */
+/* same features (A6), and a room without a template builds nothing    */
+/* here.                                                               */
 /* ------------------------------------------------------------------ */
 
 /** A resolved niche: the host wall RUN is rebuilt around the opening. */
@@ -510,10 +550,66 @@ interface InlayFeature {
   z1: number;
 }
 
+/** A resolved raised platform: a railed dais standing against one wall
+ *  run, its center offset along the run. One per declared slot. */
+interface PlatformFeature {
+  run: number;
+  along: number;
+  width: number;
+  depth: number;
+  height: number;
+  stepDepth: number;
+  railH: number;
+}
+
+/** A resolved mezzanine: a half-floor ledge on one full-height run — the
+ *  deck, its parapet height and the slab thickness. */
+interface MezzanineFeature {
+  run: number;
+  along: number;
+  width: number;
+  deckY: number;
+  depth: number;
+  parapetH: number;
+  slab: number;
+}
+
+/** A resolved arch frame: two posts + a round arch before one run. */
+interface ArchFeature {
+  run: number;
+  along: number;
+  width: number;
+  springY: number;
+  post: number;
+  tube: number;
+}
+
+/** A resolved column order: free-standing column centers along one run. */
+interface ColumnOrderFeature {
+  run: number;
+  alongs: number[];
+  offWall: number;
+}
+
+/** A resolved water rill: the runnel's footprint rectangle (local frame).
+ *  The channel runs along the rectangle's LONG axis, RILL_WIDTH across,
+ *  centered on the short axis. */
+interface RillFeature {
+  x0: number;
+  x1: number;
+  z0: number;
+  z1: number;
+}
+
 interface RoomFeatures {
   niches: NicheFeature[];
   pilasters: PilasterFeature[];
   inlay: InlayFeature | null;
+  platforms: PlatformFeature[];
+  mezzanines: MezzanineFeature[];
+  arches: ArchFeature[];
+  columnOrders: ColumnOrderFeature[];
+  rill: RillFeature | null;
 }
 
 /**
@@ -533,6 +629,20 @@ interface RoomFeatures {
  *    whole band is shrunk inside the walkable footprint (an l-shape's
  *    abandoned quadrant takes no stone), and the figure lifts 14mm —
  *    above the parquet's 6mm plane, so the two never z-fight.
+ *  - RAISED-PLATFORM / MEZZANINE / ARCH-FRAME: single figures, each
+ *    resolved to ONE door-split run of the declared role (a figure that
+ *    fits its run never crosses a doorway by construction); the span
+ *    centers the figure and is clamped inside the run's ends; the
+ *    mezzanine and arch add their own drawn-height gates (a ledge you
+ *    would crack your head on, or an arch that would pierce the wall
+ *    top, is skipped — cutaway sills keep only what fits under them).
+ *  - COLUMN-ORDER: per door-split run like the pilaster, but a
+ *    free-standing rhythm filtered to the declared span and gated on the
+ *    drawn height (a 3.3m column in a 1.1m sill is a stub).
+ *  - WATER-RILL: flat floors only; the declared floor rectangle must stay
+ *    wholly on one side of the walk-path corridor, inside the walkable
+ *    footprint, out of the room's water and out of every door approach —
+ *    any failure degrades the slot to nothing, never a clip.
  *
  * Exported (pure) for the unit tests in tests/lib/game/room-features.test.ts.
  */
@@ -545,7 +655,8 @@ export function buildRoomFeatures({
   wallHeight,
   wallThick,
   doors,
-  flatFloor,
+  ground,
+  water,
 }: {
   template: RoomTemplate | null;
   plan: RoomPlan;
@@ -555,11 +666,69 @@ export function buildRoomFeatures({
   wallHeight: number;
   wallThick: number;
   doors: readonly RoomDoorPlacement[];
-  flatFloor: boolean;
+  /** The room's ground shape (archetype spec): the inlay needs a truly
+   *  flat floor; the rill tolerates a sunken basin (its rectangle must
+   *  simply avoid the water, which the resolver checks against the real
+   *  basin) and only rolling terrain disqualifies it. */
+  ground: "flat" | "rolling" | "sunken";
+  /** The room's water rectangle (scaled, local frame) — the rill must
+   *  never claim the basin's ground. Null when the room is dry. */
+  water: { cx: number; cz: number; halfX: number; halfZ: number } | null;
 }): RoomFeatures {
-  const out: RoomFeatures = { niches: [], pilasters: [], inlay: null };
+  const out: RoomFeatures = {
+    niches: [],
+    pilasters: [],
+    inlay: null,
+    platforms: [],
+    mezzanines: [],
+    arches: [],
+    columnOrders: [],
+    rill: null,
+  };
   if (!template) return out;
   const ws = wallHeight / WALL_HEIGHT;
+
+  // Single-figure wall features (platform, mezzanine, arch) resolve to ONE
+  // run of the declared role: the first whose length holds the figure with
+  // its end pads, whose DRAWN height passes the figure's own rule, and
+  // whose span-center position is clear of every strand door (frame-
+  // shifted, the niche discipline). Runs are already split at door gaps,
+  // so a figure that fits its run never crosses a doorway.
+  const runCenterFor = (
+    role: string,
+    need: number,
+    doorClear: number,
+    minDrawn: number,
+    span: readonly [number, number],
+  ): { run: number; along: number } | null => {
+    for (let i = 0; i < wallRuns.length; i++) {
+      const run = wallRuns[i];
+      if (wallRoleFor(plan, walls[run.source]) !== role) continue;
+      if (wallHeights[i] < minDrawn - 1e-6) continue;
+      const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+      const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
+      if (len < need) continue;
+      const pad = need / 2 + 0.3;
+      const raw = ((span[0] + span[1]) / 2 - 0.5) * len;
+      const along = Math.min(Math.max(raw, -len / 2 + pad), len / 2 - pad);
+      const src = walls[run.source];
+      const runShift = horizontal
+        ? run.wall.x - src.x
+        : run.wall.z - src.z;
+      if (
+        doors.some(
+          (d) =>
+            d.wall === run.source &&
+            Math.abs(d.along - runShift - along) <
+              need / 2 + DOOR_GAP_HALF + doorClear,
+        )
+      ) {
+        continue;
+      }
+      return { run: i, along };
+    }
+    return null;
+  };
 
   for (const slot of template.features) {
     if (slot.kind === "niche") {
@@ -644,7 +813,7 @@ export function buildRoomFeatures({
         }
         if (alongs.length > 0) out.pilasters.push({ run: i, alongs });
       }
-    } else if (slot.kind === "floor-inlay" && flatFloor && out.inlay === null) {
+    } else if (slot.kind === "floor-inlay" && ground === "flat" && out.inlay === null) {
       const span = slot.span ?? [0.25, 0.75];
       const band = INLAY_BAND_WIDTH * ws;
       let x0 = (span[0] - 0.5) * plan.width;
@@ -683,14 +852,189 @@ export function buildRoomFeatures({
       ) {
         out.inlay = { x0, x1, z0, z1 };
       }
+    } else if (slot.kind === "raised-platform") {
+      // The railed dais: fits any drawn height (36cm against a sill is a
+      // step, not a story), needs a run long enough to hold it.
+      const span = slot.span ?? [0.3, 0.7];
+      const fit = runCenterFor(
+        slot.at,
+        PLATFORM_MIN_RUN * ws,
+        PLATFORM_DOOR_CLEAR * ws,
+        0,
+        span,
+      );
+      if (fit) {
+        const run = wallRuns[fit.run];
+        const len = run.wall.sizeZ <= run.wall.sizeX ? run.wall.sizeX : run.wall.sizeZ;
+        const width = Math.min(
+          Math.max((span[1] - span[0]) * len, 1.4 * ws),
+          len - 0.6,
+        );
+        if (width >= 1.4 * ws) {
+          out.platforms.push({
+            run: fit.run,
+            along: fit.along,
+            width,
+            depth: PLATFORM_DEPTH * ws,
+            height: PLATFORM_HEIGHT * Math.max(ws, 0.6),
+            stepDepth: PLATFORM_STEP_DEPTH * Math.max(ws, 0.6),
+            railH: PLATFORM_RAIL_HEIGHT * ws,
+          });
+        }
+      }
+    } else if (slot.kind === "mezzanine") {
+      // The half-floor ledge: only a wall tall enough to hold the deck
+      // above a person's head (deck + slab + margin) — cutaway sills and
+      // low rooms skip.
+      const fit = runCenterFor(
+        slot.at,
+        MEZZANINE_MIN_RUN * ws,
+        0.3 * ws,
+        (MEZZANINE_DECK_Y + MEZZANINE_SLAB + 0.2) * ws,
+        slot.span ?? [0.25, 0.75],
+      );
+      if (fit) {
+        const run = wallRuns[fit.run];
+        const len = run.wall.sizeZ <= run.wall.sizeX ? run.wall.sizeX : run.wall.sizeZ;
+        const width = Math.min(
+          Math.max(((slot.span?.[1] ?? 0.75) - (slot.span?.[0] ?? 0.25)) * len, 2.2 * ws),
+          len - 0.6,
+        );
+        out.mezzanines.push({
+          run: fit.run,
+          along: fit.along,
+          width,
+          deckY: MEZZANINE_DECK_Y * ws,
+          depth: MEZZANINE_DEPTH * ws,
+          parapetH: MEZZANINE_PARAPET * ws,
+          slab: MEZZANINE_SLAB * ws,
+        });
+      }
+    } else if (slot.kind === "arch-frame") {
+      // The portal: needs its full height under the wall's drawn top.
+      const fit = runCenterFor(
+        slot.at,
+        ARCH_WIDTH * ws,
+        ARCH_DOOR_CLEAR * ws,
+        (ARCH_SPRING_Y + ARCH_TUBE + ARCH_HEADROOM) * ws,
+        slot.span ?? [0.4, 0.6],
+      );
+      if (fit) {
+        out.arches.push({
+          run: fit.run,
+          along: fit.along,
+          width: ARCH_WIDTH * ws,
+          springY: ARCH_SPRING_Y * ws,
+          post: ARCH_POST * ws,
+          tube: ARCH_TUBE * ws,
+        });
+      }
+    } else if (slot.kind === "column-order") {
+      // The free-standing colonnade rhythm: per door-split run (the rhythm
+      // breaks at every opening for free), gated on the drawn height
+      // (a 3.3m column in a 1.1m sill is a stub), positions filtered to the
+      // declared span and kept clear of door frames.
+      const colH =
+        (COLUMN_PLINTH_HEIGHT + COLUMN_SHAFT_HEIGHT + COLUMN_CAPITAL_HEIGHT + 0.1) *
+        ws;
+      const span = slot.span ?? [0.1, 0.9];
+      for (let i = 0; i < wallRuns.length; i++) {
+        const run = wallRuns[i];
+        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
+        if (wallHeights[i] < colH) continue;
+        const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+        const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
+        const pad = COLUMN_END_PAD * ws;
+        const runLen = len - pad * 2;
+        if (runLen < COLUMN_MIN_RUN * ws) continue;
+        const n = Math.max(1, Math.round(runLen / (COLUMN_SPAN * ws)));
+        const spacing = runLen / n;
+        const srcWall = walls[run.source];
+        const runShift = horizontal
+          ? run.wall.x - srcWall.x
+          : run.wall.z - srcWall.z;
+        const alongs: number[] = [];
+        for (let k = 0; k < n; k++) {
+          const a = -len / 2 + pad + (k + 0.5) * spacing;
+          const norm = (a + len / 2) / len;
+          if (norm < span[0] || norm > span[1]) continue;
+          if (
+            doors.some(
+              (d) =>
+                d.wall === run.source &&
+                Math.abs(d.along - runShift - a) <
+                  DOOR_GAP_HALF + COLUMN_SHAFT_RADIUS * ws + COLUMN_DOOR_CLEAR * ws,
+            )
+          ) {
+            continue;
+          }
+          alongs.push(a);
+        }
+        if (alongs.length > 0) {
+          out.columnOrders.push({ run: i, alongs, offWall: COLUMN_OFF_WALL * ws });
+        }
+      }
+    } else if (slot.kind === "water-rill" && ground !== "rolling" && out.rill === null) {
+      // The runnel: a declared floor rectangle carrying a shallow stone
+      // channel of real water. Degrades to NOTHING (never clips) when:
+      // the floor rolls, the rectangle crosses the walk-path corridor or
+      // the room's water, sits inside a strand door's approach, or falls
+      // outside the walkable footprint. The channel runs along the
+      // rectangle's LONG axis.
+      const span = slot.span ?? [0.2, 0.8];
+      const spanZ = slot.spanZ ?? [0.2, 0.8];
+      let x0 = (span[0] - 0.5) * plan.width;
+      let x1 = (span[1] - 0.5) * plan.width;
+      let z0 = spanZ[0] * plan.extent;
+      let z1 = spanZ[1] * plan.extent;
+      // Keep the runnel out of the walk-path corridor: it must lie wholly
+      // on one side of the door→hero spine. A declaration that straddles
+      // the spine is clipped to its wider side; clipped past a channel's
+      // width, the slot degrades to nothing.
+      const corridor = PATH_HALF + RILL_PATH_CLEAR * ws;
+      if (x0 < corridor && x1 > -corridor) {
+        if (x0 + x1 > 0) x0 = corridor;
+        else x1 = -corridor;
+        if (x1 - x0 < RILL_WIDTH * ws) continue;
+      }
+      const longX = x1 - x0 >= z1 - z0;
+      const len = longX ? x1 - x0 : z1 - z0;
+      if (len < RILL_MIN_LENGTH * ws) continue;
+      // Whole footprint inside the walkable plan (l-shape's abandoned
+      // quadrant takes no runnel), with the rim's own margin.
+      const margin = wallThick + 0.15;
+      const corners = [
+        [x0, z0],
+        [x0, z1],
+        [x1, z0],
+        [x1, z1],
+      ] as const;
+      if (!corners.every(([cx, cz]) => planContains(plan, cx, cz, margin))) {
+        continue;
+      }
+      // Never the basin's ground, never a door's approach.
+      if (water) {
+        const overlap =
+          Math.abs((x0 + x1) / 2 - water.cx) <
+            (x1 - x0) / 2 + water.halfX &&
+          Math.abs((z0 + z1) / 2 - water.cz) <
+            (z1 - z0) / 2 + water.halfZ;
+        if (overlap) continue;
+      }
+      const probe = longX
+        ? ([
+            [x0, (z0 + z1) / 2],
+            [x1, (z0 + z1) / 2],
+            [(x0 + x1) / 2, (z0 + z1) / 2],
+          ] as const)
+        : ([
+            [(x0 + x1) / 2, z0],
+            [(x0 + x1) / 2, z1],
+            [(x0 + x1) / 2, (z0 + z1) / 2],
+          ] as const);
+      if (probe.some(([px, pz]) => inDoorApproach(px, pz, doors))) continue;
+      out.rill = { x0, x1, z0, z1 };
     }
-    // raised-platform / water-rill / mezzanine: the FeatureKind union
-    // carries these as data for later milestones, but NO template or
-    // module declares them (the pool deck used to declare a water-rill
-    // that this loop dropped silently and describe-room still professed —
-    // removed until the rill's geometry exists). The fall-through below
-    // is intentional only while nothing declares them: the day one does,
-    // its consumer lands in the same change.
   }
   return out;
 }
@@ -965,6 +1309,583 @@ function FloorInlay({
     >
       <meshStandardMaterial color={color} roughness={1} />
     </mesh>
+  );
+}
+
+/** A railing run standing on its own y=0 plane: posts at ~1.15m pitches
+ *  plus a continuous top rail, in one colour. Local +x runs along the
+ *  rail, centered. Shared by the raised platform and the mezzanine. */
+function RailRun({
+  length,
+  height,
+  color,
+  post = 0.075,
+}: {
+  length: number;
+  height: number;
+  color: THREE.Color;
+  post?: number;
+}) {
+  const n = Math.max(2, Math.round(length / 1.15) + 1);
+  const parts: ReactNode[] = [];
+  for (let i = 0; i < n; i++) {
+    const x = -length / 2 + (i * length) / (n - 1);
+    parts.push(
+      <mesh key={`p${i}`} position={[x, height / 2, 0]} castShadow>
+        <boxGeometry args={[post, height, post]} />
+        <meshStandardMaterial color={color} roughness={1} flatShading />
+      </mesh>,
+    );
+  }
+  parts.push(
+    <mesh key="rail" position={[0, height, 0]} castShadow>
+      <boxGeometry args={[length + post, 0.08, post * 1.6]} />
+      <meshStandardMaterial color={color} roughness={1} flatShading />
+    </mesh>,
+  );
+  return <group>{parts}</group>;
+}
+
+/** Inward-normal helpers shared by the wall-bound N3/N4 features — the
+ *  same probe trick as the dado and the niche. */
+function wallFrameFor(wall: WallSegment, plan: RoomPlan) {
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, wall.x + 0.5, wall.z, 0) ? 1 : -1;
+  }
+  const len = horizontal ? wall.sizeX : wall.sizeZ;
+  const thick = horizontal ? wall.sizeZ : wall.sizeX;
+  const pos = (
+    along: number,
+    y: number,
+    off: number,
+  ): [number, number, number] =>
+    horizontal
+      ? [wall.x + along, y, wall.z + nz * off]
+      : [wall.x + nx * off, y, wall.z + along];
+  const box = (
+    sizeAlong: number,
+    h: number,
+    sizePerp: number,
+  ): [number, number, number] =>
+    horizontal ? [sizeAlong, h, sizePerp] : [sizePerp, h, sizeAlong];
+  // Y-rotation mapping a RailRun's local +x onto the wall's run / across.
+  const alongRot = horizontal ? 0 : Math.PI / 2;
+  const acrossRot = horizontal ? Math.PI / 2 : 0;
+  return { horizontal, len, thick, pos, box, alongRot, acrossRot };
+}
+
+/**
+ * Raised platform (§3.2 抬高平台): the railed dais against one wall —
+ * the platform body, one intermediate step (two rises of height/2), and
+ * RailRuns on the three open edges. Body in the room's panel tone, the
+ * rails in the dark cap-rail trim — the same two-note material language
+ * as the dado.
+ */
+function RaisedPlatform({
+  wall,
+  feature,
+  plan,
+  bodyColor,
+  railColor,
+}: {
+  wall: WallSegment;
+  feature: PlatformFeature;
+  plan: RoomPlan;
+  bodyColor: THREE.Color;
+  railColor: THREE.Color;
+}) {
+  const { thick, pos, box, alongRot, acrossRot } = wallFrameFor(wall, plan);
+  const { along, width, depth, height, stepDepth, railH } = feature;
+  const face = thick / 2;
+  const stepH = height / 2;
+  const railY = GROUND_Y + height;
+  return (
+    <group>
+      <mesh
+        position={pos(along, GROUND_Y + height / 2, face + depth / 2)}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={box(width, height, depth)} />
+        <meshStandardMaterial color={bodyColor} roughness={1} flatShading />
+      </mesh>
+      {/* The one intermediate step — the platform's own edge is the
+          second rise. */}
+      <mesh
+        position={pos(along, GROUND_Y + stepH / 2, face + depth + stepDepth / 2)}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={box(width, stepH, stepDepth)} />
+        <meshStandardMaterial color={bodyColor} roughness={1} flatShading />
+      </mesh>
+      {/* Railing on the open edges: the front + the two ends. */}
+      <group
+        position={pos(along, railY, face + depth - 0.04)}
+        rotation={[0, alongRot, 0]}
+      >
+        <RailRun length={width} height={railH} color={railColor} />
+      </group>
+      {([-1, 1] as const).map((side) => (
+        <group
+          key={side}
+          position={pos(
+            along + side * (width / 2 - 0.04),
+            railY,
+            face + depth / 2,
+          )}
+          rotation={[0, acrossRot, 0]}
+        >
+          <RailRun length={depth - 0.08} height={railH} color={railColor} />
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/**
+ * Mezzanine (§3.2 夹层): the half-floor ledge — a slab on corbel brackets
+ * along the wall, a solid parapet panel on its open edge, and cheek
+ * walls closing the two ends. The second silhouette layer the dollhouse
+ * camera reads as "a place", fully opaque, no ceiling above it (the sky
+ * the room already has does that).
+ */
+function MezzanineDeck({
+  wall,
+  feature,
+  plan,
+  bodyColor,
+  parapetColor,
+  trimColor,
+}: {
+  wall: WallSegment;
+  feature: MezzanineFeature;
+  plan: RoomPlan;
+  bodyColor: THREE.Color;
+  parapetColor: THREE.Color;
+  trimColor: THREE.Color;
+}) {
+  const { thick, pos, box, acrossRot } = wallFrameFor(wall, plan);
+  const { along, width, deckY, depth, parapetH, slab } = feature;
+  const face = thick / 2;
+  const corbels = Math.min(4, Math.max(2, Math.round(width / 2.4)));
+  return (
+    <group>
+      {/* The slab + a proud front fascia (the ledge's finished edge). */}
+      <mesh
+        position={pos(along, deckY + slab / 2, face + depth / 2)}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={box(width, slab, depth)} />
+        <meshStandardMaterial color={bodyColor} roughness={1} flatShading />
+      </mesh>
+      <mesh
+        position={pos(along, deckY + slab / 2, face + depth - 0.03)}
+        castShadow
+      >
+        <boxGeometry args={box(width, slab + 0.05, 0.06)} />
+        <meshStandardMaterial color={trimColor} roughness={1} flatShading />
+      </mesh>
+      {/* Corbels underneath, leaning into the wall. */}
+      {Array.from({ length: corbels }, (_, i) => {
+        const a = along - width / 2 + ((i + 0.5) * width) / corbels;
+        return (
+          <mesh
+            key={i}
+            position={pos(a, deckY - 0.16, face + depth * 0.35)}
+            rotation={acrossRot !== 0 ? [0.55, 0, 0] : [0, 0, -0.55]}
+            castShadow
+          >
+            <boxGeometry args={[0.12, 0.34, 0.12]} />
+            <meshStandardMaterial color={trimColor} roughness={1} flatShading />
+          </mesh>
+        );
+      })}
+      {/* The parapet panel on the open edge + the end cheeks. */}
+      <mesh
+        position={pos(along, deckY + slab + parapetH / 2, face + depth - 0.06)}
+        castShadow
+        receiveShadow
+      >
+        <boxGeometry args={box(width, parapetH, 0.09)} />
+        <meshStandardMaterial color={parapetColor} roughness={1} flatShading />
+      </mesh>
+      <mesh
+        position={pos(along, deckY + slab + parapetH, face + depth - 0.06)}
+        castShadow
+      >
+        <boxGeometry args={box(width + 0.06, 0.07, 0.15)} />
+        <meshStandardMaterial color={trimColor} roughness={1} flatShading />
+      </mesh>
+      {([-1, 1] as const).map((side) => (
+        <mesh
+          key={side}
+          position={pos(
+            along + side * (width / 2 - 0.05),
+            deckY + slab + parapetH / 2,
+            face + depth / 2,
+          )}
+          castShadow
+          receiveShadow
+        >
+          <boxGeometry args={box(0.09, parapetH, depth)} />
+          <meshStandardMaterial color={parapetColor} roughness={1} flatShading />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+/**
+ * Arch frame (§3.2 拱门框): two posts on plinths and a round arch
+ * spanning them, standing before the wall — a portal that closes its
+ * own top (no ceiling needed). The arch is a half-torus in the wall's
+ * stone register, with a small keystone at the crown.
+ */
+function ArchFrame({
+  wall,
+  feature,
+  plan,
+  stoneColor,
+}: {
+  wall: WallSegment;
+  feature: ArchFeature;
+  plan: RoomPlan;
+  stoneColor: THREE.Color;
+}) {
+  const { thick, pos, horizontal } = wallFrameFor(wall, plan);
+  const { along, width, springY, post, tube } = feature;
+  const face = thick / 2;
+  const radius = width / 2 - post / 2;
+  const postOff = face + post / 2 + 0.02;
+  const archY = GROUND_Y + springY;
+  const mat = (
+    <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+  );
+  return (
+    <group>
+      {([-1, 1] as const).map((side) => {
+        const a = along + side * (width / 2 - post / 2);
+        return (
+          <group key={side}>
+            <mesh position={pos(a, GROUND_Y + 0.09, postOff)} castShadow>
+              <boxGeometry args={[post * 1.5, 0.18, post * 1.5]} />
+              {mat}
+            </mesh>
+            <mesh
+              position={pos(a, GROUND_Y + 0.18 + springY / 2, postOff)}
+              castShadow
+              receiveShadow
+            >
+              <boxGeometry args={[post, springY, post]} />
+              {mat}
+            </mesh>
+          </group>
+        );
+      })}
+      {/* The round arch: a half-torus spanning the posts, its plane
+          aligned with the wall's run. */}
+      <mesh
+        position={pos(along, archY, postOff)}
+        rotation={[0, horizontal ? 0 : Math.PI / 2, 0]}
+        castShadow
+      >
+        <torusGeometry args={[radius, tube, 8, 20, Math.PI]} />
+        {mat}
+      </mesh>
+      {/* Keystone at the crown, nosed toward the room. */}
+      <mesh
+        position={pos(along, archY + radius + tube * 0.2, postOff + tube * 0.35)}
+        castShadow
+      >
+        <boxGeometry
+          args={horizontal ? [post * 0.55, tube * 1.7, post * 0.8] : [post * 0.8, tube * 1.7, post * 0.55]}
+        />
+        {mat}
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * Column order (§3.2 柱式): the free-standing colonnade — for each
+ * resolved center, a plinth, a gently tapering shaft, and a capital
+ * with its abacus, standing off the wall in the room's quarry stone.
+ */
+function ColumnOrderRun({
+  wall,
+  feature,
+  plan,
+  stoneColor,
+}: {
+  wall: WallSegment;
+  feature: ColumnOrderFeature;
+  plan: RoomPlan;
+  stoneColor: THREE.Color;
+}) {
+  const { thick, pos, box } = wallFrameFor(wall, plan);
+  const off = thick / 2 + feature.offWall;
+  const shaftBase = GROUND_Y + COLUMN_PLINTH_HEIGHT;
+  const capitalBase = shaftBase + COLUMN_SHAFT_HEIGHT;
+  return (
+    <group>
+      {feature.alongs.map((a, i) => (
+        <group key={i}>
+          <mesh
+            position={pos(a, GROUND_Y + COLUMN_PLINTH_HEIGHT / 2, off)}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry
+              args={box(COLUMN_PLINTH_SIZE, COLUMN_PLINTH_HEIGHT, COLUMN_PLINTH_SIZE)}
+            />
+            <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+          </mesh>
+          <mesh
+            position={pos(a, shaftBase + COLUMN_SHAFT_HEIGHT / 2, off)}
+            castShadow
+            receiveShadow
+            rotation={[0, shaftTwist(i), 0]}
+          >
+            <cylinderGeometry
+              args={[
+                COLUMN_SHAFT_RADIUS,
+                COLUMN_SHAFT_RADIUS * 1.18,
+                COLUMN_SHAFT_HEIGHT,
+                12,
+              ]}
+            />
+            <meshStandardMaterial
+              color={stoneColor.clone().multiplyScalar(1.08)}
+              roughness={1}
+              flatShading
+            />
+          </mesh>
+          <mesh
+            position={pos(a, capitalBase + COLUMN_CAPITAL_HEIGHT / 2, off)}
+            castShadow
+          >
+            <boxGeometry
+              args={box(COLUMN_CAPITAL_SIZE, COLUMN_CAPITAL_HEIGHT, COLUMN_CAPITAL_SIZE)}
+            />
+            <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+          </mesh>
+          <mesh
+            position={pos(a, capitalBase + COLUMN_CAPITAL_HEIGHT + 0.03, off)}
+            castShadow
+          >
+            <boxGeometry
+              args={box(COLUMN_CAPITAL_SIZE * 1.15, 0.06, COLUMN_CAPITAL_SIZE * 1.15)}
+            />
+            <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+          </mesh>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+/** Deterministic per-column twist so the shafts' flat facets do not
+ *  align into a visual moiré down the run. */
+function shaftTwist(i: number): number {
+  return (i % 3) * 0.35;
+}
+
+/** One face of the water rill's stone runnel. `WaterRill` orients this. */
+function RillWater({
+  rect,
+  level,
+  color,
+  shallowColor,
+  playerRef,
+  door,
+  dir,
+}: {
+  rect: { cx: number; cz: number; halfX: number; halfZ: number };
+  level: number;
+  color: THREE.Color;
+  shallowColor: THREE.Color;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
+  door: DoorRef;
+  dir: 1 | -1;
+}) {
+  const driver = useMemo(() => createWaveDriver(rect), [rect]);
+  useEffect(() => () => driver.dispose(), [driver]);
+  const water = useMemo(
+    () =>
+      createWaterSurfaceMaterial({
+        color,
+        shallowColor,
+        spanX: rect.halfX * 2,
+        spanY: rect.halfZ * 2,
+        centerZ: rect.cz,
+        waveTexture: driver.texture,
+        waveTexelMeters: driver.texelMeters,
+      }),
+    [color, shallowColor, rect, driver],
+  );
+  useEffect(() => () => water.dispose(), [water]);
+  // Wading impulses — the same discipline as the pool's WaterSurface:
+  // a splash on entry, then a step every ~0.5m inside the runnel. No
+  // mirror (the pool owns GAME_DEBUG.water) and no bob (a runnel's
+  // water sits still; its life is the ripple, not the tide).
+  const wadeRef = useRef({ x: 0, z: 0, acc: 0, inside: false });
+  useFrame((_, delta) => {
+    const p = playerRef.current;
+    const lx = (p.x - door.x) * dir;
+    const lz = (p.z - door.z) * dir;
+    const w = wadeRef.current;
+    if (waveRectContains(lx, lz, rect)) {
+      if (!w.inside) {
+        driver.addImpulse(lx, lz, -0.1, 0.22);
+      } else {
+        w.acc += Math.hypot(lx - w.x, lz - w.z);
+        if (w.acc >= 0.5) {
+          const speed = w.acc / Math.max(delta, 1e-3);
+          driver.addImpulse(lx, lz, Math.max(-0.12, -0.04 - 0.015 * speed), 0.16);
+          w.acc = 0;
+        }
+      }
+      w.inside = true;
+    } else {
+      w.inside = false;
+      w.acc = 0;
+    }
+    w.x = lx;
+    w.z = lz;
+    driver.step(delta);
+  });
+  return (
+    <mesh
+      position={[rect.cx, level, rect.cz]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      renderOrder={1}
+      receiveShadow
+      material={water.material}
+    >
+      <planeGeometry args={[rect.halfX * 2, rect.halfZ * 2]} />
+    </mesh>
+  );
+}
+
+/**
+ * Water rill (§3.2 地面水渠): the stone runnel — bed, two side walls and
+ * end caps in the room's quarry stone, capped stones along the rims,
+ * carrying REAL water on its own wave driver (RillWater). The channel
+ * runs the rectangle's long axis, RILL_WIDTH across.
+ */
+function WaterRill({
+  rill,
+  ws,
+  stoneColor,
+  bedColor,
+  waterColor,
+  waterShallowColor,
+  playerRef,
+  door,
+  dir,
+}: {
+  rill: RillFeature;
+  ws: number;
+  stoneColor: THREE.Color;
+  bedColor: THREE.Color;
+  waterColor: THREE.Color;
+  waterShallowColor: THREE.Color;
+  playerRef: MutableRefObject<{ x: number; z: number }>;
+  door: DoorRef;
+  dir: 1 | -1;
+}) {
+  const cx = (rill.x0 + rill.x1) / 2;
+  const cz = (rill.z0 + rill.z1) / 2;
+  const alongX = rill.x1 - rill.x0 >= rill.z1 - rill.z0;
+  const len = alongX ? rill.x1 - rill.x0 : rill.z1 - rill.z0;
+  const width = RILL_WIDTH * ws;
+  const rim = RILL_RIM_HEIGHT * ws;
+  const bedT = RILL_BED * ws;
+  const wallT = 0.12 * Math.max(ws, 0.6);
+  const waterLevel = RILL_WATER_DEPTH * ws;
+  // Rotation mapping the runnel's local frame (channel along local z)
+  // onto the room: an x-running rill turns 90°.
+  const rotY = alongX ? Math.PI / 2 : 0;
+  // Cap stones along both rims.
+  const caps: number[] = [];
+  const nCaps = Math.max(2, Math.floor(len / (0.9 * ws)));
+  for (let i = 0; i < nCaps; i++) {
+    caps.push(-len / 2 + ((i + 0.5) * len) / nCaps);
+  }
+  return (
+    <>
+      <group position={[cx, 0, cz]} rotation={[0, rotY, 0]}>
+        {/* Bed + side walls + end caps. */}
+        <mesh position={[0, GROUND_Y + bedT / 2, 0]} receiveShadow>
+          <boxGeometry args={[width, bedT, len]} />
+          <meshStandardMaterial color={bedColor} roughness={1} flatShading />
+        </mesh>
+        {([-1, 1] as const).map((side) => (
+          <mesh
+            key={side}
+            position={[side * (width / 2 + wallT / 2), GROUND_Y + rim / 2, 0]}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[wallT, rim, len]} />
+            <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+          </mesh>
+        ))}
+        {([-1, 1] as const).map((side) => (
+          <mesh
+            key={`e${side}`}
+            position={[0, GROUND_Y + rim / 2, side * (len / 2 - wallT / 2)]}
+            castShadow
+            receiveShadow
+          >
+            <boxGeometry args={[width + wallT * 2, rim, wallT]} />
+            <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+          </mesh>
+        ))}
+        {/* Rim cap stones. */}
+        {caps.map((z, i) =>
+          ([-1, 1] as const).map((side) => (
+            <mesh
+              key={`c${i}${side}`}
+              position={[
+                side * (width / 2 + wallT / 2),
+                GROUND_Y + rim + 0.035,
+                z + (i % 2 === 0 ? 0.06 : -0.06) * ws,
+              ]}
+              rotation={[0, (i % 3) * 0.08, 0]}
+              castShadow
+            >
+              <boxGeometry args={[wallT + 0.07 * ws, 0.07, 0.34 * ws]} />
+              <meshStandardMaterial color={stoneColor} roughness={1} flatShading />
+            </mesh>
+          )),
+        )}
+      </group>
+      {/* The water lives in the PLAN frame — the driver's impulses and
+          the wading probe are measured in room-local coordinates, so the
+          rectangle handed here stays unrotated. */}
+      <RillWater
+        rect={{
+          cx,
+          cz,
+          halfX: (rill.x1 - rill.x0) / 2,
+          halfZ: (rill.z1 - rill.z0) / 2,
+        }}
+        level={GROUND_Y + waterLevel}
+        color={waterColor}
+        shallowColor={waterShallowColor}
+        playerRef={playerRef}
+        door={door}
+        dir={dir}
+      />
+    </>
   );
 }
 
@@ -1630,7 +2551,21 @@ type MotifKind =
   | "scratchpost"
   | "doghouse"
   | "bone"
-  | "ball";
+  | "ball"
+  // wonder kits (§3.1 N4) — the diorama world's oversized playthings:
+  // stud-topped toy blocks, the marble-run tower/chute, giant chessmen,
+  // folded paper boats, warm paper ground lanterns, the self-supported
+  // swing frame and its rope-hung seats.
+  | "toyblock"
+  | "marblerun"
+  | "marblechute"
+  | "chessking"
+  | "chessrook"
+  | "chesspawn"
+  | "paperboat"
+  | "paperlantern"
+  | "swingframe"
+  | "swingseat";
 
 const MOTIF_KINDS: Record<ArchetypeId, readonly MotifKind[]> = {
   pool: ["ladder", "board", "lounger", "ring"],
@@ -3907,6 +4842,304 @@ function MotifGeometry({
           <sphereGeometry args={[0.15, 9, 7]} />
           <meshStandardMaterial color={accent} roughness={0.9} flatShading />
         </mesh>
+      );
+    /* ------------------------------------------------------------ */
+    /* The wonder set (§3.1 N4): oversized playthings at human scale, */
+    /* same flat-shaded low-poly language, the palette's accent for   */
+    /* the painted details. Calm and whole — played-with, never       */
+    /* toppled (I4).                                                  */
+    /* ------------------------------------------------------------ */
+    case "toyblock":
+      // 巨型积木 — a stud-topped cube: cream-painted wood, the accent
+      // stud screwed on top. The kit stacks these with its dy.
+      return (
+        <group>
+          <mesh position={[0, 0.36, 0]}>
+            <boxGeometry args={[0.72, 0.72, 0.72]} />
+            <meshStandardMaterial color="#f2ede2" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0, 0.79, 0]}>
+            <cylinderGeometry args={[0.16, 0.16, 0.14, 10]} />
+            <meshStandardMaterial color={accent} roughness={0.8} flatShading />
+          </mesh>
+        </group>
+      );
+    case "marblerun":
+      // 滚球塔 — the tower: a plinth, the central column, two disc ramps
+      // winding down around it, and three marbles resting on the lower
+      // ramp. Static, at rest — the run is paused, not abandoned (I4).
+      return (
+        <group>
+          <mesh position={[0, 0.06, 0]}>
+            <cylinderGeometry args={[0.55, 0.62, 0.12, 12]} />
+            <meshStandardMaterial color="#b08a5e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.95, 0]}>
+            <cylinderGeometry args={[0.07, 0.07, 1.78, 8]} />
+            <meshStandardMaterial color="#a98a68" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.78, 0]}>
+            <cylinderGeometry args={[0.5, 0.5, 0.05, 14]} />
+            <meshStandardMaterial color={accent} roughness={0.85} flatShading />
+          </mesh>
+          <mesh position={[0, 1.16, 0]}>
+            <cylinderGeometry args={[0.72, 0.72, 0.05, 16]} />
+            <meshStandardMaterial color={accent} roughness={0.85} flatShading />
+          </mesh>
+          {(
+            [
+              [0.42, 1.24, 0.1],
+              [-0.2, 1.24, 0.48],
+              [0.05, 1.86, -0.3],
+            ] as const
+          ).map(([x, y, z], i) => (
+            <mesh key={i} position={[x, y, z]}>
+              <sphereGeometry args={[0.07, 8, 6]} />
+              <meshStandardMaterial
+                color={["#e86a58", "#63c88e", "#5970a6"][i]}
+                roughness={0.4}
+                flatShading
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "marblechute":
+      // 滚球滑道 — the exit chute: an inclined runway on two trestle
+      // legs, running down to a shallow dish that holds two more marbles.
+      return (
+        <group>
+          <mesh position={[0.25, 0.62, 0]} rotation={[0, 0, -0.42]}>
+            <boxGeometry args={[1.5, 0.05, 0.22]} />
+            <meshStandardMaterial color="#a98a68" roughness={1} flatShading />
+          </mesh>
+          {(
+            [
+              [-0.15, 0.28],
+              [0.62, 0.5],
+            ] as const
+          ).map(([x, h], i) => (
+            <mesh key={i} position={[x, h / 2, 0]}>
+              <boxGeometry args={[0.06, h, 0.18]} />
+              <meshStandardMaterial color="#8a705c" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[-0.62, 0.08, 0]}>
+            <cylinderGeometry args={[0.24, 0.18, 0.12, 10]} />
+            <meshStandardMaterial color={accent} roughness={0.85} flatShading />
+          </mesh>
+          {(
+            [
+              [-0.66, 0.02],
+              [-0.55, 0.06],
+            ] as const
+          ).map(([x, z], i) => (
+            <mesh key={`m${i}`} position={[x, 0.16, z]}>
+              <sphereGeometry args={[0.06, 8, 6]} />
+              <meshStandardMaterial
+                color={["#e8c34e", "#a68cd0"][i]}
+                roughness={0.4}
+                flatShading
+              />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "chessking":
+      // 巨型棋子·王 — the alabaster king: stepped base, tapering body,
+      // crown collar and the cross finial. Tall enough to read across
+      // the room.
+      return (
+        <group>
+          <mesh position={[0, 0.11, 0]}>
+            <cylinderGeometry args={[0.52, 0.58, 0.22, 14]} />
+            <meshStandardMaterial color="#ece5d8" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 0.95, 0]}>
+            <cylinderGeometry args={[0.24, 0.4, 1.44, 14]} />
+            <meshStandardMaterial color="#f2ede2" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 1.74, 0]}>
+            <cylinderGeometry args={[0.32, 0.24, 0.18, 12]} />
+            <meshStandardMaterial color="#ece5d8" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 1.95, 0]}>
+            <sphereGeometry args={[0.24, 10, 8]} />
+            <meshStandardMaterial color="#f2ede2" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 2.26, 0]}>
+            <boxGeometry args={[0.06, 0.3, 0.06]} />
+            <meshStandardMaterial color={accent} roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 2.28, 0]}>
+            <boxGeometry args={[0.24, 0.06, 0.06]} />
+            <meshStandardMaterial color={accent} roughness={0.8} flatShading />
+          </mesh>
+        </group>
+      );
+    case "chessrook":
+      // 巨型棋子·车 — the slate rook: drum body, the battlement crown
+      // cut from a wider cap in four merlons.
+      return (
+        <group>
+          <mesh position={[0, 0.11, 0]}>
+            <cylinderGeometry args={[0.5, 0.56, 0.22, 14]} />
+            <meshStandardMaterial color="#3f3f48" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0, 0.82, 0]}>
+            <cylinderGeometry args={[0.36, 0.44, 1.2, 14]} />
+            <meshStandardMaterial color="#4a4a52" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0, 1.5, 0]}>
+            <cylinderGeometry args={[0.44, 0.38, 0.16, 14]} />
+            <meshStandardMaterial color="#3f3f48" roughness={0.9} flatShading />
+          </mesh>
+          {(
+            [
+              [0.3, 0],
+              [-0.3, 0],
+              [0, 0.3],
+              [0, -0.3],
+            ] as const
+          ).map(([x, z], i) => (
+            <mesh key={i} position={[x, 1.68, z]}>
+              <boxGeometry args={[0.22, 0.2, 0.22]} />
+              <meshStandardMaterial color="#4a4a52" roughness={0.9} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "chesspawn":
+      // 巨型棋子·卒 — the alabaster pawn: plain base, the ball head on
+      // its collar. The smallest of the three, advanced in the game.
+      return (
+        <group>
+          <mesh position={[0, 0.1, 0]}>
+            <cylinderGeometry args={[0.42, 0.48, 0.2, 12]} />
+            <meshStandardMaterial color="#ece5d8" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 0.68, 0]}>
+            <cylinderGeometry args={[0.2, 0.34, 0.96, 12]} />
+            <meshStandardMaterial color="#f2ede2" roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 1.22, 0]}>
+            <sphereGeometry args={[0.26, 10, 8]} />
+            <meshStandardMaterial color="#ece5d8" roughness={0.8} flatShading />
+          </mesh>
+        </group>
+      );
+    case "paperboat":
+      // 折纸船 — a folded paper boat: two slanted hull panels meeting at
+      // the keel, the prow and stern peaks folded up, a thin accent
+      // waterline stripe. Paper-white, crisp (折纸 reads as white).
+      return (
+        <group>
+          <mesh position={[-0.16, 0.2, 0]} rotation={[0, 0, 0.62]}>
+            <boxGeometry args={[0.52, 0.02, 0.34]} />
+            <meshStandardMaterial color="#f6f2e8" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0.16, 0.2, 0]} rotation={[0, 0, -0.62]}>
+            <boxGeometry args={[0.52, 0.02, 0.34]} />
+            <meshStandardMaterial color="#f6f2e8" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0, 0.14, 0]}>
+            <boxGeometry args={[0.68, 0.03, 0.05]} />
+            <meshStandardMaterial color={accent} roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[-0.36, 0.34, 0]} rotation={[0, 0, 0.5]}>
+            <boxGeometry args={[0.2, 0.02, 0.3]} />
+            <meshStandardMaterial color="#efe9dc" roughness={0.9} flatShading />
+          </mesh>
+          <mesh position={[0.36, 0.34, 0]} rotation={[0, 0, -0.5]}>
+            <boxGeometry args={[0.2, 0.02, 0.3]} />
+            <meshStandardMaterial color="#efe9dc" roughness={0.9} flatShading />
+          </mesh>
+        </group>
+      );
+    case "paperlantern":
+      // 纸地灯 — a paper ground lantern: a squat foot ring, the warm
+      // glow body (paper, lit from within — a small authored emissive,
+      // the room's real light still comes from its fixtures, B.13), a
+      // dark cap with a short hanging loop.
+      return (
+        <group>
+          <mesh position={[0, 0.05, 0]}>
+            <cylinderGeometry args={[0.2, 0.24, 0.1, 10]} />
+            <meshStandardMaterial color="#8a5a3a" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.4, 0]}>
+            <sphereGeometry args={[0.26, 10, 8]} />
+            <meshStandardMaterial
+              color="#ffd9a0"
+              emissive="#ffbe78"
+              emissiveIntensity={0.85}
+              roughness={0.9}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.66, 0]}>
+            <cylinderGeometry args={[0.12, 0.16, 0.08, 8]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "swingframe":
+      // 秋千支架 — the self-supported frame: two A-ends (each two legs
+      // splayed in z and braced), joined by the crossbar the seats hang
+      // from. Nothing touches a ceiling (I2) — the frame IS the support.
+      return (
+        <group>
+          {(
+            [
+              [-2.05, 1],
+              [2.05, -1],
+            ] as const
+          ).map(([x, flip]) => (
+            <group key={x}>
+              <mesh
+                position={[x, 1.32, 0.42]}
+                rotation={[0.42 * flip, 0, 0]}
+              >
+                <cylinderGeometry args={[0.055, 0.07, 2.9, 6]} />
+                <meshStandardMaterial color="#a98a68" roughness={1} flatShading />
+              </mesh>
+              <mesh
+                position={[x, 1.32, -0.42]}
+                rotation={[-0.42 * flip, 0, 0]}
+              >
+                <cylinderGeometry args={[0.055, 0.07, 2.9, 6]} />
+                <meshStandardMaterial color="#a98a68" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[x, 0.5, 0]}>
+                <boxGeometry args={[0.08, 0.08, 0.9]} />
+                <meshStandardMaterial color="#8a705c" roughness={1} flatShading />
+              </mesh>
+            </group>
+          ))}
+          <mesh position={[0, 2.62, 0]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[0.06, 0.06, 4.35, 8]} />
+            <meshStandardMaterial color="#b08a5e" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "swingseat":
+      // 秋千座 — the seat at rest: two ropes from the crossbar down to
+      // a small plank seat. Hung from the frame's bar (y 2.62), static.
+      return (
+        <group>
+          <mesh position={[-0.28, 1.85, 0]}>
+            <cylinderGeometry args={[0.015, 0.015, 1.54, 5]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.28, 1.85, 0]}>
+            <cylinderGeometry args={[0.015, 0.015, 1.54, 5]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.06, 0]}>
+            <boxGeometry args={[0.7, 0.05, 0.3]} />
+            <meshStandardMaterial color={accent} roughness={0.9} flatShading />
+          </mesh>
+        </group>
       );
   }
 }
@@ -6455,12 +7688,14 @@ export function SpaceScene({
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
   // lib/game/kits.ts (the "furniture" stream). NATURE rooms run the same
-  // machine with the nature deck (§3.1 N4) — see the nature branch below.
+  // machine with the nature deck (§3.1 N4) — see the nature branch below —
+  // and WONDER rooms with the wonder deck (§3.1 N4): the dioramas' authored
+  // playthings keep the oversized accent rugs the legacy path seeded.
   // The pool hall keeps its water-anchored legacy fixtures — the pool IS
   // its content — and draws its deck kits around them, the fixtures'
   // positions handed over as obstacle discs. The outdoor pool biome (a
   // nature room with an empty nature deck) keeps its rim fixtures on the
-  // motif layer. Wonder rooms keep their seeded oversized rugs.
+  // motif layer.
   const furniture = useMemo(() => {
     if (
       recipe.worldClass !== "interior" &&
@@ -6572,56 +7807,46 @@ export function SpaceScene({
         obstacles: seamObstacles.length > 0 ? seamObstacles : undefined,
       }).map(toPlacement);
     }
+    if (recipe.worldClass === "wonder") {
+      // §3.1 N4: the dioramas are furnished by the WONDER kits on the same
+      // staging machine (hero far-third, side kits, the §4 facings, the
+      // 35% 留白, the B.11 door strips) — the deck and the world class are
+      // the only deltas. The oversized accent rugs the legacy path seeded
+      // stay (placed first, as the pool hall's fixtures do), and the
+      // animals remain their own layer below. Water rooms (the duck pond)
+      // subtract their basin from the density area like the nature branch.
+      const rugs = furnishInterior(
+        rng,
+        scaledRecipe,
+        waterRect,
+        plan,
+        propScale,
+        clearanceDoors,
+      );
+      const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+      const waterArea = waterRect
+        ? (waterRect.halfX * 2 * waterRect.halfZ * 2) /
+          (scaleFactor * scaleFactor)
+        : 0;
+      const kits = stageInteriorKits({
+        rng,
+        worldClass: "wonder",
+        archetype: recipe.archetype,
+        plan,
+        comp,
+        baseExtent: recipe.size.extent,
+        baseArea: Math.max(0, baseArea - waterArea),
+        propScale,
+        wallThick,
+        water: waterRect,
+        doors: clearanceDoors,
+        heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
+      });
+      return [...rugs, ...kits.map(toPlacement)];
+    }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
   }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
 
-  // Probe/e2e mirror (GAME_DEBUG.room): the mounted room's composition and
-  // its placed strand doors, so probes can assert §8/§10.5 facts — module
-  // growth by door load, axial-only door walls, the sparse open fields —
-  // without reaching into the scene graph. Cleared when the room unmounts.
-  useEffect(() => {
-    const tracePiece = furniture.find((p) => p.trace) ?? null;
-    GAME_DEBUG.room = {
-      sliceId: recipe.sliceId,
-      doorCount: roomDoorCount,
-      cls: `${recipe.worldClass}/${recipe.archetype}/${recipe.size.id}`,
-      modules: roomComposition?.modules.map((p) => p.module.id) ?? [],
-      topology: roomComposition?.topology ?? "",
-      width: scaledRecipe.width,
-      extent: scaledRecipe.size.extent,
-      doorWalls: template?.doorWalls ?? [],
-      declaredCapacity: template?.doorCapacity ?? 0,
-      openFields: roomComposition?.openFields.length ?? 0,
-      fieldRects: (roomComposition?.openFields ?? []).map(
-        (f) =>
-          [f.x0 * scaleFactor, f.z0 * scaleFactor, f.x1 * scaleFactor, f.z1 * scaleFactor] as const,
-      ),
-      placedDoors: doorLayout.doors.map((d) => ({
-        role: wallRoleFor(plan, walls[d.wall]),
-        row: d.row,
-        along: d.along,
-      })),
-      furniture: furniture.length,
-      pieces: furniture.map((p) => [p.x, p.z] as const),
-      pieceKinds: furniture.map((p) => p.kind),
-      // §4.4: the room's one trace (null when the room grew none) — its
-      // kind and XZ, and the host piece it rests on, so probes can assert
-      // "exactly one, inside the path/hero visibility band" from data.
-      trace: tracePiece
-        ? {
-            kind: tracePiece.kind,
-            x: tracePiece.x,
-            z: tracePiece.z,
-            host: furniture.find(
-              (p) => p.trace !== true && p.x === tracePiece.x && p.z === tracePiece.z,
-            )?.kind ?? "",
-          }
-        : null,
-    };
-    return () => {
-      if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;
-    };
-  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, furniture, scaleFactor]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid. A COMPOSED room (§8) already carries its interior
@@ -6847,6 +8072,12 @@ export function SpaceScene({
       ),
     [recipe],
   );
+  // The rill's bed: the same quarry stone a grade darker under the water
+  // (it is never lit directly through 12cm of water).
+  const rillBedColor = useMemo(
+    () => inlayColor.clone().multiplyScalar(0.82),
+    [inlayColor],
+  );
 
   // Strand-door crossing detection: the entrance's hysteresis-band pattern
   // (clamps.ts WALL_IN/WALL_OUT) applied per door — the player must be
@@ -6910,9 +8141,17 @@ export function SpaceScene({
         wallHeight,
         wallThick,
         doors: clearanceDoors,
-        flatFloor: spec.ground === "flat",
+        ground: spec.ground,
+        water: waterRect
+          ? {
+              cx: waterRect.cx,
+              cz: waterRect.cz,
+              halfX: waterRect.halfX,
+              halfZ: waterRect.halfZ,
+            }
+          : null,
       }),
-    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, clearanceDoors, spec],
+    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, clearanceDoors, spec, waterRect],
   );
   const nicheByRun = useMemo(() => {
     const map = new Map<number, NicheFeature>();
@@ -6920,6 +8159,68 @@ export function SpaceScene({
     return map;
   }, [roomFeatures]);
 
+  // Probe/e2e mirror (GAME_DEBUG.room): the mounted room's composition and
+  // its placed strand doors, so probes can assert §8/§10.5 facts — module
+  // growth by door load, axial-only door walls, the sparse open fields —
+  // without reaching into the scene graph. Cleared when the room unmounts.
+  useEffect(() => {
+    const tracePiece = furniture.find((p) => p.trace) ?? null;
+    const roleOfRun = (runIndex: number): string =>
+      wallRoleFor(plan, walls[wallRuns[runIndex].source]);
+    GAME_DEBUG.room = {
+      sliceId: recipe.sliceId,
+      doorCount: roomDoorCount,
+      cls: `${recipe.worldClass}/${recipe.archetype}/${recipe.size.id}`,
+      modules: roomComposition?.modules.map((p) => p.module.id) ?? [],
+      topology: roomComposition?.topology ?? "",
+      width: scaledRecipe.width,
+      extent: scaledRecipe.size.extent,
+      doorWalls: template?.doorWalls ?? [],
+      declaredCapacity: template?.doorCapacity ?? 0,
+      openFields: roomComposition?.openFields.length ?? 0,
+      fieldRects: (roomComposition?.openFields ?? []).map(
+        (f) =>
+          [f.x0 * scaleFactor, f.z0 * scaleFactor, f.x1 * scaleFactor, f.z1 * scaleFactor] as const,
+      ),
+      placedDoors: doorLayout.doors.map((d) => ({
+        role: wallRoleFor(plan, walls[d.wall]),
+        row: d.row,
+        along: d.along,
+      })),
+      furniture: furniture.length,
+      pieces: furniture.map((p) => [p.x, p.z] as const),
+      pieceKinds: furniture.map((p) => p.kind),
+      // The resolved features actually built this mount — the N3/N4 slots
+      // included (probes assert they render where declared, and that a
+      // slot which failed every host rule is absent rather than clipped).
+      features: [
+        ...roomFeatures.niches.map((n) => `niche@${roleOfRun(n.run)}`),
+        ...roomFeatures.pilasters.map((p) => `pilaster-rhythm@${roleOfRun(p.run)}`),
+        ...(roomFeatures.inlay ? ["floor-inlay@floor"] : []),
+        ...roomFeatures.platforms.map((f) => `raised-platform@${roleOfRun(f.run)}`),
+        ...roomFeatures.mezzanines.map((f) => `mezzanine@${roleOfRun(f.run)}`),
+        ...roomFeatures.arches.map((f) => `arch-frame@${roleOfRun(f.run)}`),
+        ...roomFeatures.columnOrders.map((f) => `column-order@${roleOfRun(f.run)}`),
+        ...(roomFeatures.rill ? ["water-rill@floor"] : []),
+      ],
+      // §4.4: the room's one trace (null when the room grew none) — its
+      // kind and XZ, and the host piece it rests on, so probes can assert
+      // "exactly one, inside the path/hero visibility band" from data.
+      trace: tracePiece
+        ? {
+            kind: tracePiece.kind,
+            x: tracePiece.x,
+            z: tracePiece.z,
+            host: furniture.find(
+              (p) => p.trace !== true && p.x === tracePiece.x && p.z === tracePiece.z,
+            )?.kind ?? "",
+          }
+        : null,
+    };
+    return () => {
+      if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;
+    };
+  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor]);
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
    * AND bowl sample the shared tile maps with one texture cell per physical
@@ -7578,6 +8879,67 @@ export function SpaceScene({
           color={dadoPanelColor}
         />
       ))}
+
+      {/* The N3/N4 wall features (§3.2): the railed dais, the mezzanine
+          ledge, the arch portal and the free-standing column order —
+          resolved to single door-split runs, scaled by the wall ratio,
+          silent when their host cannot hold them. */}
+      {roomFeatures.platforms.map((f, i) => (
+        <RaisedPlatform
+          key={`plat${i}`}
+          wall={wallRuns[f.run].wall}
+          feature={f}
+          plan={plan}
+          bodyColor={dadoPanelColor}
+          railColor={capColor}
+        />
+      ))}
+      {roomFeatures.mezzanines.map((f, i) => (
+        <MezzanineDeck
+          key={`mezz${i}`}
+          wall={wallRuns[f.run].wall}
+          feature={f}
+          plan={plan}
+          bodyColor={dadoPanelColor}
+          parapetColor={wallColor}
+          trimColor={capColor}
+        />
+      ))}
+      {roomFeatures.arches.map((f, i) => (
+        <ArchFrame
+          key={`arch${i}`}
+          wall={wallRuns[f.run].wall}
+          feature={f}
+          plan={plan}
+          stoneColor={inlayColor}
+        />
+      ))}
+      {roomFeatures.columnOrders.map((f, i) => (
+        <ColumnOrderRun
+          key={`col${i}`}
+          wall={wallRuns[f.run].wall}
+          feature={f}
+          plan={plan}
+          stoneColor={inlayColor}
+        />
+      ))}
+
+      {/* The water rill (§3.2 地面水渠): the stone runnel carrying real
+          water on its own wave driver — same material family and water
+          colours as the pool, no claim on the basin's caustics. */}
+      {roomFeatures.rill && (
+        <WaterRill
+          rill={roomFeatures.rill}
+          ws={wallHeight / WALL_HEIGHT}
+          stoneColor={inlayColor}
+          bedColor={rillBedColor}
+          waterColor={waterColor}
+          waterShallowColor={waterShallowColor}
+          playerRef={playerRef}
+          door={door}
+          dir={dir}
+        />
+      )}
 
       {/* Second-row door screens (§10.5 fallback ②): the freestanding
           slabs the double-bank doors hang on — same boxes, same cap rail,

@@ -114,6 +114,10 @@ export interface ModuleFeature {
   kind: FeatureSlot["kind"];
   at: ModuleEdge | "floor";
   span?: readonly [number, number];
+  /** Floor features only: the span's partner on the module's z axis (both
+   *  in the module's own frame), carried to the room as spanZ — see
+   *  FeatureSlot.spanZ. */
+  spanZ?: readonly [number, number];
 }
 
 /**
@@ -271,6 +275,14 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     features: [
       { kind: "pilaster-rhythm", at: "n" },
       { kind: "floor-inlay", at: "floor", span: [0.3, 0.7] },
+      // The library gallery's processional end: free-standing columns
+      // before the shelf wall (real stone where the old vocabulary drew
+      // light shafts, §3.2's column order) and, between the stacks and
+      // the colonnade, the round arch — its own ceiling (§3.2's arch
+      // frame). The shelf wall hosts no doors (doorEdges is empty), so
+      // the north face is the one wall the rhythm can always trust.
+      { kind: "column-order", at: "n", span: [0.14, 0.86] },
+      { kind: "arch-frame", at: "n", span: [0.38, 0.62] },
     ],
     kits: [
       "bookshelf-run",
@@ -478,11 +490,20 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     floor: "deck",
     wall: "tile",
     light: "pool-bounce",
-    // No water-rill feature: that kind is unrendered data (the consumer in
-    // space.tsx skips it, and describe-room would still prose about it),
-    // and the deck's water IS the pool basin beside it. When the rill's
-    // geometry lands, its declaration returns in the same change.
-    features: [],
+    // The rill returns WITH its geometry (space.tsx's buildRoomFeatures
+    // resolves it and the WaterRill component builds the runnel + its own
+    // wave-driven water): the east-flank feed runnel — a shallow stone
+    // channel running the deck's depth toward the pool basin, real water
+    // on the room's own wave machinery. The x span keeps it on the east
+    // flank, clear of the walk spine; the z span stops it at the basin.
+    features: [
+      {
+        kind: "water-rill",
+        at: "floor",
+        span: [0.76, 0.98],
+        spanZ: [0.08, 0.68],
+      },
+    ],
     kits: [
       "pool-loungers",
       "towel-station",
@@ -515,7 +536,14 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     floor: "timber",
     wall: "panelling",
     light: "task",
-    features: [{ kind: "pilaster-rhythm", at: "n" }],
+    features: [
+      { kind: "pilaster-rhythm", at: "n" },
+      // The hall head: a railed dais for the head table, and above it a
+      // mezzanine gallery overlooking the meal — the far wall's two
+      // tiers, the dollhouse camera's second silhouette layer.
+      { kind: "raised-platform", at: "n", span: [0.3, 0.7] },
+      { kind: "mezzanine", at: "n", span: [0.24, 0.76] },
+    ],
     kits: ["dining", "housekeeping", "gallery-bench", "chair-stack", "sideboard"],
     heroKit: "dining",
     zones: [
@@ -1291,6 +1319,12 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
             ? [
                 (rect.x0 + f.span[0] * (rect.x1 - rect.x0) + comp.width / 2) / comp.width,
                 (rect.x0 + f.span[1] * (rect.x1 - rect.x0) + comp.width / 2) / comp.width,
+              ]
+            : undefined,
+          spanZ: f.spanZ
+            ? [
+                (rect.z0 + f.spanZ[0] * (rect.z1 - rect.z0)) / comp.extent,
+                (rect.z0 + f.spanZ[1] * (rect.z1 - rect.z0)) / comp.extent,
               ]
             : undefined,
         });

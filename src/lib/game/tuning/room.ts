@@ -546,6 +546,119 @@ export const INLAY_BAND_WIDTH = 0.4;
 export const INLAY_MIN_SPAN = 1.6;
 
 /* ------------------------------------------------------------------ */
+/* The N3/N4 feature set (v0.11-room-interiors §3.2, 2026-10): the      */
+/* raised platform, mezzanine, arch frame, column order and water rill  */
+/* that complete the §3.2 catalogue alongside dado/pilaster/niche/inlay. */
+/* Same conventions: sizes are human-scale meters ×wall scale (the      */
+/* wallScale ratio the renderer already computes), every feature is    */
+/* opaque architecture lit only by the room's own fixtures (B.13), and  */
+/* each carries a minimum-host rule so a host that cannot hold it       */
+/* degrades to NOTHING rather than clipping through (the cutaway/small  */
+/* room discipline the dado and pilaster established).                 */
+/* ------------------------------------------------------------------ */
+
+/** Raised platform (抬高平台): a dais of two 18cm steps against a wall,
+ *  railed on its open faces — a stage, a head table's floor. Sits on the
+ *  floor; the railing keeps the edge honest (a raised edge you could
+ *  fall from reads as architecture, a bare box as a crate). */
+export const PLATFORM_HEIGHT = 0.36;
+/** Step tread depth (m, ×wall scale) — each of the two steps. */
+export const PLATFORM_STEP_DEPTH = 0.32;
+/** Platform depth off the wall (m, ×wall scale). */
+export const PLATFORM_DEPTH = 2.2;
+/** Railing height above the platform (m, ×wall scale). */
+export const PLATFORM_RAIL_HEIGHT = 0.9;
+/** A run shorter than this (m, ×wall scale) gets no platform. */
+export const PLATFORM_MIN_RUN = 3.4;
+/** A platform opening this close (m, ×wall scale, center-to-center) to a
+ *  strand door on its run forfeits the slot — the door's approach must
+ *  stay open (same frame-shifted discipline as NICHE_DOOR_CLEAR). */
+export const PLATFORM_DOOR_CLEAR = 1.4;
+
+/** Mezzanine (夹层): a half-floor ledge along one full-height wall —
+ *  the high-value piece under the dollhouse camera, where the room's
+ *  silhouette gains a second layer. Deck + parapet on the open edge +
+ *  corbel brackets underneath; nothing hangs (I2 — the deck is walled
+ *  at both ends by the host wall's neighbours). */
+export const MEZZANINE_DECK_Y = 2.3;
+/** Ledge depth off the wall (m, ×wall scale). */
+export const MEZZANINE_DEPTH = 2.2;
+/** Parapet height above the deck (m, ×wall scale). */
+export const MEZZANINE_PARAPET = 0.9;
+/** Deck slab thickness (m, ×wall scale). */
+export const MEZZANINE_SLAB = 0.16;
+/** A host wall shorter than deck + parapet + this headroom (m, ×wall
+ *  scale) gets no mezzanine — a ledge you would crack your head on is
+ *  a bug, so cutaway sills and low rooms simply skip. */
+export const MEZZANINE_HEADROOM = 1.0;
+export const MEZZANINE_MIN_RUN = 3.6;
+
+/** Arch frame (拱门框): two posts + a round arch spanning them, standing
+ *  on the floor before a wall — a portal that needs no ceiling (the arch
+ *  closes its own top, §3.2). Frames the wall behind it; walks the room's
+ *  trim/stone register. */
+export const ARCH_WIDTH = 2.6;
+/** Post section (m, ×wall scale), square. */
+export const ARCH_POST = 0.34;
+/** Springing height — post top / arch foot (m, ×wall scale). */
+export const ARCH_SPRING_Y = 2.35;
+/** Arch tube radius (m, ×wall scale) — the round arch's thickness. */
+export const ARCH_TUBE = 0.17;
+/** A host wall whose DRAWN height cannot clear spring + tube + this (m,
+ *  ×wall scale) gets no arch. */
+export const ARCH_HEADROOM = 0.15;
+export const ARCH_MIN_RUN = ARCH_WIDTH + 0.8;
+export const ARCH_DOOR_CLEAR = 1.2;
+
+/** Column order (柱式): a rhythm of free-standing classical columns —
+ *  plinth + tapering shaft + echinus capital — standing off a wall like
+ *  a colonnade in front of it (the §3.2 note: these REPLACE the old
+ *  light-shaft vocabulary with real load-looking stone). Round where
+ *  the pilaster is flat, off the wall where the pilaster hugs it. */
+export const COLUMN_SHAFT_HEIGHT = 2.9;
+export const COLUMN_SHAFT_RADIUS = 0.16;
+export const COLUMN_PLINTH_HEIGHT = 0.22;
+export const COLUMN_PLINTH_SIZE = 0.52;
+export const COLUMN_CAPITAL_HEIGHT = 0.2;
+export const COLUMN_CAPITAL_SIZE = 0.46;
+/** Stand-off from the wall's inner face (m, ×wall scale). */
+export const COLUMN_OFF_WALL = 0.85;
+/** Center-to-center rhythm (m, ×wall scale) — a tighter, walkable
+ *  colonnade spacing than the pilaster's flat rhythm. */
+export const COLUMN_SPAN = 2.4;
+export const COLUMN_END_PAD = 0.7;
+export const COLUMN_MIN_RUN = 3.0;
+export const COLUMN_DOOR_CLEAR = 1.0;
+
+/** Water rill (地面水渠): a shallow stone runnel crossing a declared
+ *  floor band, carrying REAL water on the room's own wave machinery — a
+ *  second WaveDriver over the rill rectangle feeds the same
+ *  createWaterSurfaceMaterial family the pool uses (Beer-Lambert
+ *  absorption, wave-driven normals), so wading the rill ripples it
+ *  exactly like wading the pool. The square sim grid stretches over the
+ *  runnel's long rectangle: impulses elongate along the channel, which
+ *  is also how a real narrow channel carries a disturbance — guided
+ *  along its run. The rill claims NO caustics (its bed is its own stone
+ *  geometry a handspan under 10–14cm of water — basin caustics stay the
+ *  pool basin's, masked to the basin rect, untouched). Shallow enough to
+ *  read as water over stone, never as a second pool. */
+export const RILL_WIDTH = 0.8;
+/** Runnel rim height above the floor (m, ×wall scale) — its side walls. */
+export const RILL_RIM_HEIGHT = 0.24;
+/** Water depth inside the runnel (m, ×wall scale). */
+export const RILL_WATER_DEPTH = 0.12;
+/** Bed thickness below the water (m, ×wall scale). */
+export const RILL_BED = 0.06;
+/** The rill never intrudes into the walk-path corridor: its rectangle
+ *  must sit entirely outside |x| ≥ PATH_HALF + this (m, scaled), or the
+ *  slot degrades to nothing (a channel you must step across mid-path is
+ *  an obstruction, not a feature). */
+export const RILL_PATH_CLEAR = 0.6;
+/** Smallest runnel length (m, ×wall scale) that still reads as a
+ *  crossing — below this the slot is skipped. */
+export const RILL_MIN_LENGTH = 2.4;
+
+/* ------------------------------------------------------------------ */
 /* Motivated fixtures (v0.11-hotel-rooms B.13 「摄影棚论」, user        */
 /* 2026-09-18): this world has NO outdoors, so every lit surface must  */
 /* have a findable source. Every room grows a LAMP (shade + bulb + a   */

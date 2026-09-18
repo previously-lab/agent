@@ -23,10 +23,12 @@
  *     mirror, roomOrientationFor). Pass `strandDoors` + `corridorSide` to
  *     place them exactly as the renderer would; without them the outline
  *     reports the PERMITTED walls and the MEASURED capacity instead.
- *   - the pool hall's water-anchored legacy fixtures and the wonder rooms'
- *     animals/rugs: those live inside space.tsx (furnishInterior /
- *     buildAnimals), outside the pure chain. The outline says the pool IS
- *     the pool hall's content and enumerates nothing it cannot prove.
+ *   - the pool hall's water-anchored legacy fixtures (its obstacle discs
+ *     live inside space.tsx, outside the pure chain — the pool hall is
+ *     excluded from the furnishing enumeration) and the wonder rooms'
+ *     animals + oversized rugs (buildAnimals / furnishInterior — outside
+ *     the pure chain; their KITS are staged by the same pure call as
+ *     everything else and ARE enumerated).
  *   - kit staging assumes the strand doors it was told about: without
  *     `strandDoors` + `corridorSide` the furnishing list matches a doorless
  *     render, and a room that grew strand doors may shift a side kit off a
@@ -78,7 +80,7 @@ import {
   hostableWallsFor,
   placeRoomDoors,
 } from "./room-doors";
-import { planArea, stageInteriorKits, type KitKind } from "./kits";
+import { kitsFor, planArea, stageInteriorKits, type KitKind } from "./kits";
 import { terrainHeight, waterRectFor } from "./terrain";
 import {
   ARCHETYPES,
@@ -173,9 +175,11 @@ export interface RoomDescription {
   /** Vegetation/rock presence, from the archetype's densities. */
   scatter: { trees: boolean; rocks: boolean };
   /** Interior furnishing staged by kits.ts — the EXACT kit placements the
-   *  renderer builds (hero first). null for non-interior rooms and for the
-   *  pool hall (its water-anchored legacy fixtures live outside the pure
-   *  chain — see the module header). */
+   *  renderer builds (hero first). Present for interior rooms (except the
+   *  pool hall, whose water-anchored legacy fixtures live outside the pure
+   *  chain), for nature rooms whose biome draws the nature deck, and for
+   *  wonder rooms (the rugs and animals stay outside the pure chain — see
+   *  the module header). Null everywhere else. */
   furnishing: { kit: string; pieces: KitKind[] }[] | null;
   doors: {
     /** Wall roles strand doors may hang on — null = no template, so any
@@ -322,23 +326,40 @@ export function describeRoom(
     : undefined;
 
   // Interior furnishing: the renderer's exact staging (space.tsx's furniture
-  // memo) — same "furniture" stream, same kit whitelist (the composition's
-  // module kits), same zones, same heightfield snap. The pool hall is
-  // excluded: its obstacle discs come from space.tsx's legacy fixtures,
-  // which the pure chain cannot reproduce (enumerating kits staged without
-  // them could name pieces the render rejected — a lie).
+  // memo) — same "furniture" stream, same kit whitelist, same zones, same
+  // heightfield snap. Covered rooms: the INTERIOR classes (module-whitelisted
+  // when composed; the pool hall is excluded — its obstacle discs come from
+  // space.tsx's legacy fixtures, which the pure chain cannot reproduce, so
+  // enumerating kits staged without them could name pieces the render
+  // rejected), NATURE rooms whose biome draws the nature deck (the outdoor
+  // pool biome keeps its rim fixtures — an empty deck furnishes nothing),
+  // and WONDER rooms (the rugs/animals stay outside the pure chain; the
+  // kits are staged here exactly as staged there). Water biomes subtract
+  // their basin from the density area, mirroring the renderer's branches.
   let furnishing: RoomDescription["furnishing"] = null;
-  if (recipe.worldClass === "interior" && recipe.archetype !== "pool-hall") {
+  const furnishClass =
+    (recipe.worldClass === "interior" && recipe.archetype !== "pool-hall") ||
+    recipe.worldClass === "wonder" ||
+    (recipe.worldClass === "nature" &&
+      kitsFor("nature", recipe.archetype, recipe.size.extent).length > 0)
+      ? recipe.worldClass
+      : null;
+  if (furnishClass) {
     const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
     const kitIds = composition
       ? [...new Set(composition.modules.flatMap((p) => p.module.kits))]
       : undefined;
+    const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+    const waterArea = water
+      ? (water.halfX * 2 * water.halfZ * 2) / (scaleFactor * scaleFactor)
+      : 0;
     const staged = stageInteriorKits({
       rng,
+      worldClass: furnishClass,
       archetype: recipe.archetype,
       plan,
       comp: composeRoom(sliceId, plan, scaleFactor, WORLD_SEED),
-      baseArea: planArea(plan) / (scaleFactor * scaleFactor),
+      baseArea: Math.max(0, baseArea - waterArea),
       baseExtent: recipe.size.extent,
       propScale,
       wallThick,
@@ -505,6 +526,8 @@ const FEATURE_ZH: Record<FeatureKind, string> = {
   "floor-inlay": "地面镶嵌",
   "water-rill": "水渠",
   mezzanine: "夹层",
+  "arch-frame": "拱门框",
+  "column-order": "柱式",
 };
 const FLOOR_ZH: Record<FloorRole, string> = {
   timber: "木地板",
@@ -633,8 +656,8 @@ export function formatRoomDescription(
   if (desc.worldClass === "wonder") {
     L.push(
       zh
-        ? `内容：${archetype}的立体透视盒（种子编排的动物/气球陈设）`
-        : `Content: a seeded ${archetype} diorama (animals/balloons)`,
+        ? `内容：${archetype}的立体透视盒（动物/气球与大地毯在纯推导链外，不逐一列举；套装见下）`
+        : `Content: a seeded ${archetype} diorama (animals/balloons and the oversized rugs live outside the pure chain — kits below)`,
     );
   }
 

@@ -153,3 +153,89 @@ describe("describeRoom", () => {
     expect(zh).toContain("东西侧墙");
   });
 });
+
+describe("describeRoom worldClass furnishing (nature/wonder kits in the outline)", () => {
+  /** The decks, mirrored from kits.ts — every enumerated kit must belong
+   *  to the room's own world-class deck. */
+  const NATURE_DECK = [
+    "fallen-log",
+    "stone-circle",
+    "jetty",
+    "fence-ruin",
+    "campfire",
+    "path-marker",
+    "boulder-cluster",
+    "reeds",
+  ];
+  const WONDER_DECK = [
+    "toy-blocks",
+    "marble-run",
+    "giant-chess",
+    "paper-boats",
+    "lantern-cluster",
+    "swing-frame",
+  ];
+
+  // Scan a deterministic spread of slice ids for one room of each shape —
+  // compileSpaceRecipe hashes any string, so the probe ids are as good
+  // as dates (A6: the same scan returns the same rooms on any machine).
+  const findSlice = (
+    pred: (r: ReturnType<typeof compileSpaceRecipe>) => boolean,
+    limit = 600,
+  ): string => {
+    for (let i = 0; i < limit; i++) {
+      const id = `outline-probe-${i}`;
+      if (pred(compileSpaceRecipe(id))) return id;
+    }
+    throw new Error("no matching slice found in the scan window");
+  };
+
+  it("enumerates the nature kits for a nature room with a nature deck", () => {
+    const id = findSlice(
+      (r) => r.worldClass === "nature" && r.archetype !== "pool",
+    );
+    const desc = describeRoom(id);
+    expect(desc.furnishing).not.toBeNull();
+    const kits = desc.furnishing!.map((f) => f.kit);
+    expect(kits.length).toBeGreaterThan(0);
+    for (const kit of kits) expect(NATURE_DECK).toContain(kit);
+    // The zh outline's 陈设 line names the hero kit first.
+    const zh = formatRoomDescription(desc, "zh");
+    expect(zh).toContain("陈设：主角套件");
+    expect(zh).toContain(kits[0]);
+  });
+
+  it("keeps the outdoor pool biome on its legacy path (no enumeration)", () => {
+    const id = findSlice(
+      (r) => r.worldClass === "nature" && r.archetype === "pool",
+    );
+    const desc = describeRoom(id);
+    expect(desc.furnishing).toBeNull();
+    expect(desc.water).not.toBeNull();
+  });
+
+  it("enumerates the wonder kits for a wonder room", () => {
+    const id = findSlice((r) => r.worldClass === "wonder");
+    const desc = describeRoom(id);
+    expect(desc.furnishing).not.toBeNull();
+    const kits = desc.furnishing!.map((f) => f.kit);
+    expect(kits.length).toBeGreaterThan(0);
+    for (const kit of kits) expect(WONDER_DECK).toContain(kit);
+    // Same line count in both locales with the furnishing line present.
+    const en = formatRoomDescription(desc, "en");
+    const zh = formatRoomDescription(desc, "zh");
+    expect(en).toContain("hero kit");
+    expect(en).toContain(kits[0]);
+    expect(zh.split("\n")).toHaveLength(en.split("\n").length);
+  });
+
+  it("keeps the outline deterministic for the new world classes", () => {
+    for (const cls of ["nature", "wonder"] as const) {
+      const id = findSlice((r) => r.worldClass === cls);
+      const a = JSON.stringify(describeRoom(id));
+      describeRoom(findSlice((r) => r.worldClass === "interior"));
+      const b = JSON.stringify(describeRoom(id));
+      expect(b).toBe(a);
+    }
+  });
+});

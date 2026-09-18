@@ -27,12 +27,14 @@
  * for a runtime check.
  *
  * WORLD CLASSES. The deck holds every hand-written kit — the interior
- * sets (N1, the abundance pass, the craft pass) and the nature set
+ * sets (N1, the abundance pass, the craft pass), the nature set
  * (§3.1 N4: fallen-log, stone-circle, jetty, fence-ruin, campfire,
- * path-marker, boulder-cluster, reeds). `worldClasses` + `archetypes`
- * gate which room may draw which kit (a meadow never grows pool
- * lockers; the outdoor pool biome keeps its rim-anchored fixture
- * scatter — its content IS the water — and draws no kits at all).
+ * path-marker, boulder-cluster, reeds) and the wonder set (§3.1 N4:
+ * toy-blocks, marble-run, giant-chess, paper-boats, lantern-cluster,
+ * swing-frame). `worldClasses` + `archetypes` gate which room may draw
+ * which kit (a meadow never grows pool lockers; the outdoor pool biome
+ * keeps its rim-anchored fixture scatter — its content IS the water —
+ * and draws no kits at all).
  *
  * THE TRACE (§4.4). Staging ends by selecting the room's ONE trace: a
  * single calm piece (an open book, a tea tray, a folded towel — never
@@ -140,7 +142,24 @@ export type KitKind =
   | "log"
   | "mushroom"
   | "cairn"
-  | "signpost";
+  | "signpost"
+  // The wonder set (§3.1 N4, 2026-10): the diorama world's oversized
+  // playthings — giant toy blocks (a stud-topped cube, stacked by the
+  // kit's dy), the marble-run tower with its exit chute and dish, three
+  // giant chessmen, folded paper boats, warm paper ground lanterns, and
+  // the self-supported swing frame with its rope-hung seats (§3.1's
+  // explicit exception to I2: the seat hangs from the FRAME's crossbar,
+  // never from a ceiling).
+  | "toyblock"
+  | "marblerun"
+  | "marblechute"
+  | "chessking"
+  | "chessrook"
+  | "chesspawn"
+  | "paperboat"
+  | "paperlantern"
+  | "swingframe"
+  | "swingseat";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -836,6 +855,115 @@ export const KITS: readonly Kit[] = [
       { kind: "reeds", dx: -0.55, dz: 0.35, rotY: 0.2 },
       { kind: "reeds", dx: 0.4, dz: 0.55, rotY: 1.2, scale: 0.85 },
       { kind: "reeds", dx: 0.05, dz: -0.25, rotY: 2.2, scale: 0.7 },
+    ],
+  },
+
+  /* -------------------------------------------------------------- */
+  /* The wonder set (§3.1 N4, 2026-10): the diorama world's authored */
+  /* playthings — oversized, calm, never toppled (I4), every kit has  */
+  /* a relation (faces the water, the path, or stands as the composed */
+  /* centrepiece). The swing frame's seats hang from ITS OWN crossbar */
+  /* (§3.1's explicit allowance) — never from a ceiling (I2).        */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 巨型积木堆 — giant toy blocks: three on the floor at scattered
+    // angles, a fourth stacked on the first (the kit's dy — supported,
+    // never floating). Played-with, not toppled (I4).
+    id: "toy-blocks",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks", "cats", "dogs", "balloons"],
+    facing: "center",
+    footprint: 1.6,
+    pieces: [
+      { kind: "toyblock", dx: 0, dz: 0, rotY: 0.3 },
+      { kind: "toyblock", dx: 0.9, dz: 0.25, rotY: -0.25, scale: 0.85 },
+      { kind: "toyblock", dx: -0.72, dz: 0.6, rotY: 0.95, scale: 0.7 },
+      { kind: "toyblock", dx: 0.02, dz: -0.02, rotY: 0.62, dy: 0.72 },
+    ],
+  },
+  {
+    // 滚球轨道 — the marble run corner: the tower with its two disc
+    // ramps, the exit chute running down to the marble dish, and a
+    // small chair pulled up to watch it run — paused, never abandoned
+    // (I4). A composed centrepiece (I5): the tower owns the far-third
+    // slot, the chute and chair arrange around it.
+    id: "marble-run",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks", "cats", "dogs", "balloons"],
+    heroSlot: true,
+    facing: "path",
+    footprint: 2.2,
+    pieces: [
+      { kind: "marblerun", dx: 0, dz: 0, rotY: 0 },
+      { kind: "marblechute", dx: 1.35, dz: 0.3, rotY: -Math.PI / 2 },
+      { kind: "chair", dx: -1.35, dz: -0.5, rotY: 2.2 },
+    ],
+  },
+  {
+    // 几个超大棋子 — giant chessmen mid-game: the alabaster king, a
+    // slate rook answered across the board-that-is-the-floor, a pawn
+    // advanced between them. A composed centrepiece (I5) — the game IS
+    // the focus, the pieces face the room's center like players.
+    id: "giant-chess",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks", "cats", "dogs", "balloons"],
+    heroSlot: true,
+    facing: "center",
+    footprint: 2.1,
+    pieces: [
+      { kind: "chessking", dx: -0.85, dz: 0, rotY: 0.2 },
+      { kind: "chessrook", dx: 0.8, dz: 0.55, rotY: -0.4 },
+      { kind: "chesspawn", dx: 0.05, dz: -0.75, rotY: 0.9 },
+    ],
+  },
+  {
+    // 折纸船 — folded paper boats left at the pond's edge, prows toward
+    // the water (facing "water"): someone's fleet, ready for launch.
+    // Only the duck pond (the wonder room with water) grows them.
+    id: "paper-boats",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks"],
+    facing: "water",
+    footprint: 1.4,
+    pieces: [
+      { kind: "paperboat", dx: 0, dz: 0, rotY: 0 },
+      { kind: "paperboat", dx: 0.7, dz: 0.4, rotY: 0.5, scale: 0.85 },
+      { kind: "paperboat", dx: -0.6, dz: 0.5, rotY: -0.35, scale: 0.7 },
+    ],
+  },
+  {
+    // 地面灯笼群 — ground lanterns breathing warm light at staggered
+    // heights, a little constellation standing on the floor. Faces the
+    // room's center; the glow is small and authored (the room's real
+    // light still comes from its fixtures — B.13).
+    id: "lantern-cluster",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks", "cats", "dogs", "balloons"],
+    facing: "center",
+    footprint: 1.8,
+    pieces: [
+      { kind: "paperlantern", dx: 0, dz: 0, rotY: 0, scale: 1.1 },
+      { kind: "paperlantern", dx: 0.8, dz: 0.45, rotY: 0.7, scale: 0.8 },
+      { kind: "paperlantern", dx: -0.7, dz: 0.5, rotY: 1.9, scale: 0.9 },
+      { kind: "paperlantern", dx: 0.15, dz: -0.8, rotY: 3.4, scale: 0.7 },
+      { kind: "paperlantern", dx: -0.5, dz: -0.6, rotY: 4.6, scale: 0.75 },
+    ],
+  },
+  {
+    // 带支架的秋千 — the swing frame standing on its own two A-ends,
+    // two rope-hung seats at rest. §3.1's explicit exception to I2: the
+    // seats hang from the frame's crossbar, never from a ceiling. Faces
+    // the walk path — you swing toward the room.
+    id: "swing-frame",
+    worldClasses: ["wonder"],
+    archetypes: ["ducks", "cats", "dogs", "balloons"],
+    facing: "path",
+    footprint: 2.5,
+    pieces: [
+      { kind: "swingframe", dx: 0, dz: 0, rotY: 0 },
+      { kind: "swingseat", dx: 1.02, dz: 0, rotY: 0 },
+      { kind: "swingseat", dx: -1.02, dz: 0, rotY: 0 },
     ],
   },
 ];

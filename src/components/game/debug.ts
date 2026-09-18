@@ -70,6 +70,12 @@ export const GAME_DEBUG = {
      *  a placed piece (e.g. which prop a trace rests on) by kind without
      *  entering the scene graph. */
     pieceKinds: readonly string[];
+    /** The resolved template feature slots ACTUALLY built this mount
+     *  (kind@role strings — e.g. "mezzanine@far", "water-rill@floor"):
+     *  probes assert the N3/N4 features render where declared without
+     *  entering the scene graph, and that a slot which failed every
+     *  host rule is absent rather than clipped. */
+    features: readonly string[];
     /** §4.4: the mounted room's one trace — its kind and XZ plus the host
      *  piece it rests on — or null when the room grew none (no eligible
      *  host, or an unfurnished room). Probes assert "exactly one, inside

@@ -44,16 +44,22 @@ import type { ArchetypeId, WorldClass } from "./space-types";
 /* The data model (§7.2)                                               */
 /* ------------------------------------------------------------------ */
 
-/** Geometric feature slots (§3.2's six): the template's authored dressing.
- *  Declared here as data; the RENDERER builds the geometry (niche, inlay…)
- *  when it adopts the template layer. */
+/** Geometric feature slots (§3.2's catalogue): the template's authored
+ *  dressing. Declared here as data; the RENDERER builds the geometry
+ *  (niche, inlay, rill…) when it adopts the template layer. Every kind
+ *  in this union has its geometry AND its consumer in the same build —
+ *  a kind nobody renders is never declared (the water-rill precedent:
+ *  it was pulled from the pool deck the moment its consumer dropped it,
+ *  and returned only with the rill's geometry). */
 export type FeatureKind =
   | "niche"
   | "raised-platform"
   | "pilaster-rhythm"
   | "floor-inlay"
   | "water-rill"
-  | "mezzanine";
+  | "mezzanine"
+  | "arch-frame"
+  | "column-order";
 
 export interface FeatureSlot {
   kind: FeatureKind;
@@ -61,6 +67,11 @@ export interface FeatureSlot {
   at: WallRole | "floor";
   /** Normalized span along the wall / across the floor (0..1). */
   span?: readonly [number, number];
+  /** Floor features only: the normalized z span (0..1 of the room's
+   *  depth), so a floor figure can be authored as a rectangle (x span ×
+   *  z span) instead of inheriting one span for both axes the way the
+   *  inlay does. Undefined = the span covers the floor's full depth. */
+  spanZ?: readonly [number, number];
 }
 
 /**
@@ -521,6 +532,21 @@ export function auditTemplate(template: RoomTemplate): string[] {
   for (const f of template.features) {
     if (f.at !== "floor" && !available.includes(f.at)) {
       problems.push(`${template.id}: feature ${f.kind}@"${f.at}" absent on ${template.footprint}`);
+    }
+    for (const [name, span] of [["span", f.span], ["spanZ", f.spanZ]] as const) {
+      if (!span) continue;
+      if (
+        span[0] < 0 ||
+        span[1] > 1 ||
+        span[0] >= span[1]
+      ) {
+        problems.push(
+          `${template.id}: feature ${f.kind} has an invalid ${name} [${span[0]}, ${span[1]}]`,
+        );
+      }
+    }
+    if (f.at !== "floor" && f.spanZ !== undefined) {
+      problems.push(`${template.id}: feature ${f.kind} is wall-bound but carries spanZ`);
     }
   }
   if (template.doorWalls.length === 0 && template.doorCapacity > 0) {

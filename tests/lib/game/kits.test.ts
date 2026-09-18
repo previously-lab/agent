@@ -93,6 +93,9 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   "standingstone", "boulder", "reeds", "firepit", "jettydeck", "moss",
   "ruinwall", "log", "mushroom", "cairn", "signpost",
   "yarn", "cattree", "scratchpost", "doghouse", "bone", "ball",
+  // The wonder set (§3.1 N4): the diorama world's oversized playthings.
+  "toyblock", "marblerun", "marblechute", "chessking", "chessrook",
+  "chesspawn", "paperboat", "paperlantern", "swingframe", "swingseat",
 ];
 
 const KIT_IDS = [
@@ -137,6 +140,16 @@ const NATURE_KIT_IDS = [
   "path-marker",
   "boulder-cluster",
   "reeds",
+];
+
+/** The wonder set (§3.1 N4) — the six diorama groups, in catalogue order. */
+const WONDER_KIT_IDS = [
+  "toy-blocks",
+  "marble-run",
+  "giant-chess",
+  "paper-boats",
+  "lantern-cluster",
+  "swing-frame",
 ];
 
 const kitById = (id: string): Kit => {
@@ -268,6 +281,52 @@ describe("nature kit data (§3.1 N4)", () => {
       expect(["path", "door", "hero", "center", "water"]).toContain(
         kitById(id).facing,
       );
+    }
+  });
+});
+
+describe("wonder kit data (§3.1 N4)", () => {
+  const WONDER_ROOMS = ["ducks", "cats", "dogs", "balloons"] as const;
+
+  it("ships the six wonder kits, in catalogue order", () => {
+    expect(
+      KITS.filter((k) => k.worldClasses.includes("wonder")).map((k) => k.id),
+    ).toEqual(WONDER_KIT_IDS);
+  });
+
+  it("gives every wonder archetype at least one hero-eligible kit", () => {
+    for (const room of WONDER_ROOMS) {
+      const heroes = kitsFor("wonder", room, 96).filter((k) => k.heroSlot);
+      expect(heroes.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("whitelists the paper boats to the duck pond (the wonder water room)", () => {
+    expect(kitsFor("wonder", "ducks", 16).map((k) => k.id)).toContain(
+      "paper-boats",
+    );
+    for (const room of ["cats", "dogs", "balloons"] as const) {
+      expect(kitsFor("wonder", room, 16).map((k) => k.id)).not.toContain(
+        "paper-boats",
+      );
+    }
+  });
+
+  it("declares a facing for every wonder kit (§4)", () => {
+    for (const id of WONDER_KIT_IDS) {
+      expect(["path", "door", "hero", "center", "water"]).toContain(
+        kitById(id).facing,
+      );
+    }
+  });
+
+  it("stacks the toy blocks by dy, never floating unsupported (I2)", () => {
+    const stacked = kitById("toy-blocks").pieces.filter((p) => (p.dy ?? 0) > 0);
+    expect(stacked.length).toBeGreaterThan(0);
+    for (const p of stacked) {
+      // The only lifted block rests on the origin block's top (0.72).
+      expect(Math.hypot(p.dx, p.dz)).toBeLessThan(0.1);
+      expect(p.dy).toBeCloseTo(0.72, 2);
     }
   });
 });
