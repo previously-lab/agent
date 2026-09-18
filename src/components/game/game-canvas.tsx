@@ -185,7 +185,10 @@ import {
   clampToCorridor,
   clampToSpace,
   type CorridorEnd,
+  type SeamWall,
 } from "@/lib/game/clamps";
+import { compositionForRecipe, seamPartitionsFor } from "@/lib/game/room-modules";
+import { WORLD_SEED } from "@/lib/game/seed";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
 import {
@@ -332,6 +335,10 @@ const NO_ROOM_PLAN: RoomPlan = {
   stepZ: 0,
   columns: [],
 };
+
+/** Referentially stable empty seam list — no space active, or a room the
+ *  catalogue serves without a composition (every non-interior class). */
+const NO_ROOM_SEAMS: readonly SeamWall[] = [];
 
 /** Referentially stable empty door list — the current hotel's list when a
  *  strand hotel is missing from `timelines` (the strand lane off, or a
@@ -818,6 +825,11 @@ function resolveSpaceForDoor(
  * prop contract is unchanged). The plan is returned even when the room
  * grows no strand doors: plan-aware containment needs it regardless.
  *
+ * SEAM WALLS (§8): for a composed room, the jamb boxes of its interior
+ * partitions (room-modules.ts seamPartitionsFor over the SAME composition
+ * + scale factor + wall thickness the renderer draws) — the clamp's
+ * solid interior walls. Empty for every non-composed room.
+ *
  * Also resolves the room's ANCHOR TERMINAL (§13.1) through the renderer's
  * own inputs — same comp, same plan, same prop scale — so the proximity
  * prompt and the interaction measure the exact machine space.tsx drew
@@ -829,6 +841,7 @@ function roomGeometryForSpace(
 ): {
   plan: RoomPlan;
   doors: readonly RoomDoorPlacement[];
+  seams: readonly SeamWall[];
   terminal: TerminalAnchor;
 } {
   const { door, recipe, scaledRecipe, scale } = space;
@@ -837,6 +850,13 @@ function roomGeometryForSpace(
   const extent = scaledRecipe.size.extent;
   const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
   const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+  // The composition sizes the scaled recipe (scaledRecipeFor), so the
+  // same call with the space's frozen door count returns the composition
+  // the renderer built the room from — one derivation, both lanes.
+  const composition = compositionForRecipe(recipe, WORLD_SEED, count);
+  const seams: SeamWall[] = composition
+    ? seamPartitionsFor(composition, scaleFactor, wallThick).flatMap((sp) => sp.flanks)
+    : [];
   // The template declares the silhouette (v0.11-room-interiors §7):
   // selected through the renderer's OWN helper (space.tsx
   // roomTemplateForDoorCount) — one source for the measured selection, so
@@ -861,6 +881,7 @@ function roomGeometryForSpace(
     return {
       plan,
       doors: [],
+      seams,
       terminal: terminalForSpace(space, plan),
     };
   }
@@ -875,7 +896,7 @@ function roomGeometryForSpace(
     undefined,
     template ? doorAffordanceFor(template) : undefined,
   );
-  return { plan, doors, terminal: terminalForSpace(space, plan) };
+  return { plan, doors, seams, terminal: terminalForSpace(space, plan) };
 }
 
 /**
@@ -1406,6 +1427,7 @@ function GameLoop({
   roomDoors,
   roomDoorCountFor,
   roomPlan,
+  roomSeams,
   roomTerminal,
   lobbyAnchorLabel,
   departingRef,
@@ -1473,6 +1495,10 @@ function GameLoop({
    *  clamp's plan-aware containment; a placeholder rect when no space is
    *  active (the space clamp never runs then). */
   roomPlan: RoomPlan;
+  /** The active space's interior seam jamb walls (§8 — same derivation as
+   *  the renderer's partitions; empty for non-composed rooms): the clamp's
+   *  solid interior walls. */
+  roomSeams: readonly SeamWall[];
   /** The active room's anchor terminal (room-local frame — the same pure
    *  resolution space.tsx rendered; null when no space is active, then the
    *  lobby machine is the anchor candidate). */
@@ -1611,12 +1637,14 @@ function GameLoop({
       // 3. Clamps for wherever the player ended up. The space clamp boxes to
       // the SCALED footprint — the same dims the room was built at, so the
       // player can reach the far end of a colossal room and cannot walk
-      // through a miniature room's walls. It also receives the room's plan
-      // and placed strand doors (same pure derivation the renderer draws):
-      // the plan keeps the player out of an l-shape's abandoned quadrant
-      // (the plain box is only the plan's bounding box), and each door's
-      // passage relaxes the wall bound enough for the crossing trigger to
-      // fire — every other wall stays exactly as boxed.
+      // through a miniature room's walls. It also receives the room's plan,
+      // its placed strand doors, and its interior seam jamb walls (same pure
+      // derivation the renderer draws): the plan keeps the player out of an
+      // l-shape's abandoned quadrant (the plain box is only the plan's
+      // bounding box), each door's passage relaxes the wall bound enough for
+      // the crossing trigger to fire, and each seam partition's jambs are
+      // solid in both directions — the opening between them stays walkable
+      // because no wall box covers it.
       if (space !== null) {
         clampToSpace(
           p,
@@ -1625,6 +1653,7 @@ function GameLoop({
           space.scaledRecipe.size.extent,
           roomDoors,
           roomPlan,
+          roomSeams,
         );
       } else {
         clampToHotel(
@@ -2681,6 +2710,7 @@ export default function GameCanvas({
           roomDoors={activeRoomGeometry?.doors ?? []}
           roomDoorCountFor={roomDoorCountFor}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
+          roomSeams={activeRoomGeometry?.seams ?? NO_ROOM_SEAMS}
           roomTerminal={activeRoomGeometry?.terminal ?? null}
           lobbyAnchorLabel={hotelName}
           departingRef={departingRef}

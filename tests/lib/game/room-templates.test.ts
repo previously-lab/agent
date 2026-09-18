@@ -116,6 +116,25 @@ describe("template data (§7.2/§7.5)", () => {
     }
   });
 
+  it("§7.2: the niche wall never hosts doors (audit #7)", () => {
+    // The reading hall's niche used to share the far wall with its doors —
+    // the exact inversion of §7.2's example ("凹龛墙不开门"). In a rect
+    // room the far wall is the only north/south wall §10.5 lets doors use,
+    // so the niche yields its wall and takes a flank (the axial semantics
+    // already keep every flank door-free). Blanket rule, locked by test:
+    // no template hosts doors on a wall that carries its niche.
+    for (const t of ROOM_TEMPLATES) {
+      for (const f of t.features) {
+        if (f.kind !== "niche" || f.at === "floor") continue;
+        expect(t.doorWalls).not.toContain(f.at);
+      }
+    }
+    const hall = byId("reading-hall");
+    const niche = hall.features.find((f) => f.kind === "niche")!;
+    expect(niche.at).not.toBe("far");
+    expect(hall.doorWalls).toEqual(["far"]);
+  });
+
   it("declares the gallery as the high-capacity door absorber", () => {
     // The 20-door day: one whole wall built to carry many doors.
     const gallery = byId("gallery");

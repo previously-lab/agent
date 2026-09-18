@@ -21,6 +21,7 @@ import {
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
 import type { RoomTemplate } from "@/lib/game/room-templates";
+import { roomTemplateById } from "@/lib/game/room-templates";
 import {
   COLUMN_SHAFT_RADIUS,
   DOOR_GAP_HALF,
@@ -311,5 +312,54 @@ describe("buildRoomFeatures N3/N4 features (§3.2)", () => {
       { doors: [door] },
     );
     expect(f.rill).toBeNull();
+  });
+});
+
+describe("reading-hall niche after audit #7 (§7.2)", () => {
+  // The template data moved the niche off the far (door) wall onto the left
+  // flank. These lock the geometry: the niche builds on the flank when that
+  // wall is drawn full height, and forfeits (never clips) when the room's
+  // orientation cuts the flank to a sill.
+  const hall = roomTemplateById("reading-hall")!;
+  const plan = rectPlan(48, 32);
+  const walls = wallSegmentsFor(plan, THICK);
+  const runs = splitWallsForDoors(walls, []);
+  const roleOf = (i: number) => wallRoleFor(plan, walls[runs[i].source]);
+  const build = (wallHeights: number[]) =>
+    buildRoomFeatures({
+      template: hall,
+      plan,
+      walls,
+      wallRuns: runs,
+      wallHeights,
+      wallHeight: WALL_HEIGHT,
+      wallThick: THICK,
+      doors: [],
+      ground: "flat",
+      water: null,
+    });
+  const heightsFor = (sillRole: "left" | "right") =>
+    runs.map((_, i) => (roleOf(i) === sillRole ? WALL_SILL_HEIGHT : WALL_HEIGHT));
+
+  it("declares the niche off every door wall (data lock)", () => {
+    const niche = hall.features.find((f) => f.kind === "niche")!;
+    expect(niche.at).toBe("left");
+    expect(hall.doorWalls).not.toContain(niche.at);
+    expect(hall.doorWalls).toEqual(["far"]);
+  });
+
+  it("builds the flank niche when the left wall stands full height (south room)", () => {
+    // South-facing room: the RIGHT wall faces the camera (sill), the LEFT
+    // stands full height — the niche resolves on a left run.
+    const features = build(heightsFor("right"));
+    expect(features.niches).toHaveLength(1);
+    expect(roleOf(features.niches[0].run)).toBe("left");
+  });
+
+  it("forfeits the niche when the left wall is a cutaway sill (north room)", () => {
+    // North-facing room: the LEFT wall is the sill — a niche in a 1.1 m
+    // wall would be a hole in nothing, so the slot stays absent.
+    const features = build(heightsFor("left"));
+    expect(features.niches).toHaveLength(0);
   });
 });

@@ -61,6 +61,11 @@ export const CLEAR_HALF = 1.2;
 export const SPACE_WALL_CLEAR = 0.4;
 /** Min distance from the space's outer edges. */
 export const SPACE_EDGE_MARGIN = 1;
+/** Min distance from an interior seam partition's jamb (§8). A quarter
+ *  metre — half the perimeter's wall clear — so the nearest legal jamb,
+ *  ≥1 m off the door axis (module widths are even, so seams sit on
+ *  integer coordinates), never expands into the ±GAP_HALF doorway gap. */
+export const SEAM_WALL_CLEAR = 0.25;
 /** Lobby east wall clearance. */
 export const LOBBY_CLEAR = 0.6;
 /** Strand-door passage (v0.11 B.8/B.11): inside a placed door's along-wall
@@ -139,6 +144,21 @@ export function clampToCorridor(
 }
 
 /**
+ * An interior seam wall the space clamp treats as solid: an axis-aligned
+ * footprint box in the room's local plan frame. These are the JAMBS of the
+ * seamPartitionsFor derivation (room-modules.ts) — the header sits above
+ * human height (A4) and the opening between the jambs is deliberately part
+ * of no wall box, so it stays walkable by construction. The entrance
+ * doorway strip is already carved out of that derivation (门廊净空).
+ */
+export interface SeamWall {
+  x: number;
+  z: number;
+  sizeX: number;
+  sizeZ: number;
+}
+
+/**
  * Space clamp: the player is boxed to the recipe's rectangular footprint
  * (x within door.x ± (width/2 − edge margin), outward z from
  * wall + wall clear to wall + extent − edge margin, mirrored for south
@@ -180,6 +200,19 @@ export function clampToCorridor(
  * so a far-flung point merely aligned with a door is projected, never
  * dragged across the room into a doorway. rect and colonnade plans fill
  * their bounding box, so this step is a no-op for them (byte-identical).
+ *
+ * SEAM CONTAINMENT (v0.11-room-interiors §8). `seams` carries the jamb
+ * boxes of a composition's interior partitions (room-modules.ts
+ * seamPartitionsFor — the SAME derivation the renderer draws, entrance
+ * doorway strip already carved). Composition plans are always rect, so
+ * this runs after the plan step as the final pass: a position inside a
+ * jamb (expanded by a quarter-metre wall clear — small enough that the
+ * nearest legal jamb, ≥1 m off the door axis, never eats into the ±GAP_HALF
+ * doorway gap) is projected out along the axis of least penetration, the
+ * closed-form idiom of the plan step. The opening between the jambs is no
+ * wall at all, so it stays walkable by construction — and the header,
+ * above human height (A4), is not in `seams` to begin with. An empty
+ * `seams` (every non-composed room) leaves the clamp byte-identical.
  */
 export function clampToSpace(
   p: { x: number; z: number },
@@ -188,6 +221,7 @@ export function clampToSpace(
   extent: number,
   roomDoors: readonly RoomDoorPlacement[],
   plan: RoomPlan,
+  seams: readonly SeamWall[] = [],
 ): void {
   const rawX = p.x;
   const rawZ = p.z;
@@ -234,47 +268,87 @@ export function clampToSpace(
     }
   }
 
-  if (plan.id !== "l-shape") return;
-  // Plan containment (see the doc comment): the abandoned quadrant is
-  // (lz past the step) on the dropped side of the inner wall's margin
-  // line. The margin mirrors the box's own side-wall margin, so the kept
-  // leg holds the player exactly as far off its inner wall as off every
-  // outer wall; the step wall needs no margin — the band to its doors'
-  // crossing trigger (0.55 m from a plane only thick/2 past the step)
-  // must stay reachable, and the wall's near face lies on the step plane.
-  const kept = plan.lSide;
-  const innerMargin = width / 2 - xHalf;
-  const plx = (p.x - door.x) * dir;
-  const plz = (p.z - door.z) * dir;
-  const onDroppedSide = kept > 0 ? plx < innerMargin : plx > -innerMargin;
-  if (plz <= plan.stepZ || !onDroppedSide) return;
+  if (plan.id === "l-shape") {
+    // Plan containment (see the doc comment): the abandoned quadrant is
+    // (lz past the step) on the dropped side of the inner wall's margin
+    // line. The margin mirrors the box's own side-wall margin, so the kept
+    // leg holds the player exactly as far off its inner wall as off every
+    // outer wall; the step wall needs no margin — the band to its doors'
+    // crossing trigger (0.55 m from a plane only thick/2 past the step)
+    // must stay reachable, and the wall's near face lies on the step plane.
+    const kept = plan.lSide;
+    const innerMargin = width / 2 - xHalf;
+    const plx = (p.x - door.x) * dir;
+    const plz = (p.z - door.z) * dir;
+    const onDroppedSide = kept > 0 ? plx < innerMargin : plx > -innerMargin;
+    if (plz > plan.stepZ && onDroppedSide) {
+      // Door carve: a strand door's slab passage opens the forbidden zone.
+      const rawLx = (rawX - door.x) * dir;
+      const rawLz = (rawZ - door.z) * dir;
+      let carved = false;
+      for (const d of roomDoors) {
+        const along = -(plx - d.x) * d.nz + (plz - d.z) * d.nx;
+        if (Math.abs(along) >= GAP_HALF) continue;
+        const perp = (plx - d.x) * d.nx + (plz - d.z) * d.nz;
+        if (Math.abs(perp) > ROOM_DOOR_PASS_DEPTH + 1e-9) continue;
+        const rawPerp = (rawLx - d.x) * d.nx + (rawLz - d.z) * d.nz;
+        const held = clamp(rawPerp, -ROOM_DOOR_PASS_DEPTH, ROOM_DOOR_PASS_DEPTH);
+        if (d.nx !== 0) {
+          p.x = door.x + dir * (d.x + d.nx * held);
+        } else {
+          p.z = door.z + dir * (d.z + d.nz * held);
+        }
+        carved = true;
+        break;
+      }
 
-  // Door carve: a strand door's slab passage opens the forbidden zone.
-  const rawLx = (rawX - door.x) * dir;
-  const rawLz = (rawZ - door.z) * dir;
-  for (const d of roomDoors) {
-    const along = -(plx - d.x) * d.nz + (plz - d.z) * d.nx;
-    if (Math.abs(along) >= GAP_HALF) continue;
-    const perp = (plx - d.x) * d.nx + (plz - d.z) * d.nz;
-    if (Math.abs(perp) > ROOM_DOOR_PASS_DEPTH + 1e-9) continue;
-    const rawPerp = (rawLx - d.x) * d.nx + (rawLz - d.z) * d.nz;
-    const held = clamp(rawPerp, -ROOM_DOOR_PASS_DEPTH, ROOM_DOOR_PASS_DEPTH);
-    if (d.nx !== 0) {
-      p.x = door.x + dir * (d.x + d.nx * held);
-    } else {
-      p.z = door.z + dir * (d.z + d.nz * held);
+      if (!carved) {
+        // No doorway: project to the nearest walkable point. Both
+        // candidates are clamp fixed points, so the projection never
+        // oscillates; a tie takes the step wall.
+        const toStep = plz - plan.stepZ;
+        const toInner = kept > 0 ? innerMargin - plx : plx + innerMargin;
+        if (toStep <= toInner) {
+          p.z = door.z + dir * plan.stepZ;
+        } else {
+          p.x = door.x + dir * (kept * innerMargin);
+        }
+      }
     }
-    return;
   }
 
-  // No doorway: project to the nearest walkable point. Both candidates
-  // are clamp fixed points, so the projection never oscillates; a tie
-  // takes the step wall.
-  const toStep = plz - plan.stepZ;
-  const toInner = kept > 0 ? innerMargin - plx : plx + innerMargin;
-  if (toStep <= toInner) {
-    p.z = door.z + dir * plan.stepZ;
-  } else {
-    p.x = door.x + dir * (kept * innerMargin);
+  // SEAM CONTAINMENT: a composition's interior partition jambs are solid in
+  // both directions. The opening between the jambs is part of no wall box,
+  // so nothing here can close it. A position inside an expanded jamb is
+  // projected out along the axis of least penetration — the same closed
+  // form as the plan step; the result lies ON the expanded boundary, so
+  // the pass is idempotent. The clear is a quarter metre (scaled) — small
+  // enough that the nearest legal jamb (≥1 m off the door axis, module
+  // widths being even) never eats into the ±GAP_HALF doorway gap. Runs
+  // last so a position the box dragged across a jamb is ejected from it.
+  if (seams.length > 0) {
+    const clear = scaledMargin(SEAM_WALL_CLEAR, Math.min(width, extent) / 2);
+    const rawLx = (rawX - door.x) * dir;
+    const rawLz = (rawZ - door.z) * dir;
+    let lx = (p.x - door.x) * dir;
+    let lz = (p.z - door.z) * dir;
+    for (const s of seams) {
+      const hx = s.sizeX / 2 + clear;
+      const hz = s.sizeZ / 2 + clear;
+      const dx = lx - s.x;
+      const dz = lz - s.z;
+      if (Math.abs(dx) >= hx || Math.abs(dz) >= hz) continue;
+      const penX = hx - Math.abs(dx);
+      const penZ = hz - Math.abs(dz);
+      if (penX <= penZ) {
+        const side = Math.sign(dx) || Math.sign(rawLx - s.x) || 1;
+        lx = s.x + side * hx;
+      } else {
+        const side = Math.sign(dz) || Math.sign(rawLz - s.z) || 1;
+        lz = s.z + side * hz;
+      }
+    }
+    p.x = door.x + dir * lx;
+    p.z = door.z + dir * lz;
   }
 }

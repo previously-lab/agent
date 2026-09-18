@@ -16,11 +16,16 @@ import {
   GAP_HALF,
   LOBBY_CLEAR,
   ROOM_DOOR_PASS_DEPTH,
+  SEAM_WALL_CLEAR,
   SPACE_EDGE_MARGIN,
   WALL_Z,
   clampToCorridor,
   clampToSpace,
 } from "@/lib/game/clamps";
+import {
+  compositionForRecipe,
+  seamPartitionsFor,
+} from "@/lib/game/room-modules";
 import {
   crossedRoomDoor,
   hostableWallsFor,
@@ -866,5 +871,116 @@ describe("plan-aware containment", () => {
     const after = toLocal(NORTH_DOOR, p);
     expect(inForbiddenZone(plan, after.lx, after.lz)).toBe(false);
     expect(Math.abs(perpOf(farDoor, after))).toBeGreaterThan(ROOM_DOOR_PASS_DEPTH);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Seam walls (v0.11-room-interiors §8): interior partitions are solid, */
+/* their openings stay walkable.                                       */
+/* ------------------------------------------------------------------ */
+
+describe("clampToSpace — interior seam walls (§8)", () => {
+  // A composed interior room built through the SAME pure chain both
+  // consumers use (game-canvas roomGeometryForSpace): composition →
+  // seamPartitionsFor at human scale. The recipe view is the clamp's own
+  // input shape — only the fields the composition reads matter.
+  function composedSeams(sliceId: string) {
+    const recipe = {
+      sliceId,
+      worldClass: "interior",
+      archetype: "hotel-room",
+      width: 24,
+      size: { id: "m", extent: 32 },
+    } as unknown as Parameters<typeof compositionForRecipe>[0];
+    const comp = compositionForRecipe(recipe);
+    if (!comp) return null;
+    const parts = seamPartitionsFor(comp, 1, ROOM_WALL_THICKNESS);
+    return parts.length > 0 ? { comp, parts } : null;
+  }
+  // Deterministic probe: the first fixed slice whose room grows a seam
+  // partition with a jamb at least 2 m long (a midpoint test needs room
+  // to stand off the jamb ends).
+  const fixture = (() => {
+    for (let d = 1; d < 100; d++) {
+      const hit = composedSeams(`2026-11-${String(d).padStart(2, "0")}probe`);
+      if (!hit) continue;
+      const part = hit.parts.find((sp) =>
+        sp.flanks.some((f) => Math.max(f.sizeX, f.sizeZ) >= 2),
+      );
+      if (part) return { comp: hit.comp, part };
+    }
+    throw new Error("no composed fixture found");
+  })();
+  const jamb = fixture.part.flanks.find(
+    (f) => Math.max(f.sizeX, f.sizeZ) >= 2,
+  )!;
+  const horizontal = jamb.sizeX >= jamb.sizeZ;
+  const seams = fixture.part.flanks;
+  /** The jamb's interior (expanded by the clamp's SEAM_WALL_CLEAR). */
+  const insideJamb = (lx: number, lz: number) =>
+    Math.abs(lx - jamb.x) < jamb.sizeX / 2 + SEAM_WALL_CLEAR - 1e-9 &&
+    Math.abs(lz - jamb.z) < jamb.sizeZ / 2 + SEAM_WALL_CLEAR - 1e-9;
+
+  it("rejects a position at a seam wall's midpoint", () => {
+    const target = toWorld(NORTH_DOOR, jamb.x, jamb.z);
+    clampToSpace(target, NORTH_DOOR, 24, 16, [], RECT, seams);
+    const after = toLocal(NORTH_DOOR, target);
+    expect(insideJamb(after.lx, after.lz)).toBe(false);
+    // The player was actually pushed — the wall is solid now.
+    expect(after.lx !== jamb.x || after.lz !== jamb.z).toBe(true);
+  });
+
+  it("holds the jamb solid from BOTH sides", () => {
+    // Approach the jamb's midpoint from either face along its normal; each
+    // side must eject to its OWN side of the wall (least penetration).
+    for (const side of [1, -1] as const) {
+      const nx = horizontal ? 0 : side;
+      const nz = horizontal ? side : 0;
+      const probe = toWorld(
+        NORTH_DOOR,
+        jamb.x + nx * (jamb.sizeX / 2 - 0.05),
+        jamb.z + nz * (jamb.sizeZ / 2 - 0.05),
+      );
+      clampToSpace(probe, NORTH_DOOR, 24, 16, [], RECT, seams);
+      const after = toLocal(NORTH_DOOR, probe);
+      expect(insideJamb(after.lx, after.lz)).toBe(false);
+      const off = horizontal ? (after.lz - jamb.z) * side : (after.lx - jamb.x) * side;
+      expect(off).toBeGreaterThan(0);
+    }
+  });
+
+  it("accepts a position at the opening's center — the gap walks through", () => {
+    // The header spans the opening, so its center IS the opening's center.
+    const c = fixture.part.header;
+    const target = toWorld(NORTH_DOOR, c.x, c.z);
+    clampToSpace(target, NORTH_DOOR, 24, 16, [], RECT, seams);
+    const after = toLocal(NORTH_DOOR, target);
+    // Still inside the opening window (half-width 1.2 m at human scale),
+    // and inside no jamb.
+    const along = horizontal ? after.lx - c.x : after.lz - c.z;
+    expect(Math.abs(along)).toBeLessThan(1.2);
+    for (const f of seams) {
+      expect(
+        Math.abs(after.lx - f.x) < f.sizeX / 2 + SEAM_WALL_CLEAR - 1e-9 &&
+          Math.abs(after.lz - f.z) < f.sizeZ / 2 + SEAM_WALL_CLEAR - 1e-9,
+      ).toBe(false);
+    }
+  });
+
+  it("an empty seams list leaves the clamp byte-identical (non-composed rooms)", () => {
+    const p = { x: NORTH_DOOR.x + 3, z: WALL_Z + 8 };
+    const q = { ...p };
+    clampToSpace(p, NORTH_DOOR, 24, 16, [], RECT, []);
+    clampToSpace(q, NORTH_DOOR, 24, 16, [], RECT);
+    expect(p).toEqual(q);
+  });
+
+  it("the seam pass is idempotent — a clamped position clamps to itself", () => {
+    const target = toWorld(NORTH_DOOR, jamb.x, jamb.z);
+    clampToSpace(target, NORTH_DOOR, 24, 16, [], RECT, seams);
+    const once = { ...toLocal(NORTH_DOOR, target) };
+    clampToSpace(target, NORTH_DOOR, 24, 16, [], RECT, seams);
+    const twice = toLocal(NORTH_DOOR, target);
+    expect(twice).toEqual(once);
   });
 });

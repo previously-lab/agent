@@ -63,6 +63,12 @@ export const GAME_DEBUG = {
     openFields: number;
     /** The open fields in the scaled plan's coordinates (§8.2 随机区域). */
     fieldRects: readonly (readonly [number, number, number, number])[];
+    /** The interior seam partition JAMB walls (§8) in the scaled plan's
+     *  coordinates — [x, z, sizeX, sizeZ] boxes, header omitted (above
+     *  human height). Probes assert seam containment and walk the openings
+     *  without entering the scene graph; the same boxes the movement
+     *  clamp consumes (room-modules seamPartitionsFor). */
+    seamRects: readonly (readonly [number, number, number, number])[];
     placedDoors: readonly { role: string; row: number; along: number }[];
     furniture: number;
     /** Every furnished piece's XZ (hero first) — probes count the pieces

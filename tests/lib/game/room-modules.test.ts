@@ -29,13 +29,18 @@ import {
   compositionForRecipe,
   compositionTemplateFor,
   moduleKitsFor,
+  moduleSconceFor,
+  moduleWallForSegment,
   primaryModulesFor,
   rectDifference,
   resolveRoomComposition,
   roomModuleById,
+  seamPartitionsFor,
+  type ModuleEdge,
   type RoomComposition,
   type RoomModule,
 } from "@/lib/game/room-modules";
+import type { SpaceRecipe } from "@/lib/game/space-types";
 import { roomTemplateForDoorCount } from "@/components/game/space";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import { scaledRecipeFor } from "@/lib/game/room-plan";
@@ -698,5 +703,149 @@ describe("roomTemplateForDoorCount composition branch (the renderer's selection)
       // — and crucially, never a `comp:` one.
       expect(template?.id.startsWith("comp:") ?? false).toBe(false);
     }
+  });
+});
+
+describe("seamPartitionsFor — the shared derivation (renderer + clamp)", () => {
+  // The composition probe slices from the doorway-strip audit: row
+  // topologies can center a seam on the door axis (equal-width module
+  // pairs), and the cross's south arm can lay one along the entrance
+  // plane — either would plant a jamb in the doorway. The derivation must
+  // force such seams' openings over the strip and never emit a flank that
+  // crosses it.
+  function interiorRecipe(sliceId: string, archetype: string, tier: string, extent: number): SpaceRecipe {
+    return {
+      sliceId,
+      worldClass: "interior",
+      archetype: archetype as SpaceRecipe["archetype"],
+      width: 24,
+      size: { id: tier as SpaceRecipe["size"]["id"], extent },
+      palette: { id: "dusk" },
+      lightSeed: 1,
+    } as unknown as SpaceRecipe;
+  }
+
+  it("never lets a jamb flank overlap the entrance doorway gap", () => {
+    let checked = 0;
+    for (const archetype of ARCHETYPES) {
+      for (let d = 1; d <= 80; d++) {
+        const sliceId = `2026-10-${String(d).padStart(2, "0")}seam-audit`;
+        for (const [tier, extent] of [["s", 16], ["m", 32], ["l", 64], ["xl", 96]] as const) {
+          const comp = compositionForRecipe(interiorRecipe(sliceId, archetype, tier, extent));
+          if (!comp) continue;
+          for (const sf of [1, 0.25, 2.8]) {
+            const thick = ROOM_WALL_THICKNESS * Math.max(sf, 0.35);
+            for (const sp of seamPartitionsFor(comp, sf, thick)) {
+              checked++;
+              for (const f of sp.flanks) {
+                const inGap =
+                  f.z - f.sizeZ / 2 < thick &&
+                  f.z + f.sizeZ / 2 > -thick &&
+                  f.x - f.sizeX / 2 < 0.6 - 1e-9 &&
+                  f.x + f.sizeX / 2 > -(0.6 - 1e-9);
+                expect(inGap, `flank (${f.x},${f.z}) ${f.sizeX}x${f.sizeZ} in gap`).toBe(false);
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  it("keeps a center seam real — an open vestibule, no post on the axis", () => {
+    // foyer+study rows land the seam exactly on the door axis.
+    const comp = compositionForRecipe(
+      interiorRecipe("2026-10-17Thotel-room", "hotel-room", "m", 32),
+    );
+    expect(comp).not.toBeNull();
+    const parts = seamPartitionsFor(comp!, 1, ROOM_WALL_THICKNESS);
+    expect(parts.length).toBeGreaterThan(0);
+    const center = parts.find((p) => Math.abs(p.header.x) < 1e-6);
+    expect(center).toBeDefined();
+    for (const f of center!.flanks) {
+      // No flank stands within the doorway gap or its wall plane.
+      expect(
+        Math.abs(f.x) < 0.6 && f.z - f.sizeZ / 2 < ROOM_WALL_THICKNESS,
+      ).toBe(false);
+    }
+    // The opening hugs the entrance: the header (spanning the opening)
+    // starts within the entrance apron.
+    expect(center!.header.z + center!.header.sizeZ / 2).toBeLessThan(3);
+  });
+
+  it("is deterministic in (composition, scale) — same partitions, always (A6)", () => {
+    const comp = compositionForRecipe(
+      interiorRecipe("2026-10-17Thotel-room", "hotel-room", "m", 32),
+    )!;
+    const a = seamPartitionsFor(comp, 1, ROOM_WALL_THICKNESS);
+    const b = seamPartitionsFor(comp, 1, ROOM_WALL_THICKNESS);
+    expect(a).toEqual(b);
+  });
+});
+
+describe("moduleWallForSegment / moduleSconceFor (§8.2 registers)", () => {
+  function foyerStudy() {
+    // foyer|study at the door axis; foyer west, study east.
+    const comp = compositionForRecipe(
+      {
+        sliceId: "2026-10-17Thotel-room",
+        worldClass: "interior",
+        archetype: "hotel-room",
+        width: 24,
+        size: { id: "m", extent: 32 },
+        palette: { id: "dusk" },
+        lightSeed: 1,
+      } as unknown as SpaceRecipe,
+    )!;
+    return comp;
+  }
+
+  it("attributes each perimeter span to its module's wall role", () => {
+    const comp = foyerStudy();
+    const thick = ROOM_WALL_THICKNESS;
+    const halfW = comp.width / 2;
+    // West flank wall: the foyer's west edge runs the foyer's 8 m depth.
+    expect(
+      moduleWallForSegment(comp, { x: -halfW + thick / 2, z: 4, sizeX: thick, sizeZ: 8 }, 1),
+    ).toBe("panelling"); // foyer.wall
+    // East flank wall over the study's span.
+    expect(
+      moduleWallForSegment(comp, { x: halfW - thick / 2, z: 5, sizeX: thick, sizeZ: 10 }, 1),
+    ).toBe("shelf"); // study.wall
+    // The entrance wall belongs to no module.
+    expect(
+      moduleWallForSegment(comp, { x: -8, z: thick / 2, sizeX: 4, sizeZ: thick }, 1),
+    ).toBeNull();
+  });
+
+  it("moduleSconceFor picks a door-free, sill-free wall in the module's register", () => {
+    const comp = foyerStudy();
+    // foyer|study row: the foyer exposes n + its WEST flank (its east edge
+    // IS the seam); the study exposes n + its EAST flank. A module never
+    // hangs a sconce on a seam edge — there is no wall face there.
+    const foyer = comp.modules.find((p) => p.module.id === "foyer")!;
+    const study = comp.modules.find((p) => p.module.id === "study")!;
+    // A blocked north edge falls through to the flanks (candidates n → e →
+    // w, skipping edges the module does not expose).
+    const blocked = new Set<ModuleEdge>(["n"]);
+    const foyerAnchor = moduleSconceFor(foyer, comp, 1, ROOM_WALL_THICKNESS, [], blocked);
+    expect(foyerAnchor).not.toBeNull();
+    expect(foyerAnchor!.register).toBe("quiet"); // the foyer's register
+    expect(foyerAnchor!.nx).toBe(1); // the west wall's inward normal
+    const studyAnchor = moduleSconceFor(study, comp, 1, ROOM_WALL_THICKNESS, [], blocked);
+    expect(studyAnchor).not.toBeNull();
+    expect(studyAnchor!.register).toBe("task"); // the study's register
+    expect(studyAnchor!.nx).toBe(-1); // the east wall's inward normal
+    // A door planted inside a flank's clear disqualifies it — the foyer's
+    // only other edge is the seam, so it grows NO sconce rather than a
+    // sourceless light (B.13).
+    const doorAt = { x: foyerAnchor!.x + 0.4, z: foyerAnchor!.z };
+    expect(
+      moduleSconceFor(foyer, comp, 1, ROOM_WALL_THICKNESS, [doorAt], blocked),
+    ).toBeNull();
+    // Every edge blocked or door-bound → no sconce either.
+    const allBlocked = new Set<ModuleEdge>(["n", "e", "w"]);
+    expect(moduleSconceFor(study, comp, 1, ROOM_WALL_THICKNESS, [], allBlocked)).toBeNull();
   });
 });

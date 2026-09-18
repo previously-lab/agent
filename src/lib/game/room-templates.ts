@@ -134,10 +134,15 @@ export interface RoomTemplate {
 
 export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
   {
-    // 阅览厅 — shelf runs on three walls, a long central table, a niche at
-    // the far end. §10.5 轴向语义: doors live on the far (north/south)
-    // wall, flanking the niche (NICHE_DOOR_CLEAR keeps their margin); the
-    // side shelf runs never break.
+    // 阅览厅 — shelf runs on three walls, a long central table, a niche on
+    // a flank wall. §7.2: the niche wall NEVER hosts doors — and in a rect
+    // room the far wall is the only north/south wall §10.5 lets doors use,
+    // so the niche yields its wall to the doors and takes a flank instead
+    // (the audit's #7: doors and niche no longer share a wall). The flank
+    // walls never carry doors by the axial semantics, so the niche is
+    // structurally undisturbed; buildRoomFeatures still gates it to
+    // full-height runs (a cutaway sill gets none), and the window's host
+    // pool steps around it (space.tsx buildRoomFixtures).
     id: "reading-hall",
     label: "阅览厅",
     worldClasses: ["interior"],
@@ -147,7 +152,7 @@ export const ROOM_TEMPLATES: readonly RoomTemplate[] = [
     doorCapacity: 4,
     doorWalls: ["far"],
     features: [
-      { kind: "niche", at: "far", span: [0.4, 0.6] },
+      { kind: "niche", at: "left", span: [0.4, 0.6] },
       { kind: "pilaster-rhythm", at: "left" },
       { kind: "pilaster-rhythm", at: "right" },
     ],

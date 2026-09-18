@@ -789,3 +789,24 @@ export const LIGHT_REGISTER_WEIGHTS: readonly {
   { id: "daylight", weight: 0.25 },
   { id: "ember", weight: 0.1 },
 ];
+
+/** Module light registers → sconce fixture (v0.11-room-interiors §8.2):
+ *  each composed-room module carries its own register — HOW it is lit,
+ *  not with what colour — and the renderer grows one small wall sconce
+ *  per module in that register, so neighbouring modules read as
+ *  differently lit (a warm task pool over the desk, a cool wash over the
+ *  shelf walls, pale daylight, the pool deck's bounced aqua, a dim quiet
+ *  corner). Colours come from the same family as LIGHT_REGISTER_TINTS
+ *  (pool-bounce is the water's own bounce — pale aqua, never saturated);
+ *  intensity is the sconce's point-light level at human scale (×scale² in
+ *  the renderer, the lamp's law), pool the additive floor quad's peak. */
+export const MODULE_LIGHT_FIXTURES: Record<
+  string,
+  { color: string; intensity: number; pool: number }
+> = {
+  task: { color: "#ffd9a8", intensity: 4.5, pool: 0.34 },
+  wash: { color: "#cfe2ff", intensity: 4.5, pool: 0.3 },
+  daylight: { color: "#fff4dc", intensity: 5.5, pool: 0.36 },
+  "pool-bounce": { color: "#bfeadb", intensity: 4.5, pool: 0.32 },
+  quiet: { color: "#e6d3b3", intensity: 2.2, pool: 0.22 },
+};

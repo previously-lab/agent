@@ -77,6 +77,7 @@ import type {
   TemplateZone,
 } from "./room-templates";
 import { createRng, hashString, WORLD_SEED } from "./seed";
+import type { WallSegment } from "./room-plan";
 import type { ArchetypeId, SpaceRecipe, WorldClass } from "./space-types";
 
 /* ------------------------------------------------------------------ */
@@ -1109,6 +1110,234 @@ export function compositionForRecipe(
     worldSeed,
     TIER_MODULE_COUNTS[recipe.size.id],
   );
+}
+
+/* ------------------------------------------------------------------ */
+/* Seam partitions (§8) — ONE derivation, two consumers.               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * One interior seam as built geometry: the two full-height JAMB boxes and
+ * the HEADER over the opening. Same footprint shape as the perimeter's
+ * WallSegment (the renderer supplies the height); `aId` is the seam's
+ * a-side module — the tint owner for the per-module wall register (§8.2).
+ */
+export interface SeamPartition {
+  flanks: WallSegment[];
+  header: WallSegment;
+  aId: string;
+}
+
+/**
+ * The interior seam partitions of a composition — the walls BETWEEN the
+ * joined modules — in the room's local plan frame (doorway at (0,0), +z
+ * outward), SCALED by `scaleFactor` at thickness `wallThick`. THE single
+ * derivation both consumers build from, so the clamp can never disagree
+ * with the drawn wall:
+ *
+ *  - space.tsx renders each partition (jambs + header, opaque, full
+ *    height) and feeds the jamb runs to the kit obstacle channel;
+ *  - clamps.ts contains the player to the JAMBS only — the header sits
+ *    above human height (A4) and the opening between the jambs must stay
+ *    walkable, so neither belongs to any solid box.
+ *
+ * A seam too short to hold a walkable opening at this scale (a miniature
+ * dollhouse room) is left open instead of growing an unenterable doorway.
+ */
+export function seamPartitionsFor(
+  comp: RoomComposition,
+  scaleFactor: number,
+  wallThick: number,
+): SeamPartition[] {
+  const out: SeamPartition[] = [];
+  const jamb = Math.max(0.3, wallThick);
+  // The entrance doorway gap half — clamps.ts's GAP_HALF (0.6), the one
+  // doorway constant, restated here so this module stays cycle-free.
+  const DOOR_GAP_HALF = 0.6;
+  for (const seam of comp.seams) {
+    const horizontal = Math.abs(seam.line.z0 - seam.line.z1) < 1e-9;
+    const sx0 = seam.line.x0 * scaleFactor;
+    const sz0 = seam.line.z0 * scaleFactor;
+    const sx1 = seam.line.x1 * scaleFactor;
+    const sz1 = seam.line.z1 * scaleFactor;
+    const len = horizontal ? sx1 - sx0 : sz1 - sz0;
+    const openW = Math.min(seam.opening.width, len - jamb * 2);
+    if (openW < 1.2) continue;
+    let at = Math.min(
+      Math.max(seam.opening.at * scaleFactor, jamb + openW / 2),
+      len - jamb - openW / 2,
+    );
+    // ENTRANCE DOORWAY STRIP (门廊净空): no partition wall may cross the
+    // doorway gap. A row of equal-width modules can center a vertical
+    // seam on the door axis, and the cross's south arm can lay a
+    // horizontal one along the entrance plane — either would plant a jamb
+    // in the doorway. Such a seam's opening is FORCED over the strip: a
+    // vertical seam opens right at the entrance (the two modules share an
+    // open vestibule there, the partition starts past the apron), a
+    // horizontal one's opening centers on the door axis. Any flank still
+    // overlapping the strip after the forced opening (only possible when
+    // the clamped opening could not reach) is dropped rather than allowed
+    // to block the gap. Pure geometry override — the composition's seeded
+    // data and rng streams are untouched.
+    const onEntrance = sz0 <= 1e-9;
+    const crossesStrip = onEntrance && (
+      horizontal
+        ? sx0 < DOOR_GAP_HALF && sx1 > -DOOR_GAP_HALF
+        : Math.abs(sx0) < DOOR_GAP_HALF + wallThick
+    );
+    if (crossesStrip) {
+      at = horizontal
+        ? Math.min(Math.max(-sx0, jamb + openW / 2), len - jamb - openW / 2)
+        : Math.min(Math.max(openW / 2 + 0.2, jamb + openW / 2), len - jamb - openW / 2);
+    }
+    const o0 = at - openW / 2;
+    const o1 = at + openW / 2;
+    const flank = (a: number, b: number): WallSegment =>
+      horizontal
+        ? { x: sx0 + (a + b) / 2, z: sz0, sizeX: b - a, sizeZ: wallThick, entrance: false }
+        : { x: sx0, z: sz0 + (a + b) / 2, sizeX: wallThick, sizeZ: b - a, entrance: false };
+    const stripLo = -(DOOR_GAP_HALF + wallThick);
+    const stripHi = DOOR_GAP_HALF + wallThick;
+    const overlapsStrip = (s: WallSegment) =>
+      s.z - s.sizeZ / 2 < wallThick &&
+      s.z + s.sizeZ / 2 > -wallThick &&
+      s.x - s.sizeX / 2 < stripHi &&
+      s.x + s.sizeX / 2 > stripLo;
+    const flanks = [flank(-wallThick, o0), flank(o1, len + wallThick)].filter(
+      (s) => Math.max(s.sizeX, s.sizeZ) > 0.05 && !(crossesStrip && overlapsStrip(s)),
+    );
+    const header: WallSegment = horizontal
+      ? { x: sx0 + at, z: sz0, sizeX: openW + wallThick, sizeZ: wallThick, entrance: false }
+      : { x: sx0, z: sz0 + at, sizeX: wallThick, sizeZ: openW + wallThick, entrance: false };
+    out.push({ flanks, header, aId: seam.aId });
+  }
+  return out;
+}
+
+/** The module whose exposed edge one PERIMETER segment of a composed room
+ *  sits on — the source of that span's wall-material role (§8.2's
+ *  per-module wall register). The composition's room is always a rect (x
+ *  centered on the doorway, z ∈ [0, extent]), so the segment's edge is
+ *  classified by its outer face. Returns null for the entrance wall, a
+ *  span no single module covers (two modules share the edge), or a
+ *  segment off the perimeter — the caller keeps the room default there.
+ *  Pure. */
+export function moduleWallForSegment(
+  comp: RoomComposition,
+  seg: { x: number; z: number; sizeX: number; sizeZ: number },
+  scaleFactor: number,
+): WallRoleM | null {
+  const eps = 1e-6;
+  const halfW = (comp.width / 2) * scaleFactor;
+  const extent = comp.extent * scaleFactor;
+  const horizontal = seg.sizeZ <= seg.sizeX;
+  let edge: ModuleEdge;
+  let lo: number;
+  let hi: number;
+  if (horizontal) {
+    const outerZ = seg.z + seg.sizeZ / 2;
+    if (Math.abs(outerZ - extent) < eps) edge = "n";
+    else if (Math.abs(outerZ) < eps) return null; // the entrance wall
+    else return null;
+    lo = seg.x - seg.sizeX / 2;
+    hi = seg.x + seg.sizeX / 2;
+  } else {
+    const outerX = seg.x + (seg.x < 0 ? -seg.sizeX / 2 : seg.sizeX / 2);
+    if (Math.abs(outerX + halfW) < eps) edge = "w";
+    else if (Math.abs(outerX - halfW) < eps) edge = "e";
+    else return null;
+    lo = seg.z - seg.sizeZ / 2;
+    hi = seg.z + seg.sizeZ / 2;
+  }
+  const w = comp.width * scaleFactor;
+  const found: WallRoleM[] = [];
+  for (const placed of comp.modules) {
+    if (!placed.exposed[edge]) continue;
+    const r = placed.rect;
+    const rLo = (edge === "w" || edge === "e" ? r.z0 : r.x0) * scaleFactor;
+    const rHi = (edge === "w" || edge === "e" ? r.z1 : r.x1) * scaleFactor;
+    // The module's span along the wall must COVER the whole segment.
+    if (rLo > lo + eps || rHi < hi - eps) continue;
+    // And the segment must actually sit on the module's own edge line
+    // (the exposure flag says the edge is on the perimeter; this pins
+    // which perimeter line that is).
+    if (edge === "n" && Math.abs(r.z1 * scaleFactor - extent) > eps) continue;
+    if (edge === "w" && Math.abs(r.x0 * scaleFactor + halfW) > eps) continue;
+    if (edge === "e" && Math.abs(r.x1 * scaleFactor - halfW) > eps) continue;
+    found.push(placed.module.wall);
+  }
+  return found.length === 1 ? found[0] : null;
+}
+
+/** A module register sconce's wall anchor: the point on the wall's inner
+ *  face (plan-local, scaled) and the wall's inward normal. */
+export interface ModuleSconceAnchor {
+  x: number;
+  z: number;
+  nx: number;
+  nz: number;
+  register: LightRegister;
+}
+
+/** How far a sconce's center must sit from a strand door's slab (m,
+ *  scaled): the door's gap half plus a hand's margin — a sconce never
+ *  shares its wall with a doorway. */
+const SCONE_DOOR_CLEAR = 1.7;
+
+/**
+ * Where one module's register sconce hangs: the midpoint of the module's
+ * first exposed edge — north, then east, then west (never the entrance
+ * wall) — that is neither a cutaway sill (`blockedEdges`, no wall face at
+ * fixture height there) nor within SCONE_DOOR_CLEAR of a strand door's
+ * slab along the wall. Null when every candidate is disqualified: the
+ * register then shows only through the module's floor tint, never through
+ * a floating light (B.13 — no sourceless light). Pure. */
+export function moduleSconceFor(
+  placed: PlacedModule,
+  comp: RoomComposition,
+  scaleFactor: number,
+  wallThick: number,
+  doors: readonly { x: number; z: number }[],
+  blockedEdges: ReadonlySet<ModuleEdge>,
+): ModuleSconceAnchor | null {
+  const r = placed.rect;
+  const candidates: { edge: ModuleEdge; x: number; z: number; nx: number; nz: number }[] = [
+    {
+      edge: "n",
+      x: ((r.x0 + r.x1) / 2) * scaleFactor,
+      z: r.z1 * scaleFactor - wallThick - 0.08,
+      nx: 0,
+      nz: -1,
+    },
+    {
+      edge: "e",
+      x: r.x1 * scaleFactor - wallThick - 0.08,
+      z: ((r.z0 + r.z1) / 2) * scaleFactor,
+      nx: -1,
+      nz: 0,
+    },
+    {
+      edge: "w",
+      x: r.x0 * scaleFactor + wallThick + 0.08,
+      z: ((r.z0 + r.z1) / 2) * scaleFactor,
+      nx: 1,
+      nz: 0,
+    },
+  ];
+  for (const c of candidates) {
+    if (!placed.exposed[c.edge]) continue;
+    if (blockedEdges.has(c.edge)) continue;
+    const tx = -c.nz;
+    const tz = c.nx;
+    const conflicts = doors.some((d) => {
+      const along = (d.x - c.x) * tx + (d.z - c.z) * tz;
+      const perp = (d.x - c.x) * c.nx + (d.z - c.z) * c.nz;
+      return Math.abs(along) < SCONE_DOOR_CLEAR && Math.abs(perp) < 1.2;
+    });
+    if (conflicts) continue;
+    return { x: c.x, z: c.z, nx: c.nx, nz: c.nz, register: placed.module.light };
+  }
+  return null;
 }
 
 /** Fold a successful placement into the resolved composition: shift to

@@ -151,6 +151,13 @@ import {
 import {
   compositionForRecipe,
   compositionTemplateFor,
+  moduleSconceFor,
+  moduleWallForSegment,
+  roomModuleById,
+  seamPartitionsFor,
+  type ModuleEdge,
+  type ModuleSconceAnchor,
+  type WallRoleM,
 } from "@/lib/game/room-modules";
 import type { SplitWall } from "@/lib/game/room-doors";
 import {
@@ -261,6 +268,7 @@ import {
   MEZZANINE_MIN_RUN,
   MEZZANINE_PARAPET,
   MEZZANINE_SLAB,
+  MODULE_LIGHT_FIXTURES,
   NICHE_DOOR_CLEAR,
   NICHE_HEIGHT,
   NICHE_MAX_DEPTH,
@@ -5470,16 +5478,41 @@ interface DuckSeed {
   heading: number;
 }
 
+/** Swim-ripple gating: metres of drift per duck between wave impulses —
+ *  the wading loop's ~0.5 m step discipline, tightened for the ducks'
+ *  gentler press. Displacement-gated, never per-frame. */
+const SWIM_RIPPLE_EVERY = 0.35;
+
 /** A pool full of rubber ducks: instanced body/head/beak, per-duck bob
  *  (phase-offset sine) and a very slow circular drift. Cute by decree:
- *  round body, big head, orange beak. */
-function Ducks({ ducks }: { ducks: DuckSeed[] }) {
+ *  round body, big head, orange beak. The drift presses the surface: each
+ *  duck's travel injects a small impulse into the pool's wave driver
+ *  (§12.2 — the wading discipline, displacement-gated per duck), so the
+ *  water carries a gentle ambient shimmer instead of sitting painted. */
+function Ducks({
+  ducks,
+  driver,
+  rect,
+}: {
+  ducks: DuckSeed[];
+  /** The pool's wave driver (SpaceScene owns it) — swim ripples inject
+   *  here. Null when the room grew no wave field. */
+  driver: WaveDriver | null;
+  /** The driver's water rectangle, room-local — drift positions inject
+   *  directly in this frame. */
+  rect: { cx: number; cz: number; halfX: number; halfZ: number } | null;
+}) {
   const bodyRef = useRef<THREE.InstancedMesh>(null);
   const headRef = useRef<THREE.InstancedMesh>(null);
   const beakRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
   const m4 = useMemo(() => new THREE.Matrix4(), []);
   const count = ducks.length;
+  // Per-duck displacement accumulators — one impulse per SWIM_RIPPLE_EVERY
+  // metres of travel, never per frame (the wading loop's discipline). The
+  // arrays resize with the flock; positions seed on first sight so the
+  // initial splat doesn't fire.
+  const swimRef = useRef({ init: false, px: [] as number[], pz: [] as number[], acc: [] as number[] });
 
   // The beak cone points +Y by default; bake the forward-pointing rotation
   // into the shared geometry once so instance matrices stay translations.
@@ -5495,6 +5528,13 @@ function Ducks({ ducks }: { ducks: DuckSeed[] }) {
     const beak = beakRef.current;
     if (!body || !head || !beak) return;
     const surfaceY = WATER_Y + Math.sin(t * 0.6) * 0.02;
+    const swim = swimRef.current;
+    if (swim.px.length !== count) {
+      swim.init = false;
+      swim.px = new Array(count).fill(0);
+      swim.pz = new Array(count).fill(0);
+      swim.acc = new Array(count).fill(0);
+    }
     ducks.forEach((d, i) => {
       const s = d.scale;
       const x = d.x + Math.sin(t * 0.05 + d.phase) * 0.4;
@@ -5510,7 +5550,30 @@ function Ducks({ ducks }: { ducks: DuckSeed[] }) {
       head.setMatrixAt(i, m4.premultiply(dummy.matrix));
       m4.makeTranslation(0, 0.17 * s, 0.36 * s);
       beak.setMatrixAt(i, m4.premultiply(dummy.matrix));
+
+      // Swim ripples: accumulate this duck's drift, press the surface every
+      // ~0.35 m — small, low, and rect-guarded (a drifting duck never
+      // splats outside the water it floats on).
+      if (driver && rect) {
+        if (swim.init) {
+          swim.acc[i] += Math.hypot(x - swim.px[i], z - swim.pz[i]);
+          if (swim.acc[i] >= SWIM_RIPPLE_EVERY) {
+            if (waveRectContains(x, z, rect)) {
+              driver.addImpulse(
+                x,
+                z,
+                Math.max(-0.05, -0.028 * s),
+                0.12,
+              );
+            }
+            swim.acc[i] = 0;
+          }
+        }
+        swim.px[i] = x;
+        swim.pz[i] = z;
+      }
     });
+    swim.init = true;
     body.instanceMatrix.needsUpdate = true;
     head.instanceMatrix.needsUpdate = true;
     beak.instanceMatrix.needsUpdate = true;
@@ -6501,6 +6564,12 @@ function buildRoomFixtures(
   propScale: number,
   wallScale: number,
   hasClerestory: boolean,
+  /** Source wall indices whose run hosts a niche — the window never hangs
+   *  there (the niche rebuilds its run into a recessed alcove; a view
+   *  plane on the same run would z-fight the alcove back). §7.2 moved the
+   *  reading hall's niche onto a flank wall, exactly where the window
+   *  prefers to hang, so the pool filter is what keeps the two apart. */
+  nicheSources: ReadonlySet<number>,
 ): RoomFixtures {
   const rng = createRng(hashString(`${WORLD_SEED}:${recipe.sliceId}:fixtures`));
   const { extent } = scaled.size;
@@ -6536,7 +6605,12 @@ function buildRoomFixtures(
   const endPad = 1;
   const fits = (w: WallSegment) =>
     Math.max(w.sizeX, w.sizeZ) >= (winHalf + endPad) * 2;
-  const fullHeight = walls.filter((w) => !w.entrance && !wallFacesCamera(plan, w, dir));
+  const fullHeight = walls.filter(
+    (w) =>
+      !w.entrance &&
+      !wallFacesCamera(plan, w, dir) &&
+      !nicheSources.has(walls.indexOf(w)),
+  );
   const fitsFull = fullHeight.filter(fits);
   // AXIAL SEMANTICS (§10.5): the east/west (vertical) walls belong to
   // windows and light — the strand doors took the north/south
@@ -6714,6 +6788,70 @@ function RoomLamp({
           color={LAMP_COLOR}
           transparent
           opacity={LAMP_POOL_OPACITY * boost}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * One module's light-register sconce (§8.2): a small backplate and an
+ * emissive dome on the module's own wall, the register's real point
+ * light, and an additive floor pool beneath — the corridor sconce idiom
+ * scaled to a module, the findable source for that module's light mood
+ * (warm task pool, cool shelf wash, pale daylight, the pool deck's aqua
+ * bounce, a dim quiet corner). The register owns HOW the module is lit;
+ * the palette never enters here. When every candidate wall is a cutaway
+ * sill or door-bound the module grows no sconce (see moduleSconceFor) —
+ * light never floats without a source (B.13).
+ */
+function ModuleSconce({
+  anchor,
+  wallScale,
+}: {
+  anchor: ModuleSconceAnchor;
+  wallScale: number;
+}) {
+  const fixture = MODULE_LIGHT_FIXTURES[anchor.register] ?? MODULE_LIGHT_FIXTURES.quiet;
+  const y = 2.05 * wallScale;
+  // The group turns local +z onto the wall's inward normal: the plate sits
+  // on the face, the dome proud of it, the light and pool inside the room.
+  const rotY = Math.atan2(anchor.nx, anchor.nz);
+  return (
+    <group position={[anchor.x, 0, anchor.z]} rotation={[0, rotY, 0]}>
+      <mesh position={[0, y, 0.02]} castShadow>
+        <boxGeometry args={[0.22 * wallScale, 0.34 * wallScale, 0.06]} />
+        <meshStandardMaterial color="#3a3a3e" roughness={0.6} metalness={0.3} flatShading />
+      </mesh>
+      <mesh position={[0, y + 0.06 * wallScale, 0.09]}>
+        <sphereGeometry args={[0.085 * wallScale, 8, 6]} />
+        <meshStandardMaterial
+          color="#000000"
+          emissive={fixture.color}
+          emissiveIntensity={2.0}
+          roughness={1}
+        />
+      </mesh>
+      <pointLight
+        position={[0, y, 0.4 * wallScale]}
+        color={fixture.color}
+        intensity={fixture.intensity * wallScale * wallScale}
+        distance={8 * wallScale}
+        decay={2}
+      />
+      {/* The register's pool on the module's floor. */}
+      <mesh
+        position={[0, 0.036, 0.95 * wallScale]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[2.4 * wallScale, 2.4 * wallScale]} />
+        <meshBasicMaterial
+          map={sharedRadialGlowTexture()}
+          color={fixture.color}
+          transparent
+          opacity={fixture.pool}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
         />
@@ -7562,47 +7700,24 @@ export function SpaceScene({
 
   // INTERIOR SEAMS (§8): the partition walls between a composition's
   // joined modules — the visible evidence the room is a composition, not
-  // one floor. Each consented seam draws a real-thickness wall broken
-  // around its seeded opening: two jambs at full height plus a header
-  // above (openings stay human-height, A4 — the doorway never scales).
-  // Flank ends run wallThick PAST the seam line's ends so the T-junctions
-  // with perimeter walls and crossing seams never show a gap. A seam too
-  // short to hold a walkable opening at this room's scale (miniature
-  // dollhouse rooms) is left open instead of growing an unenterable
-  // doorway — the modules read as one merged space there.
-  const seamPartitions = useMemo(() => {
-    const out: { flanks: WallSegment[]; header: WallSegment }[] = [];
-    if (!roomComposition) return out;
-    const jamb = Math.max(0.3, wallThick);
-    for (const seam of roomComposition.seams) {
-      const horizontal = Math.abs(seam.line.z0 - seam.line.z1) < 1e-9;
-      const sx0 = seam.line.x0 * scaleFactor;
-      const sz0 = seam.line.z0 * scaleFactor;
-      const sx1 = seam.line.x1 * scaleFactor;
-      const sz1 = seam.line.z1 * scaleFactor;
-      const len = horizontal ? sx1 - sx0 : sz1 - sz0;
-      const openW = Math.min(seam.opening.width, len - jamb * 2);
-      if (openW < 1.2) continue;
-      const at = Math.min(
-        Math.max(seam.opening.at * scaleFactor, jamb + openW / 2),
-        len - jamb - openW / 2,
-      );
-      const o0 = at - openW / 2;
-      const o1 = at + openW / 2;
-      const flank = (a: number, b: number): WallSegment =>
-        horizontal
-          ? { x: sx0 + (a + b) / 2, z: sz0, sizeX: b - a, sizeZ: wallThick, entrance: false }
-          : { x: sx0, z: sz0 + (a + b) / 2, sizeX: wallThick, sizeZ: b - a, entrance: false };
-      const flanks = [flank(-wallThick, o0), flank(o1, len + wallThick)].filter(
-        (s) => Math.max(s.sizeX, s.sizeZ) > 0.05,
-      );
-      const header: WallSegment = horizontal
-        ? { x: sx0 + at, z: sz0, sizeX: openW + wallThick, sizeZ: wallThick, entrance: false }
-        : { x: sx0, z: sz0 + at, sizeX: wallThick, sizeZ: openW + wallThick, entrance: false };
-      out.push({ flanks, header });
-    }
-    return out;
-  }, [roomComposition, scaleFactor, wallThick]);
+  // one floor. Built by the ONE shared derivation clamps.ts also consumes
+  // (room-modules.ts seamPartitionsFor): each consented seam draws a
+  // real-thickness wall broken around its walkable opening — two jambs at
+  // full height plus a header above (openings stay human-height, A4 — the
+  // doorway never scales). Flank ends run wallThick PAST the seam line's
+  // ends so the T-junctions with perimeter walls and crossing seams never
+  // show a gap; the entrance doorway strip is carved at the same
+  // derivation (门廊净空 — a seam on the door axis opens into a shared
+  // vestibule instead of planting a post in the doorway). A seam too short
+  // to hold a walkable opening at this room's scale (miniature dollhouse
+  // rooms) is left open instead of growing an unenterable doorway.
+  const seamPartitions = useMemo(
+    () =>
+      roomComposition
+        ? seamPartitionsFor(roomComposition, scaleFactor, wallThick)
+        : [],
+    [roomComposition, scaleFactor, wallThick],
+  );
 
   // Kit clearance (§8): the seam partitions are real walls — furniture
   // must not phase through them. Obstacle discs along the jamb runs (the
@@ -7627,6 +7742,43 @@ export function SpaceScene({
     }
     return discs;
   }, [seamPartitions]);
+
+  // MODULE LIGHT REGISTERS (§8.2): one sconce per module in the module's
+  // own register (task/wash/daylight/pool-bounce/quiet), each a findable
+  // source on the module's wall (B.13 — the register owns HOW the module
+  // is lit, and the light is never sourceless). Cutaway sills (camera-
+  // facing walls, no face at fixture height) and door-bound candidate
+  // edges disqualify a wall; a module whose every candidate is
+  // disqualified grows no sconce — its register still shows in the floor
+  // tint, and no floating light appears.
+  const moduleSconces = useMemo(() => {
+    if (!roomComposition) return [];
+    const blocked = new Set<ModuleEdge>();
+    for (const w of walls) {
+      if (w.entrance || !wallFacesCamera(plan, w, dir)) continue;
+      const horizontal = w.sizeZ <= w.sizeX;
+      if (horizontal) {
+        if (Math.abs(w.z + w.sizeZ / 2 - extent) < 1e-6) blocked.add("n");
+      } else if (Math.abs(w.x - w.sizeX / 2 + width / 2) < 1e-6) {
+        blocked.add("w");
+      } else if (Math.abs(w.x + w.sizeX / 2 - width / 2) < 1e-6) {
+        blocked.add("e");
+      }
+    }
+    const anchors: ModuleSconceAnchor[] = [];
+    for (const placed of roomComposition.modules) {
+      const anchor = moduleSconceFor(
+        placed,
+        roomComposition,
+        scaleFactor,
+        wallThick,
+        doorLayout.doors,
+        blocked,
+      );
+      if (anchor) anchors.push(anchor);
+    }
+    return anchors;
+  }, [roomComposition, walls, plan, dir, extent, width, scaleFactor, wallThick, doorLayout]);
 
   const trees = useMemo(
     () =>
@@ -7892,6 +8044,69 @@ export function SpaceScene({
     return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors);
   }, [recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors]);
 
+  // Dollhouse cutaway: entrance segments always keep full height (the door
+  // handoff depends on them); of the rest, the segments whose outward face
+  // looks toward the fixed camera are drawn at sill height — opaque, but
+  // low enough that the interior reads over them. Runs inherit their
+  // source segment's orientation, so the test holds after the door split.
+  // Declared above the template features and fixtures: both consume the
+  // drawn heights (features gate on them; the niche host walls steer the
+  // window's host pool).
+  const wallHeights = useMemo(
+    () =>
+      wallRuns.map(({ wall }) =>
+        wall.entrance || !wallFacesCamera(plan, wall, dir)
+          ? wallHeight
+          : Math.min(wallHeight, WALL_SILL_HEIGHT),
+      ),
+    [wallRuns, plan, dir, wallHeight],
+  );
+
+  // Drawn height per ORIGINAL wall index (every run of a source shares its
+  // cutaway state) — the strand-door assemblies need it to close their
+  // transom up to the wall top on full-height walls.
+  const sourceWallHeights = useMemo(() => {
+    const map = new Map<number, number>();
+    wallRuns.forEach((run, i) => {
+      if (!map.has(run.source)) map.set(run.source, wallHeights[i]);
+    });
+    return map;
+  }, [wallRuns, wallHeights]);
+
+  // TEMPLATE FEATURES (§7.2): the niche, pilaster rhythm, and floor inlay
+  // the resolved template declares. Resolved AFTER the door split (wallRuns
+  // + wallHeights) so features follow the cutaway and break at openings;
+  // consumes only the plan/walls/doors the existing modules already
+  // produced. No template → no features, and nothing else in this file
+  // changes. Flat-floor gate keeps the inlay off rolling terrain.
+  // This memo sits ABOVE the fixtures memo on purpose: the window's host
+  // pool steps around a niche's host wall (a view plane and a rebuilt
+  // alcove run cannot share a run), so buildRoomFixtures receives the
+  // niche source walls as input.
+  const roomFeatures = useMemo(
+    () =>
+      buildRoomFeatures({
+        template,
+        plan,
+        walls,
+        wallRuns,
+        wallHeights,
+        wallHeight,
+        wallThick,
+        doors: clearanceDoors,
+        ground: spec.ground,
+        water: waterRect
+          ? {
+              cx: waterRect.cx,
+              cz: waterRect.cz,
+              halfX: waterRect.halfX,
+              halfZ: waterRect.halfZ,
+            }
+          : null,
+      }),
+    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, clearanceDoors, spec, waterRect],
+  );
+
   // MOTIVATED FIXTURES (B.13): the lamp, the window, and (outdoor-class
   // sets + the pool hall) the clerestory band — the findable source of
   // every lit surface. The pool hall is interior by class but keeps §2's
@@ -7913,8 +8128,9 @@ export function SpaceScene({
         propScale,
         wallHeight / WALL_HEIGHT,
         hasClerestory,
+        new Set(roomFeatures.niches.map((n) => wallRuns[n.run].source)),
       ),
-    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory],
+    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, roomFeatures, wallRuns],
   );
   // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
   // and cool at night while the lamp burns brighter (readability never
@@ -8122,61 +8338,6 @@ export function SpaceScene({
     }
   });
 
-  // Dollhouse cutaway: entrance segments always keep full height (the door
-  // handoff depends on them); of the rest, the segments whose outward face
-  // looks toward the fixed camera are drawn at sill height — opaque, but
-  // low enough that the interior reads over them. Runs inherit their
-  // source segment's orientation, so the test holds after the door splits.
-  const wallHeights = useMemo(
-    () =>
-      wallRuns.map(({ wall }) =>
-        wall.entrance || !wallFacesCamera(plan, wall, dir)
-          ? wallHeight
-          : Math.min(wallHeight, WALL_SILL_HEIGHT),
-      ),
-    [wallRuns, plan, dir, wallHeight],
-  );
-
-  // Drawn height per ORIGINAL wall index (every run of a source shares its
-  // cutaway state) — the strand-door assemblies need it to close their
-  // transom up to the wall top on full-height walls.
-  const sourceWallHeights = useMemo(() => {
-    const map = new Map<number, number>();
-    wallRuns.forEach((run, i) => {
-      if (!map.has(run.source)) map.set(run.source, wallHeights[i]);
-    });
-    return map;
-  }, [wallRuns, wallHeights]);
-
-  // TEMPLATE FEATURES (§7.2): the niche, pilaster rhythm, and floor inlay
-  // the resolved template declares. Resolved AFTER the door split (wallRuns
-  // + wallHeights) so features follow the cutaway and break at openings;
-  // consumes only the plan/walls/doors the existing modules already
-  // produced. No template → no features, and nothing else in this file
-  // changes. Flat-floor gate keeps the inlay off rolling terrain.
-  const roomFeatures = useMemo(
-    () =>
-      buildRoomFeatures({
-        template,
-        plan,
-        walls,
-        wallRuns,
-        wallHeights,
-        wallHeight,
-        wallThick,
-        doors: clearanceDoors,
-        ground: spec.ground,
-        water: waterRect
-          ? {
-              cx: waterRect.cx,
-              cz: waterRect.cz,
-              halfX: waterRect.halfX,
-              halfZ: waterRect.halfZ,
-            }
-          : null,
-      }),
-    [template, plan, walls, wallRuns, wallHeights, wallHeight, wallThick, clearanceDoors, spec, waterRect],
-  );
   const nicheByRun = useMemo(() => {
     const map = new Map<number, NicheFeature>();
     for (const n of roomFeatures.niches) map.set(n.run, n);
@@ -8205,6 +8366,14 @@ export function SpaceScene({
       fieldRects: (roomComposition?.openFields ?? []).map(
         (f) =>
           [f.x0 * scaleFactor, f.z0 * scaleFactor, f.x1 * scaleFactor, f.z1 * scaleFactor] as const,
+      ),
+      // §8 seam jamb walls (scaled plan coordinates) — the same boxes the
+      // movement clamp consumes; probes assert containment/walkability
+      // without entering the scene graph.
+      seamRects: seamPartitions.flatMap((sp) =>
+        sp.flanks.map(
+          (f) => [f.x, f.z, f.sizeX, f.sizeZ] as const,
+        ),
       ),
       placedDoors: doorLayout.doors.map((d) => ({
         role: wallRoleFor(plan, walls[d.wall]),
@@ -8244,7 +8413,7 @@ export function SpaceScene({
     return () => {
       if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;
     };
-  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor]);
+  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor, wallThick, seamPartitions]);
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
    * AND bowl sample the shared tile maps with one texture cell per physical
@@ -8299,12 +8468,46 @@ export function SpaceScene({
     });
   }, [groundMaterial, waterRect, width, extent, waveDriver]);
   useFrame((state) => caustics?.update(state.clock.elapsedTime));
+  // PER-MODULE WALL REGISTERS (§8.2): in a composed room each perimeter
+  // span belongs to one module's exposed edge, and the span takes THAT
+  // module's wall role as an OPAQUE material colour (panelling → wood,
+  // tile → the wall slot, shelf → fabric, plaster → the room default) —
+  // the joined modules read as different rooms at eye level without
+  // spending transparency (the budget stays water + glass). Spans no
+  // single module covers keep the room default.
+  const wallRoleColors = useMemo(() => {
+    const p = recipe.palette;
+    return {
+      plaster: wallColor,
+      panelling: new THREE.Color(p.wood),
+      tile: new THREE.Color(p.wall),
+      shelf: new THREE.Color(p.fabric),
+    } as const;
+  }, [wallColor, recipe]);
+  const wallRunRoles = useMemo(
+    () =>
+      wallRuns.map(({ wall }) =>
+        roomComposition
+          ? moduleWallForSegment(roomComposition, wall, scaleFactor)
+          : null,
+      ),
+    [wallRuns, roomComposition, scaleFactor],
+  );
+  // Role per ORIGINAL wall index, for the screens (each screen stands off
+  // its host wall and inherits its tint) and the seam partitions.
+  const sourceWallRoles = useMemo(() => {
+    const map = new Map<number, WallRoleM | null>();
+    wallRuns.forEach(({ source }, i) => {
+      if (!map.has(source)) map.set(source, wallRunRoles[i]);
+    });
+    return map;
+  }, [wallRuns, wallRunRoles]);
   const wallMaterials = useMemo(
     () =>
       wallRuns.map(({ wall }, i) =>
         createSurfaceMaterial({
           kind: surfaceKind,
-          color: wallColor,
+          color: (wallRunRoles[i] && wallRoleColors[wallRunRoles[i]!]) || wallColor,
           // A wall box's long axis is its span (u on the box's main faces);
           // v is the drawn height (sill height on the cutaway sides).
           spanX: Math.max(wall.sizeX, wall.sizeZ),
@@ -8313,7 +8516,7 @@ export function SpaceScene({
           normalScale: wallNormalScale,
         }),
       ),
-    [wallRuns, wallHeights, wallColor, surfaceKind, wallNormalScale],
+    [wallRuns, wallHeights, wallColor, surfaceKind, wallNormalScale, wallRunRoles, wallRoleColors],
   );
   useEffect(
     () => () => {
@@ -8330,7 +8533,9 @@ export function SpaceScene({
         runs.map(({ wall }) =>
           createSurfaceMaterial({
             kind: surfaceKind,
-            color: wallColor,
+            color:
+              (sourceWallRoles.get(source) && wallRoleColors[sourceWallRoles.get(source)!]) ||
+              wallColor,
             spanX: Math.max(wall.sizeX, wall.sizeZ),
             spanY: sourceWallHeights.get(source) ?? wallHeight,
             flatShading: true,
@@ -8338,7 +8543,7 @@ export function SpaceScene({
           }),
         ),
       ),
-    [screenRuns, sourceWallHeights, wallHeight, wallColor, surfaceKind, wallNormalScale],
+    [screenRuns, sourceWallHeights, wallHeight, wallColor, surfaceKind, wallNormalScale, sourceWallRoles, wallRoleColors],
   );
   useEffect(
     () => () => {
@@ -8372,21 +8577,25 @@ export function SpaceScene({
   );
   // The seam partitions share the perimeter's material wiring exactly —
   // one surface material per segment (jambs + header), full room height.
+  // The tint is the seam's a-side module's wall register (§8.2): the
+  // partition is that module's wall continuing into the composition.
   const seamMaterials = useMemo(
     () =>
-      seamPartitions.map((sp) =>
-        [...sp.flanks, sp.header].map((seg) =>
+      seamPartitions.map((sp) => {
+        const role = roomModuleById(sp.aId)?.wall;
+        const color = (role && wallRoleColors[role]) || wallColor;
+        return [...sp.flanks, sp.header].map((seg) =>
           createSurfaceMaterial({
             kind: surfaceKind,
-            color: wallColor,
+            color,
             spanX: Math.max(seg.sizeX, seg.sizeZ),
             spanY: wallHeight,
             flatShading: true,
             normalScale: wallNormalScale,
           }),
-        ),
-      ),
-    [seamPartitions, surfaceKind, wallColor, wallHeight, wallNormalScale],
+        );
+      }),
+    [seamPartitions, surfaceKind, wallColor, wallHeight, wallNormalScale, wallRoleColors],
   );
   useEffect(
     () => () => {
@@ -8797,7 +9006,12 @@ export function SpaceScene({
 
       {/* Wonder-room animals. */}
       {animals.ducks.length > 0 && (
-        <Ducks key={`ducks-${recipe.sliceId}`} ducks={animals.ducks} />
+        <Ducks
+          key={`ducks-${recipe.sliceId}`}
+          ducks={animals.ducks}
+          driver={waveDriver}
+          rect={waterRect}
+        />
       )}
       {animals.pets.pets.length > 0 && (
         <PetAnimals
@@ -9112,6 +9326,12 @@ export function SpaceScene({
         scale={propScale}
         boost={night ? LAMP_NIGHT_BOOST : 1}
       />
+      {/* Module register sconces (§8.2): one per composed-room module, the
+          register's findable source — wall plate, lit dome, real point
+          light, additive pool. Non-composed rooms grow none. */}
+      {moduleSconces.map((anchor, i) => (
+        <ModuleSconce key={`sconce${i}`} anchor={anchor} wallScale={wallHeight / WALL_HEIGHT} />
+      ))}
       <RoomWindow
         fixture={fixtures.window}
         wallScale={wallHeight / WALL_HEIGHT}
