@@ -465,12 +465,7 @@
     "title": "The Hotel",
     "loading": "Preparing the corridor…",
     "exit": "Exit",
-    "enter": "Enter",
-    "replyPlaceholder": "Say something to Previously…",
-    "replySend": "Send",
-    "replySending": "Passing it to Previously…",
-    "replySent": "Previously will remember this.",
-    "replyFailed": "It didn't go through — your words are still here."
+    "enter": "Enter"
   },
   "memory": {
     "emptyTitle": "No memories yet",

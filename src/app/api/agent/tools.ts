@@ -30,6 +30,7 @@ import {
   recallExecute,
   thinkDeepExecute,
   currentTimeExecute,
+  describeRoomExecute,
   delegateTaskExecute,
   viewImageExecute,
   type ToolContext,
@@ -320,6 +321,49 @@ export const chatTools = {
   readSlice: conceptTools.readSlice,
   readTimelineWindow: conceptTools.readTimelineWindow,
   readPreviously: conceptTools.readPreviously,
+  describeRoom: tool({
+    description:
+      "Describe the hotel room a time slice opens onto in the game view — " +
+      "an engine-computed outline of what the room CONTAINS: world class and " +
+      "archetype, size and scale notation, floor plan, module/template layout, " +
+      "palette and light register, furnishing kits, water, doors and windows. " +
+      "The outline is derived from the world seed by the same pure modules " +
+      "that render the room, so it is exact and deterministic — quote it " +
+      "freely, it cannot disagree with what the user sees. Use it when the " +
+      "user asks what is in the room they are standing in (omit sliceId for " +
+      "the current slice's room) or what a past slice's room looks like. " +
+      "Strand-door PLACEMENTS additionally depend on the runtime strand " +
+      "graph: pass strandDoors + corridorSide only if you know them; " +
+      "otherwise the outline reports the permitted walls and measured " +
+      "capacity instead of positions.",
+    inputSchema: z.object({
+      sliceId: z
+        .string()
+        .optional()
+        .describe(
+          "Slice ID in YYYY-MM-DD-HHMM format. Defaults to the current slice.",
+        ),
+      strandDoors: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "The runtime strand-door count for this slice, when known. Steers " +
+          "layout selection exactly as the real count does at render time.",
+        ),
+      corridorSide: z
+        .enum(["north", "south"])
+        .optional()
+        .describe(
+          "Which side of the corridor the room's entrance door sits on " +
+          "(the room's mirror). Required together with strandDoors for exact " +
+          "door placements.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: describeRoomExecute,
+  }),
   currentTime: tool({
     description:
       "Check the current time — the user's local time (minute precision, with " +
@@ -570,6 +614,7 @@ export function buildChatToolsContext(
     readSlice: ctx,
     readTimelineWindow: ctx,
     readPreviously: ctx,
+    describeRoom: ctx,
     currentTime: ctx,
     recall: ctx,
     webSearch: ctx,

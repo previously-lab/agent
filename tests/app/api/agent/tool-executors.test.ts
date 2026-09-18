@@ -123,6 +123,7 @@ import {
   readSliceSummaryExecute,
   readTimelineWindowExecute,
   currentTimeExecute,
+  describeRoomExecute,
   recallExecute,
   webSearchExecute,
   viewImageExecute,
@@ -326,6 +327,56 @@ describe("currentTimeExecute", () => {
     const out = await currentTimeExecute({}, opts({ sliceId: "bogus" }));
     expect(out).toContain("Now:");
     expect(out).not.toContain("This slice");
+  });
+});
+
+describe("describeRoomExecute", () => {
+  it("describes the current slice's room when sliceId is omitted", async () => {
+    const out = await describeRoomExecute(
+      {},
+      opts({ sliceId: "2026-09-14-2207", locale: "en" }),
+    );
+    expect(out).toContain("Room outline · slice 2026-09-14-2207");
+    expect(out).toContain("World:");
+    expect(out).toContain("Palette:");
+    expect(out).toContain("Doors:");
+  });
+
+  it("describes an explicit slice, localized by the turn locale", async () => {
+    const out = await describeRoomExecute(
+      { sliceId: "2026-09-12-0941" },
+      opts({ locale: "zh" }),
+    );
+    expect(out).toContain("房间大纲 · slice 2026-09-12-0941");
+    expect(out).toContain("入口在南墙");
+  });
+
+  it("is deterministic — the same slice yields the same outline", async () => {
+    const a = await describeRoomExecute(
+      { sliceId: "2026-09-13-1530" },
+      opts({ locale: "en" }),
+    );
+    const b = await describeRoomExecute(
+      { sliceId: "2026-09-13-1530" },
+      opts({ locale: "en" }),
+    );
+    expect(b).toBe(a);
+  });
+
+  it("places strand doors when the runtime inputs are provided", async () => {
+    const out = await describeRoomExecute(
+      { sliceId: "2026-09-14-2207", strandDoors: 3, corridorSide: "north" },
+      opts({ locale: "en" }),
+    );
+    expect(out).toContain("Placed strand doors (3)");
+  });
+
+  it("returns a domain error (never throws) for an invalid slice id", async () => {
+    const out = await describeRoomExecute(
+      { sliceId: "bogus" },
+      opts({ locale: "en" }),
+    );
+    expect(out).toMatch(/^ERROR: Invalid slice ID/);
   });
 });
 

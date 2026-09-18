@@ -48,6 +48,24 @@ describe("client-mode tool gating", () => {
 });
 
 describe("chat tool surface", () => {
+  it("exposes describeRoom in chatTools and gives it a context entry", () => {
+    expect(chatTools).toHaveProperty("describeRoom");
+    expect(buildChatToolsContext(ctx).describeRoom).toBe(ctx);
+  });
+
+  it("describeRoom takes an optional sliceId plus the optional runtime door inputs", () => {
+    const schema = chatTools.describeRoom.inputSchema as unknown as {
+      shape: Record<string, { isOptional(): boolean }>;
+    };
+    expect(schema.shape).toHaveProperty("sliceId");
+    expect(schema.shape).toHaveProperty("strandDoors");
+    expect(schema.shape).toHaveProperty("corridorSide");
+    // No required parameters: "this room" is the default (ctx.sliceId).
+    expect(schema.shape.sliceId.isOptional()).toBe(true);
+    expect(schema.shape.strandDoors.isOptional()).toBe(true);
+    expect(schema.shape.corridorSide.isOptional()).toBe(true);
+  });
+
   it("exposes webFetch in chatTools and gives it a context entry", () => {
     expect(chatTools).toHaveProperty("webFetch");
     expect(buildChatToolsContext(ctx).webFetch).toBe(ctx);

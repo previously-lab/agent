@@ -13,7 +13,6 @@ import {
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
 import type { CorridorDoor } from "./corridor";
-import { RoomNarrationPanel } from "./room-narration-panel";
 import { ChatPage } from "@/components/chat/chat-page";
 import {
   ConversationPanel,
@@ -120,10 +119,6 @@ export function GameShell() {
   // resolves, and stays empty if it fails.
   const [timelines, setTimelines] =
     useState<ReadonlyMap<string, readonly CorridorDoor[]>>(NO_TIMELINES);
-  // The mounted room's slice — feeds the narration panel. Pushed by the
-  // canvas through onActiveSliceChange (an effect on its activeSpace
-  // state), so it tracks the door manager exactly.
-  const [activeSliceId, setActiveSliceId] = useState<string | null>(null);
 
   // ── THE CONVERSATION LAYER (§14.1) ──────────────────────────────────────
   // The game does not own the conversation — the same DOM panel as the `/`
@@ -273,16 +268,6 @@ export function GameShell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [router, panelMode]);
 
-  const activeDoorLabel = activeSliceId
-    ? doors?.find((door) => door.sliceId === activeSliceId)?.label
-    : undefined;
-
-  // Previously's voice is OFF until the user specifies how and when it should
-  // speak: today it fires on room entry, which they have asked to change. The
-  // panel, its narration store and its i18n keys are all in place, so flipping
-  // this to true restores the current behaviour.
-  const NARRATION_ENABLED = false;
-
   return (
     <div className="relative h-full w-full">
       {/* Top-left overlay: title + exit. The container is pointer-transparent
@@ -303,22 +288,11 @@ export function GameShell() {
           doors={doors}
           roomDoors={roomDoors}
           timelines={timelines}
-          onActiveSliceChange={setActiveSliceId}
           paused={panelMode === "fullscreen"}
         />
       ) : (
         <GameLoading />
       )}
-      {/* Previously's voice in the room — bottom-left, clear of the title
-          (top-left) and the door HUD (bottom-center). Renders nothing in
-          the corridor; a narration failure shows up inside the panel and
-          never touches the canvas. Gated by NARRATION_ENABLED above. */}
-      {NARRATION_ENABLED ? (
-        <RoomNarrationPanel
-          sliceId={activeSliceId}
-          {...(activeDoorLabel ? { label: activeDoorLabel } : {})}
-        />
-      ) : null}
       {/* The conversation layer, over the game (§14.1): a quiet pill by
           default, a docked overlay on open, a fullscreen surface that
           freezes (never unmounts) the world behind it. insetTop=0 — the

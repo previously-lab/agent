@@ -81,6 +81,10 @@ import type { ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { isTransientError, triageErrorMessage } from "@/lib/chat/tool-triage";
 import {
+  describeRoom,
+  formatRoomDescription,
+} from "@/lib/game/describe-room";
+import {
   shouldEmitProgress,
   type ProgressWriteState,
 } from "@/lib/chat/progress-throttle";
@@ -954,6 +958,39 @@ export async function currentTimeExecute(
   }
 
   return lines.join("\n");
+}
+
+// ── describeRoom — the game room's computed outline (v0.11 §13) ────────
+
+/**
+ * describeRoom — what the hotel room of a slice CONTAINS, computed from the
+ * world seed by the game's own pure chain (lib/game/describe-room.ts —
+ * space-recipe → room-plan → room-modules/room-templates → room-doors →
+ * kits, the same modules the renderer builds from). Deterministic: same
+ * slice, same outline. No I/O, so it is the cheapest "what is around the
+ * user" answer there is.
+ *
+ * The rendered text is localized by the turn's locale (zh/en). Invalid slice
+ * ids are a domain error — returned, never thrown.
+ */
+export async function describeRoomExecute(
+  {
+    sliceId,
+    strandDoors,
+    corridorSide,
+  }: { sliceId?: string; strandDoors?: number; corridorSide?: "north" | "south" },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const sid = sliceId ?? ctx.sliceId;
+  if (!parseSliceId(sid)) {
+    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
+  }
+  const desc = describeRoom(sid, {
+    ...(strandDoors !== undefined ? { strandDoors } : {}),
+    ...(corridorSide ? { corridorSide } : {}),
+  });
+  return formatRoomDescription(desc, ctx.locale === "zh" ? "zh" : "en");
 }
 
 // ── recall �?semantic search across past conversation slices ─────────
