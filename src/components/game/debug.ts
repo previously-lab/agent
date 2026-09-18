@@ -40,6 +40,46 @@ export const GAME_DEBUG = {
   /** Materials left transparent / below authored opacity after a fade. */
   matsTransparent: -1,
   matsFaded: -1,
+  /** Probe/e2e mirror of the MOUNTED room's composition (§8) and its
+   *  placed strand doors — written by SpaceScene whenever the room changes,
+   *  null in the corridor. Probes assert §8/§10.5 facts (module growth by
+   *  door load, axial door walls, sparse open fields) without reaching
+   *  into the scene graph. */
+  room: null as null | {
+    sliceId: string;
+    doorCount: number;
+    /** The mounted recipe's own class/archetype/tier — probes diff the
+     *  runtime recipe against the offline compile when fixtures are in
+     *  play. */
+    cls: string;
+    modules: readonly string[];
+    topology: string;
+    width: number;
+    extent: number;
+    doorWalls: readonly string[];
+    declaredCapacity: number;
+    openFields: number;
+    /** The open fields in the scaled plan's coordinates (§8.2 随机区域). */
+    fieldRects: readonly (readonly [number, number, number, number])[];
+    placedDoors: readonly { role: string; row: number; along: number }[];
+    furniture: number;
+    /** Every furnished piece's XZ (hero first) — probes count the pieces
+     *  standing inside the open fields without entering the scene. */
+    pieces: readonly (readonly [number, number])[];
+  },
+  /** Probe/e2e: the current window's corridor doors — sliceId, wall-plane
+   *  position, and which corridor side (north rooms sit at +z, south at
+   *  −z). Newest first. Written by GameCanvas whenever the window changes. */
+  windowDoors: [] as {
+    sliceId: string;
+    x: number;
+    z: number;
+    side: "north" | "south";
+  }[],
+  /** Probe/e2e: the data lane's strand-door count per slice id (the pure
+   *  derivation the compositions freeze — §8.4). Empty map until the
+   *  strand read resolves. */
+  doorCounts: {} as Record<string, number>,
 };
 
 declare global {

@@ -5641,10 +5641,13 @@ export function roomTemplateForDoorCount(
   // MODULAR COMPOSITION (§8): an interior room's template IS its module
   // composition folded into the renderer's existing input — the same
   // resolution scaledRecipeFor already sized the plan from, so the template
-  // can never disagree with the floor it zones. The measured-capacity
-  // machinery below is the legacy catalogue's; the composition's declared
-  // ceiling rides placeRoomDoors' ladder on overflow, unchanged.
-  const composition = compositionForRecipe(recipe);
+  // can never disagree with the floor it zones. The strand-door count the
+  // caller hands in steers that resolution directly (§8.4 — a busy day
+  // grows modules, and more modules ⇒ a longer north door wall); the
+  // measured-capacity machinery below is the legacy catalogue's; the
+  // composition's declared ceiling rides placeRoomDoors' ladder on
+  // overflow, unchanged.
+  const composition = compositionForRecipe(recipe, WORLD_SEED, roomDoorCount);
   if (composition) return compositionTemplateFor(composition);
   const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
   const capacityFor = (t: RoomTemplate) => {
@@ -5679,6 +5682,7 @@ export function SpaceScene({
   prewarm = false,
   onFadedOut,
   roomDoors,
+  roomDoorCount: roomDoorCountProp,
   onRoomDoor,
 }: {
   recipe: SpaceRecipe;
@@ -5699,6 +5703,13 @@ export function SpaceScene({
   /** Strand doors for this slice — absent/empty = today's single-entrance
    *  room. */
   roomDoors?: readonly SpaceRoomDoor[];
+  /** The strand-door count the room was RESOLVED with — the integrator
+   *  freezes it into the ActiveSpace at the wall crossing so the room
+   *  cannot morph mid-stay when the strand lane resolves after the mount
+   *  (§8.4: the composition grows by this count). Absent = the live list's
+   *  length (standalone renders; the door list and the count cannot drift
+   *  there). */
+  roomDoorCount?: number;
   /** Fires once per strand door when the player walks through it (latched
    *  per door per mount; never fires for the entrance). */
   onRoomDoor?: (key: string) => void;
@@ -5724,9 +5735,16 @@ export function SpaceScene({
   // applied at CONSTRUCTION time: `scaledRecipe` carries the factor in its
   // plan dims, so terrain, water, and the movement clamps all live in one
   // (scaled) coordinate system. The doorway is never scaled (axiom A4).
+  //
+  // The strand-door count (§8.4) steers BOTH the composition that sizes
+  // these dims and the template/door placement below — ONE value for the
+  // whole visit (the integrator freezes it into the ActiveSpace at the
+  // crossing; see the prop docs), so the room the player walks is the room
+  // the clamp contains, whatever the strand lane does later.
+  const roomDoorCount = roomDoorCountProp ?? roomDoors?.length ?? 0;
   const { recipe: scaledRecipe, scale } = useMemo(
-    () => scaledRecipeFor(recipe),
-    [recipe],
+    () => scaledRecipeFor(recipe, roomDoorCount),
+    [recipe, roomDoorCount],
   );
   const scaleFactor = scale.factor;
   const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
@@ -5760,9 +5778,13 @@ export function SpaceScene({
   // so the plan/walls/doors/zones chain below runs unchanged. The plan's
   // dims already ARE the composition's (scaledRecipeFor swapped them), and
   // the composition's own detail — the interior seams, the per-module kit
-  // whitelist, the floor roles — rides `roomComposition` below.
-  const roomDoorCount = roomDoors?.length ?? 0;
-  const roomComposition = useMemo(() => compositionForRecipe(recipe), [recipe]);
+  // whitelist, the floor roles — rides `roomComposition` below. Same frozen
+  // door count as the dims above: the template can never disagree with the
+  // floor it zones.
+  const roomComposition = useMemo(
+    () => compositionForRecipe(recipe, WORLD_SEED, roomDoorCount),
+    [recipe, roomDoorCount],
+  );
   const template = useMemo(
     () =>
       roomTemplateForDoorCount(
@@ -6208,6 +6230,16 @@ export function SpaceScene({
       const kitIds = roomComposition
         ? [...new Set(roomComposition.modules.flatMap((p) => p.module.kits))]
         : undefined;
+      // §8.2 随机区域: the composition's open fields dress sparsely (0–3
+      // seeded pieces per field from this same deck) — scaled into the
+      // plan's coordinates like the seams. The fields are deliberately NOT
+      // keep-empty zones: the staging channel owns their dressing.
+      const openFields = roomComposition?.openFields.map((f) => ({
+        x0: f.x0 * scaleFactor,
+        z0: f.z0 * scaleFactor,
+        x1: f.x1 * scaleFactor,
+        z1: f.z1 * scaleFactor,
+      }));
       const staging = {
         rng,
         archetype: recipe.archetype,
@@ -6219,6 +6251,7 @@ export function SpaceScene({
         water: waterRect,
         doors: clearanceDoors,
         kitIds,
+        openFields,
         // The template's content zones (§7), resolved to absolute plan
         // coordinates: the hero's pin, the kit-cluster rects, the
         // keep-empty apron. Absent = today's seeded staging, byte-for-byte.
@@ -6254,6 +6287,39 @@ export function SpaceScene({
     }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
   }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
+
+  // Probe/e2e mirror (GAME_DEBUG.room): the mounted room's composition and
+  // its placed strand doors, so probes can assert §8/§10.5 facts — module
+  // growth by door load, axial-only door walls, the sparse open fields —
+  // without reaching into the scene graph. Cleared when the room unmounts.
+  useEffect(() => {
+    GAME_DEBUG.room = {
+      sliceId: recipe.sliceId,
+      doorCount: roomDoorCount,
+      cls: `${recipe.worldClass}/${recipe.archetype}/${recipe.size.id}`,
+      modules: roomComposition?.modules.map((p) => p.module.id) ?? [],
+      topology: roomComposition?.topology ?? "",
+      width: scaledRecipe.width,
+      extent: scaledRecipe.size.extent,
+      doorWalls: template?.doorWalls ?? [],
+      declaredCapacity: template?.doorCapacity ?? 0,
+      openFields: roomComposition?.openFields.length ?? 0,
+      fieldRects: (roomComposition?.openFields ?? []).map(
+        (f) =>
+          [f.x0 * scaleFactor, f.z0 * scaleFactor, f.x1 * scaleFactor, f.z1 * scaleFactor] as const,
+      ),
+      placedDoors: doorLayout.doors.map((d) => ({
+        role: wallRoleFor(plan, walls[d.wall]),
+        row: d.row,
+        along: d.along,
+      })),
+      furniture: furniture.length,
+      pieces: furniture.map((p) => [p.x, p.z] as const),
+    };
+    return () => {
+      if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;
+    };
+  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, furniture, scaleFactor]);
 
   // Internal structure (L/XL only, on the scaled tier): partition or
   // column grid. A COMPOSED room (§8) already carries its interior

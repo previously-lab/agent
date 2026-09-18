@@ -132,7 +132,7 @@
  * player sees comes from corridor/space renderers fed by the seed module.
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
@@ -292,12 +292,18 @@ interface Motion {
  *  recipe (palette, archetype); `scaledRecipe` is the same recipe with the
  *  room-language scale notation applied to its plan dims — the ONE scaled
  *  view (room-plan.ts) that the renderer, the movement clamp, and the
- *  avatar physics all share. */
+ *  avatar physics all share. `roomDoorCount` is the strand-door count the
+ *  space was resolved with, FROZEN at the wall crossing (the data lane's
+ *  pure derivation for the slice): the composition that sized scaledRecipe
+ *  grew by it (§8.4), and freezing it here keeps the renderer and the
+ *  clamp on one value for the whole visit — the room can never morph
+ *  mid-stay when the strand lane resolves after the mount. */
 interface ActiveSpace {
   door: DoorRef;
   recipe: SpaceRecipe;
   scaledRecipe: SpaceRecipe;
   scale: ScaleNotation;
+  roomDoorCount: number;
 }
 
 /** Stand-in plan while no space is active — the space clamp never runs
@@ -747,16 +753,19 @@ function doorRefForFlatIndex(
  *  by the door manager's wall-crossing mount and the return door's
  *  back-into-the-room landing, so a room mounted either way is identical
  *  (recipe, archetype override, and the single scaled view the clamps and
- *  terrain consume). */
+ *  terrain consume). `roomDoorCount` is the strand-door count for this
+ *  slice AT RESOLUTION TIME — frozen into the space (see ActiveSpace), so
+ *  every consumer of the room shares one value. */
 function resolveSpaceForDoor(
   door: DoorRef,
   archetypeById: ReadonlyMap<string, ArchetypeId>,
+  roomDoorCount: number = 0,
 ): ActiveSpace {
   const recipe = compileSpaceRecipe(door.sliceId);
   const archetype = archetypeById.get(door.sliceId);
   const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
-  const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe);
-  return { door, recipe: finalRecipe, scaledRecipe, scale };
+  const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe, roomDoorCount);
+  return { door, recipe: finalRecipe, scaledRecipe, scale, roomDoorCount };
 }
 
 /**
@@ -1241,6 +1250,7 @@ function GameLoop({
   setPrewarmDoor,
   transitionActive,
   roomDoors,
+  roomDoorCountFor,
   roomPlan,
 }: {
   playerRef: PlayerRef;
@@ -1295,6 +1305,11 @@ function GameLoop({
   /** The active space's placed strand doors (plan-local frame) — the
    *  clamp's passage windows; empty when the room grows none. */
   roomDoors: readonly RoomDoorPlacement[];
+  /** The runtime strand-door count for ANY slice of the current window —
+   *  the pure door-map lookup (data lane), consumed at the wall crossing
+   *  to freeze the count into the new ActiveSpace. GameLoop sees only the
+   *  ACTIVE space's placements above, so the mount asks here per slice. */
+  roomDoorCountFor: (sliceId: string) => number;
   /** The active space's floor plan (same derivation as roomDoors) — the
    *  clamp's plan-aware containment; a placeholder rect when no space is
    *  active (the space clamp never runs then). */
@@ -1386,9 +1401,11 @@ function GameLoop({
           // The scaled view is computed ONCE inside resolveSpaceForDoor —
           // room-plan.ts is the single definition of "how big is this room";
           // clamps, terrain, and water below all consume it, matching the
-          // geometry space.tsx builds.
+          // geometry space.tsx builds. The strand-door count is frozen in
+          // with it (§8.4 — the composition grew by it): the room the
+          // player walks in is the room the clamp contains.
           MOUNT_TRACE.tRequest = performance.now();
-          space = resolveSpaceForDoor(door, archetypeById);
+          space = resolveSpaceForDoor(door, archetypeById, roomDoorCountFor(door.sliceId));
           setActiveSpace(space);
         }
       } else if (az < WALL_IN && space !== null) {
@@ -1655,6 +1672,15 @@ export default function GameCanvas({
   focusSlice?: string | null;
 }): JSX.Element {
   const t = useTranslations("game");
+  // The runtime strand-door count for a slice — the data lane's pure
+  // derivation (buildRoomDoorMap in game-shell.tsx), read off the map.
+  // Every room resolution (prewarm, wall crossing, return landing) freezes
+  // THIS value into its ActiveSpace, so a room never depends on when the
+  // strand lane resolved relative to the mount.
+  const roomDoorCountFor = useCallback(
+    (sliceId: string): number => roomDoors?.get(sliceId)?.length ?? 0,
+    [roomDoors],
+  );
   // App dark mode, read OUTSIDE the Canvas — React context never crosses
   // the R3F reconciler boundary, so it is handed down as plain props.
   const { resolvedTheme } = useTheme();
@@ -1817,6 +1843,24 @@ export default function GameCanvas({
     const xs = materializedDoorXs(windowIds, layout);
     return returnSides.north ? [...xs, RETURN_DOOR_X] : xs;
   }, [windowIds, layout, returnSides]);
+  // Probe/e2e mirror: the current window's corridor doors (sliceId +
+  // wall-plane position + side) and the data lane's per-slice strand-door
+  // counts — probes pick slices and assert §8/§10.5 facts from these
+  // instead of walking the corridor blind.
+  useEffect(() => {
+    GAME_DEBUG.windowDoors = windowIds.map((sliceId, i) => {
+      const ref = doorRefForFlatIndex(i, windowIds, layout);
+      return {
+        sliceId,
+        x: ref?.x ?? 0,
+        z: ref?.z ?? 0,
+        side: (i % 2 === 0 ? "north" : "south") as "north" | "south",
+      };
+    });
+    GAME_DEBUG.doorCounts = roomDoors
+      ? Object.fromEntries([...roomDoors.entries()].map(([id, list]) => [id, list.length]))
+      : {};
+  }, [windowIds, layout, roomDoors]);
   const archetypeById = useMemo(() => {
     const map = new Map<string, ArchetypeId>();
     for (const door of currentDoors) {
@@ -1833,13 +1877,14 @@ export default function GameCanvas({
   );
   // The prewarm target's space, resolved through the SAME construction the
   // door manager uses — a prewarmed room is identical to a crossed-into
-  // one (A6).
+  // one (A6), including the frozen strand-door count (re-resolved when the
+  // door map lands, while the mount is still invisible).
   const prewarmSpace = useMemo(
     () =>
       prewarmDoor === null
         ? null
-        : resolveSpaceForDoor(prewarmDoor, archetypeById),
-    [prewarmDoor, archetypeById],
+        : resolveSpaceForDoor(prewarmDoor, archetypeById, roomDoorCountFor(prewarmDoor.sliceId)),
+    [prewarmDoor, archetypeById, roomDoorCountFor],
   );
   // The one room slot: the shown space (active or dissolving) wins; the
   // prewarm space fills it while the corridor is walked.
@@ -1863,16 +1908,16 @@ export default function GameCanvas({
   // the same pure derivation (roomGeometryForSpace — template, plan,
   // doors) the mounted SpaceScene renders — one chain, two call sites,
   // identical results (A6). Memoised per room: the per-frame clamp then
-  // costs a handful of closed-form compares, never a plan rebuild.
+  // costs a handful of closed-form compares, never a plan rebuild. The
+  // count is the space's OWN frozen value — the same one the renderer's
+  // composition resolved with, so the clamp can never relax at a door the
+  // room did not draw (or box a floor the room outgrew).
   const activeRoomGeometry = useMemo(
     () =>
       activeSpace === null
         ? null
-        : roomGeometryForSpace(
-            activeSpace,
-            roomDoors?.get(activeSpace.recipe.sliceId)?.length ?? 0,
-          ),
-    [activeSpace, roomDoors],
+        : roomGeometryForSpace(activeSpace, activeSpace.roomDoorCount),
+    [activeSpace],
   );
 
   /** Land the player in the CURRENT hotel's lobby, just inside the return
@@ -1986,15 +2031,22 @@ export default function GameCanvas({
     for (const d of backDoors) {
       if (d.archetype !== undefined) backArchetypes.set(d.sliceId, d.archetype);
     }
-    const space = resolveSpaceForDoor(door, backArchetypes);
+    const space = resolveSpaceForDoor(
+      door,
+      backArchetypes,
+      roomDoorCountFor(door.sliceId),
+    );
     // The strand door the player left by: land just inside the room at
     // that door. placement.index is the placement's index into the room's
-    // door list (room-doors.ts), so the spec's own index finds it.
+    // door list (room-doors.ts), so the spec's own index finds it. The
+    // geometry rebuild uses the space's OWN frozen count — resolved just
+    // above from the same map — so the landing matches the room as it
+    // stands now.
     const specs = roomDoors?.get(door.sliceId) ?? [];
     const specIndex = specs.findIndex((s) => s.key === returnTo.key);
     const placement =
       specIndex >= 0
-        ? roomGeometryForSpace(space, specs.length).doors.find(
+        ? roomGeometryForSpace(space, space.roomDoorCount).doors.find(
             (pl) => pl.index === specIndex,
           )
         : undefined;
@@ -2257,6 +2309,7 @@ export default function GameCanvas({
             prewarm={mountedIsPrewarm}
             onFadedOut={handleFadedOut}
             roomDoors={roomDoors?.get(mountedSpace.recipe.sliceId)}
+            roomDoorCount={mountedSpace.roomDoorCount}
             onRoomDoor={handleRoomDoor}
           />
         )}
@@ -2293,6 +2346,7 @@ export default function GameCanvas({
           setPrewarmDoor={setPrewarmDoor}
           transitionActive={strandTransition.phase !== "idle"}
           roomDoors={activeRoomGeometry?.doors ?? []}
+          roomDoorCountFor={roomDoorCountFor}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
         />
         {/*

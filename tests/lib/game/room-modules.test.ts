@@ -33,6 +33,7 @@ import {
   rectDifference,
   resolveRoomComposition,
   roomModuleById,
+  type RoomComposition,
   type RoomModule,
 } from "@/lib/game/room-modules";
 import { roomTemplateForDoorCount } from "@/components/game/space";
@@ -379,17 +380,19 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
     }
   });
 
-  it("keeps the entrance apron and the open fields empty", () => {
+  it("keeps the entrance apron empty and leaves the open fields to the sparse staging channel", () => {
     for (let i = 0; i < 30; i++) {
       const comp = resolveRoomComposition(`2027-08-${i}`, "interior", "library", 0)!;
       const template = compositionTemplateFor(comp);
       const keepEmpty = template.zones.filter((z) => z.kind === "keep-empty");
-      // One apron + one per open field + the modules' own keep-empty zones.
+      // One apron + the modules' own keep-empty zones — and NOTHING for
+      // the open fields: they are dressed (sparsely) by kits.ts's
+      // openFields staging channel, not banned by the zone set.
       const moduleKeepEmpty = comp.modules.reduce(
         (s, p) => s + p.module.zones.filter((z) => z.kind === "keep-empty").length,
         0,
       );
-      expect(keepEmpty.length).toBe(1 + comp.openFields.length + moduleKeepEmpty);
+      expect(keepEmpty.length).toBe(1 + moduleKeepEmpty);
     }
   });
 
@@ -582,11 +585,86 @@ describe("compositionForRecipe (the render/contain chain's one resolution)", () 
   });
 });
 
+describe("compositionForRecipe with the runtime door count (§8.4)", () => {
+  it("defaults to the doorless resolution (byte-for-byte backwards compatible)", () => {
+    for (let i = 0; i < 50; i++) {
+      const recipe = compileSpaceRecipe(`2028-07-${i}`);
+      expect(compositionForRecipe(recipe)).toEqual(
+        compositionForRecipe(recipe, WORLD_SEED, 0),
+      );
+    }
+  });
+
+  it("is deterministic per (recipe, doorCount) (A6)", () => {
+    for (let i = 0; i < 30; i++) {
+      const recipe = compileSpaceRecipe(`2028-08-${i}`);
+      expect(compositionForRecipe(recipe, WORLD_SEED, 7)).toEqual(
+        compositionForRecipe(recipe, WORLD_SEED, 7),
+      );
+    }
+  });
+
+  it("a busy day grows modules through the recipe entry — and the door wall only gets longer (§10.5)", () => {
+    // The exposed door-eligible NORTH edge meters — the §10.5 quantity:
+    // growth adds north wall, never east/west doors.
+    const doorEdgeMeters = (comp: RoomComposition): number =>
+      comp.modules.reduce((s, p) => {
+        if (!p.exposed.n || !p.module.doorEdges.includes("n")) return s;
+        return s + (p.rect.x1 - p.rect.x0);
+      }, 0);
+    let grew = 0;
+    for (let i = 0; i < 120; i++) {
+      const recipe = compileSpaceRecipe(`2028-09-${i}`);
+      if (recipe.worldClass !== "interior") continue;
+      const calm = compositionForRecipe(recipe, WORLD_SEED, 0)!;
+      const busy = compositionForRecipe(recipe, WORLD_SEED, 16)!;
+      expect(auditComposition(busy)).toEqual([]);
+      // §10.5 axial semantics hold at every door load: the far (north)
+      // wall is the ONLY door wall — growth never squeezes doors onto
+      // the east/west walls.
+      expect(compositionTemplateFor(busy).doorWalls).toEqual(["far"]);
+      // The busy day's declared ceiling never comes out below the calm
+      // day's (overflow relaxes at placement, never drops).
+      expect(busy.doorCapacity).toBeGreaterThanOrEqual(calm.doorCapacity);
+      // The north door wall never shrinks as the load rises (every growth
+      // path either widens the room or exposes another module's north
+      // edge). Depth is deliberately NOT asserted: a higher count may
+      // switch topology (row → ell) and trade depth for width lawfully —
+      // "large" is MORE modules, whatever silhouette joins them.
+      expect(doorEdgeMeters(busy)).toBeGreaterThanOrEqual(doorEdgeMeters(calm));
+      if (busy.modules.length > calm.modules.length) {
+        grew += 1;
+        expect(busy.modules.length).toBeLessThanOrEqual(4);
+      }
+    }
+    // The growth path is real: at least one slice in the sweep joins more
+    // modules under the 16-door load than doorless.
+    expect(grew).toBeGreaterThan(0);
+  });
+
+  it("a door load within the hinted modules' capacity never grows the count (门少不加模块)", () => {
+    for (let i = 0; i < 80; i++) {
+      const recipe = compileSpaceRecipe(`2028-10-${i}`);
+      if (recipe.worldClass !== "interior") continue;
+      const comp = compositionForRecipe(recipe, WORLD_SEED, 0)!;
+      // Feeding BACK the calm day's own capacity: the placement already
+      // absorbs it, so the resolution is unchanged — growth responds to
+      // EXCESS load, not to any nonzero count.
+      expect(compositionForRecipe(recipe, WORLD_SEED, comp.doorCapacity)).toEqual(comp);
+    }
+  });
+});
+
 describe("roomTemplateForDoorCount composition branch (the renderer's selection)", () => {
-  it("returns the composition's synthetic template for interior rooms", () => {
+  it("returns the composition's synthetic template for interior rooms — resolved WITH the door count", () => {
     for (let i = 0; i < 30; i++) {
       const recipe = compileSpaceRecipe(`2028-05-${i}`);
-      const comp = compositionForRecipe(recipe);
+      // The count-3 composition is what the renderer's selection resolves
+      // for a 3-door room (§8.4: the door load steers the composition
+      // THROUGH this entry point) — under a door load the tier hint may
+      // grow, so the expected template is the COUNT-3 resolution's, not
+      // the doorless one's.
+      const comp = compositionForRecipe(recipe, WORLD_SEED, 3);
       if (!comp) continue;
       const { recipe: scaled, scale } = scaledRecipeFor(recipe);
       const template = roomTemplateForDoorCount(

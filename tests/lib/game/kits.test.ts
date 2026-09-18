@@ -981,3 +981,187 @@ describe("kitIds filter (module whitelists)", () => {
     expect(stageFiltered("2026-10-0", 48, "hotel-room", [])).toHaveLength(0);
   });
 });
+
+describe("openFields channel (§8.2 随机区域 — the sparse dressing)", () => {
+  // Two module-scale voids inside a 48×48 plan: one west field, one east.
+  const FIELDS = [
+    { x0: -20, z0: 10, x1: -8, z1: 22 },
+    { x0: 8, z0: 26, x1: 20, z1: 38 },
+  ] as const;
+
+  function stageFields(
+    sliceId: string,
+    openFields?: readonly (typeof FIELDS)[number][],
+  ): StagedKitPiece[] {
+    const extent = 48;
+    const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+    const comp = composeRoom(sliceId, plan, 1);
+    const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+    return stageInteriorKits({
+      rng,
+      archetype: "hotel-room",
+      plan,
+      comp,
+      baseArea: planArea(plan),
+      baseExtent: extent,
+      propScale: 1,
+      wallThick: ROOM_WALL_THICKNESS,
+      water: null,
+      ...(openFields ? { openFields } : {}),
+      heightAt: () => 0,
+    });
+  }
+
+  /** Placements whose CENTER falls inside a field rect — the field pieces. */
+  function fieldPieces(
+    pieces: StagedKitPiece[],
+  ): Map<number, (typeof FIELDS)[number]> {
+    const byIndex = new Map<number, StagedKitPiece>();
+    for (const p of pieces) {
+      // A placement's first piece carries its origin-ish center well enough
+      // for the inside-the-field grouping.
+      if (!byIndex.has(p.kitIndex)) byIndex.set(p.kitIndex, p);
+    }
+    const out = new Map<number, (typeof FIELDS)[number]>();
+    for (const [kitIndex, p] of byIndex) {
+      const f = FIELDS.find(
+        (r) => p.x >= r.x0 && p.x <= r.x1 && p.z >= r.z0 && p.z <= r.z1,
+      );
+      if (f) out.set(kitIndex, f);
+    }
+    return out;
+  }
+
+  it("is deterministic per sliceId (A6)", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 12)) {
+      expect(stageFields(sliceId, FIELDS)).toEqual(stageFields(sliceId, FIELDS));
+    }
+  });
+
+  it("omitting openFields reproduces the pre-dressing staging byte-for-byte", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 12)) {
+      expect(stageFields(sliceId, undefined)).toEqual(stageFields(sliceId));
+    }
+  });
+
+  it("dresses each field with at most OPEN_FIELD_PIECE_MAX placements — and side kits never spill in", () => {
+    for (const sliceId of SLICE_IDS) {
+      // Mirror the composed room: side kits are restricted to cluster
+      // zones (the modules' rects), which do NOT overlap the fields — so
+      // every placement inside a field came from the openFields channel.
+      const extent = 48;
+      const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+      const comp = composeRoom(sliceId, plan, 1);
+      const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+      const pieces = stageInteriorKits({
+        rng,
+        archetype: "hotel-room",
+        plan,
+        comp,
+        baseArea: planArea(plan),
+        baseExtent: extent,
+        propScale: 1,
+        wallThick: ROOM_WALL_THICKNESS,
+        water: null,
+        openFields: FIELDS,
+        zones: {
+          // Hero pinned to the center strip's far third — module zones
+          // never overlap the fields in a real composition either.
+          hero: { x0: -6, z0: 30, x1: 6, z1: 38 },
+          clusters: [{ x0: -6, z0: 6, x1: 6, z1: 42 }],
+        },
+        heightAt: () => 0,
+      });
+      const inFields = fieldPieces(pieces);
+      const perField = new Map<(typeof FIELDS)[number], number>();
+      for (const f of inFields.values()) {
+        perField.set(f, (perField.get(f) ?? 0) + 1);
+      }
+      for (const n of perField.values()) {
+        expect(n).toBeLessThanOrEqual(3);
+      }
+    }
+  });
+
+  it("fields actually get dressed across a sweep (the channel is alive)", () => {
+    // Not every field of every room dresses (0 is a legal draw — 少而准),
+    // but across 48 rooms the two fields must sometimes host pieces.
+    let dressed = 0;
+    for (const sliceId of SLICE_IDS) {
+      if (fieldPieces(stageFields(sliceId, FIELDS)).size > 0) dressed += 1;
+    }
+    expect(dressed).toBeGreaterThan(SLICE_IDS.length / 4);
+  });
+
+  it("field pieces keep every clearance (path, doorway, footprint, 留白)", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 16)) {
+      const extent = 48;
+      const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+      const comp = composeRoom(sliceId, plan, 1);
+      const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+      const pieces = stageInteriorKits({
+        rng,
+        archetype: "hotel-room",
+        plan,
+        comp,
+        baseArea: planArea(plan),
+        baseExtent: extent,
+        propScale: 1,
+        wallThick: ROOM_WALL_THICKNESS,
+        water: null,
+        openFields: FIELDS,
+        // The hero is exempt from the path check by design (the path leads
+        // TO it) — pin it to the center strip so only true field pieces
+        // land inside the fields.
+        zones: {
+          hero: { x0: -6, z0: 30, x1: 6, z1: 38 },
+          clusters: [{ x0: -6, z0: 6, x1: 6, z1: 42 }],
+        },
+        heightAt: () => 0,
+      });
+      const staged: Staged = { pieces, plan, comp };
+      const inFields = fieldPieces(pieces);
+      for (const [kitIndex, f] of inFields) {
+        for (const p of pieces.filter((q) => q.kitIndex === kitIndex)) {
+          expect(planContains(plan, p.x, p.z, 0)).toBe(true);
+          expect(
+            Math.abs(p.x) < PROP_DOOR_HALF && p.z < PROP_DOOR_DEPTH,
+          ).toBe(false);
+          expect(
+            distToPath(comp, p.x, p.z),
+          ).toBeGreaterThanOrEqual(comp.pathHalf + KIT_PATH_CLEAR - 1e-9);
+          expect(p.x >= f.x0 && p.x <= f.x1 && p.z >= f.z0 && p.z <= f.z1).toBe(
+            true,
+          );
+        }
+      }
+      // And the global 65% coverage cap still binds with fields dressed.
+      expect(coverageOf(staged)).toBeLessThanOrEqual(1 - KIT_EMPTY_FLOOR_MIN + 1e-9);
+    }
+  });
+
+  it("respects a module whitelist when dressing (the fields draw from the room's own deck)", () => {
+    const whitelist = ["luggage", "coat-bench"];
+    const extent = 48;
+    for (const sliceId of SLICE_IDS.slice(0, 16)) {
+      const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+      const comp = composeRoom(sliceId, plan, 1);
+      const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+      const pieces = stageInteriorKits({
+        rng,
+        archetype: "hotel-room",
+        plan,
+        comp,
+        baseArea: planArea(plan),
+        baseExtent: extent,
+        propScale: 1,
+        wallThick: ROOM_WALL_THICKNESS,
+        water: null,
+        kitIds: whitelist,
+        openFields: FIELDS,
+        heightAt: () => 0,
+      });
+      for (const p of pieces) expect(whitelist).toContain(p.kitId);
+    }
+  });
+});

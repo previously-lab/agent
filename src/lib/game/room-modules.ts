@@ -35,15 +35,36 @@
  * WIRING (2026-10, the renderer adoption). The renderer and the movement
  * clamp both derive the room's dims from ONE recipe view — room-plan.ts's
  * scaledRecipeFor — which swaps the tier dims for the composition's
- * width/extent for interior rooms via `compositionForRecipe` below. That
- * path is a pure function of the recipe ALONE (the clamp's call chain in
- * game-canvas.tsx can never see the runtime strand-door count), so the live
- * resolution pins `doorCount = 0` and steers the module count by the SIZE
- * TIER instead (§8.3: "large" is MORE modules — S keeps a single module, M
- * two, L three, XL four). A day busier than the composition's declared
- * ceiling rides the §10.5 placement ladder (double-row screens, then axial
- * overflow) exactly as the template layer's overflows always did — the
- * door-load growth below stays available to any caller that HAS the count.
+ * width/extent for interior rooms via `compositionForRecipe` below.
+ *
+ * DOOR LOAD (§8.4 — the composition grows by content): `compositionForRecipe`
+ * takes the runtime strand-door count as an OPTIONAL argument (default 0 —
+ * a caller without the count sees today's behaviour byte-for-byte). The
+ * count is a PURE DERIVATION of the memory/strand graph for the slice
+ * (game-shell.tsx's buildRoomDoorMap — no clock, no randomness, no
+ * render-time lookup), hence a legal pure-function input under A6: same
+ * (worldSeed, sliceId, worldClass, archetype, doorCount) ⇒ same composition,
+ * always. The integrator freezes the count into the ActiveSpace at the wall
+ * crossing (game-canvas.tsx), so the renderer and the clamp share ONE value
+ * for the whole visit — the room can never morph mid-stay when the strand
+ * lane resolves after the mount. The size tier keeps its say as the count
+ * hint (§8.3: S one module, M two, L three, XL four — "large" is MORE
+ * modules); the door load then pushes the count UPWARD while the placement's
+ * declared ceiling cannot absorb it (§8.2: each module declares its own
+ * capacity): a busy day grows modules, and more modules ⇒ a longer north
+ * wall (§10.5), never doors squeezed onto the east/west walls. A day busier
+ * than the composition's declared ceiling rides the §10.5 placement ladder
+ * (double-row screens, then axial overflow) exactly as the template layer's
+ * overflows always did — room-doors.ts's six-rung ladder stays the last
+ * insurance, unchanged.
+ *
+ * OPEN FIELDS (随机区域, §8.2): resolved as the bounding rect's voids and
+ * DRESSED SPARSELY at staging time — kits.ts's stageInteriorKits takes the
+ * fields as an optional channel (0–3 seeded pieces per field, drawn from
+ * the room's module-filtered deck, riding the same clearance and 留白
+ * machinery). Placement must clear the walk path and the door approaches,
+ * which exist only on the SCALED plan — so the dressing lives in staging,
+ * not here; this module only declares WHERE the fields are.
  */
 import {
   INTERIOR_KITS,
@@ -594,8 +615,10 @@ export interface RoomComposition {
   modules: readonly PlacedModule[];
   seams: readonly ModuleSeam[];
   /** The 随机区域: module-scale open fields inside the bounding rect that
-   *  no module claims — room-frame rects, dressed only sparsely (today:
-   *  kept empty; a future sparse-scatter channel reads this). */
+   *  no module claims — room-frame rects, dressed only sparsely by the
+   *  staging channel (kits.ts's openFields input: 0–3 seeded pieces per
+   *  field from the room's module-filtered deck, same clearances and 留白
+   *  budget as the module floors). */
   openFields: readonly { x0: number; z0: number; x1: number; z1: number }[];
   /** Declared door ceiling of the whole composition: the sum of the
    *  placed modules' ceilings, counting only modules that actually expose
@@ -1032,23 +1055,24 @@ export const TIER_MODULE_COUNTS: Record<SpaceRecipe["size"]["id"], number> = {
  * The composition of one recipe's room — the ONE resolution the whole
  * render/contain chain shares (scaledRecipeFor sizes the plan from it;
  * the renderer's template branch folds the same value into a synthetic
- * RoomTemplate). Pure function of the recipe alone: the runtime strand-door
- * count never reaches the recipe layer (the movement clamp's call chain
- * could not see it), so the door load is pinned to 0 and busy days ride
- * the §10.5 placement ladder instead — see the module header. Returns null
- * for every non-interior class, where the room stays byte-for-byte as it
- * was before modules.
+ * RoomTemplate). Pure function of the recipe plus the caller's strand-door
+ * count (default 0 — identical to every pre-door-load resolution): the
+ * count is derived from the strand graph by the data lane, and freezing it
+ * per visit keeps the renderer and the clamp on one value (see the module
+ * header). Returns null for every non-interior class, where the room stays
+ * byte-for-byte as it was before modules.
  */
 export function compositionForRecipe(
   recipe: SpaceRecipe,
   worldSeed: string = WORLD_SEED,
+  doorCount: number = 0,
 ): RoomComposition | null {
   if (recipe.worldClass !== "interior") return null;
   return resolveRoomComposition(
     recipe.sliceId,
     recipe.worldClass,
     recipe.archetype,
-    0,
+    doorCount,
     worldSeed,
     TIER_MODULE_COUNTS[recipe.size.id],
   );
@@ -1172,9 +1196,11 @@ function edgeToWallRole(edge: ModuleEdge): "left" | "right" | "far" | null {
  * Zones: each module's module-local zones are mapped through its placed
  * rect into room-normalized coordinates; the PRIMARY module's hero zone
  * and heroKit become the room's hero (every other module's hero zone
- * demotes to a cluster rect); the open fields and a full-width entrance
- * apron join the keep-empty set, so the ≥35%-empty-floor rule (§4.5)
- * holds at the module level by construction, not by scatter luck.
+ * demotes to a cluster rect); a full-width entrance apron joins the
+ * keep-empty set, so the ≥35%-empty-floor rule (§4.5) holds at the module
+ * level by construction, not by scatter luck. The open fields stay OUT of
+ * the zone set — they are dressed sparsely by the staging channel instead
+ * (see the openFields note in the function body).
  *
  * Doors: the affordance permits exactly the wall roles at least one
  * EXPOSED door-eligible module edge maps to — a module buried inside the
@@ -1225,17 +1251,11 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
     kind: "keep-empty",
     rect: { x: [0, 1], z: [0, Math.min(1.2 / comp.extent, 0.12)] },
   });
-  // The open fields stay empty today (the sparse-dressing channel reads
-  // comp.openFields when it lands).
-  for (const f of comp.openFields) {
-    zones.push({
-      kind: "keep-empty",
-      rect: {
-        x: [(f.x0 + comp.width / 2) / comp.width, (f.x1 + comp.width / 2) / comp.width],
-        z: [f.z0 / comp.extent, f.z1 / comp.extent],
-      },
-    });
-  }
+  // The open fields are NOT keep-empty zones: they are dressed — sparsely —
+  // by the staging channel (kits.ts's openFields input, fed straight from
+  // comp.openFields). The ≥35%-empty-floor rule (§4.5) still binds there:
+  // field pieces draw from the same seeded deck and count against the same
+  // global coverage budget as every other kit.
 
   const doorWalls = new Set<"left" | "right" | "far">();
   for (const placed of comp.modules) {

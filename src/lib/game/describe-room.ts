@@ -98,8 +98,10 @@ import {
 export interface DescribeRoomOptions {
   /** The runtime strand-door count (the strand graph's say). When given
    *  WITH `corridorSide`, the doors are placed exactly as the renderer
-   *  places them; alone it only steers template selection (as the real
-   *  count does at render time). */
+   *  places them; alone it steers BOTH the module composition's sizing
+   *  (§8.4 — a busy day grows modules) and the template selection, exactly
+   *  as the real count does at render time. Absent = 0, the doorless
+   *  derivation a room frozen before the strand lane resolved has. */
   strandDoors?: number;
   /** Which side of the corridor the room's door sits on — the room's
    *  mirror (roomOrientationFor: a north-side door means dir = 1). Needed
@@ -231,20 +233,24 @@ export function describeRoom(
   // The renderer's own derivation order (space.tsx SpaceScene /
   // game-canvas.tsx roomGeometryForSpace), same functions, same arguments.
   const recipe = compileSpaceRecipe(sliceId, WORLD_SEED);
-  const { recipe: scaled, scale } = scaledRecipeFor(recipe);
+  // The strand-door count steers the composition the same way the renderer
+  // steers it (§8.4): absent = 0, the doorless derivation the renderer's
+  // own pre-strand resolutions freeze — a description WITH the count
+  // matches a room built WITH it.
+  const strandDoors = options.strandDoors ?? 0;
+  const { recipe: scaled, scale } = scaledRecipeFor(recipe, strandDoors);
   const scaleFactor = scale.factor;
   const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
   const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
   const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
   const width = scaled.width;
   const extent = scaled.size.extent;
-  const strandDoors = options.strandDoors ?? 0;
 
   // Layout resolution: a composed interior's template IS its module
   // composition; other rooms draw from the §7 catalogue (measured
   // selection — capacity measured on the scaled plan, like the renderer's
   // roomTemplateForDoorCount).
-  const composition = compositionForRecipe(recipe, WORLD_SEED);
+  const composition = compositionForRecipe(recipe, WORLD_SEED, strandDoors);
   const template = composition
     ? compositionTemplateFor(composition)
     : resolveRoomTemplate(
@@ -343,6 +349,19 @@ export function describeRoom(
       // render, and a room that grew strand doors may shift a side kit.
       doors: doorClearanceSet(placedLayout?.doors ?? []),
       ...(kitIds ? { kitIds } : {}),
+      // §8.2 随机区域: the composition's open fields dress sparsely (0–3
+      // seeded pieces) — the same scaled plan coordinates the renderer
+      // passes, so the outline lists exactly what the room grows.
+      ...(composition && composition.openFields.length > 0
+        ? {
+            openFields: composition.openFields.map((f) => ({
+              x0: f.x0 * scaleFactor,
+              z0: f.z0 * scaleFactor,
+              x1: f.x1 * scaleFactor,
+              z1: f.z1 * scaleFactor,
+            })),
+          }
+        : {}),
       ...(template ? { zones: templateZonesFor(template, plan) } : {}),
       heightAt: (x, z) => terrainHeight(scaled, x, z),
     });

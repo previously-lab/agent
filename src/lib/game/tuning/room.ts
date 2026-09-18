@@ -410,6 +410,12 @@ export const KIT_WALL_CLEAR = 0.35;
  *  them even when a legal spot existed — the budget is pure CPU at mount
  *  time, no draw-call cost. */
 export const KIT_PLACE_ATTEMPTS = 120;
+/** The 随机区域 sparse-dressing ceiling (§8.2): each open field grows at
+ *  most this many kit pieces — 0–3 seeded, sparse by construction (most
+ *  fields draw none), never a grid (positions are uniform draws, never
+ *  equidistant), and every piece still counts against the 留白 floor
+ *  above (§6's bans bind in the fields exactly as on the module floors). */
+export const OPEN_FIELD_PIECE_MAX = 3;
 
 /* ------------------------------------------------------------------ */
 /* dado-band (v0.11-room-interiors §3.2): baseboard + panelled          */

@@ -120,16 +120,19 @@ export function scaleNotationFor(
  * come from the slice's MODULE COMPOSITION (room-modules.ts
  * compositionForRecipe — "large" is MORE modules, never a bigger tier),
  * scaled like any other dims. The composition is a pure function of the
- * recipe, so the renderer and the movement clamp derive the same room
- * without ever sharing state. Rooms the catalogue cannot serve (every
- * non-interior class today) keep the tier dims byte-for-byte.
+ * recipe PLUS the caller's strand-door count (§8.4 — the composition grows
+ * by content; default 0 = a doorless derivation, byte-for-byte the old
+ * behaviour), so the renderer and the movement clamp derive the same room
+ * by passing the SAME count — the integrator freezes it per visit in the
+ * ActiveSpace. Rooms the catalogue cannot serve (every non-interior class
+ * today) keep the tier dims byte-for-byte.
  */
-export function scaledRecipeFor(recipe: SpaceRecipe): {
+export function scaledRecipeFor(recipe: SpaceRecipe, roomDoorCount: number = 0): {
   recipe: SpaceRecipe;
   scale: ScaleNotation;
 } {
   const scale = scaleNotationFor(recipe.sliceId);
-  const composition = compositionForRecipe(recipe);
+  const composition = compositionForRecipe(recipe, WORLD_SEED, roomDoorCount);
   const baseWidth = composition ? composition.width : recipe.width;
   const baseExtent = composition ? composition.extent : recipe.size.extent;
   if (scale.factor === 1 && !composition) return { recipe, scale };

@@ -42,6 +42,7 @@ import {
   KIT_PATH_CLEAR,
   KIT_PLACE_ATTEMPTS,
   KIT_WALL_CLEAR,
+  OPEN_FIELD_PIECE_MAX,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
 } from "./tuning/room";
@@ -753,6 +754,14 @@ export interface KitStaging {
    *  the same archetype eligibility above, so the whitelist never widens
    *  a kit's gate). Omitted = the full deck, byte-for-byte as today. */
   kitIds?: readonly string[];
+  /** The 随机区域 open fields (§8.2) of a COMPOSED room, in the scaled
+   *  plan's coordinates: each field dresses with 0–3 seeded pieces drawn
+   *  from the same (module-filtered) deck — sparse by construction, never
+   *  equidistant (uniform draws inside the rect), under the same
+   *  clearance, coverage, and path promises as every other piece. The
+   *  fields are NOT keep-empty zones; omitting this reproduces the empty
+   *  fields of the pre-dressing build. */
+  openFields?: readonly KitZoneRect[];
   /** Terrain snap for piece y (the shared heightfield). */
   heightAt: (x: number, z: number) => number;
 }
@@ -938,7 +947,10 @@ function drawKitTransform(
  *     tapering per tier, KIT_COUNT_MAX backstop), wall-anchored or free
  *     per kit, never touching each other (KIT_GAP), and hard-capped so at
  *     least KIT_EMPTY_FLOOR_MIN of the scaled floor stays empty.
- *  3. CLEARANCES: every piece stays inside the walkable footprint, out of
+ *  3. OPEN FIELDS (§8.2 随机区域): a composed room's module-scale voids
+ *     dress with 0–3 seeded pieces each — from the same deck, under the
+ *     same clearances and coverage budget; most fields stay empty.
+ *  4. CLEARANCES: every piece stays inside the walkable footprint, out of
  *     the doorway strip AND out of every strand door's approach strip
  *     (B.11 — a door must stay walkable-to), off the cleared path
  *     (pathHalf + KIT_PATH_CLEAR — the ≥1.4 m promise is measured to kit
@@ -1091,6 +1103,54 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       covered += cov;
       prevId = kit.id;
       break;
+    }
+  }
+
+  // 3. Open fields (§8.2 随机区域): each module-scale void inside a composed
+  //    room draws 0–3 seeded pieces — sparse by construction (most fields
+  //    draw none), never a grid (positions are uniform draws inside the
+  //    rect, never equidistant §6), never a warehouse (the deck is the
+  //    room's module-filtered whitelist, with the same variety of small
+  //    "trace" pieces as the module floors). Every piece rides the SAME
+  //    pushKit clearance machinery as the side kits — walkable footprint,
+  //    doorway and strand-door approaches, the cleared path, the water,
+  //    the authored keep-empty zones, the kit-gap discs — and counts
+  //    against the SAME 65% coverage budget, so §6's bans bind in the
+  //    fields exactly as on the module floors. A field too small for the
+  //    margins, or a draw that finds no legal spot, simply dresses lighter:
+  //    少而准 beats 塞满.
+  if (o.openFields) {
+    for (const field of o.openFields) {
+      const wanted = Math.floor(rng() * (OPEN_FIELD_PIECE_MAX + 1));
+      for (let slot = 0; slot < wanted; slot++) {
+        if (covered + minCov > coverageCap) break;
+        for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
+          const kit = kits[Math.floor(rng() * kits.length)];
+          const cov = Math.PI * (kit.footprint * propScale) ** 2;
+          if (covered + cov > coverageCap) continue;
+          const m = wallInset + 0.2 * propScale;
+          const xLo = field.x0 + m;
+          const xHi = field.x1 - m;
+          const zLo = field.z0 + m;
+          const zHi = field.z1 - m;
+          if (xHi - xLo < 0.4 || zHi - zLo < 0.4) break;
+          const x = xLo + rng() * (xHi - xLo);
+          const z = zLo + rng() * (zHi - zLo);
+          const t: KitTransform = {
+            x,
+            z,
+            rotY: facingRotY(kit.facing, x, z, comp, water),
+            scale: propScale,
+          };
+          const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
+          if (!pieces) continue;
+          nextKitIndex += 1;
+          out.push(...pieces);
+          discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
+          covered += cov;
+          break;
+        }
+      }
     }
   }
   return out;
