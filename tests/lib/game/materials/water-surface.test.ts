@@ -1,23 +1,27 @@
 /**
  * Tests for the water surface material's pure contract
  * (src/lib/game/materials/water-surface.ts): the Beer–Lambert absorption
- * the DEPTH_ABSORPTION chunk must implement, and the mirror-constant
- * guard that keeps the shader's analytic pool bowl in sync with
- * terrain.ts's heightfield (the two must agree EXACTLY or the water's
- * depth tint and the displaced floor diverge).
+ * the DEPTH_ABSORPTION chunk must implement, and the basin contract that
+ * keeps the shader's analytic floor in sync with terrain.ts's heightfield
+ * (the two must agree EXACTLY or the water's depth tint and the displaced
+ * floor diverge). terrain.ts exports POOL_DEPTH/GROUND_Y and owns
+ * waterRectFor, so the sync is structural — these tests lock the numbers
+ * the shader rebuilds with.
  */
 import { describe, it, expect } from "vitest";
 import {
   WATER_ABSORPTION_SIGMA,
-  WATER_BOWL_DEPTH,
-  WATER_BOWL_FEATHER,
-  WATER_GROUND_Y,
   createWaterSurfaceMaterial,
   waterTransmittance,
 } from "@/lib/game/materials/water-surface";
 import { WATER_Y } from "@/lib/game/tuning/room";
 import { createWaveDriver } from "@/lib/game/materials/wave-driver";
-import { terrainHeight, waterRectFor } from "@/lib/game/terrain";
+import {
+  GROUND_Y,
+  POOL_DEPTH,
+  terrainHeight,
+  waterRectFor,
+} from "@/lib/game/terrain";
 import {
   PALETTES,
   SIZE_TIERS,
@@ -68,7 +72,8 @@ describe("waterTransmittance (Beer–Lambert)", () => {
       expect(t.alpha).toBeLessThan(1); // tile ALWAYS reads through
       prev = t.alpha;
     }
-    // The documented tuning anchors: ankle-clear rim, deep turquoise bowl.
+    // The documented tuning anchors: ankle-clear doorway ramp, light-blue
+    // flat bottom that still lets the tile read through.
     expect(waterTransmittance(0.33).alpha).toBeLessThan(0.25);
     expect(waterTransmittance(1.93).alpha).toBeGreaterThan(0.5);
     expect(waterTransmittance(1.93).alpha).toBeLessThan(0.75);
@@ -84,46 +89,47 @@ describe("waterTransmittance (Beer–Lambert)", () => {
   });
 });
 
-describe("pool-bowl mirror constants vs terrain.ts", () => {
-  it("reconstructs the exact floor height at the bowl center", () => {
+describe("basin contract vs terrain.ts (single source of truth)", () => {
+  it("reconstructs the exact flat-bottom floor height inside the rect", () => {
     const recipe = poolRecipe();
     const rect = waterRectFor(recipe);
     if (!rect) throw new Error("pool archetype must have a water rect");
-    // At the 32m tier the bowl center sits far outside the doorway funnel
-    // (cz ≥ 5 ⇒ entranceMask = 1), so terrain hits the full bowl depth.
-    const floor = terrainHeight(recipe, rect.cx, rect.cz);
+    // At the 32m tier the rect sits far outside the doorway funnel
+    // (cz ≥ 5 ⇒ entranceMask = 1), so terrain hits the full POOL_DEPTH
+    // across the whole interior — center, edge midpoints, AND corners
+    // (the straight-walled basin has no shallow corners anymore).
     expect(rect.cz).toBeGreaterThanOrEqual(5);
-    expect(floor).toBeCloseTo(WATER_GROUND_Y - WATER_BOWL_DEPTH, 10);
+    const bottom = GROUND_Y - POOL_DEPTH;
+    for (const [x, z] of [
+      [rect.cx, rect.cz],
+      [rect.cx + rect.halfX * 0.98, rect.cz],
+      [rect.cx, rect.cz + rect.halfZ * 0.98],
+      [rect.cx + rect.halfX * 0.98, rect.cz + rect.halfZ * 0.98],
+    ]) {
+      expect(terrainHeight(recipe, x, z)).toBeCloseTo(bottom, 10);
+    }
   });
 
-  it("puts the deep end in the 0.5–2m band the absorption is tuned for", () => {
-    const depth = WATER_Y - (WATER_GROUND_Y - WATER_BOWL_DEPTH);
+  it("has straight walls: deck level just outside, full depth just inside", () => {
+    const recipe = poolRecipe();
+    const rect = waterRectFor(recipe);
+    if (!rect) throw new Error("pool archetype must have a water rect");
+    const outX = rect.cx + rect.halfX + 0.01;
+    const inX = rect.cx + rect.halfX - 0.01;
+    // Far enough from the door axis that the entrance funnel cannot
+    // soften the wall (|x| ≫ DOOR_GAP_HALF + 1).
+    expect(Math.abs(inX)).toBeGreaterThan(3);
+    expect(terrainHeight(recipe, outX, rect.cz)).toBeCloseTo(GROUND_Y, 10);
+    expect(terrainHeight(recipe, inX, rect.cz)).toBeCloseTo(
+      GROUND_Y - POOL_DEPTH,
+      10,
+    );
+  });
+
+  it("puts the flat bottom in the 0.5–2m band the absorption is tuned for", () => {
+    const depth = WATER_Y - (GROUND_Y - POOL_DEPTH);
     expect(depth).toBeGreaterThan(1.5);
     expect(depth).toBeLessThanOrEqual(2);
-  });
-
-  it("keeps the rect CORNERS ankle-shallow (the bowl feathers outside rho = 1)", () => {
-    const recipe = poolRecipe();
-    const rect = waterRectFor(recipe);
-    if (!rect) throw new Error("pool archetype must have a water rect");
-    // terrain.ts's bowl is full-depth across the whole inscribed ellipse
-    // (rho ≤ 1) and feathers back to deck level over rho ∈ (1, 1.3) — so
-    // inside the water RECTANGLE the shallow water lives at the corners
-    // (rho → √2), not at the edge midpoints.
-    const cornerX = rect.cx + rect.halfX * 0.98;
-    const cornerZ = rect.cz + rect.halfZ * 0.98;
-    const floor = terrainHeight(recipe, cornerX, cornerZ);
-    expect(floor).toBeCloseTo(WATER_GROUND_Y, 1);
-    const cornerDepth = WATER_Y - floor;
-    expect(cornerDepth).toBeLessThan(0.5);
-    // ...and the edge midpoints are already at full depth (rho = 1).
-    const midFloor = terrainHeight(recipe, rect.cx + rect.halfX * 0.98, rect.cz);
-    expect(midFloor).toBeCloseTo(WATER_GROUND_Y - WATER_BOWL_DEPTH, 1);
-  });
-
-  it("documents the feather it mirrors", () => {
-    // terrain.ts BOWL_FEATHER is 0.3 in normalized ellipse-radius units.
-    expect(WATER_BOWL_FEATHER).toBe(0.3);
   });
 });
 
@@ -139,9 +145,9 @@ describe("createWaterSurfaceMaterial", () => {
     expect(water.material.normalMap).not.toBeNull();
     expect(typeof water.update).toBe("function");
     expect(water.material.customProgramCacheKey?.()).toBe(
-      "previously-water-v2",
+      "previously-water-v3",
     );
-    water.update(1.5); // scroll offsets advance without a GL context
+    water.update(1.5); // a stable no-op without a GL context
     water.dispose();
   });
 

@@ -97,7 +97,8 @@ describe("applyPoolCaustics", () => {
       w: number;
     };
     expect([rect.x, rect.y, rect.z, rect.w]).toEqual([0, 8, 4, 3]);
-    expect(shader.uniforms.uCausticsIntensity.value).toBe(1.5);
+    // Caller's intensity scaled by the module's output gain (0.4).
+    expect(shader.uniforms.uCausticsIntensity.value).toBeCloseTo(1.5 * 0.4, 10);
     const cell = shader.uniforms.uCausticsCell.value as Vector2;
     expect(cell.x).toBe(CAUSTICS_CELL_METERS);
     expect(shader.uniforms.uCausticsA.value).toBe(sharedCausticsTextures()[0]);

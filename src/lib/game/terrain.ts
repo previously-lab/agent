@@ -13,9 +13,10 @@
  * floor plan; nothing is clamped to the plan:
  *   - flat (meadow, interiors, wonders, snow, …) is GROUND_Y everywhere.
  *   - rolling (plains, forest) continues as fbm noise beyond the plan edges.
- *   - sunken (pool, pool-hall, ducks) feathers back to GROUND_Y beyond the
- *     basin rim; the basin is an ellipse fitted to the water rectangle
- *     (see waterRectFor), centered on the water, not necessarily the room.
+ *   - sunken (pool, pool-hall, ducks) is a rectangular straight-walled
+ *     basin with a flat bottom: full POOL_DEPTH inside the water rectangle
+ *     (see waterRectFor), GROUND_Y outside it, no rim slope. The only
+ *     softening is the doorway entrance funnel below.
  * The entrance funnel (a 2.4m-wide strip at the doorway, flattened so the
  * player can always walk in) applies to every ground kind — for sunken it
  * matters on small tiers, where the basin rim would otherwise cross the
@@ -43,10 +44,13 @@ const ROLLING_AMPLITUDE = 1.2;
 /** Rolling noise frequency: ~1 sample per 11m before octaves. */
 const ROLLING_FREQUENCY = 0.09;
 const ROLLING_OCTAVES = 4;
-/** Sunken basin depth in meters. */
-const BOWL_DEPTH = 1.6;
-/** Basin rim feather, in normalized ellipse-radius units. */
-const BOWL_FEATHER = 0.3;
+/** Sunken basin depth in meters — every sunken room is a rectangular
+ *  straight-walled pool with a flat bottom this far below GROUND_Y.
+ *  Exported as the SINGLE definition of the basin shape: the water
+ *  material (materials/water-surface.ts) rebuilds the water depth from
+ *  this constant plus waterRectFor, so geometry and shading can never
+ *  drift apart. */
+export const POOL_DEPTH = 1.6;
 
 /**
  * Terrain flattening mask at the doorway: 1 everywhere except a funnel
@@ -137,14 +141,15 @@ export function terrainHeight(
   } else if (spec.ground === "sunken") {
     const rect = waterRectFor(recipe);
     if (rect) {
-      const rho = Math.hypot(
-        (localX - rect.cx) / rect.halfX,
-        (localZ - rect.cz) / rect.halfZ,
-      );
-      height =
-        -BOWL_DEPTH *
-        (1 - smoothstep(1, 1 + BOWL_FEATHER, rho)) *
-        entranceMask(localX, localZ);
+      // Straight walls, flat bottom: full depth inside the water
+      // rectangle, deck level outside it. The entrance funnel is the one
+      // softening, so the player can always walk in at the doorway.
+      const inside =
+        Math.abs(localX - rect.cx) <= rect.halfX &&
+        Math.abs(localZ - rect.cz) <= rect.halfZ;
+      if (inside) {
+        height = -POOL_DEPTH * entranceMask(localX, localZ);
+      }
     }
   }
   return GROUND_Y + height;

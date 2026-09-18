@@ -70,9 +70,11 @@ export interface PoolCausticsOptions {
    */
   color?: ColorRepresentation;
   /**
-   * Emissive multiplier on the web product (default 1). The product's mean
-   * is ≈0.04 with sub-1% pixels above 0.5 (see caustics.ts), so values up
-   * to ~2 stay believable; the floor's own lighting supplies the base.
+   * Emissive multiplier on the web product (default 1), before the
+   * module's CAUSTICS_OUTPUT_GAIN — the product's mean is ≈0.04 with
+   * sub-1% pixels above 0.5 (see caustics.ts), and the gain scales the
+   * result down to "light dappling through water" (see its doc); the
+   * floor's own lighting supplies the base.
    */
   intensity?: number;
   /**
@@ -88,17 +90,30 @@ export interface PoolCaustics {
 }
 
 /**
- * Meters per texture repeat (default): 3m / 5 cells puts the bright
- * filaments ~0.6m apart — two tile widths at the basin's 0.3m tile scale,
- * the spacing real pool caustics read at. Smaller cells turn to noise under
- * minification, larger ones lose the "web" density.
+ * Meters per texture repeat (default): 4.5m / 5 cells puts the bright
+ * filaments ~0.9m apart — three tile widths at the basin's 0.3m tile
+ * scale. Was 3m (filaments ~0.6m): at pool scale that density tiled the
+ * whole floor into a continuous net that read as a pattern ON the water
+ * surface (v0.11 user review). The sparser web keeps the "refracted
+ * light" read at room scale without wallpapering the pool.
  */
-export const CAUSTICS_CELL_METERS = 3;
+export const CAUSTICS_CELL_METERS = 4.5;
 
 /**
- * Counter-scroll velocities in texture-repeats/sec, same speed band as the
- * water surface's ripple layers (WATER_RIPPLE_LAYERS) so the floor light
- * and the surface above it drift together. Opposite x signs and mutually
+ * Output gain applied on top of the caller's intensity. The web product's
+ * bright filaments peak near 0.5–1.0, so at intensity 1 unscaled the
+ * emissive web hit ~0.5–1.0 white across the whole floor — through the
+ * water's α ≈ 0.55 that still out-shone the water body itself and read
+ * as a net printed on the surface (v0.11 user review). 0.4 lands the
+ * filaments at ~0.2–0.4 emissive: clearly visible dappling through the
+ * water, always subordinate to the water's own color.
+ */
+const CAUSTICS_OUTPUT_GAIN = 0.4;
+
+/**
+ * Counter-scroll velocities in texture-repeats/sec, in the same slow band
+ * the water surface's wave field moves at, so the floor light and the
+ * surface above it drift together. Opposite x signs and mutually
  * incommensurate components mean the two webs take minutes to re-align.
  */
 const CAUSTICS_SCROLL_A = { vx: 0.021, vy: 0.013 } as const;
@@ -223,7 +238,9 @@ export function applyPoolCaustics(
       },
       uCausticsCell: { value: new Vector2(cell, cell) },
       uCausticsColor: { value: new Color(opts.color ?? 0xffffff) },
-      uCausticsIntensity: { value: opts.intensity ?? 1 },
+      uCausticsIntensity: {
+        value: (opts.intensity ?? 1) * CAUSTICS_OUTPUT_GAIN,
+      },
     });
     if (!shader.fragmentShader.includes(CAUSTICS_DECLS_PROBE)) {
       if (!shader.fragmentShader.includes(EMISSIVE_INCLUDE)) {

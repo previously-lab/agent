@@ -24,8 +24,8 @@ import { CONCRETE_ALBEDO_MEAN, TILE_ALBEDO_MEAN } from "@/lib/game/materials";
 import {
   CONCRETE_SPAN_METERS,
   TILE_SPAN_METERS,
-  WATER_RIPPLE_LAYERS,
 } from "@/lib/game/tuning/room";
+import { POOL_DEPTH } from "@/lib/game/terrain";
 
 /** The tangent-space packed sample the patch must eliminate (the dead
  *  object-space branch keeps its own unpack — assert on the exact line). */
@@ -151,53 +151,36 @@ describe("createWaterSurfaceMaterial", () => {
     spanY: 8,
   };
 
-  it("compiles the layered raw-normal blend and the Beer–Lambert depth model", () => {
+  it("compiles the wave-field-only normal and the Beer–Lambert depth model", () => {
     const water = createWaterSurfaceMaterial(opts);
-    const layers = sharedWaterNormalTextures();
-    expect(water.material.normalMap).toBe(layers[0]);
+    // The normalMap slot stays bound (never sampled) so three compiles the
+    // tangent-frame math; the packed texture sample must be gone.
+    expect(water.material.normalMap).not.toBeNull();
+    expect(water.material.normalScale.x).toBe(1);
     expect(water.material.transparent).toBe(true);
     expect(water.material.defines).toMatchObject({ USE_UV: "" });
 
     const shader = stubShader();
     water.material.onBeforeCompile(shader, null as never);
-    expect(shader.uniforms.uWaterNormalB.value).toBe(layers[1]);
-    expect(shader.uniforms.uWaterNormalC.value).toBe(layers[2]);
-    expect(shader.fragmentShader).toContain("waterNA");
+    expect(shader.fragmentShader).toContain("waveSlope");
     expect(shader.fragmentShader).not.toContain(PACKED_MAPN_LINE);
-    expect(shader.fragmentShader).toContain("uWaterSigma");
-    expect(shader.fragmentShader).toContain("uWaveHeight");
-    // Per-layer repeat is span / wavelength, isotropic per axis.
-    const scrollA = shader.uniforms.uWaterScrollA.value as {
-      x: number;
-      y: number;
-    };
-    expect(scrollA.x).toBeCloseTo(12 / WATER_RIPPLE_LAYERS[0].meters, 6);
-    expect(scrollA.y).toBeCloseTo(8 / WATER_RIPPLE_LAYERS[0].meters, 6);
+    // No texture pattern on the surface: the old scrolling ripple layers
+    // left no samplers or scroll uniforms behind.
+    expect(shader.uniforms.uWaterNormalB).toBeUndefined();
+    expect(shader.uniforms.uWaterScrollA).toBeUndefined();
+    expect(shader.uniforms.uWaterSigma).toBeDefined();
+    expect(shader.uniforms.uWaveHeight).toBeDefined();
+    // The depth model is the straight-walled basin: a single depth
+    // uniform, fed from terrain.ts's POOL_DEPTH — no bowl constants.
+    expect(shader.uniforms.uWaterDepth.value).toBe(POOL_DEPTH);
+    expect(shader.uniforms.uWaterBowl).toBeUndefined();
     water.dispose();
   });
 
-  it("scrolls ripples as a pure function of the clock (determinism)", () => {
-    const a = createWaterSurfaceMaterial(opts);
-    const b = createWaterSurfaceMaterial(opts);
-    const shaderA = stubShader();
-    const shaderB = stubShader();
-    a.material.onBeforeCompile(shaderA, null as never);
-    b.material.onBeforeCompile(shaderB, null as never);
-    a.update(1.5);
-    b.update(1.5);
-    const offsetsA = shaderA.uniforms.uWaterScrollB.value as {
-      z: number;
-      w: number;
-    };
-    const offsetsB = shaderB.uniforms.uWaterScrollB.value as {
-      z: number;
-      w: number;
-    };
-    expect(offsetsA.z).toBeCloseTo((1.5 * WATER_RIPPLE_LAYERS[1].vx) % 1, 6);
-    expect(offsetsA.w).toBeCloseTo((1.5 * WATER_RIPPLE_LAYERS[1].vy) % 1, 6);
-    expect(offsetsA.z).toBe(offsetsB.z);
-    expect(offsetsA.w).toBe(offsetsB.w);
-    a.dispose();
-    b.dispose();
+  it("keeps update() as a stable no-op for the frame loop's call site", () => {
+    const water = createWaterSurfaceMaterial(opts);
+    expect(typeof water.update).toBe("function");
+    expect(() => water.update(1.5)).not.toThrow();
+    water.dispose();
   });
 });

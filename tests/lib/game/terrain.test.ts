@@ -11,6 +11,7 @@ import {
   waterRectFor,
   waterSideFor,
   GROUND_Y,
+  POOL_DEPTH,
 } from "@/lib/game/terrain";
 import {
   ARCHETYPE_IDS,
@@ -100,6 +101,37 @@ describe("terrainHeight", () => {
       const corner = terrainHeight(recipe, recipe.width / 2, 0);
       expect(center).toBeLessThan(GROUND_Y - 1.5);
       expect(corner).toBeCloseTo(GROUND_Y, 6);
+    }
+  });
+
+  it("builds a straight-walled, flat-bottomed basin (no curved slope)", () => {
+    for (const tier of SIZE_TIERS) {
+      const recipe = makeRecipe("pool", tier.extent);
+      const rect = waterRectFor(recipe);
+      expect(rect).not.toBeNull();
+      if (!rect) continue;
+      const bottom = GROUND_Y - POOL_DEPTH;
+      // Flat bottom: every interior sample clear of the doorway funnel
+      // sits at exactly the same depth (center, edges, corners alike).
+      for (const [x, z] of [
+        [rect.cx, rect.cz],
+        [rect.cx + rect.halfX * 0.98, rect.cz],
+        [rect.cx - rect.halfX * 0.98, rect.cz],
+        [rect.cx, rect.cz + rect.halfZ * 0.98],
+        [rect.cx + rect.halfX * 0.98, rect.cz + rect.halfZ * 0.98],
+      ]) {
+        expect(terrainHeight(recipe, x, z)).toBeCloseTo(bottom, 10);
+      }
+      // Straight walls: a 2cm step across the waterline crosses the full
+      // depth — there is no feathered rim anywhere on the rectangle.
+      const outX = rect.cx + rect.halfX + 0.01;
+      const inX = rect.cx + rect.halfX - 0.01;
+      expect(terrainHeight(recipe, outX, rect.cz)).toBeCloseTo(GROUND_Y, 10);
+      expect(terrainHeight(recipe, inX, rect.cz)).toBeCloseTo(bottom, 10);
+      const outZ = rect.cz + rect.halfZ + 0.01;
+      const inZ = rect.cz + rect.halfZ - 0.01;
+      expect(terrainHeight(recipe, rect.cx, outZ)).toBeCloseTo(GROUND_Y, 10);
+      expect(terrainHeight(recipe, rect.cx, inZ)).toBeCloseTo(bottom, 10);
     }
   });
 
