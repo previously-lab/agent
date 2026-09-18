@@ -10,9 +10,11 @@ import { describe, it, expect } from "vitest";
 import {
   DataTexture,
   FloatType,
+  HalfFloatType,
   LinearFilter,
   LinearMipmapLinearFilter,
   MeshStandardMaterial,
+  RedFormat,
   RepeatWrapping,
   RGBAFormat,
   Vector2,
@@ -22,8 +24,11 @@ import {
 import {
   applyPoolCaustics,
   CAUSTICS_CELL_METERS,
+  refractUvDeltaFromMeters,
+  WATER_REFRACT_GAIN,
 } from "@/lib/game/materials/caustics-surface";
 import { sharedCausticsTextures } from "@/lib/game/materials/shared";
+import { TILE_SPAN_METERS } from "@/lib/game/tuning/room";
 
 const RECT = { cx: 0, cz: 8, halfX: 4, halfZ: 3 };
 const SPAN = { spanX: 12, spanY: 16 };
@@ -34,7 +39,7 @@ function fakeShader() {
     uniforms: {} as Record<string, { value: unknown }>,
     vertexShader: "void main() { }",
     fragmentShader:
-      "uniform vec3 totalEmissiveRadiance;\nvoid main() {\n#include <emissivemap_fragment>\n}",
+      "uniform vec3 totalEmissiveRadiance;\nvoid main() {\n#include <map_fragment>\n#include <emissivemap_fragment>\n}",
   } as unknown as WebGLProgramParametersWithUniforms;
 }
 
@@ -43,6 +48,22 @@ function mappedMaterial(): MeshStandardMaterial {
   material.map = new DataTexture(new Uint8Array(4), 1, 1);
   return material;
 }
+
+/** The half-float height texture the wave driver hands out (128² here). */
+function waveTexture(): DataTexture {
+  const texture = new DataTexture(
+    new Uint16Array(128 * 128),
+    128,
+    128,
+    RedFormat,
+    HalfFloatType,
+  );
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  return texture;
+}
+
+const WAVE = () => ({ texture: waveTexture(), texelMeters: { x: 0.05, y: 0.04 } });
 
 describe("sharedCausticsTextures", () => {
   it("returns two seamless float layers with the library sampling policy", () => {
@@ -206,5 +227,63 @@ describe("applyPoolCaustics", () => {
     expect(
       shader.fragmentShader.split("uniform sampler2D uCausticsA;").length,
     ).toBe(2);
+  });
+
+  it("without the wave option the shader stays free of wave uniforms and offsets", () => {
+    const material = mappedMaterial();
+    applyPoolCaustics(material, { rect: RECT, ...SPAN });
+    const shader = fakeShader();
+    material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+    expect(shader.uniforms.uWaveHeight).toBeUndefined();
+    expect(shader.uniforms.uWaveTexel).toBeUndefined();
+    expect(shader.fragmentShader).not.toContain("uWaveHeight");
+    expect(shader.fragmentShader).not.toContain("refrOffset");
+    expect(shader.fragmentShader).not.toContain("texture2D( map, vMapUv + ");
+  });
+
+  it("with the wave option the floor refracts: slope block, displaced map sample, wobbling web", () => {
+    const material = mappedMaterial();
+    const wave = WAVE();
+    applyPoolCaustics(material, { rect: RECT, ...SPAN, wave });
+    const shader = fakeShader();
+    material.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+
+    // Wave uniforms: texture + texel (uv size + meters).
+    expect(shader.uniforms.uWaveHeight.value).toBe(wave.texture);
+    const texel = shader.uniforms.uWaveTexel.value as Vector2 & {
+      x: number;
+      y: number;
+      z: number;
+      w: number;
+    };
+    expect([texel.x, texel.y]).toEqual([1 / 128, 1 / 128]);
+    expect([texel.z, texel.w]).toEqual([0.05, 0.04]);
+
+    const fs = shader.fragmentShader;
+    // The slope/mask block lands ahead of the map lookup…
+    expect(fs.indexOf("refrSlope")).toBeLessThan(fs.indexOf("sampledDiffuseColor"));
+    // …the map sample carries the refraction offset (meters → map repeats)…
+    expect(fs).toContain("texture2D( map, vMapUv + vec2( refrOffset.x, -refrOffset.y )");
+    // …and the caustics web rides the same offset, amplified.
+    expect(fs).toContain(`refrOffset * 2.5`);
+    expect(fs).toContain(`${WATER_REFRACT_GAIN}`);
+    // The wave uniforms are declared exactly once.
+    expect(fs.split("uniform sampler2D uWaveHeight;").length).toBe(2);
+    // Program cache key forks so wave and plain floors never share one.
+    expect(material.customProgramCacheKey()).toContain(":caustics-v1:wave");
+  });
+});
+
+describe("refractUvDeltaFromMeters", () => {
+  it("converts meters to tile-map UV deltas with the v axis flipped", () => {
+    const d = refractUvDeltaFromMeters(0.3, 0.12);
+    expect(d.x).toBeCloseTo(0.3 / TILE_SPAN_METERS, 10);
+    expect(d.y).toBeCloseTo(-0.12 / TILE_SPAN_METERS, 10);
+  });
+
+  it("zero slope gives exactly zero offset (a calm pool is pixel-identical)", () => {
+    const d = refractUvDeltaFromMeters(0, 0);
+    expect(d.x).toBeCloseTo(0, 10);
+    expect(d.y).toBeCloseTo(0, 10);
   });
 });

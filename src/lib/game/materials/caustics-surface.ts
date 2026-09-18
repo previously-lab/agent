@@ -44,13 +44,31 @@
  * Determinism: texture content derives from WORLD_SEED; the scroll offsets
  * are a pure function of the elapsed clock (visual motion may read the
  * clock). Nothing here allocates per frame.
+ *
+ * WAVE-DRIVEN REFRACTION (optional `wave` option). True Snell refraction
+ * of the pool floor would need a scene grab pass (render the world minus
+ * water to a target, distort its UVs by the surface normal) — a full
+ * extra render per frame, rejected in water-surface.ts's documented
+ * budget. The stylized approximation instead offsets the FLOOR's own
+ * lookups by the live wave field's slope, which costs one 128² texture
+ * sample in the floor shader and no pass at all:
+ *   - the tile map's UV is displaced ∝ slope — the bricks under the water
+ *     visibly bend with the waves ("池底的砖透过水变形", §12.2);
+ *   - the caustics web's UV is displaced by the same slope (× a wobble
+ *     factor) — refracted light dances further than the floor it lands
+ *     on, which is how real pools behave.
+ * A calm pool has slope 0 everywhere, so the offsets vanish and the floor
+ * is pixel-identical to an unpatched one; dynamics keep their single
+ * source (the wave field) and a sleeping driver costs nothing here.
  */
 
 import {
   Color,
+  ShaderChunk,
   Vector2,
   Vector4,
   type ColorRepresentation,
+  type DataTexture,
   type MeshStandardMaterial,
   type WebGLProgramParametersWithUniforms,
   type WebGLRenderer,
@@ -64,6 +82,18 @@ export interface PoolCausticsOptions {
   /** Ground plane span in meters (x = width, y = extent). */
   spanX: number;
   spanY: number;
+  /**
+   * Live wave height field (wave-driver.ts). When given, the pool floor
+   * REFRACTS: the tile map's UV and the caustics web's UV are displaced by
+   * the wave field's slope, masked to the water rectangle (see module
+   * doc). When omitted the patch behaves exactly as before.
+   */
+  wave?: {
+    /** The driver's half-float height texture (R channel, meters). */
+    texture: DataTexture;
+    /** Meters per sim texel on each axis (the driver's texelMeters). */
+    texelMeters: { x: number; y: number };
+  };
   /**
    * Web tint — refracted KEY light, so tint toward the skylight/window
    * (B.13: every light has a findable source). Default white.
@@ -134,6 +164,40 @@ const LAYER_B_SCALE = 1.37;
  */
 const MASK_FEATHER_START = 0.92;
 
+/**
+ * Floor-tile refraction gain: meters of apparent tile shift per unit of
+ * wave slope. A wading footstep peaks at slope ≈ 0.27 (water-surface.ts's
+ * gain doc), so the tiles under a ring bend ≈ 3 cm — about a tenth of a
+ * tile width: clearly alive, never swimming. A calm field has slope 0, so
+ * the offset is exactly 0 and the floor is pixel-identical to an
+ * unpatched one.
+ */
+export const WATER_REFRACT_GAIN = 0.12;
+
+/**
+ * The caustics web is displaced by refrOffset × this factor: refracted
+ * LIGHT dances several times further than the apparent floor shift (the
+ * focused web sweeps with the surface, which is how real pools behave).
+ */
+const CAUSTICS_WOBBLE_FACTOR = 2.5;
+
+/**
+ * Pure mirror of the shader's meters → tile-map-UV conversion, so tests
+ * can lock the refraction UV math without compiling GLSL: the ground
+ * plane maps local meters to vMapUv at TILE_SPAN_METERS per repeat, with
+ * the plane's v axis running AGAINST +z (rotated −π/2 about X — the same
+ * flip the caustics doc documents).
+ */
+export function refractUvDeltaFromMeters(
+  offsetX: number,
+  offsetZ: number,
+): { x: number; y: number } {
+  return {
+    x: offsetX / TILE_SPAN_METERS,
+    y: -offsetZ / TILE_SPAN_METERS,
+  };
+}
+
 const FRAGMENT_DECLS = `
 uniform sampler2D uCausticsA;
 uniform sampler2D uCausticsB;
@@ -146,9 +210,56 @@ uniform vec3 uCausticsColor;
 uniform float uCausticsIntensity;
 `;
 
-const EMISSIVE_INCLUDE = "#include <emissivemap_fragment>";
+/** Wave-field uniforms, prepended only when the wave option is present. */
+const WAVE_FRAGMENT_DECLS = `
+uniform sampler2D uWaveHeight;
+uniform vec4 uWaveTexel;
+`;
 
-function buildCausticsEmissive(): string {
+/**
+ * Wave-slope sample + water-rect mask, injected ahead of map_fragment so
+ * both the tile map's UV and (later, in the emissive chunk) the caustics
+ * web's UV can displace by refrOffset. The u/v mapping mirrors
+ * waveUvForLocal (v flipped against +z); the slope is the same
+ * central-difference quotient the water surface's normal uses. Declared
+ * at main() scope WITHOUT a wrapping block: refrOffset must stay visible
+ * to the map lookup and the emissive chunk below. The patched material
+ * is guaranteed to carry a map (applyPoolCaustics throws without one),
+ * so vMapUv exists here; the refr* names are unique to this patch.
+ */
+const WAVE_REFRACT_BLOCK = `
+vec2 refr01 = vMapUv * uCausticsUvFromMap;
+vec2 refrLocal = vec2(
+	( refr01.x - 0.5 ) * uCausticsPlane.x,
+	( 1.0 - refr01.y ) * uCausticsPlane.y );
+vec2 refrUv = vec2(
+	0.5 + ( refrLocal.x - uCausticsRect.x ) / ( 2.0 * uCausticsRect.z ),
+	0.5 - ( refrLocal.y - uCausticsRect.y ) / ( 2.0 * uCausticsRect.w ) );
+float refrL = texture2D( uWaveHeight, refrUv - vec2( uWaveTexel.x, 0.0 ) ).r;
+float refrR = texture2D( uWaveHeight, refrUv + vec2( uWaveTexel.x, 0.0 ) ).r;
+float refrD = texture2D( uWaveHeight, refrUv - vec2( 0.0, uWaveTexel.y ) ).r;
+float refrU = texture2D( uWaveHeight, refrUv + vec2( 0.0, uWaveTexel.y ) ).r;
+vec2 refrSlope = vec2( refrR - refrL, refrU - refrD ) / ( 2.0 * uWaveTexel.zw );
+vec2 refrEdge = abs( refrLocal - uCausticsRect.xy ) / uCausticsRect.zw;
+float refrMask = 1.0 - smoothstep( ${MASK_FEATHER_START}, 1.0, max( refrEdge.x, refrEdge.y ) );
+vec2 refrOffset = refrSlope * ( refrMask * ${WATER_REFRACT_GAIN} );
+`;
+
+/** The map sample three's map_fragment takes (r185) — the UV is displaced
+ *  by the wave refraction offset (converted meters → map repeats). */
+const MAP_SAMPLE = "texture2D( map, vMapUv )";
+
+const EMISSIVE_INCLUDE = "#include <emissivemap_fragment>";
+const MAP_INCLUDE = "#include <map_fragment>";
+
+function buildCausticsEmissive(hasWave: boolean): string {
+  // With the wave option the web's UV rides the same refrOffset the tile
+  // map uses, amplified — refracted light sweeps further than the floor
+  // shift beneath it. refrOffset is declared by WAVE_REFRACT_BLOCK, which
+  // is injected ahead of map_fragment (earlier in main()).
+  const webUv = hasWave
+    ? `( causticsLocal + refrOffset * ${CAUSTICS_WOBBLE_FACTOR} ) / uCausticsCell`
+    : "causticsLocal / uCausticsCell";
   return `${EMISSIVE_INCLUDE}
 	{
 		vec2 caustics01 = vMapUv * uCausticsUvFromMap;
@@ -157,7 +268,7 @@ function buildCausticsEmissive(): string {
 			( 1.0 - caustics01.y ) * uCausticsPlane.y );
 		vec2 causticsEdge = abs( causticsLocal - uCausticsRect.xy ) / uCausticsRect.zw;
 		float causticsMask = 1.0 - smoothstep( ${MASK_FEATHER_START}, 1.0, max( causticsEdge.x, causticsEdge.y ) );
-		vec2 causticsUv = causticsLocal / uCausticsCell;
+		vec2 causticsUv = ${webUv};
 		float causticsWeb =
 				texture2D( uCausticsA, causticsUv + uCausticsScroll.xy ).r
 			* texture2D( uCausticsB, causticsUv * ${LAYER_B_SCALE} + uCausticsScroll.zw ).r;
@@ -165,7 +276,28 @@ function buildCausticsEmissive(): string {
 	}`;
 }
 
+/**
+ * Displaced map lookup for the wave option: three's map_fragment sample
+ * moves by the refraction offset, converted meters → map repeats exactly
+ * as refractUvDeltaFromMeters mirrors (pure twin of this GLSL).
+ */
+function buildWaveMapFragment(): string {
+  const chunk = ShaderChunk.map_fragment;
+  if (!chunk.includes(MAP_SAMPLE)) {
+    throw new Error(
+      "materials/caustics-surface: three's map_fragment no longer contains the diffuse map sample — the refraction patch needs updating for this three version",
+    );
+  }
+  return chunk.replace(
+    MAP_SAMPLE,
+    `texture2D( map, vMapUv + vec2( refrOffset.x, -refrOffset.y ) / ${TILE_SPAN_METERS} )`,
+  );
+}
+
 const CAUSTICS_PROGRAM_CACHE_TAG = ":caustics-v1";
+/** Appended when the wave option is present: the program differs (extra
+ *  uniforms + the displaced map sample), so the key must too. */
+const CAUSTICS_WAVE_CACHE_TAG = ":wave";
 
 /** The declarations the patch prepends — the idempotency probe below keys
  *  on this exact line. */
@@ -210,6 +342,7 @@ export function applyPoolCaustics(
 
   const scroll = new Vector4(0, 0, 0, 0);
   const cell = opts.cellMeters ?? CAUSTICS_CELL_METERS;
+  const hasWave = opts.wave != null;
 
   const previousOnBeforeCompile = material.onBeforeCompile;
   material.onBeforeCompile = (
@@ -241,6 +374,19 @@ export function applyPoolCaustics(
       uCausticsIntensity: {
         value: (opts.intensity ?? 1) * CAUSTICS_OUTPUT_GAIN,
       },
+      ...(opts.wave
+        ? {
+            uWaveHeight: { value: opts.wave.texture },
+            uWaveTexel: {
+              value: new Vector4(
+                1 / opts.wave.texture.image.width,
+                1 / opts.wave.texture.image.height,
+                opts.wave.texelMeters.x,
+                opts.wave.texelMeters.y,
+              ),
+            },
+          }
+        : {}),
     });
     if (!shader.fragmentShader.includes(CAUSTICS_DECLS_PROBE)) {
       if (!shader.fragmentShader.includes(EMISSIVE_INCLUDE)) {
@@ -248,18 +394,29 @@ export function applyPoolCaustics(
           "materials/caustics-surface: fragment shader has no emissivemap_fragment include",
         );
       }
-      shader.fragmentShader =
-        FRAGMENT_DECLS +
-        shader.fragmentShader.replace(
-          EMISSIVE_INCLUDE,
-          buildCausticsEmissive(),
-        );
+      let next = shader.fragmentShader.replace(
+        EMISSIVE_INCLUDE,
+        buildCausticsEmissive(hasWave),
+      );
+      if (hasWave) {
+        if (!next.includes(MAP_INCLUDE)) {
+          throw new Error(
+            "materials/caustics-surface: fragment shader has no map_fragment include for the refraction offset",
+          );
+        }
+        next = WAVE_FRAGMENT_DECLS + next;
+        next = next.replace(MAP_INCLUDE, `${WAVE_REFRACT_BLOCK}\n${MAP_INCLUDE}`);
+        next = next.replace(MAP_INCLUDE, buildWaveMapFragment());
+      }
+      shader.fragmentShader = FRAGMENT_DECLS + next;
     }
   };
 
   const previousCacheKey = material.customProgramCacheKey.bind(material);
   material.customProgramCacheKey = () =>
-    previousCacheKey() + CAUSTICS_PROGRAM_CACHE_TAG;
+    previousCacheKey() +
+    CAUSTICS_PROGRAM_CACHE_TAG +
+    (hasWave ? CAUSTICS_WAVE_CACHE_TAG : "");
 
   material.needsUpdate = true;
 

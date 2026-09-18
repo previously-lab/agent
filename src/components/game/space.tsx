@@ -110,7 +110,7 @@ import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
 import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
-import { GAME_DEBUG } from "./debug";
+import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
 import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
@@ -173,6 +173,7 @@ import {
   sharedRadialGlowTexture,
   sharedWallWashTexture,
   waveRectContains,
+  type WaveDriver,
 } from "@/lib/game/materials";
 import {
   SUN_SHADOW_BIAS,
@@ -682,8 +683,13 @@ export function buildRoomFeatures({
         out.inlay = { x0, x1, z0, z1 };
       }
     }
-    // raised-platform / water-rill / mezzanine: no §7.5 template declares
-    // them yet — the slot kinds are data for later milestones.
+    // raised-platform / water-rill / mezzanine: the FeatureKind union
+    // carries these as data for later milestones, but NO template or
+    // module declares them (the pool deck used to declare a water-rill
+    // that this loop dropped silently and describe-room still professed —
+    // removed until the rill's geometry exists). The fall-through below
+    // is intentional only while nothing declares them: the day one does,
+    // its consumer lands in the same change.
   }
   return out;
 }
@@ -1146,6 +1152,7 @@ function WaterSurface({
   playerRef,
   door,
   dir,
+  driver,
 }: {
   halfX: number;
   halfZ: number;
@@ -1155,10 +1162,12 @@ function WaterSurface({
   playerRef: MutableRefObject<{ x: number; z: number }>;
   door: DoorRef;
   dir: 1 | -1;
+  /** The room's wave driver — created (and disposed) by SpaceScene, which
+   *  also hands the driver's texture to the pool-floor caustics patch. */
+  driver: WaveDriver;
 }) {
   const meshRef = useRef<THREE.Mesh>(null);
   const rect = useMemo(() => ({ cx: 0, cz, halfX, halfZ }), [cz, halfX, halfZ]);
-  const driver = useMemo(() => createWaveDriver(rect), [rect]);
   const water = useMemo(
     () =>
       createWaterSurfaceMaterial({
@@ -1172,16 +1181,18 @@ function WaterSurface({
       }),
     [color, shallowColor, halfX, halfZ, cz, driver],
   );
-  useEffect(
-    () => () => {
-      water.dispose();
-      driver.dispose();
-    },
-    [water, driver],
-  );
+  useEffect(() => () => water.dispose(), [water]);
   // Wading impulses: a step every ~0.5 m of travel inside the water rect,
   // amplitude ∝ speed; one splash on entry. Sim steps on a fixed clock.
   const wadeRef = useRef({ x: 0, z: 0, acc: 0, inside: false });
+  // Probe/e2e mirror: hang the preallocated record off GAME_DEBUG while
+  // mounted, drop it on unmount; the loop mutates it in place below.
+  useEffect(() => {
+    GAME_DEBUG.water = WATER_DEBUG_MIRROR;
+    return () => {
+      GAME_DEBUG.water = null;
+    };
+  }, []);
   useFrame(({ clock }, delta) => {
     const t = clock.elapsedTime;
     water.update(t);
@@ -1211,6 +1222,17 @@ function WaterSurface({
     w.x = lx;
     w.z = lz;
     driver.step(delta);
+    const m = GAME_DEBUG.water;
+    if (m) {
+      m.cx = rect.cx;
+      m.cz = rect.cz;
+      m.halfX = rect.halfX;
+      m.halfZ = rect.halfZ;
+      m.doorX = door.x;
+      m.doorZ = door.z;
+      m.dir = dir;
+      m.awake = driver.awake;
+    }
   });
   return (
     <mesh
@@ -5937,6 +5959,16 @@ export function SpaceScene({
   });
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
+  // The pool's wave-equation driver (materials/wave-driver.ts): created
+  // HERE, not in the WaterSurface component, because the pool-floor
+  // caustics patch below also samples the driver's height texture (the
+  // floor refracts by the same field the surface floats on). The rect is
+  // the same {cx: 0, cz, halfX, halfZ} the surface plane maps 1:1.
+  const waveDriver = useMemo(
+    () => (waterRect ? createWaveDriver(waterRect) : null),
+    [waterRect],
+  );
+  useEffect(() => () => waveDriver?.dispose(), [waveDriver]);
 
   // Perimeter walls from the room plan: rect rooms get the legacy
   // five-segment enclosure; l-shape rooms narrow past a seeded step (two
@@ -6660,8 +6692,17 @@ export function SpaceScene({
       // clerestory band's wash.
       color: "#ffffff",
       intensity: 1,
+      // The floor rides the same wave field the surface floats on: tiles
+      // refract and the light web wobbles with every wading ring (see
+      // caustics-surface.ts's WAVE-DRIVEN REFRACTION doc).
+      wave: waveDriver
+        ? {
+            texture: waveDriver.texture,
+            texelMeters: waveDriver.texelMeters,
+          }
+        : undefined,
     });
-  }, [groundMaterial, waterRect, width, extent]);
+  }, [groundMaterial, waterRect, width, extent, waveDriver]);
   useFrame((state) => caustics?.update(state.clock.elapsedTime));
   const wallMaterials = useMemo(
     () =>
@@ -6989,7 +7030,7 @@ export function SpaceScene({
         />
       )}
 
-      {waterRect && (
+      {waterRect && waveDriver && (
         <WaterSurface
           halfX={waterRect.halfX}
           halfZ={waterRect.halfZ}
@@ -6999,6 +7040,7 @@ export function SpaceScene({
           playerRef={playerRef}
           door={door}
           dir={dir}
+          driver={waveDriver}
         />
       )}
 

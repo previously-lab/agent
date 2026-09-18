@@ -477,7 +477,11 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     floor: "deck",
     wall: "tile",
     light: "pool-bounce",
-    features: [{ kind: "water-rill", at: "floor", span: [0.1, 0.9] }],
+    // No water-rill feature: that kind is unrendered data (the consumer in
+    // space.tsx skips it, and describe-room would still prose about it),
+    // and the deck's water IS the pool basin beside it. When the rill's
+    // geometry lands, its declaration returns in the same change.
+    features: [],
     kits: [
       "pool-loungers",
       "towel-station",

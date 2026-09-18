@@ -67,6 +67,23 @@ export const GAME_DEBUG = {
      *  standing inside the open fields without entering the scene. */
     pieces: readonly (readonly [number, number])[];
   },
+  /** Probe/e2e mirror of the MOUNTED room's water (written by the
+   *  WaterSurface frame loop, null in the corridor and on unmount): the
+   *  water rectangle in ROOM-LOCAL meters, the doorway's world position
+   *  and orientation (world = door + local·dir), and the wave driver's
+   *  awake flag — probes assert ripples/sleep without scene-graph access.
+   *  The record is preallocated and mutated in place (no per-frame
+   *  allocation). */
+  water: null as null | {
+    cx: number;
+    cz: number;
+    halfX: number;
+    halfZ: number;
+    doorX: number;
+    doorZ: number;
+    dir: 1 | -1;
+    awake: boolean;
+  },
   /** Probe/e2e: the current window's corridor doors — sliceId, wall-plane
    *  position, and which corridor side (north rooms sit at +z, south at
    *  −z). Newest first. Written by GameCanvas whenever the window changes. */
@@ -87,3 +104,18 @@ declare global {
     __gameDebug?: typeof GAME_DEBUG;
   }
 }
+
+/** Preallocated record the WaterSurface frame loop mutates in place and
+ *  hangs off GAME_DEBUG.water while a room with water is mounted (null
+ *  again on unmount). One record is safe: at most one WaterSurface is
+ *  mounted at a time. */
+export const WATER_DEBUG_MIRROR = {
+  cx: 0,
+  cz: 0,
+  halfX: 0,
+  halfZ: 0,
+  doorX: 0,
+  doorZ: 0,
+  dir: 1 as 1 | -1,
+  awake: false,
+};
