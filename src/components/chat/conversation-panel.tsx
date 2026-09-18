@@ -213,7 +213,7 @@ export function ConversationPanel({
           top: mode === "fullscreen" ? 0 : insetTop,
         }}
         className={`fixed right-0 bottom-0 flex flex-col border-l border-foreground/10 bg-background shadow-[0_0_60px_-15px_rgba(15,23,42,0.35)] outline-none transition-[width,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none dark:shadow-[0_0_60px_-15px_rgba(0,0,0,0.8)] ${
-          mode === "fullscreen" ? "z-[60] border-l-0" : "z-30"
+          mode === "fullscreen" ? "z-[60] border-l-0" : "z-50"
         } ${open ? "translate-x-0" : "pointer-events-none translate-x-full"}`}
       >
         {/* The panel's own slim bar: title + the two tier verbs. In-flow
