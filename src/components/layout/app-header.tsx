@@ -18,7 +18,7 @@
  * pointer events, so canvas content underneath the gaps stays interactive
  * and scrolls beneath the frosted pills.
  */
-import { Link, usePathname } from "@/i18n/navigation";
+import { Link } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import { DemoBadge } from "@/components/layout/demo-badge";
@@ -30,11 +30,6 @@ import { ISLAND_BAR } from "./island";
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
   const identity = useBriefingIdentity();
-  const pathname = usePathname();
-
-  // The immersive game route owns the whole viewport and carries its own
-  // minimal overlay — the floating chrome stays out.
-  if (pathname.includes("/game")) return null;
 
   return (
     // THE PHONE ARRANGEMENT IS THE READER'S, and it is a wrap rather than a

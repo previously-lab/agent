@@ -11,6 +11,7 @@ import {
   buildRoomDoorMap,
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
+import { readHotelData, writeHotelData } from "@/lib/game/hotel-data";
 import type { CorridorDoor } from "./corridor";
 
 /**
@@ -122,24 +123,44 @@ export function GameShell({
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
+  // THE CACHED LANE SURVIVES VIEW SWITCHES: a remount after field → game →
+  // field reuses the previously derived (doors, roomDoors, timelines)
+  // instead of two server reads plus a second-pass room-door rebuild. The
+  // lazy initializers read it synchronously so a warm switch mounts the
+  // canvas in the same commit the view flips — one build, full data, the
+  // fast path a cold entry already takes. Staleness is bounded by the
+  // invalidation contract in hotel-data.ts: a turn settle bumps the epoch,
+  // a locale change misses the key, a reload clears the module.
+  const cachedLane = readHotelData(locale);
   // null = the catalog is still in flight; the corridor mounts only once the
   // doors resolve (to the timeline, or to the fallback on empty/error).
-  const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(null);
+  const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(
+    () => cachedLane?.doors ?? null,
+  );
   // The strand-door map (slice id → the room's strand doors, B.11). Empty
   // until the strand read resolves, and stays empty if it fails — the game
   // must work exactly as it does today without strands.
-  const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(NO_ROOM_DOORS);
+  const [roomDoors, setRoomDoors] = useState<RoomDoorMap>(
+    () => cachedLane?.roomDoors ?? NO_ROOM_DOORS,
+  );
   // The strand hotels (HD4): strand name → its timeline as a corridor door
   // list (newest first, same shape as `doors`). Empty until the strand read
   // resolves, and stays empty if it fails.
   const [timelines, setTimelines] =
-    useState<ReadonlyMap<string, readonly CorridorDoor[]>>(NO_TIMELINES);
+    useState<ReadonlyMap<string, readonly CorridorDoor[]>>(
+      () => cachedLane?.timelines ?? NO_TIMELINES,
+    );
 
   // The conversation layer is NOT here (§14 merge): the app shell's panel
   // floats over this view too, and Escape's panel-then-view precedence lives
   // with the shell, which owns the panel's mode.
 
   useEffect(() => {
+    // Cache hit (state was initialized from it): nothing to fetch. Re-read
+    // rather than trust the mount-time value — an epoch bump between the
+    // render and this effect (a turn settling in that window) must send us
+    // down the fetch path like any stale entry.
+    if (readHotelData(locale)) return;
     let cancelled = false;
     (async () => {
       try {
@@ -147,6 +168,11 @@ export function GameShell({
         if (cancelled) return;
         if (catalog.length === 0) {
           setDoors(FALLBACK_DOORS);
+          writeHotelData(locale, {
+            doors: FALLBACK_DOORS,
+            roomDoors: NO_ROOM_DOORS,
+            timelines: NO_TIMELINES,
+          });
           return;
         }
         // The catalog arrives oldest → newest; corridor door index 0 is the
@@ -193,30 +219,35 @@ export function GameShell({
             );
           }
           setTimelines(strandTimelines);
-          setRoomDoors(
-            buildRoomDoorMap({
-              graph,
-              sliceIds: corridorDoors.map((door) => door.sliceId),
-              // Plaque: the strand name + the destination's date, in the
-              // corridor doors' own label format ("工作 → Sep 15 · 07:46"),
-              // plus the destination slice's door NUMBER as a `#HHMM`
-              // suffix (B.14 rule 1) — the room renderer splits the suffix
-              // off (before any truncation) and hangs it on its own small
-              // plate, the corridor plate's twin. Unlit doors are labeled
-              // by the resolver with the bare name and get no number: an
-              // unlit door has no destination (B.4).
-              label: ({ strand, destinationSliceId }) => {
-                const entry = entryById.get(destinationSliceId);
-                const date = entry
-                  ? formatDoorLabel(entry.date, entry.start, locale)
-                  : destinationSliceId;
-                const clock = sliceClockTime(destinationSliceId);
-                return clock
-                  ? `${strand} → ${date}#${clock}`
-                  : `${strand} → ${date}`;
-              },
-            }),
-          );
+          const roomDoorMap = buildRoomDoorMap({
+            graph,
+            sliceIds: corridorDoors.map((door) => door.sliceId),
+            // Plaque: the strand name + the destination's date, in the
+            // corridor doors' own label format ("工作 → Sep 15 · 07:46"),
+            // plus the destination slice's door NUMBER as a `#HHMM`
+            // suffix (B.14 rule 1) — the room renderer splits the suffix
+            // off (before any truncation) and hangs it on its own small
+            // plate, the corridor plate's twin. Unlit doors are labeled
+            // by the resolver with the bare name and get no number: an
+            // unlit door has no destination (B.4).
+            label: ({ strand, destinationSliceId }) => {
+              const entry = entryById.get(destinationSliceId);
+              const date = entry
+                ? formatDoorLabel(entry.date, entry.start, locale)
+                : destinationSliceId;
+              const clock = sliceClockTime(destinationSliceId);
+              return clock
+                ? `${strand} → ${date}#${clock}`
+                : `${strand} → ${date}`;
+            },
+          });
+          setRoomDoors(roomDoorMap);
+          // The full lane is derived — cache it for the next view switch.
+          writeHotelData(locale, {
+            doors: corridorDoors,
+            roomDoors: roomDoorMap,
+            timelines: strandTimelines,
+          });
         } catch (err) {
           if (cancelled) return;
           if (!warnedStrandFailure) {
@@ -226,6 +257,14 @@ export function GameShell({
               err,
             );
           }
+          // Strand read failed: cache the corridor-only lane so a view
+          // switch still avoids re-fetching the catalog (the strand map
+          // degrades to empty, exactly as the live state does).
+          writeHotelData(locale, {
+            doors: corridorDoors,
+            roomDoors: NO_ROOM_DOORS,
+            timelines: NO_TIMELINES,
+          });
         }
       } catch (err) {
         if (cancelled) return;

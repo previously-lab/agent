@@ -52,6 +52,7 @@ import {
   getTimelineCatalogPage,
   type StrandListItem,
 } from "@/lib/episodic/actions";
+import { invalidateHotelData } from "@/lib/game/hotel-data";
 import {
   DEFAULT_RUNG,
   parseAtParam,
@@ -449,6 +450,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const refreshCatalog = useCallback(async () => {
     try {
       const page = await getTimelineCatalogPage(null);
+      // A settled turn may have written a new slice (or rewoven strands) —
+      // kill the hotel's cached lane so the next game entry re-derives
+      // instead of serving pre-turn doors. Bumping on every successful
+      // refresh is deliberate: strand-only changes have no client-visible
+      // growth signal, and an unnecessary re-fetch beats stale doors.
+      invalidateHotelData();
       setEntries((prev) => {
         const have = new Set(prev.map((e) => e.id));
         const newest = prev.at(-1)?.start ?? "";
