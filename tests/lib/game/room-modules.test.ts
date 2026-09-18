@@ -54,7 +54,7 @@ import {
   placeRoomDoors,
 } from "@/lib/game/room-doors";
 import { planArea, stageInteriorKits } from "@/lib/game/kits";
-import { INTERIOR_KITS } from "@/lib/game/kits";
+import { KITS } from "@/lib/game/kits";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import {
   COLONNADE_BAY,
@@ -121,7 +121,7 @@ describe("module catalogue (§8.2)", () => {
   });
 
   it("names only real kits, with short whitelists (§6: 少而准)", () => {
-    const kitIds = new Set(INTERIOR_KITS.map((k) => k.id));
+    const kitIds = new Set(KITS.map((k) => k.id));
     for (const m of ROOM_MODULES) {
       expect(m.kits.length).toBeGreaterThanOrEqual(2);
       expect(m.kits.length).toBeLessThanOrEqual(6);

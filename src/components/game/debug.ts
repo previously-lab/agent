@@ -66,6 +66,20 @@ export const GAME_DEBUG = {
     /** Every furnished piece's XZ (hero first) — probes count the pieces
      *  standing inside the open fields without entering the scene. */
     pieces: readonly (readonly [number, number])[];
+    /** The kind of every entry in `pieces`, same order — probes identify
+     *  a placed piece (e.g. which prop a trace rests on) by kind without
+     *  entering the scene graph. */
+    pieceKinds: readonly string[];
+    /** §4.4: the mounted room's one trace — its kind and XZ plus the host
+     *  piece it rests on — or null when the room grew none (no eligible
+     *  host, or an unfurnished room). Probes assert "exactly one, inside
+     *  the path/hero visibility band" from data. */
+    trace: null | {
+      kind: string;
+      x: number;
+      z: number;
+      host: string;
+    };
   },
   /** Probe/e2e mirror of the MOUNTED room's water (written by the
    *  WaterSurface frame loop, null in the corridor and on unmount): the

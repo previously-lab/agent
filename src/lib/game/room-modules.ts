@@ -67,7 +67,7 @@
  * not here; this module only declares WHERE the fields are.
  */
 import {
-  INTERIOR_KITS,
+  KITS,
   kitsFor,
   type Kit,
 } from "./kits";
@@ -152,7 +152,8 @@ export interface RoomModule {
   light: LightRegister;
   /** The module's own dressing (§3.2 features, module-local). */
   features: readonly ModuleFeature[];
-  /** The module's furnishing whitelist — ids into INTERIOR_KITS. Short on
+  /** The module's furnishing whitelist — ids into kits.ts's hand-written
+   *  catalogue. Short on
    *  purpose: 少而准 (§6). */
   kits: readonly string[];
   /** The module's composed centrepiece (a kits.ts heroSlot kit id) — the
@@ -1335,11 +1336,13 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
 /* ------------------------------------------------------------------ */
 
 // Lazy: room-plan.ts imports this module for scaledRecipeFor while kits.ts
-// imports room-plan.ts back — an eager Set over INTERIOR_KITS would read the
-// kit catalogue before its module finished evaluating on that entry order.
+// imports room-plan.ts back — an eager Set over the kit catalogue would read
+// it before its module finished evaluating on that entry order. The set
+// holds every hand-written kit (interior + nature); the interior gate the
+// modules draw through lives in kitsFor, unchanged.
 let KIT_IDS: Set<string> | null = null;
 function kitIds(): Set<string> {
-  KIT_IDS ??= new Set(INTERIOR_KITS.map((k) => k.id));
+  KIT_IDS ??= new Set(KITS.map((k) => k.id));
   return KIT_IDS;
 }
 
@@ -1359,7 +1362,7 @@ export function auditModule(module: RoomModule): string[] {
     if (!kitIds().has(id)) problems.push(`${module.id}: unknown kit "${id}"`);
   }
   if (module.heroKit) {
-    const kit = INTERIOR_KITS.find((k) => k.id === module.heroKit);
+    const kit = KITS.find((k) => k.id === module.heroKit);
     if (!module.kits.includes(module.heroKit)) {
       problems.push(`${module.id}: heroKit "${module.heroKit}" not in its whitelist`);
     } else if (!kit?.heroSlot) {

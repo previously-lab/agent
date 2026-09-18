@@ -416,6 +416,21 @@ export const KIT_PLACE_ATTEMPTS = 120;
  *  equidistant), and every piece still counts against the 留白 floor
  *  above (§6's bans bind in the fields exactly as on the module floors). */
 export const OPEN_FIELD_PIECE_MAX = 3;
+/** Nature hero redraw budget (§3.1 N4): a water biome's composed focal
+ *  point can land inside the basin, where no dry furniture may stand.
+ *  The nature hero redraws along the far-third band, seeded, until it
+ *  finds dry ground. Interiors keep the single original draw — the
+ *  retry branch is gated on the nature world class, so their staging
+ *  stays byte-for-byte. */
+export const KIT_HERO_ATTEMPTS = 6;
+/** §4.4 trace visibility band (m, ×prop scale): the room's one trace must
+ *  sit within this distance of the cleared walk path (measured beyond the
+ *  path's own half-width) or of the hero's clearing (HERO_CLEAR on top) —
+ *  the band a walker's sightline sweep and the focal stage actually take
+ *  in. 12 m: most hosts are wall-anchored pieces, which stand at the
+ *  perimeter by construction — a tighter band would push the trace out of
+ *  every room it was meant to be found in. */
+export const TRACE_VIEW_MARGIN = 12;
 
 /* ------------------------------------------------------------------ */
 /* dado-band (v0.11-room-interiors §3.2): baseboard + panelled          */

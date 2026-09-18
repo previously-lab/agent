@@ -180,6 +180,7 @@ import {
   SUN_SHADOW_NORMAL_BIAS,
 } from "@/lib/game/tuning/render";
 import {
+  kitsFor,
   planArea,
   stageInteriorKits,
   type StagedKitPiece,
@@ -1569,6 +1570,16 @@ type MotifKind =
   | "shell"
   | "snowman"
   | "icestone"
+  // nature kits (§3.1 N4) — the worn outdoor vocabulary the nature set
+  // composes: standing stones, boulders, water-edge reeds, the unlit fire
+  // pit, jetty deck sections, moss patches, the eroded dry-stone wall.
+  | "standingstone"
+  | "boulder"
+  | "reeds"
+  | "firepit"
+  | "jettydeck"
+  | "moss"
+  | "ruinwall"
   // interior furniture (also scattered into hybrid nature rooms)
   | "bed"
   | "nightstand"
@@ -1662,6 +1673,10 @@ interface PropPlacement {
   z: number;
   rotY: number;
   scale: number;
+  /** §4.4: this piece is the room's one trace — a small calm kind set
+   *  ON a host piece (same x/z, lifted to the host's top). Carried to the
+   *  probe mirror so probes can count traces without the scene graph. */
+  trace?: boolean;
 }
 
 /**
@@ -2207,6 +2222,194 @@ function MotifGeometry({
           <mesh position={[0.4, 0.14, 0.15]} scale={[0.7, 0.55, 0.7]}>
             <dodecahedronGeometry args={[0.4, 0]} />
             <meshStandardMaterial color="#cfe4f0" roughness={0.7} flatShading />
+          </mesh>
+        </group>
+      );
+    /* ------------------------------------------------------------ */
+    /* The nature set (§3.1 N4): worn outdoor pieces at human scale,  */
+    /* in the same material language as the scatter vocabulary —      */
+    /* flat-shaded low-poly primitives, weathered stone and timber.   */
+    /* ------------------------------------------------------------ */
+    case "standingstone":
+      // 立石 — a worn menhir: a low base drum, the tapered slab rising
+      // from it, a capstone seated slightly askew (weather, not damage).
+      return (
+        <group>
+          <mesh position={[0, 0.13, 0]}>
+            <cylinderGeometry args={[0.34, 0.42, 0.26, 7]} />
+            <meshStandardMaterial color="#7f8286" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.0, 0]}>
+            <boxGeometry args={[0.46, 1.5, 0.3]} />
+            <meshStandardMaterial color="#8a8d90" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.03, 1.8, 0]} rotation={[0, 0.28, 0.04]}>
+            <boxGeometry args={[0.34, 0.18, 0.24]} />
+            <meshStandardMaterial color="#95918a" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "boulder":
+      // 巨石 — a squat weathered boulder: a low-poly rock with a
+      // flattened crown (a trace can rest on it) and a smaller brother
+      // leaning at its foot.
+      return (
+        <group>
+          <mesh position={[0, 0.26, 0]} scale={[1.2, 0.72, 1.05]}>
+            <dodecahedronGeometry args={[0.5, 0]} />
+            <meshStandardMaterial color="#8f8a7c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.52, 0.1, 0.3]} scale={[0.55, 0.4, 0.5]} rotation={[0, 0.7, 0]}>
+            <dodecahedronGeometry args={[0.5, 0]} />
+            <meshStandardMaterial color="#98917f" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "reeds":
+      // 芦苇 — a clump rooted in the shallows: thin blades at seeded
+      // tilts, three carrying their seed heads above the waterline.
+      return (
+        <group>
+          {(
+            [
+              [0, 0, 1.45, 0],
+              [0.12, 0.06, 1.2, 0.1],
+              [-0.11, 0.03, 1.32, -0.12],
+              [0.05, -0.12, 1.1, 0.16],
+              [-0.07, -0.09, 1.4, -0.06],
+              [0.16, -0.04, 0.95, 0.22],
+              [-0.17, 0.1, 1.05, -0.2],
+            ] as const
+          ).map(([x, z, h, lean], i) => (
+            <group key={i} position={[x, 0, z]} rotation={[lean, 0, lean * 0.7]}>
+              <mesh position={[0, h / 2, 0]}>
+                <cylinderGeometry args={[0.014, 0.02, h, 4]} />
+                <meshStandardMaterial color="#5f7d48" roughness={1} flatShading />
+              </mesh>
+              {i % 2 === 0 && (
+                <mesh position={[0, h + 0.09, 0]}>
+                  <cylinderGeometry args={[0.028, 0.02, 0.2, 5]} />
+                  <meshStandardMaterial color="#a4906a" roughness={1} flatShading />
+                </mesh>
+              )}
+            </group>
+          ))}
+        </group>
+      );
+    case "firepit":
+      // 火塘（不点火）— a ring of fire stones around an ash pan with two
+      // charred logs crossed inside, cold by rule. Calm, never spent-in-
+      // a-hurry: the wood is stacked, the stones settled.
+      return (
+        <group>
+          {(
+            [
+              [0.42, 0, 1.1],
+              [0.3, 0.3, 0.9],
+              [0, 0.42, 1],
+              [-0.3, 0.3, 1.15],
+              [-0.42, 0, 0.95],
+              [-0.3, -0.3, 1.05],
+              [0, -0.42, 0.9],
+              [0.3, -0.3, 1],
+            ] as const
+          ).map(([x, z, s], i) => (
+            <mesh key={i} position={[x, 0.09, z]} rotation={[0.2 * i, 0.5 * i, 0]} scale={s}>
+              <dodecahedronGeometry args={[0.11, 0]} />
+              <meshStandardMaterial color="#7f8286" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.03, 0]}>
+            <cylinderGeometry args={[0.3, 0.32, 0.05, 10]} />
+            <meshStandardMaterial color="#6a655c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.1, 0]} rotation={[0, 0.5, Math.PI / 2]}>
+            <cylinderGeometry args={[0.035, 0.045, 0.52, 5]} />
+            <meshStandardMaterial color="#4a3f36" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.13, 0]} rotation={[0, -0.7, Math.PI / 2]}>
+            <cylinderGeometry args={[0.03, 0.04, 0.44, 5]} />
+            <meshStandardMaterial color="#544639" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "jettydeck":
+      // 木栈道 — one deck section: plank boards on four posts. Authored
+      // so the deck crown (local y 0.45) rides above the water surface
+      // (WATER_Y 0.35) while the posts reach the bed — supported, never
+      // floating (I2). Sections join into the jetty kit's walkway.
+      return (
+        <group>
+          <mesh position={[0, 0.415, 0]}>
+            <boxGeometry args={[1.5, 0.07, 1.25]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {[-0.31, 0, 0.31].map((x) => (
+            <mesh key={x} position={[x, 0.462, 0]}>
+              <boxGeometry args={[0.26, 0.024, 1.25]} />
+              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {(
+            [
+              [-0.66, -0.5],
+              [0.66, -0.5],
+              [-0.66, 0.5],
+              [0.66, 0.5],
+            ] as const
+          ).map(([x, z]) => (
+            <mesh key={`${x}${z}`} position={[x, 0.2, z]}>
+              <cylinderGeometry args={[0.055, 0.065, 0.42, 6]} />
+              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "moss":
+      // 苔藓 — a low cushion patch: flattened mounds hugging the ground
+      // at the foot of logs and stones, in two forest-floor greens.
+      return (
+        <group>
+          {(
+            [
+              [0, 0, 0.3, "#6a8a54"],
+              [0.3, 0.14, 0.22, "#5f8048"],
+              [-0.26, 0.1, 0.24, "#5f8048"],
+              [0.05, -0.24, 0.2, "#6a8a54"],
+            ] as const
+          ).map(([x, z, r, color], i) => (
+            <mesh key={i} position={[x, 0.035, z]} scale={[1, 0.24, 1]}>
+              <sphereGeometry args={[r, 7, 5]} />
+              <meshStandardMaterial color={color} roughness={1} flatShading />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "ruinwall":
+      // 残破矮墙 — a run of worn dry-stone: three blocks at staggered
+      // heights rounded by erosion. Calm decay — no fresh breaks, no
+      // debris (§6's bans hold); the wall simply ran out of wall.
+      return (
+        <group>
+          {(
+            [
+              [-0.35, 0.72, 0],
+              [0, 0.5, 0.08],
+              [0.35, 0.62, -0.06],
+            ] as const
+          ).map(([x, h, lean], i) => (
+            <mesh key={i} position={[x, h / 2, 0]} rotation={[0, lean, 0]}>
+              <boxGeometry args={[0.32, h, 0.4]} />
+              <meshStandardMaterial
+                color={["#8a8d90", "#95918a", "#7f8286"][i]}
+                roughness={1}
+                flatShading
+              />
+            </mesh>
+          ))}
+          <mesh position={[0.12, 0.76, 0]} rotation={[0, 0.2, 0]}>
+            <boxGeometry args={[0.2, 0.08, 0.3]} />
+            <meshStandardMaterial color="#8a8d90" roughness={1} flatShading />
           </mesh>
         </group>
       );
@@ -6205,10 +6408,28 @@ export function SpaceScene({
     [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors],
   );
 
+  // v0.11 §3.1 N4: nature rooms draw from the nature kit deck — the same
+  // staging machine as the interiors, worldClass "nature". The pool biome
+  // is the one exception: its content IS the water, and it keeps its
+  // rim-anchored fixture scatter on the motif layer below. Computed once
+  // so the motif and furniture memos agree on which nature rooms kit.
+  const natureKitDeck = useMemo(
+    () =>
+      recipe.worldClass === "nature"
+        ? kitsFor("nature", recipe.archetype, recipe.size.extent)
+        : [],
+    [recipe],
+  );
+
   // Motif layer: one dedicated "props" seed stream. The hero and motif
   // props draw in a fixed order, so the whole layer is deterministic per
   // recipe. Hybrids mix their biome's props with hotel furniture.
   const motif = useMemo(() => {
+    // Nature rooms furnished by kits grow NO scattered motifs — the kit
+    // hero is the focal set piece (I5), and doubling it with a scattered
+    // hero would split the room's one focus. The pool biome (nature with
+    // an empty kit deck) keeps its rim fixtures here.
+    if (natureKitDeck.length > 0) return { props: [] as PropPlacement[] };
     const rng = createRng(deriveSubSeed(WORLD_SEED, recipe.sliceId, "props"));
     const base = MOTIF_KINDS[recipe.archetype];
     const kinds =
@@ -6229,17 +6450,23 @@ export function SpaceScene({
         clearanceDoors,
       ),
     };
-  }, [recipe, scaledRecipe, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors]);
+  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors]);
 
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
-  // lib/game/kits.ts (the "furniture" stream). The pool hall keeps its
-  // water-anchored legacy fixtures — the pool IS its content and pool-side
-  // kits are milestone N2 — and draws its deck kits around them, the
-  // fixtures' positions handed over as obstacle discs. Wonder rooms keep
-  // their seeded oversized rugs.
+  // lib/game/kits.ts (the "furniture" stream). NATURE rooms run the same
+  // machine with the nature deck (§3.1 N4) — see the nature branch below.
+  // The pool hall keeps its water-anchored legacy fixtures — the pool IS
+  // its content — and draws its deck kits around them, the fixtures'
+  // positions handed over as obstacle discs. The outdoor pool biome (a
+  // nature room with an empty nature deck) keeps its rim fixtures on the
+  // motif layer. Wonder rooms keep their seeded oversized rugs.
   const furniture = useMemo(() => {
-    if (recipe.worldClass !== "interior" && recipe.worldClass !== "wonder") {
+    if (
+      recipe.worldClass !== "interior" &&
+      recipe.worldClass !== "wonder" &&
+      !(recipe.worldClass === "nature" && natureKitDeck.length > 0)
+    ) {
       return [];
     }
     const rng = createRng(
@@ -6252,7 +6479,35 @@ export function SpaceScene({
       z: p.z,
       rotY: p.rotY,
       scale: p.scale,
+      trace: p.trace,
     });
+    if (recipe.worldClass === "nature") {
+      // §3.1 N4: the outdoor biomes are furnished by the NATURE kits —
+      // the same staging machine (hero far-third, side kits, clearances,
+      // the 35% 留白, the §4.4 trace), only the deck and the world class
+      // differ. Water biomes subtract their basin from the density area
+      // (the pool hall's discipline); the shore kits (jetty, reeds) draw
+      // their positions from the water rectangle inside staging.
+      const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+      const waterArea = waterRect
+        ? (waterRect.halfX * 2 * waterRect.halfZ * 2) /
+          (scaleFactor * scaleFactor)
+        : 0;
+      return stageInteriorKits({
+        rng,
+        worldClass: "nature",
+        archetype: recipe.archetype,
+        plan,
+        comp,
+        baseExtent: recipe.size.extent,
+        baseArea: Math.max(0, baseArea - waterArea),
+        propScale,
+        wallThick,
+        water: waterRect,
+        doors: clearanceDoors,
+        heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
+      }).map(toPlacement);
+    }
     if (recipe.worldClass === "interior") {
       const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
       // §8: a composed room furnishes from its modules' OWN whitelists
@@ -6318,13 +6573,14 @@ export function SpaceScene({
       }).map(toPlacement);
     }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
+  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
 
   // Probe/e2e mirror (GAME_DEBUG.room): the mounted room's composition and
   // its placed strand doors, so probes can assert §8/§10.5 facts — module
   // growth by door load, axial-only door walls, the sparse open fields —
   // without reaching into the scene graph. Cleared when the room unmounts.
   useEffect(() => {
+    const tracePiece = furniture.find((p) => p.trace) ?? null;
     GAME_DEBUG.room = {
       sliceId: recipe.sliceId,
       doorCount: roomDoorCount,
@@ -6347,6 +6603,20 @@ export function SpaceScene({
       })),
       furniture: furniture.length,
       pieces: furniture.map((p) => [p.x, p.z] as const),
+      pieceKinds: furniture.map((p) => p.kind),
+      // §4.4: the room's one trace (null when the room grew none) — its
+      // kind and XZ, and the host piece it rests on, so probes can assert
+      // "exactly one, inside the path/hero visibility band" from data.
+      trace: tracePiece
+        ? {
+            kind: tracePiece.kind,
+            x: tracePiece.x,
+            z: tracePiece.z,
+            host: furniture.find(
+              (p) => p.trace !== true && p.x === tracePiece.x && p.z === tracePiece.z,
+            )?.kind ?? "",
+          }
+        : null,
     };
     return () => {
       if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;

@@ -28,11 +28,14 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  INTERIOR_KITS,
+  KITS,
   kitsFor,
   placeKit,
   planArea,
   stageInteriorKits,
+  TRACE_HOST_TOPS,
+  TRACE_KINDS,
+  traceVisible,
   type Kit,
   type KitZones,
   type StagedKitPiece,
@@ -85,6 +88,10 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   "vanity", "plant", "pedestal", "diningtable", "chairstack", "fountain",
   "poolbench", "ringpost", "grandfatherclock", "counter", "screen",
   "sideboard", "towelrail", "poolladder",
+  // The nature set (§3.1 N4): the worn outdoor vocabulary + the reused
+  // scatter kinds (log, mushroom, cairn, signpost).
+  "standingstone", "boulder", "reeds", "firepit", "jettydeck", "moss",
+  "ruinwall", "log", "mushroom", "cairn", "signpost",
   "yarn", "cattree", "scratchpost", "doghouse", "bone", "ball",
 ];
 
@@ -120,26 +127,42 @@ const KIT_IDS = [
   "towel-rail",
 ];
 
+/** The nature set (§3.1 N4) — the eight outdoor groups, in catalogue order. */
+const NATURE_KIT_IDS = [
+  "fallen-log",
+  "stone-circle",
+  "jetty",
+  "fence-ruin",
+  "campfire",
+  "path-marker",
+  "boulder-cluster",
+  "reeds",
+];
+
 const kitById = (id: string): Kit => {
-  const kit = INTERIOR_KITS.find((k) => k.id === id);
+  const kit = KITS.find((k) => k.id === id);
   if (!kit) throw new Error(`unknown kit ${id}`);
   return kit;
 };
 
 describe("kit data (§3.1)", () => {
   it("ships the twenty-five interior kits (N1's eight + the abundance pass's eight + the craft pass's nine)", () => {
-    expect(INTERIOR_KITS.map((k) => k.id)).toEqual(KIT_IDS);
+    expect(
+      KITS.filter((k) => k.worldClasses.includes("interior")).map(
+        (k) => k.id,
+      ),
+    ).toEqual(KIT_IDS);
   });
 
   it("keeps every kit inside the 3–6 piece rule", () => {
-    for (const kit of INTERIOR_KITS) {
+    for (const kit of KITS) {
       expect(kit.pieces.length).toBeGreaterThanOrEqual(3);
       expect(kit.pieces.length).toBeLessThanOrEqual(6);
     }
   });
 
   it("keeps every piece offset inside the declared footprint disc", () => {
-    for (const kit of INTERIOR_KITS) {
+    for (const kit of KITS) {
       for (const p of kit.pieces) {
         expect(Math.hypot(p.dx, p.dz)).toBeLessThanOrEqual(kit.footprint);
       }
@@ -147,7 +170,7 @@ describe("kit data (§3.1)", () => {
   });
 
   it("references only kinds the renderer can build", () => {
-    for (const kit of INTERIOR_KITS) {
+    for (const kit of KITS) {
       for (const p of kit.pieces) {
         expect(RENDERER_MOTIF_KINDS).toContain(p.kind);
       }
@@ -155,7 +178,7 @@ describe("kit data (§3.1)", () => {
   });
 
   it("declares a back offset for every wall-anchored kit", () => {
-    for (const kit of INTERIOR_KITS) {
+    for (const kit of KITS) {
       if (kit.anchor === "wall") {
         expect(kit.backOffset).toBeGreaterThan(0);
       }
@@ -189,6 +212,63 @@ describe("kit data (§3.1)", () => {
     const pool = kitsFor("interior", "pool-hall", 16).map((k) => k.id);
     expect(pool).toContain("lockers");
     expect(pool).not.toContain("bed-corner");
+  });
+});
+
+describe("nature kit data (§3.1 N4)", () => {
+  const NATURE_BIOMES = [
+    "meadow",
+    "plains",
+    "forest",
+    "ocean",
+    "lake",
+    "beach",
+    "snowfield",
+  ] as const;
+
+  it("ships the eight nature kits, in catalogue order", () => {
+    expect(
+      KITS.filter((k) => k.worldClasses.includes("nature")).map((k) => k.id),
+    ).toEqual(NATURE_KIT_IDS);
+  });
+
+  it("gives every non-pool nature biome at least one hero-eligible kit", () => {
+    for (const biome of NATURE_BIOMES) {
+      const heroes = kitsFor("nature", biome, 96).filter((k) => k.heroSlot);
+      expect(heroes.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps the outdoor pool biome on its legacy fixture path (empty nature deck)", () => {
+    // The pool IS its content — rim-anchored fixtures stay on the motif
+    // scatter path; kits must not claim it.
+    expect(kitsFor("nature", "pool", 96)).toHaveLength(0);
+  });
+
+  it("marks the shore kits water-bound and water-facing", () => {
+    for (const id of ["jetty", "reeds"]) {
+      const k = kitById(id);
+      expect(k.shore).toBe(true);
+      expect(k.intoWater).toBe(true);
+      expect(k.facing).toBe("water");
+    }
+  });
+
+  it("whitelists shore kits only for water biomes", () => {
+    for (const biome of ["meadow", "plains", "forest", "snowfield"] as const) {
+      expect(kitsFor("nature", biome, 96).some((k) => k.shore)).toBe(false);
+    }
+    for (const biome of ["lake", "beach", "ocean"] as const) {
+      expect(kitsFor("nature", biome, 96).some((k) => k.shore)).toBe(true);
+    }
+  });
+
+  it("declares a facing for every nature kit (§4: orientation is the relation)", () => {
+    for (const id of NATURE_KIT_IDS) {
+      expect(["path", "door", "hero", "center", "water"]).toContain(
+        kitById(id).facing,
+      );
+    }
   });
 });
 
@@ -495,6 +575,281 @@ describe("stageInteriorKits", () => {
         for (const p of pieces) {
           expect(Math.hypot(p.x - o.x, p.z - o.z)).toBeGreaterThan(o.r);
         }
+      }
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Nature staging (§3.1 N4) — the same machine on the outdoor deck.     */
+/* ------------------------------------------------------------------ */
+
+function stageNature(
+  sliceId: string,
+  extent: number,
+  archetype: string,
+  water: { cx: number; cz: number; halfX: number; halfZ: number } | null,
+): Staged {
+  const plan = roomPlanFor(sliceId, extent, extent, COLONNADE_BAY);
+  const comp = composeRoom(sliceId, plan, 1);
+  const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+  const pieces = stageInteriorKits({
+    rng,
+    worldClass: "nature",
+    archetype,
+    plan,
+    comp,
+    baseArea:
+      planArea(plan) - (water ? water.halfX * 2 * water.halfZ * 2 : 0),
+    baseExtent: extent,
+    propScale: 1,
+    wallThick: ROOM_WALL_THICKNESS,
+    water,
+    heightAt: () => 0,
+  });
+  return { pieces, plan, comp };
+}
+
+const LAKE_WATER_64 = { cx: 0, cz: 32, halfX: 16, halfZ: 16 };
+const DRY_BIOMES = ["forest", "meadow", "plains", "snowfield"] as const;
+const WATER_BIOMES = ["lake", "beach", "ocean"] as const;
+
+describe("nature staging (§3.1 N4)", () => {
+  it("is deterministic per sliceId (A6: same memory, same room)", () => {
+    for (const archetype of [...DRY_BIOMES, ...WATER_BIOMES]) {
+      for (const sliceId of SLICE_IDS.slice(0, 12)) {
+        expect(
+          stageNature(sliceId, 64, archetype, LAKE_WATER_64).pieces,
+        ).toEqual(stageNature(sliceId, 64, archetype, LAKE_WATER_64).pieces);
+      }
+    }
+  });
+
+  it("places a hero in the far third, on dry ground, in water biomes too", () => {
+    // The hero retry exists because the composed focal point can land in
+    // the basin; the retried hero must still be far-third and out of the
+    // water (its kit is never intoWater) — on waterside rooms it stands
+    // on the far bank, the composed focal point of a flooded room. A
+    // room whose every candidate failed (rare) grows no hero: kitIndex 0
+    // then belongs to a side kit, which the heroSlot check filters out.
+    const heroIds = new Set(
+      kitsFor("nature", "lake", 96)
+        .filter((k) => k.heroSlot)
+        .map((k) => k.id),
+    );
+    let heroRooms = 0;
+    for (const sliceId of SLICE_IDS) {
+      const { pieces } = stageNature(sliceId, 64, "lake", LAKE_WATER_64);
+      const zero = pieces.filter((p) => p.kitIndex === 0);
+      const zeroIds = new Set(zero.map((p) => p.kitId));
+      const isHero = zeroIds.size > 0 && [...zeroIds].every((id) => heroIds.has(id));
+      if (!isHero) continue;
+      heroRooms += 1;
+      for (const p of zero) {
+        expect(p.z).toBeGreaterThan(64 * 0.6);
+        expect(
+          Math.abs(p.x - LAKE_WATER_64.cx) < LAKE_WATER_64.halfX &&
+            Math.abs(p.z - LAKE_WATER_64.cz) < LAKE_WATER_64.halfZ,
+        ).toBe(false);
+      }
+    }
+    expect(heroRooms).toBeGreaterThanOrEqual(SLICE_IDS.length * 0.85);
+  });
+
+  it("keeps every non-shore piece out of the water", () => {
+    const shoreKits = new Set(["jetty", "reeds"]);
+    for (const sliceId of SLICE_IDS.slice(0, 24)) {
+      const { pieces } = stageNature(sliceId, 64, "lake", LAKE_WATER_64);
+      for (const p of pieces) {
+        if (shoreKits.has(p.kitId)) continue;
+        expect(
+          Math.abs(p.x - LAKE_WATER_64.cx) < LAKE_WATER_64.halfX &&
+            Math.abs(p.z - LAKE_WATER_64.cz) < LAKE_WATER_64.halfZ,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("kept every clearance: footprint, doorway, path, 留白", () => {
+    for (const archetype of [...DRY_BIOMES, ...WATER_BIOMES]) {
+      for (const extent of [16, 32, 64, 96]) {
+        const water = WATER_BIOMES.includes(archetype as "lake")
+          ? {
+              cx: 0,
+              cz: extent * 0.5,
+              halfX: extent * 0.25,
+              halfZ: extent * 0.25,
+            }
+          : null;
+        for (const sliceId of SLICE_IDS.slice(0, 16)) {
+          const staged = stageNature(sliceId, extent, archetype, water);
+          expect(coverageOf(staged)).toBeLessThanOrEqual(
+            1 - KIT_EMPTY_FLOOR_MIN + 1e-9,
+          );
+          for (const p of staged.pieces) {
+            expect(planContains(staged.plan, p.x, p.z, 0)).toBe(true);
+            expect(
+              Math.abs(p.x) < PROP_DOOR_HALF && p.z < PROP_DOOR_DEPTH,
+            ).toBe(false);
+            const nearHero =
+              Math.hypot(p.x - staged.comp.hero.x, p.z - staged.comp.hero.z) <
+              HERO_CLEAR + 3;
+            if (!nearHero && !p.trace) {
+              expect(distToPath(staged.comp, p.x, p.z)).toBeGreaterThanOrEqual(
+                staged.comp.pathHalf + KIT_PATH_CLEAR - 1e-9,
+              );
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("drops the shore kits when the room has no water", () => {
+    // A lake-archetype deck has shore kits; staging it dry must not draw
+    // a single jetty section or reed clump.
+    for (const sliceId of SLICE_IDS.slice(0, 24)) {
+      const { pieces } = stageNature(sliceId, 64, "lake", null);
+      expect(pieces.some((p) => p.kitId === "jetty" || p.kitId === "reeds")).toBe(
+        false,
+      );
+    }
+  });
+
+  it("actually places shore kits across a water sweep (the channel is alive)", () => {
+    let withShore = 0;
+    for (const sliceId of SLICE_IDS) {
+      const { pieces } = stageNature(sliceId, 64, "lake", LAKE_WATER_64);
+      if (pieces.some((p) => p.kitId === "jetty" || p.kitId === "reeds")) {
+        withShore += 1;
+      }
+    }
+    expect(withShore).toBeGreaterThan(SLICE_IDS.length / 4);
+  });
+
+  it("reads as several different scenes, never one kit many times (§6)", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 24)) {
+      const { pieces } = stageNature(sliceId, 64, "forest", null);
+      const byIndex = new Map<number, string>();
+      for (const p of pieces) byIndex.set(p.kitIndex, p.kitId);
+      const ids = [...byIndex.values()];
+      if (ids.length < 6) continue;
+      expect(new Set(ids).size).toBeGreaterThanOrEqual(4);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The §4.4 trace — the room's exactly-one calm trace, on a visible     */
+/* host. Both world classes run the same selection.                     */
+/* ------------------------------------------------------------------ */
+
+/** Hosts eligible for a trace under the visibility rule (the mirror of
+ *  the selection logic in stageInteriorKits — kept small on purpose). */
+function visibleHostCount(
+  pieces: StagedKitPiece[],
+  comp: Composition,
+  propScale: number,
+  extent: number,
+): number {
+  const carriedBy = new Set<number>();
+  for (const p of pieces) {
+    if ((TRACE_KINDS as readonly string[]).includes(p.kind) && p.dy > 0) {
+      carriedBy.add(p.kitIndex);
+    }
+  }
+  return pieces.filter(
+    (p) =>
+      TRACE_HOST_TOPS[p.kind] !== undefined &&
+      !carriedBy.has(p.kitIndex) &&
+      traceVisible(comp, p.x, p.z, propScale, extent),
+  ).length;
+}
+
+/** The §4.4 invariants: at most one trace everywhere; exactly one with a
+ *  visible host (zero otherwise); it rides a real host inside the
+ *  visibility band and its kind is whitelisted. */
+function checkTraceRules(
+  pieces: StagedKitPiece[],
+  comp: Composition,
+  propScale: number,
+  extent: number,
+) {
+  const traces = pieces.filter((p) => p.trace);
+  expect(traces.length).toBeLessThanOrEqual(1);
+  if (visibleHostCount(pieces, comp, propScale, extent) > 0) {
+    expect(traces).toHaveLength(1);
+    const t = traces[0];
+    expect(TRACE_KINDS).toContain(t.kind);
+    const host = pieces.find(
+      (p) => p !== t && p.x === t.x && p.z === t.z,
+    );
+    expect(host).toBeDefined();
+    expect(TRACE_HOST_TOPS[host!.kind]).toBeDefined();
+  } else {
+    expect(traces).toHaveLength(0);
+  }
+}
+
+describe("the §4.4 trace", () => {
+  it("obeys the exactly-one rule across the interior sweep", () => {
+    for (const extent of TIERS) {
+      for (const sliceId of SLICE_IDS) {
+        const { pieces, comp } = stageFor(sliceId, extent);
+        checkTraceRules(pieces, comp, 1, extent);
+      }
+    }
+  });
+
+  it("obeys the exactly-one rule across the nature sweep", () => {
+    for (const archetype of [...DRY_BIOMES, ...WATER_BIOMES]) {
+      for (const sliceId of SLICE_IDS.slice(0, 16)) {
+        const { pieces, comp } = stageNature(
+          sliceId,
+          64,
+          archetype,
+          WATER_BIOMES.includes(archetype as "lake") ? LAKE_WATER_64 : null,
+        );
+        checkTraceRules(pieces, comp, 1, 64);
+      }
+    }
+  });
+
+  it("actually places traces across the sweep (the selector is alive)", () => {
+    let interiorTraced = 0;
+    for (const sliceId of SLICE_IDS) {
+      if (stageFor(sliceId, 64).pieces.some((p) => p.trace)) interiorTraced += 1;
+    }
+    expect(interiorTraced).toBeGreaterThan(SLICE_IDS.length / 2);
+    let natureTraced = 0;
+    for (const sliceId of SLICE_IDS) {
+      if (
+        stageNature(sliceId, 64, "forest", null).pieces.some((p) => p.trace)
+      ) {
+        natureTraced += 1;
+      }
+    }
+    expect(natureTraced).toBeGreaterThan(SLICE_IDS.length / 4);
+  });
+
+  it("is deterministic per sliceId (A6: same memory, same trace)", () => {
+    const traceOf = (pieces: StagedKitPiece[]) =>
+      pieces.filter((p) => p.trace).map((p) => [p.kind, p.x, p.z, p.kitId]);
+    for (const sliceId of SLICE_IDS.slice(0, 12)) {
+      expect(traceOf(stageFor(sliceId, 64).pieces)).toEqual(
+        traceOf(stageFor(sliceId, 64).pieces),
+      );
+      expect(traceOf(stageNature(sliceId, 64, "lake", LAKE_WATER_64).pieces)).toEqual(
+        traceOf(stageNature(sliceId, 64, "lake", LAKE_WATER_64).pieces),
+      );
+    }
+  });
+
+  it("stays calm (§6): only whitelisted kinds, never a horror prop", () => {
+    for (const sliceId of SLICE_IDS.slice(0, 16)) {
+      for (const p of stageFor(sliceId, 32).pieces) {
+        if (!p.trace) continue;
+        expect(["bookpile", "tray", "towelstack"]).toContain(p.kind);
       }
     }
   });
@@ -824,13 +1179,17 @@ describe("template zones parameter (§7) — additive", () => {
    *  Recaptured 2026-10 after the kit deck grew from eight to sixteen:
    *  the pin's job is unchanged — omitting `zones` must reproduce the
    *  zones-less staging of the CURRENT deck byte-for-byte. Recaptured
-   *  again 2026-10 for the craft pass (25 kits) + §10.5 axial doors. */
+   *  again 2026-10 for the craft pass (25 kits) + §10.5 axial doors, and
+   *  again for the nature pass + §4.4 trace: the trace is an additive
+   *  piece (a room with no eligible host stages byte-for-byte as before —
+   *  the 16 m pin is unchanged), and rooms that grew one changed hash,
+   *  as every additive pin capture has. */
   const PINS: [string, number, string, number, string, string][] = [
     ["2026-10-11", 16, "hotel-room", 1, "6467:1955045619", "5385:1947765648"],
-    ["2026-10-12", 32, "library", 1.5, "16696:1752736629", "16585:1666843699"],
-    ["2026-10-13", 64, "ballroom", 0.66, "34289:2571048912", "32379:364227140"],
-    ["2026-10-14", 96, "hotel-room", 1, "51582:402388874", "51528:2164671650"],
-    ["2026-10-15", 32, "pool-hall", 1, "14553:3784513238", "15478:848847481"],
+    ["2026-10-12", 32, "library", 1.5, "16846:1808255877", "16734:380846541"],
+    ["2026-10-13", 64, "ballroom", 0.66, "34437:4041128359", "32547:1369509703"],
+    ["2026-10-14", 96, "hotel-room", 1, "51733:4062784932", "51680:994858471"],
+    ["2026-10-15", 32, "pool-hall", 1, "14717:2761953735", "15639:1797853888"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {

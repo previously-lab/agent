@@ -25,6 +25,21 @@
  * into its prop dispatcher, so TypeScript rejects any kit kind the
  * renderer drops, and tests/lib/game/kits.test.ts mirrors the full list
  * for a runtime check.
+ *
+ * WORLD CLASSES. The deck holds every hand-written kit — the interior
+ * sets (N1, the abundance pass, the craft pass) and the nature set
+ * (§3.1 N4: fallen-log, stone-circle, jetty, fence-ruin, campfire,
+ * path-marker, boulder-cluster, reeds). `worldClasses` + `archetypes`
+ * gate which room may draw which kit (a meadow never grows pool
+ * lockers; the outdoor pool biome keeps its rim-anchored fixture
+ * scatter — its content IS the water — and draws no kits at all).
+ *
+ * THE TRACE (§4.4). Staging ends by selecting the room's ONE trace: a
+ * single calm piece (an open book, a tea tray, a folded towel — never
+ * toppled/broken/bloody, §6) set ON a host piece the walker actually
+ * passes: a host inside the path/hero visibility band. Same seeded
+ * stream, same slice ⇒ same trace (A6); a room with no eligible host
+ * grows no trace (空场 rules) — exactly one otherwise.
  */
 import {
   distToPath,
@@ -35,16 +50,19 @@ import {
 import { inDoorApproach, type RoomDoorPlacement } from "./room-doors";
 import {
   HERO_CLEAR,
+  HERO_Z_MIN,
   KIT_AREA_PER_KIT,
   KIT_COUNT_MAX,
   KIT_EMPTY_FLOOR_MIN,
   KIT_GAP,
+  KIT_HERO_ATTEMPTS,
   KIT_PATH_CLEAR,
   KIT_PLACE_ATTEMPTS,
   KIT_WALL_CLEAR,
   OPEN_FIELD_PIECE_MAX,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
+  TRACE_VIEW_MARGIN,
 } from "./tuning/room";
 
 /** Prop kinds kits may reference — a strict subset of the renderer's
@@ -105,7 +123,24 @@ export type KitKind =
   | "sideboard"
   | "towelrail"
   | "poolladder"
-  | "board";
+  | "board"
+  // The nature set (§3.1 N4, 2026-10): worn outdoor pieces for the nature
+  // kits — standing stones, boulders, water-edge reeds, the unlit fire
+  // pit, jetty deck sections, moss patches and the eroded dry-stone wall.
+  // The kits also reuse the existing scatter vocabulary (the fallen log,
+  // mushroom clusters, cairns and the signpost), so those kinds join the
+  // subset here.
+  | "standingstone"
+  | "boulder"
+  | "reeds"
+  | "firepit"
+  | "jettydeck"
+  | "moss"
+  | "ruinwall"
+  | "log"
+  | "mushroom"
+  | "cairn"
+  | "signpost";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -151,6 +186,19 @@ export interface Kit {
   backOffset?: number;
   /** What the kit faces when free-standing. */
   facing: KitFacing;
+  /** WATER-BOUND kits (jetty, reeds): the origin is drawn ON the water
+   *  rectangle's edge — the piece offsets were authored to straddle the
+   *  shoreline — and the kit is dropped from the deck entirely when the
+   *  room has no water. The kit still faces its declared target (the
+   *  water, for both), so the walkway runs out into the basin and the
+   *  reeds lean over it. */
+  shore?: boolean;
+  /** Pieces may stand in the water (their bases reach the bed — a jetty
+   *  on posts, reeds rooted in the shallows). The dry-furniture rule
+   *  "kits stay out of the water" is waived per kit, exactly as the pool
+   *  hall's rim fixtures overhang the basin; everything else still holds
+   *  (plan footprint, path, doorway strips, kit gaps). */
+  intoWater?: boolean;
   /** Footprint disc radius (m, human scale). Every piece offset sits
    *  inside it, and placement keeps the whole disc clear of other kits —
    *  the disc is the kit's breathing room, and the sum of discs is how
@@ -210,7 +258,7 @@ export function placeKit(kit: Kit, t: KitTransform): PlacedKitPiece[] {
 /* the hero, or the water.                                              */
 /* ------------------------------------------------------------------ */
 
-export const INTERIOR_KITS: readonly Kit[] = [
+export const KITS: readonly Kit[] = [
   {
     // 床 + 两床头柜 + 台灯 + 地毯 — the hotel-room signature. Headboard
     // (the bed's local −z) to the wall, lamp beside the right nightstand,
@@ -646,6 +694,150 @@ export const INTERIOR_KITS: readonly Kit[] = [
       { kind: "bucket", dx: -0.7, dz: 0.3, rotY: 0 },
     ],
   },
+
+  /* -------------------------------------------------------------- */
+  /* The nature set (§3.1 N4, 2026-10): eight hand-written groups    */
+  /* that turn the outdoor biomes from scattered props into arranged  */
+  /* scenes — every kit has a relation (faces the path, the water or  */
+  /* the hero), nothing is an equidistant repeat (§6), and everything  */
+  /* stands on the ground or the bed — the jetty's deck rides on its  */
+  /* posts, the reeds root in the shallows, nothing hangs (I2).       */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 倒木 + 蘑菇 + 苔藓 — the forest's resting spot: a fallen trunk (its
+    // long axis across the kit's forward), a mushroom cluster at its
+    // root end and a moss patch at the other. Faces the walk path.
+    id: "fallen-log",
+    worldClasses: ["nature"],
+    archetypes: ["forest", "meadow", "plains", "snowfield", "lake"],
+    facing: "path",
+    footprint: 1.7,
+    pieces: [
+      { kind: "log", dx: 0, dz: 0, rotY: 0 },
+      { kind: "mushroom", dx: 0.95, dz: 0.4, rotY: 0.4 },
+      { kind: "moss", dx: -0.75, dz: -0.35, rotY: 0.9, scale: 1.1 },
+    ],
+  },
+  {
+    // 几块立石 — the worn ring: five standing stones on a circle, the
+    // gap toward the kit's forward (whoever approaches is expected),
+    // heights staggered by weather, not violence. A composed focal
+    // centrepiece for the dry biomes (I5).
+    id: "stone-circle",
+    worldClasses: ["nature"],
+    archetypes: ["forest", "meadow", "plains", "snowfield"],
+    heroSlot: true,
+    facing: "center",
+    footprint: 2.2,
+    pieces: [
+      { kind: "standingstone", dx: 1.04, dz: 1.15, rotY: -0.6 },
+      { kind: "standingstone", dx: -1.04, dz: 1.15, rotY: 0.6, scale: 0.9 },
+      { kind: "standingstone", dx: 1.0, dz: -1.19, rotY: 2.5, scale: 1.1 },
+      { kind: "standingstone", dx: -1.0, dz: -1.19, rotY: -2.5, scale: 0.8 },
+      { kind: "standingstone", dx: 0, dz: -1.55, rotY: Math.PI },
+    ],
+  },
+  {
+    // 木栈道探入水中 — the jetty: three deck sections in a line running
+    // out over the water, a mooring cairn at its root on the shore. The
+    // origin lands ON the water's edge and the kit faces the water, so
+    // the walkway reaches into the basin; the posts stand on the bed.
+    id: "jetty",
+    worldClasses: ["nature"],
+    archetypes: ["lake", "beach", "ocean"],
+    shore: true,
+    intoWater: true,
+    facing: "water",
+    footprint: 3.6,
+    pieces: [
+      { kind: "jettydeck", dx: 0, dz: 0.3, rotY: 0 },
+      { kind: "jettydeck", dx: 0, dz: 1.55, rotY: 0 },
+      { kind: "jettydeck", dx: 0, dz: 2.8, rotY: 0 },
+      { kind: "cairn", dx: 0.85, dz: -0.6, rotY: 0.5, scale: 0.7 },
+    ],
+  },
+  {
+    // 残破矮墙 — the old field wall: two runs of worn dry-stone, their
+    // heights staggered by erosion (calm decay — never a fresh break,
+    // no debris, §6's bans hold), a moss patch at the foot. Faces the
+    // path like a boundary the walker is meant to follow.
+    id: "fence-ruin",
+    worldClasses: ["nature"],
+    archetypes: ["meadow", "plains", "forest", "snowfield", "beach"],
+    facing: "path",
+    footprint: 1.9,
+    pieces: [
+      { kind: "ruinwall", dx: -0.55, dz: 0, rotY: 0 },
+      { kind: "ruinwall", dx: 0.6, dz: 0.08, rotY: 0.12 },
+      { kind: "moss", dx: 0.1, dz: 0.5, rotY: 0.4, scale: 0.9 },
+    ],
+  },
+  {
+    // 火塘，不点火 — the hearth, cold: a ring of fire stones, an ash
+    // pan with two charred logs, and two log seats set tangentially —
+    // a gathering place, composed centrepiece (I5), unlit by rule.
+    id: "campfire",
+    worldClasses: ["nature"],
+    archetypes: ["forest", "meadow", "plains", "snowfield", "lake", "beach"],
+    heroSlot: true,
+    facing: "center",
+    footprint: 1.8,
+    pieces: [
+      { kind: "firepit", dx: 0, dz: 0, rotY: 0 },
+      { kind: "log", dx: -1.05, dz: 0.25, rotY: 1.35, scale: 0.72 },
+      { kind: "log", dx: 0.95, dz: 0.55, rotY: -0.9, scale: 0.62 },
+    ],
+  },
+  {
+    // 路标 + 石块 — the waymark: a signpost where the path bends, a
+    // cairn and a boulder at its foot. Faces the walk path.
+    id: "path-marker",
+    worldClasses: ["nature"],
+    archetypes: ["plains", "meadow", "forest", "snowfield", "lake", "beach", "ocean"],
+    facing: "path",
+    footprint: 1.4,
+    pieces: [
+      { kind: "signpost", dx: 0, dz: 0, rotY: 0 },
+      { kind: "cairn", dx: 0.75, dz: 0.35, rotY: 0.3, scale: 0.55 },
+      { kind: "boulder", dx: -0.7, dz: 0.45, rotY: 0, scale: 0.5 },
+    ],
+  },
+  {
+    // 巨石群 — the boulder cluster: three weathered boulders leaning
+    // together at seeded angles, moss between them. A composed
+    // centrepiece for the big quiet biomes (I5).
+    id: "boulder-cluster",
+    worldClasses: ["nature"],
+    archetypes: ["forest", "meadow", "plains", "snowfield", "lake", "beach", "ocean"],
+    heroSlot: true,
+    facing: "center",
+    footprint: 2.3,
+    pieces: [
+      { kind: "boulder", dx: 0, dz: 0, rotY: 0, scale: 1.15 },
+      { kind: "boulder", dx: 1.15, dz: 0.5, rotY: 0.9, scale: 0.8 },
+      { kind: "boulder", dx: -0.9, dz: 0.8, rotY: 2.1, scale: 0.65 },
+      { kind: "moss", dx: 0.35, dz: -0.75, rotY: 0, scale: 1 },
+    ],
+  },
+  {
+    // 水边芦苇 — the reed bed: three clumps rooted in the shallows at
+    // the water's edge (the origin sits ON the shoreline; the offsets
+    // straddle it), leaning toward the water. Shore kit: drawn on the
+    // basin's edge, dropped when the room has no water.
+    id: "reeds",
+    worldClasses: ["nature"],
+    archetypes: ["lake", "beach", "ocean"],
+    shore: true,
+    intoWater: true,
+    facing: "water",
+    footprint: 1.5,
+    pieces: [
+      { kind: "reeds", dx: -0.55, dz: 0.35, rotY: 0.2 },
+      { kind: "reeds", dx: 0.4, dz: 0.55, rotY: 1.2, scale: 0.85 },
+      { kind: "reeds", dx: 0.05, dz: -0.25, rotY: 2.2, scale: 0.7 },
+    ],
+  },
 ];
 
 /** Kits a room of this class/archetype/tier may draw. */
@@ -654,7 +846,7 @@ export function kitsFor(
   archetype: string,
   baseExtent: number,
 ): readonly Kit[] {
-  return INTERIOR_KITS.filter(
+  return KITS.filter(
     (k) =>
       k.worldClasses.includes(worldClass) &&
       (!k.archetypes || k.archetypes.includes(archetype)) &&
@@ -722,6 +914,11 @@ export interface KitStaging {
   /** Seeded stream for this room's kit layer (one stream per room, drawn
    *  in a fixed order — determinism is the whole point). */
   rng: () => number;
+  /** The world class furnishing this room — "interior" (default, today's
+   *  behaviour byte-for-byte) or "nature" (§3.1 N4: the outdoor deck).
+   *  Selects the kit pool via the same worldClasses gate everything else
+   *  uses, and unlocks the nature-only hero redraw (dry-ground retry). */
+  worldClass?: string;
   archetype: string;
   /** The SCALED plan and composition (what the renderer built). */
   plan: RoomPlan;
@@ -772,8 +969,13 @@ export interface StagedKitPiece extends PlacedKitPiece {
   kitId: string;
   /** Serial of the kit PLACEMENT this piece belongs to (the same kit type
    *  can be set down several times in one room) — also a stable render
-   *  key. The hero placement is 0. */
+   *  key. The hero placement is 0. The §4.4 trace rides its HOST's id and
+   *  index (it is not a placement of its own). */
   kitIndex: number;
+  /** §4.4: this piece is the room's one trace — a small calm kind set ON
+   *  the host piece (same x/z, lifted by the host's top). At most one per
+   *  staged room; absent on every other piece. */
+  trace?: boolean;
 }
 
 /** Walkable floor area of a plan (m²): the bounding box minus the
@@ -860,6 +1062,53 @@ function facingRotY(
   }
 }
 
+/** The §4.4 trace whitelist — small CALM pieces only (I4): the open
+ *  book, the tea tray with its cups, the folded towel. Toppled / broken /
+ *  bloody / hand-printed props are §6 bans and must never join this
+ *  list. Exported for the renderer's probe mirror and the tests. */
+export const TRACE_KINDS: readonly KitKind[] = ["bookpile", "tray", "towelstack"];
+
+/** Host pieces a trace may rest on — the kind plus its top surface height
+ *  above the floor (m, human scale; multiplied by the host piece's own
+ *  scale at placement). Tops come from the established dy precedents
+ *  (bookpile on bench 0.45, desklamp on desk 0.80, tray on diningtable
+ *  0.78, bell on counter 1.02) and the nature kinds' authored geometry.
+ *  Cluttered tops (nightstand's vase, the vanity and sideboard dressing)
+ *  are deliberately excluded — a trace must own its spot. */
+export const TRACE_HOST_TOPS: Readonly<Record<string, number>> = {
+  bench: 0.45,
+  desk: 0.8,
+  diningtable: 0.78,
+  counter: 1.02,
+  poolbench: 0.4,
+  log: 0.46,
+  jettydeck: 0.45,
+  boulder: 0.6,
+};
+
+/** §4.4 visibility: is (x, z) inside the trace's visible band — within
+ *  TRACE_VIEW_MARGIN of the cleared walk path (beyond its half-width), of
+ *  the hero's clearing, or in the far third of the room (the depth the
+ *  eyes land on when entering — open sightlines, nothing to hide a trace
+ *  behind)? The one rule the selector and every probe share, so "the
+ *  trace is visible" is asserted against the same geometry that chose
+ *  it. */
+export function traceVisible(
+  comp: Composition,
+  x: number,
+  z: number,
+  propScale: number,
+  extent: number,
+): boolean {
+  const margin = TRACE_VIEW_MARGIN * propScale;
+  return (
+    distToPath(comp, x, z) <= comp.pathHalf + margin ||
+    Math.hypot(x - comp.hero.x, z - comp.hero.z) <=
+      (HERO_CLEAR + TRACE_VIEW_MARGIN) * propScale ||
+    z >= extent * (HERO_Z_MIN - 0.04)
+  );
+}
+
 /** Candidate walls for an anchored kit: both sides and the far wall,
  *  except colonnade plans, whose sides are open bays (far wall only).
  *  The entrance wall is never an anchor — the doorway zone stays clear. */
@@ -926,6 +1175,46 @@ function drawKitTransform(
     return null;
   }
 
+  // Shore kits (jetty, reeds): the origin lands ON the water rectangle's
+  // edge — the piece offsets were authored to straddle the shoreline — on
+  // a seeded side and a seeded spot along it, facing the water. The
+  // entrance side (z small, near the door axis) is kept out so the
+  // doorway apron stays readable; waterRectFor guarantees a walkable
+  // deck on every side, so the root piece always has dry ground behind
+  // it. All the usual clearance checks still run in pushKit.
+  if (kit.shore) {
+    if (!water) return null;
+    const start = Math.floor(rng() * 4);
+    for (let i = 0; i < 4; i++) {
+      const side = (start + i) % 4;
+      const t = 0.3 + rng() * 0.4; // mid-band of the side, never a corner
+      let x: number;
+      let z: number;
+      if (side === 0) {
+        x = water.cx - water.halfX;
+        z = water.cz - water.halfZ + t * water.halfZ * 2;
+      } else if (side === 1) {
+        x = water.cx + water.halfX;
+        z = water.cz - water.halfZ + t * water.halfZ * 2;
+      } else if (side === 2) {
+        z = water.cz - water.halfZ;
+        // South shore can sit near the entrance on small tiers: fold the
+        // draw to the east/west halves, outside the doorway strip.
+        const half = t < 0.5 ? -1 : 1;
+        const u = ((t < 0.5 ? t : t - 0.5) / 0.5) * 0.95;
+        const lo = Math.max(2.6, 0.5 * water.halfX);
+        const hi = Math.max(lo + 0.1, water.halfX * 0.95);
+        x = water.cx + half * (lo + u * (hi - lo));
+      } else {
+        z = water.cz + water.halfZ;
+        x = water.cx - water.halfX + t * water.halfX * 2;
+      }
+      if (!planContains(plan, x, z, wallInset)) continue;
+      return { x, z, rotY: facingRotY(kit.facing, x, z, comp, water), scale };
+    }
+    return null;
+  }
+
   const m = wallInset + 0.2 * scale;
   const xLo = -halfW + m;
   const xHi = halfW - m;
@@ -954,19 +1243,28 @@ function drawKitTransform(
  *     the doorway strip AND out of every strand door's approach strip
  *     (B.11 — a door must stay walkable-to), off the cleared path
  *     (pathHalf + KIT_PATH_CLEAR — the ≥1.4 m promise is measured to kit
- *     geometry), and out of the water. Kits are dry furniture; nothing
- *     hangs, nothing floats (I2). When door approaches shrink a small
- *     room past what its density target wants, the room places FEWER
- *     kits — a clearance is never violated to hit the target.
+ *     geometry), and out of the water — except shore kits (jetty, reeds),
+ *     whose pieces straddle the shoreline on their posts and roots. Kits
+ *     are supported; nothing hangs, nothing floats (I2). When door
+ *     approaches shrink a small room past what its density target wants,
+ *     the room places FEWER kits — a clearance is never violated to hit
+ *     the target.
+ *  5. THE TRACE (§4.4): the room's one calm trace — a whitelisted kind
+ *     set ON a visible host (path/hero band) — chosen from the seeded
+ *     stream; zero when no eligible host exists.
  *
  * Pure function of the inputs: same rng stream, same room (A6).
  */
 export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
-  const kits = kitsFor("interior", o.archetype, o.baseExtent).filter(
-    (k) => !o.kitIds || o.kitIds.includes(k.id),
+  const worldClass = o.worldClass ?? "interior";
+  const { rng, plan, comp, propScale, water } = o;
+  const kits = kitsFor(worldClass, o.archetype, o.baseExtent).filter(
+    (k) =>
+      (!o.kitIds || o.kitIds.includes(k.id)) &&
+      // Shore kits are water-bound: no basin, no draw.
+      (!k.shore || water !== null),
   );
   if (kits.length === 0) return [];
-  const { rng, plan, comp, propScale, water } = o;
   const wallInset = o.wallThick + KIT_WALL_CLEAR * propScale;
   const pieceClear = KIT_PATH_CLEAR * propScale;
   const discs: { x: number; z: number; r: number }[] = [
@@ -999,7 +1297,9 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       ) {
         return null;
       }
-      if (water && insideWater(p.x, p.z, water, pieceClear)) return null;
+      if (water && !kit.intoWater && insideWater(p.x, p.z, water, pieceClear)) {
+        return null;
+      }
       // Template keep-empty zones (§7): the entrance apron, the hall
       // spine — authored voids the furnishing must respect.
       if (o.zones?.keepEmpty) {
@@ -1034,6 +1334,12 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   //    hero's clearing keeps everything else off its stage.
   //    Template zones (§7) may pin the hero's kit and stand it at the
   //    template's hero rect instead of the seeded slot.
+  //    NATURE: the composed focal point can land inside the basin on
+  //    water biomes, where dry furniture may not stand — the hero then
+  //    redraws, seeded, along the far-third band until a legal dry spot
+  //    exists (KIT_HERO_ATTEMPTS). Interiors keep the single original
+  //    draw — the retry consumes no rng unless the first draw failed, so
+  //    their staging stays byte-for-byte.
   const heroKits = kits.filter((k) => k.heroSlot);
   if (heroKits.length > 0) {
     const pinned = o.zones?.heroKit
@@ -1050,19 +1356,53 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         hz = zz;
       }
     }
-    const t: KitTransform = {
-      x: hx,
-      z: hz,
-      rotY: Math.atan2(-hx, -hz),
-      scale: propScale,
-    };
-    const pieces = pushKit(kit, t, { skipPathCheck: true }, nextKitIndex);
-    if (pieces) {
-      nextKitIndex += 1;
-      out.push(...pieces);
-      const r = Math.max(kit.footprint, HERO_CLEAR) * propScale;
-      discs.push({ x: t.x, z: t.z, r });
-      covered += Math.PI * kit.footprint * propScale * kit.footprint * propScale;
+    const heroCandidates: { x: number; z: number }[] = [{ x: hx, z: hz }];
+    if (worldClass === "nature") {
+      const halfW = plan.width / 2;
+      if (water) {
+        // Waterside hero: the composed focal point of a flooded room is
+        // the FAR BANK, not a random dry corner. Candidates stand on the
+        // deck just past the basin's far edge (origin far enough inland
+        // that the kit's front pieces — which face the door, toward the
+        // water — stay clear of the shoreline), seeded along the bank.
+        const farEdge = water.cz + water.halfZ;
+        for (let i = 0; i < Math.ceil(KIT_HERO_ATTEMPTS / 2); i++) {
+          heroCandidates.push({
+            x: (rng() * 2 - 1) * halfW * 0.3,
+            z: farEdge + 1.8 + rng() * 1.5,
+          });
+        }
+      }
+      // Generic dry far-third draws fill the rest of the budget (dry
+      // biomes retry here too — a colonnade's focal slot can still land
+      // on an abandoned quadrant or a door approach).
+      for (
+        let i = 0;
+        i < (water ? Math.floor(KIT_HERO_ATTEMPTS / 2) : KIT_HERO_ATTEMPTS);
+        i++
+      ) {
+        heroCandidates.push({
+          x: (rng() * 2 - 1) * halfW * 0.25,
+          z: plan.extent * (0.68 + rng() * 0.2),
+        });
+      }
+    }
+    for (const c of heroCandidates) {
+      const t: KitTransform = {
+        x: c.x,
+        z: c.z,
+        rotY: Math.atan2(-c.x, -c.z),
+        scale: propScale,
+      };
+      const pieces = pushKit(kit, t, { skipPathCheck: true }, nextKitIndex);
+      if (pieces) {
+        nextKitIndex += 1;
+        out.push(...pieces);
+        const r = Math.max(kit.footprint, HERO_CLEAR) * propScale;
+        discs.push({ x: t.x, z: t.z, r });
+        covered += Math.PI * kit.footprint * propScale * kit.footprint * propScale;
+        break;
+      }
     }
   }
 
@@ -1152,6 +1492,46 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         }
       }
     }
+  }
+  // 4. THE TRACE (§4.4) — the room's exactly-one calm trace, chosen, not
+  //    baked into some kit: a whitelisted kind set ON a host piece that
+  //    stands inside the visibility band of the walk path or the hero
+  //    (the trace must be SEEN from where the walker actually is — a
+  //    trace tucked behind the far wall would be set dressing, not a
+  //    trace). Hosts are flat-topped pieces (TRACE_HOST_TOPS); a host
+  //    whose placement already carries a trace-kind piece on it (the
+  //    gallery bench's own open book) is skipped so two books never pile
+  //    onto one seat. No eligible host ⇒ no trace (空场 / 极小的房 grow
+  //    none) — one otherwise. The draw rides the same seeded stream:
+  //    same slice, same trace (A6).
+  const carriedBy = new Set<number>();
+  for (const p of out) {
+    if ((TRACE_KINDS as readonly string[]).includes(p.kind) && p.dy > 0) {
+      carriedBy.add(p.kitIndex);
+    }
+  }
+  const hosts = out.filter(
+    (p) =>
+      TRACE_HOST_TOPS[p.kind] !== undefined && !carriedBy.has(p.kitIndex),
+  );
+  const visibleHosts = hosts.filter((p) =>
+    traceVisible(comp, p.x, p.z, propScale, plan.extent),
+  );
+  if (visibleHosts.length > 0) {
+    const host = visibleHosts[Math.floor(rng() * visibleHosts.length)];
+    const kind = TRACE_KINDS[Math.floor(rng() * TRACE_KINDS.length)];
+    out.push({
+      kind,
+      x: host.x,
+      z: host.z,
+      rotY: host.rotY + (rng() * 2 - 1) * 0.6,
+      scale: propScale,
+      dy: 0,
+      y: o.heightAt(host.x, host.z) + TRACE_HOST_TOPS[host.kind] * host.scale,
+      kitId: host.kitId,
+      kitIndex: host.kitIndex,
+      trace: true,
+    });
   }
   return out;
 }
