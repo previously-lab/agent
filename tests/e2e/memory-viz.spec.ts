@@ -13,14 +13,15 @@ import {
  * search palette's jump-to-slice, and the timeline view selected by
  * ?view=timeline (direct URL, the mode switcher, the Ctrl+. toggle).
  *
- * THE CONVERSATION IS A DOM SCROLLER (v0.11 §14.5): the R3F conversation
- * field is deleted, and the stream is a native scroll container again — the
- * wheel moves it, `scrollTop` is the position, and the specs read the DOM
- * contract back (`data-armed` on the window's armed head, seam text in the
- * viewport). That scroller lives in the conversation PANEL (§14.1) — a fixed
- * overlay on the right edge, never the page's width — so a wheel reaches it
- * only with the pointer over the panel; `wheelUp` below aims there. Read
- * `unified-chat-stream.tsx`'s header before changing how any of this moves.
+ * THE CONVERSATION IS THE R3F FIELD AGAIN (the 2026-09 restore): the
+ * camera-navigated billboard field deleted by `419ad3d` is restored, and the
+ * conversation rung renders it IN THE PANE — the wheel drives its camera, the
+ * position is the field's own offset, and the specs read the DOM contract
+ * back (`data-armed` on the window's armed head, seam text in the viewport).
+ * The ONE difference from the old field: the turn IN FLIGHT never enters it —
+ * the ongoing turn renders as plain DOM in the conversation panel (§14.1), so
+ * these no-chat-turn specs see history only. Read
+ * `conversation-field.tsx`'s header before changing how any of this moves.
  *
  * All specs seed slice files + the timeline catalog straight into the
  * isolated MEMORY_ROOT (see memory-fixture.ts) — no chat turn ever runs, so
@@ -40,16 +41,14 @@ function sentinel(slice: FixtureSlice, role: "user" | "agent"): string {
 }
 
 /**
- * Scroll the conversation stream up by one wheel notch.
+ * Move the conversation field's camera up by one wheel notch.
  *
- * The stream is a native scroll container (v0.11 §14.5), so the wheel is
- * simply the reader's own input — the pointer only has to be over the pane
- * for the scroller to receive the event. The pane is the conversation PANEL
- * on the right edge (v0.11 §14.1), not the page: a wheel aimed at a
- * viewport-relative point lands on the world canvas beside the panel and the
- * scroller never sees it (the panel is a fixed overlay ~420–520px wide, and
- * 60% of a 1280px viewport is left of its edge), so the pointer is parked on
- * the conversation field itself — what a reader does before scrolling.
+ * The pointer only has to be over the field for the wheel to reach it — the
+ * field owns its own input handling. It renders in the PANE at the
+ * conversation rung (the restored surface, left of the docked conversation
+ * panel), so the pointer is parked on the field's own root — what a reader
+ * does before scrolling — rather than at a viewport-relative point that
+ * could land on the panel overlay or the world canvas.
  */
 async function wheelUp(page: Page, px: number): Promise<void> {
   await conversationField(page).hover();
@@ -58,9 +57,9 @@ async function wheelUp(page: Page, px: number): Promise<void> {
 
 /**
  * The head of the loaded window, ARMED — the only state in which it offers the
- * older page. Paging is ASKED FOR in this stream, never inferred from a scroll
- * position, and this is where the reader asks. The stream arms the head's
- * signal from `scrollTop`; the solo face is what tells the window's head
+ * older page. Paging is ASKED FOR in this field, never inferred from a camera
+ * position, and this is where the reader asks. The field arms the head's
+ * signal from the camera offset; the solo face is what tells the window's head
  * apart from a slice gate in the timeline (see `field-origin.tsx`).
  */
 function armedOrigin(page: Page) {
@@ -68,24 +67,24 @@ function armedOrigin(page: Page) {
 }
 
 /**
- * The conversation stream's ROOT — the scroll container itself. It is what
- * "the chat stayed mounted" is true of.
+ * The conversation field's ROOT — the element that owns the camera and the
+ * wheel. It is what "the conversation stayed mounted" is true of.
  *
- * `data-conversation-field` is the hook, kept from the R3F field the stream
- * replaced: e2e specs and probes already addressed the conversation through
- * it, and a selector is stabler than a class list.
+ * `data-conversation-field` is the field's own stable hook: e2e specs and
+ * probes have always addressed the conversation through it, and a selector
+ * is stabler than a class list.
  */
 function conversationField(page: Page) {
   return page.locator("[data-conversation-field]");
 }
 
 /**
- * The element's screen y once the scroll has STOPPED moving.
+ * The element's screen y once the camera has STOPPED moving.
  *
- * The head arms itself the moment `scrollTop` enters the head region, which
- * can be one wheel event before the rows above have finished settling — so an
- * arming assertion is not a settled one, and a position sampled there is a
- * position in transit. Two consecutive samples that agree are the stream at
+ * The head arms itself the moment the camera enters the head region, which
+ * can be one wheel event before the blocks above have finished settling — so
+ * an arming assertion is not a settled one, and a position sampled there is a
+ * position in transit. Two consecutive samples that agree are the field at
  * rest.
  */
 async function settledY(locator: Locator): Promise<number> {
@@ -201,12 +200,13 @@ test.describe("Memory viz (v0.10)", () => {
       await expect(head).not.toBeInViewport();
 
       // THE READER'S PLACE DID NOT MOVE. A page arriving ABOVE the reader is
-      // the one case a native scroller gets wrong on its own — so the stream
-      // shifts `scrollTop` by exactly the height the page added (estimates
-      // first, each new row's measured height as the correction), and the
-      // turn the reader was at the top of the viewport on is still at the
-      // same screen y, with the new conversations off-screen above them to be
-      // scrolled into. A failure here is the view jumping by a page's height.
+      // the one direction "a billboard grows downward, moves nothing above"
+      // cannot cover — so the field compensates: `relayout` moves the camera
+      // by exactly the height the prepended blocks add (re-measuring as they
+      // settle), and the turn the reader was at the top of the viewport on is
+      // still at the same screen y, with the new conversations off-screen
+      // above them to be scrolled into. A failure here is the view jumping by
+      // a page's height.
       await expect
         .poll(async () => {
           const box = await anchor.boundingBox();
@@ -216,17 +216,20 @@ test.describe("Memory viz (v0.10)", () => {
 
       // Now walk up into the page that arrived: the oldest slice's turns
       // render, and the boundary between the two slices that arrived is a real
-      // SEAM the reader passes — the DOM stream's `SliceSeam` (the gate and
-      // its intertitle belong to the timeline now). The seam is addressed by
-      // the NEWER slice's start date ("Feb 2 · New conversation" is S01's top
-      // edge).
-      const seam = page.getByText(/Feb 2 · New conversation/);
+      // GATE the reader passes through — the field's `SliceGate` intertitle
+      // (fixed height; arming changes what it paints, never its box), not a
+      // hairline that got lost with the page. (The gate is addressed by the
+      // conversations it stands between: its armed face names the older
+      // slice's focus on the back face.)
+      const seamGate = page
+        .getByRole("separator", { name: "Between conversations" })
+        .filter({ hasText: slices[0].focus! });
       await expect(async () => {
         await wheelUp(page, 1200);
         await expect(
           page.getByText(sentinel(slices[0], "user")),
         ).toBeVisible({ timeout: 2_000 });
-        await expect(seam).toBeInViewport({ timeout: 2_000 });
+        await expect(seamGate).toBeInViewport({ timeout: 2_000 });
       }).toPass({ timeout: 30_000 });
       await expect(page.getByText(sentinel(slices[0], "agent"))).toBeVisible();
     });

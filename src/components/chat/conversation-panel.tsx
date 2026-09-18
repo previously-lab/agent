@@ -91,6 +91,31 @@ const DOCK_FULLWIDTH_BELOW_PX = 640;
 /** First-hydration placeholder before the viewport is measured. */
 const DOCK_FALLBACK_PX = 480;
 
+/** The dock width for a viewport width — pure, so the shell can lay its pane
+ *  surfaces out around the docked panel with the SAME number the panel
+ *  transitions on (the field-view slot leaves the dock's width clear). */
+export function dockWidthFor(viewportW: number): number {
+  if (viewportW === 0) return DOCK_FALLBACK_PX;
+  if (viewportW < DOCK_FULLWIDTH_BELOW_PX) return viewportW;
+  return Math.min(
+    DOCK_MAX_PX,
+    Math.max(DOCK_MIN_PX, Math.round(viewportW * DOCK_RATIO)),
+  );
+}
+
+/** The live viewport width — the panel measures it, and the shell reuses the
+ *  measurement for the dock-aware pane layout. */
+export function useViewportWidth(): number {
+  const [viewportW, setViewportW] = useState(0);
+  useEffect(() => {
+    const update = () => setViewportW(window.innerWidth);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return viewportW;
+}
+
 export interface ConversationPanelProps {
   mode: ConversationPanelMode;
   onModeChange: (mode: ConversationPanelMode) => void;
@@ -98,6 +123,11 @@ export interface ConversationPanelProps {
    *  the dock starts BELOW it (the header's islands stay visible and
    *  clickable above the panel); fullscreen ignores it and covers all. */
   insetTop?: number;
+  /** An optional surface mounted ABOVE the conversation children inside the
+   *  panel body — the shell's portal target for the R3F conversation field
+   *  at FULLSCREEN, where the panel is viewport-wide and the field fits.
+   *  Absent at every other tier (the field then portals into the pane). */
+  bodyPrefix?: ReactNode;
   /** The conversation surface. Always mounted — see the module header. */
   children: ReactNode;
 }
@@ -106,6 +136,7 @@ export function ConversationPanel({
   mode,
   onModeChange,
   insetTop = 0,
+  bodyPrefix,
   children,
 }: ConversationPanelProps) {
   const t = useTranslations("conversationPanel");
@@ -115,22 +146,8 @@ export function ConversationPanel({
   // The dock width in px, so dock → fullscreen is a real CSS width
   // transition (the panel GROWS out of its docked size) rather than a jump
   // between two uninterpolatable length expressions.
-  const [viewportW, setViewportW] = useState(0);
-  useEffect(() => {
-    const update = () => setViewportW(window.innerWidth);
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
-  const dockWidth =
-    viewportW === 0
-      ? DOCK_FALLBACK_PX
-      : viewportW < DOCK_FULLWIDTH_BELOW_PX
-        ? viewportW
-        : Math.min(
-            DOCK_MAX_PX,
-            Math.max(DOCK_MIN_PX, Math.round(viewportW * DOCK_RATIO)),
-          );
+  const viewportW = useViewportWidth();
+  const dockWidth = dockWidthFor(viewportW);
   const panelWidth =
     mode === "fullscreen" ? viewportW || DOCK_FALLBACK_PX : dockWidth;
 
@@ -247,9 +264,22 @@ export function ConversationPanel({
             <X className="size-4" aria-hidden />
           </button>
         </div>
-        {/* min-h-0 so the chat's own scroller — not this column — grows and
-            scrolls. */}
-        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+        {/* min-h-0 so the chat's own surface — not this column — grows and
+            scrolls. At fullscreen an optional bodyPrefix (the R3F field's
+            portal target) takes the grow and the conversation children keep
+            their natural height (live strip + composer). */}
+        <div className="flex min-h-0 flex-1 flex-col">
+          {bodyPrefix}
+          <div
+            className={
+              bodyPrefix
+                ? "flex min-h-0 flex-col"
+                : "flex min-h-0 flex-1 flex-col"
+            }
+          >
+            {children}
+          </div>
+        </div>
       </div>
     </>
   );

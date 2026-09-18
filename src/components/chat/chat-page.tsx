@@ -10,10 +10,10 @@ import { ComposerHost } from "./composer-host";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { UnifiedChatStream } from "./unified-chat-stream";
-import type { ChatStreamHandle } from "./unified-chat-stream";
+import type { ConversationFieldHandle } from "./conversation-field";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
-// The stream's item model lives in its own module: the surface renders the
-// same items and must not import the stream component to get them.
+// The stream's item model moved to its own module: the conversation field
+// renders the same items and must not import the stream component to get them.
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
@@ -220,6 +220,10 @@ const CHAT_ID_KEY = "previously:chatId";
 const SEND_MESSAGE_WINDOW = 10; // ~5 turns of working memory
 /** Cap the persisted conversation so a long session can't overflow localStorage. */
 const PERSIST_MESSAGE_CAP = 200;
+
+/** Virtuoso prepend pattern: the list's absolute index origin. Big enough
+ *  that any realistic history depth of prepended pages stays positive. */
+const FIRST_ITEM_INDEX_BASE = 100_000;
 
 function readStoredRunId(): string | null {
   if (typeof localStorage === "undefined") return null;
@@ -434,16 +438,16 @@ function Inner({
   );
   const stream = useSliceStream(persona, streamCursor);
 
-  // The jump paths drive the stream through its imperative handle rather
-  // than scrolling the DOM themselves.
-  const streamApiRef = useRef<ChatStreamHandle | null>(null);
+  // The field owns the position, so the jump paths drive it directly rather
+  // than going through a list handle.
+  const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
   // The time of the item currently at the top of the viewport (reported by the
   // stream) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
 
-  // Page one older slice in. There is no index bookkeeping on this side: the
-  // stream holds the reader's place through a prepend by shifting its scroll
-  // position by the height the page added — see `unified-chat-stream.tsx`.
+  // Page one older slice in. There is no index origin to shift any more: the
+  // field holds its position through a prepend by measuring the added blocks,
+  // which is the same guarantee without a windowing library's bookkeeping.
   const { loadOlder, loadingOlder } = stream;
   const pageOlder = useCallback(async () => {
     await loadOlder();
@@ -778,19 +782,18 @@ function Inner({
   // Refs for the async jump path (scrollToIndex after paging lands).
 
   /**
-   * Run `fn` against the stream's handle as soon as it exists.
+   * Run `fn` against the field's handle as soon as it exists.
    *
-   * The stream mounts BELOW this component and fills its handle from an
-   * effect, so a jump that fires during the mount sequence — and `?at=` is
-   * consumed exactly then — would find nothing. Retrying is bounded, so a
-   * genuinely absent stream gives up rather than spinning. `scrollToKey`
-   * needs no retry of its own: it remembers an unloaded target and lands
-   * when it arrives.
+   * The field mounts BELOW this component and fills its handle from an effect,
+   * so a jump that fires during the mount sequence — and `?at=` is consumed
+   * exactly then — would find nothing. Retrying is bounded, so a genuinely
+   * absent field gives up rather than spinning. `scrollToKey` needs no retry
+   * of its own: it remembers an unloaded target and lands when it arrives.
    */
-  const withStream = useCallback(
-    (fn: (api: ChatStreamHandle) => void, frames = 120) => {
+  const withField = useCallback(
+    (fn: (api: ConversationFieldHandle) => void, frames = 120) => {
       const attempt = (left: number) => {
-        const api = streamApiRef.current;
+        const api = fieldApiRef.current;
         if (api) {
           fn(api);
           return;
@@ -804,8 +807,8 @@ function Inner({
   );
 
   const scrollToBottom = useCallback(() => {
-    withStream((api) => api.scrollToBottom());
-  }, [withStream]);
+    withField((api) => api.scrollToBottom());
+  }, [withField]);
 
   const handleSubmit = async (message: string, images: File[]) => {
     // Sending snaps back to the present: the jump target is cleared and the
@@ -918,8 +921,8 @@ function Inner({
       // right above the live turns).
       let found = true;
       if (sliceId !== "now" && sliceId !== resumeBlock?.sliceId) {
-        // No scroll bookkeeping to do on this side: the stream absorbs each
-        // prepend by compensating its own scroll position.
+        // No index bookkeeping to do: the field tracks its own offsets and
+        // absorbs a prepend by measurement, not by shifting a window base.
         found = await stream.loadUntilSlice(sliceId);
       }
 
@@ -941,10 +944,11 @@ function Inner({
           scrollToBottom();
           return;
         }
-        // The stream addresses a slice by its seam KEY — the seam carries the
-        // slice id. A false return means the target is still paging in; the
-        // stream lands on it when it appears.
-        withStream((api) => api.scrollToKey("seam-" + sliceId));
+        // The field addresses a slice by its seam KEY — the seam carries the
+        // slice id — so it never needs the data-relative index the virtualized
+        // list wanted. A false return means the target is still paging in; the
+        // field lands on it when it appears.
+        withField((api) => api.scrollToKey("seam-" + sliceId));
       });
     },
     [
@@ -953,7 +957,7 @@ function Inner({
       resumeBlock,
       stream,
       scrollToBottom,
-      withStream,
+      withField,
       resolveSliceStart,
       tHist,
     ],
@@ -1027,7 +1031,7 @@ function Inner({
    * Sending comes HOME first. At a card rung the composer is collapsed, and a
    * reader who sends from there is answered at the conversation rung — so the
    * submit switches rung and then runs the normal path. Doing it in that order
-   * means the stream is already mounted and following the live edge when the
+   * means the field is already mounted and following the live edge when the
    * first token arrives, instead of the reply streaming into a pane nobody is
    * looking at.
    */
@@ -1053,26 +1057,28 @@ function Inner({
            as a reserve and behaved as a CROP: this box is `overflow-hidden`, so
            a padding here shrinks the viewport and cuts the content off at that
            edge — pixels the reader can never scroll to, because they are
-           outside the scroller rather than merely behind a control. The room
-           now comes off the CONTENT's own extent instead (the stream's own
-           padding, below), so the stream fills the pane and content passes
-           under the floating chrome on its way past it. ── */}
+           outside the field rather than merely behind a control. The room now
+           comes off the CONTENT's own extent instead (the field's range, the
+           scroller's padding below), so the field fills the pane and content
+           passes under the floating chrome on its way past it. ── */}
       <div
         className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
           onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
-        // Dimmed-and-mounted, not unmounted: this subtree holds the stream's
-        // scroll position and the live useChat stream, and a rung change must
-        // not rebuild either. `inert` is what makes "hidden" mean hidden — the
+        // Dimmed-and-mounted, not unmounted: this subtree holds the field's
+        // camera position and the live stream, and a rung change must not
+        // rebuild either. `inert` is what makes "hidden" mean hidden — the
         // content is off the focus order and out of the accessibility tree,
         // which `opacity-0` alone does not do.
         inert={!onConversationRung || undefined}
       >
         {emptyMemory ? (
-          // A REAL SCROLLER, like the stream beside it: the padding IS the
-          // content inset, because a scroll container's scrollport is its
-          // padding box, so content scrolls INTO the padding and is visible
-          // there.
+          // THIS ONE IS A REAL SCROLLER, and there the padding IS the content
+          // inset: a scroll container's scrollport is its padding box, so
+          // content scrolls INTO the padding and is visible there. It is the
+          // same reserve the field makes with its range — expressed the way a
+          // DOM scroller expresses it, which is the one shape this column could
+          // not use.
           <div
             style={{ paddingTop: insetTop, paddingBottom: insetBottom }}
             className="h-full overflow-y-auto"
@@ -1098,7 +1104,7 @@ function Inner({
             // looking at rather than being fought over by both.
             feed={feed}
             publishing={publishing}
-            apiRef={streamApiRef}
+            fieldApiRef={fieldApiRef}
             insetTop={insetTop}
             insetBottom={insetBottom}
             briefing={

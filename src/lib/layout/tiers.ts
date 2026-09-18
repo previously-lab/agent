@@ -153,7 +153,7 @@ export function paneWidthFor(windowW: number): number {
  * and the inset grow at the LAPTOP boundary, where both tiers are pinned to
  * the cap, and never at a boundary where the column is still filling the pane.
  *
- * Both consumers (`unified-chat-stream.tsx` and `conversation-unit.tsx`) must
+ * Both consumers (`conversation-field.tsx` and `conversation-unit.tsx`) must
  * call THIS, with the window width — never derive it themselves. `field-blocks`
  * states the invariant: if the two disagree, the same slice reflows when the
  * reader changes rung.

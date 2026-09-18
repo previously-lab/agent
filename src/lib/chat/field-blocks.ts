@@ -1,19 +1,16 @@
 /**
- * The block model the timeline's fields share — pure, no React, no three.js.
+ * The conversation field's block model — pure, no React, no three.js.
  *
- * A field lays the stream out as a vertical run of BLOCKS, each anchored by
+ * The field lays the stream out as a vertical run of BLOCKS, each anchored by
  * its top edge. A block is one slice's region, and the gate that follows it —
  * the `seam` between that slice and the next — is its bottom edge. This module
  * owns that grouping, the fixed sizes the layout assumes, and the rule that
  * decides which boundary is currently announcing itself.
  *
- * It was lifted out of the (now deleted) chat-side `conversation-field.tsx`
- * because every one of these was already pure: they take a stream item list
- * and return numbers or strings. Living inside the component meant they could
- * only be checked by driving the whole R3F field in a browser, which is a bad
- * price for arithmetic. Since v0.11 §14.5 the conversation is a DOM scroller
- * (see `unified-chat-stream.tsx`, which reuses the sizes and `sliceIdOf`
- * here); the grouping and gate arithmetic now serve the timeline's fields.
+ * It was lifted out of `conversation-field.tsx` because every one of these was
+ * already pure: they take a stream item list and return numbers or strings.
+ * Living inside the component meant they could only be checked by driving the
+ * whole R3F field in a browser, which is a bad price for arithmetic.
  */
 
 import type { ChatStreamItem } from "./stream-items";
@@ -127,10 +124,9 @@ export const ORIGIN_REGION = -1;
  * rest of the responsive table — a single field could be a constant, but a
  * phone cannot afford one. The invariant this comment used to carry still
  * holds and is now enforced by there being one function: the column width is
- * ONE number per render — `conversation-unit.tsx` calls
- * `columnFor(window.innerWidth)` and never re-derives it. (The chat-side
- * consumer went away with `conversation-field.tsx`; the DOM stream sizes its
- * column in CSS.)
+ * ONE number per render, shared by `conversation-field.tsx` and
+ * `conversation-unit.tsx`, or the same slice reflows when the reader changes
+ * rung. Both call `columnFor(window.innerWidth)`; neither re-derives it.
  */
 
 /**

@@ -33,7 +33,7 @@ const PULSE = "animate-pulse motion-reduce:animate-none bg-foreground/8";
 
 /**
  * The field's own face inset — the padding a real block's content sits inside
- * (`unified-chat-stream.tsx` and `slice-conversation.tsx` both carry this exact
+ * (`conversation-field.tsx` and `slice-conversation.tsx` both carry this exact
  * string). It is duplicated rather than imported because those two modules are
  * the RENDERERS and this is a placeholder; the contract is the string, and the
  * comment in each place says so.

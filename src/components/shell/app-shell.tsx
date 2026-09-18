@@ -64,8 +64,14 @@ import { useTier } from "@/hooks/use-tier";
 import { ChatPage } from "@/components/chat/chat-page";
 import {
   ConversationPanel,
+  dockWidthFor,
+  useViewportWidth,
   type ConversationPanelMode,
 } from "@/components/chat/conversation-panel";
+import {
+  ConversationSurfaceProvider,
+  type ConversationSurface,
+} from "@/components/chat/conversation-surface";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
@@ -237,6 +243,31 @@ export function AppShell({ initialConfig }: AppShellProps) {
     );
   }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
+
+  // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
+  // The conversation field renders through a portal into whichever surface can
+  // host its window-derived 680 px column: the pane's slot while the panel
+  // floats beside it (field view), a slot inside the panel body at
+  // fullscreen, and — with no wide host (the game's docked/pilled panel) —
+  // the DOM list takes the conversation instead (see
+  // `chat/conversation-surface.tsx`). The slot elements are owned HERE
+  // because the shell owns both their parents; `useState` refs re-render on
+  // registration, the same handshake `world-canvas.tsx` uses.
+  const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
+  const [panelSlotEl, setPanelSlotEl] = useState<HTMLElement | null>(null);
+  const viewportW = useViewportWidth();
+  const dockW = dockWidthFor(viewportW);
+  const onConversationRung = rung === "conversation";
+  const conversationSurface: ConversationSurface =
+    view === "game"
+      ? panelSlotEl
+        ? { kind: "field", el: panelSlotEl }
+        : { kind: "narrow" }
+      : panelMode === "fullscreen"
+        ? panelSlotEl
+          ? { kind: "field", el: panelSlotEl }
+          : { kind: "narrow" }
+        : { kind: "field", el: paneSlotEl };
 
   // A conversation jump (`?at=` — `openSlice`, the search palette) is a FIELD
   // world act: arriving on one clears an in-session game override so the
@@ -564,7 +595,32 @@ export function AppShell({ initialConfig }: AppShellProps) {
       {view === "field" && <AxisBand range={range} feed={feed} />}
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
+      <ConversationSurfaceProvider value={conversationSurface}>
       <div className="relative flex-1 min-w-0 flex flex-col">
+        {/* THE CONVERSATION FIELD'S PANE SLOT — the restored R3F conversation
+            renders HERE, in the 2.5D view, exactly where the conversation
+            rung lived before the DOM refactor: portal target for the field
+            (see `chat/conversation-surface.tsx`). Dimmed, not unmounted, at a
+            card rung — the subtree holds the field's camera position — and
+            at conversation rung the reader reads history in the pane while
+            the ongoing turn lives in the panel. The slot leaves the docked
+            panel's width clear so the field's column is never under it. */}
+        {view === "field" && (
+          <div
+            ref={setPaneSlotEl}
+            data-conversation-slot
+            inert={!onConversationRung || undefined}
+            className={`absolute inset-y-0 left-0 z-0 transition-opacity duration-300 ${
+              onConversationRung
+                ? "opacity-100"
+                : "pointer-events-none opacity-0"
+            }`}
+            style={{
+              right:
+                panelMode === "dock" && onConversationRung ? dockW : 0,
+            }}
+          />
+        )}
         {/* THE CONVERSATION LAYER — one persistent panel over the world
             (§14.1), not a view of its own any more. The panel OVERLAYS the
             pane (position: fixed): the card field behind it keeps its size,
@@ -574,11 +630,19 @@ export function AppShell({ initialConfig }: AppShellProps) {
             but its OWN rung is pinned to "conversation": tier visibility is
             the panel's job now, and the composer is the full form at every
             tier. insetTop={0} because the panel's own slim bar replaced the
-            floating chrome's keep-out inside it. */}
+            floating chrome's keep-out inside it. At FULLSCREEN the panel is
+            viewport-wide, so it hosts the R3F field itself (bodyPrefix is
+            the portal target) — that is the one tier where the dock's width
+            constraint does not apply. */}
         <ConversationPanel
           mode={panelMode}
           onModeChange={setPanelMode}
           insetTop={chromeInset}
+          bodyPrefix={
+            panelMode === "fullscreen" ? (
+              <div ref={setPanelSlotEl} className="min-h-0 flex-1" />
+            ) : undefined
+          }
         >
           <ChatPage
             initialConfig={initialConfig}
@@ -725,6 +789,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
           </div>
         )}
       </div>
+      </ConversationSurfaceProvider>
     </div>
     </WorldSceneProvider>
   );
