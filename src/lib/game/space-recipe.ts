@@ -18,6 +18,9 @@ import {
   deriveSubSeed,
   pick,
 } from "@/lib/game/seed";
+import { parseDebugSlice, worldClassOfArchetype } from "./debug-slice";
+import { roomModuleById } from "./room-modules";
+import { roomTemplateById } from "./room-templates";
 import {
   INTERIOR_ROOMS,
   NATURE_BIOMES,
@@ -125,15 +128,41 @@ export function compileSpaceRecipe(
   const widthRng = createRng(deriveSubSeed(worldSeed, sliceId, "width"));
   const styleRng = createRng(deriveSubSeed(worldSeed, sliceId, "style"));
 
-  const worldClass = pickClass(classRng);
-  const archetype =
+  let worldClass = pickClass(classRng);
+  let archetype =
     worldClass === "interior"
       ? pick(typeRng, INTERIOR_ROOMS)
       : worldClass === "wonder"
         ? pick(typeRng, WONDER_ROOMS)
         : pick(typeRng, NATURE_BIOMES); // nature AND hybrid
 
-  const size = pick(sizeRng, SIZE_TIERS);
+  let size = pick(sizeRng, SIZE_TIERS);
+
+  // Debug gallery (debug-slice.ts): a `dbg-` slice pins the facets its page
+  // reviews — the archetype page its archetype, the module page an interior
+  // room of that module's own archetype at tier M (the composition sizes the
+  // plan), the template page the tier its layout asks for. A real slice never
+  // matches, so every draw above and below is untouched for it.
+  const debug = parseDebugSlice(sliceId);
+  if (debug?.page === "archetypes") {
+    archetype = debug.id as typeof archetype;
+    worldClass = worldClassOfArchetype(debug.id);
+  } else if (debug?.page === "modules") {
+    worldClass = "interior";
+    const pinnedModule = roomModuleById(debug.id);
+    if (pinnedModule && pinnedModule.archetypes.length > 0) {
+      archetype = pinnedModule.archetypes[0];
+    }
+    size = SIZE_TIERS.find((tier) => tier.extent === 32) ?? size;
+  } else if (debug?.page === "templates") {
+    worldClass = "interior";
+    const template = roomTemplateById(debug.id);
+    if (template?.archetypes?.length) archetype = template.archetypes[0];
+    if (template) {
+      size = SIZE_TIERS.find((tier) => tier.extent === template.minExtent) ?? size;
+    }
+  }
+
   const widthFactor = pick(widthRng, WIDTH_FACTORS);
 
   // Palette: interior/wonder rooms favor the vivid set (85%) for the

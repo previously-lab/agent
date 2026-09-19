@@ -38,6 +38,7 @@ import type { DoorAffordance } from "./room-doors";
 import type { KitZones, KitZoneRect } from "./kits";
 import type { PlanId, RoomPlan, TemplatePlan, WallRole } from "./room-plan";
 import { createRng, hashString, WORLD_SEED } from "./seed";
+import { parseDebugSlice } from "./debug-slice";
 import type { ArchetypeId, WorldClass } from "./space-types";
 
 /* ------------------------------------------------------------------ */
@@ -453,6 +454,10 @@ export function resolveRoomTemplate(
   worldSeed: string = WORLD_SEED,
   capacityFor?: (template: RoomTemplate) => number,
 ): RoomTemplate | null {
+  // Debug gallery (debug-slice.ts): a `dbg-t:` slice pins this layout
+  // outright — reviewing a layout must not be steered by capacity.
+  const dbg = parseDebugSlice(sliceId);
+  if (dbg?.page === "templates") return roomTemplateById(dbg.id) ?? null;
   const eligible = eligibleTemplates(worldClass, archetype, baseExtent, doorCount);
   if (eligible.length === 0) return null;
   const effective = (t: RoomTemplate): number =>

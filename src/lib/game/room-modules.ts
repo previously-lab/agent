@@ -77,6 +77,7 @@ import type {
   TemplateZone,
 } from "./room-templates";
 import { createRng, hashString, WORLD_SEED } from "./seed";
+import { parseDebugSlice } from "./debug-slice";
 import type { WallSegment } from "./room-plan";
 import type { ArchetypeId, SpaceRecipe, WorldClass } from "./space-types";
 
@@ -982,11 +983,18 @@ export function resolveRoomComposition(
   doorCount: number = 0,
   worldSeed: string = WORLD_SEED,
   countHint?: number,
+  /** Debug gallery (debug-slice.ts): pin the primary module rather than
+   *  drawing it. Callers pass a countHint of 1 alongside, so the forced room
+   *  is exactly that module; a real slice never sets it. */
+  forcedPrimaryId?: string,
 ): RoomComposition | null {
   const primaries = primaryModulesFor(worldClass, archetype);
-  if (primaries.length === 0) return null;
+  const forcedPrimary = forcedPrimaryId
+    ? roomModuleById(forcedPrimaryId)
+    : undefined;
+  if (primaries.length === 0 && !forcedPrimary) return null;
   const rng = compositionRng(worldSeed, sliceId);
-  const primary = weightedPick(rng, primaries);
+  const primary = forcedPrimary ?? weightedPick(rng, primaries);
 
   // Topology order for each module count, seeded: the resolver walks the
   // list and keeps the first placement that joins.
@@ -1102,13 +1110,18 @@ export function compositionForRecipe(
   doorCount: number = 0,
 ): RoomComposition | null {
   if (recipe.worldClass !== "interior") return null;
+  // Debug gallery (debug-slice.ts): a `dbg-m:` slice composes THAT module and
+  // nothing else, so the standard rooms can be reviewed one at a time.
+  const dbg = parseDebugSlice(recipe.sliceId);
+  const forced = dbg?.page === "modules" ? dbg.id : undefined;
   return resolveRoomComposition(
     recipe.sliceId,
     recipe.worldClass,
     recipe.archetype,
     doorCount,
     worldSeed,
-    TIER_MODULE_COUNTS[recipe.size.id],
+    forced ? 1 : TIER_MODULE_COUNTS[recipe.size.id],
+    forced,
   );
 }
 

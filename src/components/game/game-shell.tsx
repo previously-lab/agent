@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
 import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
@@ -12,6 +13,12 @@ import {
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
 import { readHotelData, writeHotelData } from "@/lib/game/hotel-data";
+import { debugUnitsFor, isDebugPage } from "@/lib/game/debug-catalog";
+import {
+  DEBUG_PAGE_PARAM,
+  DEBUG_PARAM,
+  DEBUG_QUERY_VALUE,
+} from "@/lib/game/debug-slice";
 import type { CorridorDoor } from "./corridor";
 
 /**
@@ -123,6 +130,28 @@ export function GameShell({
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
+
+  // THE GALLERY (the standard-room review pass): `?view=game&debug=rooms
+  // &page=modules|templates|archetypes` swaps the corridor's doors for one
+  // door per STANDARD unit, so each can be walked — and decorated — on its
+  // own. The force rides in the synthetic slice id (debug-slice.ts), so
+  // nothing else in the room pipeline needs to know this mode exists.
+  const searchParams = useSearchParams();
+  const galleryPage = useMemo(() => {
+    const page = searchParams.get(DEBUG_PAGE_PARAM);
+    return isDebugPage(page) ? page : "modules";
+  }, [searchParams]);
+  const galleryDoors = useMemo<readonly CorridorDoor[] | null>(
+    () =>
+      searchParams.get(DEBUG_PARAM) === DEBUG_QUERY_VALUE
+        ? debugUnitsFor(galleryPage).map((unit) => ({
+            sliceId: unit.sliceId,
+            label: unit.label,
+          }))
+        : null,
+    [searchParams, galleryPage],
+  );
+
   // THE CACHED LANE SURVIVES VIEW SWITCHES: a remount after field → game →
   // field reuses the previously derived (doors, roomDoors, timelines)
   // instead of two server reads plus a second-pass room-door rebuild. The
@@ -133,9 +162,10 @@ export function GameShell({
   // a locale change misses the key, a reload clears the module.
   const cachedLane = readHotelData(locale);
   // null = the catalog is still in flight; the corridor mounts only once the
-  // doors resolve (to the timeline, or to the fallback on empty/error).
+  // doors resolve (to the timeline, or to the fallback on empty/error). The
+  // gallery replaces the lot with its own door list.
   const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(
-    () => cachedLane?.doors ?? null,
+    () => galleryDoors ?? cachedLane?.doors ?? null,
   );
   // The strand-door map (slice id → the room's strand doors, B.11). Empty
   // until the strand read resolves, and stays empty if it fails — the game
@@ -156,6 +186,12 @@ export function GameShell({
   // with the shell, which owns the panel's mode.
 
   useEffect(() => {
+    // The gallery owns the door list outright: no catalog read, no strand
+    // graph — the corridor shows the standard units and nothing else.
+    if (galleryDoors) {
+      setDoors(galleryDoors);
+      return;
+    }
     // Cache hit (state was initialized from it): nothing to fetch. Re-read
     // rather than trust the mount-time value — an epoch bump between the
     // render and this effect (a turn settling in that window) must send us
@@ -281,7 +317,7 @@ export function GameShell({
     return () => {
       cancelled = true;
     };
-  }, [locale]);
+  }, [locale, galleryDoors]);
 
   return (
     <div className="relative h-full w-full">
