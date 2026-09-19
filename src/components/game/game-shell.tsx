@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
 import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
@@ -152,6 +152,25 @@ export function GameShell({
     [searchParams, galleryPage],
   );
 
+  /**
+   * Swap the corridor for the gallery (or drop it) by rewriting the query —
+   * a DEV affordance, so it rides on the same URL the mode is read from and
+   * leaves nothing behind in the hotel's data lane.
+   */
+  const router = useRouter();
+  const pathname = usePathname();
+  const setGallery = (page: "modules" | "templates" | "archetypes" | null) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (page === null) {
+      params.delete(DEBUG_PARAM);
+      params.delete(DEBUG_PAGE_PARAM);
+    } else {
+      params.set(DEBUG_PARAM, DEBUG_QUERY_VALUE);
+      params.set(DEBUG_PAGE_PARAM, page);
+    }
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
   // THE CACHED LANE SURVIVES VIEW SWITCHES: a remount after field → game →
   // field reuses the previously derived (doors, roomDoors, timelines)
   // instead of two server reads plus a second-pass room-door rebuild. The
@@ -195,8 +214,13 @@ export function GameShell({
     // Cache hit (state was initialized from it): nothing to fetch. Re-read
     // rather than trust the mount-time value — an epoch bump between the
     // render and this effect (a turn settling in that window) must send us
-    // down the fetch path like any stale entry.
-    if (readHotelData(locale)) return;
+    // down the fetch path like any stale entry. The cached doors go back in
+    // too: leaving the gallery left ITS list in the state.
+    const cached = readHotelData(locale);
+    if (cached) {
+      setDoors(cached.doors);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -335,6 +359,42 @@ export function GameShell({
         >
           {t("exit")}
         </button>
+      </div>
+      {/* DEV: the gallery switcher (temporary) — bottom-left, clear of the
+          conversation pill (bottom-right) and the door HUD (bottom-centre).
+          It rewrites the query the gallery mode is read from, so the pages
+          are one tap away instead of a typed URL, and the hotel is one tap
+          back. */}
+      <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-1 sm:right-6 sm:top-6">
+        <button
+          type="button"
+          onClick={() => setGallery(galleryDoors ? null : galleryPage)}
+          className="pointer-events-auto rounded-full bg-black/50 px-3 py-1.5 text-[11px] font-medium text-neutral-200 backdrop-blur-sm transition-colors hover:bg-black/65"
+        >
+          {galleryDoors ? "返回酒店 · Hotel" : "展厅 · Gallery"}
+        </button>
+        {galleryDoors && (
+          <div className="flex flex-col gap-1 rounded-xl bg-black/45 p-1.5 backdrop-blur-sm">
+            {(["modules", "templates", "archetypes"] as const).map((page) => (
+              <button
+                key={page}
+                type="button"
+                onClick={() => setGallery(page)}
+                className={`rounded-lg px-2.5 py-1 text-left text-[11px] transition-colors ${
+                  page === galleryPage
+                    ? "bg-white/15 text-neutral-100"
+                    : "text-neutral-300 hover:bg-white/10 hover:text-neutral-100"
+                }`}
+              >
+                {page === "modules"
+                  ? `模块 · Modules (${debugUnitsFor("modules").length})`
+                  : page === "templates"
+                    ? `模板 · Templates (${debugUnitsFor("templates").length})`
+                    : `原型 · Archetypes (${debugUnitsFor("archetypes").length})`}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       {doors ? (
         <GameCanvas
