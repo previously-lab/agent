@@ -160,6 +160,7 @@ import {
   type ModuleSconceAnchor,
   type WallRoleM,
 } from "@/lib/game/room-modules";
+import { schematicPlacementsFor } from "@/lib/game/room-schematic";
 import type { SplitWall } from "@/lib/game/room-doors";
 import {
   crossedRoomDoor,
@@ -710,27 +711,39 @@ export function buildRoomFeatures({
   };
   if (!template) return out;
   const ws = wallHeight / WALL_HEIGHT;
+  // v0.12: runs already hosting a wall feature (niche, pilaster rhythm,
+  // platform, mezzanine, arch, column order). The DECLARED-role pass never
+  // consults it — same-role stacking is authored (the reading hall's
+  // pilasters + arch + colonnade share the shelf wall). The FALLBACK pass
+  // skips claimed runs: several features relocated off their cutaway wall
+  // must spread across the walls that remain, never pile onto one.
+  const claimedRuns = new Set<number>();
 
   // Single-figure wall features (platform, mezzanine, arch) resolve to ONE
   // run of the declared role: the first whose length holds the figure with
   // its end pads, whose DRAWN height passes the figure's own rule, and
   // whose span-center position is clear of every strand door (frame-
   // shifted, the niche discipline). Runs are already split at door gaps,
-  // so a figure that fits its run never crosses a doorway.
+  // so a figure that fits its run never crosses a doorway. When `claimed`
+  // is given and the declared role hosts nothing, the figure FALLS BACK
+  // (v0.12, the arch/column half of the declarations audit) to the first
+  // unclaimed non-entrance run tall enough — the declaration is a
+  // preference, not a coin flip.
   const runCenterFor = (
     role: string,
     need: number,
     doorClear: number,
     minDrawn: number,
     span: readonly [number, number],
+    claimed?: ReadonlySet<number>,
   ): { run: number; along: number } | null => {
-    for (let i = 0; i < wallRuns.length; i++) {
+    const tryAt = (i: number): { run: number; along: number } | null => {
       const run = wallRuns[i];
-      if (wallRoleFor(plan, walls[run.source]) !== role) continue;
-      if (wallHeights[i] < minDrawn - 1e-6) continue;
+      if (wallRoleFor(plan, walls[run.source]) !== role) return null;
+      if (wallHeights[i] < minDrawn - 1e-6) return null;
       const horizontal = run.wall.sizeZ <= run.wall.sizeX;
       const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
-      if (len < need) continue;
+      if (len < need) return null;
       const pad = need / 2 + 0.3;
       const raw = ((span[0] + span[1]) / 2 - 0.5) * len;
       const along = Math.min(Math.max(raw, -len / 2 + pad), len / 2 - pad);
@@ -746,11 +759,50 @@ export function buildRoomFeatures({
               need / 2 + DOOR_GAP_HALF + doorClear,
         )
       ) {
-        continue;
+        return null;
+      }
+      return { run: i, along };
+    };
+    for (let i = 0; i < wallRuns.length; i++) {
+      const hit = tryAt(i);
+      if (hit) return hit;
+    }
+    if (!claimed) return null;
+    for (let i = 0; i < wallRuns.length; i++) {
+      if (claimed.has(i)) continue;
+      if (walls[wallRuns[i].source].entrance) continue;
+      // retarget the role filter at this run's own role
+      const hit = tryAtWithRole(i);
+      if (hit) return hit;
+    }
+    return null;
+
+    function tryAtWithRole(i: number): { run: number; along: number } | null {
+      // the fallback keeps every host rule but ignores the declared role
+      const run = wallRuns[i];
+      if (wallHeights[i] < minDrawn - 1e-6) return null;
+      const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+      const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
+      if (len < need) return null;
+      const pad = need / 2 + 0.3;
+      const raw = ((span[0] + span[1]) / 2 - 0.5) * len;
+      const along = Math.min(Math.max(raw, -len / 2 + pad), len / 2 - pad);
+      const src = walls[run.source];
+      const runShift = horizontal
+        ? run.wall.x - src.x
+        : run.wall.z - src.z;
+      if (
+        doors.some(
+          (d) =>
+            d.wall === run.source &&
+            Math.abs(d.along - runShift - along) <
+              need / 2 + DOOR_GAP_HALF + doorClear,
+        )
+      ) {
+        return null;
       }
       return { run: i, along };
     }
-    return null;
   };
 
   for (const slot of template.features) {
@@ -811,11 +863,15 @@ export function buildRoomFeatures({
         .filter(
           (i) =>
             !declared.includes(i) &&
+            !claimedRuns.has(i) &&
             !walls[wallRuns[i].source].entrance &&
             wallHeights[i] >= wallHeight - 1e-6,
         );
       for (const i of [...declared, ...fallback]) {
-        if (tryRun(i)) break; // one niche per declared slot
+        if (tryRun(i)) {
+          claimedRuns.add(i);
+          break; // one niche per declared slot
+        }
       }
     } else if (slot.kind === "pilaster-rhythm") {
       const stripMin =
@@ -870,6 +926,7 @@ export function buildRoomFeatures({
         .filter(
           (i) =>
             !declared.includes(i) &&
+            !claimedRuns.has(i) &&
             !walls[wallRuns[i].source].entrance &&
             wallHeights[i] >= stripMin,
         );
@@ -878,6 +935,7 @@ export function buildRoomFeatures({
         const alongs = tryRun(i);
         if (alongs.length > 0) {
           out.pilasters.push({ run: i, alongs });
+          claimedRuns.add(i);
           placedSlot = true;
         }
       }
@@ -886,6 +944,7 @@ export function buildRoomFeatures({
           const alongs = tryRun(i);
           if (alongs.length > 0) {
             out.pilasters.push({ run: i, alongs });
+            claimedRuns.add(i);
             break; // the fallback claims one run, never every wall
           }
         }
@@ -957,6 +1016,7 @@ export function buildRoomFeatures({
             stepDepth: PLATFORM_STEP_DEPTH * Math.max(ws, 0.6),
             railH: PLATFORM_RAIL_HEIGHT * ws,
           });
+          claimedRuns.add(fit.run);
         }
       }
     } else if (slot.kind === "mezzanine") {
@@ -986,15 +1046,22 @@ export function buildRoomFeatures({
           parapetH: MEZZANINE_PARAPET * ws,
           slab: MEZZANINE_SLAB * ws,
         });
+        claimedRuns.add(fit.run);
       }
     } else if (slot.kind === "arch-frame") {
-      // The portal: needs its full height under the wall's drawn top.
+      // The portal: needs its full height under the wall's drawn top. Like
+      // the niche and the pilasters, the declared role is a preference —
+      // when the dollhouse cutaway sinks it (the reading hall's north face
+      // at one corridor side), the arch relocates to the first unclaimed
+      // full-height run instead of vanishing; the claimedRuns discipline
+      // keeps it off walls already hosting another feature's fallback.
       const fit = runCenterFor(
         slot.at,
         ARCH_WIDTH * ws,
         ARCH_DOOR_CLEAR * ws,
         (ARCH_SPRING_Y + ARCH_TUBE + ARCH_HEADROOM) * ws,
         slot.span ?? [0.4, 0.6],
+        claimedRuns,
       );
       if (fit) {
         out.arches.push({
@@ -1005,6 +1072,7 @@ export function buildRoomFeatures({
           post: ARCH_POST * ws,
           tube: ARCH_TUBE * ws,
         });
+        claimedRuns.add(fit.run);
       }
     } else if (slot.kind === "column-order") {
       // The free-standing colonnade rhythm: per door-split run (the rhythm
@@ -1015,15 +1083,14 @@ export function buildRoomFeatures({
         (COLUMN_PLINTH_HEIGHT + COLUMN_SHAFT_HEIGHT + COLUMN_CAPITAL_HEIGHT + 0.1) *
         ws;
       const span = slot.span ?? [0.1, 0.9];
-      for (let i = 0; i < wallRuns.length; i++) {
+      const tryRun = (i: number): number[] => {
         const run = wallRuns[i];
-        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
-        if (wallHeights[i] < colH) continue;
+        if (wallHeights[i] < colH) return [];
         const horizontal = run.wall.sizeZ <= run.wall.sizeX;
         const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
         const pad = COLUMN_END_PAD * ws;
         const runLen = len - pad * 2;
-        if (runLen < COLUMN_MIN_RUN * ws) continue;
+        if (runLen < COLUMN_MIN_RUN * ws) return [];
         const n = Math.max(1, Math.round(runLen / (COLUMN_SPAN * ws)));
         const spacing = runLen / n;
         const srcWall = walls[run.source];
@@ -1047,8 +1114,32 @@ export function buildRoomFeatures({
           }
           alongs.push(a);
         }
+        return alongs;
+      };
+      let placedSlot = false;
+      for (let i = 0; i < wallRuns.length; i++) {
+        if (wallRoleFor(plan, walls[wallRuns[i].source]) !== slot.at) continue;
+        const alongs = tryRun(i);
         if (alongs.length > 0) {
           out.columnOrders.push({ run: i, alongs, offWall: COLUMN_OFF_WALL * ws });
+          claimedRuns.add(i);
+          placedSlot = true;
+        }
+      }
+      if (!placedSlot) {
+        // v0.12: the cutaway sank the declared role — relocate the
+        // rhythm to the first unclaimed tall run (the arch's fallback
+        // discipline), never piling onto a wall already hosting one.
+        for (let i = 0; i < wallRuns.length; i++) {
+          if (claimedRuns.has(i)) continue;
+          if (walls[wallRuns[i].source].entrance) continue;
+          if (wallRoleFor(plan, walls[wallRuns[i].source]) === slot.at) continue;
+          const alongs = tryRun(i);
+          if (alongs.length > 0) {
+            out.columnOrders.push({ run: i, alongs, offWall: COLUMN_OFF_WALL * ws });
+            claimedRuns.add(i);
+            break; // the fallback claims one run, never every wall
+          }
         }
       }
     } else if (slot.kind === "water-rill" && ground !== "rolling" && out.rill === null) {
@@ -2757,6 +2848,14 @@ type MotifKind =
   | "sideboard"
   | "towelrail"
   | "poolladder"
+  // The structure layer (v0.12-room-realism §2 — the living pilot's
+  // vocabulary, consumed by room-schematic.ts's slots): the coffee table
+  // and the media unit under the TV, and the tabletop dressing trio.
+  | "coffeetable"
+  | "mediaunit"
+  | "vase"
+  | "frame"
+  | "candle"
   // wonder props
   | "yarn"
   | "cattree"
@@ -4903,6 +5002,160 @@ function MotifGeometry({
               <meshStandardMaterial color={accent} roughness={1} flatShading />
             </mesh>
           ))}
+        </group>
+      );
+    case "coffeetable":
+      // The low table (v0.12 附录 A): top at 0.4m — the sofa's reach (0.35–
+      // 0.5m gap) — on four square legs, an under-shelf for the book pile.
+      // The room schematic's tabletop dressing rides this top (dy lift).
+      return (
+        <group>
+          <mesh position={[0, 0.375, 0]}>
+            <boxGeometry args={[0.9, 0.05, 0.55]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {[
+            [-0.39, -0.21],
+            [0.39, -0.21],
+            [-0.39, 0.21],
+            [0.39, 0.21],
+          ].map(([x, z]) => (
+            <mesh key={`${x}${z}`} position={[x, 0.175, z]}>
+              <boxGeometry args={[0.06, 0.35, 0.06]} />
+              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.12, 0]}>
+            <boxGeometry args={[0.78, 0.03, 0.43]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "mediaunit":
+      // The TV's low stand (v0.12 附录 A): a 0.5m credenza, back at local
+      // −z (against the focal wall), two door fronts, brass knobs, the top
+      // panel the TV piece stands on (the schematic lifts it by this top).
+      return (
+        <group>
+          {[
+            [-0.72, -0.2],
+            [0.72, -0.2],
+            [-0.72, 0.2],
+            [0.72, 0.2],
+          ].map(([x, z]) => (
+            <mesh key={`${x}${z}`} position={[x, 0.035, z]}>
+              <boxGeometry args={[0.07, 0.07, 0.07]} />
+              <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.28, 0]}>
+            <boxGeometry args={[1.6, 0.42, 0.55]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {[-0.4, 0.4].map((x) => (
+            <group key={x}>
+              <mesh position={[x, 0.28, 0.28]}>
+                <boxGeometry args={[0.72, 0.34, 0.02]} />
+                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[x + 0.28 * Math.sign(x), 0.28, 0.295]}>
+                <sphereGeometry args={[0.022, 6, 5]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[1.66, 0.04, 0.58]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "vase":
+      // Tabletop amphora (v0.12 附录 A — the dressing trio): belly, neck,
+      // lip, in the room's accent glaze (the pedestal amphora's idiom).
+      return (
+        <group>
+          <mesh position={[0, 0.1, 0]} scale={[1, 1.15, 1]}>
+            <sphereGeometry args={[0.09, 9, 7]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+          <mesh position={[0, 0.22, 0]}>
+            <cylinderGeometry args={[0.038, 0.05, 0.1, 8]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+          <mesh position={[0, 0.28, 0]}>
+            <cylinderGeometry args={[0.055, 0.04, 0.025, 8]} />
+            <meshStandardMaterial color={accent} roughness={0.5} flatShading />
+          </mesh>
+        </group>
+      );
+    case "frame":
+      // Small standing picture frame (v0.12 附录 A): a dark frame, a warm
+      // "picture" panel, a kickstand behind — it RESTS on the top, leaning
+      // back a touch (supported, never hung).
+      return (
+        <group>
+          <mesh position={[0, 0.1, 0]} rotation={[-0.1, 0, 0]}>
+            <boxGeometry args={[0.2, 0.26, 0.02]} />
+            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.1, 0.012]} rotation={[-0.1, 0, 0]}>
+            <boxGeometry args={[0.15, 0.2, 0.008]} />
+            <meshStandardMaterial
+              color="#c8a86a"
+              roughness={0.9}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.07, -0.045]} rotation={[0.35, 0, 0]}>
+            <boxGeometry args={[0.16, 0.14, 0.015]} />
+            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "candle":
+      // Candlestick (v0.12 附录 A): a brass base and stem, a cream candle,
+      // a small steady flame (emissive, like the lamp shades' glow — no
+      // real point light, B.13's source discipline).
+      return (
+        <group>
+          <mesh position={[0, 0.015, 0]}>
+            <cylinderGeometry args={[0.05, 0.06, 0.03, 8]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.09, 0]}>
+            <cylinderGeometry args={[0.018, 0.024, 0.12, 7]} />
+            <meshStandardMaterial
+              color="#c8b06a"
+              roughness={0.4}
+              metalness={0.6}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0, 0.185, 0]}>
+            <cylinderGeometry args={[0.024, 0.024, 0.07, 8]} />
+            <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0.24, 0]}>
+            <sphereGeometry args={[0.018, 6, 5]} />
+            <meshStandardMaterial
+              color="#f2e6c8"
+              emissive="#f2e6c8"
+              emissiveIntensity={0.9}
+              roughness={1}
+              flatShading
+            />
+          </mesh>
         </group>
       );
     case "poolladder":
@@ -8133,6 +8386,12 @@ export function SpaceScene({
       const kitIds = roomComposition
         ? [...new Set(roomComposition.modules.flatMap((p) => p.module.kits))]
         : undefined;
+      // v0.12 §2 (the structure layer): modules carrying a hand-authored
+      // RoomSchematic furnish by SLOT PLACEMENT — staging's second input
+      // (room-schematic.ts). Modules without one are untouched.
+      const schematicPlacements = roomComposition
+        ? schematicPlacementsFor(roomComposition.modules, scaleFactor)
+        : [];
       // §8.2 随机区域: the composition's open fields dress sparsely (0–3
       // seeded pieces per field from this same deck) — scaled into the
       // plan's coordinates like the seams. The fields are deliberately NOT
@@ -8154,6 +8413,7 @@ export function SpaceScene({
         water: waterRect,
         doors: clearanceDoors,
         kitIds,
+        schematics: schematicPlacements,
         openFields,
         // The composition's content zones (§7/§8), resolved to absolute plan
         // coordinates: the hero's pin, the kit-cluster rects, the
@@ -8614,6 +8874,14 @@ export function SpaceScene({
       furniture: furniture.length,
       pieces: furniture.map((p) => [p.x, p.z] as const),
       pieceKinds: furniture.map((p) => p.kind),
+      // v0.12 §2: the modules furnishing by room schematic this mount
+      // (empty = every module staged generically) — probes assert the
+      // blueprint path took ownership of the living room's floor.
+      schematics: roomComposition
+        ? schematicPlacementsFor(roomComposition.modules, scaleFactor).map(
+            (p) => p.schematic.moduleId,
+          )
+        : [],
       // The resolved features actually built this mount — the N3/N4 slots
       // included (probes assert they render where declared, and that a
       // slot which failed every host rule is absent rather than clipped).

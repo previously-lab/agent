@@ -41,6 +41,10 @@ import {
   compositionTemplateFor,
 } from "@/lib/game/room-modules";
 import { stageInteriorKits, planArea } from "@/lib/game/kits";
+import {
+  roomSchematicFor,
+  schematicPlacementsFor,
+} from "@/lib/game/room-schematic";
 import { waterRectFor } from "@/lib/game/terrain";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import {
@@ -77,6 +81,7 @@ function stageModuleRoom(moduleId: string) {
   const zones = compositionKitZonesFor(comp, plan);
   const kitIds = [...new Set(comp.modules.flatMap((p) => p.module.kits))];
   const water = waterRectFor(scaledRecipe);
+  const schematics = schematicPlacementsFor(comp.modules, scale.factor);
   const pieces = stageInteriorKits({
     rng: createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture")),
     archetype: recipe.archetype,
@@ -90,9 +95,10 @@ function stageModuleRoom(moduleId: string) {
     doors: [],
     kitIds,
     zones,
+    ...(schematics.length > 0 ? { schematics } : {}),
     heightAt: () => 0,
   });
-  return { recipe, scaledRecipe, scale, comp, plan, zones, kitIds, water, pieces };
+  return { recipe, scaledRecipe, scale, comp, plan, zones, kitIds, water, pieces, schematics };
 }
 
 /** The renderer's feature-builder inputs for the same room, at one room
@@ -140,9 +146,14 @@ function featuresFor(
 }
 
 describe("declared heroKits land (v0.12 ①)", () => {
-  const pinned = ROOM_MODULES.filter((m) => m.heroKit);
+  // A module OWNED by a room schematic (v0.12 §2 — today the living)
+  // furnishes by slot placement instead; the generic hero stands down
+  // there. Its pinned heroKit is still declared: a rolled-back schematic
+  // falls back to it (the degrade path, asserted in
+  // room-schematic.test.ts).
+  const pinned = ROOM_MODULES.filter((m) => m.heroKit && !roomSchematicFor(m.id));
   it("every module that pins a heroKit stages it as placement 0", () => {
-    expect(pinned.length).toBeGreaterThanOrEqual(8);
+    expect(pinned.length).toBeGreaterThanOrEqual(7);
     for (const m of pinned) {
       const { pieces } = stageModuleRoom(m.id);
       const hero = pieces.filter((p) => p.kitIndex === 0);
@@ -152,6 +163,30 @@ describe("declared heroKits land (v0.12 ①)", () => {
         `${m.id}: placement 0 is ${hero[0]?.kitId}, expected ${m.heroKit}`,
       ).toBe(true);
     }
+  });
+
+  it("the schematic-owned living stages its blueprint, not its heroKit", () => {
+    const { pieces, schematics } = stageModuleRoom("living");
+    expect(schematics.map((s) => s.schematic.moduleId)).toEqual(["living"]);
+    const kinds = new Set(pieces.map((p) => p.kind));
+    // §1's required slots: sofa + coffee table + rug + reading chair +
+    // floor lamp + media unit + TV.
+    for (const kind of [
+      "sofa",
+      "coffeetable",
+      "rug",
+      "readingchair",
+      "floorlamp",
+      "mediaunit",
+      "tv",
+    ]) {
+      expect(kinds.has(kind as never), `living: missing ${kind}`).toBe(true);
+    }
+    // 禁止栏: the park-bench vocabulary never enters the living room.
+    expect(kinds.has("bench" as never)).toBe(false);
+    expect(kinds.has("coatstand" as never)).toBe(false);
+    // The schematic's groups own placement 0.
+    expect(pieces[0]?.kitId).toMatch(/^living:/);
   });
 
   it("the bedroom's bed is the composed centrepiece, not a side kit", () => {

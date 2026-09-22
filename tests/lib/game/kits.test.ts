@@ -88,6 +88,9 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   "vanity", "plant", "pedestal", "diningtable", "chairstack", "fountain",
   "poolbench", "ringpost", "grandfatherclock", "counter", "screen",
   "sideboard", "towelrail", "poolladder",
+  // The structure layer (v0.12-room-realism §2 — the living pilot's
+  // vocabulary, drawn by room-schematic.ts's slots).
+  "coffeetable", "mediaunit", "vase", "frame", "candle",
   // The nature set (§3.1 N4): the worn outdoor vocabulary + the reused
   // scatter kinds (log, mushroom, cairn, signpost).
   "standingstone", "boulder", "reeds", "firepit", "jettydeck", "moss",

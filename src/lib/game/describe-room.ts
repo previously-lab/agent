@@ -34,13 +34,21 @@
  *     render, and a room that grew strand doors may shift a side kit off a
  *     door approach the outline could not see.
  *
- * The window/lamp/clerestory notes mirror the two authored rules of
+ * The window/lamp/clerestory notes mirror the authored rules of
  * space.tsx's buildRoomFixtures (windows prefer the east/west side walls —
- * §10.5 axial semantics; the clerestory band exists on every non-interior
- * room plus the pool hall) and the light register mirrors its
+ * §10.5 axial semantics — and since the v0.12 declarations audit the
+ * window host pool EXCLUDES every wall that hosts a built wall feature —
+ * niche, pilaster rhythm, arch, column order, platform, mezzanine — not
+ * just the niche; the clerestory band exists on every non-interior room
+ * plus the pool hall) and the light register mirrors its
  * lightRegisterFor draw (same lightSeed salt, same tuning weights). Those
- * three are the ONLY renderer rules restated here — flagged so a change to
- * buildRoomFixtures' rules updates both places.
+ * are the ONLY renderer rules restated here — flagged so a change to
+ * buildRoomFixtures' rules updates both places. `featureHostWalls`
+ * derives the host pool from the same resolved template the renderer
+ * builds the features from (the DECLARED wall features — a slot the host
+ * rules refused builds nothing and hosts nothing, so the derived pool is
+ * a superset of the render's actual one, and the window's exclusion only
+ * tightens).
  *
  * Output: `describeRoom` returns structured, locale-free data;
  * `formatRoomDescription` renders it as an outline in English or Chinese —
@@ -81,6 +89,7 @@ import {
   placeRoomDoors,
 } from "./room-doors";
 import { kitsFor, planArea, stageInteriorKits, type KitKind } from "./kits";
+import { schematicPlacementsFor } from "./room-schematic";
 import { terrainHeight, waterRectFor } from "./terrain";
 import {
   ARCHETYPES,
@@ -203,6 +212,11 @@ export interface RoomDescription {
     /** Every room grows a lamp and a window; the window prefers an
      *  east/west side wall (§10.5 axial semantics). */
     windowPrefersSideWall: boolean;
+    /** v0.12: the window host pool excludes every wall hosting a wall
+     *  feature (niche, pilaster rhythm, arch, column order, platform,
+     *  mezzanine) — derived from this room's declared wall features (see
+     *  the module header's same-source note). */
+    featureHostWalls: readonly WallRole[];
     /** The high clerestory band: every non-interior room + the pool hall. */
     clerestory: boolean;
   };
@@ -349,6 +363,12 @@ export function describeRoom(
     const kitIds = composition
       ? [...new Set(composition.modules.flatMap((p) => p.module.kits))]
       : undefined;
+    // v0.12 §2: the renderer's schematic input, rebuilt from the same
+    // composition — the outline lists exactly the pieces the blueprint
+    // stages (kitId "living:seating" etc.), same as the render.
+    const schematicPlacements = composition
+      ? schematicPlacementsFor(composition.modules, scaleFactor)
+      : [];
     const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
     const waterArea = water
       ? (water.halfX * 2 * water.halfZ * 2) / (scaleFactor * scaleFactor)
@@ -370,6 +390,7 @@ export function describeRoom(
       // render, and a room that grew strand doors may shift a side kit.
       doors: doorClearanceSet(placedLayout?.doors ?? []),
       ...(kitIds ? { kitIds } : {}),
+      ...(schematicPlacements.length > 0 ? { schematics: schematicPlacements } : {}),
       // §8.2 随机区域: the composition's open fields dress sparsely (0–3
       // seeded pieces) — the same scaled plan coordinates the renderer
       // passes, so the outline lists exactly what the room grows.
@@ -453,6 +474,13 @@ export function describeRoom(
     },
     fixtures: {
       windowPrefersSideWall: spec.walled,
+      featureHostWalls: [
+        ...new Set(
+          (template?.features ?? [])
+            .filter((f) => f.at !== "floor")
+            .map((f) => f.at as WallRole),
+        ),
+      ],
       clerestory: recipe.worldClass !== "interior" || recipe.archetype === "pool-hall",
     },
   };
@@ -726,6 +754,13 @@ export function formatRoomDescription(
 
   const fixtureParts = [
     zh ? "窗优先挂东西侧墙" : "window prefers an east/west side wall",
+    desc.fixtures.featureHostWalls.length > 0
+      ? zh
+        ? `窗避开特征宿主墙（${desc.fixtures.featureHostWalls
+            .map((w) => WALL_ROLE_ZH[w])
+            .join("、")}）`
+        : `window avoids the feature host wall(s): ${desc.fixtures.featureHostWalls.join(", ")}`
+      : null,
     desc.fixtures.clerestory
       ? zh
         ? "有高侧窗带"

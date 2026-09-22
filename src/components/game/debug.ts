@@ -78,6 +78,9 @@ export const GAME_DEBUG = {
      *  a placed piece (e.g. which prop a trace rests on) by kind without
      *  entering the scene graph. */
     pieceKinds: readonly string[];
+    /** v0.12 §2: the modules furnishing by RoomSchematic this mount
+     *  (module ids — empty when every module staged generically). */
+    schematics: readonly string[];
     /** The resolved template feature slots ACTUALLY built this mount
      *  (kind@role strings — e.g. "mezzanine@far", "water-rill@floor"):
      *  probes assert the N3/N4 features render where declared without

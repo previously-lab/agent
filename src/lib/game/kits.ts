@@ -51,6 +51,11 @@ import {
 } from "./room-plan";
 import { inDoorApproach, type RoomDoorPlacement } from "./room-doors";
 import {
+  resolveSchematic,
+  type ResolvedSchematicGroup,
+  type SchematicPlacement,
+} from "./room-schematic";
+import {
   HERO_CLEAR,
   HERO_Z_MIN,
   KIT_AREA_PER_KIT,
@@ -160,7 +165,16 @@ export type KitKind =
   | "paperboat"
   | "paperlantern"
   | "swingframe"
-  | "swingseat";
+  | "swingseat"
+  // The structure layer (v0.12-room-realism §2, the living pilot): the
+  // room-schematic slots draw these — a low coffee table with a dressed
+  // top, the media unit under the TV, and the tabletop dressing trio
+  // (vase / picture frame / candle) that says someone lives here.
+  | "coffeetable"
+  | "mediaunit"
+  | "vase"
+  | "frame"
+  | "candle";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -1093,6 +1107,19 @@ export interface KitStaging {
    *  the same archetype eligibility above, so the whitelist never widens
    *  a kit's gate). Omitted = the full deck, byte-for-byte as today. */
   kitIds?: readonly string[];
+  /** Room blueprints (v0.12-room-realism §2, the structure layer): a
+   *  module that carries a hand-authored RoomSchematic furnishes by SLOT
+   *  PLACEMENT — resolveSchematic turns each placement into synthetic
+   *  kit groups whose pieces are seeded from the slots' accepts and whose
+   *  offsets/facings the blueprint authors. The groups ride THIS SAME
+   *  pushKit clearance machinery (walkable footprint, doorway + strand-
+   *  door strips, path, water, keep-empty, gap discs, the coverage
+   *  budget) — no geometry rule is re-implemented (§7.3). A failed
+   *  REQUIRED group rolls the whole placement back and the module
+   *  furnishes with the generic orchestration below, exactly as it did
+   *  before blueprints. Modules WITHOUT a schematic and every room with
+   *  an absent/empty list stage byte-for-byte as today. */
+  schematics?: readonly SchematicPlacement[];
   /** The 随机区域 open fields (§8.2) of a COMPOSED room, in the scaled
    *  plan's coordinates: each field dresses with 0–3 seeded pieces drawn
    *  from the same (module-filtered) deck — sparse by construction, never
@@ -1435,6 +1462,12 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
     t: KitTransform,
     opts: { skipPathCheck: boolean },
     kitIndex: number,
+    /** Optional discs override (the schematic pass): ISOLATED blueprint
+     *  groups check only against non-schematic discs — their pieces
+     *  relate by AUTHORED offsets (a coffee table 0.4m in front of its
+     *  sofa is the composition, not a violation), while everything
+     *  outside the blueprint still guards the full set. */
+    guardDiscs?: readonly { x: number; z: number; r: number }[],
   ): StagedKitPiece[] | null => {
     const placed = placeKit(kit, t);
     for (const p of placed) {
@@ -1463,7 +1496,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       }
     }
     const r = kit.footprint * t.scale;
-    for (const d of discs) {
+    for (const d of guardDiscs ?? discs) {
       if (Math.hypot(t.x - d.x, t.z - d.z) < r + d.r + KIT_GAP * propScale) {
         return null;
       }
@@ -1483,6 +1516,84 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
 
   let nextKitIndex = 0;
 
+  // 0. ROOM SCHEMATICS (v0.12 §2 — the structure layer). Modules that
+  //    carry a blueprint furnish by slot placement: resolveSchematic
+  //    turns each placement into synthetic kit groups (seeded accepts,
+  //    authored anchors/facings — all draws ride this same stream in
+  //    declaration order, A6), and each group is pushed through THE SAME
+  //    pushKit clearance machinery as a hand-written kit. A failed
+  //    optional group drops alone; a failed required group (or a failed
+  //    resolution) rolls EVERY schematic piece back — the module then
+  //    furnishes with the generic orchestration below, never a half-
+  //    furnished room. On success the schematic's rect owns its module's
+  //    floor: the generic hero and the module's cluster zones stand down
+  //    there (the blueprint's required groups ARE the centrepiece; a
+  //    generic hero would double-furnish the floor). Rooms without
+  //    schematics skip this whole block — zero draws, byte-for-byte.
+  let schemRects: readonly KitZoneRect[] = [];
+  if (o.schematics && o.schematics.length > 0) {
+    const preOut = out.length;
+    const preDiscs = discs.length;
+    const preCovered = covered;
+    const schemDiscs = new Set<{ x: number; z: number; r: number }>();
+    let aborted = false;
+    for (const placement of o.schematics) {
+      const resolved: ResolvedSchematicGroup[] | null = resolveSchematic(
+        placement,
+        rng,
+        propScale,
+      );
+      if (!resolved) {
+        aborted = true;
+        break;
+      }
+      for (const g of resolved) {
+        const kit: Kit = {
+          id: g.id,
+          worldClasses: ["interior"],
+          facing: "center",
+          footprint: g.footprint,
+          pieces: g.pieces.map((p) => ({
+            kind: p.kind,
+            dx: p.dx,
+            dz: p.dz,
+            rotY: p.rotY,
+            dy: p.dy,
+            scale: p.scale,
+          })),
+        };
+        const t: KitTransform = { x: g.x, z: g.z, rotY: g.rotY, scale: 1 };
+        // Isolated groups (one authored composition) guard only against
+        // non-schematic discs; the optional groups guard against all.
+        const guard = g.isolated
+          ? discs.filter((d) => !schemDiscs.has(d))
+          : discs;
+        const pieces = pushKit(kit, t, { skipPathCheck: g.skipPath }, nextKitIndex, guard);
+        if (!pieces) {
+          if (g.required) {
+            aborted = true;
+            break;
+          }
+          continue;
+        }
+        nextKitIndex += 1;
+        out.push(...pieces);
+        const d = { x: t.x, z: t.z, r: g.footprint };
+        discs.push(d);
+        schemDiscs.add(d);
+        covered += Math.PI * g.footprint * g.footprint;
+      }
+      if (aborted) break;
+    }
+    if (aborted) {
+      out.length = preOut;
+      discs.length = preDiscs;
+      covered = preCovered;
+    } else {
+      schemRects = o.schematics.map((p) => p.rect);
+    }
+  }
+
   // 1. The hero: composed centrepiece at the far-third slot. The path
   //    leads TO it, so the path check is skipped for the hero itself; the
   //    hero's clearing keeps everything else off its stage.
@@ -1494,10 +1605,6 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   //    candidate consumes no retry draws — staging stays byte-for-byte.
   const heroKits = kits.filter((k) => k.heroSlot);
   if (heroKits.length > 0) {
-    const pinned = o.zones?.heroKit
-      ? heroKits.find((k) => k.id === o.zones!.heroKit)
-      : undefined;
-    const kit = pinned ?? heroKits[Math.floor(rng() * heroKits.length)];
     let hx = comp.hero.x;
     let hz = comp.hero.z;
     if (o.zones?.hero) {
@@ -1508,6 +1615,18 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         hz = zz;
       }
     }
+    // v0.12 §2: a hero slot OWNED by a succeeded schematic stands down —
+    // the blueprint's required groups ARE the composed centrepiece (the
+    // seating answers the media wall on the module's axis); a generic
+    // hero would double-furnish the floor. Suppressed heroes consume no
+    // draws; a rolled-back schematic leaves schemRects empty and the
+    // hero places exactly as before.
+    const heroOwned = schemRects.some((r) => inZoneRect(hx, hz, r));
+    if (!heroOwned) {
+    const pinned = o.zones?.heroKit
+      ? heroKits.find((k) => k.id === o.zones!.heroKit)
+      : undefined;
+    const kit = pinned ?? heroKits[Math.floor(rng() * heroKits.length)];
     const heroCandidates: { x: number; z: number }[] = [{ x: hx, z: hz }];
     if (worldClass === "nature") {
       const halfW = plan.width / 2;
@@ -1575,6 +1694,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         break;
       }
     }
+    }
   }
 
   // 2. Side kits, area-driven. The coverage budget is checked against the
@@ -1606,9 +1726,22 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   //      least-used, where the B.12 density promise outranks the cap; a
   //      deck that cannot honour both is a deck-size problem, and the
   //      whitelists own that.
+  // v0.12 §2: cluster zones OWNED by a succeeded schematic stand down —
+  // the module's floor is furnished by the blueprint; only the OTHER
+  // modules' zones deal. An empty schemRects filter is the identity, so
+  // rooms without schematics keep the zone set byte-for-byte.
+  const rectInside = (a: KitZoneRect, b: KitZoneRect) =>
+    a.x0 >= b.x0 - 1e-9 &&
+    a.x1 <= b.x1 + 1e-9 &&
+    a.z0 >= b.z0 - 1e-9 &&
+    a.z1 <= b.z1 + 1e-9;
+  const activeClusters =
+    o.zones?.clusters?.filter(
+      (c) => !schemRects.some((r) => rectInside(c, r)),
+    ) ?? o.zones?.clusters;
   const zoneDecks =
-    o.zones?.clusters && o.zones.clusters.some((r) => (r.kitIds?.length ?? 0) > 0)
-      ? o.zones.clusters
+    activeClusters && activeClusters.some((r) => (r.kitIds?.length ?? 0) > 0)
+      ? activeClusters
       : null;
   const counts = new Map<string, number>();
   const drawKit = (deck: readonly Kit[]): Kit => {
@@ -1649,9 +1782,13 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
       if (!t) continue;
       // Template cluster zones (§7): side kits live where the template put
-      // its content areas — the shelf walls' feet, the bedroom wing.
+      // its content areas — the shelf walls' feet, the bedroom wing. The
+      // membership test runs against the ACTIVE (schematic-owning modules'
+      // zones filtered out) set while the gate stays on the DECLARED set:
+      // a room whose clusters are ALL schematic-owned must place NOTHING
+      // here — an empty active list is a total filter, not an open floor.
       if (o.zones?.clusters && o.zones.clusters.length > 0) {
-        const hit = o.zones.clusters.find((r) => inZoneRect(t.x, t.z, r));
+        const hit = activeClusters?.find((r) => inZoneRect(t.x, t.z, r));
         if (!hit) continue;
         // Zone deck: the kit standing in a module's zone speaks that
         // module's vocabulary. The drawn kit already belongs → keep;
