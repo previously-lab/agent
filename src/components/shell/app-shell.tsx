@@ -20,6 +20,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -27,7 +28,7 @@ import {
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, animate, motion } from "motion/react";
 import { useTranslations } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -108,6 +109,12 @@ interface AppShellProps {
   /** Server-preloaded user config passed through to ChatPage. */
   initialConfig?: UserConfig;
 }
+
+/** The rung-switch slide's travel, px (world units at the z=0 plane — the
+ *  field camera's 1:1 screen mapping, camera.ts). Pre-merge value, restored
+ *  (556ae16 took the slide out with the per-pane canvases; §14's single
+ *  canvas moves the CAMERA instead of the DOM layer — same gesture). */
+const RUNG_SLIDE_X = 24;
 
 export function AppShell({ initialConfig }: AppShellProps) {
   const router = useRouter();
@@ -534,6 +541,72 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  nothing, which is why this is a lease rather than a merge. */
   const panePublishes = showCardField;
 
+  // ── THE RUNG SLIDE (the 556ae16 regression, restored in-canvas) ──────────
+  // Pre-merge, the timeline pane was a DOM layer carrying its OWN canvas, so
+  // its enter/exit SLIDED the whole scene (x: 24, 0.3 s, ease-out-expo). The
+  // merge moved the cards into the shell's shared canvas, which must not
+  // move — and the transition degenerated to an opacity fade. The slide is
+  // restored by moving the two halves together: ONE framer animation writes
+  // BOTH the field camera's x offset and the DOM layer's transform every
+  // tick, so the GL content and the Html card faces travel as one plane
+  // (world px = screen px at the z=0 plane) — exactly like the pre-merge
+  // per-pane canvas under its CSS transform. The x never rides in the
+  // motion element's props: an `initial x` would hydrate differently for a
+  // reduced-motion client (the server cannot know the preference), and the
+  // imperative transform keeps server and client markup identical. A
+  // reduced-motion reader gets opacity only, the offset pinned at 0.
+  const paneSlideRef = useRef(0); // camera offset (world px)
+  const paneLayerRef = useRef<HTMLDivElement | null>(null); // the DOM layer
+  const setSlide = (v: number) => {
+    paneSlideRef.current = v;
+    const el = paneLayerRef.current;
+    if (el) el.style.transform = v === 0 ? "" : `translateX(${v}px)`;
+  };
+  // True while the timeline layer is EXITING (the conversation rung took
+  // over and AnimatePresence is playing the 0.3 s exit): the field freezes
+  // on its last card rung — the world content the reader was looking at is
+  // what slides out, not one frame of the conversation rung's units.
+  const [timelineExiting, setTimelineExiting] = useState(false);
+  // Layout effect: the snap + animation must be in place BEFORE the entering
+  // world's first paint (a passive effect would let one frame flash at 0).
+  useLayoutEffect(() => {
+    if (showCardField) {
+      setTimelineExiting(false);
+      if (reducedMotion) {
+        setSlide(0);
+        return;
+      }
+      // Enter: the world appears at +24 — where the pre-merge layer's
+      // initial x sat — and travels to 0 over the same 300 ms.
+      setSlide(RUNG_SLIDE_X);
+      const controls = animate(RUNG_SLIDE_X, 0, {
+        duration: 0.3,
+        ease: [0.22, 1, 0.36, 1],
+        onUpdate: setSlide,
+      });
+      return () => controls.stop();
+    }
+    setTimelineExiting(true);
+    if (reducedMotion) {
+      setSlide(0);
+      const t = setTimeout(() => setTimelineExiting(false), 0);
+      return () => clearTimeout(t);
+    }
+    const controls = animate(paneSlideRef.current, RUNG_SLIDE_X, {
+      duration: 0.3,
+      ease: [0.22, 1, 0.36, 1],
+      onUpdate: setSlide,
+      onComplete: () => setTimelineExiting(false),
+    });
+    // Backstop: onComplete can race a fast re-enter, and the exiting freeze
+    // must never outlive the layer it describes.
+    const t = setTimeout(() => setTimelineExiting(false), 350);
+    return () => {
+      controls.stop();
+      clearTimeout(t);
+    };
+  }, [showCardField, reducedMotion]);
+
   // ── THE ONE CANVAS (§14 merge) ───────────────────────────────────────────
   // Both worlds render in the shell-owned WorldCanvas — the card field's two
   // canvases (the pane's card field and the band's braid) are subtrees of it
@@ -671,15 +744,25 @@ export function AppShell({ initialConfig }: AppShellProps) {
           {showCardField && (
             <motion.div
               key="timeline"
-              // Opacity-only (§14 merge): the cards render in the shell's
-              // shared canvas now, so this DOM layer can no longer slide the
-              // scene with it — a fade keeps the two in step.
+              // Opacity only — the slide's x lives on the inner layer, set
+              // imperatively by THE RUNG SLIDE above (one animation drives
+              // the DOM transform and the camera offset together, and an
+              // `initial x` here would hydrate differently for a reduced-
+              // motion client).
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
               className="absolute inset-0 z-10 flex flex-col"
             >
+              {/* THE SLIDING LAYER: plain div, so framer never touches the
+                  transform — THE RUNG SLIDE's onUpdate owns it, writing the
+                  same value to the camera offset and this transform every
+                  tick (the two halves move as one plane). */}
+              <div
+                ref={paneLayerRef}
+                className="absolute inset-0 will-change-transform"
+              >
               {/* Catalog-loading crossfade: the arrival swaps a structured
                   skeleton for the live scene without a hard cut. */}
               <AnimatePresence mode="wait" initial={false}>
@@ -722,10 +805,18 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       // itself (WorldCanvas frameloop="never" while the panel
                       // is fullscreen) — pause, never unmount.
                       camXOffset={camXOffset}
+                      // The rung slide, restored: the camera offset the
+                      // world content travels during the 0.3 s switch, and
+                      // the exit freeze (the field keeps its last card rung
+                      // while this layer slides out).
+                      slideRef={paneSlideRef}
+                      exiting={timelineExiting}
+                      frozenRung={lastCardRungRef.current}
                     />
                   </motion.div>
                 )}
               </AnimatePresence>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

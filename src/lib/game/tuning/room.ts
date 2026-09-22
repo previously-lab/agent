@@ -410,6 +410,17 @@ export const KIT_WALL_CLEAR = 0.35;
  *  them even when a legal spot existed — the budget is pure CPU at mount
  *  time, no draw-call cost. */
 export const KIT_PLACE_ATTEMPTS = 120;
+/** §6's anti-warehouse rule as a CHECKABLE number (2026-10 XL repetition
+ *  audit): one kit id may be set down at most this many times in ONE room.
+ *  3 = "several settings of one meal, never a warehouse" (the dining
+ *  hall's own comment): three reads as an arrangement, four reads as a
+ *  pattern. kits.ts's draw re-rolls onto an uncapped kit — the zone's own
+ *  deck first, then any room kit, then the zone deck's least-used — so
+ *  the cap binds room-wide in every realistic pool, and only a fully
+ *  saturated room falls through, where the B.12 density promise
+ *  rightfully outranks it (a deck that cannot honour both is a deck-size
+ *  problem, and the module whitelists own that). */
+export const KIT_ROOM_CAP = 3;
 /** The 随机区域 sparse-dressing ceiling (§8.2): each open field grows at
  *  most this many kit pieces — 0–3 seeded, sparse by construction (most
  *  fields draw none), never a grid (positions are uniform draws, never

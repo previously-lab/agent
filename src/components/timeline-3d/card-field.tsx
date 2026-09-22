@@ -173,6 +173,22 @@ export interface CardFieldProps {
    *  PANE — the shell computes it from the band's rect. Parallel shift, no
    *  turn: the dead-on framing rule below is untouched. */
   camXOffset?: number;
+  /** The rung-switch slide, restored (§: 556ae16's regression): world px the
+   *  camera additionally offsets by for the 300 ms of a conversation↔cards
+   *  switch, driven by the shell with the same framer animation that slides
+   *  the DOM layer — so the GL content and the Html card faces travel as
+   *  one plane, exactly like the pre-merge per-pane canvas did under its
+   *  CSS transform. */
+  slideRef?: React.MutableRefObject<number>;
+  /** True while the timeline layer is EXITING to the conversation rung (the
+   *  shell's AnimatePresence playing the 0.3 s exit): the field freezes on
+   *  `frozenRung` — the rung the reader was actually looking at — instead
+   *  of re-rendering the conversation rung's units for one frame and
+   *  unmounting. The world content that slides out is the content that was
+   *  on screen. */
+  exiting?: boolean;
+  /** The rung the field freezes on while `exiting`. */
+  frozenRung?: FieldRung;
 }
 
 // ─── Tunables ───────────────────────────────────────────────────────────────
@@ -352,6 +368,9 @@ interface FieldSceneProps {
   insetBottom: number;
   /** Horizontal camera shift — see `CardFieldProps.camXOffset`. */
   camXOffset: number;
+  /** The rung-switch slide's transient camera offset — see
+   *  `CardFieldProps.slideRef`. Composed into the camera's x every frame. */
+  slideRef?: React.MutableRefObject<number>;
 }
 
 function FieldScene({
@@ -378,6 +397,7 @@ function FieldScene({
   insetTop,
   insetBottom,
   camXOffset,
+  slideRef,
 }: FieldSceneProps) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
@@ -615,14 +635,21 @@ function FieldScene({
     // poses (`sheetPose`), which is where it was always drawn from anyway.
     const camZ = camZFor(size.height);
     const worldScale = worldScaleFor(size.height);
+    // THE RUNG SLIDE, restored (see `CardFieldProps.slideRef`): the shell's
+    // conversation↔cards transition parks a parallel x offset here for its
+    // 300 ms — world px = screen px at the z=0 plane, so the GL content
+    // shifts by exactly what the DOM layer's x shift moves the Html faces
+    // by. Dead-on framing preserved: still a parallel shift, never a turn.
+    const slideX = slideRef?.current ?? 0;
+    const camX = camXOffset + slideX;
     if (!reducedMotion) {
       const p = feed.progress; // 0..1 (0 = oldest/top, 1 = newest/bottom)
       const cy = (p - 0.5) * 2 * 0.14 * worldScale; // ±0.14 old world units
-      camera.position.set(camXOffset, cy, camZ);
-      camera.lookAt(camXOffset, cy, 0);
+      camera.position.set(camX, cy, camZ);
+      camera.lookAt(camX, cy, 0);
     } else {
-      camera.position.set(camXOffset, 0, camZ);
-      camera.lookAt(camXOffset, 0, 0);
+      camera.position.set(camX, 0, camZ);
+      camera.lookAt(camX, 0, 0);
     }
 
     // Which way the reader is travelling, for the boundary that speaks. Read
@@ -779,6 +806,9 @@ export function CardField({
   insetTop = 0,
   insetBottom = 0,
   camXOffset = 0,
+  slideRef,
+  exiting = false,
+  frozenRung,
 }: CardFieldProps) {
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
@@ -818,7 +848,11 @@ export function CardField({
   const [innerRung, setInnerRung] = useState<FieldRung>(
     initialAtId ? "slice" : rungForStackLevel(DEFAULT_LEVEL),
   );
-  const rung = rungProp ?? innerRung;
+  // THE EXIT FREEZE: while the shell's timeline layer slides out to the
+  // conversation rung, this field keeps rendering the rung the reader was
+  // actually looking at — the world content that slides out is the content
+  // that was on screen, not one frame of the conversation rung's units.
+  const rung = exiting && frozenRung ? frozenRung : (rungProp ?? innerRung);
   const level = stackLevelForRung(rung);
   const applyRung = useCallback(
     (next: FieldRung) => {
@@ -1272,10 +1306,14 @@ export function CardField({
   // frame already shows the final layout with no fly-in. An internal change
   // echoes back through the prop with innerRung already updated, so the
   // `rungProp !== innerRung` guard runs the transition exactly once.
+  // During the EXIT freeze the prop flips to "conversation" while this field
+  // keeps its card rung: the transition is skipped outright (the snapshot
+  // would re-deal rows nobody will see), and the tracker still advances so
+  // the post-exit enter doesn't replay it.
   const prevRungPropRef = useRef(rungProp);
   if (rungProp != null && prevRungPropRef.current !== rungProp) {
     prevRungPropRef.current = rungProp;
-    if (rungProp !== innerRung) {
+    if (!exiting && rungProp !== innerRung) {
       startTransition(innerRung, rungProp, centerAnchorFor(innerRung));
       setInnerRung(rungProp);
     }
@@ -1476,6 +1514,7 @@ export function CardField({
         insetTop={insetTop}
         insetBottom={insetBottom}
         camXOffset={camXOffset}
+        slideRef={slideRef}
       />
     ),
   );

@@ -1242,13 +1242,18 @@ describe("template zones parameter (§7) — additive", () => {
    *  again for the nature pass + §4.4 trace: the trace is an additive
    *  piece (a room with no eligible host stages byte-for-byte as before —
    *  the 16 m pin is unchanged), and rooms that grew one changed hash,
-   *  as every additive pin capture has. */
+   *  as every additive pin capture has. Recaptured a fourth time 2026-10
+   *  for the §6 anti-repetition cap (KIT_ROOM_CAP — the room-wide draw
+   *  re-deal) and the open-field piece-reach margin: both intentionally
+   *  steer kit selection and field positions, so the pins that moved,
+   *  moved for the audit item, not by accident. The 16 m no-door pin is
+   *  unchanged again — a room that small never binds the cap. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6467:1955045619", "5385:1947765648"],
-    ["2026-10-12", 32, "library", 1.5, "16846:1808255877", "16734:380846541"],
-    ["2026-10-13", 64, "ballroom", 0.66, "34437:4041128359", "32547:1369509703"],
-    ["2026-10-14", 96, "hotel-room", 1, "51733:4062784932", "51680:994858471"],
-    ["2026-10-15", 32, "pool-hall", 1, "14717:2761953735", "15639:1797853888"],
+    ["2026-10-11", 16, "hotel-room", 1, "6467:1955045619", "5388:2482888562"],
+    ["2026-10-12", 32, "library", 1.5, "16630:145653143", "14454:2853241498"],
+    ["2026-10-13", 64, "ballroom", 0.66, "27610:380677853", "26519:2080935525"],
+    ["2026-10-14", 96, "hotel-room", 1, "34178:4037623016", "31449:2779045110"],
+    ["2026-10-15", 32, "pool-hall", 1, "15471:3924561398", "15504:1651833347"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {

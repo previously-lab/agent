@@ -60,6 +60,7 @@ import {
   KIT_HERO_ATTEMPTS,
   KIT_PATH_CLEAR,
   KIT_PLACE_ATTEMPTS,
+  KIT_ROOM_CAP,
   KIT_WALL_CLEAR,
   OPEN_FIELD_PIECE_MAX,
   PROP_DOOR_DEPTH,
@@ -1003,6 +1004,15 @@ export interface KitZoneRect {
   z1: number;
 }
 
+/** A cluster rect with its own DRAW DECK attached (a composed room's
+ *  modules, room-modules.ts compositionKitZonesFor): side kits standing in
+ *  this zone draw from THESE kit ids — the module's whitelist — instead of
+ *  the room-wide union deck, so one kit no longer sprawls across the whole
+ *  room (§8.1.4: "不同模块各自的陈设"). Absent/empty = the room deck. */
+export interface KitClusterRect extends KitZoneRect {
+  kitIds?: readonly string[];
+}
+
 /**
  * A layout template's content zones (v0.11-room-interiors §7.2), resolved
  * to absolute plan coordinates by room-templates.ts and consumed here. All
@@ -1017,13 +1027,17 @@ export interface KitZoneRect {
  *               hero is drawn as today.
  *   clusters  — side kits are placed only with their origin inside one of
  *               these rects (the shelf walls' feet, the bedroom wing).
+ *               A cluster rect may carry its own kitIds (KitClusterRect) —
+ *               the module's whitelist; the draw then picks a ZONE first
+ *               and deals from that module's deck (§8.1.4), instead of
+ *               the room-wide union.
  *   keepEmpty — no kit piece may land inside, and no kit's footprint disc
  *               may overlap (the entrance apron, the hall spine).
  */
 export interface KitZones {
   hero?: KitZoneRect;
   heroKit?: string;
-  clusters?: readonly KitZoneRect[];
+  clusters?: readonly KitClusterRect[];
   keepEmpty?: readonly KitZoneRect[];
 }
 
@@ -1545,24 +1559,84 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   );
   const minCov = Math.min(...kits.map((k) => k.footprint * propScale)) ** 2 * Math.PI;
   let prevId: string | null = null;
+  // §6's anti-warehouse rule, as two cooperating mechanisms (2026-10 XL
+  // repetition audit — the "same kit N times in one room" readings):
+  //  (a) ZONE DECKS. When a cluster rect carries its own kitIds (a composed
+  //      room's modules — room-modules.ts compositionKitZonesFor), the kit
+  //      that STANDS in that zone is re-dealt from the ZONE's whitelist: a
+  //      kit repeats only inside its own module (a reading room keeps
+  //      several reading corners), never sprawls across the whole room
+  //      (§8.1.4). The re-deal happens AFTER the transform draw and keeps
+  //      the transform — the position/rng economy (and so the placement hit
+  //      rate, i.e. B.12's density) is exactly the legacy flow's; only the
+  //      kit's identity is steered. Rooms whose zones carry no decks (the
+  //      legacy templates) keep the union deal byte-for-byte.
+  //  (b) A ROOM-WIDE CAP (KIT_ROOM_CAP = 3). No kit id more than three
+  //      times per room: the draw re-rolls onto an uncapped kit — the
+  //      zone's own deck first, then any room kit, then the zone deck's
+  //      least-used, where the B.12 density promise outranks the cap; a
+  //      deck that cannot honour both is a deck-size problem, and the
+  //      whitelists own that.
+  const zoneDecks =
+    o.zones?.clusters && o.zones.clusters.some((r) => (r.kitIds?.length ?? 0) > 0)
+      ? o.zones.clusters
+      : null;
+  const counts = new Map<string, number>();
+  const drawKit = (deck: readonly Kit[]): Kit => {
+    const countOf = (k: Kit) => counts.get(k.id) ?? 0;
+    // Precedence: (1) an uncapped kit OF THE ZONE'S DECK — the module's
+    // own vocabulary first; (2) any uncapped kit of the ROOM — the cap is
+    // room-wide even when one module's short list is exhausted (a borrowed
+    // sibling beats a 4th repeat); (3) the zone deck's LEAST-USED kit —
+    // only a fully saturated room lands here, and then the B.12 density
+    // promise outranks the cap: a deck that cannot honour both is a
+    // deck-size problem, and the whitelists own that.
+    const uncapped = deck.filter((k) => countOf(k) < KIT_ROOM_CAP);
+    const pool =
+      uncapped.length > 0
+        ? uncapped
+        : (() => {
+            const room = kits.filter((k) => countOf(k) < KIT_ROOM_CAP);
+            if (room.length > 0) return room;
+            const min = Math.min(...deck.map(countOf));
+            return deck.filter((k) => countOf(k) === min);
+          })();
+    let kit = pool[Math.floor(rng() * pool.length)];
+    // Variety re-roll: the same kit twice in a row reads as a warehouse
+    // aisle, not an arrangement (§6: kits are never equidistant repeats).
+    if (kit.id === prevId && pool.length > 1) {
+      kit = pool[Math.floor(rng() * pool.length)];
+    }
+    return kit;
+  };
+  const zoneDeckFor = (zone: KitClusterRect): readonly Kit[] => {
+    const ids = zone.kitIds;
+    return ids && ids.length > 0 ? kits.filter((k) => ids.includes(k.id)) : [];
+  };
   for (let slot = 0; slot < target; slot++) {
     if (covered + minCov > coverageCap) break;
     for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
-      let kit = kits[Math.floor(rng() * kits.length)];
-      // Variety re-roll: the same kit twice in a row reads as a warehouse
-      // aisle, not an arrangement (§6: kits are never equidistant repeats).
-      if (kit.id === prevId && kits.length > 1) {
-        kit = kits[Math.floor(rng() * kits.length)];
-      }
-      const cov = Math.PI * (kit.footprint * propScale) ** 2;
-      if (covered + cov > coverageCap) continue;
+      let kit = drawKit(kits);
       const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
       if (!t) continue;
       // Template cluster zones (§7): side kits live where the template put
       // its content areas — the shelf walls' feet, the bedroom wing.
       if (o.zones?.clusters && o.zones.clusters.length > 0) {
-        if (!o.zones.clusters.some((r) => inZoneRect(t.x, t.z, r))) continue;
+        const hit = o.zones.clusters.find((r) => inZoneRect(t.x, t.z, r));
+        if (!hit) continue;
+        // Zone deck: the kit standing in a module's zone speaks that
+        // module's vocabulary. The drawn kit already belongs → keep;
+        // otherwise re-deal from the zone's whitelist (seeded, capped),
+        // keeping the transform — clearance below re-validates everything.
+        if (zoneDecks) {
+          const zdeck = zoneDeckFor(hit);
+          if (zdeck.length > 0 && !zdeck.includes(kit)) {
+            kit = drawKit(zdeck);
+          }
+        }
       }
+      const cov = Math.PI * (kit.footprint * propScale) ** 2;
+      if (covered + cov > coverageCap) continue;
       const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
       if (!pieces) continue;
       nextKitIndex += 1;
@@ -1570,6 +1644,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
       covered += cov;
       prevId = kit.id;
+      counts.set(kit.id, (counts.get(kit.id) ?? 0) + 1);
       break;
     }
   }
@@ -1593,14 +1668,26 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       for (let slot = 0; slot < wanted; slot++) {
         if (covered + minCov > coverageCap) break;
         for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
-          const kit = kits[Math.floor(rng() * kits.length)];
+          // The room-wide cap binds in the fields exactly like the module
+          // floors — a 随机区域 is not a warehouse loophole (§6).
+          const kit = drawKit(kits);
           const cov = Math.PI * (kit.footprint * propScale) ** 2;
           if (covered + cov > coverageCap) continue;
           const m = wallInset + 0.2 * propScale;
-          const xLo = field.x0 + m;
-          const xHi = field.x1 - m;
-          const zLo = field.z0 + m;
-          const zHi = field.z1 - m;
+          // The margin must swallow the kit's own pieces, not just its
+          // origin: a bed-corner's lamp stands ~1.9 m from the origin, and
+          // the field's promise is that every piece CENTER stays inside
+          // the rect (piece bodies may overhang an edge the way a rug
+          // overhangs — dressing, not a leak). Reach is the farthest any
+          // piece center can sit after the placement's rotation.
+          const reach =
+            Math.max(
+              ...kit.pieces.map((p) => Math.hypot(p.dx, p.dz)),
+            ) * propScale;
+          const xLo = field.x0 + m + reach;
+          const xHi = field.x1 - m - reach;
+          const zLo = field.z0 + m + reach;
+          const zHi = field.z1 - m - reach;
           if (xHi - xLo < 0.4 || zHi - zLo < 0.4) break;
           const x = xLo + rng() * (xHi - xLo);
           const z = zLo + rng() * (zHi - zLo);
@@ -1616,6 +1703,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
           out.push(...pieces);
           discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
           covered += cov;
+          counts.set(kit.id, (counts.get(kit.id) ?? 0) + 1);
           break;
         }
       }

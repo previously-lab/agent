@@ -150,6 +150,7 @@ import {
 } from "@/lib/game/room-templates";
 import {
   compositionForRecipe,
+  compositionKitZonesFor,
   compositionTemplateFor,
   moduleSconceFor,
   moduleWallForSegment,
@@ -7950,10 +7951,18 @@ export function SpaceScene({
         doors: clearanceDoors,
         kitIds,
         openFields,
-        // The template's content zones (§7), resolved to absolute plan
+        // The composition's content zones (§7/§8), resolved to absolute plan
         // coordinates: the hero's pin, the kit-cluster rects, the
-        // keep-empty apron. Absent = today's seeded staging, byte-for-byte.
-        zones: template ? templateZonesFor(template, plan) : undefined,
+        // keep-empty apron. A COMPOSED room takes the module-attributed
+        // fold (compositionKitZonesFor) — each cluster rect carries its
+        // module's kit whitelist, which is what makes the side-kit draw
+        // deal each module its OWN set (§8.1.4) instead of one union pool.
+        // Legacy templates keep the plain fold, byte-for-byte.
+        zones: roomComposition
+          ? compositionKitZonesFor(roomComposition, plan)
+          : template
+            ? templateZonesFor(template, plan)
+            : undefined,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       };
       if (recipe.archetype === "pool-hall") {

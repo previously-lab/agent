@@ -70,6 +70,9 @@ import {
   KITS,
   kitsFor,
   type Kit,
+  type KitClusterRect,
+  type KitZoneRect,
+  type KitZones,
 } from "./kits";
 import type {
   FeatureSlot,
@@ -78,7 +81,7 @@ import type {
 } from "./room-templates";
 import { createRng, hashString, WORLD_SEED } from "./seed";
 import { parseDebugSlice } from "./debug-slice";
-import type { WallSegment } from "./room-plan";
+import type { RoomPlan, WallSegment } from "./room-plan";
 import type { ArchetypeId, SpaceRecipe, WorldClass } from "./space-types";
 
 /* ------------------------------------------------------------------ */
@@ -1604,6 +1607,72 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
     heroKit,
     weight: 1,
   };
+}
+
+/**
+ * The composition's content zones as staging's KitZones, WITH each module's
+ * kit whitelist attached to its cluster rects (2026-10 XL repetition
+ * audit) — §8.1.4's promise ("不再是'同一套件撒八遍'，而是'不同模块各自
+ * 的陈设'") as data: kits.ts's side-kit draw picks a ZONE first and deals
+ * from that module's own short list, so one kit can repeat inside its
+ * module (themed) but never sprawls across the whole room (a warehouse).
+ *
+ * The rects are THE SAME mapping compositionTemplateFor/templateZonesFor
+ * produce (module zones → normalized → plan coords), and the hero/keepEmpty
+ * handling matches the template fold exactly — the primary's hero zone is
+ * the room's hero, a companion's demotes to a cluster, the entrance apron
+ * joins keep-empty — so this is a STRICT widening of the plain zones: a
+ * consumer that ignores kitIds reproduces today's behaviour. The heroKit
+ * comes from the primary exactly when it authors a hero zone (the foyer
+ * primary leaves the hero to the seeded far-third draw, as today).
+ */
+export function compositionKitZonesFor(
+  comp: RoomComposition,
+  plan: RoomPlan,
+): KitZones {
+  const w = plan.width;
+  const e = plan.extent;
+  const toPlanRect = (placed: PlacedModule, zone: TemplateZone): KitZoneRect => {
+    const rw = placed.rect.x1 - placed.rect.x0;
+    const rd = placed.rect.z1 - placed.rect.z0;
+    const nx0 = (placed.rect.x0 + zone.rect.x[0] * rw + comp.width / 2) / comp.width;
+    const nx1 = (placed.rect.x0 + zone.rect.x[1] * rw + comp.width / 2) / comp.width;
+    const nz0 = (placed.rect.z0 + zone.rect.z[0] * rd) / comp.extent;
+    const nz1 = (placed.rect.z0 + zone.rect.z[1] * rd) / comp.extent;
+    return { x0: (nx0 - 0.5) * w, x1: (nx1 - 0.5) * w, z0: nz0 * e, z1: nz1 * e };
+  };
+  const clusters: KitClusterRect[] = [];
+  const keepEmpty: KitZoneRect[] = [];
+  let hero: KitZoneRect | undefined;
+  let heroKit: string | undefined;
+  for (const placed of comp.modules) {
+    for (const zone of placed.module.zones) {
+      const rect = toPlanRect(placed, zone);
+      if (zone.kind === "hero") {
+        if (placed.primary) {
+          hero = rect;
+          heroKit = placed.module.heroKit;
+        } else {
+          // A companion's would-be hero is just its densest cluster —
+          // same rule as the template fold.
+          clusters.push({ ...rect, kitIds: placed.module.kits });
+        }
+      } else if (zone.kind === "cluster") {
+        clusters.push({ ...rect, kitIds: placed.module.kits });
+      } else {
+        keepEmpty.push(rect);
+      }
+    }
+  }
+  // The entrance apron: full width, the doorway's clearing (same rule as
+  // compositionTemplateFor's fold).
+  keepEmpty.push({
+    x0: -w / 2,
+    z0: 0,
+    x1: w / 2,
+    z1: Math.min(1.2, 0.12 * comp.extent) * (e / comp.extent),
+  });
+  return { hero, heroKit, clusters, keepEmpty };
 }
 
 /* ------------------------------------------------------------------ */

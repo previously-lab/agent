@@ -69,6 +69,18 @@ export interface TimelineSceneProps {
    *  column centred in the pane. Owned by the shell, which owns the band's
    *  rect. */
   camXOffset?: number;
+  /** The rung-switch slide, restored (§: 556ae16's regression). The world
+   *  content's camera offset for the 300 ms of a conversation↔cards switch —
+   *  the shell drives it with the same framer animation that slides this
+   *  layer's DOM, so faces and their GL backing sheets travel together. */
+  slideRef?: React.MutableRefObject<number>;
+  /** True while this layer exits to the conversation rung: the field freezes
+   *  on `frozenRung` (its last card rung) so the content the reader was
+   *  looking at is what slides out. */
+  exiting?: boolean;
+  /** The rung the field freezes on while `exiting` — the shell's last card
+   *  rung. */
+  frozenRung?: FieldRung;
 }
 
 /**
@@ -167,6 +179,9 @@ export function TimelineScene({
   insetTop,
   insetBottom,
   camXOffset,
+  slideRef,
+  exiting,
+  frozenRung,
 }: TimelineSceneProps) {
   const filtered = filterByStrand(entries, strands);
 
@@ -213,6 +228,9 @@ export function TimelineScene({
           insetTop={insetTop}
           insetBottom={insetBottom}
           camXOffset={camXOffset}
+          slideRef={slideRef}
+          exiting={exiting}
+          frozenRung={frozenRung}
         />
         {/* The present, at the bottom, where the present is. */}
         <BottomFade />
