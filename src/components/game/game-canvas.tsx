@@ -1614,6 +1614,22 @@ function GameLoop({
           space = null;
           setActiveSpace(null);
         }
+      } else if (az > WALL_OUT && space !== null) {
+        // Opposite-side recovery (v0.12 declarations audit): the release
+        // window above is a hysteresis band a jumped position can skip —
+        // a probe/teleport (or a clamp relaxation) landing on the FAR side
+        // of the corridor from the active room used to leave `space` stale
+        // forever: the mount branch below requires space === null, so the
+        // new room never mounted and the old one held the slot ("prewarm
+        // latch pins the previous room"). A walker can never reach here —
+        // the space/hotel clamps keep them inside their room or the
+        // corridor band — so releasing on the opposite side is pure
+        // recovery, never a behaviour change for walking play.
+        const roomSide = space.door.z > 0 ? 1 : -1;
+        if (Math.sign(p.z) === -roomSide) {
+          space = null;
+          setActiveSpace(null);
+        }
       }
 
       // 2b. Prewarm — while no space is active, the nearest door within

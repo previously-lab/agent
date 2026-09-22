@@ -312,6 +312,18 @@ import {
   RILL_RIM_HEIGHT,
   RILL_WATER_DEPTH,
   RILL_WIDTH,
+  SHELF_WALL_BAY,
+  SHELF_WALL_BAY_MAX,
+  SHELF_WALL_BOARD,
+  SHELF_WALL_BOARD_COLOR,
+  SHELF_WALL_DEPTH,
+  SHELF_WALL_HEIGHT,
+  SHELF_WALL_MIN_H,
+  SHELF_WALL_PLINTH,
+  SHELF_WALL_ROW_COLORS,
+  SHELF_WALL_SHELF_GAP,
+  SHELF_WALL_STILE,
+  SHELF_WALL_WOOD,
   SKIRT_OVERHANG,
   SKIRT_OVERHANG_MIN,
   SKIRT_Y,
@@ -744,17 +756,24 @@ export function buildRoomFeatures({
   for (const slot of template.features) {
     if (slot.kind === "niche") {
       const half = (NICHE_WIDTH * ws) / 2;
-      for (let i = 0; i < wallRuns.length; i++) {
+      // v0.12 declarations audit: the declared wall role hosts the niche
+      // when it can — but the dollhouse cutaway drops one or two roles to
+      // sill height per room orientation, and a niche declared on such a
+      // role used to vanish for every room hung on that corridor side
+      // (the bedroom's alcove existed only half the time). The slot now
+      // FALLS BACK to any full-height non-entrance run, keeping every
+      // host rule; the declaration is a preference, not a coin flip.
+      const tryRun = (i: number): boolean => {
         const run = wallRuns[i];
-        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
+        if (walls[run.source].entrance) return false;
         // Never on a cutaway sill.
-        if (wallHeights[i] < wallHeight - 1e-6) continue;
+        if (wallHeights[i] < wallHeight - 1e-6) return false;
         const horizontal = run.wall.sizeZ <= run.wall.sizeX;
         const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
         const span = slot.span ?? [0.4, 0.6];
         const along = ((span[0] + span[1]) / 2 - 0.5) * len;
         // The opening must sit fully on the run, clear of its ends…
-        if (Math.abs(along) + half > len / 2 - 0.3) continue;
+        if (Math.abs(along) + half > len / 2 - 0.3) return false;
         // …and never swallow a doorway or its approach. Door `along`s are
         // measured from the SOURCE segment's center, this run's `along`
         // from the run's center — shift into one frame before comparing
@@ -771,7 +790,7 @@ export function buildRoomFeatures({
                 half + DOOR_GAP_HALF + NICHE_DOOR_CLEAR,
           )
         ) {
-          continue;
+          return false;
         }
         const thick = horizontal ? run.wall.sizeZ : run.wall.sizeX;
         out.niches.push({
@@ -782,22 +801,41 @@ export function buildRoomFeatures({
           depth: Math.max(0.1, Math.min(NICHE_MAX_DEPTH, thick - 0.08)),
           pedestalH: NICHE_PEDESTAL_HEIGHT * ws,
         });
-        break; // one niche per declared slot
+        return true;
+      };
+      const declared = wallRuns
+        .map((_, i) => i)
+        .filter((i) => wallRoleFor(plan, walls[wallRuns[i].source]) === slot.at);
+      const fallback = wallRuns
+        .map((_, i) => i)
+        .filter(
+          (i) =>
+            !declared.includes(i) &&
+            !walls[wallRuns[i].source].entrance &&
+            wallHeights[i] >= wallHeight - 1e-6,
+        );
+      for (const i of [...declared, ...fallback]) {
+        if (tryRun(i)) break; // one niche per declared slot
       }
     } else if (slot.kind === "pilaster-rhythm") {
       const stripMin =
         (DADO_TOP + DADO_FULL_MARGIN + PILASTER_MIN_STRIP) * ws;
-      for (let i = 0; i < wallRuns.length; i++) {
+      // Same fallback discipline as the niche: the declared role first,
+      // then any full-height non-entrance run (the study's pilasters now
+      // land on a real wall whichever side of the corridor the room hangs
+      // on). The fallback claims ONE run — a rhythm repeated on every
+      // wall would read as wallpaper, not architecture.
+      const tryRun = (i: number): number[] => {
         const run = wallRuns[i];
-        if (wallRoleFor(plan, walls[run.source]) !== slot.at) continue;
+        if (walls[run.source].entrance) return [];
         // Breaking at the dado band: a pilaster stands ON the full band —
         // cutaway sills (baseboard only, no shaft room) get none.
-        if (wallHeights[i] < stripMin) continue;
+        if (wallHeights[i] < stripMin) return [];
         const horizontal = run.wall.sizeZ <= run.wall.sizeX;
         const len = horizontal ? run.wall.sizeX : run.wall.sizeZ;
         const pad = PILASTER_END_PAD * ws;
         const runLen = len - pad * 2;
-        if (runLen < PILASTER_MIN_RUN * ws) continue;
+        if (runLen < PILASTER_MIN_RUN * ws) return [];
         const n = Math.max(1, Math.round(runLen / (PILASTER_SPAN * ws)));
         const spacing = runLen / n;
         // Runs are already split at door gaps; defensively drop any strip
@@ -822,7 +860,35 @@ export function buildRoomFeatures({
           }
           alongs.push(a);
         }
-        if (alongs.length > 0) out.pilasters.push({ run: i, alongs });
+        return alongs;
+      };
+      const declared = wallRuns
+        .map((_, i) => i)
+        .filter((i) => wallRoleFor(plan, walls[wallRuns[i].source]) === slot.at);
+      const fallback = wallRuns
+        .map((_, i) => i)
+        .filter(
+          (i) =>
+            !declared.includes(i) &&
+            !walls[wallRuns[i].source].entrance &&
+            wallHeights[i] >= stripMin,
+        );
+      let placedSlot = false;
+      for (const i of declared) {
+        const alongs = tryRun(i);
+        if (alongs.length > 0) {
+          out.pilasters.push({ run: i, alongs });
+          placedSlot = true;
+        }
+      }
+      if (!placedSlot) {
+        for (const i of fallback) {
+          const alongs = tryRun(i);
+          if (alongs.length > 0) {
+            out.pilasters.push({ run: i, alongs });
+            break; // the fallback claims one run, never every wall
+          }
+        }
       }
     } else if (slot.kind === "floor-inlay" && ground === "flat" && out.inlay === null) {
       const span = slot.span ?? [0.25, 0.75];
@@ -1213,6 +1279,7 @@ function PilasterRun({
   plan,
   wallScale,
   color,
+  front = 0,
 }: {
   wall: WallSegment;
   height: number;
@@ -1220,6 +1287,7 @@ function PilasterRun({
   plan: RoomPlan;
   wallScale: number;
   color: THREE.Color;
+  front?: number;
 }) {
   const horizontal = wall.sizeZ <= wall.sizeX;
   const thick = horizontal ? wall.sizeZ : wall.sizeX;
@@ -1237,9 +1305,9 @@ function PilasterRun({
   const y0 = DADO_TOP * k;
   const stripH = height - capH - y0;
   if (stripH <= 0.02) return null;
-  const off = thick / 2 + proj / 2 - 0.002; // 2mm sink, the dado convention
+  const off = thick / 2 + proj / 2 - 0.002 + front; // 2mm sink, the dado convention
   const capProj = proj * 1.35;
-  const capOff = thick / 2 + capProj / 2 - 0.002;
+  const capOff = thick / 2 + capProj / 2 - 0.002 + front;
   return (
     <group>
       {alongs.map((a, i) => {
@@ -1264,6 +1332,139 @@ function PilasterRun({
       })}
     </group>
   );
+}
+
+/**
+ * Shelf wall (书架墙): the wall-register treatment for a module whose wall
+ * role is "shelf" (the study, the reading room — v0.12 declarations audit:
+ * the register existed as a COLOUR only, so the declared book walls never
+ * rendered). A low-poly bookcase skin stands on the floor against the
+ * wall's inner face — fully opaque, wall-supported (I2), no hanging, no
+ * transparency — bays of shelves and book rows in the exact material
+ * language of the bookshelf prop (same woods, same three book colours).
+ * Only FULL-HEIGHT runs host it (a bookcase rising out of a 1.1m cutaway
+ * sill is the niche's "hole in nothing" failure); bays overlapping the
+ * window's frame are left open. Where a pilaster rhythm shares the run,
+ * the strips render proud of the shelves (PilasterRun's `front`) and
+ * read as the bays' vertical divisions.
+ */
+function ShelfWallRun({
+  wall,
+  height,
+  plan,
+  wallScale,
+  window,
+}: {
+  wall: WallSegment;
+  height: number;
+  plan: RoomPlan;
+  wallScale: number;
+  /** The room's one window — bays under its frame stay empty (the window
+   *  never hangs on a feature host run by construction, but a host pool
+   *  fallback can still land it beside one; the skip is the backstop). */
+  window: WindowFixture;
+}) {
+  const horizontal = wall.sizeZ <= wall.sizeX;
+  const thick = horizontal ? wall.sizeZ : wall.sizeX;
+  let nx = 0;
+  let nz = 0;
+  if (horizontal) {
+    nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+  } else {
+    nx = planContains(plan, wall.x + 0.5, wall.z, 0) ? 1 : -1;
+  }
+  const k = wallScale;
+  const len = horizontal ? wall.sizeX : wall.sizeZ;
+  const bookH = Math.min(height - 0.06, SHELF_WALL_HEIGHT * k);
+  if (bookH < SHELF_WALL_MIN_H * k) return null;
+  const depth = SHELF_WALL_DEPTH * k;
+  // The window's along-range on this wall (frame margin as built).
+  const onThisWall = horizontal
+    ? Math.abs(window.z - wall.z) < 0.2 && Math.abs(window.x - wall.x) <= len / 2
+    : Math.abs(window.x - wall.x) < 0.2 && Math.abs(window.z - wall.z) <= len / 2;
+  const winAlong = horizontal ? window.x - wall.x : window.z - wall.z;
+  const winHalf = WINDOW_WIDTH * k;
+  const n = Math.max(
+    1,
+    Math.min(SHELF_WALL_BAY_MAX, Math.round(len / (SHELF_WALL_BAY * k))),
+  );
+  const bayW = len / n;
+  const stile = SHELF_WALL_STILE * k;
+  const board = SHELF_WALL_BOARD * k;
+  const plinth = SHELF_WALL_PLINTH * k;
+  const gap = SHELF_WALL_SHELF_GAP * k;
+  const off = thick / 2 + depth / 2 - 0.002;
+  const pos = (along: number, y: number): [number, number, number] =>
+    horizontal
+      ? [wall.x + along, y, wall.z + nz * off]
+      : [wall.x + nx * off, y, wall.z + along];
+  const shelfYs: number[] = [];
+  for (let y = plinth + gap; y <= bookH - board - 0.04; y += gap) {
+    shelfYs.push(y);
+  }
+  const parts: ReactNode[] = [];
+  // Bay-boundary stiles (n bays share n+1 boundaries — no doubled boxes).
+  for (let i = 0; i <= n; i++) {
+    const a = -len / 2 + i * bayW;
+    parts.push(
+      <mesh key={`st${i}`} position={pos(a, bookH / 2)} castShadow receiveShadow>
+        <boxGeometry
+          args={horizontal ? [stile, bookH, depth] : [depth, bookH, stile]}
+        />
+        <meshStandardMaterial color={SHELF_WALL_WOOD} roughness={1} flatShading />
+      </mesh>,
+    );
+  }
+  // Run-length boards: plinth, top, and every shelf.
+  const boards: { key: string; y: number; t: number }[] = [
+    { key: "plinth", y: plinth / 2, t: plinth },
+    { key: "top", y: bookH - board / 2, t: board },
+    ...shelfYs.map((y, i) => ({ key: `sh${i}`, y, t: board })),
+  ];
+  for (const b of boards) {
+    parts.push(
+      <mesh key={b.key} position={pos(0, b.y)} castShadow receiveShadow>
+        <boxGeometry
+          args={horizontal ? [len, b.t, depth] : [depth, b.t, len]}
+        />
+        <meshStandardMaterial color={SHELF_WALL_BOARD_COLOR} roughness={1} flatShading />
+      </mesh>,
+    );
+  }
+  // Book rows: one low box per bay per shelf gap, the prop's three colours
+  // cycling, heights alternating like the prop's own rows.
+  for (let i = 0; i < n; i++) {
+    const a = -len / 2 + (i + 0.5) * bayW;
+    if (onThisWall && Math.abs(a - winAlong) < winHalf / 2 + bayW / 2 + 0.35) {
+      continue;
+    }
+    for (let s = 0; s < shelfYs.length; s++) {
+      const shelfY = shelfYs[s];
+      const rowH = gap - board - 0.1 * k - 0.04 * k * (s % 2);
+      if (rowH <= 0.05) continue;
+      parts.push(
+        <mesh
+          key={`bk${i}-${s}`}
+          position={pos(a, shelfY + board / 2 + rowH / 2)}
+          castShadow
+        >
+          <boxGeometry
+            args={
+              horizontal
+                ? [bayW - stile * 2 - 0.04, rowH, depth * 0.72]
+                : [depth * 0.72, rowH, bayW - stile * 2 - 0.04]
+            }
+          />
+          <meshStandardMaterial
+            color={SHELF_WALL_ROW_COLORS[(i + s) % SHELF_WALL_ROW_COLORS.length]}
+            roughness={1}
+            flatShading
+          />
+        </mesh>,
+      );
+    }
+  }
+  return <group>{parts}</group>;
 }
 
 /**
@@ -6565,12 +6766,15 @@ function buildRoomFixtures(
   propScale: number,
   wallScale: number,
   hasClerestory: boolean,
-  /** Source wall indices whose run hosts a niche — the window never hangs
-   *  there (the niche rebuilds its run into a recessed alcove; a view
-   *  plane on the same run would z-fight the alcove back). §7.2 moved the
-   *  reading hall's niche onto a flank wall, exactly where the window
-   *  prefers to hang, so the pool filter is what keeps the two apart. */
-  nicheSources: ReadonlySet<number>,
+  /** Source wall indices whose run hosts a WALL FEATURE (niche, pilaster
+   *  rhythm, arch, column order, platform, mezzanine) — the window never
+   *  hangs there. The niche rebuilds its run into a recessed alcove (a
+   *  view plane on the same run would z-fight the alcove back), and the
+   *  pilaster strips project past the wall face (a pane behind a strip
+   *  would clip through it); §7.2 moved the reading hall's niche onto a
+   *  flank wall, exactly where the window prefers to hang, so the pool
+   *  filter is what keeps the two apart. */
+  featureSources: ReadonlySet<number>,
 ): RoomFixtures {
   const rng = createRng(hashString(`${WORLD_SEED}:${recipe.sliceId}:fixtures`));
   const { extent } = scaled.size;
@@ -6610,7 +6814,7 @@ function buildRoomFixtures(
     (w) =>
       !w.entrance &&
       !wallFacesCamera(plan, w, dir) &&
-      !nicheSources.has(walls.indexOf(w)),
+      !featureSources.has(walls.indexOf(w)),
   );
   const fitsFull = fullHeight.filter(fits);
   // AXIAL SEMANTICS (§10.5): the east/west (vertical) walls belong to
@@ -7868,11 +8072,11 @@ export function SpaceScene({
   // machine with the nature deck (§3.1 N4) — see the nature branch below —
   // and WONDER rooms with the wonder deck (§3.1 N4): the dioramas' authored
   // playthings keep the oversized accent rugs the legacy path seeded.
-  // The pool hall keeps its water-anchored legacy fixtures — the pool IS
-  // its content — and draws its deck kits around them, the fixtures'
-  // positions handed over as obstacle discs. The outdoor pool biome (a
-  // nature room with an empty nature deck) keeps its rim fixtures on the
-  // motif layer.
+  // The pool hall draws its deck from the module layer (§8): a COMPOSED
+  // pool room's modules furnish the deck with their own kits and the basin
+  // stays water-only — the old rim scatter now survives only on the legacy
+  // template path. The outdoor pool biome (a nature room with an empty
+  // nature deck) keeps its rim fixtures on the motif layer.
   const furniture = useMemo(() => {
     if (
       recipe.worldClass !== "interior" &&
@@ -7966,7 +8170,18 @@ export function SpaceScene({
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       };
       if (recipe.archetype === "pool-hall") {
-        const legacy = furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
+        // The basin rim scatter (ladder/loungers/columns) predates the
+        // module layer, and in a COMPOSED pool room it fought the modules'
+        // own furniture for the same dry rims — its obstacle discs blocked
+        // the bath's declared lockers and towel stations out of existence
+        // (the room rendered as a bare basin; v0.12 declarations audit).
+        // §8's rule owns the composition: the modules' whitelists furnish
+        // the deck, the basin stays water-only. Legacy TEMPLATE pool rooms
+        // (no composition — the §7 catalogue) keep the rim fixtures,
+        // byte-for-byte.
+        const legacy = roomComposition
+          ? []
+          : furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
         const obstacles = [
           ...legacy.map((p) => ({
             x: p.x,
@@ -8137,7 +8352,14 @@ export function SpaceScene({
         propScale,
         wallHeight / WALL_HEIGHT,
         hasClerestory,
-        new Set(roomFeatures.niches.map((n) => wallRuns[n.run].source)),
+        new Set([
+          ...roomFeatures.niches.map((n) => wallRuns[n.run].source),
+          ...roomFeatures.pilasters.map((p) => wallRuns[p.run].source),
+          ...roomFeatures.arches.map((a) => wallRuns[a.run].source),
+          ...roomFeatures.columnOrders.map((c) => wallRuns[c.run].source),
+          ...roomFeatures.platforms.map((p) => wallRuns[p.run].source),
+          ...roomFeatures.mezzanines.map((m) => wallRuns[m.run].source),
+        ]),
       ),
     [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, roomFeatures, wallRuns],
   );
@@ -9114,7 +9336,9 @@ export function SpaceScene({
       {/* Pilaster rhythm (template feature, §7.2): strips standing on the
           dado band, evenly spread per run — the door-split runs break the
           rhythm at every opening for free, and cutaway sills are skipped
-          (no shaft room above the rail). */}
+          (no shaft room above the rail). On a shelf-wall run the strips
+          stand proud of the bookcase (front = case depth) and read as
+          the bays' divisions. */}
       {roomFeatures.pilasters.map((p, i) => (
         <PilasterRun
           key={`pil${p.run}-${i}`}
@@ -9124,8 +9348,35 @@ export function SpaceScene({
           plan={plan}
           wallScale={wallHeight / WALL_HEIGHT}
           color={dadoPanelColor}
+          front={
+            wallRunRoles[p.run] === "shelf" &&
+            wallHeights[p.run] >= wallHeight - 1e-6
+              ? SHELF_WALL_DEPTH * (wallHeight / WALL_HEIGHT)
+              : 0
+          }
         />
       ))}
+
+      {/* The shelf wall (书架墙): a module whose wall register is "shelf"
+          gets a real bookcase wall on every FULL-HEIGHT run — bays of
+          shelves and book rows standing on the floor against the wall
+          (the register used to be a colour only; v0.12 declarations
+          audit). Cutaway sills keep the plain tint: a bookcase cannot
+          rise out of a 1.1m wall. */}
+      {wallRuns.map(({ wall }, i) =>
+        wallRunRoles[i] === "shelf" &&
+        !nicheByRun.has(i) &&
+        wallHeights[i] >= wallHeight - 1e-6 ? (
+          <ShelfWallRun
+            key={`shelf${i}`}
+            wall={wall}
+            height={wallHeights[i]}
+            plan={plan}
+            wallScale={wallHeight / WALL_HEIGHT}
+            window={fixtures.window}
+          />
+        ) : null,
+      )}
 
       {/* The N3/N4 wall features (§3.2): the railed dais, the mezzanine
           ledge, the arch portal and the free-standing column order —

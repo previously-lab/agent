@@ -110,9 +110,23 @@ describe("buildRoomFeatures niche/door frame alignment", () => {
     expect(buggyDist).toBeGreaterThanOrEqual(clear);
   });
 
-  it("forfeits a niche whose opening sits inside a strand door's clearance", () => {
+  it("relocates a niche whose opening sits inside a strand door's clearance", () => {
+    // v0.12 declarations audit: the slot no longer vanishes when its
+    // declared spot is door-bound — it falls back to a legal full-height
+    // host run, still clear of every door's clearance.
     const features = build([spanMid - 0.01, spanMid + 0.01]);
-    expect(features.niches).toHaveLength(0);
+    expect(features.niches).toHaveLength(1);
+    const niche = features.niches[0];
+    const run = runs[niche.run];
+    const src = walls[run.source];
+    const horizontal = run.wall.sizeZ <= run.wall.sizeX;
+    const runShift = horizontal ? run.wall.x - src.x : run.wall.z - src.z;
+    for (const d of doors.filter((d) => d.wall === run.source)) {
+      expect(
+        Math.abs(d.along - runShift - niche.along) <
+          NICHE_WIDTH / 2 + DOOR_GAP_HALF + NICHE_DOOR_CLEAR,
+      ).toBe(false);
+    }
   });
 
   it("keeps a niche genuinely clear of every door", () => {
@@ -356,10 +370,22 @@ describe("reading-hall niche after audit #7 (§7.2)", () => {
     expect(roleOf(features.niches[0].run)).toBe("left");
   });
 
-  it("forfeits the niche when the left wall is a cutaway sill (north room)", () => {
+  it("falls back to a full-height run when the left wall is a cutaway sill (north room)", () => {
     // North-facing room: the LEFT wall is the sill — a niche in a 1.1 m
-    // wall would be a hole in nothing, so the slot stays absent.
+    // wall would be a hole in nothing. v0.12 declarations audit: the slot
+    // relocates to a legal full-height host (the right flank here) instead
+    // of vanishing for half of all room orientations.
     const features = build(heightsFor("left"));
+    expect(features.niches).toHaveLength(1);
+    expect(roleOf(features.niches[0].run)).toBe("right");
+  });
+
+  it("stays absent when every non-entrance wall is a cutaway sill", () => {
+    // The fallback needs a legal host: sill everything but the entrance
+    // pair and the slot has nowhere legal left — absent, never clipping.
+    const features = build(
+      runs.map(({ wall }) => (wall.entrance ? WALL_HEIGHT : WALL_SILL_HEIGHT)),
+    );
     expect(features.niches).toHaveLength(0);
   });
 });

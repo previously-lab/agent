@@ -1400,12 +1400,24 @@ function drawKitTransform(
 export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   const worldClass = o.worldClass ?? "interior";
   const { rng, plan, comp, propScale, water } = o;
-  const kits = kitsFor(worldClass, o.archetype, o.baseExtent).filter(
-    (k) =>
-      (!o.kitIds || o.kitIds.includes(k.id)) &&
-      // Shore kits are water-bound: no basin, no draw.
-      (!k.shore || water !== null),
+  const gated = kitsFor(worldClass, o.archetype, o.baseExtent);
+  const drawable = (k: Kit) =>
+    // Shore kits are water-bound: no basin, no draw.
+    !k.shore || water !== null;
+  let kits = gated.filter(
+    (k) => (!o.kitIds || o.kitIds.includes(k.id)) && drawable(k),
   );
+  if (kits.length === 0 && o.kitIds && o.kitIds.length > 0) {
+    // 牌堆非空回退 (v0.12 declarations audit): a module whose whitelist ∩
+    // the room's own gating draws NOTHING must never furnish NOTHING — an
+    // empty deck hands the room back to the archetype's bare legacy管线
+    // (the bath rendered as a pure pool basin: four declared kits, zero
+    // placed). The fallback relaxes ONLY the module whitelist (the kitIds
+    // filter), keeping the world-class/archetype gate and the shore rule
+    // intact: the room still furnishes from its archetype's real, gated
+    // vocabulary, never from everything.
+    kits = gated.filter(drawable);
+  }
   if (kits.length === 0) return [];
   const wallInset = o.wallThick + KIT_WALL_CLEAR * propScale;
   const pieceClear = KIT_PATH_CLEAR * propScale;
@@ -1476,12 +1488,10 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   //    hero's clearing keeps everything else off its stage.
   //    Template zones (§7) may pin the hero's kit and stand it at the
   //    template's hero rect instead of the seeded slot.
-  //    NATURE: the composed focal point can land inside the basin on
-  //    water biomes, where dry furniture may not stand — the hero then
-  //    redraws, seeded, along the far-third band until a legal dry spot
-  //    exists (KIT_HERO_ATTEMPTS). Interiors keep the single original
-  //    draw — the retry consumes no rng unless the first draw failed, so
-  //    their staging stays byte-for-byte.
+  //    FAILED FIRST DRAWS REDRAW (v0.12): nature retries a water-blocked
+  //    focal point along the far-third band; interiors redraw inside the
+  //    authored hero zone (see below). A hero that places on the first
+  //    candidate consumes no retry draws — staging stays byte-for-byte.
   const heroKits = kits.filter((k) => k.heroSlot);
   if (heroKits.length > 0) {
     const pinned = o.zones?.heroKit
@@ -1526,6 +1536,25 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         heroCandidates.push({
           x: (rng() * 2 - 1) * halfW * 0.25,
           z: plan.extent * (0.68 + rng() * 0.2),
+        });
+      }
+    }
+    if (o.zones?.hero) {
+      // Interior hero redraw (v0.12 declarations audit): the pinned hero's
+      // first candidate is the zone center, and when that single draw
+      // failed, interiors used to settle for NO centrepiece at all — the
+      // bedroom lost its bed over a 5cm keep-empty disc graze, the kitchen
+      // its table, the pool-deck its loungers. The interior hero now gets
+      // the same bounded redraw the nature class always had: seeded draws
+      // INSIDE the authored hero zone (the module promised the kit fits
+      // there), same pushKit clearance for every candidate. Draws are
+      // consumed only after the center fails, so a hero that already
+      // placed keeps byte-for-byte staging; A6 unchanged (same stream).
+      const hr = o.zones.hero;
+      for (let i = 0; i < KIT_HERO_ATTEMPTS; i++) {
+        heroCandidates.push({
+          x: hr.x0 + rng() * (hr.x1 - hr.x0),
+          z: hr.z0 + rng() * (hr.z1 - hr.z0),
         });
       }
     }

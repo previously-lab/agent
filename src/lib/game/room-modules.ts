@@ -196,7 +196,12 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "panelling",
     light: "quiet",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.35, 0.65] }],
-    kits: ["coat-bench", "luggage", "housekeeping", "reception"],
+    // §6.4 逐件问责 (v0.12 declarations audit): no housekeeping here — the
+    // trolley + towel piles + bucket is floor-service semantics, and in the
+    // threshold room it read as the cleaner working around your arrival.
+    // The foyer keeps arrival: coats, bags, the reception counter, a
+    // lobby clock.
+    kits: ["coat-bench", "luggage", "reception", "clock-nook"],
     zones: [
       { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.9] } },
       { kind: "cluster", rect: { x: [0.7, 0.96], z: [0.1, 0.9] } },
@@ -229,7 +234,12 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     ],
     heroKit: "bed-corner",
     zones: [
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.62, 0.94] } },
+      // The hero zone sits deep enough that the bed corner's footprint
+      // disc clears the keep-empty spine on the first draw — at 0.62 the
+      // disc grazed the void's edge and the whole centrepiece was
+      // forfeited (v0.12 declarations audit; kits.ts now also redraws a
+      // failed hero inside this zone).
+      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.72, 0.92] } },
       { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.6] } },
       { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.1, 0.6] } },
       { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.55] } },
@@ -324,7 +334,10 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     kits: ["dining", "housekeeping", "coat-bench", "chair-stack"],
     heroKit: "dining",
     zones: [
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.55, 0.9] } },
+      // Deep enough for the laid table's footprint disc to clear the
+      // keep-empty apron on the first draw (v0.12 declarations audit —
+      // at 0.55 the disc grazed the void and the table never came).
+      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.6, 0.92] } },
       { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.1, 0.55] } },
       { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.1, 0.55] } },
       { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 0.5] } },
@@ -335,11 +348,19 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     // 更衣浴室 — lockers along the wall, towels folded and waiting, one
     // bench. The pool wing's changing room (its kits are all pool-side —
     // a hotel-room draw would leave it a single coat bench, not a room).
+    // Sized 16×10 like the pool deck it serves: the pool-hall archetype
+    // waters a fixed 45% of the floor, and at 8×8 the basin plus its rim
+    // fixtures swallowed every dry spot — the four declared kits placed
+    // nothing and the room rendered as a bare basin (v0.12 declarations
+    // audit). At 16×10 the east/west rims are ~4.7m of dry deck: the
+    // changing furniture owns the room and the basin reads as the bath's
+    // plunge pool, not its whole identity. §6.4: every piece here can say
+    // why it is in a changing room.
     id: "bath",
     label: "更衣浴室",
     worldClasses: ["interior"],
     archetypes: ["pool-hall"],
-    size: { w: 8, d: 8 },
+    size: { w: 16, d: 10 },
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -349,9 +370,15 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     features: [],
     kits: ["lockers", "towel-station", "coat-bench", "towel-rail"],
     zones: [
-      { kind: "cluster", rect: { x: [0.04, 0.96], z: [0.68, 0.95] } },
-      { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.62] } },
+      // The dry rims beside the basin — lockers anchor to the flank
+      // walls here, towel stations and rails stand between the water
+      // margin and the wall.
+      { kind: "cluster", rect: { x: [0.03, 0.2], z: [0.12, 0.88] } },
+      { kind: "cluster", rect: { x: [0.8, 0.97], z: [0.12, 0.88] } },
+      // The dry strip past the basin's far edge — small kits only.
+      { kind: "cluster", rect: { x: [0.3, 0.7], z: [0.84, 0.96] } },
+      // The entrance apron and the walk spine to the water stay clear.
+      { kind: "keep-empty", rect: { x: [0.37, 0.63], z: [0, 0.5] } },
     ],
     weight: 2,
   },
@@ -370,7 +397,12 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "panelling",
     light: "quiet",
     features: [],
-    kits: ["luggage", "housekeeping", "coat-bench", "chair-stack"],
+    // §6.4 逐件问责 (v0.12 declarations audit): no chair-stack here — the
+    // stacked banquet chairs read as a function room's spares, not a
+    // luggage room's. The room stores: bags, carts, the bench you set
+    // them down on, and housekeeping mid-tidy (the one room where the
+    // trolley genuinely belongs — it is being put in order).
+    kits: ["luggage", "housekeeping", "coat-bench"],
     zones: [
       { kind: "cluster", rect: { x: [0.06, 0.45], z: [0.12, 0.9] } },
       { kind: "cluster", rect: { x: [0.55, 0.94], z: [0.12, 0.9] } },
@@ -430,11 +462,16 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "plaster",
     light: "quiet",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.25, 0.75] }],
+    // §6.4 逐件问责 (v0.12 declarations audit): no coat-bench here — the
+    // bench + coat stand + umbrella stand is the park/threshold vocabulary,
+    // and in a living room it read as a park bench moved indoors (the
+    // user's own call-out). The living sits on the sofa group; its quiet
+    // pieces are the clock nook, the sideboard and the plants.
     kits: [
       "sofa-group",
       "tv-corner",
       "reading",
-      "coat-bench",
+      "clock-nook",
       "sideboard",
       "plant-pedestal",
     ],
@@ -472,7 +509,9 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     ],
     heroKit: "reading",
     zones: [
-      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.6, 0.9] } },
+      // Deep enough for the reading corner's footprint disc to clear the
+      // keep-empty apron on the first draw (v0.12 declarations audit).
+      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.66, 0.92] } },
       { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.15, 0.6] } },
       { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.15, 0.6] } },
       { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.55] } },
@@ -498,15 +537,18 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     // The rill returns WITH its geometry (space.tsx's buildRoomFeatures
     // resolves it and the WaterRill component builds the runnel + its own
     // wave-driven water): the east-flank feed runnel — a shallow stone
-    // channel running the deck's depth toward the pool basin, real water
-    // on the room's own wave machinery. The x span keeps it on the east
-    // flank, clear of the walk spine; the z span stops it at the basin.
+    // channel running the deck's depth, real water on the room's own wave
+    // machinery. The span hugs the deck's east edge, clear of the walk
+    // spine AND the basin (the builder forfeits any rill rect touching
+    // the water — the 2026-09 declaration reached z 0.68 of the depth and
+    // straddled the basin, so the rill could never build; v0.12 audit),
+    // and the z span runs the flank's full dry length.
     features: [
       {
         kind: "water-rill",
         at: "floor",
-        span: [0.76, 0.98],
-        spanZ: [0.08, 0.68],
+        span: [0.86, 0.94],
+        spanZ: [0.1, 0.9],
       },
     ],
     kits: [
@@ -519,9 +561,14 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     ],
     heroKit: "pool-loungers",
     zones: [
-      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.55, 0.85] } },
+      // The hero stands on the west rim, facing the door across the
+      // water — the authored zone-center draw used to land INSIDE the
+      // basin (forfeit: dry furniture may not stand in the pool), so the
+      // loungers never appeared (v0.12 declarations audit).
+      { kind: "hero", rect: { x: [0.1, 0.24], z: [0.4, 0.6] } },
       { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.9] } },
-      { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.1, 0.9] } },
+      // The east cluster keeps off the runnel band (its span above).
+      { kind: "cluster", rect: { x: [0.74, 0.82], z: [0.1, 0.9] } },
       { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.5] } },
     ],
     weight: 3,
@@ -549,7 +596,11 @@ export const ROOM_MODULES: readonly RoomModule[] = [
       { kind: "raised-platform", at: "n", span: [0.3, 0.7] },
       { kind: "mezzanine", at: "n", span: [0.24, 0.76] },
     ],
-    kits: ["dining", "housekeeping", "gallery-bench", "chair-stack", "sideboard"],
+    // §6.4 逐件问责 (v0.12 declarations audit): no housekeeping here — a
+    // trolley of towels and a bucket reads as the cleaner working AROUND
+    // the meal, never the meal itself; the hall's service is the
+    // sideboard and the stacked spares.
+    kits: ["dining", "gallery-bench", "chair-stack", "sideboard"],
     heroKit: "dining",
     zones: [
       { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.8] } },

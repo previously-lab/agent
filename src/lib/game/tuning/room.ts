@@ -543,6 +543,32 @@ export const PILASTER_MIN_RUN = 2.4;
  *  for a strip above the rail). */
 export const PILASTER_MIN_STRIP = 0.6;
 
+/** Shelf wall (书架墙, v0.12 declarations audit): the wall-register
+ *  treatment that turns a module's "shelf" role into a real bookcase wall
+ *  — bay stiles + plinth/top/shelf boards + book rows in the bookshelf
+ *  prop's material language, standing on the floor against the run's inner
+ *  face (opaque, wall-supported, no hanging). Sizes ride the wall scale
+ *  like every other wall feature. */
+/** Bookcase height (m, ×wall scale), capped under the host run's drawn top. */
+export const SHELF_WALL_HEIGHT = 2.6;
+/** Projection off the inner face (m, ×wall scale) — the case depth. */
+export const SHELF_WALL_DEPTH = 0.3;
+/** Target bay width / per-run bay cap (m, ×wall scale / bays). */
+export const SHELF_WALL_BAY = 1.2;
+export const SHELF_WALL_BAY_MAX = 24;
+/** A run shorter than this bookcase height (m, ×wall scale) keeps its
+ *  plain wall — a case you could not shelve reads as a crate. */
+export const SHELF_WALL_MIN_H = 1.0;
+export const SHELF_WALL_STILE = 0.06;
+export const SHELF_WALL_BOARD = 0.05;
+export const SHELF_WALL_PLINTH = 0.14;
+/** Shelf pitch (m, ×wall scale) — four to five rows under the 2.6m case. */
+export const SHELF_WALL_SHELF_GAP = 0.48;
+/** The bookshelf prop's own palette (space.tsx's "bookshelf" case). */
+export const SHELF_WALL_WOOD = "#6b4f3a";
+export const SHELF_WALL_BOARD_COLOR = "#7a6a55";
+export const SHELF_WALL_ROW_COLORS = ["#c4553f", "#5a7a44", "#e8c95a"] as const;
+
 /** Floor inlay (地面镶边): a border band in a contrasting stone, flat on
  *  the floor. Lifted 14mm — above the parquet's 6mm dressing plane so
  *  the two never z-fight, low enough to read as flush. The band is a
