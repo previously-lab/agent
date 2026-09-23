@@ -16,8 +16,8 @@
  * block a passage and is the first thing seen on entry (显眼, never a
  * corner). A seeded draw picks WHICH side of the door; feasibility pulls
  * the machine toward the wall and then outward until every clearance
- * passes, so colossal paths and miniature plans both resolve
- * deterministically (A6: same inputs, same spot).
+ * passes, so any plan's paths resolve deterministically (A6: same inputs,
+ * same spot).
  *
  * TWO CALL SITES, ONE ANSWER. space.tsx renders the terminal from this
  * resolver, and game-canvas.tsx resolves the SAME anchor through the same
@@ -177,9 +177,10 @@ export function roomTerminalFor({
 
   const halfRoom = width / 2 - wallThick / 2;
   // The machine rides the prop scale like every other piece of furniture,
-  // bounded so a colossal room gets a big console, not a billboard.
+  // bounded so a big room gets a big console, not a billboard (at v0.13's
+  // single ×1 tier the clamp is the identity; the rails stay).
   let scale = Math.min(2.2, Math.max(0.35, propScale));
-  // Miniature fallback floor — below this the dollhouse machine is a toy.
+  // Small-room fallback floor — below this the dollhouse machine is a toy.
   const SCALE_FLOOR = 0.16;
   // Fit: the final |x| is min(need, xCap) with need = strip + half-width +
   // walk gap and xCap = halfRoom − half-width − pad; keeping need ≤ xCap

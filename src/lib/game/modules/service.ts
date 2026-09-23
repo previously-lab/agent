@@ -17,7 +17,9 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "门厅",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
-    size: { w: 10, d: 8 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid (snapped
+    // UP from 10×8 — at 12×6 the authored blueprint forfeits: the 2.4–2.6m
+    // off-wall counter leaves no depth for the threshold/waiting groups).
     openings: ["n", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 3,
@@ -54,7 +56,9 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "备餐间",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom"],
-    size: { w: 10, d: 8 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid (snapped
+    // UP from 10×8 — at 12×6 the authored blueprint forfeits: the 2.4–2.6m
+    // off-wall counter leaves no depth for the threshold/waiting groups).
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -85,19 +89,19 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     // 更衣浴室 — lockers along the wall, towels folded and waiting, one
     // bench. The pool wing's changing room (its kits are all pool-side —
     // a hotel-room draw would leave it a single coat bench, not a room).
-    // Sized 16×10 like the pool deck it serves: the pool-hall archetype
-    // waters a fixed 45% of the floor, and at 8×8 the basin plus its rim
-    // fixtures swallowed every dry spot — the four declared kits placed
-    // nothing and the room rendered as a bare basin (v0.12 declarations
-    // audit). At 16×10 the east/west rims are ~4.7m of dry deck: the
-    // changing furniture owns the room and the basin reads as the bath's
-    // plunge pool, not its whole identity. §6.4: every piece here can say
-    // why it is in a changing room.
+    // Sized 18×12 (2×3, the module grid's largest legal cell) like the pool
+    // deck it serves: the pool-hall archetype waters a fixed 45% of the
+    // floor, and at 8×8 the basin plus its rim fixtures swallowed every dry
+    // spot — the four declared kits placed nothing and the room rendered as
+    // a bare basin (v0.12 declarations audit). At 18×12 the east/west rims
+    // are ~5.5m of dry deck: the changing furniture owns the room and the
+    // basin reads as the bath's plunge pool, not its whole identity. §6.4:
+    // every piece here can say why it is in a changing room.
     id: "bath",
     label: "更衣浴室",
     worldClasses: ["interior"],
     archetypes: ["pool-hall"],
-    size: { w: 16, d: 10 },
+    size: { w: 18, d: 12 }, // v0.13 尺度收敛: 2×3 — the grid's largest legal cell
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -126,7 +130,9 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "行李房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
-    size: { w: 8, d: 8 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 — snapped UP from 8×8 (nearest
+    // grid cell 6×6 cannot hold the authored rack rows + cart; the lane
+    // report carries this deviation from pure nearest-snap).
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -156,7 +162,7 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "工作间",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library", "ballroom"],
-    size: { w: 10, d: 10 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,

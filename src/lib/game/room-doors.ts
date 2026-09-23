@@ -30,6 +30,16 @@
  * portal dressing stands full height from the floor, so a door in a sill
  * wall reads as a frame rising above a half wall, not a hole in the air.
  *
+ * GRID ALIGNED (v0.13 module grid): every strand door's center sits at a
+ * CELL CENTER of the plan's module grid (doorLatticeCenters) — half a
+ * cell off every grid line — so a door's 2.4m gap never straddles a
+ * module seam, doors in abutting modules align door-to-door, and the
+ * ladder's old continuous spacing relaxes into grid pitch (6m), wider
+ * than every rung's authored spacing. Capacity is counted in lattice
+ * seats, here AND in doorCapacityFor (Finding A's steering agreement
+ * holds verbatim). The emergency forcePlace stays off-grid by necessity
+ * — never dropping a door outranks alignment.
+ *
  * AXIAL SEMANTICS (v0.11-room-interiors §10.5, user 2026-10): doors live
  * on the NORTH/SOUTH walls — the plan's horizontal segments, parallel to
  * the corridor's door walls — so "change timeline" and "turn back" always
@@ -59,7 +69,9 @@ import { createRng, hashString, WORLD_SEED } from "./seed";
 import { CAM_OFFSET } from "./tuning/render";
 import {
   DOOR_GAP_HALF,
+  DOOR_LATTICE_HALF_CELL,
   DOOR_WIDTH,
+  MODULE_GRID,
   ROOM_DOOR_CLEAR_DEPTH,
   ROOM_DOOR_CLEAR_HALF,
   ROOM_DOOR_CLUSTER_STICK,
@@ -174,6 +186,10 @@ interface Host {
  */
 interface LadderRung {
   hostableOnly: boolean;
+  /** The authored center spacing. The v0.13 door lattice seats doors at
+   *  grid cell centers (6 m pitch — wider than every rung's spacing), so
+   *  no rung's spacing binds anymore; the field stays as the authored
+   *  record of the domestic spacing the lattice replaced. */
   spacing: number;
   endPad: number;
   /** 1 = the wall row only; 2 = the freestanding screen row may take the
@@ -223,45 +239,58 @@ const LADDER: readonly LadderRung[] = [
   },
 ];
 
-/** Wall capacity at a center spacing: n doors need run ≥ (n−1)·spacing. */
-function capacity(run: number, spacing: number): number {
-  if (run < 0) return 0;
-  return 1 + Math.floor(run / spacing + 1e-9);
+/**
+ * The plan-frame door lattice (v0.13 module grid): the room's floor plan
+ * IS the composition's bounding rect (module edges land on multiples of
+ * MODULE_GRID measured from the plan's own origin), so strand-door centers
+ * sit at CELL CENTERS — half a cell off every grid line, `stagger` further
+ * shifted (the screen row's 3 m, landing on the boundary lattice). A
+ * door's 2.4 m gap can then never straddle a module seam, and doors in
+ * abutting modules align door-to-door. Returns the along-run positions (m
+ * from the segment's start, i.e. inside [pad, len − pad]) of every legal
+ * center.
+ */
+export function doorLatticeCenters(
+  plan: RoomPlan,
+  wall: WallSegment,
+  pad: number,
+  stagger: number = 0,
+): number[] {
+  const horizontal = isHorizontal(wall);
+  const len = wallLength(wall);
+  const phase = horizontal ? -plan.width / 2 : 0;
+  const start = (horizontal ? wall.x : wall.z) - len / 2;
+  const lo = start + pad;
+  const hi = start + len - pad;
+  const first = phase + DOOR_LATTICE_HALF_CELL + stagger;
+  const out: number[] = [];
+  for (
+    let c = first + Math.ceil((lo - first) / MODULE_GRID - 1e-9) * MODULE_GRID;
+    c <= hi + 1e-9;
+    c += MODULE_GRID
+  ) {
+    out.push(c - start);
+  }
+  return out;
 }
 
-/**
- * Positions of k door centers along a run [0, run], pairwise ≥ spacing,
- * seeded and UNEVEN: rejection-sampled uniform draws (irregular gaps read
- * as authored, even gaps as wallpaper), with a guaranteed deterministic
- * fallback (seeded offset + exact spacing) for the near-capacity case.
- */
-function samplePositions(
+/** Seeded pick of k lattice centers (along-run positions), order
+ *  preserved. Adjacent centers are one grid pitch (6 m) apart — wider
+ *  than every ladder rung's spacing — so any subset satisfies the spacing
+ *  and the never-overlap rule by construction; the domestic clustering
+ *  still reads through the WALL ASSIGNMENT (CLUSTER_STICK), not through
+ *  irregular gaps. */
+function pickLattice(
   rng: () => number,
-  run: number,
+  centers: readonly number[],
   k: number,
-  spacing: number,
 ): number[] {
-  if (k === 1) {
-    // Off-center, never dead middle — a lone door hugging one side of its
-    // wall reads as the door to somewhere specific.
-    return [run * (0.2 + rng() * 0.6)];
+  const pool = [...centers];
+  const picked: number[] = [];
+  for (let i = 0; i < k && pool.length > 0; i++) {
+    picked.push(pool.splice(Math.floor(rng() * pool.length), 1)[0]);
   }
-  for (let tries = 0; tries < 60; tries++) {
-    const pts = Array.from({ length: k }, () => rng() * run).sort(
-      (a, b) => a - b,
-    );
-    let ok = true;
-    for (let i = 1; i < k; i++) {
-      if (pts[i] - pts[i - 1] < spacing) {
-        ok = false;
-        break;
-      }
-    }
-    if (ok) return pts;
-  }
-  const slack = Math.max(0, run - (k - 1) * spacing);
-  const offset = rng() * slack;
-  return Array.from({ length: k }, (_, j) => offset + j * spacing);
+  return picked.sort((a, b) => a - b);
 }
 
 /** One placement attempt at one ladder rung. Null when the walls cannot
@@ -295,22 +324,31 @@ function tryPlace(
       run: len - 2 * rung.endPad,
     });
   });
-  // A rows-2 rung adds each host's screen-row seats: the screen samples in
-  // a run shrunk by the stagger (see below), so its capacity is measured
-  // on the shrunken run exactly as it will be placed. On the rungs where
-  // ADJACENT (east/west) walls may also host, the screen's run gives up
-  // the corner diagonal too: a screen door ROW_DEPTH in from its wall
-  // line sits that much closer to the neighbouring wall's doors, so its
-  // end pad grows by the row depth. The axial rungs host on non-adjacent
-  // walls only (rect: the far wall; l-shape: the parallel far/step), where
-  // the corner case cannot arise.
-  const stagger = rung.spacing / 2;
+  // A rows-2 rung adds each host's screen-row seats, sampled on the
+  // staggered boundary lattice (DOOR_LATTICE_HALF_CELL further than the
+  // wall row's cell centers) so a screen door never stands directly in
+  // front of a wall door and both rows stay grid-aligned. On the rungs
+  // where ADJACENT (east/west) walls may also host, the screen's seats
+  // give up the corner diagonal too: a screen door ROW_DEPTH in from its
+  // wall line sits that much closer to the neighbouring wall's doors, so
+  // its end pad grows by the row depth. The axial rungs host on
+  // non-adjacent walls only (rect: the far wall; l-shape: the parallel
+  // far/step), where the corner case cannot arise.
   const screenPad = rung.endPad + (rung.axialOnly ? 0 : ROOM_DOOR_ROW_DEPTH);
-  const screenSpan = (h: Host) => h.len - 2 * screenPad - stagger;
-  const rowCapacity = (h: Host) => capacity(h.run, rung.spacing);
-  const screenCapacity = (h: Host) =>
-    rung.rows === 2 ? capacity(screenSpan(h), rung.spacing) : 0;
-  const remaining = hosts.map((h) => rowCapacity(h) + screenCapacity(h));
+  const rowCenters = (h: Host) =>
+    doorLatticeCenters(plan, walls[h.wall], rung.endPad);
+  const screenCenters = (h: Host) =>
+    rung.rows === 2
+      ? doorLatticeCenters(
+          plan,
+          walls[h.wall],
+          screenPad,
+          DOOR_LATTICE_HALF_CELL,
+        )
+      : [];
+  const remaining = hosts.map(
+    (h) => rowCenters(h).length + screenCenters(h).length,
+  );
   const total = remaining.reduce((a, b) => a + b, 0);
   if (total < count) return null;
 
@@ -341,27 +379,19 @@ function tryPlace(
   }
 
   // Positions per host wall: the wall row fills first; the overflow takes
-  // the screen row, staggered half a spacing against the wall row so a
-  // screen door never stands directly in front of a wall door. The
-  // stagger is an INJECTIVE shift — sample in the run shrunk by the
-  // stagger, then shift forward — never a wrap: on a full run the
-  // fallback's exact-spacing positions would wrap onto each other (two
-  // screen doors at the same spot), and the never-overlap rule outranks
-  // the stagger's aesthetics.
+  // the screen row, staggered half a grid cell (DOOR_LATTICE_HALF_CELL)
+  // against the wall row so a screen door never stands directly in front
+  // of a wall door. Both rows draw from grid lattices, so seats are
+  // distinct by construction and the never-overlap rule holds trivially.
   const counts = new Map<number, number>();
   assignment.forEach((h) => counts.set(h, (counts.get(h) ?? 0) + 1));
   const rows = new Map<number, { wall: number[]; screen: number[] }>();
   for (const [h, k] of counts) {
-    const wallCap = rowCapacity(hosts[h]);
-    const k0 = Math.min(k, wallCap);
+    const wallSeats = rowCenters(hosts[h]);
+    const k0 = Math.min(k, wallSeats.length);
     const k1 = k - k0;
-    const onWall = samplePositions(rng, hosts[h].run, k0, rung.spacing);
-    const onScreen = samplePositions(
-      rng,
-      screenSpan(hosts[h]),
-      k1,
-      rung.spacing,
-    ).map((p) => p + stagger);
+    const onWall = pickLattice(rng, wallSeats, k0);
+    const onScreen = pickLattice(rng, screenCenters(hosts[h]), k1);
     rows.set(h, { wall: onWall, screen: onScreen });
   }
   const used = new Map<number, number>();
@@ -373,8 +403,8 @@ function tryPlace(
     const r = rows.get(assignment[d]) ?? { wall: [0], screen: [] };
     const wallCap = r.wall.length;
     const row: 0 | 1 = slot < wallCap ? 0 : 1;
-    const pos = row === 0 ? r.wall[slot] : r.screen[slot - wallCap];
-    const offset = (row === 0 ? rung.endPad : screenPad) + pos;
+    // Lattice seats are already along-run offsets from the segment start.
+    const offset = row === 0 ? r.wall[slot] : r.screen[slot - wallCap];
     const wall = walls[h.wall];
     // From segment start along the run: start = center − len/2.
     const along = offset - h.len / 2;
@@ -523,12 +553,11 @@ export function hostableWallsFor(
  * Hostable wall metres under a template's affordance (v0.11-room-interiors
  * §7, Finding A): the total USABLE run of the walls the affordance permits,
  * net of the domestic end pad on each segment — the raw material door
- * capacity is measured from. Measured on the SCALED walls the caller already
- * built, so a miniature room's shortened wall reports shortened metres and
- * scale notation can no longer hide behind a tier-sized capacity claim.
- * `hostable` (optional) restricts the measure to the caller's full-height
- * walls, exactly like the ladder's primary rung; omit it to measure every
- * solid permitted wall. Pure.
+ * capacity is measured from. Measured on the SCALED walls the caller
+ * already built (v0.13 draws every room at ×1, so the measure is the
+ * wall itself); `hostable` (optional) restricts the measure to the
+ * caller's full-height walls, exactly like the ladder's primary rung;
+ * omit it to measure every solid permitted wall. Pure.
  */
 export function hostableWallMetersFor(
   plan: RoomPlan,
@@ -549,15 +578,15 @@ export function hostableWallMetersFor(
 
 /**
  * Graceful door capacity under a template's affordance (Finding A): how
- * many strand doors the plan's PERMITTED walls absorb at the authored
- * domestic spacing — the ladder's primary rung, the rung that does not
- * relax. This is the same per-wall `capacity(run, spacing)` math tryPlace
- * uses, summed over the same host set, so the number selection steers by is
- * the number placement can actually honour without loosening the ladder.
- * Measured, never declared: a ×0.2 miniature's 13m door wall yields the
- * four doors it truly hosts, not the tier-sized figure its template was
- * authored with (the template's declared doorCapacity remains as a CEILING,
- * applied by the caller, so a colossal room cannot demand an absurd count).
+ * many strand doors the plan's PERMITTED walls absorb at the ladder's
+ * primary rung — the rung that does not relax. THE SAME lattice
+ * enumeration tryPlace seats (doorLatticeCenters at the primary rung's
+ * end pad), summed over the same host set, so the number selection steers
+ * by is the number placement can actually honour without loosening the
+ * ladder. Measured, never declared: the wall the room truly has yields
+ * the doors it truly hosts, not the tier-sized figure a template may have
+ * been authored with (the template's declared doorCapacity remains as a
+ * CEILING, applied by the caller).
  */
 export function doorCapacityFor(
   plan: RoomPlan,
@@ -572,7 +601,7 @@ export function doorCapacityFor(
     if (!isHorizontal(wall)) return; // §10.5: the ladder's rungs are N/S-first
     if (affordance && !affordance.walls.includes(wallRoleFor(plan, wall))) return;
     if (hostable && !hostable[i]) return;
-    total += capacity(wallLength(wall) - 2 * rung.endPad, rung.spacing);
+    total += doorLatticeCenters(plan, wall, rung.endPad).length;
   });
   return total;
 }

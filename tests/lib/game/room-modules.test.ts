@@ -63,6 +63,9 @@ import { KITS } from "@/lib/game/kits";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
 import {
   COLONNADE_BAY,
+  MODULE_GRID,
+  MODULE_GRID_MAX_AREA,
+  MODULE_GRID_MAX_CELLS,
   PROP_SCALE_EXP,
   ROOM_WALL_THICKNESS,
 } from "@/lib/game/tuning/room";
@@ -116,12 +119,17 @@ describe("module catalogue (§8.2)", () => {
     }
   });
 
-  it("keeps every footprint inside the promised 8–16 m", () => {
+  it("keeps every footprint on the 6 m module grid, inside the 2×3 cap", () => {
     for (const m of ROOM_MODULES) {
-      expect(m.size.w).toBeGreaterThanOrEqual(8);
-      expect(m.size.w).toBeLessThanOrEqual(16);
-      expect(m.size.d).toBeGreaterThanOrEqual(8);
-      expect(m.size.d).toBeLessThanOrEqual(16);
+      const cellsW = m.size.w / MODULE_GRID;
+      const cellsD = m.size.d / MODULE_GRID;
+      expect(Number.isInteger(cellsW), `${m.id} w`).toBe(true);
+      expect(Number.isInteger(cellsD), `${m.id} d`).toBe(true);
+      expect(cellsW).toBeGreaterThanOrEqual(1);
+      expect(cellsD).toBeGreaterThanOrEqual(1);
+      expect(cellsW).toBeLessThanOrEqual(MODULE_GRID_MAX_CELLS);
+      expect(cellsD).toBeLessThanOrEqual(MODULE_GRID_MAX_CELLS);
+      expect(cellsW * cellsD).toBeLessThanOrEqual(MODULE_GRID_MAX_AREA);
     }
   });
 
@@ -548,10 +556,10 @@ describe("countHint + TIER_MODULE_COUNTS (§8.3 convergence)", () => {
       const id = `2028-02-${i}`;
       const s = resolveRoomComposition(id, "interior", "library", 0, WORLD_SEED, counts.S)!;
       expect(s.modules.length).toBe(1);
-      // A single module's footprint is the promised 8–16 m — "large" is
-      // never ONE module stretched.
-      expect(s.width).toBeLessThanOrEqual(16);
-      expect(s.extent).toBeLessThanOrEqual(16);
+      // A single module's footprint is at most the 2×3 grid cap (18 m) —
+      // "large" is never ONE module stretched.
+      expect(s.width).toBeLessThanOrEqual(MODULE_GRID * MODULE_GRID_MAX_CELLS);
+      expect(s.extent).toBeLessThanOrEqual(MODULE_GRID * MODULE_GRID_MAX_CELLS);
       const m = resolveRoomComposition(id, "interior", "library", 0, WORLD_SEED, counts.M)!;
       expect(m.modules.length).toBeGreaterThanOrEqual(2);
     }

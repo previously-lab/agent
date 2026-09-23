@@ -56,18 +56,58 @@ page.on("pageerror", (e) =>
   problems.push("[pageerror] " + String(e?.message).slice(0, 200)),
 );
 
-/** The conversation panel is open by default and eats a third of the frame. */
+/** The conversation panel is open by default and eats a third of the frame.
+ *  Retried until it is actually gone: a single click sometimes lands on a
+ *  re-rendered button and the panel comes back. */
 async function collapsePanel() {
-  const hit = await page.evaluate(() => {
-    const btn = Array.from(document.querySelectorAll("button")).find((b) =>
-      /collapse/i.test(b.getAttribute("aria-label") || ""),
-    );
-    if (!btn) return false;
-    btn.click();
-    return true;
-  });
-  return hit;
+  for (let i = 0; i < 4; i++) {
+    const hit = await page.evaluate(() => {
+      const btn = Array.from(document.querySelectorAll("button")).find((b) =>
+        /collapse/i.test(b.getAttribute("aria-label") || ""),
+      );
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    if (!hit) break;
+    await page.waitForTimeout(500);
+  }
+  await page.evaluate(() => document.activeElement?.blur?.());
+  return page.evaluate(
+    () => !document.querySelector("button[aria-label*='ollapse' i]"),
+  );
 }
+
+/** The corridor's door plate — the room the player is FACING. Matching the
+ *  wanted room's label here is what proves a shot shows that room: the mount
+ *  record proves a room was built, not that the camera is looking at it
+ *  (measured: the bath run mounted cleanly and photographed the kitchen's
+ *  door). */
+async function readPlate() {
+  return page.evaluate(() => {
+    const hit = Array.from(document.querySelectorAll("span,div,p"))
+      .filter((el) => el.children.length === 0)
+      .map((el) => (el.textContent || "").trim())
+      .find((t) => /·/.test(t) && /Enter|Foyer|Bedroom|Study|Reading|Kitchen|Bath|Storage|Gallery|Living|Sunroom|Pool|Dining|Workshop/i.test(t));
+    return hit ?? "";
+  });
+}
+
+const LABEL = {
+  foyer: "Foyer",
+  bedroom: "Bedroom",
+  study: "Study",
+  "reading-room": "Reading",
+  kitchen: "Kitchen",
+  bath: "Bath",
+  storage: "Storage",
+  "gallery-module": "Gallery",
+  living: "Living",
+  sunroom: "Sunroom",
+  "pool-deck": "Pool",
+  "dining-hall": "Dining",
+  workshop: "Workshop",
+};
 
 async function boot() {
   await page.goto(BASE + GALLERY, { waitUntil: "networkidle" });
@@ -76,7 +116,8 @@ async function boot() {
     timeout: 30000,
   });
   await page.waitForTimeout(SETTLE);
-  await collapsePanel();
+  const folded = await collapsePanel();
+  if (!folded) await collapsePanel();
   await page.waitForTimeout(600);
 }
 
@@ -188,39 +229,45 @@ async function mount(id) {
       console.log(`  ${id} attempt ${attempt}: door absent in window ${winIdx}`);
       continue;
     }
-    const z = live.side === "north" ? 7 : -7;
-    // THE FRAMED VIEW. The gallery lights each room as an interior beyond its
-    // door: standing in front of the door frames the room (the view the review
-    // wants), and only stepping through swaps to the in-room camera. Shoot the
-    // framed view while still in the corridor.
-    await page.evaluate(
-      ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
-      [-live.x, live.side === "north" ? 3.4 : -3.4],
-    );
-    await page.waitForTimeout(3400);
-    await page.screenshot({ path: `${OUT}/${id}-door.png` });
-    // Stand at the door first (still in the corridor), then step through.
-    await page.evaluate(
-      ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
-      [-live.x, live.side === "north" ? 3 : -3],
-    );
-    await page.waitForTimeout(1000);
-    await page.evaluate(
-      ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
-      [-live.x, z],
-    );
-    // A room takes a beat to build — poll for the mount instead of trusting a
-    // fixed settle (measured: a short settle still reads `room: null` from the
-    // corridor even though the step-through landed).
-    for (let i = 0; i < 24; i++) {
-      const got = await page.evaluate(
-        () => globalThis.__gameDebug?.room?.sliceId ?? null,
+    // THE WAY IN. Mounting is not "cross the wall" — the door manager only
+    // fires outside the corridor band with a door inside DOOR_GRAB_DIST (2.5m),
+    // and the Enter key answers a proximity query of its own. Measured on the
+    // study: (reported x, ±3.4) + Enter mounts; the mirrored x does not. The
+    // reported x worked for one room and the mirrored one for another, so try
+    // the candidates in order and let the data mirror decide — the mount is
+    // verified against the room's own debug record either way.
+    const side = live.side === "north" ? 1 : -1;
+    let mountX = live.x;
+    const candidates = [
+      [live.x, 3.4],
+      [-live.x, 3.4],
+      [live.x, 6.6],
+      [-live.x, 6.6],
+    ];
+    let room = null;
+    for (const [cx, cz] of candidates) {
+      mountX = cx;
+      // The framed view first: the gallery lights the room beyond its door, so
+      // shooting from the corridor is what the review wants.
+      await page.evaluate(
+        ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
+        [cx, side * Math.abs(cz)],
       );
-      if (got) break;
-      await page.waitForTimeout(600);
+      await page.waitForTimeout(2600);
+      if (!room) await page.screenshot({ path: `${OUT}/${id}-door.png` });
+      await page.keyboard.press("Enter");
+      let mountedId = null;
+      for (let i = 0; i < 8; i++) {
+        mountedId = await page.evaluate(
+          () => globalThis.__gameDebug?.room?.sliceId ?? null,
+        );
+        if (mountedId) break;
+        await page.waitForTimeout(700);
+      }
+      if (mountedId === want) break;
     }
     await page.waitForTimeout(1200);
-    const room = await page.evaluate(() => {
+    room = await page.evaluate(() => {
       const r = globalThis.__gameDebug?.room;
       if (!r) return null;
       return {
@@ -247,7 +294,7 @@ async function mount(id) {
           : null,
       };
     });
-    if (room && room.sliceId === want) return { room, door, attempt };
+    if (room && room.sliceId === want) return { room, door, attempt, mountX };
     console.log(
       `  ${id} attempt ${attempt}: mounted ${room?.sliceId ?? "null"} instead`,
     );
@@ -261,21 +308,33 @@ for (const id of MODULES) {
     console.log(`  ${id}: FAILED`);
     continue;
   }
-  const { room, door } = got;
-  // THE ONE FRAME. The gallery mounts a room as a lit interior BEYOND the
-  // corridor wall and keeps the player in the corridor (measured: the player
-  // clamps at z ±4.5 no matter what). The camera sits behind the player and
-  // looks along the corridor, so the room reads best from the OPPOSITE side:
-  // stand across the corridor at the door's x and look over the low wall.
-  await page.evaluate(
-    ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
-    [-door.x, door.side === "north" ? -4.3 : 4.3],
-  );
-  await page.waitForTimeout(3400);
-  await page.screenshot({ path: `${OUT}/${id}.png` });
+  const { room, door, mountX } = got;
+  // TWO FRAMES, ONE PICK. The camera sits behind the player and looks along
+  // the corridor, so the room reads from the OPPOSITE side: stand across the
+  // corridor and look over the low wall. Which x frames the room is NOT the x
+  // that mounted it (measured: the bath mounted cleanly while the plate read
+  // "Kitchen"), and the plate names the NEAREST door rather than the mounted
+  // room, so it is not an oracle — it is recorded as context only. Shoot both
+  // vantages and let the review pick.
+  const farZ = door.side === "north" ? -4.3 : 4.3;
+  const plates = {};
+  for (const [tag, cx] of [
+    ["a", mountX],
+    ["b", -mountX],
+  ]) {
+    await page.evaluate(
+      ([x, z]) => globalThis.__gameDebug?.teleport?.(x, z),
+      [cx, farZ],
+    );
+    await page.waitForTimeout(3000);
+    plates[tag] = await readPlate();
+    await page.screenshot({
+      path: `${OUT}/${id}${tag === "a" ? "" : "-alt"}.png`,
+    });
+  }
   writeFileSync(
     `${OUT}/${id}.json`,
-    JSON.stringify({ mountedAs: room.sliceId, door, room }, null, 2),
+    JSON.stringify({ mountedAs: room.sliceId, plates, door, room }, null, 2),
   );
   console.log(
     `  ${id}: ok — modules=[${room.modules.join(",")}] schematics=[${room.schematics.join(",")}] ` +

@@ -23,6 +23,12 @@
  *    fixture id must still exist, byte-identical; additions are validated
  *    by the shared audit (room-schematic.test.ts) and each lane's family
  *    test, not by this guard.
+ *
+ *  v0.13 RESAMPLE: the fixture's module entries were regenerated after the
+ *  module-grid snap (footprints 8–16 m → 6 m cell multiples) — ids, zones,
+ *  kits, features and every schematic entry are byte-unchanged; only the
+ *  13 `size` fields moved. The pre-snap fingerprint remains in git history
+ *  (HEAD 2df0df9's tree).
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";

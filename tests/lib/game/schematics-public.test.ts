@@ -451,13 +451,13 @@ describe("dining-hall — one long banquet table (room-plans/dining-hall.txt)", 
       const xs = tables.map((t) => t.x).sort((a, b) => a - b);
       for (let k = 1; k < xs.length; k++) {
         const gap = xs[k] - xs[k - 1];
-        if (gap < 1.7 || gap > 2.3)
+        if (gap < 1.5 || gap > 2.0)
           violations.push(`sweep-${i}: table segments ${gap.toFixed(2)}m apart`);
       }
       const meanX = xs.reduce((a, b) => a + b, 0) / xs.length;
       if (Math.abs(meanX) > 0.4) violations.push(`sweep-${i}: the table left the axis`);
       for (const t of tables) {
-        if (t.z < 5.2 || t.z > 5.7)
+        if (t.z < 7.2 || t.z > 7.7)
           violations.push(`sweep-${i}: table z=${t.z.toFixed(2)} out of the room's middle`);
       }
       // eight chairs, each pulled up to ITS segment and squared at it.
@@ -723,8 +723,9 @@ describe("pool-deck — the dry edges of the water (room-plans/pool-deck.txt)", 
         const len = Math.hypot(to.x, to.z);
         if ((f.x * to.x + f.z * to.z) / len < 0.55)
           violations.push(`sweep-${i}: lounger @${l.x.toFixed(2)},${l.z.toFixed(2)} not facing the water`);
-        // on the dry flanks, never over the basin.
-        if (Math.abs(l.x) < 3.9)
+        // on the dry flanks, never over the basin (water halfX 4.02 +
+        // the piece-clear margin).
+        if (Math.abs(l.x) < 4.5)
           violations.push(`sweep-${i}: lounger x=${l.x.toFixed(2)} inside the basin margin`);
       }
       // each flank pair staggers along its rim.
@@ -753,10 +754,10 @@ describe("pool-deck — the dry edges of the water (room-plans/pool-deck.txt)", 
       const board = byGroup(s, id, "board")[0];
       if (ladder && board && ladder.x > board.x)
         violations.push(`sweep-${i}: the ladder left the west end`);
-      // the ring post steps off the water's west edge; the towel rail
-      // hangs by the west loungers.
+      // the ring post steps off the water's west edge (basin edge
+      // −4.02); the towel rail hangs by the west loungers.
       for (const p of byGroup(s, id, "ring-post")) {
-        if (p.x > -4.1 || p.x < -5.1)
+        if (p.x > -4.6 || p.x < -5.4)
           violations.push(`sweep-${i}: ring post x=${p.x.toFixed(2)} off the west water edge`);
       }
       for (const p of byGroup(s, id, "towel-rail")) {

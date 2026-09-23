@@ -280,38 +280,47 @@ export const WATER_ROUGHNESS = 0.08;
 /* Consumed by lib/game/room-plan.ts (pure) and space.tsx.            */
 /* ------------------------------------------------------------------ */
 
-/** Scale draw: 78% of rooms stay human-scale — the distortion must stay
- *  special to read as a dream (A2), not as the new normal. */
-export const SCALE_NORMAL_PROB = 0.78;
-/** Scale draw: 12% colossal; the remaining 10% are miniature (slightly
- *  rarer — tiny rooms risk readability more than huge ones). */
-export const SCALE_COLOSSAL_PROB = 0.12;
-/** Colossal factor = MIN + r·SPAN → ×2.5–3.5, centered on ×3 (doc 附录
- *  B.12, user 2026-09-18: a merely big space is worth little — "colossal"
- *  keeps the bigger-than-expected surprise but no longer sprawls into an
- *  empty floor; recognizability now comes from light/material/set-dressing,
- *  not area). Was ×8–20 per the original §3 notation. */
-export const SCALE_COLOSSAL_MIN = 2.5;
-export const SCALE_COLOSSAL_SPAN = 1;
-/** Miniature factor = MIN + r·SPAN → ×0.2–0.35: small enough to read as a
- *  room built too small for you, large enough to actually walk into — an
- *  M-tier (32m) room lands 6.4–11.2m across, never near the player's own
- *  0.9m capsule (the old 0.05 floor built unenterable 1.6m boxes). */
-export const SCALE_MINIATURE_MIN = 0.2;
-export const SCALE_MINIATURE_SPAN = 0.15;
+/** Scale notation (v0.13 尺度收敛, user: "移除巨人城" — the giant city is
+ *  gone): every room draws the ONE human-scale tier. The old three-tier
+ *  draw (78% normal / 12% colossal ×2.5–3.5 / 10% miniature ×0.2–0.35)
+ *  collapsed into the single normal outcome — a giant floor with nine
+ *  pieces of furniture spread across it read as a bug, and "large" is
+ *  expressed by joining MORE standard modules (room-modules.ts §8.3),
+ *  never by enlarging the room. scaleNotationFor keeps its signature so
+ *  every consumer is untouched; the scale-aware math below (wall-height
+ *  curve, prop/creature exponents, margin scaling) stays as the identity
+ *  path at the only factor now drawn, ×1. */
+
+/** The module grid (v0.13 尺度收敛): a standard room module's footprint is
+ *  an integer number of these cells per side — 小房间 1×1, 长房间 1×2 /
+ *  2×1, 大房间 2×2 — so composed rooms tile like building blocks and every
+ *  interior seam lands on a grid line. The hard cap is 2×3: no side longer
+ *  than MODULE_GRID_MAX_CELLS cells, no footprint larger than
+ *  MODULE_GRID_MAX_AREA cells (room-modules.ts's audit enforces both). */
+export const MODULE_GRID = 6;
+/** Longest legal footprint side, in cells (the 2×3 cap's 3). */
+export const MODULE_GRID_MAX_CELLS = 3;
+/** Largest legal footprint area, in cells (2×3 = 6). */
+export const MODULE_GRID_MAX_AREA = 6;
+/** Door lattice: strand-door centers sit at CELL CENTERS of the module
+ *  grid (half a cell off every grid line), measured in the room's plan
+ *  frame, so a door's 2.4m gap can never straddle a module seam and doors
+ *  in abutting modules align door-to-door (room-doors.ts). */
+export const DOOR_LATTICE_HALF_CELL = MODULE_GRID / 2;
+
 /** Wall height scales by S^0.5, not S: full-S walls (14m at ×3.5) would make
  *  the far walls the only thing on screen at the fixed camera (the near
  *  walls are cut to WALL_SILL_HEIGHT, so they no longer veil the room). */
 export const WALL_SCALE_EXP = 0.5;
 /** Wall-height clamps (m): MIN is the absolute safety floor — in practice
- *  the portal floor (PORTAL_HEIGHT + WALL_PORTAL_MARGIN, below) binds
- *  first; MAX stops colossal walls before they become the only thing on
- *  screen. */
+ *  the portal floor (PORTAL_HEIGHT + WALL_PORTAL_MARGIN, below) binds first;
+ *  MAX is the curve's ceiling rail (live only if a future draw ever passes
+ *  a factor > 1 again — v0.13 leaves every room at ×1). */
 export const WALL_HEIGHT_MIN = 0.8;
 export const WALL_HEIGHT_MAX = 16;
 /** Extra wall above the 3.2m portal surround: the door never scales (the
- *  A4 human-scale anchor), so miniature walls must still contain the
- *  portal plus this margin of visible wall over the lintel. */
+ *  A4 human-scale anchor), so even the smallest room's walls must contain
+ *  the portal plus this margin of visible wall over the lintel. */
 export const WALL_PORTAL_MARGIN = 0.3;
 /** Furniture/motif props scale by S^0.75 — giant enough to sell the room's
  *  scale, always shorter than the walls they stand between. */
@@ -319,10 +328,10 @@ export const PROP_SCALE_EXP = 0.75;
 /** Creatures (ducks/pets/balloons) scale by S^0.5: they are characters whose
  *  readability matters more than their role as a scale cue. */
 export const CREATURE_SCALE_EXP = 0.5;
-/** Terrain tessellation cap: segments grow with S^0.75 so colossal rolling
+/** Terrain tessellation cap: segments grow with S^0.75 so big rolling
  *  ground doesn't alias, but vertex count stays bounded (one-time cost). */
 export const GROUND_SEGMENTS_MAX = 256;
-/** Miniature rooms still get a readable grounding apron under the diorama. */
+/** Even the smallest room gets a readable grounding apron under it. */
 export const SKIRT_OVERHANG_MIN = 8;
 /** Non-rectangular plans need room to breathe — S tiers (16m) would turn an
  *  L's kept leg into a cramped corridor (hard-banned anti-pattern). */
@@ -346,8 +355,9 @@ export const HERO_SCALE = 2.2;
 /** No-scatter clearing around the hero (m, ×prop scale) — it owns its stage. */
 export const HERO_CLEAR = 3;
 /** Cleared walk path (door → hero) half-width in meters at human scale;
- *  room-plan.ts scales it by clamp(S, 0.35, 2) so miniature rooms keep
- *  props and colossal rooms keep a passable gap between giant props. */
+ *  room-plan.ts scales it by clamp(S, 0.35, 2) — at v0.13's single ×1
+ *  tier the clamp is the identity and the path keeps its 1.4 m half-width
+ *  everywhere. */
 export const PATH_HALF = 1.4;
 /** Clustered scatter: 2–3 seeded cluster centers (+1 on L/XL tiers). */
 export const CLUSTER_COUNT_BASE = 2;
@@ -358,8 +368,8 @@ export const CLUSTER_RADIUS_SPAN = 3;
 /** Fraction of scatter drawn uniformly instead of clustered — a lone tree
  *  far from any grouping reads as placed, not as leftover. */
 export const LONE_PROB = 0.15;
-/** Pet waypoint radius cap (m): in colossal rooms pets stay near the door,
- *  where the player actually is, instead of wandering a 150m orbit. */
+/** Pet waypoint radius cap (m): in the biggest rooms pets stay near the
+ *  door, where the player actually is, instead of wandering a 150m orbit. */
 export const PET_NEAR_RADIUS_MAX = 24;
 
 /* ------------------------------------------------------------------ */

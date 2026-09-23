@@ -7,7 +7,8 @@
  * sparsely). "Large" is expressed by MORE modules, never by enlarging one
  * (§8.3).
  *
- * A module is DATA, never code: its footprint (8–16 m a side), which of
+ * A module is DATA, never code: its footprint (an integer number of
+ *  MODULE_GRID cells a side — 1×1 / 1×2 / 2×1 / 2×2, capped at 2×3), which of
  * its four edges may OPEN onto a sibling module, which exposed edges may
  * carry strand doors and how many, its floor/wall material roles and
  * light register, its feature slots, and its own KIT WHITELIST (ids of
@@ -86,6 +87,12 @@ import { createRng, hashString, WORLD_SEED } from "./seed";
 import { parseDebugSlice } from "./debug-slice";
 import type { RoomPlan, WallSegment } from "./room-plan";
 import type { ArchetypeId, SpaceRecipe, WorldClass } from "./space-types";
+import {
+  DOOR_LATTICE_HALF_CELL,
+  MODULE_GRID,
+  MODULE_GRID_MAX_AREA,
+  MODULE_GRID_MAX_CELLS,
+} from "./tuning/room";
 
 /* ------------------------------------------------------------------ */
 /* The data model (§8.2)                                               */
@@ -130,7 +137,8 @@ export interface ModuleFeature {
 
 /**
  * A hand-authored standard room module (§8.2's RoomModule) — one
- * functional unit of an interior, 8–16 m a side.
+ * functional unit of an interior, an integer number of MODULE_GRID
+ * (6 m) cells a side (v0.13 尺度收敛).
  */
 export interface RoomModule {
   id: string;
@@ -141,7 +149,11 @@ export interface RoomModule {
    *  room — see compositionCompanionsFor). */
   worldClasses: readonly WorldClass[];
   archetypes: readonly ArchetypeId[];
-  /** Footprint in meters (unscaled, human scale): x span × z depth. */
+  /** Footprint in meters (unscaled, human scale): x span × z depth.
+ *  MUST snap to the MODULE_GRID: an integer cell count per side, at most
+ *  MODULE_GRID_MAX_CELLS cells long and at most MODULE_GRID_MAX_AREA
+ *  cells of area (auditModule enforces — 小 1×1, 长 1×2/2×1, 大 2×2,
+ *  hard cap 2×3). */
   size: { w: number; d: number };
   /** Edges that may OPEN onto a sibling module (a seam without both sides
    *  consenting stays a wall — the reading room's north shelf wall never
@@ -1039,7 +1051,23 @@ function buildComposition(
       // both sides — it stays a wall (no opening is emitted).
       if (len < 3) continue;
       const width = Math.min(2.4, len - 2);
-      const at = 1 + rng() * (len - 2 - width) + width / 2;
+      // Seeded, then snapped to the seam-local CELL-CENTER lattice (v0.13
+      // module grid): grid lines fall ON module edges, so an opening whose
+      // center sits half a cell off the seam's own start lines up
+      // door-to-door with the openings of abutting modules. The snap is
+      // clamped into the 1 m jamb margins — a tiny seam degenerates to its
+      // seeded spot exactly as before.
+      const lo = 1 + width / 2;
+      const hi = len - 1 - width / 2;
+      const seeded = lo + rng() * (hi - lo);
+      const at = Math.min(
+        hi,
+        Math.max(
+          lo,
+          DOOR_LATTICE_HALF_CELL +
+            Math.round((seeded - DOOR_LATTICE_HALF_CELL) / MODULE_GRID) * MODULE_GRID,
+        ),
+      );
       seams.push({
         aId: modules[i].id,
         bId: modules[j].id,
@@ -1332,14 +1360,27 @@ function kitIds(): Set<string> {
 
 /** Catalogue soundness: every module's whitelist names real kits, its
  *  heroKit is a whitelisted heroSlot kit, its zones are normalized with at
- *  most one hero, its footprint is the promised 8–16 m a side, and its
+ *  most one hero, its footprint is a legal MODULE_GRID cell multiple
+ *  (≤ 2×3, ≤ 6 cells of area), and its
  *  door edges / openings stay off the entrance-consent rules. Returns the
  *  violations (empty = sound). */
 export function auditModule(module: RoomModule): string[] {
   const problems: string[] = [];
   const { w, d } = module.size;
-  if (w < 8 || w > 16 || d < 8 || d > 16) {
-    problems.push(`${module.id}: footprint ${w}×${d} outside 8–16 m`);
+  const cellsW = w / MODULE_GRID;
+  const cellsD = d / MODULE_GRID;
+  if (!Number.isInteger(cellsW) || !Number.isInteger(cellsD) || cellsW < 1 || cellsD < 1) {
+    problems.push(
+      `${module.id}: footprint ${w}×${d} not a ${MODULE_GRID} m grid cell multiple`,
+    );
+  } else if (
+    cellsW > MODULE_GRID_MAX_CELLS ||
+    cellsD > MODULE_GRID_MAX_CELLS ||
+    cellsW * cellsD > MODULE_GRID_MAX_AREA
+  ) {
+    problems.push(
+      `${module.id}: footprint ${w}×${d} exceeds the 2×3 (${MODULE_GRID_MAX_AREA}-cell) cap`,
+    );
   }
   if (module.kits.length === 0) problems.push(`${module.id}: empty kit whitelist`);
   for (const id of module.kits) {

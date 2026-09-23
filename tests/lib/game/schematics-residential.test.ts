@@ -200,7 +200,7 @@ const ROOMS: RoomSpec[] = [
   },
   {
     moduleId: "study",
-    requiredGroups: ["study:shelf-w", "study:shelf-e", "study:desk"],
+    requiredGroups: ["study:shelf", "study:desk"],
     optionalGroups: [
       ["study:corner", 0.55],
       ["study:sideboard", 0.5],
@@ -513,7 +513,7 @@ describe("study — the desk faces the book wall (specs §3)", () => {
     const shelves = pieces.filter((p) => p.kind === "bookshelf");
     expect(shelves.length, "3 shelves in the run").toBeGreaterThanOrEqual(3);
     for (const s of shelves) {
-      expect(s.z, "the run on the focal wall").toBeGreaterThan(8.8);
+      expect(s.z, "the run on the focal wall").toBeGreaterThan(10.8);
       expect(Math.abs(norm(s.rotY - Math.PI)), "shelves face the room").toBeLessThan(0.1);
     }
     // the run is off the room's axis (the study forbids symmetry, §0-6)
@@ -521,8 +521,8 @@ describe("study — the desk faces the book wall (specs §3)", () => {
     expect(Math.abs(meanX), `the run's mean x ${meanX.toFixed(2)}`).toBeGreaterThan(0.3);
     const desk = one(pieces, "desk");
     expect(Math.abs(norm(desk.rotY - Math.PI)), "the desk faces the shelf wall").toBeLessThan(0.1);
-    expect(desk.z).toBeGreaterThan(7);
-    expect(desk.z).toBeLessThan(7.9);
+    expect(desk.z, "the desk in the room's north band").toBeGreaterThan(9.0);
+    expect(desk.z, "the desk in the room's north band").toBeLessThan(9.9);
     // 取书通道: desk back → shelf face stays ≥0.9m
     const shelfFace = Math.min(...shelves.map((s) => s.z)) - 0.21;
     const deskBack = desk.z + 0.375;
@@ -592,7 +592,7 @@ describe("reading-room — the long table under the book wall (specs §4)", () =
       const corner = pieces.filter((p) => p.kitId === gid);
       if (corner.length === 0) continue; // optional
       const chair = corner.find((p) => p.kind === "readingchair")!;
-      expect(Math.abs(chair.x), `${gid} on a flank`).toBeGreaterThan(5.5);
+      expect(Math.abs(chair.x), `${gid} on a flank`).toBeGreaterThan(5.0);
       expect(chair.z, `${gid} off the entrance`).toBeGreaterThan(1.5);
       const lamp = corner.find((p) => p.kind === "floorlamp")!;
       expect(dist(lamp, chair), "the corner lamp within reach").toBeLessThan(1.2);
@@ -602,7 +602,7 @@ describe("reading-room — the long table under the book wall (specs §4)", () =
     const bench = pieces.filter((p) => p.kitId === "reading-room:bench");
     if (bench.length > 0) {
       const seat = bench.find((p) => p.kind === "bench")!;
-      expect(seat.x, "the bench hugs the west wall").toBeLessThan(-5.5);
+      expect(seat.x, "the bench hugs the west wall").toBeLessThan(-5.0);
       expect(seat.z, "the bench between the corner and the table").toBeGreaterThan(4);
       expect(faceDot(seat, tableC), "the bench faces the table").toBeGreaterThan(0.9);
       const book = bench.find((p) => p.kind === "bookpile")!;

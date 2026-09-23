@@ -416,6 +416,11 @@ describe("degradation — a blueprint that cannot land never half-furnishes", ()
 
 describe("the no-blueprint path is byte-for-byte (contrast golden)", () => {
   it("the study debug room stages exactly the pre-change pieces (probe @ 50c8b25)", () => {
+    // v0.13 RESAMPLE: the golden was recaptured after the module-grid snap
+    // (study 10×10 → 12×12): the reading corner sits deeper and the
+    // density law places two writing-desk groups where one fit before. The
+    // pin's job is unchanged — the GENERIC path stages deterministically
+    // — the bytes are the current no-blueprint truth.
     const { pieces } = stageModuleRoom("study", { schematic: false });
     const round = (n: number) => {
       const r = Math.round(n * 100) / 100;
@@ -423,14 +428,25 @@ describe("the no-blueprint path is byte-for-byte (contrast golden)", () => {
     };
     const got = pieces.map((p) => ({ kind: p.kind, x: round(p.x), z: round(p.z) }));
     expect(got).toEqual([
-      { kind: "rug", x: -0.05, z: 6.75 },
-      { kind: "readingchair", x: 0, z: 7.1 },
-      { kind: "nightstand", x: -0.8, z: 7.2 },
-      { kind: "floorlamp", x: 0.75, z: 7.45 },
-      { kind: "bookpile", x: 0.55, z: 6.55 },
-      { kind: "pedestal", x: -3.92, z: 2.44 },
-      { kind: "plant", x: -3.62, z: 1.59 },
-      { kind: "plant", x: -3.37, z: 3.14 },
+      { kind: "rug", x: -0.05, z: 8.17 },
+      { kind: "readingchair", x: 0, z: 8.52 },
+      { kind: "nightstand", x: -0.8, z: 8.62 },
+      { kind: "floorlamp", x: 0.75, z: 8.87 },
+      { kind: "bookpile", x: 0.55, z: 7.97 },
+      { kind: "rug", x: -4.5, z: 6.86 },
+      { kind: "desk", x: -4.85, z: 6.86 },
+      { kind: "chair", x: -4, z: 6.86 },
+      { kind: "desklamp", x: -5, z: 6.31 },
+      { kind: "bookpile", x: -4.3, z: 7.61 },
+      { kind: "pedestal", x: -3.06, z: 2.95 },
+      { kind: "plant", x: -2.76, z: 2.1 },
+      { kind: "plant", x: -2.51, z: 3.65 },
+      { kind: "rug", x: 4.5, z: 10.03 },
+      { kind: "desk", x: 4.85, z: 10.03 },
+      { kind: "chair", x: 4, z: 10.03 },
+      { kind: "desklamp", x: 5, z: 10.58 },
+      { kind: "bookpile", x: 4.3, z: 9.28 },
+      { kind: "towelstack", x: -4.85, z: 6.86 },
     ]);
   });
 

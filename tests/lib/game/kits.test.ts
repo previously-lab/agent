@@ -1284,12 +1284,14 @@ describe("template zones parameter (§7) — additive", () => {
    *  for the v0.12 new-props pass (31 kits — the six NEW PROPS groups
    *  widen every interior deal): the 16 m no-door pin moves too this
    *  time — a wider deck shifts the deal even where the cap never
-   *  binds. */
+   *  binds. Recaptured a sixth time for the v0.13 module grid: only the
+   *  WITH-doors pins move (strand doors reseat onto lattice cell centers,
+   *  shifting their approach strips); the no-door pins are unchanged. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6060:535184652", "6056:1680631566"],
-    ["2026-10-12", 32, "library", 1.5, "17717:2165748283", "17533:4236919009"],
-    ["2026-10-13", 64, "ballroom", 0.66, "30230:83039979", "28851:2819135990"],
-    ["2026-10-14", 96, "hotel-room", 1, "31847:1835721113", "31734:4172443120"],
+    ["2026-10-11", 16, "hotel-room", 1, "6060:535184652", "5986:3747424891"],
+    ["2026-10-12", 32, "library", 1.5, "17717:2165748283", "17699:1570385866"],
+    ["2026-10-13", 64, "ballroom", 0.66, "30230:83039979", "29165:4262870438"],
+    ["2026-10-14", 96, "hotel-room", 1, "31847:1835721113", "30879:1633728112"],
     ["2026-10-15", 32, "pool-hall", 1, "16558:2811097141", "16370:1042149808"],
   ];
 

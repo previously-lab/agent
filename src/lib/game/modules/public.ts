@@ -18,7 +18,7 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     label: "画廊",
     worldClasses: ["interior"],
     archetypes: ["ballroom", "library"],
-    size: { w: 16, d: 10 },
+    size: { w: 18, d: 12 }, // v0.13 尺度收敛: 2×3 — the grid's largest legal cell
     openings: ["e", "w"],
     doorEdges: ["n"],
     doorCapacity: 10,
@@ -61,7 +61,8 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     label: "日光房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom", "library"],
-    size: { w: 12, d: 8 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 (snapped UP from 12×8 — at 12×6
+    // the reading-corner blueprint forfeits: 0 chairs in the sweep).
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,
@@ -100,7 +101,7 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     label: "泳池甲板",
     worldClasses: ["interior"],
     archetypes: ["pool-hall"],
-    size: { w: 16, d: 10 },
+    size: { w: 18, d: 12 }, // v0.13 尺度收敛: 2×3 — the grid's largest legal cell
     openings: ["e", "w"],
     doorEdges: [],
     doorCapacity: 0,
@@ -154,7 +155,7 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     label: "长桌餐厅",
     worldClasses: ["interior"],
     archetypes: ["ballroom", "hotel-room"],
-    size: { w: 14, d: 10 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 4,

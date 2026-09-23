@@ -17,7 +17,7 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "卧室",
     worldClasses: ["interior"],
     archetypes: ["hotel-room"],
-    size: { w: 12, d: 10 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
     openings: ["s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 3,
@@ -61,7 +61,7 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "书房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library"],
-    size: { w: 10, d: 10 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,
@@ -87,7 +87,7 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "阅览室",
     worldClasses: ["interior"],
     archetypes: ["library", "ballroom"],
-    size: { w: 14, d: 12 },
+    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,

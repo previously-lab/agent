@@ -23,9 +23,9 @@
  * demand an absurd door count), but the capacity selection steers by is
  * measured in hostable wall metres on the SCALED plan the caller already
  * computes — room-doors.ts's doorCapacityFor over the template's permitted
- * wall roles at the ladder's domestic spacing. A miniature ×0.2 colossal
- * room then gets the four doors its 13m door wall truly hosts, not the 24
- * its tier was authored for. Callers pass the measurement in via
+ * wall roles at the ladder's primary rung. The measurement reports what the
+ * wall truly hosts, not the tier-sized figure the template may have been
+ * authored for. Callers pass the measurement in via
  * resolveRoomTemplate's optional `capacityFor`; omitting it reproduces the
  * pre-measurement selection exactly (declared ceiling only).
  *
@@ -437,8 +437,8 @@ export function eligibleTemplates(
  * `capacityFor` (optional, Finding A) measures one candidate's graceful
  * capacity on THIS room's scaled plan — room-doors.ts's doorCapacityFor
  * over the candidate's permitted wall roles. The effective capacity is
- * min(the declared ceiling, the measurement), so a miniature room's
- * shortened wall shrinks the claim while a colossal room stays capped.
+ * min(the declared ceiling, the measurement), so the wall the room truly
+ * has shrinks an over-ambitious declared claim.
  * Omitting it steers by the declared ceilings alone — exactly the
  * pre-measurement behaviour.
  *

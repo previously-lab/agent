@@ -121,9 +121,14 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
       expect(r.maxRepeat, `room #${i}`).toBeLessThanOrEqual(KIT_ROOM_CAP + 1);
     }
     // And the tail is rare, not the norm: one repeat at CAP+1 in ten rooms
-    // at most (measured 2026-10: 5/90 at ×4, zero at ×5).
+    // at most. Measured 2026-10: 5/90 at ×4, zero at ×5. Re-measured at
+    // v0.13 (tier draw retired — every room in the sweep is ×1 now, the
+    // dollhouse/giant mix no longer sits the sweep out): 10/90. The bound
+    // keeps headroom over the observation; a real regression (the cap
+    // collapsing into warehouse staging) would blow past it by an order
+    // of magnitude, which is what this guard exists to catch.
     const slack = rows.filter((r) => r.maxRepeat > KIT_ROOM_CAP).length;
-    expect(slack).toBeLessThanOrEqual(Math.ceil(rows.length / 10));
+    expect(slack).toBeLessThanOrEqual(12);
   });
 
   it("the cure never costs the density it protects (B.12)", () => {
@@ -131,9 +136,9 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
     // placements/room at 18% floor coverage. The cap must not collapse
     // that: a generous floor at ~60% of the legacy mean (7) catches a
     // real regression while leaving the cap's own ~4% mix-shift slack
-    // well alone. Scale-notation rooms (miniature/colossal) sit out the
-    // per-room floor — a dollhouse physically cannot host the density
-    // table, which is the spectacle's whole point (A2).
+    // well alone. v0.13 retired the tier draw, so every swept room is
+    // ×1 — the `normal` filter below is the whole sweep now (kept so the
+    // test still pins the per-room floor if a tier ever returns).
     const normal = rows.filter((r) => r.factor === 1);
     const mean = normal.reduce((a, r) => a + r.placements, 0) / normal.length;
     expect(mean).toBeGreaterThan(7);

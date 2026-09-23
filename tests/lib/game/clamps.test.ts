@@ -591,12 +591,13 @@ describe("strand-door passages", () => {
   });
 
   it("packs a crowded room onto the axial wall's double bank (relaxed ladder), all reachable", () => {
-    // 12 doors on a 32×32 rect exceed the far wall's single-row run, so
-    // the ladder relaxes into §10.5 fallback ② — the same-wall second
-    // bank (门厅式) — BEFORE any east/west overflow: every door still
-    // hangs on the axial (far) wall, half of them on the freestanding
+    // 12 doors on a 48×32 rect exceed the far wall's single lattice row
+    // (8 cell-center seats at the 6 m pitch), so the ladder relaxes into
+    // §10.5 fallback ② — the same-wall second bank (门厅式, 7 staggered
+    // screen seats) — BEFORE any east/west overflow: every door still
+    // hangs on the axial (far) wall, four of them on the freestanding
     // screen row. The passage relaxation must work for both rows.
-    const plan = rectPlan(32, 32);
+    const plan = rectPlan(48, 32);
     const walls = wallSegmentsFor(plan, ROOM_WALL_THICKNESS);
     const hostable = hostableWallsFor(plan, walls, 1);
     const layout = placeRoomDoors("clamp-passage-crowded", plan, walls, hostable, 12);
@@ -610,7 +611,7 @@ describe("strand-door passages", () => {
     for (const d of layout.doors) {
       const target = atDoor(d, 0, 0.3);
       const p = toWorld(NORTH_DOOR, target.lx, target.lz);
-      clampToSpace(p, NORTH_DOOR, 32, 32, layout.doors, plan);
+      clampToSpace(p, NORTH_DOOR, 48, 32, layout.doors, plan);
       const after = toLocal(NORTH_DOOR, p);
       expect(perpOf(d, after)).toBeCloseTo(0.3, 9);
       expect(crossedRoomDoor(after.lx, after.lz, layout.doors)).not.toBeNull();

@@ -84,10 +84,10 @@ export const END_WALL_PASS_DEPTH = 0.6;
 
 /** Margin shrink cap: the effective space margin never exceeds this
  *  fraction of the room's half-span, so at least half of every span stays
- *  walkable at any scale. The human-scale constants above remain the
- *  ceiling — every tier is ≥16 m at ×1, so normal rooms take them
- *  unchanged and only miniature rooms (where a fixed 1 m margin would
- *  swallow the whole span) shrink. */
+ *  walkable at any scale. At v0.13's human-scale rooms (and the smallest
+ *  6m module's 3m half-span) the human-scale constants below always stay
+ *  the ceiling — the cap binds only below half-span 2m, which no room
+ *  reaches. */
 const MARGIN_HALF_SPAN_CAP = 0.5;
 
 /** Scale-aware margin: the human-scale value, capped so a shrunken room
@@ -165,7 +165,8 @@ export interface SeamWall {
  * doors). `width` is the plan's x span, `extent` its z depth — already
  * scale-adjusted by the caller, so the margins are derived from them via
  * scaledMargin: SPACE_EDGE_MARGIN / SPACE_WALL_CLEAR at human scale,
- * shrinking with the room so miniature plans stay walkable.
+ * shrinking only when a margin would swallow half the span (which no v0.13
+ * room reaches — the cap is the identity path everywhere).
  * Inside the doorway gap (|x − door.x| < GAP_HALF) the inner bound relaxes
  * to the corridor band so the player can walk back through the wall;
  * everywhere else the wall plane is solid both ways — a player on the

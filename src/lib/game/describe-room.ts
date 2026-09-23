@@ -147,7 +147,7 @@ export interface RoomDescription {
   /** The archetype's ground shape (flat / rolling / sunken basin). */
   ground: "flat" | "rolling" | "sunken";
   sizeTier: "S" | "M" | "L" | "XL";
-  /** Scale notation: normal ×1, colossal ×2.5–3.5, miniature ×0.2–0.35. */
+  /** Scale notation: v0.13 retired the tier draw — always normal ×1. */
   scale: ScaleNotation;
   /** Scaled floor-plan dims in meters (what the player walks). */
   width: number;
@@ -523,8 +523,6 @@ const PLAN_ZH: Record<PlanId, string> = {
 };
 const SCALE_ZH: Record<ScaleNotation["id"], string> = {
   normal: "正常尺度",
-  colossal: "巨构",
-  miniature: "微缩",
 };
 const REGISTER_ZH: Record<LightRegister, string> = {
   tungsten: "钨丝灯",

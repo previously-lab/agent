@@ -31,10 +31,6 @@ import {
   PLAN_NONRECT_MIN_EXTENT,
   PORTAL_HEIGHT,
   ROOM_WALL_THICKNESS,
-  SCALE_COLOSSAL_MIN,
-  SCALE_COLOSSAL_SPAN,
-  SCALE_MINIATURE_MIN,
-  SCALE_MINIATURE_SPAN,
   WALL_HEIGHT_MAX,
   WALL_HEIGHT_MIN,
 } from "@/lib/game/tuning/room";
@@ -51,29 +47,13 @@ describe("scaleNotationFor", () => {
     }
   });
 
-  it("keeps every factor inside the §3/B.12 notation ranges", () => {
+  it("draws the single human-scale tier for every slice (v0.13)", () => {
+    // 尺度收敛: the tier draw is retired — no slice may roll a giant or
+    // miniature room; factor is identically 1 (and the "scale" stream is
+    // never read, so no other facet's stream is perturbed).
     for (const sliceId of SLICE_IDS) {
-      const s = scaleNotationFor(sliceId);
-      if (s.id === "normal") {
-        expect(s.factor).toBe(1);
-      } else if (s.id === "colossal") {
-        // B.12 (user, 2026-09-18): colossal collapsed from ×8–20 to ~×3.
-        expect(s.factor).toBeGreaterThanOrEqual(SCALE_COLOSSAL_MIN);
-        expect(s.factor).toBeLessThanOrEqual(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN);
-      } else {
-        expect(s.factor).toBeGreaterThanOrEqual(SCALE_MINIATURE_MIN);
-        expect(s.factor).toBeLessThanOrEqual(SCALE_MINIATURE_MIN + SCALE_MINIATURE_SPAN);
-      }
+      expect(scaleNotationFor(sliceId)).toEqual({ id: "normal", factor: 1 });
     }
-  });
-
-  it("keeps most rooms normal, with both distortions present", () => {
-    const counts = { normal: 0, colossal: 0, miniature: 0 };
-    for (const sliceId of SLICE_IDS) counts[scaleNotationFor(sliceId).id]++;
-    // Drawn 78/12/10; 400 samples land far inside these bands.
-    expect(counts.normal).toBeGreaterThan(400 * 0.65);
-    expect(counts.colossal).toBeGreaterThan(400 * 0.04);
-    expect(counts.miniature).toBeGreaterThan(400 * 0.03);
   });
 });
 
@@ -147,40 +127,30 @@ describe("scaledWallHeight", () => {
   it("stays human at factor 1 and clamped at the extremes", () => {
     expect(scaledWallHeight(1)).toBeCloseTo(4, 5);
     expect(scaledWallHeight(20)).toBeLessThanOrEqual(WALL_HEIGHT_MAX);
-    expect(scaledWallHeight(SCALE_MINIATURE_MIN)).toBeGreaterThanOrEqual(WALL_HEIGHT_MIN);
+    expect(scaledWallHeight(0.2)).toBeGreaterThanOrEqual(WALL_HEIGHT_MIN);
   });
 
-  it("leaves every normal and colossal value on the S^0.5 curve", () => {
+  it("leaves the ×1 draw on the S^0.5 curve", () => {
     // The portal floor (3.5m) only binds below factor ~0.77 — nothing the
-    // normal or colossal draws can reach — and the new colossal ceiling
-    // (×3.5, B.12) tops out at ~7.5m, far under WALL_HEIGHT_MAX.
+    // single ×1 draw can reach — and the curve tops out far under
+    // WALL_HEIGHT_MAX at any factor a future draw might add.
     expect(scaledWallHeight(1)).toBeCloseTo(4 * Math.sqrt(1), 5);
-    expect(scaledWallHeight(SCALE_COLOSSAL_MIN)).toBeCloseTo(
-      4 * Math.sqrt(SCALE_COLOSSAL_MIN),
-      5,
-    );
-    expect(
-      scaledWallHeight(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN),
-    ).toBeCloseTo(4 * Math.sqrt(SCALE_COLOSSAL_MIN + SCALE_COLOSSAL_SPAN), 5);
+    expect(scaledWallHeight(2.5)).toBeCloseTo(4 * Math.sqrt(2.5), 5);
+    expect(scaledWallHeight(3.5)).toBeCloseTo(4 * Math.sqrt(3.5), 5);
     // The clamp rail still works for any larger factor a future draw adds.
     expect(scaledWallHeight(20)).toBe(WALL_HEIGHT_MAX);
   });
 
-  it("never lets miniature walls drop below the unscaled doorway", () => {
+  it("never lets small-room walls drop below the unscaled doorway", () => {
     // The door never scales (A4 human-scale anchor), so the wall must
     // always contain the 3.2m portal — the invariant the old 0.05 floor
-    // silently violated. Sweep the whole miniature range, endpoints
-    // included, plus every factor the scale stream actually draws.
+    // silently violated. Sweep the retired miniature band, endpoints
+    // included: the portal floor holds across all of it.
     for (let i = 0; i <= 100; i++) {
-      const factor = SCALE_MINIATURE_MIN + (i / 100) * SCALE_MINIATURE_SPAN;
+      const factor = 0.2 + (i / 100) * 0.15;
       expect(scaledWallHeight(factor)).toBeGreaterThanOrEqual(PORTAL_HEIGHT);
     }
-    for (const sliceId of SLICE_IDS) {
-      const s = scaleNotationFor(sliceId);
-      if (s.id === "miniature") {
-        expect(scaledWallHeight(s.factor)).toBeGreaterThanOrEqual(PORTAL_HEIGHT);
-      }
-    }
+    expect(scaledWallHeight(1)).toBeGreaterThanOrEqual(PORTAL_HEIGHT);
   });
 });
 

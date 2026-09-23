@@ -31,15 +31,15 @@ export const CAMERA_LERP_RATE = 6;
  *  into frame over ~1 s (review flagged the slide as reading like a
  *  defect). Set to false to re-enable the glide. */
 export const STRAND_TELEPORT_CAMERA_SNAP = true;
-/** Colossal-room legibility (first pass, expect tuning): inside a space the
+/** Room legibility zoom (first pass, expect tuning): inside a space the
  *  ortho zoom TARGET divides by clamp(S, 1, ∞)^0.5, lerped with the camera
- *  easing — otherwise a ×3 room shows only a local patch and "colossal"
- *  reads merely as slowness. */
+ *  easing — the rail stays for any future factor > 1; at v0.13's single ×1
+ *  tier the clamp is the identity and the zoom target is unchanged. */
 export const ROOM_ZOOM_SCALE_EXP = 0.5;
 /** Hard cap on the pull-back: the view never gets more than ~3× wider than
  *  normal — the dollhouse must stay readable (doc §1 A4: a human-scale
- *  anchor must stay legible). With colossal capped at ×2.5–3.5 (B.12) the
- *  real pull-back tops out near ~1.9×; this stays as a safety rail. */
+ *  anchor must stay legible). A safety rail today: no live draw reaches it
+ *  (every room is ×1). */
 export const ROOM_ZOOM_MAX_PULLBACK = 3;
 
 export const PLAYER_SPEED = 4; // m/s

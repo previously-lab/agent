@@ -510,8 +510,8 @@ describe("foyer — the arrival hub (specs §12 / foyer.txt, variant A 对门前
     const { one } = staged("foyer");
     const counter = one("counter");
     expect(Math.abs(counter.x), "the podium on the room axis").toBeLessThan(0.6);
-    expect(counter.z, "the podium mid-room, 2.4–2.6m off the far wall").toBeGreaterThan(5.1);
-    expect(counter.z).toBeLessThan(6.0);
+    expect(counter.z, "the podium mid-room, 2.4–2.6m off the far wall").toBeGreaterThan(9.2);
+    expect(counter.z).toBeLessThan(9.8);
     expect(Math.abs(norm(counter.rotY - Math.PI)), "counter faces the door").toBeLessThan(0.15);
     for (const kind of ["register", "bell"]) {
       const piece = one(kind);
@@ -533,15 +533,15 @@ describe("foyer — the arrival hub (specs §12 / foyer.txt, variant A 对门前
     const { pieces, one } = staged("foyer");
     for (const kind of ["coatstand", "umbrellastand"]) {
       const p = one(kind);
-      expect(p.x, `${kind} on the west wall`).toBeLessThan(-4.2);
-      expect(p.z, `${kind} in the entrance third`).toBeGreaterThan(2.2);
-      expect(p.z, `${kind} in the entrance third`).toBeLessThan(3.2);
+      expect(p.x, `${kind} on the west wall`).toBeLessThan(-5.0);
+      expect(p.z, `${kind} in the entrance third`).toBeGreaterThan(1.7);
+      expect(p.z, `${kind} in the entrance third`).toBeLessThan(3.4);
     }
-    // The spine (x ±1.6, entrance half z<4) stays empty: every piece
+    // The spine (x ±1.9, entrance half z<6) stays empty: every piece
     // keeps out of it.
     for (const p of pieces) {
       expect(
-        Math.abs(p.x) < 1.55 && p.z < 3.9,
+        Math.abs(p.x) < 1.85 && p.z < 5.9,
         `${p.kind}@${p.x.toFixed(2)},${p.z.toFixed(2)} sits in the spine`,
       ).toBe(false);
     }
@@ -610,9 +610,10 @@ describe("bath — a real changing room on the dry rims (specs §6 / bath.txt, 1
   it("the towel rails stand at the water's edge on the rims", () => {
     const { one } = staged("bath");
     const rail = one("towelrail");
-    expect(rail.x, "west rail at the water margin").toBeLessThan(-5.2);
-    expect(rail.z, "mid-rim").toBeGreaterThan(4.5);
-    expect(rail.z).toBeLessThan(6.5);
+    expect(rail.x, "west rail at the water margin (basin edge ≈ −4.7)").toBeLessThan(-4.8);
+    expect(rail.x, "rail still on the rim, not mid-floor").toBeGreaterThan(-5.5);
+    expect(rail.z, "mid-rim").toBeGreaterThan(5.2);
+    expect(rail.z).toBeLessThan(5.7);
   });
 
   it("every piece stays out of the keep-empty spine; the vanity keeps its group", () => {

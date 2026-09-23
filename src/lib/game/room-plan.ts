@@ -6,18 +6,16 @@
  *
  * THREE ORTHOGONAL FACETS, each drawn from its own hash-derived stream:
  *
- *   scale  — the room's scale notation: normal (×1), colossal (×2.5–3.5 —
- *            B.12 capped the old ×8–20 at ~×3: recognizability comes from
- *            light and set-dressing, not area) or
- *            miniature (×0.2–0.35 — floored so the room stays enterable). Implemented as CONSTRUCTION-TIME
- *            scaling: the renderer multiplies every plan dimension and
- *            prop size by the factor when it builds the room, instead of
- *            scaling a root group at render time. Same visual result, same
- *            O(1) cost — but the shared heightfield contract (terrain.ts)
- *            and the movement clamps stay in one coordinate system, which
- *            a render-time matrix would break. The DOOR never scales
- *            (axiom A4: the human-scale anchor that makes the distortion
- *            legible) — the doorway is built outside the scaled dims.
+ *   scale  — the room's scale notation. v0.13 尺度收敛 retired the tier
+ *            draw: every room is the ONE human-scale tier (×1 — the giant
+ *            city is gone, user "移除巨人城"). The draw machinery stays
+ *            (scaleNotationFor's signature, the construction-time scaling
+ *            in scaledRecipeFor, the wall-height curve) so every consumer
+ *            is untouched, but the factor is now identically 1 and the
+ *            "large" of a room is expressed by joining MORE standard
+ *            modules (room-modules.ts §8.3), never by enlarging one. The
+ *            DOOR never scales (axiom A4: the human-scale anchor) — the
+ *            doorway is built outside the scaled dims.
  *
  *   plan   — the floor-plan silhouette: rect (the legacy rectangle),
  *            l-shape (the rectangle narrows to one half past a seeded
@@ -61,12 +59,6 @@ import {
   PLAN_RECT_PROB,
   PORTAL_HEIGHT,
   ROOM_WALL_THICKNESS,
-  SCALE_COLOSSAL_MIN,
-  SCALE_COLOSSAL_PROB,
-  SCALE_COLOSSAL_SPAN,
-  SCALE_MINIATURE_MIN,
-  SCALE_MINIATURE_SPAN,
-  SCALE_NORMAL_PROB,
   WALL_HEIGHT_MAX,
   WALL_HEIGHT_MIN,
   WALL_PORTAL_MARGIN,
@@ -83,7 +75,7 @@ function facetRng(worldSeed: string, sliceId: string, key: string) {
 /* Scale notation                                                      */
 /* ------------------------------------------------------------------ */
 
-export type ScaleId = "normal" | "colossal" | "miniature";
+export type ScaleId = "normal";
 
 export interface ScaleNotation {
   id: ScaleId;
@@ -92,21 +84,20 @@ export interface ScaleNotation {
 }
 
 /**
- * The room's scale notation, drawn from the "scale" stream: 78% normal,
- * 12% colossal (×2.5–3.5, B.12), 10% miniature (×0.2–0.35). Most rooms stay
- * human-scale so the distortion reads as an event (A2), not the baseline.
+ * The room's scale notation. v0.13 尺度收敛: the tier draw is retired —
+ * every room is the single human-scale tier (×1), deterministically, with
+ * no stream draw (the "scale" stream simply goes unread; it is this
+ * facet's own stream, so nothing else is perturbed). "Large" is expressed
+ * by joining more standard modules, never by scaling a room (user:
+ * 移除巨人城 — a giant floor with nine pieces of furniture read as a bug).
  */
 export function scaleNotationFor(
   sliceId: string,
   worldSeed: string = WORLD_SEED,
 ): ScaleNotation {
-  const rng = facetRng(worldSeed, sliceId, "scale");
-  const r = rng();
-  if (r < SCALE_NORMAL_PROB) return { id: "normal", factor: 1 };
-  if (r < SCALE_NORMAL_PROB + SCALE_COLOSSAL_PROB) {
-    return { id: "colossal", factor: SCALE_COLOSSAL_MIN + rng() * SCALE_COLOSSAL_SPAN };
-  }
-  return { id: "miniature", factor: SCALE_MINIATURE_MIN + rng() * SCALE_MINIATURE_SPAN };
+  void sliceId;
+  void worldSeed;
+  return { id: "normal", factor: 1 };
 }
 
 /**
@@ -147,12 +138,13 @@ export function scaledRecipeFor(recipe: SpaceRecipe, roomDoorCount: number = 0):
 }
 
 /** Vertical-architecture size at room scale S: walls (and colonnade
- *  columns) scale sub-linearly so colossal rooms stay readable from the
- *  fixed top-down camera, clamped to a legible range. The floor never
- *  drops below PORTAL_HEIGHT + WALL_PORTAL_MARGIN: the door never scales
- *  (A4), so even the smallest miniature room's walls must contain its
- *  doorway — below factor ~0.77 this floor binds instead of the curve,
- *  leaving every value at factor ≥ 1 untouched. */
+ *  columns) scale sub-linearly, clamped to a legible range. v0.13 draws
+ *  only factor ×1, so this is the identity path (WALL_HEIGHT in, 4m out);
+ *  the curve and its rails stay so the factor pipeline remains total. The
+ *  floor never drops below PORTAL_HEIGHT + WALL_PORTAL_MARGIN: the door
+ *  never scales (A4), so even the smallest room's walls must contain its
+ *  doorway — below factor ~0.77 the floor would bind instead of the
+ *  curve. */
 export function scaledWallHeight(factor: number): number {
   const h = WALL_HEIGHT * Math.pow(factor, WALL_SCALE_EXP);
   const floor = Math.max(WALL_HEIGHT_MIN, PORTAL_HEIGHT + WALL_PORTAL_MARGIN);
@@ -218,10 +210,10 @@ function colonnadeColumns(
  *
  * With a `template` the silhouette is DECLARED, not drawn, and the S-tier
  * guard is bypassed: template selection (room-templates.ts) already enforces
- * the template's minExtent against the UNSCALED tier, and construction-time
- * scaling may push the scaled extent below PLAN_NONRECT_MIN_EXTENT for a
- * miniature room whose layout is still the template's. Omitting the
- * parameter reproduces the legacy draw exactly.
+ * the template's minExtent against the UNSCALED tier, and a room whose
+ * scaled extent sits below PLAN_NONRECT_MIN_EXTENT still keeps the
+ * template's layout. Omitting the parameter reproduces the legacy draw
+ * exactly.
  */
 export function roomPlanFor(
   sliceId: string,
@@ -447,9 +439,10 @@ export function distToPath(comp: Composition, x: number, z: number): number {
  * pathHalf, and 2–3 (+1 on L/XL-scale plans) cluster centers drawn inside
  * the plan off the path. Pure function of the "compose" stream.
  *
- * The path half-width scales by clamp(S, 0.35, 2): the player is always
- * human, but a miniature room cleared at the full 1.4m would lose every
- * prop, and a colossal room needs a wider gap to thread 8× props.
+ * The path half-width scales by clamp(S, 0.35, 2) — at v0.13's single ×1
+ * tier the clamp is the identity and the cleared corridor keeps its 1.4 m
+ * half-width in every room; the rails stay so the factor pipeline remains
+ * total.
  */
 export function composeRoom(
   sliceId: string,

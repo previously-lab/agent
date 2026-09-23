@@ -185,8 +185,9 @@ describe("placeRoomDoors", () => {
   });
 
   it("places exactly N doors for N requested — including the tight case", () => {
-    // A closet of a room (8×8) asked for eight doors: domestic spacing
-    // fits six, so the ladder relaxes — but never drops a door.
+    // A closet of a room (8×8) asked for eight doors: the lattice seats at
+    // most one door a wall there (6 m pitch), so every rung fails and the
+    // ladder falls to forcePlace — never dropping a door.
     const plan = rectPlan(8, 8);
     const walls = wallSegmentsFor(plan, THICK);
     const layout = placeRoomDoors("2026-09-15-0746", plan, walls, allSolid(walls), 8);
@@ -196,8 +197,11 @@ describe("placeRoomDoors", () => {
       expect(walls[d.wall].entrance).toBe(false);
       expect(planContains(plan, d.x + d.nx, d.z + d.nz, 0.05)).toBe(true);
     }
-    // A normal request is not marked relaxed.
-    const easy = placeRoomDoors("2026-09-15-0746", plan, walls, allSolid(walls), 2);
+    // A normal request on a grid-wide room is not marked relaxed (the
+    // 24 m far wall seats four lattice doors; two fit rung 0).
+    const easyPlan = roomPlanFor("2026-09-15-0746", 24, 16, COLONNADE_BAY);
+    const easyWalls = wallSegmentsFor(easyPlan, THICK);
+    const easy = placeRoomDoors("2026-09-15-0746", easyPlan, easyWalls, allSolid(easyWalls), 2);
     expect(easy.doors).toHaveLength(2);
     expect(easy.relaxed).toBe(false);
     // Zero requested, zero placed.
@@ -314,7 +318,9 @@ describe("plaqueLabelFor", () => {
 /* byte-for-byte. Recaptured 2026-10 for §10.5 axial semantics: doors    */
 /* moved onto the north/south walls (double bank before east/west        */
 /* overflow) and the layout gained the row/doubleRow/axialOverflow       */
-/* fields, so every hash changed by design.                             */
+/* /* fields, so every hash changed by design. Recaptured again for the      */
+/* v0.13 module grid: door centers seat at lattice cell centers (6 m       */
+/* pitch), so every count > 0 reseats — the count-0 hashes are unchanged. */
 /* ------------------------------------------------------------------ */
 
 describe("door affordance parameter (§7) — additive", () => {
@@ -334,13 +340,13 @@ describe("door affordance parameter (§7) — additive", () => {
   ];
   /** Pins per case, in count order [0, 2, 5, 12]. */
   const PINS: string[][] = [
-    ["68:1928360129", "272:1601945087", "588:1107131762", "1309:4095168044"],
-    ["68:1928360129", "276:3109923037", "582:1351921678", "1306:4243981065"],
-    ["68:1928360129", "276:252809807", "592:1169334783", "1330:2218811389"],
-    ["68:1928360129", "299:82331892", "640:604345039", "1461:1850437613"],
-    ["68:1928360129", "287:3768484092", "602:2559410064", "1345:1396917248"],
-    ["68:1928360129", "276:2746448142", "616:1180243909", "1397:4014092061"],
-    ["68:1928360129", "278:2919930811", "586:2449078566", "1322:854269867"],
+    ["68:1928360129", "208:3814872361", "426:915215478", "925:1676755845"],
+    ["68:1928360129", "212:3388890072", "490:3793424951", "1063:213613075"],
+    ["68:1928360129", "214:3029536012", "432:2507675553", "961:1498929277"],
+    ["68:1928360129", "236:3982395022", "477:2360283874", "1049:1616682639"],
+    ["68:1928360129", "224:2558129096", "443:3237446573", "968:3444278577"],
+    ["68:1928360129", "274:814853758", "610:1556973587", "1117:3681579722"],
+    ["68:1928360129", "210:2692120281", "428:3464853458", "961:596338753"],
   ];
   const COUNTS = [0, 2, 5, 12];
 
@@ -416,8 +422,11 @@ describe("door affordance parameter (§7) — additive", () => {
 
 describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
   it("measures capacity on the scaled wall, not the tier", () => {
-    // The same XL gallery footprint at ×1 and at miniature ×0.2: the
-    // declared ceiling (24) cannot tell them apart, the wall can.
+    // The same XL gallery footprint at ×1 and at ×0.2: the declared
+    // ceiling (24) cannot tell them apart, the wall can. v0.13 lattice:
+    // capacity counts GRID CELL CENTERS at the 6 m pitch, so the 96 m
+    // wall seats 16 and the 19.2 m wall seats 3 — the measurement still
+    // scales with the wall, never the tier claim.
     const affordance = { walls: ["far"] as const };
     const full = colonnadePlan(96, 96);
     const fullWalls = wallSegmentsFor(full, THICK);
@@ -425,10 +434,11 @@ describe("doorCapacityFor / hostableWallMetersFor (Finding A)", () => {
     const miniWalls = wallSegmentsFor(mini, THICK);
     const capFull = doorCapacityFor(full, fullWalls, null, affordance);
     const capMini = doorCapacityFor(mini, miniWalls, null, affordance);
-    expect(capFull).toBeGreaterThanOrEqual(24);
-    expect(capMini).toBeLessThanOrEqual(8);
+    expect(capFull).toBe(16);
+    expect(capMini).toBe(3);
+    expect(capMini).toBeLessThan(capFull * 0.2);
     // The metres scale with the notation (the fixed wall thickness and
-    // end pads do not, so the ratio undershoots ×0.2 — the miniature's
+    // end pads do not, so the ratio undershoots ×0.2 — the small room's
     // run is SHORTER than a fifth, which is the point).
     const mFull = hostableWallMetersFor(full, fullWalls, null, affordance);
     const mMini = hostableWallMetersFor(mini, miniWalls, null, affordance);
@@ -506,9 +516,10 @@ describe("axial semantics (§10.5)", () => {
     walls[d.wall].sizeZ <= walls[d.wall].sizeX;
 
   it("seats a full house on the axial walls alone when they are long enough", () => {
-    // 16 doors on a 48×32 rect: the far wall's rung-0 run absorbs every
-    // door — no second row, no east/west, not even relaxed.
-    const plan = rectPlan(48, 32);
+    // 16 doors on a 96×32 rect: the lattice seats exactly 16 cell centers
+    // on the 96 m far wall, so rung 0 absorbs every door — no second row,
+    // no east/west, not even relaxed.
+    const plan = rectPlan(96, 32);
     const walls = wallSegmentsFor(plan, THICK);
     const layout = placeRoomDoors("2026-12-20", plan, walls, allSolid(walls), 16);
     expect(layout.doors).toHaveLength(16);
@@ -523,10 +534,10 @@ describe("axial semantics (§10.5)", () => {
   });
 
   it("grows the same-wall second bank (门厅式) before touching east/west", () => {
-    // 16 doors on a 24×16 rect: the far wall's single row holds eight, so
-    // the ladder takes fallback ② — a staggered freestanding screen row —
-    // while the east/west walls stay doorless.
-    const plan = rectPlan(24, 16);
+    // 16 doors on a 60×24 rect: the far wall's wall row seats ten lattice
+    // centers and its staggered screen row nine — fallback ② absorbs all
+    // sixteen while the east/west walls stay doorless.
+    const plan = rectPlan(60, 24);
     const walls = wallSegmentsFor(plan, THICK);
     const layout = placeRoomDoors("2026-12-21", plan, walls, allSolid(walls), 16);
     expect(layout.doors).toHaveLength(16);
@@ -548,10 +559,13 @@ describe("axial semantics (§10.5)", () => {
   });
 
   it("overflows east/west only once the axial walls are genuinely full — and never overlaps", () => {
-    // 16 doors on a 12×8 room: the axial rungs top out well below sixteen,
-    // so fallback ③ engages — flagged, relaxed, but every door placed and
-    // every pair of frames clear of each other, corner diagonals included.
-    const plan = rectPlan(12, 8);
+    // 16 doors on a 36×24 room: the axial lattice tops out at 11 seats on
+    // the far wall (6 wall row + 5 screen), so fallback ③ engages — East
+    // and West pick up the remainder — flagged, relaxed, but every door
+    // placed ON THE GRID and every pair of frames clear of each other,
+    // corner diagonals included (the lattice pitch dominates every rung's
+    // authored spacing).
+    const plan = rectPlan(36, 24);
     const walls = wallSegmentsFor(plan, THICK);
     const layout = placeRoomDoors("2026-12-22", plan, walls, allSolid(walls), 16);
     expect(layout.doors).toHaveLength(16);
@@ -562,7 +576,7 @@ describe("axial semantics (§10.5)", () => {
   });
 
   it("splitWallsForDoors leaves the perimeter uncut for second-row doors", () => {
-    const plan = rectPlan(24, 16);
+    const plan = rectPlan(60, 24);
     const walls = wallSegmentsFor(plan, THICK);
     const layout = placeRoomDoors("2026-12-21", plan, walls, allSolid(walls), 16);
     expect(layout.doubleRow).toBe(true);

@@ -486,43 +486,34 @@ const STUDY_SCHEMATIC: RoomSchematic = {
   ],
   slots: [
     {
-      // 书架 — three shelves in two butted pairs, west pair and east
-      // pair, hugging the west half of the north wall (the room forbids
-      // symmetry): one three-shelf group would answer the coverage budget
-      // with a 4.1m footprint disc (the anchor sits at the run's west
-      // piece — the disc IS the span), so the run splits in two.
+      // 书架 — the shelf wall: three shelves stepped 1.8m along the north
+      // wall from a west-of-centre base (the room forbids symmetry). One
+      // run again (the 2×2 room's coverage budget now absorbs its 4m
+      // footprint disc, and a count-stepped run butts seamlessly — two
+      // pair-groups could never butt, their pieces would interleave or
+      // gape). The K furniture row IS the book wall until the wall:"shelf"
+      // register renders (INDEX 修正 7).
       role: "bookshelf",
-      group: "shelf-w",
+      group: "shelf",
       required: true,
       terminus: true,
       isolated: true,
       at: { kind: "wall", wall: "focal", dist: [0.65, 0.8], along: 0.35, alongTol: 0.02 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["bookshelf"],
-      count: [2, 2],
+      count: [3, 3],
       clearance: 0.35,
     },
     {
-      role: "bookshelf",
-      group: "shelf-e",
-      required: true,
-      terminus: true,
-      isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [0.65, 0.8], along: 0.56, alongTol: 0.02 },
-      facing: { kind: "intoRoom", wall: "focal" },
-      accepts: ["bookshelf"],
-      count: [2, 2],
-      clearance: 0.35,
-    },
-    {
-      // 书桌 — 2.3–2.7m off the shelf wall, west of axis (the asymmetric
-      // draw the room type demands), facing the wall it works against.
+      // 书桌 — 2.5–2.8m off the shelf wall (plan row 03 of the 12-deep
+      // room), west of axis (the asymmetric draw the room type demands),
+      // facing the wall it works against.
       role: "desk",
       group: "desk",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [2.3, 2.7], along: 0.4, alongTol: 0.15 },
+      at: { kind: "wall", wall: "focal", dist: [2.5, 2.8], along: 0.4, alongTol: 0.15 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["desk"],
       clearance: 1.0,
@@ -692,13 +683,15 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
     {
       // 长阅览桌 — three laid tables butted into one run, centred on the
       // axis (plan row 07, pulled north of the entrance spine: the south
-      // chair line stands z ≥ 6.3, the spine's disc ends at 5.28).
+      // chair line stands z ≥ 6.3, the spine's disc ends at 5.28). The
+      // 2×2 room takes 1.8m-centred tables (0.35/0.5/0.65 across the
+      // wall), each piece beside its own pair of chairs.
       role: "table-w",
       group: "table-w",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.371, alongTol: 0.01 },
+      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.35, alongTol: 0.01 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["diningtable"],
       clearance: 0.8,
@@ -733,7 +726,7 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.629, alongTol: 0.01 },
+      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.65, alongTol: 0.01 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["diningtable"],
       clearance: 0.8,

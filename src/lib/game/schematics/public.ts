@@ -168,7 +168,7 @@ const GALLERY_SCHEMATIC: RoomSchematic = {
         kind: "center",
         slots: ["wash-w", "wash-e"],
         dx: [-0.3, 0.3],
-        dz: [-1.3, -1.05],
+        dz: [-1.55, -1.25],
       },
       facing: { kind: "moduleCenter" },
       accepts: ["pedestal"],
@@ -220,13 +220,14 @@ const GALLERY_SCHEMATIC: RoomSchematic = {
     },
     {
       // 面墙长凳 — the gallery benches, pair flanking the walk axis
-      // (variant A), facing the art 5.5m away. z sits north of the
-      // entrance strip (≥3.5m at any scale the debug room reaches).
+      // (variant A), facing the art ~6.8m away (18×12 — the viewing
+      // band sits mid-south, discs clearing the z 3.6 corridor). The
+      // door strip (z < 3.5) stays south of them.
       role: "bench-w",
       group: "bench-w",
       required: true,
       terminus: true,
-      at: { kind: "wall", wall: "s", dist: [3.65, 3.85], along: 0.375, alongTol: 0.015 },
+      at: { kind: "wall", wall: "s", dist: [4.25, 4.5], along: 0.375, alongTol: 0.015 },
       facing: { kind: "focal" },
       accepts: ["bench"],
       clearance: 0.6,
@@ -236,7 +237,7 @@ const GALLERY_SCHEMATIC: RoomSchematic = {
       group: "bench-e",
       required: true,
       terminus: true,
-      at: { kind: "wall", wall: "s", dist: [3.65, 3.85], along: 0.625, alongTol: 0.015 },
+      at: { kind: "wall", wall: "s", dist: [4.25, 4.5], along: 0.625, alongTol: 0.015 },
       facing: { kind: "focal" },
       accepts: ["bench"],
       clearance: 0.6,
@@ -377,7 +378,7 @@ const DINING_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.285, alongTol: 0.012 },
+      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.285, alongTol: 0.008 },
       facing: { kind: "fixed", rotY: 0, jitter: 0.03 },
       accepts: ["diningtable"],
       clearance: 0.55,
@@ -389,7 +390,7 @@ const DINING_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.428, alongTol: 0.012 },
+      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.428, alongTol: 0.008 },
       facing: { kind: "fixed", rotY: 0, jitter: 0.03 },
       accepts: ["diningtable"],
       clearance: 0.55,
@@ -414,7 +415,7 @@ const DINING_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.571, alongTol: 0.012 },
+      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.571, alongTol: 0.008 },
       facing: { kind: "fixed", rotY: 0, jitter: 0.03 },
       accepts: ["diningtable"],
       clearance: 0.55,
@@ -426,7 +427,7 @@ const DINING_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.714, alongTol: 0.012 },
+      at: { kind: "wall", wall: "focal", dist: [4.4, 4.7], along: 0.714, alongTol: 0.008 },
       facing: { kind: "fixed", rotY: 0, jitter: 0.03 },
       accepts: ["diningtable"],
       clearance: 0.55,
@@ -878,15 +879,16 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
     { from: "door", to: "door", min: 1.4 },
   ],
   slots: [
-    // 躺椅 — the two flank pairs, staggered ~2m along each rim and
-    // squared at the basin. West pair:
+    // 躺椅 — the two flank pairs, staggered ~1.8m along each rim and
+    // squared at the basin. West pair (18×12 — z authored on the 12m
+    // depth: rim order plant 2.4, rail 4.0, pair 5.6/7.4, bench 8.7):
     {
       role: "lounger-w1",
       group: "lounger-w1",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.34, alongTol: 0.4 },
+      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.467, alongTol: 0.1 },
       facing: { kind: "moduleCenter" },
       accepts: ["lounger"],
       clearance: 0.55,
@@ -897,21 +899,21 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.57, alongTol: 0.5 },
+      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.617, alongTol: 0.12 },
       facing: { kind: "moduleCenter" },
       accepts: ["lounger"],
       clearance: 0.55,
     },
-    // East pair — x 4.35–4.65 keeps the bodies off the water margin
-    // (water west edge 3.35 + piece clear) and off the rill runnel
-    // (which starts at x 5.76).
+    // East pair — x 5.7–6.0 keeps the bodies off the water margin
+    // (basin east edge 4.02 + piece clear) and off the rill runnel
+    // (which starts at x 6.48 on the 18m width).
     {
       role: "lounger-e1",
       group: "lounger-e1",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "e", dist: [3.35, 3.65], along: 0.34, alongTol: 0.4 },
+      at: { kind: "wall", wall: "e", dist: [3.0, 3.3], along: 0.467, alongTol: 0.1 },
       facing: { kind: "moduleCenter" },
       accepts: ["lounger"],
       clearance: 0.55,
@@ -922,19 +924,19 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "e", dist: [3.35, 3.65], along: 0.57, alongTol: 0.5 },
+      at: { kind: "wall", wall: "e", dist: [3.0, 3.3], along: 0.617, alongTol: 0.12 },
       facing: { kind: "moduleCenter" },
       accepts: ["lounger"],
       clearance: 0.55,
     },
-    // 遮阳伞 — between each pair (the plans' Y).
+    // 遮阳伞 — between each pair (the plans' Y), z ≈ 6.5.
     {
       role: "umbrella-1",
       group: "umbrella-1",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [1.7, 2.0], along: 0.45, alongTol: 0.5 },
+      at: { kind: "wall", wall: "w", dist: [1.7, 2.0], along: 0.542, alongTol: 0.15 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["umbrella"],
       clearance: 0.6,
@@ -946,7 +948,7 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       chance: 0.5,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "e", dist: [3.35, 3.65], along: 0.45, alongTol: 0.5 },
+      at: { kind: "wall", wall: "e", dist: [3.0, 3.3], along: 0.542, alongTol: 0.15 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["umbrella"],
       clearance: 0.6,
@@ -959,7 +961,7 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.61, alongTol: 0.5 },
+      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.725, alongTol: 0.15 },
       facing: { kind: "moduleCenter" },
       accepts: ["poolbench"],
       clearance: 0.6,
@@ -971,7 +973,7 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       chance: 0.4,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.74, alongTol: 0.4 },
+      at: { kind: "wall", wall: "w", dist: [0.8, 1.0], along: 0.85, alongTol: 0.15 },
       facing: { kind: "moduleCenter" },
       accepts: ["poolbench"],
       clearance: 0.6,
@@ -983,19 +985,20 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       chance: 0.5,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "e", dist: [3.35, 3.65], along: 0.61, alongTol: 0.5 },
+      at: { kind: "wall", wall: "e", dist: [3.0, 3.3], along: 0.725, alongTol: 0.15 },
       facing: { kind: "moduleCenter" },
       accepts: ["poolbench"],
       clearance: 0.6,
     },
-    // 救生圈柱 — a step off the water's west edge (the plans' I).
+    // 救生圈柱 — a step off the water's west edge (the plans' I):
+    // basin west edge −4.02, ring post x −4.8…−5.2.
     {
       role: "ring-post",
       group: "ring-post",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [3.3, 3.7], along: 0.46, alongTol: 0.4 },
+      at: { kind: "wall", wall: "w", dist: [3.8, 4.2], along: 0.433, alongTol: 0.2 },
       facing: { kind: "moduleCenter" },
       accepts: ["ringpost"],
       clearance: 0.4,
@@ -1007,7 +1010,7 @@ const POOL_DECK_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.9], along: 0.32, alongTol: 0.4 },
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.9], along: 0.333, alongTol: 0.1 },
       facing: { kind: "moduleCenter" },
       accepts: ["towelrail"],
       clearance: 0.35,
