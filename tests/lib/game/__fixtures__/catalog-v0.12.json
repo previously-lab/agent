@@ -1,0 +1,1715 @@
+{
+  "generated": "pre-refactor HEAD 2df0df9 (branch v0.11-streams)",
+  "modules": {
+    "ids": [
+      "foyer",
+      "bedroom",
+      "study",
+      "reading-room",
+      "kitchen",
+      "bath",
+      "storage",
+      "gallery-module",
+      "living",
+      "sunroom",
+      "pool-deck",
+      "dining-hall",
+      "workshop"
+    ],
+    "entries": [
+      {
+        "archetypes": [
+          "hotel-room",
+          "library",
+          "ballroom",
+          "pool-hall"
+        ],
+        "doorCapacity": 3,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [
+          {
+            "at": "floor",
+            "kind": "floor-inlay",
+            "span": [
+              0.35,
+              0.65
+            ]
+          }
+        ],
+        "floor": "tile",
+        "id": "foyer",
+        "kits": [
+          "coat-bench",
+          "luggage",
+          "reception",
+          "clock-nook"
+        ],
+        "label": "门厅",
+        "light": "quiet",
+        "openings": [
+          "n",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 8,
+          "w": 10
+        },
+        "wall": "panelling",
+        "weight": 1,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.3
+              ],
+              "z": [
+                0.1,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.7,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.34,
+                0.66
+              ],
+              "z": [
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room"
+        ],
+        "doorCapacity": 3,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [
+          {
+            "at": "e",
+            "kind": "niche",
+            "span": [
+              0.35,
+              0.65
+            ]
+          }
+        ],
+        "floor": "carpet",
+        "heroKit": "bed-corner",
+        "id": "bedroom",
+        "kits": [
+          "bed-corner",
+          "writing-desk",
+          "wardrobe-wall",
+          "reading",
+          "vanity-corner"
+        ],
+        "label": "卧室",
+        "light": "quiet",
+        "openings": [
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 12
+        },
+        "wall": "plaster",
+        "weight": 3,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.28,
+                0.72
+              ],
+              "z": [
+                0.72,
+                0.92
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.26
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.74,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.36,
+                0.64
+              ],
+              "z": [
+                0,
+                0.55
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "library"
+        ],
+        "doorCapacity": 0,
+        "doorEdges": [],
+        "features": [
+          {
+            "at": "n",
+            "kind": "pilaster-rhythm"
+          }
+        ],
+        "floor": "timber",
+        "heroKit": "reading",
+        "id": "study",
+        "kits": [
+          "writing-desk",
+          "bookshelf-run",
+          "reading",
+          "plant-pedestal"
+        ],
+        "label": "书房",
+        "light": "task",
+        "openings": [
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 10
+        },
+        "wall": "shelf",
+        "weight": 2,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.3,
+                0.7
+              ],
+              "z": [
+                0.56,
+                0.86
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.06,
+                0.94
+              ],
+              "z": [
+                0.74,
+                0.96
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.3
+              ],
+              "z": [
+                0.12,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.38,
+                0.62
+              ],
+              "z": [
+                0,
+                0.5
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "library",
+          "ballroom"
+        ],
+        "doorCapacity": 0,
+        "doorEdges": [],
+        "features": [
+          {
+            "at": "n",
+            "kind": "pilaster-rhythm"
+          },
+          {
+            "at": "floor",
+            "kind": "floor-inlay",
+            "span": [
+              0.3,
+              0.7
+            ]
+          },
+          {
+            "at": "n",
+            "kind": "column-order",
+            "span": [
+              0.14,
+              0.86
+            ]
+          },
+          {
+            "at": "n",
+            "kind": "arch-frame",
+            "span": [
+              0.38,
+              0.62
+            ]
+          }
+        ],
+        "floor": "timber",
+        "heroKit": "reading",
+        "id": "reading-room",
+        "kits": [
+          "bookshelf-run",
+          "reading",
+          "gallery-bench",
+          "clock-nook",
+          "plant-pedestal"
+        ],
+        "label": "阅览室",
+        "light": "wash",
+        "openings": [
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 12,
+          "w": 14
+        },
+        "wall": "shelf",
+        "weight": 3,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.32,
+                0.68
+              ],
+              "z": [
+                0.5,
+                0.76
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.96
+              ],
+              "z": [
+                0.76,
+                0.96
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.26
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.74,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.38,
+                0.62
+              ],
+              "z": [
+                0,
+                0.44
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "ballroom"
+        ],
+        "doorCapacity": 2,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [],
+        "floor": "tile",
+        "heroKit": "dining",
+        "id": "kitchen",
+        "kits": [
+          "dining",
+          "kitchen-counter"
+        ],
+        "label": "备餐间",
+        "light": "task",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 8,
+          "w": 10
+        },
+        "wall": "tile",
+        "weight": 1,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.28,
+                0.72
+              ],
+              "z": [
+                0.6,
+                0.92
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.28
+              ],
+              "z": [
+                0.1,
+                0.55
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.72,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.55
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.34,
+                0.66
+              ],
+              "z": [
+                0,
+                0.5
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "pool-hall"
+        ],
+        "doorCapacity": 2,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [],
+        "floor": "tile",
+        "id": "bath",
+        "kits": [
+          "lockers",
+          "towel-station",
+          "coat-bench",
+          "towel-rail",
+          "mop-corner"
+        ],
+        "label": "更衣浴室",
+        "light": "wash",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 16
+        },
+        "wall": "tile",
+        "weight": 2,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.03,
+                0.2
+              ],
+              "z": [
+                0.12,
+                0.88
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.8,
+                0.97
+              ],
+              "z": [
+                0.12,
+                0.88
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.3,
+                0.7
+              ],
+              "z": [
+                0.84,
+                0.96
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.37,
+                0.63
+              ],
+              "z": [
+                0,
+                0.5
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "library",
+          "ballroom",
+          "pool-hall"
+        ],
+        "doorCapacity": 2,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [],
+        "floor": "timber",
+        "id": "storage",
+        "kits": [
+          "luggage",
+          "housekeeping",
+          "coat-bench",
+          "storage-rack"
+        ],
+        "label": "行李房",
+        "light": "quiet",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 8,
+          "w": 8
+        },
+        "wall": "panelling",
+        "weight": 1,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.06,
+                0.45
+              ],
+              "z": [
+                0.12,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.55,
+                0.94
+              ],
+              "z": [
+                0.12,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.44,
+                0.56
+              ],
+              "z": [
+                0,
+                1
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "ballroom",
+          "library"
+        ],
+        "doorCapacity": 10,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [
+          {
+            "at": "n",
+            "kind": "pilaster-rhythm"
+          },
+          {
+            "at": "floor",
+            "kind": "floor-inlay",
+            "span": [
+              0.15,
+              0.85
+            ]
+          }
+        ],
+        "floor": "timber",
+        "heroKit": "reading",
+        "id": "gallery-module",
+        "kits": [
+          "gallery-bench",
+          "reading",
+          "plant-pedestal",
+          "art-wall"
+        ],
+        "label": "画廊",
+        "light": "wash",
+        "openings": [
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 16
+        },
+        "wall": "plaster",
+        "weight": 2,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.34,
+                0.66
+              ],
+              "z": [
+                0.5,
+                0.76
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.08,
+                0.92
+              ],
+              "z": [
+                0.2,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0,
+                1
+              ],
+              "z": [
+                0.72,
+                1
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.4,
+                0.6
+              ],
+              "z": [
+                0,
+                0.44
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "ballroom",
+          "library"
+        ],
+        "doorCapacity": 3,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [
+          {
+            "at": "floor",
+            "kind": "floor-inlay",
+            "span": [
+              0.25,
+              0.75
+            ]
+          }
+        ],
+        "floor": "carpet",
+        "heroKit": "sofa-group",
+        "id": "living",
+        "kits": [
+          "sofa-group",
+          "tv-corner",
+          "reading",
+          "art-wall",
+          "sideboard",
+          "plant-pedestal"
+        ],
+        "label": "会客厅",
+        "light": "quiet",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 12,
+          "w": 12
+        },
+        "wall": "plaster",
+        "weight": 2,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.28,
+                0.72
+              ],
+              "z": [
+                0.52,
+                0.82
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.26
+              ],
+              "z": [
+                0.1,
+                0.55
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.74,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.55
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.38,
+                0.62
+              ],
+              "z": [
+                0,
+                0.46
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "ballroom",
+          "library"
+        ],
+        "doorCapacity": 0,
+        "doorEdges": [],
+        "features": [
+          {
+            "at": "floor",
+            "kind": "floor-inlay",
+            "span": [
+              0.2,
+              0.8
+            ]
+          }
+        ],
+        "floor": "tile",
+        "glassWall": true,
+        "heroKit": "reading",
+        "id": "sunroom",
+        "kits": [
+          "reading",
+          "coat-bench",
+          "gallery-bench",
+          "plant-pedestal",
+          "fountain-court"
+        ],
+        "label": "日光房",
+        "light": "daylight",
+        "openings": [
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 8,
+          "w": 12
+        },
+        "wall": "plaster",
+        "weight": 1,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.3,
+                0.7
+              ],
+              "z": [
+                0.66,
+                0.92
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.28
+              ],
+              "z": [
+                0.15,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.72,
+                0.96
+              ],
+              "z": [
+                0.15,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.36,
+                0.64
+              ],
+              "z": [
+                0,
+                0.55
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "pool-hall"
+        ],
+        "doorCapacity": 0,
+        "doorEdges": [],
+        "features": [
+          {
+            "at": "floor",
+            "kind": "water-rill",
+            "span": [
+              0.86,
+              0.94
+            ],
+            "spanZ": [
+              0.1,
+              0.9
+            ]
+          }
+        ],
+        "floor": "deck",
+        "heroKit": "pool-loungers",
+        "id": "pool-deck",
+        "kits": [
+          "pool-loungers",
+          "towel-station",
+          "ring-post",
+          "poolside-bench",
+          "ladder-board",
+          "towel-rail"
+        ],
+        "label": "泳池甲板",
+        "light": "pool-bounce",
+        "openings": [
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 16
+        },
+        "wall": "tile",
+        "weight": 3,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.1,
+                0.24
+              ],
+              "z": [
+                0.4,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.26
+              ],
+              "z": [
+                0.1,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.74,
+                0.82
+              ],
+              "z": [
+                0.1,
+                0.9
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.38,
+                0.62
+              ],
+              "z": [
+                0,
+                0.5
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "ballroom",
+          "hotel-room"
+        ],
+        "doorCapacity": 4,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [
+          {
+            "at": "n",
+            "kind": "pilaster-rhythm"
+          },
+          {
+            "at": "n",
+            "kind": "raised-platform",
+            "span": [
+              0.3,
+              0.7
+            ]
+          },
+          {
+            "at": "n",
+            "kind": "mezzanine",
+            "span": [
+              0.24,
+              0.76
+            ]
+          }
+        ],
+        "floor": "timber",
+        "heroKit": "dining",
+        "id": "dining-hall",
+        "kits": [
+          "dining",
+          "gallery-bench",
+          "chair-stack",
+          "sideboard"
+        ],
+        "label": "长桌餐厅",
+        "light": "task",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 14
+        },
+        "wall": "panelling",
+        "weight": 2,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.32,
+                0.68
+              ],
+              "z": [
+                0.5,
+                0.8
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.06,
+                0.28
+              ],
+              "z": [
+                0.15,
+                0.85
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.72,
+                0.94
+              ],
+              "z": [
+                0.15,
+                0.85
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0,
+                1
+              ],
+              "z": [
+                0,
+                0.12
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.4,
+                0.6
+              ],
+              "z": [
+                0.12,
+                0.44
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "archetypes": [
+          "hotel-room",
+          "library",
+          "ballroom"
+        ],
+        "doorCapacity": 2,
+        "doorEdges": [
+          "n"
+        ],
+        "features": [],
+        "floor": "timber",
+        "id": "workshop",
+        "kits": [
+          "writing-desk",
+          "workbench-corner",
+          "lockers",
+          "housekeeping",
+          "coat-bench",
+          "chair-stack"
+        ],
+        "label": "工作间",
+        "light": "task",
+        "openings": [
+          "n",
+          "s",
+          "e",
+          "w"
+        ],
+        "size": {
+          "d": 10,
+          "w": 10
+        },
+        "wall": "panelling",
+        "weight": 1,
+        "worldClasses": [
+          "interior"
+        ],
+        "zones": [
+          {
+            "kind": "hero",
+            "rect": {
+              "x": [
+                0.28,
+                0.72
+              ],
+              "z": [
+                0.55,
+                0.88
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.04,
+                0.28
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "cluster",
+            "rect": {
+              "x": [
+                0.72,
+                0.96
+              ],
+              "z": [
+                0.1,
+                0.6
+              ]
+            }
+          },
+          {
+            "kind": "keep-empty",
+            "rect": {
+              "x": [
+                0.36,
+                0.64
+              ],
+              "z": [
+                0,
+                0.5
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "schematics": {
+    "ids": [
+      "living"
+    ],
+    "entries": [
+      {
+        "focalWall": "n",
+        "moduleId": "living",
+        "paths": [
+          {
+            "from": "door",
+            "min": 1.4,
+            "to": "focal"
+          },
+          {
+            "from": "door",
+            "min": 1.4,
+            "to": "door"
+          }
+        ],
+        "slots": [
+          {
+            "accepts": [
+              "sofa"
+            ],
+            "at": {
+              "along": 0.5,
+              "alongTol": 0.6,
+              "dist": [
+                2.4,
+                3.6
+              ],
+              "kind": "wall",
+              "wall": "focal"
+            },
+            "clearance": 1.15,
+            "facing": {
+              "kind": "focal"
+            },
+            "group": "seating",
+            "isolated": true,
+            "required": true,
+            "role": "sofa",
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "coffeetable"
+            ],
+            "at": {
+              "dx": [
+                -0.1,
+                0.1
+              ],
+              "dz": [
+                1.05,
+                1.2
+              ],
+              "kind": "relative",
+              "slot": "sofa"
+            },
+            "clearance": 0.6,
+            "facing": {
+              "jitter": 0.04,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "group": "seating",
+            "isolated": true,
+            "required": true,
+            "role": "coffeetable",
+            "scale": [
+              0.95,
+              1.05
+            ],
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "vase",
+              "frame",
+              "candle",
+              "bookpile",
+              "tray"
+            ],
+            "at": {
+              "dx": [
+                -0.28,
+                -0.08
+              ],
+              "dz": [
+                -0.16,
+                0.16
+              ],
+              "kind": "relative",
+              "slot": "coffeetable"
+            },
+            "clearance": 0.15,
+            "count": [
+              1,
+              2
+            ],
+            "facing": {
+              "jitter": 3.141592653589793,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "group": "seating",
+            "isolated": true,
+            "lift": 0.4,
+            "required": true,
+            "role": "tabletop",
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "readingchair"
+            ],
+            "at": {
+              "dx": [
+                1.35,
+                1.7
+              ],
+              "dz": [
+                0.8,
+                1.15
+              ],
+              "kind": "relative",
+              "side": "seeded",
+              "slot": "sofa"
+            },
+            "clearance": 0.55,
+            "facing": {
+              "kind": "toward",
+              "slot": "coffeetable"
+            },
+            "group": "seating",
+            "isolated": true,
+            "required": true,
+            "role": "armchair",
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "rug"
+            ],
+            "at": {
+              "dx": [
+                -0.12,
+                0.12
+              ],
+              "dz": [
+                -0.05,
+                0.2
+              ],
+              "kind": "center",
+              "slots": [
+                "sofa",
+                "coffeetable",
+                "armchair"
+              ]
+            },
+            "clearance": 0,
+            "facing": {
+              "jitter": 3.141592653589793,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "flat": true,
+            "group": "seating",
+            "isolated": true,
+            "required": true,
+            "role": "rug",
+            "scale": [
+              1.35,
+              1.55
+            ],
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "floorlamp"
+            ],
+            "at": {
+              "dx": [
+                0.95,
+                1.1
+              ],
+              "dz": [
+                -0.3,
+                0.05
+              ],
+              "kind": "relative",
+              "side": {
+                "opposite": "armchair"
+              },
+              "slot": "sofa"
+            },
+            "clearance": 0.35,
+            "facing": {
+              "jitter": 3.141592653589793,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "group": "seating",
+            "isolated": true,
+            "required": true,
+            "role": "floorlamp",
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "mediaunit"
+            ],
+            "at": {
+              "alongTol": 0.3,
+              "dist": [
+                0.7,
+                0.95
+              ],
+              "kind": "wallAligned",
+              "wall": "focal",
+              "withAnchor": "seating"
+            },
+            "clearance": 0.85,
+            "facing": {
+              "kind": "intoRoom",
+              "wall": "focal"
+            },
+            "group": "media",
+            "isolated": true,
+            "required": true,
+            "role": "mediaunit",
+            "scale": [
+              0.95,
+              1.1
+            ],
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "tv"
+            ],
+            "at": {
+              "dx": [
+                -0.04,
+                0.04
+              ],
+              "dz": [
+                -0.02,
+                0.08
+              ],
+              "kind": "relative",
+              "slot": "mediaunit"
+            },
+            "clearance": 0.35,
+            "facing": {
+              "kind": "toward",
+              "slot": "sofa"
+            },
+            "group": "media",
+            "isolated": true,
+            "lift": 0.5,
+            "required": true,
+            "role": "tv",
+            "terminus": true
+          },
+          {
+            "accepts": [
+              "sideboard"
+            ],
+            "at": {
+              "along": 0.5,
+              "alongTol": 2,
+              "dist": [
+                0.7,
+                0.9
+              ],
+              "kind": "flankWall"
+            },
+            "chance": 0.65,
+            "clearance": 0.95,
+            "facing": {
+              "kind": "intoRoom",
+              "wall": "anchor"
+            },
+            "group": "sideboard",
+            "required": false,
+            "role": "sideboard"
+          },
+          {
+            "accepts": [
+              "bookshelf"
+            ],
+            "at": {
+              "along": 0.5,
+              "alongTol": 2.2,
+              "dist": [
+                0.65,
+                0.85
+              ],
+              "kind": "flankWall"
+            },
+            "chance": 0.5,
+            "clearance": 0.95,
+            "count": [
+              1,
+              3
+            ],
+            "facing": {
+              "kind": "intoRoom",
+              "wall": "anchor"
+            },
+            "group": "shelf",
+            "required": false,
+            "role": "bookshelf"
+          },
+          {
+            "accepts": [
+              "pedestal"
+            ],
+            "at": {
+              "corner": "seeded",
+              "dist": [
+                0.7,
+                1
+              ],
+              "kind": "focalCorner"
+            },
+            "chance": 0.6,
+            "clearance": 0.4,
+            "facing": {
+              "kind": "moduleCenter"
+            },
+            "group": "plant",
+            "required": false,
+            "role": "pedestal"
+          },
+          {
+            "accepts": [
+              "plant"
+            ],
+            "at": {
+              "dx": [
+                0.55,
+                0.75
+              ],
+              "dz": [
+                -0.15,
+                0.2
+              ],
+              "kind": "relative",
+              "side": "seeded",
+              "slot": "pedestal"
+            },
+            "clearance": 0.4,
+            "facing": {
+              "jitter": 3.141592653589793,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "group": "plant",
+            "required": false,
+            "role": "plant",
+            "scale": [
+              0.85,
+              1.05
+            ]
+          },
+          {
+            "accepts": [
+              "nightstand"
+            ],
+            "at": {
+              "dx": [
+                -0.25,
+                0.25
+              ],
+              "dz": [
+                -1.05,
+                -0.8
+              ],
+              "kind": "relative",
+              "slot": "sofa"
+            },
+            "chance": 0.5,
+            "clearance": 0.4,
+            "facing": {
+              "jitter": 0.2,
+              "kind": "fixed",
+              "rotY": 0
+            },
+            "group": "console",
+            "required": false,
+            "role": "console"
+          }
+        ],
+        "symmetry": "axial"
+      }
+    ]
+  }
+}

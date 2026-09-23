@@ -79,6 +79,9 @@ import type {
   RoomTemplate,
   TemplateZone,
 } from "./room-templates";
+import { RESIDENTIAL_MODULES } from "./modules/residential";
+import { SERVICE_MODULES } from "./modules/service";
+import { PUBLIC_MODULES } from "./modules/public";
 import { createRng, hashString, WORLD_SEED } from "./seed";
 import { parseDebugSlice } from "./debug-slice";
 import type { RoomPlan, WallSegment } from "./room-plan";
@@ -185,492 +188,46 @@ export interface RoomModule {
 /* ------------------------------------------------------------------ */
 /* The module catalogue (§8.2) — thirteen functional units, each with a */
 /* character, each furnished by a SHORT whitelist of the existing kits. */
+/*                                                                    */
+/* The module DATA lives in the lane-owned family files under         */
+/* ./modules (each family keeps its historical relative order). The   */
+/* GLOBAL order is pinned HERE: seed draws and staging pins read      */
+/* ROOM_MODULES positionally, so MODULE_ORDER must never drift — the  */
+/* lanes never edit this file.                                        */
 /* ------------------------------------------------------------------ */
 
-export const ROOM_MODULES: readonly RoomModule[] = [
-  {
-    // 门厅 — the threshold: coats, umbrellas, someone's bags waiting by the
-    // door. Deliberately empty down its spine so arrival reads as arrival.
-    id: "foyer",
-    label: "门厅",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
-    size: { w: 10, d: 8 },
-    openings: ["n", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 3,
-    floor: "tile",
-    wall: "panelling",
-    light: "quiet",
-    features: [{ kind: "floor-inlay", at: "floor", span: [0.35, 0.65] }],
-    // §6.4 逐件问责 (v0.12 declarations audit): no housekeeping here — the
-    // trolley + towel piles + bucket is floor-service semantics, and in the
-    // threshold room it read as the cleaner working around your arrival.
-    // The foyer keeps arrival: coats, bags, the reception counter, a
-    // lobby clock.
-    kits: ["coat-bench", "luggage", "reception", "clock-nook"],
-    zones: [
-      { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.9] } },
-      { kind: "cluster", rect: { x: [0.7, 0.96], z: [0.1, 0.9] } },
-      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 1] } },
-    ],
-    weight: 1,
-  },
-  {
-    // 卧室 — the hotel-room signature: the bed corner against the far wall,
-    // a desk under the window side, the room's calm arranged around sleep.
-    id: "bedroom",
-    label: "卧室",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room"],
-    size: { w: 12, d: 10 },
-    openings: ["s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 3,
-    floor: "carpet",
-    wall: "plaster",
-    light: "quiet",
-    features: [{ kind: "niche", at: "e", span: [0.35, 0.65] }],
-    // §2: wardrobe 必备 against the non-door, non-headboard wall; the tv
-    // corner leaves (the spec bans tv + sofa from the bedroom — the §6.4
-    // audit's "说不出用途链" bar — and §2's variant ask is the schematic
-    // lane's to pin).
-    // §6.4 逐件问责: no `luggage` here — §2's ban list names the
-    // luggagecart (and the cart IS the kit's centrepiece), and the
-    // wardrobe is the §2 必备 this wall exists for.
-    kits: [
-      "bed-corner",
-      "writing-desk",
-      "wardrobe-wall",
-      "reading",
-      "vanity-corner",
-    ],
-    heroKit: "bed-corner",
-    zones: [
-      // The hero zone sits deep enough that the bed corner's footprint
-      // disc clears the keep-empty spine on the first draw — at 0.62 the
-      // disc grazed the void's edge and the whole centrepiece was
-      // forfeited (v0.12 declarations audit; kits.ts now also redraws a
-      // failed hero inside this zone).
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.72, 0.92] } },
-      { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.6] } },
-      { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.1, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.55] } },
-    ],
-    weight: 3,
-  },
-  {
-    // 书房 — the writing desk is the altar: shelves on the north wall.
-    // §10.5: the north edge is the only legal door edge, and it is the
-    // shelf wall — so the study hosts NO doors at all.
-    id: "study",
-    label: "书房",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "library"],
-    size: { w: 10, d: 10 },
-    openings: ["s", "e", "w"],
-    doorEdges: [],
-    doorCapacity: 0,
-    floor: "timber",
-    wall: "shelf",
-    light: "task",
-    features: [{ kind: "pilaster-rhythm", at: "n" }],
-    kits: ["writing-desk", "bookshelf-run", "reading", "plant-pedestal"],
-    heroKit: "reading",
-    zones: [
-      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.56, 0.86] } },
-      { kind: "cluster", rect: { x: [0.06, 0.94], z: [0.74, 0.96] } },
-      { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.12, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.5] } },
-    ],
-    weight: 2,
-  },
-  {
-    // 阅览室 — the library hall in one unit: a shelf wall across the whole
-    // north face, a bench to sit with a book, a reading corner. §10.5: the
-    // shelf wall is the only legal door edge, so the room hosts none.
-    id: "reading-room",
-    label: "阅览室",
-    worldClasses: ["interior"],
-    archetypes: ["library", "ballroom"],
-    size: { w: 14, d: 12 },
-    openings: ["s", "e", "w"],
-    doorEdges: [],
-    doorCapacity: 0,
-    floor: "timber",
-    wall: "shelf",
-    light: "wash",
-    features: [
-      { kind: "pilaster-rhythm", at: "n" },
-      { kind: "floor-inlay", at: "floor", span: [0.3, 0.7] },
-      // The library gallery's processional end: free-standing columns
-      // before the shelf wall (real stone where the old vocabulary drew
-      // light shafts, §3.2's column order) and, between the stacks and
-      // the colonnade, the round arch — its own ceiling (§3.2's arch
-      // frame). The shelf wall hosts no doors (doorEdges is empty), so
-      // the north face is the one wall the rhythm can always trust.
-      { kind: "column-order", at: "n", span: [0.14, 0.86] },
-      { kind: "arch-frame", at: "n", span: [0.38, 0.62] },
-    ],
-    kits: [
-      "bookshelf-run",
-      "reading",
-      "gallery-bench",
-      "clock-nook",
-      "plant-pedestal",
-    ],
-    heroKit: "reading",
-    zones: [
-      { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.76] } },
-      { kind: "cluster", rect: { x: [0.04, 0.96], z: [0.76, 0.96] } },
-      { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.6] } },
-      { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.1, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.44] } },
-    ],
-    weight: 3,
-  },
-  {
-    // 备餐间 — the working end of a meal: a laid table, the housekeeping
-    // trolley parked mid-round. Tile floor, everything washable.
-    id: "kitchen",
-    label: "备餐间",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "ballroom"],
-    size: { w: 10, d: 8 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 2,
-    floor: "tile",
-    wall: "tile",
-    light: "task",
-    features: [],
-    // §5: the working counter (操作台) + the laid table are the room; the
-    // kitchen-counter kit names the counter, its slab dressing AND the
-    // bucket+mop corner. §6.4 逐件问责: chair-stack leaves (§13 names the
-    // workshop the stack's ONE proper room), and the housekeeping trolley
-    // + coat bench are floor-service/threshold vocabulary the §5 槽位
-    // never lists for a working kitchen (the foyer audit's own reading).
-    kits: ["dining", "kitchen-counter"],
-    heroKit: "dining",
-    zones: [
-      // Deep enough for the laid table's footprint disc to clear the
-      // keep-empty apron on the first draw (v0.12 declarations audit —
-      // at 0.55 the disc grazed the void and the table never came).
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.6, 0.92] } },
-      { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.1, 0.55] } },
-      { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.1, 0.55] } },
-      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 0.5] } },
-    ],
-    weight: 1,
-  },
-  {
-    // 更衣浴室 — lockers along the wall, towels folded and waiting, one
-    // bench. The pool wing's changing room (its kits are all pool-side —
-    // a hotel-room draw would leave it a single coat bench, not a room).
-    // Sized 16×10 like the pool deck it serves: the pool-hall archetype
-    // waters a fixed 45% of the floor, and at 8×8 the basin plus its rim
-    // fixtures swallowed every dry spot — the four declared kits placed
-    // nothing and the room rendered as a bare basin (v0.12 declarations
-    // audit). At 16×10 the east/west rims are ~4.7m of dry deck: the
-    // changing furniture owns the room and the basin reads as the bath's
-    // plunge pool, not its whole identity. §6.4: every piece here can say
-    // why it is in a changing room.
-    id: "bath",
-    label: "更衣浴室",
-    worldClasses: ["interior"],
-    archetypes: ["pool-hall"],
-    size: { w: 16, d: 10 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 2,
-    floor: "tile",
-    wall: "tile",
-    light: "wash",
-    features: [],
-    kits: ["lockers", "towel-station", "coat-bench", "towel-rail", "mop-corner"],
-    zones: [
-      // The dry rims beside the basin — lockers anchor to the flank
-      // walls here, towel stations and rails stand between the water
-      // margin and the wall.
-      { kind: "cluster", rect: { x: [0.03, 0.2], z: [0.12, 0.88] } },
-      { kind: "cluster", rect: { x: [0.8, 0.97], z: [0.12, 0.88] } },
-      // The dry strip past the basin's far edge — small kits only.
-      { kind: "cluster", rect: { x: [0.3, 0.7], z: [0.84, 0.96] } },
-      // The entrance apron and the walk spine to the water stay clear.
-      { kind: "keep-empty", rect: { x: [0.37, 0.63], z: [0, 0.5] } },
-    ],
-    weight: 2,
-  },
-  {
-    // 行李房 — the calm trace made a room: luggage carts and suitcases in
-    // waiting rows, a coat bench by the door. Storage, not abandonment (I4).
-    id: "storage",
-    label: "行李房",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
-    size: { w: 8, d: 8 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 2,
-    floor: "timber",
-    wall: "panelling",
-    light: "quiet",
-    features: [],
-    // §6.4 逐件问责 (v0.12 declarations audit): no chair-stack here — the
-    // stacked banquet chairs read as a function room's spares, not a
-    // luggage room's. The room stores: bags, carts, the bench you set
-    // them down on, the racks they wait on, and housekeeping mid-tidy
-    // (the one room where the trolley genuinely belongs — it is being put
-    // in order).
-    kits: ["luggage", "housekeeping", "coat-bench", "storage-rack"],
-    zones: [
-      { kind: "cluster", rect: { x: [0.06, 0.45], z: [0.12, 0.9] } },
-      { kind: "cluster", rect: { x: [0.55, 0.94], z: [0.12, 0.9] } },
-      { kind: "keep-empty", rect: { x: [0.44, 0.56], z: [0, 1] } },
-    ],
-    weight: 1,
-  },
-  {
-    // 画廊 — the long wall built to LOOK at (and to carry a busy day's
-    // doors): a pilastered north face, benches facing it, inlay underfoot.
-    // The composition's door absorber — its north wall is the door wall.
-    id: "gallery-module",
-    label: "画廊",
-    worldClasses: ["interior"],
-    archetypes: ["ballroom", "library"],
-    size: { w: 16, d: 10 },
-    openings: ["e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 10,
-    floor: "timber",
-    wall: "plaster",
-    light: "wash",
-    features: [
-      { kind: "pilaster-rhythm", at: "n" },
-      { kind: "floor-inlay", at: "floor", span: [0.15, 0.85] },
-    ],
-    // §6.4 逐件问责: the shelf run and the lobby clock leave — §8's 槽位
-    // is the long LOOKING wall (wallart + benches + sculptures) and the
-    // reading corner that keeps it company; a bookcase row and a
-    // grandfather clock are library vocabulary.
-    kits: [
-      "gallery-bench",
-      "reading",
-      "plant-pedestal",
-      "art-wall",
-    ],
-    heroKit: "reading", // an armchair facing the long wall — gallery-bench
-    // is the wall's companion, but kits.ts only grants the hero slot to
-    // composed centrepieces, so the pin goes to the hero-eligible chair.
-    zones: [
-      { kind: "hero", rect: { x: [0.34, 0.66], z: [0.5, 0.76] } },
-      { kind: "cluster", rect: { x: [0.08, 0.92], z: [0.2, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0, 1], z: [0.72, 1] } },
-      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0, 0.44] } },
-    ],
-    weight: 2,
-  },
-  {
-    // 会客厅 — the conversation pair as the centrepiece, a tv corner to one
-    // side, a reading chair to the other. A room for sitting with someone.
-    id: "living",
-    label: "会客厅",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "ballroom", "library"],
-    size: { w: 12, d: 12 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 3,
-    floor: "carpet",
-    wall: "plaster",
-    light: "quiet",
-    features: [{ kind: "floor-inlay", at: "floor", span: [0.25, 0.75] }],
-    // §6.4 逐件问责 (v0.12 declarations audit): no coat-bench here — the
-    // bench + coat stand + umbrella stand is the park/threshold vocabulary,
-    // and in a living room it read as a park bench moved indoors (the
-    // user's own call-out). The living sits on the sofa group; its quiet
-    // pieces are the sideboard, the plants, and the picture row (附录 A:
-    // wallart 用在 gallery / living).
-    kits: [
-      "sofa-group",
-      "tv-corner",
-      "reading",
-      "art-wall",
-      "sideboard",
-      "plant-pedestal",
-    ],
-    heroKit: "sofa-group",
-    zones: [
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.52, 0.82] } },
-      { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.55] } },
-      { kind: "cluster", rect: { x: [0.74, 0.96], z: [0.1, 0.55] } },
-      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.46] } },
-    ],
-    weight: 2,
-  },
-  {
-    // 日光房 — the room whose north wall is glass (the daylight wall: never
-    // a door, never an opening). §10.5: the only legal door edge is the
-    // glass one, so the sunroom hosts NO doors — it is the room of light.
-    id: "sunroom",
-    label: "日光房",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "ballroom", "library"],
-    size: { w: 12, d: 8 },
-    openings: ["s", "e", "w"],
-    doorEdges: [],
-    doorCapacity: 0,
-    floor: "tile",
-    wall: "plaster",
-    light: "daylight",
-    features: [{ kind: "floor-inlay", at: "floor", span: [0.2, 0.8] }],
-    // The north edge IS the glass wall (v0.12 §9 + 附录 A): the exposed
-    // span renders as a floor-to-top glass wall with the outside view, and
-    // the daylight register's sconce falls back to a solid flank wall.
-    glassWall: true,
-    kits: [
-      "reading",
-      "coat-bench",
-      "gallery-bench",
-      "plant-pedestal",
-      "fountain-court",
-    ],
-    heroKit: "reading",
-    zones: [
-      // Deep enough for the reading corner's footprint disc to clear the
-      // keep-empty apron on the first draw (v0.12 declarations audit).
-      { kind: "hero", rect: { x: [0.3, 0.7], z: [0.66, 0.92] } },
-      { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.15, 0.6] } },
-      { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.15, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.55] } },
-    ],
-    weight: 1,
-  },
-  {
-    // 泳池甲板 — the dry edge of the water: the lounger pair facing the
-    // pool, towels and ring posts along the sides. §10.5: the only legal
-    // door edge is the north one, and that edge belongs to the water —
-    // so the deck hosts NO doors.
-    id: "pool-deck",
-    label: "泳池甲板",
-    worldClasses: ["interior"],
-    archetypes: ["pool-hall"],
-    size: { w: 16, d: 10 },
-    openings: ["e", "w"],
-    doorEdges: [],
-    doorCapacity: 0,
-    floor: "deck",
-    wall: "tile",
-    light: "pool-bounce",
-    // The rill returns WITH its geometry (space.tsx's buildRoomFeatures
-    // resolves it and the WaterRill component builds the runnel + its own
-    // wave-driven water): the east-flank feed runnel — a shallow stone
-    // channel running the deck's depth, real water on the room's own wave
-    // machinery. The span hugs the deck's east edge, clear of the walk
-    // spine AND the basin (the builder forfeits any rill rect touching
-    // the water — the 2026-09 declaration reached z 0.68 of the depth and
-    // straddled the basin, so the rill could never build; v0.12 audit),
-    // and the z span runs the flank's full dry length.
-    features: [
-      {
-        kind: "water-rill",
-        at: "floor",
-        span: [0.86, 0.94],
-        spanZ: [0.1, 0.9],
-      },
-    ],
-    kits: [
-      "pool-loungers",
-      "towel-station",
-      "ring-post",
-      "poolside-bench",
-      "ladder-board",
-      "towel-rail",
-    ],
-    heroKit: "pool-loungers",
-    zones: [
-      // The hero stands on the west rim, facing the door across the
-      // water — the authored zone-center draw used to land INSIDE the
-      // basin (forfeit: dry furniture may not stand in the pool), so the
-      // loungers never appeared (v0.12 declarations audit).
-      { kind: "hero", rect: { x: [0.1, 0.24], z: [0.4, 0.6] } },
-      { kind: "cluster", rect: { x: [0.04, 0.26], z: [0.1, 0.9] } },
-      // The east cluster keeps off the runnel band (its span above).
-      { kind: "cluster", rect: { x: [0.74, 0.82], z: [0.1, 0.9] } },
-      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.5] } },
-    ],
-    weight: 3,
-  },
-  {
-    // 长桌餐厅 — one long table down the room's axis, the service kept to
-    // the flanks. The dining kit repeats along the table's run — several
-    // settings of ONE meal, never a warehouse (§6).
-    id: "dining-hall",
-    label: "长桌餐厅",
-    worldClasses: ["interior"],
-    archetypes: ["ballroom", "hotel-room"],
-    size: { w: 14, d: 10 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 4,
-    floor: "timber",
-    wall: "panelling",
-    light: "task",
-    features: [
-      { kind: "pilaster-rhythm", at: "n" },
-      // The hall head: a railed dais for the head table, and above it a
-      // mezzanine gallery overlooking the meal — the far wall's two
-      // tiers, the dollhouse camera's second silhouette layer.
-      { kind: "raised-platform", at: "n", span: [0.3, 0.7] },
-      { kind: "mezzanine", at: "n", span: [0.24, 0.76] },
-    ],
-    // §6.4 逐件问责 (v0.12 declarations audit): no housekeeping here — a
-    // trolley of towels and a bucket reads as the cleaner working AROUND
-    // the meal, never the meal itself; the hall's service is the
-    // sideboard and the stacked spares.
-    kits: ["dining", "gallery-bench", "chair-stack", "sideboard"],
-    heroKit: "dining",
-    zones: [
-      { kind: "hero", rect: { x: [0.32, 0.68], z: [0.5, 0.8] } },
-      { kind: "cluster", rect: { x: [0.06, 0.28], z: [0.15, 0.85] } },
-      { kind: "cluster", rect: { x: [0.72, 0.94], z: [0.15, 0.85] } },
-      { kind: "keep-empty", rect: { x: [0, 1], z: [0, 0.12] } },
-      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0.12, 0.44] } },
-    ],
-    weight: 2,
-  },
-  {
-    // 工作间 — the room where something was being made: the desk with its
-    // lamp, lockers of materials, the trolley parked mid-task. Paused,
-    // never abandoned (I4).
-    id: "workshop",
-    label: "工作间",
-    worldClasses: ["interior"],
-    archetypes: ["hotel-room", "library", "ballroom"],
-    size: { w: 10, d: 10 },
-    openings: ["n", "s", "e", "w"],
-    doorEdges: ["n"],
-    doorCapacity: 2,
-    floor: "timber",
-    wall: "panelling",
-    light: "task",
-    features: [],
-    // §13: the workbench corner (workbench + storagerack + chair + the
-    // tools ON the slab) is the room's signature; the writing desk stays
-    // for the paperwork end.
-    kits: ["writing-desk", "workbench-corner", "lockers", "housekeeping", "coat-bench", "chair-stack"],
-    // No heroKit pin: none of the workshop's whitelisted kits is a
-    // heroSlot centrepiece, so the hero falls back to the seeded draw
-    // among the room's hero-eligible kits (kits.ts's rule, unchanged).
-    zones: [
-      { kind: "hero", rect: { x: [0.28, 0.72], z: [0.55, 0.88] } },
-      { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.1, 0.6] } },
-      { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.1, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.36, 0.64], z: [0, 0.5] } },
-    ],
-    weight: 1,
-  },
+/** The catalogue's global order — the thirteen ids exactly as today,
+ *  frozen. The family files keep their own relative order; this list is
+ *  the single place the three families interleave. Never reorder or
+ *  drop; a new module enters only with the main agent's sign-off. */
+export const MODULE_ORDER: readonly string[] = [
+  "foyer",
+  "bedroom",
+  "study",
+  "reading-room",
+  "kitchen",
+  "bath",
+  "storage",
+  "gallery-module",
+  "living",
+  "sunroom",
+  "pool-deck",
+  "dining-hall",
+  "workshop",
 ];
+
+const MODULES_BY_ID: ReadonlyMap<string, RoomModule> = new Map(
+  [...RESIDENTIAL_MODULES, ...SERVICE_MODULES, ...PUBLIC_MODULES].map(
+    (m) => [m.id, m] as const,
+  ),
+);
+
+/** The thirteen standard room modules, assembled in MODULE_ORDER. */
+export const ROOM_MODULES: readonly RoomModule[] = MODULE_ORDER.map((id) => {
+  const m = MODULES_BY_ID.get(id);
+  if (!m) throw new Error(`MODULE_ORDER names unknown module "${id}"`);
+  return m;
+});
 
 /** Look up a module by id. */
 export function roomModuleById(id: string): RoomModule | undefined {
