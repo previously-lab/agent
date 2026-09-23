@@ -397,11 +397,15 @@ const BEDROOM_SCHEMATIC: RoomSchematic = {
     },
     {
       // 衣柜 — the east wall (a non-door, non-headboard wall per §2), far
-      // north (plan row 02); NOT isolated: its disc guards the bed group's
-      // ring and everything else's — the clearance ring is real.
+      // north (plan row 02). At 1×2 the bed corner's footprint disc spans
+      // x ∈ [−2.4, 1.4] and the wardrobe stands 1.35m past its edge — the
+      // disc-to-disc guard (KIT_GAP included) is mathematically impossible
+      // in a 6m width, so the group is isolated and the ring is carried
+      // by the authored geometry (asserted in the family test) instead.
       role: "wardrobe",
       group: "wardrobe",
       required: true,
+      isolated: true,
       at: { kind: "wall", wall: "e", dist: [0.65, 0.85], along: 0.84, alongTol: 0.35 },
       facing: { kind: "intoRoom", wall: "anchor" },
       accepts: ["wardrobe"],
@@ -461,20 +465,21 @@ const BEDROOM_SCHEMATIC: RoomSchematic = {
 };
 
 /**
- * The study (v0.12-room-specs §3; room-plans/study.txt variant A, 面壁式):
- * the writing desk faces the shelf wall — the §3 signature. The shelf run
- * hugs the north wall west-of-centre (the room forbids symmetry, §0-6;
- * the run's centre lands on the desk's axis, 1.3m+ of取书通道 behind the
- * desk), 3–4 shelves stepped along the wall. The desk 2.3–2.7m off the
- * wall, its chair pulled up square, the lamp and a book pile ON the
- * desktop (lift 0.8), the rug underfoot. The west window corner takes the
- * reading chair + lamp; the east wall takes the sideboard (plan row
- * 06–07). The shelf is `terminus` because the room's walk path ends at
- * the hero zone hard by the shelf face — without the flag the shared
- * machinery rejects the run for standing within its own destination's
- * corridor (the exact mechanism that kept the generic study shelfless in
- * the v0.12 inventory). 禁止栏 (§3): no bed / sofa / lounger / rows of
- * seats / housekeeping kind.
+ * The study (v0.12-room-specs §3; room-plans/study.txt variant A,
+ * 面壁式 — re-derived for the 1×1 (6×6) the user's scale ruling assigns):
+ * the §3 signature survives at six metres — the writing desk faces the
+ * shelf wall, the lamp and a book pile ON the desktop, the rug underfoot —
+ * but the room now holds ONE wide bookcase where a long wall held a run
+ * (a stepped run's footprint disc, ≥2.3m, would eat the 36m² floor's
+ * whole 23.4m² coverage budget), and the desk sits close under the shelf
+ * as a carrel (see the desk slot — the fixed 3.5m entrance strip leaves
+ * no room for both a pulled chair and a browse channel). The west corner
+ * keeps its chair + lamp, the east wall its sideboard. The shelf is
+ * `terminus`: the walk path ends at the desk hard by the shelf face, and
+ * without the flag the shared machinery rejects the wall for standing
+ * inside its own destination's corridor. 禁止栏 (§3): no bed / sofa /
+ * lounger / rows of seats / housekeeping kind — the accepts are the
+ * vocabulary.
  */
 const STUDY_SCHEMATIC: RoomSchematic = {
   moduleId: "study",
@@ -486,46 +491,50 @@ const STUDY_SCHEMATIC: RoomSchematic = {
   ],
   slots: [
     {
-      // 书架 — the shelf wall: three shelves stepped 1.8m along the north
-      // wall from a west-of-centre base (the room forbids symmetry). One
-      // run again (the 2×2 room's coverage budget now absorbs its 4m
-      // footprint disc, and a count-stepped run butts seamlessly — two
-      // pair-groups could never butt, their pieces would interleave or
-      // gape). The K furniture row IS the book wall until the wall:"shelf"
-      // register renders (INDEX 修正 7).
+      // 书架 — the book wall at 1×1: ONE wide bookcase (scaled 1.4–1.55×,
+      // ≈2.4–2.7m of shelving) west of the desk. A stepped run's footprint
+      // disc (≥2.3m) would answer the 36m² floor's 23.4m² coverage budget
+      // with nothing left for the desk. The K furniture carries the
+      // wall:"shelf" register until it renders (INDEX 修正 7).
       role: "bookshelf",
       group: "shelf",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [0.65, 0.8], along: 0.35, alongTol: 0.02 },
+      at: { kind: "wall", wall: "focal", dist: [0.65, 0.8], along: 0.28, alongTol: 0.06 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["bookshelf"],
-      count: [3, 3],
-      clearance: 0.35,
+      scale: [1.4, 1.55],
+      clearance: 0.5,
     },
     {
-      // 书桌 — 2.5–2.8m off the shelf wall (plan row 03 of the 12-deep
-      // room), west of axis (the asymmetric draw the room type demands),
-      // facing the wall it works against.
+      // 书桌 — the carrel: at 1×1 the fixed entrance strip (|x| < 2.3m,
+      // z < 3.5m — absolute, never scaled) leaves no room for a pulled-back
+      // desk AND a browse channel: the chair must stand z > 3.5 while a
+      // ≥0.9m channel needs the desk at z ≤ 3.715 — an empty interval. So
+      // the desk hugs the bookcase like a library carrel (gap 0.07–0.47m,
+      // logged as the scale ruling's casualty in the lane report) and the
+      // chair takes the room between desk and door. Facing the shelf wall
+      // is kept — §2 rule 1 survives; the channel does not.
       role: "desk",
       group: "desk",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [2.5, 2.8], along: 0.4, alongTol: 0.15 },
+      at: { kind: "wall", wall: "focal", dist: [1.5, 1.7], along: 0.58, alongTol: 0.15 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["desk"],
       clearance: 1.0,
     },
     {
-      // 座椅 — pulled up to the desk's front, square at it.
+      // 座椅 — in the carrel gap between desk and door (z > 3.5 keeps it
+      // out of the entrance strip), square at the desk.
       role: "chair",
       group: "desk",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "desk", dx: [-0.12, 0.12], dz: [0.75, 0.9] },
+      at: { kind: "relative", slot: "desk", dx: [-0.12, 0.12], dz: [0.45, 0.6] },
       facing: { kind: "toward", slot: "desk" },
       accepts: ["chair"],
       clearance: 0.45,
@@ -558,50 +567,57 @@ const STUDY_SCHEMATIC: RoomSchematic = {
       clearance: 0.15,
     },
     {
-      // 地毯 — under the desk and chair, flat.
+      // 地毯 — under the desk and chair, flat (z > 3.5 like everything
+      // else in this little room).
       role: "rug",
       group: "desk",
       required: true,
       terminus: true,
       isolated: true,
       flat: true,
-      at: { kind: "relative", slot: "desk", dx: [-0.05, 0.05], dz: [0.5, 0.7] },
+      at: { kind: "relative", slot: "desk", dx: [-0.05, 0.05], dz: [0.4, 0.55] },
       facing: { kind: "fixed", rotY: 0, jitter: 0 },
       accepts: ["rug"],
       scale: [1.05, 1.2],
       clearance: 0,
     },
     {
-      // 阅读角 — the west window corner (plan row 07): the chair angled at
-      // the room with the floor lamp a step south along the SAME wall — a
-      // lamp offset from the chair's turned frame could land inside the
-      // walk corridor around the path's bend, so both anchor to the wall.
+      // 阅读角 — the west wall's north band (z 3.6–4.5 — everything in a
+      // 1×1 room lives north of the entrance strip): the chair angled at
+      // the room, the lamp a step south along the SAME wall (both
+      // wall-anchored — a turned-frame offset could land in the corridor).
+      // Isolated like the sideboard: at six metres the little discs reach
+      // past each other and the guard would forfeit one of them; the
+      // authored geometry keeps the truth.
       role: "chair-w",
       group: "corner",
       required: false,
       chance: 0.55,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.34, alongTol: 0.2 },
+      isolated: true,
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.7, alongTol: 0.25 },
       facing: { kind: "moduleCenter" },
       accepts: ["readingchair"],
-      clearance: 0.5,
+      clearance: 0.4,
     },
     {
       role: "lamp-w",
       group: "corner",
       required: false,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.26, alongTol: 0.2 },
+      isolated: true,
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.63, alongTol: 0.2 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["floorlamp"],
-      clearance: 0.3,
+      clearance: 0.25,
     },
     {
-      // 边柜 — the east wall (plan rows 06–07); NOT isolated, so its disc
-      // respects every other group's ring.
+      // 边柜 — the east wall's north band; isolated, same six-metre
+      // arithmetic as the corner.
       role: "sideboard",
       group: "sideboard",
       required: false,
       chance: 0.5,
-      at: { kind: "wall", wall: "e", dist: [0.65, 0.85], along: 0.35, alongTol: 0.95 },
+      isolated: true,
+      at: { kind: "wall", wall: "e", dist: [0.7, 0.85], along: 0.65, alongTol: 0.25 },
       facing: { kind: "intoRoom", wall: "anchor" },
       accepts: ["sideboard"],
       clearance: 0.85,
@@ -610,19 +626,22 @@ const STUDY_SCHEMATIC: RoomSchematic = {
 };
 
 /**
- * The reading room (v0.12-room-specs §4; room-plans/reading-room.txt
- * variant A, 单长桌纵列): the whole north face is the book wall (5–6
- * shelves stepped along it — the inventory's "shelves on the east wall"
- * is corrected here), and the long reading table stands centred on the
- * room's axis 4.3–4.7m off it, built as three laid tables butted into one
- * 5.4m run. Six chairs face the table three-a-side (the §4 count, inside
- * the corrected ×4–8 band), a floor lamp past each end; the round rug
- * anchors the run, the two window corners take a reading chair + lamp
- * each, and the clock finds the north-east corner (optional). The plan's
- * optional gallery bench sits mid-west-wall — an open book left on its
- * seat (the calm-trace precedent the kit was authored around), facing the
- * table across the room. The table, its chairs and its lamps are the
- * path's destination — all `terminus`.
+ * The reading room (v0.12-room-specs §4; room-plans/reading-room.txt —
+ * re-derived for the 1×2 (6×12) the user's scale ruling assigns): the
+ * north face keeps its book wall as one wide bookcase, and the long
+ * reading table stands centred on the room's axis 4.2–4.7m off it as the
+ * plan's own variant B draws — TWIN laid tables butted into one 4.4m run
+ * (three tops would need ±2.9m of a ±2.35m-wide floor). Six chairs face
+ * the table three-a-side (the §4 count, inside the corrected ×4–8 band),
+ * a floor lamp just inside each end; the round rug anchors the run, the
+ * west window corner takes a reading chair + lamp (z 5–6.2 — the east
+ * corner is the walk path's side at this depth and is dropped, noted at
+ * the slots' end), and the plan's gallery bench takes the west wall's
+ * south band, exactly where the plan draws its G. The plan's optional
+ * grandfather clock does not survive the shrink — no corner clears the
+ * walk corridor's end radius at this depth either — and is dropped (noted
+ * at the slots' end). The table, its chairs and its lamps are the path's
+ * destination — all `terminus`.
  *
  * 禁止栏: the plan accounts for every piece it draws, including the
  * `bench` the default list bans — the bench is the plan's own G, a seat
@@ -654,71 +673,36 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
   ],
   slots: [
     {
-      // 书墙 — four shelves in two butted pairs, west pair and east pair,
-      // centred on the axis: one four-shelf group would answer the coverage
-      // budget with a 5.8m footprint disc (the pair's anchor sits at the
-      // run's west piece — the disc IS the span), so the run splits in two
-      // and each pair's modest disc clears the entrance spine void.
+      // 书墙 — one wide bookcase on the north face (scaled 1.5–1.7×, a
+      // 2.6–3m wall of shelves at 1×2); a stepped run's disc would tax the
+      // narrow floor for little gain, and the single piece still reads as
+      // THE book wall (the wall:"shelf" register renders plain plaster —
+      // INDEX 修正 7). Non-terminus at this depth: the path ends 2m shy
+      // of the shelf face, outside the 1.9m corridor.
       role: "bookshelf",
-      group: "shelf-w",
+      group: "shelf",
       required: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [0.65, 0.85], along: 0.42, alongTol: 0.02 },
+      at: { kind: "wall", wall: "focal", dist: [0.7, 0.85], along: 0.5, alongTol: 0.12 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["bookshelf"],
-      count: [2, 2],
-      clearance: 0.4,
+      scale: [1.5, 1.7],
+      clearance: 0.5,
     },
     {
-      role: "bookshelf",
-      group: "shelf-e",
-      required: true,
-      isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [0.65, 0.85], along: 0.58, alongTol: 0.02 },
-      facing: { kind: "intoRoom", wall: "focal" },
-      accepts: ["bookshelf"],
-      count: [2, 2],
-      clearance: 0.4,
-    },
-    {
-      // 长阅览桌 — three laid tables butted into one run, centred on the
-      // axis (plan row 07, pulled north of the entrance spine: the south
-      // chair line stands z ≥ 6.3, the spine's disc ends at 5.28). The
-      // 2×2 room takes 1.8m-centred tables (0.35/0.5/0.65 across the
-      // wall), each piece beside its own pair of chairs.
+      // 长阅览桌 — the plan's own variant B: TWIN laid tables butted into
+      // one 4.4m run on the room's axis (three 2.2m tops would need ±2.9m
+      // of a ±2.35m floor), 4.2–4.7m off the shelf wall — the browse
+      // channel keeps a real 2.2m+ at this depth.
       role: "table-w",
       group: "table-w",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.35, alongTol: 0.01 },
+      at: { kind: "wall", wall: "focal", dist: [4.2, 4.7], along: 0.35, alongTol: 0.01 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["diningtable"],
       clearance: 0.8,
-    },
-    {
-      role: "table-c",
-      group: "table-c",
-      required: true,
-      terminus: true,
-      isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.5, alongTol: 0.01 },
-      facing: { kind: "intoRoom", wall: "focal" },
-      accepts: ["diningtable"],
-      clearance: 0.8,
-    },
-    {
-      role: "rug",
-      group: "table-c",
-      required: true,
-      terminus: true,
-      isolated: true,
-      flat: true,
-      at: { kind: "relative", slot: "table-c", dx: [-0.05, 0.05], dz: [-0.05, 0.05] },
-      facing: { kind: "fixed", rotY: 0, jitter: 0 },
-      accepts: ["rug"],
-      scale: [1.3, 1.5],
-      clearance: 0,
     },
     {
       role: "table-e",
@@ -726,23 +710,37 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [4.3, 4.7], along: 0.65, alongTol: 0.01 },
+      at: { kind: "wall", wall: "focal", dist: [4.2, 4.7], along: 0.65, alongTol: 0.01 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["diningtable"],
       clearance: 0.8,
     },
     {
-      // 阅览椅×6 — locked three-a-side beside each table piece, facing
-      // the run's centre; each chair is its own group (a six-chair
+      // 毯 — under the twin-table run, centred on the pair's middle.
+      role: "rug",
+      group: "table-e",
+      required: true,
+      terminus: true,
+      isolated: true,
+      flat: true,
+      at: { kind: "relative", slot: "table-w", dx: [-0.95, -0.85], dz: [-0.05, 0.05] },
+      facing: { kind: "fixed", rotY: 0, jitter: 0 },
+      accepts: ["rug"],
+      scale: [1.1, 1.3],
+      clearance: 0,
+    },
+    {
+      // 阅览椅×6 — locked three-a-side along the twin run, facing the
+      // table they flank; each chair is its own group (a six-chair
       // composition's footprint disc would swallow the entrance spine's
-      // void — the small discs clear it by an authored 0.6m).
+      // void — the small discs clear it by an authored margin).
       role: "chair-n1",
       group: "chair-n1",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [1.7, 1.9], dz: [-1.05, -0.95] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [0.8, 0.9], dz: [-1.05, -0.95] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
@@ -752,8 +750,8 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [-0.1, 0.1], dz: [-1.05, -0.95] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [-0.08, 0.08], dz: [-1.05, -0.95] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
@@ -763,8 +761,8 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [-1.9, -1.7], dz: [-1.05, -0.95] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [-0.9, -0.8], dz: [-1.05, -0.95] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
@@ -774,8 +772,8 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [1.7, 1.9], dz: [0.95, 1.05] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [0.8, 0.9], dz: [0.95, 1.05] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
@@ -785,8 +783,8 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [-0.1, 0.1], dz: [0.95, 1.05] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [-0.08, 0.08], dz: [0.95, 1.05] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
@@ -796,19 +794,21 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [-1.9, -1.7], dz: [0.95, 1.05] },
-      facing: { kind: "toward", slot: "table-c" },
+      at: { kind: "relative", slot: "table-w", dx: [-0.9, -0.8], dz: [0.95, 1.05] },
+      facing: { kind: "toward", slot: "table-w" },
       accepts: ["chair"],
       clearance: 0.4,
     },
     {
-      // 桌端落地灯×2 — just past the run's ends (plan row 07, cols 03/10).
+      // 桌端落地灯×2 — tucked just inside the twin run's ends (the 6m
+      // width leaves no room beyond them; the lamps mark the run's ends
+      // from the flanks instead — plan cols 03/10 in spirit).
       role: "endlamp-w",
       group: "lamp-w",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [3.2, 3.4], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "table-w", dx: [1.25, 1.35], dz: [-0.05, 0.05] },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["floorlamp"],
       clearance: 0.35,
@@ -819,21 +819,23 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "relative", slot: "table-c", dx: [-3.4, -3.2], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "table-w", dx: [-3.15, -3.05], dz: [-0.05, 0.05] },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["floorlamp"],
       clearance: 0.35,
     },
     {
-      // 窗角阅读椅×2 — west and east window corners (plan rows 04/09),
-      // each with its lamp inside the reach; the lamp's dx sign is fixed
-      // per corner so it always lands room-ward (a seeded side would put
-      // it in the wall half the time and forfeit the group).
+      // 窗角阅读椅×2 — west and east window corners (z 5–6.2, the band
+      // between the door hall and the table), each with its lamp inside
+      // the reach. The lamp's dx sign is fixed per corner so it always
+      // lands room-ward (a seeded side would put it in the wall half the
+      // time and forfeit the group).
       role: "chair-w",
       group: "corner-w",
       required: false,
       chance: 0.55,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.25, alongTol: 0.55 },
+      isolated: true,
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.47, alongTol: 0.06 },
       facing: { kind: "moduleCenter" },
       accepts: ["readingchair"],
       clearance: 0.5,
@@ -842,44 +844,33 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       role: "cornerlamp-w",
       group: "corner-w",
       required: false,
+      isolated: true,
       at: { kind: "relative", slot: "chair-w", dx: [0.7, 0.85], dz: [0, 0.15] },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["floorlamp"],
       clearance: 0.3,
     },
+    // The plan's east window corner does not survive the 1×2 assignment:
+    // the walk path (door → bend → table) hugs the east flank at this
+    // depth and its 1.9m corridor swallows the whole band where the corner
+    // would stand — 0 of 36 sweep samples placed it. One window corner
+    // (west, off the path's drift side) keeps the plan's reading-corner
+    // beat; the east wall's identity is the bench's instead.
     {
-      role: "chair-e",
-      group: "corner-e",
-      required: false,
-      chance: 0.55,
-      at: { kind: "wall", wall: "e", dist: [0.7, 0.85], along: 0.25, alongTol: 0.55 },
-      facing: { kind: "moduleCenter" },
-      accepts: ["readingchair"],
-      clearance: 0.5,
-    },
-    {
-      role: "cornerlamp-e",
-      group: "corner-e",
-      required: false,
-      at: { kind: "relative", slot: "chair-e", dx: [-0.85, -0.7], dz: [0, 0.15] },
-      facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
-      accepts: ["floorlamp"],
-      clearance: 0.3,
-    },
-    {
-      // 阅览凳 — the plan's G (OPTIONAL, 西墙): the gallery bench faces the
-      // table across the room, mid-west-wall between the window corner and
-      // the table's west lamp — it never blocks the focal axis and keeps
-      // clear of the corner group (authored 1.4m+ apart, guarded by the
-      // shared discs since this group is NOT isolated). The plan's
-      // REQUIRED window corners keep their reading chairs; bench and
-      // chairs coexist exactly as the plan draws them.
+      // 阅览凳 — the plan's G (OPTIONAL, 西墙 — as the plan draws it): the
+      // gallery bench faces the table across the room from the west wall's
+      // south band (z 3.6–4.2), the one flank band the walk path leaves
+      // alone (it drifts east). The east wall at this depth belongs to
+      // the corridor, the west's north band to the window corner. Isolated:
+      // the little discs reach past each other and the guard would forfeit
+      // one of them.
       role: "bench",
       group: "bench",
       required: false,
       chance: 0.4,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.46, alongTol: 0.8 },
-      facing: { kind: "intoRoom", wall: "anchor" },
+      isolated: true,
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.325, alongTol: 0.03 },
+      facing: { kind: "moduleCenter" },
       accepts: ["bench"],
       clearance: 0.55,
     },
@@ -895,20 +886,12 @@ const READING_ROOM_SCHEMATIC: RoomSchematic = {
       lift: 0.45,
       clearance: 0.15,
     },
-    {
-      // 落地钟 — the north-east corner (the plan's optional c), standing
-      // before the shelf run's end; NOT isolated, so it respects the
-      // shelf wall's discs, and tucked to the corner bands so it clears
-      // the walk corridor that ends a door-to-shelf sight-line away.
-      role: "clock",
-      group: "clock",
-      required: false,
-      chance: 0.35,
-      at: { kind: "focalCorner", corner: "seeded", dist: [0.65, 0.75] },
-      facing: { kind: "moduleCenter" },
-      accepts: ["grandfatherclock"],
-      clearance: 0.5,
-    },
+    // The plan's optional clock (落地钟, NE corner) does not survive the
+    // 1×2 shrink either: at this depth its corner still sits inside the
+    // walk corridor's end radius (the path terminates within 1.9m of the
+    // shelf wall), and a corner prop would stand where the walk promises
+    // air. The plan marks it OPTIONAL — dropped, logged here and in the
+    // lane report.
   ],
 };
 

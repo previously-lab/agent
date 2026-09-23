@@ -20,6 +20,8 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid (snapped
     // UP from 10×8 — at 12×6 the authored blueprint forfeits: the 2.4–2.6m
     // off-wall counter leaves no depth for the threshold/waiting groups).
+    // USER SCALE PASS (v0.13.1): stays 2×2 — the 对门前台 needs the axis
+    // room a 1×2/2×1 cell cannot give it.
     openings: ["n", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 3,
@@ -56,9 +58,11 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "备餐间",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid (snapped
-    // UP from 10×8 — at 12×6 the authored blueprint forfeits: the 2.4–2.6m
-    // off-wall counter leaves no depth for the threshold/waiting groups).
+    size: { w: 6, d: 12 }, // USER SCALE PASS (v0.13.1): 1×2 on the 6m module
+    // grid — the kitchen is a galley: the working counter commands the far
+    // 6m wall and the laid table walks the axis toward it. (12×6 was
+    // rejected: the table's chairs cannot clear the 3.5m entrance strip
+    // in a 6m depth — the composition forfeits in every seed.)
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -78,10 +82,13 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
       // Deep enough for the laid table's footprint disc to clear the
       // keep-empty apron on the first draw (v0.12 declarations audit —
       // at 0.55 the disc grazed the void and the table never came).
+      // USER SCALE PASS: the spine halves to z [0, 0.25] — at 12m deep a
+      // 6m spine would eat the table's disc; the entrance apron machinery
+      // (≤1.2m, full width) already covers the arrival band.
       { kind: "hero", rect: { x: [0.28, 0.72], z: [0.6, 0.92] } },
       { kind: "cluster", rect: { x: [0.04, 0.28], z: [0.1, 0.55] } },
       { kind: "cluster", rect: { x: [0.72, 0.96], z: [0.1, 0.55] } },
-      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 0.5] } },
+      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 0.25] } },
     ],
     weight: 1,
   },
@@ -101,7 +108,13 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "更衣浴室",
     worldClasses: ["interior"],
     archetypes: ["pool-hall"],
-    size: { w: 18, d: 12 }, // v0.13 尺度收敛: 2×3 — the grid's largest legal cell
+    size: { w: 6, d: 6 }, // USER SCALE PASS (v0.13.1): 1×1 on the 6m module
+    // grid — the user's "rooms don't need to be big". The changing-room
+    // CORE survives the snap (locker run + towel bench + rail + bucket,
+    // the blueprint re-anchors them into the dry band past the entrance
+    // strip); the vanity corner, the east-side mirror run and the plants
+    // are cut — a 36m² changing room cannot say why they are there.
+    // (18×12 was absurd: 216m² for six fixtures.)
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -130,9 +143,12 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "行李房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 — snapped UP from 8×8 (nearest
-    // grid cell 6×6 cannot hold the authored rack rows + cart; the lane
-    // report carries this deviation from pure nearest-snap).
+    size: { w: 6, d: 6 }, // USER SCALE PASS (v0.13.1): 1×1 on the 6m module
+    // grid. The luggage room's core survives the snap: one rack wall with
+    // its cases (on the shelves and at its feet), the cart hugging the
+    // east wall inside the doorway band, the mop/bucket opposite. The
+    // second flank rack is cut — a 36m² room holds one rack honestly,
+    // not two. (12×12's "one back, one out" pair was a big-room read.)
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,
@@ -162,7 +178,12 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     label: "工作间",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library", "ballroom"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
+    size: { w: 12, d: 6 }, // USER SCALE PASS (v0.13.1): 2×1 on the 6m module
+    // grid — the workshop is a wide shallow shed: the workbench commands
+    // the far 12m wall, materials flank it, the paperwork end and the
+    // half-finished stack squeeze along the east. (6×12 was rejected:
+    // the 3.5m entrance strip spans a 6m width — nothing can stand in
+    // the front third, and the room becomes a corridor.)
     openings: ["n", "s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 2,

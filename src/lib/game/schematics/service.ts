@@ -314,11 +314,19 @@ const KITCHEN_SCHEMATIC: RoomSchematic = {
       scale: [0.9, 1.0],
     },
     {
-      // 餐边柜 — the sideboard along the east wall, dressed.
+      // 餐边柜 — the sideboard along the east wall's far half, dressed.
+      // Isolated (a lone wall unit) and deep past the corridor's bends.
+      // Terminus: in a 6m width the cleared corridor (pathHalf + clear
+      // ≈ 1.9m each side of a seeded, weaving centerline) spans the whole
+      // walkable width — no wall piece can guarantee the fringe clear in
+      // every seed. It serves the working wall the path leads to; the
+      // door strip itself stays asserted on every piece.
       role: "credenza",
       group: "sideboard",
       required: true,
-      at: { kind: "wall", wall: "e", dist: [0.75, 0.85], along: 0.5, alongTol: 0.2 },
+      terminus: true,
+      isolated: true,
+      at: { kind: "wall", wall: "e", dist: [0.75, 0.85], along: 0.8, alongTol: 0.06 },
       facing: { kind: "intoRoom", wall: "e" },
       accepts: ["sideboard"],
       clearance: 0.85,
@@ -336,11 +344,16 @@ const KITCHEN_SCHEMATIC: RoomSchematic = {
       clearance: 0.15,
     },
     {
-      // 拖把 — the mop parked in the south-west corner (the plans' X).
+      // 拖把 — the mop on the west wall, deep in the galley. In a 6m
+      // width the cleared corridor (pathHalf + clear ≈ 1.9m each side)
+      // spans the room and the seeded path weaves — a wall-hugging
+      // service piece rides the corridor check off (terminus) like the
+      // cart in storage; the door strip stays asserted on every piece.
       role: "mop",
       group: "cleaning",
       required: true,
-      at: { kind: "wall", wall: "w", dist: [0.68, 0.8], along: 0.135, alongTol: 0.05 },
+      terminus: true,
+      at: { kind: "wall", wall: "w", dist: [0.68, 0.8], along: 0.38, alongTol: 0.06 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["mop"],
       clearance: 0.3,
@@ -349,21 +362,17 @@ const KITCHEN_SCHEMATIC: RoomSchematic = {
 };
 
 /**
- * 更衣浴室 (specs §6, room-plans/bath.txt — the 16×10 redraw): a REAL
- * changing room again. The water owns the middle band (rows 03–05); the
- * dry rims take the furniture exactly as the plan draws it:
- *   west rim — the locker run (U@col 02, rows 03–06) mid-rim, the vanity
- *     station at its far end (M@col 02, row 02), the towel rail at the
- *     water's edge (X@col 03, row 05);
- *   north edge — the towel station (XGG@row 02): the bench with its
- *     folded towels ON the seat and the bucket beside it;
- *   east rim — the mirrored locker run and rail (variant A's double side,
- *     optional), the humidity plants at the far end (P@col 15, row 02).
- * The blueprint declares its own bans: the pool-DECK vocabulary
- * (poolbench/lounger), the luggage cart and the banquet chair stack have
- * no purpose chain in a changing room — everything else the plan names is
- * authored, so the locker row, bench, towel rail, towel stack and bucket
- * are all back (the per-room ban list replaced the one-size ban).
+ * 更衣浴室 (specs §6, room-plans/bath.txt — USER SCALE PASS 6×6): the
+ * changing-room CORE, re-anchored into a 1×1 cell. The pool wing's
+ * archetype waters ~45% of the floor (a central basin, x ≈ ±1.8); the
+ * dry band past the 3.5m entrance strip takes the whole composition:
+ *   far wall — the locker run (柜排贴墙), facing the room;
+ *   far strip — the towel bench with its folded towels ON the seat and
+ *     the bucket beside it (长凳可坐 + 水桶落服务角), the walk path's end;
+ *   west rim at the basin's edge — the towel rail (毛巾杆在湿区边).
+ * CUT at 36m² (the plan's optional column, in reverse): the vanity
+ * station, the east-side mirror run and the humidity plants — a small
+ * changing room cannot say why they are there. bans unchanged.
  */
 const BATH_SCHEMATIC: RoomSchematic = {
   moduleId: "bath",
@@ -376,41 +385,43 @@ const BATH_SCHEMATIC: RoomSchematic = {
   ],
   slots: [
     {
-      // 更衣柜·西 — the locker run on the west rim, facing the water
-      // side (you change looking at the pool).
-      role: "lockerrow-w",
-      group: "lockers-w",
+      // 更衣柜 — the locker run on the far wall, facing the room (you
+      // change looking back at the door and the pool). The walk path
+      // ends at this wall — terminus, like the living hero.
+      role: "lockerrow",
+      group: "lockers",
       required: true,
+      terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.72, 0.85], along: 0.58, alongTol: 0.15 },
-      facing: { kind: "intoRoom", wall: "w" },
+      at: { kind: "wall", wall: "focal", dist: [0.72, 0.85], along: 0.6, alongTol: 0.1 },
+      facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["lockerrow"],
       clearance: 0.5,
     },
     {
-      // 毛巾架·西 — the towel rail at the water's edge on the west rim
-      // (X@col 03, row 05): reach it from the pool, dry off walking out.
-      // At 18m wide the basin starts at x ≈ −4.7, so the rail stands
-      // ~5m off the flank wall — dist is authored meters, not normalized.
-      role: "rail-w",
-      group: "rail-w",
+      // 毛巾架 — the towel rail at the basin's edge on the west rim: the
+      // water starts at x ≈ −1.8, so the rail stands 0.95–1.15m off the
+      // flank wall — reach it from the pool, dry off walking out.
+      role: "rail",
+      group: "rail",
       required: true,
+      terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [3.8, 4.0], along: 0.45, alongTol: 0.06 },
+      at: { kind: "wall", wall: "w", dist: [0.95, 1.15], along: 0.72, alongTol: 0.04 },
       facing: { kind: "intoRoom", wall: "w" },
       accepts: ["towelrail"],
       clearance: 0.55,
     },
     {
-      // 更衣长凳 — the bench on the north edge (GG@row 02), facing the
-      // water; the walk path leads to it (terminus) — you cross the room
-      // to sit and dry off.
+      // 更衣长凳 — the bench on the far strip (past the basin's far
+      // edge), facing the water; the walk path leads to it (terminus) —
+      // you cross the room to sit and dry off.
       role: "drybench",
       group: "towelstation",
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [1.3, 1.5], along: 0.44, alongTol: 0.08 },
+      at: { kind: "wall", wall: "focal", dist: [0.68, 0.75], along: 0.44, alongTol: 0.06 },
       facing: { kind: "intoRoom", wall: "focal" },
       accepts: ["bench"],
       clearance: 0.75,
@@ -430,7 +441,7 @@ const BATH_SCHEMATIC: RoomSchematic = {
       clearance: 0.2,
     },
     {
-      // 水桶 — the bucket beside the bench (X@col 06, row 02).
+      // 水桶 — the bucket beside the bench.
       role: "benchbucket",
       group: "towelstation",
       required: true,
@@ -439,113 +450,19 @@ const BATH_SCHEMATIC: RoomSchematic = {
       accepts: ["bucket"],
       clearance: 0.3,
     },
-    {
-      // 更衣柜·东 — the mirrored run on the east rim (variant A's double
-      // side; variant B's single run is the west one alone), optional.
-      role: "lockerrow-e",
-      group: "lockers-e",
-      required: false,
-      chance: 0.55,
-      isolated: true,
-      at: { kind: "wall", wall: "e", dist: [0.72, 0.85], along: 0.52, alongTol: 0.08 },
-      facing: { kind: "intoRoom", wall: "e" },
-      accepts: ["lockerrow"],
-      clearance: 0.5,
-    },
-    {
-      // 毛巾架·东 — the east rail at the water's edge, optional.
-      role: "rail-e",
-      group: "rail-e",
-      required: false,
-      chance: 0.5,
-      isolated: true,
-      at: { kind: "wall", wall: "e", dist: [3.8, 4.0], along: 0.45, alongTol: 0.06 },
-      facing: { kind: "intoRoom", wall: "e" },
-      accepts: ["towelrail"],
-      clearance: 0.55,
-    },
-    {
-      // 梳妆台 — the vanity station at the west rim's far end (M@col 02,
-      // row 02), OPTIONAL as the specs list it. The host carries the
-      // chance; its chair/screen/mat are chance-free — when the host
-      // stays out, the children's anchors dangle and they skip cleanly
-      // (the group places whole or not at all, never a lone floating
-      // stool).
-      role: "vanitytable",
-      group: "vanity",
-      required: false,
-      chance: 0.7,
-      isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.72, 0.85], along: 0.8, alongTol: 0.06 },
-      facing: { kind: "intoRoom", wall: "w" },
-      accepts: ["vanity"],
-      clearance: 0.8,
-    },
-    {
-      // 梳妆凳 — the stool in front, facing the mirror.
-      role: "vanitychair",
-      group: "vanity",
-      required: false,
-      at: { kind: "relative", slot: "vanitytable", dx: [-0.12, 0.12], dz: [0.7, 0.85] },
-      facing: { kind: "toward", slot: "vanitytable" },
-      accepts: ["chair"],
-      clearance: 0.35,
-      scale: [0.85, 0.95],
-    },
-    {
-      // 更衣屏风 — the changing screen beside the vanity (seeded side).
-      role: "vanityscreen",
-      group: "vanity",
-      required: false,
-      at: {
-        kind: "relative",
-        slot: "vanitytable",
-        dx: [0.95, 1.2],
-        dz: [-0.1, 0.15],
-        side: "seeded",
-      },
-      facing: { kind: "fixed", rotY: 0.4, jitter: 0.3 },
-      accepts: ["screen"],
-      clearance: 0.5,
-    },
-    {
-      // 梳妆毯 — the flat mat under the stool (walked over, no disc).
-      role: "vanityrug",
-      group: "vanity",
-      required: false,
-      flat: true,
-      at: { kind: "relative", slot: "vanitytable", dx: [-0.1, 0.1], dz: [0.5, 0.7] },
-      facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
-      accepts: ["rug"],
-      clearance: 0,
-      scale: [0.8, 0.95],
-    },
-    {
-      // 耐湿盆栽 — 1–2 humidity plants along the east rim's far end.
-      role: "rimplant",
-      group: "plants",
-      required: false,
-      chance: 0.6,
-      at: { kind: "wall", wall: "e", dist: [0.72, 0.8], along: 0.8, alongTol: 0.05 },
-      facing: { kind: "moduleCenter" },
-      accepts: ["plant"],
-      count: [1, 2],
-      clearance: 0.4,
-      scale: [0.8, 1.0],
-    },
   ],
 };
 
 /**
- * 行李房 (specs §7, room-plans/storage.txt): the being-tidied room, by
- * composition not piece count. One rack anchors the north wall with
- * cases at its feet; a second rack stands on a seeded flank (the plan
- * set's A/B disagreement — north pair vs east-west pair — becomes the
- * "one rack back, one still out" mid-tidy reading), its shelves carrying
- * one case each; the LUGGAGE CART stands by the door, a metre in —
- * §12 bans the cart in the foyer, but this is the room it belongs to,
- * so this blueprint drops it from the ban list. The service corner
- * (mop or bucket, seeded) waits in the west.
+ * 行李房 (specs §7, room-plans/storage.txt — USER SCALE PASS 6×6): the
+ * being-tidied room in a 1×1 cell. One rack wall carries the whole
+ * storage vocabulary (cases riding its two shelves, cases at its feet,
+ * the small-stuff tray up top — the storage-rack kit's own composition);
+ * the LUGGAGE CART hugs the east wall inside the doorway band (the
+ * 3.5m entrance strip forbids anything nearer the door on the axis —
+ * §7 allows "靠门侧 OR 居中", and the wall-hug is the closest legal
+ * 靠门侧); the mop or bucket waits opposite. CUT: the second flank rack
+ * — a 36m² room holds one rack honestly, not two.
  *
  * bans: the default list minus luggagecart — pool-deck words, the
  * changing-room vocabulary and the banquet chair stack (§7's own ban)
@@ -569,7 +486,7 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
   ],
   slots: [
     {
-      // 北架 — the rack against the north wall, west of the spine. The
+      // 北架 — the rack against the far wall, west of the spine. The
       // group is the walk path's destination (the path leads to the rack
       // wall), so its pieces skip the corridor check the way the living
       // hero does.
@@ -584,7 +501,7 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
       clearance: 0.75,
     },
     {
-      // 架下箱 — the floor cases at the north rack's feet (1–2).
+      // 架下箱 — the floor cases at the rack's feet (1–2).
       role: "floorcases",
       group: "rack-n",
       required: true,
@@ -596,23 +513,11 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
       scale: [0.85, 1.0],
     },
     {
-      // 侧架 — the second rack on a seeded flank (east or west), the
-      // pulled-out rack mid-tidying.
-      role: "rackside",
-      group: "rack-flank",
-      required: true,
-      isolated: true,
-      at: { kind: "flankWall", dist: [0.75, 0.95], along: 0.74, alongTol: 0.05 },
-      facing: { kind: "intoRoom", wall: "anchor" },
-      accepts: ["storagerack"],
-      clearance: 0.75,
-    },
-    {
-      // 下层板箱 — the case riding the flank rack's low shelf (lifted).
+      // 下层板箱 — the case riding the rack's low shelf (lifted).
       role: "shelfcase-low",
-      group: "rack-flank",
+      group: "rack-n",
       required: true,
-      at: { kind: "relative", slot: "rackside", dx: [-0.35, -0.25], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "racknorth", dx: [-0.35, -0.25], dz: [-0.05, 0.05] },
       facing: { kind: "fixed", rotY: 0.3, jitter: 0.3 },
       accepts: ["suitcase"],
       lift: 0.14,
@@ -622,9 +527,9 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
     {
       // 上层板箱 — the case riding the high shelf.
       role: "shelfcase-high",
-      group: "rack-flank",
+      group: "rack-n",
       required: true,
-      at: { kind: "relative", slot: "rackside", dx: [0.25, 0.35], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "racknorth", dx: [0.25, 0.35], dz: [-0.05, 0.05] },
       facing: { kind: "fixed", rotY: 0.3, jitter: 0.3 },
       accepts: ["suitcase"],
       lift: 0.64,
@@ -634,34 +539,43 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
     {
       // 架顶托盘 — the tray holding the small stuff on the top shelf.
       role: "racktray",
-      group: "rack-flank",
+      group: "rack-n",
       required: false,
       chance: 0.6,
-      at: { kind: "relative", slot: "rackside", dx: [-0.05, 0.05], dz: [0, 0.08] },
+      at: { kind: "relative", slot: "racknorth", dx: [-0.05, 0.05], dz: [0, 0.08] },
       facing: { kind: "fixed", rotY: 0.5, jitter: 0.4 },
       accepts: ["tray"],
       lift: 1.14,
       clearance: 0.15,
     },
     {
-      // 行李车 — the luggage cart by the door (V@col 08, row 07), a metre
-      // in from the entrance wall, facing the room — grab it and go.
+      // 行李车 — the luggage cart hugging the east wall beside the
+      // doorway (V@col 08): the strip forbids |x| < 2.3 inside z 3.5,
+      // so the cart stands 0.65–0.69m off the wall — the closest legal
+      // 靠门侧. In a 1×1 cell the cleared corridor spans the room's
+      // width (pathHalf 1.4 + clear 0.5 ≈ the whole 6m), so the cart —
+      // met on the way in, grabbed on the way out — rides the corridor
+      // check off (terminus) like every destination piece; the door
+      // strip itself stays asserted on every piece.
       role: "cart",
       group: "cart",
       required: true,
-      at: { kind: "wall", wall: "e", dist: [0.75, 0.9], along: 0.17, alongTol: 0.03 },
+      terminus: true,
+      at: { kind: "wall", wall: "e", dist: [0.65, 0.69], along: 0.33, alongTol: 0.03 },
       facing: { kind: "intoRoom", wall: "e" },
       accepts: ["luggagecart"],
       clearance: 0.7,
     },
     {
-      // 保洁角 — the service corner in the west (the plan's X): the mop
-      // or the bucket, seeded.
+      // 保洁角 — the service corner opposite the cart (the plan's X):
+      // the mop or the bucket, seeded. Terminus for the same 1×1
+      // corridor-span reason as the cart.
       role: "mop",
       group: "mop",
       required: false,
       chance: 0.6,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.19, alongTol: 0.06 },
+      terminus: true,
+      at: { kind: "wall", wall: "w", dist: [0.6, 0.68], along: 0.33, alongTol: 0.03 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["mop", "bucket"],
       clearance: 0.3,
@@ -670,17 +584,17 @@ const STORAGE_SCHEMATIC: RoomSchematic = {
 };
 
 /**
- * 工作间 (specs §13, room-plans/workshop.txt): the room where something
- * was being made. The workbench corner owns the focal wall (bench + lamp
- * and tool tray ON the slab + the pulled-up chair, the workbench-corner
- * kit's vocabulary); the west flank takes the materials rack, the east
- * wall the second materials group (sideboard or rack, seeded); the
- * writing desk stays for the paperwork end near the entrance; the mop
- * waits in the south-east, and the CHAIR STACK (j@col 08, row 08 — §13
- * names the workshop its ONE proper room) waits beside it: half-finished
- * pieces, not a function room's spares. Deliberately asymmetric (§2
- * rule 6 — a studio must not compose axially): bench west-of-axis,
- * credenza east, rack far west, desk low west.
+ * 工作间 (specs §13, room-plans/workshop.txt — USER SCALE PASS 12×6):
+ * the wide shallow shed. The workbench corner owns the far 12m wall
+ * (bench + lamp and tool tray ON the slab + the pulled-up chair, the
+ * workbench-corner kit's vocabulary); the materials rack flanks it on
+ * the west, the second materials group (sideboard or rack, seeded) and
+ * the mop on the east; the writing desk keeps the paperwork end low on
+ * the west; the CHAIR STACK (§13's one proper room for it) waits along
+ * the east wall behind the credenza — the 3.5m doorway strip forbids
+ * the plan's south-east corner inside a 6m depth. Deliberately
+ * asymmetric (§2 rule 6 — a studio must not compose axially): bench
+ * west-of-axis, credenza east, rack far west, desk low west.
  *
  * bans: the default list minus chairstack — pool-deck words, the
  * changing-room vocabulary and the luggage cart stay unjustifiable here.
@@ -752,7 +666,7 @@ const WORKSHOP_SCHEMATIC: RoomSchematic = {
       role: "materialsrack",
       group: "materials",
       required: true,
-      at: { kind: "wall", wall: "w", dist: [0.72, 0.85], along: 0.82, alongTol: 0.06 },
+      at: { kind: "wall", wall: "w", dist: [0.72, 0.85], along: 0.86, alongTol: 0.06 },
       facing: { kind: "intoRoom", wall: "w" },
       accepts: ["storagerack"],
       clearance: 0.75,
@@ -801,7 +715,7 @@ const WORKSHOP_SCHEMATIC: RoomSchematic = {
       group: "paperwork",
       required: true,
       isolated: true,
-      at: { kind: "wall", wall: "w", dist: [0.7, 0.9], along: 0.22, alongTol: 0.04 },
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.9], along: 0.34, alongTol: 0.04 },
       facing: { kind: "intoRoom", wall: "w" },
       accepts: ["desk"],
       clearance: 0.8,
@@ -841,25 +755,32 @@ const WORKSHOP_SCHEMATIC: RoomSchematic = {
       clearance: 0.2,
     },
     {
-      // 拖把 — the mop in the south-east corner.
+      // 拖把 — the mop on the west wall between the desk and the
+      // materials rack (the east wall is fully booked: credenza low,
+      // stack high). The 12m width keeps it well clear of the corridor;
+      // isolated — a lone corner piece, it guards nothing but the door
+      // strip and the apron.
       role: "mop",
       group: "mop",
       required: false,
       chance: 0.6,
-      at: { kind: "wall", wall: "e", dist: [0.7, 0.85], along: 0.18, alongTol: 0.1 },
+      isolated: true,
+      at: { kind: "wall", wall: "w", dist: [0.7, 0.85], along: 0.66, alongTol: 0.05 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["mop"],
       clearance: 0.3,
     },
     {
-      // 叠椅 — the half-finished chair stack by the south-east (j@col 08,
-      // row 08), optional; §13's one proper room for the stack, so this
-      // blueprint drops it from the ban list.
+      // 叠椅 — the half-finished chair stack along the east wall behind
+      // the credenza (j@col 08, row 08 — §13's one proper room for the
+      // stack, so this blueprint drops it from the ban list). The south
+      // end is doorway-strip inside a 6m depth; the stack stands just
+      // past it, optional.
       role: "sparestack",
       group: "spares",
       required: false,
       chance: 0.6,
-      at: { kind: "wall", wall: "s", dist: [1.85, 2.0], along: 0.65, alongTol: 0.04 },
+      at: { kind: "wall", wall: "e", dist: [0.72, 0.85], along: 0.68, alongTol: 0.04 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["chairstack"],
       clearance: 0.55,

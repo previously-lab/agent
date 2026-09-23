@@ -67,6 +67,7 @@ import {
   MODULE_GRID_MAX_AREA,
   MODULE_GRID_MAX_CELLS,
   PROP_SCALE_EXP,
+  ROOM_DOOR_CLEAR_DEPTH,
   ROOM_WALL_THICKNESS,
 } from "@/lib/game/tuning/room";
 import { INTERIOR_ROOMS } from "@/lib/game/space-types";
@@ -501,7 +502,20 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
           heightAt: () => 0,
         });
         // Something was furnished, and nothing violates a clearance.
-        expect(pieces.length).toBeGreaterThan(0);
+        // v0.13.1 RESAMPLE (scale ruling cascade): compositions now join
+        // 1×1 modules, and a doored room only 6 m deep cannot furnish at
+        // all — the far-wall door approaches reach ROOM_DOOR_CLEAR_DEPTH
+        // (3 m) inward, the entrance apron and the entrance doorway strip
+        // (PROP_DOOR_HALF 1.8 m) claim the rest, and no legal kit origin
+        // survives the whole gate sequence (provable by constants; the
+        // renderer's real chain passes pool-hall a water rect and scales
+        // props by tier, this synthetic 1× chain does neither). The
+        // smoke therefore binds only when the doored plan is deeper than
+        // the approach can blanket; the clearance loop below runs for
+        // every cell either way.
+        const furnishable =
+          layout.doors.length === 0 || plan.extent > ROOM_DOOR_CLEAR_DEPTH * 2;
+        if (furnishable) expect(pieces.length).toBeGreaterThan(0);
         for (const p of pieces) {
           expect(planContains(plan, p.x, p.z, 0)).toBe(true);
           expect(inDoorApproach(p.x, p.z, layout.doors)).toBe(false);
@@ -639,12 +653,16 @@ describe("compositionForRecipe with the runtime door count (§8.4)", () => {
       // The busy day's declared ceiling never comes out below the calm
       // day's (overflow relaxes at placement, never drops).
       expect(busy.doorCapacity).toBeGreaterThanOrEqual(calm.doorCapacity);
-      // The north door wall never shrinks as the load rises (every growth
-      // path either widens the room or exposes another module's north
-      // edge). Depth is deliberately NOT asserted: a higher count may
-      // switch topology (row → ell) and trade depth for width lawfully —
-      // "large" is MORE modules, whatever silhouette joins them.
-      expect(doorEdgeMeters(busy)).toBeGreaterThanOrEqual(doorEdgeMeters(calm));
+      // v0.13.1 RESAMPLE: the physical north door edge is NOT asserted
+      // monotone in the load anymore. Under the user's scale ruling the
+      // modules are 1×1/1×2 cells, and a lawful growth path (row/ell →
+      // cross) widens the room SIDEWAYS: the cross's far wall is one 6 m
+      // arm where the calm ell exposed a 12 m workshop edge (1 seed in
+      // this sweep). What §10.5 guarantees — and what is pinned above —
+      // is that doors stay axial-only and the declared ceiling never
+      // drops. The far edge stays real (a door-eligible module always
+      // reaches the far wall: min 6 m across this sweep).
+      expect(doorEdgeMeters(busy)).toBeGreaterThan(0);
       if (busy.modules.length > calm.modules.length) {
         grew += 1;
         expect(busy.modules.length).toBeLessThanOrEqual(4);
@@ -762,9 +780,13 @@ describe("seamPartitionsFor — the shared derivation (renderer + clamp)", () =>
   });
 
   it("keeps a center seam real — an open vestibule, no post on the axis", () => {
-    // foyer+study rows land the seam exactly on the door axis.
+    // v0.13.1 RESAMPLE: a row's seam lands on the door axis only when the
+    // pair is equal-width. The old foyer+study anchor broke when the
+    // study shrank to 6 m (foyer 12 + study 6 centers nothing) — the
+    // living+foyer pair (both unchanged 12 m modules) is the equal-width
+    // row that still centers the seam under the new footprints.
     const comp = compositionForRecipe(
-      interiorRecipe("2026-10-17Thotel-room", "hotel-room", "m", 32),
+      interiorRecipe("2026-10-04Thotel-room", "hotel-room", "m", 32),
     );
     expect(comp).not.toBeNull();
     const parts = seamPartitionsFor(comp!, 1, ROOM_WALL_THICKNESS);
@@ -784,7 +806,7 @@ describe("seamPartitionsFor — the shared derivation (renderer + clamp)", () =>
 
   it("is deterministic in (composition, scale) — same partitions, always (A6)", () => {
     const comp = compositionForRecipe(
-      interiorRecipe("2026-10-17Thotel-room", "hotel-room", "m", 32),
+      interiorRecipe("2026-10-04Thotel-room", "hotel-room", "m", 32),
     )!;
     const a = seamPartitionsFor(comp, 1, ROOM_WALL_THICKNESS);
     const b = seamPartitionsFor(comp, 1, ROOM_WALL_THICKNESS);
@@ -794,7 +816,9 @@ describe("seamPartitionsFor — the shared derivation (renderer + clamp)", () =>
 
 describe("moduleWallForSegment / moduleSconceFor (§8.2 registers)", () => {
   function foyerStudy() {
-    // foyer|study at the door axis; foyer west, study east.
+    // foyer|study row; foyer west, study east. Since the scale ruling the
+    // study is 6 m against the foyer's 12, so the seam sits at x = 3 —
+    // the door axis falls inside the foyer, not on the seam.
     const comp = compositionForRecipe(
       {
         sliceId: "2026-10-17Thotel-room",
@@ -813,13 +837,15 @@ describe("moduleWallForSegment / moduleSconceFor (§8.2 registers)", () => {
     const comp = foyerStudy();
     const thick = ROOM_WALL_THICKNESS;
     const halfW = comp.width / 2;
-    // West flank wall: the foyer's west edge runs the foyer's 8 m depth.
+    // West flank wall: the foyer's west edge runs its full 12 m depth;
+    // the probe spans the first 8 m of it.
     expect(
       moduleWallForSegment(comp, { x: -halfW + thick / 2, z: 4, sizeX: thick, sizeZ: 8 }, 1),
     ).toBe("panelling"); // foyer.wall
-    // East flank wall over the study's span.
+    // East flank wall over the study's span — the study is 6 m deep
+    // after the scale ruling, so the probe covers its whole edge.
     expect(
-      moduleWallForSegment(comp, { x: halfW - thick / 2, z: 5, sizeX: thick, sizeZ: 10 }, 1),
+      moduleWallForSegment(comp, { x: halfW - thick / 2, z: 3, sizeX: thick, sizeZ: 6 }, 1),
     ).toBe("shelf"); // study.wall
     // The entrance wall belongs to no module.
     expect(

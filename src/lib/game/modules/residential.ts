@@ -17,7 +17,13 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "卧室",
     worldClasses: ["interior"],
     archetypes: ["hotel-room"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
+    // v0.13 用户尺度裁决: 1×2 (6×12). The bed row is 4.6m wide at most —
+    // 6m carries it without waste — while the depth carries the wardrobe,
+    // the window corner and the vanity as a real 主卧套间 (the plan's own
+    // variant-B character). Stock zones need no edit: the keep-empty spine
+    // scales to x ±0.84, z ≤ 6.6, and the bed corner's disc clears it by
+    // an authored 1.8m.
+    size: { w: 6, d: 12 },
     openings: ["s", "e", "w"],
     doorEdges: ["n"],
     doorCapacity: 3,
@@ -61,7 +67,9 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "书房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "library"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
+    // v0.13 用户尺度裁决: 1×1 (6×6) — "一个人的书房" does not want a 70%-empty
+    // floor; one desk against one shelf fills six metres honestly.
+    size: { w: 6, d: 6 },
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,
@@ -75,7 +83,11 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
       { kind: "hero", rect: { x: [0.3, 0.7], z: [0.56, 0.86] } },
       { kind: "cluster", rect: { x: [0.06, 0.94], z: [0.74, 0.96] } },
       { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.12, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.5] } },
+      // The entrance spine shrinks with the room: at 1×1 the desk-and-chair
+      // ARE the path's destination and must stand where a 12m room's spine
+      // would forbid them. 1.8m deep keeps the door swing and the walkway
+      // honest; the schematic's desk group disc still clears it by 0.5m.
+      { kind: "keep-empty", rect: { x: [0.38, 0.62], z: [0, 0.3] } },
     ],
     weight: 2,
   },
@@ -87,7 +99,15 @@ export const RESIDENTIAL_MODULES: readonly RoomModule[] = [
     label: "阅览室",
     worldClasses: ["interior"],
     archetypes: ["library", "ballroom"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 on the 6m module grid
+    // v0.13 用户尺度裁决: 1×2 (6×12). The fixed 3.5m entrance strip
+    // amputates the south half of any 6m-deep room — the six-chair table
+    // cannot survive 2×1 — so the reading room goes tall: a processional
+    // 3.5m entry hall, then the furniture band. The long table now runs
+    // east-west as the plan's own variant B draws it (TWIN laid tables,
+    // 4.4m of run — three 2.2m tops would need ±2.9m of a ±2.35m floor),
+    // with the shelf wall still north. Stock zones hold: the spine scales
+    // to x ±0.72, z ≤ 5.28, and every piece stands clear of it.
+    size: { w: 6, d: 12 },
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,

@@ -628,13 +628,11 @@ const DINING_SCHEMATIC: RoomSchematic = {
  * plant band between the seats and the glass (the inner pair required,
  * the outer pair the variant-A spread), a tea table held between the
  * chairs on one rug, a floor lamp at a chair's reach, and the quiet
- * extras (flank sideboard dressed with a vase, the SE-corner fountain)
- * as seeded accents. 12×8, axially composed, focal north — the glass.
- *
- * The chairs sit at z 5.0–5.15 rather than the plan grid's row-04
- * (z 4.5): the module's centre-south keep-empty band (z ≤ 4.4) is module
- * data this lane may not touch, and 0.6–0.75m of disc clearance off it
- * is the honest reading of "椅—玻璃 2m 留观景区" under the current zones.
+ * extras (west-wall sideboard dressed with a vase, the SE-corner
+ * fountain) as seeded accents. 12×6 (v0.13 2×1, wide-and-shallow):
+ * the seats' discs must clear the centre keep-empty band (z ≤ 3.3 of
+ * the 6m depth), which puts the chairs 1.8–2.05m off the glass and the
+ * plant band 0.8–1.2m off it — the signature holds, shallower. Axial.
  */
 const SUNROOM_SCHEMATIC: RoomSchematic = {
   moduleId: "sunroom",
@@ -655,7 +653,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       terminus: true,
       isolated: true,
-      at: { kind: "wall", wall: "focal", dist: [2.75, 2.9], along: 0.5, alongTol: 0.015 },
+      at: { kind: "wall", wall: "focal", dist: [1.85, 2.0], along: 0.5, alongTol: 0.015 },
       facing: { kind: "fixed", rotY: 0, jitter: 0.04 },
       accepts: ["coffeetable"],
       clearance: 0.55,
@@ -678,7 +676,8 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
     },
     {
       // 双椅 — facing the glass, flanking the table ±1.3–1.5m (seeded
-      // sides keep the pair mirrored).
+      // sides keep the pair mirrored). 12×6: the chairs ride z 3.95–4.2
+      // (discs clearing the z 3.3 corridor), 1.8–2.05m off the glass.
       role: "chair-1",
       group: "chair-1",
       required: true,
@@ -765,7 +764,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       isolated: true,
       terminus: true,
-      at: { kind: "wall", wall: "focal", dist: [1.25, 1.55], along: 0.375, alongTol: 0.015 },
+      at: { kind: "wall", wall: "focal", dist: [0.8, 1.2], along: 0.375, alongTol: 0.015 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["plant"],
       clearance: 0.4,
@@ -777,7 +776,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       required: true,
       isolated: true,
       terminus: true,
-      at: { kind: "wall", wall: "focal", dist: [1.25, 1.55], along: 0.625, alongTol: 0.015 },
+      at: { kind: "wall", wall: "focal", dist: [0.8, 1.2], along: 0.625, alongTol: 0.015 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["plant"],
       clearance: 0.4,
@@ -790,7 +789,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       chance: 0.6,
       isolated: true,
       terminus: true,
-      at: { kind: "wall", wall: "focal", dist: [1.25, 1.55], along: 0.125, alongTol: 0.015 },
+      at: { kind: "wall", wall: "focal", dist: [0.8, 1.2], along: 0.125, alongTol: 0.015 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["plant"],
       clearance: 0.4,
@@ -803,7 +802,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       chance: 0.6,
       isolated: true,
       terminus: true,
-      at: { kind: "wall", wall: "focal", dist: [1.25, 1.55], along: 0.875, alongTol: 0.015 },
+      at: { kind: "wall", wall: "focal", dist: [0.8, 1.2], along: 0.875, alongTol: 0.015 },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["plant"],
       clearance: 0.4,
@@ -817,7 +816,7 @@ const SUNROOM_SCHEMATIC: RoomSchematic = {
       group: "sideboard",
       required: false,
       chance: 0.55,
-      at: { kind: "wall", wall: "w", dist: [0.75, 0.95], along: 0.46, alongTol: 1.6 },
+      at: { kind: "wall", wall: "w", dist: [0.75, 0.95], along: 0.55, alongTol: 0.8 },
       facing: { kind: "intoRoom", wall: "anchor" },
       accepts: ["sideboard"],
       clearance: 0.85,

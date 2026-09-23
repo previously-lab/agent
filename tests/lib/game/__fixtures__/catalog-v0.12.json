@@ -1,5 +1,5 @@
 {
-  "generated": "v0.13 module-grid resnap (sizes only; ids, zones, kits, features, schematics byte-unchanged)",
+  "generated": "v0.13 user scale ruling: bedroom 1x2, study 1x1 (+shrunk spine), reading-room 1x2 (Lane A re-record); ids/zones/kits/features/schematics otherwise byte-held",
   "modules": {
     "ids": [
       "foyer",
@@ -141,7 +141,7 @@
         ],
         "size": {
           "d": 12,
-          "w": 12
+          "w": 6
         },
         "wall": "plaster",
         "weight": 3,
@@ -233,8 +233,8 @@
           "w"
         ],
         "size": {
-          "d": 12,
-          "w": 12
+          "d": 6,
+          "w": 6
         },
         "wall": "shelf",
         "weight": 2,
@@ -290,7 +290,7 @@
               ],
               "z": [
                 0,
-                0.5
+                0.3
               ]
             }
           }
@@ -352,7 +352,7 @@
         ],
         "size": {
           "d": 12,
-          "w": 12
+          "w": 6
         },
         "wall": "shelf",
         "weight": 3,
@@ -454,7 +454,7 @@
         ],
         "size": {
           "d": 12,
-          "w": 12
+          "w": 6
         },
         "wall": "tile",
         "weight": 1,
@@ -510,7 +510,7 @@
               ],
               "z": [
                 0,
-                0.5
+                0.25
               ]
             }
           }
@@ -543,8 +543,8 @@
           "w"
         ],
         "size": {
-          "d": 12,
-          "w": 18
+          "d": 6,
+          "w": 6
         },
         "wall": "tile",
         "weight": 2,
@@ -635,8 +635,8 @@
           "w"
         ],
         "size": {
-          "d": 12,
-          "w": 12
+          "d": 6,
+          "w": 6
         },
         "wall": "panelling",
         "weight": 1,
@@ -914,7 +914,7 @@
           "w"
         ],
         "size": {
-          "d": 12,
+          "d": 6,
           "w": 12
         },
         "wall": "plaster",
@@ -1233,7 +1233,7 @@
           "w"
         ],
         "size": {
-          "d": 12,
+          "d": 6,
           "w": 12
         },
         "wall": "panelling",

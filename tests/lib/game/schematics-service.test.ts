@@ -185,8 +185,8 @@ const REQUIRED_GROUPS: Record<(typeof SERVICE_MODULES)[number], string[]> = {
     "kitchen:sideboard",
     "kitchen:cleaning",
   ],
-  bath: ["bath:lockers-w", "bath:rail-w", "bath:towelstation"],
-  storage: ["storage:rack-n", "storage:rack-flank", "storage:cart"],
+  bath: ["bath:lockers", "bath:rail", "bath:towelstation"],
+  storage: ["storage:rack-n", "storage:cart"],
   workshop: [
     "workshop:bench",
     "workshop:materials",
@@ -208,12 +208,7 @@ const OPTIONAL_GROUPS: Record<
     { id: "kitchen:end-w", chance: 0.5 },
     { id: "kitchen:end-e", chance: 0.5 },
   ],
-  bath: [
-    { id: "bath:lockers-e", chance: 0.55 },
-    { id: "bath:rail-e", chance: 0.5 },
-    { id: "bath:vanity", chance: 0.7 },
-    { id: "bath:plants", chance: 0.6 },
-  ],
+  bath: [], // the 6×6 changing room keeps only its required core
   storage: [{ id: "storage:mop", chance: 0.6 }],
   workshop: [
     { id: "workshop:mop", chance: 0.6 },
@@ -349,13 +344,6 @@ const RIGID_PAIRS: Record<
     },
   ],
   bath: [
-    {
-      pair: ["vanity", "chair"],
-      group: "bath:vanity",
-      min: 0.68,
-      max: 0.9,
-      optional: true,
-    },
     {
       pair: ["bench", "bucket"],
       group: "bath:towelstation",
@@ -575,28 +563,29 @@ describe("kitchen — the working wall and the laid table (specs §5 / kitchen.t
     expect(approach, "a chair between the door and the table").toBeLessThan(table.z);
   });
 
-  it("the mop parks in the south-west corner", () => {
+  it("the mop parks on the west wall, past the doorway band", () => {
     const { one } = staged("kitchen");
     const mop = one("mop");
-    expect(mop.x, "mop west").toBeLessThan(-3.5);
-    expect(mop.z, "mop south").toBeLessThan(1.7);
+    expect(mop.x, "mop west").toBeLessThan(-2.0);
+    expect(mop.z, "mop past the strip").toBeGreaterThan(4.3);
+    expect(mop.z).toBeLessThan(4.75);
   });
 });
 
-describe("bath — a real changing room on the dry rims (specs §6 / bath.txt, 16×10)", () => {
-  it("the locker run stands on the west rim facing the water side", () => {
+describe("bath — the changing-room core in 6×6 (specs §6 / bath.txt)", () => {
+  it("the locker run hugs the far wall, facing the room", () => {
     const { byKind } = staged("bath");
     const lockers = byKind("lockerrow");
-    expect(lockers.length, "the west run is required").toBeGreaterThanOrEqual(1);
-    const west = lockers.find((l) => l.x < -6.5)!;
-    expect(west, "a run on the west rim").toBeDefined();
-    expect(forward(west).x, "the lockers face east, into the room").toBeGreaterThan(0.9);
+    expect(lockers.length, "the locker run is required").toBeGreaterThanOrEqual(1);
+    const run = lockers[0];
+    expect(run.z, "lockers on the far wall, past the basin").toBeGreaterThan(5.0);
+    expect(forward(run).z, "the lockers face the door/pool").toBeLessThan(-0.9);
   });
 
   it("the towel station: bench at the far strip, towels ON it, bucket beside", () => {
     const { one, byKind } = staged("bath");
     const bench = one("bench");
-    expect(bench.z, "the bench on the north edge, past the water").toBeGreaterThan(8.2);
+    expect(bench.z, "the bench on the far strip, past the basin edge").toBeGreaterThan(5.0);
     const towels = byKind("towelstack");
     expect(towels.length, "folded towels on the seat").toBeGreaterThanOrEqual(1);
     for (const t of towels) {
@@ -607,47 +596,35 @@ describe("bath — a real changing room on the dry rims (specs §6 / bath.txt, 1
     expect(dist(bucket, bench), "the bucket beside the bench").toBeLessThan(1.2);
   });
 
-  it("the towel rails stand at the water's edge on the rims", () => {
+  it("the towel rail stands at the basin's edge on the west rim", () => {
     const { one } = staged("bath");
     const rail = one("towelrail");
-    expect(rail.x, "west rail at the water margin (basin edge ≈ −4.7)").toBeLessThan(-4.8);
-    expect(rail.x, "rail still on the rim, not mid-floor").toBeGreaterThan(-5.5);
-    expect(rail.z, "mid-rim").toBeGreaterThan(5.2);
-    expect(rail.z).toBeLessThan(5.7);
+    expect(rail.x, "rail just off the water (basin edge ≈ −1.8)").toBeLessThan(-1.75);
+    expect(rail.x, "rail still on the rim").toBeGreaterThan(-2.3);
+    expect(rail.z, "past the doorway strip").toBeGreaterThan(4.1);
+    expect(rail.z).toBeLessThan(4.5);
   });
 
-  it("every piece stays out of the keep-empty spine; the vanity keeps its group", () => {
-    const { pieces, byKind } = staged("bath");
+  it("every piece stays out of the keep-empty spine", () => {
+    const { pieces } = staged("bath");
     for (const p of pieces) {
       expect(
-        Math.abs(p.x) < 2.0 && p.z < 5,
+        Math.abs(p.x) < 0.72 && p.z < 2.9,
         `${p.kind}@${p.x.toFixed(2)},${p.z.toFixed(2)} sits in the spine`,
       ).toBe(false);
     }
-    const vanity = byKind("vanity");
-    if (vanity.length === 0) return; // the optional station stayed out
-    const chair = byKind("chair");
-    expect(chair.length, "the stool came with the vanity").toBeGreaterThan(0);
-    expect(faces(chair[0], vanity[0]), "the stool faces the mirror").toBeGreaterThan(0.9);
   });
 });
 
-describe("storage — being tidied, by composition (specs §7 / storage.txt)", () => {
-  it("one rack anchors the north wall, the second stands on a flank", () => {
+describe("storage — one rack wall and the cart, in 6×6 (specs §7 / storage.txt)", () => {
+  it("the rack anchors the far wall, west of the spine", () => {
     const { byKind } = staged("storage");
     const racks = byKind("storagerack");
-    expect(racks.length).toBeGreaterThanOrEqual(2);
-    expect(
-      racks.some((r) => r.z > 7),
-      "a rack on the north wall",
-    ).toBe(true);
-    expect(
-      racks.some((r) => Math.abs(r.x) > 3),
-      "a rack on a flank",
-    ).toBe(true);
+    expect(racks.length, "one rack in a 1×1 room").toBeGreaterThanOrEqual(1);
+    expect(racks[0].z, "the rack on the far wall").toBeGreaterThan(4.8);
   });
 
-  it("cases ride the shelves and the rack's feet; the cart waits by the door", () => {
+  it("cases ride the shelves and the rack's feet; the cart hugs the east wall by the door", () => {
     const { byKind } = staged("storage");
     const cases = byKind("suitcase");
     expect(cases.length, "3+ suitcases").toBeGreaterThanOrEqual(3);
@@ -657,15 +634,16 @@ describe("storage — being tidied, by composition (specs §7 / storage.txt)", (
     ).toBeGreaterThanOrEqual(2);
     expect(
       cases.some((c) => c.dy === 0),
-      "cases at the racks' feet",
+      "cases at the rack's feet",
     ).toBe(true);
     const cart = byKind("luggagecart");
     expect(cart.length, "the luggage cart is required").toBeGreaterThanOrEqual(1);
-    expect(cart[0].x, "cart door-side, east").toBeGreaterThan(2.5);
-    expect(cart[0].z, "cart a metre in, by the door").toBeLessThan(2.2);
-    // The centre spine (x ±0.5, full depth) stays empty.
+    expect(cart[0].x, "cart hugging the east wall").toBeGreaterThan(1.8);
+    expect(cart[0].z, "cart inside the doorway band").toBeLessThan(2.2);
+    expect(cart[0].z, "cart past the apron").toBeGreaterThan(1.7);
+    // The centre spine (x ±0.36, full depth) stays empty.
     for (const c of cases) {
-      expect(Math.abs(c.x), "case out of the spine").toBeGreaterThan(0.45);
+      expect(Math.abs(c.x), "case out of the spine").toBeGreaterThan(0.3);
     }
   });
 });
@@ -698,8 +676,8 @@ describe("workshop — the bench owns the focal wall (specs §13 / workshop.txt)
         "bench and credenza must not mirror",
       ).toBeGreaterThan(1.5);
     }
-    const rack = byKind("storagerack").find((r) => r.z > 7);
-    expect(rack, "materials rack on the west flank's far end").toBeDefined();
+    const rack = byKind("storagerack").find((r) => r.z > 4.5);
+    expect(rack, "materials rack on the west wall's far end").toBeDefined();
     expect(rack!.x).toBeLessThan(-3.5);
   });
 
@@ -713,11 +691,12 @@ describe("workshop — the bench owns the focal wall (specs §13 / workshop.txt)
     expect(lamp, "the desk's lamp on the desktop").toBeDefined();
   });
 
-  it("the half-finished chair stack waits in the south-east when it lands", () => {
+  it("the half-finished chair stack waits along the east wall when it lands", () => {
     const { byKind } = staged("workshop");
     const stack = byKind("chairstack");
     if (stack.length === 0) return; // the optional spares stayed out
-    expect(stack[0].x, "stack in the east half").toBeGreaterThan(2.3);
-    expect(stack[0].z, "stack by the south end").toBeLessThan(2.2);
+    expect(stack[0].x, "stack on the east wall").toBeGreaterThan(3.5);
+    expect(stack[0].z, "stack just past the doorway strip").toBeGreaterThan(3.8);
+    expect(stack[0].z).toBeLessThan(4.4);
   });
 });

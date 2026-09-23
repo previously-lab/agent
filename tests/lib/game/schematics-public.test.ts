@@ -23,11 +23,12 @@
  *    re-recorded) are APPLIED: gallery and dining sweep against the
  *    real module data below, no overrides.
  *
- * The sunroom and the pool deck needed neither: every authored slot
- * validates against the module data as shipped (the sunroom chairs sit
- * a half-metre north of the plan grid to clear the centre keep-empty
- * band's disc; the pool deck furnishes the dry flanks and the north
- * waterline around the real pool-hall basin and the water-rill runnel).
+ * The sunroom and the pool deck needed neither zones nor bans: every
+ * authored slot validates against the module data as shipped (the
+ * sunroom is v0.13's 2×1 wide-and-shallow cell — 12×6, the seats 1.8–
+ * 2.05m off the glass with the plant band 0.8–1.2m off it; the pool
+ * deck furnishes the dry flanks and the north waterline around the
+ * real pool-hall basin and the water-rill runnel).
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -570,8 +571,9 @@ describe("sunroom — sitting before the glass (room-plans/sunroom.txt)", () => 
         // squared on the glass wall (rotY ≈ 0 = facing +z = the glass).
         if (Math.abs(norm(c.rotY)) > 0.15)
           violations.push(`sweep-${i}: chair rotY=${c.rotY.toFixed(2)} not facing the glass`);
-        // a viewing band between the seat and the glass.
-        if (e - c.z < 2.6 || e - c.z > 3.4)
+        // a viewing band between the seat and the glass (12×6: the
+        // chairs ride 1.8–2.05m off the glass, the plants 0.8–1.2m).
+        if (e - c.z < 1.7 || e - c.z > 2.3)
           violations.push(`sweep-${i}: chair ${(e - c.z).toFixed(2)}m off the glass`);
       }
       // the tea table held between the pair.
@@ -594,7 +596,7 @@ describe("sunroom — sitting before the glass (room-plans/sunroom.txt)", () => 
       for (const pl of plants) {
         if (chairs.length > 0 && pl.z <= Math.min(...chairs.map((c) => c.z)) - 0.2)
           violations.push(`sweep-${i}: a plant drifted behind the seats`);
-        if (pl.z / e < 0.72 || pl.z / e > 0.92)
+        if (pl.z / e < 0.75 || pl.z / e > 0.92)
           violations.push(`sweep-${i}: plant z=${(pl.z / e).toFixed(2)} off the glass band`);
       }
       // the lamp, when it lands, within a seat's reach.

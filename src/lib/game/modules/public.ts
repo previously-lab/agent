@@ -61,8 +61,10 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     label: "日光房",
     worldClasses: ["interior"],
     archetypes: ["hotel-room", "ballroom", "library"],
-    size: { w: 12, d: 12 }, // v0.13 尺度收敛: 2×2 (snapped UP from 12×8 — at 12×6
-    // the reading-corner blueprint forfeits: 0 chairs in the sweep).
+    size: { w: 12, d: 6 }, // v0.13 尺度收敛: 2×1 — 用户裁决(2026-09) "小房间
+    // 1×1、长房间 1×2/2×1"：日光房是宽而浅的单/双人玻璃前休憩间。12×6 下
+    // 槽位重署见 schematics/public.ts（坐席盘须离中央带 z1 3.3 → 椅—玻璃
+    // 视距 1.9–2.1m，植物带 0.8–1.2m 贴玻璃）。
     openings: ["s", "e", "w"],
     doorEdges: [],
     doorCapacity: 0,
