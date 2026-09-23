@@ -28,13 +28,22 @@ export const SERVICE_MODULES: readonly RoomModule[] = [
     // §6.4 逐件问责 (v0.12 declarations audit): no housekeeping here — the
     // trolley + towel piles + bucket is floor-service semantics, and in the
     // threshold room it read as the cleaner working around your arrival.
-    // The foyer keeps arrival: coats, bags, the reception counter, a
-    // lobby clock.
-    kits: ["coat-bench", "luggage", "reception", "clock-nook"],
+    // The foyer keeps arrival: coats, the reception counter, a lobby clock.
+    // No luggage cart either (§12 bans it): the blueprint never draws it,
+    // but the generic fallback path would stage it in the threshold.
+    // §12 bans the CART, not the waiting bags: the storage rack (rack + two
+    // suitcases + tray) is the threshold's own trace — the module header's
+    // "someone's bags waiting by the door". It also keeps the pool-hall
+    // draw at two kits (reception/clock-nook's gates exclude pool-hall), so
+    // a primary foyer never reads as the one fixed scene (§8.2's bar).
+    kits: ["coat-bench", "reception", "clock-nook", "storage-rack"],
     zones: [
       { kind: "cluster", rect: { x: [0.04, 0.3], z: [0.1, 0.9] } },
       { kind: "cluster", rect: { x: [0.7, 0.96], z: [0.1, 0.9] } },
-      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 1] } },
+      // The spine narrows to the entrance half (z:[0, 0.5]) so the
+      // reception counter can stand on the axis past the keep-empty
+      // band — its 对门 read needs the centre axis free.
+      { kind: "keep-empty", rect: { x: [0.34, 0.66], z: [0, 0.5] } },
     ],
     weight: 1,
   },

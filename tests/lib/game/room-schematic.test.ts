@@ -44,6 +44,7 @@ import {
 import {
   compositionForRecipe,
   compositionKitZonesFor,
+  ROOM_MODULES,
 } from "@/lib/game/room-modules";
 import { planArea, stageInteriorKits } from "@/lib/game/kits";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
@@ -133,9 +134,16 @@ describe("the schematic catalogue is sound", () => {
     }
   });
 
-  it("only the living module owns a blueprint today (P1 pilot)", () => {
-    expect(roomSchematicFor("living")).toBeDefined();
-    expect(roomSchematicFor("study")).toBeUndefined();
+  it("every standard module owns its blueprint (the P1 pilot went catalogue-wide)", () => {
+    // P1-era pin, re-recorded for v0.12b P2b: it used to assert the living
+    // was the ONLY blueprint while the pilot was the lone schematic. The
+    // three lanes landed the remaining twelve, so the assertion flips to
+    // the catalogue contract — all thirteen standard modules furnish by
+    // their authored plan, and a module with no blueprint is the bug now.
+    expect(ROOM_MODULES.length).toBeGreaterThanOrEqual(13);
+    for (const m of ROOM_MODULES) {
+      expect(roomSchematicFor(m.id), `${m.id}: missing blueprint`).toBeDefined();
+    }
   });
 });
 

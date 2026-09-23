@@ -150,4 +150,10 @@ export interface RoomSchematic {
   /** 会客/餐厅 may be axially composed; studies must not (§2 rule 6 —
    *  an authoring discipline the tests assert on the resolved pieces). */
   symmetry?: "axial" | "none";
+  /** The room's own 禁止栏 (auditSchematic's banned-kind list). ABSENT —
+   *  the audit applies the shared DEFAULT_BANNED_KINDS; DECLARED (even as
+   *  []) the room's own list REPLACES the default entirely: [] means this
+   *  room's plan accounts for every piece it draws, so no kind is banned
+   *  beyond what the plan itself forbids. */
+  bans?: readonly KitKind[];
 }

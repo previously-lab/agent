@@ -536,24 +536,32 @@ export function resolveSchematic(
 /* Catalogue audit (pure data checking — the tests run it)             */
 /* ------------------------------------------------------------------ */
 
+/** The default 禁止栏 (v0.12 §6.4): park-bench / pool-furniture /
+ *  housekeeping vocabulary that no blueprint may draw UNLESS it declares
+ *  its own `bans` (per-room lists replaced the old one-size ban — the
+ *  bath's lockers, the pool deck's loungers and the like are legal in
+ *  their own rooms). */
+export const DEFAULT_BANNED_KINDS: readonly KitKind[] = [
+  "bench",
+  "poolbench",
+  "lounger",
+  "towelstack",
+  "towelrail",
+  "bucket",
+  "luggagecart",
+  "lockerrow",
+  "chairstack",
+];
+
 /** Blueprint soundness: anchors/facings reference only roles and groups
  *  declared EARLIER (resolution is sequential), counts/scales are
  *  ordered, chances live in (0, 1], required slots never carry a
- *  chance, and the 禁止栏 holds — no banned kind in any accepts. Returns
- *  the violations (empty = sound). */
+ *  chance, and the 禁止栏 holds — no kind from the room's own `bans`
+ *  list (DEFAULT_BANNED_KINDS when the blueprint declares none) in any
+ *  accepts. Returns the violations (empty = sound). */
 export function auditSchematic(schematic: RoomSchematic): string[] {
   const problems: string[] = [];
-  const banned: readonly KitKind[] = [
-    "bench",
-    "poolbench",
-    "lounger",
-    "towelstack",
-    "towelrail",
-    "bucket",
-    "luggagecart",
-    "lockerrow",
-    "chairstack",
-  ];
+  const banned = schematic.bans ?? DEFAULT_BANNED_KINDS;
   const seenRoles: string[] = [];
   const seenGroups: string[] = [];
   for (const slot of schematic.slots) {

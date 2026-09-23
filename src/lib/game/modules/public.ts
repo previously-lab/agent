@@ -45,8 +45,11 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
     zones: [
       { kind: "hero", rect: { x: [0.34, 0.66], z: [0.5, 0.76] } },
       { kind: "cluster", rect: { x: [0.08, 0.92], z: [0.2, 0.6] } },
-      { kind: "keep-empty", rect: { x: [0, 1], z: [0.72, 1] } },
-      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0, 0.44] } },
+      // v0.12b §8: the north band is the LOOKING wall — the blueprint's
+      // wallart/washers own it (the band used to 100%-forfeit the
+      // schematic; lane C report Z1). The corridor keeps an entrance
+      // apron only; the benches' discs clear z 0.3 (Z2).
+      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0, 0.3] } },
     ],
     weight: 2,
   },
@@ -177,7 +180,10 @@ export const PUBLIC_MODULES: readonly RoomModule[] = [
       { kind: "cluster", rect: { x: [0.06, 0.28], z: [0.15, 0.85] } },
       { kind: "cluster", rect: { x: [0.72, 0.94], z: [0.15, 0.85] } },
       { kind: "keep-empty", rect: { x: [0, 1], z: [0, 0.12] } },
-      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0.12, 0.44] } },
+      // v0.12b §11: the corridor keeps the door approach only — the
+      // banquet's south chair row lands at z ≥ 0.42 and its discs
+      // always reached into z 0.44 (36/36 forfeits; lane C report Z3).
+      { kind: "keep-empty", rect: { x: [0.4, 0.6], z: [0.12, 0.3] } },
     ],
     weight: 2,
   },

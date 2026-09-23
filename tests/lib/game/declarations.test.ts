@@ -2,11 +2,13 @@
  * v0.12 declarations-lane regression tests — the "declared but never
  * landed" audit (doc/design/v0.12-room-inventory.md) as contracts:
  *
- *  - Every module's pinned heroKit actually STAGES in its debug-gallery
- *    room (the bedroom lost its bed, the kitchen its table, the pool-deck
- *    its loungers to a single failed first draw — kits.ts now redraws a
- *    failed hero inside its zone, and the zones were re-authored deep
- *    enough to land on the first candidate).
+ *  - A rolled-back schematic still STAGES the module's pinned heroKit
+ *    (the bedroom lost its bed, the kitchen its table to a single failed
+ *    first draw — kits.ts now redraws a failed hero inside its zone, and
+ *    the zones were re-authored deep enough to land on the first
+ *    candidate). v0.12b P2b note: with every heroKit-pinning module
+ *    schematic-owned, this bar is asserted on the rollback path (the
+ *    blueprint withheld), not in the gallery room.
  *  - Declared wall/floor features REACH a host in both room orientations:
  *    the dollhouse cutaway silks one or two wall roles per orientation,
  *    so niche/pilaster slots relocate to a legal full-height run instead
@@ -63,8 +65,10 @@ import {
 import { buildRoomFeatures } from "@/components/game/space";
 
 /** The renderer's furniture memo inputs, rebuilt for one debug-gallery
- *  module room (the single-module composition the gallery forces). */
-function stageModuleRoom(moduleId: string) {
+ *  module room (the single-module composition the gallery forces). Pass
+ *  `{ schematic: false }` to withhold the module's blueprint and stage the
+ *  generic fallback path (the rollback deck the pinned heroKit serves). */
+function stageModuleRoom(moduleId: string, extra: { schematic?: boolean } = {}) {
   const sliceId = `dbg-m:${moduleId}`;
   const recipe = compileSpaceRecipe(sliceId);
   const { recipe: scaledRecipe, scale } = scaledRecipeFor(recipe);
@@ -95,7 +99,7 @@ function stageModuleRoom(moduleId: string) {
     doors: [],
     kitIds,
     zones,
-    ...(schematics.length > 0 ? { schematics } : {}),
+    ...(extra.schematic !== false && schematics.length > 0 ? { schematics } : {}),
     heightAt: () => 0,
   });
   return { recipe, scaledRecipe, scale, comp, plan, zones, kitIds, water, pieces, schematics };
@@ -146,29 +150,37 @@ function featuresFor(
 }
 
 describe("declared heroKits land (v0.12 ①)", () => {
-  // A module OWNED by a room schematic (v0.12 §2 — today the living)
-  // furnishes by slot placement instead; the generic hero stands down
-  // there. Its pinned heroKit is still declared: a rolled-back schematic
-  // falls back to it (the degrade path, asserted in
-  // room-schematic.test.ts).
+  // v0.12b P2b re-record: the pinned set is EMPTY, and that is what the
+  // first test locks. Every module that pins a heroKit went schematic-
+  // owned when the three lanes landed their blueprints — an owned module
+  // furnishes by slot placement, its generic hero stands down, and the
+  // pinned heroKit survives only as the ROLLBACK deck (a rolled-back
+  // schematic falls back to it). The "declared but never landed" audit's
+  // bar now lives on that rollback path: living → sofa-group is asserted
+  // in room-schematic.test.ts "degradation"; the kitchen covers the
+  // service family below.
   const pinned = ROOM_MODULES.filter((m) => m.heroKit && !roomSchematicFor(m.id));
-  it("every module that pins a heroKit stages it in its gallery room", () => {
-    expect(pinned.length).toBeGreaterThanOrEqual(7);
-    for (const m of pinned) {
-      const { pieces } = stageModuleRoom(m.id);
-      // The audit's bar is "declared but never landed" — the bedroom lost
-      // its bed, the kitchen its table. The hero path owns placement 0
-      // wherever the hero zone can hold the kit's footprint disc; at the
-      // colossal gallery the keep-empty bands outsize EVERY disc (a 3.8m
-      // radius cannot sit in the 7.6m band between them), the hero
-      // forfeits, and the pinned kit still lands via the side deal — what
-      // must never happen is the room opening with no heroKit at all.
-      const staged = pieces.filter((p) => p.kitId === m.heroKit);
-      expect(
-        staged.length,
-        `${m.id}: pinned heroKit ${m.heroKit} never staged`,
-      ).toBeGreaterThan(0);
-    }
+  const heroes = ROOM_MODULES.filter((m) => m.heroKit);
+
+  it("every heroKit-pinning module is schematic-owned (the pinned list stands vacated)", () => {
+    expect(heroes.length).toBeGreaterThan(0);
+    expect(
+      pinned.map((m) => m.id),
+      `${pinned.map((m) => m.id).join(",")} still furnish by their heroKit`,
+    ).toEqual([]);
+  });
+
+  it("a rolled-back schematic still stages the module's pinned heroKit", () => {
+    // The kitchen with its blueprint withheld: the generic orchestration
+    // owns the room again and the pinned dining table must land — what
+    // must never happen is the room opening with no heroKit at all (the
+    // bedroom lost its bed, the kitchen its table — the audit's origin).
+    const { pieces } = stageModuleRoom("kitchen", { schematic: false });
+    const staged = pieces.filter((p) => p.kitId === "dining");
+    expect(
+      staged.length,
+      "kitchen: pinned heroKit dining never staged on rollback",
+    ).toBeGreaterThan(0);
   });
 
   it("the schematic-owned living stages its blueprint, not its heroKit", () => {
