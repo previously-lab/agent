@@ -56,6 +56,7 @@ import {
   type RoomDoorPlacement,
 } from "@/lib/game/room-doors";
 import { wallSegmentsFor } from "@/lib/game/room-plan";
+import { ROOM_MODULES } from "@/lib/game/room-modules";
 import {
   COLONNADE_BAY,
   HERO_CLEAR,
@@ -91,6 +92,10 @@ const RENDERER_MOTIF_KINDS: readonly string[] = [
   // The structure layer (v0.12-room-realism §2 — the living pilot's
   // vocabulary, drawn by room-schematic.ts's slots).
   "coffeetable", "mediaunit", "vase", "frame", "candle",
+  // The v0.12 new-props pass (specs 附录 A + room-plans INDEX NEW PROPS):
+  // wardrobe / storagerack / workbench / wallart / mop (the kitchen
+  // worktop is the reshaped craft-pass `counter`).
+  "wardrobe", "storagerack", "workbench", "wallart", "mop",
   // The nature set (§3.1 N4): the worn outdoor vocabulary + the reused
   // scatter kinds (log, mushroom, cairn, signpost).
   "standingstone", "boulder", "reeds", "firepit", "jettydeck", "moss",
@@ -131,6 +136,16 @@ const KIT_IDS = [
   "poolside-bench",
   "ladder-board",
   "towel-rail",
+  // The v0.12 new-props pass (specs 附录 A + room-plans INDEX NEW PROPS):
+  // the kitchen worktop corner, the bedroom wardrobe wall, the luggage
+  // rack, the workshop bench corner (workbench + storagerack), the gallery
+  // hang, and the changing-room mop corner.
+  "kitchen-counter",
+  "wardrobe-wall",
+  "storage-rack",
+  "workbench-corner",
+  "art-wall",
+  "mop-corner",
 ];
 
 /** The nature set (§3.1 N4) — the eight outdoor groups, in catalogue order. */
@@ -162,7 +177,7 @@ const kitById = (id: string): Kit => {
 };
 
 describe("kit data (§3.1)", () => {
-  it("ships the twenty-five interior kits (N1's eight + the abundance pass's eight + the craft pass's nine)", () => {
+  it("ships the thirty-one interior kits (N1's eight + the abundance pass's eight + the craft pass's nine + the v0.12 new-props pass's six)", () => {
     expect(
       KITS.filter((k) => k.worldClasses.includes("interior")).map(
         (k) => k.id,
@@ -189,6 +204,22 @@ describe("kit data (§3.1)", () => {
     for (const kit of KITS) {
       for (const p of kit.pieces) {
         expect(RENDERER_MOTIF_KINDS).toContain(p.kind);
+      }
+    }
+  });
+
+  it("lands every interior kit with a module whose whitelist deals it (§6: kind 与消费端同次落地)", () => {
+    // The water-rill lesson: a kind no module's whitelist names is dead
+    // data — staging can never draw it. Every hand-written interior kit
+    // is referenced by at least one standard module (the deal still gates
+    // on the kit's own world-class/archetype eligibility).
+    const whitelists = new Set(ROOM_MODULES.flatMap((m) => m.kits));
+    for (const kit of KITS) {
+      if (kit.worldClasses.includes("interior")) {
+        expect(
+          whitelists.has(kit.id),
+          `kit "${kit.id}" is dealt by no module whitelist`,
+        ).toBe(true);
       }
     }
   });
@@ -1249,14 +1280,17 @@ describe("template zones parameter (§7) — additive", () => {
    *  for the §6 anti-repetition cap (KIT_ROOM_CAP — the room-wide draw
    *  re-deal) and the open-field piece-reach margin: both intentionally
    *  steer kit selection and field positions, so the pins that moved,
-   *  moved for the audit item, not by accident. The 16 m no-door pin is
-   *  unchanged again — a room that small never binds the cap. */
+   *  moved for the audit item, not by accident. Recaptured a fifth time
+   *  for the v0.12 new-props pass (31 kits — the six NEW PROPS groups
+   *  widen every interior deal): the 16 m no-door pin moves too this
+   *  time — a wider deck shifts the deal even where the cap never
+   *  binds. */
   const PINS: [string, number, string, number, string, string][] = [
-    ["2026-10-11", 16, "hotel-room", 1, "6467:1955045619", "5388:2482888562"],
-    ["2026-10-12", 32, "library", 1.5, "16630:145653143", "14454:2853241498"],
-    ["2026-10-13", 64, "ballroom", 0.66, "27610:380677853", "26519:2080935525"],
-    ["2026-10-14", 96, "hotel-room", 1, "34178:4037623016", "31449:2779045110"],
-    ["2026-10-15", 32, "pool-hall", 1, "15471:3924561398", "15504:1651833347"],
+    ["2026-10-11", 16, "hotel-room", 1, "6060:535184652", "6056:1680631566"],
+    ["2026-10-12", 32, "library", 1.5, "17717:2165748283", "17533:4236919009"],
+    ["2026-10-13", 64, "ballroom", 0.66, "30230:83039979", "28851:2819135990"],
+    ["2026-10-14", 96, "hotel-room", 1, "31847:1835721113", "31734:4172443120"],
+    ["2026-10-15", 32, "pool-hall", 1, "16558:2811097141", "16370:1042149808"],
   ];
 
   it("reproduces the pre-zones staging byte-for-byte when omitted", () => {

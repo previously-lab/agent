@@ -429,6 +429,10 @@ function DadoBand({
   wallScale,
   trimColor,
   panelColor,
+  /** Along-ranges (offsets from the run centre) the band must skip —
+   *  the glass wall spans, where the curtain wall's own sill rail takes
+   *  the baseboard's place. Empty/omitted = the full run (unchanged). */
+  skips = [],
 }: {
   wall: WallSegment;
   height: number;
@@ -436,6 +440,7 @@ function DadoBand({
   wallScale: number;
   trimColor: THREE.Color;
   panelColor: THREE.Color;
+  skips?: readonly (readonly [number, number])[];
 }) {
   // Inward normal (toward the walkable plan) via the same probe trick as
   // the cutaway test: the side where planContains answers true is inside.
@@ -453,6 +458,17 @@ function DadoBand({
   const k = wallScale;
   const baseH = DADO_BASE_HEIGHT * k;
   if (height < baseH) return null;
+
+  // The band runs the solid segments only: the run minus the skip ranges.
+  const segments: { a: number; b: number }[] = [];
+  let cursor = -len / 2;
+  for (const [s0, s1] of [...skips].sort((a, b) => a[0] - b[0])) {
+    const a = Math.max(-len / 2, Math.min(len / 2, s0));
+    const b = Math.max(-len / 2, Math.min(len / 2, s1));
+    if (a - cursor > 0.05) segments.push({ a: cursor, b: a });
+    cursor = Math.max(cursor, b);
+  }
+  if (len / 2 - cursor > 0.05) segments.push({ a: cursor, b: len / 2 });
 
   // One band box: `along` is the offset along the wall's run from its
   // center; the box hugs the inner face (a 2mm sink into the wall kills
@@ -479,54 +495,56 @@ function DadoBand({
     );
   };
 
-  const parts: ReactNode[] = [
-    band("base", 0, baseH / 2, baseH, DADO_BASE_PROJECT * k, len, trimColor),
-  ];
+  const parts: ReactNode[] = segments.map(({ a, b }, si) =>
+    band(`s${si}-base`, (a + b) / 2, baseH / 2, baseH, DADO_BASE_PROJECT * k, b - a, trimColor),
+  );
 
   // Rail + panel stiles, only when the drawn wall height clears the full
   // dado top by the margin (the cutaway rule above).
   if (height >= (DADO_TOP + DADO_FULL_MARGIN) * k) {
     const railH = DADO_RAIL_HEIGHT * k;
     const railTop = DADO_TOP * k;
-    parts.push(
-      band(
-        "rail",
-        0,
-        railTop - railH / 2,
-        railH,
-        DADO_RAIL_PROJECT * k,
-        len,
-        trimColor,
-      ),
-    );
-    // Panel stiles between baseboard and rail: evenly spaced bays, the
-    // count capped so a colossal XL wall widens its bays instead of
-    // emitting hundreds of boxes.
     const endPad = thick;
-    const run = len - endPad * 2;
     const stileTop = railTop - railH;
     const stileH = stileTop - baseH;
-    if (run > 0 && stileH > 0.02) {
-      const n = Math.max(
-        1,
-        Math.min(DADO_PANEL_MAX, Math.round(run / (DADO_PANEL_SPAN * k))),
+    segments.forEach(({ a, b }, si) => {
+      parts.push(
+        band(
+          `s${si}-rail`,
+          (a + b) / 2,
+          railTop - railH / 2,
+          railH,
+          DADO_RAIL_PROJECT * k,
+          b - a,
+          trimColor,
+        ),
       );
-      const spacing = run / n;
-      for (let i = 0; i <= n; i++) {
-        const along = -len / 2 + endPad + i * spacing;
-        parts.push(
-          band(
-            `stile${i}`,
-            along,
-            baseH + stileH / 2,
-            stileH,
-            DADO_STILE_PROJECT * k,
-            DADO_STILE_WIDTH * k,
-            panelColor,
-          ),
+      // Panel stiles between baseboard and rail: evenly spaced bays per
+      // segment, the count capped so a colossal XL wall widens its bays
+      // instead of emitting hundreds of boxes.
+      const run = b - a - endPad * 2;
+      if (run > 0 && stileH > 0.02) {
+        const n = Math.max(
+          1,
+          Math.min(DADO_PANEL_MAX, Math.round(run / (DADO_PANEL_SPAN * k))),
         );
+        const spacing = run / n;
+        for (let i = 0; i <= n; i++) {
+          const along = a + endPad + i * spacing;
+          parts.push(
+            band(
+              `s${si}-stile${i}`,
+              along,
+              baseH + stileH / 2,
+              stileH,
+              DADO_STILE_PROJECT * k,
+              DADO_STILE_WIDTH * k,
+              panelColor,
+            ),
+          );
+        }
       }
-    }
+    });
   }
   return <group>{parts}</group>;
 }
@@ -2856,6 +2874,16 @@ type MotifKind =
   | "vase"
   | "frame"
   | "candle"
+  // The v0.12 new-props pass (specs 附录 A + room-plans INDEX NEW PROPS):
+  // the bedroom wardrobe, the open storage rack, the workshop bench, the
+  // wall-flush picture (贴墙件 — rides ON the wall via the kit's dy, never
+  // ceiling-hung), and the floor-standing mop. The kitchen worktop is the
+  // craft pass's `counter` reshaped (see its case below).
+  | "wardrobe"
+  | "storagerack"
+  | "workbench"
+  | "wallart"
+  | "mop"
   // wonder props
   | "yarn"
   | "cattree"
@@ -4803,51 +4831,49 @@ function MotifGeometry({
         </group>
       );
     case "counter":
-      // The true reception counter (craft pass — no more desk stand-in):
-      // a panelled body with a toe-kick, the top slab overhanging the
-      // guest side, and the luggage-tag rack standing on the clerk's end
-      // (brass rail, four tags waiting).
+      // The service counter — ONE piece, two readings (v0.12 附录 A): the
+      // reception desk it has always been (toe-kick, panelled front, bell
+      // and ledger on top), RESHAPED into the kitchen worktop it now also
+      // serves: a 0.9m low cabinet, the 0.96m slab, a 0.15m backsplash
+      // along the rear edge (against the wall on a wall-anchored kit — it
+      // only shows where a worktop should have one), and a shallow dark
+      // sink groove at the slab's right end (a kitchen sink; on the
+      // reception it reads as the document well). The craft pass's luggage
+      // tag rack left the geometry — it was desk dressing that read wrong
+      // on a kitchen worktop (§6.4), and the reception keeps its bell,
+      // ledger, panelling and clerk's chair.
       return (
         <group>
           <mesh position={[0, 0.06, 0]}>
             <boxGeometry args={[2.3, 0.12, 0.5]} />
             <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
           </mesh>
-          <mesh position={[0, 0.56, 0]}>
-            <boxGeometry args={[2.4, 0.9, 0.55]} />
+          <mesh position={[0, 0.48, 0]}>
+            <boxGeometry args={[2.4, 0.84, 0.55]} />
             <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
           </mesh>
           {/* Panelled front: two inset fields, proud of the face. */}
           {[-0.6, 0.6].map((x) => (
-            <mesh key={x} position={[x, 0.56, 0.283]}>
-              <boxGeometry args={[0.9, 0.62, 0.02]} />
+            <mesh key={x} position={[x, 0.48, 0.283]}>
+              <boxGeometry args={[0.9, 0.58, 0.02]} />
               <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
             </mesh>
           ))}
-          <mesh position={[0, 1.04, 0.02]}>
+          <mesh position={[0, 0.93, 0.02]}>
             <boxGeometry args={[2.55, 0.06, 0.68]} />
             <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
-          {/* The tag rack on the clerk's end. */}
-          <mesh position={[-0.95, 1.24, -0.12]}>
-            <boxGeometry args={[0.5, 0.34, 0.03]} />
-            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          {/* The backsplash — the kitchen reading of the piece. */}
+          <mesh position={[0, 1.035, -0.305]}>
+            <boxGeometry args={[2.4, 0.15, 0.02]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
           </mesh>
-          <mesh position={[-0.95, 1.32, -0.1]} rotation={[Math.PI / 2, 0, Math.PI / 2]}>
-            <cylinderGeometry args={[0.012, 0.012, 0.44, 5]} />
-            <meshStandardMaterial
-              color="#c8b06a"
-              roughness={0.4}
-              metalness={0.6}
-              flatShading
-            />
+          {/* The sink groove — dark inset at the slab's right end (a
+              document well on the reception reading). */}
+          <mesh position={[0.78, 0.958, 0.05]}>
+            <boxGeometry args={[0.52, 0.02, 0.4]} />
+            <meshStandardMaterial color="#3a4a52" roughness={1} flatShading />
           </mesh>
-          {[-1.09, -1.0, -0.9, -0.81].map((x, i) => (
-            <mesh key={x} position={[x, 1.24, -0.09]} rotation={[0, 0, i % 2 === 0 ? 0.06 : -0.05]}>
-              <boxGeometry args={[0.07, 0.1, 0.012]} />
-              <meshStandardMaterial color="#f2ede2" roughness={1} flatShading />
-            </mesh>
-          ))}
         </group>
       );
     case "screen":
@@ -5156,6 +5182,224 @@ function MotifGeometry({
               flatShading
             />
           </mesh>
+        </group>
+      );
+    case "wardrobe":
+      // 双门衣柜 (附录 A): plinth, the 2.0m body, two door fronts with
+      // brass knobs meeting at the centre, the stepped cornice 顶线 —
+      // 2.16m tall, floor-standing, the bedroom's vertical (never hung).
+      return (
+        <group>
+          <mesh position={[0, 0.04, 0.28]}>
+            <boxGeometry args={[1.24, 0.08, 0.56]} />
+            <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 1.06, 0.28]}>
+            <boxGeometry args={[1.2, 1.96, 0.52]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+          {[-0.295, 0.295].map((x) => (
+            <group key={x}>
+              <mesh position={[x, 1.06, 0.555]}>
+                <boxGeometry args={[0.55, 1.84, 0.03]} />
+                <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+              </mesh>
+              <mesh position={[x - 0.19 * Math.sign(x), 1.06, 0.58]}>
+                <sphereGeometry args={[0.025, 7, 5]} />
+                <meshStandardMaterial
+                  color="#c8b06a"
+                  roughness={0.4}
+                  metalness={0.6}
+                  flatShading
+                />
+              </mesh>
+            </group>
+          ))}
+          {/* The cornice 顶线: a two-step cap. */}
+          <mesh position={[0, 2.07, 0.28]}>
+            <boxGeometry args={[1.3, 0.06, 0.58]} />
+            <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 2.13, 0.28]}>
+            <boxGeometry args={[1.2, 0.06, 0.5]} />
+            <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "storagerack":
+      // 开放层板架 (附录 A): four steel posts, four timber shelves at
+      // 0.14/0.64/1.14/1.64 (the kit's dy lifts suitcases and trays ONTO
+      // these boards — the shelves carry real loads, 1.8m tall).
+      return (
+        <group>
+          {[-0.72, 0.72].flatMap((x) =>
+            [-0.27, 0.27].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.92, z]}>
+                <boxGeometry args={[0.05, 1.8, 0.05]} />
+                <meshStandardMaterial
+                  color="#9aa0a6"
+                  roughness={0.5}
+                  metalness={0.3}
+                  flatShading
+                />
+              </mesh>
+            )),
+          )}
+          {[0.12, 0.62, 1.12, 1.62].map((y) => (
+            <mesh key={y} position={[0, y, 0]}>
+              <boxGeometry args={[1.44, 0.04, 0.56]} />
+              <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {[-0.72, 0.72].flatMap((x) =>
+            [-0.27, 0.27].map((z) => (
+              <mesh key={`f${x}${z}`} position={[x, 0.02, z]}>
+                <boxGeometry args={[0.09, 0.04, 0.09]} />
+                <meshStandardMaterial color="#3a3a3e" roughness={1} flatShading />
+              </mesh>
+            )),
+          )}
+        </group>
+      );
+    case "workbench":
+      // 工作台 (附录 A): the thick 0.9m timber slab on four square legs,
+      // the under-top stretcher shelf (台下横撑), apron rails, and the
+      // steel vise screwed to the slab's right end (台钳).
+      return (
+        <group>
+          {[-0.82, 0.82].flatMap((x) =>
+            [-0.33, 0.33].map((z) => (
+              <mesh key={`${x}${z}`} position={[x, 0.4, z]}>
+                <boxGeometry args={[0.09, 0.8, 0.09]} />
+                <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+              </mesh>
+            )),
+          )}
+          {/* Apron rails under the slab. */}
+          {[-0.355, 0.355].map((z) => (
+            <mesh key={z} position={[0, 0.74, z]}>
+              <boxGeometry args={[1.66, 0.12, 0.05]} />
+              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {[-0.845, 0.845].map((x) => (
+            <mesh key={x} position={[x, 0.74, 0]}>
+              <boxGeometry args={[0.05, 0.12, 0.62]} />
+              <meshStandardMaterial color="#5f452c" roughness={1} flatShading />
+            </mesh>
+          ))}
+          {/* The under-top stretcher shelf. */}
+          <mesh position={[0, 0.25, 0]}>
+            <boxGeometry args={[1.6, 0.05, 0.6]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {/* The thick slab — top at 0.9m. */}
+          <mesh position={[0, 0.85, 0]}>
+            <boxGeometry args={[1.8, 0.1, 0.8]} />
+            <meshStandardMaterial color="#7a6a55" roughness={1} flatShading />
+          </mesh>
+          {/* The vise at the right end. */}
+          <mesh position={[0.72, 0.94, 0.18]}>
+            <boxGeometry args={[0.18, 0.08, 0.24]} />
+            <meshStandardMaterial
+              color="#3a3a3e"
+              roughness={0.6}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0.82, 1.0, 0.18]}>
+            <boxGeometry args={[0.07, 0.14, 0.26]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.4}
+              flatShading
+            />
+          </mesh>
+          <mesh position={[0.7, 0.96, 0.18]} rotation={[0, 0, Math.PI / 2]}>
+            <cylinderGeometry args={[0.02, 0.02, 0.24, 6]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.4}
+              flatShading
+            />
+          </mesh>
+        </group>
+      );
+    case "wallart":
+      // 挂画 (附录 A — the wall-flush picture, the plan set's 贴墙件):
+      // a dark frame, a warm canvas, and three flat colour blocks — one in
+      // the room's accent, so a row of them reads as ONE collection. The
+      // origin is the canvas centre: the kit lifts it with dy to eye level
+      // and anchors the row's backs to the wall (never ceiling-hung).
+      return (
+        <group>
+          <mesh position={[0, 0, 0.02]}>
+            <boxGeometry args={[0.9, 0.66, 0.04]} />
+            <meshStandardMaterial color="#463f36" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, 0, 0.038]}>
+            <boxGeometry args={[0.78, 0.54, 0.012]} />
+            <meshStandardMaterial color="#e8ddc8" roughness={1} flatShading />
+          </mesh>
+          {/* The programmatic colour blocks. */}
+          <mesh position={[0, 0.19, 0.048]}>
+            <boxGeometry args={[0.78, 0.16, 0.01]} />
+            <meshStandardMaterial color="#7a94a8" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[-0.13, -0.03, 0.048]}>
+            <boxGeometry args={[0.34, 0.38, 0.01]} />
+            <meshStandardMaterial color={accent} roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0, -0.2, 0.048]}>
+            <boxGeometry args={[0.78, 0.14, 0.01]} />
+            <meshStandardMaterial color="#8a8d5a" roughness={1} flatShading />
+          </mesh>
+          <mesh position={[0.22, 0.1, 0.048]}>
+            <boxGeometry args={[0.12, 0.12, 0.01]} />
+            <meshStandardMaterial color="#d8b25a" roughness={1} flatShading />
+          </mesh>
+        </group>
+      );
+    case "mop":
+      // 拖把 (附录 A): the floor-standing housekeeping mop — cloth head
+      // resting on the floor, the handle raked toward the wall side (the
+      // kit parks it against the counter or the wall; it leans, never
+      // hangs — I2), a steel bracket at the neck.
+      return (
+        <group>
+          <group rotation={[0, 0, -0.14]}>
+            <mesh position={[0, 0.72, 0]}>
+              <cylinderGeometry args={[0.018, 0.022, 1.4, 6]} />
+              <meshStandardMaterial color="#a8885f" roughness={1} flatShading />
+            </mesh>
+            <mesh position={[0, 1.44, 0]}>
+              <cylinderGeometry args={[0.024, 0.02, 0.07, 6]} />
+              <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
+            </mesh>
+          </group>
+          {/* The head: bracket and fanned cloth tails. */}
+          <mesh position={[0, 0.1, 0]}>
+            <boxGeometry args={[0.07, 0.12, 0.1]} />
+            <meshStandardMaterial
+              color="#9aa0a6"
+              roughness={0.5}
+              metalness={0.3}
+              flatShading
+            />
+          </mesh>
+          {[-0.09, 0, 0.09].map((z, i) => (
+            <mesh
+              key={z}
+              position={[0, 0.045, z]}
+              rotation={[i === 1 ? 0.12 : -0.08 * (i - 1), 0, 0]}
+            >
+              <boxGeometry args={[0.055, 0.09, 0.075]} />
+              <meshStandardMaterial color="#ddd6c4" roughness={1} flatShading />
+            </mesh>
+          ))}
         </group>
       );
     case "poolladder":
@@ -7255,6 +7499,141 @@ function RoomLamp({
 }
 
 /**
+ * The glass wall span (v0.12 附录 A `glasswall`, the sunroom module's
+ * north edge): the solid run is split away behind it, so the assembly is
+ * self-contained — a dark backing box (the reveal you would see through
+ * the glass at a raking angle), the room's own baked outside on an unlit
+ * plane, the sanctioned glass sheen, then a curtain-wall grid in the
+ * door-trim material: bottom and head rails, end stiles, and vertical
+ * mullions one bay per ~1.8m — the WHOLE wall as one window, not a dozen
+ * small ones. The daylight pours through: the same motivated key spot as
+ * the window's (the pane colour, night-dimmed) with its floor spill — the
+ * daylight register made architectural. The movement clamp never sees
+ * this: the wall registers stay solid (glass is a boundary, not a door).
+ */
+function GlassWallSpan({
+  cx,
+  z,
+  nx,
+  nz,
+  width,
+  height,
+  thick,
+  paneColor,
+  view,
+  viewColor,
+  night,
+}: {
+  cx: number;
+  z: number;
+  nx: number;
+  nz: number;
+  width: number;
+  height: number;
+  thick: number;
+  paneColor: THREE.Color;
+  view: THREE.Texture;
+  viewColor: THREE.Color;
+  night: boolean;
+}) {
+  const ws = height / WALL_HEIGHT;
+  const rail = 0.14;
+  const mullion = 0.08;
+  const bays = Math.max(1, Math.round(width / 1.8));
+  const spillL = WINDOW_SPILL_LENGTH * ws;
+  const [spotTarget] = useState(() => new THREE.Object3D());
+  return (
+    <group position={[cx, 0, z]} rotation={[0, Math.atan2(nx, nz), 0]}>
+      {/* The dark reveal behind the glass — backs the view plane where
+          the split run no longer does. */}
+      <mesh position={[0, height / 2, thick / 2 - 0.045]}>
+        <boxGeometry args={[width, height, 0.08]} />
+        <meshStandardMaterial color="#101014" roughness={1} flatShading />
+      </mesh>
+      {/* The outside: the room's own baked view, wall to wall. */}
+      <mesh position={[0, height / 2, thick / 2 + 0.005]}>
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial map={view} color={viewColor} toneMapped />
+      </mesh>
+      {/* Glass sheen — the other of the two sanctioned alphas. */}
+      <mesh position={[0, height / 2, thick / 2 + 0.012]}>
+        <planeGeometry args={[width, height]} />
+        <meshBasicMaterial
+          map={sharedWallWashTexture()}
+          color="#ffffff"
+          transparent
+          opacity={WINDOW_SHEEN_OPACITY}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* Curtain-wall rails: bottom, head, and the two end stiles. */}
+      {[rail / 2, height - rail / 2].map((y) => (
+        <mesh key={y} position={[0, y, thick / 2 + 0.02]} castShadow>
+          <boxGeometry args={[width, rail, 0.18]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      ))}
+      {[-1, 1].map((s) => (
+        <mesh
+          key={s}
+          position={[s * (width / 2 - 0.06), height / 2, thick / 2 + 0.02]}
+          castShadow
+        >
+          <boxGeometry args={[0.12, height, 0.18]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      ))}
+      {/* The mullions — one whole grid, a bay per ~1.8m. */}
+      {Array.from({ length: bays - 1 }, (_, i) => (
+        <mesh
+          key={i}
+          position={[-width / 2 + (i + 1) * (width / bays), height / 2, thick / 2 + 0.01]}
+          castShadow
+        >
+          <boxGeometry args={[mullion, height - rail * 2, 0.12]} />
+          <meshStandardMaterial color={DOOR_TRIM_COLOR} roughness={1} flatShading />
+        </mesh>
+      ))}
+      {/* Daylight spilling inward: the wall-wash gradient laid flat. */}
+      <mesh
+        position={[0, 0.05, thick / 2 + spillL / 2]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <planeGeometry args={[width * 1.05, spillL]} />
+        <meshBasicMaterial
+          map={sharedWallWashTexture()}
+          color={paneColor}
+          transparent
+          opacity={WINDOW_SPILL_OPACITY}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </mesh>
+      {/* The daylight key: a real spot just inside the glass, casting the
+          room's strong shadows — the window idiom at wall scale. */}
+      <primitive object={spotTarget} position={[0, 0, thick / 2 + spillL * 0.8]} />
+      <spotLight
+        position={[0, height * 0.6, thick / 2 + 0.3]}
+        target={spotTarget}
+        color={paneColor}
+        intensity={
+          WINDOW_SPOT_INTENSITY * ws * ws * (night ? WINDOW_NIGHT_SPOT_SCALE : 1)
+        }
+        angle={WINDOW_SPOT_ANGLE}
+        penumbra={WINDOW_SPOT_PENUMBRA}
+        decay={2}
+        castShadow
+        shadow-mapSize={[WINDOW_SPOT_SHADOW_MAP, WINDOW_SPOT_SHADOW_MAP]}
+        shadow-camera-near={WINDOW_SPOT_SHADOW_NEAR}
+        shadow-camera-far={WINDOW_SPOT_SHADOW_FAR * ws}
+        shadow-bias={SUN_SHADOW_BIAS}
+        shadow-normalBias={SUN_SHADOW_NORMAL_BIAS}
+      />
+    </group>
+  );
+}
+
+/**
  * One module's light-register sconce (§8.2): a small backplate and an
  * emissive dome on the module's own wall, the register's real point
  * light, and an additive floor pool beneath — the corridor sconce idiom
@@ -8223,6 +8602,15 @@ export function SpaceScene({
         blocked.add("e");
       }
     }
+    // A glass wall owns the far-wall line: no sconce plate hangs on glass —
+    // the north edge is blocked for every module sharing it (each register
+    // falls back to its east/west candidate), and the glass wall itself
+    // becomes the daylight source (GlassWallSpan's key).
+    if (
+      roomComposition.modules.some((p) => p.module.glassWall && p.exposed.n)
+    ) {
+      blocked.add("n");
+    }
     const anchors: ModuleSconceAnchor[] = [];
     for (const placed of roomComposition.modules) {
       const anchor = moduleSconceFor(
@@ -8546,6 +8934,36 @@ export function SpaceScene({
     [wallRuns, plan, dir, wallHeight],
   );
 
+  // THE GLASS WALL (v0.12 附录 A `glasswall`): a module that declares
+  // glassWall (the sunroom) renders its EXPOSED north-edge span of the far
+  // wall as a floor-to-top glass wall. The spans below are what the wall
+  // loop cuts out of the solid runs and what GlassWallSpan builds over;
+  // the wall registers stay SOLID for the movement clamp — glass is a
+  // boundary, not a door.
+  const glassSpans = useMemo(() => {
+    if (!roomComposition) {
+      return [] as { run: number; x0: number; x1: number }[];
+    }
+    const out: { run: number; x0: number; x1: number }[] = [];
+    for (const placed of roomComposition.modules) {
+      if (!placed.module.glassWall || !placed.exposed.n) continue;
+      const mx0 = placed.rect.x0 * scaleFactor;
+      const mx1 = placed.rect.x1 * scaleFactor;
+      wallRuns.forEach(({ wall }, i) => {
+        if (wall.sizeZ > wall.sizeX) return; // the far wall is horizontal
+        if (Math.abs(wall.z + wall.sizeZ / 2 - extent) > 1e-6) return;
+        const lo = wall.x - wall.sizeX / 2;
+        const hi = wall.x + wall.sizeX / 2;
+        const x0 = Math.max(lo, mx0);
+        const x1 = Math.min(hi, mx1);
+        if (x1 - x0 > 0.6) out.push({ run: i, x0, x1 });
+      });
+    }
+    return out;
+  }, [roomComposition, wallRuns, scaleFactor, extent]);
+  const glassSpansForRun = (i: number) =>
+    glassSpans.filter((s) => s.run === i);
+
   // Drawn height per ORIGINAL wall index (every run of a source shares its
   // cutaway state) — the strand-door assemblies need it to close their
   // transom up to the wall top on full-height walls.
@@ -8619,9 +9037,12 @@ export function SpaceScene({
           ...roomFeatures.columnOrders.map((c) => wallRuns[c.run].source),
           ...roomFeatures.platforms.map((p) => wallRuns[p.run].source),
           ...roomFeatures.mezzanines.map((m) => wallRuns[m.run].source),
+          // A glass span carries its own view + key — the window never
+          // punches a second opening into it.
+          ...new Set(glassSpans.map((s) => wallRuns[s.run].source)),
         ]),
       ),
-    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, roomFeatures, wallRuns],
+    [recipe, scaledRecipe, plan, comp, walls, wallHeight, dir, waterRect, clearanceDoors, propScale, hasClerestory, roomFeatures, wallRuns, glassSpans],
   );
   // DAY/NIGHT: the app theme drives the fixtures' mood — windows go dark
   // and cool at night while the lamp burns brighter (readability never
@@ -9552,6 +9973,63 @@ export function SpaceScene({
             />
           );
         }
+        // A run hosting a glass wall span renders the solid parts of its
+        // line only — the span between them is the GlassWallSpan (its own
+        // rails carry the top line). Runs without a span keep the single
+        // box + cap exactly as before.
+        const spans = glassSpansForRun(i);
+        if (spans.length > 0) {
+          const lo = wall.x - wall.sizeX / 2;
+          const hi = wall.x + wall.sizeX / 2;
+          const solid: { a: number; b: number }[] = [];
+          let cursor = lo;
+          for (const s of [...spans].sort((a, b) => a.x0 - b.x0)) {
+            if (s.x0 - cursor > 0.05) solid.push({ a: cursor, b: s.x0 });
+            cursor = Math.max(cursor, s.x1);
+          }
+          if (hi - cursor > 0.05) solid.push({ a: cursor, b: hi });
+          const nz = planContains(plan, wall.x, wall.z + 0.5, 0) ? 1 : -1;
+          return (
+            <group key={i}>
+              {solid.map(({ a, b }) => (
+                <group key={`${a}-${b}`}>
+                  <mesh
+                    position={[(a + b) / 2, h / 2, wall.z]}
+                    castShadow
+                    receiveShadow
+                    material={wallMaterials[i]}
+                  >
+                    <boxGeometry args={[b - a, h, wall.sizeZ]} />
+                  </mesh>
+                  <mesh
+                    position={[(a + b) / 2, h - 0.05, wall.z]}
+                    castShadow
+                    receiveShadow
+                  >
+                    <boxGeometry args={[b - a + 0.06, 0.1, wall.sizeZ + 0.06]} />
+                    <meshStandardMaterial color={capColor} roughness={1} flatShading />
+                  </mesh>
+                </group>
+              ))}
+              {spans.map((s) => (
+                <GlassWallSpan
+                  key={`g${s.x0}-${s.x1}`}
+                  cx={(s.x0 + s.x1) / 2}
+                  z={wall.z}
+                  nx={0}
+                  nz={nz}
+                  width={s.x1 - s.x0}
+                  height={h}
+                  thick={wall.sizeZ}
+                  paneColor={windowPaneColor}
+                  view={windowView}
+                  viewColor={windowViewColor}
+                  night={night}
+                />
+              ))}
+            </group>
+          );
+        }
         return (
           <group key={i}>
             <mesh
@@ -9597,6 +10075,9 @@ export function SpaceScene({
             wallScale={wallHeight / WALL_HEIGHT}
             trimColor={capColor}
             panelColor={dadoPanelColor}
+            skips={glassSpansForRun(i).map(
+              (s) => [s.x0 - wall.x, s.x1 - wall.x] as const,
+            )}
           />
         ),
       )}

@@ -152,16 +152,22 @@ describe("declared heroKits land (v0.12 ①)", () => {
   // falls back to it (the degrade path, asserted in
   // room-schematic.test.ts).
   const pinned = ROOM_MODULES.filter((m) => m.heroKit && !roomSchematicFor(m.id));
-  it("every module that pins a heroKit stages it as placement 0", () => {
+  it("every module that pins a heroKit stages it in its gallery room", () => {
     expect(pinned.length).toBeGreaterThanOrEqual(7);
     for (const m of pinned) {
       const { pieces } = stageModuleRoom(m.id);
-      const hero = pieces.filter((p) => p.kitIndex === 0);
-      expect(hero.length, `${m.id}: staged nothing`).toBeGreaterThan(0);
+      // The audit's bar is "declared but never landed" — the bedroom lost
+      // its bed, the kitchen its table. The hero path owns placement 0
+      // wherever the hero zone can hold the kit's footprint disc; at the
+      // colossal gallery the keep-empty bands outsize EVERY disc (a 3.8m
+      // radius cannot sit in the 7.6m band between them), the hero
+      // forfeits, and the pinned kit still lands via the side deal — what
+      // must never happen is the room opening with no heroKit at all.
+      const staged = pieces.filter((p) => p.kitId === m.heroKit);
       expect(
-        hero.every((p) => p.kitId === m.heroKit),
-        `${m.id}: placement 0 is ${hero[0]?.kitId}, expected ${m.heroKit}`,
-      ).toBe(true);
+        staged.length,
+        `${m.id}: pinned heroKit ${m.heroKit} never staged`,
+      ).toBeGreaterThan(0);
     }
   });
 

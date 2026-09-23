@@ -174,7 +174,21 @@ export type KitKind =
   | "mediaunit"
   | "vase"
   | "frame"
-  | "candle";
+  | "candle"
+  // The v0.12 new-props pass (specs 附录 A + room-plans INDEX's NEW PROPS
+  // column, the "平面图需要、词表里没有" list): the kitchen worktop counter
+  // is the craft pass's `counter` RESHAPED (see space.tsx — the panelled
+  // body now carries a 0.15m backsplash and a sink groove, and serves both
+  // the reception and the kitchen), so only these five join here — the
+  // bedroom wardrobe (双门高柜 + 顶线), the open storage rack (层板可承
+  // suitcase/tray), the workshop bench (厚木台 + 台钳), the wall-flush
+  // picture (程序化色块, hung ON the wall — the plan set's 贴墙件, never
+  // ceiling-hung), and the floor-standing mop (与 bucket 配对的家务件).
+  | "wardrobe"
+  | "storagerack"
+  | "workbench"
+  | "wallart"
+  | "mop";
 
 /** What a free-standing kit's forward faces (orientation is the point —
  *  a kit that is just a scatter of three props is a failure). Wall-anchored
@@ -341,8 +355,8 @@ export const KITS: readonly Kit[] = [
     pieces: [
       { kind: "counter", dx: 0, dz: 0, rotY: 0 },
       { kind: "chair", dx: 0, dz: -1.05, rotY: 0 },
-      { kind: "bell", dx: 0.55, dz: 0.15, rotY: 0, dy: 1.02 },
-      { kind: "register", dx: -0.5, dz: 0.1, rotY: 0.15, dy: 1.02 },
+      { kind: "bell", dx: 0.55, dz: 0.15, rotY: 0, dy: 0.96 },
+      { kind: "register", dx: -0.5, dz: 0.1, rotY: 0.15, dy: 0.96 },
     ],
   },
   {
@@ -383,8 +397,11 @@ export const KITS: readonly Kit[] = [
     ],
   },
   {
-    // 推车 + 毛巾堆 + 水桶 — housekeeping, paused mid-round (calm, never
-    // abandoned-in-a-hurry — I4): the trolley, two towel piles, a bucket.
+    // 推车 + 毛巾堆 + 水桶 + 拖把 — housekeeping, paused mid-round (calm,
+    // never abandoned-in-a-hurry — I4): the trolley, two towel piles, a
+    // bucket, and the mop leaning against the trolley's deck — the "someone
+    // is keeping this place" beat (realism §6.3) for the kitchen, the
+    // luggage room and the workshop.
     id: "housekeeping",
     worldClasses: ["interior"],
     facing: "path",
@@ -394,6 +411,7 @@ export const KITS: readonly Kit[] = [
       { kind: "towelstack", dx: 0.62, dz: 0.4, rotY: 0.2 },
       { kind: "towelstack", dx: 0.5, dz: 0.85, rotY: -0.15, scale: 0.75 },
       { kind: "bucket", dx: -0.5, dz: 0.55, rotY: 0 },
+      { kind: "mop", dx: -0.38, dz: -0.12, rotY: -0.5 },
     ],
   },
   {
@@ -726,6 +744,141 @@ export const KITS: readonly Kit[] = [
       { kind: "towelrail", dx: 0, dz: 0, rotY: 0 },
       { kind: "towelstack", dx: 0.75, dz: 0.25, rotY: 0.2, scale: 0.9 },
       { kind: "bucket", dx: -0.7, dz: 0.3, rotY: 0 },
+    ],
+  },
+
+  /* -------------------------------------------------------------- */
+  /* The v0.12 new-props pass (specs 附录 A + the room-plans INDEX's   */
+  /* NEW PROPS column): the six groups that put the formerly          */
+  /* unbuildable kinds into staged rooms — each new kind lands WITH   */
+  /* the kit that names it and the module whitelist that deals it     */
+  /* (the §6 "一个 kind 与它的消费端同一次落地" rule).                 */
+  /* -------------------------------------------------------------- */
+
+  {
+    // 一字操作台 + 台面小物 + 拖把水桶 — the kitchen's working wall
+    // (§5: counter 必备, bucket+mop 角落必备): the worktop counter with
+    // its tray and vase ON the slab (the sink groove is baked into the
+    // counter's top), the mop and bucket parked at its end. Wall-anchored:
+    // the backsplash reads against the kitchen wall.
+    id: "kitchen-counter",
+    worldClasses: ["interior"],
+    anchor: "wall",
+    backOffset: 0.4,
+    facing: "center",
+    footprint: 1.6,
+    pieces: [
+      { kind: "counter", dx: 0, dz: 0, rotY: 0 },
+      { kind: "tray", dx: -0.5, dz: 0.02, rotY: 0.15, dy: 0.96 },
+      { kind: "vase", dx: 0.32, dz: -0.08, rotY: 0, dy: 0.96 },
+      { kind: "mop", dx: 1.35, dz: -0.08, rotY: 0.4 },
+      { kind: "bucket", dx: 1.48, dz: 0.28, rotY: 0 },
+    ],
+  },
+  {
+    // 双门衣柜 + 盆栽 + 书堆 — the bedroom's wardrobe wall (§2: wardrobe
+    // 必备, against the non-door, non-headboard wall): the tall cabinet,
+    // a plant breathing at its end, the bedside reading waiting on the
+    // floor. Floor-standing, never hung (双门 + 顶线).
+    // §6.4 逐件问责: no `luggage` here — §2's ban list names the
+    // luggagecart (and the cart IS the kit's centrepiece), and the
+    // wardrobe is the §2 必备 this wall exists for. The wardrobe stays
+    // eligible for every interior archetype: it is the bedroom suite's
+    // storage wherever that suite lands (and it keeps the bedroom a
+    // legal companion for the pool hall/library/ballroom compositions —
+    // the luggage kit used to carry that cross-archetype eligibility).
+    id: "wardrobe-wall",
+    worldClasses: ["interior"],
+    archetypes: ["hotel-room", "library", "ballroom", "pool-hall"],
+    anchor: "wall",
+    backOffset: 0.35,
+    facing: "center",
+    footprint: 1.5,
+    pieces: [
+      { kind: "wardrobe", dx: 0, dz: 0, rotY: 0 },
+      { kind: "plant", dx: 1.2, dz: 0.12, rotY: 0.5 },
+      { kind: "bookpile", dx: -0.95, dz: 0.28, rotY: 0.25 },
+    ],
+  },
+  {
+    // 开放层架 + 箱 + 托盘 — the luggage room's rack wall (§7: storagerack
+    // 必备, suitcase×2–4 必备): two cases ride the shelves (the kit's dy
+    // lifts them onto real boards, never floating), a tray holds the small
+    // stuff on the top shelf.
+    id: "storage-rack",
+    worldClasses: ["interior"],
+    anchor: "wall",
+    backOffset: 0.35,
+    facing: "center",
+    footprint: 1.5,
+    pieces: [
+      { kind: "storagerack", dx: 0, dz: 0, rotY: 0 },
+      { kind: "suitcase", dx: -0.35, dz: 0.02, rotY: 0.1, dy: 0.14 },
+      { kind: "suitcase", dx: 0.32, dz: -0.04, rotY: -0.3, scale: 0.85, dy: 0.64 },
+      { kind: "tray", dx: 0.1, dz: 0.08, rotY: 0.5, dy: 1.14 },
+    ],
+  },
+  {
+    // 厚重木工作台 + 物料架 + 台前椅 + 台面工具 — the workshop's working
+    // wall (§13: workbench 必备, storagerack/sideboard 2 组必备): the
+    // bench with its vise, a rack of materials beside it, the chair pulled
+    // up, the lamp and the tool tray ON the slab. ONE kit names BOTH new
+    // workshop kinds — the module whitelist cap (§6 少而准) leaves room
+    // for only one entry, and the two belong to the same corner anyway.
+    id: "workbench-corner",
+    worldClasses: ["interior"],
+    anchor: "wall",
+    backOffset: 0.5,
+    facing: "center",
+    footprint: 1.9,
+    pieces: [
+      { kind: "workbench", dx: 0, dz: 0, rotY: 0 },
+      { kind: "storagerack", dx: -1.65, dz: -0.05, rotY: 0 },
+      { kind: "chair", dx: 0.15, dz: 1.05, rotY: Math.PI },
+      { kind: "desklamp", dx: -0.5, dz: -0.05, rotY: 0.3, dy: 0.9 },
+      { kind: "tray", dx: 0.5, dz: 0.02, rotY: -0.2, dy: 0.9 },
+    ],
+  },
+  {
+    // 一排挂画 + 盆栽 — the gallery hang (§8: wallart×3–5 沿长墙 必备):
+    // four frames at seeded-feeling staggered heights and sizes (the
+    // geometry takes the room's accent for its canvas blocks, so the row
+    // reads as ONE collection), a plant at the row's end. The frames ride
+    // ON the wall (the plan set's 贴墙件 — flush, never ceiling-hung): the
+    // pieces' negative dz keeps their backs at the wall while the kit
+    // origin stands off it like every wall kit (a hugging origin lands
+    // OUTSIDE the cluster bands and the row could never stage).
+    id: "art-wall",
+    worldClasses: ["interior"],
+    anchor: "wall",
+    backOffset: 0.8,
+    facing: "center",
+    footprint: 2.5,
+    pieces: [
+      { kind: "wallart", dx: -1.5, dz: -0.76, rotY: 0, dy: 1.5, scale: 0.85 },
+      { kind: "wallart", dx: -0.5, dz: -0.76, rotY: 0, dy: 1.62, scale: 1 },
+      { kind: "wallart", dx: 0.55, dz: -0.76, rotY: 0, dy: 1.46, scale: 0.75 },
+      { kind: "wallart", dx: 1.5, dz: -0.76, rotY: 0, dy: 1.58, scale: 0.95 },
+      { kind: "plant", dx: 2.35, dz: -0.6, rotY: 0.6 },
+    ],
+  },
+  {
+    // 拖把 + 水桶 + 备用毛巾 — the changing room's quiet corner (realism
+    // §6.3: 家务件 belong in the 浴室/厨房/行李房/工作间 corner slots):
+    // the mop standing with its bucket, a spare towel pile waiting. The
+    // bath's §6 ban on luggagecart keeps the full housekeeping trolley out,
+    // so the cleaning pair gets its own small group.
+    id: "mop-corner",
+    worldClasses: ["interior"],
+    archetypes: ["pool-hall"],
+    anchor: "wall",
+    backOffset: 0.45,
+    facing: "center",
+    footprint: 0.8,
+    pieces: [
+      { kind: "mop", dx: -0.25, dz: -0.05, rotY: -0.35 },
+      { kind: "bucket", dx: 0.25, dz: 0.1, rotY: 0 },
+      { kind: "towelstack", dx: 0.05, dz: 0.4, rotY: 0.2, scale: 0.9 },
     ],
   },
 
@@ -1241,14 +1394,15 @@ export const TRACE_KINDS: readonly KitKind[] = ["bookpile", "tray", "towelstack"
  *  above the floor (m, human scale; multiplied by the host piece's own
  *  scale at placement). Tops come from the established dy precedents
  *  (bookpile on bench 0.45, desklamp on desk 0.80, tray on diningtable
- *  0.78, bell on counter 1.02) and the nature kinds' authored geometry.
- *  Cluttered tops (nightstand's vase, the vanity and sideboard dressing)
- *  are deliberately excluded — a trace must own its spot. */
+ *  0.78, bell on counter 0.96 — the v0.12 worktop height) and the nature
+ *  kinds' authored geometry. Cluttered tops (nightstand's vase, the
+ *  vanity and sideboard dressing) are deliberately excluded — a trace
+ *  must own its spot. */
 export const TRACE_HOST_TOPS: Readonly<Record<string, number>> = {
   bench: 0.45,
   desk: 0.8,
   diningtable: 0.78,
-  counter: 1.02,
+  counter: 0.96,
   poolbench: 0.4,
   log: 0.46,
   jettydeck: 0.45,

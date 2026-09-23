@@ -168,6 +168,13 @@ export interface RoomModule {
   /** The module's composed centrepiece (a kits.ts heroSlot kit id) — the
    *  PRIMARY module's hero becomes the room's hero. */
   heroKit?: string;
+  /** The daylight-glass module (the sunroom): its EXPOSED north edge is
+   *  not a solid wall but a floor-to-top glass wall with the outside view
+   *  (space.tsx's GlassWallSpan — the v0.12 附录 A `glasswall` 墙面处理;
+   *  the wall registers stay SOLID for the movement clamp — glass is a
+   *  boundary, not a door). Only ever declared on the sunroom, whose
+   *  authored north edge carries no doors and no openings. */
+  glassWall?: boolean;
   /** Content zones, normalized to the MODULE's frame (x ∈ [0,1] → west→east,
    *  z ∈ [0,1] → south→north). At most one hero zone. */
   zones: readonly TemplateZone[];
@@ -224,11 +231,17 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "plaster",
     light: "quiet",
     features: [{ kind: "niche", at: "e", span: [0.35, 0.65] }],
+    // §2: wardrobe 必备 against the non-door, non-headboard wall; the tv
+    // corner leaves (the spec bans tv + sofa from the bedroom — the §6.4
+    // audit's "说不出用途链" bar — and §2's variant ask is the schematic
+    // lane's to pin).
+    // §6.4 逐件问责: no `luggage` here — §2's ban list names the
+    // luggagecart (and the cart IS the kit's centrepiece), and the
+    // wardrobe is the §2 必备 this wall exists for.
     kits: [
       "bed-corner",
       "writing-desk",
-      "tv-corner",
-      "luggage",
+      "wardrobe-wall",
       "reading",
       "vanity-corner",
     ],
@@ -331,7 +344,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "tile",
     light: "task",
     features: [],
-    kits: ["dining", "housekeeping", "coat-bench", "chair-stack"],
+    // §5: the working counter (操作台) + the laid table are the room; the
+    // kitchen-counter kit names the counter, its slab dressing AND the
+    // bucket+mop corner. §6.4 逐件问责: chair-stack leaves (§13 names the
+    // workshop the stack's ONE proper room), and the housekeeping trolley
+    // + coat bench are floor-service/threshold vocabulary the §5 槽位
+    // never lists for a working kitchen (the foyer audit's own reading).
+    kits: ["dining", "kitchen-counter"],
     heroKit: "dining",
     zones: [
       // Deep enough for the laid table's footprint disc to clear the
@@ -368,7 +387,7 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "tile",
     light: "wash",
     features: [],
-    kits: ["lockers", "towel-station", "coat-bench", "towel-rail"],
+    kits: ["lockers", "towel-station", "coat-bench", "towel-rail", "mop-corner"],
     zones: [
       // The dry rims beside the basin — lockers anchor to the flank
       // walls here, towel stations and rails stand between the water
@@ -400,9 +419,10 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     // §6.4 逐件问责 (v0.12 declarations audit): no chair-stack here — the
     // stacked banquet chairs read as a function room's spares, not a
     // luggage room's. The room stores: bags, carts, the bench you set
-    // them down on, and housekeeping mid-tidy (the one room where the
-    // trolley genuinely belongs — it is being put in order).
-    kits: ["luggage", "housekeeping", "coat-bench"],
+    // them down on, the racks they wait on, and housekeeping mid-tidy
+    // (the one room where the trolley genuinely belongs — it is being put
+    // in order).
+    kits: ["luggage", "housekeeping", "coat-bench", "storage-rack"],
     zones: [
       { kind: "cluster", rect: { x: [0.06, 0.45], z: [0.12, 0.9] } },
       { kind: "cluster", rect: { x: [0.55, 0.94], z: [0.12, 0.9] } },
@@ -429,12 +449,15 @@ export const ROOM_MODULES: readonly RoomModule[] = [
       { kind: "pilaster-rhythm", at: "n" },
       { kind: "floor-inlay", at: "floor", span: [0.15, 0.85] },
     ],
+    // §6.4 逐件问责: the shelf run and the lobby clock leave — §8's 槽位
+    // is the long LOOKING wall (wallart + benches + sculptures) and the
+    // reading corner that keeps it company; a bookcase row and a
+    // grandfather clock are library vocabulary.
     kits: [
       "gallery-bench",
       "reading",
-      "bookshelf-run",
       "plant-pedestal",
-      "clock-nook",
+      "art-wall",
     ],
     heroKit: "reading", // an armchair facing the long wall — gallery-bench
     // is the wall's companion, but kits.ts only grants the hero slot to
@@ -466,12 +489,13 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     // bench + coat stand + umbrella stand is the park/threshold vocabulary,
     // and in a living room it read as a park bench moved indoors (the
     // user's own call-out). The living sits on the sofa group; its quiet
-    // pieces are the clock nook, the sideboard and the plants.
+    // pieces are the sideboard, the plants, and the picture row (附录 A:
+    // wallart 用在 gallery / living).
     kits: [
       "sofa-group",
       "tv-corner",
       "reading",
-      "clock-nook",
+      "art-wall",
       "sideboard",
       "plant-pedestal",
     ],
@@ -500,6 +524,10 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "plaster",
     light: "daylight",
     features: [{ kind: "floor-inlay", at: "floor", span: [0.2, 0.8] }],
+    // The north edge IS the glass wall (v0.12 §9 + 附录 A): the exposed
+    // span renders as a floor-to-top glass wall with the outside view, and
+    // the daylight register's sconce falls back to a solid flank wall.
+    glassWall: true,
     kits: [
       "reading",
       "coat-bench",
@@ -627,7 +655,10 @@ export const ROOM_MODULES: readonly RoomModule[] = [
     wall: "panelling",
     light: "task",
     features: [],
-    kits: ["writing-desk", "lockers", "housekeeping", "coat-bench", "chair-stack"],
+    // §13: the workbench corner (workbench + storagerack + chair + the
+    // tools ON the slab) is the room's signature; the writing desk stays
+    // for the paperwork end.
+    kits: ["writing-desk", "workbench-corner", "lockers", "housekeeping", "coat-bench", "chair-stack"],
     // No heroKit pin: none of the workshop's whitelisted kits is a
     // heroSlot centrepiece, so the hero falls back to the seeded draw
     // among the room's hero-eligible kits (kits.ts's rule, unchanged).
