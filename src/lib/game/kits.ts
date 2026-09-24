@@ -1615,27 +1615,35 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   // — the baseline (temperate) omits them and furnishes through the room's
   // own gating, byte-for-byte the skinless path (无皮肤 ≡ 温带).
   const skinDecks = skin?.furnishing.decks;
+  // THE ROOM'S OWN DECK — the module whitelist ∩ the room's gating, with
+  // the 牌堆非空回退 (v0.12 declarations audit) built in: a whitelist whose
+  // ∩ draws NOTHING must never furnish NOTHING — the fallback relaxes ONLY
+  // the whitelist (the kitIds filter), keeping the world-class/archetype
+  // gate and the shore rule intact. This deck is also the BASELINE a skin
+  // falls back to (below) — a skin REPLACES the draw vocabulary but is not
+  // its SOLE OWNER: a skin deck that fits nothing on this room's floor
+  // (an outdoor shore kit on a 2×2 indoor basin) must not hand the room an
+  // automatic empty (空房是硬缺陷).
+  const roomDeck = (): readonly Kit[] => {
+    const whitelisted = gated.filter(
+      (k) => (!o.kitIds || o.kitIds.includes(k.id)) && drawable(k),
+    );
+    if (whitelisted.length > 0) return whitelisted;
+    if (o.kitIds && o.kitIds.length > 0) return gated.filter(drawable);
+    return whitelisted;
+  };
   let kits: readonly Kit[];
   if (skin && skinDecks && skinDecks.length > 0) {
     // P3: the skin's decks take over the draw vocabulary (see
     // KitStaging.skin — REPLACE, explicit path, the shore rule still binds
     // and the kitsFor gate above keeps guarding the default path).
     kits = KITS.filter((k) => skinDecks.includes(k.id) && drawable(k));
+    // 基线牌堆: a declared skin deck ∩ drawable = ∅ falls back to the
+    // room's own deck, exactly like the whitelist-empty rule — an empty
+    // room is a harder defect than a mixed draw.
+    if (kits.length === 0) kits = roomDeck();
   } else {
-    kits = gated.filter(
-      (k) => (!o.kitIds || o.kitIds.includes(k.id)) && drawable(k),
-    );
-    if (kits.length === 0 && o.kitIds && o.kitIds.length > 0) {
-      // 牌堆非空回退 (v0.12 declarations audit): a module whose whitelist ∩
-      // the room's own gating draws NOTHING must never furnish NOTHING — an
-      // empty deck hands the room back to the archetype's bare legacy管线
-      // (the bath rendered as a pure pool basin: four declared kits, zero
-      // placed). The fallback relaxes ONLY the module whitelist (the kitIds
-      // filter), keeping the world-class/archetype gate and the shore rule
-      // intact: the room still furnishes from its archetype's real, gated
-      // vocabulary, never from everything.
-      kits = gated.filter(drawable);
-    }
+    kits = roomDeck();
   }
   if (kits.length === 0) return [];
   const wallInset = o.wallThick + KIT_WALL_CLEAR * propScale;
@@ -1968,45 +1976,55 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
     const ids = zone.kitIds;
     return ids && ids.length > 0 ? kits.filter((k) => ids.includes(k.id)) : [];
   };
-  for (let slot = 0; slot < target; slot++) {
-    if (covered + minCov > coverageCap) break;
-    for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
-      let kit = drawKit(kits);
-      const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
-      if (!t) continue;
-      // Template cluster zones (§7): side kits live where the template put
-      // its content areas — the shelf walls' feet, the bedroom wing. The
-      // membership test runs against the ACTIVE (schematic-owning modules'
-      // zones filtered out) set while the gate stays on the DECLARED set:
-      // a room whose clusters are ALL schematic-owned must place NOTHING
-      // here — an empty active list is a total filter, not an open floor.
-      if (o.zones?.clusters && o.zones.clusters.length > 0) {
-        const hit = activeClusters?.find((r) => inZoneRect(t.x, t.z, r));
-        if (!hit) continue;
-        // Zone deck: the kit standing in a module's zone speaks that
-        // module's vocabulary. The drawn kit already belongs → keep;
-        // otherwise re-deal from the zone's whitelist (seeded, capped),
-        // keeping the transform — clearance below re-validates everything.
-        if (zoneDecks) {
-          const zdeck = zoneDeckFor(hit);
-          if (zdeck.length > 0 && !zdeck.includes(kit)) {
-            kit = drawKit(zdeck);
+  // The side-kit pass as a CLOSURE over the draw deck: the normal pass runs
+  // with the room's chosen deck (the skin's REPLACE deck when one is
+  // declared, else the room deck); the SURVIVAL DRAW below re-runs the
+  // IDENTICAL pass on the baseline room deck when nothing at all staged.
+  // Same machinery, same clearances — only the vocabulary differs.
+  const stageSideKits = (deck: readonly Kit[]): void => {
+    const minCovDeck =
+      Math.min(...deck.map((k) => k.footprint * propScale)) ** 2 * Math.PI;
+    for (let slot = 0; slot < target; slot++) {
+      if (covered + minCovDeck > coverageCap) break;
+      for (let a = 0; a < KIT_PLACE_ATTEMPTS; a++) {
+        let kit = drawKit(deck);
+        const t = drawKitTransform(rng, kit, plan, comp, water, propScale, wallInset);
+        if (!t) continue;
+        // Template cluster zones (§7): side kits live where the template put
+        // its content areas — the shelf walls' feet, the bedroom wing. The
+        // membership test runs against the ACTIVE (schematic-owning modules'
+        // zones filtered out) set while the gate stays on the DECLARED set:
+        // a room whose clusters are ALL schematic-owned must place NOTHING
+        // here — an empty active list is a total filter, not an open floor.
+        if (o.zones?.clusters && o.zones.clusters.length > 0) {
+          const hit = activeClusters?.find((r) => inZoneRect(t.x, t.z, r));
+          if (!hit) continue;
+          // Zone deck: the kit standing in a module's zone speaks that
+          // module's vocabulary. The drawn kit already belongs → keep;
+          // otherwise re-deal from the zone's whitelist (seeded, capped),
+          // keeping the transform — clearance below re-validates everything.
+          if (zoneDecks) {
+            const zdeck = zoneDeckFor(hit);
+            if (zdeck.length > 0 && !zdeck.includes(kit)) {
+              kit = drawKit(zdeck);
+            }
           }
         }
+        const cov = Math.PI * (kit.footprint * propScale) ** 2;
+        if (covered + cov > coverageCap) continue;
+        const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
+        if (!pieces) continue;
+        nextKitIndex += 1;
+        out.push(...pieces);
+        discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
+        covered += cov;
+        prevId = kit.id;
+        counts.set(kit.id, (counts.get(kit.id) ?? 0) + 1);
+        break;
       }
-      const cov = Math.PI * (kit.footprint * propScale) ** 2;
-      if (covered + cov > coverageCap) continue;
-      const pieces = pushKit(kit, t, { skipPathCheck: false }, nextKitIndex);
-      if (!pieces) continue;
-      nextKitIndex += 1;
-      out.push(...pieces);
-      discs.push({ x: t.x, z: t.z, r: kit.footprint * t.scale });
-      covered += cov;
-      prevId = kit.id;
-      counts.set(kit.id, (counts.get(kit.id) ?? 0) + 1);
-      break;
     }
-  }
+  };
+  stageSideKits(kits);
 
   // 3. Open fields (§8.2 随机区域): each module-scale void inside a composed
   //    room draws 0–3 seeded pieces — sparse by construction (most fields
@@ -2068,6 +2086,23 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
       }
     }
   }
+  // 3½. THE SURVIVAL DRAW — 空房是硬缺陷: when every pass above staged
+  //     NOTHING (a skin deck that fits no authored slot on this floor — an
+  //     outdoor shore kit on a 2×2 indoor basin; a blueprint rolled back on
+  //     a floor blanket-covered by strand-door approaches), the room gets
+  //     ONE more side-kit pass from ITS OWN baseline deck (the module
+  //     whitelist ∩ gating — the same 牌堆非空回退 chain, so a skin may
+  //     REPLACE the draw vocabulary but is never its SOLE OWNER). Every
+  //     clearance of the normal pass still binds — walkable footprint,
+  //     doorway and strand-door strips, the path fringe, water, keep-empty
+  //     zones, disc gaps, the 35%-empty budget; only the vocabulary
+  //     changes. A room that staged anything at all never runs this, so
+  //     every previously-furnished room keeps byte-for-byte staging.
+  if (out.length === 0) {
+    const survival = roomDeck();
+    if (survival.length > 0) stageSideKits(survival);
+  }
+
   // 4. THE TRACE (§4.4) — the room's exactly-one calm trace, chosen, not
   //    baked into some kit: a whitelisted kind set ON a host piece that
   //    stands inside the visibility band of the walk path or the hero

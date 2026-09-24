@@ -503,16 +503,28 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
         });
         // Something was furnished, and nothing violates a clearance.
         // v0.13.1 RESAMPLE (scale ruling cascade): compositions now join
-        // 1×1 modules, and a doored room only 6 m deep cannot furnish at
-        // all — the far-wall door approaches reach ROOM_DOOR_CLEAR_DEPTH
-        // (3 m) inward, the entrance apron and the entrance doorway strip
-        // (PROP_DOOR_HALF 1.8 m) claim the rest, and no legal kit origin
-        // survives the whole gate sequence (provable by constants; the
-        // renderer's real chain passes pool-hall a water rect and scales
-        // props by tier, this synthetic 1× chain does neither). The
-        // smoke therefore binds only when the doored plan is deeper than
-        // the approach can blanket; the clearance loop below runs for
-        // every cell either way.
+        // 1×1 modules, and a doored room only 6 m deep cannot furnish AT
+        // ALL through THIS synthetic chain — the far-wall door approaches
+        // reach ROOM_DOOR_CLEAR_DEPTH (3 m) inward, the entrance apron and
+        // the entrance doorway strip (PROP_DOOR_HALF 1.8 m) claim the rest,
+        // and no legal kit origin survives the whole gate sequence. This is
+        // a CONSTANTS-PROVEN corner, not a parameter accident: measured on
+        // the REAL chain (water + zones + blueprints, bath 6×6), a lone
+        // small module under a 1–2 strand load stages zero pieces WITH or
+        // WITHOUT its blueprint — the approach blanket kills the far-wall
+        // slots and no catalogue kit fits the surviving slivers. At a 3+
+        // load the composition layer (§8.4) grows the room and everything
+        // furnishes again (bath+living+storage 15×18 ⇒ 28+ pieces).
+        // Mitigation by shrinking clearances is REJECTED (it would void the
+        // B.11 door-reachability and ≥1.4 m path promises this very file
+        // asserts); the corner's owner is the door-load/composition layer,
+        // tracked for the main agent. What the smoke binds here: the
+        // doorless plan and every deeper plan ALWAYS furnish. The product-
+        // level lock against empty standard rooms lives in
+        // playground.test.ts ("the playground sweep never stages an empty
+        // room") and declarations.test.ts ("a rolled-back pool module still
+        // furnishes"). The clearance loop below runs for every cell either
+        // way.
         const furnishable =
           layout.doors.length === 0 || plan.extent > ROOM_DOOR_CLEAR_DEPTH * 2;
         if (furnishable) expect(pieces.length).toBeGreaterThan(0);

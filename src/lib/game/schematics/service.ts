@@ -430,10 +430,18 @@ const BATH_SCHEMATIC: RoomSchematic = {
     {
       // 凳上毛巾 — the folded towels ON the bench seat (lift rides the
       // bench's own scale — the bench top rises with it, never floating).
+      // The bench faces intoRoom from the north wall (rotY π: local +z
+      // maps to world −z — the mirror of intuition, see the foyer desk),
+      // so a POSITIVE dz biases the piece INTO the room: the bench hugs the
+      // far wall (dist 0.68–0.75 off a 6 m depth ⇒ z ≈ 5.25–5.32, and
+      // planContains needs piece centers ≤ extent − wallInset ≈ 5.35), and
+      // the old ± jitter rode the towels up to 5 cm PAST that walkable
+      // margin — a 1 cm scrape that forfeits the whole placement (measured:
+      // bath×shallows seed 5 staged an empty room off exactly this).
       role: "benchtowels",
       group: "towelstation",
       required: true,
-      at: { kind: "relative", slot: "drybench", dx: [-0.35, -0.15], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "drybench", dx: [-0.35, -0.15], dz: [0.02, 0.12] },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["towelstack"],
       count: [1, 2],
@@ -441,11 +449,13 @@ const BATH_SCHEMATIC: RoomSchematic = {
       clearance: 0.2,
     },
     {
-      // 水桶 — the bucket beside the bench.
+      // 水桶 — the bucket on the floor beside the bench, biased INTO the
+      // room (positive dz, same mirror) so its center stays off the far
+      // wall's walkable-margin bound.
       role: "benchbucket",
       group: "towelstation",
       required: true,
-      at: { kind: "relative", slot: "drybench", dx: [0.75, 0.95], dz: [-0.05, 0.05] },
+      at: { kind: "relative", slot: "drybench", dx: [0.75, 0.95], dz: [0.04, 0.18] },
       facing: { kind: "fixed", rotY: 0, jitter: Math.PI },
       accepts: ["bucket"],
       clearance: 0.3,

@@ -80,12 +80,14 @@ describe("describeRoom", () => {
       expect(desc.layout.modules.map((m) => m.id)).toEqual(
         composition.modules.map((p) => p.module.id),
       );
-      // A composed interior is furnished from the pure chain (pool-hall
-      // excluded — its legacy fixtures live in space.tsx).
-      if (recipe.archetype !== "pool-hall") {
-        expect(desc.furnishing).not.toBeNull();
-      } else {
-        expect(desc.furnishing).toBeNull();
+      // A composed interior is furnished from the pure chain — the
+      // pool-hall modules (bath, pool-deck) included: a composed pool
+      // room's content is its modules' whitelists + blueprints alone
+      // (the legacy rim scatter retires once a composition exists), so
+      // the enumeration names exactly what the render stages.
+      expect(desc.furnishing).not.toBeNull();
+      expect(desc.furnishing!.length).toBeGreaterThan(0);
+      if (recipe.archetype === "pool-hall") {
         expect(desc.water).not.toBeNull();
       }
     }

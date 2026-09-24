@@ -208,3 +208,77 @@ describe("playgroundFrameFor", () => {
     expect(high.halfHeight).toBeGreaterThan(low.halfHeight);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* THE EMPTY-ROOM GUARD — the playground sweep that burned us: the     */
+/* readout reported "0 件 · no kits staged" for bath and pool-deck     */
+/* while the render showed a furnished room. The lock: through the     */
+/* SAME pure chain the readout consumes (describeRoom on the           */
+/* playground slice id), every standard room under every skin must     */
+/* stage at least one piece of furniture. An empty standard room is    */
+/* a HARD defect — the blueprint may forfeit, but the generic          */
+/* fallback must always be able to furnish.                            */
+/* ------------------------------------------------------------------ */
+
+describe("the playground sweep never stages an empty room (78 combos)", () => {
+  /** null = the temperate baseline (无皮肤 ≡ 温带 — the dropdown's
+   *  "none" option) plus the four world-owning skins. */
+  const SKIN_CHOICES = [null, "dune", "grove", "moss", "shallows"] as const;
+
+  interface Combo {
+    moduleId: string;
+    skinId: (typeof SKIN_CHOICES)[number];
+    seedTag: string | null;
+  }
+  const combos: Combo[] = [];
+  for (const moduleId of PLAYGROUND_MODULE_IDS) {
+    for (const skinId of SKIN_CHOICES) {
+      combos.push({ moduleId, skinId, seedTag: null });
+    }
+  }
+  // The two rooms the sweep caught get a seed sweep too — the seed rides
+  // the room's own streams, so a reseeded room is a DIFFERENT arrangement
+  // of the same module and must furnish all the same.
+  for (const moduleId of ["bath", "pool-deck"]) {
+    for (const skinId of SKIN_CHOICES) {
+      for (const seedTag of ["1", "2", "3", "4", "5", "6", "7", "8"]) {
+        combos.push({ moduleId, skinId, seedTag });
+      }
+    }
+  }
+
+  const pieceTotal = (d: ReturnType<typeof describeRoom>) =>
+    (d.furnishing ?? []).reduce((n, f) => n + f.pieces.length, 0);
+
+  it.each(
+    combos.map((c) => [
+      `${c.moduleId} × ${c.skinId ?? "baseline"}${c.seedTag ? ` seed ${c.seedTag}` : ""}`,
+      c,
+    ] as const),
+  )("furnishes %s (≥1 piece)", (_title, c) => {
+    const sliceId = playgroundSliceId({
+      moduleId: c.moduleId,
+      skinId: c.skinId,
+      seedTag: c.seedTag,
+    });
+    const desc = describeRoom(sliceId);
+    const total = pieceTotal(desc);
+    expect(
+      total,
+      `空房是硬缺陷：回退路径必须能 furnish — ${c.moduleId} × ` +
+        `${c.skinId ?? "baseline"}${c.seedTag ? ` (seed ${c.seedTag})` : ""} ` +
+        `staged ${total} pieces through the readout chain (furnishing ` +
+        `${desc.furnishing === null ? "null" : "empty"})`,
+    ).toBeGreaterThan(0);
+    // The blueprint path names its groups "<module>:<group>"; a room that
+    // furnished with NO such group furnished through the generic fallback
+    // — both paths are legal, neither may come out empty.
+    const viaBlueprint = desc.furnishing!.some((f) =>
+      f.kit.startsWith(`${c.moduleId}:`),
+    );
+    expect(
+      viaBlueprint || desc.furnishing!.length > 0,
+      `${c.moduleId}: neither the blueprint nor the fallback staged anything`,
+    ).toBe(true);
+  });
+});

@@ -23,12 +23,17 @@
  *     mirror, roomOrientationFor). Pass `strandDoors` + `corridorSide` to
  *     place them exactly as the renderer would; without them the outline
  *     reports the PERMITTED walls and the MEASURED capacity instead.
- *   - the pool hall's water-anchored legacy fixtures (its obstacle discs
- *     live inside space.tsx, outside the pure chain — the pool hall is
- *     excluded from the furnishing enumeration) and the wonder rooms'
- *     animals + oversized rugs (buildAnimals / furnishInterior — outside
- *     the pure chain; their KITS are staged by the same pure call as
- *     everything else and ARE enumerated).
+ *   - the pool hall's water-anchored LEGACY rim scatter (the pre-module
+ *     fixtures — their obstacle discs live inside space.tsx, outside the
+ *     pure chain). A COMPOSED pool room (the bath / pool-deck module
+ *     rooms) furnishes from its modules' whitelists and blueprints ONLY —
+ *     space.tsx hands the legacy scatter an empty list the moment a
+ *     composition exists — so its kit staging is pure-chain and IS
+ *     enumerated like every other interior room. What stays un-derivable
+ *     is only the scatter itself (and the wonder rooms' animals +
+ *     oversized rugs — buildAnimals / furnishInterior — outside the pure
+ *     chain; their KITS are staged by the same pure call as everything
+ *     else and ARE enumerated).
  *   - kit staging assumes the strand doors it was told about: without
  *     `strandDoors` + `corridorSide` the furnishing list matches a doorless
  *     render, and a room that grew strand doors may shift a side kit off a
@@ -225,13 +230,16 @@ export interface RoomDescription {
     overrides: { role: string; feature: KitKind }[];
   } | null;
   /** Interior furnishing staged by kits.ts — the EXACT kit placements the
-   *  renderer builds (hero first). Present for interior rooms (except the
-   *  pool hall, whose water-anchored legacy fixtures live outside the pure
-   *  chain), for EVERY nature and hybrid room (the world's skin owns the
-   *  draw vocabulary; a water biome furnishes from its skin's shore kits),
-   *  and for wonder rooms (the rugs and animals stay outside the pure
-   *  chain — the kits are staged by the same pure call as everything else
-   *  and ARE enumerated). Null everywhere else. */
+   *  renderer builds (hero first). Present for EVERY interior room: the
+   *  pool-hall modules (bath, pool-deck) furnish from their whitelists and
+   *  blueprints exactly like the other modules — only the pre-module
+   *  water-anchored rim scatter lived outside the pure chain, and the
+   *  renderer retires it the moment a composition exists. Present for
+   *  EVERY nature and hybrid room (the world's skin owns the draw
+   *  vocabulary; a water biome furnishes from its skin's shore kits), and
+   *  for wonder rooms (the rugs and animals stay outside the pure chain —
+   *  the kits are staged by the same pure call as everything else and ARE
+   *  enumerated). Null everywhere else. */
   furnishing: { kit: string; pieces: KitKind[] }[] | null;
   doors: {
     /** Wall roles strand doors may hang on — null = no template, so any
@@ -399,20 +407,26 @@ export function describeRoom(
   // Interior furnishing: the renderer's exact staging (space.tsx's furniture
   // memo) — same "furniture" stream, same kit whitelist, same zones, same
   // heightfield snap. Covered rooms: the INTERIOR classes (module-whitelisted
-  // when composed; the pool hall is excluded — its obstacle discs come from
-  // space.tsx's legacy fixtures, which the pure chain cannot reproduce, so
-  // enumerating kits staged without them could name pieces the render
-  // rejected), EVERY nature and hybrid room (the world's skin owns the draw
-  // vocabulary — a water biome furnishes from its skin's shore kits, so the
-  // outdoor pool biome enumerates like any other), and WONDER rooms (the
+  // when composed) — INCLUDING the pool-hall modules: a composed pool room
+  // furnishes from its modules' whitelists and blueprints alone (space.tsx
+  // retires the legacy rim scatter the moment a composition exists — its
+  // obstacle discs were the only pure-chain-unreachable input, and they are
+  // EMPTY for these rooms), so the enumeration names exactly the pieces the
+  // render stages. EVERY nature and hybrid room (the world's skin owns the
+  // draw vocabulary — a water biome furnishes from its skin's shore kits, so
+  // the outdoor pool biome enumerates like any other), and WONDER rooms (the
   // rugs/animals stay outside the pure chain; the kits are staged here
   // exactly as staged there — under a view-only skin: the wonder deck is
   // the diorama's structure and the skin's decks never replace it). Water
   // biomes subtract their basin from the density area, mirroring the
   // renderer's branches.
   let furnishing: RoomDescription["furnishing"] = null;
+  // EVERY standard world class furnishes through the staging machine —
+  // interior pool halls included since the module layer (§8) took over
+  // their content. (The gate stays a gate, not a constant: a room class
+  // outside these four still answers null.)
   const furnishClass =
-    (recipe.worldClass === "interior" && recipe.archetype !== "pool-hall") ||
+    recipe.worldClass === "interior" ||
     recipe.worldClass === "wonder" ||
     recipe.worldClass === "nature" ||
     recipe.worldClass === "hybrid"

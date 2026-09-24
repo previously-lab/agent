@@ -294,6 +294,46 @@ describe("the deck never empties (v0.12 ④)", () => {
       expect(inWater).toBe(false);
     }
   });
+
+  it("the pool-deck stages its blueprint, not a bare basin", () => {
+    const { pieces } = stageModuleRoom("pool-deck");
+    const kinds = new Set(pieces.map((p) => p.kind));
+    // specs §10's required core: the lounger pair, the ring post, the
+    // towel rail, the working edge (ladder + board).
+    for (const kind of ["lounger", "ringpost", "towelrail", "poolladder", "board"]) {
+      expect(kinds.has(kind as never), `pool-deck: missing ${kind}`).toBe(true);
+    }
+    const { water } = stageModuleRoom("pool-deck");
+    for (const p of pieces) {
+      const inWater =
+        Math.abs(p.x - water!.cx) < water!.halfX &&
+        Math.abs(p.z - water!.cz) < water!.halfZ;
+      expect(inWater).toBe(false);
+    }
+  });
+
+  it("a rolled-back pool module still furnishes through the fallback (空房是硬缺陷)", () => {
+    // The playground sweep caught bath and pool-deck reporting ZERO pieces
+    // while the render showed a furnished room — the readout chain refused
+    // to enumerate pool rooms at all. The enumeration is fixed; this locks
+    // the other half of the promise: WITHHOLD the blueprint (any required
+    // group's failure rolls the whole placement back) and the generic
+    // orchestration must still stage something on the dry rims.
+    for (const id of ["bath", "pool-deck"]) {
+      const { pieces } = stageModuleRoom(id, { schematic: false });
+      expect(
+        pieces.length,
+        `${id}: rolled-back schematic staged nothing — 空房是硬缺陷：回退路径必须能 furnish`,
+      ).toBeGreaterThan(0);
+      const { water } = stageModuleRoom(id);
+      for (const p of pieces) {
+        const inWater =
+          Math.abs(p.x - water!.cx) < water!.halfX &&
+          Math.abs(p.z - water!.cz) < water!.halfZ;
+        expect(inWater).toBe(false);
+      }
+    }
+  });
 });
 
 describe("§6.4 whitelist hygiene (v0.12 ⑤)", () => {
