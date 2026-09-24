@@ -39,18 +39,29 @@ page.on("console", (m) => {
 
 for (const id of MODULES) {
   const url = `${BASE}/en/playground?m=${id}${SKIN ? `&skin=${SKIN}` : ""}`;
-  await page.goto(url, { waitUntil: "networkidle" });
-  await page.waitForSelector("canvas", { timeout: 30000 });
-  await page.waitForTimeout(4200);
-  await page.screenshot({ path: `${OUT}/${id}.png` });
-  // the route's own readout, so the frame and the facts travel together
-  const readout = await page.evaluate(() => {
-    const text = document.body.innerText.replace(/\s+/g, " ").trim();
-    return text.slice(0, 1200);
-  });
-  writeFileSync(`${OUT}/${id}.txt`, readout);
-  const line = readout.match(/([\d.]+×[\d.]+|[\d.]+m × [\d.]+m)/);
-  console.log(`  ${id}: ${line ? line[0] : "?"} — ${readout.slice(0, 120)}`);
+  let done = false;
+  for (let attempt = 1; attempt <= 2 && !done; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+      // attached is enough — React re-mounts the canvas and "visible" gets
+      // raced (measured: a canvas that IS visible times the wait out).
+      await page.waitForSelector("canvas", { state: "attached", timeout: 60000 });
+      await page.waitForTimeout(5200);
+      await page.screenshot({ path: `${OUT}/${id}.png` });
+      // the route's own readout, so the frame and the facts travel together
+      const readout = await page.evaluate(() => {
+        const text = document.body.innerText.replace(/\s+/g, " ").trim();
+        return text.slice(0, 1200);
+      });
+      writeFileSync(`${OUT}/${id}.txt`, readout);
+      const line = readout.match(/([\d.]+×[\d.]+|[\d.]+m × [\d.]+m)/);
+      console.log(`  ${id}: ${line ? line[0] : "?"} — ${readout.slice(0, 120)}`);
+      done = true;
+    } catch (err) {
+      console.log(`  ${id} attempt ${attempt}: ${String(err).split("\n")[0]}`);
+    }
+  }
+  if (!done) console.log(`  ${id}: FAILED`);
 }
 
 console.log("  console errors:", problems.length, problems.slice(0, 2).join(" | "));
