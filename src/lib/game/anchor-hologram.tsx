@@ -210,6 +210,13 @@ const CYLINDER_AXIS = new THREE.Vector3(0, 1, 0);
 /** A segment with no direction collapses to zero size instead of taking
  *  an arbitrary axis. Shared, never written. */
 const ZERO_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+/** Segment overlap. The tube geometry is OPEN-ENDED, so where two segments
+ *  meet at an angle the outside of the joint opens a wedge — invisible on a
+ *  nearly straight run, a row of notches through a tight coil. Stretching
+ *  each segment 12% past its own ends buries the joint inside the next one;
+ *  the bundle is hairlines, so the extra length is well under a millimetre
+ *  of silhouette. */
+const SEGMENT_OVERLAP = 1.12;
 
 /** Bake one line into an InstancedMesh of unit cylinders — one instance
  *  per segment, placed and grey-inked exactly as the band's frame loop
@@ -244,7 +251,7 @@ function buildLineMesh(
     dir.divideScalar(length);
     quat.setFromUnitVectors(CYLINDER_AXIS, dir);
     mid.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
-    scale.set(radius, length, radius);
+    scale.set(radius, length * SEGMENT_OVERLAP, radius);
     mesh.setMatrixAt(i, matrix.compose(mid, quat, scale));
     // The core carries its ink on the material (the band's note: seeding
     // instanceColor would square the colour); threads get grey instance

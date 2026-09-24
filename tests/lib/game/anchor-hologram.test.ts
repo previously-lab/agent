@@ -2,22 +2,21 @@
  * Tests for the anchor hologram's pure geometry layer
  * (lib/game/anchor-hologram-geometry.ts).
  *
- * The contract under test: the braid is the band's coaxial model with
- * ONE knot — every thread stays on the cylinder at every height (the
- * winding never moves a line in or out); an integral number of turns
- * closes the helix back onto each thread's own seat (straight above,
- * straight below, braided in between — the two-states-one-formula); the
- * bundle's size is data-dense in (strands, neighborSlots) with strands
- * keeping priority at the cap; per-segment brightness stays inside the
- * kind's range (the bundle reads as volume, never as glare); and the
- * same inputs bake the identical bytes (A6 — layout is data, only the
- * component's spin is time).
+ * The contract under test: the braid is the band's coaxial model with TWO
+ * blended knots — every thread stays on the cylinder at every height (the
+ * winding never moves a line in or out); the twist runs over the object's
+ * whole height at a nearly constant pitch and always in ONE direction (a
+ * coil, not a knot spliced between straight rods); the bundle's size is
+ * data-dense in (strands, neighborSlots) with strands keeping priority at
+ * the cap; per-segment brightness stays inside the kind's range (the bundle
+ * reads as volume, never as glare); and the same inputs bake the identical
+ * bytes (A6 — layout is data, only the component's spin is time).
  */
 import { describe, expect, it } from "vitest";
 import {
   HOLO_BOTTOM,
   HOLO_CENTER_Y,
-  HOLO_KNOT_LAMBDA,
+  HOLO_KNOT_SPREAD,
   HOLO_NEIGHBOR_BRIGHTNESS,
   HOLO_RADIUS,
   HOLO_SEGMENTS,
@@ -30,7 +29,6 @@ import {
   holoThreadBake,
   type HoloThread,
 } from "@/lib/game/anchor-hologram-geometry";
-import { laneAngleFor } from "@/lib/timeline3d/winding";
 
 describe("holoThreadsFor", () => {
   it("draws no bundle for a bare newest slice", () => {
@@ -100,7 +98,7 @@ describe("holoThreadBake", () => {
     }
   });
 
-  it("closes the helix: below and above the knot the thread rests on its own seat", () => {
+  it("winds one way only: exactly the configured turns, never unwinding", () => {
     const seat = 3;
     const count = 7;
     const bake = holoThreadBake(thread("strand", seat, count));
@@ -125,52 +123,70 @@ describe("holoThreadBake", () => {
       }
       return total;
     };
-    // Below the knot to above it the shared spin swept exactly
-    // HOLO_TURNS whole turns — nothing created, nothing lost.
-    expect(swept(1, HOLO_SEGMENTS - 1)).toBeCloseTo(HOLO_TURNS * Math.PI * 2, 6);
-    // And each end rests on the seat angle itself: a straight vertical
-    // line at its own seat, above and below the braid.
-    const seatAngle = laneAngleFor(seat, count);
-    const residue = (a: number): number => {
-      // Wrap to (-π, π] — the +π shift comes BEFORE the mod, and JS `%`
-      // truncates so the double mod has to floor it back.
-      const d = a - seatAngle;
-      const wrapped =
+    // The object carries MOST of the configured twist, and never more than
+    // configured — nothing created. It is deliberately not the whole count:
+    // the coil runs off both ends of the visible height (a spring cut at
+    // both ends) instead of resting on the seats, because threads that are
+    // straight for two thirds of their length are what read as unphysical.
+    const sweptTotal = swept(1, HOLO_SEGMENTS - 1);
+    expect(sweptTotal).toBeGreaterThan((HOLO_TURNS - 0.6) * Math.PI * 2);
+    expect(sweptTotal).toBeLessThanOrEqual(HOLO_TURNS * Math.PI * 2 + 1e-6);
+    // …and it swept them in ONE direction: a spring winds, it does not wind
+    // and unwind. (The cable's "each end rests on its own seat" closure is
+    // the BAND's property, where the twist belongs to one card; the
+    // hologram coils across its whole height instead, which is what makes it
+    // read as an object rather than a knot spliced into two straight rods.)
+    for (let i = 2; i <= HOLO_SEGMENTS - 1; i++) {
+      const d = angleAt(i) - angleAt(i - 1);
+      const step =
         ((((d + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) -
         Math.PI;
-      return Math.abs(wrapped);
-    };
-    expect(residue(angleAt(1))).toBeLessThan(1e-6);
-    expect(residue(angleAt(HOLO_SEGMENTS - 1))).toBeLessThan(1e-6);
+      expect(step).toBeGreaterThan(-1e-6);
+    }
   });
 
-  it("does nearly all of its winding inside the knot window", () => {
+  it("coils across its whole height at a nearly constant pitch", () => {
     const bake = holoThreadBake(thread("strand", 1, 4));
     const angleAt = (i: number): number =>
       Math.atan2(bake.points[i * 3 + 2], bake.points[i * 3]);
-    const swept = (i0: number, i1: number): number => {
-      let total = 0;
-      let prev = angleAt(i0);
-      for (let i = i0 + 1; i <= i1; i++) {
-        // Floor-mod wrap — JS `%` truncates, which mis-wraps negatives.
-        const d = angleAt(i) - prev;
-        total +=
-          Math.abs(
-            ((((d + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) -
-              Math.PI,
-          );
-        prev = angleAt(i);
-      }
-      return total;
+    // Unwrapped per-step rotation: the twist each sample adds.
+    const stepAt = (i: number): number => {
+      const d = angleAt(i) - angleAt(i - 1);
+      return (
+        ((((d + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) -
+        Math.PI
+      );
     };
     const yToIndex = (y: number): number =>
       Math.round(((y - HOLO_BOTTOM) / (HOLO_TOP - HOLO_BOTTOM)) * HOLO_SEGMENTS);
-    const inside = swept(
-      yToIndex(HOLO_CENTER_Y - HOLO_KNOT_LAMBDA),
-      yToIndex(HOLO_CENTER_Y + HOLO_KNOT_LAMBDA),
-    );
-    const total = swept(0, HOLO_SEGMENTS);
-    expect(inside / total).toBeGreaterThan(0.9);
+    // THE PITCH IS CONSTANT WHERE THE COIL IS: across the two knot centres
+    // (± HOLO_KNOT_SPREAD of the slice) the per-step twist must not vary by
+    // more than a fifth — a real spring is evenly wound, and a varying rate
+    // is what made the first cut read as a machine part rather than a coil.
+    const lo = yToIndex(HOLO_CENTER_Y - HOLO_KNOT_SPREAD);
+    const hi = yToIndex(HOLO_CENTER_Y + HOLO_KNOT_SPREAD);
+    let min = Infinity;
+    let max = 0;
+    for (let i = lo + 1; i <= hi; i++) {
+      const step = stepAt(i);
+      min = Math.min(min, step);
+      max = Math.max(max, step);
+    }
+    expect(min).toBeGreaterThan(0);
+    expect(max / min).toBeLessThan(1.2);
+    // AND IT IS NOT CRAMMED INTO A WINDOW: the twist reaches well outside
+    // the slice's own half-metre — the threads are coil, not straight rods
+    // with a knot in the middle.
+    let outside = 0;
+    let total = 0;
+    const windowLo = yToIndex(HOLO_CENTER_Y - HOLO_KNOT_SPREAD);
+    const windowHi = yToIndex(HOLO_CENTER_Y + HOLO_KNOT_SPREAD);
+    for (let i = 1; i <= HOLO_SEGMENTS; i++) {
+      const step = stepAt(i);
+      total += step;
+      if (i < windowLo || i > windowHi) outside += step;
+    }
+    expect(outside / total).toBeGreaterThan(0.25);
   });
 
   it("keeps brightness inside the kind's range, with neighbors dimmer", () => {

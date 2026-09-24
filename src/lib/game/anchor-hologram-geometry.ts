@@ -46,7 +46,7 @@
 
 import {
   laneDepthFor,
-  strandPointAt,
+  strandPointAtKnots,
 } from "@/lib/timeline3d/winding";
 
 /* ------------------------------------------------------------------ */
@@ -67,16 +67,33 @@ export const HOLO_RADIUS = 0.3;
  *  1.06 m), so the braid reads at eye height while the column tail
  *  climbs to HOLO_TOP above the walls. */
 export const HOLO_CENTER_Y = 1.15;
-/** Half-height of the knot window — the braid spans ±lambda around the slice. */
-export const HOLO_KNOT_LAMBDA = 0.5;
-/** Full turns across the knot. ONE: a single lazy twist reads as a cradle
- *  around the spine, where three turns (the band's count, one per card)
- *  wound it into the coil the reader called too busy. Integral, because
- *  every thread must leave the knot at the seat it entered with. */
-export const HOLO_TURNS = 1;
-/** Vertical samples per line; 64 over the knot is ~2 cm a segment, smooth
- *  for one turn without being greedy (every room owns one hologram). */
-export const HOLO_SEGMENTS = 64;
+/** Half-height of ONE knot window. Two of them, blended, spread the twist
+ *  over the object's whole height (see HOLO_KNOT_SPREAD) — a knot confined
+ *  to a short window left the threads straight for two thirds of their
+ *  length and coiling in the middle, which reads as a spring spliced into
+ *  two straight rods. Each knot still eases at its own edges, and the wide
+ *  window keeps the blended rate flat through the middle. */
+export const HOLO_KNOT_LAMBDA = 1.4;
+/** The two knot centres sit this far above and below the slice
+ *  (`HOLO_CENTER_Y ± HOLO_KNOT_SPREAD`), equally weighted. Two smoothsteps
+ *  one radius apart sum to a trapezoid: eased at both ends, and a nearly
+ *  CONSTANT pitch between them — what a real coil's twist rate looks like. */
+export const HOLO_KNOT_SPREAD = 0.55;
+/** Full turns across the whole knot blend. Integral, so every thread leaves
+ *  at the seat it entered with. Four over the object's 2.76 m is a pitch of
+ *  ~0.7 m ≈ 2.3× the bundle radius — the proportion a spring actually has.
+ *  (Three turns inside a 0.88 m window was the cage the reader rejected;
+ *  the count was never the problem, the cramming was.) */
+export const HOLO_TURNS = 4;
+/** Vertical samples per line. 96 over 2.76 m is 2.9 cm a segment, so the
+ *  coil is drawn with ~52 chords per turn instead of ~23 — the facets stop
+ *  reading as a polygon. */
+export const HOLO_SEGMENTS = 96;
+/** The two knots the bake blends, in the winding's own vocabulary. */
+export const HOLO_KNOTS = [
+  { centerY: 0, lambda: HOLO_KNOT_LAMBDA, weight: 0.5 },
+  { centerY: 0, lambda: HOLO_KNOT_LAMBDA, weight: 0.5 },
+] as const;
 /** The thread cap — the elegance dial. A handful of lines is a braid,
  *  past four it is the wire cage the reader rejected; the band's moiré
  *  discipline says the same. Strands keep priority at the cap. */
@@ -226,14 +243,18 @@ export function holoThreadBake(thread: HoloThread): HoloLineBake {
   const laneBrightness =
     HOLO_LANE_BRIGHTNESS_MIN +
     HOLO_LANE_BRIGHTNESS_SPAN * laneDepthFor(thread.seat, thread.count);
+  const knots = HOLO_KNOTS.map((k) => ({
+    centerY: HOLO_CENTER_Y + k.centerY,
+    lambda: k.lambda,
+    weight: k.weight,
+  }));
   for (let i = 0; i < n; i++) {
     const y = HOLO_BOTTOM + (i / HOLO_SEGMENTS) * (HOLO_TOP - HOLO_BOTTOM);
-    const p = strandPointAt(
+    const p = strandPointAtKnots(
       y,
       thread.seat,
       thread.count,
-      HOLO_CENTER_Y,
-      HOLO_KNOT_LAMBDA,
+      knots,
       HOLO_RADIUS,
       HOLO_TURNS,
     );
