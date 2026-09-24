@@ -52,12 +52,17 @@
  * hint (§8.3: S one module, M two, L three, XL four — "large" is MORE
  * modules); the door load then pushes the count UPWARD while the placement's
  * declared ceiling cannot absorb it (§8.2: each module declares its own
- * capacity): a busy day grows modules, and more modules ⇒ a longer north
- * wall (§10.5), never doors squeezed onto the east/west walls. A day busier
- * than the composition's declared ceiling rides the §10.5 placement ladder
- * (double-row screens, then axial overflow) exactly as the template layer's
- * overflows always did — room-doors.ts's six-rung ladder stays the last
- * insurance, unchanged.
+ * capacity) OR while the placement cannot physically BEAR the doors on its
+ * floor — doorLoadBearingFor below, the v0.13.1 door-load lane: a declared
+ * ceiling is not a furnishable floor, and a one-cell-deep room (or a deep
+ * one whose centred seat blankets its authored centrepiece) stages ZERO
+ * furniture under a 1–2 door load, measured on the real chain. The load is
+ * allocated by what the room can bear, never force-fitted: a busy day grows
+ * modules, and more modules ⇒ a longer north wall (§10.5), never doors
+ * squeezed onto the east/west walls. A day busier than the composition's
+ * declared ceiling rides the §10.5 placement ladder (double-row screens,
+ * then axial overflow) exactly as the template layer's overflows always did
+ * — room-doors.ts's six-rung ladder stays the last insurance, unchanged.
  *
  * OPEN FIELDS (随机区域, §8.2): resolved as the bounding rect's voids and
  * DRESSED SPARSELY at staging time — kits.ts's stageInteriorKits takes the
@@ -92,6 +97,10 @@ import {
   MODULE_GRID,
   MODULE_GRID_MAX_AREA,
   MODULE_GRID_MAX_CELLS,
+  ROOM_DOOR_CLEAR_DEPTH,
+  ROOM_DOOR_CLEAR_HALF,
+  ROOM_DOOR_END_PAD,
+  ROOM_DOOR_ROW_DEPTH,
 } from "./tuning/room";
 
 /* ------------------------------------------------------------------ */
@@ -595,6 +604,132 @@ function boundsOf(rects: readonly Rect[]): Rect {
   };
 }
 
+/** The entrance apron — the full-width keep-empty band at the door wall
+ *  (buildComposition's open-field subtraction and the synthetic
+ *  template's apron zone both measure it). One constant so the
+ *  door-load bearing rule and the composition builder never drift. */
+const ENTRANCE_APRON = 1.2;
+
+/**
+ * DOOR-LOAD BEARING (§8.4, the v0.13.1 door-load lane) — the geometric
+ * half of Finding A's discipline. A JOINED placement must be able to
+ * PHYSICALLY BEAR the requested strand doors, not just declare a ceiling
+ * that absorbs them: a room that declares capacity 2 but is one module
+ * cell deep furnishes NOTHING under a 1–2 door load, because B.11's
+ * approach clearance eats the only band its kits can stand in. Two
+ * constants-proven geometric constraints decide (pure geometry of the
+ * placed rects — no rng, no kit data; A6: same placement, same answer):
+ *
+ *  ① FURNISHABLE DEPTH. Every strand door hangs on the far (north) wall
+ *    (§10.5) and B.11 requires its approach strip — ROOM_DOOR_CLEAR_HALF
+ *    (1.8 m) to each side, ROOM_DOOR_CLEAR_DEPTH (3 m) inward — kept as
+ *    clear as the entrance's own doorway corridor. The composition's
+ *    entrance apron claims ENTRANCE_APRON (1.2 m). What remains between
+ *    them must hold ONE FULL MODULE CELL of furnishable depth: no
+ *    catalogue kit stands in less (a 6 m-deep room keeps 6 − 3 − 1.2 =
+ *    1.8 m — measured on the REAL chain, bath 6×6 stages ZERO pieces at
+ *    a 1–2 door load, with and without its blueprint; the RESAMPLE note
+ *    in room-modules.test). With 6 m cells the threshold is extent ≥ 12.
+ *    When the load spills PAST the measured seats, the ladder's next
+ *    rung (§10.5 ②) stands the screen row ROOM_DOOR_ROW_DEPTH (1.8 m)
+ *    inward and the mirrored vestibule copy (doorClearanceSet) carries
+ *    the clearance to the wall — the blanket deepens by ROW_DEPTH, so
+ *    the depth test measures from E − CLEAR_DEPTH − ROW_DEPTH once
+ *    spilled.
+ *    A shallow room TWO CELLS WIDE keeps a pass (workshop 12×6 measured
+ *    7–9 pieces at 1–2 doors): both far-wall seats sit OFF the entrance
+ *    axis (±3 m on the global lattice), so a side blanket leaves the
+ *    mid-room content alone — and the pass holds ONLY while the load
+ *    fits the measured seats: a spilled shallow load means screens or
+ *    east/west overflow, whose blankets reach the middle.
+ *
+ *  ② THE LONE CENTRED SEAT. A SINGLE-module placement whose far run
+ *    offers exactly one lattice seat, sitting within
+ *    ROOM_DOOR_CLEAR_HALF of the entrance axis, cannot bear ANY door
+ *    load. The seat IS the module's own centre — its blanket (±1.8 m of
+ *    a 3 m half-width is the whole axis) spans the wall's entire content
+ *    band, and whether the staging seed then finds a survivor in the
+ *    side slivers is pure luck: bedroom 6w×12d measured ZERO pieces at
+ *    1–3 doors, and kitchen 6w×12d staged 5 pieces on one seed, ZERO on
+ *    another (2026-09-16-2115) — the same room, the same wall, a
+ *    different draw. A door load is allocated by what the room can bear,
+ *    never gambled on a seed. (A MULTI-module placement keeps its
+ *    siblings' floors even when one module's band is blanketed, so the
+ *    rule binds the lone module only.) Growing is the cure: the wider
+ *    composition doubles the seats and moves them off-axis.
+ *
+ * When a placement cannot bear the load the resolver grows the
+ * composition (§8.4's own mechanism — a busy day grows modules); when
+ * even four modules cannot absorb it, a BEARING fallback carries the
+ * overflow (else the highest-capacity placement, the pre-lane
+ * behaviour) and the placement ladder relaxes, exactly as it always did
+ * past the declared ceiling (never-drop, room-doors.ts).
+ */
+export function doorLoadBearingFor(
+  modules: readonly RoomModule[],
+  rects: readonly Rect[],
+  bounds: Rect,
+  count: number,
+): boolean {
+  if (count <= 0) return true;
+  const eps = 1e-6;
+  const w = bounds.x1 - bounds.x0;
+  const e = bounds.z1 - bounds.z0;
+  const dx = -(bounds.x0 + bounds.x1) / 2;
+  // The lattice seats of one far-wall run, at the primary rung's end pad
+  // — the SAME enumeration room-doors.ts's doorLatticeCenters performs
+  // (restated here so this module stays cycle-free, per seamPartitionsFor's
+  // precedent; room-modules.test pins the two implementations together).
+  const seatsOnRun = (lo: number, hi: number): number[] => {
+    const first = -w / 2 + DOOR_LATTICE_HALF_CELL;
+    const out: number[] = [];
+    for (
+      let c =
+        first +
+        Math.ceil((lo + ROOM_DOOR_END_PAD - first) / MODULE_GRID - 1e-9) *
+          MODULE_GRID;
+      c <= hi - ROOM_DOOR_END_PAD + 1e-9;
+      c += MODULE_GRID
+    ) {
+      out.push(c);
+    }
+    return out;
+  };
+  // The door-eligible runs on the far wall (the ONLY legal door wall,
+  // §10.5) with their seat counts; spilled = the load exceeds the
+  // measured seats and the ladder's relaxation (screen row first)
+  // deepens the blanket by ROOM_DOOR_ROW_DEPTH.
+  let totalSeats = 0;
+  const runSeats: number[][] = [];
+  modules.forEach((m, i) => {
+    const r = rects[i];
+    if (Math.abs(r.z1 - bounds.z1) >= eps) return; // not on the far wall
+    if (!m.doorEdges.includes("n")) return; // not door-eligible
+    const seats = seatsOnRun(r.x0 + dx, r.x1 + dx);
+    runSeats.push(seats);
+    totalSeats += seats.length;
+  });
+  const spilled = count > totalSeats;
+  const zNear = e - ROOM_DOOR_CLEAR_DEPTH - (spilled ? ROOM_DOOR_ROW_DEPTH : 0);
+
+  // ① furnishable depth: the band between the apron and the deepest
+  // blanket must hold one full module cell.
+  if (zNear < ENTRANCE_APRON + MODULE_GRID) {
+    // The wide-shallow pass: off-axis seats, load within the measured
+    // seats — workshop 12×6 at 1–2 doors, measured furnishing.
+    return w >= 2 * MODULE_GRID && totalSeats >= 2 && !spilled;
+  }
+
+  // ② the lone centred seat: a single-module placement whose only far
+  // seat sits on the entrance axis cannot bear any load (the blanket
+  // spans its whole content band — see the doc above).
+  if (modules.length === 1) {
+    const lone = runSeats.length === 1 && runSeats[0].length === 1 ? runSeats[0][0] : null;
+    if (lone !== null && Math.abs(lone) < ROOM_DOOR_CLEAR_HALF) return false;
+  }
+  return true;
+}
+
 /* ------------------------------------------------------------------ */
 /* The resolver                                                        */
 /* ------------------------------------------------------------------ */
@@ -611,9 +746,12 @@ function compositionRng(worldSeed: string, sliceId: string): () => number {
  * Selection steers by the strand-door count exactly as the template layer
  * does (§7.2's 门数匹配在源头承担): the module count starts seeded (1–4,
  * weighted toward 2) and rises while the placement's DECLARED ceiling
- * cannot absorb `doorCount` — the measured capacity of the permitted
- * walls stays the caller's check on top (Finding A), and overflow still
- * relaxes at placement, never drops (room-doors.ts).
+ * cannot absorb `doorCount` OR the placement cannot physically BEAR the
+ * doors on its floor (doorLoadBearingFor — the v0.13.1 door-load lane:
+ * a shallow or centred-seat placement under a small load furnishes
+ * nothing, whatever its declared ceiling says) — the measured capacity of
+ * the permitted walls stays the caller's check on top (Finding A), and
+ * overflow still relaxes at placement, never drops (room-doors.ts).
  *
  * Returns null where the catalogue cannot serve the room at all (today:
  * every non-interior world class — the module set covers interior only,
@@ -687,11 +825,20 @@ export function resolveRoomComposition(
   for (let c = count; c <= 4; c++) candidateCounts.push(c);
   for (let c = count - 1; c >= 1; c--) candidateCounts.push(c);
 
-  // The best placement that JOINED so far (first topology of its count),
-  // kept as the fallback when nothing meets the door load — overflow then
-  // relaxes at placement, never drops (room-doors.ts).
+  // The best placement that JOINED so far, kept as a fallback when
+  // nothing meets the door load. bestBearing is the highest-capacity
+  // placement whose FLOOR can bear the load (the door-load lane): it
+  // outranks `best`, because relaxing the ladder on a floor that can
+  // furnish beats relaxing it on one whose door blankets eat every kit
+  // origin. Overflow relaxes at placement, never drops (room-doors.ts).
   let best: { modules: RoomModule[]; rects: Rect[]; topology: TopologyId; capacity: number } | null =
     null;
+  let bestBearing: {
+    modules: RoomModule[];
+    rects: Rect[];
+    topology: TopologyId;
+    capacity: number;
+  } | null = null;
 
   for (const c of candidateCounts) {
     if (companionsFor(archetype, [primary.id]).length < c - 1) continue;
@@ -706,24 +853,38 @@ export function resolveRoomComposition(
       taken.push(picked.id);
     }
     const modules = [primary, ...companions];
+    // EVERY topology of this count is walked (not just the first that
+    // joins): a joined placement whose floor cannot bear the load must
+    // not block a bearing sibling of the same count.
     for (const topology of topologiesFor(c)) {
       const rects = layoutModules(rng, modules, topology);
       if (!rects) continue;
-      const capacity = placedCapacity(modules, rects, boundsOf(rects));
-      if (capacity >= doorCount) {
-        return buildComposition(rng, modules, rects, topology, boundsOf(rects));
+      const bounds = boundsOf(rects);
+      const capacity = placedCapacity(modules, rects, bounds);
+      // The placement absorbs the load only when its DECLARED ceiling covers
+      // the count AND the placement can physically BEAR the doors on its
+      // floor (doorLoadBearingFor — the v0.13.1 door-load lane: a shallow
+      // or centred-seat room under a 1–2 load furnishes nothing). Otherwise
+      // the resolver grows, exactly as it does past the declared ceiling.
+      const bearing = doorLoadBearingFor(modules, rects, bounds, doorCount);
+      if (capacity >= doorCount && bearing) {
+        return buildComposition(rng, modules, rects, topology, bounds);
       }
       if (!best || capacity > best.capacity) {
         best = { modules, rects, topology, capacity };
       }
-      break; // one joined placement per count is enough — grow instead
+      if (bearing && (!bestBearing || capacity > bestBearing.capacity)) {
+        bestBearing = { modules, rects, topology, capacity };
+      }
     }
   }
   // Nothing absorbed the door load (or only lesser placements joined):
-  // the highest-capacity fallback carries the overflow. The single-module
-  // row always joins, so `best` is set whenever the catalogue is sound;
-  // the guard below is for the unsound-catalogue case only.
-  const b = best ?? {
+  // a BEARING fallback carries the overflow when one joined (its floor
+  // furnishes under the ladder's relaxation); otherwise the
+  // highest-capacity placement does — the pre-lane behaviour. The
+  // single-module row always joins, so one of the two is set whenever the
+  // catalogue is sound; the guard below is the unsound-catalogue case.
+  const b = bestBearing ?? best ?? {
     modules: [primary],
     rects: layoutModules(rng, [primary], "row") ?? [],
     topology: "row" as TopologyId,
@@ -1095,7 +1256,7 @@ function buildComposition(
   // Open fields: the parts of the bounding rect no module claims, minus a
   // 1.2 m door apron along the entrance edge (the doorway's clearing is
   // the keep-empty zone's job, not a "field").
-  const apron: Rect = { x0: room.x0, z0: 0, x1: room.x1, z1: Math.min(1.2, room.z1) };
+  const apron: Rect = { x0: room.x0, z0: 0, x1: room.x1, z1: Math.min(ENTRANCE_APRON, room.z1) };
   const openFields = rectDifference(room, [...rects, apron]).filter(
     (r) => (r.x1 - r.x0) * (r.z1 - r.z0) >= 4,
   );
@@ -1194,7 +1355,7 @@ export function compositionTemplateFor(comp: RoomComposition): RoomTemplate {
   // The entrance apron: full width, the doorway's clearing.
   zones.push({
     kind: "keep-empty",
-    rect: { x: [0, 1], z: [0, Math.min(1.2 / comp.extent, 0.12)] },
+    rect: { x: [0, 1], z: [0, Math.min(ENTRANCE_APRON / comp.extent, 0.12)] },
   });
   // The open fields are NOT keep-empty zones: they are dressed — sparsely —
   // by the staging channel (kits.ts's openFields input, fed straight from
@@ -1337,7 +1498,7 @@ export function compositionKitZonesFor(
     x0: -w / 2,
     z0: 0,
     x1: w / 2,
-    z1: Math.min(1.2, 0.12 * comp.extent) * (e / comp.extent),
+    z1: Math.min(ENTRANCE_APRON, 0.12 * comp.extent) * (e / comp.extent),
   });
   return { hero, heroKit, clusters, keepEmpty };
 }

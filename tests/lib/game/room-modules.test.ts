@@ -28,6 +28,7 @@ import {
   auditModule,
   compositionForRecipe,
   compositionTemplateFor,
+  doorLoadBearingFor,
   moduleKitsFor,
   moduleSconceFor,
   moduleWallForSegment,
@@ -61,13 +62,13 @@ import {
 import { planArea, stageInteriorKits } from "@/lib/game/kits";
 import { KITS } from "@/lib/game/kits";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import { describeRoom } from "@/lib/game/describe-room";
 import {
   COLONNADE_BAY,
   MODULE_GRID,
   MODULE_GRID_MAX_AREA,
   MODULE_GRID_MAX_CELLS,
   PROP_SCALE_EXP,
-  ROOM_DOOR_CLEAR_DEPTH,
   ROOM_WALL_THICKNESS,
 } from "@/lib/game/tuning/room";
 import { INTERIOR_ROOMS } from "@/lib/game/space-types";
@@ -507,27 +508,24 @@ describe("compositionTemplateFor (the renderer's existing input)", () => {
         // ALL through THIS synthetic chain — the far-wall door approaches
         // reach ROOM_DOOR_CLEAR_DEPTH (3 m) inward, the entrance apron and
         // the entrance doorway strip (PROP_DOOR_HALF 1.8 m) claim the rest,
-        // and no legal kit origin survives the whole gate sequence. This is
-        // a CONSTANTS-PROVEN corner, not a parameter accident: measured on
-        // the REAL chain (water + zones + blueprints, bath 6×6), a lone
-        // small module under a 1–2 strand load stages zero pieces WITH or
-        // WITHOUT its blueprint — the approach blanket kills the far-wall
-        // slots and no catalogue kit fits the surviving slivers. At a 3+
-        // load the composition layer (§8.4) grows the room and everything
-        // furnishes again (bath+living+storage 15×18 ⇒ 28+ pieces).
-        // Mitigation by shrinking clearances is REJECTED (it would void the
-        // B.11 door-reachability and ≥1.4 m path promises this very file
-        // asserts); the corner's owner is the door-load/composition layer,
-        // tracked for the main agent. What the smoke binds here: the
-        // doorless plan and every deeper plan ALWAYS furnish. The product-
-        // level lock against empty standard rooms lives in
-        // playground.test.ts ("the playground sweep never stages an empty
-        // room") and declarations.test.ts ("a rolled-back pool module still
-        // furnishes"). The clearance loop below runs for every cell either
-        // way.
-        const furnishable =
-          layout.doors.length === 0 || plan.extent > ROOM_DOOR_CLEAR_DEPTH * 2;
-        if (furnishable) expect(pieces.length).toBeGreaterThan(0);
+        // and no legal kit origin survives the whole gate sequence. This
+        // was a CONSTANTS-PROVEN corner, not a parameter accident: measured
+        // on the REAL chain (water + zones + blueprints, bath 6×6), a lone
+        // small module under a 1–2 strand load staged zero pieces WITH or
+        // WITHOUT its blueprint. The corner's owner was the door-load
+        // layer, and the v0.13.1 door-load lane now CLOSES it at the
+        // source: doorLoadBearingFor refuses shallow or lone-centred-seat
+        // placements, so the resolver above never returns a doored plan
+        // shallower than two module cells (the 6 m-deep doored plans this
+        // smoke used to exempt now simply never occur). Clearances were
+        // never shrunk — B.11 and the ≥1.4 m path promises below bind for
+        // every piece, and the EVERY-plan furnishing assertion is
+        // unconditional again. The product-level lock against empty
+        // standard rooms lives in playground.test.ts ("the playground
+        // sweep never stages an empty room", now with a doored variant)
+        // and declarations.test.ts ("a rolled-back pool module still
+        // furnishes").
+        expect(pieces.length).toBeGreaterThan(0);
         for (const p of pieces) {
           expect(planContains(plan, p.x, p.z, 0)).toBe(true);
           expect(inDoorApproach(p.x, p.z, layout.doors)).toBe(false);
@@ -685,16 +683,183 @@ describe("compositionForRecipe with the runtime door count (§8.4)", () => {
     expect(grew).toBeGreaterThan(0);
   });
 
-  it("a door load within the hinted modules' capacity never grows the count (门少不加模块)", () => {
+  it("never returns a composition that cannot bear its load (the door-load lane)", () => {
+    // The resolver grows past every placement whose floor cannot bear
+    // the doors (doorLoadBearingFor), so the composition it returns at a
+    // household load always bears its own load — the double-zero corner
+    // (blueprint AND fallback stage nothing) is closed at the source.
     for (let i = 0; i < 80; i++) {
       const recipe = compileSpaceRecipe(`2028-10-${i}`);
       if (recipe.worldClass !== "interior") continue;
-      const comp = compositionForRecipe(recipe, WORLD_SEED, 0)!;
-      // Feeding BACK the calm day's own capacity: the placement already
-      // absorbs it, so the resolution is unchanged — growth responds to
-      // EXCESS load, not to any nonzero count.
-      expect(compositionForRecipe(recipe, WORLD_SEED, comp.doorCapacity)).toEqual(comp);
+      for (const doors of [1, 2, 3]) {
+        const comp = compositionForRecipe(recipe, WORLD_SEED, doors)!;
+        expect(
+          doorLoadBearingFor(
+            comp.modules.map((p) => p.module),
+            comp.modules.map((p) => p.rect),
+            { x0: -comp.width / 2, z0: 0, x1: comp.width / 2, z1: comp.extent },
+            doors,
+          ),
+          `${recipe.sliceId} doors=${doors} -> ${comp.topology}:${comp.modules
+            .map((p) => p.module.id)
+            .join("+")} ${comp.width}x${comp.extent}`,
+        ).toBe(true);
+      }
     }
+  });
+
+  it("a bearable load within the hinted modules' capacity never grows the count (门少不加模块)", () => {
+    for (let i = 0; i < 80; i++) {
+      const recipe = compileSpaceRecipe(`2028-11-${i}`);
+      if (recipe.worldClass !== "interior") continue;
+      const comp = compositionForRecipe(recipe, WORLD_SEED, 0)!;
+      // Feeding BACK the calm day's own load, capped at the largest count
+      // its floor can BEAR: the placement absorbs it (the ceiling covers
+      // it and the lane passes), so the resolution is unchanged — growth
+      // responds to EXCESS or un-bearable load, not to any nonzero count.
+      // (The declared ceiling alone no longer pins this: a 6 m-wide lone
+      // module declares capacity 2–3 yet cannot bear even one centred
+      // door — the lane's whole point. Bearing is nonincreasing in the
+      // count — spill and the lone-seat rule never un-fire — so the first
+      // un-bearable load ends the scan.)
+      const bounds = {
+        x0: -comp.width / 2,
+        z0: 0,
+        x1: comp.width / 2,
+        z1: comp.extent,
+      };
+      const mods = comp.modules.map((p) => p.module);
+      const rects = comp.modules.map((p) => p.rect);
+      let bearable = 0;
+      for (let d = 1; d <= comp.doorCapacity; d++) {
+        if (!doorLoadBearingFor(mods, rects, bounds, d)) break;
+        bearable = d;
+      }
+      expect(compositionForRecipe(recipe, WORLD_SEED, bearable)).toEqual(comp);
+    }
+  });
+
+  it("real interior slices never stage an empty room under a household door load", () => {
+    // The doored-sweep's real-slice net: every interior room a memory can
+    // compile, under 1–3 strand doors on BOTH corridor sides, furnishes
+    // at least one piece through the SAME pure chain the renderer builds
+    // from (describeRoom). The v0.13.1 door-load lane grew the rooms that
+    // used to double-zero; this sweep proves the net has no remaining
+    // holes across tier hints, primaries, and both room mirrors.
+    for (let i = 0; i < 160; i++) {
+      const recipe = compileSpaceRecipe(`2029-03-${i}`);
+      if (recipe.worldClass !== "interior") continue;
+      for (const doors of [1, 2, 3]) {
+        for (const side of ["north", "south"] as const) {
+          const desc = describeRoom(recipe.sliceId, {
+            strandDoors: doors,
+            corridorSide: side,
+          });
+          const total = (desc.furnishing ?? []).reduce(
+            (n, f) => n + f.pieces.length,
+            0,
+          );
+          expect(
+            total,
+            `${recipe.sliceId} ${recipe.archetype}/${recipe.size.id} ` +
+              `doors=${doors} ${side} -> ${desc.extent}m×${desc.width}m ` +
+              (desc.layout.kind === "modules"
+                ? `${desc.layout.topology}:${desc.layout.modules.map((m) => m.id).join("+")}`
+                : desc.layout.kind),
+          ).toBeGreaterThan(0);
+        }
+      }
+    }
+  });
+});
+
+describe("doorLoadBearingFor (the v0.13.1 door-load lane)", () => {
+  // A lone module placed as the single-module room: rect southwest-
+  // anchored like the resolver's provisional frame. The lane's seat
+  // enumeration is a restatement of room-doors.ts's doorLatticeCenters
+  // (kept cycle-free, per seamPartitionsFor's precedent) — for a single
+  // module the measured seat count IS doorCapacityFor over the far wall,
+  // so the two implementations are pinned together here.
+  const lonePlacement = (m: RoomModule) => ({
+    modules: [m] as const,
+    rects: [{ x0: 0, z0: 0, x1: m.size.w, z1: m.size.d }],
+    bounds: { x0: 0, z0: 0, x1: m.size.w, z1: m.size.d },
+  });
+  const measuredFarSeats = (m: RoomModule): number => {
+    const plan = roomPlanFor(
+      `seats-${m.id}`,
+      m.size.w,
+      m.size.d,
+      COLONNADE_BAY,
+      WORLD_SEED,
+      { plan: "rect" },
+    );
+    return doorCapacityFor(plan, wallSegmentsFor(plan, ROOM_WALL_THICKNESS), null, {
+      walls: ["far"],
+    });
+  };
+
+  it("restates the lattice seat count — single-module bearing(1) ⟺ the far wall measures ≥ 2 seats", () => {
+    for (const m of ROOM_MODULES) {
+      // Modules with no door-eligible edge own no far-wall run at all —
+      // the lane passes them vacuously (their declared capacity is 0, so
+      // the resolver's ceiling check keeps the doors away regardless).
+      if (m.doorEdges.length === 0) continue;
+      const { modules, rects, bounds } = lonePlacement(m);
+      const seats = measuredFarSeats(m);
+      expect(
+        doorLoadBearingFor(modules as readonly RoomModule[], rects, bounds, 1),
+        `${m.id} (${m.size.w}×${m.size.d}, ${seats} measured seats)`,
+      ).toBe(seats >= 2);
+    }
+  });
+
+  it("pins the measured corner: lone small modules cannot bear; wide-shallow and multi-seat rooms can", () => {
+    // The real-chain measurements the rule's thresholds come from (see
+    // the function's doc): bath 6×6 staged ZERO at 1–2 doors; bedroom
+    // 6w×12d ZERO at 1–3; kitchen 6w×12d ZERO on one seed, 5 pieces on
+    // another; storage 6×6 ZERO at 2; workshop 12×6 furnished 7–9 pieces
+    // at 1–2 and grew at 3; the 12×12/18×12 singles furnish throughout.
+    const cannotBear = ["bath", "bedroom", "kitchen", "storage"];
+    const bearsSmall = ["foyer", "living", "dining-hall", "gallery-module"];
+    for (const id of cannotBear) {
+      const m = byId(id);
+      const { modules, rects, bounds } = lonePlacement(m);
+      for (const doors of [1, 2, 3]) {
+        expect(
+          doorLoadBearingFor(modules as readonly RoomModule[], rects, bounds, doors),
+          `${id} should not bear ${doors}`,
+        ).toBe(false);
+      }
+    }
+    for (const id of bearsSmall) {
+      const m = byId(id);
+      const { modules, rects, bounds } = lonePlacement(m);
+      for (const doors of [1, 2, 3]) {
+        expect(
+          doorLoadBearingFor(modules as readonly RoomModule[], rects, bounds, doors),
+          `${id} should bear ${doors}`,
+        ).toBe(true);
+      }
+    }
+    // The wide-shallow pass and its spill limit (workshop 12×6).
+    const workshop = byId("workshop");
+    const ws = lonePlacement(workshop);
+    expect(
+      doorLoadBearingFor(ws.modules as readonly RoomModule[], ws.rects, ws.bounds, 1),
+    ).toBe(true);
+    expect(
+      doorLoadBearingFor(ws.modules as readonly RoomModule[], ws.rects, ws.bounds, 2),
+    ).toBe(true);
+    expect(
+      doorLoadBearingFor(ws.modules as readonly RoomModule[], ws.rects, ws.bounds, 3),
+    ).toBe(false);
+  });
+
+  it("never drops a door: a 0-count load bears on any placement", () => {
+    const m = byId("bath");
+    const { modules, rects, bounds } = lonePlacement(m);
+    expect(doorLoadBearingFor(modules as readonly RoomModule[], rects, bounds, 0)).toBe(true);
   });
 });
 

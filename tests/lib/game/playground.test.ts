@@ -282,3 +282,47 @@ describe("the playground sweep never stages an empty room (78 combos)", () => {
     ).toBe(true);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* THE DOORED EMPTY-ROOM GUARD — the v0.13.1 door-load lane's product  */
+/* lock. The lane (room-modules.ts doorLoadBearingFor) grows a room    */
+/* its floor cannot bear; these combos are exactly the ones that used  */
+/* to double-zero — the blueprint rolled back AND the generic fallback */
+/* staged nothing (bath 6×6 and bedroom 6w at 1–2 doors, measured).   */
+/* A doored standard room must furnish on BOTH corridor sides.         */
+/* ------------------------------------------------------------------ */
+
+describe("the doored sweep never stages an empty room (78 combos)", () => {
+  interface Combo {
+    moduleId: string;
+    doors: number;
+    side: "north" | "south";
+  }
+  const combos: Combo[] = [];
+  for (const moduleId of PLAYGROUND_MODULE_IDS) {
+    for (const doors of [1, 2, 3]) {
+      for (const side of ["north", "south"] as const) {
+        combos.push({ moduleId, doors, side });
+      }
+    }
+  }
+
+  const pieceTotal = (d: ReturnType<typeof describeRoom>) =>
+    (d.furnishing ?? []).reduce((n, f) => n + f.pieces.length, 0);
+
+  it.each(
+    combos.map((c) => [`${c.moduleId} × ${c.doors} doors, ${c.side} side`, c] as const),
+  )("furnishes %s (≥1 piece)", (_title, c) => {
+    const desc = describeRoom(
+      playgroundSliceId({ moduleId: c.moduleId, skinId: null, seedTag: null }),
+      { strandDoors: c.doors, corridorSide: c.side },
+    );
+    const total = pieceTotal(desc);
+    expect(
+      total,
+      `空房是硬缺陷：带 ${c.doors} 扇线索门也必须能 furnish — ${c.moduleId} ` +
+        `(${c.side}) staged ${total} pieces through the readout chain`,
+    ).toBeGreaterThan(0);
+  });
+});
+
