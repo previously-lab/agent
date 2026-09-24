@@ -1,69 +1,23 @@
 /**
  * Deep-link parsing for the single-route shell.
  *
- * This file used to be `mode-switch.test.ts` and covered a `chat | timeline`
- * view mode. The view became a RUNG (`deep-link.ts` explains why), so the view
- * half of these tests is gone and the rung half is here. The `at`/`atStart`
- * half is unchanged — that is the part that addresses a POINT in the memory
- * rather than a zoom, and it survived the rename untouched.
+ * What remains of the contract is the cold-boot conversation anchor:
+ * `?at=<sliceId>&atStart=<iso>`, consumed once by ChatPage and stripped so
+ * a refresh never re-jumps. The rung (`?z=`) and the view (`?view=`) are
+ * gone — the shell's navigation is in-memory state (shell-nav.ts), and
+ * nothing in the session writes query params any more.
  */
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_RUNG,
   parseAtParam,
   parseAtStartParam,
-  parseRungParam,
-  rungHref,
   stripAtParam,
 } from "@/lib/chat/deep-link";
 
-describe("parseRungParam", () => {
-  it("reads every rung of the ladder", () => {
-    expect(parseRungParam("?z=conversation")).toBe("conversation");
-    expect(parseRungParam("?z=slice")).toBe("slice");
-    expect(parseRungParam("?z=day")).toBe("day");
-    expect(parseRungParam("?z=week")).toBe("week");
-  });
-
-  it("accepts a query string with or without the leading ?", () => {
-    expect(parseRungParam("z=day")).toBe("day");
-    expect(parseRungParam("persona=user&z=week")).toBe("week");
-  });
-
-  it("returns null when absent, blank, or not a rung", () => {
-    // Null is the caller's signal to use DEFAULT_RUNG. An unrecognised `z` is a
-    // stale or hand-edited link, and answering it with a valid rung would
-    // silently ignore what the URL asked for.
-    expect(parseRungParam("")).toBeNull();
-    expect(parseRungParam("?z=")).toBeNull();
-    expect(parseRungParam("?z=%20")).toBeNull();
-    expect(parseRungParam("?z=timeline")).toBeNull(); // the OLD view param value
-    expect(parseRungParam("?z=month")).toBeNull();
-    expect(parseRungParam("?persona=user")).toBeNull();
-  });
-});
-
-describe("rungHref", () => {
-  it("writes NO param for the default rung, so the common URL stays clean", () => {
+describe("DEFAULT_RUNG", () => {
+  it("is the conversation — a bare visit opens the live stream", () => {
     expect(DEFAULT_RUNG).toBe("conversation");
-    expect(rungHref("conversation")).toBe("/");
-  });
-
-  it("names a card rung", () => {
-    expect(rungHref("slice")).toBe("/?z=slice");
-    expect(rungHref("week")).toBe("/?z=week");
-  });
-
-  it("carries a reading-position anchor when present", () => {
-    expect(rungHref("slice", "2026-08-01-1000")).toBe(
-      "/?z=slice&at=2026-08-01-1000",
-    );
-    expect(rungHref("slice", "a b")).toBe("/?z=slice&at=a+b");
-    // The default rung with an anchor is still a bare `?at=`, which is exactly
-    // what the shell produces when it lands the conversation on a slice.
-    expect(rungHref("conversation", "2026-08-01-1000")).toBe(
-      "/?at=2026-08-01-1000",
-    );
   });
 });
 
@@ -85,8 +39,8 @@ describe("parseAtParam", () => {
     expect(parseAtParam("?at=a%20b")).toBe("a b");
   });
 
-  it("ignores the rung, which rides in the same query string", () => {
-    expect(parseAtParam("?z=slice&at=2026-08-01-1000")).toBe("2026-08-01-1000");
+  it("ignores other params riding in the same query string", () => {
+    expect(parseAtParam("?view=game&at=2026-08-01-1000")).toBe("2026-08-01-1000");
   });
 });
 
@@ -98,12 +52,11 @@ describe("stripAtParam", () => {
     expect(stripAtParam("")).toBe("");
   });
 
-  it("KEEPS the rung — the anchor is consumed once, the zoom is not", () => {
-    // The chat page strips `at` after it has jumped. The rung has to survive
-    // that: it is the reader's current position in the ladder, not a one-shot
-    // instruction, and a refresh must keep it.
-    expect(stripAtParam("?z=slice&at=x")).toBe("?z=slice");
-    expect(stripAtParam("?at=x&z=week")).toBe("?z=week");
+  it("keeps unrelated params — only the one-shot anchor is consumed", () => {
+    // The chat page strips `at` after it has jumped. Everything else in
+    // the query string is not its to touch (debug params, skins…).
+    expect(stripAtParam("?debug=rooms&at=x")).toBe("?debug=rooms");
+    expect(stripAtParam("?at=x&skin=taiga")).toBe("?skin=taiga");
   });
 
   it("strips atStart along with at", () => {

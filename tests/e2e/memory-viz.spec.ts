@@ -339,10 +339,10 @@ test.describe("Memory viz (v0.10)", () => {
   });
 
   // The app is ONE LADDER at four zooms — conversation → slice → day → week —
-  // and the floating lens is the only control that moves along it. This block
-  // used to test a `chat | timeline` VIEW switch owned by a header pill; both
-  // the pill and the view param are gone (`src/lib/chat/deep-link.ts` explains
-  // why), so the tests now drive the lens and assert on `?z=`.
+  // and the floating lens is the only control that moves along it. The rung
+  // is the shell's IN-MEMORY state: the URL carries no navigation (deep-link
+  // explains what little query contract remains), so these tests drive the
+  // lens and assert on the lens's own pressed state.
   test.describe("the rung ladder", () => {
     /** The floating zoom lens. Its segments are named by rung. */
     const lens = (page: Page) => page.getByRole("group", { name: "Lens" });
@@ -351,12 +351,14 @@ test.describe("Memory viz (v0.10)", () => {
 
     // The first card-rung hit compiles the three.js chunk in dev — allow
     // triple the default timeout.
-    test("a deep link renders the rung it names", async ({ page }) => {
+    // The rung is IN-MEMORY state now (the shell owns it; the URL carries
+    // no navigation) — "the rung it names" is what the lens selects.
+    test("the lens renders the rung it selects", async ({ page }) => {
       test.slow();
       await seedSlices(datasetA());
 
-      const res = await page.goto("/en?z=slice");
-      expect(res?.status()).toBe(200);
+      await page.goto("/en");
+      await lensButton(page, "Slice").click();
       await expect(lensButton(page, "Slice")).toHaveAttribute(
         "aria-pressed",
         "true",
@@ -408,7 +410,10 @@ test.describe("Memory viz (v0.10)", () => {
       expect(streamHandle).toBeTruthy();
 
       await lensButton(page, "Slice").click();
-      await expect(page).toHaveURL(/z=slice/);
+      await expect(lensButton(page, "Slice")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       // The conversation layer COLLAPSES TO ITS PILL here (v0.11 §14.1): at a
       // card rung the reader came to look at the cards, so the panel's default
       // tier is the quiet floating button. What must not happen is the
@@ -435,10 +440,13 @@ test.describe("Memory viz (v0.10)", () => {
       );
       expect(isSameNode).toBe(true);
 
-      // Back to the conversation: the default rung is written as NO param, so
-      // the URL goes clean rather than carrying `?z=conversation`.
+      // Back to the conversation: the rung returns to the default (the lens
+      // shows Conversation pressed — the rung never rode the URL).
       await lensButton(page, "Conversation").click();
-      await expect(page).not.toHaveURL(/z=/);
+      await expect(lensButton(page, "Conversation")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       // THE REAL INVARIANT, and a stronger one than the node identity above:
       // what the reader typed survives the round trip through a card rung.
       // That is the reason the composer is one never-unmounted component with
@@ -451,7 +459,10 @@ test.describe("Memory viz (v0.10)", () => {
       await expect(area).toHaveValue("still here");
 
       await lensButton(page, "Slice").click();
-      await expect(page).toHaveURL(/z=slice/);
+      await expect(lensButton(page, "Slice")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
       // The pill is the collapsed tier again; opening it restores the dock
       // with the SAME composer instance — the draft survives, which is the
       // invariant the never-unmounted render prop was standing in for.
@@ -484,10 +495,15 @@ test.describe("Memory viz (v0.10)", () => {
         page.getByRole("button", { name: "Local", exact: true }),
       ).toBeVisible();
       // The listener mounts after the gate button under full-suite load, so
-      // press-until-navigated instead of firing once into a dead window.
+      // press-until-toggled instead of firing once into a dead window. The
+      // toggle is memory state: the lens's pressed segment is the assertion.
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).toHaveURL(/z=/, { timeout: 3_000 });
+        await expect(lensButton(page, "Slice")).toHaveAttribute(
+          "aria-pressed",
+          "true",
+          { timeout: 3_000 },
+        );
       }).toPass();
       // Wait for the scene to actually render before toggling back: a rung
       // change issued while the card field is still mounting is dropped,
@@ -497,7 +513,11 @@ test.describe("Memory viz (v0.10)", () => {
       });
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(page).not.toHaveURL(/z=/, { timeout: 3_000 });
+        await expect(lensButton(page, "Conversation")).toHaveAttribute(
+          "aria-pressed",
+          "true",
+          { timeout: 3_000 },
+        );
       }).toPass();
     });
   });

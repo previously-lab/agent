@@ -54,12 +54,12 @@ describe("holoThreadsFor", () => {
     const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
     const threads = holoThreadsFor(many, 7);
     expect(threads).toHaveLength(HOLO_STRAND_MAX);
-    expect(threads.filter((t) => t.kind === "strand")).toHaveLength(8);
+    expect(threads.filter((t) => t.kind === "strand")).toHaveLength(4);
     expect(threads.filter((t) => t.kind === "neighbor")).toHaveLength(0);
     // Fewer strands leave room for neighbors.
-    const fewer = holoThreadsFor(many.slice(0, 5), 7);
-    expect(fewer.filter((t) => t.kind === "strand")).toHaveLength(5);
-    expect(fewer.filter((t) => t.kind === "neighbor")).toHaveLength(3);
+    const fewer = holoThreadsFor(many.slice(0, 2), 7);
+    expect(fewer.filter((t) => t.kind === "strand")).toHaveLength(2);
+    expect(fewer.filter((t) => t.kind === "neighbor")).toHaveLength(2);
   });
 
   it("treats negative and non-integer inputs as the data allows", () => {

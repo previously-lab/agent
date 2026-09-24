@@ -13,23 +13,39 @@ describe("slice-jump bus", () => {
     const handler = vi.fn();
     const unregister = registerSliceJumpHandler(handler);
     expect(requestSliceJump("2026-08-01-1000")).toBe(true);
-    expect(handler).toHaveBeenCalledWith("2026-08-01-1000");
+    expect(handler).toHaveBeenCalledWith("2026-08-01-1000", undefined);
     // Nothing stashed when handled.
     expect(takePendingSliceJump()).toBeNull();
     unregister();
   });
 
+  it("carries the producer-known ISO start to the handler", () => {
+    const handler = vi.fn();
+    registerSliceJumpHandler(handler);
+    requestSliceJump("2026-08-01-1000", "2026-08-11T10:00:00.000Z");
+    expect(handler).toHaveBeenCalledWith(
+      "2026-08-01-1000",
+      "2026-08-11T10:00:00.000Z",
+    );
+  });
+
   it("stashes the jump when no handler is registered (palette on another route)", () => {
     expect(requestSliceJump("2026-08-01-1000")).toBe(false);
-    expect(takePendingSliceJump()).toBe("2026-08-01-1000");
+    expect(takePendingSliceJump()).toEqual({
+      sliceId: "2026-08-01-1000",
+      start: undefined,
+    });
     // The stash is consumed by the take.
     expect(takePendingSliceJump()).toBeNull();
   });
 
-  it("the latest unhandled jump wins", () => {
+  it("the latest unhandled jump wins (start included)", () => {
     requestSliceJump("2026-08-01-1000");
-    requestSliceJump("2026-08-02-1100");
-    expect(takePendingSliceJump()).toBe("2026-08-02-1100");
+    requestSliceJump("2026-08-02-1100", "2026-08-12T11:00:00.000Z");
+    expect(takePendingSliceJump()).toEqual({
+      sliceId: "2026-08-02-1100",
+      start: "2026-08-12T11:00:00.000Z",
+    });
   });
 
   it("unregistering detaches only its own handler", () => {

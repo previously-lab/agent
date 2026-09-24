@@ -4,20 +4,14 @@
  * Every room grows ONE terminal (the 锚定物): a floor-standing machine with
  * a slowly breathing screen. Walk up, interact, and the view switches to
  * the 2.5D catalog focused on the room's slice — the game → catalog
- * direction of the shared `?slice=` address. The lobby's terminal is one
- * size bigger and shows the whole-window index (buildLobbyRegister's data,
- * rendered as DOM per §13's 文字走 DOM rule).
+ * direction of the shared slice address (shell-nav.ts's `focusSlice`). The
+ * lobby's terminal is one size bigger and shows the whole-window index
+ * (buildLobbyRegister's data, rendered as DOM per §13's 文字走 DOM rule).
  *
- * WHY THE ENTRANCE WALL. The resolver always places the terminal beside
- * the doorway on the ENTRANCE wall: the strand doors never hang there
- * (room-doors.ts guarantees it), the doorway clear strip is a known circle,
- * and the walk path starts at the door center — so a spot computed from
- * the strip radius, the path distance, and the hero clearing can never
- * block a passage and is the first thing seen on entry (显眼, never a
- * corner). A seeded draw picks WHICH side of the door; feasibility pulls
- * the machine toward the wall and then outward until every clearance
- * passes, so any plan's paths resolve deterministically (A6: same inputs,
- * same spot).
+ * THE OPEN FIELD. The room's machine stands in the room's open area,
+ * mid-depth — a floor lamp, not a wall fixture (the placement note lives
+ * with the resolver below). The seeded scan and the degenerate fallback
+ * resolve deterministically (A6: same inputs, same spot).
  *
  * TWO CALL SITES, ONE ANSWER. space.tsx renders the terminal from this
  * resolver, and game-canvas.tsx resolves the SAME anchor through the same
@@ -31,7 +25,6 @@ import { LOBBY_LENGTH } from "./hotel";
 import { distToPath, type Composition, type RoomPlan } from "./room-plan";
 import { createRng, hashString } from "./seed";
 import { ENTRANCE_CLEAR_RADIUS, HERO_CLEAR } from "./tuning/room";
-import { parseRungParam } from "@/lib/chat/deep-link";
 
 /* ------------------------------------------------------------------ */
 /* Terminal proportions (human scale, factor 1)                       */
@@ -158,10 +151,36 @@ export interface RoomTerminalInput {
 
 /**
  * Resolve the room terminal's anchor. Deterministic in (sliceId, plan,
- * comp, width, wallThick, propScale, water). The seeded draw is only the
- * SIDE of the doorway; every adjustment after that is feasibility-driven
- * (wall hug → path/hero/water clearance → plan containment), so the same
- * memory always grows the machine in the same spot.
+ * comp, width, wallThick, propScale, water) (A6 — the two call sites
+ * resolve the SAME anchor through the same pure call).
+ *
+ * THE OPEN FIELD, NOT THE WALL. The machine stands in the room's open
+ * area, mid-depth — a floor lamp with a holographic timeline for a
+ * shade, 显眼 without ever blocking anything. The resolver samples
+ * seeded candidates across the middle band (30–70% depth), keeps the
+ * ones that cannot be in the way (inside the plan, clear of the doorway
+ * strip, the walk path and the water), and picks the survivor with the
+ * most clearance from the soft constraints — the hero's clearing, the
+ * composition's cluster circles and the side walls.
+ *
+ * WHY CLUSTERS ARE THE FURNITURE PROXY. This layer's input is the plan
+ * and the composition; the kit layer's authored keep-empty zones and
+ * module floors live above it (they need the template/composition data
+ * RoomTerminalInput does not carry). What the planning layer DOES know:
+ * grouped scatter and kit staging anchor around comp.clusters, so a
+ * candidate outside every cluster circle avoids the furniture footprints
+ * by construction; and wall-anchored kits hug the walls, so the score
+ * rewards standing away from them. The hard filters cover what the
+ * modules' entrance aprons and hall spines protect — those zones sit on
+ * the walk path's corridor, and the path filter is stricter than any of
+ * them. Sparse open-field dressing (§8.2, 0–3 pieces per field, itself
+ * path-avoiding) may still rarely graze the machine — accepted as
+ * best-effort at this layer.
+ *
+ * DEGENERATE ROOMS. A room too small to clear the path anywhere in the
+ * band (the dollhouse scales) degrades to the entrance-wall spot beside
+ * the doorway — the v0.11 placement, feasibility-nudged, proven to stay
+ * inside the plan and out of the passage.
  */
 export function roomTerminalFor({
   sliceId,
@@ -173,7 +192,6 @@ export function roomTerminalFor({
   water,
 }: RoomTerminalInput): TerminalAnchor {
   const rng = createRng(hashString(`${sliceId}@terminal`));
-  const side = rng() < 0.5 ? -1 : 1;
 
   const halfRoom = width / 2 - wallThick / 2;
   // The machine rides the prop scale like every other piece of furniture,
@@ -191,40 +209,99 @@ export function roomTerminalFor({
   };
   scale = fitScale();
 
+  const hw = (TERMINAL_W * scale) / 2;
+  const hd = (TERMINAL_D * scale) / 2;
+  const heroClear = HERO_CLEAR * propScale;
+
+  const inside = (x: number, z: number): boolean =>
+    terminalInsidePlan(plan, width, plan.extent, wallThick, {
+      x0: x - hw,
+      x1: x + hw,
+      z0: z - hd,
+      z1: z + hd,
+    });
+  // THE DOORWAY STRIP: an unscaled circle at the door centre (A4) — the
+  // entrance apron the modules keep empty lives inside it, and the walk
+  // path starts there, but the strip is the hard guarantee.
+  const clearOfDoor = (x: number, z: number): boolean =>
+    Math.hypot(x, z) >= ENTRANCE_CLEAR_RADIUS + hw + 0.1;
+  const clearOfPath = (x: number, z: number): boolean =>
+    distToPath(comp, x, z) >= comp.pathHalf + hw + 0.12;
+  const clearOfWater = (x: number, z: number): boolean => {
+    if (!water) return true;
+    const dx = Math.max(0, Math.abs(x - water.cx) - water.halfX);
+    const dz = Math.max(0, Math.abs(z - water.cz) - water.halfZ);
+    return Math.hypot(dx, dz) >= hw + 0.1;
+  };
+  // Soft clearances, as BOUNDARY distances (≥0 means clear with margin).
+  // The score is the WORST of them, so the picked spot is the one that
+  // least crowds anything — hero content, furniture clusters, walls.
+  const heroBoundary = (x: number, z: number): number =>
+    heroClear <= 0
+      ? Number.POSITIVE_INFINITY
+      : Math.hypot(x - comp.hero.x, z - comp.hero.z) - heroClear - hw;
+  const clusterBoundary = (x: number, z: number): number =>
+    comp.clusters.reduce(
+      (min, c) => Math.min(min, Math.hypot(x - c.x, z - c.z) - c.radius - hw),
+      Number.POSITIVE_INFINITY,
+    );
+  // Wall-anchored furniture hugs every wall (kits.ts: origins stand off
+  // the wall by the wall clear + the kit's back offset, bodies between).
+  // The band keeps the machine out of that strip — the walls are where
+  // the furniture IS; the middle of the room is the open field. 1.2 m at
+  // prop scale covers the convention's deepest typical reach (clear 0.35
+  // + back offset up to 0.8 + body ~0.4 for racks and shelves); the band
+  // is SOFT — a cramped room scores lower rather than failing.
+  const WALL_FURNITURE_BAND = 1.2 * Math.max(propScale, 0.35);
+  const sideWallBoundary = (x: number): number =>
+    halfRoom - Math.abs(x) - hw - WALL_FURNITURE_BAND;
+  const farWallBoundary = (z: number): number =>
+    plan.extent - z - hd - WALL_FURNITURE_BAND;
+
+  // The seeded scan: the middle band of the plan — the open field a
+  // floor lamp would stand in. Every draw is tested; hard filters are
+  // gates, the soft boundaries pick the winner. Bounded (48 draws) and
+  // total: same inputs, same spot.
+  let best: { x: number; z: number; score: number } | null = null;
+  for (let i = 0; i < 48; i++) {
+    const x = (rng() * 2 - 1) * Math.max(0.5, halfRoom - hw - 0.15);
+    const z = plan.extent * (0.3 + rng() * 0.4);
+    if (!inside(x, z) || !clearOfDoor(x, z) || !clearOfPath(x, z)) continue;
+    if (!clearOfWater(x, z)) continue;
+    const score = Math.min(
+      heroBoundary(x, z),
+      clusterBoundary(x, z),
+      sideWallBoundary(x),
+      farWallBoundary(z),
+    );
+    if (!best || score > best.score) best = { x, z, score };
+  }
+  if (best) return { x: best.x, z: best.z, rotY: 0, scale };
+
+  // DEGENERATE FALLBACK (the dollhouse scales): no open-field spot clears
+  // the path, so the machine stands beside the doorway on the entrance
+  // wall — the strand doors never hang there (room-doors.ts guarantees
+  // it), and the feasibility nudges below only ever INCREASE clearance.
+  const side = rng() < 0.5 ? -1 : 1;
   let w = TERMINAL_W * scale;
   let x = side * (ENTRANCE_CLEAR_RADIUS + w / 2 + 0.26);
   let z = wallThick / 2 + (TERMINAL_D * scale) / 2 - 0.02;
   const zMin = wallThick / 2 + (TERMINAL_D * scale) / 2 - 0.06;
   const xCap = halfRoom - w / 2 - 0.04;
   x = Math.min(Math.abs(x), xCap) * side;
-
-  const heroClear = HERO_CLEAR * propScale;
-  const clearOfHero = (): boolean =>
+  const clearOfHeroFb = (): boolean =>
     heroClear <= 0 ||
     Math.hypot(x - comp.hero.x, z - comp.hero.z) >= heroClear + w / 2;
-  const clearOfWater = (): boolean => {
-    if (!water) return true;
-    const dx = Math.max(0, Math.abs(x - water.cx) - water.halfX);
-    const dz = Math.max(0, Math.abs(z - water.cz) - water.halfZ);
-    return Math.hypot(dx, dz) >= w / 2 + 0.1;
-  };
-  const clearOfPath = (): boolean =>
-    distToPath(comp, x, z) >= comp.pathHalf + w / 2 + 0.12;
-  const inside = (): boolean =>
+  const insideFb = (): boolean =>
     terminalInsidePlan(plan, width, plan.extent, wallThick, {
       x0: x - w / 2,
       x1: x + w / 2,
       z0: z - (TERMINAL_D * scale) / 2,
       z1: z + (TERMINAL_D * scale) / 2,
     });
-
-  // Feasibility passes, applied in place and bounded: first hug the wall
-  // (z down), then slide outward along it (x up). Both moves only ever
-  // INCREASE clearance, so the loop terminates at the first fully-clear
-  // spot; a machine that fits nowhere degrades to the wall at xCap,
-  // never outside the plan.
   for (let i = 0; i < 24; i++) {
-    if (inside() && clearOfPath() && clearOfHero() && clearOfWater()) break;
+    if (insideFb() && clearOfPath(x, z) && clearOfHeroFb() && clearOfWater(x, z))
+      break;
     if (z > zMin) {
       z = Math.max(zMin, z - 0.08 * scale);
     } else if (Math.abs(x) + 0.2 * scale <= xCap) {
@@ -233,7 +310,6 @@ export function roomTerminalFor({
       break;
     }
   }
-
   return { x, z, rotY: 0, scale };
 }
 
@@ -272,48 +348,3 @@ export const LOBBY_TERMINAL_ANCHOR: TerminalAnchor = {
   scale: LOBBY_TERMINAL_S,
 };
 
-/* ------------------------------------------------------------------ */
-/* The catalog jump (§13: navigation IS the address)                  */
-/* ------------------------------------------------------------------ */
-
-export type AnchorNav =
-  | { readonly mode: "push"; readonly href: string }
-  | { readonly mode: "assign"; readonly href: string };
-
-/**
- * Where the anchor interaction navigates. Two paths, both through the
- * app's existing URL contract (`?at=` is the field's own slice-jump
- * address; the shell clears an in-session game override when one lands):
- *
- *  - The shell's rung is a card rung (`z` param live in the URL — the
- *    shell mirrors rung → URL on every change): a soft navigation to
- *    `?at=<id>` through Next's patched History API (an external pushState
- *    is picked up by the app router, so `useSearchParams` re-renders —
- *    no router import, which keeps game-canvas importable from node-side
- *    unit tests). The query-only URL keeps the locale path; the field
- *    remounts, focuses and flashes the slice's card, and the conversation
- *    jump stays suppressed — the panel tiers keep their existing
- *    defaults.
- *  - The rung is the conversation default (`z` absent — a cold boot at
- *    `/?view=game`, or the island button pressed from the conversation):
- *    the rung state cannot be lifted from the URL post-mount (the shell
- *    owns it; `z` only seeds the initial state), so a soft push would
- *    land on the conversation, not the catalog. A full navigation to
- *    `/<locale>?z=slice&at=<id>` re-seeds everything and lands exactly
- *    where a shared link would.
- *
- * Pure — unit-tested in tests/lib/game/anchor.test.ts.
- */
-export function anchorNavPlan(
-  currentSearch: string,
-  locale: string,
-  sliceId: string,
-): AnchorNav {
-  const enc = encodeURIComponent(sliceId);
-  const rung = parseRungParam(currentSearch);
-  if (rung !== null && rung !== "conversation") {
-    // Query-only: pushState resolves it against the current locale path.
-    return { mode: "push", href: `?at=${enc}` };
-  }
-  return { mode: "assign", href: `/${locale}?z=slice&at=${enc}` };
-}

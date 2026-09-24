@@ -9,7 +9,8 @@
  * every height, `angle(y) = seat(i, count) + spin(y)`, with ONE knot —
  * the room's own slice — swept by `strandPointAt`. There is no second
  * configuration and nothing here re-derives the braid; the hologram is the
- * coaxial cable standing in the room, human height, glowing.
+ * coaxial cable standing in the room: the braid at eye height, the core
+ * climbing above the walls, threads few enough to stay a braid.
  *
  * WHAT THE THREADS ARE (data → braid, the whole reason the shape varies):
  *  - The CORE line is the room's own timeline — a straight vertical tube,
@@ -52,26 +53,37 @@ import {
 /* Dimensions (world meters at construction scale 1)                  */
 /* ------------------------------------------------------------------ */
 
-/** Cable start above the emitter puck. */
+/** Cable start above the emitter base. */
 export const HOLO_BOTTOM = 0.14;
-/** Cable top — 人高: a human-height hologram beside the doorway. */
-export const HOLO_TOP = 1.86;
+/** Cable top — TALL ON PURPOSE: 2.9 m clears the cutaway sills (1.1 m)
+ *  and even a full-height wall in the 45° top-down camera, so the
+ *  hologram's crown is never eaten by the masonry. The braid itself
+ *  stays at human height (HOLO_CENTER_Y); only the straight column
+ *  tail rises above the walls. */
+export const HOLO_TOP = 2.9;
 /** ONE cylinder radius for the whole bundle (the winding never changes it). */
 export const HOLO_RADIUS = 0.3;
+/** The knot's centre — the face of the old machine (its screen sat at
+ *  1.06 m), so the braid reads at eye height while the column tail
+ *  climbs to HOLO_TOP above the walls. */
+export const HOLO_CENTER_Y = 1.15;
 /** Half-height of the knot window — the braid spans ±lambda around the slice. */
 export const HOLO_KNOT_LAMBDA = 0.44;
 /** Full turns across the knot — the band's TURNS, one twist per card. */
 export const HOLO_TURNS = 3;
-/** Vertical samples per line; 64 over 1.72 m is ~2.7 cm a segment, smooth
+/** Vertical samples per line; 64 over 2.76 m is ~4.3 cm a segment, smooth
  *  for three turns without being greedy (every room owns one hologram). */
 export const HOLO_SEGMENTS = 64;
-/** The moiré cap on the thread bundle — see the header. */
-export const HOLO_STRAND_MAX = 8;
-/** Tube radii (world): the core is the spine, strands a hair under it,
- *  neighbors the lightest mark — the band's three line weights. */
-export const HOLO_CORE_RADIUS = 0.018;
-export const HOLO_STRAND_RADIUS = 0.011;
-export const HOLO_NEIGHBOR_RADIUS = 0.009;
+/** The thread cap — the elegance dial. A handful of lines is a braid,
+ *  past four it is the wire cage the reader rejected; the band's moiré
+ *  discipline says the same. Strands keep priority at the cap. */
+export const HOLO_STRAND_MAX = 4;
+/** Tube radii (world): the core is the spine (a touch heavier, it is
+ *  the one line allowed to bloom), threads are hairlines that must not
+ *  compete with it. */
+export const HOLO_CORE_RADIUS = 0.022;
+export const HOLO_STRAND_RADIUS = 0.01;
+export const HOLO_NEIGHBOR_RADIUS = 0.0085;
 /** The rigid self-spin rate (rad/s) — one turn in ~52 s, 缓慢 by design.
  *  This is the ONLY quantity here the component animates, and it is a pure
  *  function of the clock; it never feeds back into the geometry. */
@@ -81,13 +93,13 @@ export const HOLO_SPIN_SPEED = 0.12;
 /* Ink                                                                */
 /* ------------------------------------------------------------------ */
 
-/** Strand-thread brightness bounds (multiplied into the accent by the
- *  material gain): near the band's quiet-bundle range, peaking just under
- *  the core so the spine stays the landmark. */
-export const HOLO_STRAND_BRIGHTNESS: readonly [number, number] = [0.42, 0.95];
-/** Neighbor threads are context, not doors — the band's backdrop-recede
- *  range: legible as threads, clearly dimmer than the strands. */
-export const HOLO_NEIGHBOR_BRIGHTNESS: readonly [number, number] = [0.16, 0.38];
+/** Strand-thread brightness bounds (multiplied into the bundle grey by
+ *  the material): mid grey, clearly under the core — the threads inform,
+ *  the core landmarkes. */
+export const HOLO_STRAND_BRIGHTNESS: readonly [number, number] = [0.65, 1.0];
+/** Neighbor threads are context, not doors — the quiet half of the
+ *  bundle's range. */
+export const HOLO_NEIGHBOR_BRIGHTNESS: readonly [number, number] = [0.3, 0.6];
 /** The band's lane-light constants — nearer lanes read brighter, with the
  *  alternation that keeps a narrow bundle reading as a volume. */
 export const HOLO_LANE_BRIGHTNESS_MIN = 0.75;
@@ -158,14 +170,9 @@ export interface HoloLineBake {
   readonly brightness: Float32Array;
 }
 
-/** The knot's centre height — the middle of the cable, so the braid reads
- *  centred from the fixed 45° game camera. */
-export const HOLO_CENTER_Y = (HOLO_BOTTOM + HOLO_TOP) / 2;
-
-/**
- * The core: a straight vertical line on the axis — the spine the bundle
- * wraps around, exactly the band's core. Brightness is unused (the core's
- * ink rides on its material colour, as the band's core does).
+/** The core: a straight vertical line on the axis — the spine the bundle
+ *  wraps around, exactly the band's core. Brightness is unused (the core's
+ *  ink rides on its material colour, as the band's core does).
  */
 export function holoCoreBake(): HoloLineBake {
   const n = HOLO_SEGMENTS + 1;
@@ -193,7 +200,7 @@ export function holoCoreBake(): HoloLineBake {
  * Per-segment brightness is the band's volume shading read in the cable
  * frame: how far forward the sample sits (`sinT` of its cylinder angle)
  * scaled by the seat's lane depth, mapped into the kind's brightness
- * range. The component multiplies these greys into the accent, so a far
+ * range. The component multiplies these into the bundle grey, so a far
  * flank recedes while the bundle still reads as one object.
  */
 export function holoThreadBake(thread: HoloThread): HoloLineBake {

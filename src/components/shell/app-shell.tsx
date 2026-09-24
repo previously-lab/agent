@@ -2,20 +2,30 @@
 
 /**
  * AppShell (v0.11) — the single-route shell that hosts both chat and timeline
- * views on `/`. The rung (`?z=`, absent = conversation) is the only
- * navigation. The left time axis (AxisBand) is always mounted; the right pane
- * holds the card field at a card rung, with the CONVERSATION LAYER
- * (`chat/conversation-panel.tsx`) floating over everything as a persistent
- * three-tier panel (pill / dock / fullscreen, §14.1). The chat stream stays
- * MOUNTED at every tier — pill slides the panel offscreen instead of
- * unmounting — so Virtuoso scroll state and the live useChat stream survive
- * every collapse, and FULLSCREEN freezes the card field's frame loop
- * (`paused` → frameloop="never") without unmounting it.
+ * views on `/`. ALL product navigation is IN-MEMORY state owned here (the
+ * world, the rung, the shared slice address, the conversation jump) — the
+ * URL carries none of it. The left time axis (AxisBand) is always mounted;
+ * the right pane holds the card field at a card rung, with the CONVERSATION
+ * LAYER (`chat/conversation-panel.tsx`) floating over everything as a
+ * persistent three-tier panel (pill / dock / fullscreen, §14.1). The chat
+ * stream stays MOUNTED at every tier — pill slides the panel offscreen
+ * instead of unmounting — so Virtuoso scroll state and the live useChat
+ * stream survive every collapse, and FULLSCREEN freezes the card field's
+ * frame loop (`paused` → frameloop="never") without unmounting it.
  *
  * Catalog loading is lazy: the timeline data layer (catalog window + strand
- * list) is fetched on the first switch to the timeline view. A deep link
- * `/?view=timeline&at=<sliceId>` loads the full catalog so the linked slice is
- * always resolvable, mirroring the old `/timeline` page behavior.
+ * list) is fetched on the first switch to a card rung. Addressing a slice
+ * (terminal entrance, card click) loads the full catalog so the slice is
+ * always resolvable.
+ *
+ * THE URL IS DEV-ONLY. The only query params anyone reads are the debug
+ * gallery's (`?view=game&debug=rooms&page=&skin=`, game-shell.tsx) and the
+ * playground route's — never product navigation. `?view=game` is read ONCE
+ * as the cold-boot world (so the gallery link still opens the hotel); it is
+ * never written back and never reconciled. `?at=`/`?atStart=` remain a
+ * cold-boot conversation deep link consumed once by ChatPage (chat-page.tsx)
+ * — a shared link still lands on its slice, but nothing inside the session
+ * ever produces one.
  */
 import {
   useCallback,
@@ -32,7 +42,6 @@ import { AnimatePresence, animate, motion } from "motion/react";
 import { useTranslations } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "@/i18n/navigation";
 import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { FieldRung } from "@/lib/timeline3d/units";
@@ -62,11 +71,12 @@ import {
   type StrandListItem,
 } from "@/lib/episodic/actions";
 import { invalidateHotelData } from "@/lib/game/hotel-data";
+import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
+import { requestSliceJump } from "@/lib/chat/slice-jump";
 import {
-  DEFAULT_RUNG,
-  parseAtParam,
-  parseRungParam,
-} from "@/lib/chat/deep-link";
+  ShellNavContext,
+  type ShellNav,
+} from "@/components/shell/shell-nav";
 import { ISLAND } from "@/components/layout/island";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
@@ -124,32 +134,33 @@ interface AppShellProps {
  *  canvas moves the CAMERA instead of the DOM layer — same gesture). */
 const RUNG_SLIDE_X = 24;
 
+/** The data-hold's bound (ms): how long a move into the field may wait at
+ *  the dissolve threshold for the catalog before proceeding into the
+ *  destination's fallback skeleton. An unbounded hold would pin
+ *  WORLD_TRANSITION.active — the input gate — forever when the catalog
+ *  fetch fails (see the clock's exception-path note). */
+const TRANSITION_DATA_WAIT_MS = 8000;
+
 export function AppShell({ initialConfig }: AppShellProps) {
-  const router = useRouter();
+  // THE URL IS DEV-ONLY. `?view=game` is read ONCE, as the cold-boot world,
+  // so the debug gallery's link (`?view=game&debug=rooms`, game-shell.tsx)
+  // still opens straight into the hotel. Nothing else reads the query string
+  // here and nothing ever writes it: a refresh returns to the field at the
+  // conversation rung, exactly like a fresh visit.
   const searchParams = useSearchParams();
-  const rawSearch = searchParams.toString();
-  // THE RUNG IS THE ONLY NAVIGATION. There used to be a view mode beside it
-  // (`?view=timeline` = cards, absent = chat) and the two were the same axis at
-  // different resolutions — see `deep-link.ts`. `?z=` names the rung; a deep
-  // link with `?at=` still lands on the slice rung, because a reader arriving
-  // at a named slice wants the field one step coarser than the conversation.
-  const rungParam = parseRungParam(rawSearch);
-  const at = parseAtParam(rawSearch);
-  // THE WORLD SWITCH (§14) — a TRANSITION, never a snap. `settledView` is
-  // the world the reader is in (the URL agrees with it once a move
-  // finishes); `transition` is a live move between the worlds (owned by
-  // the shell, driven per frame by world-transition.ts). The URL is the
-  // arrival: it is written at completion, and a URL that disagrees with
-  // the settled world — Back/forward, a deep link, an openSlice jump —
-  // starts the move through the reconciliation below. `?slice=` stays the
-  // SHARED ADDRESS: the field focuses the slice's card (lands on the
-  // slice rung, flashed), the game stands at its door (game-canvas.tsx).
-  // It is deliberately separate from `?at=`, whose remaining meaning is a
-  // CONVERSATION jump (see the rung note below).
-  const sliceParam = searchParams.get("slice");
-  const viewParam = searchParams.get("view");
-  const urlWorld: WorldKind = viewParam === "game" ? "game" : "field";
-  const [settledView, setSettledView] = useState<WorldKind>(urlWorld);
+  const [settledView, setSettledView] = useState<WorldKind>(() =>
+    searchParams.get("view") === "game" ? "game" : "field",
+  );
+  // THE WORLD SWITCH (§14) — a TRANSITION, never a snap, and PURE STATE: no
+  // URL leg, no reconciliation. `settledView` is the world the reader is in;
+  // `transition` is a live move between the worlds (owned by the shell,
+  // driven per frame by world-transition.ts). `sharedSlice` is the shared
+  // slice address — the memory form of the old `?slice=`/`?at=` contract,
+  // consumed two ways: the field focuses the slice's card (its `initialAtId`
+  // — flashed), the game stands the reader at the slice's door
+  // (game-canvas.tsx's `focusSlice`). The shell's navigation actions
+  // (shell-nav.ts) compose these with the transition machine.
+  const [sharedSlice, setSharedSlice] = useState<string | null>(null);
   const [transition, setTransition] = useState<{
     from: WorldKind;
     to: WorldKind;
@@ -175,50 +186,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
   feedRef.current ??= createFieldFeed();
   const feed = feedRef.current;
   /** The zoom rung, owned here so the floating lens switcher reads the same
-   *  value CardField transitions through. Seeded from `?z=` when the URL names
-   *  one, and otherwise from `DEFAULT_RUNG` — the CONVERSATION, so a bare `/`
-   *  opens on the live conversation exactly as it always has. (The card field's
-   *  own default is `day`; that is the right default for someone who asked for
-   *  the timeline and the wrong one for someone who just opened the app.)
-   *
-   *  `?at=` DELIBERATELY DOES NOT PICK A RUNG. It used to force `slice`, and
-   *  that was a porting slip: the rule was written when `?view=` still chose
-   *  which pane was up, so "the slice rung" then meant "open the timeline
-   *  field at this slice". With the view gone, `?at=` means what its only
-   *  remaining callers mean by it — a slice JUMP, which the conversation
-   *  performs (`openSlice`, the search palette). Forcing `slice` opened the
-   *  card field on top of the jump and the conversation never happened; the
-   *  e2e caught it. `?z=slice&at=…` still asks for the card rung at a slice.
-   *
-   *  `?slice=` DOES seed the slice rung — but only in the field world: the
-   *  shared address means "look at this slice", and the field's way of looking
-   *  is the slice rung with the card flashed. In the game world it addresses
-   *  the hotel instead (the reader stands at its door), so the rung keeps the
-   *  conversation default. */
-  const [rung, setRung] = useState<FieldRung>(
-    rungParam ?? (sliceParam && view !== "game" ? "slice" : DEFAULT_RUNG),
-  );
-
-  // The rung lives in the URL so a refresh or a share keeps the zoom — the view
-  // param used to be the only thing that survived, which meant the one piece of
-  // state the reader actually manipulates was the one that did not. Written with
-  // `replaceState`, not a router push: the rung changes on every wheel-zoom, and
-  // a history entry per notch would make Back useless.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (rung === DEFAULT_RUNG) params.delete("z");
-    else params.set("z", rung);
-    // The world rides the URL too: a refresh or a share of `/?view=game`
-    // reopens the hotel. The field is the default, so it writes nothing.
-    if (view === "game") params.set("view", "game");
-    else params.delete("view");
-    const q = params.toString();
-    window.history.replaceState(
-      null,
-      "",
-      `${window.location.pathname}${q ? `?${q}` : ""}`,
-    );
-  }, [rung, view]);
+   *  value CardField transitions through. Memory-only: a bare `/` always
+   *  opens on `DEFAULT_RUNG` — the CONVERSATION, exactly as it always has.
+   *  (The card field's own default is `day`; that is the right default for
+   *  someone who asked for the timeline and the wrong one for someone who
+   *  just opened the app.) */
+  const [rung, setRung] = useState<FieldRung>(DEFAULT_RUNG);
 
   // `Cmd/Ctrl+.` — the shortcut the deleted mode switcher owned. Kept because
   // it is the fastest round trip between the cards and the conversation, and it
@@ -256,15 +229,34 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
   // ── THE WORLD TRANSITION MACHINE (world-transition.ts) ────────────────────
   // The shell owns the move: WHICH worlds are mounted (one settled, two
-  // mid-move), the rAF clock that writes the shared singleton's progress,
-  // and the URL, which is written at completion — the destination is the
-  // arrival, so a refresh mid-move lands on the side the reader started
-  // from and Back replays the reverse move through the reconciliation
-  // below. Everything inside the canvas (the scripted hotel shot, the
-  // compositor's dissolve, the contract pin) reads the singleton per
-  // frame; React state only mirrors the phase boundaries.
-  const transitionLockRef = useRef(false);
-  const settledRef = useRef<WorldKind>(urlWorld);
+  // mid-move) and the rAF clock that writes the shared singleton's progress.
+  // Everything inside the canvas (the scripted hotel shot, the compositor's
+  // dissolve, the contract pin) reads the singleton per frame; React state
+  // only mirrors the phase boundaries. The machine is PURE STATE — nothing
+  // here reads or writes the URL.
+  //
+  // THE INPUT-GATE INVARIANT. WORLD_TRANSITION.active freezes the hotel's
+  // keyboard (game-canvas.tsx's movement gate), so it must be false exactly
+  // when no move is running. It is therefore cleared in ONE place only —
+  // settleMove() — and settleMove() runs on EVERY path that ends a move:
+  //   · the completion tick (finish),
+  //   · the clock effect's cleanup — an interrupt that starts a new move,
+  //     a mid-flight reversal, or the shell unmounting,
+  //   · an exception in the tick (the catch ends the move).
+  // The guard is WORLD_TRANSITION.id: a reversal bumps id in startMove
+  // BEFORE the outgoing clock's cleanup runs, so an outgoing settle can
+  // never clear a newer move's gate. beginTransition() never clears the
+  // flag and never leaves it set without a live clock behind it — every
+  // early return happens before the singleton is touched. A stuck gate is
+  // structurally impossible: either a clock is running (the flag is
+  // wanted), or the clock has stopped and its cleanup settled the move.
+  const transitionRef = useRef<{
+    from: WorldKind;
+    to: WorldKind;
+    sliceId: string | null;
+    phase: WorldTransitionPhase;
+  } | null>(null);
+  const settledRef = useRef<WorldKind>(view);
   const readyRef = useRef(false);
   const reducedMotionRef = useRef(reducedMotion);
   useEffect(() => {
@@ -277,12 +269,20 @@ export function AppShell({ initialConfig }: AppShellProps) {
     reducedMotionRef.current = reducedMotion;
   }, [reducedMotion]);
 
-  const beginTransition = useCallback(
-    (to: WorldKind, sliceId: string | null) => {
-      if (transitionLockRef.current) return; // one move at a time
-      const from = settledRef.current;
-      if (from === to) return;
-      transitionLockRef.current = true;
+  /** THE SINGLE EXIT — see the invariant above. Id-guarded: only the move
+   *  that owns WORLD_TRANSITION.id may clear the gate, so an outgoing
+   *  clock's cleanup (reversal, interrupt, unmount) can never clear the
+   *  flag a newer move just set. Idempotent — safe to run twice. */
+  const settleMove = useCallback((id: number) => {
+    const wt = WORLD_TRANSITION;
+    if (wt.id !== id) return;
+    wt.active = false;
+    wt.progress = 0;
+    transitionRef.current = null;
+  }, []);
+
+  const startMove = useCallback(
+    (from: WorldKind, to: WorldKind, sliceId: string | null) => {
       const wt = WORLD_TRANSITION;
       wt.active = true;
       wt.id += 1;
@@ -296,34 +296,94 @@ export function AppShell({ initialConfig }: AppShellProps) {
         // (the field world mounts nothing at the conversation rung; its
         // scene is the card field's). A terminal entrance lands on the
         // slice rung at the terminal's slice; a plain exit (the game's
-        // exit button, Escape, Back) lands where the reader last looked at
+        // exit button, Escape) lands where the reader last looked at
         // cards — the same last-card-rung the ⌘/. toggle returns to.
         setRung(sliceId !== null ? "slice" : lastCardRungRef.current);
       }
-      setTransition({ from, to, sliceId, phase: "camera" });
+      const t = {
+        from,
+        to,
+        sliceId,
+        phase: "camera" as WorldTransitionPhase,
+      };
+      transitionRef.current = t;
+      setTransition(t);
     },
     [],
   );
 
-  // URL reconciliation: the URL is the arrival. A URL naming a world the
-  // reader is not settled in starts the move (with the slice when the URL
-  // carries one — Back after a terminal entrance replays the reverse); a
-  // URL that disagrees with a LIVE move (Back pressed mid-flight) cancels
-  // the move and snaps to what the URL says.
-  useEffect(() => {
-    if (transition) {
-      if (urlWorld !== transition.to) {
-        const wt = WORLD_TRANSITION;
-        wt.active = false;
-        wt.progress = 0;
-        transitionLockRef.current = false;
-        setTransition(null);
-        setSettledView(urlWorld);
+  const beginTransition = useCallback(
+    (to: WorldKind, sliceId: string | null) => {
+      const live = transitionRef.current;
+      if (live) {
+        // A move is already running. The same destination is a no-op (the
+        // live move lands there — repeated Enter, Exit pressed twice).
+        // The OTHER world is a REVERSAL mid-flight: the live move's
+        // destination becomes the departure world and the dissolve simply
+        // crosses back (Escape/Exit pressed while the hotel mounts). The
+        // outgoing clock's cleanup will call settleMove with the stale id
+        // and no-op — the gate stays live for the new move.
+        if (live.to === to) return;
+        startMove(live.to, to, sliceId);
+        return;
       }
-      return;
-    }
-    if (urlWorld !== settledView) beginTransition(urlWorld, at);
-  }, [urlWorld, at, transition, settledView, beginTransition]);
+      const from = settledRef.current;
+      if (from === to) return;
+      startMove(from, to, sliceId);
+    },
+    [startMove],
+  );
+
+  // Read-anywhere mirror of the rung for the navigation callbacks below.
+  const rungRef = useRef<FieldRung>(rung);
+  useEffect(() => {
+    rungRef.current = rung;
+  }, [rung]);
+
+  // ── THE SHELL'S NAVIGATION ACTIONS (shell-nav.ts) ────────────────────────
+  // The memory form of the old `?slice=` / `?at=` contract. `focusSlice`
+  // addresses a slice to the card field, `standAtSlice` to the hotel (the
+  // reader stands at the slice's door), `openSlice` is the conversation
+  // jump. All three are pure state — no URL, no router.
+  const focusSlice = useCallback(
+    (sliceId: string) => {
+      setSharedSlice(sliceId);
+      if (transitionRef.current) return; // a move owns the rung seeding
+      if (settledRef.current !== "field") {
+        beginTransition("field", sliceId);
+      } else {
+        setRung("slice");
+      }
+    },
+    [beginTransition],
+  );
+  const standAtSlice = useCallback(
+    (sliceId: string) => {
+      setSharedSlice(sliceId);
+      if (transitionRef.current) return;
+      if (settledRef.current !== "game") beginTransition("game", null);
+    },
+    [beginTransition],
+  );
+  const openSlice = useCallback(
+    (sliceId: string, start?: string) => {
+      // The card field's click: address the slice — the field focuses and
+      // flashes its card at the current rung (the shared address), and
+      // when the CONVERSATION is the active surface the jump itself runs
+      // through the M2 bus, exactly the split the old `?at=` consumption
+      // had (chat-page.tsx suppresses its deep-link jump at a card rung).
+      // `start` rides the bus so the travel clock skips its resolve fetch.
+      setSharedSlice(sliceId);
+      if (rungRef.current === "conversation") requestSliceJump(sliceId, start);
+      if (transitionRef.current) return;
+      if (settledRef.current !== "field") beginTransition("field", null);
+    },
+    [beginTransition],
+  );
+  const shellNav = useMemo<ShellNav>(
+    () => ({ focusSlice, standAtSlice, openSlice }),
+    [focusSlice, standAtSlice, openSlice],
+  );
 
   // The room → catalog entrance: the terminal interaction fires this after
   // its depart flare (world-transition.ts's hook), and the move starts
@@ -371,73 +431,75 @@ export function AppShell({ initialConfig }: AppShellProps) {
       ? WORLD_TRANSITION_REDUCED_MS
       : WORLD_TRANSITION_MS;
     const started = performance.now();
+    // The move this clock owns: settleMove(id) clears the input gate only
+    // when the singleton's id still matches, so a reversal/interrupt that
+    // bumped the id before this effect's cleanup runs leaves the new
+    // move's gate untouched (see the machine's invariant above).
+    const moveId = WORLD_TRANSITION.id;
     let raf = 0;
     let cancelled = false;
     const finish = () => {
       if (cancelled) return;
       cancelled = true;
-      // The destination becomes the URL BEFORE the settled flip: a refresh
-      // at this exact instant lands on the arriving side, and the push (not
-      // replace) means Back returns to the departing URL — where the
-      // reconciliation starts the reverse move.
-      const params = new URLSearchParams(window.location.search);
-      if (transitionTo === "game") {
-        params.set("view", "game");
-      } else {
-        params.delete("view");
-        if (transitionSlice) params.set("at", transitionSlice);
-      }
-      const q = params.toString();
-      window.history.pushState(
-        {},
-        "",
-        `${window.location.pathname}${q ? `?${q}` : ""}`,
-      );
-      const wt = WORLD_TRANSITION;
-      wt.active = false;
-      wt.progress = 0;
-      transitionLockRef.current = false;
+      settleMove(moveId);
       setSettledView(transitionTo);
       setTransition(null);
     };
     const tick = () => {
       if (cancelled) return;
-      // §14.1: a fullscreen conversation freezes the world — the move
-      // holds until the panel folds back.
-      if (worldFrozen) {
+      try {
+        // §14.1: a fullscreen conversation freezes the world — the move
+        // holds until the panel folds back.
+        if (worldFrozen) {
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        const elapsedMs = performance.now() - started;
+        let p = Math.min(1, elapsedMs / duration);
+        // The dissolve waits for the destination's data: hold at the
+        // threshold — the hotel parked at the terminal's eye pose — until
+        // the catalog has loaded enough for the field world to mount the
+        // focused card. The hold is BOUNDED: a catalog fetch that failed
+        // leaves the destination showing its designed fallback skeleton
+        // (TimelineFallback), and an unbounded hold would pin the input
+        // gate forever — the exception path must still end the move.
+        if (
+          transitionTo === "field" &&
+          p >= DISSOLVE_START &&
+          !readyRef.current &&
+          elapsedMs < TRANSITION_DATA_WAIT_MS
+        ) {
+          p = DISSOLVE_START;
+        }
+        WORLD_TRANSITION.progress = p;
+        const phase = transitionPhase(p);
+        setTransition((prev) =>
+          prev && prev.phase !== phase ? { ...prev, phase } : prev,
+        );
+        if (p >= 1) {
+          finish();
+          return;
+        }
         raf = requestAnimationFrame(tick);
-        return;
-      }
-      const elapsed = (performance.now() - started) / duration;
-      let p = Math.min(1, elapsed);
-      // The dissolve waits for the destination's data: hold at the
-      // threshold — the hotel parked at the terminal's eye pose — until
-      // the catalog has loaded enough for the field world to mount the
-      // focused card.
-      if (
-        transitionTo === "field" &&
-        p >= DISSOLVE_START &&
-        !readyRef.current
-      ) {
-        p = DISSOLVE_START;
-      }
-      WORLD_TRANSITION.progress = p;
-      const phase = transitionPhase(p);
-      setTransition((prev) =>
-        prev && prev.phase !== phase ? { ...prev, phase } : prev,
-      );
-      if (p >= 1) {
+      } catch {
+        // An exception in the clock must not orphan the move: end it
+        // through the same single exit (the settled world lands on the
+        // requested destination — state, not the interrupted frame, is the
+        // source of truth).
         finish();
-        return;
       }
-      raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => {
+      // THE GATE ALWAYS CLEARS: completion (finish above), an interrupt or
+      // reversal (a new move owns the singleton now — the id guard makes
+      // this a no-op), or the shell unmounting. There is no path that stops
+      // the clock without running settleMove.
       cancelled = true;
       cancelAnimationFrame(raf);
+      settleMove(moveId);
     };
-  }, [transitionFrom, transitionTo, transitionSlice, worldFrozen]);
+  }, [transitionFrom, transitionTo, transitionSlice, worldFrozen, settleMove]);
 
   // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
   // The conversation field renders through a portal into whichever surface can
@@ -464,10 +526,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
           : { kind: "narrow" }
         : { kind: "field", el: paneSlotEl };
 
-  // A conversation jump (`?at=` — `openSlice`, the search palette) needs no
-  // in-session override to clear any more: the URL reconciliation owns the
-  // world, so a slice jump arriving from the hotel starts the move to the
-  // field on its own (with the slice as the transition's focus).
+  // A conversation jump (`openSlice`, the search palette rides the M2 bus
+  // directly) is pure state now: `openSlice` homes the world to the field
+  // when the jump comes from the hotel, and the conversation performs the
+  // jump itself (chat-page.tsx) — nothing needs clearing afterwards.
 
   // Escape in the game world: panel first (anything open folds to the pill),
   // then the view itself (back to the field, through the transition). The
@@ -593,13 +655,13 @@ export function AppShell({ initialConfig }: AppShellProps) {
     };
   }, [strandList.length]);
 
-  // ── Lazy catalog load on the first CARD rung (or a deep link that starts on
-  //    one). A slice address (`?at=`, the shared `?slice=`, or a transition's
-  //    terminal slice) loads the full catalog so the linked slice is always
-  //    resolvable; otherwise loads the latest month window. ─────────────────
-  // A live transition's slice leads: it is the field's landing focus before
-  // the URL carries it (the URL is written at completion).
-  const focusId = transition?.sliceId ?? at ?? sliceParam;
+  // ── Lazy catalog load on the first CARD rung. A slice address (the shared
+  //    `sharedSlice`, or a transition's terminal slice) loads the full catalog
+  //    so the addressed slice is always resolvable; otherwise loads the latest
+  //    month window. ─────────────────────────────────────────────────────────
+  // A live transition's slice leads: it is the field's landing focus the
+  // moment the move completes.
+  const focusId = transition?.sliceId ?? sharedSlice;
   useEffect(() => {
     if (rung === "conversation" || timelineReady) return;
     let cancelled = false;
@@ -688,19 +750,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
       loadingRef.current = false;
     }
   }, [hasMore, oldestMonth]);
-
-  const openSlice = useCallback(
-    (sliceId: string, start?: string) => {
-      // `atStart` carries the slice's ISO start — the chat page's jump
-      // handler needs it for the travel clock and would otherwise spend a
-      // full catalog fetch to learn it.
-      const startParam = start
-        ? `&atStart=${encodeURIComponent(start)}`
-        : "";
-      router.push(`/?at=${encodeURIComponent(sliceId)}${startParam}`);
-    },
-    [router],
-  );
 
   // ── ONE LADDER, TWO RENDERERS ─────────────────────────────────────────────
   // The rung is the navigation now; there is no view mode beside it. The
@@ -823,6 +872,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
     // The world-slot provider must sit ABOVE both the canvas and the worlds'
     // DOM-side owners (they are siblings here) — see world-canvas.tsx.
     <WorldSceneProvider>
+    <ShellNavContext.Provider value={shellNav}>
     <div className="relative flex h-dvh overflow-hidden">
       {/* The field world's page atmosphere, UNDER the canvas (the canvas is
           transparent; the aurora used to sit behind the pane's own canvas,
@@ -1092,13 +1142,14 @@ export function AppShell({ initialConfig }: AppShellProps) {
           <div className="relative flex-1 min-h-0">
             <GameShell
               onExit={() => beginTransition("field", null)}
-              focusSlice={sliceParam}
+              focusSlice={sharedSlice}
             />
           </div>
         )}
       </div>
       </ConversationSurfaceProvider>
     </div>
+    </ShellNavContext.Provider>
     </WorldSceneProvider>
   );
 }

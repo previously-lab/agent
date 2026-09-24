@@ -1,22 +1,23 @@
 /**
- * Deep links for the single-route shell.
+ * Deep links for the single-route shell — what little of them remains.
  *
- * WHAT CHANGED AND WHY THIS FILE IS RENAMED. It used to be `mode-switch.ts`,
- * and it encoded a VIEW: `/` meant chat and `?view=timeline` meant the
- * timeline. Those were never two places — they are one field at four zooms
- * (`units.ts`), and the view param was the coarser half of the same axis the
- * lens switcher already offered. So the view became a RUNG: `?z=slice` is the
- * rung, and `/` is the default one. A module named for a mode switch that no
- * longer exists is a trap for whoever reads it next, hence the rename.
+ * WHAT CHANGED AND WHY THIS FILE SHRANK. It used to be `mode-switch.ts`,
+ * then `deep-link.ts` carried the RUNG (`?z=`) beside the point anchor.
+ * Both are gone: the shell's navigation — the world, the rung, the shared
+ * slice address, the conversation jump — is IN-MEMORY state owned by
+ * AppShell (see `shell-nav.ts` and app-shell.tsx's header). The URL no
+ * longer names a rung and nothing in the session ever writes one.
  *
- * WHAT IS STILL HERE. `?at=<sliceId>` is unchanged and still means "dock at
- * this slice" — the one deep link that addresses a POINT in the memory rather
- * than a zoom. `?atStart=` still rides along with it, saving the jump handler a
- * catalog fetch to learn the travel clock's target.
+ * WHAT IS STILL HERE. `?at=<sliceId>&atStart=<iso>` remains a COLD-BOOT
+ * conversation deep link — a shared link still lands on its slice.
+ * ChatPage consumes it exactly once (replaceState-stripped, so a refresh
+ * never re-jumps); nothing inside the session produces it. The debug
+ * gallery (`?view=game&debug=rooms…`, game-shell.tsx) and the playground
+ * route keep their own params, read by their own modules.
  *
  * Pure — no React, no browser. Unit-tested in `tests/lib/chat/deep-link.test.ts`.
  */
-import { RUNG_ORDER, type FieldRung } from "@/lib/timeline3d/units";
+import type { FieldRung } from "@/lib/timeline3d/units";
 
 /**
  * The rung `/` opens at — the conversation, so a bare visit lands exactly where
@@ -25,23 +26,6 @@ import { RUNG_ORDER, type FieldRung } from "@/lib/timeline3d/units";
  * clicking a card, and the wrong one for someone who just opened the app.)
  */
 export const DEFAULT_RUNG: FieldRung = "conversation";
-
-/** The rung's query param. Short because it is rewritten on every zoom. */
-const RUNG_PARAM = "z";
-
-/**
- * The rung named by a query string, or null when absent/unrecognised. Null is
- * the caller's signal to use `DEFAULT_RUNG` — an unknown `z` is a stale or
- * hand-edited link, and answering it with a valid rung would silently ignore
- * what the URL said.
- */
-export function parseRungParam(search: string): FieldRung | null {
-  const raw = new URLSearchParams(search).get(RUNG_PARAM)?.trim();
-  if (!raw) return null;
-  return (RUNG_ORDER as readonly string[]).includes(raw)
-    ? (raw as FieldRung)
-    : null;
-}
 
 /**
  * Extract a valid `at` anchor from a query string (with or without the
@@ -77,14 +61,4 @@ export function stripAtParam(search: string): string {
   params.delete("atStart");
   const rest = params.toString();
   return rest ? `?${rest}` : "";
-}
-
-/** The query string for a rung, with an optional reading-position anchor. The
- *  default rung is written as NO param, so the common case has a clean URL. */
-export function rungHref(rung: FieldRung, at?: string | null): string {
-  const params = new URLSearchParams();
-  if (rung !== DEFAULT_RUNG) params.set(RUNG_PARAM, rung);
-  if (at) params.set("at", at);
-  const q = params.toString();
-  return q ? `/?${q}` : "/";
 }

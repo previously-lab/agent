@@ -51,10 +51,10 @@
  * WHY A hook instead of a navigation. The room → catalog entrance used to be
  * an instant URL jump planned by anchor.ts's anchorNavPlan. The primitive
  * owns the swap now: the terminal interaction fires
- * WORLD_TRANSITION.hooks.enter and the shell starts the machine; the URL is
- * written at COMPLETION (destination reached), so a refresh or a share mid-
- * transition lands on the side the reader started from, and Back replays the
- * reverse move through the URL reconciliation in the shell.
+ * WORLD_TRANSITION.hooks.enter and the shell starts the machine — navigation
+ * is the shell's in-memory state (shell-nav.ts), never the URL, and the
+ * input gate (active) is cleared on every exit path by the shell's single
+ * settle (app-shell.tsx's machine invariant).
  */
 import * as THREE from "three";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";

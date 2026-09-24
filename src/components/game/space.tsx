@@ -140,7 +140,7 @@ import {
   type WallSegment,
 } from "@/lib/game/room-plan";
 import { AnchorHologram } from "@/lib/game/anchor-hologram";
-import { roomTerminalFor } from "@/lib/game/anchor";
+import { roomTerminalFor, terminalFootprint } from "@/lib/game/anchor";
 import {
   doorAffordanceFor,
   resolveRoomTemplate,
@@ -8046,15 +8046,16 @@ export function SpaceScene({
   });
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
-  // THE ANCHOR HOLOGRAM (§13.1): every room grows the one braid beside
-  // the doorway on the entrance wall — lib/game/anchor.ts resolves the
-  // spot (seeded side, feasibility-clamped clear of the strip, the walk
-  // path, the hero clearing, and the water); the integrator resolves the
-  // SAME anchor through the same pure call for the proximity prompt and
-  // the interaction (A6 — two call sites, one answer). Mounted inside the
-  // room root, so the fade capture carries it through the crossfade; its
-  // glow is emissive-only (no light), so the light configuration — and
-  // the compile storm budget — is untouched.
+  // THE ANCHOR HOLOGRAM (§13.1): every room grows the one braid in the
+  // room's open field — lib/game/anchor.ts resolves the spot (a seeded
+  // scan of the mid-depth band, hard-clear of the doorway strip, the walk
+  // path, and the water, scored off the hero, the furniture clusters and
+  // the walls); the integrator resolves the SAME anchor through the same
+  // pure call for the proximity prompt and the interaction (A6 — two call
+  // sites, one answer). Mounted inside the room root, so the fade capture
+  // carries it through the crossfade; its glow is emissive-only (no
+  // light), so the light configuration — and the compile storm budget —
+  // is untouched.
   const terminalAnchor = useMemo(
     () =>
       roomTerminalFor({
@@ -8068,6 +8069,19 @@ export function SpaceScene({
       }),
     [seedId, plan, comp, width, wallThick, propScale, waterRect],
   );
+  // THE ANCHOR RESERVES ITS FLOOR: the machine is a fixture, and the kit
+  // staging yields to fixtures — its footprint disc joins the obstacles
+  // every staging branch passes (the pool columns' precedent), so no kit
+  // piece may land on the hologram (lib/game/kits.ts's gap machinery).
+  // A6 holds: the disc derives from the deterministic anchor.
+  const terminalObstacle = useMemo(() => {
+    const fp = terminalFootprint(terminalAnchor);
+    return {
+      x: terminalAnchor.x,
+      z: terminalAnchor.z,
+      r: Math.hypot((fp.x1 - fp.x0) / 2, (fp.z1 - fp.z0) / 2) + 0.1,
+    };
+  }, [terminalAnchor]);
   // The braid's threads, from the data the room already holds: one per
   // strand passing through this slice (the room-door lane's merged
   // groups, deduped in door order — activity-desc, so the bundle's seats
@@ -8382,6 +8396,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
+        obstacles: [terminalObstacle],
         // v0.12 P3: the world's biome skin — §6.2 slot overrides and the
         // skin's curated decks ride in through the staging machine.
         skin,
@@ -8459,6 +8474,7 @@ export function SpaceScene({
           ? []
           : furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
         const obstacles = [
+          terminalObstacle,
           ...legacy.map((p) => ({
             x: p.x,
             z: p.z,
@@ -8480,7 +8496,7 @@ export function SpaceScene({
       return stageInteriorKits({
         ...staging,
         baseArea,
-        obstacles: seamObstacles.length > 0 ? seamObstacles : undefined,
+        obstacles: [terminalObstacle, ...seamObstacles],
       }).map(toPlacement);
     }
     if (recipe.worldClass === "wonder") {
@@ -8521,6 +8537,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
+        obstacles: [terminalObstacle],
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       });
       return [...rugs, ...kits.map(toPlacement)];
@@ -8528,7 +8545,7 @@ export function SpaceScene({
     // Unreachable: the gate above covers every world class. Kept so the
     // memo's return type stays PropPlacement[] without a cast.
     return [];
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, terminalObstacle, seedId, skin]);
 
 
   // Internal structure (L/XL only, on the scaled tier): partition or
@@ -10046,7 +10063,6 @@ export function SpaceScene({
         scale={terminalAnchor.scale}
       >
         <AnchorHologram
-          accent={recipe.palette.accent}
           strands={terminalStrands}
           neighborSlots={terminalNeighborSlots}
         />

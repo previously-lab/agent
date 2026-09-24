@@ -3,15 +3,15 @@
  * contract under test: the room terminal's spot is a deterministic pure
  * function of (sliceId, plan, comp, width, wallThick, propScale, water)
  * (A6 — space.tsx and game-canvas.tsx resolve the SAME anchor through the
- * same call); it always clears the doorway strip, the walk path, the
- * hero clearing, and the water; it always stays inside the plan; the
- * lobby terminal's constants are consistent with its blocker; and the
- * catalog-jump plan picks the soft router push exactly when the shell's
- * rung is a live card rung (the `z` param mirrors rung state).
+ * same call); it always stays inside the plan; it never blocks the doorway
+ * strip, the walk path, or the water; it stands in the room's OPEN FIELD
+ * (mid-depth — a floor lamp, not a wall fixture) unless the room is too
+ * small to clear the path anywhere, in which case it degrades to the
+ * entrance-wall spot; and it never overlaps the staged furniture. The
+ * lobby terminal's constants are consistent with its blocker.
  */
 import { describe, it, expect } from "vitest";
 import {
-  anchorNavPlan,
   LOBBY_TERMINAL_ANCHOR,
   LOBBY_TERMINAL_BLOCKER,
   roomTerminalFor,
@@ -30,6 +30,13 @@ import {
   scaledRecipeFor,
 } from "@/lib/game/room-plan";
 import { waterRectFor } from "@/lib/game/terrain";
+import {
+  stageInteriorKits,
+  planArea,
+  type StagedKitPiece,
+} from "@/lib/game/kits";
+import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import { debugUnitsFor } from "@/lib/game/debug-catalog";
 import {
   COLONNADE_BAY,
   ENTRANCE_CLEAR_RADIUS,
@@ -96,6 +103,15 @@ const FIXTURE_SLICES = [
   "2026-09-19-2359",
 ] as const;
 
+/** True when the anchor came from the entrance-wall fallback (the
+ *  degenerate rooms too small to clear the path in the open field). */
+function isFallback(
+  input: RoomTerminalInput,
+  anchor: ReturnType<typeof roomTerminalFor>,
+): boolean {
+  return anchor.z < input.plan.extent * 0.3 - 1e-6;
+}
+
 describe("roomTerminalFor", () => {
   it("is deterministic in its inputs (A6)", () => {
     for (const sliceId of FIXTURE_SLICES) {
@@ -130,15 +146,13 @@ describe("roomTerminalFor", () => {
       for (const count of [0, 1, 4]) {
         const { input, anchor } = anchorFor(sliceId, count);
         const w = (TERMINAL_W * anchor.scale) / 2;
-        // The entrance strip is UNSCALED (candidateOk's rule — the door
-        // never scales, A4); the machine may only overlap it when the
-        // plan itself is narrower than the strip (degenerate dollhouse).
-        const halfRoom = input.width / 2 - input.wallThick / 2;
-        if (halfRoom > ENTRANCE_CLEAR_RADIUS + 0.26 + w) {
-          expect(Math.abs(anchor.x) - w).toBeGreaterThanOrEqual(
-            ENTRANCE_CLEAR_RADIUS - 1e-6,
-          );
-        }
+        // The entrance strip is UNSCALED (the door never scales, A4). The
+        // machine stands well past it — except in degenerate dollhouse
+        // rooms the strip alone outspans (the fallback may hug the wall
+        // beside the door, still outside the strip's circle).
+        expect(
+          Math.hypot(anchor.x, anchor.z) - w,
+        ).toBeGreaterThanOrEqual(ENTRANCE_CLEAR_RADIUS - 1e-6);
         expect(
           distToPath(input.comp, anchor.x, anchor.z),
         ).toBeGreaterThanOrEqual(input.comp.pathHalf + w - 1e-6);
@@ -163,20 +177,183 @@ describe("roomTerminalFor", () => {
     }
   });
 
-  it("hugs the entrance wall (prominent on entry, never a corner prop)", () => {
+  it("stands in the open field (mid-depth) unless the room cannot clear the path", () => {
+    let fallbacks = 0;
     for (const sliceId of FIXTURE_SLICES) {
-      const { input, anchor } = anchorFor(sliceId, 0);
-      const zMax = input.wallThick / 2 + (TERMINAL_D * anchor.scale) / 2 + 0.3;
-      expect(anchor.z).toBeLessThanOrEqual(zMax);
-      // Beside the doorway — except in degenerate dollhouse rooms where
-      // the unscaled doorway strip alone outspans the half-width (the
-      // same exemption the strip test uses).
-      const w = (TERMINAL_W * anchor.scale) / 2;
-      const halfRoom = input.width / 2 - input.wallThick / 2;
-      if (halfRoom > ENTRANCE_CLEAR_RADIUS + 0.26 + w) {
-        expect(Math.abs(anchor.x)).toBeGreaterThan(ENTRANCE_CLEAR_RADIUS);
+      for (const count of [0, 1, 4]) {
+        const { input, anchor } = anchorFor(sliceId, count);
+        if (isFallback(input, anchor)) {
+          fallbacks += 1;
+          // The fallback is the wall-side spot: beside the doorway, still
+          // outside the strip circle (asserted above).
+          expect(Math.abs(anchor.x)).toBeGreaterThan(ENTRANCE_CLEAR_RADIUS - 1e-6);
+        } else {
+          // The middle band — a floor lamp in the room's open area.
+          expect(anchor.z).toBeGreaterThanOrEqual(input.plan.extent * 0.3 - 1e-6);
+          expect(anchor.z).toBeLessThanOrEqual(input.plan.extent * 0.7 + 1e-6);
+        }
       }
     }
+    // The fixtures are standard-scale rooms: the open field resolves
+    // everywhere. (A non-zero count here means a REAL small-room draw
+    // regressed to the fallback — investigate before raising the number.)
+    expect(fallbacks).toBe(0);
+  });
+});
+
+describe("the 12-module scan (gallery units × strand-door counts)", () => {
+  /** The terminal's footprint rectangle vs one kit piece's body disc. */
+  function overlapsPiece(
+    fp: ReturnType<typeof terminalFootprint>,
+    cx: number,
+    cz: number,
+    r: number,
+  ): boolean {
+    const nx = Math.max(fp.x0, Math.min(cx, fp.x1));
+    const nz = Math.max(fp.z0, Math.min(cz, fp.z1));
+    return Math.hypot(cx - nx, cz - nz) < r;
+  }
+
+  /** Stage the room's real furniture through the kit machine (the same
+   *  entry space.tsx uses), with the anchor's obstacle disc in the
+   *  obstacles — exactly what production passes (space.tsx's
+   *  terminalObstacle) — so the scan asserts the guarantee from the
+   *  pieces the machine actually staged. */
+  function stagedFor(
+    sliceId: string,
+    count: number,
+    anchor: ReturnType<typeof roomTerminalFor>,
+    propScale: number,
+  ): StagedKitPiece[] {
+    const recipe = compileSpaceRecipe(sliceId);
+    const { recipe: scaledRecipe, scale } = scaledRecipeFor(recipe, count);
+    const scaleFactor = scale.factor;
+    const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+    const template = roomTemplateForDoorCount(
+      recipe,
+      scaledRecipe.width,
+      scaledRecipe.size.extent,
+      scaleFactor,
+      wallThick,
+      count,
+    );
+    const plan = roomPlanFor(
+      recipe.sliceId,
+      scaledRecipe.width,
+      scaledRecipe.size.extent,
+      COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+      undefined,
+      template ? templatePlanFor(template) : undefined,
+    );
+    const comp = composeRoom(recipe.sliceId, plan, scaleFactor);
+    const water = waterRectFor(scaledRecipe);
+    const fp = terminalFootprint(anchor);
+    const terminalObstacle = {
+      x: anchor.x,
+      z: anchor.z,
+      r: Math.hypot((fp.x1 - fp.x0) / 2, (fp.z1 - fp.z0) / 2) + 0.1,
+    };
+    const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+    const waterArea = water
+      ? (water.halfX * 2 * water.halfZ * 2) / (scaleFactor * scaleFactor)
+      : 0;
+    const rng = createRng(
+      deriveSubSeed(WORLD_SEED, recipe.sliceId, "furniture"),
+    );
+    return stageInteriorKits({
+      rng,
+      worldClass: recipe.worldClass,
+      archetype: recipe.archetype,
+      plan,
+      comp,
+      baseExtent: recipe.size.extent,
+      baseArea: Math.max(0, baseArea - waterArea),
+      propScale,
+      wallThick,
+      water,
+      obstacles: [terminalObstacle],
+      heightAt: () => 0,
+    });
+  }
+
+  it("places the terminal clear of the door, the path, and the furniture, in every module", () => {
+    const units = debugUnitsFor("modules");
+    expect(units.length).toBeGreaterThanOrEqual(12);
+    let fallbacks = 0;
+    for (const unit of units) {
+      for (const count of [0, 2, 4]) {
+        const { input, anchor } = anchorFor(unit.sliceId, count);
+        const w = (TERMINAL_W * anchor.scale) / 2;
+        const label = `${unit.sliceId}@${count}`;
+
+        // Inside the plan.
+        expect(
+          terminalInsidePlan(
+            input.plan,
+            input.width,
+            input.plan.extent,
+            input.wallThick,
+            terminalFootprint(anchor),
+          ),
+          label,
+        ).toBe(true);
+
+        // Not in the doorway strip, not on the walk path, not in the water.
+        expect(
+          Math.hypot(anchor.x, anchor.z) - w,
+          label,
+        ).toBeGreaterThanOrEqual(ENTRANCE_CLEAR_RADIUS - 1e-6);
+        expect(
+          distToPath(input.comp, anchor.x, anchor.z),
+          label,
+        ).toBeGreaterThanOrEqual(input.comp.pathHalf + w - 1e-6);
+        if (input.water) {
+          const dx = Math.max(
+            0,
+            Math.abs(anchor.x - input.water.cx) - input.water.halfX,
+          );
+          const dz = Math.max(
+            0,
+            Math.abs(anchor.z - input.water.cz) - input.water.halfZ,
+          );
+          expect(Math.hypot(dx, dz), label).toBeGreaterThanOrEqual(w - 1e-6);
+        }
+
+        // The open field — or the counted, still-inside fallback.
+        if (isFallback(input, anchor)) {
+          fallbacks += 1;
+          expect(Math.abs(anchor.x), label).toBeGreaterThan(
+            ENTRANCE_CLEAR_RADIUS - 1e-6,
+          );
+        } else {
+          expect(anchor.z, label).toBeGreaterThanOrEqual(
+            input.plan.extent * 0.3 - 1e-6,
+          );
+        }
+
+        // The furniture: no staged piece's BODY may intersect the
+        // terminal's footprint. Piece-level, not placement-disc: a wall
+        // kit's footprint is its keep-away radius (lateral span included),
+        // while its bodies are thin panels AT the wall — the disc would
+        // flag museum-row standoffs as overlaps. Hung pieces (dy lifts
+        // them above a floor machine's head) cannot collide at all. Floor
+        // pieces model as body discs of half-meter at piece scale — the
+        // renderer's furniture is human-scale by construction.
+        const pieces = stagedFor(unit.sliceId, count, anchor, input.propScale);
+        const fp = terminalFootprint(anchor);
+        for (const piece of pieces) {
+          if (piece.dy * input.propScale >= 1.0) continue;
+          const r = 0.5 * piece.scale;
+          expect(
+            overlapsPiece(fp, piece.x, piece.z, r),
+            `${label} overlaps ${piece.kitId}#${piece.kitIndex} (${piece.kind})`,
+          ).toBe(false);
+        }
+      }
+    }
+    // Every gallery module resolves the open field (a non-zero count is a
+    // real regression to investigate, not a number to raise blindly).
+    expect(fallbacks).toBe(0);
   });
 });
 
@@ -196,35 +373,5 @@ describe("lobby terminal constants", () => {
     // Reach radius is a positive, human-scale distance.
     expect(TERMINAL_REACH_LOBBY).toBeGreaterThan(0.5);
     expect(TERMINAL_REACH_LOBBY).toBeLessThan(5);
-  });
-});
-
-describe("anchorNavPlan", () => {
-  it("soft-pushes when a card rung is live in the URL", () => {
-    for (const search of ["?z=slice", "?z=day&view=game", "?z=day&x=1"]) {
-      const nav = anchorNavPlan(search, "en", "2026-09-15-1401");
-      expect(nav).toEqual({ mode: "push", href: "?at=2026-09-15-1401" });
-    }
-  });
-
-  it("treats an unknown rung like the conversation default (hard path)", () => {
-    const nav = anchorNavPlan("?z=bogus", "en", "2026-09-15-1401");
-    expect(nav.mode).toBe("assign");
-  });
-
-  it("hard-navigates with the slice rung when the rung is the conversation default", () => {
-    for (const search of ["", "?view=game", "?slice=2026-09-15-1401", "?z=conversation"]) {
-      const nav = anchorNavPlan(search, "zh", "2026-09-15-1401");
-      expect(nav).toEqual({
-        mode: "assign",
-        href: "/zh?z=slice&at=2026-09-15-1401",
-      });
-    }
-  });
-
-  it("encodes exotic slice ids", () => {
-    const nav = anchorNavPlan("?view=game", "en", "slice with spaces/ä");
-    expect(nav.mode).toBe("assign");
-    expect(nav.href).toBe(`/en?z=slice&at=${encodeURIComponent("slice with spaces/ä")}`);
   });
 });

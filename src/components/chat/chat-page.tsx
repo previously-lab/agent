@@ -970,11 +970,11 @@ function Inner({
   // state). A jump stashed while the chat page wasn't mounted replays once,
   // on registration.
   useEffect(() => {
-    const unregister = registerSliceJumpHandler((sliceId) => {
-      void handleSelectSlice(sliceId);
+    const unregister = registerSliceJumpHandler((sliceId, start) => {
+      void handleSelectSlice(sliceId, start);
     });
     const stashed = takePendingSliceJump();
-    if (stashed) void handleSelectSlice(stashed);
+    if (stashed) void handleSelectSlice(stashed.sliceId, stashed.start);
     return unregister;
   }, [handleSelectSlice]);
 

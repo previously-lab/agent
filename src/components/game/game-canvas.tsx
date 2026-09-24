@@ -1495,6 +1495,7 @@ function GameLoop({
   roomTerminal,
   lobbyAnchorLabel,
   departingRef,
+  departWatchRef,
   anchorHudRef,
   setHudAnchor,
 }: {
@@ -1572,6 +1573,10 @@ function GameLoop({
   /** Latched by the anchor interaction: freezes movement while the
    *  depart flare plays and the view dissolves to the catalog. */
   departingRef: MutableRefObject<boolean>;
+  /** Set once the latch has seen WORLD_TRANSITION.active — the latch only
+   *  self-clears AFTER the move it belongs to has run and ended (the flare
+   *  window alone must not clear it). See the frame note below. */
+  departWatchRef: MutableRefObject<boolean>;
   /** The latest in-reach anchor (also read by the interact key handler
    *  and the GAME_DEBUG probe mirror). */
   anchorHudRef: MutableRefObject<AnchorHud | null>;
@@ -1580,6 +1585,21 @@ function GameLoop({
   useFrame((_, delta) => {
     const p = playerRef.current;
     let space = activeSpace;
+
+    // THE DEPART LATCH SELF-CLEARS — structurally, not by timeout. The
+    // shell's transition machine guarantees WORLD_TRANSITION.active is
+    // false exactly when no move runs (its single settle clears it on
+    // completion, reversal, interrupt AND unmount — app-shell.tsx), so
+    // "latched, saw the move active, and the move is over" means the
+    // entrance already ended (completed, reversed, or interrupted) and
+    // the walk must resume. The sawActive guard keeps the 700 ms flare
+    // window (latch set, move not yet started) from clearing it early.
+    if (WORLD_TRANSITION.active) {
+      departWatchRef.current = true;
+    } else if (departingRef.current && departWatchRef.current) {
+      departingRef.current = false;
+      departWatchRef.current = false;
+    }
 
     if (hopGuard.current) {
       // A hotel hop teleported the player between frames: this frame may
@@ -2069,6 +2089,7 @@ export default function GameCanvas({
   const [hudAnchor, setHudAnchor] = useState<AnchorHud | null>(null);
   const anchorHudRef = useRef<AnchorHud | null>(null);
   const departingRef = useRef(false);
+  const departWatchRef = useRef(false);
   const interactRef = useRef<() => void>(() => {});
   useEffect(() => {
     interactRef.current = () => {
@@ -2769,7 +2790,6 @@ export default function GameCanvas({
               scale={LOBBY_TERMINAL_ANCHOR.scale}
             >
               <AnchorHologram
-                accent={accent}
                 dimmed={corridorHidden}
                 strands={lobbyHoloStrands}
                 neighborSlots={currentDoors.length}
@@ -2845,6 +2865,7 @@ export default function GameCanvas({
           roomTerminal={activeRoomGeometry?.terminal ?? null}
           lobbyAnchorLabel={hotelName}
           departingRef={departingRef}
+          departWatchRef={departWatchRef}
           anchorHudRef={anchorHudRef}
           setHudAnchor={setHudAnchor}
         />
