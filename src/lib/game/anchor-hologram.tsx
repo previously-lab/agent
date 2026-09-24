@@ -75,6 +75,7 @@ import {
 import { RADIAL_SEGMENTS } from "@/lib/timeline3d/tube";
 import {
   HOLO_BOTTOM,
+  HOLO_BUNDLE_GLOW,
   HOLO_CORE_RADIUS,
   HOLO_NEIGHBOR_RADIUS,
   HOLO_SEGMENTS,
@@ -448,7 +449,7 @@ export function AnchorHologram({
     columnMaterial.color.copy(coreInk).multiplyScalar(0.9 * dim);
     poolMaterial.color.copy(coreInk).multiplyScalar(0.9 * dim);
     ghostMaterial.color.copy(coreInk).multiplyScalar(GHOST_GAIN * dim);
-    bundleMaterial.color.copy(greyInk).multiplyScalar(dim);
+    bundleMaterial.color.copy(greyInk).multiplyScalar(HOLO_BUNDLE_GLOW * dim);
 
     // The point light rides the caller's group scale (the lamp's
     // ×propScale² convention): miniature rooms get a dollhouse glow,

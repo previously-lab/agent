@@ -68,11 +68,14 @@ export const HOLO_RADIUS = 0.3;
  *  climbs to HOLO_TOP above the walls. */
 export const HOLO_CENTER_Y = 1.15;
 /** Half-height of the knot window — the braid spans ±lambda around the slice. */
-export const HOLO_KNOT_LAMBDA = 0.44;
-/** Full turns across the knot — the band's TURNS, one twist per card. */
-export const HOLO_TURNS = 3;
-/** Vertical samples per line; 64 over 2.76 m is ~4.3 cm a segment, smooth
- *  for three turns without being greedy (every room owns one hologram). */
+export const HOLO_KNOT_LAMBDA = 0.5;
+/** Full turns across the knot. ONE: a single lazy twist reads as a cradle
+ *  around the spine, where three turns (the band's count, one per card)
+ *  wound it into the coil the reader called too busy. Integral, because
+ *  every thread must leave the knot at the seat it entered with. */
+export const HOLO_TURNS = 1;
+/** Vertical samples per line; 64 over the knot is ~2 cm a segment, smooth
+ *  for one turn without being greedy (every room owns one hologram). */
 export const HOLO_SEGMENTS = 64;
 /** The thread cap — the elegance dial. A handful of lines is a braid,
  *  past four it is the wire cage the reader rejected; the band's moiré
@@ -100,6 +103,15 @@ export const HOLO_STRAND_BRIGHTNESS: readonly [number, number] = [0.65, 1.0];
 /** Neighbor threads are context, not doors — the quiet half of the
  *  bundle's range. */
 export const HOLO_NEIGHBOR_BRIGHTNESS: readonly [number, number] = [0.3, 0.6];
+/** The bundle's overall gain (multiplied into the grey ON TOP of the
+ *  per-segment brightness). Above 1 it pushes the brighter threads past
+ *  the bloom threshold — the strands pick up a soft halo and the whole
+ *  cradle glows, while the neighbours (0.3–0.6 of the range) stay matte
+ *  and keep the core the landmark. Measured against the grey's linear
+ *  blue (0.72): 1.45 just grazes the threshold at full brightness, 1.65
+ *  gives the strands a halo you can actually see, and past ~2 the bundle
+ *  lights the room like a lamp of its own. */
+export const HOLO_BUNDLE_GLOW = 1.65;
 /** The band's lane-light constants — nearer lanes read brighter, with the
  *  alternation that keeps a narrow bundle reading as a volume. */
 export const HOLO_LANE_BRIGHTNESS_MIN = 0.75;
