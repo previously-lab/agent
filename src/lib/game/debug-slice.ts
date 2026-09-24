@@ -5,10 +5,13 @@
  *
  * THE FORCE RIDES IN THE SLICE ID: `dbg-m:<moduleId>` pins a standard room
  * module, `dbg-t:<templateId>` an authored layout, `dbg-a:<archetypeId>` an
- * archetype. Nothing mutable is involved, so a debug room stays a pure function
- * of its id (A6 — same id, same room), and the normal path can never see one:
- * `parseDebugSlice` answers null for every real memory slice, and the pipeline
- * branches below are all "no id, no change".
+ * archetype. v0.12 P3 adds `dbg-skin:<skinId>` (skins.ts) — the biome-skin
+ * force: it composes with any unit pin as `dbg-skin:<skinId>+dbg-m:<moduleId>`
+ * (skin segment FIRST), or stands alone (`dbg-skin:<skinId>`) to force a skin
+ * on the otherwise-seeded room. Nothing mutable is involved, so a debug room
+ * stays a pure function of its id (A6 — same id, same room), and the normal
+ * path can never see one: `parseDebugSlice` answers null for every real
+ * memory slice, and the pipeline branches below are all "no id, no change".
  *
  * WHY THIS FILE IS A LEAF. room-modules.ts, room-templates.ts and
  * space-recipe.ts import it, so it may import nothing but space-types — the
@@ -47,19 +50,51 @@ const PREFIX: Record<DebugPage, string> = {
   archetypes: "dbg-a:",
 };
 
+/** The v0.12 P3 biome-skin force (skins.ts). A LEADING `dbg-skin:<skinId>`
+ *  segment, alone or `+`-composed before a unit pin. */
+const SKIN_PREFIX = "dbg-skin:";
+
 /** The synthetic slice id one unit builds from. */
 export function debugSliceId(page: DebugPage, id: string): string {
   return `${PREFIX[page]}${id}`;
+}
+
+/**
+ * The skin id a slice id forces — the leading `dbg-skin:<skinId>` segment's
+ * body, or null when absent (every real memory slice, and bare `dbg-skin:`
+ * with no id). The skin segment may stand alone (`dbg-skin:dune`) or
+ * introduce a composed pin (`dbg-skin:dune+dbg-m:living`); either way only
+ * the FIRST segment is read — the remainder belongs to parseDebugSlice.
+ * Validation against the skin catalogue is the caller's job (skins.ts
+ * answers null for unknown ids, so a stale pin degrades, never crashes).
+ */
+export function parseDebugSkin(sliceId: string): string | null {
+  if (!sliceId.startsWith(SKIN_PREFIX)) return null;
+  const body = sliceId.slice(SKIN_PREFIX.length);
+  const plus = body.indexOf("+");
+  const id = plus === -1 ? body : body.slice(0, plus);
+  return id.length > 0 ? id : null;
 }
 
 /** The unit a slice id pins, or null for every real memory slice. */
 export function parseDebugSlice(
   sliceId: string,
 ): { page: DebugPage; id: string } | null {
+  // A leading `dbg-skin:<skinId>+` segment composes with the pin below —
+  // strip it first so the page loop sees the plain unit id, exactly as it
+  // did before skins existed. A bare `dbg-skin:<skinId>` pins no unit: the
+  // loop falls through to null like every real memory slice (the skin
+  // force alone lives in parseDebugSkin).
+  const skin = parseDebugSkin(sliceId);
+  let rest = sliceId;
+  if (skin !== null) {
+    rest = sliceId.slice(SKIN_PREFIX.length + skin.length);
+    if (rest.startsWith("+")) rest = rest.slice(1);
+  }
   for (const page of DEBUG_PAGES) {
     const prefix = PREFIX[page];
-    if (!sliceId.startsWith(prefix)) continue;
-    const id = sliceId.slice(prefix.length);
+    if (!rest.startsWith(prefix)) continue;
+    const id = rest.slice(prefix.length);
     if (id) return { page, id };
   }
   return null;

@@ -41,8 +41,11 @@
  * niche, pilaster rhythm, arch, column order, platform, mezzanine — not
  * just the niche; the clerestory band exists on every non-interior room
  * plus the pool hall) and the light register mirrors its
- * lightRegisterFor draw (same lightSeed salt, same tuning weights). Those
- * are the ONLY renderer rules restated here — flagged so a change to
+ * lightRegisterFor draw (same lightSeed salt, same tuning weights). The
+ * v0.12 P3 skin line mirrors skins.ts's skinForSlice — the SAME pure
+ * source the renderer's skin lane reads, so the outline names the world
+ * the render draws. Those are the ONLY renderer rules restated here —
+ * flagged so a change to
  * buildRoomFixtures' rules updates both places. `featureHostWalls`
  * derives the host pool from the same resolved template the renderer
  * builds the features from (the DECLARED wall features — a slot the host
@@ -91,6 +94,14 @@ import {
 import { kitsFor, planArea, stageInteriorKits, type KitKind } from "./kits";
 import { schematicPlacementsFor } from "./room-schematic";
 import { terrainHeight, waterRectFor } from "./terrain";
+import {
+  skinForSlice,
+  type SkinFloorKind,
+  type SkinHorizon,
+  type SkinSilhouette,
+  type SkinWalk,
+  type SkinWallKind,
+} from "./skins";
 import {
   ARCHETYPES,
   type ArchetypeId,
@@ -181,6 +192,21 @@ export interface RoomDescription {
   features: { kind: FeatureKind; at: WallRole | "floor" }[];
   /** The water rect (pool / lake / sea), scaled meters — null when dry. */
   water: { width: number; depth: number; coverage: number } | null;
+  /** The v0.12 P3 biome skin this room is forced into — null on the
+   *  default path (skins.ts skinForSlice: only a `dbg-skin:` debug id
+   *  resolves). Same pure source the renderer reads, so the outline can
+   *  never describe a different world than the render draws. */
+  skin: {
+    id: string;
+    floor: SkinFloorKind;
+    /** dry walks at full speed; wade walks slower (speed < 1). */
+    walk: SkinWalk;
+    wall: SkinWallKind;
+    outside: SkinSilhouette;
+    horizon: SkinHorizon;
+    /** §6.2 environment slot overrides (role → environment kind). */
+    overrides: { role: string; feature: KitKind }[];
+  } | null;
   /** Vegetation/rock presence, from the archetype's densities. */
   scatter: { trees: boolean; rocks: boolean };
   /** Interior furnishing staged by kits.ts — the EXACT kit placements the
@@ -465,6 +491,23 @@ export function describeRoom(
         }
       : null,
     scatter: { trees: spec.treeDensity > 0, rocks: spec.rockDensity > 0 },
+    skin: (() => {
+      const skin = skinForSlice(sliceId);
+      return skin
+        ? {
+            id: skin.id,
+            floor: skin.floor.kind,
+            walk: skin.floor.walk,
+            wall: skin.wall.kind,
+            outside: skin.window.silhouette,
+            horizon: skin.fog.horizon,
+            overrides: (skin.slotOverrides ?? []).map((o) => ({
+              role: o.role,
+              feature: o.feature,
+            })),
+          }
+        : null;
+    })(),
     furnishing,
     doors: {
       permittedWalls: affordance ? affordance.walls : null,
@@ -567,6 +610,44 @@ const WALL_ZH: Record<WallRoleM, string> = {
   tile: "瓷砖墙",
   shelf: "书架墙",
 };
+const SKIN_FLOOR_ZH: Record<SkinFloorKind, string> = {
+  timber: "木地板",
+  carpet: "地毯",
+  tile: "瓷砖",
+  deck: "甲板",
+  sand: "沙地",
+  grass: "草地",
+  moss: "苔藓地面",
+  gravel: "碎石地",
+  snow: "雪地",
+  stone: "石板地",
+  "shallow-water": "浅水",
+};
+const SKIN_WALL_ZH: Record<SkinWallKind, string> = {
+  plaster: "灰泥墙",
+  panelling: "护墙板",
+  tile: "瓷砖墙",
+  shelf: "书架墙",
+  rock: "岩壁",
+  stone: "石砌墙",
+  hedge: "树篱墙",
+  glass: "玻璃墙",
+  "water-wall": "水墙（不可穿越）",
+};
+const SKIN_SILHOUETTE_ZH: Record<SkinSilhouette, string> = {
+  "soft-hills": "远山",
+  dunes: "沙丘",
+  treeline: "林线",
+  "mist-forest": "雾中林影",
+  "open-water": "开阔水面",
+};
+const SKIN_HORIZON_ZH: Record<SkinHorizon, string> = {
+  "soft-hills": "柔和丘陵",
+  "sand-haze": "沙尘远霭",
+  "light-shafts": "林间光柱",
+  "wet-mist": "湿雾",
+  "clear-depth": "清澈深水",
+};
 const TOPOLOGY_ZH: Record<TopologyId, string> = {
   row: "一字排开",
   ell: "L 形相接",
@@ -653,6 +734,36 @@ export function formatRoomDescription(
       ? `调色板：${desc.palette} ｜ 光照寄存器：${REGISTER_ZH[desc.lightRegister]}`
       : `Palette: ${desc.palette} | light register: ${desc.lightRegister}`,
   );
+
+  if (desc.skin) {
+    const floor = zh ? SKIN_FLOOR_ZH[desc.skin.floor] : desc.skin.floor;
+    const walkNote =
+      desc.skin.walk === "wade"
+        ? zh
+          ? "（涉水可行走，更慢）"
+          : " (wadeable, slower)"
+        : "";
+    const wall = zh ? SKIN_WALL_ZH[desc.skin.wall] : desc.skin.wall;
+    const outside = zh
+      ? SKIN_SILHOUETTE_ZH[desc.skin.outside]
+      : desc.skin.outside;
+    const horizon = zh ? SKIN_HORIZON_ZH[desc.skin.horizon] : desc.skin.horizon;
+    L.push(
+      zh
+        ? `环境皮肤：${desc.skin.id}｜地面：${floor}${walkNote}｜墙面：${wall}｜窗外：${outside}｜雾景：${horizon}`
+        : `Skin: ${desc.skin.id} | floor: ${floor}${walkNote} | walls: ${wall} | outside: ${outside} | haze: ${horizon}`,
+    );
+    if (desc.skin.overrides.length > 0) {
+      const list = desc.skin.overrides
+        .map((o) => `${o.role}→${o.feature}`)
+        .join(", ");
+      L.push(
+        zh
+          ? `槽位替换：${list}（净空与朝向不变）`
+          : `Slot overrides: ${list} (clearance and facing unchanged)`,
+      );
+    }
+  }
 
   if (desc.features.length > 0) {
     const features = desc.features
