@@ -79,25 +79,41 @@ export const HOLO_KNOT_LAMBDA = 1.4;
  *  one radius apart sum to a trapezoid: eased at both ends, and a nearly
  *  CONSTANT pitch between them — what a real coil's twist rate looks like. */
 export const HOLO_KNOT_SPREAD = 0.55;
-/** Full turns across the whole knot blend. Integral, so every thread leaves
- *  at the seat it entered with. Four over the object's 2.76 m is a pitch of
- *  ~0.7 m ≈ 2.3× the bundle radius — the proportion a spring actually has.
- *  (Three turns inside a 0.88 m window was the cage the reader rejected;
- *  the count was never the problem, the cramming was.) */
-export const HOLO_TURNS = 4;
-/** Vertical samples per line. 96 over 2.76 m is 2.9 cm a segment, so the
- *  coil is drawn with ~52 chords per turn instead of ~23 — the facets stop
- *  reading as a polygon. */
+/** Full turns across the whole knot blend. Integral, so the coil's lower end
+ *  still sits close to the threads' own seats (the bottom ring is visible and
+ *  the base disc anchors it). TWO over the threads' 2.26 m is a pitch of
+ *  ~1.1 m ≈ 3.8× the bundle radius: a relaxed spiral, which is what the reader
+ *  asked for after seeing three and four. (Note how the earlier cage read:
+ *  three turns inside a 0.88 m window — the count was never the problem, the
+ *  cramming was.) */
+export const HOLO_TURNS = 2;
+/** Vertical samples per line. 96 over the THREADS' span (2.26 m) is 2.4 cm a
+ *  segment, so the coil is drawn with ~60 chords per turn instead of ~23 —
+ *  the facets stop reading as a polygon. */
 export const HOLO_SEGMENTS = 96;
+/** Where the THREADS stop. The knot blend eases out at both extremes (that is
+ *  what keeps the pitch even through the middle), which means the last stretch
+ *  of every thread is nearly vertical — four straight antennae above a coil,
+ *  which the reader rejected on sight. So the bundle is cut where it is still
+ *  winding (a coil sawn off mid-turn, like a real spring's end), and only the
+ *  CORE climbs to HOLO_TOP: the spine is the straight line that is supposed to
+ *  peek over the walls and say where the hologram is. */
+export const HOLO_THREAD_TOP = 2.4;
 /** The two knots the bake blends, in the winding's own vocabulary. */
 export const HOLO_KNOTS = [
   { centerY: 0, lambda: HOLO_KNOT_LAMBDA, weight: 0.5 },
   { centerY: 0, lambda: HOLO_KNOT_LAMBDA, weight: 0.5 },
 ] as const;
-/** The thread cap — the elegance dial. A handful of lines is a braid,
- *  past four it is the wire cage the reader rejected; the band's moiré
- *  discipline says the same. Strands keep priority at the cap. */
-export const HOLO_STRAND_MAX = 4;
+/** How many NEIGHBOUR lines the bare case draws. The count of strands is the
+ *  data now (one line per strand — a hub wears a dense braid, a solitary
+ *  moment almost none), so neighbours are only a floor: a slice that touches
+ *  nothing at all still gets a few context lines instead of a bare pole. */
+export const HOLO_NEIGHBOR_FALLBACK_MAX = 3;
+/** The line cap — SEVEN, matching the timeline's own bundle (the band's narrow
+ *  tier reads at most this many strand lines before the eye starts reading the
+ *  beat pattern instead of the threads). Strands claim the lines in order; a
+ *  slice touching more than seven wears the busiest braid the language has. */
+export const HOLO_STRAND_MAX = 7;
 /** Tube radii (world): the core is the spine (a touch heavier, it is
  *  the one line allowed to bloom), threads are hairlines that must not
  *  compete with it. */
@@ -154,10 +170,12 @@ export interface HoloThread {
 }
 
 /**
- * The bundle for one room: `strands.length` strand threads (capped), then
- * `neighborSlots` neighbor threads topping up to at most HOLO_STRAND_MAX.
- * Strands keep priority at the cap — a door outranks context. Pure,
- * order-stable, and data-dense in exactly the two quantities the room
+ * The bundle for one room: ONE THREAD PER STRAND — as many lines as the slice
+ * really touches, up to HOLO_STRAND_MAX (seven, the timeline's own ceiling) —
+ * so the count is data, not decoration and you can read the room's place in
+ * the network off its machine. Neighbours are a floor only: when the slice
+ * touches nothing at all, a few context threads stand in for the empty bundle.
+ * Pure, order-stable, and data-dense in exactly the two quantities the room
  * actually knows.
  */
 export function holoThreadsFor(
@@ -168,10 +186,13 @@ export function holoThreadsFor(
     HOLO_STRAND_MAX,
     Math.max(0, Math.floor(strands.length)),
   );
-  const nCount = Math.min(
-    Math.max(0, Math.floor(neighborSlots)),
-    HOLO_STRAND_MAX - sCount,
-  );
+  const nCount =
+    sCount > 0
+      ? 0
+      : Math.min(
+          Math.max(0, Math.floor(neighborSlots)),
+          HOLO_NEIGHBOR_FALLBACK_MAX,
+        );
   const count = sCount + nCount;
   const out: HoloThread[] = [];
   for (let i = 0; i < sCount; i++) {
@@ -249,7 +270,8 @@ export function holoThreadBake(thread: HoloThread): HoloLineBake {
     weight: k.weight,
   }));
   for (let i = 0; i < n; i++) {
-    const y = HOLO_BOTTOM + (i / HOLO_SEGMENTS) * (HOLO_TOP - HOLO_BOTTOM);
+    const y =
+      HOLO_BOTTOM + (i / HOLO_SEGMENTS) * (HOLO_THREAD_TOP - HOLO_BOTTOM);
     const p = strandPointAtKnots(
       y,
       thread.seat,

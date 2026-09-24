@@ -18,10 +18,12 @@ import {
   HOLO_CENTER_Y,
   HOLO_KNOT_SPREAD,
   HOLO_NEIGHBOR_BRIGHTNESS,
+  HOLO_NEIGHBOR_FALLBACK_MAX,
   HOLO_RADIUS,
   HOLO_SEGMENTS,
   HOLO_STRAND_BRIGHTNESS,
   HOLO_STRAND_MAX,
+  HOLO_THREAD_TOP,
   HOLO_TOP,
   HOLO_TURNS,
   holoCoreBake,
@@ -35,35 +37,33 @@ describe("holoThreadsFor", () => {
     expect(holoThreadsFor([], 0)).toEqual([]);
   });
 
-  it("seats strands first, neighbors top up, count rides the total", () => {
+  it("draws one line per strand — the count is the data, not decoration", () => {
     const threads = holoThreadsFor(["工作", " fitness "], 2);
-    expect(threads).toHaveLength(4);
-    expect(threads.map((t) => t.kind)).toEqual([
-      "strand",
-      "strand",
-      "neighbor",
-      "neighbor",
-    ]);
-    expect(threads.map((t) => t.seat)).toEqual([0, 1, 2, 3]);
-    for (const t of threads) expect(t.count).toBe(4);
+    expect(threads).toHaveLength(2);
+    expect(threads.every((t) => t.kind === "strand")).toBe(true);
+    expect(threads.map((t) => t.seat)).toEqual([0, 1]);
+    for (const t of threads) expect(t.count).toBe(2);
   });
 
-  it("caps at HOLO_STRAND_MAX with strands keeping priority", () => {
+  it("caps at HOLO_STRAND_MAX — seven, the timeline's own ceiling", () => {
     const many = Array.from({ length: 12 }, (_, i) => `s${i}`);
     const threads = holoThreadsFor(many, 7);
+    expect(HOLO_STRAND_MAX).toBe(7);
     expect(threads).toHaveLength(HOLO_STRAND_MAX);
-    expect(threads.filter((t) => t.kind === "strand")).toHaveLength(4);
-    expect(threads.filter((t) => t.kind === "neighbor")).toHaveLength(0);
-    // Fewer strands leave room for neighbors.
-    const fewer = holoThreadsFor(many.slice(0, 2), 7);
-    expect(fewer.filter((t) => t.kind === "strand")).toHaveLength(2);
-    expect(fewer.filter((t) => t.kind === "neighbor")).toHaveLength(2);
+    expect(threads.every((t) => t.kind === "strand")).toBe(true);
+    expect(threads.map((t) => t.seat)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // Neighbours are a FLOOR, not a top-up: they appear only when the slice
+    // touches nothing at all, so a bare machine never reads as broken.
+    const bare = holoThreadsFor([], 9);
+    expect(bare).toHaveLength(HOLO_NEIGHBOR_FALLBACK_MAX);
+    expect(bare.every((t) => t.kind === "neighbor")).toBe(true);
   });
 
   it("treats negative and non-integer inputs as the data allows", () => {
     expect(holoThreadsFor([], -3)).toEqual([]);
     const threads = holoThreadsFor(["a", "b"], 2.9);
-    expect(threads.filter((t) => t.kind === "neighbor")).toHaveLength(2);
+    expect(threads).toHaveLength(2);
+    expect(threads.every((t) => t.kind === "strand")).toBe(true);
   });
 
   it("is deterministic for the same inputs", () => {
@@ -89,10 +89,14 @@ describe("holoThreadBake", () => {
     }
   });
 
-  it("spans the full cable height, monotone upward", () => {
+  it("spans the threads' own height, monotone upward", () => {
     const bake = holoThreadBake(thread("neighbor", 0, 1));
     expect(bake.points[1]).toBeCloseTo(HOLO_BOTTOM, 6);
-    expect(bake.points[HOLO_SEGMENTS * 3 + 1]).toBeCloseTo(HOLO_TOP, 6);
+    // The THREADS stop short of the core's top: the tip they no longer
+    // reach is where the fade thins them out (the core climbs to HOLO_TOP
+    // and fades over its own last half metre).
+    expect(bake.points[HOLO_SEGMENTS * 3 + 1]).toBeCloseTo(HOLO_THREAD_TOP, 6);
+    expect(HOLO_THREAD_TOP).toBeLessThan(HOLO_TOP);
     for (let i = 1; i <= HOLO_SEGMENTS; i++) {
       expect(bake.points[i * 3 + 1]).toBeGreaterThan(bake.points[(i - 1) * 3 + 1]);
     }
@@ -158,7 +162,9 @@ describe("holoThreadBake", () => {
       );
     };
     const yToIndex = (y: number): number =>
-      Math.round(((y - HOLO_BOTTOM) / (HOLO_TOP - HOLO_BOTTOM)) * HOLO_SEGMENTS);
+      Math.round(
+        ((y - HOLO_BOTTOM) / (HOLO_THREAD_TOP - HOLO_BOTTOM)) * HOLO_SEGMENTS,
+      );
     // THE PITCH IS CONSTANT WHERE THE COIL IS: across the two knot centres
     // (± HOLO_KNOT_SPREAD of the slice) the per-step twist must not vary by
     // more than a fifth — a real spring is evenly wound, and a varying rate

@@ -81,6 +81,7 @@ import {
   HOLO_SEGMENTS,
   HOLO_SPIN_SPEED,
   HOLO_STRAND_RADIUS,
+  HOLO_THREAD_TOP,
   HOLO_TOP,
   holoCoreBake,
   holoThreadsFor,
@@ -217,6 +218,12 @@ const ZERO_SCALE_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
  *  the bundle is hairlines, so the extra length is well under a millimetre
  *  of silhouette. */
 const SEGMENT_OVERLAP = 1.12;
+/** Top fade. The bundle is deliberately opaque (alpha belongs to water and
+ *  glass alone), so "fading out" is done by RADIUS: over the last half metre
+ *  every line thins to nothing rather than ending in mid-air — which is what
+ *  a hologram's edge does anyway. The CORE fades too, over its own top (it
+ *  climbs higher than the threads do, so its tip dissolves above them). */
+const THREAD_FADE_SPAN = 0.5;
 
 /** Bake one line into an InstancedMesh of unit cylinders — one instance
  *  per segment, placed and grey-inked exactly as the band's frame loop
@@ -251,7 +258,18 @@ function buildLineMesh(
     dir.divideScalar(length);
     quat.setFromUnitVectors(CYLINDER_AXIS, dir);
     mid.set((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
-    scale.set(radius, length * SEGMENT_OVERLAP, radius);
+    // Threads thin out over their last stretch (see THREAD_FADE_SPAN); the
+    // Every line thins out over the last half metre of its OWN top — the
+    // core climbs to HOLO_TOP, the threads stop at HOLO_THREAD_TOP, so the
+    // spine's tip dissolves above the braid.
+    const top = bake.kind === "core" ? HOLO_TOP : HOLO_THREAD_TOP;
+    const fadeFrom = top - THREAD_FADE_SPAN;
+    let taper = 1;
+    if (mid.y > fadeFrom) {
+      const left = 1 - Math.min(1, (mid.y - fadeFrom) / THREAD_FADE_SPAN);
+      taper = left * left;
+    }
+    scale.set(radius * taper, length * SEGMENT_OVERLAP, radius * taper);
     mesh.setMatrixAt(i, matrix.compose(mid, quat, scale));
     // The core carries its ink on the material (the band's note: seeding
     // instanceColor would square the colour); threads get grey instance
