@@ -95,22 +95,35 @@ describe("compileSpaceRecipe", () => {
     }
   });
 
-  it("draws at least 3 world classes, 6 archetypes, and 8 palettes over 200 ids", () => {
+  it("draws the interior class, every interior room, and 8 palettes over 200 ids", () => {
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+    // The multi-class spread this test used to pin is unreachable — the
+    // class draw answers interior only (CLASS_WEIGHTS' single switch),
+    // and the nature/hybrid/wonder taxonomy stays dormant in
+    // space-types.ts. The diversity bar survives INSIDE the class: every
+    // interior room and a wide palette spread still appear across the
+    // draw. (A class id returning to CLASS_WEIGHTS re-widens this test.)
     const recipes = SLICE_IDS.map((id) => compileSpaceRecipe(id));
     const classes = new Set<WorldClass>(recipes.map((r) => r.worldClass));
     const archetypes = new Set<ArchetypeId>(recipes.map((r) => r.archetype));
     const palettes = new Set<PaletteId>(recipes.map((r) => r.palette.id));
-    expect(classes.size).toBeGreaterThanOrEqual(3);
-    expect(archetypes.size).toBeGreaterThanOrEqual(6);
+    expect([...classes]).toEqual(["interior"]);
+    for (const room of INTERIOR_ROOMS) {
+      expect(archetypes.has(room), `no slice drew ${room}`).toBe(true);
+    }
     expect(palettes.size).toBeGreaterThanOrEqual(8);
   });
 
-  it("covers every room/biome over 600 slice ids (taxonomy completeness)", () => {
+  it("covers every interior room over 600 slice ids (taxonomy completeness)", () => {
+    // 世界分类收口（2026-09）：the dormant nature/hybrid/wonder rooms
+    // cannot be drawn, so completeness is pinned on the live taxonomy —
+    // the interior room list (ARCHETYPE_IDS still validates every recipe
+    // above, drawn or dormant).
     const seen = new Set<ArchetypeId>();
-    for (let i = 0; i < 600 && seen.size < ARCHETYPE_IDS.length; i++) {
+    for (let i = 0; i < 600 && seen.size < INTERIOR_ROOMS.length; i++) {
       seen.add(compileSpaceRecipe(`coverage-${i}`).archetype);
     }
-    for (const id of ARCHETYPE_IDS) {
+    for (const id of INTERIOR_ROOMS) {
       expect(seen.has(id)).toBe(true);
     }
   });

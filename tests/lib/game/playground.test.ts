@@ -24,7 +24,7 @@ import {
 } from "@/lib/game/debug-slice";
 import { skinForSlice } from "@/lib/game/skins";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
-import { roomModuleById } from "@/lib/game/room-modules";
+import { roomModuleById, ROOM_MODULES } from "@/lib/game/room-modules";
 import { describeRoom } from "@/lib/game/describe-room";
 
 const LIVING = "living";
@@ -70,8 +70,11 @@ describe("parsePlaygroundParams", () => {
   });
 
   it("vocabulary matches the catalogues it claims to mirror", () => {
-    expect(PLAYGROUND_MODULE_IDS).toContain("gallery-module");
-    expect(PLAYGROUND_MODULE_IDS).toContain("pool-deck");
+    // 世界分类收口（2026-09）：gallery-module 与 pool-deck 两个大厅
+    // 下架（数据休眠在 modules/public.ts），注册表 13 → 11 — the
+    // vocabulary is pinned to the registry itself, so a future deregistration
+    // or addition moves this assertion with the MODULE_ORDER switch.
+    expect(PLAYGROUND_MODULE_IDS).toEqual(ROOM_MODULES.map((m) => m.id));
     expect(PLAYGROUND_SKIN_IDS).toEqual(
       expect.arrayContaining(["temperate", "dune", "grove", "moss", "shallows"]),
     );

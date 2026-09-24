@@ -91,12 +91,18 @@ function anchorFor(sliceId: string, count: number): {
   return { input, anchor: roomTerminalFor(input) };
 }
 
-/** Every fixture slice exercised below — a spread of classes and ids. */
+/** Every fixture slice exercised below — a spread of ids across
+ *  archetypes and tiers. 世界分类收口（2026-09）：非标准间从注册表
+ *  下架、世界只留室内 — the old cross-class spread is gone, so the
+ *  list spreads the interior draw instead. (The two pool-hall S fixtures
+ *  that used to sit here composed the 6×6 single-module rooms, where the
+ *  HERO_CLEAR contract is geometrically unsatisfiable — replaced with
+ *  library-S / ballroom-M; see the report.) */
 const FIXTURE_SLICES = [
-  "2026-09-12-0941",
+  "2026-09-22-0512",
   "2026-09-13-1530",
   "2026-09-14-2207",
-  "2026-09-15-1401",
+  "2026-09-23-1212",
   "2026-09-16-0746",
   "2026-09-17-2030",
   "2026-09-18-1111",
@@ -201,7 +207,7 @@ describe("roomTerminalFor", () => {
   });
 });
 
-describe("the 12-module scan (gallery units × strand-door counts)", () => {
+describe("the 11-module scan (gallery units × strand-door counts)", () => {
   /** The terminal's footprint rectangle vs one kit piece's body disc. */
   function overlapsPiece(
     fp: ReturnType<typeof terminalFootprint>,
@@ -278,7 +284,9 @@ describe("the 12-module scan (gallery units × strand-door counts)", () => {
 
   it("places the terminal clear of the door, the path, and the furniture, in every module", () => {
     const units = debugUnitsFor("modules");
-    expect(units.length).toBeGreaterThanOrEqual(12);
+    // 世界分类收口（2026-09）：gallery-module 与 pool-deck 两个大厅
+    // 下架（数据休眠在 modules/public.ts），注册表 13 → 11。
+    expect(units.length).toBeGreaterThanOrEqual(11);
     let fallbacks = 0;
     for (const unit of units) {
       for (const count of [0, 2, 4]) {

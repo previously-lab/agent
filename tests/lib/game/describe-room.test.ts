@@ -15,7 +15,6 @@ import {
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import { compositionForRecipe } from "@/lib/game/room-modules";
 import { scaledRecipeFor } from "@/lib/game/room-plan";
-import { skinById } from "@/lib/game/skins";
 
 /** Fixed slice ids — deterministic input, not Math.random(). */
 const SLICES = [
@@ -157,106 +156,17 @@ describe("describeRoom", () => {
   });
 });
 
-describe("describeRoom worldClass furnishing (nature/wonder kits in the outline)", () => {
-  /** The decks, mirrored from kits.ts — every enumerated kit must belong
-   *  to the room's own world-class deck. */
-  const NATURE_DECK = [
-    "fallen-log",
-    "stone-circle",
-    "jetty",
-    "fence-ruin",
-    "campfire",
-    "path-marker",
-    "boulder-cluster",
-    "reeds",
-  ];
-  const WONDER_DECK = [
-    "toy-blocks",
-    "marble-run",
-    "giant-chess",
-    "paper-boats",
-    "lantern-cluster",
-    "swing-frame",
-  ];
 
-  // Scan a deterministic spread of slice ids for one room of each shape —
-  // compileSpaceRecipe hashes any string, so the probe ids are as good
-  // as dates (A6: the same scan returns the same rooms on any machine).
-  const findSlice = (
-    pred: (r: ReturnType<typeof compileSpaceRecipe>) => boolean,
-    limit = 600,
-  ): string => {
-    for (let i = 0; i < limit; i++) {
-      const id = `outline-probe-${i}`;
-      if (pred(compileSpaceRecipe(id))) return id;
-    }
-    throw new Error("no matching slice found in the scan window");
-  };
-
-  it("enumerates the nature kits for a nature room — the world's skin owns the draw", () => {
-    const id = findSlice(
-      (r) => r.worldClass === "nature" && r.archetype !== "pool",
-    );
-    const desc = describeRoom(id);
-    expect(desc.furnishing).not.toBeNull();
-    const kits = desc.furnishing!.map((f) => f.kit);
-    expect(kits.length).toBeGreaterThan(0);
-    // P3 step three: the room's WORLD owns the vocabulary — every
-    // enumerated kit rides the resolved skin's decks (which are curated
-    // from the nature set, so the catalogue assertion still holds).
-    expect(desc.skin).not.toBeNull();
-    const skinDecks = skinById(desc.skin!.id)!.furnishing.decks ?? [];
-    for (const kit of kits) expect(skinDecks).toContain(kit);
-    for (const kit of kits) expect(NATURE_DECK).toContain(kit);
-    // The zh outline's 陈设 line names the hero kit first.
-    const zh = formatRoomDescription(desc, "zh");
-    expect(zh).toContain("陈设：主角套件");
-    expect(zh).toContain(kits[0]);
-  });
-
-  it("furnishes the outdoor pool biome from its shallows skin's shore kits", () => {
-    // P3 step three: the pool biome is a nature room like any other — the
-    // shallows skin's decks REPLACE the empty archetype gate, and its shore
-    // kits (jetty, reeds) are water-bound, so the basin finally furnishes.
-    const id = findSlice(
-      (r) => r.worldClass === "nature" && r.archetype === "pool",
-    );
-    const desc = describeRoom(id);
-    expect(desc.skin?.id).toBe("shallows");
-    expect(desc.furnishing).not.toBeNull();
-    const kits = desc.furnishing!.map((f) => f.kit);
-    expect(kits.length).toBeGreaterThan(0);
-    const shallowsDecks = skinById("shallows")!.furnishing.decks ?? [];
-    for (const kit of kits) expect(shallowsDecks).toContain(kit);
-    expect(desc.water).not.toBeNull();
-  });
-
-  it("enumerates the wonder kits for a wonder room (view skin, authored deck)", () => {
-    const id = findSlice((r) => r.worldClass === "wonder");
-    const desc = describeRoom(id);
-    // The wonder room WEARS its world's skin (view)…
-    expect(desc.skin).not.toBeNull();
-    // …but keeps its authored playthings: the deck is the diorama's
-    // structure, so the skin's nature decks never enter the enumeration.
-    expect(desc.furnishing).not.toBeNull();
-    const kits = desc.furnishing!.map((f) => f.kit);
-    expect(kits.length).toBeGreaterThan(0);
-    for (const kit of kits) expect(WONDER_DECK).toContain(kit);
-    // Same line count in both locales with the furnishing line present.
-    const en = formatRoomDescription(desc, "en");
-    const zh = formatRoomDescription(desc, "zh");
-    expect(en).toContain("hero kit");
-    expect(en).toContain(kits[0]);
-    expect(zh.split("\n")).toHaveLength(en.split("\n").length);
-  });
-
-  it("keeps the outline deterministic for the new world classes", () => {
-    for (const cls of ["nature", "wonder"] as const) {
-      const id = findSlice((r) => r.worldClass === cls);
-      const a = JSON.stringify(describeRoom(id));
-      describeRoom(findSlice((r) => r.worldClass === "interior"));
-      const b = JSON.stringify(describeRoom(id));
-      expect(b).toBe(a);
-    }
-  });
-});
+// 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+// The "describeRoom worldClass furnishing (nature/wonder kits in the
+// outline)" suite lived here — four cases that scanned deterministic
+// probe ids for a nature / pool-biome / wonder slice and enumerated the
+// resolved skin's decks. With the world draw interior-only no probe id
+// can produce those rooms (the scan window comes back empty), and the
+// whole block's premise — a real slice drawing a skinned world — is
+// unreachable until a class id returns to CLASS_WEIGHTS. The nature /
+// wonder kits, the biome and wonder archetype lists, the skins and their
+// decks stay dormant in kits.ts, space-types.ts and skins.ts; the
+// debug gallery still reaches them (`dbg-a:meadow` etc. — see
+// skin-render.test.ts / skins.test.ts), which is where the skinned-world
+// contracts are pinned now.

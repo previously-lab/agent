@@ -229,10 +229,13 @@ export const MODULE_ORDER: readonly string[] = [
   "kitchen",
   "bath",
   "storage",
-  "gallery-module",
+  // "gallery-module" and "pool-deck" are OFF THE REGISTRY (user ruling,
+  // 2026-09): they were the two 18x12 public halls, and no room may be
+  // bigger than the standard set — bigness comes from combining standard
+  // rooms. Their definitions, blueprints and kits stay in the tree,
+  // dormant; putting the ids back here is the whole of the switch.
   "living",
   "sunroom",
-  "pool-deck",
   "dining-hall",
   "workshop",
 ];

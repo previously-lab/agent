@@ -213,9 +213,25 @@ describe("kit data (§3.1)", () => {
     // data — staging can never draw it. Every hand-written interior kit
     // is referenced by at least one standard module (the deal still gates
     // on the kit's own world-class/archetype eligibility).
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+    // These four pool-hall kits were dealt ONLY by the pool-deck hall's
+    // whitelist; with the deck off MODULE_ORDER (its data dormant in
+    // modules/public.ts) they have no on-registry dealer until the deck
+    // returns or another module picks them up. The exemption is an
+    // explicit dormancy list, not a softened assertion — anything NEW
+    // here is the dead-data drift this test exists to catch.
+    const DORMANT_ORPHANS = [
+      "pool-loungers",
+      "ring-post",
+      "poolside-bench",
+      "ladder-board",
+    ];
     const whitelists = new Set(ROOM_MODULES.flatMap((m) => m.kits));
     for (const kit of KITS) {
-      if (kit.worldClasses.includes("interior")) {
+      if (
+        kit.worldClasses.includes("interior") &&
+        !DORMANT_ORPHANS.includes(kit.id)
+      ) {
         expect(
           whitelists.has(kit.id),
           `kit "${kit.id}" is dealt by no module whitelist`,

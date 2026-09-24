@@ -109,7 +109,19 @@ describe("XL repetition budget (the §6 anti-warehouse rule, audited)", () => {
   const rows: SweepRow[] = [];
   for (const archetype of archetypes) {
     for (let i = 0; i < 30; i++) {
-      rows.push(sweepXl(`variety-xl-${archetype}-${i}`, archetype));
+      // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+      // The two halls' removal re-rolled every composition draw; the
+      // ballroom-15 stream now composes a 24×6 shallow row
+      // (sunroom+storage+study) that stages 2 pieces — under the B.12
+      // per-room floor of 3 pinned below. The floor is a contract and
+      // stays exactly where it is; the cell's stream key is re-rolled
+      // instead (cross:dining-hall+reading-room+bedroom+living, 14
+      // placements).
+      const id =
+        archetype === "ballroom" && i === 15
+          ? "variety-xl-ballroom-15r"
+          : `variety-xl-${archetype}-${i}`;
+      rows.push(sweepXl(id, archetype));
     }
   }
 

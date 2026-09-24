@@ -138,9 +138,12 @@ describe("the schematic catalogue is sound", () => {
     // P1-era pin, re-recorded for v0.12b P2b: it used to assert the living
     // was the ONLY blueprint while the pilot was the lone schematic. The
     // three lanes landed the remaining twelve, so the assertion flips to
-    // the catalogue contract — all thirteen standard modules furnish by
-    // their authored plan, and a module with no blueprint is the bug now.
-    expect(ROOM_MODULES.length).toBeGreaterThanOrEqual(13);
+    // the catalogue contract — every on-registry module furnishes by its
+    // authored plan, and a module with no blueprint is the bug now.
+    // 世界分类收口（2026-09）：gallery-module 与 pool-deck 两个大厅下架
+    // （蓝图数据原样休眠在 schematics/public.ts —— "every blueprint
+    // passes the audit" above still pins them），注册表 13 → 11。
+    expect(ROOM_MODULES.length).toBeGreaterThanOrEqual(11);
     for (const m of ROOM_MODULES) {
       expect(roomSchematicFor(m.id), `${m.id}: missing blueprint`).toBeDefined();
     }

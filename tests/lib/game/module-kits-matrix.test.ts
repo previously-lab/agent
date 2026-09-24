@@ -16,6 +16,12 @@
  * updates the literal AND records its reason in this header; an
  * accidental one fails loudly, named module@archetype.
  *
+ * 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+ * the gallery-module and pool-deck rows left the matrix with the two
+ * halls off MODULE_ORDER (their module data and blueprints stay dormant
+ * in modules/public.ts and schematics/public.ts; putting the ids back is
+ * the whole of the switch, and their rows return with them).
+ *
  * Column order = INTERIOR_ROOMS (space-types.ts); cell order = the KITS
  * catalogue order moduleKitsFor filters in. [] = the module can furnish
  * NOTHING in that archetype — no primary seat, no companion seat either.
@@ -67,12 +73,6 @@ const MATRIX: Record<string, Record<string, readonly string[]>> = {
     library: ["luggage", "housekeeping", "coat-bench", "storage-rack"],
     ballroom: ["luggage", "housekeeping", "coat-bench", "storage-rack"],
   },
-  "gallery-module": {
-    "hotel-room": ["reading", "plant-pedestal", "art-wall"],
-    "pool-hall": ["plant-pedestal", "art-wall"],
-    library: ["reading", "gallery-bench", "plant-pedestal", "art-wall"],
-    ballroom: ["reading", "gallery-bench", "plant-pedestal", "art-wall"],
-  },
   living: {
     "hotel-room": ["reading", "tv-corner", "sofa-group", "plant-pedestal", "sideboard", "art-wall"],
     "pool-hall": ["plant-pedestal", "art-wall"],
@@ -84,12 +84,6 @@ const MATRIX: Record<string, Record<string, readonly string[]>> = {
     "pool-hall": ["coat-bench", "plant-pedestal"],
     library: ["reading", "coat-bench", "gallery-bench", "plant-pedestal", "fountain-court"],
     ballroom: ["reading", "coat-bench", "gallery-bench", "plant-pedestal", "fountain-court"],
-  },
-  "pool-deck": {
-    "hotel-room": [],
-    "pool-hall": ["pool-loungers", "towel-station", "ring-post", "poolside-bench", "ladder-board", "towel-rail"],
-    library: [],
-    ballroom: [],
   },
   "dining-hall": {
     "hotel-room": ["dining", "chair-stack", "sideboard"],

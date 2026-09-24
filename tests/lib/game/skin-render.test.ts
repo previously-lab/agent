@@ -115,21 +115,16 @@ describe("default path: zero change", () => {
     }
   });
 
-  it("a real water world walks slower — the wade skin arrives through the world assignment", () => {
-    // Scan for a slice whose world is a wade biome (pool / lake / ocean /
-    // ducks) — the assignment, not a debug force, puts the shallows on it.
-    let wade: string | null = null;
-    for (let i = 0; i < 3000 && wade === null; i++) {
-      const id = `render-wade-${i}`;
-      const r = compileSpaceRecipe(id);
-      if (
-        r.worldClass !== "interior" &&
-        skinForSlice(id)?.floor.walk === "wade"
-      ) {
-        wade = id;
-      }
-    }
-    expect(wade).not.toBeNull();
+  it("a water world walks slower — the wade skin arrives through the world assignment", () => {
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+    // no real slice draws a wade biome anymore, so the world assignment
+    // is exercised through the debug gallery's archetype pins (the same
+    // skinForSlice path — the archetype is pinned, not the skin forced;
+    // the class and skin still resolve from the archetype itself).
+    const wade = (["pool", "ocean", "lake", "ducks"] as const)
+      .map((a) => `dbg-a:${a}`)
+      .find((id) => skinForSlice(id)?.floor.walk === "wade");
+    expect(wade).toBeDefined();
     const skin = skinForSlice(wade!)!;
     expect(skin.floor.walk).toBe("wade");
     expect(skinWalkSpeedScale(wade!)).toBe(skin.floor.speed);
@@ -574,18 +569,16 @@ describe("P3 step two: the render feeds the skin to staging", () => {
     }
   });
 
-  it("描述 = 画面 holds on the world-assigned rooms too (nature pin, wonder pin, hybrid slice)", () => {
-    // P3 step three: a nature room furnishes from its world's skin, a
-    // hybrid furnishes on its biome's outdoor machine, and a wonder room
-    // keeps its authored deck under the view skin — both lanes enumerate
-    // the same pieces either way.
-    let hybrid: string | null = null;
-    for (let i = 0; i < 3000 && hybrid === null; i++) {
-      const id = `render-hybrid-${i}`;
-      if (compileSpaceRecipe(id).worldClass === "hybrid") hybrid = id;
-    }
-    expect(hybrid).not.toBeNull();
-    for (const id of ["dbg-a:forest", "dbg-a:meadow", "dbg-a:ducks", hybrid!]) {
+  it("描述 = 画面 holds on the world-assigned rooms too (nature pin, wonder pin)", () => {
+    // P3 step three: a nature room furnishes from its world's skin and a
+    // wonder room keeps its authored deck under the view skin — both
+    // lanes enumerate the same pieces either way.
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+    // the hybrid class no longer exists (CLASS_WEIGHTS draws interior
+    // only), so the hybrid probe that scanned for one is gone; the
+    // nature/wonder pins still reach those worlds through the debug
+    // gallery and pin this contract.
+    for (const id of ["dbg-a:forest", "dbg-a:meadow", "dbg-a:ducks"]) {
       const outline = describeRoom(id).furnishing;
       expect(outline, `${id}: the outline furnishes`).not.toBeNull();
       expect(renderStaging(id), id).toEqual(outline);

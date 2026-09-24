@@ -490,18 +490,17 @@ describe("A6 — determinism with a skin", () => {
       expect(skinForSlice(id)).toBeNull();
       expect(describeRoom(id).skin).toBeNull();
     }
-    // A real nature slice resolves its world's skin, and the outline is a
-    // stable function of the slice (A6).
-    let nature: string | null = null;
-    for (let i = 0; i < 3000 && nature === null; i++) {
-      const id = `staging-world-${i}`;
-      if (compileSpaceRecipe(id).worldClass === "nature") nature = id;
-    }
-    expect(nature).not.toBeNull();
-    const skin = skinForSlice(nature!);
+    // A nature world resolves its world's skin, and the outline is a
+    // stable function of the slice (A6). 世界分类收口（2026-09）：非标准
+    // 间从注册表下架、世界只留室内 — no real slice draws nature now, so
+    // the probe is the debug gallery's archetype pin (the same
+    // skinForSlice / describeRoom chain, with the archetype pinned
+    // instead of drawn).
+    const nature = "dbg-a:forest";
+    const skin = skinForSlice(nature);
     expect(skin).not.toBeNull();
-    const desc = describeRoom(nature!);
+    const desc = describeRoom(nature);
     expect(desc.skin?.id).toBe(skin!.id);
-    expect(JSON.stringify(describeRoom(nature!))).toBe(JSON.stringify(desc));
+    expect(JSON.stringify(describeRoom(nature))).toBe(JSON.stringify(desc));
   });
 });

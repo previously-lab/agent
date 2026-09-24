@@ -1,5 +1,5 @@
 {
-  "generated": "v0.13 user scale ruling: bedroom 1x2, study 1x1 (+shrunk spine), reading-room 1x2 (Lane A re-record); ids/zones/kits/features/schematics otherwise byte-held",
+  "generated": "v0.13 user scale ruling: bedroom 1x2, study 1x1 (+shrunk spine), reading-room 1x2 (Lane A re-record); 世界分类收口（2026-09）: gallery-module + pool-deck off the registry (MODULE_ORDER 13 -> 11; their entries stay in git history and the module data stays dormant in modules/public.ts)",
   "modules": {
     "ids": [
       "foyer",
@@ -9,10 +9,8 @@
       "kitchen",
       "bath",
       "storage",
-      "gallery-module",
       "living",
       "sunroom",
-      "pool-deck",
       "dining-hall",
       "workshop"
     ],
@@ -687,95 +685,6 @@
       },
       {
         "archetypes": [
-          "ballroom",
-          "library"
-        ],
-        "doorCapacity": 10,
-        "doorEdges": [
-          "n"
-        ],
-        "features": [
-          {
-            "at": "n",
-            "kind": "pilaster-rhythm"
-          },
-          {
-            "at": "floor",
-            "kind": "floor-inlay",
-            "span": [
-              0.15,
-              0.85
-            ]
-          }
-        ],
-        "floor": "timber",
-        "heroKit": "reading",
-        "id": "gallery-module",
-        "kits": [
-          "gallery-bench",
-          "reading",
-          "plant-pedestal",
-          "art-wall"
-        ],
-        "label": "画廊",
-        "light": "wash",
-        "openings": [
-          "e",
-          "w"
-        ],
-        "size": {
-          "d": 12,
-          "w": 18
-        },
-        "wall": "plaster",
-        "weight": 2,
-        "worldClasses": [
-          "interior"
-        ],
-        "zones": [
-          {
-            "kind": "hero",
-            "rect": {
-              "x": [
-                0.34,
-                0.66
-              ],
-              "z": [
-                0.5,
-                0.76
-              ]
-            }
-          },
-          {
-            "kind": "cluster",
-            "rect": {
-              "x": [
-                0.08,
-                0.92
-              ],
-              "z": [
-                0.2,
-                0.6
-              ]
-            }
-          },
-          {
-            "kind": "keep-empty",
-            "rect": {
-              "x": [
-                0.4,
-                0.6
-              ],
-              "z": [
-                0,
-                0.3
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "archetypes": [
           "hotel-room",
           "ballroom",
           "library"
@@ -972,107 +881,6 @@
               "z": [
                 0,
                 0.55
-              ]
-            }
-          }
-        ]
-      },
-      {
-        "archetypes": [
-          "pool-hall"
-        ],
-        "doorCapacity": 0,
-        "doorEdges": [],
-        "features": [
-          {
-            "at": "floor",
-            "kind": "water-rill",
-            "span": [
-              0.86,
-              0.94
-            ],
-            "spanZ": [
-              0.1,
-              0.9
-            ]
-          }
-        ],
-        "floor": "deck",
-        "heroKit": "pool-loungers",
-        "id": "pool-deck",
-        "kits": [
-          "pool-loungers",
-          "towel-station",
-          "ring-post",
-          "poolside-bench",
-          "ladder-board",
-          "towel-rail"
-        ],
-        "label": "泳池甲板",
-        "light": "pool-bounce",
-        "openings": [
-          "e",
-          "w"
-        ],
-        "size": {
-          "d": 12,
-          "w": 18
-        },
-        "wall": "tile",
-        "weight": 3,
-        "worldClasses": [
-          "interior"
-        ],
-        "zones": [
-          {
-            "kind": "hero",
-            "rect": {
-              "x": [
-                0.1,
-                0.24
-              ],
-              "z": [
-                0.4,
-                0.6
-              ]
-            }
-          },
-          {
-            "kind": "cluster",
-            "rect": {
-              "x": [
-                0.04,
-                0.26
-              ],
-              "z": [
-                0.1,
-                0.9
-              ]
-            }
-          },
-          {
-            "kind": "cluster",
-            "rect": {
-              "x": [
-                0.74,
-                0.82
-              ],
-              "z": [
-                0.1,
-                0.9
-              ]
-            }
-          },
-          {
-            "kind": "keep-empty",
-            "rect": {
-              "x": [
-                0.38,
-                0.62
-              ],
-              "z": [
-                0,
-                0.5
               ]
             }
           }

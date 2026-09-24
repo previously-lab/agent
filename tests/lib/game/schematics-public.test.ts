@@ -6,6 +6,16 @@
  * on the staged debug-gallery rooms — the room-schematic.test.ts living
  * pilot's contract, applied to the four public rooms.
  *
+ * 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+ * gallery-module and pool-deck came off MODULE_ORDER (user ruling: no
+ * room bigger than the standard set), so their sweep suites are deleted:
+ * a `dbg-m:` slice no longer composes an off-registry module, and the
+ * rooms those tests staged are unreachable until the ids return to
+ * MODULE_ORDER (the whole of the switch). Their blueprint AUDIT stays —
+ * the data is dormant, not gone (modules/public.ts, schematics/public.ts).
+ * dining-hall and sunroom remain on the registry and keep their full
+ * suites below.
+ *
  * Two of the rooms carry a reported, main-agent-gated dependency (the
  * lane report + doc/design/v0.12b-lane-C-notes.md carry the full text):
  *
@@ -54,7 +64,6 @@ import {
   type StagedKitPiece,
 } from "@/lib/game/kits";
 import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
-import { waterRectFor } from "@/lib/game/terrain";
 import {
   COLONNADE_BAY,
   KIT_EMPTY_FLOOR_MIN,
@@ -286,104 +295,16 @@ describe("gallery-module — the long LOOKING wall (room-plans/gallery-module.tx
     expect(auditSchematic(roomSchematicFor(id)!)).toEqual([]);
   });
 
-  it("required core lands in every sweep sample; optionals respect their floors", () => {
-    const samples = sweep(id);
-    assertGroupPresence(
-      samples,
-      id,
-      [
-        "art-1",
-        "art-2",
-        "art-3",
-        "wash-w",
-        "wash-e",
-        "sculpture",
-        "bench-w",
-        "bench-e",
-      ],
-      { "art-4": 0.55, "art-5": 0.55, nook: 0.5, "plant-w": 0.6, "plant-e": 0.6 },
-    );
-  });
-
-  it("keeps the floor ≤65% covered", () => {
-    for (const [i, s] of sweep(id).entries()) {
-      const ratio = coverageRatio(s.pieces, s.plan);
-      expect(
-        ratio,
-        `sweep-${i}: coverage ${(ratio * 100).toFixed(0)}% > 65%`,
-      ).toBeLessThanOrEqual(1 - KIT_EMPTY_FLOOR_MIN + 1e-9);
-    }
-  });
-
-  it("nothing leaves the walkable band or blocks the entrance strip", () => {
-    assertClearances(sweep(id), id);
-  });
-
-  it("A6 — three fresh stagings of the same slice are identical", () => {
-    assertDeterminism(id, {});
-  });
-
-  it("the viewing wall reads as a gallery (realism §2, as measurements)", () => {
-    const violations: string[] = [];
-    const samples = sweep(id);
-    for (const [i, s] of samples.entries()) {
-      const e = s.plan.extent;
-      const halfW = s.plan.width / 2;
-      const arts = s.pieces.filter((p) => p.kind === "wallart");
-      if (arts.length < 3 || arts.length > 5)
-        violations.push(`sweep-${i}: ${arts.length} paintings staged`);
-      for (const a of arts) {
-        // hung on the focal wall, facing into the room (rotY ≈ π).
-        if (a.z / e < 0.86 || a.z / e > 0.99)
-          violations.push(`sweep-${i}: painting z=${(a.z / e).toFixed(2)} off the far wall`);
-        if (Math.abs(norm(a.rotY - Math.PI)) > 0.25)
-          violations.push(`sweep-${i}: painting rotY=${a.rotY.toFixed(2)} not facing the room`);
-        if (Math.abs(a.x) / halfW > 0.92)
-          violations.push(`sweep-${i}: painting x=${a.x.toFixed(2)} off the wall run`);
-      }
-      // washers 2m off the art wall, never mid-room.
-      for (const g of ["wash-w", "wash-e"]) {
-        for (const l of byGroup(s, id, g)) {
-          if (l.z / e < 0.7 || l.z / e > 0.88)
-            violations.push(`sweep-${i}: ${g} z=${(l.z / e).toFixed(2)} not washing the wall`);
-        }
-      }
-      // benches face the art (rotY ≈ 0), mid-south, with a viewing
-      // distance (authored metres — normalised by the room's scale,
-      // the debug gallery draws colossal).
-      const benches = [...byGroup(s, id, "bench-w"), ...byGroup(s, id, "bench-e")].filter(
-        (p) => p.kind === "bench",
-      );
-      if (benches.length !== 2) violations.push(`sweep-${i}: ${benches.length} benches`);
-      for (const b of benches) {
-        if (Math.abs(norm(b.rotY)) > 0.2)
-          violations.push(`sweep-${i}: bench rotY=${b.rotY.toFixed(2)} not facing the art`);
-        if (b.z / e < 0.3 || b.z / e > 0.46)
-          violations.push(`sweep-${i}: bench z=${(b.z / e).toFixed(2)} out of the viewing band`);
-        const nearest = Math.min(...arts.map((a) => dist(a, b))) / s.scaleFactor;
-        if (nearest < 3.2 || nearest > 8)
-          violations.push(`sweep-${i}: bench ${nearest.toFixed(2)} authored-m off the art`);
-      }
-      // sculpture: a stone ON every pedestal (lifted, never floating).
-      const pedestals = s.pieces.filter((p) => p.kind === "pedestal");
-      const stones = s.pieces.filter((p) => p.kind === "standingstone");
-      if (pedestals.length < 1 || pedestals.length > 2)
-        violations.push(`sweep-${i}: ${pedestals.length} pedestals`);
-      if (stones.length !== pedestals.length)
-        violations.push(`sweep-${i}: ${stones.length} stones for ${pedestals.length} pedestals`);
-      for (const st of stones) {
-        if (st.dy < 0.8) violations.push(`sweep-${i}: stone dy=${st.dy.toFixed(2)} not on the cap`);
-        if (!pedestals.some((pe) => dist(pe, st) < 0.15))
-          violations.push(`sweep-${i}: stone floats off its pedestal`);
-      }
-      // axial discipline: the composition straddles the room axis.
-      const meanAbsArt =
-        arts.reduce((sum, a) => sum + Math.abs(a.x), 0) / Math.max(1, arts.length);
-      if (meanAbsArt > halfW * 0.75)
-        violations.push(`sweep-${i}: the art row drifted off the axis`);
-    }
-    expect(violations).toEqual([]);
-  });
+  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+  // The gallery's sweep suite (required core / coverage / clearances /
+  // A6 / the viewing-wall measurements) lived here — it staged the room
+  // through the debug gallery's `dbg-m:gallery-module` slice, and with
+  // the hall off MODULE_ORDER the registry cannot compose it anymore
+  // (forcedPrimaryId looks the module up in ROOM_MODULES too), so the
+  // blueprint it pinned never stages. The audit above stays: the
+  // gallery's module data and blueprint remain sound and dormant in
+  // modules/public.ts + schematics/public.ts — putting the id back in
+  // MODULE_ORDER revives this suite's subject with them.
 });
 
 /* ------------------------------------------------------------------ */
@@ -628,145 +549,14 @@ describe("pool-deck — the dry edges of the water (room-plans/pool-deck.txt)", 
     expect(auditSchematic(roomSchematicFor(id)!)).toEqual([]);
   });
 
-  it("required core lands in every sweep sample; optionals respect their floors", () => {
-    const samples = sweep(id);
-    assertGroupPresence(
-      samples,
-      id,
-      [
-        "lounger-w1",
-        "lounger-w2",
-        "lounger-e1",
-        "lounger-e2",
-        "umbrella-1",
-        "bench-w",
-        "ring-post",
-        "towel-rail",
-        "ladder",
-        "board",
-      ],
-      { "umbrella-2": 0.5, "bench-w2": 0.4, "bench-e": 0.5, plant: 0.5 },
-    );
-  });
-
-  it("keeps the floor ≤65% covered", () => {
-    for (const [i, s] of sweep(id).entries()) {
-      const ratio = coverageRatio(s.pieces, s.plan);
-      expect(
-        ratio,
-        `sweep-${i}: coverage ${(ratio * 100).toFixed(0)}% > 65%`,
-      ).toBeLessThanOrEqual(1 - KIT_EMPTY_FLOOR_MIN + 1e-9);
-    }
-  });
-
-  it("nothing leaves the walkable band or blocks the entrance strip", () => {
-    assertClearances(sweep(id), id);
-  });
-
-  it("A6 — three fresh stagings of the same slice are identical", () => {
-    assertDeterminism(id, {});
-  });
-
-  it("every piece keeps out of the basin and the rill runnel (the water geometry)", () => {
-    // The debug staging passes water: null, so the shared water check
-    // cannot run there — this test emulates the exact rectangle the
-    // renderer hands staging (space.tsx: waterRectFor(scaledRecipe))
-    // and fails any piece centre inside the basin band or the WaterRill
-    // runnel band. Trace pieces ride their already-validated hosts, so
-    // they are exempt.
-    const violations: string[] = [];
-    const samples = sweep(id);
-    const wr = waterRectFor(scaledRecipeFor(compileSpaceRecipe(`dbg-m:${id}`)).recipe)!;
-    for (const [i, s] of samples.entries()) {
-      const f = s.scaleFactor;
-      const margin = KIT_PATH_CLEAR * s.propScale;
-      const rillX0 = (0.86 - 0.5) * s.plan.width;
-      const rillX1 = (0.94 - 0.5) * s.plan.width;
-      const rillZ0 = 0.1 * s.plan.extent;
-      const rillZ1 = 0.9 * s.plan.extent;
-      for (const p of s.pieces) {
-        if (p.trace) continue;
-        if (
-          Math.abs(p.x - wr.cx * f) < wr.halfX * f + margin &&
-          Math.abs(p.z - wr.cz * f) < wr.halfZ * f + margin
-        ) {
-          violations.push(
-            `sweep-${i}: ${p.kind}@${p.x.toFixed(2)},${p.z.toFixed(2)} stands in the basin`,
-          );
-        }
-        if (
-          p.x > rillX0 - 0.3 &&
-          p.x < rillX1 + 0.3 &&
-          p.z > rillZ0 - 0.3 &&
-          p.z < rillZ1 + 0.3
-        ) {
-          violations.push(
-            `sweep-${i}: ${p.kind}@${p.x.toFixed(2)},${p.z.toFixed(2)} stands in the rill runnel`,
-          );
-        }
-      }
-    }
-    expect(violations).toEqual([]);
-  });
-
-  it("the deck reads as a pool deck (§2: seats square at the water)", () => {
-    const violations: string[] = [];
-    const samples = sweep(id);
-    for (const [i, s] of samples.entries()) {
-      const e = s.plan.extent;
-      const cx = 0;
-      const cz = e / 2;
-      const loungers = s.pieces.filter((p) => p.kind === "lounger");
-      if (loungers.length !== 4) violations.push(`sweep-${i}: ${loungers.length} loungers`);
-      for (const l of loungers) {
-        // squared at the basin (the room's focus).
-        const f = forward(l);
-        const to = { x: cx - l.x, z: cz - l.z };
-        const len = Math.hypot(to.x, to.z);
-        if ((f.x * to.x + f.z * to.z) / len < 0.55)
-          violations.push(`sweep-${i}: lounger @${l.x.toFixed(2)},${l.z.toFixed(2)} not facing the water`);
-        // on the dry flanks, never over the basin (water halfX 4.02 +
-        // the piece-clear margin).
-        if (Math.abs(l.x) < 4.5)
-          violations.push(`sweep-${i}: lounger x=${l.x.toFixed(2)} inside the basin margin`);
-      }
-      // each flank pair staggers along its rim.
-      const west = loungers.filter((l) => l.x < 0).sort((a, b) => a.z - b.z);
-      const east = loungers.filter((l) => l.x > 0).sort((a, b) => a.z - b.z);
-      for (const pair of [west, east]) {
-        if (pair.length !== 2) {
-          violations.push(`sweep-${i}: a flank pair has ${pair.length} loungers`);
-          continue;
-        }
-        const gap = pair[1].z - pair[0].z;
-        if (gap < 1.2 || gap > 3.4)
-          violations.push(`sweep-${i}: flank pair staggered ${gap.toFixed(2)}m`);
-      }
-      // the working edge: ladder west, board east, on the north
-      // waterline strip and squared at the pool (facing south).
-      for (const g of ["ladder", "board"]) {
-        for (const p of byGroup(s, id, g)) {
-          if (p.z / e < 0.8 || p.z / e > 0.95)
-            violations.push(`sweep-${i}: ${g} z=${(p.z / e).toFixed(2)} off the waterline`);
-          if (Math.abs(norm(p.rotY - Math.PI)) > 0.25)
-            violations.push(`sweep-${i}: ${g} rotY=${p.rotY.toFixed(2)} not facing the pool`);
-        }
-      }
-      const ladder = byGroup(s, id, "ladder")[0];
-      const board = byGroup(s, id, "board")[0];
-      if (ladder && board && ladder.x > board.x)
-        violations.push(`sweep-${i}: the ladder left the west end`);
-      // the ring post steps off the water's west edge (basin edge
-      // −4.02); the towel rail hangs by the west loungers.
-      for (const p of byGroup(s, id, "ring-post")) {
-        if (p.x > -4.6 || p.x < -5.4)
-          violations.push(`sweep-${i}: ring post x=${p.x.toFixed(2)} off the west water edge`);
-      }
-      for (const p of byGroup(s, id, "towel-rail")) {
-        if (p.x > -6.4)
-          violations.push(`sweep-${i}: towel rail x=${p.x.toFixed(2)} not on the west wall`);
-      }
-    }
-    expect(violations).toEqual([]);
-  });
+  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+  // The deck's sweep suite (required core / coverage / clearances / A6 /
+  // the basin-and-rill water geometry / the seats-square-at-the-water
+  // measurements) lived here — it staged the room through the debug
+  // gallery's `dbg-m:pool-deck` slice, and with the hall off
+  // MODULE_ORDER the registry cannot compose it anymore, so the
+  // blueprint it pinned never stages. The audit above stays: the deck's
+  // module data and blueprint remain sound and dormant in
+  // modules/public.ts + schematics/public.ts — putting the id back in
+  // MODULE_ORDER revives this suite's subject with them.
 });

@@ -305,16 +305,15 @@ describe("debug force: dbg-skin prefix (P3 acceptance switch)", () => {
 });
 
 describe("world assignment — real slices wear their world's skin (P3 step three)", () => {
-  // Scan deterministic probe ids for one slice per non-interior archetype
-  // (compileSpaceRecipe hashes any string — the scan is A6-pure).
-  function slicePerArchetype(): Record<string, string> {
+  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+  // a real slice never draws a non-interior world now, so the per-
+  // archetype probe is the debug gallery's archetype pin: the same
+  // skinForSlice world-assignment path (the class and skin resolve from
+  // the archetype itself — nothing is forced), pinned instead of drawn
+  // (compileSpaceRecipe hashes any string — the pin is A6-pure).
+  function slicePerArchetype(archetypes: readonly string[]): Record<string, string> {
     const seen: Record<string, string> = {};
-    for (let i = 0; i < 3000; i++) {
-      const id = `skin-world-${i}`;
-      const r = compileSpaceRecipe(id);
-      if (r.worldClass === "interior") continue;
-      if (!seen[r.archetype]) seen[r.archetype] = id;
-    }
+    for (const archetype of archetypes) seen[archetype] = `dbg-a:${archetype}`;
     return seen;
   }
 
@@ -333,7 +332,7 @@ describe("world assignment — real slices wear their world's skin (P3 step thre
       dogs: "grove",
       balloons: "grove",
     };
-    const seen = slicePerArchetype();
+    const seen = slicePerArchetype(Object.keys(EXPECTED));
     for (const [archetype, skinId] of Object.entries(EXPECTED)) {
       const id = seen[archetype];
       expect(id, `probe for ${archetype}`).toBeDefined();

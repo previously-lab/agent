@@ -58,11 +58,21 @@ describe("scaleNotationFor", () => {
 });
 
 describe("scaledRecipeFor", () => {
-  it("is the identity view for normal rooms", () => {
-    const recipe = compileSpaceRecipe(SLICE_IDS[0]);
-    const { recipe: view, scale } = scaledRecipeFor(recipe);
-    if (scale.factor === 1) {
-      expect(view).toBe(recipe);
+  it("is the identity view for rooms without a composition", () => {
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+    // every real slice is interior now and takes its plan dims from a
+    // module composition, so scaledRecipeFor always rebuilds the recipe
+    // for them. The no-copy identity promise survives exactly where the
+    // world class resolves no composition: the debug gallery's nature /
+    // wonder archetype pins (dbg-a:), which still reach those dormant
+    // worlds (space-types.ts's biome/wonder lists are untouched data).
+    for (const sliceId of ["dbg-a:meadow", "dbg-a:ducks"]) {
+      const recipe = compileSpaceRecipe(sliceId);
+      const { recipe: view, scale } = scaledRecipeFor(recipe);
+      expect(compositionForRecipe(recipe)).toBeNull();
+      if (scale.factor === 1) {
+        expect(view).toBe(recipe);
+      }
     }
   });
 

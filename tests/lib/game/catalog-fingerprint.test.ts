@@ -29,6 +29,16 @@
  *  kits, features and every schematic entry are byte-unchanged; only the
  *  13 `size` fields moved. The pre-snap fingerprint remains in git history
  *  (HEAD 2df0df9's tree).
+ *
+ *  世界分类收口（2026-09）: the module side of the fixture was re-recorded
+ *  again — gallery-module and pool-deck came OFF the registry (user
+ *  ruling: no room bigger than the standard set; "large" is more standard
+ *  rooms), so `modules` pins the 11 ids/entries on MODULE_ORDER today.
+ *  The two halls' entries remain in git history, and their definitions,
+ *  blueprints and kits stay dormant in modules/public.ts +
+ *  schematics/public.ts. The SCHEMATICS side still pins every pre-
+ *  refactor blueprint byte-identical — the two halls' blueprints are
+ *  data like any other and stay pinned (superset semantics unchanged).
  */
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";

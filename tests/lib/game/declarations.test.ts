@@ -13,8 +13,11 @@
  *    the dollhouse cutaway silks one or two wall roles per orientation,
  *    so niche/pilaster slots relocate to a legal full-height run instead
  *    of vanishing (bedroom niche at the south-door orientation, study
- *    pilasters at the north-door one), and the pool-deck water-rill's
- *    declared band clears the basin it used to straddle.
+ *    pilasters at the north-door one).
+ *    世界分类收口（2026-09）: the pool-deck water-rill case that lived
+ *    here is deleted with the deck off the registry — its module data,
+ *    blueprint and runnel feature stay dormant in modules/public.ts and
+ *    schematics/public.ts.
  *  - The shelf wall renders as GEOMETRY: every full-height run of a
  *    "shelf"-register module carries the bookcase bays (the register was
  *    a colour only — the study and reading room never grew their book
@@ -232,22 +235,14 @@ describe("declared features land in both orientations (v0.12 ②)", () => {
     expect(south.pilasters.length).toBeGreaterThan(0);
   });
 
-  it("the pool-deck water-rill clears the basin at both orientations", () => {
-    const north = featuresFor("pool-deck", 1);
-    const south = featuresFor("pool-deck", -1);
-    expect(north.rill).not.toBeNull();
-    expect(south.rill).not.toBeNull();
-    const { water } = stageModuleRoom("pool-deck");
-    expect(water).not.toBeNull();
-    for (const rill of [north.rill!, south.rill!]) {
-      const overlap =
-        Math.abs((rill.x0 + rill.x1) / 2 - water!.cx) <
-          (rill.x1 - rill.x0) / 2 + water!.halfX &&
-        Math.abs((rill.z0 + rill.z1) / 2 - water!.cz) <
-          (rill.z1 - rill.z0) / 2 + water!.halfZ;
-      expect(overlap).toBe(false);
-    }
-  });
+  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+  // "the pool-deck water-rill clears the basin at both orientations" lived
+  // here — the deck is off MODULE_ORDER, and a `dbg-m:pool-deck` slice no
+  // longer composes the deck (the registry can't see it), so the rill
+  // never lands to be measured. The deck's module data, blueprint and
+  // runnel feature stay dormant in modules/public.ts and
+  // schematics/public.ts; putting the id back in MODULE_ORDER is the
+  // whole of the switch.
 });
 
 describe("the deck never empties (v0.12 ④)", () => {
@@ -295,22 +290,12 @@ describe("the deck never empties (v0.12 ④)", () => {
     }
   });
 
-  it("the pool-deck stages its blueprint, not a bare basin", () => {
-    const { pieces } = stageModuleRoom("pool-deck");
-    const kinds = new Set(pieces.map((p) => p.kind));
-    // specs §10's required core: the lounger pair, the ring post, the
-    // towel rail, the working edge (ladder + board).
-    for (const kind of ["lounger", "ringpost", "towelrail", "poolladder", "board"]) {
-      expect(kinds.has(kind as never), `pool-deck: missing ${kind}`).toBe(true);
-    }
-    const { water } = stageModuleRoom("pool-deck");
-    for (const p of pieces) {
-      const inWater =
-        Math.abs(p.x - water!.cx) < water!.halfX &&
-        Math.abs(p.z - water!.cz) < water!.halfZ;
-      expect(inWater).toBe(false);
-    }
-  });
+  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内。
+  // "the pool-deck stages its blueprint, not a bare basin" lived here —
+  // with pool-deck off MODULE_ORDER its `dbg-m:` slice composes a
+  // different room, so the blueprint it pinned never stages. The deck's
+  // blueprint and kit data stay dormant in schematics/public.ts and
+  // modules/public.ts.
 
   it("a rolled-back pool module still furnishes through the fallback (空房是硬缺陷)", () => {
     // The playground sweep caught bath and pool-deck reporting ZERO pieces
@@ -319,19 +304,21 @@ describe("the deck never empties (v0.12 ④)", () => {
     // the other half of the promise: WITHHOLD the blueprint (any required
     // group's failure rolls the whole placement back) and the generic
     // orchestration must still stage something on the dry rims.
-    for (const id of ["bath", "pool-deck"]) {
-      const { pieces } = stageModuleRoom(id, { schematic: false });
-      expect(
-        pieces.length,
-        `${id}: rolled-back schematic staged nothing — 空房是硬缺陷：回退路径必须能 furnish`,
-      ).toBeGreaterThan(0);
-      const { water } = stageModuleRoom(id);
-      for (const p of pieces) {
-        const inWater =
-          Math.abs(p.x - water!.cx) < water!.halfX &&
-          Math.abs(p.z - water!.cz) < water!.halfZ;
-        expect(inWater).toBe(false);
-      }
+    // 世界分类收口（2026-09）：pool-deck left the loop with its hall off
+    // the registry (dormant in modules/public.ts); the bath carries the
+    // contract on its own.
+    const id = "bath";
+    const { pieces } = stageModuleRoom(id, { schematic: false });
+    expect(
+      pieces.length,
+      `${id}: rolled-back schematic staged nothing — 空房是硬缺陷：回退路径必须能 furnish`,
+    ).toBeGreaterThan(0);
+    const { water } = stageModuleRoom(id);
+    for (const p of pieces) {
+      const inWater =
+        Math.abs(p.x - water!.cx) < water!.halfX &&
+        Math.abs(p.z - water!.cz) < water!.halfZ;
+      expect(inWater).toBe(false);
     }
   });
 });

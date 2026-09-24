@@ -275,13 +275,21 @@ describe("P4 variant distribution readout", () => {
     //    loosen only with a re-measure recorded here) ─────────────────
     const clashLegacy = rate(skinned, (r) => r.legacyPaletteId, "clash");
     const clashNow = rate(skinned, (r) => r.paletteId, "clash");
-    expect(skinned.length).toBeGreaterThanOrEqual(100);
-    // Measured on the 200-slice sample: legacy 31% → post-P4 8.4%. The
-    // floor weight (0.12) keeps clashes possible, so the share never
-    // reaches zero — the cap leaves headroom for the on-disk slice set
-    // to grow (the sample re-measures on every run).
-    expect(clashNow).toBeLessThan(clashLegacy / 2);
-    expect(clashNow).toBeLessThanOrEqual(0.1);
+    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
+    // the sample draws no skinned world (skinned.length === 0), so the
+    // affinity floors have no population until a class id returns to
+    // CLASS_WEIGHTS. The affinity TABLE itself stays pinned by the next
+    // test; the structure/XL floors below are interior-side and stay
+    // unconditional.
+    if (skinned.length > 0) {
+      expect(skinned.length).toBeGreaterThanOrEqual(100);
+      // Measured on the 200-slice sample: legacy 31% → post-P4 8.4%. The
+      // floor weight (0.12) keeps clashes possible, so the share never
+      // reaches zero — the cap leaves headroom for the on-disk slice set
+      // to grow (the sample re-measures on every run).
+      expect(clashNow).toBeLessThan(clashLegacy / 2);
+      expect(clashNow).toBeLessThanOrEqual(0.1);
+    }
     // every structure seen ≥4 times shows at least 2 worlds
     for (const s of multi) {
       expect(s.worlds, s.key).toBeGreaterThanOrEqual(2);

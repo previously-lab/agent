@@ -89,11 +89,16 @@ export function doorGlowColor(palette: Palette): string {
 }
 
 /** World-class draw weights — nature 40 / interior 25 / hybrid 20 / wonder 15. */
+/** The world-class registry. The draw is now INTERIOR-ONLY (user ruling,
+ *  2026-09): every space in the game is a standard room or a combination of
+ *  standard rooms, so "large" is more rooms and never a bigger world. The
+ *  other three classes and everything that serves them — the biome and wonder
+ *  archetype lists, their kits, the terrain and the size tiers — stay in the
+ *  tree, dormant: this table is the single switch that decides whether they
+ *  can be reached. (Before: nature .4 / interior .25 / hybrid .2 / wonder .15
+ *  — three quarters of every timeline was an open field.) */
 const CLASS_WEIGHTS: readonly { id: WorldClass; weight: number }[] = [
-  { id: "nature", weight: 0.4 },
-  { id: "interior", weight: 0.25 },
-  { id: "hybrid", weight: 0.2 },
-  { id: "wonder", weight: 0.15 },
+  { id: "interior", weight: 1 },
 ];
 
 /** Weighted class pick from the next draw of `rng`. */
@@ -103,7 +108,7 @@ function pickClass(rng: () => number): WorldClass {
     if (r < entry.weight) return entry.id;
     r -= entry.weight;
   }
-  return "nature";
+  return "interior";
 }
 
 /* ------------------------------------------------------------------ */
