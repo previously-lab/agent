@@ -12,6 +12,18 @@
 import { VIVID_PALETTES } from "../space-types";
 
 /* ------------------------------------------------------------------ */
+/* The fixed camera (ONE constant, every consumer shares it)            */
+/* ------------------------------------------------------------------ */
+
+/** Fixed-camera offset from the player/focus (world meters). The room
+ *  orientation rule above, the dollhouse cutaway (room-doors.ts's
+ *  wallFacesCamera), and the integrator's camera rig all read THIS one
+ *  definition — it lives here, in the leaf tuning module, so the pure
+ *  game chain (room-doors above all) never has to import the renderer
+ *  tuning lane (tuning/render re-exports it for the render side). */
+export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
+
+/* ------------------------------------------------------------------ */
 /* Room orientation (the door-side rule — ONE derivation, every        */
 /* consumer shares it).                                                */
 /* ------------------------------------------------------------------ */

@@ -201,7 +201,6 @@ import {
 import { skinForSlice, skinLightFixture } from "@/lib/game/skins";
 import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
 import {
-  kitsFor,
   planArea,
   stageInteriorKits,
   type StagedKitPiece,
@@ -255,8 +254,6 @@ import {
   ENTRANCE_DEPTH,
   GROUND_SEGMENTS,
   GROUND_SEGMENTS_MAX,
-  HERO_CLEAR,
-  HERO_SCALE,
   INLAY_BAND_WIDTH,
   INLAY_LIFT,
   INLAY_MIN_SPAN,
@@ -273,7 +270,6 @@ import {
   LAMP_SHADE_Y,
   LIGHT_REGISTER_TINTS,
   LIGHT_REGISTER_WEIGHTS,
-  LONE_PROB,
   MEZZANINE_DECK_Y,
   MEZZANINE_DEPTH,
   MEZZANINE_HEADROOM,
@@ -306,12 +302,9 @@ import {
   PLATFORM_MIN_RUN,
   PLATFORM_RAIL_HEIGHT,
   PLATFORM_STEP_DEPTH,
-  PROP_COUNT,
   PROP_DOOR_DEPTH,
   PROP_DOOR_HALF,
   PROP_SCALE_EXP,
-  ROCK_DIVISOR,
-  ROCK_MIN,
   ROOM_DOOR_CLEAR_DEPTH,
   ROOM_DOOR_CLEAR_HALF,
   ROOM_DOOR_ROW_DEPTH,
@@ -352,9 +345,6 @@ import {
   SPACE_FADE_S,
   STRUCTURE_MIN_EXTENT,
   TILE_NORMAL_SCALE,
-  TREE_DIVISOR,
-  TREE_MIN,
-  WALL_CLEARANCE,
   WALL_SILL_HEIGHT,
   WATER_ROUGHNESS,
   WATER_Y,
@@ -2220,123 +2210,6 @@ function WaterRill({
   );
 }
 
-/** One prop placement in the group's canonical local frame. */
-interface Placement {
-  x: number;
-  y: number;
-  z: number;
-  scale: number;
-  rotX: number;
-  rotY: number;
-  rotZ: number;
-}
-
-/**
- * Draw one scatter candidate: clustered around a seeded composition center
- * (with a LONE_PROB fraction of uniform draws — a solitary tree far from
- * any grouping reads as placed, not as leftover), uniform when the room
- * has no clusters. Positions live in the plan's (scaled) local frame.
- */
-function drawCandidate(
-  rng: () => number,
-  plan: RoomPlan,
-  comp: Composition,
-  edge: number,
-): { x: number; z: number } {
-  if (comp.clusters.length > 0 && rng() >= LONE_PROB) {
-    const c = comp.clusters[Math.floor(rng() * comp.clusters.length)];
-    // Triangular offsets (sum of two uniforms) concentrate near the center.
-    return {
-      x: c.x + (rng() + rng() - 1) * c.radius,
-      z: c.z + (rng() + rng() - 1) * c.radius,
-    };
-  }
-  return {
-    x: (rng() * 2 - 1) * Math.max(0.1, plan.width / 2 - edge),
-    z: edge + rng() * Math.max(0.1, plan.extent - edge * 2),
-  };
-}
-
-/** Shared placement rules: inside the walkable footprint, out of the
- *  doorway strip, off every strand door's approach strip (B.11), off the
- *  cleared path, and clear of the hero's clearing. */
-function candidateOk(
-  plan: RoomPlan,
-  comp: Composition,
-  x: number,
-  z: number,
-  edge: number,
-  heroClear: number,
-  doors: readonly RoomDoorPlacement[],
-): boolean {
-  if (!planContains(plan, x, z, edge)) return false;
-  if (Math.abs(x) < ENTRANCE_CLEAR_RADIUS && z < ENTRANCE_DEPTH) return false;
-  if (doors.length > 0 && inDoorApproach(x, z, doors)) return false;
-  if (distToPath(comp, x, z) < comp.pathHalf) return false;
-  if (heroClear > 0 && Math.hypot(x - comp.hero.x, z - comp.hero.z) < heroClear) {
-    return false;
-  }
-  return true;
-}
-
-/**
- * Deterministic tree/rock scatter: count = max(minCount, round(density ·
- * extent² / divisor)) from the ORIGINAL (unscaled) tier — a colossal room
- * gets the same authored population, bigger and farther apart — positions
- * drawn from createRng(recipe.layoutSeed ^ salt), clustered around the
- * composition's centers, snapped to the shared terrainHeight of the SCALED
- * recipe view. Candidates outside the footprint, on the cleared path, in
- * the entrance strip, in a strand door's approach strip (B.11), or in the
- * water are rejected and redrawn (bounded
- * attempts guard the pathological case), so the placed count is exact.
- */
-function scatter(
-  recipe: SpaceRecipe,
-  scaled: SpaceRecipe,
-  density: number,
-  divisor: number,
-  minCount: number,
-  water: WaterRect | null,
-  plan: RoomPlan,
-  comp: Composition,
-  edge: number,
-  propScale: number,
-  salt: number,
-  doors: readonly RoomDoorPlacement[],
-): Placement[] {
-  if (density <= 0) return [];
-  // Counts come from the unscaled tier: the room's population is authored
-  // at human scale, then the scale notation stretches the space it lives in.
-  const baseExtent = recipe.size.extent;
-  const count = Math.max(
-    minCount,
-    Math.round((density * baseExtent * baseExtent) / divisor),
-  );
-  const rng = createRng((recipe.layoutSeed ^ salt) >>> 0);
-  const out: Placement[] = [];
-  const heroClear = HERO_CLEAR * propScale;
-  const maxAttempts = count * 50 + 200;
-  let attempts = 0;
-  while (out.length < count && attempts < maxAttempts) {
-    attempts += 1;
-    const { x: lx, z: lz } = drawCandidate(rng, plan, comp, edge);
-    if (!candidateOk(plan, comp, lx, lz, edge, heroClear, doors)) continue;
-    if (water && insideRect(lx, lz, water, 0.5)) {
-      continue;
-    }
-    out.push({
-      x: lx,
-      y: terrainHeight(scaled, lx, lz),
-      z: lz,
-      scale: (0.8 + rng() * 0.5) * propScale,
-      rotX: 0,
-      rotY: rng() * Math.PI * 2,
-      rotZ: 0,
-    });
-  }
-  return out;
-}
-
 /** Plan dims shorthand. */
 function dims(recipe: SpaceRecipe): { extent: number; width: number } {
   return { extent: recipe.size.extent, width: recipe.width };
@@ -2676,123 +2549,6 @@ function FloorParquet({
   );
 }
 
-/** Instanced trees: one trunk + one canopy mesh sharing the same
- *  placements. Matrices are written on mount and then swayed imperatively
- *  every frame (phase-offset gentle rotation); both instanced meshes are
- *  disposed on cleanup. */
-function TreeInstances({
-  placements,
-  canopyColor,
-}: {
-  placements: Placement[];
-  canopyColor: THREE.Color;
-}) {
-  const trunkRef = useRef<THREE.InstancedMesh>(null);
-  const canopyRef = useRef<THREE.InstancedMesh>(null);
-  const dummy = useMemo(() => new THREE.Object3D(), []);
-
-  useLayoutEffect(() => {
-    const trunk = trunkRef.current;
-    const canopy = canopyRef.current;
-    if (!trunk || !canopy) return;
-    placements.forEach((p, i) => {
-      dummy.rotation.set(0, p.rotY, 0);
-      dummy.scale.setScalar(p.scale);
-      dummy.position.set(p.x, p.y + 0.7 * p.scale, p.z);
-      dummy.updateMatrix();
-      trunk.setMatrixAt(i, dummy.matrix);
-      dummy.position.set(p.x, p.y + 1.9 * p.scale, p.z);
-      dummy.updateMatrix();
-      canopy.setMatrixAt(i, dummy.matrix);
-    });
-    trunk.instanceMatrix.needsUpdate = true;
-    canopy.instanceMatrix.needsUpdate = true;
-    return () => {
-      trunk.dispose();
-      canopy.dispose();
-    };
-  }, [placements, dummy]);
-
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
-    const trunk = trunkRef.current;
-    const canopy = canopyRef.current;
-    if (!trunk || !canopy) return;
-    placements.forEach((p, i) => {
-      const sway = Math.sin(t * 0.6 + i * 1.7) * 0.03;
-      dummy.rotation.set(0, p.rotY, sway * 0.4);
-      dummy.scale.setScalar(p.scale);
-      dummy.position.set(p.x, p.y + 0.7 * p.scale, p.z);
-      dummy.updateMatrix();
-      trunk.setMatrixAt(i, dummy.matrix);
-      dummy.rotation.set(0, p.rotY, sway);
-      dummy.position.set(p.x, p.y + 1.9 * p.scale, p.z);
-      dummy.updateMatrix();
-      canopy.setMatrixAt(i, dummy.matrix);
-    });
-    trunk.instanceMatrix.needsUpdate = true;
-    canopy.instanceMatrix.needsUpdate = true;
-  });
-
-  return (
-    <>
-      <instancedMesh
-        ref={trunkRef}
-        args={[undefined, undefined, placements.length]}
-        frustumCulled={false}
-        castShadow
-        receiveShadow
-      >
-        <cylinderGeometry args={[0.14, 0.2, 1.4, 6]} />
-        <meshStandardMaterial color="#6b4f3a" roughness={1} flatShading />
-      </instancedMesh>
-      <instancedMesh
-        ref={canopyRef}
-        args={[undefined, undefined, placements.length]}
-        frustumCulled={false}
-        castShadow
-        receiveShadow
-      >
-        <coneGeometry args={[0.85, 1.7, 6]} />
-        <meshStandardMaterial color={canopyColor} roughness={1} flatShading />
-      </instancedMesh>
-    </>
-  );
-}
-
-/** Instanced low-poly rocks (dodecahedra at 0.2–0.6 scale). */
-function RockInstances({ placements }: { placements: Placement[] }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null);
-
-  useLayoutEffect(() => {
-    const mesh = meshRef.current;
-    if (!mesh) return;
-    const dummy = new THREE.Object3D();
-    placements.forEach((p, i) => {
-      dummy.rotation.set(p.rotX, p.rotY, p.rotZ);
-      dummy.scale.setScalar(p.scale);
-      dummy.position.set(p.x, p.y + 0.35 * p.scale, p.z);
-      dummy.updateMatrix();
-      mesh.setMatrixAt(i, dummy.matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-    return () => mesh.dispose();
-  }, [placements]);
-
-  return (
-    <instancedMesh
-      ref={meshRef}
-      args={[undefined, undefined, placements.length]}
-      frustumCulled={false}
-      castShadow
-      receiveShadow
-    >
-      <dodecahedronGeometry args={[0.5, 0]} />
-      <meshStandardMaterial color="#8a8d90" roughness={1} flatShading />
-    </instancedMesh>
-  );
-}
-
 /** Motif prop kinds — every archetype has at least three (the flat
  *  interiors are furnished by kits instead; see lib/game/kits.ts and the
  *  furniture memo below). */
@@ -2916,40 +2672,8 @@ type MotifKind =
   | "swingframe"
   | "swingseat";
 
-const MOTIF_KINDS: Record<ArchetypeId, readonly MotifKind[]> = {
-  pool: ["ladder", "board", "lounger", "ring"],
-  forest: ["log", "mushroom", "lantern"],
-  meadow: ["fence", "flowers", "bench"],
-  plains: ["lonetree", "cairn", "signpost"],
-  ocean: ["buoy", "driftwood"],
-  lake: ["rowboat", "lantern", "driftwood"],
-  beach: ["umbrella", "beachball", "sandcastle", "shell"],
-  snowfield: ["snowman", "icestone", "log"],
-  "hotel-room": [],
-  "pool-hall": [],
-  library: [],
-  ballroom: [],
-  ducks: ["ring"],
-  cats: ["yarn", "cattree", "scratchpost"],
-  dogs: ["doghouse", "bone", "ball"],
-  balloons: ["giftbox"],
-};
-
-/** Furniture mixed into hybrid nature rooms — the "does not belong" gag. */
-const HYBRID_FURNITURE: readonly MotifKind[] = [
-  "bed",
-  "tv",
-  "sofa",
-  "floorlamp",
-  "desk",
-];
-
-/** Pool fixtures that belong ON the basin rim (they may overhang water). */
-function isPoolside(kind: MotifKind): boolean {
-  return kind === "ladder" || kind === "board";
-}
-
-/** One motif prop placement in the group's canonical local frame. */
+/** One placed prop in the group's canonical local frame — the shared shape
+ *  of kit-staged furniture pieces and the legacy furnishing paths. */
 interface PropPlacement {
   kind: MotifKind;
   x: number;
@@ -2961,107 +2685,6 @@ interface PropPlacement {
    *  ON a host piece (same x/z, lifted to the host's top). Carried to the
    *  probe mirror so probes can count traces without the scene graph. */
   trace?: boolean;
-}
-
-/**
- * Deterministic motif staging. The HERO comes first: one element from the
- * archetype's kinds, placed at the composition's far-third focal point at
- * HERO_SCALE — the thing you see when you walk in (it floats if the focal
- * point lands on water). The remaining PROP_COUNT[extent] props (counted
- * from the ORIGINAL tier, like the vegetation scatter) cluster around the
- * composition's centers. Obstacle rules: the doorway corridor
- * (|x| < 1.8, z < 3m), every strand door's approach strip (B.11), the
- * walk path, the hero's clearing, the plan
- * footprint, and the wall boxes are always off-limits; so is the water
- * rectangle, except poolside fixtures, which are placed ON its rim facing
- * the water instead. Snapped to the shared terrainHeight of the SCALED
- * recipe view; sizes carry the room's prop scale.
- */
-function scatterMotifs(
-  rng: () => number,
-  recipe: SpaceRecipe,
-  scaled: SpaceRecipe,
-  kinds: readonly MotifKind[],
-  water: WaterRect | null,
-  plan: RoomPlan,
-  comp: Composition,
-  edge: number,
-  propScale: number,
-  doors: readonly RoomDoorPlacement[],
-): PropPlacement[] {
-  if (kinds.length === 0) return [];
-  const { extent, width } = dims(scaled);
-  const out: PropPlacement[] = [];
-
-  // (a) The hero: far-third focal element, unmistakably the set piece.
-  const heroKind = kinds[Math.floor(rng() * kinds.length)];
-  const heroOnWater = water !== null && insideRect(comp.hero.x, comp.hero.z, water, 0);
-  out.push({
-    kind: heroKind,
-    x: comp.hero.x,
-    y: heroOnWater ? WATER_Y : terrainHeight(scaled, comp.hero.x, comp.hero.z),
-    z: comp.hero.z,
-    rotY: rng() * Math.PI * 2,
-    scale: (0.9 + rng() * 0.25) * HERO_SCALE * propScale,
-  });
-
-  // (b)+(c) The rest: clustered, off the cleared path, out of the hero's
-  // clearing — grouped placement reads as authored, uniform draws as noise.
-  const heroClear = HERO_CLEAR * propScale;
-  const count = PROP_COUNT[recipe.size.extent] ?? Math.max(3, Math.round(recipe.size.extent / 12));
-  const maxAttempts = count * 60 + 240;
-  let attempts = 0;
-  while (out.length < count + 1 && attempts < maxAttempts) {
-    attempts += 1;
-    const kind = kinds[Math.floor(rng() * kinds.length)];
-    let lx: number;
-    let lz: number;
-    if (isPoolside(kind) && water) {
-      // On the water rim: pick one of the three non-entrance sides, hug the
-      // edge (a slight overhang reads as hooks/board over the rim), clamped
-      // so the base stays just outside the perimeter wall.
-      const side = Math.floor(rng() * 3); // 0:+x 1:-x 2:far(+z)
-      const t = (rng() * 2 - 1) * Math.max(0.4, water.halfX - 0.8);
-      const clampX = width / 2 - ROOM_WALL_THICKNESS - 0.25;
-      const clampZ = extent - ROOM_WALL_THICKNESS - 0.25;
-      const offX = water.halfX + 0.3;
-      const offZ = water.halfZ + 0.3;
-      if (side === 0) {
-        lx = Math.min(offX, clampX);
-        lz = Math.min(Math.max(water.cz + t * (water.halfZ / Math.max(water.halfX, 0.01)), 0.6), clampZ);
-      } else if (side === 1) {
-        lx = -Math.min(offX, clampX);
-        lz = Math.min(Math.max(water.cz + t * (water.halfZ / Math.max(water.halfX, 0.01)), 0.6), clampZ);
-      } else {
-        lx = Math.min(Math.max(t, -clampX), clampX);
-        lz = Math.min(water.cz + offZ, clampZ);
-      }
-    } else {
-      ({ x: lx, z: lz } = drawCandidate(rng, plan, comp, edge));
-    }
-    if (Math.abs(lx) < PROP_DOOR_HALF && lz < PROP_DOOR_DEPTH) {
-      continue;
-    }
-    if (!candidateOk(plan, comp, lx, lz, isPoolside(kind) ? 0 : edge, heroClear, doors)) {
-      continue;
-    }
-    if (!isPoolside(kind) && water && insideRect(lx, lz, water, 0.3)) {
-      continue;
-    }
-    const rotY =
-      isPoolside(kind) && water
-        ? Math.atan2(water.cx - lx, water.cz - lz) // face the water center
-        : rng() * Math.PI * 2;
-    out.push({
-      kind,
-      x: lx,
-      y: terrainHeight(scaled, lx, lz),
-      z: lz,
-      rotY,
-      scale: (0.9 + rng() * 0.25) * propScale,
-    });
-  }
-  return out;
 }
 
 /**
@@ -8213,12 +7836,14 @@ export function SpaceScene({
   const { extent } = scaledRecipe.size;
   const width = scaledRecipe.width;
 
-  // v0.12 P3 — the biome skin this slice forces (skins.ts). null on the
-  // default path (every real memory slice, and any unknown id): every
-  // resolver below answers null and each call site keeps its legacy
-  // expression behind a `??` / branch — the default room renders
-  // pixel-for-pixel as before. A forced skin is a pure function of the
-  // slice id (A6), so the same slice always rebuilds the same world.
+  // v0.12 P3 — the biome skin this slice wears (skins.ts). The DEBUG FORCE
+  // (`dbg-skin:<id>`, alone or composed) wins; every other id resolves its
+  // WORLD ASSIGNMENT — the compiled archetype's skin — and an interior
+  // world answers null, the temperate baseline, so an interior room renders
+  // pixel-for-pixel as before (every resolver below answers null for it and
+  // each call site keeps its legacy expression behind a `??` / branch). A
+  // resolved skin is a pure function of the slice id (A6), so the same
+  // slice always rebuilds the same world.
   // The force reads the DOOR's id — the corridor-facing identity: the
   // recipe may carry the skin-stripped id (P3-b1), and the skin
   // must still recognise itself.
@@ -8295,10 +7920,6 @@ export function SpaceScene({
     () => composeRoom(seedId, plan, scaleFactor),
     [seedId, plan, scaleFactor],
   );
-  // Scatter clearances ride the prop scale: giant props need giant margins,
-  // dollhouse props keep their dollhouse clearances.
-  const scatterEdge = wallThick + WALL_CLEARANCE * propScale;
-
   // Crossfade machinery: capture every material once (the tree is static
   // per recipe), then scale opacity each frame toward the fade target.
   const rootRef = useRef<THREE.Group>(null);
@@ -8671,103 +8292,26 @@ export function SpaceScene({
     return anchors;
   }, [roomComposition, walls, plan, dir, extent, width, scaleFactor, wallThick, doorLayout]);
 
-  const trees = useMemo(
-    () =>
-      scatter(
-        recipe,
-        scaledRecipe,
-        spec.treeDensity,
-        TREE_DIVISOR,
-        TREE_MIN,
-        waterRect,
-        plan,
-        comp,
-        scatterEdge,
-        propScale,
-        0,
-        clearanceDoors,
-      ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors],
-  );
-  const rocks = useMemo(
-    () =>
-      scatter(
-        recipe,
-        scaledRecipe,
-        spec.rockDensity,
-        ROCK_DIVISOR,
-        ROCK_MIN,
-        waterRect,
-        plan,
-        comp,
-        scatterEdge,
-        propScale,
-        0x9e3779b9, // stream salt: rocks never share the trees' sequence
-        clearanceDoors,
-      ),
-    [recipe, scaledRecipe, spec, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors],
-  );
-
-  // v0.11 §3.1 N4: nature rooms draw from the nature kit deck — the same
-  // staging machine as the interiors, worldClass "nature". The pool biome
-  // is the one exception: its content IS the water, and it keeps its
-  // rim-anchored fixture scatter on the motif layer below. Computed once
-  // so the motif and furniture memos agree on which nature rooms kit.
-  const natureKitDeck = useMemo(
-    () =>
-      recipe.worldClass === "nature"
-        ? kitsFor("nature", recipe.archetype, recipe.size.extent)
-        : [],
-    [recipe],
-  );
-
-  // Motif layer: one dedicated "props" seed stream. The hero and motif
-  // props draw in a fixed order, so the whole layer is deterministic per
-  // recipe. Hybrids mix their biome's props with hotel furniture.
-  const motif = useMemo(() => {
-    // Nature rooms furnished by kits grow NO scattered motifs — the kit
-    // hero is the focal set piece (I5), and doubling it with a scattered
-    // hero would split the room's one focus. The pool biome (nature with
-    // an empty kit deck) keeps its rim fixtures here.
-    if (natureKitDeck.length > 0) return { props: [] as PropPlacement[] };
-    const rng = createRng(deriveSubSeed(WORLD_SEED, seedId, "props"));
-    const base = MOTIF_KINDS[recipe.archetype];
-    const kinds =
-      recipe.worldClass === "hybrid"
-        ? [...base, ...HYBRID_FURNITURE]
-        : base;
-    return {
-      props: scatterMotifs(
-        rng,
-        recipe,
-        scaledRecipe,
-        kinds,
-        waterRect,
-        plan,
-        comp,
-        scatterEdge,
-        propScale,
-        clearanceDoors,
-      ),
-    };
-  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors, seedId]);
-
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
-  // lib/game/kits.ts (the "furniture" stream). NATURE rooms run the same
-  // machine with the nature deck (§3.1 N4) — see the nature branch below —
-  // and WONDER rooms with the wonder deck (§3.1 N4): the dioramas' authored
-  // playthings keep the oversized accent rugs the legacy path seeded.
-  // The pool hall draws its deck from the module layer (§8): a COMPOSED
-  // pool room's modules furnish the deck with their own kits and the basin
-  // stays water-only — the old rim scatter now survives only on the legacy
-  // template path. The outdoor pool biome (a nature room with an empty
-  // nature deck) keeps its rim fixtures on the motif layer.
+  // lib/game/kits.ts (the "furniture" stream). NATURE and HYBRID rooms run
+  // the same machine with their world's biome skin (v0.12 P3 step three —
+  // the skin's curated decks REPLACE the archetype vocabulary; a hybrid's
+  // biome draws the same outdoor deck as its nature twin), and WONDER
+  // rooms with the wonder deck under their world's skin: the dioramas'
+  // authored playthings keep the oversized accent rugs the legacy path
+  // seeded. The pool hall draws its deck from the module layer (§8): a
+  // COMPOSED pool room's modules furnish the deck with their own kits and
+  // the basin stays water-only — the old rim scatter now survives only on
+  // the legacy template path. The outdoor pool biome is a nature room like
+  // any other now: the shallows skin's shore kits (jetty, reeds) furnish
+  // its rim through the same staging call.
   const furniture = useMemo(() => {
     if (
       recipe.worldClass !== "interior" &&
       recipe.worldClass !== "wonder" &&
-      !(recipe.worldClass === "nature" && natureKitDeck.length > 0)
+      recipe.worldClass !== "nature" &&
+      recipe.worldClass !== "hybrid"
     ) {
       return [];
     }
@@ -8783,13 +8327,17 @@ export function SpaceScene({
       scale: p.scale,
       trace: p.trace,
     });
-    if (recipe.worldClass === "nature") {
-      // §3.1 N4: the outdoor biomes are furnished by the NATURE kits —
-      // the same staging machine (hero far-third, side kits, clearances,
-      // the 35% 留白, the §4.4 trace), only the deck and the world class
-      // differ. Water biomes subtract their basin from the density area
-      // (the pool hall's discipline); the shore kits (jetty, reeds) draw
-      // their positions from the water rectangle inside staging.
+    if (recipe.worldClass === "nature" || recipe.worldClass === "hybrid") {
+      // §3.1 N4 + v0.12 P3 step three: the outdoor rooms are furnished by
+      // the staging machine with their world's skin — the skin's decks own
+      // the draw vocabulary (a world-owning skin REPLACES the archetype
+      // gate; a null skin — only a stale pin — falls back to the
+      // archetype's own nature deck through the same gate as ever). A
+      // hybrid IS its biome's world: the "furniture that does not belong"
+      // gag retired along with the scatter path. Water biomes subtract
+      // their basin from the density area (the pool hall's discipline);
+      // the shore kits (jetty, reeds) draw their positions from the water
+      // rectangle inside staging.
       const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
       const waterArea = waterRect
         ? (waterRect.halfX * 2 * waterRect.halfZ * 2) /
@@ -8807,7 +8355,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
-        // v0.12 P3: the forced biome skin — §6.2 slot overrides and the
+        // v0.12 P3: the world's biome skin — §6.2 slot overrides and the
         // skin's curated decks ride in through the staging machine.
         skin,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
@@ -8916,6 +8464,11 @@ export function SpaceScene({
       // stay (placed first, as the pool hall's fixtures do), and the
       // animals remain their own layer below. Water rooms (the duck pond)
       // subtract their basin from the density area like the nature branch.
+      // P3 step three: the wonder room WEARS its world's skin (the render
+      // lane skins floor/walls/outside/fog) but the skin stops at the
+      // view — the diorama's authored playthings are its structure, so no
+      // skin rides into THIS staging call (the deck stays the wonder
+      // vocabulary; describe-room's enumeration mirrors exactly).
       const rugs = furnishInterior(
         rng,
         scaledRecipe,
@@ -8933,7 +8486,6 @@ export function SpaceScene({
         rng,
         worldClass: "wonder",
         archetype: recipe.archetype,
-        skin,
         plan,
         comp,
         baseExtent: recipe.size.extent,
@@ -8946,8 +8498,10 @@ export function SpaceScene({
       });
       return [...rugs, ...kits.map(toPlacement)];
     }
-    return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
-  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
+    // Unreachable: the gate above covers every world class. Kept so the
+    // memo's return type stays PropPlacement[] without a cast.
+    return [];
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
 
 
   // Internal structure (L/XL only, on the scaled tier): partition or
@@ -9895,30 +9449,6 @@ export function SpaceScene({
         >
           <boxGeometry args={[s.sizeX, basinCurbs.height, s.sizeZ]} />
         </mesh>
-      ))}
-
-      {trees.length > 0 && (
-        <TreeInstances placements={trees} canopyColor={canopyColor} />
-      )}
-      {rocks.length > 0 && <RockInstances placements={rocks} />}
-
-      {/* Motif props: seeded low-poly set pieces, kept clear of the doorway
-          corridor, the walls, and (except poolside fixtures) the water. */}
-      {motif.props.map((p, i) => (
-        <group
-          key={i}
-          position={[p.x, p.y, p.z]}
-          rotation={[0, p.rotY, 0]}
-          scale={p.scale}
-        >
-          <Shadowed>
-            <MotifProp
-              kind={p.kind}
-              accent={recipe.palette.accent}
-              canopyColor={canopyColor}
-            />
-          </Shadowed>
-        </group>
       ))}
 
       {/* Interior furnishing: kit-staged groupings (plus the pool hall's

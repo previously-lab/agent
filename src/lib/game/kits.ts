@@ -1274,8 +1274,10 @@ export interface KitStaging {
    *  before blueprints. Modules WITHOUT a schematic and every room with
    *  an absent/empty list stage byte-for-byte as today. */
   schematics?: readonly SchematicPlacement[];
-  /** The v0.12 P3 biome skin this room is forced into (skins.ts
-   *  skinForSlice — only a `dbg-skin:` debug slice id resolves one).
+  /** The v0.12 P3 biome skin this room wears (skins.ts skinForSlice —
+   *  the `dbg-skin:` debug force or the P3-step-three world assignment:
+   *  a real slice resolves its skin from its compiled archetype, and an
+   *  interior world resolves null, the temperate baseline).
    *  Consumed two ways, both explicit:
    *  (1) handed to resolveSchematic, where a skin-declared slot override
    *      (§6.2) REPLACES the slot's seeded kind — anchor, facing and

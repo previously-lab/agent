@@ -29,7 +29,9 @@ export const SCENE_COLORS = VOID_COLORS;
  *  still frames ~7 dense bays (6 m pitch) down to ~2 sparse ones (24 m
  *  pitch, corridor-pitch.ts) per screen. */
 export const CAMERA_ZOOM = 44;
-export const CAM_OFFSET = { x: -12, y: 16, z: 12 };
+/** The camera offset itself lives in ./room (CAM_OFFSET) — the leaf module
+ *  the pure game chain reads; re-exported here for the render lane. */
+export { CAM_OFFSET } from "./room";
 /** Follow smoothing: factor = 1 − e^(−rate·dt). */
 export const CAMERA_LERP_RATE = 6;
 /** Wormhole hand-off (doc B.11): when a strand door teleports the player

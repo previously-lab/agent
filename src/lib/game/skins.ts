@@ -40,17 +40,30 @@
  *
  * DEBUG FORCE (the P3 acceptance switch, debug-slice.ts): `dbg-skin:<id>`
  * in a slice id forces that skin — alone on the seeded room, or composed
- * with any unit pin, e.g. `dbg-skin:dune+dbg-m:living`. The default path
- * is untouched: skinForSlice answers null for every real memory slice, and
- * A6 holds — a forced skin is a pure function of the slice id, so the same
- * slice always rebuilds the same room in the same world.
+ * with any unit pin, e.g. `dbg-skin:dune+dbg-m:living`.
  *
- * Pure module: no three.js, no React, no seeding, no wall clock.
+ * THE WORLD ASSIGNMENT (P3 step three — 皮肤成为"世界"): a REAL slice
+ * resolves its skin from its world. skinForSlice compiles the slice's
+ * recipe (space-recipe.ts — the same pure derivation the renderer builds
+ * the room from) and reads THE ARCHETYPE → SKIN TABLE below. Who decides:
+ * the ARCHETYPE decides — §3's 环境层 belongs to the world, the structure
+ * layer never asks what skin it wears. Interior archetypes are ABSENT from
+ * the table: an interior world IS the temperate baseline, and the baseline
+ * ≡ no skin (无皮肤 ≡ 温带), so interior rooms answer null and every legacy
+ * expression stays in force — zero change by construction, not by
+ * convention. A6 holds two ways: the recipe is a pure function of the
+ * slice id, and the table is data — same slice ⇒ same world ⇒ same skin,
+ * on any machine. (compileSpaceRecipe is pure; this module stays free of
+ * three.js, React, and the wall clock — the only seeding in the game.)
+ *
+ * Pure module: no three.js, no React, no wall clock.
  */
 
 import type { KitKind } from "./kits";
 import type { LightRegister } from "./room-modules";
-import { parseDebugSkin } from "./debug-slice";
+import type { ArchetypeId } from "./space-types";
+import { parseDebugSkin, debugSliceIdWithoutSkin } from "./debug-slice";
+import { compileSpaceRecipe } from "./space-recipe";
 import { MODULE_LIGHT_FIXTURES } from "./tuning/room";
 
 /* ------------------------------------------------------------------ */
@@ -492,15 +505,55 @@ export function isSkinId(id: string): id is SkinId {
   return skinById(id) !== undefined;
 }
 
-/** THE consumer entry point: the skin a slice id forces, or null on the
- *  default path — every real memory slice answers null (zero change),
- *  only a `dbg-skin:<id>` debug id resolves. Unknown ids answer null
- *  too, so a stale pin degrades to the legacy room, never to a crash.
- *  Pure in the slice id (A6): same slice ⇒ same skin, any machine. */
+/** THE ARCHETYPE → SKIN TABLE — the world assignment (P3 step three).
+ *  Every NON-INTERIOR archetype maps to the skin of its world; interior
+ *  archetypes stay ABSENT — an interior room is the temperate baseline and
+ *  answers null (无皮肤 ≡ 温带, zero change by construction). Nature biomes
+ *  draw the landscape they ARE: the dry open biomes read dune, the green
+ *  ones grove, the deep wet ones moss/shallows. Wonder dioramas take a
+ *  world's skin too — the duck pond is the flooded room, the play dioramas
+ *  stand in the grass. One table, looked up by the compiled archetype:
+ *  same slice ⇒ same world ⇒ same skin (A6).
+ *
+ *  (Authored-note: no snow skin exists in the catalogue — snowfield takes
+ *  moss, the coldest wet end, until a snow world is authored.) */
+const SKIN_BY_ARCHETYPE: Partial<Record<ArchetypeId, SkinId>> = {
+  // nature — the biome is its world's skin (§3: 沙漠构成的客厅…).
+  meadow: "grove",
+  plains: "dune",
+  forest: "moss",
+  pool: "shallows",
+  ocean: "shallows",
+  lake: "shallows",
+  beach: "dune",
+  snowfield: "moss", // ← no snow skin yet; the wet-cold end stands in.
+  // wonder — the diorama's world is skinned like any room's.
+  ducks: "shallows", // the pond
+  cats: "grove",
+  dogs: "grove",
+  balloons: "grove",
+};
+
+/** The skin a WORLD wears — the pure half of the assignment (the table).
+ *  Interior archetypes are absent: null, the temperate baseline. */
+export function skinForArchetype(archetype: ArchetypeId): BiomeSkin | null {
+  const id = SKIN_BY_ARCHETYPE[archetype];
+  return id ? (skinById(id) ?? null) : null;
+}
+
+/** THE consumer entry point: the skin a slice id resolves. The DEBUG FORCE
+ *  wins (`dbg-skin:<id>`, alone or composed) — and a STALE forced id
+ *  degrades to null, never to a crash. Otherwise the world assignment:
+ *  the slice's recipe compiles from its SKIN-STRIPPED id
+ *  (debug-slice.ts — the strip never perturbs the room's own streams), and
+ *  the compiled ARCHETYPE decides the skin through the table above.
+ *  Interior worlds resolve null — temperate ≡ no skin — so the default
+ *  interior path is byte-for-byte today's. Pure in the slice id (A6). */
 export function skinForSlice(sliceId: string): BiomeSkin | null {
-  const id = parseDebugSkin(sliceId);
-  if (id === null) return null;
-  return skinById(id) ?? null;
+  const forced = parseDebugSkin(sliceId);
+  if (forced !== null) return skinById(forced) ?? null;
+  const recipe = compileSpaceRecipe(debugSliceIdWithoutSkin(sliceId));
+  return skinForArchetype(recipe.archetype);
 }
 
 /** The slot-4 fixture resolved — the register's MODULE_LIGHT_FIXTURES

@@ -12,9 +12,11 @@
  *  5. the five skins are pairwise visually distinguishable (same tuple
  *     never twice; window skies, fog tints, floor/wall kinds, silhouettes
  *     and horizons all distinct), each with a day AND a night state;
- *  6. A6: same slice (+ same skin) ⇒ same skin / same outline;
- *  7. the debug prefix composes with `dbg-m:` and leaves the default path
- *     byte-for-byte untouched.
+ *  6. A6: same slice ⇒ same skin / same outline;
+ *  7. the debug prefix composes with `dbg-m:` and overrides the WORLD
+ *     ASSIGNMENT (P3 step three): a real slice resolves its skin from its
+ *     compiled archetype — interior worlds answer null (the temperate
+ *     baseline), nature/wonder worlds resolve their table entry.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -284,7 +286,11 @@ describe("debug force: dbg-skin prefix (P3 acceptance switch)", () => {
     expect(skinForSlice(recipe.sliceId)?.id).toBe("dune");
   });
 
-  it("answers null on the default path — real slices never wear a skin", () => {
+  it("interior pins, interior real slices and stale forced ids answer null — the temperate baseline", () => {
+    // P3 step three: EVERY slice resolves its world's skin — and an
+    // interior world IS the temperate baseline, which answers null
+    // (无皮肤 ≡ 温带, zero change by construction). A stale forced id
+    // degrades to null too, never to a crash.
     for (const id of [
       "2026-09-15-0746",
       "core",
@@ -295,6 +301,55 @@ describe("debug force: dbg-skin prefix (P3 acceptance switch)", () => {
     ]) {
       expect(skinForSlice(id), id).toBeNull();
     }
+  });
+});
+
+describe("world assignment — real slices wear their world's skin (P3 step three)", () => {
+  // Scan deterministic probe ids for one slice per non-interior archetype
+  // (compileSpaceRecipe hashes any string — the scan is A6-pure).
+  function slicePerArchetype(): Record<string, string> {
+    const seen: Record<string, string> = {};
+    for (let i = 0; i < 3000; i++) {
+      const id = `skin-world-${i}`;
+      const r = compileSpaceRecipe(id);
+      if (r.worldClass === "interior") continue;
+      if (!seen[r.archetype]) seen[r.archetype] = id;
+    }
+    return seen;
+  }
+
+  it("every non-interior archetype resolves its world skin, deterministically (A6)", () => {
+    const EXPECTED: Record<string, string> = {
+      meadow: "grove",
+      plains: "dune",
+      forest: "moss",
+      pool: "shallows",
+      ocean: "shallows",
+      lake: "shallows",
+      beach: "dune",
+      snowfield: "moss",
+      ducks: "shallows",
+      cats: "grove",
+      dogs: "grove",
+      balloons: "grove",
+    };
+    const seen = slicePerArchetype();
+    for (const [archetype, skinId] of Object.entries(EXPECTED)) {
+      const id = seen[archetype];
+      expect(id, `probe for ${archetype}`).toBeDefined();
+      // Same slice ⇒ same skin object, any machine, any call order:
+      expect(skinForSlice(id!), `${archetype} via ${id}`).toBe(skinById(skinId));
+      expect(skinForSlice(id!)).toBe(skinForSlice(id!));
+      // Same slice ⇒ same world: the recipe underneath is unchanged.
+      expect(compileSpaceRecipe(id!).archetype).toBe(archetype);
+    }
+  });
+
+  it("the debug force still wins over the world assignment", () => {
+    expect(skinForSlice("dbg-skin:dune+dbg-m:living")?.id).toBe("dune");
+    // Even on a unit pin whose world would assign a different skin:
+    expect(skinForSlice("dbg-skin:temperate+dbg-a:meadow")?.id).toBe("temperate");
+    expect(skinForSlice("dbg-skin:grove+dbg-a:ducks")?.id).toBe("grove");
   });
 });
 

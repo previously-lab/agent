@@ -17,8 +17,10 @@
  *  4. THE TRANSPARENCY BUDGET HOLDS AT THE RENDER GATE: only glass /
  *     water-wall kinds get alpha, and only when the data declared an
  *     opacity < 1 — a forged opaque kind carrying opacity is refused;
- *  5. WALK SPEED: wade skins answer < 1, every dry skin and every real
- *     slice answers exactly 1.
+ *  5. WALK SPEED: wade skins answer < 1 — through the debug force AND
+ *     through the P3-step-three world assignment (a real pool/lake/ocean/
+ *     duck slice wades slower); dry skins and every interior (temperate)
+ *     slice answer exactly 1.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -40,11 +42,20 @@ import {
   composeRoom,
   roomPlanFor,
   scaledRecipeFor,
+  wallSegmentsFor,
 } from "@/lib/game/room-plan";
 import {
   compositionForRecipe,
   compositionKitZonesFor,
+  compositionTemplateFor,
 } from "@/lib/game/room-modules";
+import {
+  doorAffordanceFor,
+  resolveRoomTemplate,
+  templatePlanFor,
+  templateZonesFor,
+} from "@/lib/game/room-templates";
+import { doorCapacityFor } from "@/lib/game/room-doors";
 import { schematicPlacementsFor } from "@/lib/game/room-schematic";
 import { stageInteriorKits, planArea } from "@/lib/game/kits";
 import { roomTerminalFor } from "@/lib/game/anchor";
@@ -86,7 +97,10 @@ describe("default path: zero change", () => {
     expect(skinWallAlpha(null)).toBeNull();
   });
 
-  it("real memory slices and plain unit pins never wear a skin", () => {
+  it("interior real slices and plain unit pins walk at full speed — the temperate baseline answers 1", () => {
+    // P3 step three: every slice resolves its world's skin, and an interior
+    // world is the temperate baseline (null) — so these answer the legacy
+    // constant exactly. A stale/unknown skin id degrades the same way.
     for (const id of [
       "2026-09-15-0746",
       "core",
@@ -99,6 +113,29 @@ describe("default path: zero change", () => {
     ]) {
       expect(skinWalkSpeedScale(id), id).toBe(1);
     }
+  });
+
+  it("a real water world walks slower — the wade skin arrives through the world assignment", () => {
+    // Scan for a slice whose world is a wade biome (pool / lake / ocean /
+    // ducks) — the assignment, not a debug force, puts the shallows on it.
+    let wade: string | null = null;
+    for (let i = 0; i < 3000 && wade === null; i++) {
+      const id = `render-wade-${i}`;
+      const r = compileSpaceRecipe(id);
+      if (
+        r.worldClass !== "interior" &&
+        skinForSlice(id)?.floor.walk === "wade"
+      ) {
+        wade = id;
+      }
+    }
+    expect(wade).not.toBeNull();
+    const skin = skinForSlice(wade!)!;
+    expect(skin.floor.walk).toBe("wade");
+    expect(skinWalkSpeedScale(wade!)).toBe(skin.floor.speed);
+    expect(skinWalkSpeedScale(wade!)).toBeLessThan(1);
+    // A6: the same slice answers the same speed on every read.
+    expect(skinWalkSpeedScale(wade!)).toBe(skinWalkSpeedScale(wade!));
   });
 });
 
@@ -409,15 +446,47 @@ function renderStaging(id: string): { kit: string; pieces: string[] }[] {
   const scaleFactor = scale.factor;
   const propScale = Math.pow(scaleFactor, PROP_SCALE_EXP);
   const wallThick = ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35);
+  const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
+  // The render lane's template resolution (space.tsx roomTemplateForDoorCount
+  // for a doorless mount, restated with the same pure calls describe-room
+  // mirrors): a composition folds itself; every other class draws from the
+  // §7 catalogue by measured selection.
+  const composition = compositionForRecipe(recipe, WORLD_SEED, 0);
+  const template = composition
+    ? compositionTemplateFor(composition)
+    : resolveRoomTemplate(
+        seedId,
+        recipe.worldClass,
+        recipe.archetype,
+        recipe.size.extent,
+        0,
+        WORLD_SEED,
+        (t) => {
+          const p = roomPlanFor(
+            seedId,
+            scaled.width,
+            scaled.size.extent,
+            bay,
+            WORLD_SEED,
+            templatePlanFor(t),
+          );
+          return doorCapacityFor(
+            p,
+            wallSegmentsFor(p, wallThick),
+            null,
+            doorAffordanceFor(t),
+          );
+        },
+      );
   const plan = roomPlanFor(
     seedId,
     scaled.width,
     scaled.size.extent,
-    COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+    bay,
     WORLD_SEED,
+    template ? templatePlanFor(template) : undefined,
   );
   const comp = composeRoom(seedId, plan, scaleFactor);
-  const composition = compositionForRecipe(recipe, WORLD_SEED, 0);
   const water = waterRectFor(scaled);
   const rng = createRng(deriveSubSeed(WORLD_SEED, seedId, "furniture"));
   const kitIds = composition
@@ -434,12 +503,33 @@ function renderStaging(id: string): { kit: string; pieces: string[] }[] {
   }));
   const staged = stageInteriorKits({
     rng,
+    // The render lane's class contract: nature AND hybrid stage on the
+    // outdoor machine ("nature"), wonder on the wonder machine, interior
+    // on the default.
+    worldClass:
+      recipe.worldClass === "nature" || recipe.worldClass === "hybrid"
+        ? "nature"
+        : recipe.worldClass,
     archetype: recipe.archetype,
-    skin: skinForSlice(id),
+    // The render lane feeds the skin to staging for interior and
+    // nature/hybrid rooms; WONDER rooms wear their skin's VIEW only — the
+    // diorama keeps its authored deck, so no skin rides into the wonder
+    // staging call (space.tsx's wonder branch, restated).
+    skin: recipe.worldClass === "wonder" ? null : skinForSlice(id),
     plan,
     comp,
     baseExtent: recipe.size.extent,
-    baseArea: planArea(plan) / (scaleFactor * scaleFactor),
+    // Water biomes subtract their basin from the density area (the
+    // renderer's nature/wonder/pool-hall branches); dry interiors don't
+    // (their water is null anyway, so the two rules agree there).
+    baseArea:
+      recipe.worldClass !== "interior" || recipe.archetype === "pool-hall"
+        ? Math.max(
+            0,
+            planArea(plan) / (scaleFactor * scaleFactor) -
+              (water ? (water.halfX * 2 * water.halfZ * 2) / (scaleFactor * scaleFactor) : 0),
+          )
+        : planArea(plan) / (scaleFactor * scaleFactor),
     propScale,
     wallThick,
     water,
@@ -447,7 +537,11 @@ function renderStaging(id: string): { kit: string; pieces: string[] }[] {
     kitIds,
     schematics,
     openFields,
-    zones: composition ? compositionKitZonesFor(composition, plan) : undefined,
+    zones: composition
+      ? compositionKitZonesFor(composition, plan)
+      : template
+        ? templateZonesFor(template, plan)
+        : undefined,
     heightAt: (x: number, z: number) => terrainHeight(scaled, x, z),
   });
   const byPlacement = new Map<number, { kit: string; pieces: string[] }>();
@@ -478,6 +572,27 @@ describe("P3 step two: the render feeds the skin to staging", () => {
       expect(outline, `${id}: the outline furnishes`).not.toBeNull();
       expect(renderStaging(id), id).toEqual(outline);
     }
+  });
+
+  it("描述 = 画面 holds on the world-assigned rooms too (nature pin, wonder pin, hybrid slice)", () => {
+    // P3 step three: a nature room furnishes from its world's skin, a
+    // hybrid furnishes on its biome's outdoor machine, and a wonder room
+    // keeps its authored deck under the view skin — both lanes enumerate
+    // the same pieces either way.
+    let hybrid: string | null = null;
+    for (let i = 0; i < 3000 && hybrid === null; i++) {
+      const id = `render-hybrid-${i}`;
+      if (compileSpaceRecipe(id).worldClass === "hybrid") hybrid = id;
+    }
+    expect(hybrid).not.toBeNull();
+    for (const id of ["dbg-a:forest", "dbg-a:meadow", "dbg-a:ducks", hybrid!]) {
+      const outline = describeRoom(id).furnishing;
+      expect(outline, `${id}: the outline furnishes`).not.toBeNull();
+      expect(renderStaging(id), id).toEqual(outline);
+    }
+    // …and the worlds diverge where the assignment says they do.
+    expect(describeRoom("dbg-a:forest").skin?.id).toBe("moss");
+    expect(describeRoom("dbg-a:ducks").skin?.id).toBe("shallows");
   });
 
   it("the skin visibly changes the staged world (the wiring is live)", () => {

@@ -47,7 +47,11 @@
  * the render draws — and the same skin object also FEEDS the staging
  * call below (§6.2 overrides replace the slot kinds, the skin's decks
  * take over the draw), so the furnishing enumeration lists exactly the
- * pieces a skinned render stages. A THIRD restated rule is the roomId
+ * pieces a skinned render stages. WONDER rooms are the one exception,
+ * restated from the renderer's wonder branch: the skin stops at the VIEW
+ * there — the diorama's authored deck is its structure, so the staging
+ * call below receives NO skin for a wonder room (deck takeover never
+ * displaces the playthings). A THIRD restated rule is the roomId
  * STRIP (debug-slice.ts debugSliceIdWithoutSkin): every seeded derivation
  * below runs on the skin-stripped id, so a forced skin never perturbs
  * the room's own streams (无皮肤 ≡ 温带) — the renderer's skin lane must
@@ -100,7 +104,7 @@ import {
   hostableWallsFor,
   placeRoomDoors,
 } from "./room-doors";
-import { kitsFor, planArea, stageInteriorKits, type KitKind } from "./kits";
+import { planArea, stageInteriorKits, type KitKind } from "./kits";
 import { schematicPlacementsFor } from "./room-schematic";
 import { terrainHeight, waterRectFor } from "./terrain";
 import {
@@ -202,10 +206,13 @@ export interface RoomDescription {
   features: { kind: FeatureKind; at: WallRole | "floor" }[];
   /** The water rect (pool / lake / sea), scaled meters — null when dry. */
   water: { width: number; depth: number; coverage: number } | null;
-  /** The v0.12 P3 biome skin this room is forced into — null on the
-   *  default path (skins.ts skinForSlice: only a `dbg-skin:` debug id
-   *  resolves). Same pure source the renderer reads, so the outline can
-   *  never describe a different world than the render draws. */
+  /** The v0.12 P3 biome skin this room wears — the world assignment for a
+   *  real slice (skins.ts: the compiled archetype's skin; interior worlds
+   *  resolve null, the temperate baseline) or the `dbg-skin:` debug force.
+   *  Same pure source the renderer reads, so the outline can never describe
+   *  a different world than the render draws. WONDER rooms wear their
+   *  skin's VIEW (floor/walls/outside/fog) but keep their authored deck —
+   *  the diorama's playthings are its structure, not its world's. */
   skin: {
     id: string;
     floor: SkinFloorKind;
@@ -217,14 +224,14 @@ export interface RoomDescription {
     /** §6.2 environment slot overrides (role → environment kind). */
     overrides: { role: string; feature: KitKind }[];
   } | null;
-  /** Vegetation/rock presence, from the archetype's densities. */
-  scatter: { trees: boolean; rocks: boolean };
   /** Interior furnishing staged by kits.ts — the EXACT kit placements the
    *  renderer builds (hero first). Present for interior rooms (except the
    *  pool hall, whose water-anchored legacy fixtures live outside the pure
-   *  chain), for nature rooms whose biome draws the nature deck, and for
-   *  wonder rooms (the rugs and animals stay outside the pure chain — see
-   *  the module header). Null everywhere else. */
+   *  chain), for EVERY nature and hybrid room (the world's skin owns the
+   *  draw vocabulary; a water biome furnishes from its skin's shore kits),
+   *  and for wonder rooms (the rugs and animals stay outside the pure
+   *  chain — the kits are staged by the same pure call as everything else
+   *  and ARE enumerated). Null everywhere else. */
   furnishing: { kit: string; pieces: KitKind[] }[] | null;
   doors: {
     /** Wall roles strand doors may hang on — null = no template, so any
@@ -284,7 +291,7 @@ export function describeRoom(
   sliceId: string,
   options: DescribeRoomOptions = {},
 ): RoomDescription {
-  // The v0.12 P3 biome skin this slice forces (skins.ts skinForSlice) — the
+  // The v0.12 P3 biome skin this slice wears (skins.ts skinForSlice) — the
   // SAME pure source the renderer's skin lane reads. The skin rides the
   // FULL slice id; the ROOM's identity strips the prefix
   // (debug-slice.ts debugSliceIdWithoutSkin): a forced skin is a VIEW-layer
@@ -293,9 +300,9 @@ export function describeRoom(
   // (无皮肤 ≡ 温带). Feeding the skin to the staging call below is what
   // keeps the outline's furnishing in lockstep with a skinned render:
   // §6.2-overridden slots list the replacement kinds and the
-  // hero/side/open-field kits list the skin's decks. Real memory slices
-  // answer null, and the staging default path is then byte-for-byte the
-  // legacy one.
+  // hero/side/open-field kits list the skin's decks. Real slices resolve
+  // their world's skin (an interior world answers null — the temperate
+  // baseline), and a null skin stages byte-for-byte the legacy way.
   const skin = skinForSlice(sliceId);
   const roomId = debugSliceIdWithoutSkin(sliceId);
   // The renderer's own derivation order (space.tsx SpaceScene /
@@ -395,17 +402,20 @@ export function describeRoom(
   // when composed; the pool hall is excluded — its obstacle discs come from
   // space.tsx's legacy fixtures, which the pure chain cannot reproduce, so
   // enumerating kits staged without them could name pieces the render
-  // rejected), NATURE rooms whose biome draws the nature deck (the outdoor
-  // pool biome keeps its rim fixtures — an empty deck furnishes nothing),
-  // and WONDER rooms (the rugs/animals stay outside the pure chain; the
-  // kits are staged here exactly as staged there). Water biomes subtract
-  // their basin from the density area, mirroring the renderer's branches.
+  // rejected), EVERY nature and hybrid room (the world's skin owns the draw
+  // vocabulary — a water biome furnishes from its skin's shore kits, so the
+  // outdoor pool biome enumerates like any other), and WONDER rooms (the
+  // rugs/animals stay outside the pure chain; the kits are staged here
+  // exactly as staged there — under a view-only skin: the wonder deck is
+  // the diorama's structure and the skin's decks never replace it). Water
+  // biomes subtract their basin from the density area, mirroring the
+  // renderer's branches.
   let furnishing: RoomDescription["furnishing"] = null;
   const furnishClass =
     (recipe.worldClass === "interior" && recipe.archetype !== "pool-hall") ||
     recipe.worldClass === "wonder" ||
-    (recipe.worldClass === "nature" &&
-      kitsFor("nature", recipe.archetype, recipe.size.extent).length > 0)
+    recipe.worldClass === "nature" ||
+    recipe.worldClass === "hybrid"
       ? recipe.worldClass
       : null;
   if (furnishClass) {
@@ -425,9 +435,15 @@ export function describeRoom(
       : 0;
     const staged = stageInteriorKits({
       rng,
-      worldClass: furnishClass,
+      // A hybrid furnishes on the outdoor machine — its biome's world, the
+      // same draw the renderer's nature branch stages.
+      worldClass: furnishClass === "hybrid" ? "nature" : furnishClass,
       archetype: recipe.archetype,
-      skin,
+      // Wonder rooms wear their skin's VIEW only: the diorama keeps its
+      // authored deck (the renderer's wonder branch passes no skin to
+      // staging), so the outline enumerates the playthings, not the skin's
+      // nature decks.
+      skin: recipe.worldClass === "wonder" ? null : skin,
       plan,
       comp: composeRoom(roomId, plan, scaleFactor, WORLD_SEED),
       baseArea: Math.max(0, baseArea - waterArea),
@@ -515,7 +531,6 @@ export function describeRoom(
           coverage: spec.waterCoverage,
         }
       : null,
-    scatter: { trees: spec.treeDensity > 0, rocks: spec.rockDensity > 0 },
     skin: skin
       ? {
           id: skin.id,
@@ -804,13 +819,6 @@ export function formatRoomDescription(
         ? `水：${round(desc.water.width)}m × ${round(desc.water.depth)}m（覆盖约 ${Math.round(desc.water.coverage * 100)}% 地面）`
         : `Water: ${round(desc.water.width)}m × ${round(desc.water.depth)}m (about ${Math.round(desc.water.coverage * 100)}% of the floor)`,
     );
-  }
-  if (desc.scatter.trees || desc.scatter.rocks) {
-    const parts = [
-      desc.scatter.trees ? (zh ? "树" : "trees") : null,
-      desc.scatter.rocks ? (zh ? "岩石" : "rocks") : null,
-    ].filter(Boolean);
-    L.push(zh ? `散布：${parts.join("、")}` : `Scatter: ${parts.join(", ")}`);
   }
   if (desc.worldClass === "wonder") {
     L.push(

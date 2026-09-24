@@ -483,10 +483,25 @@ describe("A6 — determinism with a skin", () => {
     expect(desc.skin?.id).toBe("shallows");
   });
 
-  it("a real slice stays skinless", () => {
+  it("real slices wear their world: interior → null, nature → its skin (A6 in the outline)", () => {
+    // Interior worlds resolve the temperate baseline — null, byte-for-byte
+    // the skinless path.
     for (const id of ["2026-09-15-0746", "core", "dbg-m:living"]) {
       expect(skinForSlice(id)).toBeNull();
       expect(describeRoom(id).skin).toBeNull();
     }
+    // A real nature slice resolves its world's skin, and the outline is a
+    // stable function of the slice (A6).
+    let nature: string | null = null;
+    for (let i = 0; i < 3000 && nature === null; i++) {
+      const id = `staging-world-${i}`;
+      if (compileSpaceRecipe(id).worldClass === "nature") nature = id;
+    }
+    expect(nature).not.toBeNull();
+    const skin = skinForSlice(nature!);
+    expect(skin).not.toBeNull();
+    const desc = describeRoom(nature!);
+    expect(desc.skin?.id).toBe(skin!.id);
+    expect(JSON.stringify(describeRoom(nature!))).toBe(JSON.stringify(desc));
   });
 });

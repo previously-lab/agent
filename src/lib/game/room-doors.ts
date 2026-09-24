@@ -66,7 +66,7 @@ import {
   type WallSegment,
 } from "./room-plan";
 import { createRng, hashString, WORLD_SEED } from "./seed";
-import { CAM_OFFSET } from "./tuning/render";
+import { CAM_OFFSET } from "./tuning/room";
 import {
   DOOR_GAP_HALF,
   DOOR_LATTICE_HALF_CELL,
