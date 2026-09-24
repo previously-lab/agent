@@ -14,46 +14,65 @@
  * leave them reading the default no-op setter, and their scenes would
  * silently never reach the canvas (that was the v0.11 merge's first bug:
  * an empty field and a white hotel with zero console errors).
+ *
+ * ONE SLOT PER WORLD. The transition primitive (world-transition.ts) keeps
+ * BOTH worlds mounted while the camera moves between them, so the slot is
+ * a pair: each owner registers under its own kind and the canvas renders
+ * whichever nodes are present — one when a world is settled, two mid-
+ * transition. `useWorldScene` takes the kind explicitly (CardField is
+ * always "field", GameCanvas always "game").
  */
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
   type ReactNode,
 } from "react";
+import type { WorldKind } from "./world-contract";
 
-type SetWorldScene = (node: ReactNode) => void;
+export interface WorldSceneNodes {
+  field: ReactNode;
+  game: ReactNode;
+}
+
+const EMPTY_NODES: WorldSceneNodes = { field: null, game: null };
+
+type SetWorldScene = (world: WorldKind, node: ReactNode) => void;
 
 const WorldSceneSetContext = createContext<SetWorldScene>(() => undefined);
 /** Read by WorldCanvas only. */
-export const WorldSceneNodeContext = createContext<ReactNode>(null);
+export const WorldSceneNodesContext = createContext<WorldSceneNodes>(EMPTY_NODES);
 
 export function WorldSceneProvider({
   children,
 }: {
   children: ReactNode;
 }): ReactNode {
-  const [worldScene, setWorldScene] = useState<ReactNode>(null);
+  const [nodes, setNodes] = useState<WorldSceneNodes>(EMPTY_NODES);
+  const setWorldScene = useCallback<SetWorldScene>((world, node) => {
+    setNodes((prev) => ({ ...prev, [world]: node }));
+  }, []);
   return (
     <WorldSceneSetContext.Provider value={setWorldScene}>
-      <WorldSceneNodeContext.Provider value={worldScene}>
+      <WorldSceneNodesContext.Provider value={nodes}>
         {children}
-      </WorldSceneNodeContext.Provider>
+      </WorldSceneNodesContext.Provider>
     </WorldSceneSetContext.Provider>
   );
 }
 
 /**
- * Register the caller's R3F subtree as THE mounted world's scene. Called by
- * the DOM-side owner of a world (CardField, GameCanvas) on every render;
- * the cleanup clears the slot on unmount so a leaving world never paints
- * one extra frame.
+ * Register the caller's R3F subtree as one world's scene. Called by the
+ * DOM-side owner of a world (CardField → "field", GameCanvas → "game") on
+ * every render; the cleanup clears that world's slot on unmount so a
+ * leaving world never paints one extra frame.
  */
-export function useWorldScene(node: ReactNode): void {
+export function useWorldScene(world: WorldKind, node: ReactNode): void {
   const setWorldScene = useContext(WorldSceneSetContext);
   useEffect(() => {
-    setWorldScene(node);
-    return () => setWorldScene(null);
+    setWorldScene(world, node);
+    return () => setWorldScene(world, null);
   });
 }

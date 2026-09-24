@@ -1485,10 +1485,13 @@ export function CardField({
   // THE CANVAS IS THE SHELL'S (§14 merge). This component keeps everything
   // that is NOT GL — the gesture surface, the rung/deal state, the offset
   // table — and hands the scene subtree to the shared canvas through the
-  // world slot (`useWorldScene`). Registered on every render (the element
-  // is a description; the canvas re-renders only when this field does) and
-  // cleared on unmount. Empty states register NOTHING — there is no scene.
+  // world slot (`useWorldScene`), registered under the field world's kind
+  // (the slot is per-world now — a transition keeps both worlds mounted).
+  // Registered on every render (the element is a description; the canvas
+  // re-renders only when this field does) and cleared on unmount. Empty
+  // states register NOTHING — there is no scene.
   useWorldScene(
+    "field",
     entries.length === 0 ? null : (
       <FieldScene
         rows={rows}

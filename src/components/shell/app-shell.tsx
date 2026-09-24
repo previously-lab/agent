@@ -48,6 +48,14 @@ import {
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
 import {
+  DISSOLVE_START,
+  transitionPhase,
+  WORLD_TRANSITION,
+  WORLD_TRANSITION_MS,
+  WORLD_TRANSITION_REDUCED_MS,
+  type WorldTransitionPhase,
+} from "@/lib/timeline3d/world-transition";
+import {
   getStrandList,
   getTimelineCatalog,
   getTimelineCatalogPage,
@@ -127,18 +135,32 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // at a named slice wants the field one step coarser than the conversation.
   const rungParam = parseRungParam(rawSearch);
   const at = parseAtParam(rawSearch);
-  // THE WORLD SWITCH (§14): `?view=game` mounts the hotel instead of the
-  // field world; absent (or the old `?view=timeline` alias) is the field.
-  // The override is the in-session toggle — the URL param is the arrival.
-  // `?slice=` is the SHARED ADDRESS: the field focuses the slice's card
-  // (lands on the slice rung, flashed), the game stands at its door
-  // (game-canvas.tsx). It is deliberately separate from `?at=`, whose
-  // remaining meaning is a CONVERSATION jump (see the rung note below).
+  // THE WORLD SWITCH (§14) — a TRANSITION, never a snap. `settledView` is
+  // the world the reader is in (the URL agrees with it once a move
+  // finishes); `transition` is a live move between the worlds (owned by
+  // the shell, driven per frame by world-transition.ts). The URL is the
+  // arrival: it is written at completion, and a URL that disagrees with
+  // the settled world — Back/forward, a deep link, an openSlice jump —
+  // starts the move through the reconciliation below. `?slice=` stays the
+  // SHARED ADDRESS: the field focuses the slice's card (lands on the
+  // slice rung, flashed), the game stands at its door (game-canvas.tsx).
+  // It is deliberately separate from `?at=`, whose remaining meaning is a
+  // CONVERSATION jump (see the rung note below).
   const sliceParam = searchParams.get("slice");
   const viewParam = searchParams.get("view");
-  const [viewOverride, setViewOverride] = useState<WorldKind | null>(null);
-  const view: WorldKind =
-    viewOverride ?? (viewParam === "game" ? "game" : "field");
+  const urlWorld: WorldKind = viewParam === "game" ? "game" : "field";
+  const [settledView, setSettledView] = useState<WorldKind>(urlWorld);
+  const [transition, setTransition] = useState<{
+    from: WorldKind;
+    to: WorldKind;
+    sliceId: string | null;
+    phase: WorldTransitionPhase;
+  } | null>(null);
+  const view: WorldKind = settledView;
+  const mountedWorlds: readonly WorldKind[] = transition
+    ? [transition.from, transition.to]
+    : [settledView];
+  const transitionActive = transition !== null;
   const reducedMotion = useReducedMotion() ?? false;
 
   // ── Shared timeline state (owned by the shell so the left AxisBand and the
@@ -232,6 +254,88 @@ export function AppShell({ initialConfig }: AppShellProps) {
    *  placeholder from it. See `RunningCard`. */
   const [running, setRunning] = useState(false);
 
+  // ── THE WORLD TRANSITION MACHINE (world-transition.ts) ────────────────────
+  // The shell owns the move: WHICH worlds are mounted (one settled, two
+  // mid-move), the rAF clock that writes the shared singleton's progress,
+  // and the URL, which is written at completion — the destination is the
+  // arrival, so a refresh mid-move lands on the side the reader started
+  // from and Back replays the reverse move through the reconciliation
+  // below. Everything inside the canvas (the scripted hotel shot, the
+  // compositor's dissolve, the contract pin) reads the singleton per
+  // frame; React state only mirrors the phase boundaries.
+  const transitionLockRef = useRef(false);
+  const settledRef = useRef<WorldKind>(urlWorld);
+  const readyRef = useRef(false);
+  const reducedMotionRef = useRef(reducedMotion);
+  useEffect(() => {
+    settledRef.current = settledView;
+  }, [settledView]);
+  useEffect(() => {
+    readyRef.current = timelineReady;
+  }, [timelineReady]);
+  useEffect(() => {
+    reducedMotionRef.current = reducedMotion;
+  }, [reducedMotion]);
+
+  const beginTransition = useCallback(
+    (to: WorldKind, sliceId: string | null) => {
+      if (transitionLockRef.current) return; // one move at a time
+      const from = settledRef.current;
+      if (from === to) return;
+      transitionLockRef.current = true;
+      const wt = WORLD_TRANSITION;
+      wt.active = true;
+      wt.id += 1;
+      wt.from = from;
+      wt.to = to;
+      wt.progress = 0;
+      wt.reducedMotion = reducedMotionRef.current;
+      if (to === "field") {
+        // Seed the destination's card rung while the hotel still owns the
+        // screen — the dissolve then reveals cards, never an empty canvas
+        // (the field world mounts nothing at the conversation rung; its
+        // scene is the card field's). A terminal entrance lands on the
+        // slice rung at the terminal's slice; a plain exit (the game's
+        // exit button, Escape, Back) lands where the reader last looked at
+        // cards — the same last-card-rung the ⌘/. toggle returns to.
+        setRung(sliceId !== null ? "slice" : lastCardRungRef.current);
+      }
+      setTransition({ from, to, sliceId, phase: "camera" });
+    },
+    [],
+  );
+
+  // URL reconciliation: the URL is the arrival. A URL naming a world the
+  // reader is not settled in starts the move (with the slice when the URL
+  // carries one — Back after a terminal entrance replays the reverse); a
+  // URL that disagrees with a LIVE move (Back pressed mid-flight) cancels
+  // the move and snaps to what the URL says.
+  useEffect(() => {
+    if (transition) {
+      if (urlWorld !== transition.to) {
+        const wt = WORLD_TRANSITION;
+        wt.active = false;
+        wt.progress = 0;
+        transitionLockRef.current = false;
+        setTransition(null);
+        setSettledView(urlWorld);
+      }
+      return;
+    }
+    if (urlWorld !== settledView) beginTransition(urlWorld, at);
+  }, [urlWorld, at, transition, settledView, beginTransition]);
+
+  // The room → catalog entrance: the terminal interaction fires this after
+  // its depart flare (world-transition.ts's hook), and the move starts
+  // here — replacing the interaction's old instant anchorNavPlan jump.
+  useEffect(() => {
+    WORLD_TRANSITION.hooks.enter = (sliceId) =>
+      beginTransition("field", sliceId);
+    return () => {
+      WORLD_TRANSITION.hooks.enter = null;
+    };
+  }, [beginTransition]);
+
   // ── THE CONVERSATION LAYER'S TIER (§14.1) ───────────────────────────────
   // One conversation, three sizes — the tier lives HERE, not inside the
   // panel, because the shell must react to it: a card rung defaults to the
@@ -251,6 +355,89 @@ export function AppShell({ initialConfig }: AppShellProps) {
     );
   }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
+
+  // THE TRANSITION CLOCK — one rAF per move writes the shared singleton's
+  // progress; React state only mirrors the phase boundaries (2–3 re-renders
+  // a move, not 60/s), and the per-frame readers (the scripted hotel shot,
+  // the compositor's dissolve and contract pin) stay inside the canvas. The
+  // primitives are destructured so the clock does NOT restart on a phase
+  // boundary re-render — restarting would reset the elapsed baseline.
+  const transitionFrom = transition?.from;
+  const transitionTo = transition?.to;
+  const transitionSlice = transition?.sliceId;
+  useEffect(() => {
+    if (transitionFrom === undefined || transitionTo === undefined) return;
+    const duration = WORLD_TRANSITION.reducedMotion
+      ? WORLD_TRANSITION_REDUCED_MS
+      : WORLD_TRANSITION_MS;
+    const started = performance.now();
+    let raf = 0;
+    let cancelled = false;
+    const finish = () => {
+      if (cancelled) return;
+      cancelled = true;
+      // The destination becomes the URL BEFORE the settled flip: a refresh
+      // at this exact instant lands on the arriving side, and the push (not
+      // replace) means Back returns to the departing URL — where the
+      // reconciliation starts the reverse move.
+      const params = new URLSearchParams(window.location.search);
+      if (transitionTo === "game") {
+        params.set("view", "game");
+      } else {
+        params.delete("view");
+        if (transitionSlice) params.set("at", transitionSlice);
+      }
+      const q = params.toString();
+      window.history.pushState(
+        {},
+        "",
+        `${window.location.pathname}${q ? `?${q}` : ""}`,
+      );
+      const wt = WORLD_TRANSITION;
+      wt.active = false;
+      wt.progress = 0;
+      transitionLockRef.current = false;
+      setSettledView(transitionTo);
+      setTransition(null);
+    };
+    const tick = () => {
+      if (cancelled) return;
+      // §14.1: a fullscreen conversation freezes the world — the move
+      // holds until the panel folds back.
+      if (worldFrozen) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      const elapsed = (performance.now() - started) / duration;
+      let p = Math.min(1, elapsed);
+      // The dissolve waits for the destination's data: hold at the
+      // threshold — the hotel parked at the terminal's eye pose — until
+      // the catalog has loaded enough for the field world to mount the
+      // focused card.
+      if (
+        transitionTo === "field" &&
+        p >= DISSOLVE_START &&
+        !readyRef.current
+      ) {
+        p = DISSOLVE_START;
+      }
+      WORLD_TRANSITION.progress = p;
+      const phase = transitionPhase(p);
+      setTransition((prev) =>
+        prev && prev.phase !== phase ? { ...prev, phase } : prev,
+      );
+      if (p >= 1) {
+        finish();
+        return;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
+  }, [transitionFrom, transitionTo, transitionSlice, worldFrozen]);
 
   // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
   // The conversation field renders through a portal into whichever surface can
@@ -277,26 +464,25 @@ export function AppShell({ initialConfig }: AppShellProps) {
           : { kind: "narrow" }
         : { kind: "field", el: paneSlotEl };
 
-  // A conversation jump (`?at=` — `openSlice`, the search palette) is a FIELD
-  // world act: arriving on one clears an in-session game override so the
-  // linked slice is never buried under the hotel.
-  useEffect(() => {
-    if (at) setViewOverride(null);
-  }, [at]);
+  // A conversation jump (`?at=` — `openSlice`, the search palette) needs no
+  // in-session override to clear any more: the URL reconciliation owns the
+  // world, so a slice jump arriving from the hotel starts the move to the
+  // field on its own (with the slice as the transition's focus).
 
   // Escape in the game world: panel first (anything open folds to the pill),
-  // then the view itself (back to the field). The panel's own Escape lives on
-  // its container with stopPropagation, so the two never fire together.
+  // then the view itself (back to the field, through the transition). The
+  // panel's own Escape lives on its container with stopPropagation, so the
+  // two never fire together.
   useEffect(() => {
     if (view !== "game") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (panelMode !== "pill") setPanelMode("pill");
-      else setViewOverride("field");
+      else beginTransition("field", null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, panelMode]);
+  }, [view, panelMode, beginTransition]);
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
   // One narration at a time: each request bumps `gen`, and the pod aborts
@@ -408,10 +594,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
   }, [strandList.length]);
 
   // ── Lazy catalog load on the first CARD rung (or a deep link that starts on
-  //    one). A slice address (`?at=`, or the shared `?slice=` in the field
-  //    world) loads the full catalog so the linked slice is always resolvable;
-  //    otherwise loads the latest month window. ──────────────────────────────
-  const focusId = at ?? sliceParam;
+  //    one). A slice address (`?at=`, the shared `?slice=`, or a transition's
+  //    terminal slice) loads the full catalog so the linked slice is always
+  //    resolvable; otherwise loads the latest month window. ─────────────────
+  // A live transition's slice leads: it is the field's landing focus before
+  // the URL carries it (the URL is written at completion).
+  const focusId = transition?.sliceId ?? at ?? sliceParam;
   useEffect(() => {
     if (rung === "conversation" || timelineReady) return;
     let cancelled = false;
@@ -620,6 +808,17 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const bandW = spec.railW;
   const camXOffset = -(bandX + bandW) / 2;
 
+  // The field world's DOM layer (band, pane, floating chrome) rides the
+  // move's phase: as the DESTINATION it arrives with the dissolve — it
+  // never sits over the hotel during the camera beat; as the SOURCE it
+  // stays up until completion, so the reader watches the field fade
+  // through the compositor, not the DOM.
+  const fieldChrome = transition
+    ? transition.to === "field"
+      ? transition.phase !== "camera"
+      : true
+    : settledView === "field";
+
   return (
     // The world-slot provider must sit ABOVE both the canvas and the worlds'
     // DOM-side owners (they are siblings here) — see world-canvas.tsx.
@@ -629,8 +828,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
           transparent; the aurora used to sit behind the pane's own canvas,
           now it sits behind the shared one). Inset past the band so the
           strip keeps the plain page background it has always had. Mounted
-          only at a card rung, exactly as before. */}
-      {view === "field" && showCardField && (
+          only at a card rung and while the field world is up, exactly as
+          before. */}
+      {mountedWorlds.includes("field") && showCardField && (
         <>
           <style>{TIMELINE_KEYFRAMES}</style>
           <div
@@ -644,13 +844,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
       )}
       {/* The floating chrome (app-header) is a FIELD-world fixture; the game
           keeps only its own overlay. Hidden with a style tag because the
-          header itself is not this file's to change. */}
-      {view === "game" && <style>{`[data-app-header]{display:none}`}</style>}
+          header itself is not this file's to change. Hidden from the start
+          of a move INTO the hotel, shown from the start of a move OUT. */}
+      {mountedWorlds.includes("game") && (
+        <style>{`[data-app-header]{display:none}`}</style>
+      )}
       <WorldCanvas
-        world={view}
+        worlds={mountedWorlds}
         paused={worldFrozen}
         band={
-          view === "field"
+          mountedWorlds.includes("field")
             ? {
                 x: bandX,
                 width: bandW,
@@ -663,16 +866,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
             : null
         }
       />
-      {/* LEFT: the time axis, present in BOTH views. It is not a timeline-view
-          affordance — it is where the app's strands live, and it stays put
-          across the switch. Its braid renders in the shared canvas (scissored
-          to this strip's rect); what mounts here is the band's DOM half, so
-          the scrub lens and fades sit above the canvas by DOM order. The
-          right pane supplies the anchors either way: the card field's rows
-          in the timeline, the chat stream's slice seams in chat, so the
-          braid winds at whatever the user is actually looking at. Field
-          world only — the game owns the whole viewport. */}
-      {view === "field" && <AxisBand range={range} feed={feed} />}
+      {/* LEFT: the time axis. It is not a timeline-view affordance — it is
+          where the app's strands live — but its braid renders in the
+          field world's scene, so the band's DOM waits for the same phase
+          as the rest of the field chrome: it arrives with the dissolve
+          when the field is the destination and stays while the field is
+          the source. The right pane supplies the anchors either way: the
+          card field's rows in the timeline, the chat stream's slice seams
+          in chat, so the braid winds at whatever the user is actually
+          looking at. Field world only — the game owns the whole viewport. */}
+      {fieldChrome && <AxisBand range={range} feed={feed} />}
 
       {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
       <ConversationSurfaceProvider value={conversationSurface}>
@@ -684,8 +887,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
             card rung — the subtree holds the field's camera position — and
             at conversation rung the reader reads history in the pane while
             the ongoing turn lives in the panel. The slot leaves the docked
-            panel's width clear so the field's column is never under it. */}
-        {view === "field" && (
+            panel's width clear so the field's column is never under it.
+            Rides the field chrome's phase like the band. */}
+        {fieldChrome && (
           <div
             ref={setPaneSlotEl}
             data-conversation-slot
@@ -730,7 +934,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
             rung="conversation"
             onTurnSettled={refreshCatalog}
             feed={feed}
-            publishing={!panePublishes}
+            // Frozen while a world transition runs: the feed is one-writer
+            // (field-feed.ts), and a move mounts/unmounts the fields
+            // around the band — nobody publishes mid-move.
+            publishing={!panePublishes && !transitionActive}
             onRunningChange={setRunning}
             insetTop={0}
             insetBottom={composerClearance}
@@ -738,7 +945,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
           />
         </ConversationPanel>
 
-        {view === "field" && (
+        {fieldChrome && (
           <>
         <AnimatePresence>
           {showCardField && (
@@ -794,7 +1001,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       initialAtId={focusId ?? undefined}
                       strands={strands}
                       feed={feed}
-                      publishing={panePublishes}
+                      // Same freeze as the chat field — the one-writer rule
+                      // holds through the move (see ChatPage above).
+                      publishing={panePublishes && !transitionActive}
                       rung={rung}
                       onRungChange={setRung}
                       reducedMotion={reducedMotion}
@@ -865,10 +1074,11 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
         {/* THE WORLD SWITCH (§14) — the field world's way into the hotel. A
             quiet island button at the pane's foot, clear of the composer; the
-            way back is the game's own exit button or Escape. */}
+            way back is the game's own exit button or Escape. Both now START
+            THE TRANSITION instead of snapping the view. */}
         <button
           type="button"
-          onClick={() => setViewOverride("game")}
+          onClick={() => beginTransition("game", null)}
           aria-label={tGame("title")}
           title={tGame("title")}
           className={`${ISLAND} pointer-events-auto absolute bottom-4 left-4 z-10 flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
@@ -878,10 +1088,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
           </>
         )}
 
-        {view === "game" && (
+        {mountedWorlds.includes("game") && (
           <div className="relative flex-1 min-h-0">
             <GameShell
-              onExit={() => setViewOverride("field")}
+              onExit={() => beginTransition("field", null)}
               focusSlice={sliceParam}
             />
           </div>

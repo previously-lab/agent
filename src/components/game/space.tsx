@@ -108,7 +108,7 @@ import {
 } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
+import { WALL_HEIGHT, WINDOW_SLICES, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
 import { smoothstep } from "@/lib/game/math";
@@ -139,7 +139,7 @@ import {
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
-import { AnchorTerminal } from "@/lib/game/anchor-terminal";
+import { AnchorHologram } from "@/lib/game/anchor-hologram";
 import { roomTerminalFor } from "@/lib/game/anchor";
 import {
   doorAffordanceFor,
@@ -7697,6 +7697,14 @@ export interface SpaceRoomDoor {
   key: string;
   label: string;
   lit: boolean;
+  /**
+   * Every strand the door represents (the strand-doors lane's merged
+   * group, primary first) — OPTIONAL because standalone/debug mounts
+   * build bare `{key, label, lit}` doors; absent reads as no strands.
+   * The mounted game passes the full `RoomDoor` through (structural
+   * superset), so the anchor hologram can braid one thread per strand.
+   */
+  strands?: readonly string[];
 }
 
 /**
@@ -8038,7 +8046,7 @@ export function SpaceScene({
   });
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
-  // THE ANCHOR TERMINAL (§13.1): every room grows the one machine beside
+  // THE ANCHOR HOLOGRAM (§13.1): every room grows the one braid beside
   // the doorway on the entrance wall — lib/game/anchor.ts resolves the
   // spot (seeded side, feasibility-clamped clear of the strip, the walk
   // path, the hero clearing, and the water); the integrator resolves the
@@ -8060,6 +8068,25 @@ export function SpaceScene({
       }),
     [seedId, plan, comp, width, wallThick, propScale, waterRect],
   );
+  // The braid's threads, from the data the room already holds: one per
+  // strand passing through this slice (the room-door lane's merged
+  // groups, deduped in door order — activity-desc, so the bundle's seats
+  // are data-stable), plus one context thread per NEWER slice of this
+  // corridor window. Flat door indices are dense below the newest slice,
+  // so `index % WINDOW_SLICES` is exactly the count of provably-existing
+  // newer neighbors — older slots may belong to a partial last window
+  // and are never claimed (A6: the braid only ever shows what the data
+  // can prove).
+  const terminalStrands = useMemo(() => {
+    const out: string[] = [];
+    for (const d of roomDoors ?? []) {
+      for (const s of d.strands ?? []) {
+        if (!out.includes(s)) out.push(s);
+      }
+    }
+    return out;
+  }, [roomDoors]);
+  const terminalNeighborSlots = door.index % WINDOW_SLICES;
   // The pool's wave-equation driver (materials/wave-driver.ts): created
   // HERE, not in the WaterSurface component, because the pool-floor
   // caustics patch below also samples the driver's height texture (the
@@ -10008,16 +10035,21 @@ export function SpaceScene({
         />
       )}
 
-      {/* The anchor terminal (§13.1): the room's machine, breathing by the
-          door. Walk up, interact, and the view dissolves to the 2.5D
-          catalog focused on this slice — the game → catalog half of the
-          shared ?slice= address. */}
+      {/* The anchor hologram (§13.1): the room's slice of the timeline
+          braided with its strands and window, glowing by the door. Walk
+          up, interact, and the view dissolves to the 2.5D catalog focused
+          on this slice — the game → catalog half of the shared ?slice=
+          address. */}
       <group
         position={[terminalAnchor.x, GROUND_Y, terminalAnchor.z]}
         rotation={[0, terminalAnchor.rotY, 0]}
         scale={terminalAnchor.scale}
       >
-        <AnchorTerminal accent={recipe.palette.accent} />
+        <AnchorHologram
+          accent={recipe.palette.accent}
+          strands={terminalStrands}
+          neighborSlots={terminalNeighborSlots}
+        />
       </group>
 
       {/* The door from inside: same frame and glow as the corridor face;

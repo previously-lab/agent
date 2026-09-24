@@ -143,9 +143,8 @@ import { useTheme } from "@teispace/next-themes";
 import type { JSX, MutableRefObject, ReactNode } from "react";
 import { GAME_DEBUG } from "./debug";
 import { useWorldScene } from "@/components/timeline-3d/world-slot";
-import { AnchorTerminal } from "@/lib/game/anchor-terminal";
+import { AnchorHologram } from "@/lib/game/anchor-hologram";
 import {
-  anchorNavPlan,
   LOBBY_TERMINAL_ANCHOR,
   LOBBY_TERMINAL_BLOCKER,
   roomTerminalFor,
@@ -156,6 +155,11 @@ import {
   TERMINAL_REACH_ROOM,
   type TerminalAnchor,
 } from "@/lib/game/anchor";
+import {
+  WORLD_TRANSITION,
+  hotelShotPose,
+  type FollowPose,
+} from "@/lib/timeline3d/world-transition";
 import {
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
@@ -351,11 +355,19 @@ const NO_TIMELINE_DOORS: readonly CorridorDoor[] = [];
 type PlayerRef = MutableRefObject<PlayerPos>;
 
 /** The anchor HUD payload (§13.1) — set while the player stands in reach
- *  of a terminal; wins over the door prompt in the Hud. */
+ *  of a terminal; wins over the door prompt in the Hud. `x`/`z`/`faceX`/
+ *  `faceZ` are the terminal's world pose (the interaction point and the
+ *  direction the terminal faces): the transition's scripted camera shot
+ *  descends to it, so the thing the camera flies to is the thing the loop
+ *  measured — the same A6 double-call-site discipline as the placement. */
 interface AnchorHud {
   kind: "room" | "lobby";
   sliceId: string;
   label: string;
+  x: number;
+  z: number;
+  faceX: number;
+  faceZ: number;
 }
 
 /** Live player/atmosphere/fade state for probes — re-exported from the
@@ -551,6 +563,14 @@ export interface StrandDoorSpec {
   readonly label: string;
   readonly lit: boolean;
   readonly destination: StrandDestination | null;
+  /**
+   * Every strand this door represents (the data lane's merged group,
+   * primary first) — OPTIONAL at the type level because the spec only
+   * requires the door fields; the data lane hands the full `RoomDoor`
+   * through (a structural superset), so this is present at runtime and
+   * the anchor hologram braids one thread per entry.
+   */
+  readonly strands?: readonly string[];
 }
 
 /**
@@ -974,15 +994,51 @@ function CameraRig({
     const k = 1 - Math.exp(-CAMERA_LERP_RATE * Math.min(dt, MAX_DT));
     focus.current.x += (playerRef.current.x - focus.current.x) * k;
     focus.current.z += (playerRef.current.z - focus.current.z) * k;
+    const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
+    zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
+    const ortho = camera as THREE.OrthographicCamera;
+
+    // THE TRANSITION SHOT (world-transition.ts): while a world transition
+    // runs, a scripted pose takes the camera down from this follow pose to
+    // eye level in front of the anchor terminal (leaving) or back up from
+    // it (entering). The follow rig's own state keeps easing above, so
+    // the hand back is seamless — the rise ends exactly ON the live pose.
+    // Movement is frozen by GameLoop for the same window, so the follow
+    // pose is stationary underneath the shot.
+    const wt = WORLD_TRANSITION;
+    if (wt.active) {
+      const follow: FollowPose = {
+        x: focus.current.x + CAM_OFFSET.x,
+        y: CAM_OFFSET.y,
+        z: focus.current.z + CAM_OFFSET.z,
+        lookX: focus.current.x,
+        lookY: 0,
+        lookZ: focus.current.z,
+        zoom: zoomRef.current,
+      };
+      const shot = hotelShotPose(
+        wt.progress,
+        wt.from,
+        wt.to,
+        wt.reducedMotion,
+        wt.anchor,
+        follow,
+      );
+      if (shot !== null) {
+        camera.position.set(shot.x, shot.y, shot.z);
+        camera.lookAt(shot.lookX, shot.lookY, shot.lookZ);
+        ortho.zoom = shot.zoom;
+        ortho.updateProjectionMatrix();
+        return;
+      }
+    }
+
     camera.position.set(
       focus.current.x + CAM_OFFSET.x,
       CAM_OFFSET.y,
       focus.current.z + CAM_OFFSET.z,
     );
     camera.lookAt(focus.current.x, 0, focus.current.z);
-    const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
-    zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
-    const ortho = camera as THREE.OrthographicCamera;
     ortho.zoom = zoomRef.current;
     ortho.updateProjectionMatrix();
   });
@@ -1303,11 +1359,11 @@ function PlayerAvatar({
 }
 
 /**
- * The lobby terminal's screen content — the whole-window index as DOM
+ * The lobby hologram's index plate — the whole-window index as DOM
  * (§13: 文字走 DOM), the register board's own data at terminal scale.
- * Rendered through drei Html INSIDE the machine's bezel
- * (AnchorTerminal's screenOverlay); monospace phosphor on the dark
- * glass, the hotel name and window number in the timeline accent.
+ * Rendered through drei Html in a floating plate above the lobby's
+ * anchor hologram (AnchorHologram's overlay); monospace phosphor on the
+ * dark glass, the hotel name and window number in the timeline accent.
  */
 function LobbyIndexScreen({
   register,
@@ -1535,7 +1591,11 @@ function GameLoop({
       // next frame runs on the committed hotel.
       hopGuard.current = false;
       motionRef.current = { x: 0, z: 0, moving: false };
-    } else if (!transitionActive && !departingRef.current) {
+    } else if (
+      !transitionActive &&
+      !departingRef.current &&
+      !WORLD_TRANSITION.active
+    ) {
       // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
       // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
       // room should feel immense, not waste the player's time; the corridor
@@ -1724,6 +1784,8 @@ function GameLoop({
     // so the thing measured here IS the thing space.tsx drew.
     let ax = 0;
     let az = 0;
+    let aFaceX = 0;
+    let aFaceZ = 1;
     let aKind: "" | "room" | "lobby" = "";
     let aSlice: string | null = null;
     let aReach = TERMINAL_REACH_LOBBY;
@@ -1732,6 +1794,11 @@ function GameLoop({
       const front = (TERMINAL_D * roomTerminal.scale) / 2;
       ax = space.door.x + dir * roomTerminal.x;
       az = space.door.z + dir * (roomTerminal.z + front);
+      // The terminal's local +z front maps to world (0, dir) under the
+      // same mirror — the direction the scripted shot's eye pose stands
+      // from.
+      aFaceX = 0;
+      aFaceZ = dir;
       aKind = "room";
       aSlice = space.door.sliceId;
       aReach = TERMINAL_REACH_ROOM;
@@ -1739,9 +1806,23 @@ function GameLoop({
       const t = LOBBY_TERMINAL_ANCHOR;
       ax = t.x - (TERMINAL_D * t.scale) / 2;
       az = t.z;
+      // The lobby terminal's rotY = −π/2: its front faces −x, which is
+      // where the interaction point sits.
+      aFaceX = -1;
+      aFaceZ = 0;
       aKind = "lobby";
       aSlice = sliceIds[0] ?? null;
     }
+    // The transition's shot target — written every frame (single writer,
+    // mutated in place), whether or not the player is in reach: entering
+    // the hotel dissolves to the nearest terminal's eye pose even when the
+    // player never stood next to it.
+    const wtAnchor = WORLD_TRANSITION.anchor;
+    wtAnchor.x = ax;
+    wtAnchor.z = az;
+    wtAnchor.faceX = aFaceX;
+    wtAnchor.faceZ = aFaceZ;
+    wtAnchor.has = aKind !== "";
     const aDist = Math.hypot(p.x - ax, p.z - az);
     const aHud: AnchorHud | null =
       aSlice !== null && aDist <= aReach
@@ -1752,6 +1833,10 @@ function GameLoop({
               aKind === "lobby"
                 ? lobbyAnchorLabel
                 : (doors.find((d) => d.sliceId === aSlice)?.label ?? aSlice),
+            x: ax,
+            z: az,
+            faceX: aFaceX,
+            faceZ: aFaceZ,
           }
         : null;
     const prevAnchor = anchorHudRef.current;
@@ -1989,28 +2074,19 @@ export default function GameCanvas({
     interactRef.current = () => {
       const anchor = anchorHudRef.current;
       if (anchor === null || departingRef.current) return;
+      if (WORLD_TRANSITION.active) return;
       departingRef.current = true;
       TERMINAL_DEPART.t0 = performance.now();
-      const nav = anchorNavPlan(window.location.search, locale, anchor.sliceId);
+      // The depart flare plays first; then the shell's transition machine
+      // takes over — the scripted camera move + dissolve replace this
+      // interaction's old instant catalog jump (world-transition.ts). The
+      // URL is written at completion, not here.
       window.setTimeout(
-        () => {
-          if (nav.mode === "push") {
-            // The soft path rides Next's own patched History API: an
-            // external pushState is picked up by the app router
-            // (ACTION_RESTORE), so useSearchParams re-renders WITHOUT a
-            // router dependency — game-canvas stays importable from
-            // node-side unit tests. The query-only URL keeps the locale
-            // path; Next copies its internal history state, so Back
-            // returns to the hotel.
-            window.history.pushState({}, "", nav.href);
-          } else {
-            window.location.assign(nav.href);
-          }
-        },
+        () => WORLD_TRANSITION.hooks.enter?.(anchor.sliceId),
         reducedMotion ? 0 : TERMINAL_FLARE_MS,
       );
     };
-  }, [locale, reducedMotion]);
+  }, [reducedMotion]);
   // The runtime strand-door count for a slice — the data lane's pure
   // derivation (buildRoomDoorMap in game-shell.tsx), read off the map.
   // Every room resolution (prewarm, wall crossing, return landing) freezes
@@ -2161,6 +2237,21 @@ export default function GameCanvas({
     () => buildLobbyRegister(currentDoors, location.windowIndex),
     [currentDoors, location.windowIndex],
   );
+  // The lobby hologram's braid: every strand threading the window — the
+  // room-door lane's strands for the current window's slices, deduped in
+  // first-seen order — plus one context thread per slice in the window
+  // (the whole index, where a room claims only its newer neighbors).
+  const lobbyHoloStrands = useMemo(() => {
+    const out: string[] = [];
+    for (const d of currentDoors) {
+      for (const door of roomDoors?.get(d.sliceId) ?? []) {
+        for (const s of door.strands ?? []) {
+          if (!out.includes(s)) out.push(s);
+        }
+      }
+    }
+    return out;
+  }, [currentDoors, roomDoors]);
   const sliceIds = useMemo(() => currentDoors.map((d) => d.sliceId), [currentDoors]);
   const globalLayout = useMemo(() => corridorLayoutFromDoors(currentDoors), [currentDoors]);
   const layout = useMemo(
@@ -2611,8 +2702,11 @@ export default function GameCanvas({
   // AccumulativeShadows needs a static scene.
   //
   // Registered on every render — the element is a description, and this
-  // component re-renders only when its own state does.
+  // component re-renders only when its own state does — under the game
+  // world's kind (the slot is per-world now; a transition keeps both
+  // worlds registered, and the canvas portals each into its own scene).
   useWorldScene(
+    "game",
     <>
       <Atmosphere space={activeSpace} dark={dark} playerRef={playerRef} />
         <RenderTrace />
@@ -2656,12 +2750,14 @@ export default function GameCanvas({
             dimmed={corridorHidden}
             dark={dark}
           />
-          {/* The lobby's anchor terminal (§13.1): one size bigger, screen
-              carrying the whole-window index as DOM. Lives in the corridor
-              wrapper so it unmounts with the corridor (HIDE_DELAY_MS after
-              a room engages) and eases down with the same dissolve
-              (`dimmed`). Emissive-only, so the light configuration — and
-              the compile budget — never changes. */}
+          {/* The lobby's anchor hologram (§13.1): one size bigger, the
+              window's whole braid (every threading strand + every slice
+              as a context thread) with the whole-window index floating
+              as DOM above the cable. Lives in the corridor wrapper so it
+              unmounts with the corridor (HIDE_DELAY_MS after a room
+              engages) and eases down with the same dissolve (`dimmed`).
+              Emissive-only, so the light configuration — and the compile
+              budget — never changes. */}
           {!corridorGone && (
             <group
               position={[
@@ -2672,10 +2768,12 @@ export default function GameCanvas({
               rotation={[0, LOBBY_TERMINAL_ANCHOR.rotY, 0]}
               scale={LOBBY_TERMINAL_ANCHOR.scale}
             >
-              <AnchorTerminal
+              <AnchorHologram
                 accent={accent}
                 dimmed={corridorHidden}
-                screenOverlay={
+                strands={lobbyHoloStrands}
+                neighborSlots={currentDoors.length}
+                overlay={
                   <LobbyIndexScreen
                     register={lobbyRegister}
                     hotelName={hotelName}
