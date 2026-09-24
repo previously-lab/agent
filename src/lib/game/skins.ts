@@ -140,12 +140,19 @@ export interface SkinWall {
  *  §3.1 N4 outdoor set (fallen logs, stone circles, reeds…) — §3's
  *  允许自然套装作为槽位填充物. Consumed by the staging lane: the deck
  *  lists the kit ids a skin deals from (the module whitelists still own
- *  per-module character; the deck is the skin's WORLD). */
+ *  per-module character; the deck is the skin's WORLD). A skin that OMITS
+ *  `decks` is the baseline: the room's own whitelists own the draw exactly
+ *  as without a skin — 无皮肤 ≡ 温带. */
 export interface SkinFurnishing {
   family: "interior" | "nature";
   /** Curated kit ids (kits.ts KITS) this skin's rooms draw from —
-   *  validated by the tests against the catalogue. */
-  decks: readonly string[];
+   *  validated by the tests against the catalogue. OMITTED = the
+   *  baseline: the room keeps its own gating (module whitelist +
+   *  archetype/world-class vocabulary), byte-for-byte the skinless path.
+   *  A skin that owns its WORLD (dune / grove / moss / shallows) declares
+   *  its decks and the staging draw runs inside them (REPLACE,
+   *  kits.ts stageInteriorKits). */
+  decks?: readonly string[];
 }
 
 /** Slot 4 — the light mood. Resolved against the EXISTING module-light
@@ -267,7 +274,9 @@ export interface BiomeSkin {
 
 /** The baseline: today's interior registers (timber / plaster / the
  *  interior kit sets / daylight) — the skin the debug pages' default
- *  vocabulary describes. No overrides: the interior stays furniture. */
+ *  vocabulary describes. No overrides: the interior stays furniture. No
+ *  decks: a temperate room furnishes through its own module whitelists,
+ *  byte-for-byte the skinless path (无皮肤 ≡ 温带). */
 const TEMPERATE: BiomeSkin = {
   id: "temperate",
   label: "Temperate interior",
@@ -281,41 +290,10 @@ const TEMPERATE: BiomeSkin = {
     kind: "plaster",
     colors: { day: "#ddd6ca", night: "#8b857a" },
   },
+  // The baseline declares NO decks (see SkinFurnishing.decks): the deck
+  // takeover in kits.ts binds only on a skin that declares its world.
   furnishing: {
     family: "interior",
-    decks: [
-      "bed-corner",
-      "luggage",
-      "reception",
-      "reading",
-      "lockers",
-      "housekeeping",
-      "dining",
-      "coat-bench",
-      "tv-corner",
-      "bookshelf-run",
-      "writing-desk",
-      "sofa-group",
-      "gallery-bench",
-      "pool-loungers",
-      "towel-station",
-      "ring-post",
-      "vanity-corner",
-      "plant-pedestal",
-      "clock-nook",
-      "chair-stack",
-      "sideboard",
-      "fountain-court",
-      "poolside-bench",
-      "ladder-board",
-      "towel-rail",
-      "kitchen-counter",
-      "wardrobe-wall",
-      "storage-rack",
-      "workbench-corner",
-      "art-wall",
-      "mop-corner",
-    ],
   },
   light: { register: "daylight" },
   window: {

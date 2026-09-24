@@ -44,7 +44,16 @@
  * lightRegisterFor draw (same lightSeed salt, same tuning weights). The
  * v0.12 P3 skin line mirrors skins.ts's skinForSlice — the SAME pure
  * source the renderer's skin lane reads, so the outline names the world
- * the render draws. Those are the ONLY renderer rules restated here —
+ * the render draws — and the same skin object also FEEDS the staging
+ * call below (§6.2 overrides replace the slot kinds, the skin's decks
+ * take over the draw), so the furnishing enumeration lists exactly the
+ * pieces a skinned render stages. A THIRD restated rule is the roomId
+ * STRIP (debug-slice.ts debugSliceIdWithoutSkin): every seeded derivation
+ * below runs on the skin-stripped id, so a forced skin never perturbs
+ * the room's own streams (无皮肤 ≡ 温带) — the renderer's skin lane must
+ * strip identically before ITS salt derivations, or the outline and the
+ * render drift apart on skinned slices. Those are the ONLY renderer rules
+ * restated here —
  * flagged so a change to
  * buildRoomFixtures' rules updates both places. `featureHostWalls`
  * derives the host pool from the same resolved template the renderer
@@ -102,6 +111,7 @@ import {
   type SkinWalk,
   type SkinWallKind,
 } from "./skins";
+import { debugSliceIdWithoutSkin } from "./debug-slice";
 import {
   ARCHETYPES,
   type ArchetypeId,
@@ -274,9 +284,23 @@ export function describeRoom(
   sliceId: string,
   options: DescribeRoomOptions = {},
 ): RoomDescription {
+  // The v0.12 P3 biome skin this slice forces (skins.ts skinForSlice) — the
+  // SAME pure source the renderer's skin lane reads. The skin rides the
+  // FULL slice id; the ROOM's identity strips the prefix
+  // (debug-slice.ts debugSliceIdWithoutSkin): a forced skin is a VIEW-layer
+  // force and must never perturb the room's own seeded streams — same unit,
+  // same plan, same doors, same furniture under every skin
+  // (无皮肤 ≡ 温带). Feeding the skin to the staging call below is what
+  // keeps the outline's furnishing in lockstep with a skinned render:
+  // §6.2-overridden slots list the replacement kinds and the
+  // hero/side/open-field kits list the skin's decks. Real memory slices
+  // answer null, and the staging default path is then byte-for-byte the
+  // legacy one.
+  const skin = skinForSlice(sliceId);
+  const roomId = debugSliceIdWithoutSkin(sliceId);
   // The renderer's own derivation order (space.tsx SpaceScene /
   // game-canvas.tsx roomGeometryForSpace), same functions, same arguments.
-  const recipe = compileSpaceRecipe(sliceId, WORLD_SEED);
+  const recipe = compileSpaceRecipe(roomId, WORLD_SEED);
   // The strand-door count steers the composition the same way the renderer
   // steers it (§8.4): absent = 0, the doorless derivation the renderer's
   // own pre-strand resolutions freeze — a description WITH the count
@@ -298,7 +322,7 @@ export function describeRoom(
   const template = composition
     ? compositionTemplateFor(composition)
     : resolveRoomTemplate(
-        sliceId,
+        roomId,
         recipe.worldClass,
         recipe.archetype,
         recipe.size.extent,
@@ -306,7 +330,7 @@ export function describeRoom(
         WORLD_SEED,
         (t) => {
           const p = roomPlanFor(
-            sliceId,
+            roomId,
             width,
             extent,
             bay,
@@ -323,7 +347,7 @@ export function describeRoom(
       );
 
   const plan = roomPlanFor(
-    sliceId,
+    roomId,
     width,
     extent,
     bay,
@@ -340,7 +364,7 @@ export function describeRoom(
   const placedLayout =
     strandDoors > 0 && options.corridorSide !== undefined
       ? placeRoomDoors(
-          sliceId,
+          roomId,
           plan,
           walls,
           hostableWallsFor(
@@ -385,7 +409,7 @@ export function describeRoom(
       ? recipe.worldClass
       : null;
   if (furnishClass) {
-    const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "furniture"));
+    const rng = createRng(deriveSubSeed(WORLD_SEED, roomId, "furniture"));
     const kitIds = composition
       ? [...new Set(composition.modules.flatMap((p) => p.module.kits))]
       : undefined;
@@ -403,8 +427,9 @@ export function describeRoom(
       rng,
       worldClass: furnishClass,
       archetype: recipe.archetype,
+      skin,
       plan,
-      comp: composeRoom(sliceId, plan, scaleFactor, WORLD_SEED),
+      comp: composeRoom(roomId, plan, scaleFactor, WORLD_SEED),
       baseArea: Math.max(0, baseArea - waterArea),
       baseExtent: recipe.size.extent,
       propScale,
@@ -491,23 +516,20 @@ export function describeRoom(
         }
       : null,
     scatter: { trees: spec.treeDensity > 0, rocks: spec.rockDensity > 0 },
-    skin: (() => {
-      const skin = skinForSlice(sliceId);
-      return skin
-        ? {
-            id: skin.id,
-            floor: skin.floor.kind,
-            walk: skin.floor.walk,
-            wall: skin.wall.kind,
-            outside: skin.window.silhouette,
-            horizon: skin.fog.horizon,
-            overrides: (skin.slotOverrides ?? []).map((o) => ({
-              role: o.role,
-              feature: o.feature,
-            })),
-          }
-        : null;
-    })(),
+    skin: skin
+      ? {
+          id: skin.id,
+          floor: skin.floor.kind,
+          walk: skin.floor.walk,
+          wall: skin.wall.kind,
+          outside: skin.window.silhouette,
+          horizon: skin.fog.horizon,
+          overrides: (skin.slotOverrides ?? []).map((o) => ({
+            role: o.role,
+            feature: o.feature,
+          })),
+        }
+      : null,
     furnishing,
     doors: {
       permittedWalls: affordance ? affordance.walls : null,

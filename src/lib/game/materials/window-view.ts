@@ -19,6 +19,7 @@
 
 import { DataTexture, LinearFilter, RepeatWrapping, SRGBColorSpace } from "three";
 import { createRng } from "../seed";
+import type { SkinSilhouette } from "../skins";
 
 export interface WindowViewOptions {
   /** Stream seed — the consumer passes the room's recipe lightSeed. */
@@ -30,6 +31,10 @@ export interface WindowViewOptions {
   /** Pixel size (defaults 256×192 — a 4:3 pane). */
   width?: number;
   height?: number;
+  /** The biome skin's silhouette mix (v0.12 P3, skins.ts): which
+   *  authored far/near strata the bake layers. Omitted = the legacy
+   *  soft-hills pair — the default bake is byte-for-byte unchanged. */
+  silhouette?: SkinSilhouette;
 }
 
 export interface WindowViewImage {
@@ -139,6 +144,46 @@ function chunkedSkyline(
 }
 
 /**
+ * The silhouette strata per mix (v0.12 P3). "soft-hills" is EXACTLY
+ * today's pair — same builders, same parameters — so the default bake
+ * stays byte-for-byte what it was. Every mix draws AFTER the sun halo
+ * draws, so the sun keeps its seeded spot in every skin's sky (the
+ * silhouettes never perturb it). open-water is horizon-only: both
+ * strata read −1 (below every pixel) so nothing paints over the sky
+ * gradient and the sun.
+ */
+interface SilhouettePair {
+  far: (rng: () => number, width: number) => Float32Array;
+  near: (rng: () => number, width: number) => Float32Array;
+}
+
+const SILHOUETTE_PAIRS: Record<SkinSilhouette, SilhouettePair> = {
+  "soft-hills": {
+    far: (rng, w) => rollingSkyline(rng, w, 26, 0.3, 0.5),
+    near: (rng, w) => chunkedSkyline(rng, w, 18, 0.14, 0.34),
+  },
+  dunes: {
+    // Smooth low ridges both strata — sand reads as long calm runs.
+    far: (rng, w) => rollingSkyline(rng, w, 30, 0.26, 0.4),
+    near: (rng, w) => rollingSkyline(rng, w, 12, 0.06, 0.16),
+  },
+  treeline: {
+    // Dense conifer spikes crowding a soft far ridge.
+    far: (rng, w) => rollingSkyline(rng, w, 22, 0.3, 0.46),
+    near: (rng, w) => chunkedSkyline(rng, w, 9, 0.18, 0.44),
+  },
+  "mist-forest": {
+    // Both strata chunked and tall — a crowded wet wall of growth.
+    far: (rng, w) => chunkedSkyline(rng, w, 20, 0.26, 0.44),
+    near: (rng, w) => chunkedSkyline(rng, w, 12, 0.16, 0.38),
+  },
+  "open-water": {
+    far: (_rng, w) => new Float32Array(w).fill(-1),
+    near: (_rng, w) => new Float32Array(w).fill(-1),
+  },
+};
+
+/**
  * Bake the day view. Layout bottom → top: near silhouette (darkest) →
  * far silhouette (hazed toward the fog) → horizon haze → sky gradient
  * with a soft sun halo. A column is painted back-to-front: sky first,
@@ -171,8 +216,9 @@ export function buildWindowViewImage(opts: WindowViewOptions): WindowViewImage {
   const sunR = 0.34 + rng() * 0.12;
   const sunColor = mix(sun, WHITE, 0.45);
 
-  const far = rollingSkyline(rng, width, 26, 0.3, 0.5);
-  const near = chunkedSkyline(rng, width, 18, 0.14, 0.34);
+  const pair = SILHOUETTE_PAIRS[opts.silhouette ?? "soft-hills"];
+  const far = pair.far(rng, width);
+  const near = pair.near(rng, width);
 
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y++) {

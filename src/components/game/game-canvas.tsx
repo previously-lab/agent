@@ -189,6 +189,7 @@ import {
 } from "@/lib/game/clamps";
 import { compositionForRecipe, seamPartitionsFor } from "@/lib/game/room-modules";
 import { WORLD_SEED } from "@/lib/game/seed";
+import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
 import type { ArchetypeId, SpaceRecipe } from "@/lib/game/space-types";
 import {
@@ -289,6 +290,7 @@ import {
   VIGNETTE_DARKNESS,
   VIGNETTE_OFFSET,
   WADE_DEPTH,
+  skinWalkSpeedScale,
 } from "@/lib/game/tuning/render";
 
 /* ------------------------------------------------------------------ */
@@ -802,7 +804,13 @@ function resolveSpaceForDoor(
   archetypeById: ReadonlyMap<string, ArchetypeId>,
   roomDoorCount: number = 0,
 ): ActiveSpace {
-  const recipe = compileSpaceRecipe(door.sliceId);
+  // P3-b1: the recipe compiles from the SKIN-STRIPPED id — the skin is a
+  // view-layer force and must never perturb the room's own streams
+  // (palette/size/lightSeed feed every downstream seed, composition and
+  // scale notation included). The raw id survives on `space.door`,
+  // where the view layer (skinForSlice, probe mirrors) reads it.
+  // Identity for every non-skinned id, so the default path is untouched.
+  const recipe = compileSpaceRecipe(debugSliceIdWithoutSkin(door.sliceId));
   const archetype = archetypeById.get(door.sliceId);
   const finalRecipe = archetype === undefined ? recipe : { ...recipe, archetype };
   const { recipe: scaledRecipe, scale } = scaledRecipeFor(finalRecipe, roomDoorCount);
@@ -1539,7 +1547,16 @@ function GameLoop({
         const dt = Math.min(delta, MAX_DT);
         const speed =
           PLAYER_SPEED *
-          (space === null ? 1 : roomSpeedFactor(space.scale.factor));
+          (space === null
+            ? 1
+            : // v0.12 P3: a forced biome skin's floor walk semantics —
+              // wade floors slow the walk (skin.floor.speed, < 1). The
+              // scale answers 1 on every dry floor and the whole default
+              // path (×1 is exact, so the legacy speed math is untouched).
+              // The force reads the DOOR's raw id — the recipe rides the
+              // skin-stripped id since P3-b1.
+              roomSpeedFactor(space.scale.factor) *
+              skinWalkSpeedScale(space.door.sliceId));
         p.x += move.x * speed * dt;
         p.z += move.z * speed * dt;
       }

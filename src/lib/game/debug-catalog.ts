@@ -8,7 +8,8 @@
  * doors for this list, one door per unit, and the plate carries the authoring
  * label. Walking through a door builds exactly that unit — the force travels in
  * the synthetic slice id (debug-slice.ts), so nothing here needs to be wired
- * into the render path.
+ * into the render path. `&skin=<id>` (v0.12 P3) additionally prefixes every
+ * door with the biome-skin force, for the same-unit-across-worlds pass.
  *
  * THREE PAGES:
  *   - `modules`    — the thirteen standard room modules (§8.2), the sets the
@@ -21,10 +22,12 @@
  */
 import { ROOM_MODULES } from "./room-modules";
 import { ROOM_TEMPLATES } from "./room-templates";
+import { isSkinId } from "./skins";
 import {
   ARCHETYPE_IDS,
   DEBUG_PAGES,
   debugSliceId,
+  debugSliceIdWithSkin,
   parseDebugSlice,
   prettyUnitLabel,
   type DebugPage,
@@ -40,14 +43,29 @@ export interface DebugUnit {
   sliceId: string;
 }
 
-/** Every unit on one page, in authored order. */
-export function debugUnitsFor(page: DebugPage): DebugUnit[] {
+/** Every unit on one page, in authored order.
+ *
+ *  The optional `skinId` (the gallery's `&skin=` parameter, v0.12 P3)
+ *  prefixes every door's slice id with the skin force
+ *  (`dbg-skin:dune+dbg-m:living`), so one gallery walk reviews the SAME
+ *  unit across worlds — the "one living room × four skins" acceptance
+ *  pass. An ABSENT or UNKNOWN id is IGNORED: the doors stay plain
+ *  `dbg-m:*`, byte-for-byte today's gallery (a typo degrades to the
+ *  un-skinned review, never to a broken door). A6 holds either way — the
+ *  skin rides in the slice id, so a door's world is a pure function of
+ *  its id. */
+export function debugUnitsFor(page: DebugPage, skinId?: string | null): DebugUnit[] {
+  const skin = skinId != null && isSkinId(skinId) ? skinId : null;
+  const sliceIdFor = (id: string): string => {
+    const base = debugSliceId(page, id);
+    return skin === null ? base : debugSliceIdWithSkin(skin, base);
+  };
   if (page === "modules") {
     return ROOM_MODULES.map((module) => ({
       page,
       id: module.id,
       label: `${prettyUnitLabel(module.id)} · ${module.label}`,
-      sliceId: debugSliceId(page, module.id),
+      sliceId: sliceIdFor(module.id),
     }));
   }
   if (page === "templates") {
@@ -55,14 +73,14 @@ export function debugUnitsFor(page: DebugPage): DebugUnit[] {
       page,
       id: template.id,
       label: `${prettyUnitLabel(template.id)} · ${template.label}`,
-      sliceId: debugSliceId(page, template.id),
+      sliceId: sliceIdFor(template.id),
     }));
   }
   return ARCHETYPE_IDS.map((id) => ({
     page,
     id,
     label: prettyUnitLabel(id),
-    sliceId: debugSliceId(page, id),
+    sliceId: sliceIdFor(id),
   }));
 }
 

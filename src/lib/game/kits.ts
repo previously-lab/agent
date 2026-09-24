@@ -55,6 +55,7 @@ import {
   type ResolvedSchematicGroup,
   type SchematicPlacement,
 } from "./room-schematic";
+import type { BiomeSkin } from "./skins";
 import {
   HERO_CLEAR,
   HERO_Z_MIN,
@@ -1273,6 +1274,28 @@ export interface KitStaging {
    *  before blueprints. Modules WITHOUT a schematic and every room with
    *  an absent/empty list stage byte-for-byte as today. */
   schematics?: readonly SchematicPlacement[];
+  /** The v0.12 P3 biome skin this room is forced into (skins.ts
+   *  skinForSlice — only a `dbg-skin:` debug slice id resolves one).
+   *  Consumed two ways, both explicit:
+   *  (1) handed to resolveSchematic, where a skin-declared slot override
+   *      (§6.2) REPLACES the slot's seeded kind — anchor, facing and
+   *      clearance untouched — and a lifted slot whose relative HOST was
+   *      replaced is skin-dropped (no floating dressing, I2);
+   *  (2) when the skin DECLARES its furnishing decks, the room's kit DECK
+   *      becomes them: the skin owns the room's WORLD (§3's 结构一致、
+   *      世界不同), so its decks REPLACE the module whitelist / archetype
+   *      vocabulary — deliberately not an INTERSECT (an interior whitelist
+   *      ∩ a nature deck is empty by construction, so the skin would stage
+   *      nothing) and not a UNION (two worlds mixed in one room is what
+   *      §3 forbids). The BASELINE (temperate) omits its decks: the room
+   *      then furnishes through its own gating, byte-for-byte the skinless
+   *      path (无皮肤 ≡ 温带). The worldClasses gate in kitsFor is NOT
+   *      dismantled either way: the skin path looks its curated ids up in
+   *      KITS directly (the catalogue tests audit them against the
+   *      catalogue) and still honors the shore/water rule, so kitsFor
+   *      keeps guarding every unskinned room exactly as before.
+   *  Omitted / null = the default path, byte-for-byte. */
+  skin?: BiomeSkin | null;
   /** The 随机区域 open fields (§8.2) of a COMPOSED room, in the scaled
    *  plan's coordinates: each field dresses with 0–3 seeded pieces drawn
    *  from the same (module-filtered) deck — sparse by construction, never
@@ -1585,19 +1608,32 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
   const drawable = (k: Kit) =>
     // Shore kits are water-bound: no basin, no draw.
     !k.shore || water !== null;
-  let kits = gated.filter(
-    (k) => (!o.kitIds || o.kitIds.includes(k.id)) && drawable(k),
-  );
-  if (kits.length === 0 && o.kitIds && o.kitIds.length > 0) {
-    // 牌堆非空回退 (v0.12 declarations audit): a module whose whitelist ∩
-    // the room's own gating draws NOTHING must never furnish NOTHING — an
-    // empty deck hands the room back to the archetype's bare legacy管线
-    // (the bath rendered as a pure pool basin: four declared kits, zero
-    // placed). The fallback relaxes ONLY the module whitelist (the kitIds
-    // filter), keeping the world-class/archetype gate and the shore rule
-    // intact: the room still furnishes from its archetype's real, gated
-    // vocabulary, never from everything.
-    kits = gated.filter(drawable);
+  const skin = o.skin ?? null;
+  // A skin takes over the draw vocabulary only when it DECLARES its decks
+  // — the baseline (temperate) omits them and furnishes through the room's
+  // own gating, byte-for-byte the skinless path (无皮肤 ≡ 温带).
+  const skinDecks = skin?.furnishing.decks;
+  let kits: readonly Kit[];
+  if (skin && skinDecks && skinDecks.length > 0) {
+    // P3: the skin's decks take over the draw vocabulary (see
+    // KitStaging.skin — REPLACE, explicit path, the shore rule still binds
+    // and the kitsFor gate above keeps guarding the default path).
+    kits = KITS.filter((k) => skinDecks.includes(k.id) && drawable(k));
+  } else {
+    kits = gated.filter(
+      (k) => (!o.kitIds || o.kitIds.includes(k.id)) && drawable(k),
+    );
+    if (kits.length === 0 && o.kitIds && o.kitIds.length > 0) {
+      // 牌堆非空回退 (v0.12 declarations audit): a module whose whitelist ∩
+      // the room's own gating draws NOTHING must never furnish NOTHING — an
+      // empty deck hands the room back to the archetype's bare legacy管线
+      // (the bath rendered as a pure pool basin: four declared kits, zero
+      // placed). The fallback relaxes ONLY the module whitelist (the kitIds
+      // filter), keeping the world-class/archetype gate and the shore rule
+      // intact: the room still furnishes from its archetype's real, gated
+      // vocabulary, never from everything.
+      kits = gated.filter(drawable);
+    }
   }
   if (kits.length === 0) return [];
   const wallInset = o.wallThick + KIT_WALL_CLEAR * propScale;
@@ -1696,6 +1732,7 @@ export function stageInteriorKits(o: KitStaging): StagedKitPiece[] {
         placement,
         rng,
         propScale,
+        o.skin,
       );
       if (!resolved) {
         aborted = true;

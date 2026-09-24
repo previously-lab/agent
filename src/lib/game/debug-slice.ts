@@ -44,6 +44,12 @@ export const DEBUG_PARAM = "debug";
 /** Query parameter carrying the page (`?debug=rooms&page=modules`). */
 export const DEBUG_PAGE_PARAM = "page";
 
+/** Query parameter carrying the gallery's biome-skin force (v0.12 P3):
+ *  `?view=game&debug=rooms&page=modules&skin=dune` prefixes every gallery
+ *  door's slice id with `dbg-skin:dune+`. Only the gallery reads it; the
+ *  room pipeline sees the force inside the slice id, as always. */
+export const DEBUG_SKIN_PARAM = "skin";
+
 const PREFIX: Record<DebugPage, string> = {
   modules: "dbg-m:",
   templates: "dbg-t:",
@@ -57,6 +63,33 @@ const SKIN_PREFIX = "dbg-skin:";
 /** The synthetic slice id one unit builds from. */
 export function debugSliceId(page: DebugPage, id: string): string {
   return `${PREFIX[page]}${id}`;
+}
+
+/** A synthetic slice id with the skin force composed in FRONT — the shape
+ *  the gallery builds when `&skin=` is present:
+ *  `dbg-skin:<skinId>+dbg-m:<id>`. Pure concatenation (the parser is the
+ *  single validation point at consumption time); the skin id's membership
+ *  in the catalogue is the CALLER's job (debug-catalog.ts validates before
+ *  calling). */
+export function debugSliceIdWithSkin(skinId: string, sliceId: string): string {
+  return `${SKIN_PREFIX}${skinId}+${sliceId}`;
+}
+
+/** The slice id with a leading `dbg-skin:<skinId>+` segment REMOVED — the
+ *  ROOM's identity for every seeded derivation. The skin is a VIEW-layer
+ *  force (surfaces / light mood / outside / fog, plus the staging lane's
+ *  slot-kind swaps and deck takeover); it must never perturb the room's
+ *  own streams, so the same unit stages byte-for-byte under every skin —
+ *  无皮肤 ≡ 温带. Identity for every non-skinned id (real memory slices
+ *  above all). A BARE `dbg-skin:<skinId>` (nothing left after the strip)
+ *  keeps the full id: the seeded room stays seeded, only its view is
+ *  skinned. Inverse of debugSliceIdWithSkin. */
+export function debugSliceIdWithoutSkin(sliceId: string): string {
+  const skin = parseDebugSkin(sliceId);
+  if (skin === null) return sliceId;
+  const rest = sliceId.slice(SKIN_PREFIX.length + skin.length);
+  const stripped = rest.startsWith("+") ? rest.slice(1) : rest;
+  return stripped.length > 0 ? stripped : sliceId;
 }
 
 /**

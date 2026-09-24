@@ -10,6 +10,13 @@
  */
 
 import { VOID_COLORS } from "./hotel";
+import {
+  ALPHA_WALL_KINDS,
+  skinForSlice,
+  type BiomeSkin,
+  type SkinHorizon,
+  type SkinSilhouette,
+} from "../skins";
 
 /** Scene mood while no space is active — the void color for the active
  *  theme (shared with the corridor so the end-fade planes always match
@@ -286,3 +293,115 @@ export const STRAND_DOOR_ARRIVAL_INSET = 1;
 
 /** Player spawn: lobby floor, clear of the desk and armchairs. */
 export const SPAWN = { x: 6, z: 0 };
+
+/* ------------------------------------------------------------------ */
+/* Biome-skin render inputs (v0.12 P3) — the pure resolver lane:      */
+/* skin DATA (lib/game/skins.ts) → the plain values the renderer      */
+/* consumes. Every resolver answers null (or the exact legacy         */
+/* constant) for skin === null, so each call site can keep its        */
+/* legacy expression behind a `??` and the default path stays         */
+/* pixel-for-pixel today. Pure: no three.js, no React.                */
+/* ------------------------------------------------------------------ */
+
+/** Slot 1 — the floor albedo for the current theme. null = the palette
+ *  path (callers keep their legacy palette expression — zero change). */
+export function skinFloorHex(skin: BiomeSkin | null, night: boolean): string | null {
+  if (!skin) return null;
+  return night ? skin.floor.colors.night : skin.floor.colors.day;
+}
+
+/** Slot 2 — the wall surface colour for the current theme. Same null
+ *  convention as skinFloorHex. */
+export function skinWallHex(skin: BiomeSkin | null, night: boolean): string | null {
+  if (!skin) return null;
+  return night ? skin.wall.colors.night : skin.wall.colors.day;
+}
+
+/** Slot 2 — THE TRANSPARENCY BUDGET at the renderer's gate (§5): alpha
+ *  comes back ONLY for a glass / water-wall kind that actually declared
+ *  an opacity < 1; every other kind answers null and the caller's
+ *  material stays opaque — the renderer never widens what the data
+ *  allowed (skins.test.ts audits the catalogue; this refuses anyway). */
+export function skinWallAlpha(skin: BiomeSkin | null): {
+  transparent: true;
+  opacity: number;
+} | null {
+  if (!skin) return null;
+  const opacity = skin.wall.opacity ?? 1;
+  if (opacity >= 1) return null;
+  if (!(ALPHA_WALL_KINDS as readonly string[]).includes(skin.wall.kind)) {
+    return null;
+  }
+  return { transparent: true, opacity };
+}
+
+/** Slot 4 — the window-view bake inputs: the skin's DAY colours (the
+ *  night state is applied as the view plane's tint — the
+ *  WINDOW_VIEW_NIGHT_* law) plus the silhouette mix the bake layers.
+ *  null = the palette's own four colours, no silhouette option. */
+export function skinWindowBake(skin: BiomeSkin | null): {
+  sky: string;
+  fog: string;
+  ground: string;
+  sunColor: string;
+  silhouette: SkinSilhouette;
+} | null {
+  if (!skin) return null;
+  return {
+    sky: skin.window.day.sky,
+    fog: skin.window.day.fog,
+    ground: skin.window.day.ground,
+    sunColor: skin.window.day.sun,
+    silhouette: skin.window.silhouette,
+  };
+}
+
+/** Slot 4, night — the view plane's tint hex: the skin's own night haze
+ *  (its world melts into its night fog at night). null = the legacy
+ *  WINDOW_VIEW_NIGHT_TINT constant. */
+export function skinWindowNightTintHex(skin: BiomeSkin | null): string | null {
+  return skin ? skin.window.night.fog : null;
+}
+
+/** Slot 5 — the far-field colour the room melts into. The integrator's
+ *  background consumes this when that lane hooks it; today the room's
+ *  own apron reads it (skinSkirtApronHex). null = palette.fog. */
+export function skinFogHex(skin: BiomeSkin | null, night: boolean): string | null {
+  if (!skin) return null;
+  return night ? skin.fog.night : skin.fog.day;
+}
+
+/** Slot 5 — the apron's reach: fog density multiplies the grounding
+ *  skirt's overhang — the only "fog falloff" this fog-less renderer
+ *  has, the skirt IS the mist band past the walls. 1 on the default
+ *  path (×1 is exact, so the legacy overhang math is untouched). */
+export function skinSkirtOverhangScale(skin: BiomeSkin | null): number {
+  return skin ? skin.fog.density : 1;
+}
+
+/** Slot 5 — how the apron reads against the far field (§3's 远景读法):
+ *  the darkening factor the skirt colour takes per horizon kind. The
+ *  legacy factor 0.62 is soft-hills' entry — the default path's exact
+ *  value. Haze horizons keep the apron close to the fog colour (low
+ *  contrast reads as depth); clear depth sits it darker and crisper. */
+export const SKIN_APRON_DARKEN: Record<SkinHorizon, number> = {
+  "soft-hills": 0.62,
+  "sand-haze": 0.78,
+  "light-shafts": 0.68,
+  "wet-mist": 0.8,
+  "clear-depth": 0.5,
+};
+
+/** Slot 5 — the apron's base colour: the skin's own FOG (the far field
+ *  runs right up to the room's feet — haze horizon, wet mist, clear
+ *  depth). null = palette.ground (the legacy apron base). */
+export function skinSkirtApronHex(skin: BiomeSkin | null, night: boolean): string | null {
+  return skinFogHex(skin, night);
+}
+
+/** Slot 1 walk — the wade multiplier on the in-room walk speed (dry
+ *  floors and the whole default path answer 1, an exact ×1). Pure in
+ *  the slice id (A6): same slice, same speed, any machine. */
+export function skinWalkSpeedScale(sliceId: string): number {
+  return skinForSlice(sliceId)?.floor.speed ?? 1;
+}

@@ -30,7 +30,13 @@ import {
   skinSlotFeatureFor,
   type BiomeSkin,
 } from "@/lib/game/skins";
-import { parseDebugSkin, parseDebugSlice } from "@/lib/game/debug-slice";
+import {
+  parseDebugSkin,
+  parseDebugSlice,
+  DEBUG_SKIN_PARAM,
+  debugSliceIdWithSkin,
+} from "@/lib/game/debug-slice";
+import { debugUnitBySliceId, debugUnitsFor } from "@/lib/game/debug-catalog";
 import { KITS, type KitKind } from "@/lib/game/kits";
 import { roomSchematics } from "@/lib/game/room-schematic";
 import { MODULE_LIGHT_FIXTURES } from "@/lib/game/tuning/room";
@@ -73,9 +79,14 @@ describe("biome skin catalogue", () => {
       expect(skin.wall.kind.length).toBeGreaterThan(0);
       assertHex(skin.wall.colors.day);
       assertHex(skin.wall.colors.night);
-      // Slot 3 — furnishing: family + a non-empty deck of real kits.
+      // Slot 3 — furnishing: family + decks. The BASELINE (temperate)
+      // omits its decks — its rooms keep their own whitelists, byte-for-byte
+      // the skinless path (无皮肤 ≡ 温带). A world-owning skin declares a
+      // non-empty deck of real kits (audited against the catalogue below).
       expect(["interior", "nature"]).toContain(skin.furnishing.family);
-      expect(skin.furnishing.decks.length).toBeGreaterThan(0);
+      if (skin.furnishing.decks !== undefined) {
+        expect(skin.furnishing.decks.length).toBeGreaterThan(0);
+      }
       // Slot 4 — light: one of the five existing module registers.
       expect(MODULE_LIGHT_FIXTURES[skin.light.register]).toBeDefined();
       // Slot 5 — window: four day colours + four night colours + silhouette.
@@ -92,10 +103,17 @@ describe("biome skin catalogue", () => {
 
   it("every furnishing deck id exists in the kits catalogue", () => {
     for (const skin of SKINS) {
-      for (const id of skin.furnishing.decks) {
+      for (const id of skin.furnishing.decks ?? []) {
         expect(KIT_IDS.has(id), `${skin.id} deck "${id}"`).toBe(true);
       }
     }
+  });
+
+  it("exactly the temperate baseline omits its decks — 无皮肤 ≡ 温带", () => {
+    expect(SKINS.filter((s) => s.furnishing.decks === undefined).map((s) => s.id)).toEqual([
+      "temperate",
+    ]);
+    expect(skinById("temperate")!.slotOverrides ?? []).toHaveLength(0);
   });
 
   it("resolves the light fixture through the register table", () => {
@@ -280,6 +298,73 @@ describe("debug force: dbg-skin prefix (P3 acceptance switch)", () => {
   });
 });
 
+describe("gallery &skin= parameter (P3 acceptance switch)", () => {
+  it("the parameter is named skin", () => {
+    expect(DEBUG_SKIN_PARAM).toBe("skin");
+  });
+
+  it("prefixes every door on every page with a valid skin force", () => {
+    for (const page of ["modules", "templates", "archetypes"] as const) {
+      const plain = debugUnitsFor(page);
+      const skinned = debugUnitsFor(page, "dune");
+      expect(skinned).toHaveLength(plain.length);
+      for (let i = 0; i < plain.length; i++) {
+        expect(skinned[i].sliceId).toBe(
+          debugSliceIdWithSkin("dune", plain[i].sliceId),
+        );
+        expect(skinned[i].sliceId.startsWith("dbg-skin:dune+")).toBe(true);
+        // The pin underneath is untouched and recoverable:
+        expect(parseDebugSlice(skinned[i].sliceId)).toEqual({
+          page,
+          id: plain[i].id,
+        });
+        expect(parseDebugSkin(skinned[i].sliceId)).toBe("dune");
+        // The plate lookup resolves through the skin segment too:
+        expect(debugUnitBySliceId(skinned[i].sliceId)?.label).toBe(
+          plain[i].label,
+        );
+        // And the forced world resolves deterministically:
+        expect(skinForSlice(skinned[i].sliceId)?.id).toBe("dune");
+      }
+    }
+  });
+
+  it("A6: the skinned door list is a pure function of (page, skin)", () => {
+    expect(debugUnitsFor("modules", "grove")).toEqual(
+      debugUnitsFor("modules", "grove"),
+    );
+    expect(debugUnitsFor("modules", "grove")).not.toEqual(
+      debugUnitsFor("modules", "moss"),
+    );
+  });
+
+  it("ignores an absent, empty or unknown skin — the plain gallery, byte-for-byte", () => {
+    const plain = debugUnitsFor("modules");
+    expect(debugUnitsFor("modules", null)).toEqual(plain);
+    expect(debugUnitsFor("modules", undefined)).toEqual(plain);
+    expect(debugUnitsFor("modules", "")).toEqual(plain);
+    expect(debugUnitsFor("modules", "volcano")).toEqual(plain);
+    for (const unit of debugUnitsFor("modules", "volcano")) {
+      expect(unit.sliceId.startsWith("dbg-skin:")).toBe(false);
+    }
+  });
+
+  it("temperate is not a special world at the parse layer", () => {
+    // No branch anywhere in the parse layer keys on WHICH skin id rides the
+    // prefix — temperate parses exactly like every other id, and the unit
+    // pin underneath resolves byte-for-byte as if the prefix were absent.
+    const id = "dbg-skin:temperate+dbg-m:living";
+    expect(parseDebugSkin(id)).toBe("temperate");
+    expect(parseDebugSlice(id)).toEqual(parseDebugSlice("dbg-m:living"));
+    expect(skinForSlice(id)?.id).toBe("temperate");
+    expect(skinForSlice(id)).toBe(skinForSlice(id));
+    // And the gallery can force it like any other skin:
+    expect(debugUnitsFor("modules", "temperate")[0].sliceId).toBe(
+      "dbg-skin:temperate+dbg-m:foyer",
+    );
+  });
+});
+
 describe("A6: same slice, same skin, same outline", () => {
   it("resolves a forced skin deterministically", () => {
     const id = "dbg-skin:grove+dbg-m:living";
@@ -306,6 +391,27 @@ describe("A6: same slice, same skin, same outline", () => {
     const desc = describeRoom(id);
     expect(desc.skin).toBeNull();
     expect(JSON.stringify(describeRoom(id))).toBe(JSON.stringify(desc));
+  });
+
+  it("the skin never perturbs the room's own streams (无皮肤 ≡ 温带)", () => {
+    // The skin is a VIEW-layer force: the temperate-prefixed outline is
+    // the bare outline plus exactly the skin block — same recipe, plan,
+    // doors and furnishing (the renderer's skin lane strips the prefix
+    // identically before its own salt derivations).
+    const bare = describeRoom("dbg-m:living");
+    const temp = describeRoom("dbg-skin:temperate+dbg-m:living");
+    expect(temp.skin?.id).toBe("temperate");
+    // Everything except the address header and the skin block is identical:
+    const body = (d: ReturnType<typeof describeRoom>) => ({
+      ...d,
+      sliceId: "",
+      skin: null,
+    });
+    expect(body(temp)).toEqual(body(bare));
+    // ...while a world-owning skin DOES diverge (decks + overrides).
+    expect(describeRoom("dbg-skin:dune+dbg-m:living").furnishing).not.toEqual(
+      bare.furnishing,
+    );
   });
 
   it("formats the skin in both locales with matching line counts", () => {

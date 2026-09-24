@@ -43,6 +43,24 @@
  * slot: chance → count → per-piece (kind, anchor, scale) → facing jitter.
  * Same slice ⇒ same stream ⇒ same room.
  *
+ * SKIN OVERRIDES (v0.12 P3 §6.2 — the orchestration wiring). resolveSchematic
+ * takes the biome skin the room is forced into as an OPTIONAL argument: a
+ * slot whose role the skin overrides (skins.ts skinSlotFeatureFor) draws the
+ * skin's environment kind INSTEAD of its seeded accepts pick. The kind is
+ * all that changes — the authored anchor, facing, clearance and the pushKit
+ * machinery ride unchanged, and the seeded pick's draw is still consumed, so
+ * every NON-overridden slot (and the whole room downstream) keeps the legacy
+ * stream byte-for-byte. Absent / null reproduces today's bytes exactly.
+ * COMPANION RULE — THE GENERAL HOST-DROP (P3-b2): when an override
+ * replaced a slot that HOSTS lifted dressing (an EARLIER relative slot
+ * with `lift` resting on it), the dressing's authored top may not exist
+ * on the replacement (a fountain basin is not the coffee table's 0.4 m
+ * dressing surface; a moss bed carries none at all) — the dependent
+ * lifted slot then stages NOTHING, so no piece hangs in the air (I2's
+ * never-floating rule). Same stream discipline (the dropped slot's draws
+ * are still consumed); the rule binds to ANY override × ANY lifted
+ * dependent, never to one skin's data.
+ *
  * COORDINATES. Slot distances are AUTHORED METERS scaled by the placement's
  * `scale` (plan meters per authored meter — the module's experienced scale
  * factor); piece sizes ride `propScale` exactly like every other prop
@@ -52,6 +70,7 @@
  */
 import type { KitKind } from "./kits";
 import type { PlacedModule } from "./room-modules";
+import { skinSlotFeatureFor, type BiomeSkin } from "./skins";
 import { SCHEMATICS } from "./schematics";
 import type {
   RoomSchematic,
@@ -248,6 +267,11 @@ export function resolveSchematic(
   placement: SchematicPlacement,
   rng: () => number,
   propScale: number,
+  /** §6.2 (P3 wiring): the biome skin the room is forced into, if any —
+   *  an overridden role draws the skin's environment kind instead of its
+   *  seeded accepts pick (kind-only replacement; see the module header).
+   *  Absent / null = the legacy resolution, byte-for-byte. */
+  skin?: BiomeSkin | null,
 ): ResolvedSchematicGroup[] | null {
   const { schematic, rect, exposed, scale } = placement;
   const focal = focalEdgeFor(schematic, rect, exposed);
@@ -267,6 +291,9 @@ export function resolveSchematic(
   /** Resolved slots by role — relative/center/toward anchors read these
    *  (they must be declared EARLIER — the audit enforces it). */
   const roles = new Map<string, ResolvedSlot>();
+  /** §6.2: roles whose kind a skin override replaced — a lifted slot
+   *  resting on one of them is skin-dropped (the host-drop rule, below). */
+  const skinReplacedRoles = new Set<string>();
   /** Seeded dx signs by role (the "opposite" side refs read these). */
   const signs = new Map<string, 1 | -1>();
   /** Group anchor positions (the wallAligned anchors read these). */
@@ -291,6 +318,31 @@ export function resolveSchematic(
       const count = slot.count ? Math.max(1, Math.round(range(slot.count))) : 1;
       const variety = slot.scale ? range(slot.scale) : 1;
       const pieceScale = propScale * variety;
+
+      // §6.2: ask the skin FIRST — an overridden role draws the skin's
+      // environment kind. The seeded pick below still consumes its draw
+      // (its result is discarded), so the stream — and with it every
+      // non-overridden slot's anchor, facing and clearance — stays the
+      // legacy one byte-for-byte.
+      const skinKind = skin ? skinSlotFeatureFor(skin, slot.role) : undefined;
+      if (skinKind !== undefined) skinReplacedRoles.add(slot.role);
+
+      // §6.2 companion rule — the GENERAL host-drop (see the module
+      // header): a LIFTED slot (tabletop dressing, `slot.lift`) rests ON
+      // its relative host's authored top. When a skin override replaced
+      // the HOST's kind, that top may no longer exist and the lifted
+      // pieces would hang in the air (I2) — so the slot stages NOTHING.
+      // The slot's seeded draws are still consumed (the stream stays
+      // legacy, same discipline as the kind override) and its resolved
+      // role still registers (the SPOT is real — the host's replacement
+      // stands there, so later relative/toward references keep their
+      // legacy behavior); only the pieces, the group's first-piece anchor
+      // claim and the footprint contribution are suppressed. Any override
+      // × any lifted dependent resolves by this one rule.
+      const hostSkinDropped =
+        slot.lift !== undefined &&
+        slot.at.kind === "relative" &&
+        skinReplacedRoles.has(slot.at.slot);
 
       // — anchor: world position (and the wall it landed on, for the
       // facing/spread) for every piece of this slot.
@@ -459,16 +511,36 @@ export function resolveSchematic(
 
       for (let k = 0; k < world.length; k++) {
         const p = world[k];
-        const kind = pickKind(slot.accepts);
+        // The seeded pick ALWAYS consumes its draw — even when the skin
+        // overrides the result — so the stream (and with it every
+        // non-overridden slot's anchors, facings and chance gates) stays
+        // byte-identical to the legacy room; the override changes the
+        // KIND and nothing else.
+        const seededKind = pickKind(slot.accepts);
+        const kind = skinKind ?? seededKind;
         const rotAbs = abs(p);
-        // the group anchors at its FIRST placed piece
-        if (!placedAny) {
+        // the group anchors at its FIRST EMITTED piece — a skin-dropped
+        // lifted slot anchors nothing (the host-drop rule)
+        if (!placedAny && !hostSkinDropped) {
           placedAny = true;
           gx = p.x;
           gz = p.z;
           grot = rotAbs;
           groupAnchors.set(gid, { x: p.x, z: p.z });
         }
+        const resolved: ResolvedSlot = {
+          x: p.x,
+          z: p.z,
+          rotY: rotAbs,
+          scale: pieceScale,
+          flat: slot.flat === true,
+          clearance: slot.clearance,
+        };
+        // The role registers regardless (the SPOT is real — the host's
+        // replacement stands there); only the PIECES are suppressed when
+        // the slot is skin-dropped.
+        if (k === 0) roles.set(slot.role, resolved);
+        if (hostSkinDropped) continue;
         // group-frame offsets (placeKit maps them back with grot)
         const c = Math.cos(grot);
         const s = Math.sin(grot);
@@ -485,14 +557,6 @@ export function resolveSchematic(
           slot.lift !== undefined
             ? slot.lift * (host?.scale ?? pieceScale)
             : 0;
-        const resolved: ResolvedSlot = {
-          x: p.x,
-          z: p.z,
-          rotY: rotAbs,
-          scale: pieceScale,
-          flat: slot.flat === true,
-          clearance: slot.clearance,
-        };
         pieces.push({
           kind,
           dx,
@@ -501,7 +565,6 @@ export function resolveSchematic(
           dy,
           scale: pieceScale,
         });
-        if (k === 0) roles.set(slot.role, resolved);
         if (!slot.flat) {
           footprint = Math.max(
             footprint,

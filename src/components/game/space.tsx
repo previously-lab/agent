@@ -189,7 +189,17 @@ import {
 import {
   SUN_SHADOW_BIAS,
   SUN_SHADOW_NORMAL_BIAS,
+  SKIN_APRON_DARKEN,
+  skinFloorHex,
+  skinSkirtApronHex,
+  skinSkirtOverhangScale,
+  skinWallAlpha,
+  skinWallHex,
+  skinWindowBake,
+  skinWindowNightTintHex,
 } from "@/lib/game/tuning/render";
+import { skinForSlice, skinLightFixture } from "@/lib/game/skins";
+import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
 import {
   kitsFor,
   planArea,
@@ -7273,7 +7283,11 @@ function buildRoomFixtures(
    *  filter is what keeps the two apart. */
   featureSources: ReadonlySet<number>,
 ): RoomFixtures {
-  const rng = createRng(hashString(`${WORLD_SEED}:${recipe.sliceId}:fixtures`));
+  // P3-b1: the fixtures' stream rides the skin-stripped id — a forced
+  // skin moves the lamp/window/clerestory never.
+  const rng = createRng(
+    hashString(`${WORLD_SEED}:${debugSliceIdWithoutSkin(recipe.sliceId)}:fixtures`),
+  );
   const { extent } = scaled.size;
   const width = scaled.width;
 
@@ -7647,11 +7661,17 @@ function GlassWallSpan({
 function ModuleSconce({
   anchor,
   wallScale,
+  skinFixture,
 }: {
   anchor: ModuleSconceAnchor;
   wallScale: number;
+  /** v0.12 P3: a forced biome skin REPLACES the register table lookup
+   *  (skins.ts skinLightFixture — the skin's register + tint/level) —
+   *  absent = the legacy MODULE_LIGHT_FIXTURES[register] path. The
+   *  ×scale² law and the pool are the consumer's, unchanged. */
+  skinFixture?: { color: string; intensity: number; pool: number };
 }) {
-  const fixture = MODULE_LIGHT_FIXTURES[anchor.register] ?? MODULE_LIGHT_FIXTURES.quiet;
+  const fixture = skinFixture ?? MODULE_LIGHT_FIXTURES[anchor.register] ?? MODULE_LIGHT_FIXTURES.quiet;
   const y = 2.05 * wallScale;
   // The group turns local +z onto the wall's inward normal: the plate sits
   // on the face, the dome proud of it, the light and pool inside the room.
@@ -8073,6 +8093,10 @@ export function roomTemplateForDoorCount(
   wallThick: number,
   roomDoorCount: number,
 ): RoomTemplate | null {
+  // P3-b1: the strip rides INSIDE this shared helper — the movement
+  // clamp's derivation (game-canvas.tsx) calls it too, so one strip here
+  // keeps BOTH lanes' template selection on the skinless room id.
+  const seedId = debugSliceIdWithoutSkin(recipe.sliceId);
   // MODULAR COMPOSITION (§8): an interior room's template IS its module
   // composition folded into the renderer's existing input — the same
   // resolution scaledRecipeFor already sized the plan from, so the template
@@ -8087,7 +8111,7 @@ export function roomTemplateForDoorCount(
   const bay = COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35));
   const capacityFor = (t: RoomTemplate) => {
     const p = roomPlanFor(
-      recipe.sliceId,
+      seedId,
       width,
       extent,
       bay,
@@ -8098,7 +8122,7 @@ export function roomTemplateForDoorCount(
     return doorCapacityFor(p, w, null, doorAffordanceFor(t));
   };
   return resolveRoomTemplate(
-    recipe.sliceId,
+    seedId,
     recipe.worldClass,
     recipe.archetype,
     recipe.size.extent,
@@ -8189,6 +8213,26 @@ export function SpaceScene({
   const { extent } = scaledRecipe.size;
   const width = scaledRecipe.width;
 
+  // v0.12 P3 — the biome skin this slice forces (skins.ts). null on the
+  // default path (every real memory slice, and any unknown id): every
+  // resolver below answers null and each call site keeps its legacy
+  // expression behind a `??` / branch — the default room renders
+  // pixel-for-pixel as before. A forced skin is a pure function of the
+  // slice id (A6), so the same slice always rebuilds the same world.
+  // The force reads the DOOR's id — the corridor-facing identity: the
+  // recipe may carry the skin-stripped id (P3-b1), and the skin
+  // must still recognise itself.
+  const skin = skinForSlice(door.sliceId);
+  // P3-b1: the skin rides the VIEW, never the SEEDS. Every seeded
+  // derivation in this render runs on the skin-stripped id
+  // (debug-slice.ts debugSliceIdWithoutSkin — the same strip
+  // describe-room's outline lane uses): the same unit stages
+  // byte-for-byte under every skin, and temperate ≡ no skin. On the
+  // mounted path the recipe is already stripped (game-canvas compiles
+  // it so), making this an identity; standalone mounts feeding a raw
+  // skinned recipe are corrected here.
+  const seedId = debugSliceIdWithoutSkin(recipe.sliceId);
+
   // LAYOUT TEMPLATE (v0.11-room-interiors §7): the design layer above the
   // plan. Selection is a pure function of the slice, its class/archetype,
   // the UNSCALED extent tier, and the REAL strand-door count — a 20-door
@@ -8235,7 +8279,8 @@ export function SpaceScene({
   const plan = useMemo(
     () =>
       roomPlanFor(
-        recipe.sliceId,
+        // P3-b1: seeded on the skin-stripped id (seedId).
+        seedId,
         width,
         extent,
         COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
@@ -8244,11 +8289,11 @@ export function SpaceScene({
         // probability-table draw runs unchanged.
         template ? templatePlanFor(template) : undefined,
       ),
-    [recipe, width, extent, scaleFactor, template],
+    [seedId, width, extent, scaleFactor, template],
   );
   const comp = useMemo(
-    () => composeRoom(recipe.sliceId, plan, scaleFactor),
-    [recipe, plan, scaleFactor],
+    () => composeRoom(seedId, plan, scaleFactor),
+    [seedId, plan, scaleFactor],
   );
   // Scatter clearances ride the prop scale: giant props need giant margins,
   // dollhouse props keep their dollhouse clearances.
@@ -8384,7 +8429,7 @@ export function SpaceScene({
   const terminalAnchor = useMemo(
     () =>
       roomTerminalFor({
-        sliceId: recipe.sliceId,
+        sliceId: seedId,
         plan,
         comp,
         width,
@@ -8392,7 +8437,7 @@ export function SpaceScene({
         propScale,
         water: waterRect,
       }),
-    [recipe, plan, comp, width, wallThick, propScale, waterRect],
+    [seedId, plan, comp, width, wallThick, propScale, waterRect],
   );
   // The pool's wave-equation driver (materials/wave-driver.ts): created
   // HERE, not in the WaterSurface component, because the pool-floor
@@ -8436,7 +8481,7 @@ export function SpaceScene({
       return { doors: [], relaxed: false, doubleRow: false, axialOverflow: false };
     const hostable = hostableWallsFor(plan, walls, dir);
     return placeRoomDoors(
-      recipe.sliceId,
+      seedId,
       plan,
       walls,
       hostable,
@@ -8444,7 +8489,7 @@ export function SpaceScene({
       WORLD_SEED,
       template ? doorAffordanceFor(template) : undefined,
     );
-  }, [recipe, plan, walls, dir, roomDoorCount, template]);
+  }, [seedId, plan, walls, dir, roomDoorCount, template]);
 
   // Clearance consumers (scatter, kits, fixtures, structures, features)
   // test approaches against the clearance SET: the doors themselves plus a
@@ -8685,7 +8730,7 @@ export function SpaceScene({
     // hero would split the room's one focus. The pool biome (nature with
     // an empty kit deck) keeps its rim fixtures here.
     if (natureKitDeck.length > 0) return { props: [] as PropPlacement[] };
-    const rng = createRng(deriveSubSeed(WORLD_SEED, recipe.sliceId, "props"));
+    const rng = createRng(deriveSubSeed(WORLD_SEED, seedId, "props"));
     const base = MOTIF_KINDS[recipe.archetype];
     const kinds =
       recipe.worldClass === "hybrid"
@@ -8705,7 +8750,7 @@ export function SpaceScene({
         clearanceDoors,
       ),
     };
-  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors]);
+  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, scatterEdge, propScale, clearanceDoors, seedId]);
 
   // Interiors are furnished by KITS (v0.11-room-interiors §3.1): composed,
   // wall-anchored groupings that face the path/door/hero, staged by
@@ -8727,7 +8772,7 @@ export function SpaceScene({
       return [];
     }
     const rng = createRng(
-      deriveSubSeed(WORLD_SEED, recipe.sliceId, "furniture"),
+      deriveSubSeed(WORLD_SEED, seedId, "furniture"),
     );
     const toPlacement = (p: StagedKitPiece): PropPlacement => ({
       kind: p.kind,
@@ -8762,6 +8807,9 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
+        // v0.12 P3: the forced biome skin — §6.2 slot overrides and the
+        // skin's curated decks ride in through the staging machine.
+        skin,
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       }).map(toPlacement);
     }
@@ -8793,6 +8841,11 @@ export function SpaceScene({
       const staging = {
         rng,
         archetype: recipe.archetype,
+        // v0.12 P3: the forced biome skin — §6.2 slot overrides replace
+        // seeded slot kinds and the skin's decks take over the draw
+        // vocabulary (the staging machine's own contract; null = the
+        // byte-for-byte legacy path).
+        skin,
         plan,
         comp,
         baseExtent: recipe.size.extent,
@@ -8880,6 +8933,7 @@ export function SpaceScene({
         rng,
         worldClass: "wonder",
         archetype: recipe.archetype,
+        skin,
         plan,
         comp,
         baseExtent: recipe.size.extent,
@@ -8893,7 +8947,7 @@ export function SpaceScene({
       return [...rugs, ...kits.map(toPlacement)];
     }
     return furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
-  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles]);
+  }, [recipe, scaledRecipe, natureKitDeck, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
 
 
   // Internal structure (L/XL only, on the scaled tier): partition or
@@ -8903,18 +8957,18 @@ export function SpaceScene({
   const structure = useMemo(() => {
     if (roomComposition) return { kind: "none" as const };
     const rng = createRng(
-      deriveSubSeed(WORLD_SEED, recipe.sliceId, "structure"),
+      deriveSubSeed(WORLD_SEED, seedId, "structure"),
     );
     return buildStructure(rng, scaledRecipe, plan, clearanceDoors);
-  }, [recipe, scaledRecipe, plan, clearanceDoors, roomComposition]);
+  }, [scaledRecipe, plan, clearanceDoors, roomComposition, seedId]);
 
   // Wonder-room animals: ducks / cats+dogs / balloons from one stream.
   const animals = useMemo(() => {
     const rng = createRng(
-      deriveSubSeed(WORLD_SEED, recipe.sliceId, "animals"),
+      deriveSubSeed(WORLD_SEED, seedId, "animals"),
     );
     return buildAnimals(rng, recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors);
-  }, [recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors]);
+  }, [recipe, scaledRecipe, waterRect, plan, creatureScale, clearanceDoors, seedId]);
 
   // Dollhouse cutaway: entrance segments always keep full height (the door
   // handoff depends on them); of the rest, the segments whose outward face
@@ -9048,6 +9102,13 @@ export function SpaceScene({
   // and cool at night while the lamp burns brighter (readability never
   // depends on the window).
   const night = useAppDark();
+  // The skin's render inputs for the CURRENT theme — primitive, so the
+  // memo dependency arrays below stay flat. null/1 = the legacy path.
+  const floorHex = skinFloorHex(skin, night);
+  const wallHex = skinWallHex(skin, night);
+  const wallAlpha = skinWallAlpha(skin);
+  const skirtHex = skinSkirtApronHex(skin, night);
+  const windowNightTint = skinWindowNightTintHex(skin);
   // Fixture LIGHT takes the palette's own sun color (the room's one light
   // register, A5), lifted toward white so the hue survives the bloom, then
   // modulated by the room's seeded light register (§11.2 item 4: the
@@ -9066,7 +9127,9 @@ export function SpaceScene({
   // a cool half-strength wash — dark, never black.
   const windowViewColor = useMemo(() => {
     if (night) {
-      return new THREE.Color(WINDOW_VIEW_NIGHT_TINT).multiplyScalar(
+      // A forced skin tints the night view with its own night haze; the
+      // gain law is unchanged (WINDOW_VIEW_NIGHT_*).
+      return new THREE.Color(windowNightTint ?? WINDOW_VIEW_NIGHT_TINT).multiplyScalar(
         WINDOW_VIEW_NIGHT_GAIN,
       );
     }
@@ -9075,25 +9138,41 @@ export function SpaceScene({
       .multiplyScalar(
         WINDOW_VIEW_DAY_GAIN * Math.min(1.2, Math.max(0.6, recipe.palette.sunIntensity)),
       );
-  }, [recipe, night]);
+  }, [recipe, night, windowNightTint]);
   // The baked outside, one per room: sky gradient + sun halo + far/near
   // silhouettes, every color from this room's palette (§11.2 — the blue
   // room admits pale-blue daylight). The window samples it once; the
   // clerestory tiles it one view per mullion bay.
   const windowView = useMemo(
-    () =>
-      createWindowViewTexture(
+    () => {
+      // v0.12 P3: a forced skin bakes ITS outside (day colours + its
+      // silhouette mix); the palette's own four colours stay the default.
+      const bake = skinWindowBake(skin);
+      return createWindowViewTexture(
         buildWindowViewImage({
           seed: (recipe.lightSeed ^ 0x2c1b3d) >>> 0,
-          sky: recipe.palette.sky,
-          fog: recipe.palette.fog,
-          ground: recipe.palette.ground,
-          sunColor: recipe.palette.sunColor,
+          sky: bake?.sky ?? recipe.palette.sky,
+          fog: bake?.fog ?? recipe.palette.fog,
+          ground: bake?.ground ?? recipe.palette.ground,
+          sunColor: bake?.sunColor ?? recipe.palette.sunColor,
+          ...(bake ? { silhouette: bake.silhouette } : {}),
         }),
-      ),
-    [recipe],
+      );
+    },
+    [recipe, skin],
   );
   useEffect(() => () => windowView.dispose(), [windowView]);
+  // v0.12 P3 probe mirror (loose cast — debug.ts's type stays untouched):
+  // the forced biome skin on the mounted room, so probes/e2e can assert
+  // the skin lane took without entering the scene graph. null = default.
+  useEffect(() => {
+    (GAME_DEBUG as unknown as Record<string, unknown>).skin = skin?.id ?? null;
+    return () => {
+      if ((GAME_DEBUG as unknown as Record<string, unknown>).skin === (skin?.id ?? null)) {
+        (GAME_DEBUG as unknown as Record<string, unknown>).skin = null;
+      }
+    };
+  }, [skin]);
   // Probe/e2e aid (GAME_DEBUG is a plain object; the fixture block is
   // optional debug surface, typed loosely to keep debug.ts untouched).
   useEffect(() => {
@@ -9163,7 +9242,13 @@ export function SpaceScene({
   // drops below SKIRT_OVERHANG_MIN — a miniature room still grounds its
   // diorama in the mist.
   const skirtGeometry = useMemo(() => {
-    const overhang = Math.max(SKIRT_OVERHANG_MIN, SKIRT_OVERHANG * scaleFactor);
+    // v0.12 P3: a forced skin's fog density stretches the apron — the
+    // skirt IS this renderer's mist band (there is no scene fog). ×1 on
+    // the default path, an exact no-op.
+    const overhang = Math.max(
+      SKIRT_OVERHANG_MIN,
+      SKIRT_OVERHANG * scaleFactor * skinSkirtOverhangScale(skin),
+    );
     const sizeX = width + overhang * 2;
     const sizeZ = extent + overhang * 2;
     const halfW = width / 2;
@@ -9182,12 +9267,18 @@ export function SpaceScene({
     hole.closePath();
     shape.holes.push(hole);
     return new THREE.ShapeGeometry(shape);
-  }, [width, extent, scaleFactor]);
+  }, [width, extent, scaleFactor, skin]);
   useEffect(() => () => skirtGeometry.dispose(), [skirtGeometry]);
-  const skirtColor = useMemo(
-    () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.62),
-    [recipe],
-  );
+  const skirtColor = useMemo(() => {
+    // v0.12 P3: the apron wears the skin's own FOG out past the walls
+    // (the far field runs up to the room's feet), darkened per the
+    // horizon's 远景读法 (SKIN_APRON_DARKEN). The default path is
+    // palette.ground × 0.62, exactly as before.
+    const base = skirtHex
+      ? new THREE.Color(skirtHex)
+      : new THREE.Color(recipe.palette.ground);
+    return base.multiplyScalar(skin ? SKIN_APRON_DARKEN[skin.fog.horizon] : 0.62);
+  }, [recipe, skirtHex, skin]);
 
   const canopyColor = useMemo(
     () =>
@@ -9198,8 +9289,14 @@ export function SpaceScene({
     [recipe],
   );
   const wallColor = useMemo(
-    () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.8),
-    [recipe],
+    () =>
+      // v0.12 P3: a forced skin's wall material wears its authored
+      // day/night colour as-is; the default path is the palette's
+      // ground darkened 20%, exactly as before.
+      wallHex
+        ? new THREE.Color(wallHex)
+        : new THREE.Color(recipe.palette.ground).multiplyScalar(0.8),
+    [recipe, wallHex],
   );
   // Dado panel stiles sit a touch lighter than the wall they panel (the
   // baseboard and rail reuse the dark cap-rail trim color).
@@ -9265,7 +9362,10 @@ export function SpaceScene({
     const roleOfRun = (runIndex: number): string =>
       wallRoleFor(plan, walls[wallRuns[runIndex].source]);
     GAME_DEBUG.room = {
-      sliceId: recipe.sliceId,
+      // The corridor-facing (raw) id — what a probe asked to mount. The
+      // recipe may carry the skin-stripped id (P3-b1); for every real
+      // slice the two are identical.
+      sliceId: door.sliceId,
       doorCount: roomDoorCount,
       cls: `${recipe.worldClass}/${recipe.archetype}/${recipe.size.id}`,
       modules: roomComposition?.modules.map((p) => p.module.id) ?? [],
@@ -9331,9 +9431,9 @@ export function SpaceScene({
         : null,
     };
     return () => {
-      if (GAME_DEBUG.room?.sliceId === recipe.sliceId) GAME_DEBUG.room = null;
+      if (GAME_DEBUG.room?.sliceId === door.sliceId) GAME_DEBUG.room = null;
     };
-  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor, wallThick, seamPartitions]);
+  }, [recipe, roomDoorCount, roomComposition, scaledRecipe, template, doorLayout, plan, walls, wallRuns, roomFeatures, furniture, scaleFactor, wallThick, seamPartitions, door]);
   /* MATERIAL WIRING (v0.11 §2) — procedural maps from lib/game/materials.
    * Sunken rooms (pool / pool-hall / ducks) are glazed-tile basins: deck
    * AND bowl sample the shared tile maps with one texture cell per physical
@@ -9354,13 +9454,15 @@ export function SpaceScene({
     if (!tiledGround) return null;
     return createSurfaceMaterial({
       kind: "tile",
-      color: recipe.palette.ground,
+      // v0.12 P3: a forced skin's floor wears its authored colour even
+      // in the glazed basin; null keeps the palette ground.
+      color: floorHex ?? recipe.palette.ground,
       spanX: width,
       spanY: extent,
       flatShading: true,
       normalScale: TILE_NORMAL_SCALE,
     });
-  }, [tiledGround, recipe, width, extent]);
+  }, [tiledGround, recipe, width, extent, floorHex]);
   useEffect(() => () => groundMaterial?.dispose(), [groundMaterial]);
   // Pool-floor caustics (materials/caustics-surface.ts): a two-layer light
   // web patched onto the ground material's shader, masked to the water
@@ -9397,13 +9499,17 @@ export function SpaceScene({
   // single module covers keep the room default.
   const wallRoleColors = useMemo(() => {
     const p = recipe.palette;
+    // v0.12 P3: a forced skin re-skins EVERY register to its one wall
+    // material — the biome's world is uniform at eye level; null keeps
+    // the per-role palette map untouched.
+    const skinned = wallHex ? new THREE.Color(wallHex) : null;
     return {
-      plaster: wallColor,
-      panelling: new THREE.Color(p.wood),
-      tile: new THREE.Color(p.wall),
-      shelf: new THREE.Color(p.fabric),
+      plaster: skinned ?? wallColor,
+      panelling: skinned ?? new THREE.Color(p.wood),
+      tile: skinned ?? new THREE.Color(p.wall),
+      shelf: skinned ?? new THREE.Color(p.fabric),
     } as const;
-  }, [wallColor, recipe]);
+  }, [wallColor, recipe, wallHex]);
   const wallRunRoles = useMemo(
     () =>
       wallRuns.map(({ wall }) =>
@@ -9434,9 +9540,13 @@ export function SpaceScene({
           spanY: wallHeights[i],
           flatShading: true,
           normalScale: wallNormalScale,
+          // v0.12 P3: the transparency budget at the wall surface — only
+          // a glass / water-wall skin may carry alpha (skinWallAlpha
+          // gates it; absent = the legacy opaque material).
+          ...(wallAlpha ?? {}),
         }),
       ),
-    [wallRuns, wallHeights, wallColor, surfaceKind, wallNormalScale, wallRunRoles, wallRoleColors],
+    [wallRuns, wallHeights, wallColor, surfaceKind, wallNormalScale, wallRunRoles, wallRoleColors, wallAlpha],
   );
   useEffect(
     () => () => {
@@ -9568,9 +9678,11 @@ export function SpaceScene({
     const slotFor = { timber: p.wood, carpet: p.fabric, tile: p.wall, deck: p.wood };
     return roomComposition.modules.map((placed) => ({
       rect: placed.rect,
-      color: new THREE.Color(slotFor[placed.module.floor] ?? p.ground),
+      // v0.12 P3: a forced skin tints every module's footprint with its
+      // one floor material; null keeps the per-role palette slots.
+      color: new THREE.Color(floorHex ?? slotFor[placed.module.floor] ?? p.ground),
     }));
-  }, [roomComposition, parquet, recipe]);
+  }, [roomComposition, parquet, recipe, floorHex]);
   const capColor = useMemo(
     () => new THREE.Color(recipe.palette.ground).multiplyScalar(0.45),
     [recipe],
@@ -9697,7 +9809,7 @@ export function SpaceScene({
         />
         {groundMaterial ? null : (
           <meshStandardMaterial
-            color={recipe.palette.ground}
+            color={floorHex ?? recipe.palette.ground}
             roughness={1}
             flatShading
           />
@@ -9710,7 +9822,7 @@ export function SpaceScene({
         <FloorParquet
           width={width}
           extent={extent}
-          base={recipe.palette.ground}
+          base={floorHex ?? recipe.palette.ground}
         />
       )}
 
@@ -10339,7 +10451,12 @@ export function SpaceScene({
           register's findable source — wall plate, lit dome, real point
           light, additive pool. Non-composed rooms grow none. */}
       {moduleSconces.map((anchor, i) => (
-        <ModuleSconce key={`sconce${i}`} anchor={anchor} wallScale={wallHeight / WALL_HEIGHT} />
+        <ModuleSconce
+          key={`sconce${i}`}
+          anchor={anchor}
+          wallScale={wallHeight / WALL_HEIGHT}
+          skinFixture={skin ? skinLightFixture(skin) : undefined}
+        />
       ))}
       <RoomWindow
         fixture={fixtures.window}

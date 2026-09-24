@@ -18,6 +18,7 @@ import {
   DEBUG_PAGE_PARAM,
   DEBUG_PARAM,
   DEBUG_QUERY_VALUE,
+  DEBUG_SKIN_PARAM,
 } from "@/lib/game/debug-slice";
 import type { CorridorDoor } from "./corridor";
 
@@ -134,8 +135,10 @@ export function GameShell({
   // THE GALLERY (the standard-room review pass): `?view=game&debug=rooms
   // &page=modules|templates|archetypes` swaps the corridor's doors for one
   // door per STANDARD unit, so each can be walked — and decorated — on its
-  // own. The force rides in the synthetic slice id (debug-slice.ts), so
-  // nothing else in the room pipeline needs to know this mode exists.
+  // own. `&skin=<id>` (v0.12 P3) prefixes every door with that biome skin
+  // (debug-catalog.ts; unknown ids are ignored). The force rides in the
+  // synthetic slice id (debug-slice.ts), so nothing else in the room
+  // pipeline needs to know this mode exists.
   const searchParams = useSearchParams();
   const galleryPage = useMemo(() => {
     const page = searchParams.get(DEBUG_PAGE_PARAM);
@@ -144,10 +147,12 @@ export function GameShell({
   const galleryDoors = useMemo<readonly CorridorDoor[] | null>(
     () =>
       searchParams.get(DEBUG_PARAM) === DEBUG_QUERY_VALUE
-        ? debugUnitsFor(galleryPage).map((unit) => ({
-            sliceId: unit.sliceId,
-            label: unit.label,
-          }))
+        ? debugUnitsFor(galleryPage, searchParams.get(DEBUG_SKIN_PARAM)).map(
+            (unit) => ({
+              sliceId: unit.sliceId,
+              label: unit.label,
+            }),
+          )
         : null,
     [searchParams, galleryPage],
   );
