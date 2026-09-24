@@ -60,6 +60,15 @@ const PREFIX: Record<DebugPage, string> = {
  *  segment, alone or `+`-composed before a unit pin. */
 const SKIN_PREFIX = "dbg-skin:";
 
+/** The playground's seed force (lib/game/playground.ts): a `dbg-seed:<tag>`
+ *  segment BETWEEN the optional skin segment and the unit pin
+ *  (`dbg-skin:dune+dbg-seed:7+dbg-m:living`). parseDebugSlice strips it with
+ *  the skin so the pin still matches; debugSliceIdWithoutSkin keeps it (it
+ *  is not a view force — it is the room's own seed), so the same unit under
+ *  two tags stages two arrangements. Real memory slices never start with
+ *  `dbg-`, so the strip is a no-op on every non-playground id. */
+const SEED_PREFIX = "dbg-seed:";
+
 /** The synthetic slice id one unit builds from. */
 export function debugSliceId(page: DebugPage, id: string): string {
   return `${PREFIX[page]}${id}`;
@@ -109,6 +118,24 @@ export function parseDebugSkin(sliceId: string): string | null {
   return id.length > 0 ? id : null;
 }
 
+/** The seed tag a slice id forces — the `dbg-seed:<tag>` segment's body, or
+ *  null when absent. Only the segment BETWEEN the optional leading skin and
+ *  the unit pin is read (that is the one shape playgroundSliceId emits);
+ *  anything later in the id belongs to the pin's own body. */
+export function parseDebugSeed(sliceId: string): string | null {
+  let rest = sliceId;
+  const skin = parseDebugSkin(sliceId);
+  if (skin !== null) {
+    rest = sliceId.slice(SKIN_PREFIX.length + skin.length);
+    if (rest.startsWith("+")) rest = rest.slice(1);
+  }
+  if (!rest.startsWith(SEED_PREFIX)) return null;
+  const body = rest.slice(SEED_PREFIX.length);
+  const plus = body.indexOf("+");
+  const tag = plus === -1 ? body : body.slice(0, plus);
+  return tag.length > 0 ? tag : null;
+}
+
 /** The unit a slice id pins, or null for every real memory slice. */
 export function parseDebugSlice(
   sliceId: string,
@@ -117,12 +144,20 @@ export function parseDebugSlice(
   // strip it first so the page loop sees the plain unit id, exactly as it
   // did before skins existed. A bare `dbg-skin:<skinId>` pins no unit: the
   // loop falls through to null like every real memory slice (the skin
-  // force alone lives in parseDebugSkin).
+  // force alone lives in parseDebugSkin). The playground's optional
+  // `dbg-seed:<tag>+` segment (lib/game/playground.ts) strips the same way
+  // — between the skin and the pin — never perturbing the unit match.
   const skin = parseDebugSkin(sliceId);
   let rest = sliceId;
   if (skin !== null) {
     rest = sliceId.slice(SKIN_PREFIX.length + skin.length);
     if (rest.startsWith("+")) rest = rest.slice(1);
+  }
+  if (rest.startsWith(SEED_PREFIX)) {
+    const body = rest.slice(SEED_PREFIX.length);
+    const plus = body.indexOf("+");
+    const tag = plus === -1 ? body : body.slice(0, plus);
+    if (tag.length > 0 && plus !== -1) rest = body.slice(plus + 1);
   }
   for (const page of DEBUG_PAGES) {
     const prefix = PREFIX[page];
