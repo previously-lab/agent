@@ -3,30 +3,42 @@
  * (lib/game/anchor-hologram-geometry.ts).
  *
  * The contract under test: the braid is the band's coaxial model with TWO
- * blended knots — every thread stays on the cylinder at every height (the
- * winding never moves a line in or out); the twist runs over the object's
- * whole height at a nearly constant pitch and always in ONE direction (a
- * coil, not a knot spliced between straight rods); the bundle's size is
- * data-dense in (strands, neighborSlots) with strands keeping priority at
- * the cap; per-segment brightness stays inside the kind's range (the bundle
- * reads as volume, never as glare); and the same inputs bake the identical
- * bytes (A6 — layout is data, only the component's spin is time).
+ * blended knots — every thread stays on the cylinder radius at every
+ * height (the winding never moves a line in or out, and the radius never
+ * tapers: dissipation is brightness, not width); the twist runs over the
+ * object's whole height at a nearly constant pitch and always in ONE
+ * direction (a coil, not a knot spliced between straight rods); the
+ * bundle's size is data-dense in (strands, neighborSlots) with strands
+ * keeping priority at the cap; per-segment brightness stays inside the
+ * kind's range AND folds to zero at both ends under the dissolve
+ * envelope (brightest at the knot — a brightness ramp is a glow ramp at
+ * the bloom threshold, so the threads let go as light); and the same
+ * inputs bake the identical bytes (A6 — layout is data, only the
+ * component's spin is time).
  */
 import { describe, expect, it } from "vitest";
 import {
   HOLO_BOTTOM,
   HOLO_CENTER_Y,
+  HOLO_CORE_FADE_SPAN,
+  HOLO_FADE_DOWN_SPAN,
+  HOLO_FADE_UP_SPAN,
+  HOLO_HALO_GAIN,
+  HOLO_HALO_RADIUS_FACTOR,
   HOLO_KNOT_SPREAD,
   HOLO_NEIGHBOR_BRIGHTNESS,
   HOLO_NEIGHBOR_FALLBACK_MAX,
+  HOLO_NEIGHBOR_RADIUS,
   HOLO_RADIUS,
   HOLO_SEGMENTS,
   HOLO_STRAND_BRIGHTNESS,
   HOLO_STRAND_MAX,
+  HOLO_STRAND_RADIUS,
   HOLO_THREAD_TOP,
   HOLO_TOP,
   HOLO_TURNS,
   holoCoreBake,
+  holoDissolveAt,
   holoThreadsFor,
   holoThreadBake,
   type HoloThread,
@@ -92,9 +104,10 @@ describe("holoThreadBake", () => {
   it("spans the threads' own height, monotone upward", () => {
     const bake = holoThreadBake(thread("neighbor", 0, 1));
     expect(bake.points[1]).toBeCloseTo(HOLO_BOTTOM, 6);
-    // The THREADS stop short of the core's top: the tip they no longer
-    // reach is where the fade thins them out (the core climbs to HOLO_TOP
-    // and fades over its own last half metre).
+    // The THREADS stop short of the core's top; they still END at
+    // HOLO_THREAD_TOP as full-radius tubes (the old radius taper is
+    // gone) — what disappears before the top is their GLOW, via the
+    // brightness envelope baked per segment.
     expect(bake.points[HOLO_SEGMENTS * 3 + 1]).toBeCloseTo(HOLO_THREAD_TOP, 6);
     expect(HOLO_THREAD_TOP).toBeLessThan(HOLO_TOP);
     for (let i = 1; i <= HOLO_SEGMENTS; i++) {
@@ -195,17 +208,100 @@ describe("holoThreadBake", () => {
     expect(outside / total).toBeGreaterThan(0.25);
   });
 
-  it("keeps brightness inside the kind's range, with neighbors dimmer", () => {
+  it("keeps brightness inside the kind's range scaled by the envelope, with neighbors dimmer", () => {
+    // The old law (floor..ceiling everywhere) was written before the
+    // dissolve envelope; sharpened, not weakened: at every height the
+    // brightness must sit inside the kind's range MULTIPLIED by the
+    // dissolve envelope at the segment's midpoint — full range at the
+    // knot, converging to 0 at both ends.
     const strand = holoThreadBake(thread("strand", 0, 3));
     const neighbor = holoThreadBake(thread("neighbor", 0, 3));
+    const span = HOLO_THREAD_TOP - HOLO_BOTTOM;
     for (let i = 0; i < HOLO_SEGMENTS; i++) {
-      expect(strand.brightness[i]).toBeGreaterThanOrEqual(HOLO_STRAND_BRIGHTNESS[0] - 1e-6);
-      expect(strand.brightness[i]).toBeLessThanOrEqual(HOLO_STRAND_BRIGHTNESS[1] + 1e-6);
-      expect(neighbor.brightness[i]).toBeGreaterThanOrEqual(HOLO_NEIGHBOR_BRIGHTNESS[0] - 1e-6);
-      expect(neighbor.brightness[i]).toBeLessThanOrEqual(HOLO_NEIGHBOR_BRIGHTNESS[1] + 1e-6);
-      expect(neighbor.brightness[i]).toBeLessThan(strand.brightness[i]);
+      const midY = HOLO_BOTTOM + ((i + 0.5) / HOLO_SEGMENTS) * span;
+      // 1e-6 of slack on every env-scaled bound: the bake's midpoint and
+      // this test's are the same value through different float paths,
+      // and the envelope's slope turns that into ~1e-9 of disagreement.
+      const env = holoDissolveAt(midY);
+      expect(strand.brightness[i]).toBeGreaterThanOrEqual(
+        HOLO_STRAND_BRIGHTNESS[0] * env - 1e-6,
+      );
+      expect(strand.brightness[i]).toBeLessThanOrEqual(
+        HOLO_STRAND_BRIGHTNESS[1] * env + 1e-6,
+      );
+      expect(neighbor.brightness[i]).toBeGreaterThanOrEqual(
+        HOLO_NEIGHBOR_BRIGHTNESS[0] * env - 1e-6,
+      );
+      expect(neighbor.brightness[i]).toBeLessThanOrEqual(
+        HOLO_NEIGHBOR_BRIGHTNESS[1] * env + 1e-6,
+      );
+      // Neighbours never outshine a strand at the same height; strict
+      // wherever the envelope leaves any light (both kinds bake to
+      // exactly 0 past the spans, and 0 is not < 0).
+      expect(neighbor.brightness[i]).toBeLessThanOrEqual(strand.brightness[i]);
+      if (env > 0) {
+        expect(neighbor.brightness[i]).toBeLessThan(strand.brightness[i]);
+      }
       expect(Number.isFinite(strand.brightness[i])).toBe(true);
     }
+  });
+
+  it("never lets a segment exceed the kind's ceiling scaled by the envelope", () => {
+    // The envelope is a MULTIPLIER on the volume shading: brightness at
+    // any height is bounded by the kind's top × dissolve(mid) — the
+    // threads cannot glare past what the light column is doing.
+    const bake = holoThreadBake(thread("strand", 2, 5));
+    const span = HOLO_THREAD_TOP - HOLO_BOTTOM;
+    for (let i = 0; i < HOLO_SEGMENTS; i++) {
+      const midY = HOLO_BOTTOM + ((i + 0.5) / HOLO_SEGMENTS) * span;
+      const ceiling =
+        HOLO_STRAND_BRIGHTNESS[1] * holoDissolveAt(midY);
+      // 1e-6 of slack: the bake's midpoint and this test's are the same
+      // value through different float paths, and the envelope's slope is
+      // steep enough to turn that into ~1e-9 of disagreement.
+      expect(bake.brightness[i]).toBeLessThanOrEqual(ceiling + 1e-6);
+      expect(bake.brightness[i]).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("dissolves to exactly zero brightness at both ends of every thread", () => {
+    // The radius law the reader rejected is gone; the guarantee that
+    // replaces it: past the envelope's spans there is NO light left, so
+    // the open tube's rim can never show — the thread is there, black.
+    for (const t of [
+      thread("strand", 0, 3),
+      thread("strand", 4, 7),
+      thread("neighbor", 0, 2),
+    ]) {
+      const bake = holoThreadBake(t);
+      const span = HOLO_THREAD_TOP - HOLO_BOTTOM;
+      for (let i = 0; i < HOLO_SEGMENTS; i++) {
+        const midY = HOLO_BOTTOM + ((i + 0.5) / HOLO_SEGMENTS) * span;
+        if (
+          midY >= HOLO_CENTER_Y + HOLO_FADE_UP_SPAN ||
+          midY <= HOLO_CENTER_Y - HOLO_FADE_DOWN_SPAN
+        ) {
+          expect(bake.brightness[i]).toBe(0);
+        }
+      }
+    }
+  });
+
+  it("peaks near the knot and is gone well before the thread's top", () => {
+    const bake = holoThreadBake(thread("strand", 1, 4));
+    let argmax = 0;
+    for (let i = 1; i < HOLO_SEGMENTS; i++) {
+      if (bake.brightness[i] > bake.brightness[argmax]) argmax = i;
+    }
+    const midY =
+      HOLO_BOTTOM +
+      ((argmax + 0.5) / HOLO_SEGMENTS) * (HOLO_THREAD_TOP - HOLO_BOTTOM);
+    // The brightest segment of the whole line hugs the knot (the depth
+    // shading's wobble may pull it a few centimetres off, never far).
+    expect(Math.abs(midY - HOLO_CENTER_Y)).toBeLessThan(0.4);
+    // …and the peak is genuinely bright — the braid is the column's
+    // densest light, not a smudge.
+    expect(bake.brightness[argmax]).toBeGreaterThan(0.8);
   });
 
   it("contains no NaN anywhere", () => {
@@ -223,6 +319,55 @@ describe("holoThreadBake", () => {
   });
 });
 
+describe("holoDissolveAt", () => {
+  it("is 1 at the knot and 0 at (and past) both spans", () => {
+    expect(holoDissolveAt(HOLO_CENTER_Y)).toBe(1);
+    expect(holoDissolveAt(HOLO_CENTER_Y + HOLO_FADE_UP_SPAN)).toBe(0);
+    expect(holoDissolveAt(HOLO_CENTER_Y - HOLO_FADE_DOWN_SPAN)).toBe(0);
+    // Past the spans it stays pinned at 0 (the clamp, not a re-rise).
+    expect(holoDissolveAt(HOLO_CENTER_Y + HOLO_FADE_UP_SPAN * 3)).toBe(0);
+    expect(holoDissolveAt(HOLO_CENTER_Y - HOLO_FADE_DOWN_SPAN * 3)).toBe(0);
+  });
+
+  it("falls strictly and smoothly, never with a linear hard ramp", () => {
+    let prev = holoDissolveAt(HOLO_CENTER_Y);
+    for (let k = 1; k <= 32; k++) {
+      const v = holoDissolveAt(
+        HOLO_CENTER_Y + (HOLO_FADE_UP_SPAN * k) / 32,
+      );
+      expect(v).toBeLessThan(prev);
+      expect(v).toBeGreaterThanOrEqual(0);
+      prev = v;
+    }
+    // Smooth: the slope eases OUT of the knot — the glow lingers through
+    // the braid's middle before letting go (a linear ramp would already
+    // have dropped by several percent this close in).
+    expect(holoDissolveAt(HOLO_CENTER_Y + HOLO_FADE_UP_SPAN * 0.05)).toBeGreaterThan(0.98);
+    // The downward decay is the SHORT one: same distance below the knot
+    // is always dimmer than above it (the column is bottom-heavy).
+    for (const d of [0.1, 0.2, 0.3]) {
+      expect(holoDissolveAt(HOLO_CENTER_Y - d)).toBeLessThan(
+        holoDissolveAt(HOLO_CENTER_Y + d),
+      );
+    }
+  });
+});
+
+describe("the blur shells' footprint budget", () => {
+  it("keeps every halo shell far inside the cable's radius", () => {
+    // The shell is the thread's radius × HOLO_HALO_RADIUS_FACTOR; the
+    // fattest line (a strand) must stay a hairline next to the winding
+    // radius, so the softness reads as light, never as a wider object.
+    const fattestShell =
+      Math.max(HOLO_STRAND_RADIUS, HOLO_NEIGHBOR_RADIUS) *
+      HOLO_HALO_RADIUS_FACTOR;
+    expect(fattestShell).toBeLessThan(HOLO_RADIUS / 4);
+    // …and a shell is always dimmer than the thread it surrounds.
+    expect(HOLO_HALO_GAIN).toBeLessThan(1);
+    expect(HOLO_HALO_GAIN).toBeGreaterThan(0);
+  });
+});
+
 describe("holoCoreBake", () => {
   it("is a straight line on the axis, spanning the cable", () => {
     const bake = holoCoreBake();
@@ -234,5 +379,31 @@ describe("holoCoreBake", () => {
     }
     expect(bake.points[1]).toBeCloseTo(HOLO_BOTTOM, 6);
     expect(bake.points[HOLO_SEGMENTS * 3 + 1]).toBeCloseTo(HOLO_TOP, 6);
+  });
+
+  it("keeps its top fade as light: full scalar to the fade start, zero at the top", () => {
+    // The core's brightness array carries its top-fade scalars (the
+    // radius taper is gone): 1 for nearly the whole spine, easing to 0
+    // over HOLO_CORE_FADE_SPAN below HOLO_TOP, so the tip dissolves
+    // instead of ending at a rim.
+    const bake = holoCoreBake();
+    const height = HOLO_TOP - HOLO_BOTTOM;
+    for (let i = 0; i < HOLO_SEGMENTS; i++) {
+      const midY = HOLO_BOTTOM + ((i + 0.5) / HOLO_SEGMENTS) * height;
+      expect(bake.brightness[i]).toBeGreaterThanOrEqual(0);
+      expect(bake.brightness[i]).toBeLessThanOrEqual(1);
+      if (midY < HOLO_TOP - HOLO_CORE_FADE_SPAN - 0.05) {
+        expect(bake.brightness[i]).toBe(1);
+      }
+    }
+    // Monotone non-increasing through the fade…
+    for (let i = 1; i < HOLO_SEGMENTS; i++) {
+      expect(bake.brightness[i]).toBeLessThanOrEqual(bake.brightness[i - 1]);
+    }
+    // …and the very top is as dark as the fade can make a half-segment
+    // shy of HOLO_TOP (0.2% of the ink — the tube's last 2.4 cm render
+    // black, rim and all; the fade reaches exactly 0 only at the top
+    // sample itself).
+    expect(bake.brightness[HOLO_SEGMENTS - 1]).toBeLessThan(0.01);
   });
 });
