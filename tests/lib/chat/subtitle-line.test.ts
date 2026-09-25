@@ -13,7 +13,7 @@ import {
 // pill strip (design v0.13 §4). These tests pin the hard product rules: only
 // spoken words ever become text, tool/reasoning activity surfaces only as
 // status, streaming growth is a deterministic fold, and truncation keeps the
-// line to one readable line with an honest `truncated` flag.
+// text inside the two-line budget with an honest `truncated` flag.
 
 function part(p: AnyPart): AnyPart {
   return p;
@@ -163,7 +163,7 @@ describe("foldSubtitleLine — streaming growth is a fold", () => {
   });
 });
 
-describe("foldSubtitleLine — single line and truncation", () => {
+describe("foldSubtitleLine — character budget and truncation", () => {
   it("collapses newlines and whitespace runs into one line", () => {
     const line = foldSubtitleLine(
       [
@@ -183,6 +183,16 @@ describe("foldSubtitleLine — single line and truncation", () => {
     const line = foldSubtitleLine([part({ type: "text", text: long })], "assistant");
     expect(line.text.length).toBeLessThanOrEqual(SUBTITLE_LINE_MAX);
     expect(line.truncated).toBe(true);
+  });
+
+  it("keeps a two-line opening whole under the raised cap", () => {
+    // The pill subtitle wraps to at most two ~75-character mono lines, so the
+    // cap was raised past the old one-line 120: an opening of 121–150 chars
+    // must survive intact, and only text beyond the cap is cut.
+    const text = "word ".repeat(28).trim(); // 139 chars
+    const line = foldSubtitleLine([part({ type: "text", text })], "assistant");
+    expect(line.text).toBe(text);
+    expect(line.truncated).toBe(false);
   });
 
   it("does not cut mid-word when a boundary is within slack of the cap", () => {

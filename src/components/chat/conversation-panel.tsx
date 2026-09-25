@@ -13,11 +13,15 @@
  *               a round attach button on the left, a single-line input in
  *               the middle (no box of its own; the pill is the container),
  *               and round send/stop + fullscreen buttons on the right —
- *               plus, floating directly ABOVE the pill as its own dim,
- *               centred, truncated line (never part of the pill's height
- *               or width), the subtitle: the live one-line rendering of the
- *               newest turn, folded by the pure reducer in
- *               `lib/chat/subtitle-line.ts` and passed in as a prop. The
+ *               plus, floating directly ABOVE the pill (never part of the
+ *               pill's height or width), the subtitle: an FPS-radio strip —
+ *               a fixed-width speaker column (uppercase, letterspaced, the
+ *               persona in brand blue / the user in warm grey) with the body
+ *               pinned to the column's x, wrapped to at most two lines, the
+ *               whole block capped to SUBTITLE_BLOCK_MAX_WIDTH_PX and centred
+ *               over the pill — the live rendering of the newest turn, folded
+ *               by the pure reducer in `lib/chat/subtitle-line.ts` and passed
+ *               in as a prop. The
  *               fullscreen chrome (slim bar + conversation body) folds to
  *               zero height and goes inert, but stays MOUNTED — the live
  *               `useChat` stream, the draft and the scroll position all
@@ -68,6 +72,7 @@ import {
 import { useTranslations } from "next-intl";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
+import { SUBTITLE_LINE_MAX } from "@/lib/chat/subtitle-line";
 
 export type ConversationPanelMode = "pill" | "fullscreen";
 
@@ -119,6 +124,26 @@ export const PILL_MAX_WIDTH_PX = 600;
  *  to sit the pill higher or lower. */
 export const PILL_BOTTOM_GAP_PX = 16;
 
+/** The subtitle block's maximum width, px — an FPS-radio strip: the dialogue
+ *  never runs full-bleed. Centred over the pill; on narrow viewports it caps
+ *  to the viewport minus the host row's `px-4` margins instead. */
+export const SUBTITLE_BLOCK_MAX_WIDTH_PX = 660;
+/** The fixed-width speaker column, px — an uppercase, letterspaced label on
+ *  the left (the persona in brand blue, the user in a warm grey). The body
+ *  starts at this x on every line, so wrapped lines of dialogue align
+ *  vertically. */
+export const SUBTITLE_SPEAKER_COLUMN_PX = 112;
+/** One subtitle line's height, px (font-mono 11px / leading-5). */
+export const SUBTITLE_LINE_HEIGHT_PX = 20;
+/** The gap between the speaker column and the body, px — the body's fixed x
+ *  is `SUBTITLE_SPEAKER_COLUMN_PX + SUBTITLE_COLUMN_GAP_PX`. */
+export const SUBTITLE_COLUMN_GAP_PX = 12;
+/** The user's ink — a neutral warm grey. The repo has no warm-grey theme
+ *  token (`muted-foreground` is achromatic) and `globals.css` is outside this
+ *  module's lane, so the value lives here next to the panel's other colours.
+ *  The persona wears the existing `text-brand` token (the #0066ff family). */
+export const SUBTITLE_USER_INK = "oklch(0.6 0.015 75)";
+
 /** What the panel tells the chat components that render inside it: which
  *  tier is up and how to change it. Null outside a panel — consumers then
  *  draw the fullscreen-era form (there is no pill to draw). */
@@ -138,12 +163,13 @@ export function usePanelTier(): PanelTier | null {
 export interface ConversationPanelProps {
   mode: ConversationPanelMode;
   onModeChange: (mode: ConversationPanelMode) => void;
-  /** The pill's one non-control, floating above it as its own line: the live
-   *  one-line rendering of the newest turn (`speaker: text`, or a dim status
-   *  prefix while there is no text yet), folded by the pure reducer in
-   *  `lib/chat/subtitle-line.ts`. Null when there is nothing to say — the
-   *  line then renders empty so its seat (and the pill's position) stays
-   *  put. Only ever shown at the pill tier. */
+  /** The pill's one non-control, floating above it: the live radio-line
+   *  rendering of the newest turn (fixed-width speaker column + body pinned
+   *  to the column's x, at most two lines, block capped and centred), or a
+   *  status label in the same column rhythm while there is no text yet —
+   *  folded by the pure reducer in `lib/chat/subtitle-line.ts`. Null when
+   *  there is nothing to say — the line then renders empty so its seat (and
+   *  the pill's position) stays put. Only ever shown at the pill tier. */
   subtitleLine?: SubtitleLine | null;
   /** An optional surface mounted ABOVE the conversation children inside the
    *  panel body — the overlay's portal target for the R3F conversation field
@@ -205,6 +231,16 @@ export function ConversationPanel({
     [mode, onModeChange],
   );
 
+  // The subtitle seat: one 20px line normally, two when the fold's text is
+  // long enough to wrap (estimated at half the reducer cap — the body track
+  // holds ~75 mono-11px characters per line at the desktop block width). The
+  // estimate only ever reserves a line; `line-clamp-2` owns the real wrap.
+  const subtitleTwoLines =
+    !!subtitleLine?.text &&
+    subtitleLine.text.length > Math.ceil(SUBTITLE_LINE_MAX / 2);
+  const subtitleSeatHeight =
+    SUBTITLE_LINE_HEIGHT_PX * (subtitleTwoLines ? 2 : 1);
+
   return (
     <PanelTierContext.Provider value={tier}>
       {/* THE ONE BOX — a floating pill at the pill tier, the viewport at
@@ -215,8 +251,8 @@ export function ConversationPanel({
           pointer-transparent — only the pill (positioned by the composer
           host) and its buttons eat events; the world keeps every other
           pixel of the bottom edge. The height at the pill tier is the pill
-          plus the subtitle row above it: PILL_HEIGHT_PX + the subtitle's
-          20px + a 4px gap between them + PILL_BOTTOM_GAP_PX. */}
+          plus the subtitle seat above it: PILL_HEIGHT_PX + one or two 20px
+          subtitle lines + a 4px gap between them + PILL_BOTTOM_GAP_PX. */}
       <div
         ref={panelRef}
         tabIndex={-1}
@@ -224,7 +260,7 @@ export function ConversationPanel({
         style={{
           height: open
             ? "100dvh"
-            : PILL_HEIGHT_PX + 20 + 4 + PILL_BOTTOM_GAP_PX,
+            : PILL_HEIGHT_PX + subtitleSeatHeight + 4 + PILL_BOTTOM_GAP_PX,
         }}
         className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
@@ -232,45 +268,63 @@ export function ConversationPanel({
             : "pointer-events-none z-40 overflow-hidden"
         }`}
       >
-        {/* THE SUBTITLE — the pill's one non-control, floating directly
-            above it as its own dim, centred, truncated line (never part of
-            the pill's height or width): `label: text` for the newest turn,
-            or a dim status prefix while the turn has produced no words yet.
-            An empty line still renders (the row keeps the subtitle's seat);
-            the truncated marker is the expand hint. */}
+        {/* THE SUBTITLE — the pill's one non-control, floating directly above
+            it (never part of the pill's height or width): an FPS-radio
+            strip, capped to SUBTITLE_BLOCK_MAX_WIDTH_PX and centred over the
+            pill — never full-bleed. The speaker column is a fixed-width,
+            uppercase, letterspaced label (the persona in `text-brand`, the
+            user in the warm grey SUBTITLE_USER_INK); the body starts at the
+            column's far edge and wraps to at most two lines, the CSS clamp
+            supplying the ellipsis. While the turn has produced no words the
+            status prefix (thinking / reading) takes the label's place in the
+            same column rhythm, capped at the block width. An empty line
+            still renders (the row keeps the subtitle's seat). */}
         <div
           data-conversation-subtitle
           aria-live="polite"
-          className={`h-5 shrink-0 overflow-hidden font-mono text-[11px] leading-5 ${
+          style={{ height: subtitleSeatHeight }}
+          className={`shrink-0 overflow-hidden font-mono text-[11px] leading-5 ${
             open ? "hidden" : "pointer-events-none flex justify-center px-4"
           }`}
         >
           {subtitleLine && subtitleLine.text ? (
-            <span className="flex min-w-0 max-w-full items-center gap-1.5">
+            <span
+              className="flex min-w-0 w-full"
+              style={{
+                maxWidth: SUBTITLE_BLOCK_MAX_WIDTH_PX,
+                gap: SUBTITLE_COLUMN_GAP_PX,
+              }}
+            >
               <span
                 aria-hidden
-                className={`shrink-0 uppercase tracking-[0.08em] ${
-                  subtitleLine.speaker === "persona"
-                    ? "text-brand"
-                    : "text-muted-foreground"
+                className={`shrink-0 truncate uppercase tracking-[0.08em] ${
+                  subtitleLine.speaker === "persona" ? "text-brand" : ""
                 }`}
+                style={{
+                  width: SUBTITLE_SPEAKER_COLUMN_PX,
+                  color:
+                    subtitleLine.speaker === "persona"
+                      ? undefined
+                      : SUBTITLE_USER_INK,
+                }}
               >
                 {subtitleLine.speaker === "persona"
                   ? t("subtitlePersona")
                   : t("subtitleUser")}
                 :
               </span>
-              <span className="min-w-0 truncate text-muted-foreground">
+              <span className="min-w-0 flex-1 break-words text-muted-foreground line-clamp-2">
                 {subtitleLine.text}
               </span>
-              {subtitleLine.truncated ? (
-                <span aria-hidden className="shrink-0 text-muted-foreground/60">
-                  …
-                </span>
-              ) : null}
             </span>
           ) : subtitleLine?.status ? (
-            <span className="truncate text-muted-foreground/80">
+            <span
+              className="min-w-0 w-full truncate uppercase tracking-[0.08em] text-muted-foreground"
+              style={{
+                maxWidth: SUBTITLE_BLOCK_MAX_WIDTH_PX,
+                color: SUBTITLE_USER_INK,
+              }}
+            >
               {subtitleLine.status.kind === "reading"
                 ? t("subtitleReading", { count: subtitleLine.status.count })
                 : t("subtitleThinking")}

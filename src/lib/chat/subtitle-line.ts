@@ -29,13 +29,15 @@ export type { AnyPart };
 
 /**
  * Maximum length of the subtitle text, in characters, before truncation.
- * Chosen at 120 — comfortably inside the 100–140 band where a single line
- * stays readable on a phone-width pill without swallowing the input, and long
- * enough that a typical sentence opening survives intact. The UI renders this
- * as ONE line; the reducer only guarantees the character budget and the
- * word-boundary cut (see truncateSubtitleText).
+ * Chosen at 150 — the pill subtitle renders as an FPS-radio block (fixed
+ * 112px speaker column + body, at most TWO 20px lines at mono 11px, capped
+ * block width), whose body track holds roughly 75 characters per line at a
+ * desktop block width, so two lines stay readable well past a single
+ * sentence's opening and the cap lands where the second line would clip.
+ * The reducer only guarantees the character budget and the word-boundary
+ * cut (see truncateSubtitleText); the UI owns line wrapping.
  */
-export const SUBTITLE_LINE_MAX = 120;
+export const SUBTITLE_LINE_MAX = 150;
 
 /** Margin (in characters) within which a word-boundary cut is preferred over
  *  a hard character cut — cutting up to this many characters short of the cap
@@ -60,7 +62,7 @@ export type SubtitleStatus =
 export interface SubtitleLine {
   /** Who is speaking in the line currently shown. */
   speaker: SubtitleSpeaker;
-  /** The line's text — ONE line, already collapsed and truncated. */
+  /** The line's text — collapsed and truncated to the two-line budget. */
   text: string;
   /** True when `text` was cut short (the UI shows an ellipsis / expand hint). */
   truncated: boolean;
@@ -71,14 +73,15 @@ export interface SubtitleLine {
 /**
  * Collapses all whitespace runs (newlines, tabs, repeated spaces — the reply
  * arrives as markdown paragraphs) into single spaces and trims the ends, so a
- * multi-line reply still reads as one line in the pill. Pure and deterministic.
+ * multi-line reply still reads as one flowing paragraph in the pill. Pure and
+ * deterministic.
  */
 export function collapseSubtitleWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
 /**
- * Trims `text` to at most `max` characters for a single-line display, cutting
+ * Trims `text` to at most `max` characters for the two-line display, cutting
  * at the last word boundary when one lies within WORD_CUT_SLACK characters of
  * the cap (never mid-word if a few characters' slack lets us avoid it) and
  * stripping the trailing punctuation/space a boundary cut would leave behind.
