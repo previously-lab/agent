@@ -13,8 +13,32 @@ import {
   formatRoomDescription,
 } from "@/lib/game/describe-room";
 import { compileSpaceRecipe } from "@/lib/game/space-recipe";
-import { compositionForRecipe } from "@/lib/game/room-modules";
-import { scaledRecipeFor } from "@/lib/game/room-plan";
+import {
+  compositionForRecipe,
+  compositionKitZonesFor,
+  compositionTemplateFor,
+} from "@/lib/game/room-modules";
+import {
+  scaledRecipeFor,
+  roomPlanFor,
+  composeRoom,
+} from "@/lib/game/room-plan";
+import { templatePlanFor, templateZonesFor } from "@/lib/game/room-templates";
+import { createRng, deriveSubSeed, WORLD_SEED } from "@/lib/game/seed";
+import {
+  planArea,
+  stageInteriorKits,
+  type KitKind,
+} from "@/lib/game/kits";
+import { schematicPlacementsFor } from "@/lib/game/room-schematic";
+import { terrainHeight, waterRectFor } from "@/lib/game/terrain";
+import { skinForSlice } from "@/lib/game/skins";
+import { debugSliceIdWithoutSkin } from "@/lib/game/debug-slice";
+import {
+  COLONNADE_BAY,
+  PROP_SCALE_EXP,
+  ROOM_WALL_THICKNESS,
+} from "@/lib/game/tuning/room";
 
 /** Fixed slice ids — deterministic input, not Math.random(). */
 const SLICES = [
@@ -170,3 +194,152 @@ describe("describeRoom", () => {
 // debug gallery still reaches them (`dbg-skin:<id>` — see skin-render.test.ts
 // / skins.test.ts), which is where the skinned-world contracts are pinned
 // now; the archetype pins themselves resolve the temperate baseline.
+
+/* ------------------------------------------------------------------ */
+/* 描述 = 画面 — the outline's furnishing vs the renderer's staging.    */
+/*                                                                      */
+/* The committed cross-check above compares single-module rooms only,   */
+/* which is exactly the shape where the two zone sources (the           */
+/* composition's kit zones vs the plain template's) stage               */
+/* byte-identical pieces — compositionKitZonesFor is a strict widening  */
+/* of templateZonesFor, differing ONLY in the per-cluster kitIds the    */
+/* zone-first side-kit draw deals from, which matters solely for        */
+/* MULTI-module rooms whose modules whitelist different kits. The       */
+/* v0.13 drift (2d1feed) lived there unnoticed; these cases pin the     */
+/* precedence.                                                          */
+/*                                                                      */
+/* Honest limit: this is a BY-CONSTRUCTION check. The staging oracle    */
+/* reuses the same pure helpers describe-room.ts calls                  */
+/* (stageInteriorKits and friends) — an independent oracle would need   */
+/* the renderer's own furniture memo, which lives in space.tsx outside  */
+/* the importable pure chain. What IS pinned independently is the       */
+/* PRECEDENCE: the "templateZones" variant below restages each room the */
+/* way a reverted describe-room would, and must DISAGREE with the       */
+/* outline on every listed slice — so a revert fails loudly.            */
+/* ------------------------------------------------------------------ */
+
+/** Multi-module composed slices where the two zone sources genuinely
+ *  stage different kits (found by scanning; each is named by its
+ *  composed modules). At least one carries a bath beside a living
+ *  module — the shape the drift report cited (dining-hall + bath). */
+const DIVERGENT_COMPOSED_SLICES: { sliceId: string; modules: string }[] = [
+  { sliceId: "2026-02-01-1530", modules: "storage+foyer" },
+  { sliceId: "2026-04-01-1530", modules: "sunroom+bath+workshop" },
+  { sliceId: "2026-07-01-1401", modules: "bath+reading-room" },
+  { sliceId: "2026-08-01-0941", modules: "living+bath+study+reading-room" },
+  { sliceId: "2026-11-01-0941", modules: "sunroom+dining-hall" },
+];
+
+/** Re-stage a composed room's furnishing the way describe-room.ts does,
+ *  with the ZONE SOURCE switchable: "composition" is the renderer's
+ *  precedence (and the current describe-room), "template" is the
+ *  pre-2d1feed behaviour (templateZonesFor fed unconditionally). Every
+ *  other argument mirrors describeRoom's staging block exactly. */
+function stageFurnishingFor(
+  sliceId: string,
+  zoneSource: "composition" | "template",
+): { kit: string; pieces: KitKind[] }[] | null {
+  const skin = skinForSlice(sliceId);
+  const roomId = debugSliceIdWithoutSkin(sliceId);
+  const recipe = compileSpaceRecipe(roomId, WORLD_SEED);
+  const { recipe: scaled, scale } = scaledRecipeFor(recipe, 0);
+  const scaleFactor = scale.factor;
+  const composition = compositionForRecipe(recipe, WORLD_SEED, 0);
+  if (!composition) return null;
+  const template = compositionTemplateFor(composition);
+  const plan = roomPlanFor(
+    roomId,
+    scaled.width,
+    scaled.size.extent,
+    COLONNADE_BAY * Math.sqrt(Math.max(scaleFactor, 0.35)),
+    WORLD_SEED,
+    templatePlanFor(template),
+  );
+  const water = waterRectFor(scaled);
+  const rng = createRng(deriveSubSeed(WORLD_SEED, roomId, "furniture"));
+  const kitIds = [...new Set(composition.modules.flatMap((p) => p.module.kits))];
+  const schematicPlacements = schematicPlacementsFor(composition.modules, scaleFactor);
+  const baseArea = planArea(plan) / (scaleFactor * scaleFactor);
+  const waterArea = water
+    ? (water.halfX * 2 * water.halfZ * 2) / (scaleFactor * scaleFactor)
+    : 0;
+  const staged = stageInteriorKits({
+    rng,
+    worldClass: "interior",
+    archetype: recipe.archetype,
+    skin,
+    plan,
+    comp: composeRoom(roomId, plan, scaleFactor, WORLD_SEED),
+    baseArea: Math.max(0, baseArea - waterArea),
+    baseExtent: recipe.size.extent,
+    propScale: Math.pow(scaleFactor, PROP_SCALE_EXP),
+    wallThick: ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35),
+    water,
+    kitIds,
+    ...(schematicPlacements.length > 0
+      ? { schematics: schematicPlacements }
+      : {}),
+    ...(composition.openFields.length > 0
+      ? {
+          openFields: composition.openFields.map((f) => ({
+            x0: f.x0 * scaleFactor,
+            z0: f.z0 * scaleFactor,
+            x1: f.x1 * scaleFactor,
+            z1: f.z1 * scaleFactor,
+          })),
+        }
+      : {}),
+    zones:
+      zoneSource === "composition"
+        ? compositionKitZonesFor(composition, plan)
+        : templateZonesFor(template, plan),
+    heightAt: (x, z) => terrainHeight(scaled, x, z),
+  });
+  const byPlacement = new Map<number, { kit: string; pieces: KitKind[] }>();
+  for (const piece of staged) {
+    const entry = byPlacement.get(piece.kitIndex) ?? {
+      kit: piece.kitId,
+      pieces: [],
+    };
+    entry.pieces.push(piece.kind);
+    byPlacement.set(piece.kitIndex, entry);
+  }
+  return [...byPlacement.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, v]) => v);
+}
+
+describe("describeRoom furnishing = the renderer's staging (multi-module rooms)", () => {
+  it("agrees with the composition-zone staging — same kits, same piece kinds, same count", () => {
+    for (const { sliceId, modules } of DIVERGENT_COMPOSED_SLICES) {
+      const desc = describeRoom(sliceId);
+      // Guard the premise: this slice really composes several modules.
+      expect(desc.layout.kind, `${sliceId} (${modules})`).toBe("modules");
+      if (desc.layout.kind !== "modules") continue;
+      expect(desc.layout.modules.length).toBeGreaterThan(1);
+      const staged = stageFurnishingFor(sliceId, "composition");
+      expect(staged).not.toBeNull();
+      // Same kit ids in the same order, same piece-kind lists per
+      // placement, same total piece count — the outline names exactly
+      // the pieces the render stages.
+      expect(desc.furnishing, `${sliceId} (${modules})`).toEqual(staged);
+      const count = (f: { pieces: KitKind[] }[]) =>
+        f.reduce((n, e) => n + e.pieces.length, 0);
+      expect(count(desc.furnishing ?? [])).toBe(count(staged ?? []));
+    }
+  });
+
+  it("would FAIL under the reverted precedence — template zones stage different kits here", () => {
+    for (const { sliceId, modules } of DIVERGENT_COMPOSED_SLICES) {
+      const desc = describeRoom(sliceId);
+      const reverted = stageFurnishingFor(sliceId, "template");
+      expect(reverted, `${sliceId} (${modules})`).not.toBeNull();
+      // The reverted staging disagrees with the outline on every one of
+      // these slices — that disagreement IS the drift 2d1feed fixed.
+      expect(
+        JSON.stringify(reverted),
+        `${sliceId} (${modules}): template zones stage the same pieces as the composition zones — this slice no longer detects a precedence revert, pick another`,
+      ).not.toBe(JSON.stringify(desc.furnishing));
+    }
+  });
+});
