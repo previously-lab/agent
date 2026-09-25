@@ -424,13 +424,23 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // One conversation, two sizes — the tier lives HERE, not inside the
   // panel, because the shell must react to it: the game world and the card
   // rungs default to the pill (the floating quick-input pill: input, the
-  // subtitle line above it, nothing else), the conversation rung defaults to fullscreen (the
-  // full-capability surface the removed dock used to be), and FULLSCREEN
-  // freezes the card field's frame loop (paused → frameloop="never", below).
-  // The effect fires only on the world boundary — zooming BETWEEN card
-  // rungs keeps the tier the reader picked.
-  const [panelMode, setPanelMode] =
-    useState<ConversationPanelMode>("fullscreen");
+  // subtitle line above it, nothing else), the conversation rung defaults
+  // to fullscreen (the full-capability surface the removed dock used to
+  // be), and FULLSCREEN freezes the card field's frame loop (paused →
+  // frameloop="never", below). The effect fires only on the world boundary
+  // — zooming BETWEEN card rungs keeps the tier the reader picked.
+  //
+  // The INITIAL state is the same verdict computed from the COLD-BOOT view
+  // and the default rung — not a placeholder "open" tier. A wrong first
+  // tier would render the fullscreen body (and its R3F field portal target)
+  // for one commit in a game/card world and unmount it the next, and that
+  // mount-unmount churn is exactly what kills the conversation field's R3F
+  // canvas at connect time.
+  const [panelMode, setPanelMode] = useState<ConversationPanelMode>(() =>
+    settledView === "game" || DEFAULT_RUNG !== "conversation"
+      ? "pill"
+      : "fullscreen",
+  );
   const worldKind = rung === "conversation" ? "conversation" : "cards";
   useEffect(() => {
     // The game world is a LOOKING view like the card rungs — the conversation
@@ -440,10 +450,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
     );
   }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
-  // The pill's subtitle line (v0.13 §4): folded from the live message
-  // stream by ChatPage (the only holder of the messages), lifted here, and
-  // handed back down into the panel as a prop — the panel renders it, the
-  // page produces it, and this state is the wire between them.
+  // The pill's subtitle line (v0.13 §4): folded from the unified stream
+  // (history + live) by ChatPage, lifted here, and handed back down into
+  // the panel as a prop — the panel renders it, the page produces it, and
+  // this state is the wire between them.
   const [subtitleLine, setSubtitleLine] = useState<SubtitleLine | null>(null);
 
   // THE TRANSITION CLOCK — one rAF per move writes the shared singleton's
@@ -540,6 +550,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // instead (see `chat/conversation-surface.tsx`). The slot elements are
   // owned HERE because the shell owns both their parents; `useState` refs
   // re-render on registration, the same handshake `world-canvas.tsx` uses.
+  // A slot's element is NULL until its ref callback registers (and null
+  // again the moment its branch unmounts) — until a REAL element exists the
+  // surface is "narrow", never "field" with a null target. An R3F portal
+  // handed a null/detached element dies exactly at the canvas's connect.
   const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
   const [panelSlotEl, setPanelSlotEl] = useState<HTMLElement | null>(null);
   const onConversationRung = rung === "conversation";
@@ -552,7 +566,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
         ? panelSlotEl
           ? { kind: "field", el: panelSlotEl }
           : { kind: "narrow" }
-        : { kind: "field", el: paneSlotEl };
+        : paneSlotEl
+          ? { kind: "field", el: paneSlotEl }
+          : { kind: "narrow" };
 
   // A conversation jump (`openSlice`, the search palette rides the M2 bus
   // directly) is pure state now: `openSlice` homes the world to the field

@@ -176,3 +176,35 @@ export function foldSubtitleLine(
 
   return { speaker, text, truncated, status };
 }
+
+/** One message presented to the folder: its raw part stream plus the
+ *  UIMessage role. History turns restored from a slice carry no AI SDK
+ *  parts — their persisted markdown body is presented as one synthetic
+ *  `text` part, so the fold quotes exactly the words on record. */
+export interface SubtitleSource {
+  parts: readonly AnyPart[];
+  role: string;
+}
+
+/** The subtitle line for a whole conversation: the NEWEST message that HAS
+ *  speakable text. Walks from the newest message backwards and returns the
+ *  first fold whose text is non-empty, so a data-only or attachment-only
+ *  newest message (tool chatter, a staged file, a synthetic wrapper) never
+ *  blanks the strip while an older turn still has words on record.
+ *
+ *  Only when NOTHING in the list is speakable does the rule fall back to the
+ *  newest message's own fold — which surfaces its `status` (an in-flight
+ *  turn's thinking/reading prefix, per §4) or, for a truly silent stream,
+ *  null. What is shown is always ONE message's own fold: the opening words
+ *  themselves, never a paraphrase or a merge across messages. Pure and
+ *  prefix-stable, like the single-message fold it delegates to. */
+export function foldSubtitleLineLatest(
+  messages: readonly SubtitleSource[],
+): SubtitleLine | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const line = foldSubtitleLine(messages[i].parts, messages[i].role);
+    if (line.text.length > 0) return line;
+  }
+  const newest = messages[messages.length - 1];
+  return newest ? foldSubtitleLine(newest.parts, newest.role) : null;
+}

@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   foldSubtitleLine,
+  foldSubtitleLineLatest,
   collapseSubtitleWhitespace,
   truncateSubtitleText,
   SUBTITLE_LINE_MAX,
   type AnyPart,
+  type SubtitleSource,
 } from "@/lib/chat/subtitle-line";
 
 // foldSubtitleLine is the pure stream→subtitle reducer behind the permanent
@@ -242,6 +244,75 @@ describe("foldSubtitleLine — determinism", () => {
     const a = foldSubtitleLine(parts, "assistant");
     const b = foldSubtitleLine(parts.map((p) => ({ ...p })), "assistant");
     expect(a).toEqual(b);
+  });
+});
+
+describe("foldSubtitleLineLatest — the strip shows the newest message WITH speakable text", () => {
+  const msg = (role: string, parts: AnyPart[]): SubtitleSource => ({
+    role,
+    parts,
+  });
+
+  it("returns null for an empty message list", () => {
+    expect(foldSubtitleLineLatest([])).toBeNull();
+  });
+
+  it("folds the newest message when it has text", () => {
+    const line = foldSubtitleLineLatest([
+      msg("user", [part({ type: "text", text: "Where was I?" })]),
+      msg("assistant", [part({ type: "text", text: "You were here." })]),
+    ]);
+    expect(line).toMatchObject({ speaker: "persona", text: "You were here." });
+  });
+
+  it("walks back past a data-only newest message to the newest message with text", () => {
+    // The failing first-load case: the newest entry carries only tool /
+    // housekeeping traffic while an older turn still has words on record —
+    // the strip must quote the older turn, not go blank.
+    const line = foldSubtitleLineLatest([
+      msg("user", [part({ type: "text", text: "And then?" })]),
+      msg("assistant", [part({ type: "text", text: "The next morning…" })]),
+      msg("assistant", [
+        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" }),
+        part({ type: "data-turn-status", data: { status: "done" } }),
+      ]),
+    ]);
+    expect(line).toMatchObject({ speaker: "persona", text: "The next morning…" });
+  });
+
+  it("walks back past an attachment-only user message", () => {
+    const line = foldSubtitleLineLatest([
+      msg("assistant", [part({ type: "text", text: "I see the photo." })]),
+      msg("user", [part({ type: "file", mediaType: "image/png", url: "data:…" })]),
+    ]);
+    expect(line).toMatchObject({ speaker: "persona", text: "I see the photo." });
+  });
+
+  it("shows the in-flight turn's status when nothing has text yet", () => {
+    // The walk's only fallback: nothing speakable ANYWHERE (the user's
+    // latest was an attachment, the assistant's latest is tool traffic) —
+    // then the newest fold wins, which is how a reading prefix surfaces.
+    const line = foldSubtitleLineLatest([
+      msg("user", [part({ type: "file", mediaType: "image/png", url: "data:…" })]),
+      msg("assistant", [part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" })]),
+    ]);
+    expect(line).toMatchObject({ text: "", status: { kind: "reading", count: 1 } });
+  });
+
+  it("shows thinking when the newest turn has reasoning and nothing else", () => {
+    const line = foldSubtitleLineLatest([
+      msg("assistant", [part({ type: "reasoning", text: "hmm…" })]),
+    ]);
+    expect(line).toMatchObject({ text: "", status: { kind: "thinking" } });
+  });
+
+  it("renders an empty line only when the whole list is silent", () => {
+    const line = foldSubtitleLineLatest([
+      msg("assistant", [
+        part({ type: "data-phase", data: { phase: "slice", running: true, compact: true } }),
+      ]),
+    ]);
+    expect(line).toMatchObject({ text: "", status: null });
   });
 });
 

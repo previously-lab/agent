@@ -51,9 +51,10 @@ import type { EvolutionStepData } from "@/lib/chat/build-stream";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
 import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/deep-link";
 import {
-  foldSubtitleLine,
+  foldSubtitleLineLatest,
   type AnyPart,
   type SubtitleLine,
+  type SubtitleSource,
 } from "@/lib/chat/subtitle-line";
 import type { CurrentView } from "@/lib/chat/current-view";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
@@ -344,6 +345,32 @@ export function sliceStartIndex(
       (i.kind === "resume-banner" && i.key === `resume-${sliceId}`),
   );
   return idx >= 0 ? idx : null;
+}
+
+/**
+ * The unified stream as subtitle sources. History turns carry their
+ * persisted markdown body as ONE synthetic text part (slice turns have no
+ * AI SDK parts — the fold must quote the words on record, never a
+ * paraphrase); live turns carry their raw part stream. Non-turn items —
+ * seams, the resume banner, the briefing seat — have nothing to say and
+ * are skipped. Oldest → newest, matching the stream's order.
+ */
+function subtitleSourcesOf(items: readonly ChatStreamItem[]): SubtitleSource[] {
+  const sources: SubtitleSource[] = [];
+  for (const item of items) {
+    if (item.kind === "history-turn") {
+      sources.push({
+        role: item.turn.role,
+        parts: [{ type: "text", text: item.turn.content }],
+      });
+    } else if (item.kind === "live") {
+      sources.push({
+        role: item.message.role,
+        parts: (item.message.parts ?? []) as AnyPart[],
+      });
+    }
+  }
+  return sources;
 }
 
 // ─── Inner ───────────────────────────────────────────────────────────────
@@ -1061,19 +1088,18 @@ function Inner({
   }, [isLoading, onRunningChange]);
 
   // ── The pill's subtitle line (v0.13 §4) ─────────────────────────────────
-  // The NEWEST message, folded by the pure reducer — the panel renders the
-  // line above the pill; this page only publishes it (the shell lifts the
-  // value back down into the panel as a prop). The fold is pure, so the
-  // streaming growth replays identically on a reconnect's re-delivered
-  // prefix; with no messages at all there is nothing to say (null).
+  // The NEWEST message WITH SPEAKABLE TEXT, folded by the pure reducer. The
+  // source is the UNIFIED stream (`items`) — that is what the reader sees:
+  // the slice-driven history plus the live useChat turns. Publishing from
+  // `messages` alone went blank on first load, when the live list is empty
+  // but history already speaks. The walk back is the reducer's
+  // `foldSubtitleLineLatest`: the strip quotes one message's own opening
+  // words, never a paraphrase; only when nothing in the list is speakable
+  // does the fold fall back to the newest message's status (an in-flight
+  // turn's thinking/reading prefix) or null.
   useEffect(() => {
-    const last = messages[messages.length - 1];
-    onSubtitleLineChange?.(
-      last
-        ? foldSubtitleLine((last.parts ?? []) as AnyPart[], last.role)
-        : null,
-    );
-  }, [messages, onSubtitleLineChange]);
+    onSubtitleLineChange?.(foldSubtitleLineLatest(subtitleSourcesOf(items)));
+  }, [items, onSubtitleLineChange]);
 
   // The panel tier this page is hosted at (null only outside a panel): at
   // the pill tier the conversation body is folded away and the stream goes
