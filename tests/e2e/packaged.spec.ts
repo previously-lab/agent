@@ -104,7 +104,7 @@ test.describe("Packaged standalone kernel", () => {
       if (r.status() >= 400) bad.push(`${r.status()} ${r.url()}`);
     });
 
-    await page.goto("/en");
+    await page.goto("/en/app");
     await expect(page.getByPlaceholder("Send a message...")).toBeVisible();
     await page.waitForLoadState("networkidle");
     // Substantive content, not a blank shell.
@@ -182,7 +182,7 @@ test.describe("Packaged standalone kernel", () => {
     test.setTimeout(240_000);
     test.skip(!BYOK_API_KEY, "E2E_BYOK_API_KEY is required");
 
-    await page.goto("/en");
+    await page.goto("/en/app");
     await selectChatModel(page, new RegExp(`${BYOK_MODEL} \\(BYOK\\)`));
     await sendPromptAndExpectOk(page);
   });
@@ -217,7 +217,7 @@ test.describe("Packaged standalone kernel", () => {
       )
       .toBe(true);
 
-    await page.goto("/en");
+    await page.goto("/en/app");
     await selectChatModel(page, /Kimi \(subscription bridge\)/);
     await sendPromptAndExpectOk(page);
   });

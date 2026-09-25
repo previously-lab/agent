@@ -8,7 +8,7 @@ test.describe("Responsive - Mobile", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
   test("no horizontal scroll on the chat page", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     const scrollWidth = await page.evaluate(() => document.body.scrollWidth);
     const clientWidth = await page.evaluate(() => document.body.clientWidth);
     expect(scrollWidth).toBeLessThanOrEqual(clientWidth + 1);
@@ -17,7 +17,7 @@ test.describe("Responsive - Mobile", () => {
   test("header stays visible with the brand and a reachable nav menu", async ({
     page,
   }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     await expect(page.locator("header")).toBeVisible();
     await expect(page.locator('header a[href="/en"]')).toBeVisible();
     // Docs and Settings are menu rows behind the "···" trigger now; opening it
@@ -31,7 +31,7 @@ test.describe("Responsive - Mobile", () => {
   });
 
   test("chat input is usable on mobile", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     const input = page.locator("textarea");
     await expect(input).toBeEnabled();
     // pressSequentially (not fill) — real key events that a React controlled

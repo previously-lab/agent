@@ -8,7 +8,7 @@ import { test, expect } from "@playwright/test";
 // the current model to bridge/claude, so the trigger label is deterministic.
 test.describe("Model selector — subscription bridge group", () => {
   test("lists claude/codex/kimi bridge entries", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
 
     const trigger = page.getByRole("button", {
       name: /Claude \(subscription bridge\)/,
@@ -42,7 +42,7 @@ test.describe("Model selector — subscription bridge group", () => {
   test("locked thinking/effort UX — no effort button, no thinking switch", async ({
     page,
   }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
 
     // (a) No effort cycle button anywhere in the chat input area.
     const chatInput = page.locator(".rounded-2xl", {

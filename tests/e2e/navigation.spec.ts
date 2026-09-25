@@ -23,7 +23,7 @@ test.describe("Navigation", () => {
   });
 
   test("chat page shows the empty briefing and a chat input", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     // The hero was removed — the plain "PREVIOUSLY ON" brand eyebrow sits over
     // the user's name (969154d split them into separate elements) in the empty
     // briefing, the product's arrival moment.
@@ -62,7 +62,7 @@ test.describe("Navigation", () => {
   // The menu portals to <body>, so assert inside the popup, not under
   // <header> (same pattern as the GitHub row below).
   test("Docs menu row points at the external docs site", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     await page.click('header button[data-testid="nav-overflow-trigger"]');
     const menu = page.locator('[data-slot="dropdown-menu-content"]');
     const docs = menu.locator(
@@ -73,7 +73,7 @@ test.describe("Navigation", () => {
   });
 
   test("Settings menu row navigates to settings", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     await page.click('header button[data-testid="nav-overflow-trigger"]');
     const menu = page.locator('[data-slot="dropdown-menu-content"]');
     await menu.locator('a[href="/en/settings"]').click();
@@ -90,7 +90,7 @@ test.describe("Navigation", () => {
   // islands) — the menu portals to <body>, so assert inside the popup, not
   // under <header>.
   test("header exposes the GitHub link in the overflow menu", async ({ page }) => {
-    await page.goto("/en");
+    await page.goto("/en/app");
     await page.click('header button[data-testid="nav-overflow-trigger"]');
     const menu = page.locator('[data-slot="dropdown-menu-content"]');
     const github = menu.locator(

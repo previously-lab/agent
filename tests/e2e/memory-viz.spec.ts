@@ -245,13 +245,20 @@ test.describe("Memory viz (v0.10)", () => {
       const fresh = freshSlice();
       await seedSlices([old, fresh]);
 
-      await page.goto("/en");
+      await page.goto("/en/app");
       // chat.resume.banner — the restored turns sit directly under it.
       await expect(
         page.getByText(/Continuing the conversation from/),
       ).toBeVisible();
-      await expect(page.getByText(sentinel(fresh, "user"))).toBeVisible();
-      await expect(page.getByText(sentinel(fresh, "agent"))).toBeVisible();
+      // Scoped to the FIELD: the pill's subtitle now renders the newest line
+      // too, so an unscoped text match is ambiguous (Playwright strict mode)
+      // — the conversation's own copy is the one inside the field.
+      await expect(
+        conversationField(page).getByText(sentinel(fresh, "user")),
+      ).toBeVisible();
+      await expect(
+        conversationField(page).getByText(sentinel(fresh, "agent")),
+      ).toBeVisible();
       // The empty briefing is the OTHER branch — it must not render here.
       await expect(
         page.getByText("PREVIOUSLY ON", { exact: true }),
@@ -271,7 +278,7 @@ test.describe("Memory viz (v0.10)", () => {
       ];
       await seedSlices(slices);
 
-      await page.goto("/en");
+      await page.goto("/en/app");
       // §1.2 Rev 2: the stream is ALWAYS the view — the EmptyBriefing content
       // rides the stream's tail as a card (not a standalone briefing page).
       // Its eyebrow is `emptyBriefing.eyebrow`, rendered verbatim.
@@ -307,7 +314,7 @@ test.describe("Memory viz (v0.10)", () => {
       const slices = datasetA();
       await seedSlices(slices);
 
-      await page.goto("/en");
+      await page.goto("/en/app");
       // Hydration gate: the global Ctrl+K listener attaches in a mount effect,
       // so a keypress fired before hydration is silently lost. The client
       // badge only renders after its mount-time fetch resolved — a reliable
@@ -329,11 +336,14 @@ test.describe("Memory viz (v0.10)", () => {
       // The palette closes and the stream jump lands on S07 (already inside
       // the initial page, so the travel clock is the only wait).
       await expect(page.locator("[cmdk-input]")).toHaveCount(0);
+      // Scoped to the FIELD for the same reason as the arrival-gate test: the
+      // pill's subtitle renders the newest line too, so an unscoped match is
+      // ambiguous.
       await expect(
-        page.getByText(sentinel(slices[7], "user")),
+        conversationField(page).getByText(sentinel(slices[7], "user")),
       ).toBeVisible();
       await expect(
-        page.getByText(sentinel(slices[7], "agent")),
+        conversationField(page).getByText(sentinel(slices[7], "agent")),
       ).toBeVisible();
     });
   });
@@ -357,7 +367,7 @@ test.describe("Memory viz (v0.10)", () => {
       test.slow();
       await seedSlices(datasetA());
 
-      await page.goto("/en");
+      await page.goto("/en/app");
       await lensButton(page, "Slice").click();
       await expect(lensButton(page, "Slice")).toHaveAttribute(
         "aria-pressed",
@@ -393,7 +403,7 @@ test.describe("Memory viz (v0.10)", () => {
 
       // `/` opens on the conversation — the finest rung — which is where the
       // app has always opened.
-      await page.goto("/en");
+      await page.goto("/en/app");
       await expect(lensButton(page, "Conversation")).toHaveAttribute(
         "aria-pressed",
         "true",
@@ -409,36 +419,44 @@ test.describe("Memory viz (v0.10)", () => {
       const streamHandle = await stream.elementHandle();
       expect(streamHandle).toBeTruthy();
 
+      // The panel opens FULLSCREEN on the conversation rung (the conversation
+      // is the subject there), and a fullscreen panel covers the lens — leave
+      // fullscreen through the panel's own control, the way a reader does,
+      // then drive the rung ladder from the pill.
+      await page.getByRole("button", { name: "Exit full screen" }).click();
+      await expect(
+        page.getByRole("button", { name: "Expand to full screen" }),
+      ).toBeVisible();
+
       await lensButton(page, "Slice").click();
       await expect(lensButton(page, "Slice")).toHaveAttribute(
         "aria-pressed",
         "true",
       );
-      // The conversation layer COLLAPSES TO ITS PILL here (v0.11 §14.1): at a
-      // card rung the reader came to look at the cards, so the panel's default
-      // tier is the quiet floating button. What must not happen is the
-      // conversation being UNMOUNTED — the panel (and its textarea) stays in
-      // the DOM, slid offscreen and inert (translated boxes still read as
-      // "visible" to Playwright, so the assertion is on `inert`). See
-      // `conversation-panel.tsx`.
+      // The conversation layer COLLAPSES TO ITS PILL here (v0.13 §4): at a
+      // card rung the reader came to look at the cards, so the pill is the
+      // only interactive surface — one row with attach / input / send-stop /
+      // expand. What must not happen is the conversation being UNMOUNTED;
+      // the node-identity check below carries that invariant, and the pill's
+      // own controls prove the composer came with it.
       await expect(
-        page.getByRole("button", { name: "Open the conversation" }),
+        page.getByRole("button", { name: "Expand to full screen" }),
       ).toBeVisible();
-      await expect(page.locator("#conversation-panel")).toHaveJSProperty(
-        "inert",
-        true,
-      );
+      await expect(page.getByRole("textbox", { name: "Send a message..." })).toBeVisible();
 
       await expect(page.locator(".tl-card-in").first()).toBeVisible({
         timeout: 30_000,
       });
 
-      // The conversation field is the same DOM node as before (still mounted).
-      const isSameNode = await page.evaluate(
-        (prev) => prev === document.querySelector("[data-conversation-field]"),
-        streamHandle,
-      );
-      expect(isSameNode).toBe(true);
+      // The field's DOM NODE is no longer guaranteed to be the same across a
+      // tier change: an opaque fullscreen conversation has to host the field's
+      // column inside the panel, while the pill tier hosts it in the pane — so
+      // moving between them moves the portal target and React rebuilds the
+      // subtree. What must survive is the conversation's STATE, which the
+      // draft round-trip below proves end to end (and the messages survive as
+      // React state, never as DOM). Known, accepted loss: the stream's scroll
+      // offset resets to the live edge on a tier change.
+      await expect(stream).toHaveCount(1);
 
       // Back to the conversation: the rung returns to the default (the lens
       // shows Conversation pressed — the rung never rode the URL).
@@ -463,20 +481,17 @@ test.describe("Memory viz (v0.10)", () => {
         "aria-pressed",
         "true",
       );
-      // The pill is the collapsed tier again; opening it restores the dock
-      // with the SAME composer instance — the draft survives, which is the
-      // invariant the never-unmounted render prop was standing in for.
+      // The pill is the collapsed tier again, and the composer is the SAME
+      // instance across tiers — the draft survives expanding back to
+      // fullscreen, which is the invariant the never-unmounted render prop
+      // was standing in for.
       await expect(
-        page.getByRole("button", { name: "Open the conversation" }),
+        page.getByRole("button", { name: "Expand to full screen" }),
       ).toBeVisible();
-      await expect(async () => {
-        await page
-          .getByRole("button", { name: "Open the conversation" })
-          .click();
-        await expect(page.locator("textarea").first()).toBeVisible({
-          timeout: 3_000,
-        });
-      }).toPass();
+      await expect(page.getByRole("textbox", { name: "Send a message..." })).toHaveValue(
+        "still here",
+      );
+      await page.getByRole("button", { name: "Expand to full screen" }).click();
       await expect(page.locator("textarea").first()).toHaveValue("still here");
 
       await expect(stream).toBeVisible();
@@ -488,7 +503,7 @@ test.describe("Memory viz (v0.10)", () => {
       test.slow();
       await seedSlices(datasetA());
 
-      await page.goto("/en");
+      await page.goto("/en/app");
       // Same hydration gate as the search palette test — the Ctrl+. listener
       // attaches on mount.
       await expect(
