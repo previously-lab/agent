@@ -90,6 +90,7 @@ import {
 } from "./room-plan";
 import {
   compositionForRecipe,
+  compositionKitZonesFor,
   compositionTemplateFor,
   type LightRegister as ModuleLight,
   type FloorRole,
@@ -485,7 +486,18 @@ export function describeRoom(
             })),
           }
         : {}),
-      ...(template ? { zones: templateZonesFor(template, plan) } : {}),
+      // The renderer's zone source, mirrored exactly (space.tsx's staging
+      // call): a composition owns its own kit zones, and only a room built
+      // from a plain template falls back to the template's. Reading the
+      // template zones for a composed room was the drift the v0.13 skin
+      // lane's cross-check exposed — the rects match, but the zone-first
+      // side-kit draw deals from a different list, so a multi-module room's
+      // outline could disagree with the pieces it actually stages.
+      ...(composition
+        ? { zones: compositionKitZonesFor(composition, plan) }
+        : template
+          ? { zones: templateZonesFor(template, plan) }
+          : {}),
       heightAt: (x, z) => terrainHeight(scaled, x, z),
     });
     const byPlacement = new Map<number, { kit: string; pieces: KitKind[] }>();

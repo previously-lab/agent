@@ -35,7 +35,8 @@ export type SeedKey =
   | "structure"
   | "furniture"
   | "animals"
-  | "props";
+  | "props"
+  | "skin";
 
 /**
  * cyrb53 string hash — full 53-bit-quality avalanche hash folded to a

@@ -64,7 +64,7 @@
 import type { KitKind } from "./kits";
 import type { LightRegister } from "./room-modules";
 import { parseDebugSkin, debugSliceIdWithoutSkin, isDebugSlice } from "./debug-slice";
-import { createRng, deriveSubSeed, WORLD_SEED, type SeedKey } from "./seed";
+import { createRng, deriveSubSeed, WORLD_SEED } from "./seed";
 import { MODULE_LIGHT_FIXTURES } from "./tuning/room";
 
 /* ------------------------------------------------------------------ */
@@ -537,12 +537,7 @@ const SKIN_DRAW_TABLE: readonly { skin: BiomeSkin; weight: number }[] = [
  *  seeded draw over the table: `rng()` lands in exactly one skin's
  *  weight interval. Same slice id ⇒ same sub-seed ⇒ same draw (A6). */
 function drawSkinForSlice(sliceId: string): BiomeSkin {
-  // seed.ts's SeedKey union predates the skin stream; "skin" follows the
-  // same `${worldSeed}:${sliceId}:${key}` convention (the union should
-  // grow a "skin" member — this cast is the documented stand-in).
-  const rng = createRng(
-    deriveSubSeed(WORLD_SEED, sliceId, "skin" as SeedKey),
-  );
+  const rng = createRng(deriveSubSeed(WORLD_SEED, sliceId, "skin"));
   const total = SKIN_DRAW_TABLE.reduce((sum, e) => sum + e.weight, 0);
   let roll = rng() * total;
   for (const entry of SKIN_DRAW_TABLE) {
