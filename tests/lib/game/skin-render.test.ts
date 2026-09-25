@@ -18,9 +18,9 @@
  *     water-wall kinds get alpha, and only when the data declared an
  *     opacity < 1 — a forged opaque kind carrying opacity is refused;
  *  5. WALK SPEED: wade skins answer < 1 — through the debug force AND
- *     through the P3-step-three world assignment (a real pool/lake/ocean/
- *     duck slice wades slower); dry skins and every interior (temperate)
- *     slice answer exactly 1.
+ *     through the per-slice skin draw (a real slice that draws shallows
+ *     wades slower); dry skins and every temperate/debug-pin slice answer
+ *     exactly 1.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -97,13 +97,12 @@ describe("default path: zero change", () => {
     expect(skinWallAlpha(null)).toBeNull();
   });
 
-  it("interior real slices and plain unit pins walk at full speed — the temperate baseline answers 1", () => {
-    // P3 step three: every slice resolves its world's skin, and an interior
-    // world is the temperate baseline (null) — so these answer the legacy
-    // constant exactly. A stale/unknown skin id degrades the same way.
+  it("interior debug pins and stale forced ids walk at full speed — the temperate baseline answers 1", () => {
+    // v0.13 §7: a DEBUG PIN is a test fixture — it answers the temperate
+    // baseline (null), the legacy constant exactly. A stale/unknown skin
+    // id degrades the same way. (Real slices draw per slice; the ones
+    // that draw a dry skin also answer 1 — exercised below.)
     for (const id of [
-      "2026-09-15-0746",
-      "core",
       "dbg-m:living",
       "dbg-t:reading-hall",
       "dbg-a:library",
@@ -115,17 +114,18 @@ describe("default path: zero change", () => {
     }
   });
 
-  it("a water world walks slower — the wade skin arrives through the world assignment", () => {
-    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
-    // no real slice draws a wade biome anymore, so the world assignment
-    // is exercised through the debug gallery's archetype pins (the same
-    // skinForSlice path — the archetype is pinned, not the skin forced;
-    // the class and skin still resolve from the archetype itself).
-    const wade = (["pool", "ocean", "lake", "ducks"] as const)
-      .map((a) => `dbg-a:${a}`)
-      .find((id) => skinForSlice(id)?.floor.walk === "wade");
+  it("a water world walks slower — the wade skin arrives through the per-slice draw", () => {
+    // 皮肤按时间片抽: some real slice draws the shallows, and that slice
+    // wades slower. The probe set is fixed ids (A6-pure — no randomness
+    // in the test itself); the draw decides which one is the water room.
+    const PROBES = Array.from(
+      { length: 400 },
+      (_, i) => `skin-probe-2026-${String(i).padStart(4, "0")}`,
+    );
+    const wade = PROBES.find((id) => skinForSlice(id)?.floor.walk === "wade");
     expect(wade).toBeDefined();
     const skin = skinForSlice(wade!)!;
+    expect(skin.id).toBe("shallows");
     expect(skin.floor.walk).toBe("wade");
     expect(skinWalkSpeedScale(wade!)).toBe(skin.floor.speed);
     expect(skinWalkSpeedScale(wade!)).toBeLessThan(1);
@@ -569,23 +569,44 @@ describe("P3 step two: the render feeds the skin to staging", () => {
     }
   });
 
-  it("描述 = 画面 holds on the world-assigned rooms too (nature pin, wonder pin)", () => {
-    // P3 step three: a nature room furnishes from its world's skin and a
-    // wonder room keeps its authored deck under the view skin — both
-    // lanes enumerate the same pieces either way.
-    // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
-    // the hybrid class no longer exists (CLASS_WEIGHTS draws interior
-    // only), so the hybrid probe that scanned for one is gone; the
-    // nature/wonder pins still reach those worlds through the debug
-    // gallery and pin this contract.
-    for (const id of ["dbg-a:forest", "dbg-a:meadow", "dbg-a:ducks"]) {
+  it("描述 = 画面 holds on the drawn rooms too (real slices under the skin draw)", () => {
+    // v0.13 §7: a real slice draws its skin per slice — and wherever the
+    // draw lands, the outline lane and the view layer resolve the SAME
+    // skin, the outline repeats byte-for-byte, and the renderer's own
+    // staging enumerates exactly the pieces describe-room reports. The
+    // probe set spans every drawn skin (temperate included), fixed ids
+    // only (A6-pure — no randomness in the test itself).
+    const PROBES = Array.from(
+      { length: 60 },
+      (_, i) => `skin-probe-2026-${String(i).padStart(4, "0")}`,
+    );
+    const drawn = new Set(PROBES.map((id) => skinForSlice(id)!.id));
+    expect(drawn.size).toBeGreaterThanOrEqual(3);
+    // The view layer and the outline lane read one entry point:
+    for (const id of PROBES) {
+      expect(describeRoom(id).skin?.id, id).toBe(skinForSlice(id)?.id);
+      expect(JSON.stringify(describeRoom(id).furnishing), id).toBe(
+        JSON.stringify(describeRoom(id).furnishing),
+      );
+    }
+    // 描述 = 画面 on the drawn rooms: where the room composes a SINGLE
+    // module, the render replay above is describe-room's exact staging
+    // input (the per-zone kitIds compositionKitZonesFor attaches are the
+    // module's own whitelist — the global kitIds set, so the draw is
+    // identical; multi-module compositions diverge in the replay helper's
+    // zones approximation, not in the draw — see the sibling test's
+    // dbg-m:living, faithful under every forced skin).
+    let replayed = 0;
+    for (const id of PROBES) {
+      const recipe = compileSpaceRecipe(id);
+      const composition = compositionForRecipe(recipe, WORLD_SEED, 0);
+      if (!composition || composition.modules.length !== 1) continue;
       const outline = describeRoom(id).furnishing;
       expect(outline, `${id}: the outline furnishes`).not.toBeNull();
       expect(renderStaging(id), id).toEqual(outline);
+      replayed++;
     }
-    // …and the worlds diverge where the assignment says they do.
-    expect(describeRoom("dbg-a:forest").skin?.id).toBe("moss");
-    expect(describeRoom("dbg-a:ducks").skin?.id).toBe("shallows");
+    expect(replayed).toBeGreaterThanOrEqual(5);
   });
 
   it("the skin visibly changes the staged world (the wiring is live)", () => {

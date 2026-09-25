@@ -42,28 +42,29 @@
  * in a slice id forces that skin — alone on the seeded room, or composed
  * with any unit pin, e.g. `dbg-skin:dune+dbg-m:living`.
  *
- * THE WORLD ASSIGNMENT (P3 step three — 皮肤成为"世界"): a REAL slice
- * resolves its skin from its world. skinForSlice compiles the slice's
- * recipe (space-recipe.ts — the same pure derivation the renderer builds
- * the room from) and reads THE ARCHETYPE → SKIN TABLE below. Who decides:
- * the ARCHETYPE decides — §3's 环境层 belongs to the world, the structure
- * layer never asks what skin it wears. Interior archetypes are ABSENT from
- * the table: an interior world IS the temperate baseline, and the baseline
- * ≡ no skin (无皮肤 ≡ 温带), so interior rooms answer null and every legacy
- * expression stays in force — zero change by construction, not by
- * convention. A6 holds two ways: the recipe is a pure function of the
- * slice id, and the table is data — same slice ⇒ same world ⇒ same skin,
- * on any machine. (compileSpaceRecipe is pure; this module stays free of
- * three.js, React, and the wall clock — the only seeding in the game.)
+ * THE SKIN DRAW (v0.13 §7 — 皮肤按时间片抽): a REAL slice draws its skin
+ * per slice, seeded: `createRng(deriveSubSeed(WORLD_SEED, sliceId,
+ * "skin"))` over the WEIGHTED SKIN TABLE below. The world ruling narrowed
+ * every room to the standard interior, which without a draw would mean
+ * every room wears the temperate skin (世界收口后所有房间都是温带皮
+ * 肤) — the draw restores "the same standard room in a different world".
+ * Temperate stays the BASELINE (the plain world, the most common draw);
+ * the four biomes share the rest evenly. Who decides: the SLICE decides —
+ * §3's 环境层 belongs to the world, the structure layer never asks what
+ * skin it wears — and A6 holds because the draw is a pure function of the
+ * slice id: same slice ⇒ same draw ⇒ same skin, on any machine. (Debug
+ * pins — `dbg-m:` / `dbg-a:` / `dbg-seed:` — are test fixtures, not real
+ * slices: they answer the temperate baseline, null, exactly as a forced
+ * stale id does. This module stays free of three.js, React, and the wall
+ * clock — the only seeding in the game.)
  *
  * Pure module: no three.js, no React, no wall clock.
  */
 
 import type { KitKind } from "./kits";
 import type { LightRegister } from "./room-modules";
-import type { ArchetypeId } from "./space-types";
-import { parseDebugSkin, debugSliceIdWithoutSkin } from "./debug-slice";
-import { compileSpaceRecipe } from "./space-recipe";
+import { parseDebugSkin, debugSliceIdWithoutSkin, isDebugSlice } from "./debug-slice";
+import { createRng, deriveSubSeed, WORLD_SEED, type SeedKey } from "./seed";
 import { MODULE_LIGHT_FIXTURES } from "./tuning/room";
 
 /* ------------------------------------------------------------------ */
@@ -505,55 +506,66 @@ export function isSkinId(id: string): id is SkinId {
   return skinById(id) !== undefined;
 }
 
-/** THE ARCHETYPE → SKIN TABLE — the world assignment (P3 step three).
- *  Every NON-INTERIOR archetype maps to the skin of its world; interior
- *  archetypes stay ABSENT — an interior room is the temperate baseline and
- *  answers null (无皮肤 ≡ 温带, zero change by construction). Nature biomes
- *  draw the landscape they ARE: the dry open biomes read dune, the green
- *  ones grove, the deep wet ones moss/shallows. Wonder dioramas take a
- *  world's skin too — the duck pond is the flooded room, the play dioramas
- *  stand in the grass. One table, looked up by the compiled archetype:
- *  same slice ⇒ same world ⇒ same skin (A6).
- *
- *  (Authored-note: no snow skin exists in the catalogue — snowfield takes
- *  moss, the coldest wet end, until a snow world is authored.) */
-const SKIN_BY_ARCHETYPE: Partial<Record<ArchetypeId, SkinId>> = {
-  // nature — the biome is its world's skin (§3: 沙漠构成的客厅…).
-  meadow: "grove",
-  plains: "dune",
-  forest: "moss",
-  pool: "shallows",
-  ocean: "shallows",
-  lake: "shallows",
-  beach: "dune",
-  snowfield: "moss", // ← no snow skin yet; the wet-cold end stands in.
-  // wonder — the diorama's world is skinned like any room's.
-  ducks: "shallows", // the pond
-  cats: "grove",
-  dogs: "grove",
-  balloons: "grove",
-};
+/** THE SKIN DRAW WEIGHTS (v0.13 §7's 分布建议). Temperate is the
+ *  BASELINE — the "plain" world and the 保底 (guaranteed floor) of the
+ *  distribution — so it carries its own weight and each biome carries
+ *  SKIN_BIOME_WEIGHT, the four biomes splitting the non-temperate share
+ *  evenly. 3:1 keeps the plain interior the single likeliest world
+ *  (~43%) while 57% of rooms open onto one of the four biomes: the whole
+ *  point of the draw is that a room can surprise you, and a heavier
+ *  baseline measurably flattens that — at 6:1 temperate was 55.6% of the
+ *  real catalog and two consecutive rooms repeated their world 36.5% of
+ *  the time; at 3:1 the repeat rate falls to ~27%. Re-tune by changing
+ *  ONE of these two numbers: lower SKIN_TEMPERATE_WEIGHT (or raise
+ *  SKIN_BIOME_WEIGHT) for more variety, raise it to make the plain
+ *  interior dominate again. (The ratio was delegated to the main agent,
+ *  2026-09-26.) */
+export const SKIN_TEMPERATE_WEIGHT = 3;
+export const SKIN_BIOME_WEIGHT = 1;
 
-/** The skin a WORLD wears — the pure half of the assignment (the table).
- *  Interior archetypes are absent: null, the temperate baseline. */
-export function skinForArchetype(archetype: ArchetypeId): BiomeSkin | null {
-  const id = SKIN_BY_ARCHETYPE[archetype];
-  return id ? (skinById(id) ?? null) : null;
+/** The weighted draw table, in catalogue order: the temperate baseline
+ *  first, then the four biomes at SKIN_BIOME_WEIGHT each. */
+const SKIN_DRAW_TABLE: readonly { skin: BiomeSkin; weight: number }[] = [
+  { skin: TEMPERATE, weight: SKIN_TEMPERATE_WEIGHT },
+  { skin: DUNE, weight: SKIN_BIOME_WEIGHT },
+  { skin: GROVE, weight: SKIN_BIOME_WEIGHT },
+  { skin: MOSS, weight: SKIN_BIOME_WEIGHT },
+  { skin: SHALLOWS, weight: SKIN_BIOME_WEIGHT },
+];
+
+/** THE SKIN DRAW — the pure half of the assignment (the weights). One
+ *  seeded draw over the table: `rng()` lands in exactly one skin's
+ *  weight interval. Same slice id ⇒ same sub-seed ⇒ same draw (A6). */
+function drawSkinForSlice(sliceId: string): BiomeSkin {
+  // seed.ts's SeedKey union predates the skin stream; "skin" follows the
+  // same `${worldSeed}:${sliceId}:${key}` convention (the union should
+  // grow a "skin" member — this cast is the documented stand-in).
+  const rng = createRng(
+    deriveSubSeed(WORLD_SEED, sliceId, "skin" as SeedKey),
+  );
+  const total = SKIN_DRAW_TABLE.reduce((sum, e) => sum + e.weight, 0);
+  let roll = rng() * total;
+  for (const entry of SKIN_DRAW_TABLE) {
+    roll -= entry.weight;
+    if (roll < 0) return entry.skin;
+  }
+  return SKIN_DRAW_TABLE[SKIN_DRAW_TABLE.length - 1].skin;
 }
 
 /** THE consumer entry point: the skin a slice id resolves. The DEBUG FORCE
  *  wins (`dbg-skin:<id>`, alone or composed) — and a STALE forced id
- *  degrades to null, never to a crash. Otherwise the world assignment:
- *  the slice's recipe compiles from its SKIN-STRIPPED id
- *  (debug-slice.ts — the strip never perturbs the room's own streams), and
- *  the compiled ARCHETYPE decides the skin through the table above.
- *  Interior worlds resolve null — temperate ≡ no skin — so the default
- *  interior path is byte-for-byte today's. Pure in the slice id (A6). */
+ *  degrades to null, never to a crash. A DEBUG PIN underneath (`dbg-m:` /
+ *  `dbg-a:` / `dbg-seed:` — a test fixture, not a real slice) answers the
+ *  temperate baseline, null: debug rooms describe the catalogue, they do
+ *  not wear a drawn world. A REAL slice draws its skin from the slice id
+ *  alone — the skin-stripped id seeds the draw, so the force never
+ *  perturbs the room's own streams. Pure in the slice id (A6). */
 export function skinForSlice(sliceId: string): BiomeSkin | null {
   const forced = parseDebugSkin(sliceId);
   if (forced !== null) return skinById(forced) ?? null;
-  const recipe = compileSpaceRecipe(debugSliceIdWithoutSkin(sliceId));
-  return skinForArchetype(recipe.archetype);
+  const stripped = debugSliceIdWithoutSkin(sliceId);
+  if (isDebugSlice(stripped)) return null;
+  return drawSkinForSlice(stripped);
 }
 
 /** The slot-4 fixture resolved — the register's MODULE_LIGHT_FIXTURES

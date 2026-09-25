@@ -13,10 +13,11 @@
  *     never twice; window skies, fog tints, floor/wall kinds, silhouettes
  *     and horizons all distinct), each with a day AND a night state;
  *  6. A6: same slice ⇒ same skin / same outline;
- *  7. the debug prefix composes with `dbg-m:` and overrides the WORLD
- *     ASSIGNMENT (P3 step three): a real slice resolves its skin from its
- *     compiled archetype — interior worlds answer null (the temperate
- *     baseline), nature/wonder worlds resolve their table entry.
+ *  7. the debug prefix composes with `dbg-m:` and overrides the SKIN
+ *     DRAW (v0.13 §7): a real slice draws its skin deterministically from
+ *     its id — temperate the weighted baseline, the four biomes sharing
+ *     the rest — while a debug pin (dbg-m:/dbg-a:/dbg-seed:) answers the
+ *     temperate baseline (null), never a drawn world.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -286,69 +287,71 @@ describe("debug force: dbg-skin prefix (P3 acceptance switch)", () => {
     expect(skinForSlice(recipe.sliceId)?.id).toBe("dune");
   });
 
-  it("interior pins, interior real slices and stale forced ids answer null — the temperate baseline", () => {
-    // P3 step three: EVERY slice resolves its world's skin — and an
-    // interior world IS the temperate baseline, which answers null
-    // (无皮肤 ≡ 温带, zero change by construction). A stale forced id
-    // degrades to null too, never to a crash.
+  it("debug pins and stale forced ids answer null — the temperate baseline; real slices draw", () => {
+    // v0.13 §7: a DEBUG PIN is a test fixture, not a real slice — it
+    // answers the temperate baseline (null, 无皮肤 ≡ 温带, zero change to
+    // the debug galleries). A STALE forced id degrades to null too, never
+    // to a crash. A REAL slice draws its skin from its id alone, and the
+    // draw is deterministic (A6): same slice ⇒ same skin object.
     for (const id of [
-      "2026-09-15-0746",
-      "core",
       "dbg-m:living",
       "dbg-t:reading-hall",
       "dbg-a:library",
+      "dbg-seed:7+dbg-m:living",
       "dbg-skin:volcano",
     ]) {
       expect(skinForSlice(id), id).toBeNull();
     }
+    for (const id of ["2026-09-15-0746", "core"]) {
+      const skin = skinForSlice(id);
+      expect(SKINS, id).toContain(skin);
+      expect(skinForSlice(id), id).toBe(skin);
+    }
   });
 });
 
-describe("world assignment — real slices wear their world's skin (P3 step three)", () => {
-  // 世界分类收口（2026-09）：非标准间从注册表下架、世界只留室内 —
-  // a real slice never draws a non-interior world now, so the per-
-  // archetype probe is the debug gallery's archetype pin: the same
-  // skinForSlice world-assignment path (the class and skin resolve from
-  // the archetype itself — nothing is forced), pinned instead of drawn
-  // (compileSpaceRecipe hashes any string — the pin is A6-pure).
-  function slicePerArchetype(archetypes: readonly string[]): Record<string, string> {
-    const seen: Record<string, string> = {};
-    for (const archetype of archetypes) seen[archetype] = `dbg-a:${archetype}`;
-    return seen;
-  }
+describe("the skin draw — real slices draw a deterministic skin (v0.13 §7)", () => {
+  // 皮肤按时间片抽: every real slice draws its skin per slice, seeded —
+  // the same standard room in a different world. Temperate is the
+  // weighted baseline; the four biomes share the rest.
+  const PROBES = Array.from(
+    { length: 400 },
+    (_, i) => `skin-probe-2026-${String(i).padStart(4, "0")}`,
+  );
 
-  it("every non-interior archetype resolves its world skin, deterministically (A6)", () => {
-    const EXPECTED: Record<string, string> = {
-      meadow: "grove",
-      plains: "dune",
-      forest: "moss",
-      pool: "shallows",
-      ocean: "shallows",
-      lake: "shallows",
-      beach: "dune",
-      snowfield: "moss",
-      ducks: "shallows",
-      cats: "grove",
-      dogs: "grove",
-      balloons: "grove",
-    };
-    const seen = slicePerArchetype(Object.keys(EXPECTED));
-    for (const [archetype, skinId] of Object.entries(EXPECTED)) {
-      const id = seen[archetype];
-      expect(id, `probe for ${archetype}`).toBeDefined();
-      // Same slice ⇒ same skin object, any machine, any call order:
-      expect(skinForSlice(id!), `${archetype} via ${id}`).toBe(skinById(skinId));
-      expect(skinForSlice(id!)).toBe(skinForSlice(id!));
-      // Same slice ⇒ same world: the recipe underneath is unchanged.
-      expect(compileSpaceRecipe(id!).archetype).toBe(archetype);
+  it("the draw is deterministic and lands on a real skin (A6)", () => {
+    for (const id of PROBES.slice(0, 40)) {
+      const skin = skinForSlice(id);
+      expect(SKINS, id).toContain(skin);
+      expect(skinForSlice(id), id).toBe(skin);
     }
   });
 
-  it("the debug force still wins over the world assignment", () => {
+  it("temperate is the baseline — the most common draw over the probe set", () => {
+    const hist = new Map<string, number>();
+    for (const id of PROBES) {
+      const s = skinForSlice(id)!.id;
+      hist.set(s, (hist.get(s) ?? 0) + 1);
+    }
+    // Every skin is reachable…
+    for (const skin of SKINS) {
+      expect(hist.get(skin.id) ?? 0, skin.id).toBeGreaterThan(0);
+    }
+    // …and the temperate baseline outdraws every single biome.
+    for (const skin of SKINS.filter((s) => s.id !== "temperate")) {
+      expect(hist.get("temperate")!, `temperate vs ${skin.id}`).toBeGreaterThan(
+        hist.get(skin.id) ?? 0,
+      );
+    }
+  });
+
+  it("the debug force still wins over the draw", () => {
     expect(skinForSlice("dbg-skin:dune+dbg-m:living")?.id).toBe("dune");
-    // Even on a unit pin whose world would assign a different skin:
+    // Even on a unit pin whose draw would assign a different skin:
     expect(skinForSlice("dbg-skin:temperate+dbg-a:meadow")?.id).toBe("temperate");
     expect(skinForSlice("dbg-skin:grove+dbg-a:ducks")?.id).toBe("grove");
+    // …and a real slice under the force wears the forced skin, drawn or not:
+    expect(skinForSlice("dbg-skin:grove+2026-09-15-0746")?.id).toBe("grove");
   });
 });
 
@@ -440,10 +443,15 @@ describe("A6: same slice, same skin, same outline", () => {
     });
   });
 
-  it("a real slice's outline stays skinless and unchanged", () => {
+  it("a real slice's outline wears its deterministic draw, unchanged on repeat", () => {
     const id = "2026-09-15-0746";
     const desc = describeRoom(id);
-    expect(desc.skin).toBeNull();
+    // The drawn skin is exactly what skinForSlice resolves — the outline
+    // lane and the view layer read one entry point (A6: same slice ⇒ same
+    // skin, and the outline repeats byte-for-byte). The outline's skin
+    // block is the serialization-friendly projection (id/floor/wall/…),
+    // so the identity is the id.
+    expect(desc.skin?.id).toBe(skinForSlice(id)?.id);
     expect(JSON.stringify(describeRoom(id))).toBe(JSON.stringify(desc));
   });
 
@@ -480,8 +488,9 @@ describe("A6: same slice, same skin, same outline", () => {
     expect(zh).toContain("沙丘");
     expect(zh).toContain("槽位替换");
     expect(zh.split("\n")).toHaveLength(en.split("\n").length);
-    // The default path gains no line:
-    const plain = "2026-09-15-0746";
+    // The skinless path gains no line — a debug pin answers the temperate
+    // baseline (null), never a drawn world:
+    const plain = "dbg-m:living";
     expect(formatRoomDescription(describeRoom(plain), "en")).not.toContain("Skin:");
   });
 });

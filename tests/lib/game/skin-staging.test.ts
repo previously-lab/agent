@@ -483,24 +483,23 @@ describe("A6 — determinism with a skin", () => {
     expect(desc.skin?.id).toBe("shallows");
   });
 
-  it("real slices wear their world: interior → null, nature → its skin (A6 in the outline)", () => {
-    // Interior worlds resolve the temperate baseline — null, byte-for-byte
-    // the skinless path.
-    for (const id of ["2026-09-15-0746", "core", "dbg-m:living"]) {
+  it("real slices wear their deterministic draw; debug pins stay temperate (A6 in the outline)", () => {
+    // Debug pins answer the temperate baseline — null, byte-for-byte the
+    // skinless path.
+    for (const id of ["dbg-m:living", "dbg-t:reading-hall", "dbg-a:library"]) {
       expect(skinForSlice(id)).toBeNull();
       expect(describeRoom(id).skin).toBeNull();
     }
-    // A nature world resolves its world's skin, and the outline is a
-    // stable function of the slice (A6). 世界分类收口（2026-09）：非标准
-    // 间从注册表下架、世界只留室内 — no real slice draws nature now, so
-    // the probe is the debug gallery's archetype pin (the same
-    // skinForSlice / describeRoom chain, with the archetype pinned
-    // instead of drawn).
-    const nature = "dbg-a:forest";
-    const skin = skinForSlice(nature);
-    expect(skin).not.toBeNull();
-    const desc = describeRoom(nature);
-    expect(desc.skin?.id).toBe(skin!.id);
-    expect(JSON.stringify(describeRoom(nature))).toBe(JSON.stringify(desc));
+    // A real slice wears the skin the draw assigns, and the outline is a
+    // stable function of the slice (A6) — same slice ⇒ same skin, same
+    // outline, on every read. (Which skin each id draws is the draw's
+    // business; the contract here is determinism + view/outline agreement.)
+    for (const real of ["2026-09-15-0746", "core", "2026-09-12-0941"]) {
+      const skin = skinForSlice(real);
+      expect(skin).not.toBeNull();
+      const desc = describeRoom(real);
+      expect(desc.skin?.id).toBe(skin!.id);
+      expect(JSON.stringify(describeRoom(real))).toBe(JSON.stringify(desc));
+    }
   });
 });

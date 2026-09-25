@@ -167,6 +167,6 @@ describe("describeRoom", () => {
 // unreachable until a class id returns to CLASS_WEIGHTS. The nature /
 // wonder kits, the biome and wonder archetype lists, the skins and their
 // decks stay dormant in kits.ts, space-types.ts and skins.ts; the
-// debug gallery still reaches them (`dbg-a:meadow` etc. — see
-// skin-render.test.ts / skins.test.ts), which is where the skinned-world
-// contracts are pinned now.
+// debug gallery still reaches them (`dbg-skin:<id>` — see skin-render.test.ts
+// / skins.test.ts), which is where the skinned-world contracts are pinned
+// now; the archetype pins themselves resolve the temperate baseline.
