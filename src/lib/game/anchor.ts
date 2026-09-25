@@ -22,7 +22,12 @@
  */
 import { LOBBY_CLEAR } from "./clamps";
 import { LOBBY_LENGTH } from "./hotel";
-import { distToPath, type Composition, type RoomPlan } from "./room-plan";
+import {
+  distToPath,
+  planContains,
+  type Composition,
+  type RoomPlan,
+} from "./room-plan";
 import { createRng, hashString } from "./seed";
 import { ENTRANCE_CLEAR_RADIUS, HERO_CLEAR } from "./tuning/room";
 
@@ -150,6 +155,62 @@ export interface RoomTerminalInput {
 }
 
 /**
+ * HERO-CLEARANCE FEASIBILITY CEILING — the largest hero distance this
+ * room's own geometry can honestly offer the machine. A pure function of
+ * the resolver's inputs: every parameter beyond (plan, width, wallThick,
+ * propScale, hero) is itself a deterministic derivation of them (hw is
+ * the resolved machine half-width), so A6 holds — same inputs, same
+ * ceiling, no clock and no draw.
+ *
+ * WHERE THE BOUND COMES FROM. The hero stands in the far third (≥68%
+ * depth, near the axis) and the machine only ever stands in the open
+ * field's mid-depth band (30–70% of depth, the seeded scan below) or —
+ * degenerately — at the entrance wall, which is FARTHER from a far-third
+ * hero than the band's near edge. So the band's far corner — the scan's
+ * own lateral reach at the band's near edge — is the conservative
+ * farthest spot the resolver can actually use, and any spot the fallback
+ * walk can reach lies beyond it. From that corner's distance come off
+ * the machine's half-extent (the hero boundary is measured to the body,
+ * not the center) and the wall-furniture band the score already reserves
+ * along the walls — the corner itself is inside the furniture strip, so
+ * a machine standing its reserve-distance inward is the honest reach.
+ *
+ * A room that can truly host HERO_CLEAR (every standard multi-module
+ * room) gets a ceiling above it and the clamp `min(heroClear, ceiling)`
+ * is a NO-OP — effectiveHeroClear === heroClear, scores and anchors
+ * unchanged. A 6×6 single-module room (bath / storage) gets what it can
+ * actually offer (~2.1–2.4m) instead of an unreachable 3m: the soft
+ * score stops demanding the impossible and the degenerate fallback's
+ * feasibility walk becomes satisfiable by construction.
+ */
+export function heroClearCeilingFor(
+  plan: RoomPlan,
+  width: number,
+  wallThick: number,
+  propScale: number,
+  hero: { x: number; z: number },
+  hw: number,
+): number {
+  const halfRoom = width / 2 - wallThick / 2;
+  // The scan's own lateral reach (its draw expression, mirrored). Corners
+  // outside the walkable footprint — an l-shape's abandoned quadrant past
+  // the step — do not count: the machine can never stand there.
+  const reachX = Math.max(0.5, halfRoom - hw - 0.15);
+  // WALL_FURNITURE_BAND (below), restated: the wall strip the score
+  // reserves for wall-anchored kits.
+  const band = 1.2 * Math.max(propScale, 0.35);
+  let farthest = 0;
+  for (const sx of [-1, 1]) {
+    for (const z of [plan.extent * 0.3, plan.extent * 0.7]) {
+      const x = sx * reachX;
+      if (!planContains(plan, x, z, 0)) continue;
+      farthest = Math.max(farthest, Math.hypot(x - hero.x, z - hero.z));
+    }
+  }
+  return Math.max(0, farthest - hw - band);
+}
+
+/**
  * Resolve the room terminal's anchor. Deterministic in (sliceId, plan,
  * comp, width, wallThick, propScale, water) (A6 — the two call sites
  * resolve the SAME anchor through the same pure call).
@@ -161,7 +222,10 @@ export interface RoomTerminalInput {
  * ones that cannot be in the way (inside the plan, clear of the doorway
  * strip, the walk path and the water), and picks the survivor with the
  * most clearance from the soft constraints — the hero's clearing, the
- * composition's cluster circles and the side walls.
+ * composition's cluster circles and the side walls. The hero's clearing
+ * is asked only at what the room can actually offer: heroClearCeilingFor
+ * clamps HERO_CLEAR to the open field's geometric reach, a no-op in every
+ * room big enough to host the raw clearance.
  *
  * WHY CLUSTERS ARE THE FURNITURE PROXY. This layer's input is the plan
  * and the composition; the kit layer's authored keep-empty zones and
@@ -180,7 +244,9 @@ export interface RoomTerminalInput {
  * DEGENERATE ROOMS. A room too small to clear the path anywhere in the
  * band (the dollhouse scales) degrades to the entrance-wall spot beside
  * the doorway — the v0.11 placement, feasibility-nudged, proven to stay
- * inside the plan and out of the passage.
+ * inside the plan and out of the passage. Its hero gate reads the same
+ * clamped clearance, so the nudge walk always terminates on a spot that
+ * passed every gate it returned with (see the walk's own comment).
  */
 export function roomTerminalFor({
   sliceId,
@@ -212,6 +278,18 @@ export function roomTerminalFor({
   const hw = (TERMINAL_W * scale) / 2;
   const hd = (TERMINAL_D * scale) / 2;
   const heroClear = HERO_CLEAR * propScale;
+  // CLAMPED TO WHAT THE ROOM CAN OFFER. The hero clearing is a SOFT
+  // requirement, and in a 6×6 single-module room (bath / storage) the raw
+  // 3m is more than the open field can ever reach — demanding it anyway
+  // only distorts the worst-of score (every candidate reads as equally
+  // "crowding the hero") and leaves the degenerate fallback's hero gate
+  // unsatisfiable. effectiveHeroClear is the feasibility ceiling wherever
+  // the room is genuinely small and the identity wherever it is not —
+  // see heroClearCeilingFor. Both hero checks below read THIS value.
+  const effectiveHeroClear = Math.min(
+    heroClear,
+    heroClearCeilingFor(plan, width, wallThick, propScale, comp.hero, hw),
+  );
 
   const inside = (x: number, z: number): boolean =>
     terminalInsidePlan(plan, width, plan.extent, wallThick, {
@@ -235,11 +313,14 @@ export function roomTerminalFor({
   };
   // Soft clearances, as BOUNDARY distances (≥0 means clear with margin).
   // The score is the WORST of them, so the picked spot is the one that
-  // least crowds anything — hero content, furniture clusters, walls.
+  // least crowds anything — hero content, furniture clusters, walls. The
+  // hero boundary asks only for what the room can offer (the clamped
+  // clearance); with the clamp exhausted it still reads as a raw distance,
+  // so the scan keeps preferring the far spots rather than going blind.
   const heroBoundary = (x: number, z: number): number =>
     heroClear <= 0
       ? Number.POSITIVE_INFINITY
-      : Math.hypot(x - comp.hero.x, z - comp.hero.z) - heroClear - hw;
+      : Math.hypot(x - comp.hero.x, z - comp.hero.z) - effectiveHeroClear - hw;
   const clusterBoundary = (x: number, z: number): number =>
     comp.clusters.reduce(
       (min, c) => Math.min(min, Math.hypot(x - c.x, z - c.z) - c.radius - hw),
@@ -262,12 +343,24 @@ export function roomTerminalFor({
   // floor lamp would stand in. Every draw is tested; hard filters are
   // gates, the soft boundaries pick the winner. Bounded (48 draws) and
   // total: same inputs, same spot.
+  //
+  // THE CLAMPED HERO CLEARING PROMOTES TO A GATE. In a room too small for
+  // the raw clearing (effectiveHeroClear < heroClear — only ever the
+  // single-module dollhouse rooms) the soft score alone cannot keep the
+  // promise the clamp makes: the worst-of winner can land a draw's
+  // granularity short of the ceiling. The ceiling exists precisely
+  // because the band CAN satisfy it, so the clamped clearing is enforced
+  // as a hard gate. Rooms that host the raw clearing are untouched — the
+  // gate condition is false there and every draw scores exactly as
+  // before (the regression guarantee).
+  const heroGated = effectiveHeroClear < heroClear;
   let best: { x: number; z: number; score: number } | null = null;
   for (let i = 0; i < 48; i++) {
     const x = (rng() * 2 - 1) * Math.max(0.5, halfRoom - hw - 0.15);
     const z = plan.extent * (0.3 + rng() * 0.4);
     if (!inside(x, z) || !clearOfDoor(x, z) || !clearOfPath(x, z)) continue;
     if (!clearOfWater(x, z)) continue;
+    if (heroGated && heroBoundary(x, z) < 0) continue;
     const score = Math.min(
       heroBoundary(x, z),
       clusterBoundary(x, z),
@@ -289,9 +382,15 @@ export function roomTerminalFor({
   const zMin = wallThick / 2 + (TERMINAL_D * scale) / 2 - 0.06;
   const xCap = halfRoom - w / 2 - 0.04;
   x = Math.min(Math.abs(x), xCap) * side;
+  // The hero gate reads the SAME clamped clearance as the scan. It is
+  // satisfiable at the initial spot by construction: the entrance wall is
+  // farther from a far-third hero than the ceiling's own basis (the scan
+  // band's far corner), and every nudge below walks deeper into the
+  // corner — z down toward the wall, then x outward — which only ever
+  // grows the hero distance, so once the gate holds it keeps holding.
   const clearOfHeroFb = (): boolean =>
-    heroClear <= 0 ||
-    Math.hypot(x - comp.hero.x, z - comp.hero.z) >= heroClear + w / 2;
+    effectiveHeroClear <= 0 ||
+    Math.hypot(x - comp.hero.x, z - comp.hero.z) >= effectiveHeroClear + w / 2;
   const insideFb = (): boolean =>
     terminalInsidePlan(plan, width, plan.extent, wallThick, {
       x0: x - w / 2,
@@ -299,9 +398,23 @@ export function roomTerminalFor({
       z0: z - (TERMINAL_D * scale) / 2,
       z1: z + (TERMINAL_D * scale) / 2,
     });
+  // The walk never returns an unchecked spot: it stops at the first
+  // position passing every gate, and if none does it returns the
+  // hero-farthest position among those that passed the HARD gates (inside
+  // / path / water) — best effort against the one soft requirement, never
+  // a silent violation of a gate the room could have honoured. (No known
+  // room needs that last resort: the clamp makes the hero gate reachable
+  // wherever the hard gates pass at all.)
+  let fbBest: { x: number; z: number; heroDist: number } | null = null;
   for (let i = 0; i < 24; i++) {
-    if (insideFb() && clearOfPath(x, z) && clearOfHeroFb() && clearOfWater(x, z))
-      break;
+    if (insideFb() && clearOfPath(x, z) && clearOfWater(x, z)) {
+      const heroDist = Math.hypot(x - comp.hero.x, z - comp.hero.z);
+      if (clearOfHeroFb()) {
+        fbBest = { x, z, heroDist };
+        break;
+      }
+      if (!fbBest || heroDist > fbBest.heroDist) fbBest = { x, z, heroDist };
+    }
     if (z > zMin) {
       z = Math.max(zMin, z - 0.08 * scale);
     } else if (Math.abs(x) + 0.2 * scale <= xCap) {
@@ -309,6 +422,10 @@ export function roomTerminalFor({
     } else {
       break;
     }
+  }
+  if (fbBest) {
+    x = fbBest.x;
+    z = fbBest.z;
   }
   return { x, z, rotY: 0, scale };
 }
