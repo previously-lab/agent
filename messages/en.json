@@ -459,7 +459,11 @@
     "open": "Open the conversation",
     "collapse": "Collapse the conversation",
     "expand": "Expand to full screen",
-    "exitFullscreen": "Exit full screen"
+    "exitFullscreen": "Exit full screen",
+    "subtitleUser": "You",
+    "subtitlePersona": "Previously",
+    "subtitleThinking": "Thinking…",
+    "subtitleReading": "Reading {count} memories"
   },
   "game": {
     "title": "The Hotel",

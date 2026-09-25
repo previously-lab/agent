@@ -5,27 +5,22 @@ import {
   type ConversationPanelMode,
 } from "../conversation-panel";
 
-const MODES: ConversationPanelMode[] = ["pill", "dock", "fullscreen"];
+const MODES: ConversationPanelMode[] = ["pill", "fullscreen"];
 
 describe("reducePanelMode", () => {
-  it("open lifts the pill to the dock and is a no-op when already open", () => {
-    expect(reducePanelMode("pill", "open")).toBe("dock");
-    expect(reducePanelMode("dock", "open")).toBe("dock");
+  it("open expands the strip to fullscreen and is a no-op when already open", () => {
+    expect(reducePanelMode("pill", "open")).toBe("fullscreen");
     expect(reducePanelMode("fullscreen", "open")).toBe("fullscreen");
   });
 
-  it("toggle opens the pill and collapses either open tier", () => {
-    expect(reducePanelMode("pill", "toggle")).toBe("dock");
-    expect(reducePanelMode("dock", "toggle")).toBe("pill");
+  it("toggle flips the two tiers in both directions", () => {
+    expect(reducePanelMode("pill", "toggle")).toBe("fullscreen");
     expect(reducePanelMode("fullscreen", "toggle")).toBe("pill");
   });
 
-  it("toggleFullscreen grows the dock to fullscreen and back", () => {
-    expect(reducePanelMode("dock", "toggleFullscreen")).toBe("fullscreen");
-    expect(reducePanelMode("fullscreen", "toggleFullscreen")).toBe("dock");
-    // From the pill it opens straight into fullscreen — one verb, no
-    // hidden intermediate state.
+  it("toggleFullscreen grows the strip to fullscreen and folds fullscreen back to the strip", () => {
     expect(reducePanelMode("pill", "toggleFullscreen")).toBe("fullscreen");
+    expect(reducePanelMode("fullscreen", "toggleFullscreen")).toBe("pill");
   });
 
   it("collapse always lands on the pill", () => {

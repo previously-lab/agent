@@ -2,13 +2,14 @@
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUp, Square, Paperclip, X } from "lucide-react";
+import { ArrowUp, Maximize2, Square, Paperclip, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelSelector } from "./model-selector";
 import { MemoryDocs } from "./memory-docs";
 import { ISLAND } from "@/components/layout/island";
+import { reducePanelMode, usePanelTier } from "./conversation-panel";
 
 /** The textarea's floor and ceiling, in px. The floor is what an empty
  *  composer reports so the box does not collapse while it is being typed
@@ -41,9 +42,13 @@ interface ChatInputProps {
    * either. Model selection does not survive for the same reason — it is a
    * setting for the next message, and there is no next message to write yet.
    *
-   * The component stays MOUNTED across the two forms (this is one component
-   * with an early return, not two), so typed text and staged image
-   * attachments survive a rung change in both directions.
+   * (Latent in the conversation-panel surface: the shell pins the hosted
+   * ChatPage's rung to "conversation", so the panel never asks for this
+   * form. The panel's collapsed tier draws the STRIP form instead.)
+   *
+   * The component stays MOUNTED across the forms (this is one component
+   * with early returns, not several), so typed text and staged image
+   * attachments survive a form change in every direction.
    */
   collapsed?: boolean;
   /** Restore the full composer. Required when `collapsed`. */
@@ -62,6 +67,8 @@ export function ChatInput({
 }: ChatInputProps) {
   const t = useTranslations("chat.input");
   const tComposer = useTranslations("composer");
+  const tPanel = useTranslations("conversationPanel");
+  const tier = usePanelTier();
   const reducedMotion = useReducedMotion() ?? false;
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -173,6 +180,101 @@ export function ChatInput({
             {tComposer("hint")}
           </motion.span>
           <ArrowUp className="size-4 shrink-0" />
+        </button>
+      </div>
+    );
+  }
+
+  // ── THE STRIP FORM (v0.13 §4) ────────────────────────────────────────────
+  // The conversation panel's collapsed tier: ONE row with exactly the four
+  // controls the ruling allows — attach, a single-line input, send/stop as
+  // one button, expand into fullscreen — over the panel's subtitle line.
+  // Attach reuses the same `useImageAttachments` state as the full form (one
+  // component, early returns — a draft or a staged image survives expanding
+  // to fullscreen verbatim), and stop reuses the same `onStop` the full
+  // form's button calls.
+  if (tier?.mode === "pill") {
+    return (
+      <div
+        data-strip-composer
+        onPaste={handlePaste}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        className="flex h-full items-center gap-0.5 px-2 sm:px-3"
+      >
+        {/* Attach — the full form's channel, nothing new: the hidden input
+            below feeds the shared `handlePaste`, and the images reappear as
+            previews the moment the reader expands. */}
+        <button
+          type="button"
+          data-attach
+          onClick={() => fileInputRef.current?.click()}
+          aria-label={t("attach")}
+          title={t("attach")}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+        >
+          <Paperclip className="size-3.5" />
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={handleFileChange}
+          className="hidden"
+          accept="image/*"
+        />
+        {/* The single line — a real one-line input, not a resized textarea.
+            Enter sends, as in the full form. */}
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={t("placeholder")}
+          aria-label={t("placeholder")}
+          className="h-8 min-w-0 flex-1 bg-transparent font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-muted-foreground"
+        />
+        {/* Send / stop — one button, two faces, exactly like the full
+            form's. */}
+        {isLoading && onStop ? (
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label={t("stopTooltip")}
+            title={t("stopTooltip")}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/90"
+          >
+            <Square className="size-3 fill-current" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
+            disabled={!hasContent}
+            aria-label={t("sendTooltip")}
+            title={t("sendTooltip")}
+            className={`flex size-8 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-30 ${
+              hasContent
+                ? "bg-brand text-white hover:bg-brand/90"
+                : "bg-primary text-primary-foreground"
+            }`}
+          >
+            <ArrowUp className="size-4" />
+          </button>
+        )}
+        {/* Expand — the strip's one way up, through the panel's own
+            transition table. */}
+        <button
+          type="button"
+          data-strip-expand
+          onClick={() =>
+            tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
+          }
+          aria-label={tPanel("expand")}
+          title={tPanel("expand")}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+        >
+          <Maximize2 className="size-3.5" />
         </button>
       </div>
     );

@@ -7,11 +7,11 @@
  * URL carries none of it. The left time axis (AxisBand) is always mounted;
  * the right pane holds the card field at a card rung, with the CONVERSATION
  * LAYER (`chat/conversation-panel.tsx`) floating over everything as a
- * persistent three-tier panel (pill / dock / fullscreen, §14.1). The chat
- * stream stays MOUNTED at every tier — pill slides the panel offscreen
- * instead of unmounting — so Virtuoso scroll state and the live useChat
- * stream survive every collapse, and FULLSCREEN freezes the card field's
- * frame loop (`paused` → frameloop="never") without unmounting it.
+ * persistent two-tier panel (pill strip / fullscreen, v0.13 §4). The chat
+ * stream stays MOUNTED at every tier — the pill folds the panel body to
+ * zero height instead of unmounting it — so the field camera and the live
+ * useChat stream survive every collapse, and FULLSCREEN freezes the card
+ * field's frame loop (`paused` → frameloop="never") without unmounting it.
  *
  * Catalog loading is lazy: the timeline data layer (catalog window + strand
  * list) is fetched on the first switch to a card rung. Addressing a slice
@@ -73,6 +73,7 @@ import {
 import { invalidateHotelData } from "@/lib/game/hotel-data";
 import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
 import { requestSliceJump } from "@/lib/chat/slice-jump";
+import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 import {
   ShellNavContext,
   type ShellNav,
@@ -84,8 +85,6 @@ import { useTier } from "@/hooks/use-tier";
 import { ChatPage } from "@/components/chat/chat-page";
 import {
   ConversationPanel,
-  dockWidthFor,
-  useViewportWidth,
   type ConversationPanelMode,
 } from "@/components/chat/conversation-panel";
 import {
@@ -396,25 +395,31 @@ export function AppShell({ initialConfig }: AppShellProps) {
     };
   }, [beginTransition]);
 
-  // ── THE CONVERSATION LAYER'S TIER (§14.1) ───────────────────────────────
-  // One conversation, three sizes — the tier lives HERE, not inside the
-  // panel, because the shell must react to it: a card rung defaults to the
-  // pill (the reader came to look at the cards), the conversation rung
-  // defaults to the dock, and FULLSCREEN freezes the card field's frame
-  // loop (paused → frameloop="never", below). The effect fires only on the
-  // world boundary — zooming BETWEEN card rungs keeps the tier the reader
-  // picked (a docked conversation survives slice → day).
+  // ── THE CONVERSATION LAYER'S TIER (v0.13 §4 — two tiers) ────────────────
+  // One conversation, two sizes — the tier lives HERE, not inside the
+  // panel, because the shell must react to it: the game world and the card
+  // rungs default to the pill (the bottom strip: quick input, the subtitle
+  // line, nothing else), the conversation rung defaults to fullscreen (the
+  // full-capability surface the removed dock used to be), and FULLSCREEN
+  // freezes the card field's frame loop (paused → frameloop="never", below).
+  // The effect fires only on the world boundary — zooming BETWEEN card
+  // rungs keeps the tier the reader picked.
   const [panelMode, setPanelMode] =
-    useState<ConversationPanelMode>("dock");
+    useState<ConversationPanelMode>("fullscreen");
   const worldKind = rung === "conversation" ? "conversation" : "cards";
   useEffect(() => {
     // The game world is a LOOKING view like the card rungs — the conversation
     // arrives as the pill there too.
     setPanelMode(
-      view === "game" || worldKind !== "conversation" ? "pill" : "dock",
+      view === "game" || worldKind !== "conversation" ? "pill" : "fullscreen",
     );
   }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
+  // The pill strip's subtitle line (v0.13 §4): folded from the live message
+  // stream by ChatPage (the only holder of the messages), lifted here, and
+  // handed back down into the panel as a prop — the panel renders it, the
+  // page produces it, and this state is the wire between them.
+  const [subtitleLine, setSubtitleLine] = useState<SubtitleLine | null>(null);
 
   // THE TRANSITION CLOCK — one rAF per move writes the shared singleton's
   // progress; React state only mirrors the phase boundaries (2–3 re-renders
@@ -504,16 +509,14 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
   // The conversation field renders through a portal into whichever surface can
   // host its window-derived 680 px column: the pane's slot while the panel
-  // floats beside it (field view), a slot inside the panel body at
-  // fullscreen, and — with no wide host (the game's docked/pilled panel) —
-  // the DOM list takes the conversation instead (see
-  // `chat/conversation-surface.tsx`). The slot elements are owned HERE
-  // because the shell owns both their parents; `useState` refs re-render on
-  // registration, the same handshake `world-canvas.tsx` uses.
+  // floats beside it (the pill strip leaves the whole pane free), a slot
+  // inside the panel body at fullscreen, and — with no wide host (the game
+  // view below the fullscreen tier) — the DOM list takes the conversation
+  // instead (see `chat/conversation-surface.tsx`). The slot elements are
+  // owned HERE because the shell owns both their parents; `useState` refs
+  // re-render on registration, the same handshake `world-canvas.tsx` uses.
   const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
   const [panelSlotEl, setPanelSlotEl] = useState<HTMLElement | null>(null);
-  const viewportW = useViewportWidth();
-  const dockW = dockWidthFor(viewportW);
   const onConversationRung = rung === "conversation";
   const conversationSurface: ConversationSurface =
     view === "game"
@@ -936,9 +939,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
             (see `chat/conversation-surface.tsx`). Dimmed, not unmounted, at a
             card rung — the subtree holds the field's camera position — and
             at conversation rung the reader reads history in the pane while
-            the ongoing turn lives in the panel. The slot leaves the docked
-            panel's width clear so the field's column is never under it.
-            Rides the field chrome's phase like the band. */}
+            the ongoing turn lives in the panel. Rides the field chrome's
+            phase like the band. */}
         {fieldChrome && (
           <div
             ref={setPaneSlotEl}
@@ -949,29 +951,24 @@ export function AppShell({ initialConfig }: AppShellProps) {
                 ? "opacity-100"
                 : "pointer-events-none opacity-0"
             }`}
-            style={{
-              right:
-                panelMode === "dock" && onConversationRung ? dockW : 0,
-            }}
           />
         )}
         {/* THE CONVERSATION LAYER — one persistent panel over the world
-            (§14.1), not a view of its own any more. The panel OVERLAYS the
-            pane (position: fixed): the card field behind it keeps its size,
-            so opening or docking never triggers a canvas resize. ChatPage
-            keeps publishing to the band only while the conversation rung
-            owns it, and still receives `suppressAtJump` at a card rung —
-            but its OWN rung is pinned to "conversation": tier visibility is
-            the panel's job now, and the composer is the full form at every
-            tier. insetTop={0} because the panel's own slim bar replaced the
-            floating chrome's keep-out inside it. At FULLSCREEN the panel is
-            viewport-wide, so it hosts the R3F field itself (bodyPrefix is
-            the portal target) — that is the one tier where the dock's width
-            constraint does not apply. */}
+            (v0.13 §4), not a view of its own any more: a bottom strip at the
+            pill tier, a viewport-wide overlay at fullscreen. `position:
+            fixed` either way: the world behind it keeps its size, so no tier
+            change ever triggers a canvas resize. ChatPage keeps publishing
+            to the band only while the conversation rung owns it, and still
+            receives `suppressAtJump` at a card rung — but its OWN rung is
+            pinned to "conversation": tier visibility is the panel's job.
+            At FULLSCREEN the panel is viewport-wide, so it hosts the R3F
+            field itself (bodyPrefix is the portal target); at the pill tier
+            the field portals into the pane and the strip keeps the quick
+            input + the subtitle line at the viewport's foot. */}
         <ConversationPanel
           mode={panelMode}
           onModeChange={setPanelMode}
-          insetTop={chromeInset}
+          subtitleLine={subtitleLine}
           bodyPrefix={
             panelMode === "fullscreen" ? (
               <div ref={setPanelSlotEl} className="min-h-0 flex-1" />
@@ -989,6 +986,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
             // around the band — nobody publishes mid-move.
             publishing={!panePublishes && !transitionActive}
             onRunningChange={setRunning}
+            onSubtitleLineChange={setSubtitleLine}
             insetTop={0}
             insetBottom={composerClearance}
             onComposerClearanceChange={setComposerClearance}

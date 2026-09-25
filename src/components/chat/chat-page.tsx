@@ -7,6 +7,7 @@ import { useSearchParams } from "next/navigation";
 import type { UIMessage } from "ai";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
+import { usePanelTier } from "./conversation-panel";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { UnifiedChatStream } from "./unified-chat-stream";
@@ -49,6 +50,11 @@ import {
 import type { EvolutionStepData } from "@/lib/chat/build-stream";
 import { registerSliceJumpHandler, takePendingSliceJump } from "@/lib/chat/slice-jump";
 import { parseAtParam, parseAtStartParam, stripAtParam } from "@/lib/chat/deep-link";
+import {
+  foldSubtitleLine,
+  type AnyPart,
+  type SubtitleLine,
+} from "@/lib/chat/subtitle-line";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
@@ -91,6 +97,11 @@ interface ChatPageProps {
    *  how tall it is (a growing textarea, an attachment row), so it is measured
    *  where it is drawn and the number is owned where both fields can see it. */
   onComposerClearanceChange?: (px: number) => void;
+  /** Publish the newest turn's subtitle line (v0.13 §4) — folded here from
+   *  the live messages by the pure reducer in `lib/chat/subtitle-line.ts`.
+   *  The panel's pill strip renders it; the shell lifts the value from this
+   *  page back down into the panel as a prop. */
+  onSubtitleLineChange?: (line: SubtitleLine | null) => void;
 }
 
 /** The mount-time verdict: the useChat half (reconnect) plus the arrival gate
@@ -112,6 +123,7 @@ export function ChatPage({
   insetTop,
   insetBottom,
   onComposerClearanceChange,
+  onSubtitleLineChange,
 }: ChatPageProps) {
   // Mount-time arrival decision. Only the SERVER can say whether the persisted
   // run is still in flight and whether the newest slice is still alive, so
@@ -146,6 +158,7 @@ export function ChatPage({
       insetTop={insetTop}
       insetBottom={insetBottom}
       onComposerClearanceChange={onComposerClearanceChange}
+      onSubtitleLineChange={onSubtitleLineChange}
       persona={verdict.persona}
       shouldResume={verdict.shouldResume}
       initialMessages={verdict.initialMessages}
@@ -339,6 +352,7 @@ function Inner({
   insetTop,
   insetBottom,
   onComposerClearanceChange,
+  onSubtitleLineChange,
   persona,
   shouldResume,
   initialMessages,
@@ -362,6 +376,8 @@ function Inner({
   insetBottom?: number;
   /** Report the composer's own measurement upward — see `ChatPageProps`. */
   onComposerClearanceChange?: (px: number) => void;
+  /** Publish the subtitle line upward — see `ChatPageProps`. */
+  onSubtitleLineChange?: (line: SubtitleLine | null) => void;
   /** Persona from the URL — server actions can't read searchParams. */
   persona: string;
   /** The mount-time arrival verdict (resolveArrival) — see ChatPage. */
@@ -1027,6 +1043,28 @@ function Inner({
     onRunningChange?.(isLoading);
   }, [isLoading, onRunningChange]);
 
+  // ── The pill strip's subtitle line (v0.13 §4) ─────────────────────────
+  // The NEWEST message, folded by the pure reducer — the panel renders the
+  // line in its strip; this page only publishes it (the shell lifts the
+  // value back down into the panel as a prop). The fold is pure, so the
+  // streaming growth replays identically on a reconnect's re-delivered
+  // prefix; with no messages at all there is nothing to say (null).
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    onSubtitleLineChange?.(
+      last
+        ? foldSubtitleLine((last.parts ?? []) as AnyPart[], last.role)
+        : null,
+    );
+  }, [messages, onSubtitleLineChange]);
+
+  // The panel tier this page is hosted at (null only outside a panel): at
+  // the pill tier the conversation body is folded away and the stream goes
+  // inert with it — the strip is the only interactive surface. The composer
+  // is a sibling, not inside the stream column, so it stays live.
+  const panelTier = usePanelTier();
+  const panelPill = panelTier?.mode === "pill";
+
   /**
    * Sending comes HOME first. At a card rung the composer is collapsed, and a
    * reader who sends from there is answered at the conversation rung — so the
@@ -1069,8 +1107,10 @@ function Inner({
         // camera position and the live stream, and a rung change must not
         // rebuild either. `inert` is what makes "hidden" mean hidden — the
         // content is off the focus order and out of the accessibility tree,
-        // which `opacity-0` alone does not do.
-        inert={!onConversationRung || undefined}
+        // which `opacity-0` alone does not do. The same applies at the
+        // panel's pill tier, where the body folds to zero height and the
+        // strip is the only interactive surface.
+        inert={!onConversationRung || panelPill || undefined}
       >
         {emptyMemory ? (
           // THIS ONE IS A REAL SCROLLER, and there the padding IS the content

@@ -35,12 +35,21 @@
  * splitting those two across the boundary is how the pill ends up positioned
  * as a card.
  *
+ * THE PANEL TIER DECIDES THE SEAT (v0.13 §4). The host reads the surrounding
+ * `ConversationPanel`'s tier through `PanelTierContext`: at the pill tier the
+ * composer IS the strip's control row — pinned to the panel box's bottom
+ * edge (the box is the strip there), no offset, no gap; at fullscreen it
+ * floats over the body exactly as it always has. `ChatInput` reads the same
+ * context to draw its strip form. One component instance throughout: the
+ * tier only ever changes classes, never the mount.
+ *
  * Submitting is not handled here — `ChatPage` wraps the submit so a send from a
  * card rung returns to the conversation first, because that is where the reply
  * is going to be written and watching it arrive is the point of sending.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FieldRung } from "@/lib/timeline3d/units";
+import { usePanelTier } from "./conversation-panel";
 
 /** What the composer is told about the form it is being asked to draw. */
 export interface ComposerForm {
@@ -85,6 +94,7 @@ export function ComposerHost({
 }: ComposerHostProps) {
   const [open, setOpen] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
+  const tier = usePanelTier();
 
   const onConversation = rung === "conversation";
 
@@ -96,8 +106,12 @@ export function ComposerHost({
   }, [onConversation]);
 
   /** The compact form is the DEFAULT at a card rung and never at the
-   *  conversation one — see the module header. */
+   *  conversation one — see the module header. (Latent in the panel, whose
+   *  hosted ChatPage is pinned to the conversation rung.) */
   const collapsed = !onConversation && !open;
+
+  /** The strip is the panel's collapsed tier — see the module header. */
+  const onStrip = tier?.mode === "pill";
 
   // Report the clearance whenever the composer changes size — a draft growing
   // the textarea, an attachment arriving, the two forms swapping.
@@ -129,18 +143,24 @@ export function ComposerHost({
       ref={hostRef}
       data-composer
       className={
-        collapsed
-          ? // `w-auto` so the pill is exactly as wide as its own controls. A
-            // fixed width here is how the old round button ended up 44rem wide
-            // with a 48px face centred in it.
-            "absolute bottom-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] left-1/2 z-50 w-auto -translate-x-1/2"
-          : // One floating card, at BOTH rungs. 44rem is the reading column's
-            // own order of magnitude, so the composer's edges sit near the
-            // content's edges without a second measurement to keep in step.
-            "absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom,0.75rem))] z-20 flex justify-center px-3"
+        onStrip
+          ? // The pill strip's control row: pinned to the panel box's bottom
+            // edge (the box IS the strip at this tier), spanning its width.
+            // No offset, no gap, no card chrome — the strip's hairline and
+            // paper background are the chrome.
+            "absolute inset-x-0 bottom-0 z-10 flex h-12 items-stretch"
+          : collapsed
+            ? // `w-auto` so the pill is exactly as wide as its own controls. A
+              // fixed width here is how the old round button ended up 44rem wide
+              // with a 48px face centred in it.
+              "absolute bottom-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] left-1/2 z-50 w-auto -translate-x-1/2"
+            : // One floating card, at BOTH rungs. 44rem is the reading column's
+              // own order of magnitude, so the composer's edges sit near the
+              // content's edges without a second measurement to keep in step.
+              "absolute inset-x-0 bottom-[max(0.75rem,env(safe-area-inset-bottom,0.75rem))] z-20 flex justify-center px-3"
       }
     >
-      <div className={collapsed ? "" : "w-[min(44rem,100%)]"}>
+      <div className={onStrip ? "min-w-0 flex-1" : collapsed ? "" : "w-[min(44rem,100%)]"}>
         {composer({ collapsed, expand: () => setOpen(true) })}
       </div>
     </div>

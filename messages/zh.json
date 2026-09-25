@@ -459,7 +459,11 @@
     "open": "打开对话",
     "collapse": "收起对话",
     "expand": "展开为全屏",
-    "exitFullscreen": "退出全屏"
+    "exitFullscreen": "退出全屏",
+    "subtitleUser": "你",
+    "subtitlePersona": "Previously",
+    "subtitleThinking": "正在整理…",
+    "subtitleReading": "查阅 {count} 条记忆"
   },
   "game": {
     "title": "旅店",

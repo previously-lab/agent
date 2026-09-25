@@ -1,51 +1,64 @@
 "use client";
 
 /**
- * ConversationPanel — the conversation layer's three tiers (v0.11 §14.1).
+ * ConversationPanel — the conversation layer's two tiers (v0.13 §4).
  *
- * ONE conversation surface (the DOM chat — `ChatPage`), three sizes:
+ * ONE conversation surface (the DOM chat — `ChatPage`), two sizes, one box:
  *
- *   pill        a quiet floating button, bottom-right. The conversation
- *               subtree stays MOUNTED but slides offscreen (inert, no
- *               pointer events) so the live `useChat` stream, the draft and
- *               the scroll position all survive the collapse.
- *   dock        an overlay panel on the right edge, 420–520px (full width
- *               under `sm`). OVERLAY, never a squeeze: it is `position:
- *               fixed`, so the world canvas behind it keeps its size — no
- *               resize event, no camera recompute, no framing jump.
- *   fullscreen  the same panel grown to the viewport width (a CSS width
- *               transition FROM the dock width, not a remount). While it is
- *               up the owning surface freezes its R3F world — the parent
- *               reads `mode === "fullscreen"` and switches the Canvas
- *               `frameloop` to "never", which pauses rendering WITHOUT
- *               unmounting: the scene, its programs and the last frame all
- *               stay, so returning is instant.
+ *   pill        the bottom STRIP: a hairline-ruled bar pinned to the
+ *               viewport's bottom edge, spanning the full width. It carries
+ *               exactly four controls — a single-line input, send/stop as
+ *               one button, expand into fullscreen, attach — plus the one
+ *               non-control, the subtitle line: the live one-line rendering
+ *               of the newest turn, folded by the pure reducer in
+ *               `lib/chat/subtitle-line.ts` and passed in as a prop. The
+ *               fullscreen chrome (slim bar + conversation body) folds to
+ *               zero height and goes inert, but stays MOUNTED — the live
+ *               `useChat` stream, the draft and the scroll position all
+ *               survive the collapse, and the composer itself keeps
+ *               rendering (absolutely positioned against this box, which
+ *               the strip does not clip), so a draft typed in the strip is
+ *               still there at fullscreen.
+ *   fullscreen  the same box grown to the viewport (a CSS height transition
+ *               FROM the strip height, not a remount), full capability.
+ *               OVERLAY, never a route change — `position: fixed`, so the
+ *               world canvas behind it is never resized or unmounted; the
+ *               owning surface freezes its R3F `frameloop` ("never") while
+ *               this tier is up, which pauses rendering WITHOUT unmounting:
+ *               the scene, its programs and the last frame all stay.
  *
- * The component is CONTROLLED (`mode`/`onModeChange`): the two surfaces
- * (`app-shell`, `game-shell`) own the state, because they are the ones that
- * must react to it (freeze the world, pick the per-surface default tier).
+ * The component is CONTROLLED (`mode`/`onModeChange`): the owning surface
+ * (`app-shell`) owns the state, because it is the one that must react to it
+ * (freeze the world, pick the per-surface default tier). The tier is also
+ * published to the chat components through `PanelTierContext` — the
+ * composer (via `ComposerHost`) and `ChatInput` read it to know which form
+ * to draw, so the strip and the full composer are one component instance,
+ * never an unmount boundary.
  *
- * Keyboard. `Cmd/Ctrl+J` toggles pill ↔ dock (window-level, registered here
- * so both surfaces share it). The two obvious neighbours were taken:
- * `Cmd/Ctrl+K` is the search palette and `Cmd/Ctrl+.` is the shell's rung
- * toggle (app-shell.tsx). `Escape` collapses to the pill and is listened for
- * on the PANEL CONTAINER, not the window: popovers inside the chat (the
- * model selector & co.) render in portals OUTSIDE this subtree, so their
- * Escape never reaches this handler — one Escape closes the popover, the
- * next collapses the panel. Focus is moved into the panel when it opens and
- * back to the pill when it collapses.
+ * Keyboard. `Cmd/Ctrl+J` toggles pill ↔ fullscreen (window-level,
+ * registered here so both surfaces share it). The two obvious neighbours
+ * were taken: `Cmd/Ctrl+K` is the search palette and `Cmd/Ctrl+.` is the
+ * shell's rung toggle (app-shell.tsx). `Escape` collapses to the pill and
+ * is listened for on the PANEL CONTAINER, not the window: popovers inside
+ * the chat (the model selector & co.) render in portals OUTSIDE this
+ * subtree, so their Escape never reaches this handler — one Escape closes
+ * the popover, the next collapses the panel. Focus moves into the panel
+ * when it opens and lands on the strip when it collapses.
  */
 import {
+  createContext,
+  useContext,
   useEffect,
+  useMemo,
   useRef,
-  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { useTranslations } from "next-intl";
-import { Maximize2, MessageCircle, Minimize2, X } from "lucide-react";
+import { Maximize2, Minimize2, X } from "lucide-react";
+import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
-export type ConversationPanelMode = "pill" | "dock" | "fullscreen";
+export type ConversationPanelMode = "pill" | "fullscreen";
 
 /** Every tier change — clicks and keys alike — funnels through this table,
  *  so the keyboard surface and the buttons can never disagree. Exported and
@@ -56,11 +69,14 @@ export function reducePanelMode(
 ): ConversationPanelMode {
   switch (event) {
     case "open":
-      return mode === "pill" ? "dock" : mode;
+      // The strip's expand verb: from the pill the only place to open IS
+      // fullscreen; already there, nothing more to open.
+      return mode === "pill" ? "fullscreen" : mode;
     case "toggle":
-      return mode === "pill" ? "dock" : "pill";
+      // Cmd/Ctrl+J — the two tiers are each other's only destination.
+      return mode === "pill" ? "fullscreen" : "pill";
     case "toggleFullscreen":
-      return mode === "fullscreen" ? "dock" : "fullscreen";
+      return mode === "fullscreen" ? "pill" : "fullscreen";
     case "collapse":
       return "pill";
   }
@@ -79,54 +95,41 @@ export function isPanelHotkey(event: {
   );
 }
 
-/** Dock width bounds (§14.1: "约 420–520px"). Measured in JS — a CSS
- *  `clamp()` string cannot be interpolated into a width transition from a
- *  number, and the dock → fullscreen grow IS a width transition. */
-const DOCK_MIN_PX = 420;
-const DOCK_MAX_PX = 520;
-const DOCK_RATIO = 0.38;
-/** Below the `sm` breakpoint the dock IS the screen — a 420px panel on a
- *  390px phone leaves a sliver of world that helps no one. */
-const DOCK_FULLWIDTH_BELOW_PX = 640;
-/** First-hydration placeholder before the viewport is measured. */
-const DOCK_FALLBACK_PX = 480;
+/** The pill strip's total height, px — the subtitle row (`h-5`) plus the
+ *  one control row, under a 1px hairline. THE knob to turn if the strip
+ *  reads too tall or too short on screen: the subtitle keeps its 20px and
+ *  the composer row takes whatever is left. */
+export const STRIP_HEIGHT_PX = 72;
 
-/** The dock width for a viewport width — pure, so the shell can lay its pane
- *  surfaces out around the docked panel with the SAME number the panel
- *  transitions on (the field-view slot leaves the dock's width clear). */
-export function dockWidthFor(viewportW: number): number {
-  if (viewportW === 0) return DOCK_FALLBACK_PX;
-  if (viewportW < DOCK_FULLWIDTH_BELOW_PX) return viewportW;
-  return Math.min(
-    DOCK_MAX_PX,
-    Math.max(DOCK_MIN_PX, Math.round(viewportW * DOCK_RATIO)),
-  );
+/** What the panel tells the chat components that render inside it: which
+ *  tier is up and how to change it. Null outside a panel — consumers then
+ *  draw the fullscreen-era form (there is no strip to be). */
+export interface PanelTier {
+  mode: ConversationPanelMode;
+  setMode: (mode: ConversationPanelMode) => void;
 }
 
-/** The live viewport width — the panel measures it, and the shell reuses the
- *  measurement for the dock-aware pane layout. */
-export function useViewportWidth(): number {
-  const [viewportW, setViewportW] = useState(0);
-  useEffect(() => {
-    const update = () => setViewportW(window.innerWidth);
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
-  return viewportW;
+const PanelTierContext = createContext<PanelTier | null>(null);
+
+/** The tier the surrounding `ConversationPanel` is in — null when there is
+ *  no panel around the consumer. */
+export function usePanelTier(): PanelTier | null {
+  return useContext(PanelTierContext);
 }
 
 export interface ConversationPanelProps {
   mode: ConversationPanelMode;
   onModeChange: (mode: ConversationPanelMode) => void;
-  /** The room the floating chrome takes at the top of the viewport, px —
-   *  the dock starts BELOW it (the header's islands stay visible and
-   *  clickable above the panel); fullscreen ignores it and covers all. */
-  insetTop?: number;
+  /** The strip's one non-control: the live one-line rendering of the newest
+   *  turn (`speaker: text`, or a dim status prefix while there is no text
+   *  yet), folded by the pure reducer in `lib/chat/subtitle-line.ts`. Null
+   *  when there is nothing to say — the row then renders empty so the strip
+   *  keeps its height. Only ever shown at the pill tier. */
+  subtitleLine?: SubtitleLine | null;
   /** An optional surface mounted ABOVE the conversation children inside the
    *  panel body — the shell's portal target for the R3F conversation field
    *  at FULLSCREEN, where the panel is viewport-wide and the field fits.
-   *  Absent at every other tier (the field then portals into the pane). */
+   *  Absent at the pill tier (the field then portals into the pane). */
   bodyPrefix?: ReactNode;
   /** The conversation surface. Always mounted — see the module header. */
   children: ReactNode;
@@ -135,21 +138,13 @@ export interface ConversationPanelProps {
 export function ConversationPanel({
   mode,
   onModeChange,
-  insetTop = 0,
+  subtitleLine = null,
   bodyPrefix,
   children,
 }: ConversationPanelProps) {
   const t = useTranslations("conversationPanel");
   const panelRef = useRef<HTMLDivElement>(null);
-  const pillRef = useRef<HTMLButtonElement>(null);
-
-  // The dock width in px, so dock → fullscreen is a real CSS width
-  // transition (the panel GROWS out of its docked size) rather than a jump
-  // between two uninterpolatable length expressions.
-  const viewportW = useViewportWidth();
-  const dockWidth = dockWidthFor(viewportW);
-  const panelWidth =
-    mode === "fullscreen" ? viewportW || DOCK_FALLBACK_PX : dockWidth;
+  const open = mode === "fullscreen";
 
   // `Cmd/Ctrl+J` — one registration per surface (the panel is mounted once
   // per page). Deps re-register on mode change rather than holding a ref:
@@ -166,76 +161,100 @@ export function ConversationPanel({
 
   // Focus follows the tier: opening moves it INTO the panel (so Escape and
   // Tab belong to the conversation from the first keystroke), collapsing
-  // returns it to the pill — the control that re-opens. Tier-to-tier moves
-  // (dock ↔ fullscreen) leave focus wherever it is.
+  // lands it on the strip — the control surface that re-opens. The two are
+  // one box now, so the same ref serves both; `outline-none` keeps the
+  // programmatic focus invisible.
   const prevModeRef = useRef(mode);
   useEffect(() => {
     const prev = prevModeRef.current;
     prevModeRef.current = mode;
     if (prev === mode) return;
-    if (mode === "pill") {
-      if (prev !== "pill") pillRef.current?.focus();
-    } else if (prev === "pill") {
-      panelRef.current?.focus();
-    }
+    panelRef.current?.focus();
   }, [mode]);
 
-  const open = mode !== "pill";
   const onContainerKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape") return;
     // Keep the game's (or any window-level) Escape from ALSO firing on this
     // keystroke — collapsing the panel is the whole answer.
     event.stopPropagation();
-    onModeChange("pill");
+    onModeChange(reducePanelMode(mode, "collapse"));
   };
 
-  return (
-    <>
-      {/* THE PILL — the collapsed tier. Quiet by design (§14.1): one small
-          frosted button at the bottom-right, clear of the game's sightline
-          and of the companion pod's column (which sits ~220px up). Only it
-          eats events while collapsed. */}
-      <button
-        ref={pillRef}
-        type="button"
-        aria-label={t("open")}
-        aria-expanded={open}
-        aria-controls="conversation-panel"
-        onClick={() => onModeChange(reducePanelMode(mode, "open"))}
-        className={`fixed right-4 bottom-4 z-40 flex size-11 items-center justify-center rounded-full bg-card/90 text-muted-foreground shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md transition-[opacity,transform] duration-200 hover:text-foreground hover:ring-foreground/25 motion-reduce:transition-none sm:right-5 sm:bottom-5 ${
-          open ? "pointer-events-none scale-75 opacity-0" : "scale-100 opacity-100"
-        }`}
-        // Collapsed-but-mounted like the panel: the button itself is the
-        // focus-return target, so it must stay in the tree.
-        tabIndex={open ? -1 : 0}
-      >
-        <MessageCircle className="size-5" aria-hidden />
-      </button>
+  const tier = useMemo<PanelTier>(
+    () => ({ mode, setMode: onModeChange }),
+    [mode, onModeChange],
+  );
 
-      {/* THE PANEL — dock and fullscreen share one box; only its width and
-          elevation change. `fixed` (overlay) is the "覆盖，不挤压" rule made
-          structural: nothing in the layout can feel this box, so the canvas
-          behind it never resizes. Pill slides it offscreen instead of
-          unmounting. */}
+  return (
+    <PanelTierContext.Provider value={tier}>
+      {/* THE ONE BOX — strip at the pill tier, viewport at fullscreen; the
+          change is a height transition, not a remount. `fixed` (overlay) is
+          the "覆盖，不挤压" rule made structural: nothing in the layout can
+          feel this box, so the canvas behind it never resizes. */}
       <div
         ref={panelRef}
-        id="conversation-panel"
-        role="region"
-        aria-label={t("title")}
         tabIndex={-1}
-        inert={!open}
         onKeyDown={onContainerKeyDown}
-        style={{
-          width: panelWidth,
-          top: mode === "fullscreen" ? 0 : insetTop,
-        }}
-        className={`fixed right-0 bottom-0 flex flex-col border-l border-foreground/10 bg-background shadow-[0_0_60px_-15px_rgba(15,23,42,0.35)] outline-none transition-[width,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none dark:shadow-[0_0_60px_-15px_rgba(0,0,0,0.8)] ${
-          mode === "fullscreen" ? "z-[60] border-l-0" : "z-50"
-        } ${open ? "translate-x-0" : "pointer-events-none translate-x-full"}`}
+        style={{ height: open ? "100dvh" : STRIP_HEIGHT_PX }}
+        className={`fixed inset-x-0 bottom-0 flex flex-col bg-background outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+          open ? "z-[60]" : "z-40 overflow-hidden border-t border-foreground/10"
+        }`}
       >
-        {/* The panel's own slim bar: title + the two tier verbs. In-flow
-            (not floating), so the conversation below reserves nothing. */}
-        <div className="flex h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2">
+        {/* THE SUBTITLE — the strip's one non-control: `label: text` for the
+            newest turn, or a dim status prefix while the turn has produced
+            no words yet. An empty line still renders (the row keeps the
+            strip's height); the truncated marker is the expand hint. */}
+        <div
+          data-conversation-subtitle
+          aria-live="polite"
+          className={`h-5 shrink-0 overflow-hidden px-3 font-mono text-[11px] leading-5 ${
+            open ? "hidden" : "block"
+          }`}
+        >
+          {subtitleLine && subtitleLine.text ? (
+            <span className="flex h-full items-center gap-1.5">
+              <span
+                aria-hidden
+                className={`shrink-0 uppercase tracking-[0.08em] ${
+                  subtitleLine.speaker === "persona"
+                    ? "text-brand"
+                    : "text-muted-foreground"
+                }`}
+              >
+                {subtitleLine.speaker === "persona"
+                  ? t("subtitlePersona")
+                  : t("subtitleUser")}
+                :
+              </span>
+              <span className="truncate text-muted-foreground">
+                {subtitleLine.text}
+              </span>
+              {subtitleLine.truncated ? (
+                <span aria-hidden className="shrink-0 text-muted-foreground/60">
+                  …
+                </span>
+              ) : null}
+            </span>
+          ) : subtitleLine?.status ? (
+            <span className="flex h-full items-center">
+              <span className="truncate text-muted-foreground/80">
+                {subtitleLine.status.kind === "reading"
+                  ? t("subtitleReading", { count: subtitleLine.status.count })
+                  : t("subtitleThinking")}
+              </span>
+            </span>
+          ) : null}
+        </div>
+
+        {/* The panel's own slim bar: title + the two tier verbs. Fullscreen
+            only — at the pill tier it stays mounted but hidden (it holds no
+            state; the strip is the collapsed face). In-flow, so the
+            conversation below reserves nothing. */}
+        <div
+          className={`h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2 ${
+            open ? "flex" : "hidden"
+          }`}
+        >
           <span className="flex-1 truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
@@ -264,23 +283,47 @@ export function ConversationPanel({
             <X className="size-4" aria-hidden />
           </button>
         </div>
-        {/* min-h-0 so the chat's own surface — not this column — grows and
-            scrolls. At fullscreen an optional bodyPrefix (the R3F field's
-            portal target) takes the grow and the conversation children keep
-            their natural height (live strip + composer). */}
-        <div className="flex min-h-0 flex-1 flex-col">
-          {bodyPrefix}
-          <div
-            className={
-              bodyPrefix
-                ? "flex min-h-0 flex-col"
-                : "flex min-h-0 flex-1 flex-col"
-            }
-          >
-            {children}
+
+        {/* THE CONVERSATION BODY — the fullscreen surface. At the pill tier
+            it folds to zero height (not `display:none` — the subtree must
+            stay mounted, and the composer below is absolutely positioned
+            against the BOX, outside this clip) and goes inert. `inert` is
+            what keeps the hidden conversation out of the tab order — a
+            zero-height box alone would not. */}
+        <div
+          id="conversation-panel"
+          role="region"
+          aria-label={t("title")}
+          inert={!open}
+          className={`min-h-0 flex-col overflow-hidden ${
+            open ? "flex flex-1" : "flex h-0"
+          }`}
+        >
+          {/* min-h-0 so the chat's own surface — not this column — grows and
+              scrolls. At fullscreen an optional bodyPrefix (the R3F field's
+              portal target) takes the grow and the conversation children
+              keep their natural height (live strip + composer). */}
+          <div className="flex min-h-0 flex-1 flex-col">
+            {bodyPrefix}
+            <div
+              className={
+                bodyPrefix
+                  ? "flex min-h-0 flex-col"
+                  : "flex min-h-0 flex-1 flex-col"
+              }
+            >
+              {children}
+            </div>
           </div>
         </div>
+
+        {/* The composer is NOT in this JSX — `ChatPage` renders it
+            (`ComposerHost`), absolutely positioned against this box. At the
+            pill tier it lands on this box's bottom edge, i.e. inside the
+            strip, below the subtitle; at fullscreen it floats over the body
+            as it always has. One component instance throughout — see
+            `composer-host.tsx` and the `PanelTierContext` header. */}
       </div>
-    </>
+    </PanelTierContext.Provider>
   );
 }
