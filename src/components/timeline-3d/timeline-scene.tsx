@@ -33,6 +33,10 @@ export interface TimelineSceneProps {
   onNeedOlder: () => Promise<void>;
   /** Navigate to the chat anchored at a slice. */
   onOpenSlice: (sliceId: string, start?: string) => void;
+  /** ONE CURSOR (v0.13 §6): the slice rung's centred card, reported as the
+   *  stack scrolls — the shell writes it to the shared cursor (a quiet
+   *  write; no world motion rides on it). */
+  onCursorSlice?: (sliceId: string) => void;
   /** 「讲讲这片」 — narrate a slice via the mouth stream. Absent (bridge
    *  brain, or the mode probe still out) → no narrate corner action. */
   onNarrate?: (sliceId: string, timeLabel?: string) => void;
@@ -167,6 +171,7 @@ export function TimelineScene({
   hasMore,
   onNeedOlder,
   onOpenSlice,
+  onCursorSlice,
   onNarrate,
   initialAtId,
   strands,
@@ -217,6 +222,7 @@ export function TimelineScene({
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}
           onOpenSlice={onOpenSlice}
+          onCursorSlice={onCursorSlice}
           onNarrate={onNarrate}
           initialAtId={initialAtId}
           genKey={strands.join("|") || "core"}

@@ -453,6 +453,13 @@ function ScrubLens({
  * the two places a reader most often wants and the two a drag is worst at
  * reaching, because the target shrinks to a few pixels as the content grows.
  *
+ * THE BOTTOM END IS 回到现在, AN EXPLICIT JUMP (v0.13 §6) — not a scroll.
+ * "Now" is the live stream, and the newest slice is not in the card stack's
+ * reachable set, so at the card rungs the shell hands `onNow` and the button
+ * leaves the stack for the conversation rung (cursor cleared) rather than
+ * seeking. At the conversation rung there is no `onNow` and the button keeps
+ * its seek-to-bottom — the chat field's live edge IS now.
+ *
  * THEY FLOAT ON THE RIGHT, NOT ON THE RAIL. They used to sit on the strip
  * itself, and a 32px column holding a thumb, a readout, a crossing dot and two
  * buttons is not a rail any more — the controls were competing with the thing
@@ -467,7 +474,18 @@ function ScrubLens({
  * hairline squares that read as bare chevrons drifting over the content —
  * which is precisely how the reader described them.
  */
-export function JumpControls({ feed }: { feed: FieldFeed }) {
+export function JumpControls({
+  feed,
+  onNow,
+}: {
+  feed: FieldFeed;
+  /** 回到现在 as an explicit JUMP (v0.13 §6), supplied at the card rungs:
+   *  the bottom control leaves the stack for the live surface instead of
+   *  seeking, because "now" is the stream — the newest slice is not in the
+   *  card stack's reachable set. Absent (the conversation rung, where the
+   *  chat field's live edge IS now), the button keeps its seek-to-bottom. */
+  onNow?: () => void;
+}) {
   const t = useTranslations("timeline3d");
   const button = `${ISLAND} pointer-events-auto flex size-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`;
   return (
@@ -487,7 +505,7 @@ export function JumpControls({ feed }: { feed: FieldFeed }) {
         data-jump="bottom"
         aria-label={t("jumpBottom")}
         title={t("jumpBottom")}
-        onClick={() => requestSeek(feed, 1)}
+        onClick={onNow ?? (() => requestSeek(feed, 1))}
         className={button}
       >
         <ArrowDownToLine className="size-3.5" />

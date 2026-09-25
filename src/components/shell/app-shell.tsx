@@ -49,7 +49,7 @@ import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
 import { AnimatePresence, animate, motion } from "motion/react";
-import { useTranslations } from "next-intl";
+import { useTranslations, useLocale } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
@@ -153,6 +153,8 @@ export function AppShell() {
     setPanelMode,
     worldFrozen,
     sharedSlice,
+    reportCursor,
+    getCursor,
     feed,
     composerClearance,
     setPaneSlotEl,
@@ -268,6 +270,11 @@ export function AppShell() {
     sliceId: string | null;
     phase: WorldTransitionPhase;
   } | null>(null);
+  /** THE "WHERE WAS I" MEMORY (v0.13 §6): the cursor's value when the reader
+   *  last LEFT the world for the cards — written in startMove on every
+   *  game → field move. The card gate's 回到原来的房间 is the one return
+   *  that restores it instead of moving the cursor. */
+  const prevRoomCursorRef = useRef<string | null>(null);
   const settledRef = useRef<WorldKind>(view);
   const readyRef = useRef(false);
   const reducedMotionRef = useRef(reducedMotion);
@@ -302,6 +309,16 @@ export function AppShell() {
       wt.to = to;
       wt.progress = 0;
       wt.reducedMotion = reducedMotionRef.current;
+      if (from === "game") {
+        // THE "WHERE WAS I" MEMORY (v0.13 §6): leaving the world remembers
+        // the cursor as it stands — walking has been keeping it current, so
+        // this is the room the reader was last in. The card gate's
+        // 回到原来的房间 restores exactly this value. Read through
+        // `getCursor` (the provider's synchronously-written ref): an exit
+        // fired in the same beat as the room's cursor report can outrun the
+        // render pipeline, and a render-mirrored value would read stale.
+        prevRoomCursorRef.current = getCursor();
+      }
       if (to === "field") {
         // Seed the destination's card rung while the hotel still owns the
         // screen — the dissolve then reveals cards, never an empty canvas
@@ -321,7 +338,7 @@ export function AppShell() {
       transitionRef.current = t;
       setTransition(t);
     },
-    [],
+    [getCursor],
   );
 
   const beginTransition = useCallback(
@@ -561,6 +578,53 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view, panelMode, setPanelMode, beginTransition]);
+
+  // ── 回到现在 (v0.13 §6) — an explicit JUMP, never a scroll ─────────────
+  // "Now" is the live stream, not the newest card: the newest slice is NOT
+  // in the card stack's reachable set (the stack is the bounded past), so
+  // the corner control leaves the stack for the conversation rung and
+  // clears the cursor — the default state is no slice selected (§2/§5), and
+  // the next request carries no view block. At the conversation rung the
+  // same corner button keeps its old seek-to-bottom, because the chat
+  // field's live edge IS now.
+  const returnToNow = useCallback(() => {
+    reportCursor(null);
+    setRung("conversation");
+  }, [reportCursor]);
+
+  // ── THE WORLD GATE (v0.13 §6) — returning to the world is a CHOICE ─────
+  // The field's way into the hotel used to be a bare button that started
+  // the transition. With a cursor (or a remembered one) it now offers the
+  // three rulings first: 前往这个房间 (travel to the room the cursor now
+  // names — the full transition beat, never a hard cut), 回到原来的房间
+  // (the cursor does NOT move — the card session leaves no trace on it),
+  // or 取消 (stay with the cards). With neither a cursor nor a memory the
+  // gate has nothing to offer and the button keeps its old direct move.
+  const [worldGateOpen, setWorldGateOpen] = useState(false);
+  useEffect(() => {
+    if (!worldGateOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setWorldGateOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [worldGateOpen]);
+  const locale = useLocale();
+  // The gate's labels are inline per-locale rather than message keys:
+  // messages/ belongs to another lane tonight, and the game shell's own
+  // gallery chrome already carries its labels this way.
+  const gateText = locale.startsWith("zh")
+    ? {
+        goThis: "前往这个房间",
+        goBack: "回到原来的房间",
+        cancel: "取消 · 继续看卡片",
+      }
+    : {
+        goThis: "Go to this room",
+        goBack: "Back to the previous room",
+        cancel: "Cancel · keep reading",
+      };
+  const prevRoomCursor = prevRoomCursorRef.current;
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
   // One narration at a time: each request bumps `gen`, and the pod aborts
@@ -1077,6 +1141,10 @@ export function AppShell() {
                       hasMore={hasMore}
                       onNeedOlder={loadOlder}
                       onOpenSlice={nav.openSlice}
+                      // ONE CURSOR (§6): the card a scroll centres IS the
+                      // slice the reader stands at — the quiet write, no
+                      // world motion (see card-field.tsx).
+                      onCursorSlice={reportCursor}
                       onNarrate={bridgeBrain === false ? startNarration : undefined}
                       initialAtId={focusId ?? undefined}
                       strands={strands}
@@ -1130,7 +1198,15 @@ export function AppShell() {
             crossing dot and these two — a 32px column where the controls were
             competing with the thing they controlled. The rail says where time
             IS; the right edge is where you act on it. */}
-        <JumpControls feed={feed} />
+        <JumpControls
+          feed={feed}
+          // 回到现在 (§6): at a card rung the bottom control is the explicit
+          // jump to NOW — the conversation rung, cursor cleared — because the
+          // newest slice is not in the stack's reachable set. At the
+          // conversation rung it keeps its seek-to-bottom: the chat field's
+          // live edge IS now.
+          onNow={rung !== "conversation" ? returnToNow : undefined}
+        />
         {/* THE COMPANION POD — the companion stream's floating presence. It
             holds the narration the 「讲讲这片」 entry starts (pod button +
             panel in one component, streaming and all) AND the evolution
@@ -1153,19 +1229,87 @@ export function AppShell() {
           />
         )}
 
-        {/* THE WORLD SWITCH (§14) — the field world's way into the hotel. A
-            quiet island button at the pane's foot, clear of the composer; the
-            way back is the game's own exit button or Escape. Both now START
-            THE TRANSITION instead of snapping the view. */}
-        <button
-          type="button"
-          onClick={() => beginTransition("game", null)}
-          aria-label={tGame("title")}
-          title={tGame("title")}
-          className={`${ISLAND} pointer-events-auto absolute bottom-4 left-4 z-10 flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
-        >
-          <Hotel className="size-4" />
-        </button>
+        {/* THE WORLD GATE (§6) — the field world's way into the hotel, now a
+            CHOICE when there is a cursor to travel to or a room to return to:
+            前往这个房间 (the transition's travel beat, landing at the slice
+            the cards centred on) / 回到原来的房间 (the remembered cursor —
+            the card session does not move it) / 取消 (stay). With neither,
+            the button keeps its old direct move. The way back out of the
+            hotel is unchanged: the game's own exit button or Escape. */}
+        <div className="absolute bottom-4 left-4 z-20">
+          {worldGateOpen && (
+            <>
+              {/* The click-away: a bare layer, not a focusable control. */}
+              <div
+                aria-hidden
+                className="fixed inset-0 z-10"
+                onClick={() => setWorldGateOpen(false)}
+              />
+              <div
+                data-world-gate
+                role="menu"
+                aria-label={tGame("title")}
+                className="absolute bottom-11 left-0 z-20 flex w-56 flex-col gap-0.5 rounded-xl bg-background/95 p-1.5 shadow-lg ring-1 ring-border backdrop-blur-md"
+              >
+                {sharedSlice !== null && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="rounded-lg px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-foreground/5"
+                    onClick={() => {
+                      setWorldGateOpen(false);
+                      nav.standAtSlice(sharedSlice);
+                    }}
+                  >
+                    {gateText.goThis}
+                  </button>
+                )}
+                {prevRoomCursor !== null && prevRoomCursor !== sharedSlice && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="rounded-lg px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-foreground/5"
+                    onClick={() => {
+                      setWorldGateOpen(false);
+                      nav.standAtSlice(prevRoomCursor);
+                    }}
+                  >
+                    {gateText.goBack}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="rounded-lg px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+                  onClick={() => setWorldGateOpen(false)}
+                >
+                  {gateText.cancel}
+                </button>
+              </div>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              if (sharedSlice === null && prevRoomCursor === null) {
+                beginTransition("game", null);
+                return;
+              }
+              setWorldGateOpen((open) => !open);
+            }}
+            aria-label={tGame("title")}
+            aria-haspopup={
+              sharedSlice !== null || prevRoomCursor !== null
+                ? "menu"
+                : undefined
+            }
+            aria-expanded={worldGateOpen || undefined}
+            title={tGame("title")}
+            className={`${ISLAND} pointer-events-auto flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
+          >
+            <Hotel className="size-4" />
+          </button>
+        </div>
           </>
         )}
 

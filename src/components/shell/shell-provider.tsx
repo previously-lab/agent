@@ -23,9 +23,15 @@
  *   worldFrozen      the "freeze the world" signal, DERIVED here
  *                    (fullscreen freezes) and consumed by the route's canvas
  *                    (`paused` → frameloop="never" — pause, never unmount).
- *   sharedSlice      the navigation cursor — the one slice address every
- *                    surface reads. Written by the nav actions, read by the
- *                    route (field focus / hotel door) and by `getChatView`.
+ *   sharedSlice      the ONE cursor every surface reads AND every surface
+ *                    moves (v0.13 §6 一个游标). Written by the nav actions,
+ *                    and quietly by the surfaces themselves: the world's
+ *                    roaming (game-canvas reports the room the reader
+ *                    stands in) and the card stack's scrolling (card-field
+ *                    reports the centred card) move the SAME cursor through
+ *                    `reportCursor` — the write that steers no world. Read
+ *                    by the route (field focus / hotel door), by
+ *                    `getChatView`, and at call time by `getCursor`.
  *   nav (ShellNav)   focusSlice / standAtSlice / openSlice. Each moves the
  *                    cursor HERE and delegates the world motion to the
  *                    route's registered driver — the transition machine and
@@ -83,6 +89,7 @@ import type { FieldRung } from "@/lib/timeline3d/units";
 import type { CurrentView } from "@/lib/chat/current-view";
 import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
 import { createFieldFeed, type FieldFeed } from "@/lib/timeline3d/field-feed";
+import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import type { ConversationPanelMode } from "@/components/chat/conversation-panel";
 import {
@@ -131,6 +138,15 @@ interface ShellValue {
   worldFrozen: boolean;
   /** The shared slice address — the one cursor every surface reads. */
   sharedSlice: string | null;
+  /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
+   *  — the room the reader walks into, the card a scroll centres — moves
+   *  the SAME cursor the nav actions own, but steers NO world (the nav
+   *  actions are the only writers that also drive world motion). */
+  reportCursor: (sliceId: string | null) => void;
+  /** The cursor at CALL time (the synchronously-written ref, not the render
+   *  snapshot) — for event-callback readers that can outrun the render
+   *  pipeline, like the route's "where was I" memory. */
+  getCursor: () => string | null;
   /** The per-turn view getter (v0.13 §5) — see the module header. */
   getChatView: () => CurrentView | undefined;
   /** The one band feed — see `field-feed.ts`. */
@@ -201,6 +217,31 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     sharedSliceRef.current = sharedSlice;
   }, [sharedSlice]);
 
+  // THE CURSOR'S QUIET WRITE (v0.13 §6 一个游标) — see ShellValue.reportCursor.
+  // The surfaces report through the module hook (lib/timeline3d/cursor.ts —
+  // the WORLD_TRANSITION.hooks idiom) rather than context, because one
+  // reporter is game-canvas.tsx: its import chain is already loaded by the
+  // pure-function vitest suites, and pulling this provider (and the chat
+  // tree with it) into that chain to deliver one string would be the most
+  // expensive possible channel. The same-value guard keeps a scroll that
+  // parks on one card for hundreds of frames from re-rendering anything.
+  const reportCursor = useCallback((sliceId: string | null) => {
+    if (sharedSliceRef.current === sliceId) return;
+    sharedSliceRef.current = sliceId;
+    setSharedSlice(sliceId);
+  }, []);
+  // The cursor at CALL time. The state above is a render snapshot; this ref
+  // moves in the same synchronous write, so an event-callback reader (the
+  // route's transition machine saving its "where was I" memory) never sees
+  // a value the render pipeline has not caught up with yet.
+  const getCursor = useCallback(() => sharedSliceRef.current, []);
+  useEffect(() => {
+    CURSOR_HOOKS.report = reportCursor;
+    return () => {
+      CURSOR_HOOKS.report = null;
+    };
+  }, [reportCursor]);
+
   // THE FEED IS ONE OBJECT WITH ONE WRITER (lib/timeline3d/field-feed.ts).
   // Created here, above both of its fields' owners, so the chat stream's
   // half survives the app route unmounting.
@@ -255,19 +296,19 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const nav = useMemo<ShellNav>(
     () => ({
       focusSlice: (sliceId) => {
-        setSharedSlice(sliceId);
+        reportCursor(sliceId);
         driverRef.current?.focusSlice(sliceId);
       },
       standAtSlice: (sliceId) => {
-        setSharedSlice(sliceId);
+        reportCursor(sliceId);
         driverRef.current?.standAtSlice(sliceId);
       },
       openSlice: (sliceId, start) => {
-        setSharedSlice(sliceId);
+        reportCursor(sliceId);
         driverRef.current?.openSlice(sliceId, start);
       },
     }),
-    [],
+    [reportCursor],
   );
 
   const reportTurnSettled = useCallback(() => {
@@ -308,6 +349,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       setPanelMode,
       worldFrozen,
       sharedSlice,
+      reportCursor,
+      getCursor,
       getChatView,
       feed,
       publishing,
@@ -327,6 +370,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelMode,
       worldFrozen,
       sharedSlice,
+      reportCursor,
+      getCursor,
       getChatView,
       feed,
       publishing,

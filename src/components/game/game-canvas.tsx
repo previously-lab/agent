@@ -160,6 +160,7 @@ import {
   hotelShotPose,
   type FollowPose,
 } from "@/lib/timeline3d/world-transition";
+import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import {
   LOBBY_LENGTH,
   LOBBY_SOUTH_REACH,
@@ -2097,6 +2098,19 @@ export default function GameCanvas({
   useEffect(() => {
     onActiveSliceChange?.(activeSpace === null ? null : activeSpace.door.sliceId);
   }, [activeSpace, onActiveSliceChange]);
+  // ONE CURSOR (v0.13 §6): walking IS moving the shared slice cursor — the
+  // room the reader stands in is the slice the cursor names. A QUIET write
+  // through the module hook (lib/timeline3d/cursor.ts, the
+  // WORLD_TRANSITION.hooks idiom — NOT context: this file's import chain is
+  // loaded by the pure-function vitest suites, and the shell provider would
+  // drag the chat tree into it). It steers no world, and the focus effect
+  // below refuses to re-apply the slice the player is already standing in,
+  // so the write cannot yank the walk back to the door. The corridor
+  // reports NOTHING: between rooms the cursor keeps the last room — which
+  // is exactly the "where was I" the card gate's 回到原来的房间 restores.
+  useEffect(() => {
+    if (activeSpace !== null) CURSOR_HOOKS.report?.(activeSpace.door.sliceId);
+  }, [activeSpace]);
   // Prewarm (responsiveness): the nearest door within ROOM_PREWARM_DIST
   // (GameLoop step 2b) gets its room mounted invisible in the ONE room
   // slot below — geometry built, root group visible=false, so it draws
@@ -2541,9 +2555,20 @@ export default function GameCanvas({
   // minus the nav stack — a deep link ARRIVES, it does not travel. The core
   // timeline is searched first, then each strand hotel (they resolve a frame
   // later than the core doors, so an unresolved id simply waits for them).
+  //
+  // THE ONE-CURSOR GUARD (v0.13 §6): the cursor now ALSO moves when the
+  // reader walks — the room mount above reports it, and the shell hands the
+  // same address back as this prop. Re-applying THAT slice would teleport
+  // the player out of the room they just entered and onto its door. Standing
+  // inside the addressed slice's room IS standing at the address: mark it
+  // applied and leave the walk alone.
   const focusAppliedRef = useRef<string | null>(null);
   useEffect(() => {
     if (!focusSlice || focusAppliedRef.current === focusSlice) return;
+    if (activeSpace?.door.sliceId === focusSlice) {
+      focusAppliedRef.current = focusSlice;
+      return;
+    }
     let timelineId = CORE_TIMELINE_ID;
     let list: readonly CorridorDoor[] = doors;
     let idx = doors.findIndex((d) => d.sliceId === focusSlice);
@@ -2575,7 +2600,7 @@ export default function GameCanvas({
       cameraSnapRef.current = true;
       hopGuardRef.current = true;
     }
-  }, [focusSlice, doors, timelines, location]);
+  }, [focusSlice, doors, timelines, location, activeSpace]);
 
   // Keyboard: track pressed keys, swallow the arrows' page scroll, and clear
   // the set on window blur so a released key can never stick.

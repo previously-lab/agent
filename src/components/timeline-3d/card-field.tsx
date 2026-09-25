@@ -15,7 +15,13 @@
  *   re-renders when the visible range or the level changes.
  * - Scroll: wheel / one-finger drag move through time (bottom = NOW); the
  *   shared `feed` reports 0..1 to the ambient threadline. A prepend shifts the
- *   scroll offset so the world never jumps.
+ *   scroll offset so the world never jumps. ONE CURSOR (v0.13 §6): at the
+ *   slice rung the scroll also moves the shared slice cursor — the centred
+ *   card IS the slice the reader stands at, reported through `onCursorSlice`
+ *   so the world and the conversation see the same address. The stack is
+ *   bounded by reach: the loaded window of the CURRENT timeline, with older
+ *   pages arriving only when the head's control asks — scrolling is walking
+ *   fast, never a teleport through all of memory.
  *
  *   OLDER PAGES LOAD ONLY WHEN ASKED FOR. This field used to fetch the next
  *   window by itself, on two triggers: crossing into a 320px zone below the
@@ -140,6 +146,12 @@ export interface CardFieldProps {
   /** L0 card click → dock the reading panel. `start` (the row top's ISO
    *  start) rides along so the chat jump never needs a catalog fetch. */
   onOpenSlice: (sliceId: string, start?: string) => void;
+  /** ONE CURSOR (v0.13 §6): scrolling the stack is walking fast — the card
+   *  at the viewport centre IS the slice the reader stands at, and the
+   *  field reports it (slice rung only, and only while it owns the feed)
+   *  so the shared cursor tracks the read. A quiet write: no world motion
+   *  rides on it. */
+  onCursorSlice?: (sliceId: string) => void;
   /** 「讲讲这片」 — ask the mouth to narrate a slice. Absent (bridge brain,
    *  or the probe still out) → the card renders no narrate corner action. */
   onNarrate?: SliceNarration["onSelect"];
@@ -350,6 +362,9 @@ interface FieldSceneProps {
   reducedMotion: boolean;
   flashId: string | null;
   onActivate: (row: StackRow) => void;
+  /** The centred card's slice, reported as the stack scrolls — see
+   *  `CardFieldProps.onCursorSlice`. */
+  onCursorSlice?: (sliceId: string) => void;
   arias: Map<string, string>;
   texts: FrameCardTexts;
   leaving: LeavingItem[];
@@ -387,6 +402,7 @@ function FieldScene({
   reducedMotion,
   flashId,
   onActivate,
+  onCursorSlice,
   arias,
   texts,
   leaving,
@@ -465,6 +481,9 @@ function FieldScene({
   }, []);
   const dirRef = useRef<"past" | "future">("past");
   const lastScrollRef = useRef(0);
+  // The last slice this field reported as the cursor (ONE CURSOR, §6) —
+  // tracked so the report fires on a CHANGE, not per frame.
+  const lastCursorRef = useRef<string | null>(null);
   // The visible range is STATE (drives which RowGroups mount), mirrored in a
   // ref so the frame loop can compare without a stale closure. Reading a ref
   // during render would leave stale rows mounted after a level change when no
@@ -614,6 +633,28 @@ function FieldScene({
       feed.crossing.y = armedBand
         ? (armedBand.top + armedBand.height / 2 - rigNow.current) / size.height
         : null;
+    }
+
+    // ONE CURSOR (v0.13 §6): scrolling the stack is walking fast — the card
+    // at the viewport CENTRE is the slice the reader stands at, so it moves
+    // the same cursor the world's roaming moves. Only the slice rung names
+    // single slices (the aggregate rungs' units are days/weeks), and the
+    // ownsFeed gate keeps a hidden or transition-frozen field from
+    // reporting a cursor nobody is looking at. The write is QUIET (the
+    // shell's reportCursor): it steers no world — and it cannot loop back
+    // here, because this field reads its landing anchor once at mount and
+    // never re-anchors on a cursor change mid-read.
+    if (ownsFeed && rung === "slice" && rows.length > 0) {
+      const idx = unitAtPx(
+        tops,
+        rows.length,
+        rigNow.current + size.height / 2,
+      );
+      const id = rows[idx]?.top.id ?? null;
+      if (id !== null && id !== lastCursorRef.current) {
+        lastCursorRef.current = id;
+        onCursorSlice?.(id);
+      }
     }
 
     // Scroll-driven camera drift, VERTICAL ONLY.
@@ -795,6 +836,7 @@ export function CardField({
   filteredOut,
   onNeedOlder,
   onOpenSlice,
+  onCursorSlice,
   onNarrate,
   initialAtId,
   genKey = "",
@@ -1507,6 +1549,7 @@ export function CardField({
         reducedMotion={reducedMotion}
         flashId={flashId}
         onActivate={onActivate}
+        onCursorSlice={onCursorSlice}
         arias={arias}
         texts={texts}
         leaving={leaving}
