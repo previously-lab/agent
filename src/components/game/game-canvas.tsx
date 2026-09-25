@@ -219,7 +219,7 @@ import {
   templatePlanFor,
 } from "@/lib/game/room-templates";
 import { terrainHeight, waterRectFor, waterSideFor } from "@/lib/game/terrain";
-import { Corridor, LOBBY_BLOCKERS, buildLobbyRegister, type CorridorDoor, type LobbyRegister } from "./corridor";
+import { Corridor, LOBBY_BLOCKERS, type CorridorDoor } from "./corridor";
 import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
 import {
   ARRIVAL_DOOR_CROSS_DEPTH,
@@ -1359,88 +1359,6 @@ function PlayerAvatar({
 }
 
 /**
- * The lobby hologram's index plate — the whole-window index as DOM
- * (§13: 文字走 DOM), the register board's own data at terminal scale.
- * Rendered through drei Html in a floating plate above the lobby's
- * anchor hologram (AnchorHologram's overlay); monospace phosphor on the
- * dark glass, the hotel name and window number in the timeline accent.
- */
-function LobbyIndexScreen({
-  register,
-  hotelName,
-  windowIndex,
-  accent,
-}: {
-  register: LobbyRegister;
-  hotelName: string;
-  windowIndex: number;
-  accent: string;
-}): JSX.Element {
-  const inkDim = "rgba(236,226,204,0.55)";
-  const entries = register.entries.slice(0, 10);
-  return (
-    <div
-      style={{
-        width: "100%",
-        height: "100%",
-        boxSizing: "border-box",
-        padding: "7px 9px",
-        display: "flex",
-        flexDirection: "column",
-        fontFamily: "ui-monospace, Menlo, Consolas, monospace",
-        color: "#ece2cc",
-        userSelect: "none",
-        // Nearly opaque so the DOM glyphs ride on the emissive plane's
-        // light — the screen still BREATHES and the depart flare still
-        // swells through (an opaque backing would hide both).
-        background: "rgba(10,13,12,0.88)",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-          color: accent,
-          fontWeight: 700,
-          fontSize: 11,
-          letterSpacing: 1,
-          paddingBottom: 3,
-          borderBottom: "1px solid rgba(236,226,204,0.25)",
-        }}
-      >
-        <span style={{ maxWidth: "72%", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {hotelName}
-        </span>
-        <span>W{windowIndex}</span>
-      </div>
-      <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-          justifyContent: "space-evenly",
-        }}
-      >
-        {entries.map((entry) => (
-          <div
-            key={entry.sliceId}
-            style={{ display: "flex", alignItems: "baseline", gap: 6, lineHeight: 1 }}
-          >
-            <span style={{ fontWeight: 700, fontSize: 10 }}>{entry.time ?? "····"}</span>
-            <span style={{ color: inkDim, fontSize: 8 }}>{entry.date ?? ""}</span>
-          </div>
-        ))}
-        {entries.length === 0 && (
-          <span style={{ color: inkDim, fontSize: 9 }}>—</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/**
  * The per-frame game loop: integrates movement, runs the door manager
  * (mount/release activeSpace on a hysteresis band around the wall plane),
  * applies the corridor/space clamps, and refreshes the HUD door prompt —
@@ -2251,13 +2169,6 @@ export default function GameCanvas({
     location.timelineId === CORE_TIMELINE_ID
       ? "PREVIOUSLY"
       : location.timelineId;
-  // The lobby terminal's screen content (§13.1): the whole-window index,
-  // the register board's own data (buildLobbyRegister) re-rendered as DOM
-  // on the machine's screen — 文字走 DOM, 空间永远 R3F.
-  const lobbyRegister = useMemo<LobbyRegister>(
-    () => buildLobbyRegister(currentDoors, location.windowIndex),
-    [currentDoors, location.windowIndex],
-  );
   // The lobby hologram's braid: every strand threading the window — the
   // room-door lane's strands for the current window's slices, deduped in
   // first-seen order — plus one context thread per slice in the window
@@ -2773,8 +2684,7 @@ export default function GameCanvas({
           />
           {/* The lobby's anchor hologram (§13.1): one size bigger, the
               window's whole braid (every threading strand + every slice
-              as a context thread) with the whole-window index floating
-              as DOM above the cable. Lives in the corridor wrapper so it
+              as a context thread). Lives in the corridor wrapper so it
               unmounts with the corridor (HIDE_DELAY_MS after a room
               engages) and eases down with the same dissolve (`dimmed`).
               Emissive-only, so the light configuration — and the compile
@@ -2793,14 +2703,6 @@ export default function GameCanvas({
                 dimmed={corridorHidden}
                 strands={lobbyHoloStrands}
                 neighborSlots={currentDoors.length}
-                overlay={
-                  <LobbyIndexScreen
-                    register={lobbyRegister}
-                    hotelName={hotelName}
-                    windowIndex={location.windowIndex}
-                    accent={accent}
-                  />
-                }
               />
             </group>
           )}

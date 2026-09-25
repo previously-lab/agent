@@ -55,15 +55,12 @@
  * THE LOBBY VARIANT rides the same component one size bigger (the
  * caller's group scale, LOBBY_TERMINAL_ANCHOR.scale): its strands are the
  * union of every strand threading the window, its neighbor count is the
- * window's slice count, `dimmed` follows the corridor's dissolve (light
- * included), and `overlay` floats the whole-window index as DOM beside
- * the column (§13: 文字走 DOM — the register board was never scene
- * geometry).
+ * window's slice count, and `dimmed` follows the corridor's dissolve
+ * (light included).
  */
-import { useEffect, useMemo, useRef, type JSX, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type JSX } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import { Html } from "@react-three/drei";
 import {
   TERMINAL_BREATH_PERIOD_S,
   TERMINAL_DEPART,
@@ -112,9 +109,6 @@ const LIGHT_DISTANCE = 6;
 const GHOST_GAIN = 0.05;
 /** The scanline ripple count along the core's full height. */
 const SCAN_LINES = 26;
-/** The index plate's height beside the column (world meters at scale 1;
- *  the lobby's 1.5× group lands it at ~3.1 m). */
-const OVERLAY_Y = 2.05;
 /** How far the lobby's dissolve pulls the inks down (the corridor's
  *  rate, matching the old terminal's dim contract). */
 const DIM_FADE = 0.88;
@@ -294,7 +288,6 @@ export function AnchorHologram({
   dimmed = false,
   strands = [],
   neighborSlots = 0,
-  overlay,
 }: {
   /** Lobby-only: lerp down with the corridor's dissolve (light
    *  included). */
@@ -305,9 +298,6 @@ export function AnchorHologram({
   /** How many newer slices this room's window provably holds — one
    *  context thread each. */
   neighborSlots?: number;
-  /** DOM content floating beside the column (the lobby's window index);
-   *  null = the abstract hologram. */
-  overlay?: ReactNode;
 }): JSX.Element {
   const coreInk = useMemo(() => new THREE.Color(CORE_INK), []);
   const greyInk = useMemo(() => new THREE.Color(BUNDLE_GREY), []);
@@ -550,30 +540,6 @@ export function AnchorHologram({
         ))}
       </group>
 
-      {overlay && (
-        <Html
-          transform
-          center
-          distanceFactor={2}
-          position={[0, OVERLAY_Y, 0]}
-          zIndexRange={[5, 0]}
-          style={{ pointerEvents: "none" }}
-        >
-          <div
-            style={{
-              width: 172,
-              height: 118,
-              overflow: "hidden",
-              userSelect: "none",
-              background: "rgba(10, 12, 11, 0.82)",
-              border: "1px solid rgba(236, 226, 204, 0.28)",
-              borderRadius: 6,
-            }}
-          >
-            {overlay}
-          </div>
-        </Html>
-      )}
     </group>
   );
 }
