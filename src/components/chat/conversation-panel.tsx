@@ -264,10 +264,14 @@ export function ConversationPanel({
         }}
         className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
-            ? "z-[60] bg-background"
+            ? "z-40 bg-background"
             : "pointer-events-none z-40 overflow-hidden"
         }`}
       >
+        {/* Z-ORDER: the panel sits BELOW every dialog (z-50 and up) and above
+            the world (auto). A modal must never be trapped behind a
+            fullscreen conversation — the command palette proved it the hard
+            way, its items un-clickable while the panel was z-60. */}
         {/* THE SUBTITLE — the pill's one non-control, floating directly above
             it (never part of the pill's height or width): an FPS-radio
             strip, capped to SUBTITLE_BLOCK_MAX_WIDTH_PX and centred over the
