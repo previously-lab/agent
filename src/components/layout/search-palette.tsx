@@ -114,10 +114,11 @@ export function SearchPalette() {
 
   const handleSelect = (sliceId: string) => {
     setOpen(false);
-    // Handled in place on the chat page; otherwise stash + navigate home,
-    // where ChatPage replays the pending jump once its stream is up.
+    // Handled in place when the conversation layer is up; otherwise stash +
+    // navigate to the app route (`/app` since v0.13 §3.1 — `/` is the home
+    // now), where ChatPage replays the pending jump once its stream is up.
     const handled = requestSliceJump(sliceId);
-    if (!handled) router.push("/");
+    if (!handled) router.push("/app");
   };
 
   const keyword = queryKeyword(debouncedQuery);

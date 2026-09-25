@@ -16,8 +16,9 @@
  * THE ROOM COMES OFF THE CONTENT'S EXTENT, NOT OFF THE COLUMN. The column used
  * to carry this number as a padding, which looked like the same thing and was
  * not: the column is `overflow-hidden`, so a padding on it CROPS the content at
- * that edge. The number goes up to the shell instead and comes back down to
- * both fields as an inset on their camera range — see `minOffsetFor`.
+ * that edge. The number goes up to the layout-level shell provider instead and
+ * comes back down to both fields as an inset on their camera range — see
+ * `minOffsetFor`.
  *
  * The compact form is the card rung's default and never the conversation's.
  *

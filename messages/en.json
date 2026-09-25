@@ -585,5 +585,12 @@
     "debugActiveSlice": "Active slice",
     "debugNoActive": "none",
     "debugRefresh": "Refresh"
+  },
+  "home": {
+    "identity": "Previously",
+    "tagline": "The space you and Previously built together — revisit it, discuss it, keep building.",
+    "continue": "Continue",
+    "enterWorld": "Enter the world",
+    "settings": "Settings"
   }
 }

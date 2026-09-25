@@ -31,13 +31,16 @@
  *               FROM the pill's height, not a remount), full capability.
  *               OVERLAY, never a route change — `position: fixed`, so the
  *               world canvas behind it is never resized or unmounted; the
- *               owning surface freezes its R3F `frameloop` ("never") while
- *               this tier is up, which pauses rendering WITHOUT unmounting:
+ *               provider derives `worldFrozen` from this tier and the app
+ *               route's canvas freezes its R3F `frameloop` ("never") while
+ *               it is up, which pauses rendering WITHOUT unmounting:
  *               the scene, its programs and the last frame all stay.
  *
- * The component is CONTROLLED (`mode`/`onModeChange`): the owning surface
- * (`app-shell`) owns the state, because it is the one that must react to it
- * (freeze the world, pick the per-surface default tier). The tier is also
+ * The component is CONTROLLED (`mode`/`onModeChange`): the tier state lives
+ * in the layout-level `ShellProvider` (shell-provider.tsx, v0.13 §3.1) and
+ * the panel is rendered by `conversation-overlay.tsx`, because the tier's
+ * readers sit in BOTH trees — the overlay draws it, the app route reacts to
+ * it (freeze the world, pick the per-world default tier). The tier is also
  * published to the chat components through `PanelTierContext` — the
  * composer (via `ComposerHost`) and `ChatInput` read it to know which form
  * to draw, so the pill and the full composer are one component instance,
@@ -143,9 +146,10 @@ export interface ConversationPanelProps {
    *  put. Only ever shown at the pill tier. */
   subtitleLine?: SubtitleLine | null;
   /** An optional surface mounted ABOVE the conversation children inside the
-   *  panel body — the shell's portal target for the R3F conversation field
+   *  panel body — the overlay's portal target for the R3F conversation field
    *  at FULLSCREEN, where the panel is viewport-wide and the field fits.
-   *  Absent at the pill tier (the field then portals into the pane). */
+   *  Absent at the pill tier (the field then portals into the app route's
+   *  pane slot). */
   bodyPrefix?: ReactNode;
   /** The conversation surface. Always mounted — see the module header. */
   children: ReactNode;

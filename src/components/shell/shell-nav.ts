@@ -2,9 +2,12 @@
 
 /**
  * The shell's navigation actions — the IN-Memory form of the query-string
- * contract the single-route shell used to have. AppShell owns the state
- * (the world, the rung, the shared slice address) and provides these three
- * actions to anything below it; nothing here touches the URL.
+ * contract the single-route shell used to have. Since v0.13 §3.1 the CURSOR
+ * half (the shared slice address) and these actions are owned by the
+ * layout-level `ShellProvider` (shell-provider.tsx), because the conversation
+ * layer — the cursor's other reader — lives at the layout now; the
+ * WORLD-MOTION halves are registered by AppShell as a `WorldDriver`. Nothing
+ * here touches the URL.
  *
  *   focusSlice(id)   — address a slice to the CARD FIELD: the field focuses
  *                      and flashes the slice's card (landing on the slice
@@ -27,10 +30,10 @@ export interface ShellNav {
 
 export const ShellNavContext = createContext<ShellNav | null>(null);
 
-/** The shell's navigation actions — throws outside the shell (a bug:
- *  only shell descendants may navigate). */
+/** The shell's navigation actions — throws outside the layout-level
+ *  ShellProvider (a bug: only shell descendants may navigate). */
 export function useShellNav(): ShellNav {
   const nav = useContext(ShellNavContext);
-  if (!nav) throw new Error("useShellNav outside AppShell");
+  if (!nav) throw new Error("useShellNav outside ShellProvider");
   return nav;
 }

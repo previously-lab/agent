@@ -585,5 +585,12 @@
     "debugActiveSlice": "活跃切片",
     "debugNoActive": "无",
     "debugRefresh": "刷新"
+  },
+  "home": {
+    "identity": "Previously",
+    "tagline": "你与 Previously 一起建造的领域——在这里回溯、讨论、建设。",
+    "continue": "继续",
+    "enterWorld": "进入世界",
+    "settings": "设置"
   }
 }

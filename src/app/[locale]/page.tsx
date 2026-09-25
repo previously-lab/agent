@@ -1,31 +1,29 @@
-import { Suspense } from "react";
-import { setRequestLocale } from "next-intl/server";
+import { getTranslations, setRequestLocale } from "next-intl/server";
+import { Link, redirect } from "@/i18n/navigation";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
-import { AppShell } from "@/components/shell/app-shell";
-import { ClientErrorCapture } from "@/components/chat/client-error-capture";
-import { DebugErrorBoundary } from "@/components/ui/error-boundary";
-import { ChatStreamSkeleton } from "@/components/chat/chat-skeleton";
-import { loadUserConfig } from "@/lib/config/loader";
 
-type SearchParams = Promise<{ persona?: string; view?: string; at?: string }>;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 /**
- * The config read, in its OWN async boundary.
+ * The HOME route (v0.13 §3) — the start screen, not a chat window.
  *
- * It used to sit directly in the page body, above the JSX — which meant the
- * `<Suspense>` below it could never show its fallback, because the page had
- * not finished awaiting by the time the boundary was created. The whole page
- * segment (HTML and all) waited on a `getContent` round trip, and the user
- * watched an empty screen for it. The shell needs nothing from the config but
- * the model-selector seed, so it is awaited HERE and the shell streams in
- * around it.
+ * Deliberately THIN: one identity line and three entries — 继续 (into the
+ * app, `/app`), 进入世界 (straight into the hotel, `/app?view=game`), and a
+ * small settings link in the footer. No R3F, no conversation ability (the
+ * reader's ruling: the home has no pill, no subtitle, no fullscreen — it is
+ * a start screen), and no card design work; the real card is a later batch
+ * and only ever changes THIS file, never the structure.
+ *
+ * The home appears on cold boot and when the reader 收工 from the world (§3's
+ * one-way door); it is not a tab of the app.
+ *
+ * LEGACY PARAMS. The app surface used to live ON this route, so old links
+ * carry its one-shot params (`?view=game`, `?at=`, `?atStart=`, `?z=`). They
+ * are forwarded to `/app` verbatim — a shared `/?at=…` link still lands on
+ * its slice, just through the new address. A bare visit (or `?persona=`
+ * alone, the demo switcher) stays on the home.
  */
-async function Shell() {
-  const config = await loadUserConfig();
-  return <AppShell initialConfig={config} />;
-}
-
 export default async function HomePage({
   params,
   searchParams,
@@ -36,28 +34,56 @@ export default async function HomePage({
   const { locale } = await params;
   setRequestLocale(locale);
 
-  const { persona } = await searchParams;
+  const sp = await searchParams;
   const isDemo = resolveDataSource() === "demo";
   if (isDemo) {
+    const persona = typeof sp.persona === "string" ? sp.persona : "";
     setDemoPersona(persona || "user");
   }
 
-  // v0.11 single-shell page: chat, the timeline field and the game are all
-  // views of `/` — the rung (`?z=`) picks the zoom, `?view=game` the hotel
-  // world. AppShell owns the left time axis and the one shared canvas.
+  const carriesAppParam = ["view", "at", "atStart", "z"].some(
+    (key) => sp[key] !== undefined,
+  );
+  if (carriesAppParam) {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(sp)) {
+      if (typeof value === "string") query.set(key, value);
+    }
+    redirect({ href: `/app?${query.toString()}`, locale });
+  }
+
+  const t = await getTranslations("home");
+
   return (
-    <>
-      {/* Window-level error listeners — catch anything the SDK transport or
-          React swallows and log it with full detail. */}
-      <ClientErrorCapture />
-      {/* Render-loop / render-phase errors (e.g. minified React #185) surface
-          here with the full stack + component stack instead of an opaque
-          frame. */}
-      <DebugErrorBoundary label="chat-page">
-        <Suspense fallback={<ChatStreamSkeleton />}>
-          <Shell />
-        </Suspense>
-      </DebugErrorBoundary>
-    </>
+    <main className="relative flex h-dvh flex-col items-center justify-center px-6 text-center">
+      <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-muted-foreground">
+        {t("identity")}
+      </p>
+      <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
+        {t("tagline")}
+      </p>
+      <nav className="mt-12 flex flex-col items-center gap-5">
+        <Link
+          href="/app"
+          className="text-lg font-medium transition-colors hover:text-brand"
+        >
+          {t("continue")}
+        </Link>
+        <Link
+          href="/app?view=game"
+          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {t("enterWorld")}
+        </Link>
+      </nav>
+      {/* 设置不进卡的主体 — 内容是内容，设施是设施 (§3): a small footer link,
+          not an entry of the card. */}
+      <Link
+        href="/settings"
+        className="absolute bottom-6 text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
+      >
+        {t("settings")}
+      </Link>
+    </main>
   );
 }

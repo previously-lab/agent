@@ -1,17 +1,27 @@
 "use client";
 
 /**
- * AppShell (v0.11) — the single-route shell that hosts both chat and timeline
- * views on `/`. ALL product navigation is IN-MEMORY state owned here (the
- * world, the rung, the shared slice address, the conversation jump) — the
- * URL carries none of it. The left time axis (AxisBand) is always mounted;
- * the right pane holds the card field at a card rung, with the CONVERSATION
- * LAYER (`chat/conversation-panel.tsx`) floating over everything as a
- * persistent two-tier panel (pill / fullscreen, v0.13 §4). The chat
- * stream stays MOUNTED at every tier — the pill folds the panel body to
- * zero height instead of unmounting it — so the field camera and the live
- * useChat stream survive every collapse, and FULLSCREEN freezes the card
- * field's frame loop (`paused` → frameloop="never") without unmounting it.
+ * AppShell (v0.11; rehomed to `/app` in v0.13 §3.1) — the app route's shell:
+ * the left time axis (AxisBand), the one shared world canvas (the card field
+ * and the hotel), the world transition machine, and the zoom rung. Product
+ * navigation is IN-MEMORY state; the URL carries none of it.
+ *
+ * WHAT MOVED OUT (§3.1). The CONVERSATION LAYER used to render HERE — the
+ * two-tier panel with ChatPage inside, plus the portal slots the
+ * conversation field reached its seat through. It is now a real floating
+ * layer mounted by the LAYOUT (`chat/conversation-overlay.tsx`): a sibling
+ * of this route, above the canvas by z-index, surviving navigation and world
+ * rebuilds. The state the layer and this shell SHARE moved up with it into
+ * `shell/shell-provider.tsx` — the panel tier, the shared slice cursor, the
+ * per-turn view getter (`getChatView`), the world-freeze signal
+ * (`worldFrozen`, which still arrives here as the canvas's `paused`), the
+ * one band feed, and the composer clearance. What stays HERE is the world's
+ * half: the canvas, the rung, the transition clock, the card catalog, and
+ * the pane's portal slot for the conversation field. The shell registers a
+ * `WorldDriver` with the provider on mount (the nav actions' world-motion
+ * halves, the pose read, the turn callbacks) and pushes its pose / feed
+ * lease / `?at=` suppression up as they change — the layout talks to the
+ * world through that channel; it does not own it.
  *
  * Catalog loading is lazy: the timeline data layer (catalog window + strand
  * list) is fetched on the first switch to a card rung. Addressing a slice
@@ -23,9 +33,9 @@
  * playground route's — never product navigation. `?view=game` is read ONCE
  * as the cold-boot world (so the gallery link still opens the hotel); it is
  * never written back and never reconciled. `?at=`/`?atStart=` remain a
- * cold-boot conversation deep link consumed once by ChatPage (chat-page.tsx)
- * — a shared link still lands on its slice, but nothing inside the session
- * ever produces one.
+ * cold-boot conversation deep link consumed once by ChatPage (chat-page.tsx,
+ * now in the layout's overlay) — a shared link still lands on its slice, but
+ * nothing inside the session ever produces one.
  */
 import {
   useCallback,
@@ -42,7 +52,6 @@ import { AnimatePresence, animate, motion } from "motion/react";
 import { useTranslations } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
-import type { UserConfig } from "@/lib/config/types";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import {
@@ -52,10 +61,6 @@ import {
   evolutionToastContent,
   subscribeEvolutionActivity,
 } from "@/lib/chat/evolution-activity";
-import {
-  createFieldFeed,
-  type FieldFeed,
-} from "@/lib/timeline3d/field-feed";
 import {
   DISSOLVE_START,
   transitionPhase,
@@ -73,25 +78,15 @@ import {
 import { invalidateHotelData } from "@/lib/game/hotel-data";
 import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
 import { requestSliceJump } from "@/lib/chat/slice-jump";
-import type { SubtitleLine } from "@/lib/chat/subtitle-line";
-import type { CurrentView } from "@/lib/chat/current-view";
+import { useShellNav } from "@/components/shell/shell-nav";
 import {
-  ShellNavContext,
-  type ShellNav,
-} from "@/components/shell/shell-nav";
+  useShell,
+  type WorldDriver,
+} from "@/components/shell/shell-provider";
 import { ISLAND } from "@/components/layout/island";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { useTier } from "@/hooks/use-tier";
-import { ChatPage } from "@/components/chat/chat-page";
-import {
-  ConversationPanel,
-  type ConversationPanelMode,
-} from "@/components/chat/conversation-panel";
-import {
-  ConversationSurfaceProvider,
-  type ConversationSurface,
-} from "@/components/chat/conversation-surface";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
@@ -123,11 +118,6 @@ import {
   type NarrationTarget,
 } from "@/components/companion/companion-pod";
 
-interface AppShellProps {
-  /** Server-preloaded user config passed through to ChatPage. */
-  initialConfig?: UserConfig;
-}
-
 /** The rung-switch slide's travel, px (world units at the z=0 plane — the
  *  field camera's 1:1 screen mapping, camera.ts). Pre-merge value, restored
  *  (556ae16 took the slide out with the per-pane canvases; §14's single
@@ -141,7 +131,7 @@ const RUNG_SLIDE_X = 24;
  *  fetch fails (see the clock's exception-path note). */
 const TRANSITION_DATA_WAIT_MS = 8000;
 
-export function AppShell({ initialConfig }: AppShellProps) {
+export function AppShell() {
   // THE URL IS DEV-ONLY. `?view=game` is read ONCE, as the cold-boot world,
   // so the debug gallery's link (`?view=game&debug=rooms`, game-shell.tsx)
   // still opens straight into the hotel. Nothing else reads the query string
@@ -151,22 +141,39 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [settledView, setSettledView] = useState<WorldKind>(() =>
     searchParams.get("view") === "game" ? "game" : "field",
   );
+
+  // ── THE SHARED CHANNEL (shell-provider.tsx, layout level) ───────────────
+  // Everything the conversation overlay and this shell both read or write:
+  // the panel tier (the overlay renders it; this shell derives the per-world
+  // default and consumes the freeze), the shared slice cursor, the one band
+  // feed, the composer's measured clearance, and the registration channels
+  // for the world driver / pose / feed lease below.
+  const {
+    panelMode,
+    setPanelMode,
+    worldFrozen,
+    sharedSlice,
+    feed,
+    composerClearance,
+    setPaneSlotEl,
+    registerWorldDriver,
+    setWorldPose,
+    setFeedPublishing,
+    setSuppressAtJump,
+  } = useShell();
+  // The provider-owned nav actions (cursor + the driver registered below) —
+  // handed to the card field as its slice-click prop.
+  const nav = useShellNav();
+
   // THE WORLD SWITCH (§14) — a TRANSITION, never a snap, and PURE STATE: no
   // URL leg, no reconciliation. `settledView` is the world the reader is in;
   // `transition` is a live move between the worlds (owned by the shell,
-  // driven per frame by world-transition.ts). `sharedSlice` is the shared
-  // slice address — the memory form of the old `?slice=`/`?at=` contract,
-  // consumed two ways: the field focuses the slice's card (its `initialAtId`
-  // — flashed), the game stands the reader at the slice's door
-  // (game-canvas.tsx's `focusSlice`). The shell's navigation actions
-  // (shell-nav.ts) compose these with the transition machine.
-  const [sharedSlice, setSharedSlice] = useState<string | null>(null);
-  // Read-anywhere mirror of the shared slice address for the view getter
-  // below (the transport reads it at SEND time, outside React's render).
-  const sharedSliceRef = useRef<string | null>(null);
-  useEffect(() => {
-    sharedSliceRef.current = sharedSlice;
-  }, [sharedSlice]);
+  // driven per frame by world-transition.ts). The shared slice address lives
+  // in the provider now; it is consumed two ways: the field focuses the
+  // slice's card (its `initialAtId` — flashed), the game stands the reader
+  // at the slice's door (game-canvas.tsx's `focusSlice`). The provider's
+  // navigation actions (shell-nav.ts) compose the cursor write with this
+  // transition machine, through the driver registered below.
   const [transition, setTransition] = useState<{
     from: WorldKind;
     to: WorldKind;
@@ -183,16 +190,15 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // ── Shared timeline state (owned by the shell so the left AxisBand and the
   //    right pane read the same values). ────────────────────────────────────
   //
-  // THE FEED IS ONE OBJECT WITH ONE WRITER (`lib/timeline3d/field-feed.ts`).
-  // Both fields are mounted whenever the timeline view is open — the chat one
-  // dimmed behind the other — and they used to publish into four shared refs
-  // with no ownership rule between them, so the band's position came down to
-  // which of the two rendered last. `panePublishes` below is the whole rule.
-  const feedRef = useRef<FieldFeed | null>(null);
-  feedRef.current ??= createFieldFeed();
-  const feed = feedRef.current;
+  // THE FEED IS ONE OBJECT WITH ONE WRITER (`lib/timeline3d/field-feed.ts`),
+  // created by the PROVIDER (above both this shell and the overlay's chat
+  // stream). Both fields are mounted whenever the timeline view is open — the
+  // chat one dimmed behind the other — and they used to publish into four
+  // shared refs with no ownership rule between them, so the band's position
+  // came down to which of the two rendered last. `panePublishes` below is the
+  // whole rule; the lease reaches the overlay as `publishing`.
   /** The zoom rung, owned here so the floating lens switcher reads the same
-   *  value CardField transitions through. Memory-only: a bare `/` always
+   *  value CardField transitions through. Memory-only: a bare `/app` always
    *  opens on `DEFAULT_RUNG` — the CONVERSATION, exactly as it always has.
    *  (The card field's own default is `day`; that is the right default for
    *  someone who asked for the timeline and the wrong one for someone who
@@ -228,9 +234,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
   const [hasMore, setHasMore] = useState(false);
   const [timelineReady, setTimelineReady] = useState(false);
   const loadingRef = useRef(false);
-  /** A turn is streaming. Reported up by `ChatPage`, which is the only half
-   *  that knows (`useChat`'s `isLoading`); the card field draws its abstract
-   *  placeholder from it. See `RunningCard`. */
+  /** A turn is streaming. Reported by the overlay's `ChatPage` through the
+   *  driver (it is the only half that knows — `useChat`'s `isLoading`); the
+   *  card field draws its abstract placeholder from it. See `RunningCard`. */
   const [running, setRunning] = useState(false);
 
   // ── THE WORLD TRANSITION MACHINE (world-transition.ts) ────────────────────
@@ -346,32 +352,16 @@ export function AppShell({ initialConfig }: AppShellProps) {
     rungRef.current = rung;
   }, [rung]);
 
-  // ── THE CONVERSATION'S VIEW OF THE WORLD (v0.13 §5 视野注入) ─────────
-  // What the reader is currently looking at, derived at SEND time from the
-  // shell's navigation state (never render time — the transport asks when
-  // the message leaves). Standing at the slice's door in the hotel = room;
-  // the slice rung's focused card in the field = card; ANYTHING ELSE — no
-  // shared address, a pile rung, the conversation rung — is the lobby: the
-  // getter returns undefined and the request carries NO view, so the server
-  // injects no per-turn block (the stable system prompt already states the
-  // default). A mid-move read uses the settled world: that is where the
-  // reader stands while the transition runs.
-  const getChatView = useCallback((): CurrentView | undefined => {
-    const sliceId = sharedSliceRef.current;
-    if (!sliceId) return undefined;
-    if (settledRef.current === "game") return { sliceId, surface: "room" };
-    if (rungRef.current === "slice") return { sliceId, surface: "card" };
-    return undefined;
-  }, []);
-
-  // ── THE SHELL'S NAVIGATION ACTIONS (shell-nav.ts) ────────────────────────
-  // The memory form of the old `?slice=` / `?at=` contract. `focusSlice`
-  // addresses a slice to the card field, `standAtSlice` to the hotel (the
-  // reader stands at the slice's door), `openSlice` is the conversation
-  // jump. All three are pure state — no URL, no router.
-  const focusSlice = useCallback(
+  // ── THE WORLD'S HALF OF THE NAVIGATION ACTIONS (shell-nav.ts) ───────────
+  // The memory form of the old `?slice=` / `?at=` contract, split in two by
+  // §3.1: the CURSOR half (writing the shared slice address) lives in the
+  // provider, because the conversation layer — the other reader of that
+  // address — lives at the layout now. What stays HERE is the WORLD MOTION:
+  // which world to move to, which rung to seed, and the conversation jump's
+  // bus ride. All three are pure state — no URL, no router. The provider's
+  // nav actions call these through the registered driver.
+  const driveFocusSlice = useCallback(
     (sliceId: string) => {
-      setSharedSlice(sliceId);
       if (transitionRef.current) return; // a move owns the rung seeding
       if (settledRef.current !== "field") {
         beginTransition("field", sliceId);
@@ -381,32 +371,31 @@ export function AppShell({ initialConfig }: AppShellProps) {
     },
     [beginTransition],
   );
-  const standAtSlice = useCallback(
-    (sliceId: string) => {
-      setSharedSlice(sliceId);
-      if (transitionRef.current) return;
-      if (settledRef.current !== "game") beginTransition("game", null);
-    },
-    [beginTransition],
-  );
-  const openSlice = useCallback(
+  const driveStandAtSlice = useCallback(() => {
+    if (transitionRef.current) return;
+    if (settledRef.current !== "game") beginTransition("game", null);
+  }, [beginTransition]);
+  const driveOpenSlice = useCallback(
     (sliceId: string, start?: string) => {
-      // The card field's click: address the slice — the field focuses and
-      // flashes its card at the current rung (the shared address), and
+      // The card field's click: the provider has already addressed the slice
+      // (the field focuses and flashes its card at the current rung), and
       // when the CONVERSATION is the active surface the jump itself runs
-      // through the M2 bus, exactly the split the old `?at=` consumption
-      // had (chat-page.tsx suppresses its deep-link jump at a card rung).
+      // through the M2 bus, exactly the split the old `?at=` consumption had
+      // (chat-page.tsx suppresses its deep-link jump at a card rung).
       // `start` rides the bus so the travel clock skips its resolve fetch.
-      setSharedSlice(sliceId);
       if (rungRef.current === "conversation") requestSliceJump(sliceId, start);
       if (transitionRef.current) return;
       if (settledRef.current !== "field") beginTransition("field", null);
     },
     [beginTransition],
   );
-  const shellNav = useMemo<ShellNav>(
-    () => ({ focusSlice, standAtSlice, openSlice }),
-    [focusSlice, standAtSlice, openSlice],
+  /** The live pose for the provider's two readers: the surface composition
+   *  (via the pushed pose below) and the send-time view getter (via this
+   *  ref read — the transport asks outside React's render). A mid-move read
+   *  reports the SETTLED world: that is where the reader stands. */
+  const getPose = useCallback(
+    () => ({ settled: settledRef.current, rung: rungRef.current }),
+    [],
   );
 
   // The room → catalog entrance: the terminal interaction fires this after
@@ -421,40 +410,44 @@ export function AppShell({ initialConfig }: AppShellProps) {
   }, [beginTransition]);
 
   // ── THE CONVERSATION LAYER'S TIER (v0.13 §4 — two tiers) ────────────────
-  // One conversation, two sizes — the tier lives HERE, not inside the
-  // panel, because the shell must react to it: the game world and the card
-  // rungs default to the pill (the floating quick-input pill: input, the
-  // subtitle line above it, nothing else), the conversation rung defaults
-  // to fullscreen (the full-capability surface the removed dock used to
-  // be), and FULLSCREEN freezes the card field's frame loop (paused →
-  // frameloop="never", below). The effect fires only on the world boundary
-  // — zooming BETWEEN card rungs keeps the tier the reader picked.
+  // The tier itself lives in the PROVIDER (the layout-level overlay renders
+  // it). This shell only derives the per-world default, exactly as before:
+  // the game world and the card rungs default to the pill, the conversation
+  // rung to fullscreen — and FULLSCREEN freezes the card field's frame loop
+  // (the provider's `worldFrozen` → the canvas's `paused` →
+  // frameloop="never", below). The provider's INITIAL tier already matches
+  // the cold-boot verdict (it reads `?view=game` once, and DEFAULT_RUNG is a
+  // constant), so the mount fire is SKIPPED — otherwise re-entering `/app`
+  // from another route would reset a tier the reader picked. The effect then
+  // fires only on the world boundary: zooming BETWEEN card rungs keeps the
+  // tier the reader picked.
   //
-  // The INITIAL state is the same verdict computed from the COLD-BOOT view
-  // and the default rung — not a placeholder "open" tier. A wrong first
-  // tier would render the fullscreen body (and its R3F field portal target)
-  // for one commit in a game/card world and unmount it the next, and that
-  // mount-unmount churn is exactly what kills the conversation field's R3F
-  // canvas at connect time.
-  const [panelMode, setPanelMode] = useState<ConversationPanelMode>(() =>
-    settledView === "game" || DEFAULT_RUNG !== "conversation"
-      ? "pill"
-      : "fullscreen",
-  );
+  // …with one arrival exception: a CLIENT navigation straight into the hotel
+  // (the home's 进入世界 door, `/app?view=game`) brings whatever tier the
+  // provider persisted, and the hotel must open on the pill. The provider's
+  // initializer never sees that case (it runs once, at the layout's mount),
+  // so this layout effect folds the tier BEFORE the first paint — a passive
+  // effect would flash the fullscreen body (and its portal target) over the
+  // hotel for one frame. On a cold boot the provider already holds "pill"
+  // and this is a same-value no-op.
+  useLayoutEffect(() => {
+    if (settledRef.current === "game") setPanelMode("pill");
+    // Mount only — `settledRef` still holds the ARRIVAL world here; later
+    // world changes are the boundary effect's job.
+  }, [setPanelMode]);
   const worldKind = rung === "conversation" ? "conversation" : "cards";
+  const tierBoundaryRef = useRef(false);
   useEffect(() => {
+    if (!tierBoundaryRef.current) {
+      tierBoundaryRef.current = true;
+      return;
+    }
     // The game world is a LOOKING view like the card rungs — the conversation
     // arrives as the pill there too.
     setPanelMode(
       view === "game" || worldKind !== "conversation" ? "pill" : "fullscreen",
     );
-  }, [worldKind, view]);
-  const worldFrozen = panelMode === "fullscreen";
-  // The pill's subtitle line (v0.13 §4): folded from the unified stream
-  // (history + live) by ChatPage, lifted here, and handed back down into
-  // the panel as a prop — the panel renders it, the page produces it, and
-  // this state is the wire between them.
-  const [subtitleLine, setSubtitleLine] = useState<SubtitleLine | null>(null);
+  }, [worldKind, view, setPanelMode]);
 
   // THE TRANSITION CLOCK — one rAF per move writes the shared singleton's
   // progress; React state only mirrors the phase boundaries (2–3 re-renders
@@ -541,39 +534,18 @@ export function AppShell({ initialConfig }: AppShellProps) {
     };
   }, [transitionFrom, transitionTo, transitionSlice, worldFrozen, settleMove]);
 
-  // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
-  // The conversation field renders through a portal into whichever surface can
-  // host its window-derived 680 px column: the pane's slot while the panel
-  // floats beside it (the pill leaves the whole pane free), a slot
-  // inside the panel body at fullscreen, and — with no wide host (the game
-  // view below the fullscreen tier) — the DOM list takes the conversation
-  // instead (see `chat/conversation-surface.tsx`). The slot elements are
-  // owned HERE because the shell owns both their parents; `useState` refs
-  // re-render on registration, the same handshake `world-canvas.tsx` uses.
-  // A slot's element is NULL until its ref callback registers (and null
-  // again the moment its branch unmounts) — until a REAL element exists the
-  // surface is "narrow", never "field" with a null target. An R3F portal
-  // handed a null/detached element dies exactly at the canvas's connect.
-  const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
-  const [panelSlotEl, setPanelSlotEl] = useState<HTMLElement | null>(null);
-  const onConversationRung = rung === "conversation";
-  const conversationSurface: ConversationSurface =
-    view === "game"
-      ? panelSlotEl
-        ? { kind: "field", el: panelSlotEl }
-        : { kind: "narrow" }
-      : panelMode === "fullscreen"
-        ? panelSlotEl
-          ? { kind: "field", el: panelSlotEl }
-          : { kind: "narrow" }
-        : paneSlotEl
-          ? { kind: "field", el: paneSlotEl }
-          : { kind: "narrow" };
-
-  // A conversation jump (`openSlice`, the search palette rides the M2 bus
-  // directly) is pure state now: `openSlice` homes the world to the field
-  // when the jump comes from the hotel, and the conversation performs the
-  // jump itself (chat-page.tsx) — nothing needs clearing afterwards.
+  // ── THE CONVERSATION FIELD'S PANE SLOT ───────────────────────────────────
+  // The conversation layer moved to the layout (§3.1), but the field's PANE
+  // SEAT stays here: the R3F band still reaches into the pane through a
+  // portal, and the pane is this route's. The slot ELEMENT is owned by the
+  // provider (it composes the surface from both trees' slots): this shell
+  // renders the div, `setPaneSlotEl` registers it, and the `useState`-backed
+  // ref re-renders the provider on registration — the same handshake
+  // world-canvas.tsx uses. The element is null until the ref registers (and
+  // null again the moment the field chrome unmounts, e.g. leaving `/app`),
+  // and the provider never publishes a "field" surface with a null target —
+  // an R3F portal handed a null/detached element dies exactly at the canvas's
+  // connect.
 
   // Escape in the game world: panel first (anything open folds to the pill),
   // then the view itself (back to the field, through the transition). The
@@ -588,7 +560,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, panelMode, beginTransition]);
+  }, [view, panelMode, setPanelMode, beginTransition]);
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
   // One narration at a time: each request bumps `gen`, and the pod aborts
@@ -648,17 +620,17 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
   // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
   // What the chrome covers at the top edge and what the composer covers at the
-  // foot, in px. BOTH are measured from the things themselves (see
-  // `use-chrome-inset.ts` and `composer-host.tsx`) and both are OWNED HERE,
-  // because both fields float under the same two controls and the shell is the
-  // only place above both of them.
+  // foot, in px. The top one is measured from the chrome itself
+  // (`use-chrome-inset.ts`); the foot one is measured by the overlay's
+  // composer (`composer-host.tsx`) and arrives through the PROVIDER, because
+  // both fields float under the same two controls and the provider is the
+  // one place above both of them.
   //
   // They are RANGE insets, not container padding: the fields fill the pane and
   // the content travels under the controls on its way past them, coming to rest
   // clear of them. A padding on the pane would crop the content instead — see
   // `minOffsetFor`.
   const chromeInset = useChromeInset();
-  const [composerClearance, setComposerClearance] = useState(0);
 
   // NOTE — there is deliberately no `selectedCount` here any more. It was the
   // band caption's number, and it was only ever exact for a SINGLE pick: with
@@ -700,9 +672,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
   }, [strandList.length]);
 
   // ── Lazy catalog load on the first CARD rung. A slice address (the shared
-  //    `sharedSlice`, or a transition's terminal slice) loads the full catalog
-  //    so the addressed slice is always resolvable; otherwise loads the latest
-  //    month window. ─────────────────────────────────────────────────────────
+  //    cursor, or a transition's terminal slice) loads the full catalog so the
+  //    addressed slice is always resolvable; otherwise loads the latest month
+  //    window. ───────────────────────────────────────────────────────────────
   // A live transition's slice leads: it is the field's landing focus the
   // moment the move completes.
   const focusId = transition?.sliceId ?? sharedSlice;
@@ -816,11 +788,63 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // still worth doing — but it is a rendering change, not a navigation one, and
   // it is not what stood between the reader and a single ladder.
   const showCardField = rung !== "conversation";
+  /** True while the conversation rung is up — the pane slot's visibility
+   *  switch (the field's R3F band is read in the pane there, dimmed away at
+   *  a card rung). The PANEL half of the conversation is the layout overlay's
+   *  business; this is only the slot's. */
+  const onConversationRung = rung === "conversation";
   /** THE OWNERSHIP RULE, in one line. Exactly one pane publishes to the band at
    *  a time: the card field while a card rung is up, the chat otherwise. The
    *  other field is still mounted and still animating — it simply writes
-   *  nothing, which is why this is a lease rather than a merge. */
+   *  nothing, which is why this is a lease rather than a merge. The chat half
+   *  lives in the overlay now, so the lease is PUSHED to the provider (below)
+   *  instead of handed down as a prop. */
   const panePublishes = showCardField;
+
+  // ── THE ROUTE → PROVIDER CHANNEL ─────────────────────────────────────────
+  // Registration and pushes, all laid out in one place:
+  //
+  //   · the WorldDriver — the nav actions' world-motion halves, the send-time
+  //     pose read, and the two turn callbacks the overlay's ChatPage reports
+  //     (a settled turn refreshes the catalog; a running one draws the card
+  //     field's placeholder). A ref on the provider's side: registration must
+  //     not re-render the layout's subtree.
+  //   · the reactive pose / feed lease / `?at=` suppression — provider STATE,
+  //     because their readers (the surface composition, the overlay's
+  //     ChatPage props) must re-render. Layout effects, so the push lands
+  //     before paint: a passive effect would let one painted frame run with
+  //     the mount defaults (both fields publishing at once is exactly what
+  //     the feed's one-writer rule exists to prevent).
+  //   · unmount cleans every channel back to its no-world default, so a
+  //     route without a world (settings) finds no stale driver, a neutral
+  //     lease, and no suppression.
+  const driver = useMemo<WorldDriver>(
+    () => ({
+      focusSlice: driveFocusSlice,
+      standAtSlice: driveStandAtSlice,
+      openSlice: driveOpenSlice,
+      getPose,
+      onTurnSettled: refreshCatalog,
+      setRunning,
+    }),
+    [driveFocusSlice, driveStandAtSlice, driveOpenSlice, getPose, refreshCatalog],
+  );
+  useEffect(() => {
+    registerWorldDriver(driver);
+    return () => registerWorldDriver(null);
+  }, [driver, registerWorldDriver]);
+  useLayoutEffect(() => {
+    setWorldPose({ settled: settledView, rung });
+  }, [settledView, rung, setWorldPose]);
+  useEffect(() => () => setWorldPose(null), [setWorldPose]);
+  useLayoutEffect(() => {
+    setFeedPublishing(!panePublishes && !transitionActive);
+  }, [panePublishes, transitionActive, setFeedPublishing]);
+  useEffect(() => () => setFeedPublishing(true), [setFeedPublishing]);
+  useLayoutEffect(() => {
+    setSuppressAtJump(showCardField);
+  }, [showCardField, setSuppressAtJump]);
+  useEffect(() => () => setSuppressAtJump(false), [setSuppressAtJump]);
 
   // ── THE RUNG SLIDE (the 556ae16 regression, restored in-canvas) ──────────
   // Pre-merge, the timeline pane was a DOM layer carrying its OWN canvas, so
@@ -914,9 +938,10 @@ export function AppShell({ initialConfig }: AppShellProps) {
 
   return (
     // The world-slot provider must sit ABOVE both the canvas and the worlds'
-    // DOM-side owners (they are siblings here) — see world-canvas.tsx.
+    // DOM-side owners (they are siblings here) — see world-canvas.tsx. (The
+    // shell-nav and conversation-surface providers are NOT here any more:
+    // §3.1 moved them to the layout's ShellProvider, above the overlay too.)
     <WorldSceneProvider>
-    <ShellNavContext.Provider value={shellNav}>
     <div className="relative flex h-dvh overflow-hidden">
       {/* The field world's page atmosphere, UNDER the canvas (the canvas is
           transparent; the aurora used to sit behind the pane's own canvas,
@@ -971,17 +996,22 @@ export function AppShell({ initialConfig }: AppShellProps) {
           looking at. Field world only — the game owns the whole viewport. */}
       {fieldChrome && <AxisBand range={range} feed={feed} />}
 
-      {/* RIGHT: chat stream (always mounted) + timeline overlay when active. */}
-      <ConversationSurfaceProvider value={conversationSurface}>
+      {/* RIGHT: the conversation field's pane slot + the timeline overlay
+          when active. THE CONVERSATION LAYER ITSELF IS NOT HERE any more —
+          §3.1 mounted it at the layout (chat/conversation-overlay.tsx), a
+          sibling of this route that survives navigation and world rebuilds.
+          Only the field's pane slot remains, because the R3F band still
+          reaches into this pane. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
         {/* THE CONVERSATION FIELD'S PANE SLOT — the restored R3F conversation
             renders HERE, in the 2.5D view, exactly where the conversation
             rung lived before the DOM refactor: portal target for the field
-            (see `chat/conversation-surface.tsx`). Dimmed, not unmounted, at a
-            card rung — the subtree holds the field's camera position — and
-            at conversation rung the reader reads history in the pane while
-            the ongoing turn lives in the panel. Rides the field chrome's
-            phase like the band. */}
+            (see `chat/conversation-surface.tsx`; the element is registered
+            with the PROVIDER, which composes the surface). Dimmed, not
+            unmounted, at a card rung — the subtree holds the field's camera
+            position — and at conversation rung the reader reads history in
+            the pane while the ongoing turn lives in the panel. Rides the
+            field chrome's phase like the band. */}
         {fieldChrome && (
           <div
             ref={setPaneSlotEl}
@@ -994,48 +1024,6 @@ export function AppShell({ initialConfig }: AppShellProps) {
             }`}
           />
         )}
-        {/* THE CONVERSATION LAYER — one persistent panel over the world
-            (v0.13 §4), not a view of its own any more: a floating pill at
-            the pill tier, a viewport-wide overlay at fullscreen. `position:
-            fixed` either way: the world behind it keeps its size, so no tier
-            change ever triggers a canvas resize. ChatPage keeps publishing
-            to the band only while the conversation rung owns it, and still
-            receives `suppressAtJump` at a card rung — but its OWN rung is
-            pinned to "conversation": tier visibility is the panel's job.
-            At FULLSCREEN the panel is viewport-wide, so it hosts the R3F
-            field itself (bodyPrefix is the portal target); at the pill tier
-            the field portals into the pane and the pill keeps the quick
-            input + the subtitle line at the viewport's foot. */}
-        <ConversationPanel
-          mode={panelMode}
-          onModeChange={setPanelMode}
-          subtitleLine={subtitleLine}
-          bodyPrefix={
-            panelMode === "fullscreen" ? (
-              <div ref={setPanelSlotEl} className="min-h-0 flex-1" />
-            ) : undefined
-          }
-        >
-          <ChatPage
-            initialConfig={initialConfig}
-            suppressAtJump={showCardField}
-            rung="conversation"
-            onTurnSettled={refreshCatalog}
-            feed={feed}
-            // v0.13 §5 — the current view rides each turn's request so the
-            // model knows what the reader is looking at (see getChatView).
-            getView={getChatView}
-            // Frozen while a world transition runs: the feed is one-writer
-            // (field-feed.ts), and a move mounts/unmounts the fields
-            // around the band — nobody publishes mid-move.
-            publishing={!panePublishes && !transitionActive}
-            onRunningChange={setRunning}
-            onSubtitleLineChange={setSubtitleLine}
-            insetTop={0}
-            insetBottom={composerClearance}
-            onComposerClearanceChange={setComposerClearance}
-          />
-        </ConversationPanel>
 
         {fieldChrome && (
           <>
@@ -1088,13 +1076,14 @@ export function AppShell({ initialConfig }: AppShellProps) {
                       entries={entries}
                       hasMore={hasMore}
                       onNeedOlder={loadOlder}
-                      onOpenSlice={openSlice}
+                      onOpenSlice={nav.openSlice}
                       onNarrate={bridgeBrain === false ? startNarration : undefined}
                       initialAtId={focusId ?? undefined}
                       strands={strands}
                       feed={feed}
                       // Same freeze as the chat field — the one-writer rule
-                      // holds through the move (see ChatPage above).
+                      // holds through the move (the overlay's half gets the
+                      // lease through the provider; see the driver pushes).
                       publishing={panePublishes && !transitionActive}
                       rung={rung}
                       onRungChange={setRung}
@@ -1189,9 +1178,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
           </div>
         )}
       </div>
-      </ConversationSurfaceProvider>
     </div>
-    </ShellNavContext.Provider>
     </WorldSceneProvider>
   );
 }

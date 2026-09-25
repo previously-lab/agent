@@ -78,7 +78,8 @@ interface ChatPageProps {
   /** A turn finished and its slice is on disk. The shell refreshes the card
    *  field's catalog; see the effect in `Inner`. */
   onTurnSettled?: () => void;
-  /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
+  /** The shared band feed, owned by the layout-level shell provider — see
+   *  `field-feed.ts`. */
   feed?: FieldFeed;
   /** True only while the chat view OWNS the band (the conversation rung). Both
    *  fields are mounted at once while a card rung is up, and two writers on one
@@ -93,21 +94,24 @@ interface ChatPageProps {
   insetTop?: number;
   /** The floating composer's height at the pane's foot, px — BUBBLED UP rather
    *  than held here, because the card field floats over the same foot and the
-   *  shell is the only place both fields can read one number from. */
+   *  layout-level shell provider is the one place both fields can read the
+   *  number from (v0.13 §3.1). */
   insetBottom?: number;
   /** Report that measurement upward. The composer is the only thing that knows
    *  how tall it is (a growing textarea, an attachment row), so it is measured
-   *  where it is drawn and the number is owned where both fields can see it. */
+   *  where it is drawn and the number is owned by the provider, where both
+   *  fields can see it. */
   onComposerClearanceChange?: (px: number) => void;
   /** Publish the newest turn's subtitle line (v0.13 §4) — folded here from
    *  the live messages by the pure reducer in `lib/chat/subtitle-line.ts`.
-   *  The panel's pill renders it; the shell lifts the value from this
+   *  The panel's pill renders it; the overlay lifts the value from this
    *  page back down into the panel as a prop. */
   onSubtitleLineChange?: (line: SubtitleLine | null) => void;
-  /** The shell's current-view getter (v0.13 §5 视野注入). Read at SEND time
-   *  in the transport body as the structured `view` field — which slice the
-   *  reader is looking at, and on which surface. Absent (the shell sends
-   *  none in the lobby default) → no field → the server injects no block. */
+  /** The shell provider's current-view getter (v0.13 §5 视野注入). Read at SEND
+   *  time in the transport body as the structured `view` field — which slice
+   *  the reader is looking at, and on which surface. Absent (the provider
+   *  returns none in the lobby default) → no field → the server injects no
+   *  block. */
   getView?: () => CurrentView | undefined;
 }
 
@@ -426,7 +430,7 @@ function Inner({
 }) {
   // ── Model selection — reactive, persisted to config.json ─────────────
   // The single source of truth is memory/user/config.json (cross-device, no
-  // localStorage). The RSC page preloads it (initialConfig) so there's no
+  // localStorage). The RSC layout preloads it (initialConfig) so there's no
   // default-flash + mount reconcile; saves still write back via server action.
   // Thinking/effort are NOT client state: the server pins thinking ON at low
   // effort for every turn (see start-turn.ts).
@@ -1040,8 +1044,9 @@ function Inner({
 
   // `?at=<sliceId>&atStart=<iso>` — the timeline → chat half of the context
   // carry (the wheel fallback's pick, the L3 traverse, a shared link). The
-  // chat page stays MOUNTED under the timeline shell, so this must react to
-  // searchParam changes, not just the initial mount. Consumed once: the
+  // chat page stays MOUNTED at the layout (v0.13 §3.1: the overlay survives
+  // navigation and rung switches), so this must react to searchParam
+  // changes, not just the initial mount. Consumed once: the
   // params are stripped (replaceState, no navigation) so a refresh or a
   // re-render never re-fires the jump. `atStart` is the target slice's ISO
   // start from the timeline card — passing it as the clock's `to` skips the
@@ -1127,9 +1132,10 @@ function Inner({
 
   return (
     <>
-      {/* ── Content — one centered column below the fixed header. The shell
-           (AppShell) owns the top-level flex layout and the left time axis;
-           this component just fills the right-hand column. The stream is always
+      {/* ── Content — the conversation's own column, inside the panel body
+           (the panel itself hangs at the layout — v0.13 §3.1; the app shell
+           owns the world canvas and the left time axis, this component owns
+           only the conversation). The stream is always
            mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
            an EMPTY memory falls back to the full-screen empty briefing.
 
@@ -1275,8 +1281,8 @@ function Inner({
            `shrink-0` child that took its height out of the column, which made
            it page furniture in an app that has none. `ComposerHost` positions
            it and reports how much room it needs, and that number travels up to
-           the shell — the card field floats over the same foot, so the owner
-           of the number has to be above both fields. See
+           the layout-level provider — the card field floats over the same
+           foot, so the owner of the number has to be above both fields. See
            `ChatPageProps.onComposerClearanceChange`. ── */}
       <ComposerHost
         rung={rung}
