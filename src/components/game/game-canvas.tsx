@@ -1815,7 +1815,10 @@ function GameLoop({
 
 /** Bottom-center prompt — label + localized hint, pointer-transparent.
  *  The anchor terminal (§13.1) wins over a door while the player stands
- *  in reach; the hint is the same "Enter" the doors use (E works too). */
+ *  in reach; the hint is the same "Enter" the doors use (E works too).
+ *  Sits bottom-24 (not bottom-6): the conversation pill floats centred at
+ *  the bottom edge (16px gap + 48px tall + its subtitle line above), so
+ *  the prompt must clear the whole pill stack — no overlap, no shrink. */
 function Hud({
   door,
   anchor,
@@ -1828,7 +1831,7 @@ function Hud({
   const label = anchor ? anchor.label : door?.label;
   if (label === undefined) return null;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-6 z-10 flex justify-center">
+    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center">
       <div className="rounded-full bg-black/35 px-4 py-1.5 font-serif text-sm text-neutral-300 backdrop-blur-sm">
         <span className="text-neutral-100">{label}</span>
         <span className="mx-2 text-neutral-500">·</span>

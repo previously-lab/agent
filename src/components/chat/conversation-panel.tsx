@@ -5,22 +5,30 @@
  *
  * ONE conversation surface (the DOM chat — `ChatPage`), two sizes, one box:
  *
- *   pill        the bottom STRIP: a hairline-ruled bar pinned to the
- *               viewport's bottom edge, spanning the full width. It carries
- *               exactly four controls — a single-line input, send/stop as
- *               one button, expand into fullscreen, attach — plus the one
- *               non-control, the subtitle line: the live one-line rendering
- *               of the newest turn, folded by the pure reducer in
+ *   pill        the floating PILL: a translucent glass bar (rounded-full,
+ *               `bg-background/70` + backdrop blur + a hairline ring),
+ *               horizontally centred a small gap above the viewport's
+ *               bottom edge, at most `PILL_MAX_WIDTH_PX` wide, exactly
+ *               `PILL_HEIGHT_PX` tall. ONE row with exactly four controls —
+ *               a round attach button on the left, a single-line input in
+ *               the middle (no box of its own; the pill is the container),
+ *               and round send/stop + fullscreen buttons on the right —
+ *               plus, floating directly ABOVE the pill as its own dim,
+ *               centred, truncated line (never part of the pill's height
+ *               or width), the subtitle: the live one-line rendering of the
+ *               newest turn, folded by the pure reducer in
  *               `lib/chat/subtitle-line.ts` and passed in as a prop. The
  *               fullscreen chrome (slim bar + conversation body) folds to
  *               zero height and goes inert, but stays MOUNTED — the live
  *               `useChat` stream, the draft and the scroll position all
  *               survive the collapse, and the composer itself keeps
  *               rendering (absolutely positioned against this box, which
- *               the strip does not clip), so a draft typed in the strip is
- *               still there at fullscreen.
+ *               the pill does not clip), so a draft typed in the pill is
+ *               still there at fullscreen. The pill tier's box is
+ *               pointer-transparent: only the pill and its buttons eat
+ *               events, the world behind keeps every other pixel.
  *   fullscreen  the same box grown to the viewport (a CSS height transition
- *               FROM the strip height, not a remount), full capability.
+ *               FROM the pill's height, not a remount), full capability.
  *               OVERLAY, never a route change — `position: fixed`, so the
  *               world canvas behind it is never resized or unmounted; the
  *               owning surface freezes its R3F `frameloop` ("never") while
@@ -32,7 +40,7 @@
  * (freeze the world, pick the per-surface default tier). The tier is also
  * published to the chat components through `PanelTierContext` — the
  * composer (via `ComposerHost`) and `ChatInput` read it to know which form
- * to draw, so the strip and the full composer are one component instance,
+ * to draw, so the pill and the full composer are one component instance,
  * never an unmount boundary.
  *
  * Keyboard. `Cmd/Ctrl+J` toggles pill ↔ fullscreen (window-level,
@@ -43,7 +51,7 @@
  * the chat (the model selector & co.) render in portals OUTSIDE this
  * subtree, so their Escape never reaches this handler — one Escape closes
  * the popover, the next collapses the panel. Focus moves into the panel
- * when it opens and lands on the strip when it collapses.
+ * when it opens and lands on the pill when it collapses.
  */
 import {
   createContext,
@@ -69,7 +77,7 @@ export function reducePanelMode(
 ): ConversationPanelMode {
   switch (event) {
     case "open":
-      // The strip's expand verb: from the pill the only place to open IS
+      // The pill's expand verb: from the pill tier the only place to open IS
       // fullscreen; already there, nothing more to open.
       return mode === "pill" ? "fullscreen" : mode;
     case "toggle":
@@ -95,15 +103,22 @@ export function isPanelHotkey(event: {
   );
 }
 
-/** The pill strip's total height, px — the subtitle row (`h-5`) plus the
- *  one control row, under a 1px hairline. THE knob to turn if the strip
- *  reads too tall or too short on screen: the subtitle keeps its 20px and
- *  the composer row takes whatever is left. */
-export const STRIP_HEIGHT_PX = 72;
+/** The pill's height, px — the single height knob. One control row
+ *  (`PILL_HEIGHT_PX` tall, round ~36px buttons and a one-line input
+ *  centred in it); THE constant to turn if the pill reads too tall or too
+ *  short on screen. */
+export const PILL_HEIGHT_PX = 48;
+/** The pill's maximum width, px — centred with side margins (`px-4` on the
+ *  host row), so it never touches the viewport's edges. Turn this if the
+ *  pill reads too wide or too narrow. */
+export const PILL_MAX_WIDTH_PX = 600;
+/** The gap between the viewport's bottom edge and the pill, px. Turn this
+ *  to sit the pill higher or lower. */
+export const PILL_BOTTOM_GAP_PX = 16;
 
 /** What the panel tells the chat components that render inside it: which
  *  tier is up and how to change it. Null outside a panel — consumers then
- *  draw the fullscreen-era form (there is no strip to be). */
+ *  draw the fullscreen-era form (there is no pill to draw). */
 export interface PanelTier {
   mode: ConversationPanelMode;
   setMode: (mode: ConversationPanelMode) => void;
@@ -120,11 +135,12 @@ export function usePanelTier(): PanelTier | null {
 export interface ConversationPanelProps {
   mode: ConversationPanelMode;
   onModeChange: (mode: ConversationPanelMode) => void;
-  /** The strip's one non-control: the live one-line rendering of the newest
-   *  turn (`speaker: text`, or a dim status prefix while there is no text
-   *  yet), folded by the pure reducer in `lib/chat/subtitle-line.ts`. Null
-   *  when there is nothing to say — the row then renders empty so the strip
-   *  keeps its height. Only ever shown at the pill tier. */
+  /** The pill's one non-control, floating above it as its own line: the live
+   *  one-line rendering of the newest turn (`speaker: text`, or a dim status
+   *  prefix while there is no text yet), folded by the pure reducer in
+   *  `lib/chat/subtitle-line.ts`. Null when there is nothing to say — the
+   *  line then renders empty so its seat (and the pill's position) stays
+   *  put. Only ever shown at the pill tier. */
   subtitleLine?: SubtitleLine | null;
   /** An optional surface mounted ABOVE the conversation children inside the
    *  panel body — the shell's portal target for the R3F conversation field
@@ -161,7 +177,7 @@ export function ConversationPanel({
 
   // Focus follows the tier: opening moves it INTO the panel (so Escape and
   // Tab belong to the conversation from the first keystroke), collapsing
-  // lands it on the strip — the control surface that re-opens. The two are
+  // lands it on the pill — the control surface that re-opens. The two are
   // one box now, so the same ref serves both; `outline-none` keeps the
   // programmatic focus invisible.
   const prevModeRef = useRef(mode);
@@ -187,32 +203,44 @@ export function ConversationPanel({
 
   return (
     <PanelTierContext.Provider value={tier}>
-      {/* THE ONE BOX — strip at the pill tier, viewport at fullscreen; the
-          change is a height transition, not a remount. `fixed` (overlay) is
-          the "覆盖，不挤压" rule made structural: nothing in the layout can
-          feel this box, so the canvas behind it never resizes. */}
+      {/* THE ONE BOX — a floating pill at the pill tier, the viewport at
+          fullscreen; the change is a height transition, not a remount.
+          `fixed` (overlay) is the "覆盖，不挤压" rule made structural:
+          nothing in the layout can feel this box, so the canvas behind it
+          never resizes. At the pill tier the box itself is chromeless and
+          pointer-transparent — only the pill (positioned by the composer
+          host) and its buttons eat events; the world keeps every other
+          pixel of the bottom edge. The height at the pill tier is the pill
+          plus the subtitle row above it: PILL_HEIGHT_PX + the subtitle's
+          20px + a 4px gap between them + PILL_BOTTOM_GAP_PX. */}
       <div
         ref={panelRef}
         tabIndex={-1}
         onKeyDown={onContainerKeyDown}
-        style={{ height: open ? "100dvh" : STRIP_HEIGHT_PX }}
+        style={{
+          height: open
+            ? "100dvh"
+            : PILL_HEIGHT_PX + 20 + 4 + PILL_BOTTOM_GAP_PX,
+        }}
         className={`fixed inset-x-0 bottom-0 flex flex-col bg-background outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
-          open ? "z-[60]" : "z-40 overflow-hidden border-t border-foreground/10"
+          open ? "z-[60]" : "pointer-events-none z-40 overflow-hidden"
         }`}
       >
-        {/* THE SUBTITLE — the strip's one non-control: `label: text` for the
-            newest turn, or a dim status prefix while the turn has produced
-            no words yet. An empty line still renders (the row keeps the
-            strip's height); the truncated marker is the expand hint. */}
+        {/* THE SUBTITLE — the pill's one non-control, floating directly
+            above it as its own dim, centred, truncated line (never part of
+            the pill's height or width): `label: text` for the newest turn,
+            or a dim status prefix while the turn has produced no words yet.
+            An empty line still renders (the row keeps the subtitle's seat);
+            the truncated marker is the expand hint. */}
         <div
           data-conversation-subtitle
           aria-live="polite"
-          className={`h-5 shrink-0 overflow-hidden px-3 font-mono text-[11px] leading-5 ${
-            open ? "hidden" : "block"
+          className={`h-5 shrink-0 overflow-hidden font-mono text-[11px] leading-5 ${
+            open ? "hidden" : "pointer-events-none flex justify-center px-4"
           }`}
         >
           {subtitleLine && subtitleLine.text ? (
-            <span className="flex h-full items-center gap-1.5">
+            <span className="flex min-w-0 max-w-full items-center gap-1.5">
               <span
                 aria-hidden
                 className={`shrink-0 uppercase tracking-[0.08em] ${
@@ -226,7 +254,7 @@ export function ConversationPanel({
                   : t("subtitleUser")}
                 :
               </span>
-              <span className="truncate text-muted-foreground">
+              <span className="min-w-0 truncate text-muted-foreground">
                 {subtitleLine.text}
               </span>
               {subtitleLine.truncated ? (
@@ -236,19 +264,17 @@ export function ConversationPanel({
               ) : null}
             </span>
           ) : subtitleLine?.status ? (
-            <span className="flex h-full items-center">
-              <span className="truncate text-muted-foreground/80">
-                {subtitleLine.status.kind === "reading"
-                  ? t("subtitleReading", { count: subtitleLine.status.count })
-                  : t("subtitleThinking")}
-              </span>
+            <span className="truncate text-muted-foreground/80">
+              {subtitleLine.status.kind === "reading"
+                ? t("subtitleReading", { count: subtitleLine.status.count })
+                : t("subtitleThinking")}
             </span>
           ) : null}
         </div>
 
         {/* The panel's own slim bar: title + the two tier verbs. Fullscreen
             only — at the pill tier it stays mounted but hidden (it holds no
-            state; the strip is the collapsed face). In-flow, so the
+            state; the pill is the collapsed face). In-flow, so the
             conversation below reserves nothing. */}
         <div
           className={`h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2 ${
@@ -319,8 +345,8 @@ export function ConversationPanel({
 
         {/* The composer is NOT in this JSX — `ChatPage` renders it
             (`ComposerHost`), absolutely positioned against this box. At the
-            pill tier it lands on this box's bottom edge, i.e. inside the
-            strip, below the subtitle; at fullscreen it floats over the body
+            pill tier it lands on this box's bottom edge, centred, as the
+            pill's one control row; at fullscreen it floats over the body
             as it always has. One component instance throughout — see
             `composer-host.tsx` and the `PanelTierContext` header. */}
       </div>

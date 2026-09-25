@@ -16,6 +16,8 @@ import crypto from "crypto";
 import { convertToModelMessages, type UIMessage } from "ai";
 import { turnWorkflow } from "./turn-workflow";
 import type { TurnInput } from "@/lib/chat/turn-types";
+import type { CurrentView } from "@/lib/chat/current-view";
+import { parseSliceId } from "@/lib/episodic/turn-parser";
 import { loadUserConfig } from "@/lib/config/loader";
 import {
   getModel,
@@ -48,6 +50,10 @@ export interface StartTurnArgs {
    *  client's visit log). Free text; sanitized + capped server-side, omitted
    *  from TurnInput when absent. */
   machineContext?: string;
+  /** The client's current view (v0.13 §5 视野注入) — structured field from
+   *  the chat transport; shape-validated + sliceId-checked server-side,
+   *  omitted from TurnInput when absent (the lobby default). */
+  view?: unknown;
 }
 
 /** Extract the latest user message text from raw UI messages. */
@@ -115,6 +121,25 @@ export function sanitizeMachineContext(
   // A mid-string cut can split the block's closing fence — acceptable: the
   // workflow's own injection section closes the context regardless.
   return trimmed.slice(0, MAX_MACHINE_CONTEXT_CHARS);
+}
+
+/**
+ * Validate the client's current view (v0.13 §5 视野注入) — a STRUCTURED
+ * field, never text. Strict shape check + a parseSliceId-strict slice id:
+ * a malformed id can be neither rendered nor described, so the whole field
+ * drops (the turn then carries no block, exactly like the lobby default).
+ * Pure. Returns undefined when nothing usable was sent, so the TurnInput
+ * field is OMITTED and the turn stays byte-identical to a plain chat turn.
+ */
+export function sanitizeView(raw: unknown): CurrentView | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const v = raw as { sliceId?: unknown; surface?: unknown };
+  if (typeof v.sliceId !== "string" || typeof v.surface !== "string") {
+    return undefined;
+  }
+  if (v.surface !== "room" && v.surface !== "card") return undefined;
+  if (!parseSliceId(v.sliceId)) return undefined;
+  return { sliceId: v.sliceId, surface: v.surface };
 }
 
 /**
@@ -267,6 +292,11 @@ export async function startTurn(
   // turn's input stays unchanged).
   const machineContext = sanitizeMachineContext(args.machineContext);
 
+  // Optional current view (v0.13 §5 视野注入) — validated once here so the
+  // field is OMITTED from TurnInput when the client sent none or a malformed
+  // one (the lobby default carries no per-turn block).
+  const view = sanitizeView(args.view);
+
   const input: TurnInput = {
     modelMessages,
     recentTurns,
@@ -287,6 +317,7 @@ export async function startTurn(
     imageAttachments,
     ...(args.regenerate === true ? { regenerate: true } : {}),
     ...(machineContext ? { machineContext } : {}),
+    ...(view ? { view } : {}),
   };
 
   // Pin the run to Hong Kong. The run's state, queue dispatch and streams live

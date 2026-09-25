@@ -8,7 +8,7 @@ import {
 const MODES: ConversationPanelMode[] = ["pill", "fullscreen"];
 
 describe("reducePanelMode", () => {
-  it("open expands the strip to fullscreen and is a no-op when already open", () => {
+  it("open expands the pill to fullscreen and is a no-op when already open", () => {
     expect(reducePanelMode("pill", "open")).toBe("fullscreen");
     expect(reducePanelMode("fullscreen", "open")).toBe("fullscreen");
   });
@@ -18,7 +18,7 @@ describe("reducePanelMode", () => {
     expect(reducePanelMode("fullscreen", "toggle")).toBe("pill");
   });
 
-  it("toggleFullscreen grows the strip to fullscreen and folds fullscreen back to the strip", () => {
+  it("toggleFullscreen grows the pill to fullscreen and folds fullscreen back to the pill", () => {
     expect(reducePanelMode("pill", "toggleFullscreen")).toBe("fullscreen");
     expect(reducePanelMode("fullscreen", "toggleFullscreen")).toBe("pill");
   });

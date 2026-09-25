@@ -44,7 +44,7 @@ interface ChatInputProps {
    *
    * (Latent in the conversation-panel surface: the shell pins the hosted
    * ChatPage's rung to "conversation", so the panel never asks for this
-   * form. The panel's collapsed tier draws the STRIP form instead.)
+   * form. The panel's collapsed tier draws the PILL form instead.)
    *
    * The component stays MOUNTED across the forms (this is one component
    * with early returns, not several), so typed text and staged image
@@ -185,18 +185,19 @@ export function ChatInput({
     );
   }
 
-  // ── THE STRIP FORM (v0.13 §4) ────────────────────────────────────────────
-  // The conversation panel's collapsed tier: ONE row with exactly the four
-  // controls the ruling allows — attach, a single-line input, send/stop as
-  // one button, expand into fullscreen — over the panel's subtitle line.
-  // Attach reuses the same `useImageAttachments` state as the full form (one
-  // component, early returns — a draft or a staged image survives expanding
-  // to fullscreen verbatim), and stop reuses the same `onStop` the full
-  // form's button calls.
+  // ── THE PILL FORM (v0.13 §4) ─────────────────────────────────────────────
+  // The conversation panel's collapsed tier: the floating glass pill's ONE
+  // row, exactly the four controls the ruling allows — a round attach button
+  // on the left, a single-line input in the middle (no box of its own; the
+  // pill's chrome is the container), and round send/stop + fullscreen
+  // buttons on the right. Attach reuses the same `useImageAttachments`
+  // state as the full form (one component, early returns — a draft or a
+  // staged image survives expanding to fullscreen verbatim), and stop
+  // reuses the same `onStop` the full form's button calls.
   if (tier?.mode === "pill") {
     return (
       <div
-        data-strip-composer
+        data-pill-composer
         onPaste={handlePaste}
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -212,9 +213,9 @@ export function ChatInput({
           onClick={() => fileInputRef.current?.click()}
           aria-label={t("attach")}
           title={t("attach")}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
         >
-          <Paperclip className="size-3.5" />
+          <Paperclip className="size-4" />
         </button>
         <input
           ref={fileInputRef}
@@ -232,7 +233,7 @@ export function ChatInput({
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           aria-label={t("placeholder")}
-          className="h-8 min-w-0 flex-1 bg-transparent font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-muted-foreground"
+          className="h-9 min-w-0 flex-1 bg-transparent font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-muted-foreground"
         />
         {/* Send / stop — one button, two faces, exactly like the full
             form's. */}
@@ -242,9 +243,9 @@ export function ChatInput({
             onClick={onStop}
             aria-label={t("stopTooltip")}
             title={t("stopTooltip")}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/90"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/90"
           >
-            <Square className="size-3 fill-current" />
+            <Square className="size-3.5 fill-current" />
           </button>
         ) : (
           <button
@@ -253,7 +254,7 @@ export function ChatInput({
             disabled={!hasContent}
             aria-label={t("sendTooltip")}
             title={t("sendTooltip")}
-            className={`flex size-8 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-30 ${
+            className={`flex size-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-30 ${
               hasContent
                 ? "bg-brand text-white hover:bg-brand/90"
                 : "bg-primary text-primary-foreground"
@@ -262,19 +263,19 @@ export function ChatInput({
             <ArrowUp className="size-4" />
           </button>
         )}
-        {/* Expand — the strip's one way up, through the panel's own
+        {/* Expand — the pill's one way up, through the panel's own
             transition table. */}
         <button
           type="button"
-          data-strip-expand
+          data-pill-expand
           onClick={() =>
             tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
           }
           aria-label={tPanel("expand")}
           title={tPanel("expand")}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
         >
-          <Maximize2 className="size-3.5" />
+          <Maximize2 className="size-4" />
         </button>
       </div>
     );

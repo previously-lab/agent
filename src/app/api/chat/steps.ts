@@ -125,6 +125,7 @@ import {
   runCardEvolution,
   type CardEvolutionReaders,
 } from "@/app/api/evolution/run-card-evolution";
+import { buildViewBlock } from "./view-block";
 import { readFile, readFileFresh } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
 import { readFileDemo } from "@/lib/demo/demo-fs";
@@ -2016,6 +2017,32 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       })
     : "";
 
+  // ── v0.13 §5 视野注入 — the per-turn view block ─────────────────────
+  // Built ONLY when the client sent a `view` (a slice IS selected); the lobby
+  // default sends none and this stays undefined. The block is ONE compact
+  // "[当前] …" line rendered from the same sources the surfaces themselves
+  // derive from (describeRoom for the room, the timeline catalog for the
+  // card) — it is injected by the workflow into the OUTBOUND tail of the
+  // last user message, so it can never reach the persisted slice turn (this
+  // step persists only `lastUserMessage`). Best-effort: a build failure
+  // degrades to NO block, never to a failed turn.
+  let viewBlock: string | undefined;
+  if (input.view) {
+    try {
+      viewBlock = buildViewBlock({
+        view: input.view,
+        timezone: input.clientTimezone,
+        locale: input.locale,
+        index: timelineIndex,
+      });
+    } catch (e) {
+      console.warn(
+        "[View] block build failed — continuing without it:",
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+
   return {
     slice,
     previouslyContent,
@@ -2024,6 +2051,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     identityPrompt,
     ...(directionBlock ? { directionBlock } : {}),
     ...(timelineBrief ? { timelineBrief } : {}),
+    ...(viewBlock ? { viewBlock } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
   };

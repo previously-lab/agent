@@ -26,6 +26,7 @@ export async function POST(request: Request): Promise<Response> {
       locale?: unknown;
       regenerate?: unknown;
       machineContext?: unknown;
+      view?: unknown;
     };
 
     const { messages } = body;
@@ -54,6 +55,10 @@ export async function POST(request: Request): Promise<Response> {
         typeof body.machineContext === "string"
           ? body.machineContext
           : undefined,
+      // Optional current view (v0.13 §5 视野注入) — the structured field the
+      // chat transport sends when a slice is selected; shape-validated in
+      // startTurn, omitted when absent (the lobby default).
+      view: body.view,
     });
 
     return createUIMessageStreamResponse({

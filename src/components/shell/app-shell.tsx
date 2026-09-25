@@ -7,7 +7,7 @@
  * URL carries none of it. The left time axis (AxisBand) is always mounted;
  * the right pane holds the card field at a card rung, with the CONVERSATION
  * LAYER (`chat/conversation-panel.tsx`) floating over everything as a
- * persistent two-tier panel (pill strip / fullscreen, v0.13 §4). The chat
+ * persistent two-tier panel (pill / fullscreen, v0.13 §4). The chat
  * stream stays MOUNTED at every tier — the pill folds the panel body to
  * zero height instead of unmounting it — so the field camera and the live
  * useChat stream survive every collapse, and FULLSCREEN freezes the card
@@ -74,6 +74,7 @@ import { invalidateHotelData } from "@/lib/game/hotel-data";
 import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
 import { requestSliceJump } from "@/lib/chat/slice-jump";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
+import type { CurrentView } from "@/lib/chat/current-view";
 import {
   ShellNavContext,
   type ShellNav,
@@ -160,6 +161,12 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // (game-canvas.tsx's `focusSlice`). The shell's navigation actions
   // (shell-nav.ts) compose these with the transition machine.
   const [sharedSlice, setSharedSlice] = useState<string | null>(null);
+  // Read-anywhere mirror of the shared slice address for the view getter
+  // below (the transport reads it at SEND time, outside React's render).
+  const sharedSliceRef = useRef<string | null>(null);
+  useEffect(() => {
+    sharedSliceRef.current = sharedSlice;
+  }, [sharedSlice]);
   const [transition, setTransition] = useState<{
     from: WorldKind;
     to: WorldKind;
@@ -339,6 +346,24 @@ export function AppShell({ initialConfig }: AppShellProps) {
     rungRef.current = rung;
   }, [rung]);
 
+  // ── THE CONVERSATION'S VIEW OF THE WORLD (v0.13 §5 视野注入) ─────────
+  // What the reader is currently looking at, derived at SEND time from the
+  // shell's navigation state (never render time — the transport asks when
+  // the message leaves). Standing at the slice's door in the hotel = room;
+  // the slice rung's focused card in the field = card; ANYTHING ELSE — no
+  // shared address, a pile rung, the conversation rung — is the lobby: the
+  // getter returns undefined and the request carries NO view, so the server
+  // injects no per-turn block (the stable system prompt already states the
+  // default). A mid-move read uses the settled world: that is where the
+  // reader stands while the transition runs.
+  const getChatView = useCallback((): CurrentView | undefined => {
+    const sliceId = sharedSliceRef.current;
+    if (!sliceId) return undefined;
+    if (settledRef.current === "game") return { sliceId, surface: "room" };
+    if (rungRef.current === "slice") return { sliceId, surface: "card" };
+    return undefined;
+  }, []);
+
   // ── THE SHELL'S NAVIGATION ACTIONS (shell-nav.ts) ────────────────────────
   // The memory form of the old `?slice=` / `?at=` contract. `focusSlice`
   // addresses a slice to the card field, `standAtSlice` to the hotel (the
@@ -398,8 +423,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // ── THE CONVERSATION LAYER'S TIER (v0.13 §4 — two tiers) ────────────────
   // One conversation, two sizes — the tier lives HERE, not inside the
   // panel, because the shell must react to it: the game world and the card
-  // rungs default to the pill (the bottom strip: quick input, the subtitle
-  // line, nothing else), the conversation rung defaults to fullscreen (the
+  // rungs default to the pill (the floating quick-input pill: input, the
+  // subtitle line above it, nothing else), the conversation rung defaults to fullscreen (the
   // full-capability surface the removed dock used to be), and FULLSCREEN
   // freezes the card field's frame loop (paused → frameloop="never", below).
   // The effect fires only on the world boundary — zooming BETWEEN card
@@ -415,7 +440,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
     );
   }, [worldKind, view]);
   const worldFrozen = panelMode === "fullscreen";
-  // The pill strip's subtitle line (v0.13 §4): folded from the live message
+  // The pill's subtitle line (v0.13 §4): folded from the live message
   // stream by ChatPage (the only holder of the messages), lifted here, and
   // handed back down into the panel as a prop — the panel renders it, the
   // page produces it, and this state is the wire between them.
@@ -509,7 +534,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
   // ── THE CONVERSATION SURFACE (the restored R3F field's host) ─────────────
   // The conversation field renders through a portal into whichever surface can
   // host its window-derived 680 px column: the pane's slot while the panel
-  // floats beside it (the pill strip leaves the whole pane free), a slot
+  // floats beside it (the pill leaves the whole pane free), a slot
   // inside the panel body at fullscreen, and — with no wide host (the game
   // view below the fullscreen tier) — the DOM list takes the conversation
   // instead (see `chat/conversation-surface.tsx`). The slot elements are
@@ -954,8 +979,8 @@ export function AppShell({ initialConfig }: AppShellProps) {
           />
         )}
         {/* THE CONVERSATION LAYER — one persistent panel over the world
-            (v0.13 §4), not a view of its own any more: a bottom strip at the
-            pill tier, a viewport-wide overlay at fullscreen. `position:
+            (v0.13 §4), not a view of its own any more: a floating pill at
+            the pill tier, a viewport-wide overlay at fullscreen. `position:
             fixed` either way: the world behind it keeps its size, so no tier
             change ever triggers a canvas resize. ChatPage keeps publishing
             to the band only while the conversation rung owns it, and still
@@ -963,7 +988,7 @@ export function AppShell({ initialConfig }: AppShellProps) {
             pinned to "conversation": tier visibility is the panel's job.
             At FULLSCREEN the panel is viewport-wide, so it hosts the R3F
             field itself (bodyPrefix is the portal target); at the pill tier
-            the field portals into the pane and the strip keeps the quick
+            the field portals into the pane and the pill keeps the quick
             input + the subtitle line at the viewport's foot. */}
         <ConversationPanel
           mode={panelMode}
@@ -981,6 +1006,9 @@ export function AppShell({ initialConfig }: AppShellProps) {
             rung="conversation"
             onTurnSettled={refreshCatalog}
             feed={feed}
+            // v0.13 §5 — the current view rides each turn's request so the
+            // model knows what the reader is looking at (see getChatView).
+            getView={getChatView}
             // Frozen while a world transition runs: the feed is one-writer
             // (field-feed.ts), and a move mounts/unmounts the fields
             // around the band — nobody publishes mid-move.

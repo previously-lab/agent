@@ -17,6 +17,7 @@ import type { TimeSlice } from "@/lib/episodic";
 import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
+import type { CurrentView } from "@/lib/chat/current-view";
 
 /**
  * Everything a turn needs, built once in `start-turn.ts` (the only place real
@@ -103,6 +104,17 @@ export interface TurnInput {
    * byte-identical to before.
    */
   machineContext?: string;
+  /**
+   * The client's current view (v0.13 §5 视野注入) — which slice the reader
+   * is looking at, and on which surface (its room / its card). Sent as a
+   * STRUCTURED field, never as text; sanitized in startTurn (shape +
+   * parseSliceId-strict sliceId), omitted from TurnInput when absent — the
+   * lobby default, which needs no block at all (the stable system prompt
+   * states it). The workflow injects the server-rendered compact block into
+   * the last user message's OUTBOUND copy — it can never reach the persisted
+   * slice turn (steps.ts persists only `lastUserMessage`).
+   */
+  view?: CurrentView;
 }
 
 /** Summary of a synchronous card evolution run (v0.7b — inline in housekeeping). */
@@ -188,6 +200,14 @@ export interface HousekeepingResult {
    * when the timeline isn't available yet.
    */
   timelineBrief?: string;
+  /**
+   * v0.13 §5 视野注入 — the per-turn view block, built ONLY when the client
+   * sent a `view` (a slice is selected). A single compact "[当前] …" line,
+   * injected by the workflow into the last user message's OUTBOUND copy —
+   * never the user's text, never the frozen system prompt, never persisted
+   * (the slice keeps only what the user typed). Absent in the lobby default.
+   */
+  viewBlock?: string;
   /**
    * Checkpoint carry-over: when the slice was born from a time_cap/capacity
    * close (`slice.continuesFrom`), the previous slice's trailing turns read

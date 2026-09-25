@@ -697,6 +697,22 @@ export function buildMachineContextSection(machineContext: string): string {
 // ─── System prompt assembly (pure — slice-level freeze) ──────────────────
 
 /**
+ * The stable space-fiction layer (v0.13 §5 视野注入 — the IDENTITY half,
+ * written once, never repeated per turn). States the fiction the product
+ * runs on, in the reader's terms, AND the default view: with no per-turn
+ * "[当前]" block the user is in the lobby — no slice selected — so a missing
+ * block needs no explanation. Constant for the deployment (part of the L0
+ * prefix), so the slice-level freeze is untouched.
+ *
+ * Wording discipline (design §5): nobody LIVES in the space — including
+ * Previously itself; the user and the model watch the SAME screen; the
+ * user's real-world whereabouts ("我在公司") must never be mapped onto the
+ * space.
+ */
+export const SPACE_FICTION_BLOCK = `## 这片空间
+用户与 Previously 一起建造了这片空间：他们在一起回溯、讨论、建设。谁都不生存在这个空间里——包括 Previously 自己。用户和你看着同一块屏幕；用户正在看哪一片，会通过每轮消息末尾的「[当前]」块告诉你——没有这块时，用户通常在大厅，没有选中任何时间片。`;
+
+/**
  * Assemble the turn's system prompt. v0.9: the prompt is FROZEN at slice
  * level — every block is anchored to the slice's start, so the assembled
  * string is byte-identical on every turn of a slice and the provider's
@@ -709,6 +725,9 @@ export function buildMachineContextSection(machineContext: string): string {
  *   L0 identityPrompt  — the CHARTER (mission + the two documents' contract
  *                        incl. the GROUNDING RULE + protocols + guardrails)
  *                        plus "who you're assisting"; changes only with code
+ *   L0b SPACE_FICTION_BLOCK — the product's stable fiction (the space is
+ *                        co-built, nobody lives in it, same screen) + the
+ *                        lobby default; a deployment constant
  *   L1b directionBlock — the evolved user portrait + hypotheses (direction.md);
  *                        changes when an evolution run lands a new direction —
  *                        including mid-slice (the next turn then sees the fresh
@@ -786,6 +805,7 @@ export function assembleSystemPrompt(opts: {
   } = opts;
   return [
     identityPrompt,
+    SPACE_FICTION_BLOCK,
     directionBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
@@ -840,6 +860,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     identityPrompt,
     directionBlock,
     timelineBrief,
+    viewBlock,
     contextPrefix,
     rebuiltHistory,
   } = await housekeeping(input);
@@ -1103,6 +1124,14 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
         currentMessages,
         buildMachineContextSection(input.machineContext),
       );
+    }
+    // v0.13 §5 view block (housekeeping-built compact "[当前] …" line): the
+    // SAME outbound-tail mechanics — the volatile half of the view injection,
+    // present only when the client sent a `view` (a slice selected). The
+    // lobby default appends nothing, the persisted turn keeps only the
+    // user's text, and the message count is unchanged.
+    if (viewBlock) {
+      currentMessages = appendBridgeTimeSuffix(currentMessages, viewBlock);
     }
     let continuations = 0;
     let timeoutContinuations = 0;
