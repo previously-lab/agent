@@ -1,19 +1,26 @@
-import { getTranslations, setRequestLocale } from "next-intl/server";
-import { Link, redirect } from "@/i18n/navigation";
+import { getFormatter, getTranslations, setRequestLocale } from "next-intl/server";
+import { redirect } from "@/i18n/navigation";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getHomeMemoryState } from "@/lib/home/recap";
+import { HomeCard } from "@/components/home/home-card";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+// The recap reads memory (local disk / GitHub) — it must be fresh per visit,
+// never frozen into a build-time prerender.
+export const dynamic = "force-dynamic";
 
 /**
  * The HOME route (v0.13 §3) — the start screen, not a chat window.
  *
- * Deliberately THIN: one identity line and three entries — 继续 (into the
- * app, `/app`), 进入世界 (straight into the hotel, `/app?view=game`), and a
- * small settings link in the footer. No R3F, no conversation ability (the
- * reader's ruling: the home has no pill, no subtitle, no fullscreen — it is
- * a start screen), and no card design work; the real card is a later batch
- * and only ever changes THIS file, never the structure.
+ * One card: the identity line, the 前情提要 (where the last conversation
+ * left off — real timestamps, real gap, the last exchange's own words, via
+ * `getHomeMemoryState`), the two doors (继续 → `/app`, 进入世界 →
+ * `/app?view=game`), and the settings fine print. No input box, no message
+ * stream, no conversation ability (the reader's ruling: the home is a start
+ * screen), and no R3F — nothing in this route's import graph may pull in
+ * three.js or the game scene.
  *
  * The home appears on cold boot and when the reader 收工 from the world (§3's
  * one-way door); it is not a tab of the app.
@@ -52,38 +59,55 @@ export default async function HomePage({
     redirect({ href: `/app?${query.toString()}`, locale });
   }
 
-  const t = await getTranslations("home");
+  const [t, format, memory] = await Promise.all([
+    getTranslations("home"),
+    getFormatter(),
+    getHomeMemoryState(),
+  ]);
+
+  const recap = memory.recap;
+  let recapProps = null;
+  if (recap) {
+    const lastAt = new Date(recap.lastAt);
+    // The recap's clock is the slice's own timezone (the reader's, then);
+    // an unparseable/invalid one falls back to the locale default rather
+    // than failing the whole card.
+    let when: string;
+    try {
+      when = format.dateTime(lastAt, {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: recap.timezone || undefined,
+      });
+    } catch {
+      when = format.dateTime(lastAt, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+    }
+    recapProps = {
+      label: t("recapLabel"),
+      when,
+      gap: format.relativeTime(lastAt, new Date()),
+      youLabel: t("youLabel"),
+      agentLabel: t("agentLabel"),
+      lastUser: recap.lastUser,
+      lastAgent: recap.lastAgent,
+    };
+  }
 
   return (
-    <main className="relative flex h-dvh flex-col items-center justify-center px-6 text-center">
-      <p className="font-mono text-[11px] uppercase tracking-[0.35em] text-muted-foreground">
-        {t("identity")}
-      </p>
-      <p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">
-        {t("tagline")}
-      </p>
-      <nav className="mt-12 flex flex-col items-center gap-5">
-        <Link
-          href="/app"
-          className="text-lg font-medium transition-colors hover:text-brand"
-        >
-          {t("continue")}
-        </Link>
-        <Link
-          href="/app?view=game"
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
-        >
-          {t("enterWorld")}
-        </Link>
-      </nav>
-      {/* 设置不进卡的主体 — 内容是内容，设施是设施 (§3): a small footer link,
-          not an entry of the card. */}
-      <Link
-        href="/settings"
-        className="absolute bottom-6 text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
-      >
-        {t("settings")}
-      </Link>
-    </main>
+    <HomeCard
+      identity={t("identity")}
+      stateLine={
+        memory.sliceCount > 0
+          ? t("state", { count: memory.sliceCount })
+          : t("stateEmpty")
+      }
+      recap={recapProps}
+      continueLabel={t("continue")}
+      enterWorldLabel={t("enterWorld")}
+      settingsLabel={t("settings")}
+    />
   );
 }

@@ -588,7 +588,11 @@
   },
   "home": {
     "identity": "Previously",
-    "tagline": "你与 Previously 一起建造的领域——在这里回溯、讨论、建设。",
+    "state": "已落 {count} 个时间片——在这里回溯、讨论、建设。",
+    "stateEmpty": "还没有时间片——这将是第一次对话。",
+    "recapLabel": "前情提要",
+    "youLabel": "你",
+    "agentLabel": "Previously",
     "continue": "继续",
     "enterWorld": "进入世界",
     "settings": "设置"
