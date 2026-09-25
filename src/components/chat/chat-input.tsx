@@ -202,7 +202,11 @@ export function ChatInput({
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        className="flex h-full items-center gap-0.5 px-2 sm:px-3"
+        // flex-1: the row FILLS the glass host — it is a flex item of the
+        // pill container, and without a grow rule it shrank to its content
+        // width (buttons bunched left, a gutter on the right). min-w-0 lets
+        // the input's own flex-1 take the slack and truncate honestly.
+        className="flex h-full min-w-0 flex-1 items-center gap-0.5 px-2 sm:px-3"
       >
         {/* Attach — the full form's channel, nothing new: the hidden input
             below feeds the shared `handlePaste`, and the images reappear as
