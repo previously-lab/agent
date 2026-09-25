@@ -314,7 +314,28 @@ export function ConversationPanel({
                 :
               </span>
               <span className="min-w-0 flex-1 break-words text-muted-foreground line-clamp-2">
-                {subtitleLine.text}
+                {subtitleLine.runs.length > 0
+                  ? subtitleLine.runs.map((run, index) =>
+                      run.emphasis === "strong" ? (
+                        <strong key={index} className="font-bold text-foreground">
+                          {run.text}
+                        </strong>
+                      ) : run.emphasis === "em" ? (
+                        <em key={index} className="italic">
+                          {run.text}
+                        </em>
+                      ) : run.emphasis === "code" ? (
+                        <code
+                          key={index}
+                          className="rounded-sm bg-foreground/10 px-1 text-foreground"
+                        >
+                          {run.text}
+                        </code>
+                      ) : (
+                        run.text
+                      ),
+                    )
+                  : subtitleLine.text}
               </span>
             </span>
           ) : subtitleLine?.status ? (

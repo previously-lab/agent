@@ -62,8 +62,16 @@ export type SubtitleStatus =
 export interface SubtitleLine {
   /** Who is speaking in the line currently shown. */
   speaker: SubtitleSpeaker;
-  /** The line's text — collapsed and truncated to the two-line budget. */
+  /** The line's plain text — collapsed, markdown markers stripped, and
+   *  truncated to the two-line budget. Byte-identical to what the strip has
+   *  always produced for plain input; the accessible name reads it. Joining
+   *  `runs`' text reproduces it exactly. */
   text: string;
+  /** The same kept prefix as `text`, split into styled runs (strong / em /
+   *  code / plain) for the panel to paint. Empty when `text` is empty. A run
+   *  straddling the truncation cut is split, never re-parsed — re-parsing a
+   *  truncated string is what would cut a `**` pair in half. */
+  runs: SubtitleRun[];
   /** True when `text` was cut short (the UI shows an ellipsis / expand hint). */
   truncated: boolean;
   /** What to show when there is no text yet; null as soon as text exists. */
@@ -78,6 +86,201 @@ export interface SubtitleLine {
  */
 export function collapseSubtitleWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
+}
+
+/** One styled segment of the subtitle body — the pill renders a tiny INLINE
+ *  markdown subset (strong / emphasis / inline code) and nothing else; a
+ *  two-line, 11px spoken line has no use for headings, lists, blockquotes or
+ *  link targets. `null` emphasis is plain speech. */
+export type SubtitleEmphasis = "strong" | "em" | "code";
+
+export interface SubtitleRun {
+  /** The run's words — never contains the marker characters of its own
+   *  construct, so a marker can never leak into the painted line. */
+  text: string;
+  /** Which inline style the panel paints the run with; null = plain. */
+  emphasis: SubtitleEmphasis | null;
+}
+
+/**
+ * Parses the stripped plain line into styled runs, so the subtitle can carry
+ * the message's own emphasis (observed live — the pill once rendered a raw
+ * `**你换房间了**`) without ever painting a marker. Markers out, words kept:
+ *
+ *  - `**bold**` / `__bold__`  → strong run (`__` only at a word boundary, so
+ *    `snake_case` survives untouched)
+ *  - `*em*` / `_em_`          → em run (`_` boundary-guarded the same way,
+ *    content may not start with whitespace)
+ *  - `` `code` ``             → code run (backtick runs of any length pair;
+ *    the ticks themselves are dropped)
+ *  - `[label](target)`        → the label, as plain runs; the target speaks
+ *    nothing
+ *  - `![alt](src)`            → nothing at all — images speak nothing
+ *  - line-leading furniture (`# ` headings, `> ` quotes, `- `/`1. ` bullets)
+ *    → dropped; the fold collapses newlines before parsing, so "line-leading"
+ *    reduces to the string's first characters
+ *
+ * An UNCLOSED marker degrades to plain text one character at a time — the
+ * marker characters are emitted as plain speech, never as an open emphasis —
+ * and a run's content classes exclude its own marker, so a stray marker can
+ * never appear inside a styled run. Single left-to-right pass, pure and
+ * deterministic; constructs are not re-parsed inside link labels or code
+ * content (nested markdown is outside the spoken-line subset). Joining the
+ * runs' `text` reproduces exactly what `stripSubtitleMarkdown` returns.
+ */
+export function parseSubtitleRuns(text: string): SubtitleRun[] {
+  const runs: SubtitleRun[] = [];
+  let plain = "";
+  let i = 0;
+
+  const push = (runText: string, emphasis: SubtitleEmphasis | null) => {
+    if (!runText) return;
+    const last = runs[runs.length - 1];
+    if (last && last.emphasis === emphasis) {
+      last.text += runText;
+      return;
+    }
+    runs.push({ text: runText, emphasis });
+  };
+  const flushPlain = () => {
+    if (plain) {
+      push(plain, null);
+      plain = "";
+    }
+  };
+  // The underscore constructs are boundary-guarded (`(^|[^\w])` in the old
+  // strip): inside a word a `_` is part of the identifier, not a marker.
+  const leftBoundary = (idx: number) =>
+    idx === 0 || !/[\w]/.test(text.charAt(idx - 1));
+
+  // Line-leading furniture only exists at the string's head: the fold runs
+  // collapseSubtitleWhitespace first, so there are no interior line starts.
+  if (i === 0) {
+    const furniture = /^\s{0,3}(?:#{1,6}\s+|>\s?|(?:[-*+]|\d{1,2}\.)\s+)/.exec(
+      text,
+    );
+    if (furniture) i = furniture[0].length;
+  }
+
+  while (i < text.length) {
+    const rest = text.slice(i);
+
+    // Images speak nothing — consume without emitting.
+    let match = /^!\[[^\]]*\]\([^)]*\)/.exec(rest);
+    if (match) {
+      i += match[0].length;
+      continue;
+    }
+    // Links keep their label (as plain runs) and drop the target.
+    match = /^\[([^\]]*)\]\([^)]*\)/.exec(rest);
+    if (match) {
+      plain += match[1];
+      i += match[0].length;
+      continue;
+    }
+    // Inline code: a backtick run, content up to the next backtick run, then
+    // the closing run. The ticks are dropped, the code kept.
+    if (rest.charAt(0) === "`") {
+      const open = /^`+/.exec(rest)![0];
+      const after = rest.slice(open.length);
+      const closeAt = after.search("`");
+      if (closeAt !== -1) {
+        const close = /^`+/.exec(after.slice(closeAt))![0];
+        flushPlain();
+        push(after.slice(0, closeAt), "code");
+        i += open.length + closeAt + close.length;
+        continue;
+      }
+      // Unclosed: the backtick is speech, not a marker.
+      plain += "`";
+      i += 1;
+      continue;
+    }
+    // Strong `**…**` (content may hold single characters, just not `*`).
+    if (rest.startsWith("**")) {
+      const closeAt = rest.indexOf("**", 2);
+      if (closeAt > 2) {
+        flushPlain();
+        push(rest.slice(2, closeAt), "strong");
+        i += closeAt + 2;
+        continue;
+      }
+      // Unclosed: emit one star as plain and rescan from the next character.
+      plain += "*";
+      i += 1;
+      continue;
+    }
+    // Strong `__…__` at a word boundary.
+    if (rest.startsWith("__") && leftBoundary(i)) {
+      match = /^__([^_]+)__(?=[^\w]|$)/.exec(rest);
+      if (match) {
+        flushPlain();
+        push(match[1], "strong");
+        i += match[0].length;
+        continue;
+      }
+    }
+    // Em `*…*` — content must not start with whitespace or `*`.
+    match = /^\*([^*\s][^*]*)\*/.exec(rest);
+    if (match) {
+      flushPlain();
+      push(match[1], "em");
+      i += match[0].length;
+      continue;
+    }
+    // Em `_…_` at a word boundary, same content rules.
+    if (rest.charAt(0) === "_" && leftBoundary(i)) {
+      match = /^_([^_\s][^_]*)_(?=[^\w]|$)/.exec(rest);
+      if (match) {
+        flushPlain();
+        push(match[1], "em");
+        i += match[0].length;
+        continue;
+      }
+    }
+    // Anything else is plain speech, one character at a time.
+    plain += rest.charAt(0);
+    i += 1;
+  }
+  flushPlain();
+  return runs;
+}
+
+/**
+ * The subtitle's plain line: the runs' text joined. Kept as the single
+ * consumer-facing "markers out, words kept" helper (the fold uses
+ * `parseSubtitleRuns` directly so it never has to re-parse a truncated
+ * string).
+ */
+export function stripSubtitleMarkdown(text: string): string {
+  return parseSubtitleRuns(text)
+    .map((run) => run.text)
+    .join("");
+}
+
+/** Keeps the prefix of `runs` that covers exactly `keptChars` characters —
+ *  the kept prefix of the plain line after `truncateSubtitleText`. A run that
+ *  straddles the cut is SPLIT (its head keeps the run's emphasis), so
+ *  joining the result reproduces the truncated plain text byte-for-byte.
+ *  Truncating RUNS — never re-parsing a truncated string — is what keeps a
+ *  `**` pair from being cut in half and leaking a marker. */
+function takeRunPrefix(
+  runs: readonly SubtitleRun[],
+  keptChars: number,
+): SubtitleRun[] {
+  const kept: SubtitleRun[] = [];
+  let used = 0;
+  for (const run of runs) {
+    if (used >= keptChars) break;
+    if (used + run.text.length <= keptChars) {
+      kept.push(run);
+      used += run.text.length;
+      continue;
+    }
+    kept.push({ text: run.text.slice(0, keptChars - used), emphasis: run.emphasis });
+    used = keptChars;
+  }
+  return kept;
 }
 
 /**
@@ -164,7 +367,15 @@ export function foldSubtitleLine(
   }
 
   const collapsed = collapseSubtitleWhitespace(rawText);
-  const { text, truncated } = truncateSubtitleText(collapsed);
+  // Parse BEFORE truncating and keep the runs as the truncation unit: the
+  // plain text and the runs are two views of the same kept prefix, so the
+  // panel can paint emphasis without a marker ever surviving the cut.
+  const allRuns = parseSubtitleRuns(collapsed);
+  const plain = allRuns
+    .map((run) => run.text)
+    .join("");
+  const { text, truncated } = truncateSubtitleText(plain);
+  const runs = takeRunPrefix(allRuns, text.length);
 
   let status: SubtitleStatus | null = null;
   if (text.length === 0) {
@@ -177,7 +388,7 @@ export function foldSubtitleLine(
     }
   }
 
-  return { speaker, text, truncated, status };
+  return { speaker, text, runs, truncated, status };
 }
 
 /** One message presented to the folder: its raw part stream plus the

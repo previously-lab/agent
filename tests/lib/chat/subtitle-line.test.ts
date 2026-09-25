@@ -3,6 +3,8 @@ import {
   foldSubtitleLine,
   foldSubtitleLineLatest,
   collapseSubtitleWhitespace,
+  parseSubtitleRuns,
+  stripSubtitleMarkdown,
   truncateSubtitleText,
   SUBTITLE_LINE_MAX,
   type AnyPart,
@@ -323,6 +325,140 @@ describe("foldSubtitleLineLatest — the strip shows the newest message WITH spe
       ]),
     ]);
     expect(line).toMatchObject({ text: "", status: null });
+  });
+});
+
+describe("parseSubtitleRuns — the inline subset", () => {
+  const plainOf = (runs: ReturnType<typeof parseSubtitleRuns>) =>
+    runs.map((r) => r.text).join("");
+
+  it("joining the runs reproduces the stripped plain string", () => {
+    const raw =
+      "Use **bold** and *em* and `code` — see [the docs](https://example.com).";
+    expect(plainOf(parseSubtitleRuns(raw))).toBe(
+      stripSubtitleMarkdown(raw),
+    );
+    expect(plainOf(parseSubtitleRuns(raw))).toBe(
+      "Use bold and em and code — see the docs.",
+    );
+  });
+
+  it("marks strong, em and code runs with the right emphasis", () => {
+    expect(parseSubtitleRuns("a **b** c *d* e `f` g")).toEqual([
+      { text: "a ", emphasis: null },
+      { text: "b", emphasis: "strong" },
+      { text: " c ", emphasis: null },
+      { text: "d", emphasis: "em" },
+      { text: " e ", emphasis: null },
+      { text: "f", emphasis: "code" },
+      { text: " g", emphasis: null },
+    ]);
+  });
+
+  it("keeps snake_case untouched — underscores inside a word are not markers", () => {
+    const runs = parseSubtitleRuns("the file memory_root stays literal");
+    expect(runs).toEqual([{ text: "the file memory_root stays literal", emphasis: null }]);
+    expect(parseSubtitleRuns("__bold__ here")).toEqual([
+      { text: "bold", emphasis: "strong" },
+      { text: " here", emphasis: null },
+    ]);
+  });
+
+  it("degrades unclosed markers to plain text, never a stray marker run", () => {
+    for (const raw of ["**unclosed", "*unclosed", "`unclosed", "__unclosed", "_unclosed"]) {
+      const runs = parseSubtitleRuns(raw);
+      expect(plainOf(runs)).toBe(raw);
+      expect(runs.every((r) => r.emphasis === null)).toBe(true);
+    }
+  });
+
+  it("degrades `**a *b* c` without losing any character", () => {
+    const raw = "**a *b* c";
+    expect(plainOf(parseSubtitleRuns(raw))).toBe(stripSubtitleMarkdown(raw));
+    expect(plainOf(parseSubtitleRuns(raw))).toBe("*a b* c");
+  });
+
+  it("links keep their label, images speak nothing", () => {
+    expect(plainOf(parseSubtitleRuns("see [the docs](https://x.dev) now"))).toBe(
+      "see the docs now",
+    );
+    expect(
+      plainOf(parseSubtitleRuns("a ![portrait](img.png) b")),
+    ).toBe("a  b");
+  });
+
+  it("drops line-leading furniture (headings, quotes, bullets)", () => {
+    expect(plainOf(parseSubtitleRuns("## Heading starts"))).toBe("Heading starts");
+    expect(plainOf(parseSubtitleRuns("- a list opener"))).toBe("a list opener");
+    expect(plainOf(parseSubtitleRuns("> quoted words"))).toBe("quoted words");
+  });
+
+  it("styled runs never contain their own marker characters", () => {
+    const runs = parseSubtitleRuns(
+      "**a** *b* `c` __d__ _e_ [f](u) and **more** `x`",
+    );
+    for (const run of runs) {
+      if (run.emphasis === "strong") expect(run.text).not.toContain("*");
+      if (run.emphasis === "strong") expect(run.text).not.toContain("_");
+      if (run.emphasis === "em") expect(run.text).not.toContain("*");
+      if (run.emphasis === "em") expect(run.text).not.toContain("_");
+      if (run.emphasis === "code") expect(run.text).not.toContain("`");
+    }
+  });
+});
+
+describe("foldSubtitleLine — runs ride the same truncation", () => {
+  const part = (p: AnyPart): AnyPart => p;
+
+  it("strips markers from text and aligns runs with it exactly", () => {
+    const line = foldSubtitleLine(
+      [part({ type: "text", text: "**你换房间了** — 现在是 `Ballroom`。" })],
+      "assistant",
+    );
+    expect(line.text).toBe("你换房间了 — 现在是 Ballroom。");
+    expect(line.runs.map((r) => r.text).join("")).toBe(line.text);
+    expect(line.runs).toEqual([
+      { text: "你换房间了", emphasis: "strong" },
+      { text: " — 现在是 ", emphasis: null },
+      { text: "Ballroom", emphasis: "code" },
+      { text: "。", emphasis: null },
+    ]);
+  });
+
+  it("keeps text byte-identical to the plain fold for marker-free input", () => {
+    const line = foldSubtitleLine(
+      [part({ type: "text", text: "So — here's what I found." })],
+      "assistant",
+    );
+    expect(line.text).toBe("So — here's what I found.");
+    expect(line.runs).toEqual([{ text: "So — here's what I found.", emphasis: null }]);
+    expect(line.truncated).toBe(false);
+  });
+
+  it("covers exactly the kept prefix on a long truncated reply", () => {
+    // Emphasis late in the reply must not survive the cut, and a run
+    // straddling the cut is split — never re-parsed.
+    const long =
+      `${"opening words ".repeat(6)}**bold tail** ` + "x".repeat(SUBTITLE_LINE_MAX);
+    const line = foldSubtitleLine([part({ type: "text", text: long })], "assistant");
+    expect(line.truncated).toBe(true);
+    expect(line.text.length).toBeLessThanOrEqual(SUBTITLE_LINE_MAX);
+    expect(line.runs.map((r) => r.text).join("")).toBe(line.text);
+    // Every kept character is accounted for by whole or split runs.
+    const covered = line.runs.reduce((n, r) => n + r.text.length, 0);
+    expect(covered).toBe(line.text.length);
+    // The joined plain prefix of the parsed source equals the kept text.
+    const parsed = parseSubtitleRuns(collapseSubtitleWhitespace(long));
+    expect(parsed.map((r) => r.text).join("").startsWith(line.text)).toBe(true);
+  });
+
+  it("returns empty runs when there is no text", () => {
+    const line = foldSubtitleLine(
+      [part({ type: "reasoning", text: "hmm" })],
+      "assistant",
+    );
+    expect(line.text).toBe("");
+    expect(line.runs).toEqual([]);
   });
 });
 
