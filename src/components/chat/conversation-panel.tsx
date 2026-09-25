@@ -318,15 +318,20 @@ export function ConversationPanel({
 
         {/* THE CONVERSATION BODY — the fullscreen surface. At the pill tier
             it folds to zero height (not `display:none` — the subtree must
-            stay mounted, and the composer below is absolutely positioned
-            against the BOX, outside this clip) and goes inert. `inert` is
-            what keeps the hidden conversation out of the tab order — a
-            zero-height box alone would not. */}
+            stay mounted) and the clip hides the content. The body itself
+            must NOT be inert: the composer renders inside this subtree
+            (absolutely positioned against the BOX — outside this clip
+            visually), and inertness is a DOM-subtree property a descendant
+            cannot opt out of, so the body-level inert made the painted,
+            clipped-out pill dead to every click. The CONTENT stays inert
+            through the stream column's OWN `inert` (chat-page) — that is
+            the fold's real guard; the composer is its live sibling. At
+            fullscreen the body was never inert anyway, so this changes
+            nothing there. */}
         <div
           id="conversation-panel"
           role="region"
           aria-label={t("title")}
-          inert={!open}
           className={`min-h-0 flex-col overflow-hidden ${
             open ? "flex flex-1" : "flex h-0"
           }`}

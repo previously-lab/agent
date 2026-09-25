@@ -155,9 +155,11 @@ export function ComposerHost({
         onPill
           ? // The pill's seat: centred over the panel box (which spans the
             // viewport) with side margins, PILL_BOTTOM_GAP_PX above the
-            // box's bottom edge. The box is pointer-transparent at this
-            // tier — the pill opts back into events.
-            "pointer-events-auto absolute inset-x-0 z-10 flex justify-center px-4"
+            // box's bottom edge. The row itself stays POINTER-TRANSPARENT:
+            // it spans the full viewport width, and letting it eat clicks
+            // would wall off the whole bottom edge from the world — only
+            // the pill's own glass box (the inner wrapper) opts back in.
+            "pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4"
           : collapsed
             ? // `w-auto` so the pill is exactly as wide as its own controls. A
               // fixed width here is how the old round button ended up 44rem wide
@@ -175,8 +177,11 @@ export function ComposerHost({
             ? // The glass pill itself — the chrome the old full-width strip
               // used to carry. Rounded-full, translucent paper over the
               // world, hairline ring, soft shadow (the old round toggle's),
-              // and a blur so the world reads through it.
-              "flex min-w-0 w-full items-center overflow-hidden rounded-full bg-background/70 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
+              // and a blur so the world reads through it. THE interactive
+              // surface at this tier: the only box on the bottom edge that
+              // takes pointer events — the row around it is transparent, so
+              // the world keeps every click outside the pill itself.
+              "pointer-events-auto flex min-w-0 w-full items-center overflow-hidden rounded-full bg-background/70 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
             : collapsed
               ? ""
               : "w-[min(44rem,100%)]"
