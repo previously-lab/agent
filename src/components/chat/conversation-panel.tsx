@@ -226,8 +226,10 @@ export function ConversationPanel({
             ? "100dvh"
             : PILL_HEIGHT_PX + 20 + 4 + PILL_BOTTOM_GAP_PX,
         }}
-        className={`fixed inset-x-0 bottom-0 flex flex-col bg-background outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
-          open ? "z-[60]" : "pointer-events-none z-40 overflow-hidden"
+        className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+          open
+            ? "z-[60] bg-background"
+            : "pointer-events-none z-40 overflow-hidden"
         }`}
       >
         {/* THE SUBTITLE — the pill's one non-control, floating directly
