@@ -17,8 +17,13 @@
  * The <header> element itself is pointer-transparent; each island re-enables
  * pointer events, so canvas content underneath the gaps stays interactive
  * and scrolls beneath the frosted pills.
+ *
+ * On the HOME route both islands render nothing at all: the reader has not
+ * entered the app, the home says who this is in type, and its own action row
+ * carries 设置. Search's Cmd/Ctrl+K shortcut is disabled there too (the
+ * palette's `disabled` prop) — hidden, not just unbuttoned.
  */
-import { Link } from "@/i18n/navigation";
+import { Link, usePathname } from "@/i18n/navigation";
 import { useTranslations } from "next-intl";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import { DemoBadge } from "@/components/layout/demo-badge";
@@ -30,6 +35,11 @@ import { ISLAND_BAR } from "./island";
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
   const identity = useBriefingIdentity();
+  // THE HOME IS NOT THE APP. The reader has not entered yet — the home says
+  // who this is in type, at full size — so the brand intertitle stays out of
+  // the way, and search is disabled with it (button AND the Cmd/Ctrl+K
+  // shortcut; the route decision lives here, the shortcut's in the palette).
+  const isHome = usePathname() === "/";
 
   return (
     // THE PHONE ARRANGEMENT IS THE READER'S, and it is a wrap rather than a
@@ -59,17 +69,9 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
       className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap sm:p-3 md:p-4"
     >
       {/* LEFT — the brand intertitle + status badges (status, not actions).
-          EVEN PADDING, and the badges correct it themselves. This used to be
-          `pr-1.5 pl-3`, which compensated for a pill's own filled edge — and
-          was wrong the moment no badge rendered, leaving the wordmark 6px from
-          one edge and 12 from the other. See `ISLAND_BADGE`.
+          Hidden on the home: the home itself is the intertitle. */}
 
-          IT DOES NOT ANIMATE ITS WIDTH, deliberately. A width transition needs
-          a NUMBER — CSS cannot interpolate a shrink-to-fit box — and buying
-          one means measuring the content in a second element and pinning the
-          pill to the result, which is a lot of machinery around a piece of
-          chrome for one moment on load, when the name arrives. The island just
-          grows. */}
+      {!isHome && (
       <div className={`pointer-events-auto ${ISLAND_BAR} gap-1.5 px-3`}>
         {/* "PREVIOUSLY ON {name}" — the same phrase the briefing card and the
             travel clock wear, moved into the chrome. It is the product's own
@@ -96,6 +98,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
         {isDemo && <DemoBadge />}
         <ClientBadge />
       </div>
+      )}
 
       {/* CENTER — the board bar (zoom lens + strand selector), which the SHELL
           renders (`shell/board-bar.tsx`). It cannot live here: the strand
@@ -114,11 +117,18 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           the icon row could never afford.
 
           The "···" keeps its own labels for the reason it always had: it is a
-          list a reader READS rather than a row of controls they aim at. */}
-      <nav className={`pointer-events-auto ${ISLAND_BAR} ml-auto gap-0.5 p-1 sm:ml-0`}>
-        <SearchPalette />
-        <NavOverflowMenu />
-      </nav>
+          list a reader READS rather than a row of controls they aim at.
+
+          Hidden on the home with everything else: with the brand island gone,
+          `justify-between` stranded this island at the LEFT edge — and a lone
+          "···" on the start screen reads as an accident. The home has its own
+          设置 door in the actions row; nothing here is needed before entering. */}
+      {!isHome && (
+        <nav className={`pointer-events-auto ${ISLAND_BAR} ml-auto gap-0.5 p-1 sm:ml-0`}>
+          <SearchPalette disabled={isHome} />
+          <NavOverflowMenu />
+        </nav>
+      )}
     </header>
   );
 }

@@ -587,13 +587,11 @@
     "debugRefresh": "刷新"
   },
   "home": {
-    "identity": "Previously",
-    "state": "已落 {count} 个时间片——在这里回溯、讨论、建设。",
-    "stateEmpty": "还没有时间片——这将是第一次对话。",
-    "recapLabel": "前情提要",
+    "eyebrowLead": "Previously",
+    "eyebrowPreposition": "on",
     "youLabel": "你",
     "agentLabel": "Previously",
-    "continue": "继续",
+    "continue": "接着说",
     "enterWorld": "进入世界",
     "settings": "设置"
   }

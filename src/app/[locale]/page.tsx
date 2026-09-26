@@ -2,8 +2,9 @@ import { getFormatter, getTranslations, setRequestLocale } from "next-intl/serve
 import { redirect } from "@/i18n/navigation";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 import { resolveDataSource } from "@/lib/data-source/resolve";
+import { getBriefingIdentity } from "@/lib/episodic/actions";
 import { getHomeMemoryState } from "@/lib/home/recap";
-import { HomeCard } from "@/components/home/home-card";
+import { HomeScreen } from "@/components/home/home-screen";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -14,13 +15,18 @@ export const dynamic = "force-dynamic";
 /**
  * The HOME route (v0.13 §3) — the start screen, not a chat window.
  *
- * One card: the identity line, the 前情提要 (where the last conversation
- * left off — real timestamps, real gap, the last exchange's own words, via
- * `getHomeMemoryState`), the two doors (继续 → `/app`, 进入世界 →
- * `/app?view=game`), and the settings fine print. No input box, no message
- * stream, no conversation ability (the reader's ruling: the home is a start
- * screen), and no R3F — nothing in this route's import graph may pull in
- * three.js or the game scene.
+ * Pure typography on the field: the product's sentence and the reader's
+ * name, the 前情提要 (where the last conversation left off — real timestamps,
+ * real gap, the last exchange's own words with its emphasis intact, via
+ * `getHomeMemoryState`), and one row of doors (接着说 → `/app`, 进入世界 →
+ * `/app?view=game`, 设置). No card, no status line, no uppercase — and no
+ * conversation ability, no R3F (nothing in this route's import graph may
+ * pull in three.js or the game scene).
+ *
+ * The name comes from `getBriefingIdentity` — the exact read the header
+ * chip's "Previously on {name}" uses, resolved server-side while the page
+ * streams (this route is force-dynamic, so it is fresh per visit, unlike
+ * the prerendered locale layout the chip has to fetch from).
  *
  * The home appears on cold boot and when the reader 收工 from the world (§3's
  * one-way door); it is not a tab of the app.
@@ -59,10 +65,15 @@ export default async function HomePage({
     redirect({ href: `/app?${query.toString()}`, locale });
   }
 
-  const [t, format, memory] = await Promise.all([
+  const [t, format, memory, identity] = await Promise.all([
     getTranslations("home"),
     getFormatter(),
     getHomeMemoryState(),
+    // The same read the header chip's "Previously on {name}" resolves —
+    // not a second source. This route is force-dynamic, so the name can
+    // be fresh per visit without the client fetch the prerendered layout
+    // chrome needs.
+    getBriefingIdentity(),
   ]);
 
   const recap = memory.recap;
@@ -71,7 +82,7 @@ export default async function HomePage({
     const lastAt = new Date(recap.lastAt);
     // The recap's clock is the slice's own timezone (the reader's, then);
     // an unparseable/invalid one falls back to the locale default rather
-    // than failing the whole card.
+    // than failing the whole page.
     let when: string;
     try {
       when = format.dateTime(lastAt, {
@@ -86,7 +97,6 @@ export default async function HomePage({
       });
     }
     recapProps = {
-      label: t("recapLabel"),
       when,
       gap: format.relativeTime(lastAt, new Date()),
       youLabel: t("youLabel"),
@@ -97,13 +107,10 @@ export default async function HomePage({
   }
 
   return (
-    <HomeCard
-      identity={t("identity")}
-      stateLine={
-        memory.sliceCount > 0
-          ? t("state", { count: memory.sliceCount })
-          : t("stateEmpty")
-      }
+    <HomeScreen
+      eyebrowLead={t("eyebrowLead")}
+      eyebrowPreposition={t("eyebrowPreposition")}
+      name={identity.name}
       recap={recapProps}
       continueLabel={t("continue")}
       enterWorldLabel={t("enterWorld")}

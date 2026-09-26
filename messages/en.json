@@ -587,10 +587,8 @@
     "debugRefresh": "Refresh"
   },
   "home": {
-    "identity": "Previously",
-    "state": "{count, plural, one {# time slice} other {# time slices}} — revisit them, discuss them, keep building.",
-    "stateEmpty": "No time slices yet — this will be the first conversation.",
-    "recapLabel": "Previously on",
+    "eyebrowLead": "Previously",
+    "eyebrowPreposition": "on",
     "youLabel": "You",
     "agentLabel": "Previously",
     "continue": "Continue",

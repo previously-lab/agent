@@ -53,7 +53,7 @@ function HighlightedSnippet({ text, keyword }: { text: string; keyword: string }
  * Used from a non-chat route, the slice id is stashed in the bus and the
  * palette navigates home, where the jump replays on mount.
  */
-export function SearchPalette() {
+export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
   const t = useTranslations("chat.search");
   const locale = useLocale();
   const router = useRouter();
@@ -66,8 +66,11 @@ export function SearchPalette() {
   // newer query's results.
   const requestSeq = useRef(0);
 
-  // Global Cmd/Ctrl+K toggle.
+  // Global Cmd/Ctrl+K toggle. `disabled` (the home — the reader has not
+  // entered the app, so search is fully off there, shortcut included) skips
+  // BOTH the listener and the button — not just the visible one.
   useEffect(() => {
+    if (disabled) return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
@@ -76,7 +79,7 @@ export function SearchPalette() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [disabled]);
 
   // Debounce the query (trailing edge) — cancelled on unmount.
   const debouncer = useMemo(
@@ -123,6 +126,10 @@ export function SearchPalette() {
 
   const keyword = queryKeyword(debouncedQuery);
   const shown = hits.slice(0, MAX_RESULTS);
+
+  // Disabled — the home — renders nothing at all; the hooks above stay in
+  // place (they no-op), so the shortcut never registers.
+  if (disabled) return null;
 
   return (
     <>
