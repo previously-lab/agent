@@ -7,9 +7,10 @@ import { Link } from "@/i18n/navigation";
  *
  *   TITLE    "Previously on" (the product's sentence, weight-split) and the
  *            reader's name — the biggest thing on the page.
- *   RECAP    where the last conversation left off: the slice's own clock
- *            and the real gap — a dateline, not a document.
- *   ACTIONS  one row: 继续 → `/app`, 设置 at the right end.
+ *   DATELINE the remark under it: the slice's own clock and the real gap,
+ *            hugging the name the way a subtitle hugs a title.
+ *   MENU     继续 → `/app`, then 设置 beneath it in faint ink — a stacked
+ *            pair with one left edge, the way a game's menu lists equal items.
  *
  * Purely presentational: every fact arrives formatted from the server page,
  * so this file stays locale- and clock-free. No R3F anywhere in the import
@@ -62,13 +63,12 @@ export function HomeScreen({
         </header>
 
         {/* THE DATELINE — the page's one factual line: when the last
-            conversation happened, and how long ago it was. Two hairlines used
-            to frame it; the reader dropped them (a cover carries no rules), so
-            the rhythm they enforced is now the margins: 64px above the datum,
-            56px below it — the same distances the rules used to hold. */}
+            conversation happened, and how long ago it was. It hugs the name
+            (a subtitle, not a document's dateline far down the page), so the
+            three lines read as ONE block: kicker, name, remark. */}
         {recap && (
           <section>
-            <p className="mt-16 font-mono text-xs text-muted-foreground/70">
+            <p className="mt-2 font-mono text-xs text-muted-foreground/70">
               {recap.when}
               <span className="opacity-50"> · </span>
               {recap.gap}
@@ -76,25 +76,23 @@ export function HomeScreen({
           </section>
         )}
 
-        {/* THE DOORS — one row, TWO of them, set in the same size and weight:
-            the reader's call, a menu of equal items rather than a hero with a
-            hanger-on. The ink still separates them (继续 full, 设置 faint) and
-            继续 keeps its arrow; 进入世界 is gone — the world is reached
+        {/* THE MENU — two items, stacked on one left edge: a game's own menu
+            rather than a toolbar's row, and the same size for both, because
+            they are two choices and not a hero with a hanger-on. The ink
+            separates them (继续 full, 设置 faint); neither carries an arrow —
+            the items ARE the affordance, and a glyph would decorate what
+            already reads as a link. 进入世界 is gone: the world is reached
             through the conversation, not as a second front door. */}
-        <nav className="mt-14 flex items-baseline gap-8">
+        <nav className="mt-16 flex flex-col items-start gap-3">
           <Link
             href="/app"
             className="text-lg text-foreground transition-colors hover:text-brand"
           >
             {continueLabel}
-            <span aria-hidden className="text-brand">
-              {" "}
-              →
-            </span>
           </Link>
           <Link
             href="/settings"
-            className={`ml-auto text-lg text-muted-foreground/70 transition-colors hover:text-foreground`}
+            className="text-lg text-muted-foreground/70 transition-colors hover:text-foreground"
           >
             {settingsLabel}
           </Link>
