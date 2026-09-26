@@ -15,7 +15,10 @@
  *   re-renders when the visible range or the level changes.
  * - Scroll: wheel / one-finger drag move through time (bottom = NOW); the
  *   shared `feed` reports 0..1 to the ambient threadline. A prepend shifts the
- *   scroll offset so the world never jumps. ONE CURSOR (v0.13 §6): at the
+ *   scroll offset so the world never jumps. Settling is ELASTIC (field-snap.ts):
+ *   input past the ends stretches a rubber band that the snap releases, and
+ *   ~120ms of quiet eases the offset to the nearest row boundary that fits the
+ *   viewport — a taller-than-viewport row never snaps. ONE CURSOR (v0.13 §6): at the
  *   slice rung the scroll also moves the shared slice cursor — the centred
  *   card IS the slice the reader stands at, reported through `onCursorSlice`
  *   so the world and the conversation see the same address. The stack is
@@ -92,6 +95,12 @@ import {
   unitAtPx,
   visibleRangeFor,
 } from "@/lib/timeline3d/field-offsets";
+import {
+  elasticAdd,
+  RUBBER_BAND_PX,
+  snapBoundaryFor,
+  SNAP_IDLE_MS,
+} from "@/lib/timeline3d/field-snap";
 import { offsetFor } from "@/lib/timeline3d/field-feed";
 import {
   layoutFor,
@@ -527,7 +536,14 @@ function FieldScene({
     const dt = Math.min(rawDt, 0.1);
     const rigNow = rig.current;
     const max = maxOffsetFor(layout.total, size.height, minOffset, insetBottom);
-    rigNow.target = THREE.MathUtils.clamp(rigNow.target, minOffset, max);
+    // The clamp allows the rubber band's slack past the ends (the input path
+    // asymptotes to RUBBER_BAND_PX, so this never hard-stops a live overscroll;
+    // it only fences the impossible). The snap below is what releases the band.
+    rigNow.target = THREE.MathUtils.clamp(
+      rigNow.target,
+      minOffset - RUBBER_BAND_PX,
+      max + RUBBER_BAND_PX,
+    );
 
     // A SEEK from the band. Consumed by `gen`, so a request is acted on once
     // however many frames it stays published. While the pointer is down the
@@ -541,6 +557,30 @@ function FieldScene({
       const to = offsetFor(seek.progress, minOffset, max);
       rigNow.target = to;
       if (seek.dragging) rigNow.current = to;
+      // A scrub is not a wheel/touch scroll: no ratchet under the band's finger.
+      rigNow.snapAt = 0;
+    }
+
+    // THE IDLE SNAP (field-snap.ts): the hand has been quiet for SNAP_IDLE_MS,
+    // so the target eases to the nearest rest — the head, a row top that fits,
+    // or the foot. Setting `target` is the whole mechanism: the ease below
+    // carries `current` there, and the reduced-motion branch jumps straight to
+    // it, so the snap stays instant on that path. A tall row answers `null`
+    // and the offset the reader chose is left untouched.
+    if (rigNow.snapAt > 0 && performance.now() >= rigNow.snapAt) {
+      rigNow.snapAt = 0;
+      const to = snapBoundaryFor(
+        tops,
+        layout.total,
+        size.height,
+        minOffset,
+        max,
+        rigNow.target,
+        dirRef.current,
+      );
+      if (to != null && Math.abs(to - rigNow.target) > 0.5) {
+        rigNow.target = to;
+      }
     }
 
     if (reducedMotion) {
@@ -948,6 +988,7 @@ export function CardField({
   const rig = useRef<FieldRig>({
     target: 0,
     current: 0,
+    snapAt: 0,
     anchorIndex: 0,
     genAt: performance.now(),
     hoverKey: null,
@@ -1046,6 +1087,18 @@ export function CardField({
   // `originMinOffset`.
   const hasOrigin = rows.length > 0;
   const minOffset = minOffsetFor(hasOrigin, insetTop);
+  // The gesture handlers' copy of the clamp the frame loop enforces, mirrored
+  // every render so a wheel between renders rubber-bands against fresh bounds.
+  // (Written in render, like the prepend shift below: the handlers bound in the
+  // mount-time effects must read the current table, not the first one.)
+  const scrollBoundsRef = useRef({ min: 0, max: 0 });
+  scrollBoundsRef.current.min = minOffset;
+  scrollBoundsRef.current.max = maxOffsetFor(
+    layout.total,
+    fieldSize.h || 800,
+    minOffset,
+    insetBottom,
+  );
 
   // Render-time prepend compensation: shift the scroll rig synchronously so the
   // next frame's RowGroup positions use the corrected offset, avoiding a
@@ -1067,6 +1120,8 @@ export function CardField({
         rig.current.current += shift;
         rig.current.genAt = 0;
         rig.current.dealEligible = null;
+        // A page arriving is not reader input: no re-ratchet under them.
+        rig.current.snapAt = 0;
       }
     }
     prevFirstKeyRef.current = firstKey;
@@ -1185,6 +1240,9 @@ export function CardField({
   const startTransition = useCallback(
     (fromRung: FieldRung, toRung: FieldRung, anchorId: string | null) => {
       pendingAnchorRef.current = anchorId;
+      // The transition owns the landing: a pending idle snap must not fire
+      // mid-deal and re-aim the anchor the rows are flying toward.
+      rig.current.snapAt = 0;
       if (reducedMotion) {
         rig.current.dealOrigins = null;
         rig.current.dealEligible = null;
@@ -1295,6 +1353,7 @@ export function CardField({
         );
         rig.current.target = pos;
         rig.current.current = pos;
+        rig.current.snapAt = 0;
         rig.current.genAt = performance.now();
         rig.current.dealEligible = visibleKeysFor(
           tops,
@@ -1312,6 +1371,7 @@ export function CardField({
       rig.current.anchorIndex = rows.length - 1;
       rig.current.target = max;
       rig.current.current = max;
+      rig.current.snapAt = 0;
       rig.current.genAt = performance.now();
       rig.current.dealEligible = visibleKeysFor(
         tops,
@@ -1428,7 +1488,12 @@ export function CardField({
           zoomBy(dir);
         }
       } else {
-        rig.current.target += e.deltaY;
+        // Plain wheel scrolls, with progressive resistance past the ends
+        // (field-snap.ts) and the idle snap re-armed — quiet hands settle
+        // on a row boundary.
+        const b = scrollBoundsRef.current;
+        rig.current.target = elasticAdd(rig.current.target, e.deltaY, b.min, b.max);
+        rig.current.snapAt = performance.now() + SNAP_IDLE_MS;
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -1444,6 +1509,9 @@ export function CardField({
     const pointers = new Map<number, { x: number; y: number }>();
     let lastDist: number | null = null;
     let pinchAccum = 0;
+    // True once a one-finger drag has actually scrolled — a bare tap must not
+    // arm the idle snap (the field would ratchet under a click).
+    let dragMoved = false;
     const dist = () => {
       const [a, b] = [...pointers.values()];
       return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : null;
@@ -1451,6 +1519,10 @@ export function CardField({
     const down = (e: PointerEvent) => {
       if (e.pointerType !== "touch") return;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // A held finger must never be fought: the snap stays disarmed for the
+      // whole drag and is re-armed on release.
+      rig.current.snapAt = 0;
+      dragMoved = false;
       if (pointers.size === 2) {
         lastDist = dist();
         pinchAccum = 0;
@@ -1461,8 +1533,16 @@ export function CardField({
       const prev = pointers.get(e.pointerId)!;
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (pointers.size === 1) {
-        // One-finger vertical drag scrolls time.
-        rig.current.target -= e.clientY - prev.y;
+        // One-finger vertical drag scrolls time, rubber-banding past the ends.
+        const b = scrollBoundsRef.current;
+        rig.current.target = elasticAdd(
+          rig.current.target,
+          -(e.clientY - prev.y),
+          b.min,
+          b.max,
+        );
+        rig.current.snapAt = performance.now() + SNAP_IDLE_MS;
+        dragMoved = true;
         return;
       }
       if (pointers.size !== 2) return;
@@ -1479,6 +1559,11 @@ export function CardField({
     const up = (e: PointerEvent) => {
       pointers.delete(e.pointerId);
       if (pointers.size < 2) lastDist = null;
+      if (pointers.size === 0 && dragMoved) {
+        // The drag's release settles like the wheel's quiet: snap on idle.
+        rig.current.snapAt = performance.now() + SNAP_IDLE_MS;
+        dragMoved = false;
+      }
     };
     el.addEventListener("pointerdown", down);
     el.addEventListener("pointermove", move);

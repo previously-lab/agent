@@ -33,6 +33,10 @@ export interface DealOrigin {
 export interface FieldRig {
   target: number;
   current: number;
+  /** Deadline (performance.now, ms) for the idle snap to fire; 0 = disarmed.
+   *  The gesture handlers re-arm it on every wheel/touch scroll; landings,
+   *  seeks and transitions disarm it. See `field-snap.ts`. */
+  snapAt: number;
   /** Row index the last level change anchored on (deal origin). */
   anchorIndex: number;
   /** Timestamp of the last generation (level/filter/mount). */
