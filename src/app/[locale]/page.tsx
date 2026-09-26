@@ -5,6 +5,7 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getBriefingIdentity } from "@/lib/episodic/actions";
 import { getHomeMemoryState } from "@/lib/home/recap";
 import { HomeScreen } from "@/components/home/home-screen";
+import { isRecentInterval, relativeBetween } from "@/lib/time/relative-between";
 
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
@@ -15,10 +16,12 @@ export const dynamic = "force-dynamic";
 /**
  * The HOME route (v0.13 §3) — the start screen, not a chat window.
  *
- * Pure typography on the field: the product's sentence and the reader's
- * name, the 前情提要 (where the last conversation left off — real timestamps,
- * real gap, via `getHomeMemoryState`), and one row of doors (接着说 → `/app`, 进入世界 →
- * `/app?view=game`, 设置). No card, no status line, no uppercase — and no
+ * Pure typography on the field: the product's sentence and the reader's name,
+ * the dateline under it (where the last conversation left off — real
+ * timestamps via `getHomeMemoryState`, rendered as a relative phrase while the
+ * app's own interval ladder still measures minutes/hours/days and as the plain
+ * clock beyond that), and the menu — 继续 → `/app`, 设置 → `/settings`. No card,
+ * no status line, no uppercase — and no
  * conversation ability, no R3F (nothing in this route's import graph may
  * pull in three.js or the game scene).
  *
@@ -76,29 +79,38 @@ export default async function HomePage({
   ]);
 
   const recap = memory.recap;
-  let recapProps = null;
+  let dateline: string | null = null;
   if (recap) {
     const lastAt = new Date(recap.lastAt);
-    // The recap's clock is the slice's own timezone (the reader's, then);
-    // an unparseable/invalid one falls back to the locale default rather
-    // than failing the whole page.
-    let when: string;
-    try {
-      when = format.dateTime(lastAt, {
-        dateStyle: "medium",
-        timeStyle: "short",
-        timeZone: recap.timezone || undefined,
-      });
-    } catch {
-      when = format.dateTime(lastAt, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      });
+    const now = new Date();
+    // WHICH SHAPE, decided by the app's own interval ladder rather than by a
+    // threshold grown here: a reading it still counts in minutes/hours/days
+    // reads as a phrase ("上次对话 5 小时前" / "Last spoke 5 hours ago"), while
+    // anything it would measure in weeks or more is better served by the date
+    // itself — `isRecentInterval` is where that line is drawn. The ladder is
+    // asked with NOW as the source and the last turn as the destination, the
+    // way the travel clock asks it: the reversed order calls the same gap
+    // `after`, which is also the reading a future timestamp gets.
+    const rel = relativeBetween(now.toISOString(), recap.lastAt);
+    if (isRecentInterval(rel)) {
+      dateline = t("lastSpoke", { gap: format.relativeTime(lastAt, now) });
+    } else {
+      // The recap's clock is the slice's own timezone (the reader's, then);
+      // an unparseable/invalid one falls back to the locale default rather
+      // than failing the whole page.
+      try {
+        dateline = format.dateTime(lastAt, {
+          dateStyle: "medium",
+          timeStyle: "short",
+          timeZone: recap.timezone || undefined,
+        });
+      } catch {
+        dateline = format.dateTime(lastAt, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        });
+      }
     }
-    recapProps = {
-      when,
-      gap: format.relativeTime(lastAt, new Date()),
-    };
   }
 
   return (
@@ -106,7 +118,7 @@ export default async function HomePage({
       eyebrowLead={t("eyebrowLead")}
       eyebrowPreposition={t("eyebrowPreposition")}
       name={identity.name}
-      recap={recapProps}
+      dateline={dateline}
       continueLabel={t("continue")}
       settingsLabel={t("settings")}
     />

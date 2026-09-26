@@ -590,6 +590,7 @@
     "eyebrowLead": "Previously",
     "eyebrowPreposition": "on",
     "continue": "Continue",
-    "settings": "Settings"
+    "settings": "Settings",
+    "lastSpoke": "Last spoke {gap}"
   }
 }

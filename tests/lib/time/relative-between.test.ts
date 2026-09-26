@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { relativeBetween } from "../relative-time";
+import { isRecentInterval, relativeBetween } from "@/lib/time/relative-between";
 
 // Fixed UTC reference so the tier thresholds are deterministic everywhere.
 const NOW = "2026-08-12T12:00:00Z";
@@ -75,5 +75,43 @@ describe("relativeBetween", () => {
     expect(relativeBetween(NOW, at(-1 * YEAR))).toEqual({
       kind: "count", dir: "before", unit: "year", count: 1,
     });
+  });
+});
+
+describe("isRecentInterval", () => {
+  it("keeps moments, minutes, hours and days in prose", () => {
+    expect(isRecentInterval({ kind: "moments", dir: "before" })).toBe(true);
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "minute", count: 10 }),
+    ).toBe(true);
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "hour", count: 5 }),
+    ).toBe(true);
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "day", count: 6 }),
+    ).toBe(true);
+  });
+
+  it("hands weeks, months and years to the date instead", () => {
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "week", count: 1 }),
+    ).toBe(false);
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "month", count: 2 }),
+    ).toBe(false);
+    expect(
+      isRecentInterval({ kind: "count", dir: "before", unit: "year", count: 1 }),
+    ).toBe(false);
+  });
+
+  it("refuses a future instant — a skewed clock is not an interval", () => {
+    expect(isRecentInterval({ kind: "moments", dir: "after" })).toBe(false);
+    expect(
+      isRecentInterval({ kind: "count", dir: "after", unit: "hour", count: 3 }),
+    ).toBe(false);
+  });
+
+  it("refuses an unparseable pair", () => {
+    expect(isRecentInterval(null)).toBe(false);
   });
 });

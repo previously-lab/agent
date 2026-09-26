@@ -2,7 +2,7 @@
 
 import { Clock } from "lucide-react";
 import { useLocale, useTranslations } from "next-intl";
-import { relativeBetween } from "./relative-time";
+import { relativeBetween } from "@/lib/time/relative-between";
 import type { SeamKind } from "@/lib/chat/seam";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 
@@ -27,8 +27,10 @@ export function formatSeamDate(iso: string, locale: string): string {
  *
  * The interval runs from the OLDER slice's last activity to the NEWER slice's
  * start — the silence between two conversations, i.e. "距上一次过了多久". The
- * ladder + thresholds come from `relativeBetween` (the time-travel readout's
- * humanizer) rather than a second one grown here.
+ * ladder + thresholds come from `relativeBetween`
+ * (`src/lib/time/relative-between.ts`, the app's one interval humanizer)
+ * rather than a second one grown here — and they are the same thresholds the
+ * home dateline switches on.
  *
  * HONEST OR NOTHING: nothing recorded on the older side, an unparseable bound,
  * or a backwards delta (interleaved/overlapping slices in the stored data)

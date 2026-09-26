@@ -7,8 +7,10 @@ import { Link } from "@/i18n/navigation";
  *
  *   TITLE    "Previously on" (the product's sentence, weight-split) and the
  *            reader's name — the biggest thing on the page.
- *   DATELINE the remark under it: the slice's own clock and the real gap,
- *            hugging the name the way a subtitle hugs a title.
+ *   DATELINE the remark under it — ONE line, hugging the name the way a
+ *            subtitle hugs a title: either the relative phrase the page
+ *            already phrased, or the plain clock once the gap outgrows the
+ *            interval ladder's day bucket.
  *   MENU     继续 → `/app`, then 设置 beneath it in faint ink — a stacked
  *            pair with one left edge, the way a game's menu lists equal items.
  *
@@ -23,12 +25,9 @@ export interface HomeScreenProps {
   eyebrowPreposition: string;
   /** Line 2 — the reader's name, from the same read the header chip uses. */
   name: string;
-  recap: {
-    /** Localized wall-clock of the last exchange, in the slice's timezone. */
-    when: string;
-    /** Localized gap since then ("3 days ago" / "3 天前"). */
-    gap: string;
-  } | null;
+  /** THE DATELINE, already phrased by the page — one line, one fact. Null
+   *  when there is no conversation to recap. */
+  dateline: string | null;
   continueLabel: string;
   settingsLabel: string;
 }
@@ -37,7 +36,7 @@ export function HomeScreen({
   eyebrowLead,
   eyebrowPreposition,
   name,
-  recap,
+  dateline,
   continueLabel,
   settingsLabel,
 }: HomeScreenProps) {
@@ -62,16 +61,14 @@ export function HomeScreen({
           </h1>
         </header>
 
-        {/* THE DATELINE — the page's one factual line: when the last
-            conversation happened, and how long ago it was. It hugs the name
-            (a subtitle, not a document's dateline far down the page), so the
-            three lines read as ONE block: kicker, name, remark. */}
-        {recap && (
+        {/* THE DATELINE — the page's one factual line, and the page has
+            already chosen its shape. It hugs the name (a subtitle, not a
+            document's dateline far down the page), so the three lines read as
+            ONE block: kicker, name, remark. */}
+        {dateline && (
           <section>
             <p className="mt-2 font-mono text-xs text-muted-foreground/70">
-              {recap.when}
-              <span className="opacity-50"> · </span>
-              {recap.gap}
+              {dateline}
             </p>
           </section>
         )}
