@@ -426,6 +426,15 @@ export function WorldCanvas({
         <Canvas
           dpr={[1, 2]}
           frameloop={paused ? "never" : "always"}
+          // The object form (not a boolean) on purpose: fiber maps an omitted
+          // /boolean `shadows` to the deprecated THREE.PCFSoftShadowMap, and
+          // its Canvas layout effect re-runs configure() on container resizes
+          // (no configured guard) — the world transition's compositor can then
+          // re-enable shadow rendering while the deprecated type is set
+          // (three 0.185 warns and rewrites it per render). This assigns
+          // PCFShadowMap + disabled, the same effective values, with no
+          // deprecated write. Live values stay the world contract's (§14.2).
+          shadows={{ type: THREE.PCFShadowMap, enabled: false }}
           // The field world's camera — the game's rig `makeDefault`s its own
           // orthographic camera INSIDE the game portal, so the default stays
           // the field's perspective camera at every rung of the swap.

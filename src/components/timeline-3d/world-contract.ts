@@ -8,7 +8,7 @@
  *   - `gl.toneMapping`   — the field rides R3F's default (ACESFilmic), the
  *                          game needs AgX (saturated accents clip under ACES)
  *   - `gl.shadowMap`     — the field casts no shadows (enabled: false), the
- *                          game uses `shadows="percentage"` (PCFShadowMap)
+ *                          game enables PCFShadowMap while it is mounted
  *   - `scene.background` / `scene.fog` — the field is a transparent canvas
  *                          over the page; the game attaches a `<color>` while
  *                          its subtree is up
@@ -70,7 +70,12 @@ const FIELD_SETTINGS = {
 
 /** The game world's renderer values — exactly what its standalone canvas
  *  declared: AgX via `gl={{ toneMapping }}`, `shadows="percentage"`. The
- *  background is NOT set here: the game's Atmosphere attaches its own
+ *  shared canvas now declares the same through fiber's object form
+ *  (`shadows={{ type: PCFShadowMap, enabled: false }}`, world-canvas.tsx) —
+ *  a boolean/omitted prop would map to the deprecated PCFSoftShadowMap on
+ *  every re-configure. This contract still owns the live values while a
+ *  world is mounted. The background is NOT set here: the game's Atmosphere
+ *  attaches its own
  *  `<color attach="background">` (it lerps between corridor and room
  *  moods), and the exit path clears whatever it left. */
 const GAME_SETTINGS = {

@@ -2654,7 +2654,8 @@ export default function GameCanvas({
   // renderer-level props the old standalone canvas carried moved to the
   // WORLD CONTRACT (world-canvas.tsx / world-contract.ts), applied whenever
   // the game world is mounted:
-  //   shadows="percentage" → PCFShadowMap (three 0.185 deprecated PCFSoft),
+  //   shadows → PCFShadowMap (three 0.185 deprecated PCFSoft; the shared
+  //   canvas declares it via fiber's object form, world-canvas.tsx),
   //   AgX tone mapping (saturated accents clip under the ACES default),
   //   and the §14.1 frameloop freeze is the shared canvas's `paused` prop.
   // Softer shadows stay rejected: VSM leaks through thin interior geometry,
