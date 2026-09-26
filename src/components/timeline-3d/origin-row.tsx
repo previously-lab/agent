@@ -86,9 +86,12 @@ export function OriginRow({
         // so a row passing through this region must not swallow the one
         // control the head has.
         zIndexRange={[40, 31]}
-        style={{ pointerEvents: "none" }}
+        pointerEvents="none"
       >
         <NextIntlClientProvider messages={messages} locale={locale}>
+          {/* Dynamic: width lines the head up with the cards below; the
+              height is the lib's origin-region constant (world geometry —
+              the 3D layout and this DOM box share one source of truth). */}
           <div style={{ width, height: FIELD_ORIGIN_PX }}>
             <FieldOrigin
               oldestIso={oldestIso}

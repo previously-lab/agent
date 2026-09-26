@@ -15,6 +15,7 @@
  * the click-to-drill gesture; this corner never competes with it.
  */
 import { AudioLines } from "lucide-react";
+import "./timeline-3d.css";
 
 export interface SliceNarration {
   /** Localized aria/title label (「让 Previously 讲讲这片」). */
@@ -43,8 +44,10 @@ export function SliceNarrateButton({
         e.stopPropagation();
         onSelect();
       }}
-      className="absolute right-[0.9em] top-[0.7em] z-10 flex size-[1.9em] items-center justify-center rounded-full text-muted-foreground/80 opacity-0 ring-1 ring-foreground/10 transition-[opacity,background-color,color] duration-200 hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 motion-reduce:transition-none group-hover/card:opacity-100 pointer-coarse:opacity-70"
-      style={{ fontSize: em, backgroundColor: "color-mix(in oklch, var(--card) 72%, transparent)" }}
+      className="tl-narrate-btn absolute right-[0.9em] top-[0.7em] z-10 flex size-[1.9em] items-center justify-center rounded-full text-muted-foreground/80 opacity-0 ring-1 ring-foreground/10 transition-[opacity,background-color,color] duration-200 hover:bg-muted/60 hover:text-foreground focus-visible:opacity-100 motion-reduce:transition-none group-hover/card:opacity-100 pointer-coarse:opacity-70"
+      // Dynamic: the button scales with the card — em is the face's root font
+      // size (px), passed in from the row.
+      style={{ fontSize: em }}
     >
       <AudioLines className="size-[1em]" />
     </button>

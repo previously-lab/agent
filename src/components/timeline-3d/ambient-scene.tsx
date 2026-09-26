@@ -171,8 +171,7 @@ export default function AmbientScene({ feed, range }: AmbientSceneProps) {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0"
-      style={{ pointerEvents: "none" }}
+      className="pointer-events-none absolute inset-0"
     >
       <canvas ref={canvasRef} className="block h-full w-full" />
     </div>

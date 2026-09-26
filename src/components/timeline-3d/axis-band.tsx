@@ -137,6 +137,10 @@ function RulerYearLabels({
             else labelRefs.current.delete(m.year);
           }}
           className="absolute"
+          // Positioning triple, written per label by the rAF loop: `top` is
+          // this label's measured y on the band, `right` is the lib ruler
+          // constant (mirrors the canvas tick geometry — one source of truth
+          // in ruler-math.ts), transform centres the label on its tick.
           style={{
             right: RULER_LABEL_RIGHT_PX,
             top: m.y,

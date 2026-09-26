@@ -12,7 +12,7 @@
  * pass through).
  */
 
-const GRID_LINE = "color-mix(in oklch, var(--foreground) 5%, transparent)";
+import "./timeline-3d.css";
 
 export function AtmosphereBackdrop() {
   return (
@@ -22,11 +22,7 @@ export function AtmosphereBackdrop() {
     >
       {/* Dominant brand aurora — upper stage */}
       <div
-        className="tl-aurora absolute -top-[20%] left-1/2 h-[55vh] w-[80vw] -translate-x-1/2 rounded-full blur-2xl sm:blur-3xl"
-        style={{
-          background:
-            "radial-gradient(ellipse at center, oklch(0.6 0.23 260 / 14%) 0%, oklch(0.21 0.09 267 / 8%) 45%, transparent 70%)",
-        }}
+        className="tl-aurora tl-aurora-brand absolute -top-[20%] left-1/2 h-[55vh] w-[80vw] -translate-x-1/2 rounded-full blur-2xl sm:blur-3xl"
       />
       {/* Two fainter echoes of the SAME brand hue, not two other hues — the
           atmosphere is one colour drifting, not a light show. These were an
@@ -35,31 +31,13 @@ export function AtmosphereBackdrop() {
           that no longer meant anything anywhere in the product.
           (Desktop only: big blur layers are a mobile scroll-jank source.) */}
       <div
-        className="tl-aurora-slow absolute bottom-[5%] -left-[10%] hidden h-[40vh] w-[45vw] rounded-full blur-3xl sm:block"
-        style={{
-          background:
-            "radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 5%, transparent) 0%, transparent 65%)",
-        }}
+        className="tl-aurora-slow tl-aurora-echo-w absolute bottom-[5%] -left-[10%] hidden h-[40vh] w-[45vw] rounded-full blur-3xl sm:block"
       />
       <div
-        className="tl-aurora absolute top-[35%] -right-[12%] hidden h-[40vh] w-[40vw] rounded-full blur-3xl sm:block"
-        style={{
-          background:
-            "radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 4.5%, transparent) 0%, transparent 65%)",
-        }}
+        className="tl-aurora tl-aurora-echo-e absolute top-[35%] -right-[12%] hidden h-[40vh] w-[40vw] rounded-full blur-3xl sm:block"
       />
       {/* 72px grid, radially masked so it dissolves at the edges */}
-      <div
-        className="absolute inset-0"
-        style={{
-          backgroundImage: `linear-gradient(to right, ${GRID_LINE} 1px, transparent 1px), linear-gradient(to bottom, ${GRID_LINE} 1px, transparent 1px)`,
-          backgroundSize: "72px 72px",
-          maskImage:
-            "radial-gradient(ellipse 85% 65% at 50% 40%, black 30%, transparent 75%)",
-          WebkitMaskImage:
-            "radial-gradient(ellipse 85% 65% at 50% 40%, black 30%, transparent 75%)",
-        }}
-      />
+      <div className="tl-grid-overlay absolute inset-0" />
     </div>
   );
 }
@@ -68,13 +46,7 @@ export function AtmosphereVignette() {
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none absolute inset-0"
-      style={{
-        // Fades to the theme background (darkens in dark mode, lightens in
-        // light mode) instead of a fixed black.
-        background:
-          "radial-gradient(ellipse 120% 90% at 50% 45%, transparent 55%, color-mix(in oklch, var(--background) 78%, transparent) 100%)",
-      }}
+      className="tl-vignette pointer-events-none absolute inset-0"
     />
   );
 }

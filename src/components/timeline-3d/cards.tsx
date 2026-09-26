@@ -22,6 +22,7 @@ import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   type CardGeometry,
 } from "@/lib/timeline3d/stacks";
+import "./timeline-3d.css";
 
 // ─── Shared bits ────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ export function ColorSquare({
     <span
       aria-hidden="true"
       className={`inline-block shrink-0 rounded-[1px] ${className}`}
+      // Dynamic: the strand colour arrives as a JS string per strand.
       style={{ backgroundColor: color }}
     />
   );
@@ -61,9 +63,8 @@ function accentOf(entry: TimelineSliceEntry): string {
   return strandAccent(entry.strands);
 }
 
-/** Paper grain — an SVG turbulence tile, tinted by `currentColor` at ~4%. */
-const NOISE_URI =
-  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E\")";
+/** Paper grain lives in timeline-3d.css (`.tl-noise`) — the SVG turbulence
+    tile is a static data URI, not render-time state. */
 
 // ─── The card face (one face for every level) ───────────────────────────────
 
@@ -86,6 +87,8 @@ function CardFace({
   const accent = accentOf(entry);
   const dry = !entry.focus;
   return (
+    // Dynamic size: the tier's fixed card geometry (geo.cardW/H) — JS-side
+    // responsive geometry the CSS-only breakpoints can't feed.
     <span
       className={`relative block overflow-hidden rounded-xl bg-card text-left ring-1 transition-[box-shadow,ring-color] duration-200 ${
         flash
@@ -101,14 +104,14 @@ function CardFace({
       />
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
-        style={{ backgroundImage: NOISE_URI }}
+        className="tl-noise pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
       />
-      {/* The strand spine. */}
+      {/* The strand spine. `accent` is the slice's strand colour (JS); 0.85
+          keeps the 2px bar below full strength. */}
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 w-[2px]"
-        style={{ backgroundColor: accent, opacity: 0.85 }}
+        className="absolute inset-y-0 left-0 w-[2px] opacity-85"
+        style={{ backgroundColor: accent }}
       />
 
       <span className="relative flex h-full flex-col px-4 pb-3.5 pt-3">

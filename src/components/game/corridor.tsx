@@ -262,6 +262,7 @@ import {
   DOOR_SWING_RATE,
   DOOR_WIDTH,
 } from "@/lib/game/tuning/room";
+import "./lobby-register.css";
 
 /** A corridor door as the integrator supplies it. */
 export type CorridorDoor = {
@@ -2077,7 +2078,6 @@ function LobbyRegisterBoard({
   // 200 px per world unit (drei Html: 400 / distanceFactor) — the DOM is
   // sized to exactly cover the R3F panel behind it.
   const PX_PER_M = 200;
-  const inkDim = "rgba(236,226,204,0.55)";
   return (
     <group
       position={[
@@ -2099,48 +2099,36 @@ function LobbyRegisterBoard({
         distanceFactor={2}
         position={[0, 0, 0.08]}
         zIndexRange={[5, 0]}
-        style={{ pointerEvents: "none" }}
+        pointerEvents="none"
       >
+        {/* Plate styling lives in lobby-register.css. Only three values stay
+            in JS: the pixel size (derived from the 3D world constants so the
+            DOM exactly covers the R3F panel), the ink (PLATE_INK — the lib
+            palette constant the canvas plaque texture also draws with), and
+            the accent (the per-hotel material colour, a prop). */}
         <div
+          className="lobby-register"
           style={{
             width: REGISTER_BOARD_W * PX_PER_M - 24,
             height: REGISTER_BOARD_H * PX_PER_M - 24,
-            boxSizing: "border-box",
-            padding: "20px 28px",
-            display: "flex",
-            flexDirection: "column",
-            fontFamily: "ui-monospace, Menlo, Consolas, monospace",
             color: PLATE_INK,
-            userSelect: "none",
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "baseline",
-              color: accent,
-              fontWeight: 700,
-              fontSize: 34,
-              letterSpacing: 5,
-              paddingBottom: 12,
-              borderBottom: `2px solid ${inkDim}`,
-            }}
-          >
+          <div className="lobby-register-head" style={{ color: accent }}>
             <span>{hotelName}</span>
             <span>W{windowIndex}</span>
           </div>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "space-evenly" }}>
+          <div className="lobby-register-rows">
             {register.entries.map((entry, i) => (
               <div
                 key={entry.sliceId}
-                style={{ display: "flex", alignItems: "baseline", gap: 22 }}
+                className="lobby-register-entry"
               >
-                <span style={{ fontWeight: 700, fontSize: 54 }}>{entry.time ?? "····"}</span>
-                <span style={{ color: inkDim, fontSize: 34 }}>{entry.date ?? ""}</span>
-                <span style={{ flex: 1 }} />
+                <span className="lobby-register-time">{entry.time ?? "····"}</span>
+                <span className="lobby-register-dim lobby-register-date">{entry.date ?? ""}</span>
+                <span className="lobby-register-spacer" />
                 {i < register.gaps.length && (
-                  <span style={{ color: inkDim, fontSize: 26 }}>
+                  <span className="lobby-register-dim lobby-register-gap">
                     {register.gaps[i] === null ? "·" : `${register.gaps[i]}d`}
                   </span>
                 )}
@@ -2148,16 +2136,7 @@ function LobbyRegisterBoard({
             ))}
           </div>
           {olderClock !== null && (
-            <div
-              style={{
-                borderTop: `2px solid ${inkDim}`,
-                paddingTop: 12,
-                color: accent,
-                fontWeight: 700,
-                fontSize: 30,
-                letterSpacing: 3,
-              }}
-            >
+            <div className="lobby-register-foot" style={{ color: accent }}>
               ← {olderClock}
             </div>
           )}

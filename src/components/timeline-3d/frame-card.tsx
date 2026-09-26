@@ -27,6 +27,7 @@ import type { FrameGeometry, StackRow } from "@/lib/timeline3d/stacks";
 import { cardEmFor, weekLabelFor } from "@/lib/timeline3d/stacks";
 import { ColorSquare, hhmm } from "./cards";
 import { useSliceTurns } from "./slice-content";
+import "./timeline-3d.css";
 
 /** Translated strings, passed in from OUTSIDE the R3F Canvas — drei Html
  *  renders in the Canvas's own React root, so next-intl context does not
@@ -64,8 +65,8 @@ function groupLabel(row: StackRow, locale: string): string {
   return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;
 }
 
-const NOISE_URI =
-  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E\")";
+/** Paper grain lives in timeline-3d.css (`.tl-noise`) — the SVG turbulence
+    tile is a static data URI, not render-time state. */
 
 function accentOf(entry: TimelineSliceEntry): string {
   return strandAccent(entry.strands);
@@ -379,6 +380,8 @@ export function FrameCard({
   }
 
   return (
+    // Dynamic: tier card size + the frame's own em (zoom-driven root font
+    // size — every inner measurement is em-relative to it).
     <div
       className={`relative block overflow-hidden rounded-[0.9em] bg-card text-left ring-1 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] transition-[box-shadow,ring-color] duration-200 dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
         flash
@@ -394,14 +397,14 @@ export function FrameCard({
       />
       <span
         aria-hidden
-        className="pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
-        style={{ backgroundImage: NOISE_URI }}
+        className="tl-noise pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
       />
-      {/* The strand spine. */}
+      {/* The strand spine. `accent` is the slice's strand colour (JS); 0.85
+          keeps the em-wide bar below full strength. */}
       <span
         aria-hidden
-        className="absolute inset-y-0 left-0 w-[0.14em]"
-        style={{ backgroundColor: accent, opacity: 0.85 }}
+        className="absolute inset-y-0 left-0 w-[0.14em] opacity-85"
+        style={{ backgroundColor: accent }}
       />
 
       <div className="relative flex h-full flex-col px-[1.15em] pb-[0.85em] pt-[0.8em]">
@@ -500,9 +503,10 @@ export function FrameCard({
             an inner scroller has to stop the event before the wrapper cancels
             it, and a wheel over any card would then stop moving the field for
             no scroll in return. */}
+        {/* max-w-[34em]: the frame caps at 34em of the card's own
+            (zoom-driven) em — em-relative, so no spacing token expresses it. */}
         <div
-          className="card-frame relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col overflow-hidden"
-          style={{ maxWidth: "34em" }}
+          className="card-frame relative mx-auto mt-[0.55em] flex min-h-0 w-full flex-1 flex-col overflow-hidden max-w-[34em]"
         >
           <TurnBubbles
             turns={turns}

@@ -1,0 +1,69 @@
+/* Lobby register board (corridor.tsx → LobbyRegisterBoard). These are the
+   plate's own design values — lifted verbatim from the inline styles they
+   replaced (values unchanged). Only two things stay in JS: the board's
+   pixel size (derived from the 3D world constants REGISTER_BOARD_W/H ×
+   PX_PER_M, so the DOM exactly covers the R3F panel behind it) and the
+   accent colour (the per-hotel material colour, arrives as a prop). */
+
+.lobby-register {
+  box-sizing: border-box;
+  padding: 20px 28px;
+  display: flex;
+  flex-direction: column;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  user-select: none;
+}
+
+.lobby-register-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 700;
+  font-size: 34px;
+  letter-spacing: 5px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid rgba(236, 226, 204, 0.55);
+}
+
+.lobby-register-rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+}
+
+.lobby-register-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 22px;
+}
+
+/* Pushes the gap count to the entry's right edge (was `flex: 1` on a
+   spacer span). */
+.lobby-register-spacer {
+  flex: 1;
+}
+
+.lobby-register-time {
+  font-weight: 700;
+  font-size: 54px;
+}
+
+/* Dimmed ink shared by the date and the gap count. */
+.lobby-register-dim {
+  color: rgba(236, 226, 204, 0.55);
+}
+.lobby-register-date {
+  font-size: 34px;
+}
+.lobby-register-gap {
+  font-size: 26px;
+}
+
+.lobby-register-foot {
+  border-top: 2px solid rgba(236, 226, 204, 0.55);
+  padding-top: 12px;
+  font-weight: 700;
+  font-size: 30px;
+  letter-spacing: 3px;
+}

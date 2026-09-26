@@ -279,8 +279,9 @@ export function RowGroup({
         // `400 * wpp` while the camera was fixed; `wpp` is 1 now.
         distanceFactor={400}
         zIndexRange={[30, 21]}
-        style={{ pointerEvents: "auto" }}
+        pointerEvents="auto"
       >
+        {/* Dynamic: the tier's fixed card size (geo.cardW/H). */}
         <div className="group/card relative" style={{ width: geo.cardW, height: geo.cardH }}>
           <div
             role="button"
@@ -327,8 +328,10 @@ export function RowGroup({
           center
           distanceFactor={400}
           zIndexRange={[20, 11]}
-          style={{ pointerEvents: "none" }}
+          pointerEvents="none"
         >
+          {/* Dynamic: the tier's fixed card size — the second sheet matches
+              the face. */}
           <div aria-hidden style={{ width: geo.cardW, height: geo.cardH }}>
             <SliceCardFace entry={second} geo={geo} texts={texts} />
           </div>
@@ -350,11 +353,14 @@ export function RowGroup({
             center
             distanceFactor={400}
             zIndexRange={[10, 1]}
-            style={{ pointerEvents: "none" }}
+            pointerEvents="none"
           >
             <div
               aria-hidden
               className="relative overflow-hidden bg-muted ring-1 ring-foreground/10 shadow-[0_18px_40px_-16px_rgba(15,23,42,0.22)] dark:shadow-[0_18px_40px_-16px_rgba(0,0,0,0.7)]"
+              // Dynamic, all four: tier card size, per-layer cascade radius
+              // and deep-layer fade, and an em root so the skeleton bars scale
+              // with the sheet.
               style={{
                 width: geo.cardW,
                 height: geo.cardH,

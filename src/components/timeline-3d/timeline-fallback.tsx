@@ -24,6 +24,7 @@ import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { useTier } from "@/hooks/use-tier";
 import { frameGeometryFor, frameVariantFor } from "@/lib/timeline3d/stacks";
+import "./timeline-3d.css";
 
 const PULSE = "animate-pulse motion-reduce:animate-none";
 
@@ -31,8 +32,10 @@ function Bar({ className = "", delay = 0 }: { className?: string; delay?: number
   return (
     <span
       aria-hidden
-      style={delay ? { animationDelay: `${delay}ms` } : undefined}
-      className={`rounded-full bg-foreground/8 ${PULSE} ${className}`}
+      // Dynamic stagger (per-instance prop) — written as a CSS variable and
+      // consumed by `.tl-fb-delay` in timeline-3d.css.
+      style={delay ? ({ "--fb-delay": `${delay}ms` } as React.CSSProperties) : undefined}
+      className={`tl-fb-delay rounded-full bg-foreground/8 ${PULSE} ${className}`}
     />
   );
 }
@@ -49,6 +52,8 @@ function FallbackCard({
   return (
     <div
       aria-hidden
+      // Dynamic: the placeholder is the real card's size (frameGeometryFor),
+      // so the swap when the catalog lands moves nothing.
       style={{ width, height }}
       className="relative shrink-0 overflow-hidden rounded-xl bg-card p-5 ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]"
     >
@@ -67,8 +72,8 @@ function FallbackCard({
 
       {/* Title bar. */}
       <div
-        className={`relative mt-4 h-6 w-1/2 rounded-md bg-foreground/8 ${PULSE}`}
-        style={{ animationDelay: `${delay + 100}ms` }}
+        className={`tl-fb-delay relative mt-4 h-6 w-1/2 rounded-md bg-foreground/8 ${PULSE}`}
+        style={{ "--fb-delay": `${delay + 100}ms` } as React.CSSProperties}
       />
 
       <div className="relative mt-4 h-px w-full bg-foreground/[0.07]" />
@@ -77,16 +82,16 @@ function FallbackCard({
           agent gray left), rem-sized for the fallback seat. */}
       <div className="relative mt-4 space-y-2.5">
         <div
-          className={`ml-auto h-9 w-[68%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
-          style={{ animationDelay: `${delay + 160}ms` }}
+          className={`tl-fb-delay ml-auto h-9 w-[68%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
+          style={{ "--fb-delay": `${delay + 160}ms` } as React.CSSProperties}
         />
         <div
-          className={`h-12 w-[80%] rounded-2xl rounded-bl-md bg-foreground/8 ${PULSE}`}
-          style={{ animationDelay: `${delay + 220}ms` }}
+          className={`tl-fb-delay h-12 w-[80%] rounded-2xl rounded-bl-md bg-foreground/8 ${PULSE}`}
+          style={{ "--fb-delay": `${delay + 220}ms` } as React.CSSProperties}
         />
         <div
-          className={`ml-auto h-9 w-[52%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
-          style={{ animationDelay: `${delay + 280}ms` }}
+          className={`tl-fb-delay ml-auto h-9 w-[52%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
+          style={{ "--fb-delay": `${delay + 280}ms` } as React.CSSProperties}
         />
       </div>
     </div>

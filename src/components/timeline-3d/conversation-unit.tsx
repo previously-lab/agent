@@ -156,7 +156,10 @@ export function ConversationUnit({
         // slice the reader can select text in must win any overlap with the
         // cards scrolled past above it.
         zIndexRange={[30, 21]}
-        style={{ width: column, pointerEvents: "auto" }}
+        pointerEvents="auto"
+        // Dynamic: the tier's conversation column width (useTier) — the same
+        // column the conversation field lays its blocks out at.
+        style={{ width: column }}
       >
         <SliceConversation
           entry={entry}

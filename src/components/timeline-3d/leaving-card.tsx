@@ -171,8 +171,10 @@ export function LeavingCard({
         // distance is the focal length in px, so the ratio cancels.
         distanceFactor={400}
         zIndexRange={[25, 16]}
-        style={{ pointerEvents: "none" }}
+        pointerEvents="none"
       >
+        {/* Dynamic: the tier's fixed card size — the ghost matches the real
+            card it replaces. */}
         <div aria-hidden style={{ width: geo.cardW, height: geo.cardH }}>
           <SliceCardFace entry={item.slice} geo={geo} texts={texts} />
         </div>

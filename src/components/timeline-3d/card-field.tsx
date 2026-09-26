@@ -1621,8 +1621,7 @@ export function CardField({
       role="group"
       aria-label={t("fieldLabel")}
       onKeyDown={onKeyDown}
-      className="relative h-full w-full outline-none"
-      style={{ touchAction: "none" }}
+      className="relative h-full w-full touch-none outline-none"
     />
   );
 }

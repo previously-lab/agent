@@ -76,9 +76,12 @@ export function BoundaryRow({
         // Under the cards (their ranges start at 21): a boundary is context,
         // and the face of the row above it must win any overlap.
         zIndexRange={[20, 11]}
-        style={{ pointerEvents: "none" }}
+        pointerEvents="none"
       >
         <NextIntlClientProvider messages={messages} locale={locale}>
+          {/* Dynamic: width lines the gate up with the cards' rule; the
+              height is the lib's boundary-region constant (world geometry —
+              the 3D layout and this DOM box share one source of truth). */}
           <div style={{ width, height: FIELD_BOUNDARY_PX }}>
             <SliceGate
               dateIso={boundary.atIso}

@@ -1,0 +1,52 @@
+/* Static styling for the timeline-3d overlays, lifted verbatim from the
+   inline style props it replaces (values unchanged — see git history). Pure
+   design values live here; anything measured, tier-derived, or per-frame
+   stays in JS. This file is imported by the components that use it; the
+   bundler dedupes the import. */
+
+/* ─── Atmosphere (atmosphere.tsx) ─────────────────────────────────────── */
+
+/* Dominant brand aurora — upper stage. */
+.tl-aurora-brand {
+  background: radial-gradient(ellipse at center, oklch(0.6 0.23 260 / 14%) 0%, oklch(0.21 0.09 267 / 8%) 45%, transparent 70%);
+}
+/* Two fainter echoes of the SAME brand hue, west and east. */
+.tl-aurora-echo-w {
+  background: radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 5%, transparent) 0%, transparent 65%);
+}
+.tl-aurora-echo-e {
+  background: radial-gradient(ellipse at center, color-mix(in oklch, var(--brand) 4.5%, transparent) 0%, transparent 65%);
+}
+/* 72px grid, radially masked so it dissolves at the edges. */
+.tl-grid-overlay {
+  background-image:
+    linear-gradient(to right, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 30%, transparent 75%);
+  -webkit-mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 30%, transparent 75%);
+}
+/* Vignette — fades to the theme background (darkens in dark mode, lightens
+   in light mode) instead of a fixed black. */
+.tl-vignette {
+  background: radial-gradient(ellipse 120% 90% at 50% 45%, transparent 55%, color-mix(in oklch, var(--background) 78%, transparent) 100%);
+}
+
+/* ─── Card paper grain (cards.tsx, frame-card.tsx) ────────────────────── */
+/* An SVG turbulence tile, tinted by currentColor at ~4% via the element's
+   text colour + opacity utilities. */
+.tl-noise {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+}
+
+/* ─── Slice narrate corner button (slice-narrate-button.tsx) ──────────── */
+.tl-narrate-btn {
+  background-color: color-mix(in oklch, var(--card) 72%, transparent);
+}
+
+/* ─── Fallback skeleton stagger (timeline-fallback.tsx) ───────────────── */
+/* animation-delay is a per-instance parameter written from JS as the
+   --fb-delay custom property (see the style props there). */
+.tl-fb-delay {
+  animation-delay: var(--fb-delay, 0ms);
+}
