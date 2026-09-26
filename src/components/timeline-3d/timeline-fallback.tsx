@@ -26,8 +26,6 @@ import { useTier } from "@/hooks/use-tier";
 import { frameGeometryFor, frameVariantFor } from "@/lib/timeline3d/stacks";
 import "./timeline-3d.css";
 
-const PULSE = "animate-pulse motion-reduce:animate-none";
-
 function Bar({ className = "", delay = 0 }: { className?: string; delay?: number }) {
   return (
     <span
@@ -35,7 +33,7 @@ function Bar({ className = "", delay = 0 }: { className?: string; delay?: number
       // Dynamic stagger (per-instance prop) — written as a CSS variable and
       // consumed by `.tl-fb-delay` in timeline-3d.css.
       style={delay ? ({ "--fb-delay": `${delay}ms` } as React.CSSProperties) : undefined}
-      className={`tl-fb-delay rounded-full bg-foreground/8 ${PULSE} ${className}`}
+      className={`tl-fb-delay rounded-full bg-foreground/8 animate-pulse motion-reduce:animate-none ${className}`}
     />
   );
 }
@@ -72,7 +70,7 @@ function FallbackCard({
 
       {/* Title bar. */}
       <div
-        className={`tl-fb-delay relative mt-4 h-6 w-1/2 rounded-md bg-foreground/8 ${PULSE}`}
+        className="tl-fb-delay relative mt-4 h-6 w-1/2 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
         style={{ "--fb-delay": `${delay + 100}ms` } as React.CSSProperties}
       />
 
@@ -82,15 +80,15 @@ function FallbackCard({
           agent gray left), rem-sized for the fallback seat. */}
       <div className="relative mt-4 space-y-2.5">
         <div
-          className={`tl-fb-delay ml-auto h-9 w-[68%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
+          className="tl-fb-delay ml-auto h-9 w-[68%] rounded-2xl rounded-br-md bg-muted animate-pulse motion-reduce:animate-none"
           style={{ "--fb-delay": `${delay + 160}ms` } as React.CSSProperties}
         />
         <div
-          className={`tl-fb-delay h-12 w-[80%] rounded-2xl rounded-bl-md bg-foreground/8 ${PULSE}`}
+          className="tl-fb-delay h-12 w-[80%] rounded-2xl rounded-bl-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
           style={{ "--fb-delay": `${delay + 220}ms` } as React.CSSProperties}
         />
         <div
-          className={`tl-fb-delay ml-auto h-9 w-[52%] rounded-2xl rounded-br-md bg-muted ${PULSE}`}
+          className="tl-fb-delay ml-auto h-9 w-[52%] rounded-2xl rounded-br-md bg-muted animate-pulse motion-reduce:animate-none"
           style={{ "--fb-delay": `${delay + 280}ms` } as React.CSSProperties}
         />
       </div>

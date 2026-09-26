@@ -108,10 +108,6 @@ const BYOK_PROVIDERS = [
   "custom",
 ] as const;
 
-const blockHeadingClass = "text-base font-medium";
-const subHeadingClass = "text-sm font-medium";
-const blockDescClass = "text-sm text-muted-foreground";
-
 export function ClientSection() {
   const t = useTranslations("settings.client");
 
@@ -306,8 +302,6 @@ export function ClientSection() {
     persist({ brain: { type: "bridge", agent: v } });
   };
 
-  const labelClass = "text-xs font-normal text-muted-foreground";
-
   // Render nothing until the status probe resolves — in cloud mode the probe
   // 404s and the section never appears at all.
   if (hidden || !status) return null;
@@ -323,8 +317,8 @@ export function ClientSection() {
   return (
     <section data-slot="settings-client" className="space-y-8">
       <div className="space-y-1">
-        <h3 className={blockHeadingClass}>{t("heading")}</h3>
-        <p className={blockDescClass}>{t("desc")}</p>
+        <h3 className="text-base font-medium">{t("heading")}</h3>
+        <p className="text-sm text-muted-foreground">{t("desc")}</p>
       </div>
 
       {loadError && (
@@ -333,7 +327,7 @@ export function ClientSection() {
 
       {/* ── 运行状态 / Status (read-only) ── */}
       <div className="space-y-3">
-        <h4 className={subHeadingClass}>{t("statusHeading")}</h4>
+        <h4 className="text-sm font-medium">{t("statusHeading")}</h4>
         <Table>
           <TableBody>
             <TableRow>
@@ -380,8 +374,8 @@ export function ClientSection() {
       {/* ── 本地 Agent / Local agents (read-only detection) ── */}
       <div className="space-y-3">
         <div className="space-y-1">
-          <h4 className={subHeadingClass}>{t("agentsHeading")}</h4>
-          <p className={blockDescClass}>{t("agentsDesc")}</p>
+          <h4 className="text-sm font-medium">{t("agentsHeading")}</h4>
+          <p className="text-sm text-muted-foreground">{t("agentsDesc")}</p>
         </div>
         {agents === null && !agentsError && (
           <p className="text-xs text-muted-foreground/60">{t("agentsLoading")}</p>
@@ -443,9 +437,9 @@ export function ClientSection() {
 
           {/* ── 模型引擎 / Model engine — a select, auto-saved on change ── */}
           <div className="space-y-4">
-            <h4 className={subHeadingClass}>{t("brainHeading")}</h4>
+            <h4 className="text-sm font-medium">{t("brainHeading")}</h4>
             <Label className="block space-y-1">
-              <span className={`${labelClass} inline-flex items-center gap-1`}>
+              <span className="text-xs font-normal text-muted-foreground inline-flex items-center gap-1">
                 {t("engineLabel")}
                 <Tooltip>
                   <TooltipTrigger
@@ -483,10 +477,10 @@ export function ClientSection() {
             {/* 本地 Agent / local agent engine (default — no API key) */}
             {brainType === "bridge" && (
               <div className="space-y-3">
-                <p className={blockDescClass}>{t("engineLocalAgentDesc")}</p>
+                <p className="text-sm text-muted-foreground">{t("engineLocalAgentDesc")}</p>
                 <div className="space-y-1">
                   <Label className="block space-y-1">
-                    <span className={labelClass}>{t("brainAgentLabel")}</span>
+                    <span className="text-xs font-normal text-muted-foreground">{t("brainAgentLabel")}</span>
                     <Select value={brainAgent} onValueChange={handleAgentChange}>
                       <SelectTrigger className="w-full max-w-xs">
                         <SelectValue />
@@ -520,10 +514,10 @@ export function ClientSection() {
             {/* 自带 API Key / BYOK (recommended) */}
             {brainType === "byok" && (
               <div className="space-y-3">
-                <p className={blockDescClass}>{t("byokDesc")}</p>
+                <p className="text-sm text-muted-foreground">{t("byokDesc")}</p>
                 <div className="grid grid-cols-2 gap-3">
                   <Label className="block space-y-1">
-                    <span className={labelClass}>{t("byokProviderLabel")}</span>
+                    <span className="text-xs font-normal text-muted-foreground">{t("byokProviderLabel")}</span>
                     <Select
                       value={byokProvider}
                       onValueChange={(v) => {
@@ -550,7 +544,7 @@ export function ClientSection() {
                     </Select>
                   </Label>
                   <Label className="block space-y-1">
-                    <span className={labelClass}>{t("byokApiKeyLabel")}</span>
+                    <span className="text-xs font-normal text-muted-foreground">{t("byokApiKeyLabel")}</span>
                     <Input
                       type="password"
                       value={byokApiKey}
@@ -571,7 +565,7 @@ export function ClientSection() {
                 </div>
                 {byokProvider === "custom" && (
                   <Label className="block space-y-1">
-                    <span className={labelClass}>{t("byokBaseUrlLabel")}</span>
+                    <span className="text-xs font-normal text-muted-foreground">{t("byokBaseUrlLabel")}</span>
                     <Input
                       type="text"
                       value={byokBaseUrl}
@@ -590,7 +584,7 @@ export function ClientSection() {
                   </Label>
                 )}
                 <Label className="block space-y-1">
-                  <span className={labelClass}>{t("byokModelLabel")}</span>
+                  <span className="text-xs font-normal text-muted-foreground">{t("byokModelLabel")}</span>
                   <Input
                     type="text"
                     value={byokModel}

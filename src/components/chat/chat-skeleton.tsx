@@ -29,17 +29,6 @@
 import { useTier } from "@/hooks/use-tier";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 
-const PULSE = "animate-pulse motion-reduce:animate-none bg-foreground/8";
-
-/**
- * The field's own face inset — the padding a real block's content sits inside
- * (`conversation-field.tsx` and `slice-conversation.tsx` both carry this exact
- * string). It is duplicated rather than imported because those two modules are
- * the RENDERERS and this is a placeholder; the contract is the string, and the
- * comment in each place says so.
- */
-const FACE_INSET = "px-3 sm:pr-6 md:pl-0 lg:pr-8";
-
 /** A pulsing bar. `delay` staggers it against its neighbours — see MOTION. */
 function Bar({
   className = "",
@@ -58,7 +47,7 @@ function Bar({
           ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
           : undefined
       }
-      className={`pulse-delay rounded-full ${PULSE} ${className}`}
+      className={`pulse-delay rounded-full animate-pulse motion-reduce:animate-none bg-foreground/8 ${className}`}
     />
   );
 }
@@ -139,7 +128,7 @@ function RoundSkeleton({
         style={
           { "--pulse-delay": `${delay + 90}ms` } as React.CSSProperties
         }
-        className={`pulse-delay rounded-2xl rounded-bl-md ${PULSE} ${BUBBLE_HEIGHT[agentLines]} ${agentWidth}`}
+        className={`pulse-delay rounded-2xl rounded-bl-md animate-pulse motion-reduce:animate-none bg-foreground/8 ${BUBBLE_HEIGHT[agentLines]} ${agentWidth}`}
       />
     </div>
   );
@@ -234,7 +223,9 @@ export function ChatStreamSkeleton({
           field renders at, so the skeleton's rows land where the turns
           will. */}
       <div className="mx-auto w-full" style={{ maxWidth: column }}>
-        <div className={FACE_INSET}>
+        {/* The field's face inset — the SAME string SliceConversation pads with,
+            so the placeholder's rows land where the real turns will. */}
+        <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
           <SeamSkeleton />
           <RoundSkeleton userWidth="w-[38%]" agentWidth="w-[58%]" delay={0} />
           <RoundSkeleton

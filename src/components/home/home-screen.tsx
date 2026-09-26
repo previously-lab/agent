@@ -16,19 +16,6 @@ import { Link } from "@/i18n/navigation";
  * graph.
  */
 
-// ─── The ink palette ───────────────────────────────────────────────────────
-// The semantic CLASS NAMES the zones draw on. The page's tuned sizes used
-// to live here as a tuning table feeding inline styles; the rule against
-// static values in style={{ … }} re-homed them — scale values became
-// Tailwind tokens in the markup, the off-scale type sizes became the
-// --home-* variables in globals.css.
-
-/** Inks — the semantic palette the zones draw on. */
-export const HOME_INK_FULL = "text-foreground";
-export const HOME_INK_MUTED = "text-muted-foreground";
-export const HOME_INK_FAINT = "text-muted-foreground/70";
-export const HOME_INK_BRAND = "text-brand";
-
 export interface HomeScreenProps {
   /** Line 1, weight-split parts — the product's own sentence. */
   eyebrowLead: string;
@@ -63,13 +50,13 @@ export function HomeScreen({
             name large and LIGHT (300, the variable face's own light; the big
             quiet line is the page's largest ink without shouting). */}
         <header>
-          <p className={`text-base ${HOME_INK_MUTED}`}>
+          <p className="text-base text-muted-foreground">
             <span className="font-medium text-foreground/75">
               {eyebrowLead}
             </span>{" "}
             {eyebrowPreposition}
           </p>
-          <h1 className={`home-name-type mt-1 font-light ${HOME_INK_FULL}`}>
+          <h1 className="home-name-type mt-1 font-light text-foreground">
             {name}
           </h1>
         </header>
@@ -81,7 +68,7 @@ export function HomeScreen({
             56px below it — the same distances the rules used to hold. */}
         {recap && (
           <section>
-            <p className={`mt-16 font-mono text-xs ${HOME_INK_FAINT}`}>
+            <p className="mt-16 font-mono text-xs text-muted-foreground/70">
               {recap.when}
               <span className="opacity-50"> · </span>
               {recap.gap}
@@ -97,17 +84,17 @@ export function HomeScreen({
         <nav className="mt-14 flex items-baseline gap-8">
           <Link
             href="/app"
-            className={`text-lg ${HOME_INK_FULL} transition-colors hover:text-brand`}
+            className="text-lg text-foreground transition-colors hover:text-brand"
           >
             {continueLabel}
-            <span aria-hidden className={HOME_INK_BRAND}>
+            <span aria-hidden className="text-brand">
               {" "}
               →
             </span>
           </Link>
           <Link
             href="/settings"
-            className={`ml-auto text-lg ${HOME_INK_FAINT} transition-colors hover:${HOME_INK_FULL}`}
+            className={`ml-auto text-lg text-muted-foreground/70 transition-colors hover:text-foreground`}
           >
             {settingsLabel}
           </Link>

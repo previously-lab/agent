@@ -45,14 +45,15 @@ import { getSliceContent } from "@/lib/episodic/actions";
 import { HistoryTurn } from "@/components/chat/history-turn";
 import { SliceGate, type SliceGateProps } from "@/components/chat/slice-gate";
 
-/**
- * The conversation column's horizontal inset. Named once because the face and
- * the boundary after it must share it — the gate is an intertitle inside the
- * same column, not a full-bleed rule — and because it is the SAME string the
+/*
+ * The conversation column's horizontal inset — `px-3 sm:pr-6 md:pl-0 lg:pr-8`,
+ * written at both usages below and once in `chat-skeleton.tsx`. The face and
+ * the boundary after it share one string — the gate is an intertitle inside
+ * the same column, not a full-bleed rule — and it is the SAME string the
  * conversation field pads its blocks with (`BillboardBlock`), so the two
- * renderers draw a conversation at one width while they coexist.
+ * renderers draw a conversation at one width while they coexist. The string IS
+ * the contract: it has to be changed wherever it is written.
  */
-const FACE_INSET = "px-3 sm:pr-6 md:pl-0 lg:pr-8";
 
 /**
  * The React key for one turn of a slice.
@@ -222,7 +223,7 @@ export function SliceConversation({
           height of dead space after every unit that closes one. The report is
           the FACE, which is what `faceHeights` means by "what a measured unit
           reports". */}
-      <div ref={ref} data-slice-conversation={entry.id} className={FACE_INSET}>
+      <div ref={ref} data-slice-conversation={entry.id} className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
         {turns.map((turn, i) => (
           <HistoryTurn
             key={turnKey(turn, i)}
@@ -251,7 +252,7 @@ export function SliceConversation({
           permanently dormant rule pretending to be a boundary, which is worse
           than the gap it leaves. */}
       {boundary && gateSignal ? (
-        <div className={FACE_INSET}>
+        <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
           <SliceGate {...gatePropsFor(boundary)} signal={gateSignal} />
         </div>
       ) : null}
