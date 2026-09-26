@@ -1,0 +1,75 @@
+/* The home's paper (v0.13 paper prototype). The MATERIAL lives in
+   globals.css (.paper-stock / .paper-card-stock / .paper-sink /
+   .paper-raise / .paper-foil and the --paper-* variables) — this file
+   only lays that material out on the home route: the board sheet, the
+   card lying on it, and the printed relief on the content regions.
+   Pure design values live here; nothing is measured or JS-driven. */
+
+/* The board — the page itself is the big sheet. Its seed is the theme's
+   own neutral: the home's stock carries no slice, strand, or brand hue. */
+.home-board {
+  --paper-seed: var(--background);
+}
+
+/* The card — the second sheet. Its lift is the strongest depth cue on the
+   page (above grain, above the 1px relief): one lit top edge plus a tight
+   shadow falling down-right, away from the same upper-left light that
+   lights every relief edge. The shadow is the paper's own colour pushed
+   darker — never a flat grey dropped on any theme. */
+.home-card {
+  --lift-tight: oklch(0 0 0 / 0.1);
+  --lift-tight: oklch(from var(--paper) calc(l * 0.5) calc(c * 0.5) h / 0.1);
+  --lift-soft: oklch(0 0 0 / 0.07);
+  --lift-soft: oklch(from var(--paper) calc(l * 0.35) calc(c * 0.5) h / 0.07);
+  border-radius: 3px;
+  padding: clamp(1.75rem, 5vw, 2.5rem);
+  box-shadow:
+    inset 0 1px 0 var(--paper-hi),
+    0 1px 2px var(--lift-tight),
+    0 4px 14px 2px var(--lift-soft);
+}
+
+/* Dark paper needs a deeper shadow to lift at all: the same derivation,
+   higher alpha — the shadow is still the board's colour, just more of it. */
+.dark .home-card {
+  --lift-tight: oklch(0 0 0 / 0.45);
+  --lift-tight: oklch(from var(--paper) calc(l * 0.45) calc(c * 0.5) h / 0.45);
+  --lift-soft: oklch(0 0 0 / 0.26);
+  --lift-soft: oklch(from var(--paper) calc(l * 0.3) calc(c * 0.5) h / 0.26);
+}
+
+/* The sunken content region: identity + dateline printed INTO the card
+   (content reads sunken, like a conversation bubble — thin as business-card
+   printing, not a soft UI panel). The relief comes from the .paper-sink
+   class in the markup; only the plate's geometry lives here. */
+.home-plate {
+  border-radius: 2px;
+  padding: 0.875rem 1rem 1rem;
+}
+
+/* The card's internal rule: a flat printed hairline — ink, not relief.
+   The debossed look belongs to the plate's edge; a rule is a line of ink
+   laid ON the sheet. */
+.home-rule {
+  height: 1px;
+  background-color: var(--paper-line);
+}
+
+/* The raised label-like regions: the two menu items as printed tags.
+   Geometry only — the lift is the .paper-raise recipe, 1px and no blur. */
+.home-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: 2px;
+}
+
+/* The foil's only interaction state: a breath of brightness, not a colour
+   change (metallic leaf does not recolour, it catches more light). */
+.home-foil {
+  transition: filter 150ms ease;
+}
+.home-foil:hover {
+  filter: brightness(1.05);
+}

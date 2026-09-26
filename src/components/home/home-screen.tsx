@@ -1,21 +1,30 @@
 import { Link } from "@/i18n/navigation";
+import "./home-paper.css";
 
 /**
- * The home (v0.13 §3) — pure typography on the field. No card, no box, no
- * rule, no stamps, no file numbers: sentence case, and weight + margins
- * carry the hierarchy. Zones, top to bottom:
+ * The home (v0.13 §3) — paper, not bare typography: the page IS a big sheet
+ * (the board) with a second, brighter sheet (the card) lying on it, and the
+ * content regions carry printed relief. Everything is lit from one
+ * upper-left light: the card's shadow falls down-right, a sunken region
+ * shadows its top lip, a raised one catches light on its top edge.
  *
- *   TITLE    "Previously on" (the product's sentence, weight-split) and the
- *            reader's name — the biggest thing on the page.
- *   DATELINE the remark under it — ONE line, hugging the name the way a
- *            subtitle hugs a title: either the relative phrase the page
- *            already phrased, or the plain clock once the gap outgrows the
- *            interval ladder's day bucket.
- *   MENU     继续 → `/app`, then 设置 beneath it in faint ink — a stacked
- *            pair with one left edge, the way a game's menu lists equal items.
+ * Zones, top to bottom inside the card:
  *
- * Purely presentational: every fact arrives formatted from the server page,
- * so this file stays locale- and clock-free. No R3F anywhere in the import
+ *   PLATE   the identity block (the product's sentence, the reader's name,
+ *           the dateline when there is one) — a CONTENT region, printed
+ *           INTO the card (.paper-sink): the thin-deboss read, like a
+ *           conversation bubble on a business card.
+ *   RULE    a flat printed hairline (.home-rule, --paper-line) — ink on
+ *           the sheet, separating content from menu.
+ *   MENU    继续 → `/app`, then 设置 beneath it — LABEL-like regions
+ *           (.paper-raise), printed tags whose top edge catches the light.
+ *           继续 carries the page's one metallic treatment (.paper-foil:
+ *           flat leaf ink, not embossed type); 设置 stays matte ink.
+ *
+ * The material vocabulary (--paper-*, .paper-*) lives in globals.css as a
+ * shared contract; this file (home-paper.css) only lays it out. Purely
+ * presentational: every fact arrives formatted from the server page, so
+ * this file stays locale- and clock-free. No R3F anywhere in the import
  * graph.
  */
 
@@ -41,15 +50,15 @@ export function HomeScreen({
   settingsLabel,
 }: HomeScreenProps) {
   return (
-    <main className="flex h-dvh flex-col items-center justify-center overflow-y-auto px-6">
-      <div className="w-full max-w-sm">
-        {/* TITLE — the product's sentence, then the reader's name. Sentence
-            case, no tracking, and NO font-family class: the app's default is
-            Raleway, so the title says nothing and inherits it. The weight does
-            the hierarchy — the lead a touch heavier than its preposition, the
-            name large and LIGHT (300, the variable face's own light; the big
-            quiet line is the page's largest ink without shouting). */}
-        <header>
+    <main className="home-board paper-stock flex min-h-dvh flex-col items-center justify-center px-6 py-16">
+      <div className="home-card paper-card-stock w-full max-w-sm">
+        {/* THE PLATE — the sunken identity region. Sentence case, and NO
+            font-family class: the app's default is Raleway, so the title
+            says nothing and inherits it. The weight does the hierarchy —
+            the lead a touch heavier than its preposition, the name large
+            and LIGHT (300, the variable face's own light). The dateline
+            hugs the name inside the same pressed region. */}
+        <header className="home-plate paper-sink">
           <p className="text-base text-muted-foreground">
             <span className="font-medium text-foreground/75">
               {eyebrowLead}
@@ -59,37 +68,31 @@ export function HomeScreen({
           <h1 className="home-name-type mt-1 font-light text-foreground">
             {name}
           </h1>
-        </header>
-
-        {/* THE DATELINE — the page's one factual line, and the page has
-            already chosen its shape. It hugs the name (a subtitle, not a
-            document's dateline far down the page), so the three lines read as
-            ONE block: kicker, name, remark. */}
-        {dateline && (
-          <section>
+          {dateline && (
             <p className="mt-2 font-mono text-xs text-muted-foreground/70">
               {dateline}
             </p>
-          </section>
-        )}
+          )}
+        </header>
 
-        {/* THE MENU — two items, stacked on one left edge: a game's own menu
-            rather than a toolbar's row, and the same size for both, because
-            they are two choices and not a hero with a hanger-on. The ink
-            separates them (继续 full, 设置 faint); neither carries an arrow —
-            the items ARE the affordance, and a glyph would decorate what
-            already reads as a link. 进入世界 is gone: the world is reached
-            through the conversation, not as a second front door. */}
-        <nav className="mt-16 flex flex-col items-start gap-3">
+        {/* The printed rule between content and menu — flat ink. */}
+        <div className="home-rule my-7" aria-hidden="true" />
+
+        {/* THE MENU — two label-like regions, stacked on the card's left
+            edge: a game's own menu rather than a toolbar's row. The ink
+            separates them (继续 metallic foil, 设置 matte and faint);
+            neither carries an arrow. 进入世界 is gone: the world is
+            reached through the conversation, not as a second front door. */}
+        <nav className="flex flex-col items-start gap-3">
           <Link
             href="/app"
-            className="text-lg text-foreground transition-colors hover:text-brand"
+            className="home-item paper-raise paper-foil home-foil text-lg"
           >
             {continueLabel}
           </Link>
           <Link
             href="/settings"
-            className="text-lg text-muted-foreground/70 transition-colors hover:text-foreground"
+            className="home-item paper-raise text-lg text-muted-foreground/80 transition-colors hover:text-foreground"
           >
             {settingsLabel}
           </Link>
