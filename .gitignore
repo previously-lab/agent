@@ -24,6 +24,7 @@ node_modules/
 
 # ===== Build =====
 .next/
+.next*/
 out/
 build/
 dist/
