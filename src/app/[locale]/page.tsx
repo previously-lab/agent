@@ -17,8 +17,7 @@ export const dynamic = "force-dynamic";
  *
  * Pure typography on the field: the product's sentence and the reader's
  * name, the 前情提要 (where the last conversation left off — real timestamps,
- * real gap, the last exchange's own words with its emphasis intact, via
- * `getHomeMemoryState`), and one row of doors (接着说 → `/app`, 进入世界 →
+ * real gap, via `getHomeMemoryState`), and one row of doors (接着说 → `/app`, 进入世界 →
  * `/app?view=game`, 设置). No card, no status line, no uppercase — and no
  * conversation ability, no R3F (nothing in this route's import graph may
  * pull in three.js or the game scene).
@@ -99,10 +98,6 @@ export default async function HomePage({
     recapProps = {
       when,
       gap: format.relativeTime(lastAt, new Date()),
-      youLabel: t("youLabel"),
-      agentLabel: t("agentLabel"),
-      lastUser: recap.lastUser,
-      lastAgent: recap.lastAgent,
     };
   }
 

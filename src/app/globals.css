@@ -641,14 +641,10 @@
   --subtitle-block-max: 660px;
   --subtitle-user-ink: oklch(0.6 0.015 75);
   --pill-max-width: 600px;
-  /* Home tuned type (home-screen.tsx): 44px straddles text-4xl/5xl, 15px
-     straddles sm/base, 11px falls below xs, and both leadings fall between
-     the leading scale's steps. */
+  /* Home tuned type (home-screen.tsx): 44px straddles text-4xl/5xl, and the
+     leading falls between the leading scale's steps. */
   --home-name-size: 44px;
   --home-name-leading: 1.15;
-  --home-quote-size: 15px;
-  --home-quote-leading: 1.75;
-  --home-speaker-size: 11px;
 }
 
 .subtitle-user-ink {
@@ -663,13 +659,6 @@
 .home-name-type {
   font-size: var(--home-name-size);
   line-height: var(--home-name-leading);
-}
-.home-quote-type {
-  font-size: var(--home-quote-size);
-  line-height: var(--home-quote-leading);
-}
-.home-speaker-type {
-  font-size: var(--home-speaker-size);
 }
 
 .pill-box {
