@@ -68,17 +68,12 @@ function QuoteRow({
   return (
     <div className="flex gap-3">
       <dt
-        className={`w-24 shrink-0 font-mono ${speakerClass}`}
-        style={{ fontSize: "var(--home-speaker-size)" }}
+        className={`home-speaker-type w-24 shrink-0 font-mono ${speakerClass}`}
       >
         {speaker}
       </dt>
       <dd
-        className={`min-w-0 flex-1 font-serif text-foreground/90 line-clamp-2`}
-        style={{
-          fontSize: "var(--home-quote-size)",
-          lineHeight: "var(--home-quote-leading)",
-        }}
+        className={`home-quote-type min-w-0 flex-1 font-serif text-foreground/90 line-clamp-2`}
       >
         {runs.map((run, index) =>
           run.emphasis === "strong" ? (
@@ -125,13 +120,7 @@ export function HomeScreen({
             </span>{" "}
             {eyebrowPreposition}
           </p>
-          <h1
-            className={`mt-1 font-light ${HOME_INK_FULL}`}
-            style={{
-              fontSize: "var(--home-name-size)",
-              lineHeight: "var(--home-name-leading)",
-            }}
-          >
+          <h1 className={`home-name-type mt-1 font-light ${HOME_INK_FULL}`}>
             {name}
           </h1>
         </header>

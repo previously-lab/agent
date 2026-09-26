@@ -43,6 +43,9 @@ export const SLICE_GATE_PX = 128;
  * everything, and the camera compensation (see `prependHeadCount`) leaves the
  * reader's view exactly where it was — with the new content off-screen above
  * them, to be scrolled into.
+ *
+ * The origin renders at exactly this height (`h-32` in field-origin.tsx) —
+ * keep the two in step.
  */
 export const FIELD_ORIGIN_PX = 128;
 

@@ -285,10 +285,7 @@ export function ConversationPanel({
           }`}
         >
           {subtitleLine && subtitleLine.text ? (
-            <span
-              className="flex min-w-0 w-full gap-3"
-              style={{ maxWidth: "var(--subtitle-block-max)" }}
-            >
+            <span className="subtitle-block flex min-w-0 w-full gap-3">
               <span
                 aria-hidden
                 className={`w-28 shrink-0 truncate uppercase tracking-[0.08em] ${
@@ -328,10 +325,7 @@ export function ConversationPanel({
               </span>
             </span>
           ) : subtitleLine?.status ? (
-            <span
-              className="subtitle-user-ink min-w-0 w-full truncate uppercase tracking-[0.08em]"
-              style={{ maxWidth: "var(--subtitle-block-max)" }}
-            >
+            <span className="subtitle-block subtitle-user-ink min-w-0 w-full truncate uppercase tracking-[0.08em]">
               {subtitleLine.status.kind === "reading"
                 ? t("subtitleReading", { count: subtitleLine.status.count })
                 : t("subtitleThinking")}

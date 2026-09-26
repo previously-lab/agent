@@ -655,6 +655,23 @@
   color: var(--subtitle-user-ink);
 }
 
+/* The classes that CARRY the variables above — a static property is set in
+   CSS, never applied inline just to read a var. */
+.subtitle-block {
+  max-width: var(--subtitle-block-max);
+}
+.home-name-type {
+  font-size: var(--home-name-size);
+  line-height: var(--home-name-leading);
+}
+.home-quote-type {
+  font-size: var(--home-quote-size);
+  line-height: var(--home-quote-leading);
+}
+.home-speaker-type {
+  font-size: var(--home-speaker-size);
+}
+
 .pill-box {
   max-width: var(--pill-max-width);
 }
