@@ -106,6 +106,7 @@ import {
   type UnitMetrics,
 } from "@/lib/timeline3d/units";
 import { boundaryBetween } from "@/lib/timeline3d/boundary";
+import { strandAccent } from "@/lib/timeline3d/layout";
 import {
   armedGate,
   gateBands,
@@ -121,6 +122,7 @@ import {
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
+import { setPaperBoardSeed } from "./atmosphere";
 import { RowGroup } from "./row-group";
 import { useWorldScene } from "./world-slot";
 import type { SliceNarration } from "./slice-narrate-button";
@@ -484,6 +486,10 @@ function FieldScene({
   // The last slice this field reported as the cursor (ONE CURSOR, §6) —
   // tracked so the report fires on a CHANGE, not per frame.
   const lastCursorRef = useRef<string | null>(null);
+  // The paper board's pending seed (the centred card the reader is heading
+  // for) and the slice id whose colour is ON the board — see the frame loop.
+  const paperPendingRef = useRef<{ id: string; accent: string } | null>(null);
+  const paperWrittenRef = useRef<string | null>(null);
   // The visible range is STATE (drives which RowGroups mount), mirrored in a
   // ref so the frame loop can compare without a stale closure. Reading a ref
   // during render would leave stale rows mounted after a level change when no
@@ -654,6 +660,29 @@ function FieldScene({
       if (id !== null && id !== lastCursorRef.current) {
         lastCursorRef.current = id;
         onCursorSlice?.(id);
+      }
+      // THE PAPER BOARD'S COLOUR (v0.13 paper pass): the sheet behind the
+      // field takes the strand colour of the card the reader has LANDED on.
+      // The write is gated on a SETTLED scroll — a drag through five cards
+      // sweeps no colours across the board; the ~300ms cross-fade itself is
+      // a registered-property transition on the sheet (timeline-3d.css).
+      // The accent is the same resolution the face uses for its spine and
+      // stock seed (`strandAccent`), never a second slice→strand mapping.
+      const landed = rows[idx]?.top;
+      if (landed && landed.id !== paperPendingRef.current?.id) {
+        paperPendingRef.current = {
+          id: landed.id,
+          accent: strandAccent(landed.strands),
+        };
+      }
+      const pending = paperPendingRef.current;
+      if (
+        pending &&
+        pending.id !== paperWrittenRef.current &&
+        Math.abs(rigNow.target - rigNow.current) < 0.5
+      ) {
+        paperWrittenRef.current = pending.id;
+        setPaperBoardSeed(pending.accent);
       }
     }
 

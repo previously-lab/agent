@@ -16,7 +16,12 @@
  *   → ledger-style archive rows (TONE / DECIDED / OPEN / STRANDS)
  *   → chat bubbles (real turns, agent serif, user sans)
  *   → footer (continued-from + FR.date)
- * Paper feel: noise grain + top light falloff + hairline frame + strand spine.
+ * Paper material (v0.13 paper pass): the face IS a card sheet
+ * (.paper-card-stock — the grain is its own background, blended into the
+ * stock), seeded with the strand colour so it sits one step brighter than
+ * the board. Inside, thin relief only: the strand marks read RAISED, the
+ * turn bubbles / quoted line / ledger panel read SUNKEN — business-card
+ * printing, not soft UI. Text stays flat ink at full contrast.
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { Turn } from "@/lib/episodic/types";
@@ -64,9 +69,6 @@ function groupLabel(row: StackRow, locale: string): string {
   );
   return `${d.slice(5, 10).replace("-", "/")} ${weekday}`;
 }
-
-/** Paper grain lives in timeline-3d.css (`.tl-noise`) — the SVG turbulence
-    tile is a static data URI, not render-time state. */
 
 function accentOf(entry: TimelineSliceEntry): string {
   return strandAccent(entry.strands);
@@ -154,12 +156,12 @@ function previouslyExcerpt(raw: string | null | undefined): string | null {
   return prose.slice(0, cut > 0 ? cut : 160) + "…";
 }
 
-/** 1px hairline with the card's muted foreground tint. */
+/** Printed rule between sections — the two-step band lives in CSS. */
 function Hairline({ className = "" }: { className?: string }) {
   return (
     <div
       aria-hidden
-      className={`h-px w-full bg-foreground/[0.07] ${className}`}
+      className={`tl-paper-rule w-full ${className}`}
     />
   );
 }
@@ -228,7 +230,7 @@ function TurnBubbles({
             return (
               <div
                 key={`${turn.turnId ?? "t"}-${i}`}
-                className={`max-w-[86%] rounded-[0.9em] px-[0.85em] py-[0.6em] leading-relaxed ${
+                className={`paper-sink max-w-[86%] rounded-[0.9em] px-[0.85em] py-[0.6em] leading-relaxed ${
                   isUser
                     ? "tl-user-bubble ml-auto rounded-br-[0.2em]"
                     : "rounded-bl-[0.2em] bg-muted text-foreground/85"
@@ -369,7 +371,7 @@ export function FrameCard({
             <span key={name} className="inline-flex items-center gap-[0.3em]">
               <ColorSquare
                 color={strandColor(name)}
-                className="size-[0.42em]"
+                className="paper-raise size-[0.42em]"
               />
               <span>{name}</span>
             </span>
@@ -383,21 +385,24 @@ export function FrameCard({
     // Dynamic: tier card size + the frame's own em (zoom-driven root font
     // size — every inner measurement is em-relative to it).
     <div
-      className={`relative block overflow-hidden rounded-[0.9em] bg-card text-left ring-1 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] transition-[box-shadow,ring-color] duration-200 dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
-        flash
-          ? "tl-flash ring-primary/70"
-          : "ring-foreground/10 group-hover:ring-foreground/25"
+      className={`paper-card-stock tl-paper-lift relative block overflow-hidden rounded-[0.9em] text-left transition-[box-shadow] duration-200 ${
+        flash ? "tl-flash" : ""
       }`}
-      style={{ width: geo.cardW, height: geo.cardH, fontSize: em }}
+      style={{
+        width: geo.cardW,
+        height: geo.cardH,
+        fontSize: em,
+        // The card IS a sheet: its stock takes the strand colour, one step
+        // brighter than the board (the paper contract clamps lightness).
+        // Same `accent` the spine prints with — one resolution, not two.
+        "--paper-seed": accent,
+      } as React.CSSProperties}
     >
-      {/* Top light falloff + paper grain. */}
+      {/* Top light falloff. The GRAIN is the face's own .paper-card-stock
+          background now (blended into the stock, never an overlay). */}
       <span
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-      />
-      <span
-        aria-hidden
-        className="tl-noise pointer-events-none absolute inset-0 text-foreground opacity-[0.035] dark:opacity-[0.05]"
       />
       {/* The strand spine. `accent` is the slice's strand colour (JS); 0.85
           keeps the em-wide bar below full strength. */}
@@ -412,7 +417,9 @@ export function FrameCard({
             start, full precision — the card's face never changes with the
             zoom/aggregation level. */}
         <div className="flex items-center gap-[0.5em] text-[0.62em] leading-none tracking-[0.08em] text-muted-foreground">
-          <ColorSquare color={accent} className="size-[0.5em]" />
+          {/* The strand mark reads RAISED — a printed tag you can point at,
+              not a hole in the stock. */}
+          <ColorSquare color={accent} className="paper-raise size-[0.5em]" />
           {/* Static timecode — NumberTicker's entrance roll (year counts up
               from -30) replays on every virtualization remount and reads as
               a glitch on a card face. Mono, same as the chat time readout. */}
@@ -449,7 +456,10 @@ export function FrameCard({
         {(turnsState === "loading" || previouslyText) && (
           <>
             <Hairline className="mt-[0.65em]" />
-            <div className="relative mt-[0.55em]">
+            {/* The quoted line reads SUNKEN — a passage pressed into the
+                stock, thin as business-card printing. The plate fill is the
+                board stock one step below the card (tl-paper-plate). */}
+            <div className="paper-sink tl-paper-plate relative mt-[0.55em] rounded-[0.6em] px-[0.85em] py-[0.65em]">
               {turnsState !== "loading" && previouslyText && (
                 <p className="animate-content-arrive line-clamp-2 font-serif text-[0.74em] font-light italic leading-relaxed text-muted-foreground/85">
                   <span className="text-foreground/40">❝ </span>
@@ -476,7 +486,9 @@ export function FrameCard({
         {ledgerRows.length > 0 && (
           <>
             <Hairline className="mt-[0.65em]" />
-            <div className="flex flex-col">
+            {/* The ledger is the card's SUNKEN panel — the archive rows sit
+                pressed into the stock like a printed form. */}
+            <div className="paper-sink tl-paper-plate flex flex-col rounded-[0.6em] px-[0.85em]">
               {ledgerRows.map((row, i) => (
                 <div key={row.key}>
                   {i > 0 && <Hairline />}

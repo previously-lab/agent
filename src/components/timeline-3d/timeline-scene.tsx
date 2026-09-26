@@ -3,8 +3,9 @@
 /**
  * TimelineScene (Rev 11) — the timeline view's RIGHT pane only (v0.11 shell
  * refactor). The left AxisBand is now a persistent shell component; this file
- * composes the CardField R3F scene plus the NOW tail marker, the floating lens
- * switcher, and atmosphere overlays.
+ * composes the CardField R3F scene plus the NOW tail marker and the running
+ * card. (The atmosphere moved to the SHELL below the shared canvas, §14; the
+ * vignette died with the aurora it framed.)
  *
  * Catalog window, strand selection, scroll progress/zoom refs, and the calendar
  * range are owned by the shell and passed in as props so the left AxisBand can
@@ -16,7 +17,6 @@ import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { filterByStrand } from "@/lib/timeline3d/stacks";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
-import { AtmosphereVignette } from "./atmosphere";
 import dynamic from "next/dynamic";
 
 const CardField = dynamic(
@@ -102,8 +102,15 @@ export interface TimelineSceneProps {
  * viewport edge mid-stroke.
  */
 function BottomFade() {
+  // Fades into the paper board's own stock (tl-board-fade) — a fade to the
+  // theme background would read as a band of fog on the sheet. Carries
+  // `data-board-fade` so the field's seed write tints the fade to match the
+  // tinted board (the fade is not a DOM descendant of the sheet).
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
+    <div
+      data-board-fade
+      className="tl-board-fade paper-tinted pointer-events-none absolute inset-x-0 bottom-0 h-16"
+    />
   );
 }
 
@@ -256,8 +263,6 @@ export function TimelineScene({
             conversation rung, which is precisely where a reader needs it to
             get back to the cards. */}
       </div>
-
-      <AtmosphereVignette />
     </div>
   );
 }

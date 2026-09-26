@@ -1,69 +1,56 @@
 "use client";
 
 /**
- * Timeline atmosphere — the 2.5D scene's environment lives OUTSIDE the WebGL
- * canvas as CSS overlays (doc/design/v0.10.0-memory-viz.md §5.3: 氛围层是场景
- * 外的 CSS 覆盖层，不做 3D 几何). Mirrors previously-site's stage-atmosphere:
- * a whisper-quiet 72px grid, three slow-drifting aurora glows, and an edge
- * vignette — all pointer-transparent, transform/opacity animation only.
+ * The card field's paper board (v0.13 paper pass) — the old atmosphere is
+ * deleted. What used to live here (three drifting aurora glows, a 72px grid,
+ * an edge vignette) is replaced by ONE sheet of paper filling the pane behind
+ * the transparent canvas: the sheet element's own `.paper-stock` background,
+ * no overlay divs (the grain is blended into the stock, per the paper
+ * contract in globals.css).
  *
- * `AtmosphereBackdrop` renders BEHIND the transparent canvas; `Vignette`
- * renders above it (it must not eat pointer events — the scene's gestures
- * pass through).
+ * THE SHEET'S COLOUR IS THE CURRENT CARD'S STRAND COLOUR. The card field
+ * decides which slice the reader stands on; when the scroll settles on a new
+ * card it writes `--paper-seed` here through `setPaperBoardSeed`, and the
+ * registered-property transition on `.tl-paper-board` (timeline-3d.css)
+ * cross-fades the derived stock (~300ms) instead of snapping. The write is
+ * landing-only on purpose: a drag through five cards must not sweep five
+ * colours across the board.
+ *
+ * `AtmosphereBackdrop` renders in the SHELL's pane slot, inset past the band,
+ * UNDER the shared canvas (§14 merge) — the shell file itself is not touched.
  */
 
 import "./timeline-3d.css";
+
+/** Selector for the sheet element — the one channel from the field (which
+ *  decides the current card) to the board (which the shell mounts). The
+ *  bottom fade carries the same seed: it must dissolve into the TINTED
+ *  sheet, and it is not a DOM descendant of it. */
+const BOARD_SELECTOR = "[data-paper-board], [data-board-fade]";
+
+/** Write the board's seed colour. Called by the card field when the reader
+ *  lands on a card; no-op when the board is not mounted (conversation rung). */
+export function setPaperBoardSeed(seed: string): void {
+  if (typeof document === "undefined") return;
+  document
+    .querySelectorAll<HTMLElement>(BOARD_SELECTOR)
+    .forEach((el) => el.style.setProperty("--paper-seed", seed));
+}
 
 export function AtmosphereBackdrop() {
   return (
     <div
       aria-hidden="true"
-      className="tl-backdrop pointer-events-none absolute inset-0 overflow-hidden bg-background"
-    >
-      {/* Dominant brand aurora — upper stage */}
-      <div
-        className="tl-aurora tl-aurora-brand absolute -top-[20%] left-1/2 h-[55vh] w-[80vw] -translate-x-1/2 rounded-full blur-2xl sm:blur-3xl"
-      />
-      {/* Two fainter echoes of the SAME brand hue, not two other hues — the
-          atmosphere is one colour drifting, not a light show. These were an
-          amber and an emerald, the last two literal survivors of the retired
-          five-entry strand palette, which left the backdrop carrying two hues
-          that no longer meant anything anywhere in the product.
-          (Desktop only: big blur layers are a mobile scroll-jank source.) */}
-      <div
-        className="tl-aurora-slow tl-aurora-echo-w absolute bottom-[5%] -left-[10%] hidden h-[40vh] w-[45vw] rounded-full blur-3xl sm:block"
-      />
-      <div
-        className="tl-aurora tl-aurora-echo-e absolute top-[35%] -right-[12%] hidden h-[40vh] w-[40vw] rounded-full blur-3xl sm:block"
-      />
-      {/* 72px grid, radially masked so it dissolves at the edges */}
-      <div className="tl-grid-overlay absolute inset-0" />
-    </div>
-  );
-}
-
-export function AtmosphereVignette() {
-  return (
-    <div
-      aria-hidden="true"
-      className="tl-vignette pointer-events-none absolute inset-0"
+      data-paper-board
+      className="paper-stock tl-paper-board pointer-events-none absolute inset-0 overflow-hidden"
     />
   );
 }
 
-/** Keyframes shared by the atmosphere + the NOW convergence point. Injected
- *  once by the scene (client-only, ssr:false). */
+/** Keyframes still used by the field, injected once by the shell
+ *  (client-only, ssr:false). The aurora drift and NOW-ring breathe died with
+ *  the atmosphere they animated; the panel dock-in and the ?at= flash remain. */
 export const TIMELINE_KEYFRAMES = `
-@keyframes tl-aurora-drift {
-  from { transform: translate3d(-2%, 1%, 0) scale(1); }
-  to { transform: translate3d(2%, -3%, 0) scale(1.07); }
-}
-.tl-aurora { animation: tl-aurora-drift 26s ease-in-out infinite alternate; will-change: transform; }
-.tl-aurora-slow { animation: tl-aurora-drift 38s ease-in-out infinite alternate-reverse; will-change: transform; }
-@keyframes tl-now-breathe {
-  0%, 100% { opacity: 0.15; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(1.3); }
-}
 /* Card entrance (Rev 9 §R9.4): the staggered rise lives in the field's
    generation-window motion wrapper — .tl-card-in remains only as the card
    MARKER class (e2e selector), no CSS animation. Scroll-mounted rows must
@@ -87,6 +74,6 @@ export const TIMELINE_KEYFRAMES = `
 }
 .tl-flash { animation: tl-flash 1.6s ease-out 2; }
 @media (prefers-reduced-motion: reduce) {
-  .tl-aurora, .tl-aurora-slow, .tl-now-ring, .tl-flash { animation: none !important; }
+  .tl-flash { animation: none !important; }
 }
 `;

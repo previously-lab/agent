@@ -235,6 +235,27 @@
             the theme's own neutral (`--background`); a themed surface
             (the card view) sets it to its accent colour instead. The
             derivation below must stay hue-preserving so any seed works.
+
+   THE DERIVATION IS PER-SURFACE, NOT PER-DOCUMENT — and this note is the
+   reason it stays that way, measured, not reasoned. These variables used
+   to be derived on `:root` (and `.dark`) with the surfaces inheriting
+   them, which is broken for any surface whose seed differs from the
+   document's: a custom property is inherited as its SUBSTITUTED value, so
+   `--paper` resolved ONCE on `:root` from `:root`'s seed, and a
+   descendant that re-seeded could never re-derive it. The card view's
+   board wrote a blue strand seed and its background stayed the `:root`
+   grey (minimal repro, Chromium 2026-09: an inherit-only override keeps
+   the ancestor's colour; the same derivation redeclared on the seeded
+   element itself derives correctly — oklch(0.94 0.03 245) from a blue
+   seed). So the derivation lives ON the surfaces — `.paper-stock`,
+   `.paper-card-stock`, and the `.paper-tinted` hook below — where the
+   element's own `--paper-seed` feeds it. `--paper-card` derives from
+   `--paper` on that same element, one computation.
+   DO NOT RE-HOIST THESE ONTO `:root`. It looks equivalent and silently
+   un-themes every seeded surface. Descendants (a sunken plate, a printed
+   rule, a foil word) inherit the surface's already-resolved values —
+   exactly what they want.
+
    STOCK    --paper        the board sheet. Hue comes from the seed;
             lightness is CLAMPED into a narrow band (body text must stay
             readable whatever colour is fed in) and chroma is capped so
@@ -275,8 +296,33 @@
    wins where supported (the house pattern — see typeset.css). */
 
 :root {
+  /* The seed is the only document-level input; every surface inherits it
+     and may override it. The DERIVATION lives on the surfaces (below). */
   --paper-seed: var(--background);
   --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='0'/%3E%3CfeFuncG type='linear' slope='0' intercept='0'/%3E%3CfeFuncB type='linear' slope='0' intercept='0'/%3E%3CfeFuncA type='linear' slope='0.06' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+}
+
+:root {
+  /* The dark theme's grain tile: the same tooth with the ink INVERTED —
+     white instead of black — because on a near-black stock there is no
+     room below, so the tooth has to lift. Its alpha slope is lower than
+     the light theme's: a fixed wobble is relatively louder the darker the
+     stock (Weber), so the dark sheet reads the same tooth at less gain. */
+  --paper-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='1'/%3E%3CfeFuncG type='linear' slope='0' intercept='1'/%3E%3CfeFuncB type='linear' slope='0' intercept='1'/%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+}
+
+/* The derivation, PER SURFACE (why: the header note above — an inherited
+   custom property carries its substituted value, so a derivation declared on
+   :root can never respond to a descendant's seed). `--paper-card` reads
+   `--paper` on this same element: one computation, correct per seed.
+
+   .paper-tinted carries the derivation WITHOUT the stock treatment (no
+   grain tiles, no background of its own) — for seeded elements that must
+   match a tinted sheet's colour while painting something of their own, like
+   the card view's bottom fade dissolving into the board. */
+.paper-stock,
+.paper-card-stock,
+.paper-tinted {
   --paper: oklch(0.955 0 0);
   --paper: oklch(from var(--paper-seed, oklch(0.955 0 0)) clamp(0.94, l, 0.97) min(c, 0.03) h);
   --paper-card: oklch(0.98 0 0);
@@ -289,7 +335,9 @@
   --paper-line: color-mix(in oklab, var(--paper) 85%, var(--foreground));
 }
 
-.dark {
+.dark .paper-stock,
+.dark .paper-card-stock,
+.dark .paper-tinted {
   --paper: oklch(0.2 0 0);
   --paper: oklch(from var(--paper-seed, oklch(0.2 0 0)) clamp(0.17, l, 0.23) min(c, 0.035) h);
   --paper-card: oklch(0.23 0 0);
@@ -300,15 +348,6 @@
   --paper-lo: color-mix(in oklab, var(--paper-card) 94%, black);
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
-}
-
-:root {
-  /* The dark theme's grain tile: the same tooth with the ink INVERTED —
-     white instead of black — because on a near-black stock there is no
-     room below, so the tooth has to lift. Its alpha slope is lower than
-     the light theme's: a fixed wobble is relatively louder the darker the
-     stock (Weber), so the dark sheet reads the same tooth at less gain. */
-  --paper-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='1'/%3E%3CfeFuncG type='linear' slope='0' intercept='1'/%3E%3CfeFuncB type='linear' slope='0' intercept='1'/%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 /* Dark paper swaps in the lightening tile — same surfaces, same sizes, a

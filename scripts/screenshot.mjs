@@ -86,6 +86,7 @@ function parseArgs(argv) {
     else if (a === "--base") args.base = argv[++i];
     else if (a === "--full-page") args.fullPage = true;
     else if (a === "--selector") args.selector = argv[++i];
+    else if (a === "--click") args.single ??= {}, args.single.click = argv[++i];
     else if (a === "--demo") args.demo = true;
     else if (a === "--after-demo") args.afterDemo = true;
   }
@@ -111,6 +112,7 @@ async function openPage(page, route, { fullPage = false } = {}) {
 }
 
 async function captureShot(browser, shot, outPath, fullPage, scale, selector) {
+  mkdirSync(path.dirname(outPath), { recursive: true });
   const context = await browser.newContext({
     viewport: shot.viewport ?? { width: 1440, height: 900 },
     deviceScaleFactor: scale,
@@ -119,6 +121,38 @@ async function captureShot(browser, shot, outPath, fullPage, scale, selector) {
   try {
     const page = await context.newPage();
     await openPage(page, shot.path);
+    // Generic pre-click — reach a surface the route alone cannot (e.g. a
+    // rung switcher segment), then let the page settle again before shooting.
+    // The click must LAND: on a cold, still-hydrating page the first dispatch
+    // can be a no-op, so click until the DOM actually responds (a MutationObserver
+    // on <body>, max 3 attempts) — no knowledge of what the click does.
+    if (shot.click) {
+      const clickTarget = page.locator(shot.click).first();
+      await clickTarget.waitFor({ state: "visible", timeout: 15_000 });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const mutated = await clickTarget.evaluate(
+          (el) =>
+            new Promise((resolve) => {
+              const observer = new MutationObserver(() => {
+                observer.disconnect();
+                resolve(true);
+              });
+              observer.observe(document.body, {
+                childList: true,
+                subtree: true,
+                attributes: true,
+              });
+              el.click();
+              setTimeout(() => {
+                observer.disconnect();
+                resolve(false);
+              }, 1500);
+            }),
+        );
+        if (mutated) break;
+      }
+      await settle(page);
+    }
     if (selector) {
       const locator = page.locator(selector).first();
       await locator.waitFor({ state: "visible", timeout: 15_000 });
@@ -259,6 +293,7 @@ async function main() {
         path: single?.path ?? "/en",
         theme: single?.theme ?? "dark",
         viewport: single?.viewport,
+        click: single?.click,
       };
       await captureShot(browser, shot, out, false, scale, selector);
       console.log(`Captured element: ${out}`);
@@ -279,6 +314,7 @@ async function main() {
         path: single.path,
         theme: single.theme ?? "dark",
         viewport: single.viewport,
+        click: single.click,
       };
       const out = single.out ?? path.join(OUT_DIR, `shot-${shot.theme}.png`);
       await captureShot(browser, shot, out, fullPage, scale);
