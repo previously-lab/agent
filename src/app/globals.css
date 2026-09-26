@@ -250,12 +250,25 @@
             --paper-line   the flat printed hairline for edges and rules
             (ink, not relief).
    GRAIN    --paper-grain   a 512×512 SVG turbulence tile (the timeline's
-            120px stock repeats visibly at 1440 — this one must not). The
-            noise is desaturated to a luminance tooth and compressed to
-            ±4% around mid-grey, so under `overlay` blending it darkens
-            and lightens the sheet's own colour by a few percent — that is
-            the "barely visible" floor of the strength hierarchy:
-            grain < region relief < card lift.
+            120px stock repeats visibly at 1440 — this one must not).
+
+            THE NOISE LIVES IN ALPHA, AND THE INK IS PINNED. The first cut
+            put the variation in luminance at `feFuncA slope=0 intercept=1`
+            — an OPAQUE mid-grey sheet — which no blend mode can rescue:
+            `overlay` pins the result to the base wherever the base is near
+            white or near black, and the sheet then measures a peak-to-peak
+            range of 1/255, i.e. flat. Measured, not reasoned: a 400×320
+            patch of empty board read sd 0.25 light / 0.01 dark under
+            `overlay`, and mean 190 under `normal` — the tile was PAINTING,
+            not texturing. (A VLM sees none of this: a downsample averages
+            sub-pixel tooth away. Measure it, do not ask a model.)
+
+            So the tile is TRANSLUCENT: RGB is pinned to the ink — black
+            for light stock, white for the dark theme's --paper-grain-soft
+            — and only alpha carries the noise. Composited normally over
+            the stock, the amplitude is the alpha slope and it reads at ANY
+            base lightness. Both are used at two co-prime scales so no
+            repeat period reads at any viewport width.
 
    Every derived variable carries TWO declarations: a plain oklch() line
    older engines keep, and the relative-colour / color-mix line that
@@ -263,7 +276,7 @@
 
 :root {
   --paper-seed: var(--background);
-  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.04' intercept='0.5'/%3E%3CfeFuncG type='linear' slope='0.04' intercept='0.5'/%3E%3CfeFuncB type='linear' slope='0.04' intercept='0.5'/%3E%3CfeFuncA type='linear' slope='0' intercept='1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='0'/%3E%3CfeFuncG type='linear' slope='0' intercept='0'/%3E%3CfeFuncB type='linear' slope='0' intercept='0'/%3E%3CfeFuncA type='linear' slope='0.06' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
   --paper: oklch(0.955 0 0);
   --paper: oklch(from var(--paper-seed, oklch(0.955 0 0)) clamp(0.94, l, 0.97) min(c, 0.03) h);
   --paper-card: oklch(0.98 0 0);
@@ -290,40 +303,45 @@
 }
 
 :root {
-  /* The dark theme's grain tile: same 512px tooth, amplitude ±2.2% instead
-     of ±4%. A fixed luminance wobble is RELATIVELY louder the darker the
-     stock (Weber), so on near-black paper the full-strength tile reads as
-     screen noise — the dark surfaces re-blend this quieter one. */
-  --paper-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0.03' intercept='0.5'/%3E%3CfeFuncG type='linear' slope='0.03' intercept='0.5'/%3E%3CfeFuncB type='linear' slope='0.03' intercept='0.5'/%3E%3CfeFuncA type='linear' slope='0' intercept='1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* The dark theme's grain tile: the same tooth with the ink INVERTED —
+     white instead of black — because on a near-black stock there is no
+     room below, so the tooth has to lift. Its alpha slope is lower than
+     the light theme's: a fixed wobble is relatively louder the darker the
+     stock (Weber), so the dark sheet reads the same tooth at less gain. */
+  --paper-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='1'/%3E%3CfeFuncG type='linear' slope='0' intercept='1'/%3E%3CfeFuncB type='linear' slope='0' intercept='1'/%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
-/* Dark paper re-blends the quieter tile — same surfaces, same sizes, a
-   coarser and softer tooth the eye accepts as fibre instead of noise. */
+/* Dark paper swaps in the lightening tile — same surfaces, same sizes, a
+   coarser tooth the eye accepts as fibre instead of sensor noise. */
 .dark .paper-stock,
 .dark .paper-card-stock {
   background-image: var(--paper-grain-soft), var(--paper-grain-soft);
   /* Both layers coarse: the 147px micro-tooth is the one that reads as
-     sensor noise on near-black paper. */
+     noise on near-black paper. */
   background-size: 512px 512px, 293px 293px;
 }
 
-/* The board sheet: the sheet element's OWN background — the grain is
-   blended into the stock colour, never an overlay div on top of it. Two
-   tile scales (512 coarse tooth + 147 micro) so no repeat period reads at
-   any viewport width. .paper-card-stock pins the SAME tile at DIFFERENT
-   sizes (431 + 113, both coprime with the board's) so the two surfaces
-   cannot align into moiré where the card lies on the board. */
+/* The board sheet: the sheet element's OWN background — the grain is part
+   of the stock colour, never an overlay div on top of it. Two tile scales
+   (512 coarse tooth + 147 micro) so no repeat period reads at any viewport
+   width. .paper-card-stock pins the SAME tile at DIFFERENT sizes (431 +
+   113, both coprime with the board's) so the two surfaces cannot align
+   into moiré where the card lies on the board.
+
+   `normal` is not a placeholder — the tiles carry their amplitude in
+   alpha (see GRAIN above), so plain source-over IS the correct compositing
+   and the amplitude survives whatever the stock colour is. */
 .paper-stock {
   background-color: var(--paper);
   background-image: var(--paper-grain), var(--paper-grain);
   background-size: 512px 512px, 147px 147px;
-  background-blend-mode: overlay, overlay;
+  background-blend-mode: normal, normal;
 }
 .paper-card-stock {
   background-color: var(--paper-card);
   background-image: var(--paper-grain), var(--paper-grain);
   background-size: 431px 431px, 113px 113px;
-  background-blend-mode: overlay, overlay;
+  background-blend-mode: normal, normal;
 }
 
 /* Relief recipes — 1px, no blur, the whole depth budget. Light falls from
