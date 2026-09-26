@@ -1016,6 +1016,8 @@ export function AppShell() {
       {mountedWorlds.includes("field") && showCardField && (
         <>
           <style>{TIMELINE_KEYFRAMES}</style>
+          {/* The atmosphere fills the pane to the RIGHT of the band; the
+              band's left edge and width are measured layout values (px). */}
           <div
             aria-hidden
             className="absolute inset-y-0 right-0 z-0"

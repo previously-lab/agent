@@ -48,10 +48,7 @@ export const TextGenerateEffect = ({
           return (
             <motion.span
               key={word + idx}
-              className="opacity-0"
-              style={{
-                filter: filter ? "blur(10px)" : "none",
-              }}
+              className={cn("opacity-0", filter && "tge-preblur")}
             >
               {word}{" "}
             </motion.span>

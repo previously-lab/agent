@@ -21,42 +21,12 @@ import type { HomeRecap } from "@/lib/home/recap";
  * graph.
  */
 
-// ─── The tuning table ──────────────────────────────────────────────────────
-// Every size, space and width the layout uses, in one place: change one
-// number here, the whole page follows.
-
-/** The column's full width — both hairlines span exactly this. */
-export const HOME_COLUMN_MAX_WIDTH_REM = 24;
-
-/** Line 1 ("Previously on") — small, muted ink, the lead a touch heavier. */
-export const HOME_EYEBROW_SIZE_PX = 16;
-
-/** Line 2 (the reader's name) — the biggest thing on the page. */
-export const HOME_NAME_SIZE_PX = 44;
-export const HOME_NAME_LINE_HEIGHT = 1.15;
-
-/** Hairline 1 — the air above it is the title's, below it the recap's. */
-export const HOME_RULE_TITLE_GAP_PX = 40;
-export const HOME_RULE_RECAP_GAP_PX = 24;
-
-/** Hairline 2 — below the recap's clock line, above the actions. */
-export const HOME_RULE_ACTIONS_GAP_PX = 32;
-export const HOME_RULE_NAV_GAP_PX = 24;
-
-/** The recap's fixed-width speaker column (`你` / `Previously`). */
-export const HOME_SPEAKER_WIDTH_REM = 6;
-export const HOME_SPEAKER_SIZE_PX = 11;
-
-/** The spoken lines — serif, at most two display lines with an ellipsis. */
-export const HOME_QUOTE_SIZE_PX = 15;
-export const HOME_QUOTE_LINE_HEIGHT = 1.75;
-
-/** The clock line — mono, muted. */
-export const HOME_TIME_SIZE_PX = 12;
-export const HOME_TIME_GAP_PX = 16;
-
-/** The one row of actions: primary full ink, then muted, smaller. */
-export const HOME_ACTION_SIZE_PX = 18;
+// ─── The ink palette ───────────────────────────────────────────────────────
+// The semantic CLASS NAMES the zones draw on. The page's tuned sizes used
+// to live here as a tuning table feeding inline styles; the rule against
+// static values in style={{ … }} re-homed them — scale values became
+// Tailwind tokens in the markup, the off-scale type sizes became the
+// --home-* variables in globals.css.
 
 /** Inks — the semantic palette the zones draw on. */
 export const HOME_INK_FULL = "text-foreground";
@@ -98,19 +68,16 @@ function QuoteRow({
   return (
     <div className="flex gap-3">
       <dt
-        className={`shrink-0 font-mono ${speakerClass}`}
-        style={{
-          width: HOME_SPEAKER_WIDTH_REM * 16,
-          fontSize: HOME_SPEAKER_SIZE_PX,
-        }}
+        className={`w-24 shrink-0 font-mono ${speakerClass}`}
+        style={{ fontSize: "var(--home-speaker-size)" }}
       >
         {speaker}
       </dt>
       <dd
         className={`min-w-0 flex-1 font-serif text-foreground/90 line-clamp-2`}
         style={{
-          fontSize: HOME_QUOTE_SIZE_PX,
-          lineHeight: HOME_QUOTE_LINE_HEIGHT,
+          fontSize: "var(--home-quote-size)",
+          lineHeight: "var(--home-quote-leading)",
         }}
       >
         {runs.map((run, index) =>
@@ -144,7 +111,7 @@ export function HomeScreen({
 }: HomeScreenProps) {
   return (
     <main className="flex h-dvh flex-col items-center justify-center overflow-y-auto px-6">
-      <div className="w-full" style={{ maxWidth: HOME_COLUMN_MAX_WIDTH_REM * 16 }}>
+      <div className="w-full max-w-sm">
         {/* TITLE — the product's sentence, then the reader's name. Sentence
             case, no tracking, and NO font-family class: the app's default is
             Raleway, so the title says nothing and inherits it. The weight does
@@ -152,10 +119,7 @@ export function HomeScreen({
             name large and LIGHT (300, the variable face's own light; the big
             quiet line is the page's largest ink without shouting). */}
         <header>
-          <p
-            className={`${HOME_INK_MUTED}`}
-            style={{ fontSize: HOME_EYEBROW_SIZE_PX }}
-          >
+          <p className={`text-base ${HOME_INK_MUTED}`}>
             <span className="font-medium text-foreground/75">
               {eyebrowLead}
             </span>{" "}
@@ -164,8 +128,8 @@ export function HomeScreen({
           <h1
             className={`mt-1 font-light ${HOME_INK_FULL}`}
             style={{
-              fontSize: HOME_NAME_SIZE_PX,
-              lineHeight: HOME_NAME_LINE_HEIGHT,
+              fontSize: "var(--home-name-size)",
+              lineHeight: "var(--home-name-leading)",
             }}
           >
             {name}
@@ -174,14 +138,7 @@ export function HomeScreen({
 
         {/* HAIRLINE 1 — the title's only frame. No box anywhere: the rule,
             not a border, is what separates the name from the memory. */}
-        <hr
-          aria-hidden
-          className={HOME_RULE_CLASS}
-          style={{
-            marginTop: HOME_RULE_TITLE_GAP_PX,
-            marginBottom: HOME_RULE_RECAP_GAP_PX,
-          }}
-        />
+        <hr aria-hidden className={`mt-10 mb-6 ${HOME_RULE_CLASS}`} />
 
         {/* 前情提要 — where the last conversation left off. The clock line
             sits UNDER the words, the way a dateline closes a passage. */}
@@ -203,10 +160,7 @@ export function HomeScreen({
                 />
               )}
             </dl>
-            <p
-              className={`font-mono ${HOME_INK_FAINT}`}
-              style={{ fontSize: HOME_TIME_SIZE_PX, marginTop: HOME_TIME_GAP_PX }}
-            >
+            <p className={`mt-4 font-mono text-xs ${HOME_INK_FAINT}`}>
               {recap.when}
               <span className="opacity-50"> · </span>
               {recap.gap}
@@ -215,14 +169,7 @@ export function HomeScreen({
         )}
 
         {/* HAIRLINE 2 — under the dateline, above the doors. */}
-        <hr
-          aria-hidden
-          className={HOME_RULE_CLASS}
-          style={{
-            marginTop: HOME_RULE_ACTIONS_GAP_PX,
-            marginBottom: HOME_RULE_NAV_GAP_PX,
-          }}
-        />
+        <hr aria-hidden className={`mt-8 mb-6 ${HOME_RULE_CLASS}`} />
 
         {/* THE DOORS — one row, TWO of them, set in the same size and weight:
             the reader's call, a menu of equal items rather than a hero with a
@@ -232,8 +179,7 @@ export function HomeScreen({
         <nav className="flex items-baseline gap-8">
           <Link
             href="/app"
-            className={`${HOME_INK_FULL} transition-colors hover:text-brand`}
-            style={{ fontSize: HOME_ACTION_SIZE_PX }}
+            className={`text-lg ${HOME_INK_FULL} transition-colors hover:text-brand`}
           >
             {continueLabel}
             <span aria-hidden className={HOME_INK_BRAND}>
@@ -243,8 +189,7 @@ export function HomeScreen({
           </Link>
           <Link
             href="/settings"
-            className={`ml-auto ${HOME_INK_FAINT} transition-colors hover:${HOME_INK_FULL}`}
-            style={{ fontSize: HOME_ACTION_SIZE_PX }}
+            className={`ml-auto text-lg ${HOME_INK_FAINT} transition-colors hover:${HOME_INK_FULL}`}
           >
             {settingsLabel}
           </Link>

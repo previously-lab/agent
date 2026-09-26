@@ -336,8 +336,7 @@ export function ChatInput({
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           rows={1}
-          className="w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:text-muted-foreground placeholder:font-light focus:outline-none"
-          style={{ minHeight: `${TEXTAREA_MIN_PX}px`, maxHeight: `${TEXTAREA_MAX_PX}px` }}
+          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:text-muted-foreground placeholder:font-light focus:outline-none"
         />
       </div>
 

@@ -538,6 +538,8 @@ function FieldScene({
           camera compensation leaves the reader looking at exactly what they
           were looking at. */}
       {hasOrigin && (
+        // `width` is the tier's reading column in px (useTier → columnFor);
+        // drei <Html> takes it as a style prop — the third-party API's shape.
         <Html
           key="origin"
           position={[-column / 2, FIELD_ORIGIN_PX, 0]}
@@ -564,6 +566,8 @@ function FieldScene({
         <Html
           // NOT `transform`: screen-space mode positions the element by
           // projection and leaves it at 1:1, so text is never scaled.
+          // `width` is the tier's reading column, px (useTier → columnFor) —
+          // drei <Html> takes it as a style prop.
           key={blocks[i].key}
           position={[-column / 2, -(offsets[i] ?? 0), 0]}
           zIndexRange={[10, 0]}
@@ -594,6 +598,8 @@ function FieldScene({
           Anchored by its TOP, so everything it gains it gains downward. */}
       {liveItems.length > 0 && (
         <Html
+          // Same as the block portals above: the tier's reading column, px,
+          // via drei <Html>'s style prop.
           key="live"
           position={[-column / 2, -liveTop, 0]}
           zIndexRange={[10, 0]}
@@ -1193,6 +1199,9 @@ export function ConversationField({
       onKeyDown={onKeyDown}
       className="relative h-full w-full touch-none overflow-hidden outline-none"
     >
+      {/* R3F's Canvas defaults its wrapper to position:relative INLINE, so
+          overriding it requires the style prop — the third-party API's shape,
+          not a styling choice. Fills the field wrapper. */}
       <Canvas
         orthographic
         camera={{ position: [0, 0, 100], zoom: 1, near: 0.1, far: 1000 }}

@@ -45,7 +45,7 @@ import { useEffect, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { DateStamp } from "./date-stamp";
 import { Intertitle } from "./intertitle";
-import { SLICE_GATE_PX, type GateSignal } from "@/lib/chat/field-blocks";
+import { type GateSignal } from "@/lib/chat/field-blocks";
 
 export interface SliceGateProps {
   /** Start of the NEWER slice — the destination travelling forward. */
@@ -164,8 +164,9 @@ export function SliceGate({
       data-dir="future"
       role="separator"
       aria-label={t("label")}
-      style={{ height: SLICE_GATE_PX }}
-      className="relative w-full select-none"
+      // h-32 is SLICE_GATE_PX (field-blocks) — the layout math and this
+      // box must stay the same number.
+      className="relative h-32 w-full select-none"
     >
       {/* DORMANT — the boundary as a quiet rule: a hairline with the date it
           stands between. This is what a boundary looks like when the reader is

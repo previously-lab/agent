@@ -195,8 +195,9 @@ function LiveTurnStrip({
       data-conversation-live
       role="log"
       aria-live="polite"
-      className="absolute inset-x-0 z-10 border-t border-foreground/5 bg-background"
-      style={{ bottom: insetBottom, maxHeight: "50%" }}
+      className="absolute inset-x-0 z-10 max-h-1/2 border-t border-foreground/5 bg-background"
+      // The lift over the measured composer height, px — see ComposerHost.
+      style={{ bottom: insetBottom }}
     >
       <div ref={scrollRef} className="max-h-full overflow-y-auto px-4 py-3">
         {live.map((item): ReactNode => {

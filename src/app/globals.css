@@ -627,3 +627,75 @@
 [data-card-field] canvas {
   pointer-events: none;
 }
+
+/* ── Values re-homed from inline styles ─────────────────────────────────
+   Static numbers that used to sit in style={{ … }} and have no Tailwind
+   token. Each block names the component it serves and why no token fit;
+   every other converted site resolved to an existing token. */
+
+/* conversation-panel (subtitle strip) + composer-host (the pill's glass
+   box). 660px and 600px both sit between max-w-xl (576) and max-w-2xl
+   (672); the user's ink is a WARM grey while muted-foreground is
+   achromatic. */
+:root {
+  --subtitle-block-max: 660px;
+  --subtitle-user-ink: oklch(0.6 0.015 75);
+  --pill-max-width: 600px;
+  /* Home tuned type (home-screen.tsx): 44px straddles text-4xl/5xl, 15px
+     straddles sm/base, 11px falls below xs, and both leadings fall between
+     the leading scale's steps. */
+  --home-name-size: 44px;
+  --home-name-leading: 1.15;
+  --home-quote-size: 15px;
+  --home-quote-leading: 1.75;
+  --home-speaker-size: 11px;
+}
+
+.subtitle-user-ink {
+  color: var(--subtitle-user-ink);
+}
+
+.pill-box {
+  max-width: var(--pill-max-width);
+}
+
+/* The user's bubble accent — the strand tint arrives from JS as
+   --user-tint (chat-message / history-turn). */
+.user-tint {
+  background-color: var(--user-tint);
+}
+
+/* companion-pod — sits above the composer; 220px clears it exactly, and
+   bottom-56 (224px) would be a visible 4px shift. */
+.companion-pod-root {
+  bottom: calc(220px + env(safe-area-inset-bottom, 0px));
+}
+
+/* One-line scroll strips whose scrollbar must not show (bridge tool and
+   housekeeping cards, phase indicator). No Tailwind scrollbar-width token
+   exists. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+
+/* Skeleton pulse stagger (chat-skeleton.tsx) — the scale has no
+   animation-delay tokens; the fixed steps are a tuned table, the per-row
+   ones arrive from JS as --pulse-delay. */
+.pulse-delay {
+  animation-delay: var(--pulse-delay, 0ms);
+}
+.pulse-delay-60 {
+  animation-delay: 60ms;
+}
+.pulse-delay-380 {
+  animation-delay: 380ms;
+}
+.pulse-delay-440 {
+  animation-delay: 440ms;
+}
+
+/* text-generate-effect's pre-animation blur — 10px sits between blur-md
+   (8px) and blur-lg (16px); motion animates the inline filter to 0. */
+.tge-preblur {
+  filter: blur(10px);
+}

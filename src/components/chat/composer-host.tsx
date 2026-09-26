@@ -40,7 +40,7 @@
  * `ConversationPanel`'s tier through `PanelTierContext`: at the pill tier the
  * composer IS the pill — centred a `PILL_BOTTOM_GAP_PX` above the panel
  * box's bottom edge (the box is chromeless there), at most
- * `PILL_MAX_WIDTH_PX` wide, and carrying the pill's glass chrome
+ * `--pill-max-width` (globals.css) wide, and carrying the pill's glass chrome
  * (rounded-full, translucent background, hairline ring, backdrop blur); at
  * fullscreen it floats over the body exactly as it always has. `ChatInput`
  * reads the same context to draw its pill form. One component instance
@@ -52,12 +52,7 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { FieldRung } from "@/lib/timeline3d/units";
-import {
-  PILL_BOTTOM_GAP_PX,
-  PILL_HEIGHT_PX,
-  PILL_MAX_WIDTH_PX,
-  usePanelTier,
-} from "./conversation-panel";
+import { usePanelTier } from "./conversation-panel";
 
 /** What the composer is told about the form it is being asked to draw. */
 export interface ComposerForm {
@@ -150,16 +145,16 @@ export function ComposerHost({
     <div
       ref={hostRef}
       data-composer
-      style={onPill ? { bottom: PILL_BOTTOM_GAP_PX } : undefined}
       className={
         onPill
           ? // The pill's seat: centred over the panel box (which spans the
-            // viewport) with side margins, PILL_BOTTOM_GAP_PX above the
-            // box's bottom edge. The row itself stays POINTER-TRANSPARENT:
+            // viewport) with side margins, bottom-4 (= PILL_BOTTOM_GAP_PX)
+            // above the box's bottom edge. The row itself stays
+            // POINTER-TRANSPARENT:
             // it spans the full viewport width, and letting it eat clicks
             // would wall off the whole bottom edge from the world — only
             // the pill's own glass box (the inner wrapper) opts back in.
-            "pointer-events-none absolute inset-x-0 z-10 flex justify-center px-4"
+            "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4"
           : collapsed
             ? // `w-auto` so the pill is exactly as wide as its own controls. A
               // fixed width here is how the old round button ended up 44rem wide
@@ -181,12 +176,11 @@ export function ComposerHost({
               // surface at this tier: the only box on the bottom edge that
               // takes pointer events — the row around it is transparent, so
               // the world keeps every click outside the pill itself.
-              "pointer-events-auto flex min-w-0 w-full items-center overflow-hidden rounded-full bg-background/70 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
+              "pointer-events-auto pill-box h-12 min-w-0 w-full items-center overflow-hidden rounded-full bg-background/70 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
             : collapsed
               ? ""
               : "w-[min(44rem,100%)]"
         }
-        style={onPill ? { maxWidth: PILL_MAX_WIDTH_PX, height: PILL_HEIGHT_PX } : undefined}
       >
         {composer({ collapsed, expand: () => setOpen(true) })}
       </div>

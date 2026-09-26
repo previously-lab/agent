@@ -1,34 +1,36 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   isPanelHotkey,
   reducePanelMode,
-  SUBTITLE_BLOCK_MAX_WIDTH_PX,
-  SUBTITLE_COLUMN_GAP_PX,
   SUBTITLE_LINE_HEIGHT_PX,
-  SUBTITLE_SPEAKER_COLUMN_PX,
-  SUBTITLE_USER_INK,
   type ConversationPanelMode,
 } from "../conversation-panel";
 
+// The geometry constants this suite used to import moved into globals.css
+// (and Tailwind tokens) when the inline styles they fed were re-homed — the
+// pins moved with them, read straight back out of the stylesheet.
+const GLOBALS_CSS = readFileSync("src/app/globals.css", "utf8");
+
 const MODES: ConversationPanelMode[] = ["pill", "fullscreen"];
 
-describe("subtitle geometry constants", () => {
+describe("subtitle geometry", () => {
   it("pins the FPS-radio layout: capped block, fixed label column, 20px lines", () => {
     // The block must stay a dialogue strip, never full-bleed, and the body
-    // must start at a fixed x past the label column.
-    expect(SUBTITLE_BLOCK_MAX_WIDTH_PX).toBe(660);
-    expect(SUBTITLE_SPEAKER_COLUMN_PX).toBe(112);
-    expect(SUBTITLE_COLUMN_GAP_PX).toBe(12);
+    // must start at a fixed x past the label column (the w-28 token, 112px,
+    // plus the gap-3 body gap, 12px — both in conversation-panel.tsx).
+    const blockMax = /--subtitle-block-max:\s*(\d+)px/.exec(GLOBALS_CSS);
+    expect(blockMax).not.toBeNull();
+    expect(Number(blockMax![1])).toBe(660);
+    expect(Number(blockMax![1])).toBeGreaterThan(112 + 12);
     expect(SUBTITLE_LINE_HEIGHT_PX).toBe(20);
-    expect(SUBTITLE_BLOCK_MAX_WIDTH_PX).toBeGreaterThan(
-      SUBTITLE_SPEAKER_COLUMN_PX + SUBTITLE_COLUMN_GAP_PX,
-    );
   });
 
   it("pins the user's warm-grey ink as an oklch value", () => {
-    expect(SUBTITLE_USER_INK).toMatch(/^oklch\(/);
+    const ink = /--subtitle-user-ink:\s*(oklch\([^)]*\))/.exec(GLOBALS_CSS);
+    expect(ink).not.toBeNull();
     // Neutral-warm: low chroma, hue in the yellow band.
-    const [l, c, h] = SUBTITLE_USER_INK.slice(6, -1).split(/\s+/);
+    const [l, c, h] = ink![1].slice(6, -1).split(/\s+/);
     expect(Number.parseFloat(c)).toBeLessThan(0.05);
     expect(Number.parseFloat(h)).toBeGreaterThan(40);
     expect(Number.parseFloat(h)).toBeLessThan(110);

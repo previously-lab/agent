@@ -51,8 +51,14 @@ function Bar({
   return (
     <div
       aria-hidden
-      style={delay ? { animationDelay: `${delay}ms` } : undefined}
-      className={`rounded-full ${PULSE} ${className}`}
+      // Stagger delay from the row's position in the tuned table — CSS
+      // owns the delay via .pulse-delay.
+      style={
+        delay
+          ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
+          : undefined
+      }
+      className={`pulse-delay rounded-full ${PULSE} ${className}`}
     />
   );
 }
@@ -63,8 +69,14 @@ function SeamSkeleton({ delay = 0 }: { delay?: number }) {
     <div aria-hidden className="my-6 flex items-center gap-3">
       <span className="h-px flex-1 bg-border" />
       <span
-        style={{ animationDelay: `${delay}ms` }}
-        className="h-5 w-28 rounded-full bg-muted animate-pulse motion-reduce:animate-none"
+        // Stagger delay from the seam's position — CSS owns it via
+        // .pulse-delay.
+        style={
+          delay
+            ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
+            : undefined
+        }
+        className="pulse-delay h-5 w-28 rounded-full bg-muted animate-pulse motion-reduce:animate-none"
       />
       <span className="h-px flex-1 bg-border" />
     </div>
@@ -76,8 +88,14 @@ function ResumeBannerSkeleton({ delay = 0 }: { delay?: number }) {
   return (
     <div aria-hidden className="my-4 flex justify-center">
       <span
-        style={{ animationDelay: `${delay}ms` }}
-        className="h-6 w-52 rounded-full bg-brand-500/10 animate-pulse motion-reduce:animate-none"
+        // Stagger delay from the banner's position — CSS owns it via
+        // .pulse-delay.
+        style={
+          delay
+            ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
+            : undefined
+        }
+        className="pulse-delay h-6 w-52 rounded-full bg-brand-500/10 animate-pulse motion-reduce:animate-none"
       />
     </div>
   );
@@ -108,12 +126,20 @@ function RoundSkeleton({
   return (
     <div aria-hidden className="space-y-1.5 py-1.5">
       <div
-        style={{ animationDelay: `${delay}ms` }}
-        className={`ml-auto rounded-2xl rounded-br-md bg-secondary animate-pulse motion-reduce:animate-none ${BUBBLE_HEIGHT[userLines]} ${userWidth}`}
+        // Stagger delays from the round's position — CSS owns them via
+        // .pulse-delay.
+        style={
+          delay
+            ? ({ "--pulse-delay": `${delay}ms` } as React.CSSProperties)
+            : undefined
+        }
+        className={`pulse-delay ml-auto rounded-2xl rounded-br-md bg-secondary animate-pulse motion-reduce:animate-none ${BUBBLE_HEIGHT[userLines]} ${userWidth}`}
       />
       <div
-        style={{ animationDelay: `${delay + 90}ms` }}
-        className={`rounded-2xl rounded-bl-md ${PULSE} ${BUBBLE_HEIGHT[agentLines]} ${agentWidth}`}
+        style={
+          { "--pulse-delay": `${delay + 90}ms` } as React.CSSProperties
+        }
+        className={`pulse-delay rounded-2xl rounded-bl-md ${PULSE} ${BUBBLE_HEIGHT[agentLines]} ${agentWidth}`}
       />
     </div>
   );
@@ -145,8 +171,7 @@ export function BriefingCardSkeleton() {
           {/* Serif title bar (the user's name). */}
           <div
             aria-hidden
-            style={{ animationDelay: "60ms" }}
-            className="mt-4 h-8 w-44 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
+            className="pulse-delay-60 mt-4 h-8 w-44 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
           />
 
           <div className="mt-5 h-px w-full bg-foreground/[0.07]" />
@@ -170,14 +195,8 @@ export function BriefingCardSkeleton() {
 
           {/* Suggestion chips. */}
           <div className="flex flex-wrap items-center gap-2 pt-2">
-            <span
-              style={{ animationDelay: "380ms" }}
-              className="h-7 w-32 rounded-full border border-foreground/10 bg-foreground/5 animate-pulse motion-reduce:animate-none"
-            />
-            <span
-              style={{ animationDelay: "440ms" }}
-              className="h-7 w-24 rounded-full border border-foreground/10 bg-foreground/5 animate-pulse motion-reduce:animate-none"
-            />
+            <span className="pulse-delay-380 h-7 w-32 rounded-full border border-foreground/10 bg-foreground/5 animate-pulse motion-reduce:animate-none" />
+            <span className="pulse-delay-440 h-7 w-24 rounded-full border border-foreground/10 bg-foreground/5 animate-pulse motion-reduce:animate-none" />
           </div>
         </div>
       </div>
@@ -211,6 +230,9 @@ export function ChatStreamSkeleton({
       aria-hidden
       className={`flex h-full flex-col justify-end overflow-hidden ${className}`}
     >
+      {/* The tier's reading column, px — the SAME columnFor value the real
+          field renders at, so the skeleton's rows land where the turns
+          will. */}
       <div className="mx-auto w-full" style={{ maxWidth: column }}>
         <div className={FACE_INSET}>
           <SeamSkeleton />
@@ -302,6 +324,8 @@ export function ChatPageSkeleton({
   const chromeInset = useChromeInset();
   return (
     <>
+      {/* The measured top chrome's height, px — reserves the strip the
+          floating chrome covers (see use-chrome-inset). */}
       <div
         style={{ paddingTop: chromeInset }}
         className="relative flex-1 overflow-hidden"

@@ -63,7 +63,15 @@ export function HistoryTurn({
               )}
             </div>
             <BubbleContent
-              style={userTint ? { backgroundColor: userTint } : undefined}
+              // Strand tint from JS — it arrives as the --user-tint
+              // custom property; .user-tint in globals.css owns the
+              // painting.
+              className={userTint ? "user-tint" : undefined}
+              style={
+                userTint
+                  ? ({ "--user-tint": userTint } as React.CSSProperties)
+                  : undefined
+              }
             >
               {isUser ? (
                 <span className="whitespace-pre-wrap text-sm font-serif font-light">{content}</span>

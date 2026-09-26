@@ -6,7 +6,6 @@ import { Check, ChevronDown, ChevronUp, Copy, FileCode2 } from "lucide-react";
 
 /** Blocks longer than this get collapsed behind a "show all" toggle. */
 const COLLAPSE_LINES = 20;
-const COLLAPSED_MAX_HEIGHT = 320;
 
 interface CodeBlockProps {
   language?: string;
@@ -71,11 +70,8 @@ export function CodeBlock({ language, code, isStreaming = false, filename, child
       {/* Code */}
       <div className="relative">
         <pre
-          style={
-            collapsed ? { maxHeight: COLLAPSED_MAX_HEIGHT } : undefined
-          }
           className={`overflow-x-auto p-4 text-[13px] leading-6 bg-muted/20 transition-colors duration-500 ${
-            collapsed ? "overflow-y-hidden" : ""
+            collapsed ? "max-h-80 overflow-y-hidden" : ""
           } ${isStreaming ? "bg-brand/[0.04]" : ""}`}
         >
           <code className={`language-${language ?? "text"}`}>{children ?? code}</code>

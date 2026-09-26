@@ -628,6 +628,9 @@ export function DomChatList({
 
   return (
     <div className="relative mx-auto h-full w-full max-w-5xl xl:max-w-7xl">
+      {/* The scroller's top/bottom padding — the MEASURED chrome and
+          composer heights (px) plus the static tail pad; see
+          use-chrome-inset and ComposerHost. */}
       <div
         ref={scrollerRef}
         // The stable hook, kept from the field: e2e specs and probes address
@@ -644,6 +647,8 @@ export function DomChatList({
           paddingBottom: insetBottom + TAIL_PAD_PX,
         }}
       >
+        {/* The windowed content's total height, px — origin + measured row
+            offsets (+ the error reserve): the virtualizer's extent. */}
         <div className="relative" style={{ height: innerPx }}>
           {hasHistory && (
             <div className="absolute inset-x-0 top-0">
@@ -656,6 +661,8 @@ export function DomChatList({
               />
             </div>
           )}
+          {/* Each mounted row's absolute top, px — the origin strip plus the
+              row's offset in the measured table (virtualizer placement). */}
           {items.slice(start, end).map((item, k) => (
             <div
               key={item.key}
@@ -667,6 +674,7 @@ export function DomChatList({
               {renderItem(item)}
             </div>
           ))}
+          {/* The error banner sits just below the windowed content, px. */}
           {error && (
             <div
               className="absolute inset-x-0"

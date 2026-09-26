@@ -479,8 +479,7 @@ export function CompanionPod({
   return (
     <div
       data-companion-pod-root
-      className="pointer-events-none fixed right-3 z-40 flex flex-col items-end sm:right-5"
-      style={{ bottom: "calc(220px + env(safe-area-inset-bottom, 0px))" }}
+      className="pointer-events-none fixed right-3 z-40 flex flex-col items-end sm:right-5 companion-pod-root"
     >
       <button
         type="button"

@@ -247,7 +247,15 @@ export const ChatMessage = memo(function ChatMessage({
             {(userText || fileParts.length === 0) && (
               <Bubble variant="secondary">
                 <BubbleContent
-                  style={userTint ? { backgroundColor: userTint } : undefined}
+                  // Strand tint from JS — it arrives as the --user-tint
+                  // custom property; .user-tint in globals.css owns the
+                  // painting.
+                  className={userTint ? "user-tint" : undefined}
+                  style={
+                    userTint
+                      ? ({ "--user-tint": userTint } as React.CSSProperties)
+                      : undefined
+                  }
                 >
                   <div className="font-serif font-light">
                     <MarkdownRenderer content={userText} />

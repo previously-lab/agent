@@ -1168,6 +1168,9 @@ function Inner({
           // same reserve the field makes with its range — expressed the way a
           // DOM scroller expresses it, which is the one shape this column could
           // not use.
+          // The measured chrome (top) and composer (bottom) heights in px —
+          // content scrolls INTO the padding so it passes under the
+          // floating chrome; see use-chrome-inset / ComposerHost.
           <div
             style={{ paddingTop: insetTop, paddingBottom: insetBottom }}
             className="h-full overflow-y-auto"

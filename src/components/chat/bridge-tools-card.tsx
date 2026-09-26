@@ -137,10 +137,7 @@ export function BridgeToolCard({
           absent or settled. */}
       {running && live && (
         <div className="mt-1.5 pl-6.5">
-          <div
-            className="overflow-x-auto whitespace-nowrap"
-            style={{ scrollbarWidth: "none" }}
-          >
+          <div className="overflow-x-auto whitespace-nowrap scrollbar-none">
             <span className="font-mono text-xs text-muted-foreground">
               {live}
               <span className="ml-0.5 inline-block h-3 w-px animate-pulse bg-brand-500 align-middle" />

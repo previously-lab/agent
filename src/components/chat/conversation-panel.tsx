@@ -8,7 +8,8 @@
  *   pill        the floating PILL: a translucent glass bar (rounded-full,
  *               `bg-background/70` + backdrop blur + a hairline ring),
  *               horizontally centred a small gap above the viewport's
- *               bottom edge, at most `PILL_MAX_WIDTH_PX` wide, exactly
+ *               bottom edge, at most 600px wide (`--pill-max-width` in
+ *               globals.css), exactly
  *               `PILL_HEIGHT_PX` tall. ONE row with exactly four controls —
  *               a round attach button on the left, a single-line input in
  *               the middle (no box of its own; the pill is the container),
@@ -18,7 +19,7 @@
  *               a fixed-width speaker column (uppercase, letterspaced, the
  *               persona in brand blue / the user in warm grey) with the body
  *               pinned to the column's x, wrapped to at most two lines, the
- *               whole block capped to SUBTITLE_BLOCK_MAX_WIDTH_PX and centred
+ *               whole block capped to `--subtitle-block-max` and centred
  *               over the pill — the live rendering of the newest turn, folded
  *               by the pure reducer in `lib/chat/subtitle-line.ts` and passed
  *               in as a prop. The
@@ -116,33 +117,19 @@ export function isPanelHotkey(event: {
  *  centred in it); THE constant to turn if the pill reads too tall or too
  *  short on screen. */
 export const PILL_HEIGHT_PX = 48;
-/** The pill's maximum width, px — centred with side margins (`px-4` on the
- *  host row), so it never touches the viewport's edges. Turn this if the
- *  pill reads too wide or too narrow. */
-export const PILL_MAX_WIDTH_PX = 600;
 /** The gap between the viewport's bottom edge and the pill, px. Turn this
- *  to sit the pill higher or lower. */
+ *  to sit the pill higher or lower. (The pill's MAX width lives in CSS as
+ *  `--pill-max-width` in globals.css, consumed by composer-host's
+ *  `.pill-box` — no Tailwind token sits at 600px.) */
 export const PILL_BOTTOM_GAP_PX = 16;
 
-/** The subtitle block's maximum width, px — an FPS-radio strip: the dialogue
- *  never runs full-bleed. Centred over the pill; on narrow viewports it caps
- *  to the viewport minus the host row's `px-4` margins instead. */
-export const SUBTITLE_BLOCK_MAX_WIDTH_PX = 660;
-/** The fixed-width speaker column, px — an uppercase, letterspaced label on
- *  the left (the persona in brand blue, the user in a warm grey). The body
- *  starts at this x on every line, so wrapped lines of dialogue align
- *  vertically. */
-export const SUBTITLE_SPEAKER_COLUMN_PX = 112;
-/** One subtitle line's height, px (font-mono 11px / leading-5). */
+/** The subtitle's static geometry now lives in CSS/Tailwind: the block cap
+ *  is `--subtitle-block-max` in globals.css (660px sits between max-w-xl and
+ *  max-w-2xl), the speaker column is the `w-28` token (112px), the
+ *  column-to-body gap is `gap-3` (12px), and the user's warm-grey ink is the
+ *  `.subtitle-user-ink` class. One line's height stays a constant because the
+ *  seat computation below uses it: */
 export const SUBTITLE_LINE_HEIGHT_PX = 20;
-/** The gap between the speaker column and the body, px — the body's fixed x
- *  is `SUBTITLE_SPEAKER_COLUMN_PX + SUBTITLE_COLUMN_GAP_PX`. */
-export const SUBTITLE_COLUMN_GAP_PX = 12;
-/** The user's ink — a neutral warm grey. The repo has no warm-grey theme
- *  token (`muted-foreground` is achromatic) and `globals.css` is outside this
- *  module's lane, so the value lives here next to the panel's other colours.
- *  The persona wears the existing `text-brand` token (the #0066ff family). */
-export const SUBTITLE_USER_INK = "oklch(0.6 0.015 75)";
 
 /** What the panel tells the chat components that render inside it: which
  *  tier is up and how to change it. Null outside a panel — consumers then
@@ -257,6 +244,9 @@ export function ConversationPanel({
         ref={panelRef}
         tabIndex={-1}
         onKeyDown={onContainerKeyDown}
+        // Height: 100dvh at fullscreen; at the pill tier PILL_HEIGHT_PX +
+        // the subtitle seat (JS-estimated 1–2 lines) + the 4px gap +
+        // PILL_BOTTOM_GAP_PX — only the seat varies with state.
         style={{
           height: open
             ? "100dvh"
@@ -274,10 +264,10 @@ export function ConversationPanel({
             way, its items un-clickable while the panel was z-60. */}
         {/* THE SUBTITLE — the pill's one non-control, floating directly above
             it (never part of the pill's height or width): an FPS-radio
-            strip, capped to SUBTITLE_BLOCK_MAX_WIDTH_PX and centred over the
+            strip, capped to `--subtitle-block-max` and centred over the
             pill — never full-bleed. The speaker column is a fixed-width,
             uppercase, letterspaced label (the persona in `text-brand`, the
-            user in the warm grey SUBTITLE_USER_INK); the body starts at the
+            user in the warm grey `.subtitle-user-ink`); the body starts at the
             column's far edge and wraps to at most two lines, the CSS clamp
             supplying the ellipsis. While the turn has produced no words the
             status prefix (thinking / reading) takes the label's place in the
@@ -286,6 +276,9 @@ export function ConversationPanel({
         <div
           data-conversation-subtitle
           aria-live="polite"
+          // The reserved seat's height, px — one 20px line, two when the
+          // fold is long enough to wrap (JS estimate; line-clamp-2 owns
+          // the real wrap).
           style={{ height: subtitleSeatHeight }}
           className={`shrink-0 overflow-hidden font-mono text-[11px] leading-5 ${
             open ? "hidden" : "pointer-events-none flex justify-center px-4"
@@ -293,24 +286,16 @@ export function ConversationPanel({
         >
           {subtitleLine && subtitleLine.text ? (
             <span
-              className="flex min-w-0 w-full"
-              style={{
-                maxWidth: SUBTITLE_BLOCK_MAX_WIDTH_PX,
-                gap: SUBTITLE_COLUMN_GAP_PX,
-              }}
+              className="flex min-w-0 w-full gap-3"
+              style={{ maxWidth: "var(--subtitle-block-max)" }}
             >
               <span
                 aria-hidden
-                className={`shrink-0 truncate uppercase tracking-[0.08em] ${
-                  subtitleLine.speaker === "persona" ? "text-brand" : ""
+                className={`w-28 shrink-0 truncate uppercase tracking-[0.08em] ${
+                  subtitleLine.speaker === "persona"
+                    ? "text-brand"
+                    : "subtitle-user-ink"
                 }`}
-                style={{
-                  width: SUBTITLE_SPEAKER_COLUMN_PX,
-                  color:
-                    subtitleLine.speaker === "persona"
-                      ? undefined
-                      : SUBTITLE_USER_INK,
-                }}
               >
                 {subtitleLine.speaker === "persona"
                   ? t("subtitlePersona")
@@ -344,11 +329,8 @@ export function ConversationPanel({
             </span>
           ) : subtitleLine?.status ? (
             <span
-              className="min-w-0 w-full truncate uppercase tracking-[0.08em] text-muted-foreground"
-              style={{
-                maxWidth: SUBTITLE_BLOCK_MAX_WIDTH_PX,
-                color: SUBTITLE_USER_INK,
-              }}
+              className="subtitle-user-ink min-w-0 w-full truncate uppercase tracking-[0.08em]"
+              style={{ maxWidth: "var(--subtitle-block-max)" }}
             >
               {subtitleLine.status.kind === "reading"
                 ? t("subtitleReading", { count: subtitleLine.status.count })

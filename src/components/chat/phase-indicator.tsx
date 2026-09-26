@@ -325,8 +325,7 @@ export function PhaseIndicator({
                   animate={{ opacity: 1 }}
                   transition={{ duration: 0.15 }}
                   ref={scrollRef}
-                  className="overflow-x-auto whitespace-nowrap"
-                  style={{ scrollbarWidth: "none" }}
+                  className="overflow-x-auto whitespace-nowrap scrollbar-none"
                 >
                   <span
                     className={cn(

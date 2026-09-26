@@ -49,7 +49,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Loader2 } from "lucide-react";
 import { Intertitle } from "./intertitle";
-import { FIELD_ORIGIN_PX, type GateSignal } from "@/lib/chat/field-blocks";
+import { type GateSignal } from "@/lib/chat/field-blocks";
 
 export interface FieldOriginProps {
   /** Start of the OLDEST loaded slice — the time the head of the window is at. */
@@ -93,8 +93,9 @@ export function FieldOrigin({
     <div
       ref={ref}
       data-armed="false"
-      style={{ height: FIELD_ORIGIN_PX }}
-      className="relative w-full select-none"
+      // h-32 is FIELD_ORIGIN_PX (field-blocks) — the layout math and this
+      // box must stay the same number.
+      className="relative h-32 w-full select-none"
     >
       {/* DORMANT — the window's head as a quiet rule, saying only that there
           is nothing above it that is currently loaded. */}
