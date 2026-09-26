@@ -151,10 +151,12 @@ export function HomeScreen({
       <div className="w-full" style={{ maxWidth: HOME_COLUMN_MAX_WIDTH_REM * 16 }}>
         {/* TITLE — the product's sentence, then the reader's name. Sentence
             case, no tracking: the NAME carries the weight split (lead heavier
-            than the preposition), the name itself is the page's largest ink. */}
+            than the preposition), the name itself is the page's largest ink.
+            Set in the app's sans (Raleway), NOT the serif — the reader's call:
+            the title is UI, not a quotation. */}
         <header>
           <p
-            className={`font-serif ${HOME_INK_MUTED}`}
+            className={`font-sans ${HOME_INK_MUTED}`}
             style={{ fontSize: HOME_EYEBROW_SIZE_PX }}
           >
             <span className="font-medium text-foreground/75">
@@ -163,7 +165,7 @@ export function HomeScreen({
             {eyebrowPreposition}
           </p>
           <h1
-            className={`mt-1 font-serif font-semibold ${HOME_INK_FULL}`}
+            className={`mt-1 font-sans font-semibold ${HOME_INK_FULL}`}
             style={{
               fontSize: HOME_NAME_SIZE_PX,
               lineHeight: HOME_NAME_LINE_HEIGHT,
