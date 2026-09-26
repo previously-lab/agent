@@ -113,7 +113,6 @@ export default async function HomePage({
       name={identity.name}
       recap={recapProps}
       continueLabel={t("continue")}
-      enterWorldLabel={t("enterWorld")}
       settingsLabel={t("settings")}
     />
   );

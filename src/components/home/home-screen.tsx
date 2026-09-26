@@ -57,8 +57,6 @@ export const HOME_TIME_GAP_PX = 16;
 
 /** The one row of actions: primary full ink, then muted, smaller. */
 export const HOME_ACTION_SIZE_PX = 18;
-export const HOME_SECONDARY_SIZE_PX = 13;
-export const HOME_SETTINGS_SIZE_PX = 12;
 
 /** Inks — the semantic palette the zones draw on. */
 export const HOME_INK_FULL = "text-foreground";
@@ -84,7 +82,6 @@ export interface HomeScreenProps {
     lastAgent: HomeRecap["lastAgent"];
   } | null;
   continueLabel: string;
-  enterWorldLabel: string;
   settingsLabel: string;
 }
 
@@ -143,7 +140,6 @@ export function HomeScreen({
   name,
   recap,
   continueLabel,
-  enterWorldLabel,
   settingsLabel,
 }: HomeScreenProps) {
   return (
@@ -228,12 +224,15 @@ export function HomeScreen({
           }}
         />
 
-        {/* THE DOORS — one row. 接着说 IS the old 继续 (same `/app` door):
-            the reader's wording, the hero, its arrow in the brand ink. */}
+        {/* THE DOORS — one row, TWO of them, set in the same size and weight:
+            the reader's call, a menu of equal items rather than a hero with a
+            hanger-on. The ink still separates them (继续 full, 设置 faint) and
+            继续 keeps its arrow; 进入世界 is gone — the world is reached
+            through the conversation, not as a second front door. */}
         <nav className="flex items-baseline gap-8">
           <Link
             href="/app"
-            className={`font-medium ${HOME_INK_FULL} transition-colors hover:text-brand`}
+            className={`${HOME_INK_FULL} transition-colors hover:text-brand`}
             style={{ fontSize: HOME_ACTION_SIZE_PX }}
           >
             {continueLabel}
@@ -243,16 +242,9 @@ export function HomeScreen({
             </span>
           </Link>
           <Link
-            href="/app?view=game"
-            className={`${HOME_INK_MUTED} transition-colors hover:${HOME_INK_FULL}`}
-            style={{ fontSize: HOME_SECONDARY_SIZE_PX }}
-          >
-            {enterWorldLabel}
-          </Link>
-          <Link
             href="/settings"
             className={`ml-auto ${HOME_INK_FAINT} transition-colors hover:${HOME_INK_FULL}`}
-            style={{ fontSize: HOME_SETTINGS_SIZE_PX }}
+            style={{ fontSize: HOME_ACTION_SIZE_PX }}
           >
             {settingsLabel}
           </Link>
