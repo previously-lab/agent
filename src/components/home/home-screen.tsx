@@ -150,13 +150,14 @@ export function HomeScreen({
     <main className="flex h-dvh flex-col items-center justify-center overflow-y-auto px-6">
       <div className="w-full" style={{ maxWidth: HOME_COLUMN_MAX_WIDTH_REM * 16 }}>
         {/* TITLE — the product's sentence, then the reader's name. Sentence
-            case, no tracking: the NAME carries the weight split (lead heavier
-            than the preposition), the name itself is the page's largest ink.
-            Set in the app's sans (Raleway), NOT the serif — the reader's call:
-            the title is UI, not a quotation. */}
+            case, no tracking, and NO font-family class: the app's default is
+            Raleway, so the title says nothing and inherits it. The weight does
+            the hierarchy — the lead a touch heavier than its preposition, the
+            name large and LIGHT (300, the variable face's own light; the big
+            quiet line is the page's largest ink without shouting). */}
         <header>
           <p
-            className={`font-sans ${HOME_INK_MUTED}`}
+            className={`${HOME_INK_MUTED}`}
             style={{ fontSize: HOME_EYEBROW_SIZE_PX }}
           >
             <span className="font-medium text-foreground/75">
@@ -165,7 +166,7 @@ export function HomeScreen({
             {eyebrowPreposition}
           </p>
           <h1
-            className={`mt-1 font-sans font-semibold ${HOME_INK_FULL}`}
+            className={`mt-1 font-light ${HOME_INK_FULL}`}
             style={{
               fontSize: HOME_NAME_SIZE_PX,
               lineHeight: HOME_NAME_LINE_HEIGHT,
