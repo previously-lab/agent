@@ -13,10 +13,12 @@
  * landed. The size now comes from `frameGeometryFor` — the same function
  * `card-field.tsx` sizes the real cards with — so the swap moves nothing.
  *
- * The composition is the card's own, top to bottom: the name bar, the
- * timecode bar, then the company-chip and quiet-line rounds. It is a
- * smaller DOCUMENT than the dossier was (it is a placeholder), but the
- * same one as the business card it stands in for, at the same scale.
+ * The composition is the card's own, top to bottom: the pinned-corner
+ * rounds (turn count, strand chip), the centred date and clock rounds
+ * sitting slightly above true centre, then the focus-line round at the
+ * foot. It is a smaller DOCUMENT than the dossier was (it is a
+ * placeholder), but the same one as the business card it stands in for,
+ * at the same scale.
  *
  * Motion is staggered down the column so it reads as one gesture rather than a
  * field of lights blinking in unison. `motion-reduce:animate-none` throughout.
@@ -56,31 +58,30 @@ function FallbackCard({
       style={{ width, height }}
       className="relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-paper bg-paper-grain-card p-5 shadow-paper-contact"
     >
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-      />
-      {/* The name — the big serif line the card leads with. */}
-      <div
-        className="tl-fb-delay relative h-7 w-3/5 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
-        style={{ "--fb-delay": `${delay}ms` } as React.CSSProperties}
-      />
-
-      {/* The title — the timecode under the name. */}
-      <div className="relative mt-3 flex items-center gap-2">
-        <Bar className="h-2 w-28" delay={delay + 60} />
-        <Bar className="h-2 w-12" delay={delay + 90} />
-      </div>
-
-      <div className="relative mt-auto flex items-end justify-between pt-4">
-        {/* The company — the strand chip. */}
+      {/* The pinned corners — the turn count (left) and the strand chip (right). */}
+      <div className="relative flex items-start justify-between">
+        <div
+          className="tl-fb-delay relative h-2.5 w-12 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
+          style={{ "--fb-delay": `${delay}ms` } as React.CSSProperties}
+        />
         <div className="flex items-center gap-1.5">
           <span className="inline-block size-1.5 shrink-0 rounded-[2px] bg-primary/50" />
-          <Bar className="h-2.5 w-14" delay={delay + 120} />
+          <Bar className="h-2.5 w-14" delay={delay + 60} />
         </div>
-        {/* The quiet line — turn count. */}
-        <Bar className="h-2 w-10" delay={delay + 150} />
       </div>
+
+      {/* The centre — the date and the clock, sitting slightly above true
+          centre. */}
+      <div className="relative flex flex-1 flex-col items-center justify-center pb-3">
+        <div
+          className="tl-fb-delay relative h-6 w-2/5 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
+          style={{ "--fb-delay": `${delay + 90}ms` } as React.CSSProperties}
+        />
+        <Bar className="mt-2 h-2 w-16" delay={delay + 120} />
+      </div>
+
+      {/* The foot — the focus line, spanning nearly the full width. */}
+      <Bar className="h-2 w-4/5" delay={delay + 150} />
     </div>
   );
 }

@@ -1,20 +1,33 @@
 "use client";
 
 /**
- * FrameCard (paper-and-ink rework) — the time-slice card is a LANDSCAPE
- * BUSINESS CARD (~1.7:1), not a dossier. One face at every zoom level:
- * the top card of a stack is ALWAYS the full original slice card (no
- * summaries), whether it sits alone or heads a pile.
+ * FrameCard (American Psycho layout) — the time-slice card is a LANDSCAPE
+ * BUSINESS CARD (~1.7:1), and its face takes the skeleton read off the
+ * four cards in the film: only the CENTRE block is centred, the corners
+ * are pinned; letter-spacing runs inversely to size; no rules, no boxes,
+ * no fills — type on a bare field. One face at every zoom level: the top
+ * card of a stack is ALWAYS the full original slice card (no summaries),
+ * whether it sits alone or heads a pile.
  *
- * FOUR ELEMENTS, AND NO MORE — it is a calling card, not a transcript:
- *   the "name"    the slice's focus — serif, light weight, large
- *   the "title"   when it happened — mono, small, letter-spaced
- *   the "company" the strand — a small quiet INK chip + sans label
- *   one quiet line  turn count, and continued-from if it exists
+ * The four blocks, in the reference's positions:
+ *   top-left   the turn count — a bare figure, no label (the "212 555 6342")
+ *   top-right  the strand — a small quiet INK chip + the strand name,
+ *              right-aligned as its own block, with a smaller line
+ *              beneath it (the continued-from date, when there is one —
+ *              the "Mergers and Acq.")
+ *   centre     WHEN — the date, large and serif (the "PATRICK BATEMAN"),
+ *              and the clock one size down beneath it (the "Vice
+ *              President"), the pair sitting slightly ABOVE true centre
+ *   bottom     the focus — one small line, the widest tracking, spanning
+ *              nearly the full width (the address line)
  * Clicking the card opens the conversation — the full read lives there.
- * The ledger rows, the previously excerpt and the turn bubbles are GONE
- * from the face (the turn/previously READ stays warm in `SliceCardFace`,
- * but none of it renders on the card).
+ *
+ * THE RECESSED TYPE rides exactly the two centre strings — the date and
+ * the clock: `text-shadow-paper-recess`, the depression's dark
+ * upper-left wall and its paper-lip highlight at the lower-right, 1px
+ * and no blur. Body text and all CJK stay FLAT ink: a highlight under
+ * every stroke doubles the stroke weight and closes the counters at
+ * these sizes. Everything else about the material is unchanged:
  *
  * MATERIAL — two surfaces, not four mechanisms (卡纸方案):
  *   PAPER is the sheet: `bg-paper bg-paper-grain-card`, the SAME stock as
@@ -26,14 +39,6 @@
  *   off the board by its own thickness, shadow in the crevice at the
  *   edge — `shadow-paper-contact`, never the wide floating-panel lift.
  *
- * THE PRINTED-IN TEXT EFFECT rides exactly two strings — the serif focus
- * and the timecode: `text-shadow-paper-in`, a 1px near-white highlight
- * at the stroke's foot, light from the same upper-left as everything
- * else. 1px, no blur — wider stops reading as an edge and becomes a
- * smudge. Body text and all CJK stay FLAT ink: a highlight under every
- * stroke doubles the stroke weight and closes the counters at these
- * sizes.
- *
  * INK COLOUR IS QUIET: the strand chip is a low-chroma TINT of the
  * strand colour with a same-hue denser edge (dot gain), never a
  * saturated fill — a screen of solid blocks reads as a colour chart,
@@ -41,8 +46,7 @@
  *
  * Layout (all sizes in em; root font-size derives from the card's short
  * edge via `cardEmFor`, so the face scales with the responsive geometry
- * tiers): the name sits upper-left large, the title beneath it, the
- * company chip and the quiet line share the foot.
+ * tiers).
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { tintOf } from "@/lib/timeline3d/ink";
@@ -56,9 +60,12 @@ import "./timeline-3d.css";
 
 /** Translated strings, passed in from OUTSIDE the R3F Canvas — drei Html
  *  renders in the Canvas's own React root, so next-intl context does not
- *  reach components rendered here (no hooks allowed inside). The calling
- *  card wears only two: the turn count and the continued-from line. */
+ *  reach components rendered here (no hooks allowed inside). The card
+ *  wears four: the centre date (the locale's own long form — "2026年7月
+ *  31日" / "July 31, 2026"), the turn count, and the continued-from line. */
 export interface FrameCardTexts {
+  /** "2026年7月31日" / "July 31, 2026" — the centre "name". */
+  date(d: Date): string;
   /** "N 轮" / "N turns". */
   turns(count: number): string;
   /** "续自 {{date}}" / "cont. {{date}}". */
@@ -100,14 +107,12 @@ export function FrameCard({
   texts,
 }: FrameCardProps) {
   const accent = accentOf(entry);
-  const dry = !entry.focus;
   // The card's root em — what every `em` inside this face resolves
   // against (`cardEmFor` owns the formula AND its bounds).
   const em = cardEmFor(geo);
 
   const contDate = continuedDate(entry.continues_from);
   const startD = new Date(entry.start);
-  const dateText = `${startD.getFullYear()}/${startD.getMonth() + 1}/${startD.getDate()} ${hhmm(entry.start)}`;
   // The company line: the FIRST strand only — a calling card names one
   // company. The chip is ink (a low-chroma tint of the strand colour),
   // its edge a same-hue step denser than the fill (dot gain).
@@ -128,63 +133,72 @@ export function FrameCard({
         fontSize: em,
       }}
     >
-      {/* Top light falloff — the sheet's own lighting, not an element. */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-      />
-
       <div className="relative flex h-full flex-col px-[1.3em] pb-[0.9em] pt-[0.85em]">
-        {/* The "name" — the slice's focus. Serif, light, large, and one of
-            the TWO strings allowed the printed-in edge. */}
-        <div
-          className={`line-clamp-2 font-serif font-light leading-[1.12] tracking-tight text-card-foreground text-shadow-paper-in ${
-            dry ? "text-[1.5em]" : "text-[1.32em]"
-          }`}
-        >
-          {entry.focus || `${entry.date.slice(5)} ${hhmm(entry.start)}`.trim()}
-        </div>
+        {/* The pinned corners — only the centre block is centred. */}
+        <div className="flex items-start justify-between gap-[1em]">
+          {/* Top-left — the turn count: a bare figure, letter-spaced, no
+              label. An empty span when the count is not known yet, so the
+              corner pair keeps its justify-between geometry. */}
+          <span className="font-mono text-[0.62em] leading-none tracking-[0.16em] text-foreground/60 tabular-nums">
+            {entry.turn_count != null ? texts.turns(entry.turn_count) : ""}
+          </span>
 
-        {/* The "title" — when it happened. Mono, small, letter-spaced,
-            flat except the printed-in edge. */}
-        <div className="mt-[0.5em] font-mono text-[0.6em] leading-none tracking-[0.16em] text-foreground/55">
-          <span className="tabular-nums text-shadow-paper-in">{dateText}</span>
-        </div>
-
-        <span className="mt-auto" />
-
-        {/* The foot: the "company" chip (left) and the one quiet line
-            (right). */}
-        <div className="flex items-end justify-between gap-[1em]">
-          {strandName ? (
-            <span
-              className="inline-flex max-w-[55%] shrink-0 items-center gap-[0.4em] rounded-[0.35em] px-[0.55em] py-[0.3em]"
-              // Dynamic, both: the strand colour arrives as JS per slice —
-              // the fill as a low-chroma tint, the edge a same-hue step
-              // denser (dot gain). Ink on paper, never a saturated slab.
-              style={{
-                backgroundColor: chipTint,
-                boxShadow: `inset 0 0 0 1px ${chipEdge}`,
-              }}
-            >
-              <span
-                aria-hidden
-                className="inline-block size-[0.42em] shrink-0 rounded-[2px]"
-                style={{ backgroundColor: accent }}
-              />
-              <span className="truncate font-sans text-[0.58em] leading-none tracking-[0.08em] text-foreground/75">
-                {strandName}
-              </span>
+          {/* Top-right — the strand: the quiet ink chip + name,
+              right-aligned as its own block, with the smaller
+              continued-from line beneath it ("Mergers and Acq."). */}
+          {strandName || contDate ? (
+            <span className="flex flex-col items-end gap-[0.4em] text-right">
+              {strandName && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-[0.4em] rounded-[0.35em] px-[0.55em] py-[0.3em]"
+                  // Dynamic, both: the strand colour arrives as JS per slice —
+                  // the fill as a low-chroma tint, the edge a same-hue step
+                  // denser (dot gain). Ink on paper, never a saturated slab.
+                  style={{
+                    backgroundColor: chipTint,
+                    boxShadow: `inset 0 0 0 1px ${chipEdge}`,
+                  }}
+                >
+                  <span
+                    aria-hidden
+                    className="inline-block size-[0.42em] shrink-0 rounded-[2px]"
+                    style={{ backgroundColor: accent }}
+                  />
+                  <span className="font-sans text-[0.58em] leading-none tracking-[0.1em] text-foreground/75">
+                    {strandName}
+                  </span>
+                </span>
+              )}
+              {contDate && (
+                <span className="font-sans text-[0.52em] leading-none tracking-[0.16em] text-muted-foreground">
+                  ↳ {texts.continuedFrom(contDate)}
+                </span>
+              )}
             </span>
           ) : (
             <span />
           )}
-          <span className="flex shrink-0 items-center gap-[0.9em] font-sans lining-nums text-[0.58em] leading-none tracking-[0.08em] text-muted-foreground">
-            {contDate && <span>↳ {texts.continuedFrom(contDate)}</span>}
-            {entry.turn_count != null && (
-              <span>{texts.turns(entry.turn_count)}</span>
-            )}
-          </span>
+        </div>
+
+        {/* The centre — the identifying thing is WHEN: the date, large and
+            serif, the clock one size down beneath it. The pair sits
+            slightly ABOVE true centre (the region's bottom padding lifts
+            it). These two strings are the only recessed type on the card;
+            every tracking runs inverse to size — the biggest is freely
+            spaced, the smallest is opened right up. */}
+        <div className="flex flex-1 flex-col items-center justify-center pb-[0.8em]">
+          <div className="font-serif font-light text-[1.55em] leading-none tracking-[0.06em] text-card-foreground text-shadow-paper-recess">
+            {texts.date(startD)}
+          </div>
+          <div className="mt-[0.5em] font-mono text-[0.66em] leading-none tracking-[0.3em] text-foreground/60 tabular-nums text-shadow-paper-recess">
+            {hhmm(entry.start)}
+          </div>
+        </div>
+
+        {/* The foot — the focus: one small line, the widest tracking on
+            the card, spanning nearly the full width. */}
+        <div className="line-clamp-1 font-sans text-[0.62em] leading-relaxed tracking-[0.2em] text-foreground/70">
+          {entry.focus || `${entry.date.slice(5)} ${hhmm(entry.start)}`.trim()}
         </div>
       </div>
     </div>

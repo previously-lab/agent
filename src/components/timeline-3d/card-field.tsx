@@ -129,6 +129,7 @@ import {
   progressFor,
   type FieldFeed,
 } from "@/lib/timeline3d/field-feed";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import { FrameCardTexts, frameCardLabel } from "./frame-card";
 import { RowGroup } from "./row-group";
 import { useWorldScene } from "./world-slot";
@@ -895,14 +896,22 @@ export function CardField({
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
   const locale = useLocale();
-  // The calling card wears only two strings (turn count, continued-from);
-  // the dossier's ledger/quote/bubble labels are gone with the face.
+  // The card wears four strings (centre date, turn count, continued-from
+  // — plus the date is the locale's own long form, so it arrives as a
+  // formatter); the dossier's ledger/quote/bubble labels are gone with
+  // the face.
   const texts = useMemo<FrameCardTexts>(
     () => ({
+      date: (d: Date) =>
+        dateTimeFormat(locale, {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        }).format(d),
       turns: (count: number) => t("card.turns", { count }),
       continuedFrom: (date: string) => t("card.continuedFrom", { date }),
     }),
-    [t],
+    [t, locale],
   );
   // The narrate corner action, as data — the label is translated HERE (the
   // Canvas root cuts next-intl context off from the drei Html portals, the

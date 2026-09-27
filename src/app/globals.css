@@ -59,13 +59,13 @@
   --color-paper: var(--paper);
   --color-paper-plate: var(--paper-plate);
   --color-paper-line: var(--paper-line);
-  --background-image-paper-grain: var(--paper-tooth), var(--paper-tooth-micro), var(--paper-sheen);
-  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-tooth-micro-card), var(--paper-sheen);
+  --background-image-paper-grain: var(--paper-tooth), var(--paper-tooth-micro);
+  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-tooth-micro-card);
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-sink: var(--paper-sink);
   --shadow-paper-raise: var(--paper-raise);
   --shadow-paper-contact: var(--paper-contact);
-  --text-shadow-paper-in: var(--paper-ink-edge);
+  --text-shadow-paper-recess: var(--paper-ink-recess);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -258,8 +258,7 @@
 
    THE MATERIAL IS PAPER AND INK (the reader's call, 卡纸方案). Two
    surfaces, not four mechanisms: PAPER is the board, the card, and
-   everything unprinted — the grain (tooth + micro-tooth + sheen) is
-   untouched. INK is anything printed: it sits ON TOP of the sheet, much
+   everything unprinted — the grain (tooth + micro-tooth) is untouched. INK is anything printed: it sits ON TOP of the sheet, much
    flatter than it, PARTLY covering the grain (uncoated stock lets the
    tooth show faintly through — a quarter to a third survives), and its
    EDGE IS VERY SLIGHTLY DENSER than its interior (dot gain). Nothing
@@ -314,18 +313,26 @@
             0 34px 80px hover/lift bloom belongs to floating panels
             (chat, briefing, home), not to a card lying on the board.
             This carries ALL the separation, so it is strong, not faint.
-   INK EDGE --paper-ink-edge   the printed-in text effect (the ONLY text
-            shadow anywhere on the paper): 1px, no blur, near-white at
-            high alpha, on exactly two strings — the card's serif focus
-            and its timecode. Body text and all CJK stay flat ink.
+   RECESSED --paper-ink-recess   the printed letter sits IN thick stock
+            (the type the slice card sets at its centre): the depression's
+            upper-left wall faces AWAY from the upper-left house light —
+            a dark edge in the paper's own hue family — and its lower-right
+            wall catches it: the paper's lip, the sheet's own colour lifted,
+            never pure white. A 1px / 1px hard pair, no blur — wider stops
+            reading as an edge and becomes a smudge. Exactly TWO strings
+            carry it (the centre date and the clock); body text and all
+            CJK small print stay FLAT ink — a highlight under every stroke
+            doubles the stroke weight and closes the counters at these
+            sizes. (The old single-highlight printed-in edge is retired:
+            a recess reads by its two walls, not one.)
    LIFT     --paper-lift   the elevation — EXACTLY the app's own card
             shadow (the same value the chat card, the briefing card and
             the skeletons carry), so a FLOATING panel lifts by as much
             as every other card in the product. The timeline's slice
             card no longer wears it — a sheet lying on the board is
             separated by CONTACT, not by floating.
-   GRAIN    Three layers (SVG tiles + one gradient; no image assets —
-            the principle was never the failure, the frequency was):
+   GRAIN    Two layers (SVG tiles; no image assets — the principle was
+            never the failure, the frequency was):
             TOOTH       feTurbulence fractalNoise baseFrequency 0.09
                         (≈11px features — inside the 4–40px band the eye
                         resolves; the old 0.72 tile sat at 1.4px, which
@@ -339,10 +346,6 @@
                         feDiffuseLighting. The velvet / peach-skin
                         quality: it reads as a property of the SURFACE,
                         not as features.
-            SHEEN       a broad, very soft linear-gradient —
-                        texture-of-light, not a tile (a tile repeats, a
-                        gradient cannot); it keeps the sheet from being a
-                        dead flat field.
             Light stock carries the tiles as SPARSE black ink: each
             layer's feFuncA is a steep slope on a NEGATIVE intercept, so
             most of the luminance range clamps to transparent and only
@@ -363,9 +366,7 @@
             per-unit frequency) stays identical to the reference. Board
             and card pin the tiles at co-prime intrinsic sizes (board
             512, card 431) so the two surfaces cannot align into moiré
-            where the card lies on the board. SHEEN is declared once and
-            theme-aware (it derives from --paper / --foreground), so it
-            is not part of the polarity binding. The dark polarity binds
+            where the card lies on the board. The dark polarity binds
             the SAME names in .dark — var(--paper-tooth) is theme-aware.
             Measured amplitude in an empty region: p-p ≈ 11/255
             (256×64 window), composite mean within 1 level of the
@@ -374,13 +375,12 @@
 
             THE TOKENS. One `@theme inline` entry per SURFACE, not per
             layer — bg-* utilities overwrite background-image rather
-            than composing, so each surface's three layers live in a
+            than composing, so each surface's two layers live in a
             single comma-separated token:
               --background-image-paper-grain       (board: tooth,
-                                                    tooth-micro, sheen)
+                                                    tooth-micro)
               --background-image-paper-grain-card  (card: tooth-card,
-                                                    tooth-micro-card,
-                                                    sheen)
+                                                    tooth-micro-card)
             A sunken plate takes NO grain token — it is
             `bg-paper-plate shadow-paper-sink`, tone-step fill plus
             pressed edges only.
@@ -451,45 +451,34 @@
     0 1px 2px 0 rgba(15, 23, 42, 0.22),
     0 3px 8px -2px rgba(15, 23, 42, 0.14);
 
-  /* THE PRINTED-IN EDGE — the one text effect, and only on the two
-     strings the card sets like type (the serif focus, the timecode).
-     A 1px highlight at the glyph's lower edge, high-alpha near-white,
-     light from the same upper-left as every relief edge ever had: the
-     ink sits slightly DOWN in the stock and the paper catches light at
-     the stroke's foot. 1px, no wider, no blurrier — wider stops reading
-     as an edge and becomes a smudge. On light stock the near-white is
-     against near-white and the effect is deliberately almost subliminal;
-     body text and all CJK stay FLAT ink — a highlight under every
-     stroke doubles the stroke weight and closes the counters at these
-     sizes. */
-  --paper-ink-edge: 0 1px 1px oklch(0.99 0.002 256 / 0.85);
+  /* THE RECESSED TYPE — the printed letter sits IN thick stock, and the
+     depression's two walls catch the upper-left light differently: the
+     upper-left wall faces AWAY (a dark edge in the paper's own hue
+     family), the lower-right wall catches it (the paper's lip — the
+     sheet's own colour lifted, never pure white). 1px, no blur — wider
+     stops reading as an edge. Exactly TWO strings on the slice card
+     carry this (the centre date and the clock); body text and all CJK
+     small print stay FLAT ink. On light stock the lifted lip sits
+     against near-white and the pair is deliberately almost subliminal. */
+  --paper-ink-recess:
+    -1px -1px 0 oklch(from var(--paper) calc(l * 0.4) calc(c * 2) h / 0.45),
+    1px 1px 0 color-mix(in oklab, var(--paper) 60%, white);
 
   /* The flat printed hairline (ink, not relief). */
   --paper-line: oklch(0.85 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN — three layers. TOOTH: lit relief (azimuth 45, elevation
+  /* THE GRAIN — two layers. TOOTH: lit relief (azimuth 45, elevation
      60 — the house light). MICRO-TOOTH: plain alpha, NO
      feDiffuseLighting — the velvet / peach-skin quality; it must read
-     as a property of the SURFACE, not as features. SHEEN: a broad, very
-     soft gradient — texture-of-light, not a tile (a tile repeats, a
-     gradient cannot); it keeps the sheet from being a dead flat field.
+     as a property of the SURFACE, not as features.
 
      The BOARD set. Each tile's size lives in its own SVG's width/height
      (the intrinsic size renders it 1 unit = 1px — no background-size);
      the card tiles' baseFrequency is scaled 512/N so the rendered
-     feature scale matches the board's. SHEEN is declared once, here —
-     it inherits into .dark and is theme-aware because it derives from
-     var(--paper) / var(--foreground). */
+     feature scale matches the board's. */
   --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.6' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
   --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.22' intercept='-0.13'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-sheen: linear-gradient(
-    115deg,
-    color-mix(in oklab, var(--paper) 97%, var(--foreground)) 0%,
-    transparent 45%,
-    transparent 55%,
-    color-mix(in oklab, var(--paper) 97%, var(--foreground)) 100%
-  );
 
   /* The CARD set — the same tiles at a co-prime intrinsic size (431 vs
      the board's 512) so the card lying on the board cannot align into
@@ -538,11 +527,13 @@
     0 1px 2px 0 rgba(0, 0, 0, 0.72),
     0 3px 8px -2px rgba(0, 0, 0, 0.6);
 
-  /* THE PRINTED-IN EDGE, dark stock: ink on black cardstock reads by the
-     stock catching light at the stroke's foot — the same 1px near-white
-     highlight as the light theme, at a fraction of the alpha (a full
-     0.85 halo would glow). 1px, no blur. */
-  --paper-ink-edge: 0 1px 1px oklch(0.99 0.002 256 / 0.3);
+  /* THE RECESSED TYPE, dark stock: there is no room below near-black, so
+     the occluded wall leans near-opaque and does little work; the lip
+     carries the read — the sheet lifted toward white at a restrained
+     mix, never a full-brightness halo. 1px, no blur. */
+  --paper-ink-recess:
+    -1px -1px 0 oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8),
+    1px 1px 0 color-mix(in oklab, var(--paper) 55%, white);
 
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
@@ -551,9 +542,7 @@
      sizes as the light bindings above, as translucent WHITE ink — on
      dark stock the tooth lifts. The polarity binds the SAME names:
      var(--paper-tooth) is theme-aware; there are no parallel -dark
-     variables to keep in step. SHEEN is not redeclared: the shared
-     declaration inherits here and derives from this theme's
-     --paper / --foreground. */
+     variables to keep in step. */
   --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
   --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
   --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.106914' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
@@ -565,7 +554,7 @@
    is invented for the material:
      board sheet   bg-paper bg-paper-grain
      card sheet    bg-paper bg-paper-grain-card shadow-paper-contact
-     printed-in    text-shadow-paper-in (the serif focus + timecode only)
+     recessed type text-shadow-paper-recess (the centre date + clock only)
    The timeline is PAPER AND INK: printed regions are ink film on the
    sheet — flatter, partly covering the grain, slightly denser at the
    edge — never sunken plates or raised marks. The relief recipes below
