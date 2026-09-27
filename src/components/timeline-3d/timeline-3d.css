@@ -2,30 +2,6 @@
    anything measured, tier-derived, or per-frame stays in JS. This file is
    imported by the components that use it; the bundler dedupes the import. */
 
-/* ─── The paper board (atmosphere.tsx) ─────────────────────────────────── */
-
-/* The seed IS a colour: registering it as such lets the sheet's stock
-   cross-fade when the field writes a new strand colour, instead of snapping
-   — the derived --paper/--paper-card/--paper-line recompute per frame while
-   the seed interpolates. Registered once, shared by every paper surface. */
-@property --paper-seed {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: oklch(0.955 0 0);
-}
-
-/* The board's colour write arrives when the reader LANDS on a card, never
-   per frame mid-drag (the field gates the write on a settled scroll), so a
-   short ease is right and cheap. */
-.tl-paper-board {
-  transition: --paper-seed 300ms ease;
-}
-@media (prefers-reduced-motion: reduce) {
-  .tl-paper-board {
-    transition: none;
-  }
-}
-
 /* The bottom fade over the field (timeline-scene.tsx): a card must not be
    sliced by the viewport edge, so the column dissolves into the BOARD'S OWN
    STOCK — a fade to the theme background would read as a band of fog lying
@@ -50,40 +26,6 @@
     color-mix(in oklab, var(--paper) 82%, var(--foreground)) 0 66.7%,
     color-mix(in oklab, var(--paper) 95%, var(--foreground)) 66.7% 100%
   );
-}
-
-/* The sunken plates read by a TONE STEP, not by their 1px edge alone: filled
-   with the board stock (--paper, one derivation step below the card's own
-   --paper-card) the quote/ledger sit pressed INTO the face. The value is the
-   contract's own derivation — nothing is re-derived here. */
-.tl-paper-plate {
-  background-color: var(--paper);
-}
-
-/* The card's lift. The old 80px-blur void shadow read as a soft UI panel on
-   the sheet; the lift is now the same recipe the home card uses — the
-   paper's own colour pushed darker, one lit top edge, tight fall — a card
-   lying ON the board, not floating above a void. Hover deepens the soft
-   step, the one motion this material allows. */
-.tl-paper-lift {
-  --lift-tight: oklch(0 0 0 / 0.1);
-  --lift-tight: oklch(from var(--paper) calc(l * 0.5) calc(c * 0.5) h / 0.1);
-  --lift-soft: oklch(0 0 0 / 0.08);
-  --lift-soft: oklch(from var(--paper) calc(l * 0.35) calc(c * 0.5) h / 0.08);
-  box-shadow:
-    inset 0 1px 0 var(--paper-hi),
-    0 1px 2px var(--lift-tight),
-    0 12px 32px 4px var(--lift-soft);
-}
-.dark .tl-paper-lift {
-  --lift-tight: oklch(0 0 0 / 0.45);
-  --lift-tight: oklch(from var(--paper) calc(l * 0.45) calc(c * 0.5) h / 0.45);
-  --lift-soft: oklch(0 0 0 / 0.28);
-  --lift-soft: oklch(from var(--paper) calc(l * 0.3) calc(c * 0.5) h / 0.28);
-}
-.tl-card-in:hover .tl-paper-lift {
-  --lift-soft: oklch(0 0 0 / 0.1);
-  --lift-soft: oklch(from var(--paper) calc(l * 0.35) calc(c * 0.5) h / 0.1);
 }
 
 /* ─── Slice narrate corner button (slice-narrate-button.tsx) ──────────── */

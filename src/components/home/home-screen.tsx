@@ -2,18 +2,20 @@ import { Link } from "@/i18n/navigation";
 import "./home-paper.css";
 
 /**
- * The home (v0.13 §3) — paper, not bare typography: the page IS a big sheet
- * (the board) with a second, brighter sheet (the card) lying on it, and the
- * content regions carry printed relief. Everything is lit from one
- * upper-left light: the card's shadow falls down-right, a sunken region
- * shadows its top lip, a raised one catches light on its top edge.
+ * The home (v0.13 §3) — paper, not bare typography: the page IS a big
+ * sheet and a card lies on it — ONE paper, one colour; the card reads as
+ * a separate layer only through the contract's lift shadow (.paper-lift)
+ * and the content regions carry printed relief. Everything is lit from
+ * one upper-left light: the card's shadow falls down-right, a sunken
+ * region shadows its top lip, a raised one catches light on its top edge.
  *
  * Zones, top to bottom inside the card:
  *
  *   PLATE   the identity block (the product's sentence, the reader's name,
- *           the dateline when there is one) — a CONTENT region, printed
- *           INTO the card (.paper-sink): the thin-deboss read, like a
- *           conversation bubble on a business card.
+ *           the dateline when there is one) — a CONTENT region printed
+ *           INTO the card (.paper-plate): tone-step fill plus the sunken
+ *           edges, the thin-deboss read, like a conversation bubble on a
+ *           business card.
  *   RULE    a flat printed hairline (.home-rule, --paper-line) — ink on
  *           the sheet, separating content from menu.
  *   MENU    继续 → `/app`, then 设置 beneath it — LABEL-like regions
@@ -50,15 +52,15 @@ export function HomeScreen({
   settingsLabel,
 }: HomeScreenProps) {
   return (
-    <main className="home-board paper-stock flex min-h-dvh flex-col items-center justify-center px-6 py-16">
-      <div className="home-card paper-card-stock w-full max-w-sm">
+    <main className="paper-stock flex min-h-dvh flex-col items-center justify-center px-6 py-16">
+      <div className="home-card paper-card-stock paper-lift w-full max-w-sm">
         {/* THE PLATE — the sunken identity region. Sentence case, and NO
             font-family class: the app's default is Raleway, so the title
             says nothing and inherits it. The weight does the hierarchy —
             the lead a touch heavier than its preposition, the name large
             and LIGHT (300, the variable face's own light). The dateline
             hugs the name inside the same pressed region. */}
-        <header className="home-plate paper-sink">
+        <header className="home-plate paper-plate">
           <p className="text-base text-muted-foreground">
             <span className="font-medium text-foreground/75">
               {eyebrowLead}

@@ -8,13 +8,12 @@
  * no overlay divs (the grain is blended into the stock, per the paper
  * contract in globals.css).
  *
- * THE SHEET'S COLOUR IS THE CURRENT CARD'S STRAND COLOUR. The card field
- * decides which slice the reader stands on; when the scroll settles on a new
- * card it writes `--paper-seed` here through `setPaperBoardSeed`, and the
- * registered-property transition on `.tl-paper-board` (timeline-3d.css)
- * cross-fades the derived stock (~300ms) instead of snapping. The write is
- * landing-only on purpose: a drag through five cards must not sweep five
- * colours across the board.
+ * THE SHEET IS ONE COLOUR, ALWAYS. Board and card are the same stock; the
+ * layer language between them is the card's shadow, not a colour step. There
+ * is deliberately no channel from the field to this element — an earlier pass
+ * tinted the board with the landed card's strand colour, and the colour
+ * machinery (seed write, registered-property transition) is deleted with the
+ * rework, not left dormant.
  *
  * `AtmosphereBackdrop` renders in the SHELL's pane slot, inset past the band,
  * UNDER the shared canvas (§14 merge) — the shell file itself is not touched.
@@ -22,27 +21,11 @@
 
 import "./timeline-3d.css";
 
-/** Selector for the sheet element — the one channel from the field (which
- *  decides the current card) to the board (which the shell mounts). The
- *  bottom fade carries the same seed: it must dissolve into the TINTED
- *  sheet, and it is not a DOM descendant of it. */
-const BOARD_SELECTOR = "[data-paper-board], [data-board-fade]";
-
-/** Write the board's seed colour. Called by the card field when the reader
- *  lands on a card; no-op when the board is not mounted (conversation rung). */
-export function setPaperBoardSeed(seed: string): void {
-  if (typeof document === "undefined") return;
-  document
-    .querySelectorAll<HTMLElement>(BOARD_SELECTOR)
-    .forEach((el) => el.style.setProperty("--paper-seed", seed));
-}
-
 export function AtmosphereBackdrop() {
   return (
     <div
       aria-hidden="true"
-      data-paper-board
-      className="paper-stock tl-paper-board pointer-events-none absolute inset-0 overflow-hidden"
+      className="paper-stock pointer-events-none absolute inset-0 overflow-hidden"
     />
   );
 }

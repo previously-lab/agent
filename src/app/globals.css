@@ -227,187 +227,264 @@
 }
 
 /* ─── Paper foundation (SHARED CONTRACT — do not fork) ───────────────────
-   The sheet material for every surface that prints on paper. The home
-   consumes it tonight; the card view consumes the SAME classes, so the
-   variables and class names below are a contract: extend, never duplicate.
+   The sheet material for every surface that prints on paper. The home and
+   the card view consume the SAME classes, so the variables and class names
+   below are a contract: extend, never duplicate, never rename.
 
-   INPUT    --paper-seed   the stock's source colour. The home sets it to
-            the theme's own neutral (`--background`); a themed surface
-            (the card view) sets it to its accent colour instead. The
-            derivation below must stay hue-preserving so any seed works.
+   ONE SHEET, ONE COLOUR. The board and the card are the same paper and
+   paint the same --paper; layer separation comes ONLY from the lift
+   shadow and the relief edges. There is no per-surface seed or tint
+   input: paper goes warm, never grey — aging research measures L*
+   falling toward yellow with chroma RISING (doc/paper-material-
+   research.md §4) — so hue is pinned into the warm band and chroma is
+   FLOORED, not merely capped. The old contract's lightness clamping
+   survives: the sheet follows the theme's --background lightness,
+   clamped into a readable band, with a warm static fallback at each
+   variable.
 
-   THE DERIVATION IS PER-SURFACE, NOT PER-DOCUMENT — and this note is the
-   reason it stays that way, measured, not reasoned. These variables used
-   to be derived on `:root` (and `.dark`) with the surfaces inheriting
-   them, which is broken for any surface whose seed differs from the
-   document's: a custom property is inherited as its SUBSTITUTED value, so
-   `--paper` resolved ONCE on `:root` from `:root`'s seed, and a
-   descendant that re-seeded could never re-derive it. The card view's
-   board wrote a blue strand seed and its background stayed the `:root`
-   grey (minimal repro, Chromium 2026-09: an inherit-only override keeps
-   the ancestor's colour; the same derivation redeclared on the seeded
-   element itself derives correctly — oklch(0.94 0.03 245) from a blue
-   seed). So the derivation lives ON the surfaces — `.paper-stock`,
-   `.paper-card-stock`, and the `.paper-tinted` hook below — where the
-   element's own `--paper-seed` feeds it. `--paper-card` derives from
-   `--paper` on that same element, one computation.
-   DO NOT RE-HOIST THESE ONTO `:root`. It looks equivalent and silently
-   un-themes every seeded surface. Descendants (a sunken plate, a printed
-   rule, a foil word) inherit the surface's already-resolved values —
-   exactly what they want.
+   THE DERIVATION IS DOCUMENT-LEVEL. In the seed era it had to live per
+   surface: an inherited custom property carries its SUBSTITUTED value,
+   so a descendant's re-seed could never re-derive the ancestor's
+   variables (measured, Chromium 2026-09 — a blue board seed could not
+   escape :root's grey). The seed is gone, so the derivation lives once
+   on :root / .dark and every surface — and every descendant plate,
+   rule, fade — reads the same resolved value.
 
-   STOCK    --paper        the board sheet. Hue comes from the seed;
-            lightness is CLAMPED into a narrow band (body text must stay
-            readable whatever colour is fed in) and chroma is capped so
-            a saturated seed still reads as paper, not as paint.
-            Light band l [0.94, 0.97] · c ≤ 0.03 · dark band l
-            [0.17, 0.23] · c ≤ 0.035.
-            --paper-card   the card stock, one step brighter than the
-            board (a real card sits slightly above its sheet).
-   RELIEF   --paper-hi / --paper-lo   the 1px relief edges. Derived, never
-            literal black/white. Dark's --paper-lo is deliberately weak:
-            there is far less room below near-black, so the sunken side
-            of an indent reads via its highlight up there.
-            --paper-line   the flat printed hairline for edges and rules
-            (ink, not relief).
-   GRAIN    --paper-grain   a 512×512 SVG turbulence tile (the timeline's
-            120px stock repeats visibly at 1440 — this one must not).
+   STOCK    --paper   the sheet. Light: l [0.955, 0.976] · c [0.014, 0.03]
+            · h ≈ 88. Dark: l [0.2, 0.21] · c [0.017, 0.035] ·
+            h ≈ 87. The bands sit a touch off the anchors on the
+            side the grain pushes: the pinned-ink layers shift the
+            composite mean ~7 levels (light darkens, dark lifts), and
+            the base is mixed so the COMPOSITE lands at the stock
+            colours — #f4f0e6-class light, #262219-class dark. The
+            derivation's hue is a LITERAL (the achromatic origin's
+            powerless hue breaks clamp() — see the :root note). The
+            trajectory matches the hotel's warm family (hue 81–83, chroma
+            rising as L falls) extended to sheet lightness — one material
+            across 2D and 3D without importing the hotel's wall-toned
+            hexes.
+            --paper-plate   a sunken region's fill: the sheet one tone
+            step DOWN (Δl ≈ 0.04 light, ≈ 0.06 dark — levels compress
+            near black so the dark step is wider; both land at the same
+            ≈10–15/255 below the face), chroma slightly up so the recess
+            stays in the warm family as it darkens.
+   RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
+            pressed edge. The dark side is a warm brown in the paper's
+            own hue family (the Kinetics-class rgba(60,40,20,·)) at
+            high alpha — 0.42 light, near-opaque dark — and the light
+            side a near-white at 0.7 light / 0.3 dark (on dark stock the
+            sunken side reads via its highlight). These are 10–20× the
+            old 0.02–0.04 effective alphas: measured, the old 1px /
+            4-per-255 relief was invisible; the target edge step is
+            25–90/255 across a 2–3px band — 1px bands vanish under the
+            sub-pixel resampling of transformed DOM.
+            --paper-line   the flat printed hairline (ink, not relief).
+   LIFT     --paper-lift   the whole elevation stack — contact layer
+            mandatory. With one sheet colour the shadow is the ENTIRE
+            layer language: without a crisp dark line at the sheet's
+            edge there is no signal where the sheet ends. Three layers,
+            offsets/blurs roughly doubling, negative spread keeping the
+            shadow UNDER the sheet, colour = paper hue pushed darker and
+            less saturated (semi-transparent grey over warm paper reads
+            as a dirt ring). Dark inverts: near-opaque contact plus a
+            LIGHTER ambient rim.
+   GRAIN    Three procedural layers (SVG data-URIs; no image assets —
+            the principle was never the failure, the frequency was):
+            TOOTH   feTurbulence fractalNoise baseFrequency 0.04 (≈25px
+                    features — inside the 4–40px band the eye resolves;
+                    the old 0.72 tile sat at 1.4px, which the eye can
+                    only average into dullness) → feDiffuseLighting
+                    (feDistantLight azimuth 45, elevation 60 — the same
+                    upper-left light as every relief edge) → keep only
+                    its LUMINANCE, as alpha. Flat alpha modulation reads
+                    as dirt; LIT bumps read as tooth.
+            FIBRE   anisotropic baseFrequency "0.008 0.06" — directional
+                    streaks, ±2–3%.
+            MOTTLE  baseFrequency 0.01, 2 octaves, ±2–3%, large tile —
+                    the luminance drift that breaks the tiling envelope.
+            Light stock carries the tiles as translucent BLACK ink
+            (drops), dark stock as translucent WHITE ink (lifts): a
+            fixed wobble is relatively louder the darker the stock
+            (Weber), and the pinned ink keeps the mean shift at mottle
+            class (±2–3%) at ANY sheet lightness. Board and card pin the
+            same layers at co-prime sizes so the two surfaces cannot
+            align into moiré. Target measured amplitude in an empty
+            region: p-p 8–16/255 (the old tile measured 3 — invisible).
 
-            THE NOISE LIVES IN ALPHA, AND THE INK IS PINNED. The first cut
-            put the variation in luminance at `feFuncA slope=0 intercept=1`
-            — an OPAQUE mid-grey sheet — which no blend mode can rescue:
-            `overlay` pins the result to the base wherever the base is near
-            white or near black, and the sheet then measures a peak-to-peak
-            range of 1/255, i.e. flat. Measured, not reasoned: a 400×320
-            patch of empty board read sd 0.25 light / 0.01 dark under
-            `overlay`, and mean 190 under `normal` — the tile was PAINTING,
-            not texturing. (A VLM sees none of this: a downsample averages
-            sub-pixel tooth away. Measure it, do not ask a model.)
-
-            So the tile is TRANSLUCENT: RGB is pinned to the ink — black
-            for light stock, white for the dark theme's --paper-grain-soft
-            — and only alpha carries the noise. Composited normally over
-            the stock, the amplitude is the alpha slope and it reads at ANY
-            base lightness. Both are used at two co-prime scales so no
-            repeat period reads at any viewport width.
-
-   Every derived variable carries TWO declarations: a plain oklch() line
-   older engines keep, and the relative-colour / color-mix line that
+   Every derived variable carries TWO declarations: a plain oklch()/rgba()
+   line older engines keep, and the relative-colour / color-mix line that
    wins where supported (the house pattern — see typeset.css). */
 
 :root {
-  /* The seed is the only document-level input; every surface inherits it
-     and may override it. The DERIVATION lives on the surfaces (below). */
-  --paper-seed: var(--background);
-  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='0'/%3E%3CfeFuncG type='linear' slope='0' intercept='0'/%3E%3CfeFuncB type='linear' slope='0' intercept='0'/%3E%3CfeFuncA type='linear' slope='0.06' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-}
+  /* THE SHEET. The base is mixed a touch off the anchors because the
+     pinned-ink grain shifts the composite mean ~7 levels (light darkens,
+     dark lifts); the COMPOSITE lands at the stocks — #f4f0e6-class light,
+     #262219-class dark.
+     HUE IS A LITERAL, measured not reasoned: the origin (--background)
+     is achromatic, its hue component is powerless, and math on a
+     powerless hue (e.g. clamp(85, h, 90)) makes Chromium drop the whole
+     declaration as invalid — the fallback silently painted for a full
+     session until the computed-style probe caught it. */
+  --paper: oklch(0.976 0.014 88.7);
+  --paper: oklch(from var(--background) clamp(0.955, l, 0.976) clamp(0.014, c, 0.03) 88);
 
-:root {
-  /* The dark theme's grain tile: the same tooth with the ink INVERTED —
-     white instead of black — because on a near-black stock there is no
-     room below, so the tooth has to lift. Its alpha slope is lower than
-     the light theme's: a fixed wobble is relatively louder the darker the
-     stock (Weber), so the dark sheet reads the same tooth at less gain. */
-  --paper-grain-soft: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g' x='0' y='0' width='100%25' height='100%25' color-interpolation-filters='sRGB'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.5' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncR type='linear' slope='0' intercept='1'/%3E%3CfeFuncG type='linear' slope='0' intercept='1'/%3E%3CfeFuncB type='linear' slope='0' intercept='1'/%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-}
+  /* The sunken fill: one tone step below the face. */
+  --paper-plate: oklch(0.936 0.016 85);
+  --paper-plate: oklch(from var(--paper) calc(l - 0.04) calc(c * 1.15) h);
 
-/* The derivation, PER SURFACE (why: the header note above — an inherited
-   custom property carries its substituted value, so a derivation declared on
-   :root can never respond to a descendant's seed). `--paper-card` reads
-   `--paper` on this same element: one computation, correct per seed.
+  /* The pressed-edge lips. lo = the occluded (shadow) side: a warm brown
+     in the paper's own hue family, Kinetics-class alpha. hi = the side
+     that catches light: near-white. */
+  --paper-relief-lo: oklch(0.35 0.03 85 / 0.42);
+  --paper-relief-lo: oklch(from var(--paper) calc(l * 0.36) calc(c * 2.2) h / 0.42);
+  --paper-relief-hi: oklch(0.99 0.006 85 / 0.7);
+  --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
-   .paper-tinted carries the derivation WITHOUT the stock treatment (no
-   grain tiles, no background of its own) — for seeded elements that must
-   match a tinted sheet's colour while painting something of their own, like
-   the card view's bottom fade dissolving into the board. */
-.paper-stock,
-.paper-card-stock,
-.paper-tinted {
-  --paper: oklch(0.955 0 0);
-  --paper: oklch(from var(--paper-seed, oklch(0.955 0 0)) clamp(0.94, l, 0.97) min(c, 0.03) h);
-  --paper-card: oklch(0.98 0 0);
-  --paper-card: oklch(from var(--paper) min(calc(l + 0.025), 1) c h);
-  --paper-hi: oklch(0.99 0 0);
-  --paper-hi: color-mix(in oklab, var(--paper-card) 55%, white);
-  --paper-lo: oklch(0.9 0 0);
-  --paper-lo: color-mix(in oklab, var(--paper-card) 90%, black);
+  /* The elevation stack. Contact first — tight, high-alpha, negative
+     spread; then two layers at doubling offset/blur, weakening. */
+  --paper-lift:
+    inset 0 1px 0 0 var(--paper-relief-hi),
+    0 1px 2px -1px rgba(70, 55, 35, 0.35),
+    0 2px 6px -2px rgba(70, 55, 35, 0.14),
+    0 8px 24px -8px rgba(70, 55, 35, 0.1);
+  --paper-lift:
+    inset 0 1px 0 0 var(--paper-relief-hi),
+    0 1px 2px -1px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.35),
+    0 2px 6px -2px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.14),
+    0 8px 24px -8px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.1);
+
+  /* The flat printed hairline (ink, not relief). */
   --paper-line: oklch(0.85 0 0);
-  --paper-line: color-mix(in oklab, var(--paper) 85%, var(--foreground));
+  --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
+
+  /* THE GRAIN — three layers, translucent ink in alpha. TOOTH: lit
+     relief (azimuth 45, elevation 60 — the house light). FIBRE:
+     anisotropic streaks. MOTTLE: low-frequency envelope breaker. */
+  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.08'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.028'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.02'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
-.dark .paper-stock,
-.dark .paper-card-stock,
-.dark .paper-tinted {
-  --paper: oklch(0.2 0 0);
-  --paper: oklch(from var(--paper-seed, oklch(0.2 0 0)) clamp(0.17, l, 0.23) min(c, 0.035) h);
-  --paper-card: oklch(0.23 0 0);
-  --paper-card: oklch(from var(--paper) min(calc(l + 0.06), 1) c h);
-  --paper-hi: oklch(0.3 0 0);
-  --paper-hi: color-mix(in oklab, var(--paper-card) 92%, white);
-  --paper-lo: oklch(0.22 0 0);
-  --paper-lo: color-mix(in oklab, var(--paper-card) 94%, black);
+.dark {
+  /* THE SHEET — warm charcoal, never neutral; the composite lands at
+     #262219-class after the white ink's lift. Hue literal: see the light
+     block's measured note. */
+  --paper: oklch(0.21 0.017 86.9);
+  --paper: oklch(from var(--background) clamp(0.21, l, 0.215) clamp(0.017, c, 0.035) 87);
+
+  /* The sunken fill: levels compress near black, so the tone step is
+     wider — the same ≈10–15/255 below the face as light. */
+  --paper-plate: oklch(0.15 0.02 87);
+  --paper-plate: oklch(from var(--paper) calc(l - 0.06) calc(c * 1.15) h);
+
+  /* The pressed-edge lips. No room below near-black: the dark side goes
+     near-opaque and the sunken read leans on the highlight. */
+  --paper-relief-lo: oklch(0.1 0.026 87 / 0.8);
+  --paper-relief-lo: oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8);
+  --paper-relief-hi: oklch(0.99 0.007 87 / 0.3);
+  --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.3);
+
+  /* The elevation stack inverted: near-opaque contact + a LIGHTER
+     ambient rim — on near-black paper a lift reads by rising, not
+     sinking. */
+  --paper-lift:
+    inset 0 1px 0 0 var(--paper-relief-hi),
+    0 1px 2px -1px rgba(5, 4, 2, 0.92),
+    0 2px 6px -2px rgba(80, 66, 45, 0.16),
+    0 8px 24px -8px rgba(80, 66, 45, 0.12);
+  --paper-lift:
+    inset 0 1px 0 0 var(--paper-relief-hi),
+    0 1px 2px -1px oklch(from var(--paper) calc(l * 0.12) calc(c * 0.5) h / 0.92),
+    0 2px 6px -2px oklch(from var(--paper) calc(l * 1.6) calc(c * 0.4) h / 0.16),
+    0 8px 24px -8px oklch(from var(--paper) calc(l * 2.2) calc(c * 0.3) h / 0.12);
+
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
+
+  /* THE GRAIN, dark polarity: the same three layers as translucent
+     WHITE ink — on dark stock the tooth lifts. */
+  --paper-tooth-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.08'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.028'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.02'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
-/* Dark paper swaps in the lightening tile — same surfaces, same sizes, a
-   coarser tooth the eye accepts as fibre instead of sensor noise. */
-.dark .paper-stock,
-.dark .paper-card-stock {
-  background-image: var(--paper-grain-soft), var(--paper-grain-soft);
-  /* Both layers coarse: the 147px micro-tooth is the one that reads as
-     noise on near-black paper. */
-  background-size: 512px 512px, 293px 293px;
-}
-
-/* The board sheet: the sheet element's OWN background — the grain is part
-   of the stock colour, never an overlay div on top of it. Two tile scales
-   (512 coarse tooth + 147 micro) so no repeat period reads at any viewport
-   width. .paper-card-stock pins the SAME tile at DIFFERENT sizes (431 +
-   113, both coprime with the board's) so the two surfaces cannot align
-   into moiré where the card lies on the board.
-
-   `normal` is not a placeholder — the tiles carry their amplitude in
-   alpha (see GRAIN above), so plain source-over IS the correct compositing
-   and the amplitude survives whatever the stock colour is. */
+/* The board sheet and the card sheet: the SAME colour (--paper — one
+   sheet; the layer language lives only in --paper-lift), the same three
+   grain layers pinned at co-prime sizes so the two surfaces cannot align
+   into moiré where the card lies on the board. The grain is the sheet
+   element's OWN background, never an overlay div; the tiles carry their
+   amplitude in alpha, so plain source-over is the correct compositing and
+   the amplitude survives whatever the stock colour is. */
 .paper-stock {
   background-color: var(--paper);
-  background-image: var(--paper-grain), var(--paper-grain);
-  background-size: 512px 512px, 147px 147px;
-  background-blend-mode: normal, normal;
+  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
+  background-size: 512px 512px, 384px 384px, 512px 512px;
 }
 .paper-card-stock {
-  background-color: var(--paper-card);
-  background-image: var(--paper-grain), var(--paper-grain);
-  background-size: 431px 431px, 113px 113px;
-  background-blend-mode: normal, normal;
+  background-color: var(--paper);
+  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
+  background-size: 431px 431px, 317px 317px, 449px 449px;
 }
 
-/* Relief recipes — 1px, no blur, the whole depth budget. Light falls from
-   the same upper-left everywhere: a sunken edge shadows its top lip and
-   catches light on its bottom; a raised edge does the opposite. Text never
-   carries these — regions and rules only. */
+/* Dark stock swaps the ink polarity — same layers, same sizes, white ink
+   lifting where black ink dropped. */
+.dark .paper-stock,
+.dark .paper-card-stock {
+  background-image: var(--paper-tooth-dark), var(--paper-fibre-dark), var(--paper-mottle-dark);
+}
+
+/* The elevation. The contact layer (tight, high-alpha, negative spread)
+   is what says where the sheet ends — never drop it from the stack. */
+.paper-lift {
+  box-shadow: var(--paper-lift);
+}
+
+/* Relief recipes — light falls from the same upper-left everywhere: a
+   sunken edge shadows its top lip (1px offset + ½px blur lands a ≈2px
+   dense band — the widest a pressed edge may be before it reads as a
+   gradient) and catches light on a crisp 1px bottom lip; a raised edge
+   swaps the pair. Text never carries these — regions and rules only. */
 .paper-sink {
-  box-shadow: inset 0 1px 0 var(--paper-lo), inset 0 -1px 0 var(--paper-hi);
+  box-shadow:
+    inset 0 1px 0.5px 0 var(--paper-relief-lo),
+    inset 0 -1px 0 0 var(--paper-relief-hi);
 }
 .paper-raise {
-  box-shadow: inset 0 1px 0 var(--paper-hi), inset 0 -1px 0 var(--paper-lo);
+  box-shadow:
+    inset 0 1px 0 0 var(--paper-relief-hi),
+    inset 0 -1px 0.5px 0 var(--paper-relief-lo);
+}
+
+/* The sunken plate: the tone-step fill plus the sink edges, one class.
+   The fill is opaque paper, so it carries its OWN grain — a third co-prime
+   size set, distinct from the board's and the card's, so the plate cannot
+   moiré against either surface it touches. */
+.paper-plate {
+  background-color: var(--paper-plate);
+  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
+  background-size: 373px 373px, 283px 283px, 397px 397px;
+  box-shadow:
+    inset 0 1px 0.5px 0 var(--paper-relief-lo),
+    inset 0 -1px 0 0 var(--paper-relief-hi);
+}
+.dark .paper-plate {
+  background-image: var(--paper-tooth-dark), var(--paper-fibre-dark), var(--paper-mottle-dark);
 }
 
 /* The one metallic treatment, for the single primary interactive item:
    flat leaf ink (a gradient fill, no glyph shadow — not embossing). The
    105deg, the same upper-left light that lights every relief edge. The
-   sweep must cross BRIGHTER than the card at its gleam: paper at l≈1.0
-   leaves only white above it, so the centre stop is white — the mirror
-   flash a real foil tag throws back. Every other stop is derived. */
+   sweep must cross BRIGHTER than the sheet at its gleam: paper near
+   white leaves only white above it, so the centre stop is white — the
+   mirror flash a real foil tag throws back. Every other stop is derived. */
 .paper-foil {
   background-image: linear-gradient(
     105deg,
-    oklch(from var(--paper-card) calc(l * 0.3) c h) 0%,
-    color-mix(in oklab, var(--paper-card) 25%, white) 38%,
+    oklch(from var(--paper) calc(l * 0.3) c h) 0%,
+    color-mix(in oklab, var(--paper) 25%, white) 38%,
     white 50%,
-    color-mix(in oklab, var(--paper-card) 25%, white) 62%,
-    oklch(from var(--paper-card) calc(l * 0.3) c h) 100%
+    color-mix(in oklab, var(--paper) 25%, white) 62%,
+    oklch(from var(--paper) calc(l * 0.3) c h) 100%
   );
   -webkit-background-clip: text;
   background-clip: text;
@@ -421,11 +498,11 @@
 .dark .paper-foil {
   background-image: linear-gradient(
     105deg,
-    color-mix(in oklab, var(--paper-card) 40%, white) 0%,
-    color-mix(in oklab, var(--paper-card) 15%, white) 40%,
-    color-mix(in oklab, var(--paper-card) 5%, white) 50%,
-    color-mix(in oklab, var(--paper-card) 15%, white) 60%,
-    color-mix(in oklab, var(--paper-card) 40%, white) 100%
+    color-mix(in oklab, var(--paper) 40%, white) 0%,
+    color-mix(in oklab, var(--paper) 15%, white) 40%,
+    color-mix(in oklab, var(--paper) 5%, white) 50%,
+    color-mix(in oklab, var(--paper) 15%, white) 60%,
+    color-mix(in oklab, var(--paper) 40%, white) 100%
   );
 }
 

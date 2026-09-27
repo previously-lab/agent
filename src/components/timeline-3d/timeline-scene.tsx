@@ -103,14 +103,13 @@ export interface TimelineSceneProps {
  */
 function BottomFade() {
   // Fades into the paper board's own stock (tl-board-fade) — a fade to the
-  // theme background would read as a band of fog on the sheet. Carries
-  // `data-board-fade` so the field's seed write tints the fade to match the
-  // tinted board (the fade is not a DOM descendant of the sheet).
+  // theme background would read as a band of fog on the sheet. The rework's
+  // contract derives --paper on :root (the seed input is gone — one sheet
+  // colour everywhere), so the token inherits here even though the fade is
+  // not a DOM descendant of the sheet; the retired .paper-tinted hook that
+  // used to carry the derivation is no longer needed.
   return (
-    <div
-      data-board-fade
-      className="tl-board-fade paper-tinted pointer-events-none absolute inset-x-0 bottom-0 h-16"
-    />
+    <div className="tl-board-fade pointer-events-none absolute inset-x-0 bottom-0 h-16" />
   );
 }
 
