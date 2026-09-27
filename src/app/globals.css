@@ -499,21 +499,26 @@
 }
 
 .dark {
-  /* THE SHEET — black cardstock, never yellowed: chromophore yellowing
-     is invisible on a near-black ground, so the sheet stays essentially
-     neutral with a trace of warmth (c floor 0.003). Hue literal: see the
-     light block's measured note. */
-  --paper: oklch(0.21 0.003 86.9);
-  --paper: oklch(from var(--background) clamp(0.21, l, 0.215) clamp(0.003, c, 0.035) 87);
+  /* THE SHEET — black cardstock. NOT a dark grey, and not warm.
+     Measured along the way: the band at oklch(0.21) composited to #2f2e2d
+     (rgb 46) — a dark UI panel, and the reader rejected it on sight — and
+     the band at 0.155–0.16 gave #252523 (rgb 37), still short. The target
+     he named is #1c1c1e, rgb(28 28 30).
+     NOTE THE HUE: #1c1c1e carries blue two levels over red, so the dark
+     stock is faintly COOL — the same direction as the light sheet — and not
+     the warm 87 it used to sit at. Chroma stays at a trace; the point is the
+     sign, not the amount. Hue literal: see the light block's measured note. */
+  --paper: oklch(0.120 0.002 256);
+  --paper: oklch(from var(--background) clamp(0.117, l, 0.122) clamp(0.002, c, 0.035) 256);
 
   /* The sunken fill: levels compress near black, so the tone step is
      wider — the same ≈10–15/255 below the face as light. */
-  --paper-plate: oklch(0.15 0.004 87);
+  --paper-plate: oklch(0.068 0.003 256);
   --paper-plate: oklch(from var(--paper) calc(l - 0.06) calc(c * 1.15) h);
 
   /* The pressed-edge lips. No room below near-black: the dark side goes
      near-opaque and the sunken read leans on the highlight. */
-  --paper-relief-lo: oklch(0.084 0.005 87 / 0.8);
+  --paper-relief-lo: oklch(0.05 0.003 256 / 0.8);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8);
   --paper-relief-hi: oklch(0.99 0.001 87 / 0.3);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.3);
