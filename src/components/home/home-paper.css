@@ -1,38 +1,31 @@
 /* The home's paper (v0.13 paper prototype, reworked pass). The MATERIAL
-   lives in globals.css (.paper-stock / .paper-card-stock / .paper-lift /
-   .paper-sink / .paper-raise / .paper-plate / .paper-foil and the
-   --paper-* variables) — this file only lays that material out on the
+   lives in globals.css as `@theme inline` tokens over the --paper-*
+   variables (bg-paper / bg-paper-grain / bg-paper-grain-card /
+   bg-paper-plate / bg-paper-line / shadow-paper-lift / shadow-paper-sink
+   / shadow-paper-raise) — this file only lays that material out on the
    home route: the board sheet, the card lying on it, and the printed
-   relief on the content regions. Pure design values live here; nothing is
-   measured or JS-driven. */
+   relief on the content regions. Pure design values live here; nothing
+   is measured or JS-driven. */
 
-/* The card — the second sheet. Its elevation is the contract's
-   .paper-lift (contact layer + doubling stack, paper-hued ink): the
-   strongest depth cue on the page, and the ONLY separation from the
-   board, because the two sheets are one colour. Geometry only here. */
+/* The card — the second sheet. Its elevation is shadow-paper-lift (the
+   app's own card shadow): the strongest depth cue on the page, and the
+   ONLY separation from the board, because the two sheets are one
+   colour. Geometry only here. */
 .home-card {
   border-radius: 3px;
   padding: clamp(1.75rem, 5vw, 2.5rem);
 }
 
 /* The sunken content region: identity + dateline printed INTO the card
-   (.paper-plate in the markup — tone-step fill plus the sink edges; only
-   the plate's geometry lives here). */
+   (bg-paper-plate shadow-paper-sink in the markup — tone-step fill plus
+   the sink edges; only the plate's geometry lives here). */
 .home-plate {
   border-radius: 2px;
   padding: 0.875rem 1rem 1rem;
 }
 
-/* The card's internal rule: a flat printed hairline — ink, not relief.
-   The debossed look belongs to the plate's edge; a rule is a line of ink
-   laid ON the sheet. */
-.home-rule {
-  height: 1px;
-  background-color: var(--paper-line);
-}
-
 /* The raised label-like regions: the two menu items as printed tags.
-   Geometry only — the lift is the .paper-raise recipe. */
+   Geometry only — the lift is the shadow-paper-raise utility. */
 .home-item {
   display: inline-flex;
   align-items: center;

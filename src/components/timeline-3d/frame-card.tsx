@@ -17,10 +17,10 @@
  *   → chat bubbles (real turns, agent serif, user sans)
  *   → footer (continued-from + FR.date)
  * Paper material (v0.13 paper pass): the face IS a card sheet
- * (.paper-card-stock — the grain is its own background, blended into the
- * stock), and it is the SAME stock as the board — one sheet lying on
- * another, the class names kept only so the two surfaces pin the grain
- * tile at different sizes and cannot moiré. The lift shadow alone carries
+ * (`bg-paper bg-paper-grain-card` — the grain is its own background,
+ * blended into the stock), and it is the SAME stock as the board — one
+ * sheet lying on another, the card grain utility pinning the tile at card
+ * sizes so the two surfaces cannot moiré. The lift shadow alone carries
  * the layer language between them. Inside, thin relief only: the strand
  * marks read RAISED, the turn bubbles / quoted line / ledger panel read
  * SUNKEN — business-card printing, not soft UI. Text stays flat ink at
@@ -233,7 +233,7 @@ function TurnBubbles({
             return (
               <div
                 key={`${turn.turnId ?? "t"}-${i}`}
-                className={`paper-sink max-w-[86%] rounded-[0.9em] px-[0.85em] py-[0.6em] leading-relaxed ${
+                className={`shadow-paper-sink max-w-[86%] rounded-[0.9em] px-[0.85em] py-[0.6em] leading-relaxed ${
                   isUser
                     ? "tl-user-bubble ml-auto rounded-br-[0.2em]"
                     : "rounded-bl-[0.2em] bg-muted text-foreground/85"
@@ -374,7 +374,7 @@ export function FrameCard({
             <span key={name} className="inline-flex items-center gap-[0.3em]">
               <ColorSquare
                 color={strandColor(name)}
-                className="paper-raise size-[0.42em]"
+                className="shadow-paper-raise size-[0.42em]"
               />
               <span>{name}</span>
             </span>
@@ -388,7 +388,7 @@ export function FrameCard({
     // Dynamic: tier card size + the frame's own em (zoom-driven root font
     // size — every inner measurement is em-relative to it).
     <div
-      className={`paper-card-stock paper-lift relative block overflow-hidden rounded-[0.9em] text-left ${
+      className={`bg-paper bg-paper-grain-card shadow-paper-lift relative block overflow-hidden rounded-[0.9em] text-left ${
         flash ? "tl-flash" : ""
       }`}
       style={{
@@ -397,7 +397,7 @@ export function FrameCard({
         fontSize: em,
       }}
     >
-      {/* Top light falloff. The GRAIN is the face's own .paper-card-stock
+      {/* Top light falloff. The GRAIN is the face's own bg-paper-grain-card
           background now (blended into the stock, never an overlay). The face
           is the SAME stock as the board — one sheet on another — so the lift
           shadow alone carries the layer language. */}
@@ -420,7 +420,7 @@ export function FrameCard({
         <div className="flex items-center gap-[0.5em] text-[0.62em] leading-none tracking-[0.08em] text-muted-foreground">
           {/* The strand mark reads RAISED — a printed tag you can point at,
               not a hole in the stock. */}
-          <ColorSquare color={accent} className="paper-raise size-[0.5em]" />
+          <ColorSquare color={accent} className="shadow-paper-raise size-[0.5em]" />
           {/* Static timecode — NumberTicker's entrance roll (year counts up
               from -30) replays on every virtualization remount and reads as
               a glitch on a card face. Mono, same as the chat time readout. */}
@@ -459,8 +459,11 @@ export function FrameCard({
             <Hairline className="mt-[0.65em]" />
             {/* The quoted line reads SUNKEN — a passage pressed into the
                 stock. The plate fill is the contract's: one step below the
-                sheet, so the deboss reads by area, not only its edge. */}
-            <div className="paper-plate relative mt-[0.55em] rounded-[0.6em] px-[0.85em] py-[0.65em]">
+                sheet, so the deboss reads by area, not only its edge. The
+                plate carries the CARD's grain — a plate is an inset region
+                of the card sheet, and there is no third tile set: the grain
+                stays continuous across the face. */}
+            <div className="bg-paper-plate bg-paper-grain-card shadow-paper-sink relative mt-[0.55em] rounded-[0.6em] px-[0.85em] py-[0.65em]">
               {turnsState !== "loading" && previouslyText && (
                 <p className="animate-content-arrive line-clamp-2 font-serif text-[0.74em] font-light italic leading-relaxed text-muted-foreground/85">
                   <span className="text-foreground/40">❝ </span>
@@ -488,8 +491,9 @@ export function FrameCard({
           <>
             <Hairline className="mt-[0.65em]" />
             {/* The ledger is the card's SUNKEN panel — the archive rows sit
-                pressed into the stock like a printed form (contract plate). */}
-            <div className="paper-plate flex flex-col rounded-[0.6em] px-[0.85em]">
+                pressed into the stock like a printed form (contract plate,
+                the same card-grain plate treatment as the quoted line). */}
+            <div className="bg-paper-plate bg-paper-grain-card shadow-paper-sink flex flex-col rounded-[0.6em] px-[0.85em]">
               {ledgerRows.map((row, i) => (
                 <div key={row.key}>
                   {i > 0 && <Hairline />}

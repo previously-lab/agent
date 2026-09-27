@@ -4,30 +4,33 @@ import "./home-paper.css";
 /**
  * The home (v0.13 §3) — paper, not bare typography: the page IS a big
  * sheet and a card lies on it — ONE paper, one colour; the card reads as
- * a separate layer only through the contract's lift shadow (.paper-lift)
- * and the content regions carry printed relief. Everything is lit from
- * one upper-left light: the card's shadow falls down-right, a sunken
- * region shadows its top lip, a raised one catches light on its top edge.
+ * a separate layer only through the contract's lift shadow
+ * (shadow-paper-lift) and the content regions carry printed relief.
+ * Everything is lit from one upper-left light: the card's shadow falls
+ * down-right, a sunken region shadows its top lip, a raised one catches
+ * light on its top edge.
  *
  * Zones, top to bottom inside the card:
  *
  *   PLATE   the identity block (the product's sentence, the reader's name,
  *           the dateline when there is one) — a CONTENT region printed
- *           INTO the card (.paper-plate): tone-step fill plus the sunken
- *           edges, the thin-deboss read, like a conversation bubble on a
- *           business card.
- *   RULE    a flat printed hairline (.home-rule, --paper-line) — ink on
- *           the sheet, separating content from menu.
+ *           INTO the card (bg-paper-plate shadow-paper-sink): tone-step
+ *           fill plus the sunken edges, the thin-deboss read, like a
+ *           conversation bubble on a business card.
+ *   RULE    a flat printed hairline (bg-paper-line) — ink on the sheet,
+ *           separating content from menu.
  *   MENU    继续 → `/app`, then 设置 beneath it — LABEL-like regions
- *           (.paper-raise), printed tags whose top edge catches the light.
- *           继续 carries the page's one metallic treatment (.paper-foil:
- *           flat leaf ink, not embossed type); 设置 stays matte ink.
+ *           (shadow-paper-raise), printed tags whose top edge catches the
+ *           light. 继续 carries the page's one metallic treatment
+ *           (.paper-foil: flat leaf ink, not embossed type); 设置 stays
+ *           matte ink.
  *
- * The material vocabulary (--paper-*, .paper-*) lives in globals.css as a
- * shared contract; this file (home-paper.css) only lays it out. Purely
- * presentational: every fact arrives formatted from the server page, so
- * this file stays locale- and clock-free. No R3F anywhere in the import
- * graph.
+ * The material vocabulary (--paper-* variables → @theme inline tokens →
+ * bg-paper / bg-paper-grain(-card) / shadow-paper-* utilities) lives in
+ * globals.css as a shared contract; this file (home-paper.css) only lays
+ * it out. Purely presentational: every fact arrives formatted from the
+ * server page, so this file stays locale- and clock-free. No R3F
+ * anywhere in the import graph.
  */
 
 export interface HomeScreenProps {
@@ -52,15 +55,15 @@ export function HomeScreen({
   settingsLabel,
 }: HomeScreenProps) {
   return (
-    <main className="paper-stock flex min-h-dvh flex-col items-center justify-center px-6 py-16">
-      <div className="home-card paper-card-stock paper-lift w-full max-w-sm">
+    <main className="bg-paper bg-paper-grain flex min-h-dvh flex-col items-center justify-center px-6 py-16">
+      <div className="home-card bg-paper bg-paper-grain-card shadow-paper-lift w-full max-w-sm">
         {/* THE PLATE — the sunken identity region. Sentence case, and NO
             font-family class: the app's default is Raleway, so the title
             says nothing and inherits it. The weight does the hierarchy —
             the lead a touch heavier than its preposition, the name large
             and LIGHT (300, the variable face's own light). The dateline
             hugs the name inside the same pressed region. */}
-        <header className="home-plate paper-plate">
+        <header className="home-plate bg-paper-plate shadow-paper-sink">
           <p className="text-base text-muted-foreground">
             <span className="font-medium text-foreground/75">
               {eyebrowLead}
@@ -78,7 +81,7 @@ export function HomeScreen({
         </header>
 
         {/* The printed rule between content and menu — flat ink. */}
-        <div className="home-rule my-7" aria-hidden="true" />
+        <div className="my-7 h-px bg-paper-line" aria-hidden="true" />
 
         {/* THE MENU — two label-like regions, stacked on the card's left
             edge: a game's own menu rather than a toolbar's row. The ink
@@ -88,13 +91,13 @@ export function HomeScreen({
         <nav className="flex flex-col items-start gap-3">
           <Link
             href="/app"
-            className="home-item paper-raise paper-foil home-foil text-lg"
+            className="home-item shadow-paper-raise paper-foil home-foil text-lg"
           >
             {continueLabel}
           </Link>
           <Link
             href="/settings"
-            className="home-item paper-raise text-lg text-muted-foreground/80 transition-colors hover:text-foreground"
+            className="home-item shadow-paper-raise text-lg text-muted-foreground/80 transition-colors hover:text-foreground"
           >
             {settingsLabel}
           </Link>

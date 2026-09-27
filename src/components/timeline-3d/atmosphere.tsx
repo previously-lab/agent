@@ -4,9 +4,9 @@
  * The card field's paper board (v0.13 paper pass) — the old atmosphere is
  * deleted. What used to live here (three drifting aurora glows, a 72px grid,
  * an edge vignette) is replaced by ONE sheet of paper filling the pane behind
- * the transparent canvas: the sheet element's own `.paper-stock` background,
- * no overlay divs (the grain is blended into the stock, per the paper
- * contract in globals.css).
+ * the transparent canvas: the sheet element's own `bg-paper bg-paper-grain`
+ * background, no overlay divs (the grain is blended into the stock, per the
+ * paper contract in globals.css).
  *
  * THE SHEET IS ONE COLOUR, ALWAYS. Board and card are the same stock; the
  * layer language between them is the card's shadow, not a colour step. There
@@ -25,7 +25,7 @@ export function AtmosphereBackdrop() {
   return (
     <div
       aria-hidden="true"
-      className="paper-stock pointer-events-none absolute inset-0 overflow-hidden"
+      className="bg-paper bg-paper-grain pointer-events-none absolute inset-0 overflow-hidden"
     />
   );
 }

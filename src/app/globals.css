@@ -56,6 +56,14 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-paper: var(--paper);
+  --color-paper-plate: var(--paper-plate);
+  --color-paper-line: var(--paper-line);
+  --background-image-paper-grain: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
+  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-fibre-card), var(--paper-mottle-card);
+  --shadow-paper-lift: var(--paper-lift);
+  --shadow-paper-sink: var(--paper-sink);
+  --shadow-paper-raise: var(--paper-raise);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -228,8 +236,9 @@
 
 /* ─── Paper foundation (SHARED CONTRACT — do not fork) ───────────────────
    The sheet material for every surface that prints on paper. The home and
-   the card view consume the SAME classes, so the variables and class names
-   below are a contract: extend, never duplicate, never rename.
+   the card view consume the SAME tokens, so the variables, `@theme` tokens
+   and utilities below are a contract: extend, never duplicate, never
+   rename.
 
    ONE SHEET, ONE COLOUR. The board and the card are the same paper and
    paint the same --paper; layer separation comes ONLY from the lift
@@ -279,15 +288,12 @@
             25–90/255 across a 2–3px band — 1px bands vanish under the
             sub-pixel resampling of transformed DOM.
             --paper-line   the flat printed hairline (ink, not relief).
-   LIFT     --paper-lift   the whole elevation stack — contact layer
-            mandatory. With one sheet colour the shadow is the ENTIRE
-            layer language: without a crisp dark line at the sheet's
-            edge there is no signal where the sheet ends. Three layers,
-            offsets/blurs roughly doubling, negative spread keeping the
-            shadow UNDER the sheet, colour = paper hue pushed darker and
-            less saturated (semi-transparent grey over warm paper reads
-            as a dirt ring). Dark inverts: near-opaque contact plus a
-            LIGHTER ambient rim.
+   LIFT     --paper-lift   the elevation — EXACTLY the app's own card
+            shadow (the same value the chat card, the briefing card and
+            the skeletons carry), so a sheet lifts by as much as every
+            other card in the product and there is no second stack to
+            keep in step. Relief lips are NOT part of it — they live in
+            --paper-sink / --paper-raise.
    GRAIN    Three procedural layers (SVG data-URIs; no image assets —
             the principle was never the failure, the frequency was):
             TOOTH   feTurbulence fractalNoise baseFrequency 0.04 (≈25px
@@ -306,10 +312,34 @@
             (drops), dark stock as translucent WHITE ink (lifts): a
             fixed wobble is relatively louder the darker the stock
             (Weber), and the pinned ink keeps the mean shift at mottle
-            class (±2–3%) at ANY sheet lightness. Board and card pin the
-            same layers at co-prime sizes so the two surfaces cannot
-            align into moiré. Target measured amplitude in an empty
-            region: p-p 8–16/255 (the old tile measured 3 — invisible).
+            class (±2–3%) at ANY sheet lightness.
+
+            EACH LAYER'S TILE SIZE LIVES IN ITS OWN SVG's width/height —
+            the intrinsic size renders the tile at 1 unit = 1px, so no
+            background-size is needed anywhere. When a tile's intrinsic
+            size differs from the 512-unit reference, baseFrequency is
+            scaled by 512/N so the RENDERED feature size (not the
+            per-unit frequency) stays identical to the reference. Board
+            and card pin the same layers at co-prime intrinsic sizes
+            (board 512/384/512, card 431/317/449) so the two surfaces
+            cannot align into moiré where the card lies on the board.
+            The dark polarity binds the SAME names in .dark —
+            var(--paper-tooth) is theme-aware. Target measured amplitude
+            in an empty region: p-p 8–16/255 (the old tile measured 3 —
+            invisible).
+
+            THE TOKENS. One `@theme inline` entry per SURFACE, not per
+            layer — bg-* utilities overwrite background-image rather
+            than composing, so each surface's three layers live in a
+            single comma-separated token:
+              --background-image-paper-grain       (board: tooth, fibre,
+                                                    mottle)
+              --background-image-paper-grain-card  (card: tooth-card,
+                                                    fibre-card,
+                                                    mottle-card)
+            A sunken plate takes NO grain token — it is
+            `bg-paper-plate shadow-paper-sink`, tone-step fill plus
+            pressed edges only.
 
    Every derived variable carries TWO declarations: a plain oklch()/rgba()
    line older engines keep, and the relative-colour / color-mix line that
@@ -340,18 +370,26 @@
   --paper-relief-hi: oklch(0.99 0.003 85 / 0.7);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
-  /* The elevation stack. Contact first — tight, high-alpha, negative
-     spread; then two layers at doubling offset/blur, weakening. */
-  --paper-lift:
+  /* The relief recipes — pressed-edge pairs, bound to the shadow tokens.
+     Light falls from one upper-left everywhere: a sunken edge shadows its
+     top lip (1px offset + ½px blur lands a ≈2px dense band — the widest
+     a pressed edge may be before it reads as a gradient) and catches
+     light on a crisp 1px bottom lip; a raised edge swaps the pair. Text
+     never carries these — regions and rules only. */
+  --paper-sink:
+    inset 0 1px 0.5px 0 var(--paper-relief-lo),
+    inset 0 -1px 0 0 var(--paper-relief-hi);
+  --paper-raise:
     inset 0 1px 0 0 var(--paper-relief-hi),
-    0 1px 2px -1px rgba(70, 55, 35, 0.35),
-    0 2px 6px -2px rgba(70, 55, 35, 0.14),
-    0 8px 24px -8px rgba(70, 55, 35, 0.1);
-  --paper-lift:
-    inset 0 1px 0 0 var(--paper-relief-hi),
-    0 1px 2px -1px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.35),
-    0 2px 6px -2px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.14),
-    0 8px 24px -8px oklch(from var(--paper) calc(l * 0.42) calc(c * 0.6) h / 0.1);
+    inset 0 -1px 0.5px 0 var(--paper-relief-lo);
+
+  /* The elevation: the app's OWN card shadow — the same value the chat
+     card, the briefing card and the skeletons carry
+     (shadow-[0_34px_80px_-20px_...]). A sheet lifts off the page by
+     exactly as much as every other card in the product, and there is no
+     second stack to keep in step with it. The inset relief lip is NOT
+     part of the elevation — relief lives in --paper-sink / --paper-raise. */
+  --paper-lift: 0 34px 80px -20px rgba(15, 23, 42, 0.28);
 
   /* The flat printed hairline (ink, not relief). */
   --paper-line: oklch(0.85 0 0);
@@ -359,10 +397,24 @@
 
   /* THE GRAIN — three layers, translucent ink in alpha. TOOTH: lit
      relief (azimuth 45, elevation 60 — the house light). FIBRE:
-     anisotropic streaks. MOTTLE: low-frequency envelope breaker. */
+     anisotropic streaks. MOTTLE: low-frequency envelope breaker.
+
+     The BOARD set. Each tile's size lives in its own SVG's width/height
+     (the intrinsic size renders it 1 unit = 1px — no background-size).
+     The fibre's baseFrequency is scaled 512/384 from the reference so
+     its RENDERED feature size matches what the old background-size
+     scaling produced; tooth and mottle are the 512 reference itself. */
   --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='384' height='384'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.010667 0.08' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='384' height='384' filter='url(%23g)'/%3E%3C/svg%3E");
   --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+
+  /* The CARD set — the SAME three layers at co-prime intrinsic sizes
+     (431/317/449 vs the board's 512/384/512) so the card lying on the
+     board cannot align into moiré. baseFrequency scaled by 512/N per
+     tile, same rule as the board's fibre. */
+  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.047517' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='317' height='317'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012921 0.096909' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='317' height='317' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='449' height='449'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011403' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='449' height='449' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 .dark {
@@ -385,92 +437,41 @@
   --paper-relief-hi: oklch(0.99 0.001 87 / 0.3);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.3);
 
-  /* The elevation stack inverted: near-opaque contact + a LIGHTER
-     ambient rim — on near-black paper a lift reads by rising, not
-     sinking. */
-  --paper-lift:
-    inset 0 1px 0 0 var(--paper-relief-hi),
-    0 1px 2px -1px rgba(5, 4, 2, 0.92),
-    0 2px 6px -2px rgba(80, 66, 45, 0.16),
-    0 8px 24px -8px rgba(80, 66, 45, 0.12);
-  --paper-lift:
-    inset 0 1px 0 0 var(--paper-relief-hi),
-    0 1px 2px -1px oklch(from var(--paper) calc(l * 0.12) calc(c * 0.5) h / 0.92),
-    0 2px 6px -2px oklch(from var(--paper) calc(l * 1.6) calc(c * 0.4) h / 0.16),
-    0 8px 24px -8px oklch(from var(--paper) calc(l * 2.2) calc(c * 0.3) h / 0.12);
+  /* The elevation: the dark variant of the app's own card shadow — the
+     same value the chat card, the briefing card and the skeletons carry
+     (dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]). */
+  --paper-lift: 0 34px 80px -20px rgba(0, 0, 0, 0.8);
 
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN, dark polarity: the same three layers as translucent
-     WHITE ink — on dark stock the tooth lifts. */
-  --paper-tooth-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* THE GRAIN, dark polarity: the same layers at the same intrinsic
+     sizes as the light bindings above, as translucent WHITE ink — on
+     dark stock the tooth lifts. The polarity binds the SAME names:
+     var(--paper-tooth) is theme-aware; there are no parallel -dark
+     variables to keep in step. */
+  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='384' height='384'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.010667 0.08' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='384' height='384' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.047517' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='317' height='317'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012921 0.096909' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='317' height='317' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='449' height='449'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011403' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='449' height='449' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
-/* The board sheet and the card sheet: the SAME colour (--paper — one
-   sheet; the layer language lives only in --paper-lift), the same three
-   grain layers pinned at co-prime sizes so the two surfaces cannot align
-   into moiré where the card lies on the board. The grain is the sheet
-   element's OWN background, never an overlay div; the tiles carry their
-   amplitude in alpha, so plain source-over is the correct compositing and
-   the amplitude survives whatever the stock colour is. */
-.paper-stock {
-  background-color: var(--paper);
-  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
-  background-size: 512px 512px, 384px 384px, 512px 512px;
-}
-.paper-card-stock {
-  background-color: var(--paper);
-  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
-  background-size: 431px 431px, 317px 317px, 449px 449px;
-}
-
-/* Dark stock swaps the ink polarity — same layers, same sizes, white ink
-   lifting where black ink dropped. */
-.dark .paper-stock,
-.dark .paper-card-stock {
-  background-image: var(--paper-tooth-dark), var(--paper-fibre-dark), var(--paper-mottle-dark);
-}
-
-/* The elevation. The contact layer (tight, high-alpha, negative spread)
-   is what says where the sheet ends — never drop it from the stack. */
-.paper-lift {
-  box-shadow: var(--paper-lift);
-}
-
-/* Relief recipes — light falls from the same upper-left everywhere: a
-   sunken edge shadows its top lip (1px offset + ½px blur lands a ≈2px
-   dense band — the widest a pressed edge may be before it reads as a
-   gradient) and catches light on a crisp 1px bottom lip; a raised edge
-   swaps the pair. Text never carries these — regions and rules only. */
-.paper-sink {
-  box-shadow:
-    inset 0 1px 0.5px 0 var(--paper-relief-lo),
-    inset 0 -1px 0 0 var(--paper-relief-hi);
-}
-.paper-raise {
-  box-shadow:
-    inset 0 1px 0 0 var(--paper-relief-hi),
-    inset 0 -1px 0.5px 0 var(--paper-relief-lo);
-}
-
-/* The sunken plate: the tone-step fill plus the sink edges, one class.
-   The fill is opaque paper, so it carries its OWN grain — a third co-prime
-   size set, distinct from the board's and the card's, so the plate cannot
-   moiré against either surface it touches. */
-.paper-plate {
-  background-color: var(--paper-plate);
-  background-image: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
-  background-size: 373px 373px, 283px 283px, 397px 397px;
-  box-shadow:
-    inset 0 1px 0.5px 0 var(--paper-relief-lo),
-    inset 0 -1px 0 0 var(--paper-relief-hi);
-}
-.dark .paper-plate {
-  background-image: var(--paper-tooth-dark), var(--paper-fibre-dark), var(--paper-mottle-dark);
-}
+/* The paper, in four usages. The `@theme inline` tokens above generate the
+   utilities, so every surface writes them in the markup and no class name
+   is invented for the material:
+     board sheet   bg-paper bg-paper-grain
+     card sheet    bg-paper bg-paper-grain-card shadow-paper-lift
+     sunken plate  bg-paper-plate bg-paper-grain-card shadow-paper-sink
+     raised mark   shadow-paper-raise
+   A plate is an inset region of the card — the same sheet — so it takes the
+   card's grain, which also keeps the grain continuous rather than starting a
+   third tile set inside the sheet.
+   The grain is the sheet element's OWN background, never an overlay div;
+   the tiles carry their amplitude in alpha, so plain source-over is the
+   correct compositing and the amplitude survives whatever the stock
+   colour is. */
 
 /* The one metallic treatment, for the single primary interactive item:
    flat leaf ink (a gradient fill, no glyph shadow — not embossing). The
