@@ -59,8 +59,8 @@
   --color-paper: var(--paper);
   --color-paper-plate: var(--paper-plate);
   --color-paper-line: var(--paper-line);
-  --background-image-paper-grain: var(--paper-tooth), var(--paper-fibre), var(--paper-mottle);
-  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-fibre-card), var(--paper-mottle-card);
+  --background-image-paper-grain: var(--paper-tooth), var(--paper-tooth-micro), var(--paper-sheen);
+  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-tooth-micro-card), var(--paper-sheen);
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-sink: var(--paper-sink);
   --shadow-paper-raise: var(--paper-raise);
@@ -278,8 +278,8 @@
             ≈10–15/255 below the face), chroma slightly up so the recess
             keeps the sheet's character as it darkens.
    RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
-            pressed edge. The dark side is a warm brown in the paper's
-            own hue family (the Kinetics-class rgba(60,40,20,·)) at
+            pressed edge. The dark side is a deep slate in the paper's
+            own hue family (warm brown under the old warm stock) at
             high alpha — 0.42 light, near-opaque dark — and the light
             side a near-white at 0.7 light / 0.3 dark (on dark stock the
             sunken side reads via its highlight). These are 10–20× the
@@ -294,25 +294,36 @@
             other card in the product and there is no second stack to
             keep in step. Relief lips are NOT part of it — they live in
             --paper-sink / --paper-raise.
-   GRAIN    Three procedural layers (SVG data-URIs; no image assets —
+   GRAIN    Three layers (SVG tiles + one gradient; no image assets —
             the principle was never the failure, the frequency was):
-            TOOTH   feTurbulence fractalNoise baseFrequency 0.04 (≈25px
-                    features — inside the 4–40px band the eye resolves;
-                    the old 0.72 tile sat at 1.4px, which the eye can
-                    only average into dullness) → feDiffuseLighting
-                    (feDistantLight azimuth 45, elevation 60 — the same
-                    upper-left light as every relief edge) → keep only
-                    its LUMINANCE, as alpha. Flat alpha modulation reads
-                    as dirt; LIT bumps read as tooth.
-            FIBRE   anisotropic baseFrequency "0.008 0.06" — directional
-                    streaks, ±2–3%.
-            MOTTLE  baseFrequency 0.01, 2 octaves, ±2–3%, large tile —
-                    the luminance drift that breaks the tiling envelope.
-            Light stock carries the tiles as translucent BLACK ink
-            (drops), dark stock as translucent WHITE ink (lifts): a
-            fixed wobble is relatively louder the darker the stock
-            (Weber), and the pinned ink keeps the mean shift at mottle
-            class (±2–3%) at ANY sheet lightness.
+            TOOTH       feTurbulence fractalNoise baseFrequency 0.09
+                        (≈11px features — inside the 4–40px band the eye
+                        resolves; the old 0.72 tile sat at 1.4px, which
+                        the eye can only average into dullness) →
+                        feDiffuseLighting (feDistantLight azimuth 45,
+                        elevation 60 — the same upper-left light as every
+                        relief edge) → keep only its LUMINANCE, as alpha.
+                        Flat alpha modulation reads as dirt; LIT bumps
+                        read as tooth.
+            MICRO-TOOTH baseFrequency 0.14, 2 octaves, plain alpha — NO
+                        feDiffuseLighting. The velvet / peach-skin
+                        quality: it reads as a property of the SURFACE,
+                        not as features.
+            SHEEN       a broad, very soft linear-gradient —
+                        texture-of-light, not a tile (a tile repeats, a
+                        gradient cannot); it keeps the sheet from being a
+                        dead flat field.
+            Light stock carries the tiles as SPARSE black ink: each
+            layer's feFuncA is a steep slope on a NEGATIVE intercept, so
+            most of the luminance range clamps to transparent and only
+            the upper tail darkens — the stock shows through untouched,
+            and the inked tail lands a real local shadow (this is what
+            keeps a near-zero-intercept slope from reading as a uniform
+            grey veil: with intercept ≈ 0 every pixel darkens a
+            little). Dark stock keeps the translucent WHITE ink
+            (lifts): a fixed wobble is relatively louder the darker the
+            stock (Weber), and the pinned ink keeps the mean shift
+            small at ANY sheet lightness.
 
             EACH LAYER'S TILE SIZE LIVES IN ITS OWN SVG's width/height —
             the intrinsic size renders the tile at 1 unit = 1px, so no
@@ -320,23 +331,26 @@
             size differs from the 512-unit reference, baseFrequency is
             scaled by 512/N so the RENDERED feature size (not the
             per-unit frequency) stays identical to the reference. Board
-            and card pin the same layers at co-prime intrinsic sizes
-            (board 512/384/512, card 431/317/449) so the two surfaces
-            cannot align into moiré where the card lies on the board.
-            The dark polarity binds the SAME names in .dark —
-            var(--paper-tooth) is theme-aware. Target measured amplitude
-            in an empty region: p-p 8–16/255 (the old tile measured 3 —
-            invisible).
+            and card pin the tiles at co-prime intrinsic sizes (board
+            512, card 431) so the two surfaces cannot align into moiré
+            where the card lies on the board. SHEEN is declared once and
+            theme-aware (it derives from --paper / --foreground), so it
+            is not part of the polarity binding. The dark polarity binds
+            the SAME names in .dark — var(--paper-tooth) is theme-aware.
+            Measured amplitude in an empty region: p-p ≈ 11/255
+            (256×64 window), composite mean within 1 level of the
+            stock — the veil is gone; the ink lives only in the
+            thresholded tail.
 
             THE TOKENS. One `@theme inline` entry per SURFACE, not per
             layer — bg-* utilities overwrite background-image rather
             than composing, so each surface's three layers live in a
             single comma-separated token:
-              --background-image-paper-grain       (board: tooth, fibre,
-                                                    mottle)
+              --background-image-paper-grain       (board: tooth,
+                                                    tooth-micro, sheen)
               --background-image-paper-grain-card  (card: tooth-card,
-                                                    fibre-card,
-                                                    mottle-card)
+                                                    tooth-micro-card,
+                                                    sheen)
             A sunken plate takes NO grain token — it is
             `bg-paper-plate shadow-paper-sink`, tone-step fill plus
             pressed edges only.
@@ -346,28 +360,28 @@
    wins where supported (the house pattern — see typeset.css). */
 
 :root {
-  /* THE SHEET. New cardstock, not aged: white with a HINT of warm —
-     chroma floor 0.007 (half the previous 0.014, which read yellow).
-     The base is mixed a touch bright because the pinned-ink grain pulls
-     the composite down ~3%; the COMPOSITE lands #f7f5f0–#faf8f4.
+  /* THE SHEET. Eggshell register: a cool blue-white, NOT grey — grey is
+     chroma going to zero, cool keeps a real, if small, blue chroma. The
+     guard band: L ≥ 0.95, chroma 0.004–0.010, hue 250–265. (The old warm
+     88.7 register read yellow against the brand blue.)
      HUE IS A LITERAL, measured not reasoned: the origin (--background)
      is achromatic, its hue component is powerless, and math on a
      powerless hue (e.g. clamp(85, h, 90)) makes Chromium drop the whole
      declaration as invalid — the fallback silently painted for a full
      session until the computed-style probe caught it. */
-  --paper: oklch(0.99 0.007 88.7);
-  --paper: oklch(from var(--background) clamp(0.97, l, 0.99) clamp(0.007, c, 0.03) 88);
+  --paper: oklch(0.978 0.005 256);
+  --paper: oklch(from var(--background) clamp(0.973, l, 0.983) clamp(0.005, c, 0.03) 256);
 
   /* The sunken fill: one tone step below the face. */
-  --paper-plate: oklch(0.95 0.008 85);
+  --paper-plate: oklch(0.938 0.006 256);
   --paper-plate: oklch(from var(--paper) calc(l - 0.04) calc(c * 1.15) h);
 
-  /* The pressed-edge lips. lo = the occluded (shadow) side: a warm brown
-     in the paper's own hue family, Kinetics-class alpha. hi = the side
-     that catches light: near-white. */
-  --paper-relief-lo: oklch(0.354 0.015 85 / 0.42);
+  /* The pressed-edge lips. lo = the occluded (shadow) side: a deep cool
+     slate in the paper's own hue family, Kinetics-class alpha. hi = the
+     side that catches light: near-white. */
+  --paper-relief-lo: oklch(0.352 0.011 256 / 0.42);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.36) calc(c * 2.2) h / 0.42);
-  --paper-relief-hi: oklch(0.99 0.003 85 / 0.7);
+  --paper-relief-hi: oklch(0.99 0.002 256 / 0.7);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
   /* The relief recipes — pressed-edge pairs, bound to the shadow tokens.
@@ -395,26 +409,34 @@
   --paper-line: oklch(0.85 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN — three layers, translucent ink in alpha. TOOTH: lit
-     relief (azimuth 45, elevation 60 — the house light). FIBRE:
-     anisotropic streaks. MOTTLE: low-frequency envelope breaker.
+  /* THE GRAIN — three layers. TOOTH: lit relief (azimuth 45, elevation
+     60 — the house light). MICRO-TOOTH: plain alpha, NO
+     feDiffuseLighting — the velvet / peach-skin quality; it must read
+     as a property of the SURFACE, not as features. SHEEN: a broad, very
+     soft gradient — texture-of-light, not a tile (a tile repeats, a
+     gradient cannot); it keeps the sheet from being a dead flat field.
 
      The BOARD set. Each tile's size lives in its own SVG's width/height
-     (the intrinsic size renders it 1 unit = 1px — no background-size).
-     The fibre's baseFrequency is scaled 512/384 from the reference so
-     its RENDERED feature size matches what the old background-size
-     scaling produced; tooth and mottle are the 512 reference itself. */
-  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='384' height='384'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.010667 0.08' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='384' height='384' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+     (the intrinsic size renders it 1 unit = 1px — no background-size);
+     the card tiles' baseFrequency is scaled 512/N so the rendered
+     feature scale matches the board's. SHEEN is declared once, here —
+     it inherits into .dark and is theme-aware because it derives from
+     var(--paper) / var(--foreground). */
+  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.6' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.22' intercept='-0.13'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-sheen: linear-gradient(
+    115deg,
+    color-mix(in oklab, var(--paper) 97%, var(--foreground)) 0%,
+    transparent 45%,
+    transparent 55%,
+    color-mix(in oklab, var(--paper) 97%, var(--foreground)) 100%
+  );
 
-  /* The CARD set — the SAME three layers at co-prime intrinsic sizes
-     (431/317/449 vs the board's 512/384/512) so the card lying on the
-     board cannot align into moiré. baseFrequency scaled by 512/N per
-     tile, same rule as the board's fibre. */
-  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.047517' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='317' height='317'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012921 0.096909' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='317' height='317' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='449' height='449'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011403' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='449' height='449' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* The CARD set — the same tiles at a co-prime intrinsic size (431 vs
+     the board's 512) so the card lying on the board cannot align into
+     moiré. */
+  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.106914' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.6' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-micro-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.166241' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.22' intercept='-0.13'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 .dark {
@@ -445,17 +467,17 @@
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN, dark polarity: the same layers at the same intrinsic
+  /* THE GRAIN, dark polarity: the same tiles at the same intrinsic
      sizes as the light bindings above, as translucent WHITE ink — on
      dark stock the tooth lifts. The polarity binds the SAME names:
      var(--paper-tooth) is theme-aware; there are no parallel -dark
-     variables to keep in step. */
-  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='384' height='384'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.010667 0.08' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='384' height='384' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.047517' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='317' height='317'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012921 0.096909' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='317' height='317' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='449' height='449'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.011403' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='449' height='449' filter='url(%23g)'/%3E%3C/svg%3E");
+     variables to keep in step. SHEEN is not redeclared: the shared
+     declaration inherits here and derives from this theme's
+     --paper / --foreground. */
+  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.106914' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-micro-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.166241' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 /* The paper, in four usages. The `@theme inline` tokens above generate the
