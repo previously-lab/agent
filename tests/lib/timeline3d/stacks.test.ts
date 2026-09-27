@@ -268,11 +268,11 @@ describe("sheetPose", () => {
 });
 
 describe("frameGeometryFor (Rev 11)", () => {
-  it("uses a landscape card for the dossier variant", () => {
+  it("uses a landscape business-card for the dossier variant (~1.7:1)", () => {
     const geo = frameGeometryFor("dossier", 1424, 902);
     expect(geo.cardW).toBe(Math.round(Math.min(1424 * 0.78, 900)));
-    expect(geo.cardH).toBe(Math.round(Math.min(geo.cardW / 1.5, 902 * 0.82)));
-    expect(geo.cardW / geo.cardH).toBeCloseTo(1.5, 1);
+    expect(geo.cardH).toBe(Math.round(Math.min(geo.cardW / 1.7, 902 * 0.82)));
+    expect(geo.cardW / geo.cardH).toBeCloseTo(1.7, 1);
     expect(geo.cardH).toBeLessThanOrEqual(902 * 0.82);
   });
 
@@ -295,9 +295,9 @@ describe("frameGeometryFor (Rev 11)", () => {
   });
 
   it("carries the variant it was built with", () => {
-    // The variant is what `frame-card.tsx` reads to pick its type scale and
-    // its ledger length, so a geometry that drops it would silently fall back
-    // to the dossier's 1/26 em — the 8.9px body text this exists to fix.
+    // The variant is what `frame-card.tsx` reads to pick its type scale, so
+    // a geometry that drops it would silently fall back to the dossier's
+    // 1/26 em — the 8.9px body text this exists to fix.
     expect(frameGeometryFor("portrait", 800, 902).variant).toBe("portrait");
     expect(frameGeometryFor("dossier", 1424, 902).variant).toBe("dossier");
   });

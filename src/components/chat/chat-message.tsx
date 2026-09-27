@@ -30,7 +30,7 @@ import {
   type StreamItem,
   type AgentStage,
 } from "@/lib/chat/build-stream";
-import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
+import { strandTint } from "@/lib/timeline3d/ink";
 
 interface ChatMessageProps {
   message: UIMessage;
@@ -56,6 +56,20 @@ const STAGE_KEYS: Record<AgentStage, string> = {
 
 /** How long without a new stream part before the "still working" nudge shows. */
 const SILENT_MS = 10000;
+
+// ── Ink film (paper-and-ink material model) ─────────────────────────────
+// The user bubble is PRINTED INK, not relief: a flat translucent film over
+// the paper. INK_FILM_ALPHA covers ~70% of the sheet's tooth so a quarter
+// to a third of the grain survives through the fill — a fully opaque block
+// would read as a UI rectangle. INK_EDGE_ALPHA is the dot-gain boundary:
+// the SAME hue at slightly higher opacity, never a light/dark relief pair.
+// Deliberately NOT the shared STRAND_TINT_ALPHA (0.12) — that constant is
+// the timeline cards' whisper tint and stays untouched.
+
+/** Interior film alpha — ~30% of the paper texture shows through. */
+const INK_FILM_ALPHA = 0.7;
+/** Dot-gain edge alpha — same hue, denser at the boundary. */
+const INK_EDGE_ALPHA = 0.9;
 
 // ── Unified stream: walk parts in natural order ────────────────────────
 
@@ -209,12 +223,13 @@ export const ChatMessage = memo(function ChatMessage({
       .filter((p) => p.type === "text")
       .map((p) => p.text ?? "")
       .join("\n");
-    // Strand tint of the current slice — the bubble background rides the
-    // shared tint helpers; text stays foreground at this alpha, in both
-    // themes. Unknown slice (arrival still resolving) → default secondary.
-    const userTint = strands
-      ? strandTint(strands[0], STRAND_TINT_ALPHA)
-      : undefined;
+    // Strand ink of the current slice — a printed film in the slice's FIRST
+    // strand hue (shared tint helpers, same source as the timeline cards).
+    // A strandless slice gets the neutral grey film, so the bubble is ALWAYS
+    // translucent ink — the variant's opaque bg-secondary never shows. Text
+    // stays foreground at this alpha, in both themes.
+    const userTint = strandTint(strands?.[0], INK_FILM_ALPHA);
+    const userTintEdge = strandTint(strands?.[0], INK_EDGE_ALPHA);
     // File parts (attachments): images render inline from their data URL;
     // anything else collapses to a small file chip.
     const fileParts = parts.filter((p) => p.type === "file" && p.url);
@@ -247,14 +262,16 @@ export const ChatMessage = memo(function ChatMessage({
             {(userText || fileParts.length === 0) && (
               <Bubble variant="secondary">
                 <BubbleContent
-                  // Strand tint from JS — it arrives as the --user-tint
-                  // custom property; .user-tint in globals.css owns the
-                  // painting.
-                  className={userTint ? "user-tint" : undefined}
+                  // Strand ink from JS — the film arrives as --user-tint and
+                  // the dot-gain edge as --user-tint-edge; .user-tint in
+                  // globals.css owns the fill, the ring utility owns the
+                  // denser boundary. No relief shadow either side.
+                  className="user-tint ring-1 ring-(--user-tint-edge)"
                   style={
-                    userTint
-                      ? ({ "--user-tint": userTint } as React.CSSProperties)
-                      : undefined
+                    {
+                      "--user-tint": userTint,
+                      "--user-tint-edge": userTintEdge,
+                    } as React.CSSProperties
                   }
                 >
                   <div className="font-serif font-light">

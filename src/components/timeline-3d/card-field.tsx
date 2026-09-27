@@ -895,20 +895,12 @@ export function CardField({
   const t = useTranslations("timeline3d");
   const tc = useTranslations("companion");
   const locale = useLocale();
+  // The calling card wears only two strings (turn count, continued-from);
+  // the dossier's ledger/quote/bubble labels are gone with the face.
   const texts = useMemo<FrameCardTexts>(
     () => ({
       turns: (count: number) => t("card.turns", { count }),
-      user: t("turns.user"),
-      agent: t("turns.agent"),
-      duration: (min: number) => t("card.duration", { min }),
-      no: (date: string, time: string) => t("card.no", { date, time }),
-      tone: t("card.tone"),
-      decided: t("card.decided"),
-      open: t("card.open"),
-      strands: t("card.strands"),
-      listSeparator: t("card.listSeparator"),
       continuedFrom: (date: string) => t("card.continuedFrom", { date }),
-      fr: (date: string) => t("card.fr", { date }),
     }),
     [t],
   );

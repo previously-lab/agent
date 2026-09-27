@@ -13,9 +13,10 @@
  * landed. The size now comes from `frameGeometryFor` — the same function
  * `card-field.tsx` sizes the real cards with — so the swap moves nothing.
  *
- * The composition is the card's own, top to bottom: eyebrow row, hairline,
- * title, then the user/agent bubble rounds. It is a smaller DOCUMENT than the
- * dossier (it is a placeholder), but the same one, at the same scale.
+ * The composition is the card's own, top to bottom: the name bar, the
+ * timecode bar, then the company-chip and quiet-line rounds. It is a
+ * smaller DOCUMENT than the dossier was (it is a placeholder), but the
+ * same one as the business card it stands in for, at the same scale.
  *
  * Motion is staggered down the column so it reads as one gesture rather than a
  * field of lights blinking in unison. `motion-reduce:animate-none` throughout.
@@ -53,44 +54,32 @@ function FallbackCard({
       // Dynamic: the placeholder is the real card's size (frameGeometryFor),
       // so the swap when the catalog lands moves nothing.
       style={{ width, height }}
-      className="relative shrink-0 overflow-hidden rounded-xl bg-card p-5 ring-1 ring-foreground/10 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]"
+      className="relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-paper bg-paper-grain-card p-5 shadow-paper-contact"
     >
       <span
         aria-hidden
         className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
       />
-      {/* Eyebrow row — marker square + label + timecode bars. */}
-      <div className="relative flex items-center gap-2">
-        <span className="inline-block size-1.5 shrink-0 rounded-[1px] bg-primary/70" />
-        <Bar className="h-2.5 w-24" delay={delay} />
-        <Bar className="ml-auto h-2.5 w-16" delay={delay + 60} />
-      </div>
-
-      <div className="relative mt-4 h-px w-full bg-foreground/[0.07]" />
-
-      {/* Title bar. */}
+      {/* The name — the big serif line the card leads with. */}
       <div
-        className="tl-fb-delay relative mt-4 h-6 w-1/2 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
-        style={{ "--fb-delay": `${delay + 100}ms` } as React.CSSProperties}
+        className="tl-fb-delay relative h-7 w-3/5 rounded-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
+        style={{ "--fb-delay": `${delay}ms` } as React.CSSProperties}
       />
 
-      <div className="relative mt-4 h-px w-full bg-foreground/[0.07]" />
+      {/* The title — the timecode under the name. */}
+      <div className="relative mt-3 flex items-center gap-2">
+        <Bar className="h-2 w-28" delay={delay + 60} />
+        <Bar className="h-2 w-12" delay={delay + 90} />
+      </div>
 
-      {/* Turn rounds — the TurnBubbles skeleton language (user tinted right,
-          agent gray left), rem-sized for the fallback seat. */}
-      <div className="relative mt-4 space-y-2.5">
-        <div
-          className="tl-fb-delay ml-auto h-9 w-[68%] rounded-2xl rounded-br-md bg-muted animate-pulse motion-reduce:animate-none"
-          style={{ "--fb-delay": `${delay + 160}ms` } as React.CSSProperties}
-        />
-        <div
-          className="tl-fb-delay h-12 w-[80%] rounded-2xl rounded-bl-md bg-foreground/8 animate-pulse motion-reduce:animate-none"
-          style={{ "--fb-delay": `${delay + 220}ms` } as React.CSSProperties}
-        />
-        <div
-          className="tl-fb-delay ml-auto h-9 w-[52%] rounded-2xl rounded-br-md bg-muted animate-pulse motion-reduce:animate-none"
-          style={{ "--fb-delay": `${delay + 280}ms` } as React.CSSProperties}
-        />
+      <div className="relative mt-auto flex items-end justify-between pt-4">
+        {/* The company — the strand chip. */}
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block size-1.5 shrink-0 rounded-[2px] bg-primary/50" />
+          <Bar className="h-2.5 w-14" delay={delay + 120} />
+        </div>
+        {/* The quiet line — turn count. */}
+        <Bar className="h-2 w-10" delay={delay + 150} />
       </div>
     </div>
   );

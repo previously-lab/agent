@@ -197,21 +197,21 @@ export interface FrameGeometry {
    * Which composition the card wears — carried on the geometry because the
    * card and everything measuring it must agree, and the SAME dimensions can
    * describe either face: the variant is what `frame-card.tsx` reads to pick
-   * its type scale and its ledger length.
+   * its type scale.
    *
    * The two are not interchangeable at one size. A single `em` divisor cannot
-   * serve both — the dossier's short edge is its height and the portrait's is
-   * its width — which is why `cardEmFor` reads this to pick one. The portrait
-   * is a SHORTER DOCUMENT, not a smaller one.
+   * serve both — the landscape card's short edge is its height and the
+   * portrait's is its width — which is why `cardEmFor` reads this to pick
+   * one. The portrait is a SHORTER DOCUMENT, not a smaller one.
    */
   variant: CardVariant;
 }
 
 /**
  * How a slice card composes itself. Not a size — a different DOCUMENT. The
- * dossier is the desktop face (ledger rows, quote, footer); the portrait drops
- * the rows a narrow card cannot read at a legible size and spends that room on
- * type.
+ * "dossier" is the desktop landscape face (the business card: focus, timecode,
+ * strand chip, quiet line); the portrait keeps the same four elements and
+ * spends the narrow card's room on type.
  *
  * It lives here, beside the geometry, because it is decided from the PANE. It
  * was a field on `TierSpec` — a statement about the window — for a card that
@@ -220,8 +220,8 @@ export interface FrameGeometry {
 export type CardVariant = "portrait" | "dossier";
 
 /** Pane aspect at which the card turns portrait. 1.15 rather than 1 so a pane
- *  that is merely a little taller than wide stays with the dossier, whose
- *  ledger rows it has the width to read. */
+ *  that is merely a little taller than wide stays with the landscape face,
+ *  whose lines it has the width to set. */
 export const FRAME_PORTRAIT_ABOVE = 1.15;
 
 /**
@@ -232,8 +232,8 @@ export const FRAME_PORTRAIT_ABOVE = 1.15;
  * lives in the pane. The two agree almost everywhere, because the pane is the
  * window minus a rail; they part company on a TALL window, which is exactly the
  * family that was wrong (640x1130, and any window past 1024 that is taller than
- * it is wide). The pane rule restores the dossier's ledger rows to the first
- * and keeps them off the second.
+ * it is wide). The pane rule keeps the landscape face on the first and the
+ * portrait on the second.
  */
 export function frameVariantFor(fieldW: number, fieldH: number): CardVariant {
   return fieldH > fieldW * FRAME_PORTRAIT_ABOVE ? "portrait" : "dossier";
@@ -269,8 +269,13 @@ export function cardEmFor(geo: FrameGeometry): number {
 /** Portrait aspect (W/H) of the frame card for narrow fields. */
 export const FRAME_RATIO = 0.8;
 
-/** Landscape aspect (W/H) of the frame card for wide desktop fields. */
-export const FRAME_LANDSCAPE_RATIO = 1.5;
+/** Landscape aspect (W/H) of the frame card for wide desktop fields —
+ *  the business-card proportion (~1.7:1): the slice card is a calling
+ *  card, not a document. (The one timeline-3d-facing constant living in
+ *  this module — every consumer derives from `geo`, so the change
+ *  ripples consistently; the snap physics read the offset table, not
+ *  this number.) */
+export const FRAME_LANDSCAPE_RATIO = 1.7;
 
 export function frameGeometryFor(
   variant: CardVariant,

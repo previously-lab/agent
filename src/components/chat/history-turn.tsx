@@ -5,7 +5,20 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { MarkdownRenderer } from "./markdown";
 import { CognitionPopover } from "./cognition-popover";
 import { TimeDisplay, sameDay } from "./time-display";
-import { strandTint, STRAND_TINT_ALPHA } from "@/lib/timeline3d/ink";
+import { strandTint } from "@/lib/timeline3d/ink";
+
+// ── Ink film (paper-and-ink material model) ─────────────────────────────
+// The user bubble is PRINTED INK: a flat translucent film over the paper,
+// NOT the shared STRAND_TINT_ALPHA (0.12) whisper the timeline cards use —
+// that constant stays untouched outside this lane. INK_FILM_ALPHA covers
+// ~70% of the tooth so a quarter to a third of the grain survives through
+// the fill; INK_EDGE_ALPHA is the dot-gain boundary, the SAME hue at
+// slightly higher opacity — never a light/dark relief pair.
+
+/** Interior film alpha — ~30% of the paper texture shows through. */
+const INK_FILM_ALPHA = 0.7;
+/** Dot-gain edge alpha — same hue, denser at the boundary. */
+const INK_EDGE_ALPHA = 0.9;
 
 /**
  * A single historical turn — pure body bubbles (design §1.2: history renders
@@ -33,7 +46,10 @@ export function HistoryTurn({
 }) {
   const isUser = role === "user";
   const userTint = isUser
-    ? strandTint(strands?.[0], STRAND_TINT_ALPHA)
+    ? strandTint(strands?.[0], INK_FILM_ALPHA)
+    : undefined;
+  const userTintEdge = isUser
+    ? strandTint(strands?.[0], INK_EDGE_ALPHA)
     : undefined;
 
   return (
@@ -63,13 +79,22 @@ export function HistoryTurn({
               )}
             </div>
             <BubbleContent
-              // Strand tint from JS — it arrives as the --user-tint
-              // custom property; .user-tint in globals.css owns the
-              // painting.
-              className={userTint ? "user-tint" : undefined}
+              // Strand ink from JS — the film arrives as --user-tint and the
+              // dot-gain edge as --user-tint-edge; .user-tint in globals.css
+              // owns the fill, the ring utility owns the denser boundary. No
+              // relief shadow either side. Agent turns stay variant="ghost":
+              // prose ink printed straight on the sheet.
+              className={
+                userTint
+                  ? "user-tint ring-1 ring-(--user-tint-edge)"
+                  : undefined
+              }
               style={
                 userTint
-                  ? ({ "--user-tint": userTint } as React.CSSProperties)
+                  ? ({
+                      "--user-tint": userTint,
+                      "--user-tint-edge": userTintEdge,
+                    } as React.CSSProperties)
                   : undefined
               }
             >

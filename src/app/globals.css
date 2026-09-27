@@ -64,6 +64,8 @@
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-sink: var(--paper-sink);
   --shadow-paper-raise: var(--paper-raise);
+  --shadow-paper-contact: var(--paper-contact);
+  --text-shadow-paper-in: var(--paper-ink-edge);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -241,17 +243,32 @@
    rename.
 
    ONE SHEET, ONE COLOUR. The board and the card are the same paper and
-   paint the same --paper; layer separation comes ONLY from the lift
-   shadow and the relief edges. There is no per-surface seed or tint
-   input. Two stock characters, per the reader's call (2026-09-28):
-   LIGHT is NEW cardstock — white with a hint of warm, not aged stock;
-   the yellowing curve in the research describes AGING paper, and this
-   sheet is the fresh ream. DARK is black cardstock — paper yellows
-   because oxidation chromophores absorb blue light, which is invisible
-   against a near-black ground, so the dark sheet stays essentially
-   neutral with only a trace of warmth. Both keep the old contract's
-   lightness clamping (the sheet follows the theme's --background
-   lightness, clamped into a readable band, warm static fallbacks).
+   paint the same --paper; layer separation comes ONLY from the contact
+   shadow (the crevice between two stacked sheets — see CONTACT below)
+   on the timeline. There is no per-surface seed or tint input. Two stock
+   characters, per the reader's call (2026-09-28): LIGHT is NEW cardstock
+   — white with a hint of warm, not aged stock; the yellowing curve in
+   the research describes AGING paper, and this sheet is the fresh ream.
+   DARK is black cardstock — paper yellows because oxidation chromophores
+   absorb blue light, which is invisible against a near-black ground, so
+   the dark sheet stays essentially neutral with only a trace of warmth.
+   Both keep the old contract's lightness clamping (the sheet follows the
+   theme's --background lightness, clamped into a readable band, warm
+   static fallbacks).
+
+   THE MATERIAL IS PAPER AND INK (the reader's call, 卡纸方案). Two
+   surfaces, not four mechanisms: PAPER is the board, the card, and
+   everything unprinted — the grain (tooth + micro-tooth + sheen) is
+   untouched. INK is anything printed: it sits ON TOP of the sheet, much
+   flatter than it, PARTLY covering the grain (uncoated stock lets the
+   tooth show faintly through — a quarter to a third survives), and its
+   EDGE IS VERY SLIGHTLY DENSER than its interior (dot gain). Nothing
+   sinks in and nothing stands out any more. The region-relief vocabulary
+   below (--paper-sink / --paper-raise and their lip variables) is
+   RETIRED from the timeline — the card field no longer uses it anywhere
+   — but the tokens stay in the contract because the home screen still
+   consumes them (home is out of that lane's scope; stripping the tokens
+   would silently unstyle its pressed edges).
 
    THE DERIVATION IS DOCUMENT-LEVEL. In the seed era it had to live per
    surface: an inherited custom property carries its SUBSTITUTED value,
@@ -278,7 +295,9 @@
             ≈10–15/255 below the face), chroma slightly up so the recess
             keeps the sheet's character as it darkens.
    RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
-            pressed edge. The dark side is a deep slate in the paper's
+            pressed edge — RETIRED from the timeline (paper-and-ink has
+            no sunken or raised regions), retained for the home screen's
+            consumption. The dark side is a deep slate in the paper's
             own hue family (warm brown under the old warm stock) at
             high alpha — 0.42 light, near-opaque dark — and the light
             side a near-white at 0.7 light / 0.3 dark (on dark stock the
@@ -288,12 +307,23 @@
             25–90/255 across a 2–3px band — 1px bands vanish under the
             sub-pixel resampling of transformed DOM.
             --paper-line   the flat printed hairline (ink, not relief).
+   CONTACT  --paper-contact   how one thick sheet sits on another: a
+            tight, dark contact shadow AT THE EDGE (hairline ring plus
+            two short drops), spent within a few px — the shadow in the
+            crevice between two stacked sheets. NOT elevation: the wide
+            0 34px 80px hover/lift bloom belongs to floating panels
+            (chat, briefing, home), not to a card lying on the board.
+            This carries ALL the separation, so it is strong, not faint.
+   INK EDGE --paper-ink-edge   the printed-in text effect (the ONLY text
+            shadow anywhere on the paper): 1px, no blur, near-white at
+            high alpha, on exactly two strings — the card's serif focus
+            and its timecode. Body text and all CJK stay flat ink.
    LIFT     --paper-lift   the elevation — EXACTLY the app's own card
             shadow (the same value the chat card, the briefing card and
-            the skeletons carry), so a sheet lifts by as much as every
-            other card in the product and there is no second stack to
-            keep in step. Relief lips are NOT part of it — they live in
-            --paper-sink / --paper-raise.
+            the skeletons carry), so a FLOATING panel lifts by as much
+            as every other card in the product. The timeline's slice
+            card no longer wears it — a sheet lying on the board is
+            separated by CONTACT, not by floating.
    GRAIN    Three layers (SVG tiles + one gradient; no image assets —
             the principle was never the failure, the frequency was):
             TOOTH       feTurbulence fractalNoise baseFrequency 0.09
@@ -402,8 +432,37 @@
      (shadow-[0_34px_80px_-20px_...]). A sheet lifts off the page by
      exactly as much as every other card in the product, and there is no
      second stack to keep in step with it. The inset relief lip is NOT
-     part of the elevation — relief lives in --paper-sink / --paper-raise. */
+     part of the elevation — relief lives in --paper-sink / --paper-raise.
+     (The timeline's slice card no longer wears this: it is a sheet lying
+     on the board, separated by the CONTACT shadow below — not a floating
+     panel. --paper-lift stays for the surfaces that still float: home,
+     chat, briefing.) */
   --paper-lift: 0 34px 80px -20px rgba(15, 23, 42, 0.28);
+
+  /* THE CONTACT SHADOW — how one thick sheet sits on another. Two sheets
+     stacked: the top is held off the lower by its own thickness, and the
+     shadow lives IN THE CREVICE between them — tight and dark AT THE
+     EDGE, spent within a few px, not a wide floating-panel bloom. The
+     hairline ring keeps a crisp edge line (the crevice's lip); the two
+     drops carry the falloff. This is ALL the separation a stacked sheet
+     gets — it must be strong, not faint. */
+  --paper-contact:
+    0 0 0 1px rgba(15, 23, 42, 0.10),
+    0 1px 2px 0 rgba(15, 23, 42, 0.22),
+    0 3px 8px -2px rgba(15, 23, 42, 0.14);
+
+  /* THE PRINTED-IN EDGE — the one text effect, and only on the two
+     strings the card sets like type (the serif focus, the timecode).
+     A 1px highlight at the glyph's lower edge, high-alpha near-white,
+     light from the same upper-left as every relief edge ever had: the
+     ink sits slightly DOWN in the stock and the paper catches light at
+     the stroke's foot. 1px, no wider, no blurrier — wider stops reading
+     as an edge and becomes a smudge. On light stock the near-white is
+     against near-white and the effect is deliberately almost subliminal;
+     body text and all CJK stay FLAT ink — a highlight under every
+     stroke doubles the stroke weight and closes the counters at these
+     sizes. */
+  --paper-ink-edge: 0 1px 1px oklch(0.99 0.002 256 / 0.85);
 
   /* The flat printed hairline (ink, not relief). */
   --paper-line: oklch(0.85 0 0);
@@ -464,6 +523,22 @@
      (dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)]). */
   --paper-lift: 0 34px 80px -20px rgba(0, 0, 0, 0.8);
 
+  /* THE CONTACT SHADOW, dark stock: the crevice between two black sheets
+     is near-total darkness — the ring goes near-opaque and the drops stay
+     tight. (On near-black stock a light-slate shadow would be invisible;
+     the dark theme inverts: separation reads by the dark edge, not a
+     cast light.) */
+  --paper-contact:
+    0 0 0 1px rgba(0, 0, 0, 0.62),
+    0 1px 2px 0 rgba(0, 0, 0, 0.72),
+    0 3px 8px -2px rgba(0, 0, 0, 0.6);
+
+  /* THE PRINTED-IN EDGE, dark stock: ink on black cardstock reads by the
+     stock catching light at the stroke's foot — the same 1px near-white
+     highlight as the light theme, at a fraction of the alpha (a full
+     0.85 halo would glow). 1px, no blur. */
+  --paper-ink-edge: 0 1px 1px oklch(0.99 0.002 256 / 0.3);
+
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
@@ -480,16 +555,18 @@
   --paper-tooth-micro-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.166241' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
-/* The paper, in four usages. The `@theme inline` tokens above generate the
+/* The paper, in usages. The `@theme inline` tokens above generate the
    utilities, so every surface writes them in the markup and no class name
    is invented for the material:
      board sheet   bg-paper bg-paper-grain
-     card sheet    bg-paper bg-paper-grain-card shadow-paper-lift
-     sunken plate  bg-paper-plate bg-paper-grain-card shadow-paper-sink
-     raised mark   shadow-paper-raise
-   A plate is an inset region of the card — the same sheet — so it takes the
-   card's grain, which also keeps the grain continuous rather than starting a
-   third tile set inside the sheet.
+     card sheet    bg-paper bg-paper-grain-card shadow-paper-contact
+     printed-in    text-shadow-paper-in (the serif focus + timecode only)
+   The timeline is PAPER AND INK: printed regions are ink film on the
+   sheet — flatter, partly covering the grain, slightly denser at the
+   edge — never sunken plates or raised marks. The relief recipes below
+   (sunken plate `bg-paper-plate shadow-paper-sink`, raised mark
+   `shadow-paper-raise`) are retained for the HOME SCREEN, which still
+   consumes them; the card field uses none of them.
    The grain is the sheet element's OWN background, never an overlay div;
    the tiles carry their amplitude in alpha, so plain source-over is the
    correct compositing and the amplitude survives whatever the stock
@@ -973,6 +1050,12 @@
    --user-tint (chat-message / history-turn). */
 .user-tint {
   background-color: var(--user-tint);
+  /* DOT GAIN — the denser boundary of the printed film: a same-hue edge
+     a step stronger than the fill, derived from the fill itself so it
+     holds in BOTH themes without a second JS value. Chat normally passes
+     --user-tint-edge inline; this is the fallback the class carries so
+     the ring utility never reads an unset variable. */
+  --user-tint-edge: oklch(from var(--user-tint) calc(l * 0.82) c h);
 }
 
 /* companion-pod — sits above the composer; 220px clears it exactly, and

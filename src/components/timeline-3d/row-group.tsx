@@ -337,10 +337,11 @@ export function RowGroup({
           </div>
         </Html>
       )}
-      {/* Backing sheets: gray skeleton stand-ins of the dossier card (muted
-          paper + gray bars echoing the timecode/title/fields/bubbles layout),
-          bill boarded at real z-depths so scroll/camera movement creates
-          parallax between layers. Never real content, never stark white. */}
+      {/* Backing sheets: BLANK PAPER of the same stock as the face (paper
+          and ink — a buried sheet is an unprinted one, not a gray
+          skeleton), bill boarded at real z-depths so scroll/camera
+          movement creates parallax between layers. Never real content.
+          The crevice shadow is the same contact token the face wears. */}
       {poses.slice(second ? 1 : 0).map((_, si) => {
         // Absolute cascade layer (0 = directly behind the face) drives the
         // deep-layer fade.
@@ -357,46 +358,16 @@ export function RowGroup({
           >
             <div
               aria-hidden
-              className="relative overflow-hidden bg-muted ring-1 ring-foreground/10 shadow-[0_18px_40px_-16px_rgba(15,23,42,0.22)] dark:shadow-[0_18px_40px_-16px_rgba(0,0,0,0.7)]"
-              // Dynamic, all four: tier card size, per-layer cascade radius
-              // and deep-layer fade, and an em root so the skeleton bars scale
-              // with the sheet.
+              className="bg-paper bg-paper-grain-card shadow-paper-contact relative overflow-hidden"
+              // Dynamic, all three: tier card size, per-layer cascade
+              // radius and deep-layer fade.
               style={{
                 width: geo.cardW,
                 height: geo.cardH,
                 borderRadius: sheetRadiusPx(geo),
                 opacity,
-                fontSize: Math.min(geo.cardW, geo.cardH) / 26,
               }}
-            >
-              {/* gray spine — the loading-version echo of the face's strand
-                  spine (0.14em accent bar down the left edge) */}
-              <span className="absolute inset-y-0 left-0 w-[0.14em] bg-foreground/15" />
-              {/* hairlines echoing the dossier section separators */}
-              <div className="absolute inset-x-[7%] top-[12%] h-px bg-foreground/[0.07]" />
-              <div className="absolute inset-x-[7%] top-[33%] h-px bg-foreground/[0.07]" />
-              <div className="absolute inset-x-[7%] top-[53%] h-px bg-foreground/[0.07]" />
-              <div className="absolute inset-x-[7%] bottom-[7.5%] h-px bg-foreground/[0.07]" />
-              {/* timecode row: square tick + mono line, frame number at right */}
-              <div className="absolute left-[7%] top-[6%] size-[1.8%] min-h-2 min-w-2 rounded-[2px] bg-foreground/15" />
-              <div className="absolute left-[12%] top-[6.5%] h-[1.6%] w-[24%] rounded-full bg-foreground/10" />
-              <div className="absolute right-[7%] top-[6.5%] h-[1.6%] w-[13%] rounded-full bg-foreground/8" />
-              {/* serif title */}
-              <div className="absolute left-[7%] top-[14%] h-[3%] w-[52%] rounded-full bg-foreground/12" />
-              {/* previously-on quote */}
-              <div className="absolute left-[7%] top-[24%] h-[1.8%] w-[64%] rounded-full bg-foreground/8" />
-              {/* archive field rows: short label + long value */}
-              <div className="absolute left-[7%] top-[37%] h-[1.8%] w-[7%] rounded-full bg-foreground/10" />
-              <div className="absolute left-[21%] top-[37%] h-[1.8%] w-[38%] rounded-full bg-foreground/8" />
-              <div className="absolute left-[7%] top-[45%] h-[1.8%] w-[7%] rounded-full bg-foreground/10" />
-              <div className="absolute left-[21%] top-[45%] h-[1.8%] w-[52%] rounded-full bg-foreground/8" />
-              {/* dialogue: user bubble, agent reply line, user bubble */}
-              <div className="absolute right-[7%] top-[57%] h-[9%] w-[48%] rounded-[1.2em] bg-foreground/10" />
-              <div className="absolute left-[7%] top-[71%] h-[1.8%] w-[36%] rounded-full bg-foreground/8" />
-              <div className="absolute right-[7%] top-[78%] h-[10%] w-[56%] rounded-[1.2em] bg-foreground/10" />
-              {/* footer frame code */}
-              <div className="absolute bottom-[4%] right-[7%] h-[1.6%] w-[12%] rounded-full bg-foreground/8" />
-            </div>
+            />
           </Html>
         );
       })}
