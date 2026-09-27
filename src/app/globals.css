@@ -234,13 +234,15 @@
    ONE SHEET, ONE COLOUR. The board and the card are the same paper and
    paint the same --paper; layer separation comes ONLY from the lift
    shadow and the relief edges. There is no per-surface seed or tint
-   input: paper goes warm, never grey — aging research measures L*
-   falling toward yellow with chroma RISING (doc/paper-material-
-   research.md §4) — so hue is pinned into the warm band and chroma is
-   FLOORED, not merely capped. The old contract's lightness clamping
-   survives: the sheet follows the theme's --background lightness,
-   clamped into a readable band, with a warm static fallback at each
-   variable.
+   input. Two stock characters, per the reader's call (2026-09-28):
+   LIGHT is NEW cardstock — white with a hint of warm, not aged stock;
+   the yellowing curve in the research describes AGING paper, and this
+   sheet is the fresh ream. DARK is black cardstock — paper yellows
+   because oxidation chromophores absorb blue light, which is invisible
+   against a near-black ground, so the dark sheet stays essentially
+   neutral with only a trace of warmth. Both keep the old contract's
+   lightness clamping (the sheet follows the theme's --background
+   lightness, clamped into a readable band, warm static fallbacks).
 
    THE DERIVATION IS DOCUMENT-LEVEL. In the seed era it had to live per
    surface: an inherited custom property carries its SUBSTITUTED value,
@@ -250,24 +252,22 @@
    on :root / .dark and every surface — and every descendant plate,
    rule, fade — reads the same resolved value.
 
-   STOCK    --paper   the sheet. Light: l [0.955, 0.976] · c [0.014, 0.03]
-            · h ≈ 88. Dark: l [0.2, 0.21] · c [0.017, 0.035] ·
-            h ≈ 87. The bands sit a touch off the anchors on the
-            side the grain pushes: the pinned-ink layers shift the
-            composite mean ~7 levels (light darkens, dark lifts), and
-            the base is mixed so the COMPOSITE lands at the stock
-            colours — #f4f0e6-class light, #262219-class dark. The
-            derivation's hue is a LITERAL (the achromatic origin's
-            powerless hue breaks clamp() — see the :root note). The
-            trajectory matches the hotel's warm family (hue 81–83, chroma
-            rising as L falls) extended to sheet lightness — one material
-            across 2D and 3D without importing the hotel's wall-toned
-            hexes.
+   STOCK    --paper   the sheet. Light: l [0.97, 0.99] · c [0.007, 0.03]
+            · h ≈ 88. Dark: l [0.21, 0.215] · c [0.003, 0.035] ·
+            h ≈ 87. The light floor is a HINT of warmth — 0.007, half
+            the previous 0.014, which read as aged; the composite lands
+            #f7f5f0–#faf8f4, new cardstock. The dark floor is 0.003: a
+            trace of warmth, yellow none. The bands sit off the anchors
+            on the side the grain pushes (the pinned-ink layers shift
+            the composite mean ~3–8%): the base is mixed so the
+            COMPOSITE lands at the stock colours. The derivation's hue
+            is a LITERAL (the achromatic origin's powerless hue breaks
+            clamp() — see the :root note).
             --paper-plate   a sunken region's fill: the sheet one tone
             step DOWN (Δl ≈ 0.04 light, ≈ 0.06 dark — levels compress
             near black so the dark step is wider; both land at the same
             ≈10–15/255 below the face), chroma slightly up so the recess
-            stays in the warm family as it darkens.
+            keeps the sheet's character as it darkens.
    RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
             pressed edge. The dark side is a warm brown in the paper's
             own hue family (the Kinetics-class rgba(60,40,20,·)) at
@@ -316,28 +316,28 @@
    wins where supported (the house pattern — see typeset.css). */
 
 :root {
-  /* THE SHEET. The base is mixed a touch off the anchors because the
-     pinned-ink grain shifts the composite mean ~7 levels (light darkens,
-     dark lifts); the COMPOSITE lands at the stocks — #f4f0e6-class light,
-     #262219-class dark.
+  /* THE SHEET. New cardstock, not aged: white with a HINT of warm —
+     chroma floor 0.007 (half the previous 0.014, which read yellow).
+     The base is mixed a touch bright because the pinned-ink grain pulls
+     the composite down ~3%; the COMPOSITE lands #f7f5f0–#faf8f4.
      HUE IS A LITERAL, measured not reasoned: the origin (--background)
      is achromatic, its hue component is powerless, and math on a
      powerless hue (e.g. clamp(85, h, 90)) makes Chromium drop the whole
      declaration as invalid — the fallback silently painted for a full
      session until the computed-style probe caught it. */
-  --paper: oklch(0.976 0.014 88.7);
-  --paper: oklch(from var(--background) clamp(0.955, l, 0.976) clamp(0.014, c, 0.03) 88);
+  --paper: oklch(0.99 0.007 88.7);
+  --paper: oklch(from var(--background) clamp(0.97, l, 0.99) clamp(0.007, c, 0.03) 88);
 
   /* The sunken fill: one tone step below the face. */
-  --paper-plate: oklch(0.936 0.016 85);
+  --paper-plate: oklch(0.95 0.008 85);
   --paper-plate: oklch(from var(--paper) calc(l - 0.04) calc(c * 1.15) h);
 
   /* The pressed-edge lips. lo = the occluded (shadow) side: a warm brown
      in the paper's own hue family, Kinetics-class alpha. hi = the side
      that catches light: near-white. */
-  --paper-relief-lo: oklch(0.35 0.03 85 / 0.42);
+  --paper-relief-lo: oklch(0.354 0.015 85 / 0.42);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.36) calc(c * 2.2) h / 0.42);
-  --paper-relief-hi: oklch(0.99 0.006 85 / 0.7);
+  --paper-relief-hi: oklch(0.99 0.003 85 / 0.7);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
   /* The elevation stack. Contact first — tight, high-alpha, negative
@@ -360,28 +360,29 @@
   /* THE GRAIN — three layers, translucent ink in alpha. TOOTH: lit
      relief (azimuth 45, elevation 60 — the house light). FIBRE:
      anisotropic streaks. MOTTLE: low-frequency envelope breaker. */
-  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.08'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.028'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.02'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 .dark {
-  /* THE SHEET — warm charcoal, never neutral; the composite lands at
-     #262219-class after the white ink's lift. Hue literal: see the light
-     block's measured note. */
-  --paper: oklch(0.21 0.017 86.9);
-  --paper: oklch(from var(--background) clamp(0.21, l, 0.215) clamp(0.017, c, 0.035) 87);
+  /* THE SHEET — black cardstock, never yellowed: chromophore yellowing
+     is invisible on a near-black ground, so the sheet stays essentially
+     neutral with a trace of warmth (c floor 0.003). Hue literal: see the
+     light block's measured note. */
+  --paper: oklch(0.21 0.003 86.9);
+  --paper: oklch(from var(--background) clamp(0.21, l, 0.215) clamp(0.003, c, 0.035) 87);
 
   /* The sunken fill: levels compress near black, so the tone step is
      wider — the same ≈10–15/255 below the face as light. */
-  --paper-plate: oklch(0.15 0.02 87);
+  --paper-plate: oklch(0.15 0.004 87);
   --paper-plate: oklch(from var(--paper) calc(l - 0.06) calc(c * 1.15) h);
 
   /* The pressed-edge lips. No room below near-black: the dark side goes
      near-opaque and the sunken read leans on the highlight. */
-  --paper-relief-lo: oklch(0.1 0.026 87 / 0.8);
+  --paper-relief-lo: oklch(0.084 0.005 87 / 0.8);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8);
-  --paper-relief-hi: oklch(0.99 0.007 87 / 0.3);
+  --paper-relief-hi: oklch(0.99 0.001 87 / 0.3);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.3);
 
   /* The elevation stack inverted: near-opaque contact + a LIGHTER
@@ -403,9 +404,9 @@
 
   /* THE GRAIN, dark polarity: the same three layers as translucent
      WHITE ink — on dark stock the tooth lifts. */
-  --paper-tooth-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.08'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-fibre-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.028'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-mottle-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.02'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-tooth-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='5' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='2'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.11' intercept='-0.085'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-fibre-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.008 0.06' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.08' intercept='-0.03'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-mottle-dark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.01' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.06' intercept='-0.022'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
 }
 
 /* The board sheet and the card sheet: the SAME colour (--paper — one
