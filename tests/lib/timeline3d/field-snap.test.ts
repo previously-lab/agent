@@ -1,21 +1,21 @@
 /**
- * Elastic snap scrolling — the settle physics' pure math.
+ * Elastic scroll — the settle physics' pure math.
  *
  * The contract under test, straight from the feature spec:
- *  - snap targets are ROW BOUNDARIES off the shared offset table, never a
- *    card and never a constant height;
- *  - a row taller than the viewport never snaps (the reader stays EXACTLY
- *    where they stopped);
  *  - overscroll past the ends resists progressively and stays bounded;
- *  - the head and foot are the range's own rests — they always qualify, and
- *    they are what releases the rubber band.
+ *  - the band holds while the input holds and releases by clamping back into
+ *    the range when the hand goes quiet (the deadline that fires the clamp
+ *    lives in card-field.tsx, not here).
+ *
+ * The idle snap-to-boundary that used to live beside the band was removed on
+ * user decision (2026-09-29) — settling leaves the offset exactly where the
+ * reader stopped — so there is nothing here to test about snapping.
  */
 import { describe, expect, it } from "vitest";
 import {
   elasticAdd,
   rubberOverscroll,
   RUBBER_BAND_PX,
-  snapBoundaryFor,
 } from "@/lib/timeline3d/field-snap";
 
 describe("rubberOverscroll", () => {
@@ -64,80 +64,5 @@ describe("elasticAdd", () => {
     expect(elasticAdd(min, -10_000, min, max)).toBeGreaterThan(
       min - RUBBER_BAND_PX,
     );
-  });
-});
-
-describe("snapBoundaryFor", () => {
-  // Four rows of 100px each: tops[0..3] = 0,100,200,300; total 400.
-  const tops = [0, 100, 200, 300, 400];
-  const total = 400;
-  const min = -50;
-  const max = 350;
-
-  it("lands on the nearest row boundary, not on a card", () => {
-    expect(snapBoundaryFor(tops, total, 150, min, max, 130, "future")).toBe(100);
-    expect(snapBoundaryFor(tops, total, 150, min, max, 170, "future")).toBe(200);
-  });
-
-  it("reads geometry from the table, not a constant height", () => {
-    // Uneven rows (as the turns rung measures them): 0, 250, 300.
-    const uneven = [0, 250, 300, 300];
-    expect(snapBoundaryFor(uneven, 300, 400, min, 300, 210, "future")).toBe(250);
-    expect(snapBoundaryFor(uneven, 300, 400, min, 300, 240, "future")).toBe(250);
-  });
-
-  it("breaks an exact midpoint tie toward the direction of travel", () => {
-    expect(snapBoundaryFor(tops, total, 150, min, max, 150, "future")).toBe(200);
-    expect(snapBoundaryFor(tops, total, 150, min, max, 150, "past")).toBe(100);
-  });
-
-  it("never snaps when the nearest row is taller than the viewport", () => {
-    // Row 0 is 500px tall against a 400px viewport.
-    const tallFirst = [0, 500, 600, 600];
-    expect(snapBoundaryFor(tallFirst, 600, 400, 0, 500, 100, "future")).toBeNull();
-    // Even 1px below the boundary: the nearest boundary is the tall row's own
-    // top, and it does not fit — no snap, not a skip to the next fitting row.
-    expect(snapBoundaryFor(tallFirst, 600, 400, 0, 500, 1, "future")).toBeNull();
-  });
-
-  it("snaps to a fitting row when the gesture has left the tall one", () => {
-    // Near the BOTTOM of the 500px row the next boundary (300px... here 500)
-    // is the nearest — and that row fits.
-    const tallFirst = [0, 500, 600, 600];
-    expect(snapBoundaryFor(tallFirst, 600, 400, 0, 500, 470, "future")).toBe(500);
-  });
-
-  it("treats the head and foot as rests even when every row is tall", () => {
-    const allTall = [0, 900, 1800, 1800];
-    expect(snapBoundaryFor(allTall, 1800, 400, -100, 700, 640, "past")).toBe(700);
-    expect(snapBoundaryFor(allTall, 1800, 400, -100, 700, -60, "future")).toBe(
-      -100,
-    );
-  });
-
-  it("releases the rubber band at the nearest end", () => {
-    expect(snapBoundaryFor(tops, total, 150, min, max, max + 60, "future")).toBe(
-      max,
-    );
-    expect(snapBoundaryFor(tops, total, 150, min, max, min - 60, "past")).toBe(
-      min,
-    );
-  });
-
-  it("ignores row tops outside the range (the foot rest covers the tail)", () => {
-    // Row tops past max are not rests; the foot is. 220 is nearer 200, but
-    // 230 has already passed the midpoint and belongs to the foot.
-    expect(snapBoundaryFor(tops, total, 150, min, 250, 220, "future")).toBe(200);
-    expect(snapBoundaryFor(tops, total, 150, min, 250, 230, "future")).toBe(250);
-    expect(snapBoundaryFor(tops, total, 150, min, 250, 245, "future")).toBe(250);
-  });
-
-  it("returns null for an empty field or a range with no room", () => {
-    expect(snapBoundaryFor([0], 0, 800, 0, 0, 0, "future")).toBeNull();
-    expect(snapBoundaryFor(tops, total, 150, 100, 100, 100, "future")).toBeNull();
-  });
-
-  it("keeps the foot rest exact when the reader is already there", () => {
-    expect(snapBoundaryFor(tops, total, 150, min, max, max, "future")).toBe(max);
   });
 });
