@@ -23,11 +23,13 @@
  * Clicking the card opens the conversation — the full read lives there.
  *
  * THE RECESSED TYPE rides exactly the two centre strings — the date and
- * the clock: `text-shadow-paper-recess`, the depression's dark
- * upper-left wall and its paper-lip highlight at the lower-right, 1px
- * and no blur. Body text and all CJK stay FLAT ink: a highlight under
- * every stroke doubles the stroke weight and closes the counters at
- * these sizes. Everything else about the material is unchanged:
+ * the clock: `text-shadow-paper-recess`, ONE shadow, single-sided and
+ * blurred (a lone light lip at the lower-right — see globals.css): the
+ * zero-blur pair ghosted, and the gradient-in-glyph alternative never
+ * paints under the field's 3D transforms. No highlight sits under the
+ * strokes to double their weight and close the counters at these sizes;
+ * body text and all CJK stay FLAT ink. Everything else about the
+ * material is unchanged:
  *
  * MATERIAL — two surfaces, not four mechanisms (卡纸方案):
  *   PAPER is the sheet: `bg-paper bg-paper-grain-card`, the SAME stock as

@@ -39,6 +39,7 @@ export default async function RootLayout({
           storage='local'>
           {children}
           <Toaster position="top-center" />
+          <div aria-hidden className="paper-light-field" />
         </ThemeProvider>
       </body>
     </html>

@@ -59,8 +59,8 @@
   --color-paper: var(--paper);
   --color-paper-plate: var(--paper-plate);
   --color-paper-line: var(--paper-line);
-  --background-image-paper-grain: var(--paper-tooth), var(--paper-tooth-micro);
-  --background-image-paper-grain-card: var(--paper-tooth-card), var(--paper-tooth-micro-card);
+  --background-image-paper-grain: var(--paper-grain-map);
+  --background-image-paper-grain-card: var(--paper-grain-map);
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-sink: var(--paper-sink);
   --shadow-paper-raise: var(--paper-raise);
@@ -314,76 +314,75 @@
             (chat, briefing, home), not to a card lying on the board.
             This carries ALL the separation, so it is strong, not faint.
    RECESSED --paper-ink-recess   the printed letter sits IN thick stock
-            (the type the slice card sets at its centre): the depression's
-            upper-left wall faces AWAY from the upper-left house light —
-            a dark edge in the paper's own hue family — and its lower-right
-            wall catches it: the paper's lip, the sheet's own colour lifted,
-            never pure white. A 1px / 1px hard pair, no blur — wider stops
-            reading as an edge and becomes a smudge. Exactly TWO strings
-            carry it (the centre date and the clock); body text and all
-            CJK small print stay FLAT ink — a highlight under every stroke
+            (the type the slice card sets at its centre). Round 3: the
+            ghosting ±1px zero-blur pair is gone — no source ships a
+            hard pair at display size (F3) — and the gradient-in-glyph
+            alternative the survey preferred (zero offset, safe for CJK
+            counters) had to be reverted too: Chromium drops both
+            background-clip: text and -webkit-text-fill-color under the
+            card field's 3D transforms (reproduced in isolation), so
+            the gradient never paints there. What ships is the other
+            sourced pattern: ONE shadow, single-sided, BLURRED — a lone
+            light lip at the lower-right (where the depression's wall
+            catches the upper-left house light), no dark counter-copy,
+            so nothing can double; blur 1px light / 2px dark (Kinetics
+            1/2, papyrus-nox 3/2, Verou 1). Exactly TWO strings carry
+            it (the centre date and the clock); body text and all CJK
+            small print stay FLAT ink — a highlight under every stroke
             doubles the stroke weight and closes the counters at these
-            sizes. (The old single-highlight printed-in edge is retired:
-            a recess reads by its two walls, not one.)
+            sizes.
    LIFT     --paper-lift   the elevation — EXACTLY the app's own card
             shadow (the same value the chat card, the briefing card and
             the skeletons carry), so a FLOATING panel lifts by as much
             as every other card in the product. The timeline's slice
             card no longer wears it — a sheet lying on the board is
             separated by CONTACT, not by floating.
-   GRAIN    Two layers (SVG tiles; no image assets — the principle was
-            never the failure, the frequency was):
-            TOOTH       feTurbulence fractalNoise baseFrequency 0.09
-                        (≈11px features — inside the 4–40px band the eye
-                        resolves; the old 0.72 tile sat at 1.4px, which
-                        the eye can only average into dullness) →
-                        feDiffuseLighting (feDistantLight azimuth 45,
-                        elevation 60 — the same upper-left light as every
-                        relief edge) → keep only its LUMINANCE, as alpha.
-                        Flat alpha modulation reads as dirt; LIT bumps
-                        read as tooth.
-            MICRO-TOOTH baseFrequency 0.14, 2 octaves, plain alpha — NO
-                        feDiffuseLighting. The velvet / peach-skin
-                        quality: it reads as a property of the SURFACE,
-                        not as features.
-            Light stock carries the tiles as SPARSE black ink: each
-            layer's feFuncA is a steep slope on a NEGATIVE intercept, so
-            most of the luminance range clamps to transparent and only
-            the upper tail darkens — the stock shows through untouched,
-            and the inked tail lands a real local shadow (this is what
-            keeps a near-zero-intercept slope from reading as a uniform
-            grey veil: with intercept ≈ 0 every pixel darkens a
-            little). Dark stock keeps the translucent WHITE ink
-            (lifts): a fixed wobble is relatively louder the darker the
-            stock (Weber), and the pinned ink keeps the mean shift
-            small at ANY sheet lightness.
+   GRAIN    --paper-grain-map   a RASTER TEXTURE MAP, generated once by
+            scripts/import-paper-scan.mjs and served from /public.
+            Round 3 proved the procedural route is a dead end — nobody
+            ships a procedural CSS paper surface that reads at 1:1, and
+            its isotropic cloud noise reads as generic noise, not paper.
+            Round 4 sources a REAL paper scan (ambientCG Paper001, CC0)
+            and renders the surface the way the survey said the shipped
+            answers do: raster texture. The pipeline (Playwright →
+            canvas → WebP, alpha preserved): seamless wrap by
+            offset-by-half + centre-cross blend, low-pass on BOTH the
+            colour luminance (formation cloud) and the PBR displacement
+            heightfield, Lambert shading from a fixed upper-left light
+            (high ambient — paper is soft), then one-sided anchored
+            luminance → ink alpha. No contrast stretch anywhere: the
+            first cut stretched the scan's ±2% swing to full range and
+            the sheet read as gravel.
 
-            EACH LAYER'S TILE SIZE LIVES IN ITS OWN SVG's width/height —
-            the intrinsic size renders the tile at 1 unit = 1px, so no
-            background-size is needed anywhere. When a tile's intrinsic
-            size differs from the 512-unit reference, baseFrequency is
-            scaled by 512/N so the RENDERED feature size (not the
-            per-unit frequency) stays identical to the reference. Board
-            and card pin the tiles at co-prime intrinsic sizes (board
-            512, card 431) so the two surfaces cannot align into moiré
-            where the card lies on the board. The dark polarity binds
-            the SAME names in .dark — var(--paper-tooth) is theme-aware.
-            Measured amplitude in an empty region: p-p ≈ 11/255
-            (256×64 window), composite mean within 1 level of the
-            stock — the veil is gone; the ink lives only in the
-            thresholded tail.
+            THE TILE is one 1024×600 image for BOTH surfaces: the card's
+            grain is the board's, continuing under the sheet (identical
+            aligned grids cannot beat into moiré). Ink rides in the
+            image's alpha, so the sheet element's own background keeps
+            the architecture: plain source-over, amplitude survives
+            whatever the stock colour is. Black flecks on light stock,
+            white on dark, the SAME structure both ways — the .dark block
+            rebinds the one name, as with every other paper variable.
+            WebP lossy keeps the alpha PNG cannot ship at this size for
+            (lossy alpha, ~200 KiB vs ~750 KiB PNG); JPEG was excluded
+            because the architecture needs the amplitude in alpha, not an
+            opaque lens layer. The generator prints the asset's alpha
+            statistics on every run and takes blur/bump/ambient/slope/
+            anchor knobs, tuned against the measured target.
 
             THE TOKENS. One `@theme inline` entry per SURFACE, not per
             layer — bg-* utilities overwrite background-image rather
-            than composing, so each surface's two layers live in a
-            single comma-separated token:
-              --background-image-paper-grain       (board: tooth,
-                                                    tooth-micro)
-              --background-image-paper-grain-card  (card: tooth-card,
-                                                    tooth-micro-card)
+            than composing, so each surface's layers live in a single
+            comma-separated token:
+              --background-image-paper-grain       (board: grain)
+              --background-image-paper-grain-card  (card: grain)
             A sunken plate takes NO grain token — it is
             `bg-paper-plate shadow-paper-sink`, tone-step fill plus
             pressed edges only.
+            THE LIGHT FIELD once rode these tokens as a second layer;
+            it now lives in ONE viewport-fixed overlay
+            (.paper-light-field) because gradient percentages are
+            element-box-relative — per-element washes made every card
+            carry a private light instead of sharing one global source.
 
    Every derived variable carries TWO declarations: a plain oklch()/rgba()
    line older engines keep, and the relative-colour / color-mix line that
@@ -451,40 +450,66 @@
     0 1px 2px 0 rgba(15, 23, 42, 0.22),
     0 3px 8px -2px rgba(15, 23, 42, 0.14);
 
-  /* THE RECESSED TYPE — the printed letter sits IN thick stock, and the
-     depression's two walls catch the upper-left light differently: the
-     upper-left wall faces AWAY (a dark edge in the paper's own hue
-     family), the lower-right wall catches it (the paper's lip — the
-     sheet's own colour lifted, never pure white). 1px, no blur — wider
-     stops reading as an edge. Exactly TWO strings on the slice card
-     carry this (the centre date and the clock); body text and all CJK
-     small print stay FLAT ink. On light stock the lifted lip sits
-     against near-white and the pair is deliberately almost subliminal. */
-  --paper-ink-recess:
-    -1px -1px 0 oklch(from var(--paper) calc(l * 0.4) calc(c * 2) h / 0.45),
-    1px 1px 0 color-mix(in oklab, var(--paper) 60%, white);
+  /* THE RECESSED TYPE — the printed letter sits IN thick stock. Round 3
+     shipped the survey's gradient-in-glyph pattern (a gradient clipped
+     to the text, zero offset — cannot ghost, cannot close CJK counters),
+     and it had to be reverted: Chromium silently drops both
+     background-clip: text and -webkit-text-fill-color under the card
+     field's 3D transforms (reproduced in isolation — the glyphs render
+     as flat color, the gradient never paints). So the type carries the
+     OTHER sourced pattern: ONE shadow, single-sided, BLURRED — the
+     Verou/30sec recipe (a lone light lip, no dark counter-shadow, so
+     there is no second glyph copy to double) with the blur radius the
+     survey found on every shipped display-size deboss (1–3px; the
+     zero-blur pair was the outlier that ghosted). The lip sits at the
+     lower-right, where the depression's wall catches the upper-left
+     house light; on light stock it is deliberately almost subliminal
+     against near-white paper. Exactly TWO strings carry it (the centre
+     date and the clock); body text and all CJK small print stay FLAT
+     ink. */
+  --paper-ink-recess: 1px 1px 1px color-mix(in oklab, var(--paper) 60%, white);
 
   /* The flat printed hairline (ink, not relief). */
   --paper-line: oklch(0.85 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN — two layers. TOOTH: lit relief (azimuth 45, elevation
-     60 — the house light). MICRO-TOOTH: plain alpha, NO
-     feDiffuseLighting — the velvet / peach-skin quality; it must read
-     as a property of the SURFACE, not as features.
+  /* THE GRAIN — a raster texture map from a REAL paper scan, generated
+     once by scripts/import-paper-scan.mjs (source of truth; ambientCG
+     Paper001, CC0 — see the ledger above for the full pipeline: seamless
+     wrap, low-pass, Lambert bake, anchored one-sided alpha → ink). */
 
-     The BOARD set. Each tile's size lives in its own SVG's width/height
-     (the intrinsic size renders it 1 unit = 1px — no background-size);
-     the card tiles' baseFrequency is scaled 512/N so the rendered
-     feature scale matches the board's. */
-  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.6' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.22' intercept='-0.13'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-grain-map: url("/paper-grain-light.webp");
 
-  /* The CARD set — the same tiles at a co-prime intrinsic size (431 vs
-     the board's 512) so the card lying on the board cannot align into
-     moiré. */
-  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.106914' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.6' intercept='-0.55'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-micro-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.166241' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.22' intercept='-0.13'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* THE LIGHT FIELD — the live layer the baked texture cannot carry: a
+     large soft wash fixed at the upper-left of the VIEWPORT, so the paper
+     reads as material under a lamp rather than a printed scan. The wash is
+     ONE viewport-fixed overlay (.paper-light-field, mounted last in <body>)
+     that every paper surface — board AND cards, including the timeline's
+     3D-transformed DOM billboards — glides under, holding still in the
+     frame while content moves: parallax for free, no per-card input, no
+     JS. The per-element binding was removed because gradient percentages
+     resolve against each element's own box (every card grew a private sun)
+     and background-attachment: fixed breaks under the card field's 3D
+     transforms. The --paper-light-* fallbacks ARE the lit state (a script
+     may override them, none currently does). Amplitude is PROGRESS × THEME
+     MAX: --paper-light-max is per theme (wider on dark stock, which has
+     more headroom before the white wash clips). Light physically falls ON
+     TOP of everything — ink included — so the overlay paints above page
+     content at z-index 41: above the paper faces (drei Html zIndexRange
+     tops out at 40), below interactive chrome and overlays (z-50+). */
+  --paper-light-wash: radial-gradient(60rem 60rem at calc(var(--paper-light-x, 30) * 1%) calc(var(--paper-light-y, 22) * 1%), rgb(255 255 255 / calc(var(--paper-light-p, 1) * var(--paper-light-max, 0.1))) 0%, transparent 70%);
+  --paper-light-max: 0.1;
+}
+
+/* The global light: one viewport-fixed wash layer. Gradient percentages are
+   element-box-relative, so this can only live on a singleton that spans the
+   viewport; surfaces underneath receive one shared light field. */
+.paper-light-field {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+  pointer-events: none;
+  background: var(--paper-light-wash);
 }
 
 .dark {
@@ -527,26 +552,28 @@
     0 1px 2px 0 rgba(0, 0, 0, 0.72),
     0 3px 8px -2px rgba(0, 0, 0, 0.6);
 
-  /* THE RECESSED TYPE, dark stock: there is no room below near-black, so
-     the occluded wall leans near-opaque and does little work; the lip
-     carries the read — the sheet lifted toward white at a restrained
-     mix, never a full-brightness halo. 1px, no blur. */
-  --paper-ink-recess:
-    -1px -1px 0 oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8),
-    1px 1px 0 color-mix(in oklab, var(--paper) 55%, white);
+  /* THE RECESSED TYPE, dark stock: no room below near-black, so the lip
+     carries the read — the same single-sided blurred shadow, one px more
+     blur and a brighter mix (papyrus-nox's 2px), never a full-brightness
+     halo. */
+  --paper-ink-recess: 1px 1px 2px color-mix(in oklab, var(--paper) 55%, white);
 
   --paper-line: oklch(0.3 0 0);
   --paper-line: color-mix(in oklab, var(--paper) 82%, var(--foreground));
 
-  /* THE GRAIN, dark polarity: the same tiles at the same intrinsic
-     sizes as the light bindings above, as translucent WHITE ink — on
-     dark stock the tooth lifts. The polarity binds the SAME names:
-     var(--paper-tooth) is theme-aware; there are no parallel -dark
-     variables to keep in step. */
-  --paper-tooth: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.09' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-micro: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='512' height='512'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.14' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='512' height='512' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.106914' numOctaves='3' stitchTiles='stitch'/%3E%3CfeDiffuseLighting lighting-color='%23fff' surfaceScale='1'%3E%3CfeDistantLight azimuth='45' elevation='60'/%3E%3C/feDiffuseLighting%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.07' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-tooth-micro-card: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='431' height='431'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.166241' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.05' intercept='0'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='431' height='431' filter='url(%23g)'/%3E%3C/svg%3E");
+  /* THE GRAIN, dark polarity: the same generated tile, white-ink variant
+     — on dark stock the grain lifts. The polarity binds the SAME name:
+     var(--paper-grain-map) is theme-aware. */
+  --paper-grain-map: url("/paper-grain-dark.webp");
+
+  /* THE LIGHT FIELD, dark stock: the same white wash, not a polarity
+     flip — on black cardstock it lightens toward a lamp instead of
+     glaring, and only the theme max is wider (near-black has the
+     headroom; see the light block's note). The wash itself lives on the
+     single viewport-fixed .paper-light-field overlay; both themes feed
+     the same layer. */
+  --paper-light-wash: radial-gradient(60rem 60rem at calc(var(--paper-light-x, 30) * 1%) calc(var(--paper-light-y, 22) * 1%), rgb(255 255 255 / calc(var(--paper-light-p, 1) * var(--paper-light-max, 0.1))) 0%, transparent 70%);
+  --paper-light-max: 0.14;
 }
 
 /* The paper, in usages. The `@theme inline` tokens above generate the
@@ -562,7 +589,7 @@
    `shadow-paper-raise`) are retained for the HOME SCREEN, which still
    consumes them; the card field uses none of them.
    The grain is the sheet element's OWN background, never an overlay div;
-   the tiles carry their amplitude in alpha, so plain source-over is the
+   the texture carries its amplitude in alpha, so plain source-over is the
    correct compositing and the amplitude survives whatever the stock
    colour is. */
 
