@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { BookOpenText, History, Compass } from "lucide-react";
+import { BookOpenText, History, Compass, LibraryBig } from "lucide-react";
 import { useTranslations } from "next-intl";
 import {
   Popover,
@@ -20,6 +20,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { MarkdownRenderer } from "./markdown";
+import { DocShelfDialog } from "@/components/memory/doc-shelf";
 import { getMemoryDocs, type MemoryDocs as MemoryDocsData } from "@/lib/episodic/actions";
 
 type DocKey = "previously" | "direction";
@@ -42,6 +43,7 @@ export function MemoryDocs({ persona }: { persona?: string }) {
   const [docs, setDocs] = useState<MemoryDocsData | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeDoc, setActiveDoc] = useState<DocKey | null>(null);
+  const [shelfOpen, setShelfOpen] = useState(false);
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -109,6 +111,17 @@ export function MemoryDocs({ persona }: { persona?: string }) {
               </button>
             );
           })}
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setShelfOpen(true);
+            }}
+            className="w-full text-left px-2 py-1.5 rounded text-xs flex items-center gap-2 hover:bg-muted"
+          >
+            <LibraryBig className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{t("shelf.menuLabel")}</span>
+          </button>
         </PopoverContent>
       </Popover>
 
@@ -145,6 +158,12 @@ export function MemoryDocs({ persona }: { persona?: string }) {
           )}
         </DialogContent>
       </Dialog>
+
+      <DocShelfDialog
+        open={shelfOpen}
+        onOpenChange={setShelfOpen}
+        persona={persona}
+      />
     </>
   );
 }

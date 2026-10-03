@@ -66,6 +66,8 @@ vi.mock("@/lib/evolution/store", () => ({
 vi.mock("@/lib/episodic/rework-signal", () => ({
   recordRecallOutcome: recallDeps.recordRecallOutcome,
   checkReadSlice: vi.fn(),
+  checkDocRework: vi.fn(),
+  recordDocRead: vi.fn(),
   logReworkSignal: vi.fn(),
 }));
 vi.mock("@/lib/agents/sub-agent-runner", () => ({

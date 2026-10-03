@@ -2,6 +2,8 @@
 
 import { extractRenderState } from "@/lib/chat/tool-state";
 import { ListFilesRenderer } from "./tool-renderers/list-files";
+import { ListDocsRenderer } from "./tool-renderers/list-docs";
+import { ReadDocRenderer } from "./tool-renderers/read-doc";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
 import { RecallToolRenderer } from "./tool-renderers/recall";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
@@ -55,6 +57,41 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
           toolName={toolName}
           input={input as { path?: string } | undefined}
           output={output as Array<{ name: string; type: string }> | undefined}
+          state={renderState}
+        />
+      );
+    case "listDocs":
+      return (
+        <ListDocsRenderer
+          toolName={toolName}
+          input={input as { kind?: string; filter?: string } | undefined}
+          output={
+            output as
+              | { kind?: string; files?: string[]; note?: string; error?: string }
+              | undefined
+          }
+          state={renderState}
+        />
+      );
+    case "readDoc":
+      return (
+        <ReadDocRenderer
+          toolName={toolName}
+          input={input as { fileName?: string } | undefined}
+          output={
+            output as
+              | {
+                  fileName?: string;
+                  kind?: string;
+                  status?: string;
+                  opened?: string;
+                  updated?: string;
+                  content?: string;
+                  warnings?: string[];
+                  error?: string;
+                }
+              | undefined
+          }
           state={renderState}
         />
       );

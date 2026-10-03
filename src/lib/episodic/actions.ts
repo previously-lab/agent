@@ -5,6 +5,19 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getUserName } from "@/lib/identity";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { readSliceIndex, readSliceBody, parseSlice, sliceIdToFilePath, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
+import { fsListFiles, fsReadFile } from "./io-helpers";
+import {
+  DATED_DOC_KINDS,
+  DOC_KINDS,
+  docPathCandidates,
+  isValidDocFileName,
+  normalizeDocRef,
+  parseDoc,
+  parseDocFileName,
+  type DocKind,
+  type DocStatus,
+  type ParsedDoc,
+} from "@/lib/docs";
 import { readDirection } from "@/lib/evolution/store";
 import { loadUserConfig } from "@/lib/config/loader";
 import { readTimelineIndex } from "./timeline/store";
@@ -689,4 +702,267 @@ export async function getMemoryDocs(persona?: string): Promise<MemoryDocs> {
   ]);
 
   return { sliceId: latest?.id ?? null, previously, direction };
+}
+
+// ─── Document shelf (v0.15 §4.2: topic → document two-level browse) ────────
+
+const DOCS_ROOT = "memory/docs";
+const SHELF_ASOF_PREVIEW_CHARS = 140;
+const CATALOG_SNIPPET_CHARS = 120;
+const DOC_REF_PATTERN = /《([^》]+)》/g;
+
+/** One document under a kind directory, identified purely by its file name. */
+export interface DocShelfDocRef {
+  fileName: string;
+  /** Birth date from the file name (null for unparseable names — kept visible). */
+  date: string | null;
+  /** Title from the file name (null for topic-kind names). */
+  title: string | null;
+}
+
+/** The `ls memory/docs/<kind>/` answer for one kind. */
+export interface DocShelfKindList {
+  kind: DocKind;
+  docs: DocShelfDocRef[];
+}
+
+/** One topic home on the shelf — the 截至块 + latest entry are its one-liner. */
+export interface DocShelfTopic {
+  name: string;
+  status: DocStatus;
+  /** Last-write date from the frontmatter ("" when the field is absent). */
+  updated: string;
+  /** Truncated 截至块 text — the topic's current one-line understanding. */
+  asOf: string | null;
+  asOfDate: string | null;
+  /** Newest dated entry — what happened there most recently. */
+  latestEntry: { date: string; title: string } | null;
+  /** Dated entries carrying 《…》 catalog references. */
+  catalogCount: number;
+}
+
+/**
+ * The shelf root in ONE round trip: every topic home (read + parsed for its
+ * 截至块 / latest entry / catalog count) plus the plain `ls` of the eight
+ * dated kind directories. `topic` is the primary axis and is not repeated
+ * under `kinds`. Missing directories are normal pre-migration — they list
+ * as empty, never as errors.
+ */
+export interface DocShelf {
+  topics: DocShelfTopic[];
+  kinds: DocShelfKindList[];
+}
+
+/** List one kind directory; a missing directory lists as empty. */
+async function listDocDir(kind: DocKind): Promise<Awaited<ReturnType<typeof fsListFiles>>> {
+  try {
+    return await fsListFiles(`${DOCS_ROOT}/${kind}`);
+  } catch {
+    return [];
+  }
+}
+
+function toDocRef(fileName: string, kind: DocKind): DocShelfDocRef {
+  const parsed = parseDocFileName(fileName, kind);
+  return { fileName, date: parsed?.date ?? null, title: parsed?.title ?? null };
+}
+
+/** Collapse whitespace and cap a prose preview at `max` chars. */
+function truncateDocText(text: string, max: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+/** 《…》 references in entry prose → canonical document file names. */
+function extractDocRefs(text: string): string[] {
+  const refs: string[] = [];
+  for (const m of text.matchAll(DOC_REF_PATTERN)) {
+    const normalized = normalizeDocRef(m[1]);
+    if (normalized && !refs.includes(normalized)) refs.push(normalized);
+  }
+  return refs;
+}
+
+/** Body back to Markdown WITHOUT the frontmatter (heading + 截至块 + stream). */
+function serializeDocBody(doc: ParsedDoc): string {
+  const parts: string[] = [];
+  if (doc.heading) parts.push(`# ${doc.heading}`);
+  if (doc.asOf) parts.push(`> 截至 ${doc.asOf.date}：${doc.asOf.text}`);
+  for (const s of doc.sections) {
+    parts.push(
+      s.type === "entry"
+        ? `## ${s.entry.date} — ${s.entry.title}\n\n${s.entry.body}`.trimEnd()
+        : s.text,
+    );
+  }
+  return parts.join("\n\n");
+}
+
+export async function getDocShelf(persona?: string): Promise<DocShelf> {
+  if (persona) setDemoPersona(persona);
+
+  const [topicEntries, kindLists] = await Promise.all([
+    listDocDir("topic"),
+    Promise.all(
+      DATED_DOC_KINDS.map(async (kind) => ({
+        kind,
+        docs: (await listDocDir(kind))
+          .filter((e) => e.type === "file" && e.name.endsWith(".md"))
+          .map((e) => toDocRef(e.name, kind))
+          .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "")),
+      })),
+    ),
+  ]);
+
+  const topics = await mapLimited(
+    topicEntries.filter((e) => e.type === "file" && e.name.endsWith(".md")),
+    SLICE_READ_CONCURRENCY,
+    async (entry): Promise<DocShelfTopic | null> => {
+      const fileName = entry.name;
+      const raw = await fsReadFile(`${DOCS_ROOT}/topic/${fileName}`).catch(() => null);
+      if (raw === null) return null;
+      const doc = parseDoc(raw, fileName, "topic");
+      const entries = doc.sections.flatMap((s) => (s.type === "entry" ? [s.entry] : []));
+      const last = entries[entries.length - 1];
+      return {
+        name: fileName.slice(0, -".md".length),
+        status: doc.frontmatter.status,
+        updated: doc.frontmatter.updated,
+        asOf: doc.asOf ? truncateDocText(doc.asOf.text, SHELF_ASOF_PREVIEW_CHARS) : null,
+        asOfDate: doc.asOf?.date ?? null,
+        latestEntry: last ? { date: last.date, title: last.title } : null,
+        catalogCount: entries.filter(
+          (e) => extractDocRefs(`${e.title}\n${e.body}`).length > 0,
+        ).length,
+      };
+    },
+  );
+
+  return {
+    topics: topics
+      .filter((t): t is DocShelfTopic => t !== null)
+      .sort((a, b) => b.updated.localeCompare(a.updated)),
+    kinds: kindLists,
+  };
+}
+
+/** One 名录 entry of a topic home: the documents it catalogues. */
+export interface DocTopicCatalogItem {
+  date: string;
+  title: string;
+  /** Canonical file names referenced via 《…》. */
+  refs: string[];
+  /** First prose line of the entry, truncated — the one-liner. */
+  snippet: string;
+}
+
+/** A topic home opened on the shelf: header facts + its 名录. */
+export interface DocTopicDetail {
+  name: string;
+  heading: string | null;
+  status: DocStatus;
+  opened: string;
+  updated: string;
+  asOf: string | null;
+  asOfDate: string | null;
+  catalog: DocTopicCatalogItem[];
+  warnings: string[];
+}
+
+export async function getDocTopicDetail(
+  name: string,
+  persona?: string,
+): Promise<DocTopicDetail | null> {
+  if (persona) setDemoPersona(persona);
+  const fileName = `${name}.md`;
+  if (!isValidDocFileName(fileName, "topic")) return null;
+  const raw = await fsReadFile(`${DOCS_ROOT}/topic/${fileName}`).catch(() => null);
+  if (raw === null) return null;
+
+  const doc = parseDoc(raw, fileName, "topic");
+  const catalog: DocTopicCatalogItem[] = doc.sections.flatMap((s) => {
+    if (s.type !== "entry") return [];
+    const refs = extractDocRefs(`${s.entry.title}\n${s.entry.body}`);
+    if (refs.length === 0) return [];
+    const firstLine =
+      s.entry.body.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+    return [{
+      date: s.entry.date,
+      title: s.entry.title,
+      refs,
+      snippet: truncateDocText(firstLine, CATALOG_SNIPPET_CHARS),
+    }];
+  });
+
+  return {
+    name,
+    heading: doc.heading,
+    status: doc.frontmatter.status,
+    opened: doc.frontmatter.opened,
+    updated: doc.frontmatter.updated,
+    asOf: doc.asOf?.text ?? null,
+    asOfDate: doc.asOf?.date ?? null,
+    catalog,
+    warnings: doc.warnings,
+  };
+}
+
+/** One document opened on the shelf. */
+export interface DocContent {
+  fileName: string;
+  kind: DocKind;
+  heading: string | null;
+  status: DocStatus;
+  opened: string;
+  updated: string;
+  asOf: string | null;
+  asOfDate: string | null;
+  /** Body as Markdown (heading + 截至块 + dated entry stream). */
+  markdown: string;
+  warnings: string[];
+}
+
+/**
+ * Read one document whole. `kind` is known on the kind-browse path (one read);
+ * from a topic catalog only the file name is known, so the kind directories
+ * are tried via `docPathCandidates` until the file resolves — the file system
+ * IS the index layer (§2.5). Names are validated through `isValidDocFileName`
+ * before any path is touched.
+ */
+export async function getDocContent(
+  fileName: string,
+  kind?: DocKind,
+  persona?: string,
+): Promise<DocContent | null> {
+  if (persona) setDemoPersona(persona);
+  if (kind !== undefined && !(DOC_KINDS as readonly string[]).includes(kind)) {
+    return null;
+  }
+
+  const tryRead = async (k: DocKind): Promise<DocContent | null> => {
+    if (!isValidDocFileName(fileName, k)) return null;
+    const raw = await fsReadFile(`${DOCS_ROOT}/${k}/${fileName}`).catch(() => null);
+    if (raw === null) return null;
+    const doc = parseDoc(raw, fileName, k);
+    return {
+      fileName,
+      kind: k,
+      heading: doc.heading,
+      status: doc.frontmatter.status,
+      opened: doc.frontmatter.opened,
+      updated: doc.frontmatter.updated,
+      asOf: doc.asOf?.text ?? null,
+      asOfDate: doc.asOf?.date ?? null,
+      markdown: serializeDocBody(doc),
+      warnings: doc.warnings,
+    };
+  };
+
+  if (kind) return tryRead(kind);
+  for (const candidate of docPathCandidates(fileName)) {
+    const k = candidate.split("/")[2] as DocKind;
+    const doc = await tryRead(k);
+    if (doc) return doc;
+  }
+  return null;
 }

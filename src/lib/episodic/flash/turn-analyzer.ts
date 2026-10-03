@@ -16,8 +16,9 @@
  *   5. fitness        — this slice's evidence-anchored satisfaction deltas per
  *      bucket (v1.0 design §2.5 — the analyzer SCORES, never aggregates; the
  *      deterministic trigger math lives in src/lib/evolution/triggers.ts).
- *      This slice's mechanical signals (recall verify/rework, §2.6) are an
- *      input, each recall_rework/recall_repeat a -1 candidate for recall.
+ *      This slice's mechanical signals (recall verify/rework, §2.6; doc_rework,
+ *      v0.15 §4.4) are an input, each recall_rework/recall_repeat/doc_rework a
+ *      -1 candidate for recall.
  *      The scoring RUBRIC is the direction doc's Portrait section (the loop's
  *      learned criteria) when one exists — a turn matching a known failure
  *      pattern scores -1 with evidence even without an explicit complaint.
@@ -144,9 +145,10 @@ export interface AnalyzeTurnInput {
   closingSlice?: { turns: Turn[]; tags: string[] };
   /**
    * This slice's mechanical fitness signals (design §2.6 — recall
-   * verify/rework instrumentation). Each recall_rework / recall_repeat is a
-   * -1 CANDIDATE for the recall bucket in Task 7; its detail may serve as
-   * the evidence.
+   * verify/rework instrumentation; v0.15 §4.4 adds doc_rework — a read
+   * document's cited slice was re-opened with readSlice). Each
+   * recall_rework / recall_repeat / doc_rework is a -1 CANDIDATE for the
+   * recall bucket in Task 7; its detail may serve as the evidence.
    */
   signals?: FitnessSignal[];
   /**
@@ -390,7 +392,7 @@ Score the user's satisfaction/dissatisfaction signals in THIS slice, attributed 
 - delta: -2 = explicit complaint or correction ("that's wrong", "stop doing X"); -1 = signs of dissatisfaction (frustration, asking again, disappointment) OR — when the input carries the evolved USER PORTRAIT — a turn matching a KNOWN FAILURE PATTERN in it (the portrait is the loop's learned rubric, so a recurrence scores even when the user didn't complain this time); +1 = explicit approval ("exactly what I needed", "记住了真好"). 0 = no signal — but prefer emitting NO entry at all.
 - EVIDENCE RULE (hard): every non-zero delta MUST quote the user's exact words in evidence — for a portrait-pattern -1, quote the words in THIS slice that show the pattern recurring. No quote → do not emit the entry. A delta without evidence is force-zeroed downstream anyway — don't waste it.
 - Never infer satisfaction from your own performance guesses; never score on the agent's behalf. The portrait rubric is the ONE sanctioned exception to "explicit signals only" — and only for -1, never -2.
-- Mechanical signals: when the input lists a recall_rework / recall_repeat signal, treat it as a -1 CANDIDATE for the recall bucket (the main agent re-did recall's job — implicit distrust). When it lists an interaction_regenerate / interaction_interrupt signal, treat it as a -1 CANDIDATE for the interaction bucket (the user rejected the previous reply or cut it off mid-stream). The signal's detail line may serve as the evidence. recall_verify is neutral — no entry.
+- Mechanical signals: when the input lists a recall_rework / recall_repeat / doc_rework signal, treat it as a -1 CANDIDATE for the recall bucket (the main agent re-did recall's job, or re-opened a slice a read document already cited — the document was not credited; both are implicit distrust of the memory layer). When it lists an interaction_regenerate / interaction_interrupt signal, treat it as a -1 CANDIDATE for the interaction bucket (the user rejected the previous reply or cut it off mid-stream). The signal's detail line may serve as the evidence. recall_verify is neutral — no entry.
 - Max 5 entries. Nothing signaled → omit the fitness field entirely.`);
 
 /** The dynamic user prompt: current message, existing topics, closing slice. */
@@ -421,10 +423,10 @@ Return closed_marking AND evolve_card per your Task 6 instructions.`
 
 ## Mechanical signals this slice (Task 7 input)
 
-Instrumentation recorded these this slice (design: recall verify/rework tracking):
+Instrumentation recorded these this slice (recall verify/rework tracking + document-credit tracking):
 ${input.signals.map((s) => `- ${s.type} — ${s.detail}`).join("\n")}
 
-Each recall_rework / recall_repeat is a -1 CANDIDATE for the recall bucket; each interaction_regenerate / interaction_interrupt is a -1 CANDIDATE for the interaction bucket (its detail may serve as evidence). recall_verify is neutral — no entry.`
+Each recall_rework / recall_repeat / doc_rework is a -1 CANDIDATE for the recall bucket; each interaction_regenerate / interaction_interrupt is a -1 CANDIDATE for the interaction bucket (its detail may serve as evidence). recall_verify is neutral — no entry.`
       : "";
 
   const portraitSection = input.portrait?.trim()

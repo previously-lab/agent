@@ -264,13 +264,21 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
   });
 });
 
-describe("the grounding rule (never answer the past from a compression)", () => {
-  it("lives in the CHARTER (L0, highest priority), stated exactly once, with the hard mandate and the in-conversation exemptions", () => {
+describe("the grounding rule (a claim's home is decided by the claim's type)", () => {
+  it("lives in the CHARTER (L0, highest priority), stated exactly once, with the tier split, the hard edge and the in-conversation exemptions", () => {
     expect(CHARTER_MD).toContain("THE GROUNDING RULE");
-    // The hard mandate: even when a compressed document appears to already
-    // contain the answer, past specifics come ONLY from original slice text.
-    expect(CHARTER_MD).toContain("you may NOT answer past specifics from it");
-    expect(CHARTER_MD).toContain("recall or read FIRST, then answer");
+    // v0.15: the rule is tiered by CLAIM TYPE, not a blanket ban on the
+    // compressed layer. Synthesis/pattern claims may be restated from a
+    // document — but only with attribution and its time…
+    expect(CHARTER_MD).toContain("a claim's home is decided by the claim's TYPE");
+    expect(CHARTER_MD).toContain("Attribution is the price of the shortcut");
+    // …while specific/event claims still enter only from the original slice
+    // text: a document's whole right in that tier is to help find the slice.
+    expect(CHARTER_MD).toContain("Specific / event claims");
+    expect(CHARTER_MD).toContain("read FIRST, then answer");
+    // The hard edge: anything acted or judged on needs slice evidence,
+    // whatever a document says.
+    expect(CHARTER_MD).toContain("The hard edge");
     // …with the exemptions: current slice, this conversation, and original
     // material already recalled/read into it.
     expect(CHARTER_MD).toContain("Three exemptions");

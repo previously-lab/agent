@@ -42,7 +42,6 @@ import {
   serializeStrands,
   sliceIdToFilePath,
   loadSlice,
-  refreshStrandDescriptions,
   type TimeSlice,
   type StrandIndex,
   type SlicingSignal,
@@ -57,6 +56,12 @@ import {
   consolidateStrands,
   MIN_STRANDS_FOR_LLM,
 } from "@/lib/episodic/flash/strand-consolidator";
+import {
+  buildSliceExcerpt,
+  runLibrarianPass,
+  runScribePass,
+} from "@/lib/episodic/flash/librarian";
+import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import { applyStrandMerges, pruneStrands } from "@/lib/episodic/strands";
 import {
   adaptHousekeepingReport,
@@ -943,22 +948,60 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       );
     }
 
-    // Strand description refresh — rides the SAME close boundary and the same
-    // model path as the consolidation pass (under phase outsourcing the
-    // sub-agent runner dispatches over the bridge, consistent with the
-    // consolidator's own behavior). The mechanical gate (new-slice count +
-    // cooldown + per-pass cap) lives inside refreshStrandDescriptions; demo
-    // mode is skipped (read-only preview). Never throws — the log line is
-    // the audit trail.
+    // Document-system write path (v0.15 §3.2/§4.3) — rides the SAME close
+    // boundary and the same model path. The librarian maintains the touched
+    // topic homes, judging FOR ITSELF whether anything is worth an entry
+    // (the old semantic gates — ≥5 new slices / 7-day cooldown / ≤10 per
+    // pass — are deleted per axiom D; an empty run is a legal outcome), and
+    // voids the homes of strands just merged away. The scribe (书记段) picks
+    // up the reply segment's [doc-marker] mailbox lines from the closed
+    // slice's agent.md (sediment → research/entity docs, user-stated
+    // date-anchored commitments → task docs); the research pass answers the
+    // "question" markers into docs/research + docs/hypothesis (the degraded
+    // form of the background stream — the real one needs the v0.11 §10
+    // groundwork). All writes land in the SAME batch → one commit with the
+    // close. Demo mode is skipped (read-only preview). Each pass never
+    // throws — the log lines are the audit trail.
     if (!input.useDemo) {
-      const refresh = await refreshStrandDescriptions(
-        consolidated,
-        input.modelConfig,
+      const hkDate =
+        localDateKey(input.startedAtIso, input.clientTimezone) ??
+        input.startedAtIso.slice(0, 10);
+      const closedExcerpt = buildSliceExcerpt(diskSlice);
+      const librarian = await runLibrarianPass({
+        model: input.modelConfig,
+        closedSliceId: diskSlice.slice_id,
+        excerpt: closedExcerpt,
+        strands: consolidated,
+        merges,
+        date: hkDate,
         batch,
-      );
+      });
       console.log(
-        `[Strands] Description refresh: ${refresh.refreshed.length} refreshed, ${refresh.skipped.length} skipped`,
+        `[Docs] Librarian: ${librarian.written.length} home(s) written, ${librarian.voided.length} voided` +
+          (librarian.llmRan ? "" : " (llm skipped)"),
       );
+      const scribe = await runScribePass({
+        model: input.modelConfig,
+        sliceId: diskSlice.slice_id,
+        excerpt: closedExcerpt,
+        strands: consolidated,
+        date: hkDate,
+        batch,
+      });
+      if (scribe.ran) {
+        console.log(`[Docs] Scribe: ${scribe.written.length} doc(s) written`);
+      }
+      const research = await runDocResearchPass({
+        model: input.modelConfig,
+        sliceId: diskSlice.slice_id,
+        excerpt: closedExcerpt,
+        strands: consolidated,
+        date: hkDate,
+        batch,
+      });
+      if (research.ran) {
+        console.log(`[Docs] Research: ${research.written.length} doc(s) written`);
+      }
     }
 
     // Checkpoint continuation link: only time_cap/capacity closes are
@@ -1892,6 +1935,31 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // up to WEAVE_FRESH_MS. A direct upsert is cheaper than a forced weave.
   if (createdNewSlice) {
     await upsertTimelineEntry(slice, batch);
+  }
+
+  // ── 5b. Scribe tail (v0.15 §4.3 书记段) — pick up [doc-marker] lines the
+  // reply segment dropped into the ACTIVE slice's agent.md (the boundary
+  // instance in §3 covers the just-closed slice). Runs every turn; no
+  // markers → one file read, no LLM. Writes join the same batch below.
+  // Best-effort — a document write must never take a turn down.
+  if (!input.useDemo) {
+    try {
+      const tailScribe = await runScribePass({
+        model: input.modelConfig,
+        sliceId: slice.slice_id,
+        excerpt: buildSliceExcerpt(slice),
+        strands: existingStrands,
+        date: todayLocal ?? input.startedAtIso.slice(0, 10),
+        batch,
+      });
+      if (tailScribe.ran) {
+        console.log(
+          `[Docs] Scribe (tail): ${tailScribe.written.length} doc(s) written`,
+        );
+      }
+    } catch (e) {
+      console.warn("[Docs] scribe tail failed:", e instanceof Error ? e.message : e);
+    }
   }
 
   // Commit all queued writes as one commit before building the menu

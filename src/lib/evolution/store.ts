@@ -183,13 +183,22 @@ export interface FitnessEvent {
 
 /**
  * A mechanical observation, NOT a score: emitted by instrumentation (the
- * rework signal of design §2.6) rather than by any model. The analyzer stage
- * reads these when scoring; nothing here interprets them.
+ * rework signal of design §2.6, extended by the document system §4.4) rather
+ * than by any model. The analyzer stage reads these when scoring; nothing
+ * here interprets them. Closed union — doc_rework (v0.15 §4.4: a readDoc's
+ * cited slice was re-opened with readSlice — the document was not credited)
+ * lands in the SAME recall bucket ("memory quality") as the recall signals.
  */
 export interface FitnessSignal {
   ts: string;
   sliceId: string;
-  type: "recall_verify" | "recall_rework" | "recall_repeat" | "interaction_regenerate" | "interaction_interrupt";
+  type:
+    | "recall_verify"
+    | "recall_rework"
+    | "recall_repeat"
+    | "doc_rework"
+    | "interaction_regenerate"
+    | "interaction_interrupt";
   detail: string;
 }
 

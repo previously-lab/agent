@@ -131,4 +131,36 @@ describe("computeEvolutionTriggers", () => {
     expect(buckets).toContain("recall");
     expect(buckets).toContain("interaction");
   });
+
+  it("doc_rework demerits count toward the recall bucket (v0.15 §4.4)", () => {
+    // The doc_rework SIGNAL itself is mechanical, not a score — bucketNetScore
+    // reads events only. The analyzer (turn-analyzer / bridge job 6) converts
+    // each doc_rework signal into a recall-bucket -1 candidate event whose
+    // evidence is the signal's detail line; those events are what the recall
+    // net is made of. This pins the closed union accepting "doc_rework" AND
+    // the recall trigger firing on doc_rework-derived events.
+    const docReworkDetail =
+      'main agent read slice 2026-09-04-2130 that document "2026-09-05-手机购买调研.md" references — the document was not credited';
+    const s: FitnessStore = {
+      events: ["A", "B", "C", "D", "E"].map((id) => ({
+        ts: "2026-09-10T10:00:00Z",
+        sliceId: id,
+        bucket: "recall",
+        delta: -1,
+        evidence: docReworkDetail,
+      })),
+      signals: [
+        {
+          ts: "2026-09-10T10:00:00Z",
+          sliceId: "A",
+          type: "doc_rework",
+          detail: docReworkDetail,
+        },
+      ],
+      directionRejections: [],
+    };
+    const triggers = computeEvolutionTriggers(s);
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].bucket).toBe("recall");
+  });
 });

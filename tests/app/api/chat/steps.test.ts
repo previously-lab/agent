@@ -44,13 +44,6 @@ const episodic = vi.hoisted(() => ({
   upsertTimelineEntry: vi.fn(async () => {}),
   deterministicSliceMark: vi.fn(() => ({ focus: "fallback focus", summary: "fallback summary" })),
   readStrands: vi.fn(async () => ({})),
-  // Strand description refresh driver — asserted by the close-boundary tests.
-  refreshStrandDescriptions: vi.fn(
-    async (): Promise<{ refreshed: string[]; skipped: Array<{ name: string; reason: string }> }> => ({
-      refreshed: [],
-      skipped: [],
-    }),
-  ),
   analyzeTurn: vi.fn(
     async (_input: {
       model: unknown;
@@ -136,6 +129,38 @@ vi.mock("@/lib/episodic/flash/backfill-marks", () => ({
   collectDrySliceCandidates: vi.fn(async () => []),
   applyMarksToDrySlices: vi.fn(async () => 0),
 }));
+
+// The v0.15 document write path (librarian / scribe / background research) is
+// mocked at its module boundary — the real passes run LLM sub-agents.
+const docWritePath = vi.hoisted(() => ({
+  buildSliceExcerpt: vi.fn(() => ({ focus: "", summary: "", turnsExcerpt: "" })),
+  runLibrarianPass: vi.fn(
+    async (_input: unknown): Promise<{
+      voided: string[];
+      llmRan: boolean;
+      written: string[];
+      skipped: Array<{ name: string; reason: string }>;
+    }> => ({ voided: [], llmRan: false, written: [], skipped: [] }),
+  ),
+  runScribePass: vi.fn(
+    async (_input: unknown): Promise<{
+      ran: boolean;
+      written: string[];
+      skipped: Array<{ id: string; reason: string }>;
+    }> => ({ ran: false, written: [], skipped: [] }),
+  ),
+}));
+vi.mock("@/lib/episodic/flash/librarian", () => docWritePath);
+const docResearch = vi.hoisted(() => ({
+  runDocResearchPass: vi.fn(
+    async (_input: unknown): Promise<{
+      ran: boolean;
+      written: string[];
+      skipped: Array<{ id: string; reason: string }>;
+    }> => ({ ran: false, written: [], skipped: [] }),
+  ),
+}));
+vi.mock("@/lib/episodic/flash/doc-research", () => docResearch);
 
 // Phase-level bridge outsourcing — runHousekeepingBridge / applyBridgeCardEvolution
 // are replaced with fakes (the report under test is injected verbatim);
@@ -1898,7 +1923,7 @@ describe("bridge wiring: playbook write-back (job 8)", () => {
   });
 });
 
-describe("strand description refresh driver", () => {
+describe("document write path driver (v0.15)", () => {
   function setupClosingSlice() {
     sliceAged = true;
     const disk = makeSlice({
@@ -1914,35 +1939,57 @@ describe("strand description refresh driver", () => {
     return disk;
   }
 
-  it("drives refreshStrandDescriptions on a close boundary (and logs the counts)", async () => {
+  it("drives the librarian + scribe + research passes on a close boundary", async () => {
     setupClosingSlice();
-    episodic.refreshStrandDescriptions.mockResolvedValue({
-      refreshed: ["work"],
-      skipped: [{ name: "health", reason: "cooldown" }],
+    docWritePath.runLibrarianPass.mockResolvedValue({
+      voided: [],
+      llmRan: true,
+      written: ["work"],
+      skipped: [],
     });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     try {
       await housekeeping(makeInput("wrapping up"));
 
-      expect(episodic.refreshStrandDescriptions).toHaveBeenCalledOnce();
-      const [strands, model] = episodic.refreshStrandDescriptions.mock
-        .calls[0] as unknown as [Record<string, string[]>, { id: string }];
-      expect(strands).toEqual({});
-      expect(model.id).toBe("deepseek-v4-flash");
-      expect(logSpy).toHaveBeenCalledWith(
-        "[Strands] Description refresh: 1 refreshed, 1 skipped",
-      );
+      // The librarian gets the consolidated index, the turn model, and the batch.
+      expect(docWritePath.runLibrarianPass).toHaveBeenCalledOnce();
+      const libArgs = docWritePath.runLibrarianPass.mock.calls[0][0] as unknown as {
+        closedSliceId: string;
+        strands: Record<string, string[]>;
+        model: { id: string };
+      };
+      expect(libArgs.closedSliceId).toBe("2026-07-14-0900");
+      expect(libArgs.strands).toEqual({});
+      expect(libArgs.model.id).toBe("deepseek-v4-flash");
+      expect(logSpy).toHaveBeenCalledWith("[Docs] Librarian: 1 home(s) written, 0 voided");
+
+      // The scribe runs on the CLOSED slice first (boundary instance) and
+      // again at the housekeeping tail on the new active slice.
+      expect(docWritePath.runScribePass).toHaveBeenCalled();
+      const scribeArgs = docWritePath.runScribePass.mock.calls[0][0] as unknown as {
+        sliceId: string;
+      };
+      expect(scribeArgs.sliceId).toBe("2026-07-14-0900");
+
+      // The background research pass rides the same boundary.
+      expect(docResearch.runDocResearchPass).toHaveBeenCalledOnce();
+      const researchArgs = docResearch.runDocResearchPass.mock.calls[0][0] as unknown as {
+        sliceId: string;
+      };
+      expect(researchArgs.sliceId).toBe("2026-07-14-0900");
     } finally {
       logSpy.mockRestore();
     }
   });
 
-  it("skips the refresh in demo mode (read-only preview)", async () => {
+  it("skips all three passes in demo mode (read-only preview)", async () => {
     setupClosingSlice();
 
     await housekeeping(makeInput("wrapping up", { useDemo: true }));
 
-    expect(episodic.refreshStrandDescriptions).not.toHaveBeenCalled();
+    expect(docWritePath.runLibrarianPass).not.toHaveBeenCalled();
+    expect(docWritePath.runScribePass).not.toHaveBeenCalled();
+    expect(docResearch.runDocResearchPass).not.toHaveBeenCalled();
   });
 });

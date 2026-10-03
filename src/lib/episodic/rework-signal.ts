@@ -16,6 +16,12 @@
  *   - null — no recall has run this conversation (nothing to compare against),
  *     or the read target IS the ongoing conversation slice.
  *
+ * doc_rework (v0.15 design §4.4) extends the same instrument from the
+ * document side: a readDoc whose text references slice X, followed by the
+ * main agent opening slice X itself, means the document was not credited
+ * for the fact it carried. Same fitness store, same recall bucket — the
+ * mechanism serves memory quality no matter which producer is involved.
+ *
  * The per-conversation record is module-level per-process state — the same
  * pattern manager.ts already uses for the active slice. Workflow steps in one
  * process share the module, so the recall outcome recorded by recallExecute is
@@ -44,7 +50,7 @@ export interface RecallOutcome {
   confidence: number;
 }
 
-export type ReworkKind = "verify" | "rework";
+export type ReworkKind = "verify" | "rework" | "doc_rework";
 
 /** Max conversations tracked per process — FIFO eviction beyond this. */
 const MAX_TRACKED_CONVERSATIONS = 50;
@@ -52,6 +58,20 @@ const MAX_TRACKED_CONVERSATIONS = 50;
 /** conversation slice id → latest recall outcome. Insertion order = recency
  *  (recordRecallOutcome re-inserts on update), so eviction drops the stalest. */
 const outcomes = new Map<string, RecallOutcome>();
+
+/**
+ * doc_rework probe (design v0.15 §4.4): the documents the main agent opened
+ * this conversation, each with the slice ids its text references. When a
+ * later readSlice opens one of THOSE slices, the document was not credited
+ * for the fact it carried — an implicit demerit on document quality. The
+ * signal lands in the SAME fitness store / recall bucket (the mechanism
+ * serves memory quality regardless of which mechanism produced it); the
+ * analyzer decides what the ratio means.
+ */
+const docReads = new Map<string, Map<string, Set<string>>>();
+
+/** Bound per conversation — instrumentation state, not memory. */
+const MAX_TRACKED_DOCS_PER_CONVERSATION = 50;
 
 /**
  * Record the outcome of a successful recall run. Later readSlice calls in the
@@ -70,6 +90,55 @@ export function recordRecallOutcome(
     if (oldest === undefined) break;
     outcomes.delete(oldest);
   }
+}
+
+/**
+ * Record a document the main agent read this conversation, with the slice
+ * ids the document's text references (extracted by the readDoc executor via
+ * docs-query's extractSliceIds). Later readSlice calls are classified
+ * against this record by checkDocRework. Same FIFO discipline as
+ * recordRecallOutcome.
+ */
+export function recordDocRead(
+  conversationSliceId: string,
+  docFileName: string,
+  referencedSliceIds: string[],
+): void {
+  if (!conversationSliceId || !docFileName) return;
+  let docs = docReads.get(conversationSliceId);
+  if (!docs) {
+    docs = new Map();
+    docReads.set(conversationSliceId, docs);
+  }
+  docs.delete(docFileName);
+  docs.set(docFileName, new Set(referencedSliceIds));
+  while (docs.size > MAX_TRACKED_DOCS_PER_CONVERSATION) {
+    const oldest = docs.keys().next().value;
+    if (oldest === undefined) break;
+    docs.delete(oldest);
+  }
+}
+
+/**
+ * Classify a main-agent readSlice against the documents read earlier in this
+ * conversation: if the opened slice is one a read document pointed at, the
+ * document was not credited for that fact. Returns the document's file name
+ * (the identity of the demerit's target), or null when no read document
+ * referenced this slice. Independent of the recall check — a slice can be in
+ * recall's references (verify) AND in a document's citation set; both facts
+ * are recorded, the analyzer weighs them.
+ */
+export function checkDocRework(
+  conversationSliceId: string,
+  readSliceId: string,
+): string | null {
+  const docs = docReads.get(conversationSliceId);
+  if (!docs) return null;
+  if (readSliceId === conversationSliceId) return null;
+  for (const [fileName, sliceIds] of docs) {
+    if (sliceIds.has(readSliceId)) return fileName;
+  }
+  return null;
 }
 
 /**
@@ -100,18 +169,29 @@ export function checkReadSlice(
  * store entry plus one compact audit line in the current slice's agent.md.
  * BOTH writes are best-effort — each failure is warned and swallowed; this
  * function never throws and never fails the calling tool.
+ *
+ * `docFileName` is required for kind "doc_rework" — it names the document
+ * whose citation set the read slice came from (the demerit's target).
  */
 export async function logReworkSignal(
   conversationSliceId: string,
   readSliceId: string,
   kind: ReworkKind,
+  docFileName?: string,
 ): Promise<void> {
   const ts = new Date().toISOString();
-  const type = kind === "verify" ? "recall_verify" : "recall_rework";
+  const type =
+    kind === "verify"
+      ? "recall_verify"
+      : kind === "rework"
+        ? "recall_rework"
+        : "doc_rework";
   const detail =
     kind === "verify"
       ? `main agent read slice ${readSliceId} within recall's references/searched — by-design verification`
-      : `main agent read slice ${readSliceId} outside recall's references/searched — doing recall's job itself`;
+      : kind === "rework"
+        ? `main agent read slice ${readSliceId} outside recall's references/searched — doing recall's job itself`
+        : `main agent read slice ${readSliceId} that document "${docFileName ?? "?"}" references — the document was not credited for the fact it carried`;
 
   try {
     await appendSignal({ ts, sliceId: conversationSliceId, type, detail });

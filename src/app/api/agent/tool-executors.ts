@@ -44,8 +44,26 @@ import { readPlaybook, capPlaybook } from "@/lib/evolution/store";
 import {
   recordRecallOutcome,
   checkReadSlice,
+  checkDocRework,
+  recordDocRead,
   logReworkSignal,
 } from "@/lib/episodic/rework-signal";
+import {
+  listDocsQuery,
+  readDocQuery,
+  extractSliceIds,
+  type DocsFs,
+  type ReadDocSuccess,
+  type ReadDocFailure,
+} from "@/lib/docs/docs-query";
+import { DOC_KINDS, type DocKind } from "@/lib/docs";
+import {
+  DOC_MARKER_PREFIX,
+  extractDocMarkers,
+  type DocMarker,
+} from "@/lib/episodic/flash/librarian";
+import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import { readStrands, CURRENT_PREVIOUSLY_PATH } from "@/lib/episodic";
 import { migrateToV3, isCardFormat } from "@/lib/episodic/previously-format";
 import {
@@ -323,6 +341,14 @@ export async function readSliceExecute(
       await logReworkSignal(ctx.sliceId, sliceId, reworkKind);
     }
 
+    // doc_rework probe (design v0.15 §4.4): the read slice is one a readDoc
+    // earlier this conversation referenced — the document was not credited
+    // for the fact it carried. Recorded in the same recall fitness bucket.
+    const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
+    if (docReworkFile) {
+      await logReworkSignal(ctx.sliceId, sliceId, "doc_rework", docReworkFile);
+    }
+
     return result;
   } catch (e) {
     const msg = domainError(e);
@@ -591,6 +617,201 @@ export async function readPreviouslyExecute(
     return `ERROR: ${msg}. previously.md not available for this slice.`;
   }
 }
+
+// ─── Document tools (v0.15 design §4.2 — the reader side of the doc system) ──
+
+/**
+ * The DocsFs the query layer runs on, built per call from the tool context's
+ * backend mode — same branch as every other read executor (GitHub / local /
+ * demo). The local backend is whitelist-checked and MEMORY_ROOT-aware, so
+ * isolated test roots work transparently.
+ */
+function buildDocsFs(ctx: ToolContext): DocsFs {
+  return {
+    readText: (path) =>
+      ctx.useDemo
+        ? readFileDemo(path)
+        : ctx.useGithub
+          ? readFile(path, ctx.repo, ctx.owner)
+          : readFileLocal(path),
+    listDir: (path) =>
+      ctx.useDemo
+        ? listFilesDemo(path)
+        : ctx.useGithub
+          ? listFiles(path, ctx.repo, ctx.owner)
+          : listFilesLocal(path),
+  };
+}
+
+/**
+ * listDocs — the mechanical directory listing (design §4.2). NO LLM, no
+ * ranking, no relevance score: `listDocs("research")` hands the model the
+ * file names (date + title, ascending = birth order) and the model reads the
+ * list. The directory IS the type; an empty/missing directory is a normal
+ * early-system state (files: [] + note), never an error.
+ */
+export async function listDocsExecute(
+  { kind, filter }: { kind: DocKind; filter?: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<
+  | { kind: DocKind; files: string[]; note?: string }
+  | { error: string }
+> {
+  "use step";
+  if (!(DOC_KINDS as readonly string[]).includes(kind)) {
+    return {
+      error:
+        `未知的文档类型 "${kind}"——封闭集合只有九个：` +
+        DOC_KINDS.join(" / ") +
+        "。",
+    };
+  }
+  return listDocsQuery(buildDocsFs(ctx), kind, filter);
+}
+
+/**
+ * readDoc — point-read a document by FILE NAME (design §2.1/§2.2: the file
+ * name IS the identity, references are names not paths). Resolution is
+ * path-agnostic — every kind directory under `docs/` is a candidate and the
+ * first hit wins. Documents are small files: the whole file is returned.
+ * A name that resolves nowhere is a dead link — a visible error result,
+ * never thrown, never blocking.
+ *
+ * On success the executor records the document + the slice ids its text
+ * references (recordDocRead) so the doc_rework probe (§4.4) can later
+ * classify readSlice calls against it. Best-effort, never fails the read.
+ */
+export async function readDocExecute(
+  { fileName }: { fileName: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<ReadDocSuccess | ReadDocFailure> {
+  "use step";
+  const result = await readDocQuery(buildDocsFs(ctx), fileName);
+  if (!("error" in result)) {
+    recordDocRead(ctx.sliceId, result.fileName, extractSliceIds(result.content));
+  }
+  return result;
+}
+
+// ─── noteForSediment — the sediment mailbox producer (v0.15 design §3.1/§4.3) ──
+
+/**
+ * The reply segment's ONLY write to memory. The main agent is read-only on
+ * memory by design — v0.15 §4.3 designates the reply segment as "只读 + 记账":
+ * this tool is the 记账. It appends ONE structured `[doc-marker]` line to the
+ * CURRENT slice's agent.md (the inter-stream mailbox, §3.1); the actual
+ * document write still happens at slice close, in the scribe/librarian passes
+ * that consume these markers. It never touches core.md (the evidence record)
+ * and never writes a document itself.
+ */
+export interface NoteForSedimentInput {
+  /** sediment = worth keeping as a document; task = a date-anchored to-do the
+   *  user stated; question = a thread the background research pass should
+   *  pick up. */
+  kind: "sediment" | "task" | "question";
+  /** The document's title — specific enough that a scope change would mean a
+   *  NEW document (命名纪律, design §2.1). */
+  title: string;
+  /** One line on what this is about. */
+  note?: string;
+  /** sediment only: research (default) or entity. */
+  docType?: "research" | "entity";
+  /** sediment+entity only: which of the five entity kinds. */
+  entityKind?: "event" | "person" | "object" | "place" | "org";
+  /** sediment only: an EXISTING document file name to append to. */
+  target?: string;
+  /** task only: the date anchor the user stated (YYYY-MM-DD). */
+  dateAnchor?: string;
+  /** Topic strands (strands.json keys) this belongs to. */
+  topics?: string[];
+}
+
+export type NoteForSedimentResult =
+  | { ok: true; marker: DocMarker; path: string; duplicate?: boolean }
+  | { ok: false; reason: string };
+
+/**
+ * noteForSediment — drop a `[doc-marker]` line into the current slice's
+ * agent.md. The marker contract ([doc-marker] {"v":1,...}) is owned and
+ * consumed by librarian.ts; this producer validates by ROUND-TRIPPING the
+ * constructed line through the consumer's own `extractDocMarkers`, so the two
+ * sides can never drift apart. Idempotent: the marker id is
+ * `<sliceId>-<toolCallId>` — stable across workflow step retries, and an
+ * already-present id is never appended twice.
+ */
+export async function noteForSedimentExecute(
+  input: NoteForSedimentInput,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<NoteForSedimentResult> {
+  "use step";
+  if (ctx.useDemo) {
+    return {
+      ok: false,
+      reason: "Demo mode runs on read-only benchmark data — markers are not recorded.",
+    };
+  }
+  const title = input.title.trim();
+  if (!title) return { ok: false, reason: "title must not be empty." };
+  if (input.kind === "sediment" && input.docType === "entity" && !input.entityKind) {
+    return {
+      ok: false,
+      reason:
+        "an entity sediment needs entityKind (event | person | object | place | org).",
+    };
+  }
+  const anchor = input.dateAnchor?.trim();
+  if (anchor && !/^\d{4}-\d{2}-\d{2}$/.test(anchor)) {
+    return {
+      ok: false,
+      reason: `dateAnchor must be YYYY-MM-DD, got ${JSON.stringify(anchor)}.`,
+    };
+  }
+
+  const markerId = `${ctx.sliceId}-${toolCallId}`;
+  const marker: DocMarker = {
+    v: 1,
+    id: markerId,
+    kind: input.kind,
+    title,
+    note: input.note?.trim() ?? "",
+    topics: input.topics ?? [],
+    ...(input.docType ? { docType: input.docType } : {}),
+    ...(input.entityKind ? { entityKind: input.entityKind } : {}),
+    ...(input.target?.trim() ? { target: input.target.trim() } : {}),
+    ...(anchor ? { dateAnchor: anchor } : {}),
+  };
+
+  // Contract check against the consumer's parser BEFORE touching disk — a
+  // line librarian.ts cannot parse is refused here, never silently dropped
+  // by every downstream pass.
+  const line = `${DOC_MARKER_PREFIX} ${JSON.stringify(marker)}`;
+  const parsed = extractDocMarkers(line);
+  if (parsed.length !== 1 || parsed[0].id !== markerId) {
+    return {
+      ok: false,
+      reason: "marker failed the [doc-marker] contract check (librarian parser rejected it).",
+    };
+  }
+
+  const agentPath = sliceIdToAgentPath(ctx.sliceId);
+  let existing = "";
+  try {
+    // fresh: read-modify-append — a cached base would silently drop markers
+    // other steps landed in between (io-helpers contract).
+    existing = await fsReadFile(agentPath, undefined, { fresh: true });
+  } catch {
+    // no agent.md yet — this line opens it
+  }
+  if (extractDocMarkers(existing).some((m) => m.id === markerId)) {
+    return { ok: true, marker: parsed[0], path: agentPath, duplicate: true };
+  }
+  const next = existing.trimEnd()
+    ? `${existing.trimEnd()}\n\n${line}\n`
+    : `${line}\n`;
+  await fsWriteFile(agentPath, next);
+  return { ok: true, marker: parsed[0], path: agentPath };
+}
+
 
 // ─── Chat-only executors ─────────────────────────────────────────────────
 

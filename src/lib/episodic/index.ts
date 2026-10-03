@@ -73,18 +73,9 @@ export {
 
 export {
   consolidateStrands,
-  gateStrandDescriptionRefresh,
-  refreshStrandDescription,
-  refreshStrandDescriptions,
-  MIN_NEW_SLICES_FOR_DESCRIPTION,
-  STRAND_DESCRIPTION_COOLDOWN_MS,
 } from "./flash/strand-consolidator";
 export type {
   ConsolidationResult,
-  StrandDescriptionGate,
-  RefreshStrandDescriptionInput,
-  RefreshStrandDescriptionResult,
-  RefreshStrandDescriptionsResult,
 } from "./flash/strand-consolidator";
 // ─── v0.8 timeline (first-class derived index) ─────────────────────────
 export {
@@ -141,11 +132,15 @@ export type {
 
 export {
   STRANDS_DIR,
+  TOPIC_DIR,
   getStrandFilePath,
+  getTopicDocPath,
   serializeStrandEntity,
   parseStrandEntity,
   readStrandEntity,
-  writeStrandEntity,
+  readTopicDoc,
+  strandEntityToTopicDoc,
+  topicDocToStrandEntity,
   listStrandEntityNames,
   resolveStrandEntityName,
 } from "./strand-files";

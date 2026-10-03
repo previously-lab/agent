@@ -33,6 +33,9 @@ import {
   describeRoomExecute,
   delegateTaskExecute,
   viewImageExecute,
+  listDocsExecute,
+  readDocExecute,
+  noteForSedimentExecute,
   type ToolContext,
 } from "./tool-executors";
 
@@ -296,31 +299,178 @@ export const conceptTools = {
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
 //
-// The CHAT agent owns the TIME AXIS of memory; the recall sub-agent owns the
-// TOPIC AXIS and deep investigation.
+// The CHAT agent owns the TIME AXIS of memory AND the document layer
+// (v0.15 design §4.2 — there is no recall-style sub-agent between the main
+// agent and memory on the read path).
 //
-// Main agent time-axis tools:
+// Memory surface:
 //   - readTimelineWindow: scan the timeline catalog over a date window
 //     (inclusive YYYY-MM-DD), one compact pointer line per slice. This is YOUR
 //     tool when the user's question carries an explicit time anchor ("last
 //     week", "September 3rd", "in March"). Scope the window, then open the
 //     specific slice with readSlice.
-//   - readSlice: point-read the original slice text. Use it to answer from a
-//     slice you located on the time axis, or to verify a recall reference.
+//   - readSlice: point-read the original slice text — the VERIFICATION
+//     channel and the only source for specific facts (numbers, dates, quotes,
+//     promises). Use `range` to fetch only the turns you need.
+//   - readSliceSummary: the cheapest relevance check (frontmatter only) —
+//     prefer it over readSlice when you only need to know what a slice is
+//     about.
+//   - readAgentTimeline: your own past cognition for a slice. listSlices /
+//     readTimeline / readStrand / listStrands: directory-level browse of the
+//     slice archive and the strand (tag) index.
+//   - listDocs / readDoc: the DOCUMENT layer — directory listing and
+//     path-agnostic point-read by file name. Documents are the amortized
+//     products of past investigation; slices remain the evidence.
+//   - noteForSediment: the sediment mailbox — the reply segment's ONE write
+//     (只读 + 记账, design §4.3): drop a marker line for the slice-close
+//     scribe/librarian passes. Bookkeeping, never document-writing.
 //
 // Topic-axis / unanchored questions go DIRECTLY to recall — never investigate
 // first and then escalate. If the question has NO time anchor ("did we ever
 // talk about apples?", fuzzy memories, cross-topic synthesis), call recall
 // immediately. If you realize mid-scan that the time axis can't settle it,
 // stop and call recall rather than continuing to dig.
-//
-// The other granular memory-browse tools (readSliceSummary / readAgentTimeline /
-// listSlices / readTimeline / readStrand / listStrands) stay defined in
-// conceptTools / tool-executors for the sub-agent side.
 export const chatTools = {
   readSlice: conceptTools.readSlice,
   readTimelineWindow: conceptTools.readTimelineWindow,
   readPreviously: conceptTools.readPreviously,
+  // Slice-level browse tools reclaimed by the main agent (v0.15 design §4.2 —
+  // the charter always said "you own the time axis"; recall's retirement is
+  // adjudicated by the §7 signal, but the read surface is the main agent's
+  // now, not a sub-agent's). listStrands/readStrand fold into
+  // listDocs("topic")/readDoc over time; they stay exposed meanwhile.
+  readSliceSummary: conceptTools.readSliceSummary,
+  readAgentTimeline: conceptTools.readAgentTimeline,
+  listSlices: conceptTools.listSlices,
+  readTimeline: conceptTools.readTimeline,
+  readStrand: conceptTools.readStrand,
+  listStrands: conceptTools.listStrands,
+  // Document-system readers (v0.15 design §4.2): the filesystem IS the index
+  // — listDocs is a plain directory listing, readDoc a path-agnostic
+  // point-read by file name.
+  listDocs: tool({
+    description:
+      "List the documents in one document-type directory — a plain directory " +
+      "listing, nothing more. The nine types (closed set): event, person, " +
+      "object, place, org, research, hypothesis, task (file name = " +
+      "<birth-date>-<title>.md) and topic (file name = <name>.md, the topic " +
+      "homes). File names are returned in ascending order — for the dated " +
+      "kinds that IS birth order. There is no ranking and no relevance " +
+      "score: the list itself (date + title) is the index, read it yourself. " +
+      "Use this to discover what documents exist: listDocs('research') shows " +
+      "every investigation on file; listDocs('topic') lists every topic home " +
+      "(the semantic strand index — a home's prose says what it is also " +
+      "called); listDocs('task') shows tracked tasks. Then open the document " +
+      "you want with readDoc. An empty list means the type has no documents " +
+      "yet — that is normal while the doc layer is young.",
+    inputSchema: z.object({
+      kind: z
+        .enum(["event", "person", "object", "place", "org", "research", "hypothesis", "task", "topic"])
+        .describe("The document-type directory to list."),
+      filter: z
+        .string()
+        .optional()
+        .describe(
+          "Optional case-insensitive substring filter on the file name, e.g. '手机'. Mechanical match only — no semantics.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: listDocsExecute,
+  }),
+  readDoc: tool({
+    description:
+      "Read a whole document by its FILE NAME (the file name IS the identity " +
+      "— pass '2026-09-05-手机购买调研' or '用户手机', with or without .md, " +
+      "never a path). Resolution is path-agnostic: the file is found " +
+      "wherever it lives under docs/. Documents are small files — the whole " +
+      "file is returned: the machine header (status / opened / updated), the " +
+      "截至 block stating what the document currently believes, and the " +
+      "dated entry stream. Judge freshness yourself from those dates — " +
+      "contradictions between documents are time, read them newest-first. " +
+      "Grounding rule applies: a document may summarize, but specific facts " +
+      "(numbers, dates, quotes, promises) enter your answers only from the " +
+      "original slice text — the document's job is to point you at the right " +
+      "slice fast. If the name resolves nowhere you get a dead-link error " +
+      "saying so — not blocking; run listDocs to see what exists.",
+    inputSchema: z.object({
+      fileName: z
+        .string()
+        .describe(
+          "Document file name, e.g. '2026-09-05-手机购买调研' or '用户手机' (with or without .md).",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: readDocExecute,
+  }),
+  // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). The reply segment
+  // is "只读 + 记账" — this tool is the 记账, the ONE memory write the main
+  // agent is granted: a single structured marker line into the current slice's
+  // agent.md, consumed by the scribe/librarian passes at slice close.
+  noteForSediment: tool({
+    description:
+      "Jot a note for LATER sedimentation — BOOKKEEPING, NOT writing a document. " +
+      "Use it the moment you think, mid-conversation, \"this is worth " +
+      "sedimenting\" or \"this should become a task\": a search/recall worth " +
+      "keeping as a research or entity document (kind: 'sediment'), something " +
+      "the user said that anchors a date — \"我 8 号要去 on-site\", " +
+      "\"下周三提醒我…\" — which must become a tracked task document (kind: " +
+      "'task', always pass dateAnchor), or an open thread the background " +
+      "research colleague should investigate later (kind: 'question'). It " +
+      "appends ONE structured marker line to THIS slice's agent.md mailbox; " +
+      "the actual document gets written at slice close by the scribe/librarian " +
+      "passes that read these markers — so after calling this, keep answering " +
+      "and do NOT treat the thing as recorded yet. Do NOT use it for anything " +
+      "in the current conversation (that lives in the slice itself), and do " +
+      "NOT call it for trivia — a one-off mention stays in the slices. " +
+      "title follows the document naming discipline: specific enough that a " +
+      "scope change would mean a NEW document.",
+    inputSchema: z.object({
+      kind: z
+        .enum(["sediment", "task", "question"])
+        .describe(
+          "sediment = worth keeping as a document; task = a date-anchored " +
+          "thing the user stated; question = a thread for the background " +
+          "research pass.",
+        ),
+      title: z
+        .string()
+        .min(1)
+        .describe(
+          "The document's title (命名纪律: specific enough that a scope change means a new document).",
+        ),
+      note: z
+        .string()
+        .optional()
+        .describe("One line on what this is about — grounds the later write."),
+      docType: z
+        .enum(["research", "entity"])
+        .optional()
+        .describe("sediment only: research (default) or entity."),
+      entityKind: z
+        .enum(["event", "person", "object", "place", "org"])
+        .optional()
+        .describe("sediment+entity only: which of the five entity kinds."),
+      target: z
+        .string()
+        .optional()
+        .describe(
+          "sediment only: an EXISTING document file name to append to " +
+          "(from a listDocs/readDoc), when this updates one rather than opening one.",
+        ),
+      dateAnchor: z
+        .string()
+        .optional()
+        .describe("task only: the date the user stated, YYYY-MM-DD."),
+      topics: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Existing topic strands (strands.json keys) this belongs to — only names you have seen.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: noteForSedimentExecute,
+  }),
   describeRoom: tool({
     description:
       "Describe the hotel room a time slice opens onto in the game view — " +
@@ -614,6 +764,15 @@ export function buildChatToolsContext(
     readSlice: ctx,
     readTimelineWindow: ctx,
     readPreviously: ctx,
+    readSliceSummary: ctx,
+    readAgentTimeline: ctx,
+    listSlices: ctx,
+    readTimeline: ctx,
+    readStrand: ctx,
+    listStrands: ctx,
+    listDocs: ctx,
+    readDoc: ctx,
+    noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,
     recall: ctx,

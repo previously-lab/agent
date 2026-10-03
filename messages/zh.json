@@ -86,7 +86,37 @@
         "direction": "进化方向"
       },
       "docsLoading": "加载中…",
-      "docsEmpty": "暂无内容"
+      "docsEmpty": "暂无内容",
+      "shelf": {
+        "menuLabel": "书架",
+        "title": "记忆书架",
+        "byTopic": "按主题",
+        "byKind": "按类型",
+        "topicsEmpty": "还没有主题之家——文档体系长出来后，这里会逐一出现。",
+        "docsEmpty": "这个类型下还没有文档。",
+        "catalogEmpty": "这个主题还没有挂接任何文档条目。",
+        "loading": "加载中…",
+        "loadError": "书架暂时打不开。",
+        "back": "返回书架",
+        "openedAt": "始于 {date}",
+        "updatedAt": "更新于 {date}",
+        "status": {
+          "active": "进行中",
+          "closed": "已结案",
+          "void": "已作废"
+        },
+        "kind": {
+          "event": "事件",
+          "person": "人物",
+          "object": "物品",
+          "place": "地点",
+          "org": "组织",
+          "research": "调研",
+          "hypothesis": "假说",
+          "task": "任务",
+          "topic": "主题"
+        }
+      }
     },
     "attachment": "附件",
     "actions": {
@@ -125,6 +155,10 @@
       "viewImageDone": "已查看图片",
       "listRunning": "正在浏览…",
       "listDone": "找到 {count} 项",
+      "listDocsRunning": "正在列出 {kind} 文档…",
+      "listDocsDone": "列出了 {kind} · {count} 份文档",
+      "readDocRunning": "正在阅读《{name}》…",
+      "readDocDone": "阅读了《{name}》",
       "sources": "{count} 个来源",
       "thinkDeep": "推理片段",
       "thinkDeepRunning": "正在推理「{question}」…",

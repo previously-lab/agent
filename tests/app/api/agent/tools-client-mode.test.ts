@@ -92,6 +92,48 @@ describe("chat tool surface", () => {
     };
     expect(schema.shape).toHaveProperty("mode");
   });
+
+  it("exposes the document readers with context entries", () => {
+    expect(chatTools).toHaveProperty("listDocs");
+    expect(chatTools).toHaveProperty("readDoc");
+    const contexts = buildChatToolsContext(ctx);
+    expect(contexts.listDocs).toBe(ctx);
+    expect(contexts.readDoc).toBe(ctx);
+  });
+
+  it("exposes noteForSediment (the sediment mailbox writer) with a context entry", () => {
+    expect(chatTools).toHaveProperty("noteForSediment");
+    expect(buildChatToolsContext(ctx).noteForSediment).toBe(ctx);
+    const schema = chatTools.noteForSediment.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(schema.shape).toHaveProperty("kind");
+    expect(schema.shape).toHaveProperty("title");
+    expect(schema.shape).toHaveProperty("dateAnchor");
+  });
+
+  it("listDocs input: kind + optional filter", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const schema = chatTools.listDocs.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(schema.shape).toHaveProperty("kind");
+    expect(schema.shape).toHaveProperty("filter");
+  });
+
+  it("reclaims the slice-level browse tools for the main agent (v0.15 §4.2)", () => {
+    for (const name of [
+      "readSliceSummary",
+      "readAgentTimeline",
+      "listSlices",
+      "readTimeline",
+      "readStrand",
+      "listStrands",
+    ] as const) {
+      expect(chatTools).toHaveProperty(name);
+      expect(buildChatToolsContext(ctx)[name]).toBe(ctx);
+    }
+  });
 });
 
 describe("toolContextSchema — step-boundary round-trip", () => {

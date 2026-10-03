@@ -32,7 +32,10 @@ File storage is abstracted behind a local-filesystem vs. GitHub API switch, gate
 | `slice-mutex.ts` | In-process per-sliceId async mutex (`withSliceLock`) serializing housekeeping/finalizeTurn on the same slice; acquired inside a single step only |
 | `turn-merge.ts` | `mergeTurnsWithRemote` — pure append-only turn merge used by finalizeTurn's write-conflict self-heal (re-read remote core.md, append missing turns by turnId, retry commit ≤ 2×) |
 | `rework-signal.ts` | Mechanical-signal instrumentation (v1.0 design §2.6) — module-level per-conversation record of recall outcomes; classifies each main-agent `readSlice` as `verify` / `rework`, plus the UI-driven interaction signals (`interaction_regenerate`, recorded by housekeeping from the regenerate body flag; `interaction_interrupt`, POSTed to `/api/episodic/signal` when the user stops a turn). Every signal lands in BOTH the machine-readable fitness store and an audit line in the slice's agent.md. Best-effort — never fails the caller |
-| `strand-files.ts` | Strand entity layer — one `strands/<name>.md` per strand (frontmatter: `first_seen` / `last_active` / `aliases`; body: 1-2 paragraphs of natural-language description). Read by recall (listStrands carries truncated summaries, readStrand the full text) for SEMANTIC strand matching; written ONLY by the strand-consolidator, behind `gateStrandDescriptionRefresh`. Missing dir/file degrades to the bare index |
+| `strand-files.ts` | Topic-home (主题之家) layer — one `docs/topic/<名字>.md` per strand in the v0.15 document notation (three-field frontmatter + 截至块 + dated entry stream; entries are 动态 / 名录 prose), one-to-one with strands.json keys. LEGACY `memory/episodic/strands/<name>.md` files are a READ-ONLY fallback (converted in memory) until the migration script runs; new writes land in `docs/topic/` only. Read by recall (listStrands carries truncated summaries, readStrand the full text) for SEMANTIC strand matching; written by the librarian and by document writers (名录 entries). Missing dir/file degrades to the bare index |
+| `doc-lock.ts` | Per-document lock (`withDocLock` — the `withSliceLock("doc:<文件名>")` keyed mutex, design §4.3) + `updateDocUnderLock`: locked fresh-read → pure mutation (src/lib/docs ops) → name validation → batch write. The lock is held inside a single write step only |
+| `flash/librarian.ts` | The librarian (topic-home maintenance, v0.15 §3.2) + the scribe (书记段, §3.1/§3.6). Librarian: invoked at slice close, judges FOR ITSELF whether a touched home deserves an entry — NO semantic gates (the old ≥5-slices / 7-day-cooldown / ≤10-per-pass thresholds are deleted, axiom D), empty runs are legal; writer-is-reader is structural (the closed slice + full home texts enter the prompt BEFORE the call; the model returns write-intents engineering applies through the docs pure ops under the doc lock); evidence slice ids are stamped mechanically. Also owns: merge fallout (merged-from homes get a dated 作废 entry + `void`), 名录 directory entries (doc open/close → same-batch home entry), and the `[doc-marker]` mailbox contract. Scribe: picks up sediment/task markers from a slice's agent.md → docs/research, docs/<entityKind>/, docs/task/ (date anchors stamped mechanically), records `[doc-scribe]` lines so markers never double-write |
+| `flash/doc-research.ts` | Background research/hypothesis pass (v0.15 §3.4/§3.5) — the design's DEGRADED form (the real independent background run needs the v0.11 §10 groundwork): one boundary-triggered function, driven ONLY by user "question" markers (no automatic research, no scheduled re-thinking), with read tools (readDoc / readTopicHome / readSlice) for cross-slice digging. Writes docs/research + docs/hypothesis through validated intents under the doc lock; a hypothesis without a falsification condition is refused |
 | `../evolution/` | Evolution data layer + loop (v1.0 design §2): `paths.ts` (file constants), `store.ts` (typed I/O over `memory/evolution/` + `memory/agent-playbooks/` — direction doc, per-sub-agent playbooks, generation-scoped fitness event/signal store with structural evidence-anchoring + the generation settle (`resetFitnessGeneration`), generation net scores), `triggers.ts` (deterministic trigger computation (v0.9.2): a bucket's current-generation net ≤ -5 fires it — purely quantitative, no semantic fast paths), `direction-agent.ts` (the direction contract — Portrait (six fixed dimensions) + hypothesis-pool skeleton, mode detection (bootstrap/migrate/steady), structural proposal validation, the L1b system-prompt layer builder; plus the legacy standalone evaluator) |
 
 ## Key Flows
@@ -90,16 +93,17 @@ memory/episodic/
           HHMM/
             timeline/
               core.md           -- time slice body (YAML frontmatter + turns)
-              agent.md          -- agent cognition log (mechanical extraction)
+              agent.md          -- agent cognition log (+ the [doc-marker] mailbox)
             previously.md       -- user-card snapshot (Previously Agent evolution)
         _index.json             -- monthly index of all slices in this month
   strands.json                  -- the strand index: strand (keyword) -> slice paths
-  strands/
-    <name>.md                   -- strand entity: frontmatter (first_seen /
-                                  last_active / aliases) + 1-2 paragraphs of
-                                  natural-language description (the thread's
-                                  topic, when the user first raised it)
+  strands/                      -- LEGACY strand entity files (read-only fallback;
+                                  new homes live in memory/docs/topic/)
   timeline.md                   -- global timeline (all slice summaries)
+memory/docs/                    -- the v0.15 document system (see src/lib/docs/CLAUDE.md)
+  topic/<名字>.md               -- topic homes (主题之家): one per strand
+  research/ hypothesis/ task/   -- L3 working documents (scribe + research pass)
+  event/ person/ object/ place/ org/  -- L2 entity documents
 ```
 
 The v1.0 evolution data layer (design §2, `src/lib/evolution/`) adds two more
@@ -119,19 +123,28 @@ to its slice paths, i.e. "the whole history of that thing" across time. It's the
 thin, lossless semantic-memory layer over the episodic slices. Tags are extracted
 by the turn analyzer in the housekeeping step and woven into strands at snapshot time.
 
-On top of the index sits the **strand entity layer** (`strands/<name>.md`, see
-`strand-files.ts`): one file per strand carrying a natural-language description
-(1-2 paragraphs) plus `first_seen` / `last_active` / `aliases` frontmatter. The
-recall sub-agent reads it for semantic strand matching — `listStrands` carries a
+On top of the index sit the **topic homes** (`memory/docs/topic/<名字>.md`, see
+`strand-files.ts`): one v0.15 document per strand — 截至块 + dated entry stream
+(动态 and 名录 prose), one-to-one with the strands.json key. The recall
+sub-agent reads them for semantic strand matching — `listStrands` carries a
 truncated one-line summary per described strand, `readStrand` the full text —
 so a question phrased with synonyms or in another language can still find the
-right thread. Old memory roots without a `strands/` directory degrade to the
-bare keyword index. The **strand-consolidator is the ONLY writer** of entity
-files, behind a mechanical gate: a refresh requires ≥5 new associated slices
-since the entity's `last_active` AND a 7-day cooldown since then, and the update
-call itself must carry the triggering slice ids as evidence (the LLM prompt is
-required to ground the description in them). `first_seen` / `last_active` are
-derived from the slice paths mechanically, never from the model.
+right thread. Old memory roots without any homes degrade to the bare keyword
+index; LEGACY `strands/<name>.md` entity files are read as a fallback and
+converted in memory until the one-shot migration
+(`scripts/migrate-strands-to-docs.mjs`) moves them. The **librarian**
+(`flash/librarian.ts`) is the home's maintainer: invoked at every slice-close
+boundary, it reads the closed slice and the touched homes and judges whether
+anything is worth an entry — there are NO semantic thresholds (the old
+≥5-new-slices / 7-day-cooldown / ≤10-per-pass gates were deleted per v0.15
+axiom D); an empty run is a legal outcome, and cost discipline comes from the
+trigger's rarity (close boundaries only) plus the engineering fuses (sub-agent
+step cap + timeout). When the merge machinery collapses a strand, the
+merged-from home gets a dated 作废 entry and `status: void` — it is never
+deleted. Document writers (the scribe, the research pass) append 名录 entries
+to a home in the same WriteBatch as the document they open/close. All document
+writes go through the per-doc lock (`doc-lock.ts`) and stamp their triggering
+slice id as evidence mechanically.
 
 ## Design Decisions
 
@@ -147,4 +160,5 @@ derived from the slice paths mechanically, never from the model.
 ## Known Limitations
 
 - **Turn-header collision**: a message body containing a line shaped like `## Turn {id} — ISO (role)` splits slice parsing incorrectly (pinned by a guard test in `manager.test.ts`).
-- **Strand descriptions are consolidation-pass-only**: entity files are refreshed at slice-close consolidation (capped at 10 LLM refreshes per pass), never per turn — a brand-new strand therefore carries no description until it has ≥5 slices and survives the cooldown.
+- **Topic homes are boundary-maintained, never per turn**: the librarian runs only at slice close, so a brand-new strand carries no home until the next boundary — and the librarian may legitimately judge a young thread not worth a home yet (there is no threshold forcing one). Until the reply segment (v0.11) emits `[doc-marker]` lines, the scribe/research passes are no-ops in production — the mailbox contract is implemented and tested, the producer is not.
+- **The background research pass is the degraded form**: it rides the housekeeping tail at close boundaries instead of running as an independent durable run (that needs the v0.11 §10 groundwork); its results surface only through the documents it writes.

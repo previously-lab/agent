@@ -86,7 +86,37 @@
         "direction": "Direction"
       },
       "docsLoading": "Loading…",
-      "docsEmpty": "Nothing here yet."
+      "docsEmpty": "Nothing here yet.",
+      "shelf": {
+        "menuLabel": "Shelf",
+        "title": "Memory shelf",
+        "byTopic": "By topic",
+        "byKind": "By type",
+        "topicsEmpty": "No topic homes yet — they appear here as the document system grows.",
+        "docsEmpty": "No documents in this type yet.",
+        "catalogEmpty": "No documents are catalogued under this topic yet.",
+        "loading": "Loading…",
+        "loadError": "The shelf couldn't be opened.",
+        "back": "Back to shelf",
+        "openedAt": "Opened {date}",
+        "updatedAt": "Updated {date}",
+        "status": {
+          "active": "Active",
+          "closed": "Closed",
+          "void": "Void"
+        },
+        "kind": {
+          "event": "Events",
+          "person": "People",
+          "object": "Objects",
+          "place": "Places",
+          "org": "Organizations",
+          "research": "Research",
+          "hypothesis": "Hypotheses",
+          "task": "Tasks",
+          "topic": "Topics"
+        }
+      }
     },
     "attachment": "Attachment",
     "actions": {
@@ -125,6 +155,10 @@
       "viewImageDone": "Looked at image",
       "listRunning": "Browsing…",
       "listDone": "Found {count} items",
+      "listDocsRunning": "Listing {kind} documents…",
+      "listDocsDone": "Listed {kind} · {count} documents",
+      "readDocRunning": "Reading “{name}”…",
+      "readDocDone": "Read “{name}”",
       "sources": "{count} sources",
       "thinkDeep": "Reasoning fragment",
       "thinkDeepRunning": "Reasoning about \"{question}\"…",

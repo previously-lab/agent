@@ -124,7 +124,7 @@ Which threads it draws is decided by the anchor at the CENTRE of the viewport â€
 | `thinking.tsx` | Reasoning display: Brain icon, streaming subtitle, elapsed timer, expandable Markdown |
 | `tool-renderer.tsx` | Dispatch hub: maps `toolName` to specific renderers; extracts `ToolRenderState` from raw SDK state |
 | `tool-layout.tsx` | Shared expandable tool card: status icon, name, summary, meta, CSS grid-animated details panel |
-| `tool-renderers/` | Per-tool: `recall.tsx`, `memory-tool.tsx`, `list-files.tsx`, `current-time.tsx`, `web-search.tsx`, `default.tsx` |
+| `tool-renderers/` | Per-tool: `recall.tsx`, `memory-tool.tsx`, `list-files.tsx`, `list-docs.tsx`, `read-doc.tsx`, `current-time.tsx`, `web-search.tsx`, `default.tsx` |
 | `time-display.tsx` | The shared time readout (`NumberTicker` per field) |
 | `empty-briefing.tsx` | The arrival briefing in the timeline's slice-card skin. Two seats: `variant="card"` rides the stream's tail; the full-screen form only for an empty, slice-less memory. Takes the resolved `identity` as a prop |
 | `cognition-popover.tsx` | Per-turn agent thoughts dialog (lazy-loaded Markdown) |
