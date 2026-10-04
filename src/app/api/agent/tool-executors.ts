@@ -45,6 +45,7 @@ import {
   hqRun,
   type HQBriefPayload,
 } from "@/app/api/evolution/hq-run";
+import { questionRun } from "@/app/api/evolution/question-run";
 import { readSelfSop } from "@/lib/evolution/store";
 
 import { extractSliceIds } from "@/lib/docs/docs-query";
@@ -667,13 +668,58 @@ export type NoteForSedimentResult =
   | { ok: false; reason: string };
 
 /**
+ * Append ONE validated [doc-marker] line to the current slice's agent.md
+ * mailbox — the shared tail of the marker producers (noteForSediment,
+ * startLongTask). The producer validates by ROUND-TRIPPING the constructed
+ * line through the consumer's own `extractDocMarkers`, so the two sides can
+ * never drift apart. Idempotent on the marker id: an already-present id is
+ * never appended twice (workflow step retries re-run the executor).
+ */
+async function appendDocMarker(
+  ctx: ToolContext,
+  marker: DocMarker,
+): Promise<NoteForSedimentResult> {
+  const line = `${DOC_MARKER_PREFIX} ${JSON.stringify(marker)}`;
+  const parsed = extractDocMarkers(line);
+  if (parsed.length !== 1 || parsed[0].id !== marker.id) {
+    return {
+      ok: false,
+      reason: "marker failed the [doc-marker] contract check (librarian parser rejected it).",
+    };
+  }
+
+  const agentPath = sliceIdToAgentPath(ctx.sliceId);
+  let existing = "";
+  try {
+    // fresh: read-modify-append — a cached base would silently drop markers
+    // other steps landed in between (io-helpers contract). Dual-root (v0.19
+    // R2): the mailbox of a slice created before the root move lives under
+    // the legacy slices root; the append below always writes the new root.
+    const [primary, fallback] = slicePartPathCandidates(ctx.sliceId, "agent");
+    try {
+      existing = await fsReadFile(primary, undefined, { fresh: true });
+    } catch {
+      existing = await fsReadFile(fallback, undefined, { fresh: true });
+    }
+  } catch {
+    // no agent.md yet — this line opens it
+  }
+  if (extractDocMarkers(existing).some((m) => m.id === marker.id)) {
+    return { ok: true, marker: parsed[0], path: agentPath, duplicate: true };
+  }
+  const next = existing.trimEnd()
+    ? `${existing.trimEnd()}\n\n${line}\n`
+    : `${line}\n`;
+  await fsWriteFile(agentPath, next);
+  return { ok: true, marker: parsed[0], path: agentPath };
+}
+
+/**
  * noteForSediment — drop a `[doc-marker]` line into the current slice's
  * agent.md. The marker contract ([doc-marker] {"v":1,...}) is owned and
- * consumed by librarian.ts; this producer validates by ROUND-TRIPPING the
- * constructed line through the consumer's own `extractDocMarkers`, so the two
- * sides can never drift apart. Idempotent: the marker id is
- * `<sliceId>-<toolCallId>` — stable across workflow step retries, and an
- * already-present id is never appended twice.
+ * consumed by librarian.ts; the append itself lives in appendDocMarker above.
+ * The marker id is `<sliceId>-<toolCallId>` — stable across workflow step
+ * retries.
  */
 export async function noteForSedimentExecute(
   input: NoteForSedimentInput,
@@ -703,10 +749,9 @@ export async function noteForSedimentExecute(
     };
   }
 
-  const markerId = `${ctx.sliceId}-${toolCallId}`;
   const marker: DocMarker = {
     v: 1,
-    id: markerId,
+    id: `${ctx.sliceId}-${toolCallId}`,
     kind: input.kind,
     title,
     note: input.note?.trim() ?? "",
@@ -717,43 +762,7 @@ export async function noteForSedimentExecute(
     ...(anchor ? { dateAnchor: anchor } : {}),
     ...(input.body?.trim() ? { body: input.body } : {}),
   };
-
-  // Contract check against the consumer's parser BEFORE touching disk — a
-  // line librarian.ts cannot parse is refused here, never silently dropped
-  // by every downstream pass.
-  const line = `${DOC_MARKER_PREFIX} ${JSON.stringify(marker)}`;
-  const parsed = extractDocMarkers(line);
-  if (parsed.length !== 1 || parsed[0].id !== markerId) {
-    return {
-      ok: false,
-      reason: "marker failed the [doc-marker] contract check (librarian parser rejected it).",
-    };
-  }
-
-  const agentPath = sliceIdToAgentPath(ctx.sliceId);
-  let existing = "";
-  try {
-    // fresh: read-modify-append — a cached base would silently drop markers
-    // other steps landed in between (io-helpers contract). Dual-root (v0.19
-    // R2): the mailbox of a slice created before the root move lives under
-    // the legacy slices root; the append below always writes the new root.
-    const [primary, fallback] = slicePartPathCandidates(ctx.sliceId, "agent");
-    try {
-      existing = await fsReadFile(primary, undefined, { fresh: true });
-    } catch {
-      existing = await fsReadFile(fallback, undefined, { fresh: true });
-    }
-  } catch {
-    // no agent.md yet — this line opens it
-  }
-  if (extractDocMarkers(existing).some((m) => m.id === markerId)) {
-    return { ok: true, marker: parsed[0], path: agentPath, duplicate: true };
-  }
-  const next = existing.trimEnd()
-    ? `${existing.trimEnd()}\n\n${line}\n`
-    : `${line}\n`;
-  await fsWriteFile(agentPath, next);
-  return { ok: true, marker: parsed[0], path: agentPath };
+  return appendDocMarker(ctx, marker);
 }
 
 // ─── writeCase — the reply segment's ONE bounded write (v0.20 §2.2) ────────
@@ -955,6 +964,78 @@ export async function reportToHQExecute(
       e instanceof Error ? e.message : e,
     );
     return startHQRun(payload);
+  }
+}
+
+
+// ─── startLongTask — the conversation's sub-stream, dispatched on the spot ──
+
+export type StartLongTaskResult =
+  | { ok: true; runId: string }
+  | { ok: false; reason: string };
+
+/**
+ * startLongTask — hand a piece of long work the USER explicitly asked for
+ * ("去查一下 X") to the conversation's sub-stream: the question run
+ * (v0.21 §2 — the trigger moved from the slice-close marker scan to the
+ * field dispatching mid-conversation, on the LIVE slice).
+ *
+ * The agenda still travels through the FROZEN mailbox contract (§A.3.1 — no
+ * new channel): this executor first appends ONE question marker to the
+ * current slice's agent.md (the doc-research pass's agenda IS the markers),
+ * then starts the run fire-and-forget. The run has no mouth: findings land
+ * in research/ hypotheses/ cases, and the completion statement rides the
+ * tasks/ notice case that a LATER turn's reply segment reads (§A.3.3) — the
+ * result here only says the run was dispatched.
+ *
+ * Idempotency (at-least-once + writer-is-reader): the marker id
+ * (`<sliceId>-<toolCallId>`) dedups the append across step retries; a
+ * duplicated RUN is absorbed by the pass's own processed-marker record.
+ */
+export async function startLongTaskExecute(
+  input: { task: string; note?: string },
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<StartLongTaskResult> {
+  "use step";
+  if (ctx.useDemo) {
+    return {
+      ok: false,
+      reason:
+        "Demo mode runs on read-only benchmark data — long tasks are not dispatched.",
+    };
+  }
+  const task = input.task?.trim() ?? "";
+  if (!task) return { ok: false, reason: "task must not be empty." };
+
+  const posted = await appendDocMarker(ctx, {
+    v: 1,
+    id: `${ctx.sliceId}-${toolCallId}`,
+    kind: "question",
+    title: task,
+    note: input.note?.trim() ?? "",
+    topics: [],
+  });
+  if (!posted.ok) return { ok: false, reason: posted.reason };
+
+  try {
+    // Same start config the retired close-scan trigger used (steps.ts).
+    const run = await start(
+      questionRun,
+      [{ sliceId: ctx.sliceId, date: userLocalDate(ctx.timezone) }],
+      { region: "hkg1" },
+    );
+    return { ok: true, runId: run.runId };
+  } catch (e) {
+    // The marker is already on disk — the question stays in the record; but
+    // with the close-scan route retired nothing re-fires the run, so the
+    // refusal must be visible to the model NOW.
+    return {
+      ok: false,
+      reason:
+        `the question is recorded in the mailbox but the sub-stream could not ` +
+        `be started: ${e instanceof Error ? e.message : String(e)} — ` +
+        `tell the user the dispatch failed.`,
+    };
   }
 }
 

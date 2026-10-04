@@ -18,9 +18,10 @@
  * doc-research pass, the merged card run, the case write machinery, the SOP
  * store) — this module invents no new write path.
  *
- * P4 wiring point: the hq-run.ts shell is built in another lane; it calls
- * `handleBrief` below. boundary-run.ts / question-run.ts keep compiling
- * against background-steps.ts until P4 retires the trigger chain.
+ * P4b wiring: the hq-run.ts shell's `handleHQBrief` (hq-steps.ts) calls
+ * `handleBrief` below — one brief = one round. boundary-run.ts /
+ * question-run.ts keep compiling against background-steps.ts until the last
+ * P4 lane retires the old trigger chain.
  */
 import { tool } from "ai";
 import { z } from "zod";

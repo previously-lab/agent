@@ -1,12 +1,15 @@
 /**
- * HQ run — the field↔HQ communication shell (v0.21 §4, P2).
+ * HQ run — the field↔HQ communication shell (v0.21 §4, P4b).
  *
  * The workflow runtime primitives (createHook / sleep) and the runtime API
- * (resumeHook) are mocked; `executeBoundaryRun` is stubbed. No real durable
- * run is executed — that is the main agent's live verification.
+ * (resumeHook) are mocked; the HQ agent (hq-agent.ts's handleBrief) is
+ * stubbed. No real durable run is executed — that is the main agent's live
+ * verification.
  *
  * Pins: conflict → handoff-then-exit (order), idle-grace exit, multi-brief
- * loop, and the P2 bridge's pointer extraction.
+ * loop, and the P4b handoff shape — the brief prose goes to the HQ agent
+ * VERBATIM (no pointer extraction in the shell), with the date stamp and the
+ * replyToken's slice pointer as the only shell-owned facts.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -17,7 +20,10 @@ const h = vi.hoisted(() => ({
     h.order.push("handoff");
     return { runId: "run-primary" };
   }),
-  executeBoundaryRun: vi.fn(async () => ({ ran: true, written: [], cardChanged: false })),
+  handleBrief: vi.fn(async () => {
+    h.order.push("handleBrief");
+    return { actions: [], note: "idle — nothing substantive" };
+  }),
   /** per-test hook behavior, installed by makeHook */
   behavior: null as null | {
     conflict: { runId: string } | null;
@@ -36,8 +42,8 @@ vi.mock("workflow/api", () => ({
   resumeHook: h.resumeHook,
 }));
 
-vi.mock("@/app/api/evolution/background-steps", () => ({
-  executeBoundaryRun: h.executeBoundaryRun,
+vi.mock("@/app/api/evolution/hq-agent", () => ({
+  handleBrief: h.handleBrief,
 }));
 
 import { hqRun, HQ_TOKEN, type HQBriefPayload } from "@/app/api/evolution/hq-run";
@@ -87,21 +93,33 @@ beforeEach(() => {
 });
 
 describe("hqRun — claim and conflict", () => {
-  it("no conflict → claims the token and processes the initial brief", async () => {
+  it("no conflict → claims the token and hands the initial brief to the HQ agent verbatim", async () => {
     const outcome = await hqRun(BRIEF);
     expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    // P2 bridge: the slice id mentioned in the prose is the pointer
-    expect(h.executeBoundaryRun).toHaveBeenCalledWith({
-      sliceId: "2026-10-04-0131",
+    // P4b: NO pointer extraction in the shell — the prose rides verbatim;
+    // the slice pointer comes from the mechanical replyToken, the date is
+    // the UTC stamp (the same clock slice ids are named by).
+    expect(h.handleBrief).toHaveBeenCalledTimes(1);
+    expect(h.handleBrief).toHaveBeenCalledWith({
+      brief: BRIEF.brief,
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      sliceId: "2026-10-04-0131",
     });
     expect(h.resumeHook).not.toHaveBeenCalled();
   });
 
-  it("no pointer in the brief → falls back to the replyToken's slice id", async () => {
-    await hqRun({ brief: "没有指针的简报。", replyToken: BRIEF.replyToken });
-    expect(h.executeBoundaryRun).toHaveBeenCalledWith({
-      sliceId: "2026-10-04-0131",
+  it("a replyToken without a slice id → sliceId omitted (the brief prose is still whole)", async () => {
+    await hqRun({ brief: "没有指针的简报。", replyToken: "field::2026-10-04T01:31:00.000Z" });
+    expect(h.handleBrief).toHaveBeenCalledWith({
+      brief: "没有指针的简报。",
+      date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    });
+  });
+
+  it("a non-field replyToken → no slice pointer, brief still handed over", async () => {
+    await hqRun({ brief: "外来 token。", replyToken: "something-else" });
+    expect(h.handleBrief).toHaveBeenCalledWith({
+      brief: "外来 token。",
       date: expect.any(String),
     });
   });
@@ -115,7 +133,7 @@ describe("hqRun — claim and conflict", () => {
     expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, BRIEF);
     expect(h.order).toEqual(["handoff"]);
     // a deduped rival does no HQ work itself
-    expect(h.executeBoundaryRun).not.toHaveBeenCalled();
+    expect(h.handleBrief).not.toHaveBeenCalled();
   });
 });
 
@@ -130,6 +148,12 @@ describe("hqRun — the work loop", () => {
     h.behavior = { conflict: null, queue: [second], pend: true };
     const outcome = await hqRun(BRIEF);
     expect(outcome).toEqual({ kind: "claimed", handled: 2 });
-    expect(h.executeBoundaryRun).toHaveBeenCalledTimes(2);
+    expect(h.handleBrief).toHaveBeenCalledTimes(2);
+    // each brief keeps its OWN prose and token-derived pointer
+    expect(h.handleBrief).toHaveBeenNthCalledWith(2, {
+      brief: second.brief,
+      date: expect.any(String),
+      sliceId: "2026-10-04-0131",
+    });
   });
 });

@@ -2,9 +2,10 @@
  * reportToHQ — the field's one-way dispatch to HQ (v0.21 §4).
  *
  * `workflow/api` is mocked (no real hook/start); `background-steps` is
- * stubbed so importing the (P2-bridged) hq module stays light. Pins the
- * three dispatch paths and the payload shape: prose `brief` from the model,
- * `replyToken` attached mechanically, nothing else.
+ * stubbed because tool-executors statically reaches it via question-run
+ * (startLongTask, v0.21 §2) — the mock keeps its heavy graph out of this
+ * test. Pins the three dispatch paths and the payload shape: prose `brief`
+ * from the model, `replyToken` attached mechanically, nothing else.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -12,7 +13,6 @@ const h = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
   resumeHook: vi.fn(),
   start: vi.fn(),
-  executeBoundaryRun: vi.fn(async () => ({ ran: true, written: [], cardChanged: false })),
 }));
 
 vi.mock("workflow/api", () => ({
@@ -23,7 +23,8 @@ vi.mock("workflow/api", () => ({
 }));
 
 vi.mock("@/app/api/evolution/background-steps", () => ({
-  executeBoundaryRun: h.executeBoundaryRun,
+  executeBoundaryRun: vi.fn(),
+  executeQuestionRun: vi.fn(),
 }));
 
 import { reportToHQExecute, type ToolContext } from "@/app/api/agent/tool-executors";

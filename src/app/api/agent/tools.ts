@@ -30,6 +30,7 @@ import {
   readDocExecute,
   writeCaseExecute,
   reportToHQExecute,
+  startLongTaskExecute,
   noteForSedimentExecute,
   type ToolContext,
 } from "./tool-executors";
@@ -366,6 +367,47 @@ export const chatTools = {
     }),
     contextSchema: toolContextSchema,
     execute: reportToHQExecute,
+  }),
+  // The conversation's SUB-STREAM (v0.21 §2): long work the user EXPLICITLY
+  // asked for ("去查一下 X") is dispatched on the spot — the executor drops a
+  // question marker into the live slice's mailbox and starts the question
+  // run. The sub-stream has no mouth: findings land in research/ hypotheses/
+  // cases, and the completion statement is read off the tasks/ notice case by
+  // a LATER turn — nothing flows back into this reply.
+  startLongTask: tool({
+    description:
+      "Hand a piece of LONG work the user explicitly asked for to the " +
+      "conversation's sub-stream — \"去查一下 X\", an investigation too big " +
+      "or too slow for this reply. The sub-stream researches it ACROSS the " +
+      "memory record in a durable background run and writes the findings as " +
+      "documents (research/ or hypotheses/ cases). The result does NOT come " +
+      "back to you here — do not wait for it and do not promise specifics: " +
+      "you will read its completion statement on a LATER turn and tell the " +
+      "user then. After dispatching, just tell the user the work is underway. " +
+      "ONLY for work the user explicitly requested as background/long work — " +
+      "never for something you can answer in this reply, and never on your " +
+      "own initiative.",
+    inputSchema: z.object({
+      task: z
+        .string()
+        .min(1)
+        .describe(
+          "What the user asked for, as ONE self-contained line — the " +
+          "investigation's title. It names the work in the record and becomes " +
+          "the subject of the completion statement, so phrase it the way the " +
+          "user would recognize it.",
+        ),
+      note: z
+        .string()
+        .optional()
+        .describe(
+          "Optional grounding for the researcher: why this matters now, plus " +
+          "pointers (slice ids, case paths) — pointers are worth more than " +
+          "summaries; the run reads the original records itself.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: startLongTaskExecute,
   }),
   // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). The reply segment
   // is "只读 + 记账" — this tool is the 记账, the ONE memory write the main
@@ -711,6 +753,7 @@ export function buildChatToolsContext(
     readDoc: ctx,
     writeCase: ctx,
     reportToHQ: ctx,
+    startLongTask: ctx,
     noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,

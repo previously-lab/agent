@@ -22,9 +22,11 @@
  * hq-steps.ts behind "use step" — this module imports only `workflow`, the
  * pure contract, and those two step functions.
  *
- * P2 scope: each brief is handled by `handleHQBrief`, which bridges to the
- * EXISTING background execution entry so behavior stays available. P4 swaps
- * that bridge for the HQ agent itself (hq-agent.ts).
+ * P4b: each brief is handled by `handleHQBrief`, which hands it to the HQ
+ * agent itself (hq-agent.ts — brief prose verbatim, a date stamp, and the
+ * replyToken's slice pointer; HQ reads the raw records and decides for
+ * itself, §5). The P2 mechanical bridge (pointer extraction →
+ * executeBoundaryRun) is gone.
  *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */

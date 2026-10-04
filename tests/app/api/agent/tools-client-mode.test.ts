@@ -112,6 +112,16 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("dateAnchor");
   });
 
+  it("exposes startLongTask (the conversation's sub-stream dispatch, v0.21 §2) with a context entry", () => {
+    expect(chatTools).toHaveProperty("startLongTask");
+    expect(buildChatToolsContext(ctx).startLongTask).toBe(ctx);
+    const schema = chatTools.startLongTask.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(schema.shape).toHaveProperty("task");
+    expect(schema.shape).toHaveProperty("note");
+  });
+
   it("readDoc input: the two-segment ref (分类/case名[/篇名])", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
     const schema = chatTools.readDoc.inputSchema as unknown as {
