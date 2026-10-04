@@ -40,7 +40,6 @@ import {
   readPreviously,
   writePreviously,
   findMostRecentPreviously,
-  readStrands,
   deterministicSliceMark,
   createBatch,
   flushBatch,
@@ -1376,7 +1375,6 @@ export async function scribeSegment(
 
   // ── 序 2. Analyze ─────────────────────────────────────────────────────
   await emitStep("analyze", true);
-  const existingStrands = await readStrands(batch);
   let analysis: TurnAnalysis;
   /** The bridge report — kept for 序 6's mutation application. */
   let bridgeReport: HousekeepingPhaseReport | null = null;
@@ -1384,7 +1382,7 @@ export async function scribeSegment(
     // Phase outsourcing (client mode + bridge brain, kill-switch
     // PREVIOUSLY_PHASE_OUTSOURCE=0): ONE bridge call covers the analysis AND
     // (on an explicit update) the card-mutation proposal. The payload is the
-    // minimal set (A1): message, recent turns, strand names, the card, the
+    // minimal set (A1): message, recent turns, the card, the
     // closing slice — no dry slices / merge candidates / signals / playbooks
     // / direction anymore. A failed call degrades EXACTLY like an analyzer
     // outage (memoryWorthy=true, no tags, deterministic closed marking below)
@@ -1423,7 +1421,6 @@ export async function scribeSegment(
       {
         userMessage: lastUserMessage,
         recentTurns: input.recentTurns,
-        existingStrandNames: Object.keys(existingStrands),
         cardContent: bridgeCardRaw,
         sliceId: slice.slice_id,
         closingSlice: closingSlice
@@ -1453,7 +1450,6 @@ export async function scribeSegment(
     analysis = await analyzeTurn({
       model: input.modelConfig,
       userMessage: lastUserMessage,
-      existingStrandNames: Object.keys(existingStrands),
       closingSlice: closingSlice ? { turns: closingSlice.turns } : undefined,
     });
   }
@@ -1621,7 +1617,6 @@ export async function scribeSegment(
             model: input.modelConfig,
             sliceId: slice.slice_id,
             recentTurns: input.recentTurns,
-            currentSliceTags: slice.tags,
             focus: explicitUpdate.content,
             signal: "new_observation",
             readers: buildCardReaders(input),
@@ -1664,7 +1659,6 @@ export async function scribeSegment(
         model: input.modelConfig,
         sliceId: closedThisTurn.slice_id,
         excerpt: buildSliceExcerpt(closedThisTurn),
-        strands: existingStrands,
         date: todayLocal,
         batch,
       });
@@ -1682,7 +1676,6 @@ export async function scribeSegment(
       model: input.modelConfig,
       sliceId: slice.slice_id,
       excerpt: buildSliceExcerpt(slice),
-      strands: existingStrands,
       date: todayLocal,
       batch,
     });

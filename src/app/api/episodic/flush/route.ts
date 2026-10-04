@@ -79,14 +79,11 @@ function buildFreshFrontmatter(sliceId: string): string {
     "---",
     `slice_id: "${sliceId}"`,
     'focus: ""',
-    "status: active",
     `start: "${now}"`,
     "timezone: UTC",
     'summary: ""',
     "open_loops: []",
     "decisions: []",
-    "tags: []",
-    "related_slices: []",
     "---",
   ].join("\n");
 }

@@ -3,15 +3,15 @@
  * housekeeping step.
  *
  * One pass, structured outputs (thinking on at low effort, cheap):
- *   1. semantic_hint  — which EXISTING strands this message is about, plus why
- *      (an LLM understands paraphrase / cross-language). v0.9: no longer fed
- *      into the prompt (the per-turn priming block was retired with the
- *      slice-level prompt freeze); kept on the analysis record for
- *      housekeeping decisions and agent.md.
- *   2. closed_marking — focus / summary / tone for a slice that is
+ *   1. closed_marking — focus / summary / tone for a slice that is
  *      about to close (only when one closed this turn).
- *   3. evolve_card    — whether the closing slice holds anything worth
+ *   2. evolve_card    — whether the closing slice holds anything worth
  *      sedimenting onto the user card (only when one closed this turn).
+ *
+ * v0.19 R6: the semantic_hint task is RETIRED — it picked topics from the
+ * frozen strands.json vocabulary and had no live consumer left (the per-turn
+ * priming block was retired back in v0.9). `TurnAnalysis.semanticHint` stays
+ * on the type as an optional deprecated field for tolerant readers.
  *
  * v0.19 R4/R5: the fitness task is RETIRED with the fitness store (design
  * v0.19 §C.2) — selection pressure is prose self-assessment under self/ now,
@@ -37,6 +37,11 @@ import type { ModelConfig } from "@/lib/models/registry";
 import type { EmotionalTone, Turn } from "@/lib/episodic/types";
 import type { EmotionalSignal } from "@/lib/turn-priming";
 
+/**
+ * @deprecated v0.19 R6 — the semantic-hint task is retired (it selected from
+ * the frozen strands.json vocabulary and had no live consumer). Kept on the
+ * type for tolerant readers of older analysis records; nothing produces it.
+ */
 export interface SemanticHint {
   strands: string[];
   reason: string;
@@ -64,7 +69,9 @@ export const CARD_SECTIONS = ["identity", "past", "now", "horizon"] as const;
 export type CardSection = (typeof CARD_SECTIONS)[number];
 
 export interface TurnAnalysis {
-  semanticHint: SemanticHint;
+  /** @deprecated Retired with the semantic-hint task (v0.19 R6) — never
+   *  produced anymore; tolerated on old analysis-shaped records only. */
+  semanticHint?: SemanticHint;
   /** The user's intent — what they're trying to do this turn. */
   intent?: { type: TurnIntent; reason: string };
   /**
@@ -102,19 +109,11 @@ export interface AnalyzeTurnInput {
   /** The model to run this analysis on (the turn's MAIN model, via the runner). */
   model: ModelConfig;
   userMessage: string;
-  existingStrandNames: string[];
-  /** Present only when a slice is about to close this turn — enables Task 5. */
+  /** Present only when a slice is about to close this turn — enables Task 4. */
   closingSlice?: { turns: Turn[] };
 }
 
 const analyzeSchema = z.object({
-  semantic_hint: z.object({
-    strands: z
-      .array(z.string())
-      .max(5)
-      .describe("Existing topic names this message is about. Empty if none."),
-    reason: z.string().describe("One line: why these topics relate to the message."),
-  }),
   intent: z.object({
     type: z.enum(INTENT_TYPES).describe("The user's intent for this turn."),
     reason: z.string().describe("One line: what the user is trying to do."),
@@ -199,7 +198,7 @@ const analyzeSchema = z.object({
     .describe("Only when a slice just closed."),
 });
 
-/** Compress a closing slice's turns for Task 5 — first turn + last 10, chars capped. */
+/** Compress a closing slice's turns for Task 4 — first turn + last 10, chars capped. */
 function compressSliceTurns(turns: Turn[]): string {
   if (turns.length === 0) return "(empty slice)";
   const pick = turns.length <= 11 ? turns : [turns[0], ...turns.slice(-10)];
@@ -212,21 +211,16 @@ function compressSliceTurns(turns: Turn[]): string {
 /**
  * Static role block — the system prompt (shared base + this) never changes
  * between calls, so provider prefix caches hit on every analysis. All dynamic
- * content (message, existing topics, closing slice) goes into the user prompt.
+ * content (message, closing slice) goes into the user prompt.
  */
-const ANALYZER_SYSTEM = buildSubAgentSystem(`You are the memory analyzer for a personal AI platform. One pass, five tasks (Task 5 ONLY when the user message includes a closing slice). Keep every field short — this is metadata, not prose.
+const ANALYZER_SYSTEM = buildSubAgentSystem(`You are the memory analyzer for a personal AI platform. One pass, four tasks (Task 4 ONLY when the user message includes a closing slice). Keep every field short — this is metadata, not prose.
 
-## Task 1 — Semantic hint for the agent
-
-Which of the EXISTING topics listed in the user message is this message most likely about? The agent uses this to decide which past slices to recall. Only list topics that are genuinely related; empty if none. One-line reason.
-Return semantic_hint: { strands: [...], reason: "..." }
-
-## Task 2 — Classify the user's intent
+## Task 1 — Classify the user's intent
 
 What is the user trying to do? Pick the single best label and give a one-line reason.
 Return intent: { type: "code_debug" | "code_write" | "explain" | "chat" | "review" | "clarify", reason: "..." }
 
-## Task 3 — Judge whether this turn is worth remembering
+## Task 2 — Judge whether this turn is worth remembering
 
 Is this a substantive exchange that should update memory (a new fact about the user, a preference, a correction, or a real discussion)? Or is it trivial — a greeting, acknowledgment, "继续", "ok", thanks, or small talk?
 
@@ -234,7 +228,7 @@ Return memory_worthy: true only when the turn contains durable information worth
 
 If the user EXPLICITLY asked to record something or run self-evolution ("记住：…", "自进化", "更新前情提要", "record this") — OR stated an explicit BEHAVIORAL CORRECTION / durable preference the agent should evolve from immediately ("以后别…", "下次先…", "你不要总是…", "stop doing X", "from now on always…") — regardless of memory_worthy — ALSO return memory_update with the exact content (English) + the best-fit card section. Omit memory_update otherwise.
 
-## Task 4 — Read the emotional register
+## Task 3 — Read the emotional register
 
 What is the user's emotional state in this message, if any? The agent reads this to know when to lead with support or match the user's register instead of staying purely analytical.
 
@@ -243,7 +237,7 @@ Return emotional_signal with:
 - register: neutral | emotional | humorous | frustrated | excited — the dominant register; humorous covers joking / playful / sarcastic. Omit or "neutral" when none.
 - note: one short line on what the user is feeling and why (empty when neutral).
 
-## Task 5 — Mark the closed slice (ONLY when the user message includes one)
+## Task 4 — Mark the closed slice (ONLY when the user message includes one)
 
 When a time slice just closed, summarize it so future recall can understand it at a glance. Return closed_marking with:
 - focus: one sentence on what this session was about
@@ -256,29 +250,22 @@ ALSO return evolve_card — your judgment on whether anything in this closing sl
 - reason: one line on what deserves sedimentation, or why nothing does
 When in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss.`);
 
-/** The dynamic user prompt: current message, existing topics, closing slice. */
+/** The dynamic user prompt: current message, closing slice. */
 function buildPrompt(input: AnalyzeTurnInput): string {
-  const existing =
-    input.existingStrandNames.length > 0
-      ? input.existingStrandNames.join(", ")
-      : "(none yet)";
-
   const closingSection = input.closingSlice
     ? `
 
-## Closing slice — also run Task 5
+## Closing slice — also run Task 4
 
 A time slice just closed.
 
 Conversation (first turn + last turns):
 ${compressSliceTurns(input.closingSlice.turns)}
 
-Return closed_marking AND evolve_card per your Task 5 instructions.`
+Return closed_marking AND evolve_card per your Task 4 instructions.`
     : "";
 
-  return `Message: "${input.userMessage.slice(0, 1000)}"
-
-Existing topics (for the semantic hint): ${existing}${closingSection}`;
+  return `Message: "${input.userMessage.slice(0, 1000)}"${closingSection}`;
 }
 
 /**
@@ -294,7 +281,6 @@ export function shouldRunCardEvolution(
 }
 
 const EMPTY_BASE: TurnAnalysis = {
-  semanticHint: { strands: [], reason: "" },
   // Conservative on failure: memoryWorthy stays true so an analyzer outage
   // never silently freezes memory writes.
   memoryWorthy: true,
@@ -342,12 +328,6 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
 
   const d = result.report;
   return {
-      semanticHint: {
-        strands: d.semantic_hint.strands
-          .slice(0, 5)
-          .filter((s) => typeof s === "string" && s.trim().length > 0),
-        reason: typeof d.semantic_hint.reason === "string" ? d.semantic_hint.reason : "",
-      },
       intent: d.intent
         ? { type: d.intent.type, reason: d.intent.reason }
         : undefined,

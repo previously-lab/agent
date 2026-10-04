@@ -165,26 +165,26 @@ describe("write-back rules", () => {
   it("applies SOP writes through writeSelfSop and surfaces them as playbooks (v0.19 §C.2)", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
-      reasoning: "recall keeps guessing",
+      reasoning: "search keeps guessing",
       summary: "",
       mutations: [],
       sopWrites: [
         {
-          agent: "recall" as const,
-          content: "On emotional topics, read the full slice first.",
+          agent: "search" as const,
+          content: "Quote the records slice id before answering.",
           evidence: ["2026-08-17-0515"],
-          expectedBenefit: "fewer unverified recall answers",
+          expectedBenefit: "fewer ungrounded answers",
         },
       ],
     });
     const res = await runCardEvolution(baseInput());
     expect(writeSopMock).toHaveBeenCalledWith(
-      "recall",
-      "On emotional topics, read the full slice first.",
+      "search",
+      "Quote the records slice id before answering.",
       undefined,
     );
     expect(res.playbooks).toEqual([
-      { agent: "recall", summary: "fewer unverified recall answers" },
+      { agent: "search", summary: "fewer ungrounded answers" },
     ]);
   });
 

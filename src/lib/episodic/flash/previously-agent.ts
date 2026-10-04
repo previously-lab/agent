@@ -158,7 +158,8 @@ export interface PreviouslyAgentInput {
   previouslyContent: string;
   /** The recent exchange (the closed slice's turns, or the active exchange). */
   recentTurns: Array<{ role: string; content: string }>;
-  /** Tags on the current slice — context for the review. */
+  /** @deprecated Slice tags stopped being written in v0.19 R2 (always `[]`);
+   *  the prompt no longer renders them. Tolerated for older callers only. */
   currentSliceTags?: string[];
   /** The user's LOCAL calendar date (YYYY-MM-DD) — Now ages / overdue checks
    *  compare against the user's clock, and it is the default `since`. */
@@ -310,7 +311,7 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 | \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Durable fact ("still true in 3 years"), ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
 | \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
 | \`addHorizon(text, by, refs)\` / \`resolveHorizon(match, note?)\` | Open loop, ≤ ${HORIZON_ITEM_MAX_CHARS} chars, \`by: YYYY-MM-DD\` + refs required, ≤ ${HORIZON_MAX} total. Resolve removes it — the ONLY way a Horizon item leaves. |
-| \`writeSop(agent, content, evidence, expectedBenefit)\` | Rewrite a self/ colleague's SOP (agent ∈ recall / search / thinkdeep). GATED: accepted ONLY when that colleague is listed as allowed this run — otherwise REJECTED. Evidence MUST cite records slice ids. |
+| \`writeSop(agent, content, evidence, expectedBenefit)\` | Rewrite a self/ colleague's SOP (agent ∈ search / thinkdeep). GATED: accepted ONLY when that colleague is listed as allowed this run — otherwise REJECTED. Evidence MUST cite records slice ids. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
 | \`readAgentTimeline(sliceId)\` | Read agent.md — the reasoning + tool calls. Process context for judging how interactions went. |
 | \`readPreviously(sliceId)\` | Read a past slice's card snapshot. Check how long a fact has been held. |
@@ -333,7 +334,7 @@ Compare the conversation in the task against the current card. Incorporate anyth
 
 ## self/ — SOPs and self-assessment
 
-You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documents loaded IN FULL into the recall / search / thinkdeep sub-agents' system prompts at spawn (e.g. "on emotional topics, read the full slice before concluding"). An SOP write is a MUTATION with a hard gate: \`writeSop\` is accepted ONLY for a colleague the task lists as allowed this run, and every write must carry its evidence — **cite the records slice ids in the prose itself** ("because slice 2026-08-07-0709 showed …") — and its expected benefit.
+You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documents loaded IN FULL into the search / thinkdeep sub-agents' system prompts at spawn (e.g. "on emotional topics, read the full slice before concluding"). An SOP write is a MUTATION with a hard gate: \`writeSop\` is accepted ONLY for a colleague the task lists as allowed this run, and every write must carry its evidence — **cite the records slice ids in the prose itself** ("because slice 2026-08-07-0709 showed …") — and its expected benefit.
 
 **Evidence discipline**: with fitness scoring gone, your only credential is the record. An SOP change without slice-id citations is worthless — never propose one.
 
@@ -440,7 +441,7 @@ Evaluate the PORTRAIT + HYPOTHESIS POOL against this evidence. "No change" is th
 function buildUserPrompt(input: PreviouslyAgentInput): string {
   const {
     signal, note, currentSliceId, closedSliceId, previouslyContent,
-    recentTurns, currentSliceTags,
+    recentTurns,
   } = input;
 
   const signalLabels: Record<PreviouslySignal, string> = {
@@ -451,10 +452,6 @@ function buildUserPrompt(input: PreviouslyAgentInput): string {
 
   const deepNote = closedSliceId
     ? `\n**DEEP MODE**: slice \`${closedSliceId}\` just closed. Its full conversation is below; its agent timeline (readAgentTimeline) is your process context.`
-    : "";
-
-  const tagsNote = currentSliceTags && currentSliceTags.length > 0
-    ? `\n**Current slice tags**: ${currentSliceTags.join(", ")}`
     : "";
 
   // The direction rides the prompt two ways: the merged run's EVALUATION
@@ -497,7 +494,7 @@ ${buildTimeContext(input)}
 ## Signal
 
 ${signalLabels[signal]}
-Note: "${note}"${tagsNote}
+Note: "${note}"
 Current slice: \`${currentSliceId}\`${deepNote}${directionSection}${sopSection}${profileSection}
 
 ## Current card (your working copy starts from this)
@@ -717,14 +714,14 @@ function buildTools(
     writeSop: tool({
       description:
         "Rewrite a self/ colleague's SOP (the document loaded in full into its " +
-        "system prompt at spawn) — agent ∈ recall / search / thinkdeep. HARD GATE: " +
+        "system prompt at spawn) — agent ∈ search / thinkdeep. HARD GATE: " +
         "accepted ONLY when that colleague is listed as allowed this run; otherwise " +
         "REJECTED. Carry the evidence (slice ids cited in the prose) and the " +
         "expected benefit — a mutation without them is not archivable. Self-" +
         "assessment (dated prose about what disappointed you) belongs at the " +
         "tail of the same document.",
       inputSchema: z.object({
-        agent: z.enum(["recall", "search", "thinkdeep"]),
+        agent: z.enum(["search", "thinkdeep"]),
         content: z
           .string()
           .describe("The FULL new SOP — short behavioral guidance, rewritten in place, slice ids cited in the prose."),

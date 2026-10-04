@@ -1,9 +1,10 @@
 /**
  * Episodic Memory Manager — core CRUD for time slices.
  *
- * Tracks the active time slice in memory, computes file paths, serializes
- * slices to Markdown (YAML frontmatter + turns body), and maintains the
- * monthly index and global tag index on disk.
+ * Tracks the active time slice in memory, computes file paths, and serializes
+ * slices to Markdown (YAML frontmatter + turns body). The monthly index and
+ * tag-index projections are retired (v0.19 §A.2.4) — readers live-enumerate
+ * the records tree.
  *
  * All file I/O delegates to the existing tools layer, which handles the
  * local-dev vs GitHub-production switch transparently.
@@ -182,8 +183,8 @@ async function scanDirForActiveSlice(
 }
 
 /**
- * Close the active time slice, persisting it to disk and running
- * index maintenance. Returns the closed slice.
+ * Close the active time slice, persisting it to disk. Returns the closed
+ * slice.
  */
 export async function closeSlice(
   slice: TimeSlice,
@@ -198,16 +199,13 @@ export async function closeSlice(
   slice.end = slice.turns.at(-1)?.timestamp ?? new Date().toISOString();
   slice.closedBy = signal;
 
-  // Persist the closed slice body to disk
+  // Persist the closed slice body to disk. The monthly `_index.json` and
+  // `strands.json` projections are RETIRED (design v0.19 §A.2.4/§B.5): no
+  // index maintenance runs here anymore — readers live-enumerate the records
+  // tree instead.
   const slicePath = getSlicePath(slice);
   const markdown = serializeSlice(slice);
   await fsWriteFile(slicePath, markdown, batch);
-
-  // Run index maintenance
-  await updateMonthlyIndex(slice, batch);
-  if (slice.tags.length > 0) {
-    await updateStrands(slice, batch);
-  }
 
   // Clear active if this was the active slice
   if (activeSlice?.slice_id === slice.slice_id) {
@@ -907,15 +905,14 @@ export async function saveSliceSnapshot(
 }
 
 /**
- * Persist _index.json and strands.json for an active slice.
- * Called on snapshot save so browseSlices has entries even for active slices.
+ * RETIRED no-op (design v0.19 §A.2.4/§B.5): the monthly `_index.json` and
+ * `strands.json` projections are no longer written — readers live-enumerate
+ * the records tree. The export survives only because the episodic barrel
+ * (index.ts) still re-exports it; it has no live callers.
  */
 export async function ensureIndexEntries(
-  slice: TimeSlice,
-  batch?: WriteBatch
+  _slice: TimeSlice,
+  _batch?: WriteBatch
 ): Promise<void> {
-  await updateMonthlyIndex(slice, batch);
-  if (slice.tags.length > 0) {
-    await updateStrands(slice, batch);
-  }
+  // no-op — projections retired
 }

@@ -288,7 +288,6 @@ export async function executeBoundaryRun(
   // minimal one (the freshest evidence is the closed slice itself, which the
   // agent reads through the readers).
   const minimalAnalysis: TurnAnalysis = {
-    semanticHint: { strands: [], reason: "" },
     memoryWorthy: true,
     emotionalSignal: { intensity: "none", register: "neutral", note: "" },
   };
@@ -297,7 +296,6 @@ export async function executeBoundaryRun(
     sliceId,
     closedSliceId: sliceId,
     recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
-    currentSliceTags: slice.tags,
     focus:
       `① 档案员刚更新的 case：${librarian.written.join("、") || "（无——①空转）"}。` +
       `用户模型的更新应引用这些 case（若有），而不是泛泛而谈。`,
@@ -310,8 +308,10 @@ export async function executeBoundaryRun(
       cardSelfModel: null,
       analysis: minimalAnalysis,
     },
-    // ③'s craft half — SOP rewrites ride this one merged run (§C.2).
-    allowedSopWrites: ["recall", "search", "thinkdeep"],
+    // ③'s craft half — SOP rewrites ride this one merged run (§C.2). Only
+    // colleagues with a LIVE spawn-time SOP load are allowlisted (search,
+    // thinkdeep) — recall is retired (v0.19 R6, review M7).
+    allowedSopWrites: ["search", "thinkdeep"],
   });
   console.log(
     `[BoundaryRun] ② user model: changed=${card.changed}${card.error ? ` error=${card.error}` : ""}`,

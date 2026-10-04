@@ -172,8 +172,9 @@ describe("executeBoundaryRun (§A.2.3-a)", () => {
     expect(cardInput.signal).toBe("slice_closed");
     expect(cardInput.closedSliceId).toBe(SLICE_ID);
     expect(cardInput.focus).toContain("research/手机购买调研/index.md");
-    // ③'s craft half — SOP writes ride the merged run.
-    expect(cardInput.allowedSopWrites).toEqual(["recall", "search", "thinkdeep"]);
+    // ③'s craft half — SOP writes ride the merged run. Recall is retired
+    // (no live SOP load) — only the living colleagues are allowlisted.
+    expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
     // The reflection line names what was updated.
     expect(io.files.get(REFLECTION_PATH)).toContain("research/手机购买调研/index.md");
   });

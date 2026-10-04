@@ -11,7 +11,7 @@
  * the same downstream code paths as the sub-agent flow.
  *
  * SOP evolution (v0.19 §C.2) rides the SAME report: the client proposes SOP
- * rewrites (report.playbooks) for allowlisted recall/search/thinkdeep
+ * rewrites (report.playbooks) for allowlisted search/thinkdeep
  * colleagues and the kernel applies them through applyBridgePlaybookWrites —
  * the SAME allowlist gate as the merged run's writeSop tool (a write for a
  * colleague not allowlisted this run is skipped, never written). Old clients
@@ -78,7 +78,7 @@ import {
   writeUserModelCard,
   writeSelfSop,
 } from "@/lib/evolution/store";
-import type { SelfAgent } from "@/lib/evolution/paths";
+import { SELF_AGENTS, type SelfAgent } from "@/lib/evolution/paths";
 import { directionOpSchema } from "@/lib/evolution/direction-agent";
 
 // ─── Gate ──────────────────────────────────────────────────────────────────
@@ -166,11 +166,14 @@ const strandMergeSchema = z.object({
 /**
  * SOP rewrite proposal (job 7) — the wire form of the merged run's SopWrite
  * (previously-agent.ts): one FULL rewrite of a colleague's self/<name>/
- * index.md. The agent ∈ recall / search / thinkdeep only (the colleagues
- * that carry an evolvable SOP).
+ * index.md. The LIVE colleagues are search / thinkdeep only (SelfAgent);
+ * "recall" stays on the wire enum purely for old-client tolerance — a recall
+ * proposal parses, then is skipped at apply time (no live sub-agent loads
+ * self/recall anymore, v0.19 R6).
  */
-/** The colleagues that carry an evolvable SOP — SelfAgent as a wire-safe
- *  constant. */
+/** The colleagues the wire may NAME — a superset of SelfAgent so a stale
+ *  client's recall proposal degrades to a skip instead of nuking the whole
+ *  report at schema validation. */
 const PLAYBOOK_AGENTS_WIRE = ["recall", "search", "thinkdeep"] as const;
 
 const playbookWriteSchema = z.object({
@@ -214,7 +217,6 @@ const capped = <T>(arr: T[], n: number): T[] => arr.slice(0, n);
 
 export const housekeepingPhaseReportSchema = z.object({
   analysis: z.object({
-    semantic_hint: z.array(z.string()).transform((a) => capped(a, 5)),
     intent: z.enum(WIRE_INTENTS),
     memory_worthy: z.boolean(),
     memory_update: z.string().nullable(),
@@ -263,10 +265,11 @@ export const housekeepingPhaseReportSchema = z.object({
   // mean the direction doc stays untouched.
   direction: directionOutcomeSchema.nullable().default(null),
   // SOP evolution (v0.19 §C.2 — job 7): proposed rewrites for the allowed
-  // recall / search / thinkdeep colleagues' self/ SOPs. Tolerates omission
+  // search / thinkdeep colleagues' self/ SOPs. Tolerates omission
   // (old clients) — and the allowlist gate is re-applied server-side
   // (applyBridgePlaybookWrites), so an over-eager proposal for a colleague
-  // not allowlisted this run is skipped, never written. (v0.19 R4/R5: the
+  // not allowlisted this run (or a retired one — "recall" parses on the wire
+  // but is skipped at apply time) is never written. (v0.19 R4/R5: the
   // fitness array is gone from the contract — unknown-key tolerant, so old
   // clients sending it are simply ignored.)
   playbooks: z
@@ -285,8 +288,6 @@ export interface HousekeepingBridgeInput {
   userMessage: string;
   /** Recent turns of the active slice (context for analysis/evolution). */
   recentTurns: Array<{ role: string; content: string }>;
-  /** Existing strand names — the semantic_hint topic list. */
-  existingStrandNames: string[];
   /** Current card content (current-previously.md; may be empty). */
   cardContent: string;
   /** The slice the card currently belongs to ("pending" before creation). */
@@ -353,7 +354,7 @@ export interface HousekeepingBridgeInput {
 const HOUSEKEEPING_TASK = `You are running Previously's housekeeping phase — the per-turn memory bookkeeping of a personal agent. This task is the FULL contract — the judgment rules, input specifics, and output contract all live here; your workspace instruction file only lists the available commands and mechanics.
 
 One pass, these jobs:
-1. Turn analysis — semantic_hint (existing strands this message is about), intent, memory_worthy (false for trivial turns: greetings / "继续" / thanks / small talk), memory_update (ONLY on an explicit record/evolve request or an explicit behavioral correction — the exact content, else null), emotional_signal.
+1. Turn analysis — intent, memory_worthy (false for trivial turns: greetings / "继续" / thanks / small talk), memory_update (ONLY on an explicit record/evolve request or an explicit behavioral correction — the exact content, else null), emotional_signal.
 2. Closed-slice marking — ONLY when the context says a slice is closing: focus (one sentence), summary (≤100 chars), tone.
 3. Card evolution — judge worth (when in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss) and, when worth or memory_update is set, propose card mutations with the op vocabulary below. Never rewrite the whole card; entries you don't touch stay as they are.
 4. Dry-slice backfill — ONLY when the context carries a "Dry slices needing marks" section: one backfill_marks entry per listed slice ({slice_id copied verbatim, focus one sentence, summary ≤100 chars}); [] when the section is absent.
@@ -380,7 +381,6 @@ The card is a PURE semantic memory pool (Identity/Past/Now/Horizon — what the 
 OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, no markdown fence — matching this schema:
 {
   "analysis": {
-    "semantic_hint": string[],
     "intent": "code_debug"|"code_write"|"explain"|"chat"|"review"|"clarify",
     "memory_worthy": boolean,
     "memory_update": string | null,
@@ -391,7 +391,7 @@ OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, 
   "backfill_marks": [ { "slice_id": string, "focus": string, "summary": string } ],
   "strand_merges": [ { "from": string, "to": string } ],
   "direction": "no_change" | { "ops": [ …direction ops below… ], "summary": string, "evidence": string[], "expected_benefit": string } | null,
-  "playbooks": [ { "agent": "recall"|"search"|"thinkdeep", "content": string, "evidence": string[], "expected_benefit": string } ]
+  "playbooks": [ { "agent": "search"|"thinkdeep", "content": string, "evidence": string[], "expected_benefit": string } ]
 }
 closed_marking is null when no slice is closing; mutations is [] when nothing changes; backfill_marks is [] when no dry slices were provided; strand_merges is [] when no merge candidates were provided; direction is "no_change" (or omitted) when the direction doc stays as it is; playbooks is [] (or omitted) when no colleague SOP section was provided or nothing needs a rewrite. Analysis, closed_marking, backfill_marks and strand_merges must be produced from the data in this payload ALONE — do not read memory for them. Reading memory is card-evolution forensics ONLY (substantiating mutations, especially self-model lessons), and only through the three evidence commands the workspace allows in this phase (readslice / agentlog / card); the search-type commands (timeline / strands / slicesummary) are gated off in the housekeeping phase and will be refused.`;
 
@@ -407,8 +407,8 @@ function compressTurns(turns: Array<{ role: string; content: string }>): string 
 
 /**
  * Assemble the bridge payload: task = static instructions + the closing flag;
- * context = all dynamic data (message, recent turns, strands, card, closing
- * slice). Pure — exported for tests.
+ * context = all dynamic data (message, recent turns, card, closing slice).
+ * Pure — exported for tests.
  */
 export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
   task: string;
@@ -428,11 +428,6 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
       input.recentTurns.length > 0
         ? input.recentTurns.map((t) => `**${t.role}**: ${t.content}`).join("\n\n")
         : "(none)"
-    }`,
-    `## Existing strands (the semantic_hint topic list)\n\n${
-      input.existingStrandNames.length > 0
-        ? input.existingStrandNames.join(", ")
-        : "(none yet)"
     }`,
     `## Current card (current-previously.md — your mutation proposals apply to this)\n\n${
       input.cardContent.trim() || "(empty — new card)"
@@ -461,7 +456,7 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
   if (input.sopWriteAllowlist && input.sopWriteAllowlist.length > 0) {
     const allowed = new Set(
       input.sopWriteAllowlist.filter((b): b is SelfAgent =>
-        (PLAYBOOK_AGENTS_WIRE as readonly string[]).includes(b),
+        (SELF_AGENTS as readonly string[]).includes(b),
       ),
     );
     const current = new Map(
@@ -686,10 +681,6 @@ export function adaptHousekeepingReport(
   const a = report.analysis;
   const cm = report.closed_marking;
   return {
-    semanticHint: {
-      strands: a.semantic_hint.filter((s) => s.trim().length > 0),
-      reason: "",
-    },
     intent: { type: a.intent as TurnIntent, reason: "" },
     memoryWorthy: a.memory_worthy,
     emotionalSignal: {
@@ -720,7 +711,6 @@ export function adaptHousekeepingReport(
  */
 export function degradedAnalysis(): TurnAnalysis {
   return {
-    semanticHint: { strands: [], reason: "" },
     memoryWorthy: true,
     emotionalSignal: { intensity: "none", register: "neutral", note: "" },
   };
@@ -943,6 +933,16 @@ export async function applyBridgePlaybookWrites(
   const applied: ApplyBridgePlaybooksResult["applied"] = [];
   const skipped: ApplyBridgePlaybooksResult["skipped"] = [];
   for (const w of writes.slice(0, MAX_PLAYBOOK_WRITES)) {
+    // Wire tolerance: an old client's "recall" proposal parses (it stays on
+    // PLAYBOOK_AGENTS_WIRE) but the colleague is RETIRED — no live sub-agent
+    // loads self/recall — so it is skipped here, never written.
+    if (w.agent === "recall") {
+      skipped.push({
+        agent: w.agent,
+        reason: 'the "recall" SOP is retired — no live sub-agent loads it',
+      });
+      continue;
+    }
     if (!sopWriteAllowlist.includes(w.agent)) {
       skipped.push({
         agent: w.agent,

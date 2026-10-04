@@ -71,7 +71,6 @@ const SLICE = "2026-08-22-1015";
 
 const VALID_REPORT: HousekeepingPhaseReport = {
   analysis: {
-    semantic_hint: ["work"],
     intent: "chat",
     memory_worthy: true,
     memory_update: null,
@@ -101,7 +100,6 @@ function baseInput() {
   return {
     userMessage: "我周五有个面试",
     recentTurns: [{ role: "user", content: "我周五有个面试" }],
-    existingStrandNames: ["work", "health"],
     cardContent: "",
     sliceId: SLICE,
     todayLocal: "2026-08-22",
@@ -127,7 +125,6 @@ describe("buildHousekeepingPayload", () => {
     expect(task).toContain(`slice ${SLICE} IS closing`);
     expect(task).toContain('"evolution"');
     expect(context).toContain('"我周五有个面试"');
-    expect(context).toContain("work, health");
     expect(context).toContain("Closing slice");
     expect(context).toContain("2026-08-22");
   });
@@ -207,19 +204,19 @@ describe("buildHousekeepingPayload", () => {
   it("lists allowlisted colleagues' SOPs for the folded-in SOP job when provided", () => {
     const { task, context } = buildHousekeepingPayload({
       ...baseInput(),
-      sopWriteAllowlist: ["recall"],
+      sopWriteAllowlist: ["search"],
       playbooks: [
-        { agent: "recall", content: "- read the full slice before concluding" },
-        { agent: "search", content: "- unused: not allowlisted" },
+        { agent: "search", content: "- quote the slice before answering" },
+        { agent: "thinkdeep", content: "- unused: not allowlisted" },
       ],
     });
     expect(task).toContain("SOP evolution");
     expect(task).toContain('"playbooks"');
     expect(context).toContain("self/ SOPs writable this run");
-    expect(context).toContain("### recall");
-    expect(context).toContain("- read the full slice before concluding");
-    // search is not allowlisted — its SOP is not offered.
-    expect(context).not.toContain("### search");
+    expect(context).toContain("### search");
+    expect(context).toContain("- quote the slice before answering");
+    // thinkdeep is not allowlisted — its SOP is not offered.
+    expect(context).not.toContain("### thinkdeep");
   });
 
   it("omits the self/ SOP section when no colleague is allowlisted", () => {
@@ -506,7 +503,6 @@ describe("runHousekeepingBridge", () => {
 
   it("truncates over-cap arrays instead of rejecting the whole report", async () => {
     const fat = JSON.parse(JSON.stringify(VALID_REPORT));
-    fat.analysis.semantic_hint = ["a", "b", "c", "d", "e", "f"];
     fat.backfill_marks = Array.from({ length: 5 }, (_, i) => ({
       slice_id: `2026-08-1${i}-1000`,
       focus: "f",
@@ -520,8 +516,22 @@ describe("runHousekeepingBridge", () => {
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.report.analysis.semantic_hint).toHaveLength(5);
     expect(res.report.backfill_marks).toHaveLength(3);
+  });
+
+  it("tolerates an old client still sending the retired semantic_hint (stripped)", async () => {
+    const stale = JSON.parse(JSON.stringify(VALID_REPORT));
+    stale.analysis.semantic_hint = ["work"];
+    runBridgeMock.mockResolvedValue({
+      status: "ok",
+      result: JSON.stringify(stale),
+      elapsedMs: 5,
+    });
+    const res = await runHousekeepingBridge(baseInput());
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // The retired field parses away — it never reaches the adapted analysis.
+    expect(res.report.analysis).not.toHaveProperty("semantic_hint");
   });
 
   it("tolerates omitted optional mutation fields (refs / by / evidence / resolution)", async () => {
@@ -671,9 +681,9 @@ describe("isPhaseOutsourceActive", () => {
 // ─── report → TurnAnalysis adaptation ────────────────────────────────────
 
 describe("adaptHousekeepingReport / degradedAnalysis", () => {
-  it("maps the wire shape onto TurnAnalysis (semantic_hint → strands, null → undefined)", () => {
+  it("maps the wire shape onto TurnAnalysis (null → undefined)", () => {
     const a = adaptHousekeepingReport(VALID_REPORT, false);
-    expect(a.semanticHint).toEqual({ strands: ["work"], reason: "" });
+    expect(a.semanticHint).toBeUndefined(); // retired with the semantic_hint task
     expect(a.memoryWorthy).toBe(true);
     expect(a.memoryUpdate).toBeUndefined();
     expect(a.evolveCard).toBeUndefined(); // not closing
@@ -701,7 +711,7 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
   it("degradedAnalysis mirrors the analyzer's failure contract", () => {
     const a = degradedAnalysis();
     expect(a.memoryWorthy).toBe(true);
-    expect(a.semanticHint).toEqual({ strands: [], reason: "" });
+    expect(a.semanticHint).toBeUndefined();
     expect(a.evolveCard).toBeUndefined();
   });
 });
@@ -820,29 +830,29 @@ describe("applyBridgePlaybookWrites", () => {
     const batch = { writes: [] } as unknown as Parameters<
       typeof applyBridgePlaybookWrites
     >[2];
-    const longSop = "- on emotional topics, read the full slice first\n" + "x".repeat(5000);
+    const longSop = "- quote the slice id before answering\n" + "x".repeat(5000);
     const res = await applyBridgePlaybookWrites(
       [
         {
-          agent: "recall",
+          agent: "search",
           content: longSop,
           evidence: [SLICE],
-          expected_benefit: "fewer re-reads outside references",
+          expected_benefit: "fewer ungrounded answers",
         },
       ],
-      ["recall"] as const,
+      ["search"] as const,
       batch,
     );
     expect(writeSopMock).toHaveBeenCalledOnce();
-    expect(writeSopMock).toHaveBeenCalledWith("recall", longSop, batch);
+    expect(writeSopMock).toHaveBeenCalledWith("search", longSop, batch);
     expect(res.applied).toEqual([
-      { agent: "recall", summary: "fewer re-reads outside references" },
+      { agent: "search", summary: "fewer ungrounded answers" },
     ]);
     expect(res.skipped).toEqual([]);
   });
 
   it("applies nothing for a legacy report (empty playbooks — old clients)", async () => {
-    const res = await applyBridgePlaybookWrites([], ["recall"] as const);
+    const res = await applyBridgePlaybookWrites([], ["search"] as const);
     expect(res.applied).toEqual([]);
     expect(res.skipped).toEqual([]);
     expect(writeSopMock).not.toHaveBeenCalled();
@@ -858,7 +868,7 @@ describe("applyBridgePlaybookWrites", () => {
           expected_benefit: "",
         },
       ],
-      ["recall"] as const, // search is NOT allowlisted this run
+      ["thinkdeep"] as const, // search is NOT allowlisted this run
     );
     expect(writeSopMock).not.toHaveBeenCalled();
     expect(res.applied).toEqual([]);
@@ -884,20 +894,40 @@ describe("applyBridgePlaybookWrites", () => {
   it("gates each write independently (mixed allowlisted / not)", async () => {
     const res = await applyBridgePlaybookWrites(
       [
-        { agent: "recall", content: "- note one", evidence: [], expected_benefit: "" },
+        { agent: "thinkdeep", content: "- note one", evidence: [], expected_benefit: "" },
         { agent: "search", content: "- note two", evidence: [], expected_benefit: "" },
-        { agent: "thinkdeep", content: "- note three", evidence: [], expected_benefit: "" },
       ],
-      ["recall", "thinkdeep"] as const,
+      ["thinkdeep"] as const,
     );
-    expect(writeSopMock).toHaveBeenCalledTimes(2);
-    expect(writeSopMock.mock.calls.map((c) => c[0])).toEqual([
-      "recall",
-      "thinkdeep",
-    ]);
-    expect(res.applied.map((a) => a.agent)).toEqual(["recall", "thinkdeep"]);
+    expect(writeSopMock).toHaveBeenCalledTimes(1);
+    expect(writeSopMock.mock.calls.map((c) => c[0])).toEqual(["thinkdeep"]);
+    expect(res.applied.map((a) => a.agent)).toEqual(["thinkdeep"]);
     // Generic summary when the report left expected_benefit empty.
-    expect(res.applied[0].summary).toBe("Rewrote the recall SOP");
+    expect(res.applied[0].summary).toBe("Rewrote the thinkdeep SOP");
     expect(res.skipped.map((s) => s.agent)).toEqual(["search"]);
+  });
+
+  it("skips a retired recall proposal even when the wire still carries it (old clients)", async () => {
+    // "recall" stays on the wire enum for old-client tolerance, but no live
+    // sub-agent loads self/recall — the write must never land.
+    const res = await applyBridgePlaybookWrites(
+      [
+        {
+          agent: "recall",
+          content: "- read the full slice before concluding",
+          evidence: [SLICE],
+          expected_benefit: "",
+        },
+      ],
+      ["search", "thinkdeep"] as const,
+    );
+    expect(writeSopMock).not.toHaveBeenCalled();
+    expect(res.applied).toEqual([]);
+    expect(res.skipped).toEqual([
+      {
+        agent: "recall",
+        reason: expect.stringContaining("retired"),
+      },
+    ]);
   });
 });

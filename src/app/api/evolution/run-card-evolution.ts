@@ -68,7 +68,8 @@ export interface RunCardEvolutionInput {
   closedSliceId?: string;
   /** Recent conversation to evaluate — the closed slice's turns or the active exchange. */
   recentTurns: Array<{ role: string; content: string }>;
-  /** Tags on the slice — context for the review. */
+  /** @deprecated Slice tags stopped being written in v0.19 R2 (always `[]`);
+   *  the review prompt no longer renders them. Tolerated for older callers. */
   currentSliceTags?: string[];
   /** Previously Agent signal (slice_closed / new_observation / ...). */
   signal?: PreviouslySignal;

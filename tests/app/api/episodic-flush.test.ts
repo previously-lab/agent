@@ -25,6 +25,7 @@ vi.mock("@/lib/data-source/resolve", () => ({
 }));
 
 import { POST } from "@/app/api/episodic/flush/route";
+import { parseSlice } from "@/lib/episodic/manager";
 
 function flushReq(body: unknown): Request {
   return new Request("http://localhost:3000/api/episodic/flush", {
@@ -83,5 +84,20 @@ describe("POST /api/episodic/flush validation", () => {
     expect(mockWriteFileLocal).toHaveBeenCalledTimes(1);
     const [path] = mockWriteFileLocal.mock.calls[0];
     expect(path).toBe("memory/records/2026/07/10/1430/core.md");
+  });
+
+  it("fresh frontmatter omits the retired status/tags/related_slices keys and still parses", async () => {
+    const res = await POST(flushReq({ sliceId: "2026-07-10-1430", turns: [aTurn] }));
+    expect(res.status).toBe(200);
+    const [, content] = mockWriteFileLocal.mock.calls[0] as [string, string];
+    const frontmatter = content.split("---")[1];
+    expect(frontmatter).not.toMatch(/^status:/m);
+    expect(frontmatter).not.toMatch(/^tags:/m);
+    expect(frontmatter).not.toMatch(/^related_slices:/m);
+    // Round-trip: the parse side tolerates the omission — status derives
+    // from closed_by, which a fresh file does not carry.
+    const slice = parseSlice(content);
+    expect(slice.slice_id).toBe("2026-07-10-1430");
+    expect(slice.status).toBe("active");
   });
 });

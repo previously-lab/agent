@@ -220,14 +220,14 @@ describe("self/ SOP I/O", () => {
   });
 
   it("writeSelfSop lands on the new root only and readSelfSop prefers it", async () => {
-    writeOnDisk("memory/agent-playbooks/recall.md", "# Legacy recall playbook");
+    writeOnDisk("memory/agent-playbooks/search.md", "# Legacy search playbook");
     const store = await importFresh();
-    await store.writeSelfSop("recall", "# Recall SOP\n\nNew overview. Evidence: slice abc.");
-    expect(readOnDisk("memory/self/recall/index.md")).toBe(
-      "# Recall SOP\n\nNew overview. Evidence: slice abc.",
+    await store.writeSelfSop("search", "# Search SOP\n\nNew overview. Evidence: slice abc.");
+    expect(readOnDisk("memory/self/search/index.md")).toBe(
+      "# Search SOP\n\nNew overview. Evidence: slice abc.",
     );
-    expect(await store.readSelfSop("recall")).toContain("New overview");
+    expect(await store.readSelfSop("search")).toContain("New overview");
     // Legacy playbook untouched.
-    expect(readOnDisk("memory/agent-playbooks/recall.md")).toBe("# Legacy recall playbook");
+    expect(readOnDisk("memory/agent-playbooks/search.md")).toBe("# Legacy search playbook");
   });
 });

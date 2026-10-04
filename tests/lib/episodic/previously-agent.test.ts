@@ -184,10 +184,10 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
     let rejection = "";
     runSubAgentMock.mockImplementation(async (opts) => {
       rejection = await callTool(opts, "writeSop", {
-        agent: "recall",
-        content: "Read full slices on emotional topics first.",
+        agent: "search",
+        content: "Quote the slice id before answering.",
         evidence: ["2026-08-20-1430"],
-        expectedBenefit: "fewer shallow recalls",
+        expectedBenefit: "fewer ungrounded answers",
       });
       return { ok: true, report: { reasoning: "tried", summary: "" }, text: "" };
     });
@@ -201,26 +201,44 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
   it("ACCEPTS a write for an allowlisted colleague and stages the FULL text (no cap) for the caller", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
       const ok = await callTool(opts, "writeSop", {
-        agent: "recall",
-        content: "Read full slices on emotional topics first.",
+        agent: "search",
+        content: "Quote the slice id before answering.",
         evidence: ["2026-08-20-1430", ""],
-        expectedBenefit: "fewer shallow recalls",
+        expectedBenefit: "fewer ungrounded answers",
       });
       expect(ok).toContain("OK");
-      return { ok: true, report: { reasoning: "done", summary: "", expectedBenefit: "fewer shallow recalls" }, text: "" };
+      return { ok: true, report: { reasoning: "done", summary: "", expectedBenefit: "fewer ungrounded answers" }, text: "" };
     });
     const out = await runPreviouslyAgent(
-      baseInput({ allowedSopWrites: ["recall"] }),
+      baseInput({ allowedSopWrites: ["search"] }),
     );
     expect(out.sopWrites).toEqual([
       {
-        agent: "recall",
-        content: "Read full slices on emotional topics first.",
+        agent: "search",
+        content: "Quote the slice id before answering.",
         evidence: ["2026-08-20-1430"], // blank evidence entries dropped
-        expectedBenefit: "fewer shallow recalls",
+        expectedBenefit: "fewer ungrounded answers",
       },
     ]);
-    expect(out.expectedBenefit).toBe("fewer shallow recalls");
+    expect(out.expectedBenefit).toBe("fewer ungrounded answers");
+  });
+
+  it("the writeSop schema no longer offers the retired recall colleague", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const t = opts.tools.writeSop as unknown as {
+        inputSchema: { safeParse: (v: unknown) => { success: boolean } };
+      };
+      expect(
+        t.inputSchema.safeParse({
+          agent: "recall",
+          content: "x",
+          evidence: [],
+          expectedBenefit: "y",
+        }).success,
+      ).toBe(false);
+      return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
+    });
+    await runPreviouslyAgent(baseInput({ allowedSopWrites: ["search", "thinkdeep"] }));
   });
 
   it("rejects a write for a colleague NOT allowlisted this run", async () => {
@@ -234,7 +252,7 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
       });
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
     });
-    const out = await runPreviouslyAgent(baseInput({ allowedSopWrites: ["recall"] }));
+    const out = await runPreviouslyAgent(baseInput({ allowedSopWrites: ["search"] }));
     expect(rejection).toContain("REJECTED");
     expect(out.sopWrites).toBeUndefined();
   });
@@ -269,7 +287,7 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
     await runPreviouslyAgent(
       baseInput({
         direction: "# Direction\n\nKeep answers concrete.",
-        allowedSopWrites: ["recall"],
+        allowedSopWrites: ["search"],
         userProfile: "我是设计师，回答请简短。",
       }),
     );
@@ -277,7 +295,9 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
     expect(opts.prompt).toContain("## Evolution direction");
     expect(opts.prompt).toContain("Keep answers concrete.");
     expect(opts.prompt).toContain("## self/ SOPs writable this run");
-    expect(opts.prompt).toContain("recall");
+    expect(opts.prompt).toContain("search");
+    // The retired recall colleague is advertised nowhere (review M7).
+    expect(opts.system).not.toContain("recall / search / thinkdeep");
     expect(opts.prompt).toContain("## User's self-description");
     expect(opts.prompt).toContain("我是设计师，回答请简短。");
     expect(opts.system).not.toContain("SOPs writable this run");

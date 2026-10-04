@@ -56,10 +56,9 @@ beforeEach(() => {
 });
 
 describe("analyzeTurn", () => {
-  it("parses message tags, semantic hint, intent, and close marking from the tool call", async () => {
+  it("parses intent, emotional signal, and close marking from the tool call", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: ["rust"], reason: "user mentioned borrow-checker" },
         intent: { type: "code_debug", reason: "user is debugging a failing loop" },
         memory_worthy: true,
         emotional_signal: { intensity: "strong", register: "frustrated", note: "user is frustrated" },
@@ -74,16 +73,13 @@ describe("analyzeTurn", () => {
     const result = await analyzeTurn({
       model,
       userMessage: "rust loop broken",
-      existingStrandNames: ["rust", "async"],
       closingSlice: {
         turns: [{ timestamp: "t", role: "user", content: "hi" }],
       },
     });
 
-    expect(result.semanticHint).toEqual({
-      strands: ["rust"],
-      reason: "user mentioned borrow-checker",
-    });
+    // The retired semantic-hint task is gone from the output entirely.
+    expect(result.semanticHint).toBeUndefined();
     expect(result.intent).toEqual({
       type: "code_debug",
       reason: "user is debugging a failing loop",
@@ -104,27 +100,25 @@ describe("analyzeTurn", () => {
   it("passes through memory_worthy for a trivial turn", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "你好", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "你好" });
     expect(result.memoryWorthy).toBe(false);
   });
 
   it("extracts an explicit memory update request", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user asked to record a preference" },
         memory_worthy: true,
         emotional_signal: { intensity: "light", register: "excited", note: "user is happy" },
         memory_update: { content: "User prefers answers in Chinese from now on", section: "past" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "记住：以后都用中文回答", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "记住：以后都用中文回答" });
     expect(result.memoryUpdate).toEqual({
       content: "User prefers answers in Chinese from now on",
       section: "past",
@@ -134,14 +128,13 @@ describe("analyzeTurn", () => {
   it("extracts an explicit behavioral correction as a memory update", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user correcting agent behavior" },
         memory_worthy: true,
         emotional_signal: { intensity: "light", register: "frustrated", note: "mildly annoyed" },
         memory_update: { content: "Never open with filler preambles", section: "past" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "以后别给废话开场白", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "以后别给废话开场白" });
     expect(result.memoryUpdate).toEqual({
       content: "Never open with filler preambles",
       section: "past",
@@ -151,7 +144,6 @@ describe("analyzeTurn", () => {
   it("drops a stale self_model section hint (the v5 card no longer has that section)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user correcting agent behavior" },
         memory_worthy: true,
         emotional_signal: { intensity: "light", register: "frustrated", note: "mildly annoyed" },
@@ -161,7 +153,7 @@ describe("analyzeTurn", () => {
         memory_update: { content: "Never open with filler preambles", section: "self_model" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "以后别给废话开场白", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "以后别给废话开场白" });
     // The invalid enum invalidates the whole report → degraded empty analysis.
     expect(result.memoryUpdate).toBeUndefined();
     expect(result.memoryWorthy).toBe(true);
@@ -170,26 +162,24 @@ describe("analyzeTurn", () => {
   it("omits memory_update when the user did not explicitly ask", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "你好", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "你好" });
     expect(result.memoryUpdate).toBeUndefined();
   });
 
   it("omits closed marking when no slice is closing", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "x" });
     expect(result.closedMarking).toBeUndefined();
     expect(result.memoryWorthy).toBe(false);
   });
@@ -197,13 +187,12 @@ describe("analyzeTurn", () => {
   it("parses the emotional register and normalizes a missing register to neutral", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user is venting" },
         memory_worthy: false,
         emotional_signal: { intensity: "strong", note: "venting about a rough week" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "今天太难了", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "今天太难了" });
     expect(result.emotionalSignal).toEqual({
       intensity: "strong",
       register: "neutral",
@@ -213,9 +202,8 @@ describe("analyzeTurn", () => {
 
   it("returns an empty analysis when the model fails", async () => {
     ai.streamText.mockRejectedValue(new Error("boom"));
-    const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "x" });
     expect(result).toEqual({
-      semanticHint: { strands: [], reason: "" },
       memoryWorthy: true,
       emotionalSignal: { intensity: "none", register: "neutral", note: "" },
     });
@@ -223,20 +211,20 @@ describe("analyzeTurn", () => {
 
   it("returns an empty analysis when the tool call is missing", async () => {
     ai.streamText.mockResolvedValue(noToolCall());
-    const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
-    expect(result.semanticHint).toEqual({ strands: [], reason: "" });
+    const result = await analyzeTurn({ model, userMessage: "x" });
+    expect(result.semanticHint).toBeUndefined();
+    expect(result.memoryWorthy).toBe(true);
   });
 
   it("sends a static shared-base system prompt and dynamic content in the user prompt", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
       }),
     );
-    await analyzeTurn({ model, userMessage: "hello world", existingStrandNames: ["rust"] });
+    await analyzeTurn({ model, userMessage: "hello world" });
 
     const arg = ai.streamText.mock.calls.at(-1)?.[0] as {
       system: string;
@@ -246,15 +234,15 @@ describe("analyzeTurn", () => {
     expect(arg.system).toContain("sub-agent of the Previously memory system");
     expect(arg.system).toContain("memory analyzer");
     expect(arg.system).not.toContain("hello world");
-    // Dynamic: the message and topic list live in the user prompt.
+    // The retired semantic-hint task is gone from the role block.
+    expect(arg.system).not.toContain("Semantic hint");
+    // Dynamic: the message lives in the user prompt.
     expect(arg.prompt).toContain('Message: "hello world"');
-    expect(arg.prompt).toContain("rust");
   });
 
   it("maps evolve_card when a slice is closing", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "wrapping up" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
@@ -265,7 +253,6 @@ describe("analyzeTurn", () => {
     const result = await analyzeTurn({
       model,
       userMessage: "ok",
-      existingStrandNames: [],
       closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
     });
     expect(result.evolveCard).toEqual({ worth: false, reason: "pure logistics, nothing durable" });
@@ -274,14 +261,13 @@ describe("analyzeTurn", () => {
   it("omits evolve_card when no slice is closing, even if the model returns it", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
         evolve_card: { worth: true, reason: "should be ignored" },
       }),
     );
-    const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "x" });
     expect(result.evolveCard).toBeUndefined();
   });
 
@@ -290,7 +276,6 @@ describe("analyzeTurn", () => {
     const result = await analyzeTurn({
       model,
       userMessage: "x",
-      existingStrandNames: [],
       closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
     });
     // A missed evolution is permanent memory loss — failure defaults to running.
@@ -300,20 +285,19 @@ describe("analyzeTurn", () => {
 
   it("does not add evolve_card to the failure fallback when no slice is closing", async () => {
     ai.streamText.mockRejectedValue(new Error("boom"));
-    const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
+    const result = await analyzeTurn({ model, userMessage: "x" });
     expect(result.evolveCard).toBeUndefined();
   });
 
   it("runs with the 50-step anti-loop fuse (the wall clock is the real budget)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
       }),
     );
-    await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
+    await analyzeTurn({ model, userMessage: "x" });
     expect(ai.isStepCount).toHaveBeenCalledWith(50);
   });
 });

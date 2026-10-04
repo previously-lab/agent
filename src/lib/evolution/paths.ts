@@ -53,8 +53,12 @@ export const SELF_DIR = "memory/self";
 /** Legacy playbook root — READ fallback only (§D.1). */
 export const LEGACY_PLAYBOOK_DIR = "memory/agent-playbooks";
 
-/** The sub-agents that carry an evolvable SOP under self/. */
-export type SelfAgent = "recall" | "search" | "thinkdeep";
+/** The sub-agents that carry an evolvable SOP under self/. Recall is RETIRED
+ *  (v0.19 R6, review M7): its sub-agent module was deleted and nothing loads
+ *  self/recall at spawn — the live SOP loads are search (flash-search.ts) and
+ *  thinkdeep (tool-executors.ts). */
+export const SELF_AGENTS = ["search", "thinkdeep"] as const;
+export type SelfAgent = (typeof SELF_AGENTS)[number];
 
 export function selfSopPath(agent: SelfAgent): string {
   return `${SELF_DIR}/${agent}/index.md`;
