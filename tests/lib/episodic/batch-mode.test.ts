@@ -111,7 +111,7 @@ describe("io-helpers batch mode (local backend)", () => {
     const batch = createBatch();
 
     await fsWriteFile("memory/test/index.json", "v1", batch);
-    // Simulate read-modify-write pattern (like updateMonthlyIndex)
+    // Simulate a read-modify-write pattern
     const current = await fsReadFile("memory/test/index.json", batch);
     const updated = `v2 (was ${current})`;
     await fsWriteFile("memory/test/index.json", updated, batch);

@@ -1,8 +1,12 @@
 /**
- * Backend-aware slice enumeration for the timeline weave.
+ * Backend-aware slice enumeration — the LIVE-ENUMERATION read path that
+ * replaced the retired projections (v0.19 §A.2.4: the timeline index and
+ * monthly `_index.json` weaves are gone; readers enumerate the tree instead).
+ * Consumers: the actions.ts read surface, the home recap, and the turn
+ * path's stale-active-slice scan (steps.ts).
  *
  * Returns the *actual* set of slice relative paths ("YYYY/MM/DD/HHMM") that
- * exist on disk / in the repo — the truth the projection is reconciled against.
+ * exist on disk / in the repo.
  *
  * - GitHub: recursive Git Trees API — ONE call returns every path under the
  *   repo, so enumeration never costs N directory round-trips.
@@ -21,8 +25,8 @@ export const SLICE_PATH_RE = /^(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})$/;
 
 /**
  * Enumerate all slice dirs under BOTH roots (v0.19 R2 dual-root): the new
- * records root and the legacy slices root, merged and deduped — the truth
- * the projection is reconciled against spans the root move.
+ * records root and the legacy slices root, merged and deduped — the live
+ * enumeration spans the root move.
  */
 export async function enumerateSliceIds(): Promise<string[]> {
   const ids = new Set<string>();

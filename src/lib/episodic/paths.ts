@@ -13,7 +13,8 @@
  *   IN PLACE — on whichever root the read hit (`readSlicePartResolved`).
  *
  * No other module may hardcode either root. The global projections
- * (`memory/episodic/timeline/*`, `strands.json`) keep their own paths until R3.
+ * (`memory/episodic/timeline/*`) are retired since v0.19 R3 — nothing reads or
+ * writes them; any file still on disk is inert legacy data.
  */
 import { fsReadFile, type WriteBatch } from "./io-helpers";
 

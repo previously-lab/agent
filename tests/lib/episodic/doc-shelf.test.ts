@@ -28,7 +28,6 @@ vi.mock("@/lib/episodic/timeline/enumerate", () => ({
 }));
 
 vi.mock("@/lib/episodic/manager", () => ({
-  readSliceIndex: vi.fn(),
   readSliceBody: vi.fn(),
   parseSlice: vi.fn(),
   sliceIdToFilePath: vi.fn(),

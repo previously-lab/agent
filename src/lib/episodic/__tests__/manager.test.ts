@@ -9,7 +9,6 @@ import { fsReadFile, fsWriteFile, fsListFiles } from "../io-helpers";
 import {
   parseSlice,
   serializeSlice,
-  toIndexEntry,
   sliceIdToRelPath,
   sliceIdToFilePath,
   sliceIdToAgentPath,
@@ -275,26 +274,6 @@ Here is a **bold** statement and a [link](https://example.com).
     expect(parsed.turns[0].content).toContain("**bold**");
     expect(parsed.turns[0].content).toContain("[link](https://example.com)");
     expect(parsed.turns[0].content).toContain("- list item 1");
-  });
-});
-
-// ─── toIndexEntry ──────────────────────────────────────────────────────
-
-describe("toIndexEntry", () => {
-  it("uses full slice_id as id (YYYY-MM-DD-HHMM format)", () => {
-    const entry = toIndexEntry(sampleSlice);
-    expect(entry.id).toBe("2024-03-15-1000");
-  });
-
-  it("copies metadata fields correctly", () => {
-    const entry = toIndexEntry(sampleSlice);
-    expect(entry.focus).toBe(sampleSlice.focus);
-    expect(entry.summary).toBe(sampleSlice.summary);
-    expect(entry.tags).toEqual(sampleSlice.tags);
-    expect(entry.status).toBe(sampleSlice.status);
-    expect(entry.start).toBe(sampleSlice.start);
-    expect(entry.open_loops).toEqual(sampleSlice.open_loops);
-    expect(entry.decisions).toEqual(sampleSlice.decisions);
   });
 });
 

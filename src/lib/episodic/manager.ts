@@ -14,9 +14,7 @@ import type {
   TimeSlice,
   Turn,
   SlicingSignal,
-  SliceIndexEntry,
   SliceFrontmatter,
-  MonthlyIndex,
   StrandIndex,
 } from "./types";
 import {
@@ -27,10 +25,7 @@ import {
 } from "./io-helpers";
 import {
   dayDirForDate,
-  indexPathCandidates,
   readSlicePart,
-  recordsIndexPath,
-  sliceIdToRelPath,
   slicePartPath,
   RECORDS_ROOT,
   LEGACY_SLICES_ROOT,
@@ -41,7 +36,6 @@ import {
   migrateV3ToCard,
   isCardFormat,
 } from "./previously-format";
-import { weaveTag } from "./strands";
 
 // ─── In-memory active slice tracking ─────────────────────────────────────
 
@@ -254,22 +248,6 @@ export function getSlicePath(slice: TimeSlice): string {
   return sliceIdToFilePath(slice.slice_id);
 }
 
-/**
- * Compute the path to a monthly _index.json file — the WRITE target (new
- * root: memory/records/YYYY/MM/_index.json). Reads dual-probe both roots,
- * see readSliceIndexRaw.
- */
-export function getIndexPath(year: number, month: number): string {
-  return recordsIndexPath(year, month);
-}
-
-/**
- * Get the path to the global strands.json file (the keyword→slice index).
- */
-export function getStrandsPath(): string {
-  return "memory/episodic/strands.json";
-}
-
 // ─── Serialization ───────────────────────────────────────────────────────
 
 /**
@@ -467,24 +445,6 @@ function parseTurns(body: string): Turn[] {
   return turns;
 }
 
-/**
- * Serialize a MonthlyIndex (array of SliceIndexEntry) to a JSON string.
- */
-export function serializeIndex(
-  entries: SliceIndexEntry[],
-  month: string
-): string {
-  const index: MonthlyIndex = { month, slices: entries };
-  return JSON.stringify(index, null, 2);
-}
-
-/**
- * Serialize a StrandIndex to a JSON string.
- */
-export function serializeStrands(index: StrandIndex): string {
-  return JSON.stringify(index, null, 2);
-}
-
 // ─── Turn management ─────────────────────────────────────────────────────
 
 /**
@@ -502,34 +462,9 @@ export function appendTurn(slice: TimeSlice, turn: Turn): void {
 
 // ─── Reading slices ──────────────────────────────────────────────────────
 
-/**
- * Read a monthly _index.json and return its entries — DUAL-ROOT (v0.19 R2):
- * the new-root and legacy-root indexes of the same month are merged by slice
- * id (the new root wins a conflict), so a month straddling the root move
- * still reads whole. Returns an empty array if neither index exists.
- */
-async function readSliceIndexRaw(
-  year: number,
-  month: number,
-  batch?: WriteBatch
-): Promise<SliceIndexEntry[]> {
-  const merged = new Map<string, SliceIndexEntry>();
-  // Legacy first, new root second — the new root overwrites shared ids.
-  for (const indexPath of [...indexPathCandidates(year, month)].reverse()) {
-    try {
-      const raw = await fsReadFile(indexPath, batch);
-      const parsed: MonthlyIndex = JSON.parse(raw);
-      for (const e of parsed.slices ?? []) merged.set(e.id, e);
-    } catch {
-      // this root has no index for the month — probe the other
-    }
-  }
-  return [...merged.values()];
-}
-
 // There is no cache here. Demo mode used to keep persona-keyed `_indexCache` /
-// `_bodyCache` Maps over these two reads; they are gone (v0.10) because the
-// demo backend is now cached where the read actually happens
+// `_bodyCache` Maps over the slice reads below; they are gone (v0.10) because
+// the demo backend is now cached where the read actually happens
 // (`demo-fs.ts` → the Data Cache, 30-day demo TTL), and a second cache on top
 // of a tagged one is strictly worse: a write revalidates the tag, which a
 // module-level Map never hears about, so the Map keeps serving the pre-write
@@ -537,22 +472,14 @@ async function readSliceIndexRaw(
 // Cache identity carries the persona (see `readFileDemo`), which is exactly
 // what the Maps' `${persona}:` key prefix was for.
 
-export async function readSliceIndex(
-  year: number,
-  month: number,
-  batch?: WriteBatch
-): Promise<SliceIndexEntry[]> {
-  return readSliceIndexRaw(year, month, batch);
-}
-
 /**
- * Read the global strands.json (keyword→slice index).
+ * Read the global strands.json (keyword→slice index) — the RETIRED strand
+ * projection, kept only for the game's legacy read path (actions.ts).
  * Returns an empty object if the strand index does not exist.
  */
 export async function readStrands(batch?: WriteBatch): Promise<StrandIndex> {
-  const strandsPath = getStrandsPath();
   try {
-    const raw = await fsReadFile(strandsPath, batch);
+    const raw = await fsReadFile("memory/episodic/strands.json", batch);
     return JSON.parse(raw) as StrandIndex;
   } catch {
     return {};
@@ -587,85 +514,8 @@ export async function loadSlice(
 }
 
 // ─── Index maintenance ───────────────────────────────────────────────────
-
-/**
- * Build a SliceIndexEntry from a TimeSlice for storage in a monthly index.
- */
-export function toIndexEntry(slice: TimeSlice): SliceIndexEntry {
-  return {
-    id: slice.slice_id,
-    focus: slice.focus,
-    summary: slice.summary,
-    tags: slice.tags,
-    status: slice.status,
-    start: slice.start,
-    open_loops: slice.open_loops,
-    decisions: slice.decisions,
-  };
-}
-
-/**
- * Update (or create) the monthly _index.json for the slice's year/month.
- * Upserts the slice's index entry into the existing index.
- */
-export async function updateMonthlyIndex(
-  slice: TimeSlice,
-  batch?: WriteBatch
-): Promise<void> {
-  const [yearStr, monthStr] = slice.slice_id.split("-");
-  const year = parseInt(yearStr, 10);
-  const month = parseInt(monthStr, 10);
-
-  const existing = await readSliceIndex(year, month, batch);
-  const entry = toIndexEntry(slice);
-
-  // Upsert: replace existing entry with same id, or append
-  const idx = existing.findIndex((e) => e.id === entry.id);
-  if (idx >= 0) {
-    existing[idx] = entry;
-  } else {
-    existing.push(entry);
-  }
-
-  // Sort by id ascending (YYYY-MM-DD-HHMM format sorts correctly as string)
-  existing.sort((a, b) => a.id.localeCompare(b.id));
-
-  const indexPath = getIndexPath(year, month);
-  const json = serializeIndex(existing, `${yearStr}-${monthStr}`);
-  await fsWriteFile(indexPath, json, batch);
-}
-
-/**
- * Weave the slice's tags into the global strands.json (keyword→slice index).
- * Each tag on the slice is a strand; register the slice's relative path under it.
- *
- * Merge-first: each tag lands under an existing normalized-matching strand when
- * one exists (never creating a near-duplicate); only a genuinely new tag creates
- * a new key (stored normalized). See `weaveTag` in strands.ts.
- */
-export async function updateStrands(
-  slice: TimeSlice,
-  batch?: WriteBatch
-): Promise<void> {
-  const strands = await readStrands(batch);
-  const relativePath = extractRelativePath(slice);
-
-  for (const tag of slice.tags) {
-    weaveTag(strands, tag, relativePath);
-  }
-
-  const strandsPath = getStrandsPath();
-  const json = serializeStrands(strands);
-  await fsWriteFile(strandsPath, json, batch);
-}
-
-/**
- * Extract the relative path segment from a slice's id (used by the tag index).
- * Example: "2026-06-30-1430" → "2026/06/30/1430"
- */
-function extractRelativePath(slice: TimeSlice): string {
-  return sliceIdToRelPath(slice.slice_id);
-}
+// RETIRED (v0.19 §A.2.4/§B.5): the monthly `_index.json` and `strands.json`
+// projection writers lived here. Readers live-enumerate the records tree.
 
 // ─── Agent timeline I/O ──────────────────────────────────────────────────
 
@@ -902,17 +752,4 @@ export async function saveSliceSnapshot(
   const slicePath = getSlicePath(slice);
   const markdown = serializeSlice(slice);
   await fsWriteFile(slicePath, markdown, batch);
-}
-
-/**
- * RETIRED no-op (design v0.19 §A.2.4/§B.5): the monthly `_index.json` and
- * `strands.json` projections are no longer written — readers live-enumerate
- * the records tree. The export survives only because the episodic barrel
- * (index.ts) still re-exports it; it has no live callers.
- */
-export async function ensureIndexEntries(
-  _slice: TimeSlice,
-  _batch?: WriteBatch
-): Promise<void> {
-  // no-op — projections retired
 }

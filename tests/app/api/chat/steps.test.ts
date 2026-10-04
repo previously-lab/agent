@@ -108,7 +108,6 @@ const episodic = vi.hoisted(() => ({
   readTimelineIndex: vi.fn(async () => null),
   buildTimelineBrief: vi.fn(() => ""),
   upsertTimelineEntry: vi.fn(async () => {}),
-  ensureIndexEntries: vi.fn(async () => {}),
   generateGlobalTimeline: vi.fn(async () => ""),
 }));
 
@@ -624,7 +623,6 @@ describe("housekeeping step (the reply segment)", () => {
     // No projection writes / catalog reads on the turn path.
     expect(episodic.weaveTimeline).not.toHaveBeenCalled();
     expect(episodic.upsertTimelineEntry).not.toHaveBeenCalled();
-    expect(episodic.ensureIndexEntries).not.toHaveBeenCalled();
     expect(episodic.generateGlobalTimeline).not.toHaveBeenCalled();
     expect(episodic.readTimelineIndex).not.toHaveBeenCalled();
     expect(episodic.buildTimelineBrief).not.toHaveBeenCalled();

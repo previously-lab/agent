@@ -173,11 +173,11 @@ export function ttlForPath(
 
   // ── github: the per-path memory-file classes ──
   const normalized = path.replace(/\\/g, "/");
-  // The MONTHLY index is the same class of file as the global one — it is
-  // rewritten whenever a slice in that month opens, closes or flushes, and
-  // `readSliceIndex` is how every boot scan finds slices. It used to fall
+  // The MONTHLY index is a RETIRED projection (v0.19 §A.2.4 — nothing writes
+  // `_index.json` anymore; readers live-enumerate the records tree). This
+  // rule remains only for legacy files still on disk: it used to fall
   // through to the closed-slice rule below, which is up to 24 hours of
-  // staleness on a file the design calls mutable, so it is matched FIRST.
+  // staleness on a file the design called mutable, so it is matched FIRST.
   if (MONTHLY_INDEX.test(normalized)) {
     return CACHE_TTLS.TIMELINE_INDEX_SECONDS;
   }
