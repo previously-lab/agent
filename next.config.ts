@@ -33,6 +33,10 @@ const nextConfig: NextConfig = {
   outputFileTracingExcludes: {
     "*": ["./memory/**/*", "./you/**/*"],
   },
+  // A second dev server (e2e, probes) must be able to run beside the reader's
+  // own — Next binds a lock on its distDir, so the parallel instance names its
+  // own. Default stays `.next`; set NEXT_DIST_DIR to run beside it.
+  distDir: process.env.NEXT_DIST_DIR ?? ".next",
   turbopack: {
     root: process.cwd(),
   },
