@@ -272,12 +272,11 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: readDocExecute,
   }),
-  // The reply segment's ONE bounded write (v0.20 §2.2): open a research
-  // case mid-reply so a research turn writes the document FIRST and answers
-  // FROM it. Category is hard-coded to research/ — no free path elsewhere;
-  // only open + addPiece reach the shared case-write entry (per-case lock,
-  // fresh read in lock); an evidence stamp `source: <sliceId>#<turnId>`
-  // lands as the first line of whatever is written.
+  // The reply segment's case write: open a research case mid-reply so a
+  // research turn writes the document FIRST and answers FROM it. Category is
+  // hard-coded to research/ — no free path elsewhere; only open + addPiece
+  // reach the shared case-write entry (per-case lock, fresh read in lock).
+  // Nothing is stamped into the text — the case→slice link is semantic.
   writeCase: tool({
     description:
       "Write a RESEARCH case — the one memory write the reply segment is " +
@@ -295,9 +294,9 @@ export const chatTools = {
       "the QUESTION, specific enough that a scope change means a new case). " +
       "If it ALREADY exists, pass pieceTitle to ADD one dated piece " +
       "(《日期》标题》 rules apply); omitting pieceTitle on an existing case " +
-      "is refused — this tool never rewrites an index. The written text " +
-      "carries a mechanical first line `source: <sliceId>#<turnId>` — the " +
-      "evidence stamp linking the case back to this turn; leave it intact.",
+      "is refused — this tool never rewrites an index. What you write is " +
+      "exactly what lands: no machine fields are added. If the piece should " +
+      "say where it came from (which conversation, when), say it in prose.",
     inputSchema: z.object({
       caseName: z
         .string()

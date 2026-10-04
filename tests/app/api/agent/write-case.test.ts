@@ -7,9 +7,9 @@
  *  1. research/-only with no free path (behavioral — the tool takes no
  *     category input and writes land only under memory/research/);
  *  2. lock mutex with the per-case writer (same `doc:<分类>/<case名>` key);
- *  3. end-to-end: open → stamped index → second call addPiece (index
+ *  3. end-to-end: open → index lands verbatim → second call addPiece (index
  *     untouched) → no-pieceTitle refusal;
- *  4. legacy tolerance: an index written without a `source:` line parses.
+ *  4. an index written by another writer still parses (plain body, no fields).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 
 describe("writeCase — open", () => {
-  it("opens a new research case; the evidence stamp is the first line of the body", async () => {
+  it("opens a new research case; the body lands verbatim (no machine fields)", async () => {
     const r = await call({ caseName: "手机调研", body: "调研正文。" }, "call-1");
     expect(r).toEqual({
       ok: true,
@@ -67,11 +67,9 @@ describe("writeCase — open", () => {
       path: "memory/research/手机调研/index.md",
     });
     const raw = io.files.get("memory/research/手机调研/index.md")!;
-    expect(raw).toContain("source: 2026-10-04-0131#call-1\n\n调研正文。");
-    // the stamp precedes the body text
-    expect(raw.indexOf("source: 2026-10-04-0131#call-1")).toBeLessThan(
-      raw.indexOf("调研正文。"),
-    );
+    expect(raw).toContain("调研正文。");
+    // v0.21: the case→slice link is semantic — nothing is stamped in
+    expect(raw).not.toContain("source:");
   });
 
   it("demo mode refuses (read-only benchmark data)", async () => {
@@ -125,9 +123,10 @@ describe("writeCase — addPiece on an existing case", () => {
         /^memory\/research\/手机调研\/\d{4}-\d{2}-\d{2}-报价篇\.md$/,
       );
     }
-    // the piece carries THIS call's stamp
+    // the piece is written verbatim — nothing is stamped in (v0.21)
     const piece = io.files.get((r as { path: string }).path)!;
-    expect(piece).toContain("source: 2026-10-04-0131#call-2\n\n三家报价对比。");
+    expect(piece).toContain("三家报价对比。");
+    expect(piece).not.toContain("source:");
     // the index was NOT rewritten
     expect(io.files.get("memory/research/手机调研/index.md")).toBe(indexBefore);
   });
@@ -145,7 +144,7 @@ describe("writeCase — addPiece on an existing case", () => {
     expect(io.files.get("memory/research/手机调研/index.md")).toBe(indexBefore);
   });
 
-  it("legacy index (no source line) still parses — addPiece succeeds", async () => {
+  it("an index written by another writer (plain body) still parses — addPiece succeeds", async () => {
     io.files.set(
       caseIndexPath("research", "旧案"),
       serializeCaseDoc(
@@ -153,7 +152,7 @@ describe("writeCase — addPiece on an existing case", () => {
           category: "research",
           caseName: "旧案",
           opened: "2026-10-01",
-          body: "旧正文，没有 source 行。",
+          body: "旧正文，由别的写者写下。",
         }),
       ),
     );

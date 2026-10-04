@@ -791,14 +791,13 @@ function userLocalDate(timezone: string | undefined): string {
  *   background run on the same case serializes visibly instead of
  *   interleaving bytes.
  *
- * The evidence stamp (`source: <sliceId>#<turnId>` as the FIRST line of the
- * written text) is the only machine field of the case→slice link (§2.2);
- * records get zero write-back. `toolCallId` is the turn-level call key —
- * the same key noteForSediment builds its marker id from.
+ * What the caller passes is EXACTLY what lands — no machine fields are
+ * stamped in (v0.21: the case→slice link is semantic, so a piece that wants
+ * to say where it came from says so in prose). records get zero write-back.
  */
 export async function writeCaseExecute(
   input: { caseName: string; body: string; pieceTitle?: string },
-  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+  { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<WriteCaseResult> {
   "use step";
   if (ctx.useDemo) {
@@ -825,7 +824,6 @@ export async function writeCaseExecute(
   }
   const pieceTitle = input.pieceTitle?.trim() ?? "";
 
-  const stampedBody = `source: ${ctx.sliceId}#${toolCallId}\n\n${body}`;
   const date = userLocalDate(ctx.timezone);
   const indexPath = caseIndexPath(category, caseName);
 
@@ -842,7 +840,7 @@ export async function writeCaseExecute(
   if (!exists) {
     try {
       const applied = await applyCaseWriteIntent(
-        { action: "open", category, caseName, body: stampedBody },
+        { action: "open", category, caseName, body },
         date,
       );
       return { ok: true, action: "open", path: applied.path };
@@ -866,7 +864,7 @@ export async function writeCaseExecute(
   }
   try {
     const applied = await applyCaseWriteIntent(
-      { action: "addPiece", category, caseName, title: pieceTitle, body: stampedBody },
+      { action: "addPiece", category, caseName, title: pieceTitle, body },
       date,
     );
     return { ok: true, action: "addPiece", path: applied.path };
