@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import type { ModelMessage } from "ai";
 import {
   assembleSystemPrompt,
-  buildOverdueBlock,
   BRIDGE_NOTICE,
   buildBridgeTimeLine,
   appendBridgeTimeSuffix,
+  SPACE_FICTION_BLOCK,
 } from "@/app/api/chat/turn-workflow";
 import { CHARTER_MD } from "@/lib/identity/agent-prompt.generated";
 
@@ -14,8 +14,6 @@ const PREVIOUSLY = "# Previously card";
 const DIRECTION = "## Direction — who the user is (evolved portrait)";
 const SLICE_HEAD =
   "## This slice — snapshot at its start\n- Slice started: 02 Aug 2026, 14:32 (Asia/Shanghai, UTC+8)";
-const TIMELINE = "## Timeline (recent)\n- **2026-08-01-1115** (08-01 Fri) 回顾";
-const STRANDS = "## Memory topics\n\nKnown topics: rust";
 const DEMO = "## Demo mode (read-only)";
 
 type Opts = Parameters<typeof assembleSystemPrompt>[0];
@@ -25,26 +23,22 @@ function build(overrides: Partial<Opts> = {}): string {
     identityPrompt: IDENTITY,
     previouslyContent: PREVIOUSLY,
     sliceHeadBlock: SLICE_HEAD,
-    timelineBrief: TIMELINE,
-    strandsBlock: STRANDS,
     demoNotice: DEMO,
-    overdueBlock: "",
     dateAnchor: "2026-08-09",
     ...overrides,
   });
 }
 
 describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
-  it("orders layers by stability: L0 charter → L1b direction → L1 card → L3 slice head → L4 timeline → L5 strands/demo", () => {
+  it("orders layers by stability: L0 charter → L0b space fiction → L1b direction → L1 card → L3 slice head → L5 demo", () => {
     const s = build({ directionBlock: DIRECTION });
     expect(s.indexOf(IDENTITY)).toBe(0); // L0 leads the prompt
+    expect(s.indexOf(SPACE_FICTION_BLOCK)).toBeGreaterThan(s.indexOf(IDENTITY));
     // WHO (the user model) frames the reading of WHAT (the card).
-    expect(s.indexOf(DIRECTION)).toBeGreaterThan(s.indexOf(IDENTITY));
+    expect(s.indexOf(DIRECTION)).toBeGreaterThan(s.indexOf(SPACE_FICTION_BLOCK));
     expect(s.indexOf(PREVIOUSLY)).toBeGreaterThan(s.indexOf(DIRECTION));
     expect(s.indexOf(SLICE_HEAD)).toBeGreaterThan(s.indexOf(PREVIOUSLY));
-    expect(s.indexOf(TIMELINE)).toBeGreaterThan(s.indexOf(SLICE_HEAD));
-    expect(s.indexOf(STRANDS)).toBeGreaterThan(s.indexOf(TIMELINE));
-    expect(s.indexOf(DEMO)).toBeGreaterThan(s.indexOf(STRANDS)); // L5 tail
+    expect(s.indexOf(DEMO)).toBeGreaterThan(s.indexOf(SLICE_HEAD)); // L5 tail
   });
 
   it("CORE REGRESSION: byte-identical when assembled twice within one slice (prefix cache)", () => {
@@ -63,29 +57,35 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
       sliceHeadBlock: `${SLICE_HEAD}\n- The user card was updated just as this slice began: sharpened the profile.`,
     });
     expect(s).toContain("The user card was updated just as this slice began");
-    // …and it lives in L3, before the timeline brief.
-    expect(s.indexOf("user card was updated")).toBeLessThan(s.indexOf(TIMELINE));
+    // …and it lives in L3, before the demo notice tail.
+    expect(s.indexOf("user card was updated")).toBeLessThan(s.indexOf(DEMO));
   });
 
-  it("omits empty optional blocks", () => {
-    const s = build({ timelineBrief: "", strandsBlock: "", demoNotice: "" });
-    expect(s).not.toContain("Memory topics");
+  it("omits the demo notice when empty", () => {
+    const s = build({ demoNotice: "" });
     expect(s).not.toContain("Demo mode");
-    expect(s).not.toContain("Timeline (recent)");
+  });
+
+  it("NEVER renders the retired layers (v0.19 A1 撤清单): no strands menu, no timeline brief, no overdue block, no view block", () => {
+    const s = build({ directionBlock: DIRECTION });
+    expect(s).not.toContain("## Memory topics");
+    expect(s).not.toContain("## Timeline (recent)");
+    expect(s).not.toContain("## 逾期承诺");
+    expect(s).not.toContain("## Overdue commitments");
+    expect(s).not.toContain("[当前]");
+  });
+
+  it("the space fiction states the co-built space without referencing any per-turn view signal (A1)", () => {
+    expect(SPACE_FICTION_BLOCK).toContain("谁都不生存在这个空间里");
+    expect(SPACE_FICTION_BLOCK).toContain("同一块屏幕");
+    expect(SPACE_FICTION_BLOCK).not.toContain("[当前]");
+    expect(build()).toContain(SPACE_FICTION_BLOCK);
   });
 
   it("renders the card-freshness header with the slice-head date anchor", () => {
     expect(build()).toContain(
       "## What I know about the user — the living recap (2026-08-09)",
     );
-  });
-
-  it("places the overdue-Horizon block (L2b) between the card and the slice-head block", () => {
-    const overdue = "## Overdue commitments\n…past their by date…";
-    const s = build({ overdueBlock: overdue });
-    expect(s).toContain("## Overdue commitments");
-    expect(s.indexOf(overdue)).toBeGreaterThan(s.indexOf(PREVIOUSLY));
-    expect(s.indexOf(overdue)).toBeLessThan(s.indexOf(SLICE_HEAD));
   });
 
   it("places the direction block before the card — absent by default", () => {
@@ -101,50 +101,6 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
     const s = build({ directionBlock: DIRECTION });
     expect(s).not.toContain("GROUNDING RULE");
     expect(s).not.toContain("The recap above holds WHAT");
-  });
-});
-
-describe("buildOverdueBlock (frozen derivation from raw card + slice-head date)", () => {
-  // A minimal v5 card (isCardFormat requires ## Identity + ## Past) with one
-  // overdue and one future Horizon item.
-  const CARD = [
-    "## Identity",
-    "",
-    "Name: Alan",
-    "",
-    "## Past",
-    "",
-    "A profile paragraph.",
-    "",
-    "## Horizon",
-    "",
-    "- 周五面试等 HR 回复 — by: 2026-08-05 — refs: [2026/08/01/0900]",
-    "- 下个月的体检 — by: 2026-09-10 — refs: [2026/08/01/0900]",
-  ].join("\n");
-
-  it("lists only items whose by date is before the slice-head date (zh)", () => {
-    const s = buildOverdueBlock(CARD, "2026-08-09", "zh");
-    expect(s).toContain("## 逾期承诺");
-    expect(s).toContain("周五面试等 HR 回复");
-    expect(s).not.toContain("体检"); // future item stays out
-  });
-
-  it("renders English when locale is not zh", () => {
-    const s = buildOverdueBlock(CARD, "2026-08-09", "en");
-    expect(s).toContain("## Overdue commitments");
-    expect(s).toContain('"周五面试等 HR 回复" (by 2026-08-05)');
-  });
-
-  it("is empty when nothing is overdue, the card is empty, or the card is unparseable", () => {
-    expect(buildOverdueBlock(CARD, "2026-08-01", "zh")).toBe(""); // neither past due
-    expect(buildOverdueBlock("", "2026-08-09", "zh")).toBe("");
-    expect(buildOverdueBlock("free-form legacy text", "2026-08-09")).toBe("");
-  });
-
-  it("is byte-stable for repeated assembly within one slice (frozen inputs)", () => {
-    expect(buildOverdueBlock(CARD, "2026-08-09", "zh")).toBe(
-      buildOverdueBlock(CARD, "2026-08-09", "zh"),
-    );
   });
 });
 

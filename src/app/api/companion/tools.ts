@@ -23,6 +23,10 @@ import {
   parseTurns,
 } from "@/lib/episodic/turn-parser";
 import { annotateSliceWithLocalTime } from "@/lib/episodic/time-localize";
+import {
+  slicePartPathCandidates,
+  indexPathCandidates,
+} from "@/lib/episodic/paths";
 import { formatLocalTime } from "@/lib/turn-priming";
 
 /** Serializable per-request context the tool executors close over. */
@@ -68,10 +72,23 @@ function domainError(e: unknown): string | null {
     : null;
 }
 
-function sliceCorePath(sliceId: string): string | null {
+/**
+ * Read a slice's core.md — dual-root (v0.19 R2): the new records root first,
+ * the legacy slices root on a miss. Returns null for an invalid slice id;
+ * throws when neither root holds the file.
+ */
+async function readSliceCoreDual(
+  ctx: CompanionToolContext,
+  sliceId: string,
+): Promise<string | null> {
   const parsed = parseSliceId(sliceId);
   if (!parsed) return null;
-  return `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`;
+  const [primary, fallback] = slicePartPathCandidates(sliceId, "core");
+  try {
+    return await readMemoryFile(ctx, primary);
+  } catch {
+    return readMemoryFile(ctx, fallback);
+  }
 }
 
 /**
@@ -93,12 +110,11 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
           .describe("Slice ID in YYYY-MM-DD-HHMM format, e.g. '2026-07-24-1500'."),
       }),
       execute: async ({ sliceId }: { sliceId: string }) => {
-        const path = sliceCorePath(sliceId);
-        if (!path) {
-          return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
-        }
         try {
-          const raw = await readMemoryFile(ctx, path);
+          const raw = await readSliceCoreDual(ctx, sliceId);
+          if (raw === null) {
+            return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
+          }
           // Pre-render the user's local time so the model never converts UTC itself.
           return ctx.timezone
             ? annotateSliceWithLocalTime(raw, ctx.timezone, sliceId, {
@@ -125,12 +141,11 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
           .describe("Slice ID in YYYY-MM-DD-HHMM format, e.g. '2026-07-24-1500'."),
       }),
       execute: async ({ sliceId }: { sliceId: string }) => {
-        const path = sliceCorePath(sliceId);
-        if (!path) {
-          return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
-        }
         try {
-          const raw = await readMemoryFile(ctx, path);
+          const raw = await readSliceCoreDual(ctx, sliceId);
+          if (raw === null) {
+            return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
+          }
           const { data } = matter(raw);
           const { turns } = parseTurns(raw);
           const fmt = (v: unknown): string =>
@@ -172,13 +187,34 @@ export function buildCompanionTools(ctx: CompanionToolContext) {
       }),
       execute: async ({ year, month }: { year: number; month: number }) => {
         const mm = String(month).padStart(2, "0");
-        const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
         try {
-          const raw = await readMemoryFile(ctx, path);
-          const data = JSON.parse(raw) as {
-            exists: boolean;
-            month: string;
-            slices: unknown[];
+          // Dual-root (v0.19 R2): read BOTH monthly indexes (legacy first, the
+          // new root overwrites shared ids) so a month straddling the root
+          // move reads whole.
+          const byId = new Map<string, Record<string, unknown>>();
+          let found = false;
+          for (const path of [...indexPathCandidates(year, month)].reverse()) {
+            let raw: string;
+            try {
+              raw = await readMemoryFile(ctx, path);
+            } catch {
+              continue; // this root has no index for the month
+            }
+            found = true;
+            const parsed = JSON.parse(raw) as { slices?: unknown[] };
+            for (const s of parsed.slices ?? []) {
+              if (s && typeof s === "object" && typeof (s as { id?: unknown }).id === "string") {
+                byId.set((s as { id: string }).id, s as Record<string, unknown>);
+              }
+            }
+          }
+          if (!found) throw new Error("File not found");
+          const data = {
+            exists: true,
+            month: `${year}-${mm}`,
+            slices: [...byId.values()].sort((a, b) =>
+              String(a.id).localeCompare(String(b.id)),
+            ) as unknown[],
           };
           // Pre-render each slice's start in the user's local time so the model
           // never converts UTC itself (mirrors readTimelineExecute).

@@ -17,12 +17,6 @@ import { z } from "zod";
 import { isClientMode } from "@/lib/mode";
 import {
   readSliceExecute,
-  readSliceSummaryExecute,
-  readTimelineWindowExecute,
-  listSlicesExecute,
-  readTimelineExecute,
-  readStrandExecute,
-  listStrandsExecute,
   readAgentTimelineExecute,
   readPreviouslyExecute,
   webSearchExecute,
@@ -32,7 +26,7 @@ import {
   describeRoomExecute,
   delegateTaskExecute,
   viewImageExecute,
-  listDocsExecute,
+  listTreeExecute,
   readDocExecute,
   noteForSedimentExecute,
   type ToolContext,
@@ -108,8 +102,8 @@ export const conceptTools = {
     description:
       "Open a time slice's original conversation record (core timeline) — " +
       "the ONLY source for specific facts (numbers, dates, quotes, promises): " +
-      "read FIRST, then answer. Use it to answer from a slice you located on " +
-      "the time axis (readTimelineWindow, readStrand), to follow a document's " +
+      "read FIRST, then answer. Use it to answer from a slice you located via " +
+      "listTree, to follow a document's " +
       "evidence chain down to the original text, or whenever you need the " +
       "verbatim original of anything the user or a document claims about the " +
       "past. " +
@@ -169,103 +163,6 @@ export const conceptTools = {
     contextSchema: toolContextSchema,
     execute: readSliceExecute,
   }),
-  readSliceSummary: tool({
-    description:
-      "Read a slice's summary (frontmatter only): focus, summary, tags, tone, " +
-      "turn count, open loops, decisions. The CHEAPEST way to check what a " +
-      "slice is about before reading any turns. Prefer this over readSlice for " +
-      "relevance checks; only read turns (readSlice with a range) when the " +
-      "summary says the exact content matters.",
-    inputSchema: z.object({
-      sliceId: z
-        .string()
-        .describe("Slice ID in YYYY-MM-DD-HHMM format, e.g. '2026-07-24-1500'."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readSliceSummaryExecute,
-  }),
-  readTimelineWindow: tool({
-    description:
-      "Read the timeline catalog over a date window (inclusive, YYYY-MM-DD) — " +
-      "one compact pointer line per slice (id · focus · tags · turns). " +
-      "Use this to orient by time: 'what happened this week / last month', or " +
-      "when the user references a period. A line is a pointer, not content — " +
-      "open a slice with readSliceSummary / readSlice when it looks relevant.",
-    inputSchema: z.object({
-      from: z
-        .string()
-        .optional()
-        .describe("Start date YYYY-MM-DD (inclusive). Omit for 'from the beginning'."),
-      to: z
-        .string()
-        .optional()
-        .describe("End date YYYY-MM-DD (inclusive). Omit for 'up to now'."),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(50)
-        .optional()
-        .describe("Max slices to list (default 20)."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readTimelineWindowExecute,
-  }),
-  listSlices: tool({
-    description:
-      "Browse time slice directories to see what slices exist. " +
-      "Use this to explore available time slices for a given year and month.",
-    inputSchema: z.object({
-      year: z
-        .number()
-        .int()
-        .min(2000)
-        .max(2100)
-        .optional()
-        .describe("Year. Defaults to the current year."),
-      month: z
-        .number()
-        .min(1)
-        .max(12)
-        .optional()
-        .describe("Month (1-12). Defaults to the current month."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: listSlicesExecute,
-  }),
-  readTimeline: tool({
-    description:
-      "Read a monthly timeline index — lists every slice in that month " +
-      "with its focus, summary, and tags. Use this to get a high-level " +
-      "overview before deciding which slices to read in full.",
-    inputSchema: z.object({
-      year: z.number().int().min(2000).max(2100),
-      month: z.number().min(1).max(12),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readTimelineExecute,
-  }),
-  readStrand: tool({
-    description:
-      "Follow a strand — a keyword tag that threads through multiple " +
-      "time slices. Returns all slice paths carrying that tag. " +
-      "Use this to trace a topic across time.",
-    inputSchema: z.object({
-      strand: z
-        .string()
-        .describe("The strand (tag) to follow, e.g. 'rust', 'loop-testing'."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readStrandExecute,
-  }),
-  listStrands: tool({
-    description:
-      "List all known strands — every keyword tag that has been " +
-      "woven through time slices. Use this to discover what topics exist.",
-    inputSchema: z.object({}),
-    contextSchema: toolContextSchema,
-    execute: listStrandsExecute,
-  }),
   readAgentTimeline: tool({
     description:
       "Read your own cognitive record (Agent timeline) for a slice — " +
@@ -300,105 +197,75 @@ export const conceptTools = {
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
 //
-// The CHAT agent owns the TIME AXIS of memory AND the document layer
-// (v0.15 design §4.2 — there is no recall-style sub-agent between the main
-// agent and memory on the read path).
+// The reply segment's read surface (v0.19 §A.2.1, final shape). There is
+// NO memory colleague: past-memory questions are YOURS.
 //
 // Memory surface:
-//   - readTimelineWindow: scan the timeline catalog over a date window
-//     (inclusive YYYY-MM-DD), one compact pointer line per slice. This is YOUR
-//     tool when the user's question carries an explicit time anchor ("last
-//     week", "September 3rd", "in March"). Scope the window, then open the
-//     specific slice with readSlice.
-//   - readSlice: point-read the original slice text — the VERIFICATION
-//     channel and the only source for specific facts (numbers, dates, quotes,
-//     promises). Use `range` to fetch only the turns you need.
-//   - readSliceSummary: the cheapest relevance check (frontmatter only) —
-//     prefer it over readSlice when you only need to know what a slice is
-//     about.
-//   - readAgentTimeline: your own past cognition for a slice. listSlices /
-//     readTimeline / readStrand / listStrands: directory-level browse of the
-//     slice archive and the strand (tag) index.
-//   - listDocs / readDoc: the DOCUMENT layer — directory listing and
-//     path-agnostic point-read by file name. Documents are the amortized
-//     products of past investigation; slices remain the evidence.
+//   - listTree: the WHOLE memory tree in one call, grouped by top-level
+//     category (people/ events/ things/ … records/). A TRANSITIONAL
+//     PLACEHOLDER — a dedicated retrieval tool will replace it. The paths
+//     themselves are the index: category / case name / date all live on the
+//     path. No ranking, no relevance score — read the list.
+//   - readDoc: point-read a case document by TWO-SEGMENT reference —
+//     `分类/case名` → the case's index.md; `分类/case名/篇名` → one dated
+//     piece. Judge freshness from the opened/closed dates in the header.
+//   - readSlice: point-read the original conversation record — the ONLY
+//     source for specific facts (numbers, dates, quotes, promises): read
+//     FIRST, then answer. `range` fetches only the turns you need.
+//   - readAgentTimeline / readPreviously: your own cognition for a slice /
+//     the user-card snapshot of that moment.
 //   - noteForSediment: the sediment mailbox — the reply segment's ONE write
-//     (只读 + 记账, design §4.3): drop a marker line for the slice-close
-//     scribe/librarian passes. Bookkeeping, never document-writing.
+//     (只读 + 记账): drop a marker line for the boundary-run writers.
 //
-// There is NO memory colleague. Past-memory questions are YOURS: with a
-// time anchor, readTimelineWindow + readSlice; topic-shaped ("did we ever
-// talk about apples?"), listDocs("topic") for the topic homes + listStrands
-// for the keyword index, then readDoc / readSliceSummary to go deeper; when
-// you have keyword or time leads, the slice archive answers in 2–4 calls.
-// If the question is genuinely fuzzy archaeology with no anchor at all, say
-// what you found honestly or offer to open a background task (design §4.2 —
-// no synchronous deep-search detour on the reply path).
+// How to find things: listTree first (what cases exist), readDoc into the
+// promising ones, readSlice down to the evidence. If the question is
+// genuinely fuzzy archaeology with no anchor at all, say what you found
+// honestly or note it for a background task — no synchronous deep-search
+// detour on the reply path.
 export const chatTools = {
   readSlice: conceptTools.readSlice,
-  readTimelineWindow: conceptTools.readTimelineWindow,
-  readPreviously: conceptTools.readPreviously,
-  // Slice-level browse tools owned by the main agent (v0.15 design §4.2 — the
-  // charter always said "you own the time axis"). listStrands/readStrand fold
-  // into listDocs("topic")/readDoc over time; they stay exposed meanwhile.
-  readSliceSummary: conceptTools.readSliceSummary,
   readAgentTimeline: conceptTools.readAgentTimeline,
-  listSlices: conceptTools.listSlices,
-  readTimeline: conceptTools.readTimeline,
-  readStrand: conceptTools.readStrand,
-  listStrands: conceptTools.listStrands,
-  // Document-system readers (v0.15 design §4.2): the filesystem IS the index
-  // — listDocs is a plain directory listing, readDoc a path-agnostic
-  // point-read by file name.
-  listDocs: tool({
+  readPreviously: conceptTools.readPreviously,
+  // Case-tree readers (v0.19 §A.2.1): the filesystem IS the index.
+  listTree: tool({
     description:
-      "List the documents in one document-type directory — a plain directory " +
-      "listing, nothing more. The nine types (closed set): event, person, " +
-      "object, place, org, research, hypothesis, task (file name = " +
-      "<birth-date>-<title>.md) and topic (file name = <name>.md, the topic " +
-      "homes). File names are returned in ascending order — for the dated " +
-      "kinds that IS birth order. There is no ranking and no relevance " +
-      "score: the list itself (date + title) is the index, read it yourself. " +
-      "Use this to discover what documents exist: listDocs('research') shows " +
-      "every investigation on file; listDocs('topic') lists every topic home " +
-      "(the semantic strand index — a home's prose says what it is also " +
-      "called); listDocs('task') shows tracked tasks. Then open the document " +
-      "you want with readDoc. An empty list means the type has no documents " +
-      "yet — that is normal while the doc layer is young.",
-    inputSchema: z.object({
-      kind: z
-        .enum(["event", "person", "object", "place", "org", "research", "hypothesis", "task", "topic"])
-        .describe("The document-type directory to list."),
-      filter: z
-        .string()
-        .optional()
-        .describe(
-          "Optional case-insensitive substring filter on the file name, e.g. '手机'. Mechanical match only — no semantics.",
-        ),
-    }),
+      "List the ENTIRE memory tree in one call — a transitional placeholder " +
+      "until a dedicated retrieval tool exists. Returns every path under " +
+      "memory/, GROUPED by top-level category (people / events / things / " +
+      "places / orgs / research / hypotheses / tasks / self / records), with " +
+      "config/ filtered out (engineering state, not documents). records/ " +
+      "collapses to one line per conversation (YYYY/MM/DD/HHMM). " +
+      "`truncated: true` means the listing may be incomplete (GitHub's tree " +
+      "API cut it off) — trust the shape, re-ask narrowly if something is " +
+      "missing. There is NO ranking and NO relevance score: the paths " +
+      "themselves — category, case name, birth date — ARE the index; read " +
+      "them yourself. Use this FIRST whenever the answer might already live " +
+      "in memory: it is one call to see what cases exist, then readDoc into " +
+      "the promising ones.",
+    inputSchema: z.object({}),
     contextSchema: toolContextSchema,
-    execute: listDocsExecute,
+    execute: listTreeExecute,
   }),
   readDoc: tool({
     description:
-      "Read a whole document by its FILE NAME (the file name IS the identity " +
-      "— pass '2026-09-05-手机购买调研' or '用户手机', with or without .md, " +
-      "never a path). Resolution is path-agnostic: the file is found " +
-      "wherever it lives under docs/. Documents are small files — the whole " +
-      "file is returned: the machine header (status / opened / updated), the " +
-      "截至 block stating what the document currently believes, and the " +
-      "dated entry stream. Judge freshness yourself from those dates — " +
-      "contradictions between documents are time, read them newest-first. " +
-      "Grounding rule applies: a document may summarize, but specific facts " +
-      "(numbers, dates, quotes, promises) enter your answers only from the " +
-      "original slice text — the document's job is to point you at the right " +
-      "slice fast. If the name resolves nowhere you get a dead-link error " +
-      "saying so — not blocking; run listDocs to see what exists.",
+      "Read a case document by its TWO-SEGMENT reference (v0.19 §B.2): " +
+      "`分类/case名` (e.g. 'research/手机调研') → that case's index.md — what " +
+      "it is, where it stands, which pieces hang in it; `分类/case名/篇名` → " +
+      "one dated piece. Case docs are small files — the whole file is " +
+      "returned: the opened/closed dates (closed = sealed, 写完封口), the " +
+      "正文, and the dated 尾部 lines. Judge freshness yourself from those " +
+      "dates — contradictions between documents are time, read them " +
+      "newest-first. Grounding rule applies: a document may summarize, but " +
+      "specific facts (numbers, dates, quotes, promises) enter your answers " +
+      "only from the original slice text — the document's job is to point " +
+      "you at the right slice fast. If the reference resolves nowhere you " +
+      "get a dead-link error saying so — not blocking; run listTree to see " +
+      "what exists.",
     inputSchema: z.object({
-      fileName: z
+      ref: z
         .string()
         .describe(
-          "Document file name, e.g. '2026-09-05-手机购买调研' or '用户手机' (with or without .md).",
+          "Two-segment reference: '分类/case名' or '分类/case名/篇名', e.g. 'research/手机调研' or 'tasks/8号on-site' (《》 marks and a .md suffix tolerated).",
         ),
     }),
     contextSchema: toolContextSchema,
@@ -461,8 +328,7 @@ export const chatTools = {
         .string()
         .optional()
         .describe(
-          "sediment only: an EXISTING document file name to append to " +
-          "(from a listDocs/readDoc), when this updates one rather than opening one.",
+          "sediment only: an EXISTING case reference to update (分类/case名, from listTree/readDoc), when this updates one rather than opening one.",
         ),
       dateAnchor: z
         .string()
@@ -472,7 +338,7 @@ export const chatTools = {
         .array(z.string())
         .optional()
         .describe(
-          "Existing topic strands (strands.json keys) this belongs to — only names you have seen.",
+          "LEGACY, ignored by the case-model writers — kept for mailbox compatibility.",
         ),
     }),
     contextSchema: toolContextSchema,
@@ -733,15 +599,9 @@ export function buildChatToolsContext(
 ): Record<keyof typeof chatTools, ToolContext> & { delegateTask?: ToolContext } {
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
     readSlice: ctx,
-    readTimelineWindow: ctx,
-    readPreviously: ctx,
-    readSliceSummary: ctx,
     readAgentTimeline: ctx,
-    listSlices: ctx,
-    readTimeline: ctx,
-    readStrand: ctx,
-    listStrands: ctx,
-    listDocs: ctx,
+    readPreviously: ctx,
+    listTree: ctx,
     readDoc: ctx,
     noteForSediment: ctx,
     describeRoom: ctx,

@@ -7,12 +7,23 @@
  * by reference only; the loader compiles them into the step bundle, not the
  * workflow bundle.
  *
- * Steps:
- *   1. housekeeping  — recover/close/create slice, context continuity check,
- *      Flash tag extraction, ensure previously.md, strands menu, open UI stream
- *   2. finalizeTurn  — persist agent turn, close UI stream
+ * Steps (v0.19 A1 — the three-stage rearrangement, design §A.1):
+ *   1. housekeeping      — the REPLY segment. Recover/create the slice,
+ *      DECIDE the lifecycle (a close is materialized in memory only — the
+ *      disk close is the scribe segment's job), append + persist the user
+ *      turn, assemble the read face (continuity / slice head / identity /
+ *      direction), open the UI stream. Zero LLM calls, zero projection
+ *      writes (no timeline weave, no catalog/index maintenance).
+ *   2. persistAgentTurn  — 序 1. Append the agent turn + cognition to the
+ *      slice and flush (with write-conflict self-heal).
+ *   3. scribeSegment     — 序 2–7, the SCRIBE segment (post-reply): analyze
+ *      (the only LLM left), execute the close, scan due tasks, post the
+ *      boundary event, explicit-instruction evolution, scribe passes. Every
+ *      sub-step is idempotent; a kill anywhere re-runs the whole segment.
+ *   4. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
  *
- * Chunk order for the UI: start → start-step → data-phase(slicing) → finish-step → finish.
+ * Chunk order for the UI: start → start-step → data-phase(slice/context) →
+ * (reply) → data-phase(scribe segment) → data-evolution? → finish-step → finish.
  */
 import { type UIMessageChunk, type ModelMessage } from "ai";
 import { getWritable } from "workflow";
@@ -21,52 +32,51 @@ import {
   closeSlice,
   appendTurn,
   saveSliceSnapshot,
-  ensureIndexEntries,
   tryLoadTodaySlice,
   writeAgentTimeline,
   ensurePreviously,
   readStrands,
-  generateGlobalTimeline,
-  weaveTimeline,
-  buildTimelineBrief,
-  readTimelineIndex,
-  upsertTimelineEntry,
   deterministicSliceMark,
   createBatch,
   flushBatch,
   analyzeTurn,
-  shouldRunCardEvolution,
   readCurrentPreviously,
-  findMatchingStrand,
-  getStrandsPath,
-  serializeStrands,
   sliceIdToFilePath,
+  sliceIdToAgentPath,
+  slicePartPathCandidates,
+  readSlicePart,
+  readSlicePartResolved,
+  parseSlice,
   loadSlice,
+  RECORDS_ROOT,
+  LEGACY_SLICES_ROOT,
+  type SlicePart,
   type TimeSlice,
-  type StrandIndex,
   type SlicingSignal,
   type TurnAnalysis,
   type WriteBatch,
 } from "@/lib/episodic";
+import { dayDirForDate } from "@/lib/episodic/paths";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { mergeTurnsWithRemote } from "@/lib/episodic/turn-merge";
 import { isRefConflictError } from "@/lib/tools/batch-write";
 import { getRepoConfig } from "@/lib/capabilities";
 import {
-  consolidateStrands,
-  MIN_STRANDS_FOR_LLM,
-} from "@/lib/episodic/flash/strand-consolidator";
-import {
   buildSliceExcerpt,
-  runLibrarianPass,
   runScribePass,
+  extractDocMarkers,
+  extractProcessedMarkerIds,
+  RESEARCH_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
-import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
-import { applyStrandMerges, pruneStrands } from "@/lib/episodic/strands";
+import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
+import { fsListFiles, fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
+import { MEMORY_ROOT_DIR, caseIndexPath } from "@/lib/docs/paths";
+import { readDirection } from "@/lib/evolution/store";
+import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
 import {
   adaptHousekeepingReport,
   applyBridgeCardEvolution,
-  applyBridgePlaybookWrites,
   degradedAnalysis,
   isPhaseOutsourceActive,
   runHousekeepingBridge,
@@ -77,39 +87,6 @@ import {
   type BridgePhaseData,
 } from "@/lib/models/bridge-model";
 import type { HousekeepingStep } from "@/lib/chat/build-stream";
-import {
-  applyMarksToDrySlices,
-  backfillDrySliceMarks,
-  collectDrySliceCandidates,
-} from "@/lib/episodic/flash/backfill-marks";
-import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
-import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
-import {
-  appendFitnessEvents,
-  bucketNetScore,
-  emptyFitnessStore,
-  ensureEvolutionFiles,
-  readDirection,
-  readFitness,
-  readPlaybook,
-  readRecentSignals,
-  recordDirectionRejection,
-  resetFitnessGeneration,
-  writeDirection,
-} from "@/lib/evolution/store";
-import { logInteractionSignal } from "@/lib/episodic/rework-signal";
-import { computeEvolutionTriggers } from "@/lib/evolution/triggers";
-import type { PlaybookAgent } from "@/lib/evolution/paths";
-import {
-  DIRECTION_RECENT_EVENTS,
-  DIRECTION_RECENT_MARKINGS,
-  buildDirectionBlock,
-  detectDirectionMode,
-  extractDirectionSection,
-  retireExpiredHypotheses,
-  applyDirectionOps,
-  validateDirectionProposal,
-} from "@/lib/evolution/direction-agent";
 import {
   buildAgentIdentityPrompt,
   parseIdentityFromPreviously,
@@ -130,21 +107,16 @@ import {
   runCardEvolution,
   type CardEvolutionReaders,
 } from "@/app/api/evolution/run-card-evolution";
-import { buildViewBlock } from "./view-block";
 import { readFile, readFileFresh } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
 import { readFileDemo } from "@/lib/demo/demo-fs";
 import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
-import { CARD_STAMP, parseCard } from "@/lib/episodic/previously-format";
-import {
-  localDateKey,
-  normalizeLocale,
-  relPhrase,
-} from "@/lib/time/relative";
+import { localDateKey } from "@/lib/time/relative";
 import {
   shouldEmitProgress,
   type ProgressWriteState,
 } from "@/lib/chat/progress-throttle";
+import type { UserConfig } from "@/lib/config/types";
 
 
 // ─── Private helpers ──────────────────────────────────────────────────────
@@ -320,13 +292,27 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
     if (input.useGithub) return readFile(path, input.repo, input.owner);
     return readFileLocal(path);
   };
+  /** Dual-probe the records root, then the legacy slices root. */
+  const readSliceDual = async (
+    parsed: { y: string; m: string; d: string; hm: string },
+    part: SlicePart,
+  ): Promise<string> => {
+    const [primary, fallback] = slicePartPathCandidates(
+      `${parsed.y}-${parsed.m}-${parsed.d}-${parsed.hm}`,
+      part,
+    );
+    try {
+      return await readRaw(primary);
+    } catch {
+      return readRaw(fallback);
+    }
+  };
   return {
     readSlice: async (sid, range) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `ERROR: Invalid slice ID.`;
-      const raw = await readRaw(
-        `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`,
-      );
+      // Dual-root (v0.19 R2): the cited slice may predate the records root move.
+      const raw = await readSliceDual(parsed, "core");
       if (range && range.type === "last") {
         const { turns } = parseTurns(raw);
         const n = range.count ?? 3;
@@ -340,16 +326,16 @@ function buildCardReaders(input: TurnInput): CardEvolutionReaders {
     readAgentTimeline: async (sid) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `(invalid slice: ${sid})`;
-      return readRaw(
-        `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/agent.md`,
-      ).catch(() => `(agent.md not found: ${sid})`);
+      return readSliceDual(parsed, "agent").catch(
+        () => `(agent.md not found: ${sid})`,
+      );
     },
     readPreviously: async (sid) => {
       const parsed = parseSliceId(sid);
       if (!parsed) return `(invalid slice: ${sid})`;
-      return readRaw(
-        `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/previously.md`,
-      ).catch(() => `(previously not found: ${sid})`);
+      return readSliceDual(parsed, "previously").catch(
+        () => `(previously not found: ${sid})`,
+      );
     },
   };
 }
@@ -405,84 +391,224 @@ function sliceTurnsToMessages(turns: TimeSlice["turns"]): ModelMessage[] {
 }
 
 /**
- * Format a compact menu from an already-loaded strand index for the system
- * prompt. Tags only, sorted by most recently active slice, max 20.
- * Returns empty string if no strands exist.
- *
- * When the user-clock context is provided, each tag's last-seen path carries a
- * local date + relative-days annotation (`rust（最近 07-24 周五 · 9 天前）` /
- * `rust (last 07-24 Fri · 9 days ago)`), so the agent never does date math.
+ * Slice → continuity reference. `end` falls back to the last turn's
+ * timestamp: a close decided this turn is materialized in memory only (the
+ * scribe segment executes it post-reply), and closeSlice's `end` IS the last
+ * turn's timestamp anyway — the reference is identical either way.
  */
-function buildStrandsMenu(
-  strands: StrandIndex,
-  time?: { nowIso?: string; timezone?: string; locale?: string },
-): string {
-  const entries = Object.entries(strands);
-
-  if (entries.length === 0) return "";
-
-  // Sort by most recent slice associated with each strand
-  entries.sort((a, b) => {
-    const aMax = a[1].reduce((max, p) => (p > max ? p : max), "");
-    const bMax = b[1].reduce((max, p) => (p > max ? p : max), "");
-    return bMax.localeCompare(aMax);
-  });
-
-  const zh = normalizeLocale(time?.locale) === "zh";
-  const tagNames = entries.slice(0, 20).map(([name, paths]) => {
-    if (!time?.nowIso || !time?.timezone) return name;
-    const newest = paths.reduce((max, p) => (p > max ? p : max), "");
-    const m = newest.match(/^(\d{4})\/(\d{2})\/(\d{2})\/(\d{2})(\d{2})$/);
-    if (!m) return name;
-    const iso = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:00.000Z`;
-    const localKey = localDateKey(iso, time.timezone);
-    const phrase = relPhrase(iso, time.nowIso, time.timezone, time.locale ?? "en", {
-      weekday: true,
-    });
-    if (!localKey || !phrase) return name;
-    const mmdd = localKey.slice(5);
-    return zh ? `${name}（最近 ${mmdd} ${phrase}）` : `${name} (last ${mmdd} ${phrase})`;
-  });
-  return `Known topics: ${tagNames.join(", ")}`;
-}
-
-/** Slice → continuity reference (end time comes from closeSlice's mutation). */
 function toPrevRef(s: TimeSlice): PrevSliceRef {
-  return { id: s.slice_id, focus: s.focus, start: s.start, end: s.end };
+  return {
+    id: s.slice_id,
+    focus: s.focus,
+    start: s.start,
+    end: s.end ?? s.turns.at(-1)?.timestamp,
+  };
 }
+
+// ─── Disk scans (no projections — v0.19 A1) ───────────────────────────────
 
 /**
- * Find the most recent closed slice from the canonical timeline catalog —
- * used for continuity when today has no active slice (cross-day return).
- * Reads `timeline/index.json` (structured); the markdown projection's format
- * changed in v0.8 and is not machine-scrapable. Returns null if the catalog
- * is unavailable or holds no closed slice.
- *
- * v0.9: `excludeFromId` bounds the search to slices that started BEFORE the
- * given slice id, so the continuity reference for an active slice is always
- * the slice that was closed just before it began — recomputed identically on
- * every turn of the slice (slice-head freeze).
+ * Slice ids (dashed, newest first) living in TODAY's and YESTERDAY's day
+ * dirs under BOTH roots — the bounded scan window every disk scan here
+ * shares (same discipline as tryLoadTodaySlice: a cross-UTC-midnight
+ * conversation lives in yesterday's dir).
  */
-async function readMostRecentClosedSlice(
-  excludeFromId?: string,
-): Promise<PrevSliceRef | null> {
-  try {
-    const idx = await readTimelineIndex();
-    if (!idx) return null;
-    let newest: PrevSliceRef | null = null;
-    for (const s of idx.slices) {
-      if (s.status !== "closed") continue;
-      if (excludeFromId && s.id >= excludeFromId) continue;
-      if (newest && s.id <= newest.id) continue;
-      newest = { id: s.id, focus: s.focus, start: s.start, end: s.end };
+async function listRecentDaySliceIds(): Promise<string[]> {
+  const now = new Date();
+  const ids = new Set<string>();
+  for (const d of [now, new Date(now.getTime() - 86_400_000)]) {
+    for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT] as const) {
+      const dayDir = dayDirForDate(root, d);
+      let entries: Awaited<ReturnType<typeof fsListFiles>>;
+      try {
+        entries = await fsListFiles(dayDir);
+      } catch {
+        continue; // missing year/month/day level — nothing there
+      }
+      const rel = dayDir.slice(root.length + 1); // YYYY/MM/DD
+      for (const e of entries) {
+        if (e.type === "dir" && /^\d{4}$/.test(e.name)) {
+          ids.add(`${rel.replace(/\//g, "-")}-${e.name}`);
+        }
+      }
     }
-    return newest;
+  }
+  return [...ids].sort().reverse();
+}
+
+/** Read + parse one slice's core.md by id; the directory name backstops a
+ *  frontmatter without slice_id. Null when unreadable. */
+async function readSliceById(
+  id: string,
+  batch?: WriteBatch,
+): Promise<TimeSlice | null> {
+  try {
+    const s = parseSlice(await readSlicePart(id, "core", batch));
+    if (!s.slice_id) s.slice_id = id;
+    return s;
   } catch {
     return null;
   }
 }
 
-// ─── Step 1: Housekeeping ────────────────────────────────────────────────
+/**
+ * The newest slice CLOSED before `excludeFromId` — the continuity reference
+ * (and the scribe segment's boundary-event target). Pure disk truth, no
+ * timeline catalog (the projection is gone from the turn path in v0.19 A1).
+ *
+ * Two tiers: the bounded today/yesterday scan first; when it holds no closed
+ * slice, a full enumeration (ONE Git tree call on GitHub backends, a bounded
+ * recursive walk locally) covers longer gaps. Reads are capped at 12 heads.
+ */
+async function readPrevClosedSlice(
+  excludeFromId?: string,
+  batch?: WriteBatch,
+): Promise<TimeSlice | null> {
+  const findClosed = async (ids: string[]): Promise<TimeSlice | null> => {
+    for (const id of ids.slice(0, 12)) {
+      if (excludeFromId && id >= excludeFromId) continue;
+      const s = await readSliceById(id, batch);
+      if (s && s.status === "closed") return s;
+    }
+    return null;
+  };
+  const fromRecentDays = await findClosed(await listRecentDaySliceIds());
+  if (fromRecentDays) return fromRecentDays;
+  const all = (await enumerateSliceIds())
+    .map((rel) => rel.replace(/\//g, "-"))
+    .sort()
+    .reverse();
+  return findClosed(all);
+}
+
+/**
+ * The kill-matrix catch (v0.19 A1 §A.2.4): the reply segment materializes a
+ * close in memory only — a run killed between housekeeping and the scribe
+ * segment leaves the OLD slice active on disk next to its ACTIVE successor.
+ * On redelivery housekeeping recovers the successor (newer HHMM sorts first
+ * in tryLoadTodaySlice), and this scan finds the orphan: the newest ACTIVE
+ * slice in today/yesterday's dirs that is NOT the current one (and not NEWER
+ * than it — clock skew must never close the future). Orphans older than the
+ * two-day window are the background scan's job (A2), not the turn's.
+ */
+async function findStaleActiveSlice(
+  excludeId: string,
+  batch?: WriteBatch,
+): Promise<TimeSlice | null> {
+  for (const id of await listRecentDaySliceIds()) {
+    if (id >= excludeId) continue;
+    const s = await readSliceById(id, batch);
+    if (s && s.status === "active") return s;
+  }
+  return null;
+}
+
+/**
+ * Re-derive the close signal for an orphaned slice on a redelivered run (the
+ * reply segment's pendingClose decision was never persisted). The three
+ * clock/turn-count checks are monotone in wall time, so a signal that fired
+ * on the first delivery MUST fire again — a null here means none ever did
+ * (the orphan predates A1, or was left by a crash mid-creation) and we skip
+ * rather than fabricate a cause; the background scan (A2) owns those.
+ */
+function rederiveCloseSignal(
+  slice: TimeSlice,
+  config: UserConfig,
+): SlicingSignal | null {
+  const lastTurnTs = slice.turns.at(-1)?.timestamp;
+  if (lastTurnTs && checkIdleGap(lastTurnTs, config.slicing.idleGapMinutes * 60_000)) {
+    return "idle_gap";
+  }
+  if (checkSliceAge(slice.start, config.slicing.maxSliceMinutes * 60_000)) {
+    return "time_cap";
+  }
+  if (slice.turns.length >= config.slicing.maxTurnsPerSlice) return "capacity";
+  return null;
+}
+
+/**
+ * 序 4 — due tasks, mechanically: every open task case's index.md carries a
+ * mechanically-stamped `日期锚：YYYY-MM-DD` line (the scribe stamps it, not
+ * the model); an anchor on or before the user's local today is due.
+ */
+async function scanDueTasks(
+  todayLocal: string,
+  batch: WriteBatch,
+): Promise<string[]> {
+  const due: string[] = [];
+  let entries: Awaited<ReturnType<typeof fsListFiles>>;
+  try {
+    entries = await fsListFiles(`${MEMORY_ROOT_DIR}/tasks`);
+  } catch {
+    return due; // no tasks shelf yet
+  }
+  for (const e of entries) {
+    if (e.type !== "dir") continue;
+    try {
+      const text = await fsReadFile(caseIndexPath("tasks", e.name), batch);
+      const m = text.match(/日期锚[:：]\s*(\d{4}-\d{2}-\d{2})/);
+      if (m && m[1] <= todayLocal) due.push(`tasks/${e.name}（日期锚 ${m[1]}）`);
+    } catch {
+      // no index.md in this case dir — skip
+    }
+  }
+  return due;
+}
+
+/** The boundary-event mailbox line (序 5) — one JSON object per slice close. */
+const BOUNDARY_EVENT_PREFIX = "[boundary-event]";
+
+/**
+ * 序 5 — post the boundary event onto the closed slice's agent.md mailbox:
+ * `{v, sliceId, closedBy, dueTasks}`. Idempotent by content (a mailbox that
+ * already carries this slice's event is left untouched), so a redelivered
+ * scribe segment never double-posts. The write lands IN PLACE on the root
+ * the mailbox was read from (dual-root discipline, same as the scribe's
+ * record lines); a slice without an agent.md yet gets one holding just the
+ * event. Question markers are NOT answered here (that is the background
+ * stream's job, A3) — they stay in the mailbox as the on-disk pending fact.
+ */
+async function postBoundaryEvent(
+  slice: TimeSlice,
+  dueTasks: string[],
+  batch: WriteBatch,
+): Promise<void> {
+  try {
+    const resolved = await readSlicePartResolved(slice.slice_id, "agent", batch).catch(
+      () => null,
+    );
+    const existing = resolved?.content ?? "";
+    if (
+      existing.includes(
+        `${BOUNDARY_EVENT_PREFIX} {"v":1,"sliceId":${JSON.stringify(slice.slice_id)}`,
+      )
+    ) {
+      return; // already posted — idempotent re-run
+    }
+    const line = `${BOUNDARY_EVENT_PREFIX} ${JSON.stringify({
+      v: 1,
+      sliceId: slice.slice_id,
+      closedBy: slice.closedBy ?? null,
+      dueTasks,
+    })}`;
+    const next = existing.trimEnd()
+      ? `${existing.trimEnd()}\n\n${line}\n`
+      : `${line}\n`;
+    await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(slice.slice_id), next, batch);
+    console.log(
+      `[Boundary] event posted to ${slice.slice_id} mailbox (${dueTasks.length} due task(s))`,
+    );
+  } catch (e) {
+    // A mailbox-line failure must never take the turn down — the next turn's
+    // scribe segment retries (the idempotency check keeps it single-post).
+    console.warn(
+      "[Boundary] event post failed:",
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
+// ─── Step 1: Housekeeping (the reply segment) ─────────────────────────────
 
 /**
  * How many trailing turns of a checkpointed previous slice are carried into
@@ -490,17 +616,19 @@ async function readMostRecentClosedSlice(
  */
 const CHECKPOINT_CARRY_OVER_TURNS = 10;
 
-/** Cap on the direction Portrait section fed to the turn-analyzer as Task 7's
- *  scoring rubric (v1.1) — it rides the USER prompt of every analysis call. */
-const ANALYZER_PORTRAIT_MAX_CHARS = 4000;
-
 /**
  * Recover today's slice from GitHub truth (never the module global — it does
- * not survive across workflow invocations), close it on slice-age cap / turn
- * cap / idle gap, or keep it open (rebuilding the history window from the
+ * not survive across workflow invocations), DECIDE its lifecycle (idle gap /
+ * age cap / turn cap — the close itself is the scribe segment's job, see
+ * pendingClose), or keep it open (rebuilding the history window from the
  * slice's own turns when the client history mismatches). Append the user
  * turn and durably snapshot before returning, so the message is on GitHub
  * before we stream anything.
+ *
+ * The reply segment is deliberately lean (v0.19 A1): NO LLM call (the
+ * analyzer moved post-reply), NO projection writes (timeline weave, catalog
+ * upserts, global timeline are gone from the turn path), NO strands menu /
+ * timeline brief / view block / overdue block (撤清单 §A.2.2).
  */
 export async function housekeeping(input: TurnInput): Promise<HousekeepingResult> {
   "use step";
@@ -509,70 +637,8 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // fresh-writer-per-write races drop frames (see createStepStream).
   const stream = createStepStream();
 
-  // ── Phase display: two modes, two components ─────────────────────────
-  // Edge mode emits one compact data-phase chunk per engineering sub-step
-  // (slice / analyze / tags / context / strands) — the client merges them
-  // into the HousekeepingCard checklist.
-  // Client (outsourced) mode renders ONE streaming card instead: the whole
-  // phase is a single agent call + deterministic wrap-up, so the card
-  // streams the CLI's live activity (tool rows + narration line, fed by the
-  // bridge emitter below) and fills in wrap-up rows as the engineering
-  // steps complete — the edge checklist is NOT emitted (it would sit idle
-  // through the whole call, then jump to done).
-  // The gate also requires the turn's model to run on the bridge — a BYOK
-  // model (sdk "openai") under a bridge env brain keeps housekeeping on the
-  // standard API sub-agent path.
-  const phaseOutsource = isPhaseOutsourceActive(input.modelConfig.sdk);
-  /** Wrap-up rows of the client-mode card (same shape as the checklist). */
-  const hkSteps: HousekeepingStep[] = [];
-  /** Last bridge-emitter frame state, folded into every card frame. */
-  const hkActivity: {
-    tools: BridgePhaseData["tools"];
-    live?: string;
-    /** Set when the bridge call failed and the turn degraded to the
-     *  deterministic path — the card shows an amber warning. */
-    warning?: string;
-  } = {
-    tools: [],
-  };
-  const sendHousekeepingCard = (running: boolean) =>
-    stream.send({
-      type: "data-phase" as `data-${string}`,
-      id: "phase-bridge-housekeeping",
-      data: {
-        phase: "bridgeHousekeeping",
-        running,
-        summaries: [],
-        tools: hkActivity.tools,
-        ...(hkActivity.live ? { live: hkActivity.live } : {}),
-        ...(hkActivity.warning ? { warning: hkActivity.warning } : {}),
-        steps: hkSteps.map((s) => ({ ...s })),
-      },
-    } as UIMessageChunk);
-  /** Phase display dispatch: edge → compact checklist chunk; client → a
-   *  wrap-up row inside the bridge housekeeping card. */
-  const emitStep = async (
-    phase: string,
-    running: boolean,
-    summaries?: string[],
-  ): Promise<void> => {
-    if (!phaseOutsource) return emitPhase(stream, phase, running, summaries);
-    const existing = hkSteps.find((s) => s.phase === phase);
-    if (existing) {
-      existing.running = running;
-      if (summaries !== undefined) existing.summaries = summaries;
-    } else {
-      hkSteps.push({
-        phase,
-        running,
-        ...(summaries !== undefined ? { summaries } : {}),
-      });
-    }
-    sendHousekeepingCard(hkSteps.some((s) => s.running));
-  };
-
-  // ── Phase: slice — manage the time slice (recover/close/create) ─────
-  await emitStep("slice", true);
+  // ── Phase: slice — manage the time slice (recover/create; decide) ────
+  await emitPhase(stream, "slice", true);
 
   const { config, clientTimezone, lastUserMessage, modelMessages } = input;
 
@@ -591,27 +657,9 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // two turns in one process can't flush each other's writes. ─────────────
   const batch = createBatch();
 
-  // ── v0.8: weave the timeline first (throttled). Its writes (index.json +
-  // timeline.md) join this turn's batch; the full reconcile runs when the
-  // catalog is stale or a slice just closed. The result feeds the timeline
-  // brief for the system prompt.
-  const weaveResult = await weaveTimeline({}, batch);
-  if (!weaveResult.skipped) {
-    console.log(
-      `[Timeline] weave: +${weaveResult.added} -${weaveResult.removed} dry=${weaveResult.needs_marking} total=${weaveResult.total}`,
-    );
-  }
-
-  let slice: TimeSlice;
-  /** True when this call minted a fresh slice (vs restoring the active one) —
-   *  the new slice must land in the timeline catalog within this turn's batch. */
-  let createdNewSlice = false;
-  /** The slice we came from — set when we close one this call, or resolved
-   *  from the global timeline when today has none. Drives the continuity brief. */
-  let prevSlice: PrevSliceRef | null = null;
   const diskSlice = await tryLoadTodaySlice(batch);
 
-  // ── 1. Decide lifecycle (pure — no I/O, no LLM yet) ──────────────────
+  // ── 1. Decide lifecycle (pure — no I/O, no LLM) ──────────────────────
   let closeSignal: SlicingSignal | null = null;
   /** True when the client-sent history mismatched the active slice: the
    *  slice STAYS OPEN and the model window is rebuilt from the slice's own
@@ -646,364 +694,21 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     }
   }
 
-  // ── 2. One analyze pass: message tags + semantic hint + (on close) marking ──
-  // Phase: analyze — the turn-analyzer sub-agent pass (main model via the
-  // shared runner, v0.9) is its own visible housekeeping sub-step.
-  await emitStep("analyze", true);
-  const existingStrands = await readStrands(batch);
-  // This slice's mechanical fitness signals (v1.0 §2.6 — recall verify/rework
-  // instrumentation) ride the analyzer input (Task 7) and the bridge payload.
-  const thisSliceSignals = diskSlice
-    ? (await readRecentSignals(20)).filter(
-        (s) => s.sliceId === diskSlice.slice_id,
-      )
-    : [];
-  // Phase outsourcing (client mode + bridge brain, kill-switch
-  // PREVIOUSLY_PHASE_OUTSOURCE=0): ONE bridge call covers BOTH LLM stages —
-  // the turn analysis AND the card-evolution proposal (applied in §4b via
-  // bridgeReport). The card is read here for the payload and reused in §4b.
-  // A failed call degrades EXACTLY like an analyzer outage (memoryWorthy=true,
-  // no tags, deterministic closed marking below) and additionally SKIPS the
-  // evolution — no second bridge spawn on a broken bridge.
-  let analysis: TurnAnalysis;
-  let bridgeReport: HousekeepingPhaseReport | null = null;
-  let bridgeCardRaw: string | undefined;
-  /** The direction doc, read for the bridge payload (reused when applying the
-   *  report's direction outcome in §4b). */
-  let bridgeDirection: string | null = null;
-  /** The card's legacy Self-model lines + the direction mode, offered to the
-   *  bridge call so its direction verdict follows the same discipline. */
-  let bridgeSelfModel: string | null = null;
-  let bridgeDirectionMode: "bootstrap" | "migrate" | "steady" = "steady";
-  /** Dry-slice ids offered to the bridge call — the apply step (§3b) honors
-   *  backfill marks for exactly these ids, never anything the agent invented. */
-  let bridgeDryCandidateIds: string[] = [];
-  /** True when the bridge call was offered strand merge candidates (close
-   *  boundary + post-prune index ≥ MIN_STRANDS_FOR_LLM — the consolidator's
-   *  own gate) — the apply step (§close) honors strand_merges only when the
-   *  offer was actually made. */
-  let bridgeStrandMergeOffered = false;
-  /** The offered strand names — the apply step honors a merge only when BOTH
-   *  keys were actually offered (same discipline as backfill candidate ids). */
-  let bridgeStrandMergeNames: Set<string> | null = null;
-  if (phaseOutsource) {
-    bridgeCardRaw = await readCurrentPreviously(batch);
-    bridgeDirection = await readDirection();
-    // Legacy Self-model lines (migration source) + the bootstrap/migrate/
-    // steady mode ride the payload so the outsourced direction verdict follows
-    // the same discipline as the merged evolution run (v1.1 §6).
-    const bridgeCardDoc = parseCard(bridgeCardRaw);
-    bridgeSelfModel =
-      bridgeCardDoc && bridgeCardDoc.selfModel.length > 0
-        ? bridgeCardDoc.selfModel.map((s) => `- ${s}`).join("\n")
-        : null;
-    bridgeDirectionMode = detectDirectionMode(bridgeDirection);
-    // Dry-slice re-marking rides the SAME bridge call (job 4 of the report)
-    // instead of the old per-slice backfill sub-agent spawns — on a close
-    // boundary the candidates are gathered here and marked via the report.
-    const dryCandidates =
-      closeSignal && diskSlice && !input.useDemo
-        ? await collectDrySliceCandidates({
-            excludeSliceIds: [diskSlice.slice_id],
-            batch,
-          })
-        : [];
-    bridgeDryCandidateIds = dryCandidates.map((d) => d.sliceId);
-    // Strand semantic dedupe rides the SAME call too (job 5), replacing the
-    // old strand-consolidator sub-agent pass — same gate (close boundary +
-    // POST-PRUNE index big enough), offered with slice counts so the agent
-    // can prefer the more-used name as the merge target.
-    const prunedForOffer =
-      closeSignal && diskSlice && !input.useDemo
-        ? pruneStrands(existingStrands).strands
-        : null;
-    bridgeStrandMergeOffered =
-      prunedForOffer !== null &&
-      Object.keys(prunedForOffer).length >= MIN_STRANDS_FOR_LLM;
-    if (bridgeStrandMergeOffered && prunedForOffer) {
-      bridgeStrandMergeNames = new Set(Object.keys(prunedForOffer));
-    }
-    // Playbook evolution (job 8) rides the SAME report. The payload offers
-    // the buckets that trigger on the PRE-turn store — this readFitness sees
-    // the store BEFORE §3a appends this turn's report deltas (that append
-    // happens only after the bridge call returns). The APPLY-TIME gate
-    // (applyBridgePlaybooks in §4b) re-checks against the POST-append
-    // evolutionTriggers, the authoritative set for this turn — the two can
-    // differ when this turn's own deltas push a bucket over the threshold.
-    // Offering a bucket the apply gate then rejects is harmless (the write
-    // is skipped, never written); missing one only defers its playbook
-    // rewrite to the next triggered turn.
-    const playbookPreTriggers = input.useDemo
-      ? []
-      : computeEvolutionTriggers(await readFitness(batch)).map((t) => t.bucket);
-    const playbookAgents = playbookPreTriggers.filter(
-      (b): b is PlaybookAgent =>
-        b === "recall" || b === "search" || b === "thinkdeep",
-    );
-    const playbookContents = await Promise.all(
-      playbookAgents.map(async (agent) => ({
-        agent,
-        content: (await readPlaybook(agent).catch(() => null)) ?? "",
-      })),
-    );
-    // Forward the client agent's live tool activity into the turn stream so
-    // the user can watch the CLI work during housekeeping — the same
-    // data-phase channel + payload the chat bridge model uses
-    // (createBridgeEventEmitter), on a distinct id/phase so the two
-    // indicators never merge. Frames ride this step's serial stream queue
-    // (stream.send), throttled inside the emitter. Deltas ARE forwarded here:
-    // for phase "housekeeping" the client suppresses the JSON report block
-    // and deltas carry only narration/thinking — they become the indicator's
-    // rolling "current activity" line (data.live), so the wait is visible
-    // even when the CLI makes zero tool calls. The activity state is folded
-    // into the shared card frame (hkActivity) so wrap-up rows (emitStep) and
-    // tool/narration frames never overwrite each other — every frame carries
-    // the full cumulative state (build-stream: last chunk wins).
-    const bridgeActivity = createBridgeEventEmitter({
-      id: "phase-bridge-housekeeping",
-      phase: "bridgeHousekeeping",
-      write: (data: BridgePhaseData) => {
-        hkActivity.tools = data.tools;
-        hkActivity.live = data.live;
-        // The emitter's settle (running:false) fires the moment the bridge
-        // call returns, while wrap-up rows (analyze → tags → …) are still
-        // being applied — keep the card spinning until they settle too.
-        sendHousekeepingCard(
-          data.running || hkSteps.some((s) => s.running),
-        );
-      },
-    });
-    const bridgeResult = await runHousekeepingBridge(
-      {
-        userMessage: lastUserMessage,
-        recentTurns: input.recentTurns,
-        existingStrandNames: Object.keys(existingStrands),
-        cardContent: bridgeCardRaw,
-        sliceId: diskSlice?.slice_id ?? "pending",
-        closingSlice:
-          closeSignal && diskSlice
-            ? {
-                sliceId: diskSlice.slice_id,
-                turns: diskSlice.turns,
-                tags: diskSlice.tags,
-              }
-            : undefined,
-        drySlices: dryCandidates.length > 0 ? dryCandidates : undefined,
-        strandsForMerge:
-          bridgeStrandMergeOffered && prunedForOffer
-            ? Object.entries(prunedForOffer).map(([name, paths]) => ({
-                name,
-                slices: paths.length,
-              }))
-            : undefined,
-        signals:
-          thisSliceSignals.length > 0 ? thisSliceSignals : undefined,
-        playbookTriggerBuckets:
-          playbookPreTriggers.length > 0 ? playbookPreTriggers : undefined,
-        playbooks: playbookContents.length > 0 ? playbookContents : undefined,
-        directionContent: bridgeDirection,
-        selfModelContent: bridgeSelfModel,
-        directionMode: bridgeDirectionMode,
-        todayLocal:
-          localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined,
-        locale: input.locale,
-      },
-      { onEvent: bridgeActivity.onEvent, onDelta: bridgeActivity.onDelta },
-    );
-    // Settle the indicator (running: false) whatever the outcome.
-    bridgeActivity.finish();
-    if (bridgeResult.ok) {
-      bridgeReport = bridgeResult.report;
-      analysis = adaptHousekeepingReport(
-        bridgeResult.report,
-        !!(closeSignal && diskSlice),
-      );
-    } else {
-      console.warn(
-        `[HousekeepingBridge] ${bridgeResult.reason} — degraded to the deterministic path`,
-      );
-      analysis = degradedAnalysis();
-      // Surface the degradation on the card — it must not settle silently
-      // green when the memory analysis fell back to heuristics.
-      hkActivity.warning = bridgeResult.reason;
-      sendHousekeepingCard(hkSteps.some((s) => s.running));
-    }
-  } else {
-    // Task 7's scoring rubric (v1.1): the direction doc's PORTRAIT section —
-    // the loop's learned criteria — rides the analyzer's USER prompt (never
-    // the static system prompt), capped. Advisory: a read failure just means
-    // scoring without the rubric this turn. (The bridge path's report already
-    // scores against the full direction doc shipped in its payload.)
-    let portrait: string | undefined;
-    if (!input.useDemo) {
-      try {
-        const directionDoc = await readDirection();
-        const section = directionDoc
-          ? extractDirectionSection(directionDoc, "# Portrait")
-          : null;
-        // Skip the untouched template's "_(" placeholder body.
-        if (section && !section.trimStart().startsWith("_(")) {
-          portrait = section.slice(0, ANALYZER_PORTRAIT_MAX_CHARS);
-        }
-      } catch {
-        // rubric unavailable — score without it
-      }
-    }
-    analysis = await analyzeTurn({
-      model: input.modelConfig,
-      userMessage: lastUserMessage,
-      existingStrandNames: Object.keys(existingStrands),
-      closingSlice:
-        closeSignal && diskSlice
-          ? { turns: diskSlice.turns, tags: diskSlice.tags }
-          : undefined,
-      signals: thisSliceSignals.length > 0 ? thisSliceSignals : undefined,
-      portrait,
-    });
-  }
-  const candidateTags = analysis.memoryWorthy
-    ? [
-        ...analysis.messageTags.reuse,
-        ...analysis.messageTags.create.map((c) => c.tag),
-      ]
-    : [];
-  await emitStep(
-    "analyze",
-    false,
-    candidateTags.length > 0 ? candidateTags : undefined,
-  );
-
-  // ── 3. Execute lifecycle — close marking is applied BEFORE the slice persists ──
+  // ── 2. Materialize (IN MEMORY only) ───────────────────────────────────
+  // A close decided above is NOT executed here: the old slice stays active on
+  // disk until the scribe segment closes it post-reply (序 3). A run killed
+  // in between leaves an orphaned active slice that the scribe segment's disk
+  // scan (findStaleActiveSlice) re-discovers — the decision itself needs no
+  // persistence.
+  let slice: TimeSlice;
+  /** The close decision handed to the scribe segment by value. */
+  let pendingClose: HousekeepingResult["pendingClose"];
+  /** The slice we came from — set when we decided a close this call, or
+   *  resolved from disk when today has none. Drives the continuity brief. */
+  let prevSlice: PrevSliceRef | null = null;
   if (closeSignal && diskSlice) {
-    if (analysis.closedMarking) {
-      if (analysis.closedMarking.focus) diskSlice.focus = analysis.closedMarking.focus;
-      if (analysis.closedMarking.summary) diskSlice.summary = analysis.closedMarking.summary;
-      if (analysis.closedMarking.tags.length > 0) diskSlice.tags = analysis.closedMarking.tags;
-      if (analysis.closedMarking.tone) diskSlice.emotional_tone = analysis.closedMarking.tone;
-    }
-    // v0.8 reliability: never close a slice dry when it has content. The
-    // analyzer silently returns EMPTY on any failure (worker outage, schema
-    // mismatch), which used to leave focus/summary empty — the "39% dry"
-    // timeline. Fill any gap with a deterministic mark from the slice itself.
-    if (!diskSlice.focus || !diskSlice.summary) {
-      const fallback = deterministicSliceMark(diskSlice);
-      if (!diskSlice.focus) diskSlice.focus = fallback.focus;
-      if (!diskSlice.summary) diskSlice.summary = fallback.summary;
-      console.log(
-        `[Episodic] ${diskSlice.slice_id} closed with deterministic mark (analyzer output incomplete)`,
-      );
-    }
     prevSlice = toPrevRef(diskSlice);
-    await closeSlice(diskSlice, closeSignal, batch);
-    console.log(`[Episodic] Closed slice: ${diskSlice.slice_id} (${closeSignal})`);
-    // Signal the client that a slice closed (rendered as a housekeeping
-    // checklist row). The per-slice evolution itself runs INLINE below
-    // (§4b) — the client no longer fires anything on this signal.
-    await emitStep("slice-closed", false, [diskSlice.slice_id]);
-    // v0.8 — force the reconcile so the just-closed slice is in the projection
-    // immediately (the throttled per-turn weave would defer it up to 5 min).
-    await weaveTimeline({ force: true }, batch);
-
-    // Strand consolidation (opportunistic, on slice close): prune single-use
-    // stale strands deterministically; when the index is large enough, ask the
-    // model (main model via the shared runner, v0.9) for a from→to merge map
-    // to collapse semantic duplicates
-    // (typos / same-concept-two-names) that deterministic normalization can't
-    // catch. Writes land in the current batch → one commit with the close.
-    // Phase outsourcing (bridge brain): the merge proposals arrived INSIDE the
-    // single housekeeping bridge call (report.strand_merges, job 5) — the
-    // deterministic prune still runs here, then the proposed merges are
-    // sanitized exactly like the consolidator's own output (both keys must
-    // exist post-prune, no no-ops) and applied through the same
-    // applyStrandMerges. Honors merges only when candidates were offered.
-    const strandsBefore = await readStrands(batch);
-    const { strands: consolidated, pruned, merges, llmPassSkipped } =
-      phaseOutsource
-        ? (() => {
-            const { strands, pruned } = pruneStrands(strandsBefore);
-            const proposed = bridgeStrandMergeOffered
-              ? (bridgeReport?.strand_merges ?? [])
-              : [];
-            // Sanitize exactly like the consolidator's own output (no no-ops,
-            // both keys must exist post-prune) AND honor the offer allowlist
-            // (both keys must have been offered — same discipline as the
-            // backfill candidate ids).
-            const merges = proposed.filter(
-              (m) =>
-                m.from !== m.to &&
-                bridgeStrandMergeNames?.has(m.from) === true &&
-                bridgeStrandMergeNames?.has(m.to) === true &&
-                strands[m.from] !== undefined &&
-                strands[m.to] !== undefined,
-            );
-            if (merges.length > 0) applyStrandMerges(strands, merges);
-            return { strands, pruned, merges, llmPassSkipped: !bridgeStrandMergeOffered };
-          })()
-        : await consolidateStrands(strandsBefore, input.modelConfig);
-    if (pruned.length > 0 || merges.length > 0) {
-      await fsWriteFile(getStrandsPath(), serializeStrands(consolidated), batch);
-      console.log(
-        `[Strands] Consolidation: pruned ${pruned.length}, merged ${merges.length}` +
-        (llmPassSkipped ? " (llm skipped)" : ""),
-      );
-    }
-
-    // Document-system write path (v0.15 §3.2/§4.3) — rides the SAME close
-    // boundary and the same model path. The librarian maintains the touched
-    // topic homes, judging FOR ITSELF whether anything is worth an entry
-    // (the old semantic gates — ≥5 new slices / 7-day cooldown / ≤10 per
-    // pass — are deleted per axiom D; an empty run is a legal outcome), and
-    // voids the homes of strands just merged away. The scribe (书记段) picks
-    // up the reply segment's [doc-marker] mailbox lines from the closed
-    // slice's agent.md (sediment → research/entity docs, user-stated
-    // date-anchored commitments → task docs); the research pass answers the
-    // "question" markers into docs/research + docs/hypothesis (the degraded
-    // form of the background stream — the real one needs the v0.11 §10
-    // groundwork). All writes land in the SAME batch → one commit with the
-    // close. Demo mode is skipped (read-only preview). Each pass never
-    // throws — the log lines are the audit trail.
-    if (!input.useDemo) {
-      const hkDate =
-        localDateKey(input.startedAtIso, input.clientTimezone) ??
-        input.startedAtIso.slice(0, 10);
-      const closedExcerpt = buildSliceExcerpt(diskSlice);
-      const librarian = await runLibrarianPass({
-        model: input.modelConfig,
-        closedSliceId: diskSlice.slice_id,
-        excerpt: closedExcerpt,
-        strands: consolidated,
-        merges,
-        date: hkDate,
-        batch,
-      });
-      console.log(
-        `[Docs] Librarian: ${librarian.written.length} home(s) written, ${librarian.voided.length} voided` +
-          (librarian.llmRan ? "" : " (llm skipped)"),
-      );
-      const scribe = await runScribePass({
-        model: input.modelConfig,
-        sliceId: diskSlice.slice_id,
-        excerpt: closedExcerpt,
-        strands: consolidated,
-        date: hkDate,
-        batch,
-      });
-      if (scribe.ran) {
-        console.log(`[Docs] Scribe: ${scribe.written.length} doc(s) written`);
-      }
-      const research = await runDocResearchPass({
-        model: input.modelConfig,
-        sliceId: diskSlice.slice_id,
-        excerpt: closedExcerpt,
-        strands: consolidated,
-        date: hkDate,
-        batch,
-      });
-      if (research.ran) {
-        console.log(`[Docs] Research: ${research.written.length} doc(s) written`);
-      }
-    }
-
+    pendingClose = { slice: diskSlice, signal: closeSignal };
     // Checkpoint continuation link: only time_cap/capacity closes are
     // autosave checkpoints of the SAME conversation — the new slice carries
     // the closed slice's tail as live context. idle_gap is a genuine
@@ -1016,130 +721,18 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       input.turnId,
       checkpoint ? diskSlice.slice_id : undefined,
     );
-    createdNewSlice = true;
+    console.log(
+      `[Episodic] Close decided: ${diskSlice.slice_id} (${closeSignal}) — executed post-reply by the scribe segment`,
+    );
   } else if (diskSlice && diskSlice.status === "active") {
     slice = diskSlice;
     console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
   } else {
     slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
-    createdNewSlice = true;
     console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
   }
 
-  // ── 3a. Fitness events (v1.0 §2.5) — persist the analyzer's deltas ──────
-  // The analyzer SCORES (single evidence-anchored deltas), the store aggregates.
-  // Both paths land here: the direct analyzer's analysis.fitness and the bridge
-  // report's fitness array (mapped onto the same shape by
-  // adaptHousekeepingReport). An analyzer/bridge failure carries no fitness
-  // field → nothing is appended. The events are attributed to the slice they
-  // were scored on — the CLOSED slice on a boundary, else the active one. The
-  // store's evidence force-zero is the structural backstop, not duplicated.
-  if (analysis.fitness && analysis.fitness.length > 0) {
-    try {
-      const scoredSliceId =
-        closeSignal && diskSlice ? diskSlice.slice_id : slice.slice_id;
-      const ts = new Date().toISOString();
-      await appendFitnessEvents(
-        analysis.fitness.map((f) => ({
-          ts,
-          sliceId: scoredSliceId,
-          bucket: f.bucket,
-          delta: f.delta,
-          evidence: f.evidence,
-        })),
-        batch,
-      );
-    } catch (e) {
-      // Scoring is instrumentation — a store failure must never take a turn down.
-      console.warn(
-        "[Evolution] fitness event append failed:",
-        e instanceof Error ? e.message : e,
-      );
-    }
-  }
-
-  // ── 3b. Dry-slice backfill (opportunistic, only on a close boundary) ────
-  // Slices that closed dry (needs_marking) never got their semantics rewritten
-  // — pick up to 3 from the catalog and mark them from their core.md (main
-  // model via the shared runner, v0.9), inside this turn's batch. Best-effort:
-  // failures skip silently, the active slice is never touched, and demo mode
-  // is skipped entirely (its writes are no-ops — no reason to spend the calls).
-  // Phase outsourcing (bridge brain): the marks arrived INSIDE the single
-  // housekeeping bridge call (report.backfill_marks) — no extra CLI spawns.
-  // Only candidate ids we actually offered are honored, and the same
-  // frontmatter/catalog write path (applyMarksToDrySlices) applies them.
-  if (closeSignal && diskSlice && !input.useDemo) {
-    if (phaseOutsource) {
-      const allowed = new Set(bridgeDryCandidateIds);
-      const marks = (bridgeReport?.backfill_marks ?? [])
-        .map((m) => ({
-          id: m.slice_id,
-          focus: m.focus.trim(),
-          summary: m.summary.trim(),
-        }))
-        .filter((m) => allowed.has(m.id) && (m.focus || m.summary));
-      try {
-        const marked = await applyMarksToDrySlices(marks, batch);
-        if (marked > 0) {
-          console.log(
-            `[Timeline] backfilled marks for ${marked} dry slice(s) (bridge report)`,
-          );
-        }
-      } catch {
-        // best-effort — never take a turn down
-      }
-    } else {
-      try {
-        const marked = await backfillDrySliceMarks({
-          model: input.modelConfig,
-          excludeSliceIds: [slice.slice_id, diskSlice.slice_id],
-          batch,
-        });
-        if (marked > 0) {
-          console.log(`[Timeline] backfilled marks for ${marked} dry slice(s)`);
-        }
-      } catch {
-        // best-effort — never take a turn down
-      }
-    }
-  }
-
-  // ── 4. Apply the current message's tags to the active slice ──────────
-  // Merge-first at the slice boundary too: `reuse` tags must resolve to an
-  // existing strand (a hallucinated name is dropped, never minted); `create`
-  // tags are folded into an existing strand via normalized-match before a new
-  // key is ever allowed. This keeps a slice's accumulated tags from inventing
-  // near-duplicate strands mid-slice (they'd otherwise hit strands.json before
-  // the close-time cleaning replaces them).
-  // Phase: tags — the analyzer (above) found them; this step applies them.
-  await emitStep("tags", true);
-  const appliedTags: string[] = [];
-  // Semantic gate: trivial turns (greetings, "继续", thanks, small talk) carry
-  // no durable info — skip tag extraction and strand weaving entirely, so
-  // strands.json stays clean instead of accruing one-off noise.
-  if (analysis.memoryWorthy) {
-    for (const tag of analysis.messageTags.reuse) {
-      const target = findMatchingStrand(existingStrands, tag);
-      if (!target) continue; // not an existing topic — don't mint from a reuse slot
-      if (!slice.tags.includes(target)) {
-        slice.tags.push(target);
-        appliedTags.push(target);
-      }
-    }
-    for (const { tag } of analysis.messageTags.create) {
-      const target = findMatchingStrand(existingStrands, tag) ?? tag;
-      if (!slice.tags.includes(target)) {
-        slice.tags.push(target);
-        appliedTags.push(target);
-      }
-    }
-  }
-  if (appliedTags.length > 0) {
-    console.log(`[FlashTags] Applied: ${appliedTags.join(", ")}`);
-  }
-  await emitStep("tags", false, appliedTags);
-
-  // ── 5. Append user turn ───────────────────────────────────────────────
+  // ── 3. Append user turn ───────────────────────────────────────────────
   // Dedup by turnId (user and agent turns of a round share it — scope the
   // check to role): a redelivered workflow run finds its user turn already
   // persisted and skips the append. Legacy turns parsed from old files carry
@@ -1161,859 +754,30 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       turnId: input.turnId,
     });
   }
-  // The regenerate signal is a fact about the user's reaction, recorded in
-  // the slice that will hold the re-answer (the next turn's analyzer picks it
-  // up as an interaction-bucket candidate — design §2.6).
-  if (input.regenerate) {
-    await logInteractionSignal(
-      "interaction_regenerate",
-      slice.slice_id,
-      "user regenerated the previous reply — the answer was rejected",
-      batch,
-    );
-  }
-  await emitStep("slice", false, [slice.slice_id]);
+  await emitPhase(stream, "slice", false, [slice.slice_id]);
 
   // ── Phase: context — load the user profile (previously + identity) ───
-  await emitStep("context", true);
-
-  // ── 4b. Card evolution (v0.7b / v5, mutation-based) ─────────────────────
-  // ONE pass, owned by the Previously Agent. Engineering owns the TRIGGER
-  // only; every content decision (expiry, overdue handling, caps, format)
-  // belongs to the agent, enforced INSIDE its write tools — there is no
-  // mechanical pass that silently edits the card.
-  // v0.16 S1 — SINGLE-WRITER (design §3.2): every evolution write — the
-  // merged run itself (its tools write the card / direction / playbooks
-  // inside), the bridge-mode write applications, the generation settle, and
-  // the direction-rejection backoff — runs under ONE process-wide
-  // `withSliceLock("evolution")`. Two concurrent turns can no longer tear
-  // the card/direction/playbooks apart with interleaved whole-file writes;
-  // cross-process conflicts still surface at commit time (non-fast-forward)
-  // and the loser re-runs (evolution is an idempotent review).
-  const withEvolutionLock = <T>(fn: () => Promise<T>): Promise<T> =>
-    withSliceLock("evolution", fn);
-  // v1.1: the trigger check runs EVERY turn, BEFORE the agent reply (the
-  // owner's model: when negative feedback is identified, the evolution check
-  // must fire — the reply the user is about to read should already reflect
-  // it). The check is a deterministic fitness-trigger computation
-  // (computeEvolutionTriggers) combined with the card bucket's legacy gates
-  // and the direction bootstrap/migrate gate; a fired check runs the MERGED
-  // self-evolution agent ONCE (max one run per turn — a boundary turn never
-  // also takes the mid-turn path): it evaluates direction.md FIRST (its
-  // proposal is validated + applied inside runCardEvolution through the old
-  // Phase-1 write paths) and evolves the card + triggered-bucket playbooks
-  // under the possibly-new direction.
-  // Accepted mutations are archived with their expected benefit (design §2.7)
-  // inside runCardEvolution.
-  //
-  // GENERATION SEMANTICS (v0.9.2): the fitness store holds only the CURRENT
-  // generation's selection pressure. A bucket fires when its generation net
-  // reaches EVOLVE_TRIGGER_THRESHOLD (-5) — purely quantitative, no semantic
-  // fast paths. A SUCCESSFUL fitness-triggered run SETTLES the generation
-  // (resetFitnessGeneration clears every bucket's events + signals — even a
-  // "checked, no change" verdict counts: the judge read the docket): the
-  // outcome already sedimented into card/direction/playbooks, so the spent
-  // pressure is discarded and re-accumulates from zero. A FAILED run settles
-  // nothing (the pressure stays and retries next turn). Runs gated by the
-  // boundary/direction/explicit channels WITHOUT a fitness trigger never saw
-  // the pressure's evidence, so they do not settle it.
-  // Gates:
-  //   (a) fitness triggers — a bucket whose generation net dropped to the
-  //       threshold (every turn, boundary or not);
-  //   (b) slice boundary — gated by the ANALYZER's judgment (evolveCard.worth);
-  //       on analyzer failure the gate defaults to running (a wasted worker
-  //       call is cheap, a missed evolution is permanent memory loss). A
-  //       LEGACY (pre-v5) card FORCES a run so format migration never waits
-  //       for a "worthy" boundary. When skipped, a terminal data-evolution
-  //       chunk (status "done") is still emitted so the skip stays visible
-  //       (with the reason).
-  //   (c) the user explicitly asking to record/evolve, or stating an explicit
-  //       behavioral correction (analyzeTurn's memoryUpdate) — the
-  //       INSTRUCTION channel, not selection pressure;
-  //   (d) the direction bootstrap/migrate gate (v1.1) — the FIRST direction
-  //       must not wait for a complaint, an OLD-skeleton doc not for a
-  //       boundary.
-  // Boundary-only work (strand consolidation, dry-slice backfill, the deep
-  // whole-slice review) stays boundary-only.
-  // The run is INLINE (blocking) so the reply reads the freshly-evolved card.
-  // Progress streams to the client; the result's summary
-  // is frozen into the new slice's frontmatter (evolution_summary) so the L3
-  // slice-head block can replay it on every turn of the slice.
-  // Demo mode is skipped entirely — it is a read-only preview and must never
-  // write the real card (the old /api/evolution route also returned skipped).
-  //
-  // The deterministic trigger check: computed over the store AFTER §3a
-  // appended this turn's fresh deltas (batch read-your-writes). No trigger,
-  // no gate → NO evolution run.
-  const fitnessStore = input.useDemo
-    ? emptyFitnessStore()
-    : await readFitness(batch);
-  const evolutionTriggers = input.useDemo
-    ? []
-    : computeEvolutionTriggers(fitnessStore);
-  let evolutionResult: EvolutionResult | undefined;
-  const explicitUpdate = analysis.memoryUpdate;
-  // Ages/overdue compare against the USER's local calendar date, not UTC.
-  const todayLocal =
-    localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined;
-  /** Freeze a changed evolution's summary into the slice (single line, YAML-safe). */
-  const freezeEvolutionSummary = (target: TimeSlice) => {
-    if (evolutionResult?.ran && evolutionResult.changed && evolutionResult.summary) {
-      target.evolutionSummary = evolutionResult.summary.replace(/\s+/g, " ").trim();
-    }
-  };
-  // Evolution failures must never take the turn down: a write/agent error is
-  // reported to the client as an error chunk and the turn continues.
-  //
-  // Live thinking channel: the Previously Agent streams its reasoning/writing
-  // through onEvolutionLine → throttled (40ms, same discipline as tool
-  // progress) data-evolution frames carrying the current line. The phase step
-  // ("reading" → "reviewing") rides along; the "applied" step is folded into
-  // the terminal result chunk, which follows immediately.
-  let evolutionLiveState: ProgressWriteState = {
-    lastWriteMs: 0,
-    lastLine: "",
-    lastStage: undefined,
-    sentAny: false,
-  };
-  let evolutionStep: "direction" | "reading" | "reviewing" = "reading";
-  const onEvolutionProgress = (step: "reading" | "reviewing" | "applied") => {
-    if (step === "applied") return; // the terminal result chunk follows
-    evolutionStep = step;
-    emitEvolutionProgress(stream, step);
-  };
-  const onEvolutionLine = (line: string, stage: "thinking" | "writing") => {
-    const now = Date.now();
-    if (!shouldEmitProgress(evolutionLiveState, { line, stage }, now)) return;
-    evolutionLiveState = {
-      lastWriteMs: now,
-      lastLine: line,
-      lastStage: stage,
-      sentAny: true,
-    };
-    emitEvolutionProgress(stream, evolutionStep, line, stage);
-  };
-  /**
-   * Apply the bridge report's direction verdict (v1.0 §6) through the SAME
-   * write paths as the merged run — structural validation identical to the
-   * direction sub-agent flow (validateDirectionProposal), then writeDirection.
-   * Shared by the boundary and mid-turn bridge paths. Returns the outcome for
-   * the terminal frame; a failed/rejected write returns UNDEFINED (a failure
-   * must not masquerade as "no_change") and surfaces as an amber warning row
-   * on the housekeeping card, never a silent skip.
-   */
-  const applyBridgeDirectionVerdict = async (): Promise<
-    EvolutionResult["direction"]
-  > => {
-    if (!bridgeReport || !bridgeReport.direction) return undefined;
-    if (bridgeReport.direction === "no_change") return { outcome: "no_change" };
-    const verdict = bridgeReport.direction;
-    // Atomic ops (same vocabulary as the merged run's direction tools):
-    // applyDirectionOps validates each op as it lands — rejected ops skip
-    // with their reason; the doc then passes the whole-doc gate + the
-    // engineering TTL before writeDirection.
-    const applied = applyDirectionOps(bridgeDirection, verdict.ops, {
-      sliceId: slice.slice_id,
-    });
-    const rejectedOps = applied.results.filter((r) => !r.ok);
-    if (rejectedOps.length > 0) {
-      console.warn(
-        `[Evolution] bridge direction: ${rejectedOps.length} op(s) rejected — ${rejectedOps
-          .map((r) => r.detail)
-          .join("; ")
-          .slice(0, 200)}`,
-      );
-    }
-    if (!applied.changed) {
-      if (rejectedOps.length > 0) {
-        hkActivity.warning = `Direction ops rejected: ${rejectedOps
-          .map((r) => r.detail)
-          .join("; ")
-          .slice(0, 200)}`;
-        sendHousekeepingCard(false);
-      }
-      return { outcome: "no_change" };
-    }
-    const validation = validateDirectionProposal(
-      applied.doc,
-      bridgeDirection,
-      { mode: bridgeDirectionMode },
-    );
-    if (!validation.ok) {
-      hkActivity.warning = `Direction proposal rejected: ${validation.reason}`;
-      sendHousekeepingCard(false);
-      return undefined;
-    }
-    try {
-      // Same engineering TTL as the merged run: strip pool lines whose
-      // `proposed` pointer is ≥ TTL slices old before the write lands.
-      const idx = await readTimelineIndex().catch(() => null);
-      const aged = retireExpiredHypotheses(applied.doc, [
-        ...(idx?.slices ?? []).map((s) => s.id),
-        slice.slice_id,
-      ]);
-      if (aged.retired.length > 0) {
-        console.log(
-          `[Evolution] direction (bridge): retired ${aged.retired.length} expired hypothesis(es)`,
-        );
-      }
-      await withEvolutionLock(() => writeDirection(aged.doc, batch));
-      const summary =
-        verdict.summary.trim() || "Direction updated (bridge housekeeping report)";
-      console.log("[Evolution] direction updated (bridge report)");
-      return { outcome: "updated", summary };
-    } catch (e) {
-      hkActivity.warning = `Direction write failed: ${e instanceof Error ? e.message : e}`;
-      sendHousekeepingCard(false);
-      return undefined;
-    }
-  };
-  /**
-   * Apply the bridge report's playbook rewrites (v1.0 §2.4) through the SAME
-   * bucket gate as the merged run's writePlaybook (applyBridgePlaybookWrites).
-   * Shared by the boundary / mid-turn / explicit bridge paths — every emitted
-   * EvolutionResult of a bridge branch folds the outcome in via its
-   * withDirection-style wrapper so the terminal frame tells the playbook
-   * story exactly like the runCardEvolution path does.
-   *
-   * The gate is the POST-append evolutionTriggers: §3a has appended the
-   * report's own fitness deltas by the time any §4b branch runs, so a bucket
-   * this turn's report pushed over the threshold authorizes its playbook
-   * write even though the payload offered only the pre-turn set (see the
-   * analyze-stage comment). No-op (undefined) without a report or proposals;
-   * a write failure degrades to a warning — evolution failures never take the
-   * turn down.
-   */
-  const applyBridgePlaybooks = async (): Promise<
-    EvolutionResult["playbooks"]
-  > => {
-    if (!bridgeReport || bridgeReport.playbooks.length === 0) return undefined;
-    try {
-      const res = await withEvolutionLock(() =>
-        applyBridgePlaybookWrites(
-          bridgeReport.playbooks,
-          evolutionTriggers.map((t) => t.bucket),
-          batch,
-        ),
-      );
-      console.log(
-        `[Evolution] bridge playbooks: ${res.applied.length} applied` +
-          (res.skipped.length > 0
-            ? `, ${res.skipped.length} skipped by the bucket gate (${res.skipped
-                .map((s) => s.agent)
-                .join(", ")})`
-            : ""),
-      );
-      return res.applied.length > 0 ? res.applied : undefined;
-    } catch (e) {
-      console.warn(
-        "[Evolution] bridge playbook write failed:",
-        e instanceof Error ? e.message : e,
-      );
-      return undefined;
-    }
-  };
-  /**
-   * Settle the fitness generation after a SUCCESSFUL fitness-triggered
-   * evolution run (v0.9.2 — see the §4b header). Only a run that fired
-   * BECAUSE of selection pressure (evolutionTriggers non-empty) and
-   * completed without an error settles the store — a "checked, no change"
-   * verdict included (the judge read the docket). A failed run leaves the
-   * pressure in place so the next turn retries. Best-effort: a reset
-   * failure just means the pressure lingers until the next run.
-   */
-  const settleFitnessGeneration = async (result: {
-    ran: boolean;
-    error?: string;
-  }) => {
-    if (evolutionTriggers.length === 0 || !result.ran || result.error) return;
-    try {
-      await withEvolutionLock(() => resetFitnessGeneration(batch));
-      console.log(
-        `[Evolution] generation settled (triggers: ${evolutionTriggers.map((t) => t.bucket).join(", ")})`,
-      );
-    } catch (e) {
-      console.warn(
-        "[Evolution] generation reset failed:",
-        e instanceof Error ? e.message : e,
-      );
-    }
-  };
-  try {
-    if (!input.useDemo && closeSignal && diskSlice) {
-      // Read-only fact for the trigger. In the outsourced path the card was
-      // already read for the bridge payload (analyze stage) — reuse it.
-      const cardRaw = bridgeCardRaw ?? (await readCurrentPreviously(batch));
-      // A legacy (pre-v5) card forces the run — migration must not wait for a
-      // "worthy" boundary.
-      const legacyCard =
-        cardRaw.trim().length > 0 && !cardRaw.includes(CARD_STAMP);
-      // The card's legacy Self-model lines = the direction half's MIGRATION
-      // source (folded into the Portrait, then dropped from the card). Null
-      // when the card has none.
-      const cardDoc = parseCard(cardRaw);
-      const cardSelfModel =
-        cardDoc && cardDoc.selfModel.length > 0
-          ? cardDoc.selfModel.map((s) => `- ${s}`).join("\n")
-          : null;
-
-      if (phaseOutsource) {
-        // Bridge path: the evolution decision + mutation proposals arrived in
-        // the SAME bridge call as the analysis — apply them through the
-        // card-session machinery (applyBridgeCardEvolution), no second spawn.
-        //
-        // Phase-1 verdict first (v1.0 §6): the outsourced call's direction
-        // outcome rides the same report and is applied through the SAME write
-        // paths as the direction sub-agent flow (applyBridgeDirectionVerdict).
-        const bridgeDirectionOutcome = await applyBridgeDirectionVerdict();
-        const bridgePlaybooks = await applyBridgePlaybooks();
-        // The verdict + playbook outcome ride every terminal frame of this branch.
-        const withDirection = (
-          result: EvolutionResult,
-        ): EvolutionResult => ({
-          ...result,
-          ...(bridgeDirectionOutcome
-            ? { direction: bridgeDirectionOutcome }
-            : {}),
-          ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
-        });
-
-        if (!bridgeReport) {
-          await emitEvolutionResult(stream, {
-            ran: false,
-            changed: false,
-            droppedRecent: 0,
-            note: "Housekeeping bridge unavailable — card evolution skipped this turn.",
-            error: "housekeeping bridge failed",
-          });
-        } else if (
-          (bridgeReport.evolution.worth || legacyCard) &&
-          bridgeReport.evolution.mutations.length > 0
-        ) {
-          // The card opens in its running state first — a terminal chunk out
-          // of nowhere reads as "it never ran".
-          emitEvolutionProgress(stream, "reviewing");
-          evolutionResult = await withEvolutionLock(() =>
-            applyBridgeCardEvolution({
-              card: cardRaw,
-              sliceId: diskSlice.slice_id,
-              today: todayLocal ?? new Date().toISOString().slice(0, 10),
-              reason: bridgeReport.evolution.reason,
-              mutations: bridgeReport.evolution.mutations,
-              batch,
-            }),
-          );
-          await settleFitnessGeneration(evolutionResult);
-          await emitEvolutionResult(stream, withDirection(evolutionResult));
-          freezeEvolutionSummary(slice);
-          console.log(
-            `[Evolution] bridge slice-close: changed=${evolutionResult.changed}${legacyCard ? " (legacy card migration)" : ""}`,
-          );
-        } else {
-          // Report-judged skip — the terminal chunk keeps the skip visible.
-          await emitEvolutionResult(
-            stream,
-            withDirection({
-              ran: false,
-              changed: false,
-              droppedRecent: 0,
-              note: `Slice boundary — nothing worth sedimenting (${bridgeReport.evolution.reason || "no reason given"}).`,
-            }),
-          );
-        }
-      } else {
-        // ── v1.1 merged evolution run
-        // The deterministic trigger check already ran for this turn (above):
-        // per-bucket CURRENT-GENERATION net scores (computeEvolutionTriggers),
-        // combined here with the card bucket's legacy gates (analyzer worth /
-        // legacy-card force) and the direction bootstrap/migrate gate below.
-        // Nothing due → NO evolution agent runs — the mandatory per-turn
-        // check IS this code-level scoring (mandatory check ≠ mandatory
-        // mutation).
-        const triggers = evolutionTriggers;
-        // The terminal frame's "why it ran" rows (v1.0 §2.5): each fired
-        // bucket with its current generation net score. Empty when the run was
-        // gated by the analyzer / a legacy card instead — the card then shows
-        // no score rows.
-        const triggerRows: NonNullable<EvolutionResult["triggers"]> =
-          triggers.map((t) => ({
-            bucket: t.bucket,
-            score: bucketNetScore(fitnessStore, t.bucket),
-          }));
-        const cardGate = shouldRunCardEvolution(analysis) || legacyCard;
-
-        // Direction gate (v1.1): the FIRST direction must not wait for a
-        // complaint, and an OLD-skeleton doc must not wait to be re-shaped.
-        // BOOTSTRAP (template/unset) is due when material is at hand (legacy
-        // Self-model lines on the card, or any fitness events); MIGRATE (the
-        // old # Direction / # Anti-goals skeleton) is always due — the
-        // existing doc IS the material. The gate dies permanently once the doc
-        // lands in the new skeleton.
-        //
-        // Per-slice backoff: a proposal REJECTED by validation leaves the old
-        // skeleton in place, so the gate would re-fire the full merged run on
-        // every remaining turn of this slice — a rejected slice id (recorded
-        // below, keyed to the ACTIVE slice) silences the gate for the rest of
-        // the slice. The next slice is not on the list and retries fresh.
-        await ensureEvolutionFiles();
-        const currentDirection = await readDirection();
-        const directionMode = detectDirectionMode(currentDirection);
-        const directionBackedOff = fitnessStore.directionRejections.includes(
-          slice.slice_id,
-        );
-        const directionDue =
-          !directionBackedOff &&
-          (directionMode === "migrate" ||
-            (directionMode === "bootstrap" &&
-              (cardSelfModel !== null || fitnessStore.events.length > 0)));
-
-        if (triggers.length > 0 || cardGate || directionDue) {
-          // ONE merged run: the agent evaluates direction.md FIRST (the
-          // proposal is validated mode-aware + applied inside runCardEvolution
-          // through the old Phase-1 write paths), then evolves the card (+
-          // triggered-bucket playbooks) under the possibly-new direction. The
-          // direction verdict arrives on the result and rides the terminal
-          // frame — including failures (a silent failure reads as "it never
-          // runs"). The progress card opens on the "direction" step; the run's
-          // own onProgress moves it to "reviewing".
-          evolutionStep = "direction";
-          emitEvolutionProgress(stream, "direction");
-          // The episodic trail the portrait calibrates against — the catalog
-          // already carries focus/summary/tone, one read for the window. The
-          // just-closed slice is excluded: its marking already rides
-          // `analysis.closedMarking`.
-          const markingIndex = await readTimelineIndex().catch(() => null);
-          const recentMarkings = (markingIndex?.slices ?? [])
-            .filter(
-              (s) => s.status === "closed" && s.id !== diskSlice.slice_id,
-            )
-            .slice(-DIRECTION_RECENT_MARKINGS)
-            .reverse()
-            .map((s) => ({
-              id: s.id,
-              focus: s.focus,
-              summary: s.summary,
-              tone: s.tone,
-            }));
-          const triggeredBuckets = triggers.map((t) => t.bucket);
-          evolutionResult = await withEvolutionLock(() =>
-            runCardEvolution({
-              model: input.modelConfig,
-              sliceId: diskSlice.slice_id,
-              closedSliceId: diskSlice.slice_id,
-              recentTurns: diskSlice.turns.map((t) => ({ role: t.role, content: t.content })),
-              currentSliceTags: diskSlice.tags,
-              signal: "slice_closed",
-              focus: explicitUpdate?.content,
-              readers: buildCardReaders(input),
-              onProgress: onEvolutionProgress,
-              onEvolutionLine,
-              batch,
-              todayDate: todayLocal,
-              directionEval: {
-                current: currentDirection,
-                mode: directionMode,
-                cardSelfModel,
-                recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
-                recentMarkings,
-                analysis,
-              },
-              triggeredBuckets,
-              fitnessEvents: fitnessStore.events
-                .filter((e) => triggeredBuckets.includes(e.bucket))
-                .slice(-15),
-              fitnessSignals: thisSliceSignals,
-            }),
-          );
-          // A REJECTED direction proposal (the old skeleton survives) must not
-          // re-fire the gate on every remaining turn of this slice — record
-          // the backoff keyed to the ACTIVE slice. Best-effort: a recording
-          // failure just means the gate fires once more next turn.
-          if (evolutionResult.direction?.outcome === "rejected") {
-            await withEvolutionLock(() =>
-              recordDirectionRejection(slice.slice_id, batch),
-            ).catch((e) =>
-              console.warn(
-                "[Evolution] could not record the direction rejection:",
-                e instanceof Error ? e.message : e,
-              ),
-            );
-          }
-          // A successful fitness-triggered run settles the generation (the
-          // spent pressure is discarded; a failed run settles nothing).
-          await settleFitnessGeneration(evolutionResult);
-          // Fold the "why it ran" calibration rows into the terminal frame —
-          // for BOTH the changed and the checked-no-updates outcomes. (The
-          // direction verdict already rides the result from runCardEvolution.)
-          evolutionResult = {
-            ...evolutionResult,
-            ...(triggerRows.length > 0 ? { triggers: triggerRows } : {}),
-          };
-          await emitEvolutionResult(stream, evolutionResult);
-          freezeEvolutionSummary(slice);
-          console.log(
-            `[Evolution] inline slice-close: changed=${evolutionResult.changed}` +
-              (triggers.length > 0
-                ? ` (triggers: ${triggers.map((t) => t.bucket).join(", ")})`
-                : "") +
-              (directionDue ? ` (direction ${directionMode})` : "") +
-              (legacyCard ? " (legacy card migration)" : ""),
-          );
-        } else {
-          // Analyzer-judged skip — still emit a terminal chunk so the
-          // auto-evolution stays visibly alive (a silent skip reads as "it
-          // never runs"), with the reason recorded.
-          await emitEvolutionResult(stream, {
-            ran: false,
-            changed: false,
-            droppedRecent: 0,
-            note: `Slice boundary — nothing worth sedimenting (${analysis.evolveCard?.reason ?? "no reason given"}).`,
-          });
-        }
-      }
-    } else if (!input.useDemo && slice) {
-      // ── Mid-turn evolution check (every turn, BEFORE the reply) ──
-      // The trigger math ran above over this turn's fresh deltas; the
-      // legacy-card force and the direction bootstrap/migrate gate apply here
-      // too. A fired check runs the ONE merged evolution NOW. A boundary turn
-      // never reaches this branch (handled above) — one run per turn max.
-      await ensureEvolutionFiles();
-      const currentDirection = await readDirection();
-      const directionMode = detectDirectionMode(currentDirection);
-      // The card is read only when a gate/run needs it (bootstrap material /
-      // the legacy force / the run's Self-model migration source).
-      let cardSelfModel: string | null = null;
-      let legacyCard = false;
-      if (directionMode === "bootstrap" || evolutionTriggers.length > 0) {
-        const cardRaw = bridgeCardRaw ?? (await readCurrentPreviously(batch));
-        legacyCard = cardRaw.trim().length > 0 && !cardRaw.includes(CARD_STAMP);
-        const cardDoc = parseCard(cardRaw);
-        cardSelfModel =
-          cardDoc && cardDoc.selfModel.length > 0
-            ? cardDoc.selfModel.map((s) => `- ${s}`).join("\n")
-            : null;
-      }
-      // Same discipline as the boundary gate: MIGRATE is always due;
-      // BOOTSTRAP is due with material at hand (legacy Self-model lines on
-      // the card, or any fitness events). `directionDue` stays RAW (backoff
-      // NOT applied) for mergedGate: the bridge path below applies verdicts
-      // its one housekeeping call already produced, so a rejected direction
-      // must not suppress an otherwise-worthy card mutation there. The backoff
-      // only gates the INLINE run — the one that costs a full merged
-      // Previously Agent call per turn.
-      const directionBackedOff = fitnessStore.directionRejections.includes(
-        slice.slice_id,
-      );
-      const directionDue =
-        directionMode === "migrate" ||
-        (directionMode === "bootstrap" &&
-          (cardSelfModel !== null || fitnessStore.events.length > 0));
-      const mergedGate =
-        evolutionTriggers.length > 0 || directionDue || legacyCard;
-      // The terminal frame's "why it ran" rows — same as the boundary path.
-      const triggerRows: NonNullable<EvolutionResult["triggers"]> =
-        evolutionTriggers.map((t) => ({
-          bucket: t.bucket,
-          score: bucketNetScore(fitnessStore, t.bucket),
-        }));
-
-      if (mergedGate) {
-        if (phaseOutsource) {
-          // Bridge path: this turn's ONE bridge call already folded the
-          // evolution decision into its report (its fitness deltas feed the
-          // trigger check above after being applied in §3a) — apply the
-          // verdict + proposed mutations through the same write paths, no
-          // second spawn.
-          const bridgeDirectionOutcome = await applyBridgeDirectionVerdict();
-          const bridgePlaybooks = await applyBridgePlaybooks();
-          const withDirection = (
-            result: EvolutionResult,
-          ): EvolutionResult => ({
-            ...result,
-            ...(bridgeDirectionOutcome
-              ? { direction: bridgeDirectionOutcome }
-              : {}),
-            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
-          });
-          if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
-            // Open the card in its running state first — a terminal chunk out
-            // of nowhere reads as "it never ran".
-            emitEvolutionProgress(stream, "reviewing");
-            evolutionResult = await withEvolutionLock(async () =>
-              applyBridgeCardEvolution({
-                card: bridgeCardRaw ?? (await readCurrentPreviously(batch)),
-                sliceId: slice.slice_id,
-                today: todayLocal ?? new Date().toISOString().slice(0, 10),
-                reason:
-                  bridgeReport.evolution.reason ||
-                  `Fitness trigger: ${evolutionTriggers.map((t) => t.bucket).join(", ")}`,
-                mutations: bridgeReport.evolution.mutations,
-                batch,
-              }),
-            );
-            await settleFitnessGeneration(evolutionResult);
-            await emitEvolutionResult(stream, withDirection({
-              ...evolutionResult,
-              ...(triggerRows.length > 0 ? { triggers: triggerRows } : {}),
-            }));
-            freezeEvolutionSummary(slice);
-            console.log(
-              `[Evolution] bridge mid-turn: changed=${evolutionResult.changed}` +
-                (evolutionTriggers.length > 0
-                  ? ` (triggers: ${evolutionTriggers.map((t) => t.bucket).join(", ")})`
-                  : "") +
-                (directionDue ? ` (direction ${directionMode})` : ""),
-            );
-          } else {
-            await emitEvolutionResult(
-              stream,
-              withDirection({
-                ran: false,
-                changed: false,
-                droppedRecent: 0,
-                note: bridgeReport
-                  ? `Evolution check fired — no card mutation proposed (${bridgeReport.evolution.reason || "no reason given"}).`
-                  : "Housekeeping bridge unavailable — card evolution skipped this turn.",
-                ...(bridgeReport ? {} : { error: "housekeeping bridge failed" }),
-                ...(triggerRows.length > 0 ? { triggers: triggerRows } : {}),
-              }),
-            );
-          }
-        } else if (
-          evolutionTriggers.length > 0 ||
-          legacyCard ||
-          (directionDue && !directionBackedOff)
-        ) {
-          // ONE merged run, light mode (no deep whole-slice review — that
-          // stays boundary-scoped): the agent evaluates direction.md FIRST,
-          // then evolves the card (+ triggered-bucket playbooks) under the
-          // possibly-new direction.
-          evolutionStep = "direction";
-          emitEvolutionProgress(stream, "direction");
-          const markingIndex = await readTimelineIndex().catch(() => null);
-          const recentMarkings = (markingIndex?.slices ?? [])
-            .filter((s) => s.status === "closed" && s.id !== slice.slice_id)
-            .slice(-DIRECTION_RECENT_MARKINGS)
-            .reverse()
-            .map((s) => ({
-              id: s.id,
-              focus: s.focus,
-              summary: s.summary,
-              tone: s.tone,
-            }));
-          const triggeredBuckets = evolutionTriggers.map((t) => t.bucket);
-          evolutionResult = await withEvolutionLock(() =>
-            runCardEvolution({
-              model: input.modelConfig,
-              sliceId: slice.slice_id,
-              recentTurns: input.recentTurns,
-              currentSliceTags: slice.tags,
-              signal: "new_observation",
-              focus: explicitUpdate?.content,
-              readers: buildCardReaders(input),
-              onProgress: onEvolutionProgress,
-              onEvolutionLine,
-              batch,
-              todayDate: todayLocal,
-              directionEval: {
-                current: currentDirection,
-                mode: directionMode,
-                cardSelfModel,
-                recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
-                recentMarkings,
-                analysis,
-              },
-              triggeredBuckets,
-              fitnessEvents: fitnessStore.events
-                .filter((e) => triggeredBuckets.includes(e.bucket))
-                .slice(-15),
-              fitnessSignals: thisSliceSignals,
-            }),
-          );
-          // Same per-slice backoff as the boundary path: a rejected direction
-          // proposal silences the gate for the rest of THIS slice.
-          if (evolutionResult.direction?.outcome === "rejected") {
-            await withEvolutionLock(() =>
-              recordDirectionRejection(slice.slice_id, batch),
-            ).catch((e) =>
-              console.warn(
-                "[Evolution] could not record the direction rejection:",
-                e instanceof Error ? e.message : e,
-              ),
-            );
-          }
-          await settleFitnessGeneration(evolutionResult);
-          evolutionResult = {
-            ...evolutionResult,
-            ...(triggerRows.length > 0 ? { triggers: triggerRows } : {}),
-          };
-          await emitEvolutionResult(stream, evolutionResult);
-          freezeEvolutionSummary(slice);
-          console.log(
-            `[Evolution] mid-turn check: changed=${evolutionResult.changed}` +
-              (evolutionTriggers.length > 0
-                ? ` (triggers: ${evolutionTriggers.map((t) => t.bucket).join(", ")})`
-                : "") +
-              (directionDue ? ` (direction ${directionMode})` : "") +
-              (legacyCard ? " (legacy card migration)" : ""),
-          );
-        } else {
-          // Only the direction gate fired and it is BACKED OFF for this slice
-          // (a proposal was already rejected) — skip visibly rather than
-          // re-running the full merged evolution on every remaining turn.
-          await emitEvolutionResult(stream, {
-            ran: false,
-            changed: false,
-            droppedRecent: 0,
-            note: `Direction ${directionMode} gate backed off for this slice — a proposal was already rejected; the next slice retries.`,
-          });
-        }
-      } else if (explicitUpdate) {
-      if (phaseOutsource) {
-        const cardRaw = bridgeCardRaw ?? (await readCurrentPreviously(batch));
-        const bridgePlaybooks = await applyBridgePlaybooks();
-        if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
-          // Open the card in its running state before applying — see the
-          // slice-close branch above.
-          emitEvolutionProgress(stream, "reviewing");
-          evolutionResult = {
-            ...(await withEvolutionLock(() =>
-              applyBridgeCardEvolution({
-                card: cardRaw,
-                sliceId: slice.slice_id,
-                today: todayLocal ?? new Date().toISOString().slice(0, 10),
-                reason: bridgeReport.evolution.reason || explicitUpdate.content,
-                mutations: bridgeReport.evolution.mutations,
-                batch,
-              }),
-            )),
-            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
-          };
-          await emitEvolutionResult(stream, evolutionResult);
-          freezeEvolutionSummary(slice);
-          console.log(
-            `[Evolution] bridge user request: changed=${evolutionResult.changed}`,
-          );
-        } else {
-          await emitEvolutionResult(stream, {
-            ran: false,
-            changed: false,
-            droppedRecent: 0,
-            note: bridgeReport
-              ? `Memory update noted — no card mutation proposed (${bridgeReport.evolution.reason || "no reason given"}).`
-              : "Housekeeping bridge unavailable — card evolution skipped this turn.",
-            ...(bridgeReport ? {} : { error: "housekeeping bridge failed" }),
-            ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
-          });
-        }
-      } else {
-        // v1.0: the direction doc is orientation for the product phase even on
-        // an explicit-request run (no direction evaluation and no fitness
-        // buckets triggered here, so writePlaybook stays gated off).
-        const direction = await readDirection().catch(() => null);
-        evolutionResult = await withEvolutionLock(() =>
-          runCardEvolution({
-            model: input.modelConfig,
-            sliceId: slice.slice_id,
-            recentTurns: input.recentTurns,
-            currentSliceTags: slice.tags,
-            focus: explicitUpdate.content,
-            signal: "new_observation",
-            readers: buildCardReaders(input),
-            onProgress: onEvolutionProgress,
-            onEvolutionLine,
-            batch,
-            todayDate: todayLocal,
-            direction,
-            triggeredBuckets: [],
-          }),
-        );
-        await emitEvolutionResult(stream, evolutionResult);
-        freezeEvolutionSummary(slice);
-        console.log(
-          `[Evolution] inline user request: changed=${evolutionResult.changed}`,
-        );
-      }
-      }
-    }
-  } catch (err) {
-    console.error(
-      `[Evolution] inline run failed, continuing turn:`,
-      err instanceof Error ? err.message : err,
-    );
-    await emitEvolutionResult(stream, {
-      ran: false,
-      changed: false,
-      droppedRecent: 0,
-      note: "Evolution run failed.",
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  await emitPhase(stream, "context", true);
 
   // ── 4. Ensure previously.md (pure copy forward, no decay) ────────────
   const previouslyContent = await ensurePreviously(slice.slice_id, batch);
   console.log(`[Previously] Seeded previously.md for ${slice.slice_id}`);
 
-  // ── 5. Durable snapshot + index/strand maintenance ───────────────────
+  // ── 5. Durable snapshot, then THE reply segment's one commit ─────────
+  // No projection writes here anymore (A1): the timeline catalog / global
+  // timeline / monthly index maintenance moved out of the turn path.
   await saveSliceSnapshot(slice, batch);
-  await ensureIndexEntries(slice, batch);
-  await generateGlobalTimeline(batch);
-  // A slice created THIS turn must appear in the timeline catalog within the
-  // same commit — the throttled per-turn weave above would otherwise defer it
-  // up to WEAVE_FRESH_MS. A direct upsert is cheaper than a forced weave.
-  if (createdNewSlice) {
-    await upsertTimelineEntry(slice, batch);
-  }
+  await flushBatch(batch, `Turn ${input.turnId} — user turn`);
 
-  // ── 5b. Scribe tail (v0.15 §4.3 书记段) — pick up [doc-marker] lines the
-  // reply segment dropped into the ACTIVE slice's agent.md (the boundary
-  // instance in §3 covers the just-closed slice). Runs every turn; no
-  // markers → one file read, no LLM. Writes join the same batch below.
-  // Best-effort — a document write must never take a turn down.
-  if (!input.useDemo) {
-    try {
-      const tailScribe = await runScribePass({
-        model: input.modelConfig,
-        sliceId: slice.slice_id,
-        excerpt: buildSliceExcerpt(slice),
-        strands: existingStrands,
-        date: todayLocal ?? input.startedAtIso.slice(0, 10),
-        batch,
-      });
-      if (tailScribe.ran) {
-        console.log(
-          `[Docs] Scribe (tail): ${tailScribe.written.length} doc(s) written`,
-        );
-      }
-    } catch (e) {
-      console.warn("[Docs] scribe tail failed:", e instanceof Error ? e.message : e);
-    }
-  }
-
-  // Commit all queued writes as one commit before building the menu
-  // (which reads strands.json) and opening the UI stream.
-  await flushBatch(batch, `Turn ${input.turnId} — housekeeping`);
-
-  // ── Phase: strands — weave the memory-topic index ────────────────────
-  await emitStep("strands", true);
-  const strands = await readStrands();
-  // Anchored to the SLICE START (not "now") so the relative-day annotations
-  // stay byte-stable for the slice's whole life (v0.9 prefix-cache freeze).
-  const strandsMenu = buildStrandsMenu(strands, {
-    nowIso: slice.start,
-    timezone: input.clientTimezone,
-    locale: input.locale,
-  });
-  await emitStep("strands", false, [`${Object.keys(strands).length} strands`]);
-
-  // ── 6b. Continuity + slice-head snapshot + identity ──────────────────
+  // ── 6. Continuity + slice-head snapshot + identity (the read face) ────
   // v0.9 slice-level prompt freeze: the continuity stance is computed at the
   // SLICE'S BIRTH, not per turn — the reference is the newest slice closed
-  // before this one began (a slice we closed this call, else the catalog),
+  // before this one began (the one we are about to close, else disk truth),
   // and the gap is measured against `slice.start`. Recomputed this way on
   // every turn, the resulting line is byte-identical for the slice's life.
   if (!prevSlice) {
-    prevSlice = await readMostRecentClosedSlice(slice.slice_id);
+    const prev = await readPrevClosedSlice(slice.slice_id);
+    prevSlice = prev ? toPrevRef(prev) : null;
   }
   const continuity = classifyContinuity(
     slice.start,
@@ -2035,9 +799,9 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   let contextPrefix: ModelMessage[] | undefined;
   if (slice.continuesFrom) {
     const prevTurns =
-      closeSignal && diskSlice && diskSlice.slice_id === slice.continuesFrom
-        ? diskSlice.turns // just closed in this call — already in memory
-        : (await loadSlice(slice.continuesFrom, batch))?.turns;
+      pendingClose && pendingClose.slice.slice_id === slice.continuesFrom
+        ? pendingClose.slice.turns // closing this call — already in memory
+        : (await loadSlice(slice.continuesFrom))?.turns;
     const tail = prevTurns?.slice(-CHECKPOINT_CARRY_OVER_TURNS) ?? [];
     if (tail.length > 0) {
       contextPrefix = sliceTurnsToMessages(tail);
@@ -2077,89 +841,40 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   const identityPrompt = buildAgentIdentityPrompt(profile);
 
   // The direction layer for the main agent's system prompt (v1.1): read per
-  // turn like the card, AFTER the batch flush — so a direction an evolution
-  // run just landed THIS turn (the slice boundary or the mid-turn merged run
-  // above) is read back fresh and already shapes THIS turn's reply, not only
-  // the next one. That makes the system prompt drift mid-slice on exactly
-  // those turns — a deliberate trade: on the rare turn the direction actually
-  // moves, freshness beats the prefix-cache hit.
-  // Missing / template / legacy-skeleton docs omit the layer entirely
+  // turn like the card. Evolution runs in the scribe segment now (post-reply,
+  // v0.19 A1), so a direction landed this turn is what the NEXT turn reads —
+  // within a slice without an evolution the layer is byte-stable. Missing /
+  // template / legacy-skeleton docs omit the layer entirely
   // (buildDirectionBlock returns "").
   const directionBlock = buildDirectionBlock(
     await readDirection().catch(() => null),
   );
 
-  await emitStep("context", false, [`continuity: ${continuity.tier}`]);
+  await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 
   // ── 7. Open UI stream ────────────────────────────────────────────────
   await stream.write({ type: "start" } as UIMessageChunk);
   await stream.write({ type: "start-step" } as UIMessageChunk);
 
-  // ── v0.8: assemble the timeline brief for the system prompt — recent slice
-  // pointer lines + catalog totals. Pure pointers, never content.
-  // v0.9: FROZEN mode (asOfSliceId) — absolute dates and only slices closed
-  // before this one began, so the brief can't drift mid-slice.
-  // L4: the line list is bounded by BOTH a 50-line cap and a rolling 30-day
-  // recency window (anchored at the asOf slice's own start in frozen mode,
-  // so the window stays byte-stable for the slice's whole life).
-  const timelineIndex = await readTimelineIndex();
-  const timelineBrief = timelineIndex
-    ? buildTimelineBrief(timelineIndex, {
-        timezone: input.clientTimezone,
-        locale: input.locale,
-        asOfSliceId: slice.slice_id,
-        recent: 50,
-        withinDays: 30,
-      })
-    : "";
-
-  // ── v0.13 §5 视野注入 — the per-turn view block ─────────────────────
-  // Built ONLY when the client sent a `view` (a slice IS selected); the lobby
-  // default sends none and this stays undefined. The block is ONE compact
-  // "[当前] …" line rendered from the same sources the surfaces themselves
-  // derive from (describeRoom for the room, the timeline catalog for the
-  // card) — it is injected by the workflow into the OUTBOUND tail of the
-  // last user message, so it can never reach the persisted slice turn (this
-  // step persists only `lastUserMessage`). Best-effort: a build failure
-  // degrades to NO block, never to a failed turn.
-  let viewBlock: string | undefined;
-  if (input.view) {
-    try {
-      viewBlock = buildViewBlock({
-        view: input.view,
-        timezone: input.clientTimezone,
-        locale: input.locale,
-        index: timelineIndex,
-      });
-    } catch (e) {
-      console.warn(
-        "[View] block build failed — continuing without it:",
-        e instanceof Error ? e.message : e,
-      );
-    }
-  }
-
   return {
     slice,
     previouslyContent,
-    strandsMenu,
     sliceHeadBlock,
     identityPrompt,
     ...(directionBlock ? { directionBlock } : {}),
-    ...(timelineBrief ? { timelineBrief } : {}),
-    ...(viewBlock ? { viewBlock } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
+    ...(pendingClose ? { pendingClose } : {}),
   };
   });
   } finally {
     // Release the step's writer lock so the step's HTTP request can terminate
-    // and later steps (agent reply, finalizeTurn) can acquire their own.
+    // and later steps (agent reply, the post-reply steps) can acquire their own.
     stream.close();
   }
 }
 
-// ─── Step 2: Finalize turn ───────────────────────────────────────────────
+// ─── Step 2: persistAgentTurn (序 1) ──────────────────────────────────────
 
 /**
  * How many times a conflicting flush re-reads the remote slice, merges, and
@@ -2212,15 +927,11 @@ async function flushTurnBatch(
 }
 
 /**
- * Persist the agent turn to the episodic slice (the old streamText onFinish)
- * and close the run's output stream with the trailing lifecycle chunks.
- *
- * The agent streamed with `sendFinish: false` + `preventClose: true`, so this
- * step owns the stream tail — finish-step / finish, then close. Retries are
- * safe: the agent-turn append is deduped by turnId, and the snapshot write is
- * idempotent.
+ * 序 1 — persist the agent turn to the episodic slice (the old streamText
+ * onFinish). Retries are safe: the agent-turn append is deduped by turnId,
+ * and the snapshot write is idempotent.
  */
-export async function finalizeTurn(
+export async function persistAgentTurn(
   slice: TimeSlice,
   outcome: TurnOutcome,
   turnId: string,
@@ -2233,7 +944,7 @@ export async function finalizeTurn(
   // ── Begin batch: all writes below go into ONE git commit ──────────────
   const batch = createBatch();
 
-  // 1. Episodic persistence (the old onFinish branches). `outcome.text` is the
+  // Episodic persistence (the old onFinish branches). `outcome.text` is the
   // agent's FULL assistant text for the turn (intermediate + final), so the
   // stored slice keeps both ends; tool calls are not preserved.
   // Idempotent under redelivery: when this turnId's agent turn is already in
@@ -2265,13 +976,9 @@ export async function finalizeTurn(
 
   if (outcome.finishReason === "stop" || outcome.text) {
     await saveSliceSnapshot(slice, batch);
-    // Index/timeline refresh is unconditional (was: stop-only) — an
-    // interrupted turn's partial text still belongs in the indexes.
-    await ensureIndexEntries(slice, batch);
-    await generateGlobalTimeline(batch);
   }
 
-  // 2b. Write agent timeline — mechanical extraction from the model's own
+  // Write agent timeline — mechanical extraction from the model's own
   // reasoning traces and tool calls. The cognition body is produced by
   // extractCognition() in the workflow body; here we prepend the header
   // (timestamp stamped in this step, where Date is allowed) and persist.
@@ -2280,13 +987,478 @@ export async function finalizeTurn(
     await writeAgentTimeline(slice.slice_id, header + outcome.cognition, batch);
   }
 
-  // Commit all queued writes as one commit before closing the stream.
+  // Commit all queued writes as one commit.
   await flushTurnBatch(batch, `Turn ${turnId} — agent response`, slice);
+  });
+}
 
-  // 3. Close the UI stream. Emit the terminal turn-status chunk just before
-  // the lifecycle tail so the client learns the outcome from the live stream.
-  // A reconnecting client replays the stream from the last-seen index and
-  // derives the status from the final assistant message.
+// ─── Step 3: scribeSegment (序 2–7, the scribe segment) ───────────────────
+
+/**
+ * The post-reply segment (v0.19 A1 §A.2.1) — everything the reply must not
+ * wait for, in seven steps:
+ *   序 2  analyze    — the turn-analyzer (or the ONE bridge housekeeping
+ *                      call, minimal payload) produces the semantic hint, the
+ *                      close marking, and the explicit memory-update reading.
+ *   序 3  close      — execute the close the reply segment decided
+ *                      (pendingClose), or close the orphaned active slice a
+ *                      killed run left behind (findStaleActiveSlice +
+ *                      rederived signal). Marks first; never closes dry.
+ *   序 4  due tasks  — mechanical 日期锚 scan of the tasks shelf.
+ *   序 5  boundary   — post the [boundary-event] line onto the previous
+ *                      closed slice's mailbox (idempotent); log the count of
+ *                      its unanswered question markers (the background
+ *                      stream's trigger, A3 — not answered here).
+ *   序 6  evolution  — EXPLICIT-INSTRUCTION only (the user asked to
+ *                      record/change something): the single surviving
+ *                      evolution channel. Fitness-triggered / boundary /
+ *                      direction-gated runs are gone with the loop's
+ *                      retirement (the store keeps whatever A2+ rebuilds).
+ *   序 7  scribe     — the scribe pass on the just-closed slice (markers →
+ *                      task/sediment cases), then on the active slice's tail.
+ *
+ * Everything runs under the turn's slice lock and lands in ONE batch commit
+ * at the end. EVERY sub-step is idempotent (close: status flip + signal
+ * re-derivation; boundary event: content check; evolution: a review re-run
+ * converges; scribe: processed-marker records), so a kill anywhere re-runs
+ * the whole segment safely. Demo mode skips the segment entirely (read-only
+ * preview — the analysis has nowhere to land).
+ */
+export async function scribeSegment(
+  input: TurnInput,
+  hk: HousekeepingResult,
+): Promise<void> {
+  "use step";
+
+  if (input.useDemo) return;
+
+  const stream = createStepStream();
+  const { slice } = hk;
+  const { config, lastUserMessage } = input;
+
+  // ── Phase display: two modes, two components ─────────────────────────
+  // Edge mode emits one compact data-phase chunk per engineering sub-step
+  // (analyze / slice-closed) — the client merges them into the
+  // HousekeepingCard checklist.
+  // Client (outsourced) mode renders ONE streaming card instead: the whole
+  // analysis is a single agent call + deterministic wrap-up, so the card
+  // streams the CLI's live activity (tool rows + narration line, fed by the
+  // bridge emitter below) and fills in wrap-up rows as the engineering
+  // steps complete — the edge checklist is NOT emitted (it would sit idle
+  // through the whole call, then jump to done).
+  // The gate also requires the turn's model to run on the bridge — a BYOK
+  // model (sdk "openai") under a bridge env brain keeps the analysis on the
+  // standard API sub-agent path.
+  const phaseOutsource = isPhaseOutsourceActive(input.modelConfig.sdk);
+  /** Wrap-up rows of the client-mode card (same shape as the checklist). */
+  const hkSteps: HousekeepingStep[] = [];
+  /** Last bridge-emitter frame state, folded into every card frame. */
+  const hkActivity: {
+    tools: BridgePhaseData["tools"];
+    live?: string;
+    /** Set when the bridge call failed and the segment degraded to the
+     *  deterministic path — the card shows an amber warning. */
+    warning?: string;
+  } = {
+    tools: [],
+  };
+  const sendHousekeepingCard = (running: boolean) =>
+    stream.send({
+      type: "data-phase" as `data-${string}`,
+      id: "phase-bridge-housekeeping",
+      data: {
+        phase: "bridgeHousekeeping",
+        running,
+        summaries: [],
+        tools: hkActivity.tools,
+        ...(hkActivity.live ? { live: hkActivity.live } : {}),
+        ...(hkActivity.warning ? { warning: hkActivity.warning } : {}),
+        steps: hkSteps.map((s) => ({ ...s })),
+      },
+    } as UIMessageChunk);
+  /** Phase display dispatch: edge → compact checklist chunk; client → a
+   *  wrap-up row inside the bridge housekeeping card. */
+  const emitStep = async (
+    phase: string,
+    running: boolean,
+    summaries?: string[],
+  ): Promise<void> => {
+    if (!phaseOutsource) return emitPhase(stream, phase, running, summaries);
+    const existing = hkSteps.find((s) => s.phase === phase);
+    if (existing) {
+      existing.running = running;
+      if (summaries !== undefined) existing.summaries = summaries;
+    } else {
+      hkSteps.push({
+        phase,
+        running,
+        ...(summaries !== undefined ? { summaries } : {}),
+      });
+    }
+    sendHousekeepingCard(hkSteps.some((s) => s.running));
+  };
+
+  // Live thinking channel: the Previously Agent streams its reasoning/writing
+  // through onEvolutionLine → throttled (40ms, same discipline as tool
+  // progress) data-evolution frames carrying the current line. The phase step
+  // ("reading" → "reviewing") rides along; the "applied" step is folded into
+  // the terminal result chunk, which follows immediately.
+  let evolutionLiveState: ProgressWriteState = {
+    lastWriteMs: 0,
+    lastLine: "",
+    lastStage: undefined,
+    sentAny: false,
+  };
+  let evolutionStep: "direction" | "reading" | "reviewing" = "reading";
+  const onEvolutionProgress = (step: "reading" | "reviewing" | "applied") => {
+    if (step === "applied") return; // the terminal result chunk follows
+    evolutionStep = step;
+    emitEvolutionProgress(stream, step);
+  };
+  const onEvolutionLine = (line: string, stage: "thinking" | "writing") => {
+    const now = Date.now();
+    if (!shouldEmitProgress(evolutionLiveState, { line, stage }, now)) return;
+    evolutionLiveState = {
+      lastWriteMs: now,
+      lastLine: line,
+      lastStage: stage,
+      sentAny: true,
+    };
+    emitEvolutionProgress(stream, evolutionStep, line, stage);
+  };
+
+  try {
+  return await withSliceLock(slice.slice_id, async () => {
+  const batch = createBatch();
+  // Ages/due-dates compare against the USER's local calendar date, not UTC.
+  const todayLocal =
+    localDateKey(input.startedAtIso, input.clientTimezone) ??
+    input.startedAtIso.slice(0, 10);
+
+  // The slice closing this turn: the reply segment's pending decision, or —
+  // on a redelivered run (the decision was never persisted) — an orphaned
+  // ACTIVE slice on disk that is not the current one. Undefined when the
+  // disk holds no orphan (the close already landed, or never fired).
+  const closingSlice =
+    hk.pendingClose?.slice ??
+    (await findStaleActiveSlice(slice.slice_id, batch));
+
+  // ── 序 2. Analyze ─────────────────────────────────────────────────────
+  await emitStep("analyze", true);
+  const existingStrands = await readStrands(batch);
+  let analysis: TurnAnalysis;
+  /** The bridge report — kept for 序 6's mutation application. */
+  let bridgeReport: HousekeepingPhaseReport | null = null;
+  if (phaseOutsource) {
+    // Phase outsourcing (client mode + bridge brain, kill-switch
+    // PREVIOUSLY_PHASE_OUTSOURCE=0): ONE bridge call covers the analysis AND
+    // (on an explicit update) the card-mutation proposal. The payload is the
+    // minimal set (A1): message, recent turns, strand names, the card, the
+    // closing slice — no dry slices / merge candidates / signals / playbooks
+    // / direction anymore. A failed call degrades EXACTLY like an analyzer
+    // outage (memoryWorthy=true, no tags, deterministic closed marking below)
+    // and additionally SKIPS the evolution — no second bridge spawn on a
+    // broken bridge.
+    const bridgeCardRaw = await readCurrentPreviously(batch);
+    // Forward the client agent's live tool activity into the turn stream so
+    // the user can watch the CLI work during the analysis — the same
+    // data-phase channel + payload the chat bridge model uses
+    // (createBridgeEventEmitter), on a distinct id/phase so the two
+    // indicators never merge. Frames ride this step's serial stream queue
+    // (stream.send), throttled inside the emitter. Deltas ARE forwarded here:
+    // for phase "housekeeping" the client suppresses the JSON report block
+    // and deltas carry only narration/thinking — they become the indicator's
+    // rolling "current activity" line (data.live), so the wait is visible
+    // even when the CLI makes zero tool calls. The activity state is folded
+    // into the shared card frame (hkActivity) so wrap-up rows (emitStep) and
+    // tool/narration frames never overwrite each other — every frame carries
+    // the full cumulative state (build-stream: last chunk wins).
+    const bridgeActivity = createBridgeEventEmitter({
+      id: "phase-bridge-housekeeping",
+      phase: "bridgeHousekeeping",
+      write: (data: BridgePhaseData) => {
+        hkActivity.tools = data.tools;
+        hkActivity.live = data.live;
+        // The emitter's settle (running:false) fires the moment the bridge
+        // call returns, while wrap-up rows (analyze → close) are still being
+        // applied — keep the card spinning until they settle too.
+        sendHousekeepingCard(
+          data.running || hkSteps.some((s) => s.running),
+        );
+      },
+    });
+    const bridgeResult = await runHousekeepingBridge(
+      {
+        userMessage: lastUserMessage,
+        recentTurns: input.recentTurns,
+        existingStrandNames: Object.keys(existingStrands),
+        cardContent: bridgeCardRaw,
+        sliceId: slice.slice_id,
+        closingSlice: closingSlice
+          ? { sliceId: closingSlice.slice_id, turns: closingSlice.turns }
+          : undefined,
+        todayLocal,
+        locale: input.locale,
+      },
+      { onEvent: bridgeActivity.onEvent, onDelta: bridgeActivity.onDelta },
+    );
+    // Settle the indicator (running: false) whatever the outcome.
+    bridgeActivity.finish();
+    if (bridgeResult.ok) {
+      bridgeReport = bridgeResult.report;
+      analysis = adaptHousekeepingReport(bridgeResult.report, !!closingSlice);
+    } else {
+      console.warn(
+        `[HousekeepingBridge] ${bridgeResult.reason} — degraded to the deterministic path`,
+      );
+      analysis = degradedAnalysis();
+      // Surface the degradation on the card — it must not settle silently
+      // green when the memory analysis fell back to heuristics.
+      hkActivity.warning = bridgeResult.reason;
+      sendHousekeepingCard(hkSteps.some((s) => s.running));
+    }
+  } else {
+    analysis = await analyzeTurn({
+      model: input.modelConfig,
+      userMessage: lastUserMessage,
+      existingStrandNames: Object.keys(existingStrands),
+      closingSlice: closingSlice ? { turns: closingSlice.turns } : undefined,
+    });
+  }
+  await emitStep("analyze", false);
+
+  // ── 序 3. Execute the close — marking BEFORE the slice persists ───────
+  // Idempotent: a slice already closed on disk (a previous delivery got this
+  // far) is not touched again.
+  let closedThisTurn: TimeSlice | null = null;
+  if (closingSlice && closingSlice.status === "active") {
+    const signal =
+      hk.pendingClose?.slice.slice_id === closingSlice.slice_id
+        ? hk.pendingClose.signal
+        : rederiveCloseSignal(closingSlice, config);
+    if (!signal) {
+      console.warn(
+        `[Episodic] stale active slice ${closingSlice.slice_id} re-derives no close signal — left for the background scan (A2)`,
+      );
+    } else {
+      if (analysis.closedMarking) {
+        if (analysis.closedMarking.focus) closingSlice.focus = analysis.closedMarking.focus;
+        if (analysis.closedMarking.summary) closingSlice.summary = analysis.closedMarking.summary;
+        if (analysis.closedMarking.tone) closingSlice.emotional_tone = analysis.closedMarking.tone;
+      }
+      // Never close a slice dry when it has content: the analyzer silently
+      // returns EMPTY on any failure (worker outage, schema mismatch), which
+      // used to leave focus/summary empty — the "39% dry" timeline. Fill any
+      // gap with a deterministic mark from the slice itself.
+      if (!closingSlice.focus || !closingSlice.summary) {
+        const fallback = deterministicSliceMark(closingSlice);
+        if (!closingSlice.focus) closingSlice.focus = fallback.focus;
+        if (!closingSlice.summary) closingSlice.summary = fallback.summary;
+        console.log(
+          `[Episodic] ${closingSlice.slice_id} closed with deterministic mark (analyzer output incomplete)`,
+        );
+      }
+      await closeSlice(closingSlice, signal, batch);
+      closedThisTurn = closingSlice;
+      console.log(`[Episodic] Closed slice: ${closingSlice.slice_id} (${signal})`);
+      // Signal the client that a slice closed (rendered as a housekeeping
+      // checklist row).
+      await emitStep("slice-closed", false, [closingSlice.slice_id]);
+    }
+  }
+
+  // ── 序 4. Due tasks (mechanical) ──────────────────────────────────────
+  const dueTasks = await scanDueTasks(todayLocal, batch);
+
+  // ── 序 5. Boundary event + unanswered-question count ──────────────────
+  // The target is the newest slice closed before the current one — NOT the
+  // close executed above: a run killed between 序 3 and here re-finds it
+  // from disk, and the post's own content check keeps the event single.
+  const prevClosed = await readPrevClosedSlice(slice.slice_id, batch);
+  if (prevClosed) {
+    await postBoundaryEvent(prevClosed, dueTasks, batch);
+    try {
+      const agentMd = await readSlicePart(prevClosed.slice_id, "agent", batch);
+      const answered = extractProcessedMarkerIds(agentMd, RESEARCH_RECORD_PREFIX);
+      const openQuestions = extractDocMarkers(agentMd).filter(
+        (m) => m.kind === "question" && !answered.has(m.id),
+      );
+      if (openQuestions.length > 0) {
+        console.log(
+          `[Docs] ${openQuestions.length} unanswered question marker(s) sit in ${prevClosed.slice_id}'s mailbox — the background stream's trigger (A3)`,
+        );
+      }
+    } catch {
+      // no mailbox on the closed slice — no questions either
+    }
+  }
+
+  // ── 序 6. Explicit-instruction evolution (the ONLY surviving channel) ──
+  // The user explicitly asked to record/evolve or stated a behavioral
+  // correction (analyzeTurn's memoryUpdate). Every write runs under ONE
+  // process-wide `withSliceLock("evolution")` (v0.16 S1 single-writer). A
+  // changed run's summary freezes into the slice frontmatter so the L3
+  // slice-head block replays it on every later turn of the slice. Evolution
+  // failures must never take the turn down: a write/agent error is reported
+  // to the client as an error chunk and the turn continues.
+  let evolutionResult: EvolutionResult | undefined;
+  /** Freeze a changed evolution's summary into the slice (single line, YAML-safe). */
+  const freezeEvolutionSummary = async (target: TimeSlice) => {
+    if (evolutionResult?.ran && evolutionResult.changed && evolutionResult.summary) {
+      target.evolutionSummary = evolutionResult.summary.replace(/\s+/g, " ").trim();
+      await saveSliceSnapshot(target, batch);
+    }
+  };
+  const explicitUpdate = analysis.memoryUpdate;
+  try {
+    if (explicitUpdate) {
+      if (phaseOutsource) {
+        // Bridge path: the mutation proposals arrived in the SAME bridge call
+        // as the analysis — apply them through the card-session machinery
+        // (applyBridgeCardEvolution), no second spawn.
+        const cardRaw = await readCurrentPreviously(batch);
+        if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
+          // The card opens in its running state first — a terminal chunk out
+          // of nowhere reads as "it never ran".
+          emitEvolutionProgress(stream, "reviewing");
+          evolutionResult = await withSliceLock("evolution", () =>
+            applyBridgeCardEvolution({
+              card: cardRaw,
+              sliceId: slice.slice_id,
+              today: todayLocal,
+              reason: bridgeReport.evolution.reason || explicitUpdate.content,
+              mutations: bridgeReport.evolution.mutations,
+              batch,
+            }),
+          );
+          await emitEvolutionResult(stream, evolutionResult);
+          await freezeEvolutionSummary(slice);
+          console.log(
+            `[Evolution] bridge user request: changed=${evolutionResult.changed}`,
+          );
+        } else {
+          await emitEvolutionResult(stream, {
+            ran: false,
+            changed: false,
+            droppedRecent: 0,
+            note: bridgeReport
+              ? `Memory update noted — no card mutation proposed (${bridgeReport.evolution.reason || "no reason given"}).`
+              : "Housekeeping bridge unavailable — card evolution skipped this turn.",
+            ...(bridgeReport ? {} : { error: "housekeeping bridge failed" }),
+          });
+        }
+      } else {
+        // The direction doc is orientation for the product phase even on an
+        // explicit-request run (no direction evaluation and no fitness
+        // buckets here).
+        const direction = await readDirection().catch(() => null);
+        evolutionResult = await withSliceLock("evolution", () =>
+          runCardEvolution({
+            model: input.modelConfig,
+            sliceId: slice.slice_id,
+            recentTurns: input.recentTurns,
+            currentSliceTags: slice.tags,
+            focus: explicitUpdate.content,
+            signal: "new_observation",
+            readers: buildCardReaders(input),
+            onProgress: onEvolutionProgress,
+            onEvolutionLine,
+            batch,
+            todayDate: todayLocal,
+            direction,
+            triggeredBuckets: [],
+          }),
+        );
+        await emitEvolutionResult(stream, evolutionResult);
+        await freezeEvolutionSummary(slice);
+        console.log(
+          `[Evolution] explicit user request: changed=${evolutionResult.changed}`,
+        );
+      }
+    }
+  } catch (err) {
+    console.error(
+      `[Evolution] scribe-segment run failed, continuing turn:`,
+      err instanceof Error ? err.message : err,
+    );
+    await emitEvolutionResult(stream, {
+      ran: false,
+      changed: false,
+      droppedRecent: 0,
+      note: "Evolution run failed.",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // ── 序 7. Scribe — pick up [doc-marker] mailbox lines ────────────────
+  // The just-closed slice first (its mailbox is final), then the active
+  // slice's tail (the reply segment's own markers). No markers → one file
+  // read, no LLM. Best-effort each — a document write must never take a
+  // turn down.
+  if (closedThisTurn) {
+    try {
+      const boundaryScribe = await runScribePass({
+        model: input.modelConfig,
+        sliceId: closedThisTurn.slice_id,
+        excerpt: buildSliceExcerpt(closedThisTurn),
+        strands: existingStrands,
+        date: todayLocal,
+        batch,
+      });
+      if (boundaryScribe.ran) {
+        console.log(
+          `[Docs] Scribe (boundary): ${boundaryScribe.written.length} doc(s) written`,
+        );
+      }
+    } catch (e) {
+      console.warn("[Docs] boundary scribe failed:", e instanceof Error ? e.message : e);
+    }
+  }
+  try {
+    const tailScribe = await runScribePass({
+      model: input.modelConfig,
+      sliceId: slice.slice_id,
+      excerpt: buildSliceExcerpt(slice),
+      strands: existingStrands,
+      date: todayLocal,
+      batch,
+    });
+    if (tailScribe.ran) {
+      console.log(
+        `[Docs] Scribe (tail): ${tailScribe.written.length} doc(s) written`,
+      );
+    }
+  } catch (e) {
+    console.warn("[Docs] scribe tail failed:", e instanceof Error ? e.message : e);
+  }
+
+  // ONE commit for the whole segment (close + boundary event + evolution +
+  // scribe). A kill before this flush re-runs the segment from disk state —
+  // every step above is idempotent, so nothing doubles.
+  await flushBatch(batch, `Turn ${input.turnId} — scribe`);
+  });
+  } finally {
+    stream.close();
+  }
+}
+
+// ─── Step 4: closeTurnStream ───────────────────────────────────────────────
+
+/**
+ * Close the run's output stream with the trailing lifecycle chunks. The
+ * agent streamed with `sendFinish: false` + `preventClose: true`, so this
+ * step owns the stream tail — finish-step / finish, then close. Emit the
+ * terminal turn-status chunk just before the lifecycle tail so the client
+ * learns the outcome from the live stream. A reconnecting client replays the
+ * stream from the last-seen index and derives the status from the final
+ * assistant message.
+ */
+export async function closeTurnStream(
+  outcome: TurnOutcome,
+  turnId: string,
+): Promise<void> {
+  "use step";
+
   const status = deriveTurnStatus(outcome);
   const writable = getWritable<UIMessageChunk>();
   const writer = writable.getWriter();
@@ -2306,5 +1478,4 @@ export async function finalizeTurn(
   await writer.write({ type: "finish" } as UIMessageChunk);
   writer.releaseLock();
   await writable.close();
-  });
 }

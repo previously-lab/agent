@@ -16,10 +16,10 @@
  * immediately.
  */
 import { fsReadFile, type WriteBatch } from "../io-helpers";
+import { indexPathCandidates } from "../paths";
 import { enumerateSliceIds } from "./enumerate";
 import {
   TIMELINE_MD_PATH,
-  monthlyIndexPath,
   readTimelineIndex,
   sliceEntryFromDisk,
   writeTimelineIndex,
@@ -67,35 +67,38 @@ async function readMonthlyIndices(batch?: WriteBatch): Promise<Map<string, Timel
       m += 12;
       y -= 1;
     }
-    let raw: string;
-    try {
-      raw = await fsReadFile(monthlyIndexPath(y, m), batch);
-    } catch {
-      continue; // month has no index yet
-    }
-    try {
-      const parsed = JSON.parse(raw) as { slices?: Array<Record<string, unknown>> };
-      for (const e of parsed.slices ?? []) {
-        const id = typeof e.id === "string" ? e.id : "";
-        if (!id || !id.includes("-")) continue;
-        const focus = typeof e.focus === "string" ? e.focus : "";
-        const summary = typeof e.summary === "string" ? e.summary : "";
-        map.set(id.split("-").join("/"), {
-          id,
-          date: id.slice(0, 10),
-          start: typeof e.start === "string" ? e.start : "",
-          status: e.status === "closed" ? "closed" : "active",
-          focus,
-          summary,
-          tags: Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === "string") : [],
-          open_loops: Array.isArray(e.open_loops) ? e.open_loops.map(String) : [],
-          decisions: Array.isArray(e.decisions) ? e.decisions.map(String) : [],
-          strands: [],
-          needs_marking: !focus && !summary,
-        });
+    // Dual-root (v0.19 R2): legacy root first, new root overwrites shared ids.
+    for (const indexPath of [...indexPathCandidates(y, m)].reverse()) {
+      let raw: string;
+      try {
+        raw = await fsReadFile(indexPath, batch);
+      } catch {
+        continue; // this root has no index for the month
       }
-    } catch {
-      // skip a malformed month index
+      try {
+        const parsed = JSON.parse(raw) as { slices?: Array<Record<string, unknown>> };
+        for (const e of parsed.slices ?? []) {
+          const id = typeof e.id === "string" ? e.id : "";
+          if (!id || !id.includes("-")) continue;
+          const focus = typeof e.focus === "string" ? e.focus : "";
+          const summary = typeof e.summary === "string" ? e.summary : "";
+          map.set(id.split("-").join("/"), {
+            id,
+            date: id.slice(0, 10),
+            start: typeof e.start === "string" ? e.start : "",
+            status: e.status === "closed" ? "closed" : "active",
+            focus,
+            summary,
+            tags: Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === "string") : [],
+            open_loops: Array.isArray(e.open_loops) ? e.open_loops.map(String) : [],
+            decisions: Array.isArray(e.decisions) ? e.decisions.map(String) : [],
+            strands: [],
+            needs_marking: !focus && !summary,
+          });
+        }
+      } catch {
+        // skip a malformed month index
+      }
     }
   }
   return map;

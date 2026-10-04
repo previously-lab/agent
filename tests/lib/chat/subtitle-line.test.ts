@@ -76,17 +76,26 @@ describe("foldSubtitleActivity — the activity ladder", () => {
     expect(line?.activity).toBe("searching");
   });
 
-  it("reads data-phase as housekeeping and data-evolution as evolving", () => {
+  it("reads data-phase as housekeeping; data-evolution carries no activity (M3)", () => {
     expect(
       foldSubtitleActivity([
         part({ type: "data-phase", data: { phase: "slice", running: true, compact: true } }),
       ])?.activity,
     ).toBe("housekeeping");
+    // Evolution frames light the companion pod via the bus — the conversation
+    // subtitle never describes them. A lone frame leaves the no-signal
+    // default, and a frame never displaces the current activity.
     expect(
       foldSubtitleActivity([
         part({ type: "data-evolution", data: { status: "running", step: "reviewing" } }),
       ])?.activity,
-    ).toBe("evolving");
+    ).toBe("thinking");
+    expect(
+      foldSubtitleActivity([
+        part({ type: "reasoning", text: "hmm…" }),
+        part({ type: "data-evolution", data: { status: "running", step: "reviewing" } }),
+      ])?.activity,
+    ).toBe("thinking");
   });
 
   it("reads streamed text as replying — the words themselves never surface", () => {

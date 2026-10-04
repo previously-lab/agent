@@ -11,6 +11,7 @@ import { writeFile } from "@/lib/tools";
 import { writeFileLocal } from "@/lib/tools/local-fs";
 import { fsReadFile } from "@/lib/episodic/io-helpers";
 import { sliceIdToFilePath, sliceIdToAgentPath } from "@/lib/episodic/manager";
+import { slicePartPathCandidates } from "@/lib/episodic/paths";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
 import { isProtectedSystemPath } from "@/lib/whitelist";
 import { guardRequest } from "@/lib/security/origin-guard";
@@ -151,7 +152,15 @@ export async function POST(request: Request) {
     try {
       existingContent = await fsReadFile(slicePath, undefined, { fresh: true });
     } catch {
-      // File doesn't exist yet — we will create it from scratch below.
+      // Dual-root (v0.19 R2): a still-active slice created before the root
+      // move lives under the legacy slices root — appending to it must start
+      // from ITS content, not from an empty file (that would drop turns).
+      const [, legacyPath] = slicePartPathCandidates(sliceId, "core");
+      try {
+        existingContent = await fsReadFile(legacyPath, undefined, { fresh: true });
+      } catch {
+        // File doesn't exist yet on either root — created from scratch below.
+      }
     }
 
     // ── Build the new turn blocks ──────────────────────────────────────

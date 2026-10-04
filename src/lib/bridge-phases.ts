@@ -232,10 +232,6 @@ const capped = <T>(arr: T[], n: number): T[] => arr.slice(0, n);
 
 export const housekeepingPhaseReportSchema = z.object({
   analysis: z.object({
-    tags: z.object({
-      reuse: z.array(z.string()).transform((a) => capped(a, 5)),
-      create: z.array(z.string()).transform((a) => capped(a, 3)),
-    }),
     semantic_hint: z.array(z.string()).transform((a) => capped(a, 5)),
     intent: z.enum(WIRE_INTENTS),
     memory_worthy: z.boolean(),
@@ -256,7 +252,6 @@ export const housekeepingPhaseReportSchema = z.object({
     .object({
       focus: z.string(),
       summary: z.string(),
-      tags: z.array(z.string()).transform((a) => capped(a, 6)),
       tone: z.string(),
     })
     .nullable(),
@@ -314,7 +309,7 @@ export interface HousekeepingBridgeInput {
   userMessage: string;
   /** Recent turns of the active slice (context for analysis/evolution). */
   recentTurns: Array<{ role: string; content: string }>;
-  /** Existing strand names — the merge-first reuse list. */
+  /** Existing strand names — the semantic_hint topic list. */
   existingStrandNames: string[];
   /** Current card content (current-previously.md; may be empty). */
   cardContent: string;
@@ -324,7 +319,6 @@ export interface HousekeepingBridgeInput {
   closingSlice?: {
     sliceId: string;
     turns: Array<{ role: string; content: string }>;
-    tags: string[];
   };
   /**
    * Dry slices (closed without focus/summary) up for opportunistic
@@ -393,8 +387,8 @@ export interface HousekeepingBridgeInput {
 const HOUSEKEEPING_TASK = `You are running Previously's housekeeping phase — the per-turn memory bookkeeping of a personal agent. This task is the FULL contract — the judgment rules, input specifics, and output contract all live here; your workspace instruction file only lists the available commands and mechanics.
 
 One pass, these jobs:
-1. Turn analysis — merge-first tags (reuse existing strand names VERBATIM; create only genuinely durable topics), semantic_hint (existing strands this message is about), intent, memory_worthy (false for trivial turns: greetings / "继续" / thanks / small talk), memory_update (ONLY on an explicit record/evolve request or an explicit behavioral correction — the exact content, else null), emotional_signal.
-2. Closed-slice marking — ONLY when the context says a slice is closing: focus (one sentence), summary (≤100 chars), 2-6 clean deduped tags, tone.
+1. Turn analysis — semantic_hint (existing strands this message is about), intent, memory_worthy (false for trivial turns: greetings / "继续" / thanks / small talk), memory_update (ONLY on an explicit record/evolve request or an explicit behavioral correction — the exact content, else null), emotional_signal.
+2. Closed-slice marking — ONLY when the context says a slice is closing: focus (one sentence), summary (≤100 chars), tone.
 3. Card evolution — judge worth (when in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss) and, when worth or memory_update is set, propose card mutations with the op vocabulary below. Never rewrite the whole card; entries you don't touch stay as they are.
 4. Dry-slice backfill — ONLY when the context carries a "Dry slices needing marks" section: one backfill_marks entry per listed slice ({slice_id copied verbatim, focus one sentence, summary ≤100 chars}); [] when the section is absent.
 5. Strand merge — ONLY when the context carries a "Strand merge candidates" section: propose from→to merges for NEAR-DUPLICATE strands (typos / same concept under two names / same entity written differently). Every "to" MUST be a name from the offered list; no chains (A→B and B→C in one pass); do NOT merge distinct concepts that merely share a word; when in doubt, do NOT merge — a wrong merge destroys thread history. [] when the section is absent or the index is already clean.
@@ -421,14 +415,13 @@ The card is a PURE semantic memory pool (Identity/Past/Now/Horizon — what the 
 OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, no markdown fence — matching this schema:
 {
   "analysis": {
-    "tags": { "reuse": string[], "create": string[] },
     "semantic_hint": string[],
     "intent": "code_debug"|"code_write"|"explain"|"chat"|"review"|"clarify",
     "memory_worthy": boolean,
     "memory_update": string | null,
     "emotional_signal": { "intensity": "none"|"light"|"strong", "register": "neutral"|"emotional"|"humorous"|"frustrated"|"excited", "note": string }
   },
-  "closed_marking": { "focus": string, "summary": string, "tags": string[], "tone": string } | null,
+  "closed_marking": { "focus": string, "summary": string, "tone": string } | null,
   "evolution": { "worth": boolean, "reason": string, "mutations": [ …ops above… ] },
   "backfill_marks": [ { "slice_id": string, "focus": string, "summary": string } ],
   "strand_merges": [ { "from": string, "to": string } ],
@@ -472,7 +465,7 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
         ? input.recentTurns.map((t) => `**${t.role}**: ${t.content}`).join("\n\n")
         : "(none)"
     }`,
-    `## Existing strands (reuse these verbatim — merge, don't invent)\n\n${
+    `## Existing strands (the semantic_hint topic list)\n\n${
       input.existingStrandNames.length > 0
         ? input.existingStrandNames.join(", ")
         : "(none yet)"
@@ -530,7 +523,7 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
   }
   if (closing) {
     sections.push(
-      `## Closing slice ${closing.sliceId}\n\nExisting tags: ${closing.tags.join(", ") || "(none)"}\n\nConversation (first turn + last turns):\n${compressTurns(closing.turns)}`,
+      `## Closing slice ${closing.sliceId}\n\nConversation (first turn + last turns):\n${compressTurns(closing.turns)}`,
     );
   }
   if (input.drySlices && input.drySlices.length > 0) {
@@ -681,7 +674,7 @@ export type HousekeepingBridgeResult =
  * Run the whole housekeeping analysis as ONE bridge call. Never throws —
  * any failure (bridge spawn/exit/timeout, unextractable JSON, schema
  * mismatch) degrades to { ok: false } so housekeeping falls back to the
- * deterministic path (memoryWorthy=true, no tags, deterministic closed
+ * deterministic path (memoryWorthy=true, deterministic closed
  * marking, evolution skipped).
  *
  * `opts.onEvent` / `opts.onDelta` are optional live-activity passthroughs to
@@ -728,7 +721,7 @@ const VALID_TONES: readonly string[] = ["positive", "neutral", "negative", "mixe
 
 /**
  * Map a validated wire report onto the internal TurnAnalysis shape so ALL
- * downstream housekeeping code (tag application, closed marking, degradation
+ * downstream housekeeping code (closed marking, degradation
  * fallbacks) runs unchanged. Mirrors analyzeTurn's defensive post-processing.
  */
 export function adaptHousekeepingReport(
@@ -738,12 +731,6 @@ export function adaptHousekeepingReport(
   const a = report.analysis;
   const cm = report.closed_marking;
   return {
-    messageTags: {
-      reuse: a.tags.reuse.filter((t) => t.trim().length > 0),
-      create: a.tags.create
-        .filter((t) => t.trim().length > 0)
-        .map((tag) => ({ tag, reason: "" })),
-    },
     semanticHint: {
       strands: a.semantic_hint.filter((s) => s.trim().length > 0),
       reason: "",
@@ -774,7 +761,6 @@ export function adaptHousekeepingReport(
       ? {
           focus: cm.focus.trim(),
           summary: cm.summary.trim(),
-          tags: cm.tags,
           tone: VALID_TONES.includes(cm.tone)
             ? (cm.tone as EmotionalTone)
             : null,
@@ -785,12 +771,11 @@ export function adaptHousekeepingReport(
 
 /**
  * The degraded analysis for a failed bridge call — mirrors the analyzer's
- * empty-on-failure contract (memoryWorthy=true, no tags, neutral signal).
+ * empty-on-failure contract (memoryWorthy=true, neutral signal).
  * No evolveCard: the caller skips card evolution entirely on bridge failure.
  */
 export function degradedAnalysis(): TurnAnalysis {
   return {
-    messageTags: { reuse: [], create: [] },
     semanticHint: { strands: [], reason: "" },
     memoryWorthy: true,
     emotionalSignal: { intensity: "none", register: "neutral", note: "" },

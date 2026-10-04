@@ -1,30 +1,23 @@
 /**
- * Background research/hypothesis pass (v0.15 design §3.4, §3.5, §4.3).
+ * The question run's research/hypothesis pass (v0.19 §A.2.3-b; was the
+ * degraded v0.15 boundary pass).
  *
- * THE DEGRADED FORM, ON PURPOSE: the design's real background stream is an
- * independent durable run, which needs the v0.11 §10 groundwork (fitness
- * append-only, projection stripping, the evolution single-writer) — that
- * groundwork does not exist yet. What this module implements is the design's
- * own documented fallback (§9): a single boundary-triggered pass riding the
- * housekeeping tail, driven by the USER'S QUESTIONS (the "question" markers
- * the reply segment drops into agent.md). The agenda stays conservative —
- * NO automatic research, NO scheduled re-thinking: no marker, no pass.
+ * THE DEGRADED FORM, ON PURPOSE: the design's real question run is an
+ * independent durable run — the lift is another lane's job (A3). What this
+ * module implements until then is the same shape riding the housekeeping
+ * tail: driven ONLY by the user's "question" markers (no automatic research,
+ * no scheduled re-thinking: no marker, no pass). The agenda stays
+ * conservative — the markers ARE the agenda.
  *
- * The whole pass is ONE function (`runDocResearchPass`) so it can be lifted
- * into an independent durable run wholesale when the groundwork lands.
- *
- * Discipline (same structural shape as the librarian):
- * - read-before-write: the topic homes named by the triggering markers enter
- *   the prompt BEFORE the call (their 名录 is the "what already exists"
- *   surface); the pass additionally gets read tools (readDoc / readTopicHome
- *   / readSlice) for cross-slice digging — it is a reader before it is a
- *   writer.
- * - evidence-while-writing: every landed entry carries the triggering slice
- *   id, stamped mechanically.
- * - writes are validated intents: the model returns write ops; engineering
- *   applies them through the src/lib/docs pure ops under the per-doc lock.
- *   A hypothesis whose body carries no falsification condition is REFUSED
- *   (§3.5: 无证伪条件不是假说) — the refusal is recorded, visible.
+ * Discipline (same structural shape as the case writer):
+ * - writer-is-reader: the case manifest enters the prompt, and the pass gets
+ *   READ tools (readCase / readSlice) for cross-record digging — it is a
+ *   reader before it is a writer.
+ * - evidence-while-writing: the triggering slice id is stamped mechanically.
+ * - writes are validated intents applied through the five case ops (§B.3)
+ *   under the per-case lock. A hypothesis whose body carries no falsification
+ *   condition is REFUSED (§B.6: 无证伪条件拒开) — the refusal is recorded,
+ *   visible.
  *
  * Never throws: failures degrade to skipped items in the result.
  */
@@ -33,40 +26,25 @@ import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import type { ModelConfig } from "@/lib/models/registry";
-import type { StrandIndex } from "@/lib/episodic/types";
 import {
-  appendEntry,
-  buildDocFileName,
-  createDocSkeleton,
-  isValidDocFileName,
-  markStatus,
-  normalizeDocRef,
-  rewriteAsOf,
-  serializeDoc,
-  type ParsedDoc,
+  CASE_CATEGORIES,
+  isValidCaseName,
+  type CaseCategory,
 } from "@/lib/docs";
-import { readDocQuery, type DocsFs } from "@/lib/docs/docs-query";
 import {
-  fsListFiles,
-  fsReadFile,
   fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
-import {
-  getStrandFilePath,
-  getTopicDocPath,
-  readTopicDoc,
-} from "@/lib/episodic/strand-files";
-import { updateDocUnderLock } from "@/lib/episodic/doc-lock";
-import {
-  sliceIdToAgentPath,
-  sliceIdToFilePath,
-} from "@/lib/episodic/manager";
+import { sliceIdToAgentPath } from "@/lib/episodic/manager";
+import { readSlicePart, readSlicePartResolved } from "../paths";
 import {
   RESEARCH_RECORD_PREFIX,
-  appendTopicDirectoryEntry,
+  applyCaseWriteIntent,
   extractDocMarkers,
   extractProcessedMarkerIds,
+  makeCaseReadTool,
+  renderManifest,
+  type CaseWriterManifest,
   type DocMarker,
   type SliceExcerpt,
 } from "./librarian";
@@ -74,31 +52,25 @@ import {
 // ─── The pass ──────────────────────────────────────────────────────────────
 
 const writeOpSchema = z.object({
-  kind: z.enum(["research", "hypothesis"]),
-  mode: z
-    .enum(["open", "append", "close"])
+  action: z
+    .enum(["open", "updateIndex", "appendTail", "addPiece", "close"])
     .describe(
-      "open: a new document (title required). " +
-      "append: a dated 更新 entry to an existing document (target required). " +
-      "close: the concluding 结案 entry + status closed (target required).",
+      "open: a NEW case (category + caseName; body = the index.md 正文). " +
+      "updateIndex: rewrite the 正文 of an EXISTING living case. " +
+      "appendTail: one dated line on a SEALED case. " +
+      "addPiece: a dated piece inside an existing case. " +
+      "close: seal a case (note = 去向/结论).",
     ),
-  title: z
-    .string()
-    .optional()
-    .describe("open only — the doc title. 命名纪律: state exactly what is being investigated/guessed, specific enough that a scope change would mean a NEW doc."),
-  target: z
-    .string()
-    .optional()
-    .describe("append/close only — the existing document file name."),
-  entryTitle: z.string().describe("Free entry name (开篇/更新/结案/…)."),
-  body: z
-    .string()
-    .describe(
-      "The entry prose. research: question → findings → conclusion, the conclusion living next to its evidence chain. " +
-      "hypothesis: the guess PLUS its falsification condition (无证伪条件不是假说 — a body without one is refused).",
-    ),
-  asOf: z.string().optional().describe("The one-sentence 截至 statement after this write."),
-  topics: z.array(z.string()).catch([]).default([]).describe("Topic strands this document belongs to (双重散文断言 — the home gets the matching 名录 entry)."),
+  category: z.enum(CASE_CATEGORIES),
+  caseName: z.string().describe("The case name — permanent at birth; legal per the red-line rule."),
+  /** open/updateIndex/addPiece: the 正文 (updateIndex = the WHOLE new body). */
+  body: z.string().optional(),
+  /** appendTail only. */
+  line: z.string().optional(),
+  /** addPiece only — the piece title. */
+  title: z.string().optional(),
+  /** close only. */
+  note: z.string().optional(),
 });
 
 const researchSchema = z.object({
@@ -106,81 +78,48 @@ const researchSchema = z.object({
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
-const RESEARCH_SYSTEM = buildSubAgentSystem(`You are the background researcher of a personal memory system. The user asked questions a quick answer could not settle; you investigate ACROSS the record and leave durable documents.
+const RESEARCH_SYSTEM = buildSubAgentSystem(`You are the question-run researcher of a personal memory system (v0.19). The user asked questions a quick answer could not settle; you investigate ACROSS the record and leave durable CASES (research/ = answered questions, hypotheses/ = guesses with falsification conditions).
 
-You are shown: the triggering question markers, the slice they came from, and the current homes of the topics they name (their 名录 lists the documents already hanging under each topic — read any of them with readDoc before deciding to write). You may also read slices (readSlice) — the L0 evidence.
+You are shown: the triggering question markers, the slice they came from, and the case manifest (the whole memory tree, paths only). Read what you need with readCase (case documents) and readSlice (the L0 evidence — concrete facts live ONLY there).
 
 ## Task
 
 Per question, judge: is there enough in the record to write something durable?
-- research: answer a question. 开篇 states the question and its origin; 更新 records findings (and says WHICH earlier belief each replaces); 结案 gives the conclusion next to its evidence chain. New evidence continuing the SAME question appends to the existing document; a changed scope means a NEW document (titles are permanent).
-- hypothesis: a guess about the world/affairs WITH an explicit falsification condition. Evidence-arrived entries accumulate; 结案 states confirmed / refuted / retired in prose.
+- research: answer a question. A case's index.md carries what is known and where it stands; pieces hold dated expansions; close seals it with the conclusion next to its evidence chain. New evidence continuing the SAME question updates the living case; a changed scope means a NEW case (names are permanent).
+- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — without one the write is refused. Evidence entries accumulate; close states confirmed / refuted / retired in prose.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
 
 ## Rules
 
-1. Ground everything in what you actually read (documents, homes, slices). Cite slice ids in the prose when a fact comes from one.
+1. Ground everything in what you actually read (cases, slices). Cite slice ids in the prose when a fact comes from one.
 2. Prose, in the user's language. No date bookkeeping — dates and evidence stamps are mechanical.
-3. Append-only: never restate an existing entry; add the new finding with its date.
-4. Scope honesty: a 沉淀 from one conversation is not your job — you write the cross-record view. If the question was already answered by an existing document, say so in reasoning and write nothing.
+3. Living cases are rewritten whole (updateIndex); sealed cases grow only via appendTail/addPiece. Never restate what a case already carries.
+4. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
 
 ## Output
 
 Call \`docResearchOutput\` with your writes (or empty) + reasoning.`);
 
-function buildResearchPrompt(input: {
-  sliceId: string;
-  excerpt: SliceExcerpt;
-  questions: DocMarker[];
-  homes: Array<{ topic: string; text: string | null }>;
-}): string {
-  const questionBlocks = input.questions
-    .map(
-      (q) =>
-        `### marker ${q.id}\ntitle: ${q.title}\nnote: ${q.note || "（无）"}\n` +
-        `topics: ${q.topics.length > 0 ? q.topics.join("、") : "（无）"}`,
-    )
-    .join("\n\n");
-  const homeBlocks = input.homes
-    .map(
-      ({ topic, text }) =>
-        `### 主题之家 ${topic}\n\n${text ?? "（尚无之家）"}`,
-    )
-    .join("\n\n");
-
-  return `## 触发切片 ${input.sliceId}
-
-focus: ${input.excerpt.focus || "（无）"}
-summary: ${input.excerpt.summary || "（无）"}
-
-${input.excerpt.turnsExcerpt || "（无对话摘录）"}
-
-## 用户的问题（驱动本次 pass 的全部议程——保守：除此之外不研究任何事）
-
-${questionBlocks}
-
-## 相关主题之家（写前已读；名录即"已有什么"）
-
-${homeBlocks || "（标记未指名任何主题）"}
-
-用 readDoc / readTopicHome / readSlice 继续取证，然后按指示给出写操作。`;
-}
-
-/** Does this hypothesis body carry a falsification condition? (§3.5) */
+/** Does this hypothesis body carry a falsification condition? (§B.6) */
 function hasFalsificationCondition(body: string): boolean {
   return body.includes("证伪");
 }
 
 export interface DocResearchPassInput {
   model: ModelConfig;
-  /** The closed slice whose agent.md carries the question markers. */
+  /** The slice whose agent.md carries the question markers. */
   sliceId: string;
   excerpt: SliceExcerpt;
-  strands: StrandIndex;
+  /** The listTree manifest — what cases exist before the pass starts.
+   *  Optional at the seam: absent → empty tree (readCase becomes the only
+   *  discovery surface — degraded but functional). */
+  manifest?: CaseWriterManifest;
   /** User-local date (YYYY-MM-DD) stamping every write. */
   date: string;
   batch?: WriteBatch;
+  /** @deprecated R3a: strands are dead. Ignored. */
+  strands?: unknown;
 }
 
 export interface DocResearchPassResult {
@@ -190,20 +129,23 @@ export interface DocResearchPassResult {
 }
 
 /**
- * The background research/hypothesis pass — ONE function, boundary-triggered,
- * question-driven. Picks up unprocessed "question" markers from the closed
- * slice's agent.md, investigates with read tools, and writes docs/research/
- * and docs/hypothesis/ through validated intents. Never throws.
+ * The question research/hypothesis pass — ONE function, question-driven.
+ * Picks up unprocessed "question" markers from the slice's agent.md,
+ * investigates with readCase/readSlice, and writes research/ hypotheses/
+ * cases through the five ops under the per-case lock. Never throws.
  */
 export async function runDocResearchPass(
   input: DocResearchPassInput,
 ): Promise<DocResearchPassResult> {
-  const { model, sliceId, excerpt, strands, date, batch } = input;
+  const { model, sliceId, excerpt, date, batch } = input;
+  const manifest = input.manifest ?? { truncated: false, tree: {} };
   const skipped: Array<{ id: string; reason: string }> = [];
 
   let agentMd: string;
   try {
-    agentMd = await fsReadFile(sliceIdToAgentPath(sliceId), batch);
+    // Dual-root read (v0.19 R2): the mailbox of a slice created before the
+    // root move lives under the legacy slices root.
+    agentMd = await readSlicePart(sliceId, "agent", batch);
   } catch {
     return { ran: false, written: [], skipped };
   }
@@ -214,61 +156,42 @@ export async function runDocResearchPass(
   );
   if (questions.length === 0) return { ran: false, written: [], skipped };
 
-  // Read-before-write, structural: the homes named by the questions enter
-  // the prompt BEFORE the call.
-  const homeTopics = [...new Set(questions.flatMap((q) => q.topics))].filter((t) =>
-    Object.prototype.hasOwnProperty.call(strands, t),
-  );
-  const homes: Array<{ topic: string; text: string | null }> = [];
-  for (const topic of homeTopics) {
-    try {
-      const home = await readTopicDoc(topic, batch);
-      homes.push({ topic, text: home ? serializeDoc(home.doc).trim() : null });
-    } catch {
-      homes.push({ topic, text: null });
-    }
-  }
+  const questionBlocks = (questions as DocMarker[])
+    .map(
+      (q) =>
+        `### marker ${q.id}\ntitle: ${q.title}\nnote: ${q.note || "（无）"}`,
+    )
+    .join("\n\n");
 
-  // The read-tool surface, over the batch-aware fs (read-your-writes).
-  const docsFs: DocsFs = {
-    readText: (path) => fsReadFile(path, batch),
-    listDir: (path) => fsListFiles(path),
-  };
+  const prompt = `## 触发切片 ${sliceId}
+
+focus: ${excerpt.focus || "（无）"}
+summary: ${excerpt.summary || "（无）"}
+
+${excerpt.turnsExcerpt || "（无对话摘录）"}
+
+## 用户的问题（驱动本次 pass 的全部议程——保守：除此之外不研究任何事）
+
+${questionBlocks}
+
+## case 清单（listTree 全树；"已有什么"的目录）
+
+${renderManifest(manifest.tree)}
+${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readCase 的死链为准）\n" : ""}
+用 readCase / readSlice 取证，然后按指示给出写操作。`;
+
   const tools = {
-    readDoc: tool({
-      description:
-        "Read a document by file name (e.g. 2026-09-05-手机购买调研 or 用户手机). " +
-        "Resolves across all document kinds. Returns the full text, or a dead-link error.",
-      inputSchema: z.object({ fileName: z.string() }),
-      execute: async ({ fileName }) => {
-        const result = await readDocQuery(docsFs, fileName);
-        if ("error" in result) return result.error;
-        return result.content;
-      },
-    }),
-    readTopicHome: tool({
-      description: "Read a topic home by strand name (full text; falls back to the legacy location).",
-      inputSchema: z.object({ name: z.string() }),
-      execute: async ({ name }) => {
-        try {
-          return await fsReadFile(getTopicDocPath(name), batch);
-        } catch {
-          try {
-            return await fsReadFile(getStrandFilePath(name), batch);
-          } catch {
-            return `（主题之家 ${name} 不存在）`;
-          }
-        }
-      },
-    }),
+    readCase: makeCaseReadTool(batch),
     readSlice: tool({
       description:
         "Read a slice's core.md by slice id (YYYY-MM-DD-HHMM) — the L0 evidence. " +
         "Concrete facts (numbers, dates, quotes) may ONLY come from here.",
       inputSchema: z.object({ sliceId: z.string() }),
-      execute: async ({ sliceId: id }) => {
+      execute: async ({ sliceId: id }: { sliceId: string }) => {
         try {
-          return await fsReadFile(sliceIdToFilePath(id), batch);
+          // Dual-root read (v0.19 R2): evidence slices may predate the
+          // records root move.
+          return await readSlicePart(id, "core", batch);
         } catch {
           return `（切片 ${id} 不存在或不可读）`;
         }
@@ -283,7 +206,7 @@ export async function runDocResearchPass(
   const result = await runSubAgent({
     model,
     system: RESEARCH_SYSTEM,
-    prompt: buildResearchPrompt({ sliceId, excerpt, questions, homes }),
+    prompt,
     temperature: 0,
     maxSteps: 15,
     timeoutMs: 120_000,
@@ -302,75 +225,79 @@ export async function runDocResearchPass(
   }
 
   const written: string[] = [];
-  const recordLines: string[] = [];
-  const strandNames = new Set(Object.keys(strands));
 
   for (const op of result.report.writes) {
-    // Resolve the target file name.
-    let fileName: string;
-    if (op.mode === "open") {
-      if (!op.title?.trim()) {
-        skipped.push({ id: "?", reason: `${op.kind} open without a title` });
-        continue;
-      }
-      try {
-        fileName = buildDocFileName(op.kind, date, op.title.trim());
-      } catch (e) {
-        skipped.push({ id: "?", reason: e instanceof Error ? e.message : String(e) });
-        continue;
-      }
-    } else {
-      const canonical = op.target ? normalizeDocRef(op.target) : null;
-      if (!canonical || !isValidDocFileName(canonical, op.kind)) {
-        skipped.push({ id: "?", reason: `illegal target: ${JSON.stringify(op.target)}` });
-        continue;
-      }
-      fileName = canonical;
+    const identity = `${op.category}/${op.caseName}`;
+    if (!isValidCaseName(op.caseName)) {
+      skipped.push({ id: "?", reason: `illegal case name: ${JSON.stringify(op.caseName)}` });
+      continue;
     }
-
+    // research questions land in research/; hypotheses in hypotheses/. The
+    // writer names the category; engineering only enforces the red lines.
+    const category: CaseCategory = op.category;
+    if ((category !== "research" && category !== "hypotheses") && op.action === "open") {
+      // Opening arbitrary categories from the question run is allowed by the
+      // type table (§B.6: 问题 run writes research/hypotheses) — refuse the rest.
+      skipped.push({ id: "?", reason: `question run may only open research/ or hypotheses/ cases, not ${category}/` });
+      continue;
+    }
     // A hypothesis without a falsification condition is not a hypothesis.
-    if (op.kind === "hypothesis" && op.mode === "open" && !hasFalsificationCondition(op.body)) {
-      skipped.push({ id: "?", reason: `hypothesis ${fileName} lacks a falsification condition` });
+    if (
+      category === "hypotheses" &&
+      op.action === "open" &&
+      !hasFalsificationCondition(op.body ?? "")
+    ) {
+      skipped.push({ id: "?", reason: `hypothesis ${identity} lacks a falsification condition` });
       continue;
     }
 
     try {
-      const applied = await updateDocUnderLock(op.kind, fileName, batch, (current) => {
-        if (op.mode !== "open" && !current) return null; // cannot append/close a ghost
-        const base: ParsedDoc =
-          current ??
-          createDocSkeleton({
-            fileName,
-            kind: op.kind,
-            opened: date,
-            heading: op.title?.trim() ?? null,
-          });
-        let next = appendEntry(base, {
-          date,
-          title: op.entryTitle.trim() || (op.mode === "close" ? "结案" : current ? "更新" : "开篇"),
-          body: `${op.body.trim()}\n\n（证据切片：${sliceId}）`,
-        });
-        const asOf = op.asOf?.trim();
-        if (asOf) next = rewriteAsOf(next, { date, text: asOf });
-        if (op.mode === "close") next = markStatus(next, "closed", date);
-        return next;
-      });
-      if (!applied.wrote) {
-        skipped.push({ id: "?", reason: `${op.mode} on missing document ${fileName}` });
-        continue;
+      let applied: { path: string };
+      switch (op.action) {
+        case "open": {
+          if (!op.body?.trim()) throw new Error("open requires a body");
+          applied = await applyCaseWriteIntent(
+            { action: "open", category, caseName: op.caseName, body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            date, batch,
+          );
+          break;
+        }
+        case "updateIndex": {
+          if (!op.body?.trim()) throw new Error("updateIndex requires a body");
+          applied = await applyCaseWriteIntent(
+            { action: "rewriteIndex", category, caseName: op.caseName, body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            date, batch,
+          );
+          break;
+        }
+        case "appendTail": {
+          if (!op.line?.trim()) throw new Error("appendTail requires a line");
+          applied = await applyCaseWriteIntent(
+            { action: "appendTail", category, caseName: op.caseName, line: `${op.line.trim()}（证据切片：${sliceId}）` },
+            date, batch,
+          );
+          break;
+        }
+        case "addPiece": {
+          if (!op.title?.trim() || !op.body?.trim()) {
+            throw new Error("addPiece requires a title and a body");
+          }
+          applied = await applyCaseWriteIntent(
+            { action: "addPiece", category, caseName: op.caseName, title: op.title.trim(), body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            date, batch,
+          );
+          break;
+        }
+        case "close": {
+          if (!op.note?.trim()) throw new Error("close requires a note (去向说明)");
+          applied = await applyCaseWriteIntent(
+            { action: "close", category, caseName: op.caseName, note: op.note.trim() },
+            date, batch,
+          );
+          break;
+        }
       }
-      written.push(fileName);
-
-      for (const topic of op.topics) {
-        if (!strandNames.has(topic)) continue;
-        await appendTopicDirectoryEntry({
-          topic,
-          docFileName: fileName,
-          action: op.mode === "open" ? "开设" : op.mode === "close" ? "结案" : "更新",
-          date,
-          batch,
-        });
-      }
+      written.push(applied.path.replace(/^memory\//, ""));
     } catch (e) {
       skipped.push({ id: "?", reason: e instanceof Error ? e.message : String(e) });
     }
@@ -379,6 +306,7 @@ export async function runDocResearchPass(
   // Every question marker this pass SAW is recorded as processed — the pass
   // is single-shot per boundary; an unanswered question stays visible in
   // reasoning, not as a growing backlog.
+  const recordLines: string[] = [];
   for (const q of questions) {
     recordLines.push(
       `${RESEARCH_RECORD_PREFIX} {"id":${JSON.stringify(q.id)},"docs":${JSON.stringify(written)}}`,
@@ -386,13 +314,19 @@ export async function runDocResearchPass(
   }
   if (recordLines.length > 0) {
     try {
-      const fresh = await fsReadFile(sliceIdToAgentPath(sliceId), batch).catch(() => "");
+      // Dual-root read (the slice may predate the root move), and the record
+      // append goes back to the root the mailbox was actually read from —
+      // splitting markers (legacy) from records (new) would re-see every
+      // question on the next pass.
+      const resolved = await readSlicePartResolved(sliceId, "agent", batch).catch(() => null);
+      const fresh = resolved?.content ?? "";
       const next = fresh.trimEnd()
         ? `${fresh.trimEnd()}\n\n${recordLines.join("\n")}\n`
         : `${recordLines.join("\n")}\n`;
-      await fsWriteFile(sliceIdToAgentPath(sliceId), next, batch);
+      await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next, batch);
     } catch {
-      // record loss → a question may be re-seen; append-only docs keep that non-fatal.
+      // record loss → a question may be re-seen; the case tail is append-only,
+      // keeping that a duplicate dated line: visible, non-fatal.
     }
   }
 

@@ -1,7 +1,9 @@
 /**
- * Document-shelf server actions (v0.15 §4.2) — getDocShelf / getDocTopicDetail
- * / getDocContent. The I/O layer is mocked at the module boundary
- * (`io-helpers`); the pure `@/lib/docs` parsers run for real on fixtures.
+ * Shelf server actions — the legacy half (v0.15 §4.2: getDocShelf /
+ * getDocTopicDetail / getDocContent) and the case half (v0.19 R3b:
+ * getCaseShelf / getCaseDetail / getCaseDoc, §B.1/§B.2 with §D.1 dual-root
+ * tolerance). The I/O layer is mocked at the module boundary (`io-helpers`);
+ * the pure `@/lib/docs` parsers run for real on fixtures.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -18,7 +20,11 @@ vi.mock("@/lib/demo/demo-fs", () => ({
 }));
 
 vi.mock("@/lib/episodic/timeline/store", () => ({
-  readTimelineIndex: vi.fn(),
+  sliceEntryFromDisk: vi.fn(async () => null),
+}));
+
+vi.mock("@/lib/episodic/timeline/enumerate", () => ({
+  enumerateSliceIds: vi.fn(async () => []),
 }));
 
 vi.mock("@/lib/episodic/manager", () => ({
@@ -46,6 +52,9 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
 }));
 
 import {
+  getCaseShelf,
+  getCaseDetail,
+  getCaseDoc,
   getDocShelf,
   getDocTopicDetail,
   getDocContent,
@@ -82,16 +91,47 @@ updated: 2026-09-05
 为什么要查、起初知道什么。
 `;
 
-/** Route fsListFiles/fsReadFile by a path → content/rejection map. */
+const CASE_INDEX_RAW = `---
+opened: 2026-09-05
+---
+用户在比较两款手机，倾向尚未定。
+`;
+
+const CASE_SEALED_RAW = `---
+opened: 2026-08-01
+closed: 2026-08-20
+---
+结论：已购 A 款。
+`;
+
+const PIECE_RAW = `---
+opened: 2026-09-08
+---
+报价对比：A 款 4999，B 款 4599。
+`;
+
+/**
+ * Route fsListFiles/fsReadFile by a path → content map. `ls` synthesizes BOTH
+ * child files and child directories from the map (case enumeration lists
+ * directories), and throws ENOENT when the directory holds nothing.
+ */
 function seedFiles(files: Record<string, string>) {
   mocks.fsListFiles.mockImplementation(async (path: string) => {
     const prefix = `${path}/`;
-    const names = Object.keys(files)
-      .filter((p) => p.startsWith(prefix))
-      .map((p) => p.slice(prefix.length))
-      .filter((rest) => !rest.includes("/"));
-    if (names.length === 0) throw new Error(`ENOENT ${path}`);
-    return names.map((name) => ({ name, type: "file" as const, path: `${path}/${name}` }));
+    const children = new Map<string, "file" | "dir">();
+    for (const p of Object.keys(files)) {
+      if (!p.startsWith(prefix)) continue;
+      const rest = p.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash === -1) children.set(rest, "file");
+      else children.set(rest.slice(0, slash), "dir");
+    }
+    if (children.size === 0) throw new Error(`ENOENT ${path}`);
+    return [...children].map(([name, type]) => ({
+      name,
+      type,
+      path: `${path}/${name}`,
+    }));
   });
   mocks.fsReadFile.mockImplementation(async (path: string) => {
     const content = files[path];
@@ -234,5 +274,162 @@ describe("getDocContent", () => {
   it("returns null when no kind directory holds the file", async () => {
     seedFiles({});
     expect(await getDocContent("2026-09-05-手机购买调研.md")).toBeNull();
+  });
+});
+
+// ─── getCaseShelf (v0.19 §B.1: the nine categories, point-read index.md) ───
+
+describe("getCaseShelf", () => {
+  it("enumerates all nine categories, tolerating missing directories, and point-reads each case's index.md", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      "memory/people/旧相机/index.md": CASE_SEALED_RAW,
+      "memory/research/手机调研/index.md": CASE_INDEX_RAW,
+    });
+
+    const shelf = await getCaseShelf();
+
+    // All nine categories are listed, empty ones included.
+    expect(shelf.categories).toHaveLength(9);
+    const people = shelf.categories.find((c) => c.category === "people")!;
+    // Newest-born first.
+    expect(people.cases.map((c) => c.name)).toEqual(["手机", "旧相机"]);
+    expect(people.cases[0].opened).toBe("2026-09-05");
+    expect(people.cases[0].closed).toBeNull();
+    expect(people.cases[0].preview).toContain("比较两款手机");
+    expect(people.cases[1].closed).toBe("2026-08-20");
+
+    const events = shelf.categories.find((c) => c.category === "events")!;
+    expect(events.cases).toEqual([]);
+
+    // Point reads: exactly the three case index.md files, nothing else.
+    // (Code-unit sort: 手 U+624B < 旧 U+65E7 < 调 U+8C03.)
+    const readPaths = mocks.fsReadFile.mock.calls.map((c) => c[0]).sort();
+    expect(readPaths).toEqual([
+      "memory/people/手机/index.md",
+      "memory/people/旧相机/index.md",
+      "memory/research/手机调研/index.md",
+    ]);
+  });
+
+  it("lists every category empty when no case tree exists yet", async () => {
+    mocks.fsListFiles.mockRejectedValue(new Error("ENOENT"));
+    const shelf = await getCaseShelf();
+    expect(shelf.categories).toHaveLength(9);
+    expect(shelf.categories.every((c) => c.cases.length === 0)).toBe(true);
+    expect(mocks.fsReadFile).not.toHaveBeenCalled();
+  });
+
+  it("skips case directories whose index.md is unreadable", async () => {
+    seedFiles({ "memory/people/手机/index.md": CASE_INDEX_RAW });
+    mocks.fsReadFile.mockImplementation(async (path: string) => {
+      if (path === "memory/people/手机/index.md") throw new Error("gone");
+      throw new Error(`ENOENT ${path}`);
+    });
+    const shelf = await getCaseShelf();
+    expect(
+      shelf.categories.find((c) => c.category === "people")!.cases,
+    ).toEqual([]);
+  });
+});
+
+// ─── getCaseDetail (one case: index.md + piece list, dual-root) ───────────
+
+describe("getCaseDetail", () => {
+  it("opens a new-root case with its dated pieces, newest first", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      "memory/people/手机/2026-09-06-比价篇.md": PIECE_RAW,
+      "memory/people/手机/2026-09-08-报价篇.md": PIECE_RAW,
+    });
+
+    const detail = await getCaseDetail("people", "手机");
+
+    expect(detail).not.toBeNull();
+    expect(detail!.opened).toBe("2026-09-05");
+    expect(detail!.closed).toBeNull();
+    expect(detail!.markdown).toContain("比较两款手机");
+    expect(detail!.markdown).not.toContain("opened:");
+    expect(detail!.pieces.map((p) => p.fileName)).toEqual([
+      "2026-09-08-报价篇.md",
+      "2026-09-06-比价篇.md",
+    ]);
+    expect(detail!.pieces[0]).toMatchObject({ date: "2026-09-08", title: "报价篇" });
+  });
+
+  it("falls back to the legacy root on a new-root miss (§D.1)", async () => {
+    // Only a legacy strand entity carries this name.
+    seedFiles({
+      "memory/episodic/strands/手机.md": `---\nfoo: bar\n---\n旧 strand 实体正文。\n`,
+    });
+
+    const detail = await getCaseDetail("people", "手机");
+
+    expect(detail).not.toBeNull();
+    expect(detail!.markdown).toContain("旧 strand 实体正文。");
+    expect(detail!.markdown).not.toContain("foo: bar");
+    expect(detail!.pieces).toEqual([]);
+  });
+
+  it("rejects an illegal category or case name without touching I/O", async () => {
+    expect(await getCaseDetail("bogus", "手机")).toBeNull();
+    expect(await getCaseDetail("people", "../evil")).toBeNull();
+    expect(mocks.fsReadFile).not.toHaveBeenCalled();
+    expect(mocks.fsListFiles).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a dead reference", async () => {
+    seedFiles({});
+    expect(await getCaseDetail("people", "不存在")).toBeNull();
+  });
+});
+
+// ─── getCaseDoc (two-segment references, dual-root) ───────────────────────
+
+describe("getCaseDoc", () => {
+  it("reads a case's index.md by 分类/case名", async () => {
+    seedFiles({ "memory/people/手机/index.md": CASE_SEALED_RAW });
+
+    const doc = await getCaseDoc("people/手机");
+
+    expect(doc).not.toBeNull();
+    expect(doc!.opened).toBe("2026-08-01");
+    expect(doc!.closed).toBe("2026-08-20");
+    expect(doc!.markdown).toContain("已购 A 款。");
+  });
+
+  it("reads a piece by 分类/case名/篇名 (with or without .md)", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      "memory/people/手机/2026-09-08-报价篇.md": PIECE_RAW,
+    });
+
+    const doc = await getCaseDoc("people/手机/2026-09-08-报价篇");
+    expect(doc).not.toBeNull();
+    expect(doc!.opened).toBe("2026-09-08");
+    expect(doc!.markdown).toContain("报价对比");
+
+    const withSuffix = await getCaseDoc("people/手机/2026-09-08-报价篇.md");
+    expect(withSuffix).not.toBeNull();
+  });
+
+  it("resolves a bare legacy name against the old roots (§D.1)", async () => {
+    seedFiles({ "memory/docs/topic/用户手机.md": TOPIC_RAW });
+
+    const doc = await getCaseDoc("用户手机");
+
+    expect(doc).not.toBeNull();
+    expect(doc!.opened).toBe("2026-09-01");
+    // A legacy active doc reads as 还在写 (closed null).
+    expect(doc!.closed).toBeNull();
+    expect(doc!.markdown).toContain("## 2026-09-05 — 开篇");
+  });
+
+  it("returns null for a dead link and for an illegal reference", async () => {
+    seedFiles({});
+    expect(await getCaseDoc("people/不存在")).toBeNull();
+
+    expect(await getCaseDoc("../evil")).toBeNull();
+    expect(await getCaseDoc("a/b/c/d")).toBeNull();
   });
 });

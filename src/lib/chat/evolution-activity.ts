@@ -10,10 +10,10 @@
  * companion pod's presence (button breathing + panel replay) and fires the
  * achievement toast on a genuine completion.
  *
- * The chat-side EvolutionCard keeps rendering its own frames — this bus is an
- * ADDITIONAL surface, not a replacement (M3 retires the card). Bridge brain
- * runs no inline evolution, so nothing publishes there; with no subscribers
- * the bus is a no-op.
+ * The conversation side renders NO evolution UI anymore (M3 retired the
+ * chat-side EvolutionCard): this bus is the ONLY surface for the frames —
+ * the companion pod's floating button. Bridge brain runs no inline evolution,
+ * so nothing publishes there; with no subscribers the bus is a no-op.
  */
 import type { EvolutionStepData } from "@/lib/chat/build-stream";
 

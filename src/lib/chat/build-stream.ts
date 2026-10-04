@@ -37,6 +37,11 @@ export type AnyPart = {
  * (changes / summary / note / mutations / error / partial) with
  * `status: "done"`.
  *
+ * The conversation stream no longer renders these frames (M3): the classifier
+ * skips them, and their ONLY surface is the evolution-activity bus → the
+ * companion pod's floating button (chat-page republishes them from the raw
+ * parts). This type stays because the bus speaks it.
+ *
  * Backward compatibility: chunks streamed before the `status` field existed
  * carry `{ running: boolean, step? }` instead — `status` is then inferred
  * from `running`.
@@ -102,8 +107,8 @@ export type EvolutionStepData = {
 
 /**
  * One sub-step inside the housekeeping card (slice / analyze / tags / context /
- * strands). Card evolution is NOT a sub-step — it is its own StreamItem
- * (see the "evolution" kind below).
+ * strands). Card evolution is NOT a sub-step — and since M3 not a stream item
+ * either; its frames feed only the evolution-activity bus (the companion pod).
  */
 export type HousekeepingStep = {
   phase: string;
@@ -145,13 +150,6 @@ export type StreamItem =
       streamingStage?: string;
     }
   | { kind: "housekeeping"; steps: HousekeepingStep[] }
-  | {
-      kind: "evolution";
-      /** Normalized lifecycle flag — derived from `status`, or legacy `running`. */
-      running: boolean;
-      /** The latest data-evolution chunk's payload (last chunk wins). */
-      data: EvolutionStepData;
-    }
   | {
       /** The bridge activity indicator (client+bridge mode): one row per
        *  CLI tool event. Carried by data-phase chunks whose data carries a
@@ -255,10 +253,11 @@ export function deriveAgentStage(parts: readonly AnyPart[]): AgentStage | null {
  *
  * The consecutive `compact` housekeeping phases (slice / analyze / tags /
  * context / strands) are merged into ONE `housekeeping` item with a running
- * checklist, while `data-evolution` chunks become their OWN `evolution` item
- * at the position they arrive (between the context and strands phases) —
- * the wire format stays untouched (reconnect replay is unaffected); only the
- * client presentation groups them.
+ * checklist. `data-evolution` chunks are IGNORED here (M3): the conversation
+ * renders no evolution UI — the frames reach the companion pod through the
+ * evolution-activity bus, which chat-page feeds from the raw parts. The wire
+ * format stays untouched (reconnect replay is unaffected); only the client
+ * presentation groups them.
  */
 export function buildStream(
   parts: readonly AnyPart[],
@@ -428,30 +427,6 @@ export function buildStream(
               summaries: d.summaries,
             });
           }
-        }
-      }
-    } else if (p.type === "data-evolution") {
-      // Inline card evolution (Previously Agent) — its OWN stream item at the
-      // natural arrival position (between the housekeeping context and strands
-      // phases). While running it carries the step + the agent's realtime
-      // thinking line (`live`); the terminal chunk carries the summary,
-      // mutations diff, note, error, and the partial flag.
-      flushText();
-      const d = p.data as EvolutionStepData | undefined;
-      if (d) {
-        // Legacy chunks predate `status` — infer it from the old `running`
-        // flag so replays of pre-status streams still classify correctly.
-        const running =
-          d.status !== undefined ? d.status === "running" : (d.running ?? false);
-        const existing = items.find(
-          (it): it is Extract<StreamItem, { kind: "evolution" }> =>
-            it.kind === "evolution",
-        );
-        if (existing) {
-          existing.running = running;
-          existing.data = d;
-        } else {
-          items.push({ kind: "evolution", running, data: d });
         }
       }
     } else if (p.type === "data-turn-status") {

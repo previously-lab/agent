@@ -13,7 +13,7 @@
  * from the `"use workflow"` file pulls no Node.js code into the workflow bundle.
  */
 import type { ModelMessage } from "ai";
-import type { TimeSlice } from "@/lib/episodic";
+import type { SlicingSignal, TimeSlice } from "@/lib/episodic";
 import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
@@ -165,8 +165,6 @@ export interface HousekeepingResult {
   slice: TimeSlice;
   /** Content of previously.md for the current slice. */
   previouslyContent: string;
-  /** Formatted strands menu string (empty if no strands exist). */
-  strandsMenu: string;
   /**
    * The frozen slice-head snapshot block (L3): slice-start local time, date
    * anchors, continuity stance at slice birth, and the birth-evolution
@@ -184,30 +182,14 @@ export interface HousekeepingResult {
   /**
    * The direction layer (v1.1): the evolved user portrait + hypothesis pool
    * (direction.md), injected between the card (L1) and the static rules (L2).
-   * Read per turn in housekeeping AFTER the turn's batch flush — an evolution
-   * run that landed a new direction THIS turn already shapes THIS turn's
-   * reply (the mid-slice prefix-cache drift on those turns is accepted
-   * deliberately). Absent when direction.md is missing / still the
-   * template / still the legacy skeleton awaiting migration.
+   * Read per turn in housekeeping after the user-turn flush. Evolution now
+   * runs in the SCRIBE segment (after the reply — v0.19 A1), so a direction
+   * an evolution run lands this turn is what the NEXT turn reads; within a
+   * slice without an evolution the layer is byte-stable. Absent when
+   * direction.md is missing / still the template / still the legacy skeleton
+   * awaiting migration.
    */
   directionBlock?: string;
-  /**
-   * v0.8 — compact timeline brief (recent slice pointer lines + catalog
-   * totals), assembled from the woven index. Injected into the system prompt
-   * so the agent can perceive the recent past without reading slices. Since
-   * v0.9 it is built in frozen mode (absolute dates, only slices closed
-   * before the current one) so it stays byte-stable within the slice. Absent
-   * when the timeline isn't available yet.
-   */
-  timelineBrief?: string;
-  /**
-   * v0.13 §5 视野注入 — the per-turn view block, built ONLY when the client
-   * sent a `view` (a slice is selected). A single compact "[当前] …" line,
-   * injected by the workflow into the last user message's OUTBOUND copy —
-   * never the user's text, never the frozen system prompt, never persisted
-   * (the slice keeps only what the user typed). Absent in the lobby default.
-   */
-  viewBlock?: string;
   /**
    * Checkpoint carry-over: when the slice was born from a time_cap/capacity
    * close (`slice.continuesFrom`), the previous slice's trailing turns read
@@ -228,11 +210,22 @@ export interface HousekeepingResult {
    * on turns where the client history matched.
    */
   rebuiltHistory?: ModelMessage[];
+  /**
+   * A close the reply segment DECIDED but did not execute (v0.19 A1 three
+   * stages): housekeeping keeps the lifecycle decision pure — it mints the
+   * successor slice and persists the user turn, while the close itself
+   * (marking + closeSlice) and everything downstream of it run in the scribe
+   * segment AFTER the reply. Carried by value so the scribe segment never
+   * re-derives the decision. Absent when no close fired; on a redelivered
+   * run the scribe segment re-discovers the orphaned active slice from disk
+   * (findStaleActiveSlice) instead.
+   */
+  pendingClose?: { slice: TimeSlice; signal: SlicingSignal };
 }
 
 /**
  * What the workflow extracts (as pure serializable values) from the agent
- * stream result and hands to the finalizeTurn step.
+ * stream result and hands to the persistAgentTurn step.
  */
 export interface TurnOutcome {
   /** Final assistant text (empty when the model produced none). */
@@ -241,7 +234,7 @@ export interface TurnOutcome {
   finishReason: string;
   /**
    * Mechanically extracted cognition data for agent.md — reasoning traces
-   * and tool calls with success/failure status. Written by finalizeTurn.
+   * and tool calls with success/failure status. Written by persistAgentTurn.
    */
   cognition: string;
   /**
@@ -273,7 +266,7 @@ export type TurnStatus =
 
 /**
  * Derive the terminal turn status from the agent's finish reason and output.
- * Pure function — used by finalizeTurn to emit the terminal data-turn-status
+ * Pure function — used by closeTurnStream to emit the terminal data-turn-status
  * stream chunk. The client sees it live or reconnects via the stored runId.
  */
 export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {

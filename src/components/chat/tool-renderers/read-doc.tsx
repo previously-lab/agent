@@ -6,11 +6,9 @@ import { useTranslations } from "next-intl";
 import { ToolLayout } from "../tool-layout";
 
 interface ReadDocOutput {
-  fileName?: string;
-  kind?: string;
-  status?: string;
+  path?: string;
   opened?: string;
-  updated?: string;
+  closed?: string | null;
   content?: string;
   warnings?: string[];
   error?: string;
@@ -18,39 +16,44 @@ interface ReadDocOutput {
 
 interface ReadDocRendererProps {
   toolName: string;
-  input?: { fileName?: string };
+  input?: { ref?: string };
   output?: ReadDocOutput;
   state: ToolRenderState;
 }
 
+/** Compact identity label for the summary line: category/case[/piece]. */
+function refLabel(input: { ref?: string } | undefined, output: ReadDocOutput | undefined): string {
+  const fromOutput = output?.path?.replace(/^memory\//, "").replace(/\.md$/, "");
+  const raw = input?.ref ?? fromOutput ?? "…";
+  return raw.length > 48 ? raw.slice(0, 48) + "…" : raw;
+}
+
 /**
- * readDoc renderer — point-read of one document by file name (v0.15 §4.2).
- * The summary is the file name (identity); the expanded view shows the
- * machine header (status/opened/updated — the freshness material the reader
- * judges by eye) plus the full document text, or the visible dead-link error.
+ * readDoc renderer — two-segment case-document point-read (v0.19 §B.2).
+ * The summary is the reference (identity); the expanded view shows the
+ * opened/closed dates (closed = sealed — the freshness material the reader
+ * judges by eye), the full document text, and the dead-link error when the
+ * reference resolved nowhere.
  */
 export function ReadDocRenderer({ toolName: _toolName, input, output, state }: ReadDocRendererProps) {
   const t = useTranslations("chat.tool");
-  const fileName =
-    (typeof output?.fileName === "string" && output.fileName) ||
-    (typeof input?.fileName === "string" && input.fileName) ||
-    "…";
+  const label = refLabel(input, output);
   const error = typeof output?.error === "string" ? output.error : null;
 
   const displayName = state.running
-    ? t("readDocRunning", { name: fileName })
-    : t("readDocDone", { name: fileName });
+    ? t("readDocRunning", { name: label })
+    : t("readDocDone", { name: label });
 
   const expandedContent = error ? (
     <p className="text-xs leading-relaxed text-muted-foreground">{error}</p>
   ) : output?.content ? (
     <div className="space-y-2">
-      {(output.status || output.updated) && (
+      {(output.opened || output.closed !== undefined) && (
         <p className="font-mono text-xs text-muted-foreground">
-          {output.kind && <span>{output.kind} · </span>}
-          {output.status && <span>status: {output.status} · </span>}
-          {output.opened && <span>opened: {output.opened} · </span>}
-          {output.updated && <span>updated: {output.updated}</span>}
+          opened: {output.opened || "?"}
+          {output.closed
+            ? ` · closed: ${output.closed}（sealed）`
+            : " · 还在写"}
         </p>
       )}
       <pre className="font-mono text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">
@@ -76,7 +79,7 @@ export function ReadDocRenderer({ toolName: _toolName, input, output, state }: R
       icon={<FileText className="h-3.5 w-3.5" />}
       summary={
         <span className="font-mono text-muted-foreground text-xs truncate max-w-xs">
-          {fileName}
+          {label}
         </span>
       }
       state={state}

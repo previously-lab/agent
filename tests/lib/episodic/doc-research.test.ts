@@ -71,7 +71,7 @@ const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
 const AGENT_MD = "memory/episodic/slices/2026/08/09/1300/timeline/agent.md";
 const EXCERPT = { focus: "f", summary: "s", turnsExcerpt: "用户: 深查一下手机话题" };
-const STRANDS = { 用户手机: ["2026/08/09/1300"] };
+const MANIFEST = { truncated: false, tree: { research: ["research/已有调研/index.md"] } };
 
 function seedQuestions() {
   io.files.set(
@@ -85,13 +85,13 @@ beforeEach(() => {
   io.files.clear();
 });
 
-describe("runDocResearchPass", () => {
+describe("runDocResearchPass — case model", () => {
   it("is question-driven: no agent.md, no pass, no LLM", async () => {
     const result = await runDocResearchPass({
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: STRANDS,
+      manifest: MANIFEST,
       date: DATE,
     });
     expect(result.ran).toBe(false);
@@ -107,13 +107,14 @@ describe("runDocResearchPass", () => {
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: STRANDS,
+      manifest: MANIFEST,
       date: DATE,
     });
     expect(result.ran).toBe(false);
+    expect(ai.streamText).not.toHaveBeenCalled();
   });
 
-  it("writes a research doc with the evidence stamp, a 名录 entry, and a processed record", async () => {
+  it("opens a research case with the evidence stamp + a processed record", async () => {
     seedQuestions();
     ai.streamText.mockResolvedValue(
       streamWith([
@@ -122,13 +123,10 @@ describe("runDocResearchPass", () => {
           input: {
             writes: [
               {
-                kind: "research",
-                mode: "open",
-                title: "手机话题演变调研",
-                entryTitle: "开篇",
+                action: "open",
+                category: "research",
+                caseName: "手机话题演变调研",
                 body: "问题：手机话题这一年怎么演变的。缘起：用户 8 月 9 日提问。",
-                asOf: "调查开始。",
-                topics: ["用户手机"],
               },
             ],
             reasoning: "记录足够开一篇。",
@@ -140,59 +138,24 @@ describe("runDocResearchPass", () => {
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: STRANDS,
+      manifest: MANIFEST,
       date: DATE,
     });
-    expect(result.written).toEqual([`${DATE}-手机话题演变调研.md`]);
-    const doc = io.files.get(`memory/docs/research/${DATE}-手机话题演变调研.md`)!;
-    expect(doc).toContain("问题：手机话题这一年怎么演变的");
-    expect(doc).toContain(`（证据切片：${SLICE_ID}）`);
-    const home = io.files.get("memory/docs/topic/用户手机.md")!;
-    expect(home).toContain(`《${DATE}-手机话题演变调研》开设。`);
-    expect(io.files.get(AGENT_MD)).toContain(`${RESEARCH_RECORD_PREFIX} {"id":"q-1"`);
-    // read-before-write: the named topic's home state was IN the prompt.
-    const prompt = String(ai.streamText.mock.calls[0][0].prompt);
-    expect(prompt).toContain("主题之家 用户手机");
-  });
-
-  it("refuses a hypothesis without a falsification condition", async () => {
-    seedQuestions();
-    ai.streamText.mockResolvedValue(
-      streamWith([
-        {
-          toolName: "docResearchOutput",
-          input: {
-            writes: [
-              {
-                kind: "hypothesis",
-                mode: "open",
-                title: "用户会在双十二换机",
-                entryTitle: "开篇",
-                body: "猜测：用户会在双十二换机。",
-                topics: [],
-              },
-            ],
-            reasoning: "",
-          },
-        },
-      ]),
-    );
-    const result = await runDocResearchPass({
-      model,
-      sliceId: SLICE_ID,
-      excerpt: EXCERPT,
-      strands: STRANDS,
-      date: DATE,
-    });
-    expect(result.written).toEqual([]);
-    expect(result.skipped[0].reason).toContain("falsification");
-    expect(io.files.has(`memory/docs/hypothesis/${DATE}-用户会在双十二换机.md`)).toBe(false);
-    // the question is still recorded as seen (single-shot per boundary)
+    expect(result.ran).toBe(true);
+    expect(result.written).toEqual(["research/手机话题演变调研/index.md"]);
+    const raw = io.files.get("memory/research/手机话题演变调研/index.md")!;
+    expect(raw).toContain("opened: '2026-08-09'");
+    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    // The question is recorded as processed — never re-seen.
     expect(io.files.get(AGENT_MD)).toContain(RESEARCH_RECORD_PREFIX);
   });
 
-  it("cannot append to a document that does not exist", async () => {
+  it("updates an existing living case via rewriteIndex", async () => {
     seedQuestions();
+    io.files.set(
+      "memory/research/已有调研/index.md",
+      "---\nopened: 2026-08-01\n---\n\n旧进展。\n",
+    );
     ai.streamText.mockResolvedValue(
       streamWith([
         {
@@ -200,15 +163,13 @@ describe("runDocResearchPass", () => {
           input: {
             writes: [
               {
-                kind: "research",
-                mode: "append",
-                target: "2026-01-01-幽灵文档.md",
-                entryTitle: "更新",
-                body: "新发现。",
-                topics: [],
+                action: "updateIndex",
+                category: "research",
+                caseName: "已有调研",
+                body: "旧进展 + 这次深挖的新发现。",
               },
             ],
-            reasoning: "",
+            reasoning: "r",
           },
         },
       ]),
@@ -217,30 +178,124 @@ describe("runDocResearchPass", () => {
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: STRANDS,
+      manifest: MANIFEST,
       date: DATE,
     });
-    expect(result.written).toEqual([]);
-    expect(result.skipped[0].reason).toContain("missing document");
+    expect(result.written).toEqual(["research/已有调研/index.md"]);
+    const raw = io.files.get("memory/research/已有调研/index.md")!;
+    expect(raw).toContain("旧进展 + 这次深挖的新发现。");
+    expect(raw).not.toContain("status:");
   });
 
-  it("does not rerun a question that already has a record", async () => {
-    io.files.set(
-      AGENT_MD,
-      [
-        `${DOC_MARKER_PREFIX} {"v":1,"id":"q-1","kind":"question","title":"x","note":"","topics":[]}`,
-        `${RESEARCH_RECORD_PREFIX} {"id":"q-1","docs":[]}`,
-        "",
-      ].join("\n"),
+  it("REFUSES a hypothesis without a falsification condition (§B.6)", async () => {
+    seedQuestions();
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "docResearchOutput",
+          input: {
+            writes: [
+              {
+                action: "open",
+                category: "hypotheses",
+                caseName: "用户偏好小屏",
+                body: "用户可能偏好小屏手机。",
+              },
+              {
+                action: "open",
+                category: "hypotheses",
+                caseName: "用户偏好小屏-有证伪",
+                body: "猜测：用户偏好小屏手机。证伪条件：用户下次主动选择 6.7 寸以上机型。",
+              },
+            ],
+            reasoning: "r",
+          },
+        },
+      ]),
     );
     const result = await runDocResearchPass({
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: STRANDS,
+      manifest: MANIFEST,
       date: DATE,
     });
-    expect(result.ran).toBe(false);
-    expect(ai.streamText).not.toHaveBeenCalled();
+    expect(result.written).toEqual(["hypotheses/用户偏好小屏-有证伪/index.md"]);
+    expect(result.skipped.map((s) => s.reason).join(" ")).toContain("falsification");
+    expect(io.files.has("memory/hypotheses/用户偏好小屏/index.md")).toBe(false);
+  });
+
+  it("the question run may only OPEN research/ or hypotheses/ cases", async () => {
+    seedQuestions();
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "docResearchOutput",
+          input: {
+            writes: [
+              { action: "open", category: "things", caseName: "新物品", body: "x" },
+            ],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
+    const result = await runDocResearchPass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("research/ or hypotheses/");
+  });
+
+  it("a write on a missing case degrades to a visible skip, never throws", async () => {
+    seedQuestions();
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "docResearchOutput",
+          input: {
+            writes: [
+              { action: "appendTail", category: "research", caseName: "不存在", line: "x" },
+            ],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
+    const result = await runDocResearchPass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("does not exist");
+  });
+
+  it("questions are recorded even when the pass writes nothing (thin record)", async () => {
+    seedQuestions();
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "docResearchOutput",
+          input: { writes: [], reasoning: "记录太薄，先不写。" },
+        },
+      ]),
+    );
+    const result = await runDocResearchPass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.ran).toBe(true);
+    expect(result.written).toEqual([]);
+    expect(io.files.get(AGENT_MD)).toContain(RESEARCH_RECORD_PREFIX);
   });
 });

@@ -3,17 +3,16 @@
  * housekeeping step.
  *
  * One pass, structured outputs (thinking on at low effort, cheap):
- *   1. message_tags   — keyword tags for the current user message (woven into strands).
- *   2. semantic_hint  — which EXISTING strands this message is about, plus why
+ *   1. semantic_hint  — which EXISTING strands this message is about, plus why
  *      (an LLM understands paraphrase / cross-language). v0.9: no longer fed
  *      into the prompt (the per-turn priming block was retired with the
  *      slice-level prompt freeze); kept on the analysis record for
  *      housekeeping decisions and agent.md.
- *   3. closed_marking — focus / summary / refined tags / tone for a slice that is
+ *   2. closed_marking — focus / summary / tone for a slice that is
  *      about to close (only when one closed this turn).
- *   4. evolve_card    — whether the closing slice holds anything worth
+ *   3. evolve_card    — whether the closing slice holds anything worth
  *      sedimenting onto the user card (only when one closed this turn).
- *   5. fitness        — this slice's evidence-anchored satisfaction deltas per
+ *   4. fitness        — this slice's evidence-anchored satisfaction deltas per
  *      bucket (v1.0 design §2.5 — the analyzer SCORES, never aggregates; the
  *      deterministic trigger math lives in src/lib/evolution/triggers.ts).
  *      This slice's mechanical signals (doc_rework, v0.15 §4.4 — legacy
@@ -23,6 +22,10 @@
  *      The scoring RUBRIC is the direction doc's Portrait section (the loop's
  *      learned criteria) when one exists — a turn matching a known failure
  *      pattern scores -1 with evidence even without an explicit complaint.
+ *
+ * v0.19 R2: message tags are GONE (tags/related_slices stopped being written
+ * with the strand projection's retirement) — no message_tags task, no tags in
+ * closed_marking.
  *
  * The model is passed in — since v0.9 it is the turn's MAIN model, run through
  * the shared sub-agent runner (src/lib/agents/sub-agent-runner.ts): thinking
@@ -48,7 +51,6 @@ export interface SemanticHint {
 export interface ClosedMarking {
   focus: string;
   summary: string;
-  tags: string[];
   tone: EmotionalTone | null;
 }
 
@@ -62,12 +64,6 @@ export const INTENT_TYPES = [
   "clarify",
 ] as const;
 export type TurnIntent = (typeof INTENT_TYPES)[number];
-
-export interface NewTagProposal {
-  tag: string;
-  /** Why none of the existing topics covers this. */
-  reason: string;
-}
 
 /** Best-fit card section for an explicit memory update (v5 card sections). */
 export const CARD_SECTIONS = ["identity", "past", "now", "horizon"] as const;
@@ -89,20 +85,12 @@ export interface FitnessDelta {
 }
 
 export interface TurnAnalysis {
-  /**
-   * Merge-first tags: `reuse` are existing strand names picked verbatim from
-   * the provided list; `create` are genuinely new durable topics (with a
-   * reason). The engineering layer folds `create` into existing strands via
-   * normalized-match before ever minting a new key.
-   */
-  messageTags: { reuse: string[]; create: NewTagProposal[] };
   semanticHint: SemanticHint;
   /** The user's intent — what they're trying to do this turn. */
   intent?: { type: TurnIntent; reason: string };
   /**
    * Whether this turn holds durable information worth persisting. False for
-   * trivial turns (greetings / "继续" / thanks) — the engineering layer then
-   * skips tag extraction and strand writes.
+   * trivial turns (greetings / "继续" / thanks).
    */
   memoryWorthy: boolean;
   /**
@@ -142,8 +130,8 @@ export interface AnalyzeTurnInput {
   model: ModelConfig;
   userMessage: string;
   existingStrandNames: string[];
-  /** Present only when a slice is about to close this turn — enables Task 3. */
-  closingSlice?: { turns: Turn[]; tags: string[] };
+  /** Present only when a slice is about to close this turn — enables Task 5. */
+  closingSlice?: { turns: Turn[] };
   /**
    * This slice's mechanical fitness signals (v0.15 §4.4 — doc_rework: a read
    * document's cited slice was re-opened with readSlice, i.e. the document
@@ -164,34 +152,6 @@ export interface AnalyzeTurnInput {
 }
 
 const analyzeSchema = z.object({
-  message_tags: z
-    .object({
-      reuse: z
-        .array(z.string())
-        .max(5)
-        .describe(
-          "Existing topic names (from the provided list) this message relates to, " +
-          "picked verbatim. Prefer reuse over create — merge, don't invent.",
-        ),
-      create: z
-        .array(
-          z.object({
-            tag: z
-              .string()
-              .describe(
-                "A NEW durable/general topic (e.g. work area, life area, project, company, " +
-                "financing, health, an emotional thread) ONLY when no existing topic " +
-                "covers this message. Never an ephemeral one-off event.",
-              ),
-            reason: z
-              .string()
-              .describe("One line: why none of the existing topics covers this."),
-          }),
-        )
-        .max(3)
-        .describe("Genuinely new topics only; empty when reuse suffices."),
-    })
-    .describe("Merge-first tags for the current message: reuse existing topics, create only when needed."),
   semantic_hint: z.object({
     strands: z
       .array(z.string())
@@ -206,8 +166,7 @@ const analyzeSchema = z.object({
   memory_worthy: z.boolean().describe(
     "Whether this turn contains durable, persistable information (a new fact about the user, " +
     "a preference, a correction, or a substantive exchange). Trivial turns — greetings, " +
-    "acknowledgments, 'continue', 'ok', thanks, small talk — are false. Controls whether tags " +
-    "are extracted and memory evolves.",
+    "acknowledgments, 'continue', 'ok', thanks, small talk — are false.",
   ),
   memory_update: z
     .object({
@@ -278,7 +237,6 @@ const analyzeSchema = z.object({
     .object({
       focus: z.string().describe("One sentence: what this session was about."),
       summary: z.string().describe("At most 100 characters: what happened / key decisions."),
-      tags: z.array(z.string()).max(6).describe("2-6 clean tags, deduped, cross-language merged."),
       tone: z.enum(["positive", "neutral", "negative", "mixed"]).describe("Emotional tone of the session."),
     })
     .optional()
@@ -315,13 +273,13 @@ const analyzeSchema = z.object({
     .transform((a) => a.slice(0, 5))
     .optional()
     .describe(
-      "Fitness scoring (Task 7): what THIS slice's user messages signal — explicitly, or " +
+      "Fitness scoring (Task 6): what THIS slice's user messages signal — explicitly, or " +
       "(for -1) by matching a known failure pattern in the portrait rubric. Nothing signaled " +
       "→ emit NO entry (an absent fitness field, not a 0-delta list).",
     ),
 });
 
-/** Compress a closing slice's turns for Task 3 — first turn + last 10, chars capped. */
+/** Compress a closing slice's turns for Task 5 — first turn + last 10, chars capped. */
 function compressSliceTurns(turns: Turn[]): string {
   if (turns.length === 0) return "(empty slice)";
   const pick = turns.length <= 11 ? turns : [turns[0], ...turns.slice(-10)];
@@ -336,35 +294,27 @@ function compressSliceTurns(turns: Turn[]): string {
  * between calls, so provider prefix caches hit on every analysis. All dynamic
  * content (message, existing topics, closing slice) goes into the user prompt.
  */
-const ANALYZER_SYSTEM = buildSubAgentSystem(`You are the memory analyzer for a personal AI platform. One pass, seven tasks (Task 6 ONLY when the user message includes a closing slice). Keep every field short — this is metadata, not prose.
+const ANALYZER_SYSTEM = buildSubAgentSystem(`You are the memory analyzer for a personal AI platform. One pass, six tasks (Task 5 ONLY when the user message includes a closing slice). Keep every field short — this is metadata, not prose.
 
-## Task 1 — Tag the current message
-
-Return message_tags with TWO parts:
-- reuse: existing topic names from the provided list that this message relates to. Pick VERBATIM from the list. Prefer reuse over create — the same concept must never gain a second name.
-- create: a NEW durable/general topic ONLY when no existing topic covers this message. Durable = a work/life area, a project, a company, financing, health, a recurring emotional thread. NEVER an ephemeral one-off event ("dreamt", "hungover", "today's errand"). Max 3, each with a one-line reason.
-
-Merge-first rule: reuse > create. If in doubt, reuse an existing topic rather than minting a new one.
-
-## Task 2 — Semantic hint for the agent
+## Task 1 — Semantic hint for the agent
 
 Which of the EXISTING topics listed in the user message is this message most likely about? The agent uses this to decide which past slices to recall. Only list topics that are genuinely related; empty if none. One-line reason.
 Return semantic_hint: { strands: [...], reason: "..." }
 
-## Task 3 — Classify the user's intent
+## Task 2 — Classify the user's intent
 
 What is the user trying to do? Pick the single best label and give a one-line reason.
 Return intent: { type: "code_debug" | "code_write" | "explain" | "chat" | "review" | "clarify", reason: "..." }
 
-## Task 4 — Judge whether this turn is worth remembering
+## Task 3 — Judge whether this turn is worth remembering
 
 Is this a substantive exchange that should update memory (a new fact about the user, a preference, a correction, or a real discussion)? Or is it trivial — a greeting, acknowledgment, "继续", "ok", thanks, or small talk?
 
-Return memory_worthy: true only when the turn contains durable information worth tagging and evolving. Trivial turns are false.
+Return memory_worthy: true only when the turn contains durable information worth evolving from. Trivial turns are false.
 
 If the user EXPLICITLY asked to record something or run self-evolution ("记住：…", "自进化", "更新前情提要", "record this") — OR stated an explicit BEHAVIORAL CORRECTION / durable preference the agent should evolve from immediately ("以后别…", "下次先…", "你不要总是…", "stop doing X", "from now on always…") — regardless of memory_worthy — ALSO return memory_update with the exact content (English) + the best-fit card section. Omit memory_update otherwise.
 
-## Task 5 — Read the emotional register
+## Task 4 — Read the emotional register
 
 What is the user's emotional state in this message, if any? The agent reads this to know when to lead with support or match the user's register instead of staying purely analytical.
 
@@ -373,12 +323,11 @@ Return emotional_signal with:
 - register: neutral | emotional | humorous | frustrated | excited — the dominant register; humorous covers joking / playful / sarcastic. Omit or "neutral" when none.
 - note: one short line on what the user is feeling and why (empty when neutral).
 
-## Task 6 — Mark the closed slice (ONLY when the user message includes one)
+## Task 5 — Mark the closed slice (ONLY when the user message includes one)
 
 When a time slice just closed, summarize it so future recall can understand it at a glance. Return closed_marking with:
 - focus: one sentence on what this session was about
 - summary: at most 100 characters — what happened / key decisions
-- tags: 2-6 clean tags (dedupe, merge the same concept across languages)
 - tone: positive | neutral | negative | mixed
 
 ALSO return evolve_card — your judgment on whether anything in this closing slice deserves sedimentation onto the user card:
@@ -387,7 +336,7 @@ ALSO return evolve_card — your judgment on whether anything in this closing sl
 - reason: one line on what deserves sedimentation, or why nothing does
 When in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss.
 
-## Task 7 — Score fitness signals (the portrait is your rubric)
+## Task 6 — Score fitness signals (the portrait is your rubric)
 
 Score the user's satisfaction/dissatisfaction signals in THIS slice, attributed to a bucket. This is the evolution loop's selection pressure — another agent aggregates your deltas; you only report single, evidence-anchored observations.
 
@@ -408,23 +357,21 @@ function buildPrompt(input: AnalyzeTurnInput): string {
   const closingSection = input.closingSlice
     ? `
 
-## Closing slice — also run Task 6
+## Closing slice — also run Task 5
 
 A time slice just closed.
 
 Conversation (first turn + last turns):
 ${compressSliceTurns(input.closingSlice.turns)}
 
-Existing tags on this slice: ${input.closingSlice.tags.join(", ") || "(none)"}
-
-Return closed_marking AND evolve_card per your Task 6 instructions.`
+Return closed_marking AND evolve_card per your Task 5 instructions.`
     : "";
 
   const signalsSection =
     input.signals && input.signals.length > 0
       ? `
 
-## Mechanical signals this slice (Task 7 input)
+## Mechanical signals this slice (Task 6 input)
 
 Instrumentation recorded these this slice (document-credit tracking):
 
@@ -436,7 +383,7 @@ Each doc_rework is a -1 CANDIDATE for the recall bucket; each interaction_regene
   const portraitSection = input.portrait?.trim()
     ? `
 
-## Scoring rubric — the evolved user portrait (Task 7 input)
+## Scoring rubric — the evolved user portrait (Task 6 input)
 
 ${input.portrait!.trim()}
 
@@ -445,7 +392,7 @@ This is the loop's learned rubric: a turn matching a known failure pattern here 
 
   return `Message: "${input.userMessage.slice(0, 1000)}"
 
-Existing topics (pick from these FIRST — they are the durable memory index): ${existing}${closingSection}${signalsSection}${portraitSection}`;
+Existing topics (for the semantic hint): ${existing}${closingSection}${signalsSection}${portraitSection}`;
 }
 
 /**
@@ -461,10 +408,9 @@ export function shouldRunCardEvolution(
 }
 
 const EMPTY_BASE: TurnAnalysis = {
-  messageTags: { reuse: [], create: [] },
   semanticHint: { strands: [], reason: "" },
-  // Conservative on failure: don't block tag extraction (empty tags are a
-  // no-op anyway), so an analyzer outage never silently freezes memory writes.
+  // Conservative on failure: memoryWorthy stays true so an analyzer outage
+  // never silently freezes memory writes.
   memoryWorthy: true,
   emotionalSignal: { intensity: "none", register: "neutral", note: "" },
 };
@@ -510,13 +456,6 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
 
   const d = result.report;
   return {
-      messageTags: {
-        reuse: d.message_tags.reuse.slice(0, 5),
-        create: d.message_tags.create
-          .slice(0, 3)
-          .filter((c) => typeof c.tag === "string" && c.tag.trim().length > 0)
-          .map((c) => ({ tag: c.tag, reason: c.reason })),
-      },
       semanticHint: {
         strands: d.semantic_hint.strands
           .slice(0, 5)
@@ -556,7 +495,6 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
         ? {
             focus: typeof d.closed_marking.focus === "string" ? d.closed_marking.focus.trim() : "",
             summary: typeof d.closed_marking.summary === "string" ? d.closed_marking.summary.trim() : "",
-            tags: d.closed_marking.tags.slice(0, 6),
             tone: ["positive", "neutral", "negative", "mixed"].includes(d.closed_marking.tone)
               ? (d.closed_marking.tone as EmotionalTone)
               : null,

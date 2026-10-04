@@ -51,8 +51,12 @@ export interface SliceFrontmatter {
   slice_id: string;
   /** Core topic, one sentence */
   focus: string;
-  /** Current lifecycle status */
-  status: SliceStatus;
+  /**
+   * @deprecated v0.19 R2: never written anymore — status is DERIVED from
+   * `closed_by` (present → closed, absent → active). Tolerated on read for
+   * legacy slices; never rewritten onto a frozen slice.
+   */
+  status?: SliceStatus;
   /** Start time in UTC ISO 8601 */
   start: string;
   /** End time in UTC ISO 8601 (set when closed) */
@@ -65,10 +69,16 @@ export interface SliceFrontmatter {
   open_loops: string[];
   /** Decisions made during this slice */
   decisions: string[];
-  /** Semantic tags */
-  tags: string[];
-  /** Paths of related slices, e.g. ["2026/06/22"] */
-  related_slices: string[];
+  /**
+   * @deprecated v0.19 R2: stopped being written (tags die with the strand
+   * projection). Tolerated on read for legacy slices.
+   */
+  tags?: string[];
+  /**
+   * @deprecated v0.19 R2: stopped being written. Tolerated on read for
+   * legacy slices.
+   */
+  related_slices?: string[];
   /** loop run ids spawned from this slice */
   loops: string[];
   /** Emotional tone assessed by Flash on freeze */

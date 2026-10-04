@@ -5,7 +5,7 @@
  * (another turn or process committed to the branch first), the queued slice
  * file was computed from a STALE base. Turns are append-only, so the merge is
  * mechanical: re-parse the remote core.md, append every local turn the remote
- * is missing (keyed by turnId), union the tag/loop pointers, and re-serialize.
+ * is missing (keyed by turnId), union the loop pointers, and re-serialize.
  * The caller swaps the merged content into the batch and retries the commit.
  *
  * Pure module — no I/O — so it is unit-testable and safe to import anywhere.
@@ -27,8 +27,8 @@ function turnKey(turn: Turn): string {
 /**
  * Merge `local`'s turns into the remote slice body. Returns the re-serialized
  * slice. The REMOTE frontmatter wins (it may carry state — close marking,
- * status — written after our snapshot was computed); only turns, tags and
- * loop pointers are unioned in.
+ * closed_by — written after our snapshot was computed); only turns and loop
+ * pointers are unioned in (tags are no longer persisted, v0.19 R2).
  */
 export function mergeTurnsWithRemote(
   remoteRaw: string,
@@ -44,9 +44,6 @@ export function mergeTurnsWithRemote(
     remote.turns.push(turn);
   }
 
-  for (const tag of local.tags) {
-    if (!remote.tags.includes(tag)) remote.tags.push(tag);
-  }
   for (const loopId of local.loops) {
     if (!remote.loops.includes(loopId)) remote.loops.push(loopId);
   }

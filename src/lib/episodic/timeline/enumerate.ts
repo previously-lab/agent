@@ -14,19 +14,29 @@ import { getRepoConfig } from "@/lib/capabilities";
 import { getDefaultBranch } from "@/lib/tools/batch-write";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { fsListFiles } from "../io-helpers";
-
-const SLICES_ROOT = "memory/episodic/slices";
+import { RECORDS_ROOT, LEGACY_SLICES_ROOT } from "../paths";
 
 /** A slice relative path segment: "2026/08/11/1115". */
 export const SLICE_PATH_RE = /^(\d{4})\/(\d{2})\/(\d{2})\/(\d{4})$/;
 
-/** Enumerate all slice dirs under the whitelisted root. */
+/**
+ * Enumerate all slice dirs under BOTH roots (v0.19 R2 dual-root): the new
+ * records root and the legacy slices root, merged and deduped — the truth
+ * the projection is reconciled against spans the root move.
+ */
 export async function enumerateSliceIds(): Promise<string[]> {
-  if (resolveDataSource() === "github") return enumerateGithubTree();
-  return enumerateViaList();
+  const ids = new Set<string>();
+  for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT]) {
+    const list =
+      resolveDataSource() === "github"
+        ? await enumerateGithubTree(root)
+        : await enumerateViaList(root);
+    for (const id of list) ids.add(id);
+  }
+  return [...ids];
 }
 
-async function enumerateGithubTree(): Promise<string[]> {
+async function enumerateGithubTree(root: string): Promise<string[]> {
   const { owner, repo } = getRepoConfig();
   const octokit = getOctokit();
   // The repo's default branch, not a hardcoded "main" (see batch-write.ts).
@@ -44,7 +54,7 @@ async function enumerateGithubTree(): Promise<string[]> {
   });
 
   const ids: string[] = [];
-  const prefix = `${SLICES_ROOT}/`;
+  const prefix = `${root}/`;
   for (const item of tree.tree ?? []) {
     if (item.type !== "tree") continue;
     const p = item.path ?? "";
@@ -66,18 +76,18 @@ async function safeList(path: string): Promise<
   }
 }
 
-async function enumerateViaList(): Promise<string[]> {
+async function enumerateViaList(root: string): Promise<string[]> {
   const ids: string[] = [];
   const isYear = (n: string) => /^\d{4}$/.test(n);
   const isPair = (n: string) => /^\d{2}$/.test(n);
 
-  const years = await safeList(SLICES_ROOT);
+  const years = await safeList(root);
   for (const y of years.filter((e) => e.type === "dir" && isYear(e.name))) {
-    const months = await safeList(`${SLICES_ROOT}/${y.name}`);
+    const months = await safeList(`${root}/${y.name}`);
     for (const mo of months.filter((e) => e.type === "dir" && isPair(e.name))) {
-      const days = await safeList(`${SLICES_ROOT}/${y.name}/${mo.name}`);
+      const days = await safeList(`${root}/${y.name}/${mo.name}`);
       for (const d of days.filter((e) => e.type === "dir" && isPair(e.name))) {
-        const slices = await safeList(`${SLICES_ROOT}/${y.name}/${mo.name}/${d.name}`);
+        const slices = await safeList(`${root}/${y.name}/${mo.name}/${d.name}`);
         for (const s of slices.filter((e) => e.type === "dir" && /^\d{4}$/.test(e.name))) {
           ids.push(`${y.name}/${mo.name}/${d.name}/${s.name}`);
         }

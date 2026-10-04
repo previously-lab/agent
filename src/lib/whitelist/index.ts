@@ -189,6 +189,7 @@ export function getAllowedPaths(): readonly string[] {
  */
 const PROTECTED_WRITE_PATTERNS: RegExp[] = [
   /^memory\/episodic\//, // system-owned slices + indexes
+  /^memory\/records\//, // v0.19 R2: system-owned records (the moved slices root)
   /(^|\/)_index\.json$/, // any monthly/day index
   /(^|\/)strands\.json$/, // the strand (keyword→slice) index
 ];

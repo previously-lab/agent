@@ -23,6 +23,33 @@
  * adjusted in Settings without a redeploy — this module has NO defaults of
  * its own (the old 15-minute idle-gap constant lived here and is gone).
  */
+import type { SlicingSignal } from "./types";
+
+/**
+ * Close-cause classification (v0.19 §B.5) — the single table that says whether
+ * a `closed_by` cause is a CHECKPOINT (the same conversation, autosaved: the
+ * follow-up slice carries `continues_from` + the frozen tail prefix) or a
+ * BOUNDARY (a genuinely new conversation). Covers all six SlicingSignal
+ * values; the class is DERIVED from `closed_by` here, never stored as its own
+ * field.
+ */
+export const SLICE_CLOSE_CLASS: Record<SlicingSignal, "checkpoint" | "boundary"> = {
+  time_cap: "checkpoint",
+  capacity: "checkpoint",
+  idle_gap: "boundary",
+  user_explicit: "boundary",
+  time_silence: "boundary",
+  context_lost: "boundary",
+};
+
+export type SliceCloseClass = (typeof SLICE_CLOSE_CLASS)[SlicingSignal];
+
+/** The close class of a cause; undefined for a slice that never closed. */
+export function sliceCloseClass(
+  cause: SlicingSignal | undefined,
+): SliceCloseClass | undefined {
+  return cause === undefined ? undefined : SLICE_CLOSE_CLASS[cause];
+}
 
 /**
  * Check whether the slice has been open long enough (wall-clock time since

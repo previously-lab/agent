@@ -92,14 +92,18 @@
         "title": "Memory shelf",
         "byTopic": "By topic",
         "byKind": "By type",
+        "byCategory": "By category",
         "topicsEmpty": "No topic homes yet — they appear here as the document system grows.",
         "docsEmpty": "No documents in this type yet.",
+        "casesEmpty": "No cases under this category yet.",
         "catalogEmpty": "No documents are catalogued under this topic yet.",
         "loading": "Loading…",
         "loadError": "The shelf couldn't be opened.",
         "back": "Back to shelf",
         "openedAt": "Opened {date}",
         "updatedAt": "Updated {date}",
+        "closedAt": "Closed {date}",
+        "writing": "Open",
         "status": {
           "active": "Active",
           "closed": "Closed",
@@ -115,6 +119,17 @@
           "hypothesis": "Hypotheses",
           "task": "Tasks",
           "topic": "Topics"
+        },
+        "category": {
+          "people": "People",
+          "events": "Events",
+          "things": "Things",
+          "places": "Places",
+          "orgs": "Organizations",
+          "research": "Research",
+          "hypotheses": "Hypotheses",
+          "tasks": "Tasks",
+          "self": "Self"
         }
       }
     },
@@ -159,6 +174,9 @@
       "listDocsDone": "Listed {kind} · {count} documents",
       "readDocRunning": "Reading “{name}”…",
       "readDocDone": "Read “{name}”",
+      "listTreeRunning": "Listing the memory tree…",
+      "listTreeDone": "Listed the memory tree · {count} paths",
+      "listTreeTruncated": "The listing may be incomplete (GitHub tree limit).",
       "sources": "{count} sources",
       "thinkDeep": "Reasoning fragment",
       "thinkDeepRunning": "Reasoning about \"{question}\"…",
@@ -186,37 +204,7 @@
       "collapse": "Collapse"
     },
     "evolution": {
-      "reading": "Reading memory...",
-      "reviewing": "Reviewing conversation patterns...",
-      "evolving": "Self-evolving…",
-      "failed": "Evolution failed: {error}",
-      "noChanges": "Checked, no updates needed",
-      "evolved": "Evolved: {summary}",
-      "noChangesMeta": "—",
-      "added": "+{count} added",
-      "reinforced": "↑{count} reinforced",
-      "demoted": "↓{count} demoted",
-      "removed": "✕{count} removed",
-      "superseded": "↻{count} superseded",
-      "previouslyOn": "Previously On",
-      "clickToView": "Click to view",
-      "thoughts": "Thoughts",
-      "applied": "Applying update...",
-      "partial": "(partial update)",
-      "triggerNet": "{bucket} · net score {score}",
-      "direction": "Evaluating the evolution direction...",
-      "directionUnchanged": "Direction: unchanged",
-      "directionUpdated": "Direction: {summary}",
-      "directionFailed": "Direction: evaluation failed ({reason})",
-      "directionRejected": "Direction: proposal rejected ({reason})",
-      "playbookUpdated": "{agent} playbook updated: {summary}",
-      "buckets": {
-        "card": "Card",
-        "recall": "Recall",
-        "search": "Search",
-        "thinkdeep": "Thinking",
-        "interaction": "Interaction"
-      }
+      "thoughts": "Thoughts"
     },
     "phase": {
       "thinking": "Thinking…",
@@ -500,8 +488,7 @@
     "subtitleRecalling": "(recalling…)",
     "subtitleReading": "(reading {count} memories…)",
     "subtitleReplying": "(replying…)",
-    "subtitleHousekeeping": "(tidying up…)",
-    "subtitleEvolving": "(evolving…)"
+    "subtitleHousekeeping": "(tidying up…)"
   },
   "game": {
     "title": "The Hotel",

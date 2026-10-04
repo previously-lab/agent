@@ -81,15 +81,6 @@ describe("computeTimelineLayout — time → Y (vertical, Rev 2)", () => {
     expect(layout.nowY).toBe(-NOW_GAP);
   });
 
-  it("carries catalog tags onto the node (T1 chip capsule data, Rev 3)", () => {
-    const { nodes } = computeTimelineLayout([
-      entry({ id: "2026-08-01-1000", tags: ["rust", "memory"] }),
-      entry({ id: "2026-08-02-1000" }),
-    ]);
-    expect(nodes[0].tags).toEqual(["rust", "memory"]);
-    expect(nodes[1].tags).toEqual([]);
-  });
-
   it("carries the card data (turns / tone / loops / decisions / end, Rev 4)", () => {
     const { nodes } = computeTimelineLayout([
       entry({

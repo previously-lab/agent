@@ -61,7 +61,6 @@ const model: ModelConfig = {
 };
 
 const ANALYSIS: TurnAnalysis = {
-  messageTags: { reuse: [], create: [] },
   semanticHint: { strands: [], reason: "" },
   memoryWorthy: true,
   emotionalSignal: { intensity: "none", register: "neutral", note: "" },

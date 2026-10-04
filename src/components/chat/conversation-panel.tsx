@@ -213,6 +213,9 @@ export function ConversationPanel({
 
   // The caption block's translated label — one discrete activity, never the
   // reply's words (the contract is the reducer's, `lib/chat/subtitle-line.ts`).
+  // housekeeping is the terminal fallback: the only remaining activity kind
+  // after the chain (evolution retired from the conversation side in M3 —
+  // its frames light the companion pod via the bus instead).
   const subtitleLabel = subtitleLine
     ? subtitleLine.activity === "thinking"
       ? t("subtitleThinking")
@@ -224,9 +227,7 @@ export function ConversationPanel({
             ? t("subtitleReading", { count: subtitleLine.count })
             : subtitleLine.activity === "replying"
               ? t("subtitleReplying")
-              : subtitleLine.activity === "housekeeping"
-                ? t("subtitleHousekeeping")
-                : t("subtitleEvolving")
+              : t("subtitleHousekeeping")
     : null;
 
   return (

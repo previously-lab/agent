@@ -1,22 +1,25 @@
 /**
- * v0.10 server actions — catalog-derived pagination (getSlicePageWithContent)
- * and the arrival gate (getArrivalState).
+ * v0.19 R3b server actions — live-enumeration pagination
+ * (getSlicePageWithContent / getTimelineCatalogPage), the jump window, and
+ * the arrival gate (getArrivalState).
  *
- * The data layer is mocked at the module boundary: readTimelineIndex (catalog),
- * loadSlice (slice bodies), loadUserConfig (slicing knobs).
+ * The data layer is mocked at the module boundary: enumerateSliceIds (the
+ * live tree enumeration — one call, zero reads), sliceEntryFromDisk (header
+ * point reads), loadSlice (slice bodies), loadUserConfig (slicing knobs).
+ * There is no catalog projection anymore (§A.2.4).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import type { TimeSlice, Turn } from "@/lib/episodic/types";
 
 const mocks = vi.hoisted(() => ({
-  readTimelineIndex: vi.fn(),
+  enumerateSliceIds: vi.fn(),
+  sliceEntryFromDisk: vi.fn(),
   loadSlice: vi.fn(),
   loadUserConfig: vi.fn(),
   setDemoPersona: vi.fn(),
-  readSliceBody: vi.fn(),
+  readSlicePart: vi.fn(),
   parseSlice: vi.fn(),
-  sliceIdToFilePath: vi.fn(),
   readPreviously: vi.fn(),
 }));
 
@@ -26,18 +29,26 @@ vi.mock("@/lib/demo/demo-fs", () => ({
   setDemoPersona: mocks.setDemoPersona,
 }));
 
+vi.mock("@/lib/episodic/timeline/enumerate", () => ({
+  enumerateSliceIds: mocks.enumerateSliceIds,
+}));
+
 vi.mock("@/lib/episodic/timeline/store", () => ({
-  readTimelineIndex: mocks.readTimelineIndex,
+  sliceEntryFromDisk: mocks.sliceEntryFromDisk,
 }));
 
 vi.mock("@/lib/episodic/manager", () => ({
-  readSliceIndex: vi.fn(),
-  readSliceBody: mocks.readSliceBody,
   parseSlice: mocks.parseSlice,
-  sliceIdToFilePath: mocks.sliceIdToFilePath,
   readPreviously: mocks.readPreviously,
   readAgentTimeline: vi.fn(),
   loadSlice: mocks.loadSlice,
+  readStrands: vi.fn(async () => ({})),
+}));
+
+vi.mock("@/lib/episodic/paths", () => ({
+  readSlicePart: mocks.readSlicePart,
+  // Faithful to the real converter: "2026-08-11-1001" → "2026/08/11/1001".
+  sliceIdToRelPath: (id: string) => id.split("-").slice(0, 4).join("/"),
 }));
 
 vi.mock("@/lib/config/loader", () => ({
@@ -51,6 +62,7 @@ import {
   getSliceContent,
   getArrivalState,
   getStrandList,
+  getTimelineCatalogPage,
 } from "@/lib/episodic/actions";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────
@@ -58,7 +70,10 @@ import {
 let seq = 0;
 function makeEntry(overrides: Partial<TimelineSliceEntry> = {}): TimelineSliceEntry {
   seq += 1;
-  const hh = String(seq).padStart(2, "0");
+  // Fixed-width minute part: the live enumeration SORTS ids (unlike the old
+  // catalog's insertion order), so lexicographic order must equal seeding
+  // order even past seq 100 (the jump-window cap test seeds 600).
+  const hh = String(seq).padStart(3, "0");
   const id = `2026-08-11-10${hh}`;
   return {
     id,
@@ -101,16 +116,23 @@ function makeSlice(entry: TimelineSliceEntry, turns: Turn[]): TimeSlice {
   };
 }
 
-/** Seed a catalog (oldest → newest) whose slice files all load with 2 turns. */
-function seedCatalog(count: number): TimelineSliceEntry[] {
+/** "2026-08-11-1001" → "2026/08/11/1001" (the enumeration's path form). */
+function relOf(id: string): string {
+  return id.split("-").slice(0, 4).join("/");
+}
+
+/**
+ * Seed the live tree (oldest → newest): the enumeration lists every slice's
+ * rel path, the header point read answers from the same table, and every
+ * slice file loads with 2 turns.
+ */
+function seedLive(count: number): TimelineSliceEntry[] {
   const entries = Array.from({ length: count }, () => makeEntry());
-  mocks.readTimelineIndex.mockResolvedValue({
-    _schema: 1,
-    updated_at: "2026-08-12T00:00:00.000Z",
-    slice_count: entries.length,
-    needs_marking: 0,
-    slices: entries,
-  });
+  const byRel = new Map(entries.map((e) => [relOf(e.id), e]));
+  mocks.enumerateSliceIds.mockResolvedValue(entries.map((e) => relOf(e.id)));
+  mocks.sliceEntryFromDisk.mockImplementation(
+    async (rel: string) => byRel.get(rel) ?? null,
+  );
   mocks.loadSlice.mockImplementation(async (id: string) => {
     const entry = entries.find((e) => e.id === id);
     if (!entry) return null;
@@ -134,7 +156,7 @@ beforeEach(() => {
 
 describe("getSlicePageWithContent", () => {
   it("returns the newest page oldest→newest with turns filled in, hasMore exact", async () => {
-    const entries = seedCatalog(5);
+    const entries = seedLive(5);
 
     const page = await getSlicePageWithContent(null, 3);
 
@@ -149,11 +171,11 @@ describe("getSlicePageWithContent", () => {
     expect(first.strands).toEqual(["s"]);
   });
 
-  it("pages backwards from the `before` cursor (exclusive) and ends with hasMore false", async () => {
-    const entries = seedCatalog(5);
+  it("pages backwards from the `beforeId` cursor (exclusive) and ends with hasMore false", async () => {
+    const entries = seedLive(5);
     const firstPage = await getSlicePageWithContent(null, 3);
 
-    const secondPage = await getSlicePageWithContent(firstPage.slices[0].start, 3);
+    const secondPage = await getSlicePageWithContent(firstPage.slices[0].id, 3);
 
     expect(secondPage.slices.map((s) => s.id)).toEqual(
       entries.slice(0, 2).map((e) => e.id),
@@ -161,27 +183,47 @@ describe("getSlicePageWithContent", () => {
     expect(secondPage.hasMore).toBe(false);
   });
 
-  it("reports hasMore false when the eligible catalog exactly fills the page", async () => {
-    seedCatalog(3);
+  it("point-reads ONLY the page window — one enumeration, no header reads outside it", async () => {
+    // The §A.2.4 acceptance shape: the slice set comes from one enumeration
+    // call; headers are point-read for the requested window and nothing else.
+    const entries = seedLive(10);
+
+    const page = await getSlicePageWithContent(null, 3);
+
+    expect(mocks.enumerateSliceIds).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.sliceEntryFromDisk.mock.calls.map((c) => c[0]).sort(),
+    ).toEqual(entries.slice(7).map((e) => relOf(e.id)).sort());
+
+    // Date-cursor paging: the next window is cut by the id cursor (the
+    // enumeration's own ordering), and again only its own ids are read.
+    mocks.sliceEntryFromDisk.mockClear();
+    const page2 = await getSlicePageWithContent(page.slices[0].id, 3);
+    expect(page2.slices.map((s) => s.id)).toEqual(
+      entries.slice(4, 7).map((e) => e.id),
+    );
+    expect(page2.hasMore).toBe(true);
+    expect(
+      mocks.sliceEntryFromDisk.mock.calls.map((c) => c[0]).sort(),
+    ).toEqual(entries.slice(4, 7).map((e) => relOf(e.id)).sort());
+  });
+
+  it("reports hasMore false when the eligible set exactly fills the page", async () => {
+    seedLive(3);
     const page = await getSlicePageWithContent(null, 3);
     expect(page.slices).toHaveLength(3);
     expect(page.hasMore).toBe(false);
   });
 
-  it("returns an empty page for an empty / missing catalog", async () => {
-    mocks.readTimelineIndex.mockResolvedValue(null);
+  it("returns an empty page when the enumeration finds no slices", async () => {
+    mocks.enumerateSliceIds.mockResolvedValue([]);
     const page = await getSlicePageWithContent(null, 10);
     expect(page).toEqual({ slices: [], hasMore: false });
-
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 0, needs_marking: 0, slices: [],
-    });
-    const page2 = await getSlicePageWithContent(null, 10);
-    expect(page2).toEqual({ slices: [], hasMore: false });
+    expect(mocks.sliceEntryFromDisk).not.toHaveBeenCalled();
   });
 
-  it("skips phantom catalog entries whose slice file is missing", async () => {
-    const entries = seedCatalog(3);
+  it("skips phantom entries whose slice file is missing", async () => {
+    const entries = seedLive(3);
     mocks.loadSlice.mockImplementation(async (id: string) =>
       id === entries[1].id
         ? null
@@ -196,11 +238,10 @@ describe("getSlicePageWithContent", () => {
     expect(page.hasMore).toBe(false);
   });
 
-  it("carries continuesFrom / closedBy from the catalog entry", async () => {
+  it("carries continuesFrom / closedBy from the point-read header", async () => {
     const entry = makeEntry({ continues_from: "2026-08-11-0958", closed_by: "time_cap" });
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [entry],
-    });
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(entry.id)]);
+    mocks.sliceEntryFromDisk.mockResolvedValue(entry);
     mocks.loadSlice.mockResolvedValue(makeSlice(entry, [makeTurn("x", entry.start)]));
 
     const page = await getSlicePageWithContent(null, 10);
@@ -209,7 +250,7 @@ describe("getSlicePageWithContent", () => {
   });
 
   it("forwards the demo persona (same convention as getSliceContent)", async () => {
-    seedCatalog(1);
+    seedLive(1);
     await getSlicePageWithContent(null, 10, "alice");
     expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
 
@@ -223,7 +264,7 @@ describe("getSlicePageWithContent", () => {
 
 describe("getSliceJumpWindow", () => {
   it("loads the whole missing stretch in one batch — target inclusive, oldest→newest", async () => {
-    const entries = seedCatalog(6);
+    const entries = seedLive(6);
 
     const win = await getSliceJumpWindow(entries[1].id, entries[5].id);
 
@@ -232,12 +273,12 @@ describe("getSliceJumpWindow", () => {
       entries.slice(1, 5).map((e) => e.id),
     );
     expect(win.slices[0].turns).toHaveLength(2);
-    // The catalog still holds entries older than the batch head.
+    // The enumeration still holds slices older than the batch head.
     expect(win.hasMore).toBe(true);
   });
 
-  it("reports hasMore false when the batch reaches the catalog's oldest entry", async () => {
-    const entries = seedCatalog(4);
+  it("reports hasMore false when the batch reaches the oldest enumerated slice", async () => {
+    const entries = seedLive(4);
 
     const win = await getSliceJumpWindow(entries[0].id, entries[3].id);
 
@@ -247,8 +288,8 @@ describe("getSliceJumpWindow", () => {
     expect(win.hasMore).toBe(false);
   });
 
-  it("with a null oldestLoadedId, stretches from the target to the catalog end", async () => {
-    const entries = seedCatalog(5);
+  it("with a null oldestLoadedId, stretches from the target to the enumeration's end", async () => {
+    const entries = seedLive(5);
 
     const win = await getSliceJumpWindow(entries[2].id, null);
 
@@ -264,7 +305,7 @@ describe("getSliceJumpWindow", () => {
     // loop, hasMore stays true. The cap came DOWN from 500 because a batch is
     // full slices with every turn in them, so the cap is a payload bound as
     // much as a request bound; the client's page loop covers the remainder.
-    const entries = seedCatalog(600);
+    const entries = seedLive(600);
 
     const win = await getSliceJumpWindow(entries[0].id, entries[599].id);
 
@@ -277,10 +318,10 @@ describe("getSliceJumpWindow", () => {
     expect(win.hasMore).toBe(true);
   });
 
-  it("treats an unknown oldestLoadedId as 'stretch to the catalog end'", async () => {
-    const entries = seedCatalog(6);
+  it("treats an unknown oldestLoadedId as 'stretch to the enumeration's end'", async () => {
+    const entries = seedLive(6);
 
-    const win = await getSliceJumpWindow(entries[4].id, "not-in-the-catalog");
+    const win = await getSliceJumpWindow(entries[4].id, "not-on-disk");
 
     expect(win.found).toBe(true);
     expect(win.slices.map((s) => s.id)).toEqual(
@@ -288,8 +329,8 @@ describe("getSliceJumpWindow", () => {
     );
   });
 
-  it("returns found:false when the target isn't in the catalog (index lag)", async () => {
-    seedCatalog(3);
+  it("returns found:false when the target isn't on disk (no index to lag anymore)", async () => {
+    seedLive(3);
 
     const win = await getSliceJumpWindow("2026-08-11-9999", null);
 
@@ -297,7 +338,7 @@ describe("getSliceJumpWindow", () => {
   });
 
   it("skips phantom entries whose slice file is missing", async () => {
-    const entries = seedCatalog(4);
+    const entries = seedLive(4);
     mocks.loadSlice.mockImplementation(async (id: string) =>
       id === entries[1].id
         ? null
@@ -317,9 +358,57 @@ describe("getSliceJumpWindow", () => {
   });
 
   it("forwards the demo persona", async () => {
-    const entries = seedCatalog(2);
+    const entries = seedLive(2);
     await getSliceJumpWindow(entries[0].id, entries[1].id, "alice");
     expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
+  });
+});
+
+// ─── getTimelineCatalogPage (month-windowed enumeration paging) ──────────
+
+describe("getTimelineCatalogPage", () => {
+  it("cuts the month window from the enumerated ids and point-reads only the window's headers", async () => {
+    // Two slices per month across four months — the window cut must be
+    // derivable from the ids ALONE (skeleton entries, zero reads), with
+    // point reads confined to the window.
+    const months = ["2026-05", "2026-06", "2026-07", "2026-08"];
+    const entries = months.flatMap((m) =>
+      ["11", "12"].map((day) =>
+        makeEntry({
+          id: `${m}-${day}-1000`,
+          date: `${m}-${day}`,
+          start: `${m}-${day}T10:00:00.000Z`,
+        }),
+      ),
+    );
+    const byRel = new Map(entries.map((e) => [relOf(e.id), e]));
+    mocks.enumerateSliceIds.mockResolvedValue(entries.map((e) => relOf(e.id)));
+    mocks.sliceEntryFromDisk.mockImplementation(
+      async (rel: string) => byRel.get(rel) ?? null,
+    );
+
+    const page = await getTimelineCatalogPage(null, 2);
+
+    expect(page.entries.map((e) => e.id)).toEqual(
+      entries.slice(4).map((e) => e.id),
+    );
+    expect(page.oldestMonth).toBe("2026-07");
+    expect(page.hasMore).toBe(true);
+    expect(
+      mocks.sliceEntryFromDisk.mock.calls.map((c) => c[0]).sort(),
+    ).toEqual(entries.slice(4).map((e) => relOf(e.id)).sort());
+
+    // Month-cursor paging: strictly older than the previous page's oldest
+    // month, and again only the window's headers are read.
+    mocks.sliceEntryFromDisk.mockClear();
+    const page2 = await getTimelineCatalogPage(page.oldestMonth, 2);
+    expect(page2.entries.map((e) => e.id)).toEqual(
+      entries.slice(0, 4).map((e) => e.id),
+    );
+    expect(page2.hasMore).toBe(false);
+    expect(
+      mocks.sliceEntryFromDisk.mock.calls.map((c) => c[0]).sort(),
+    ).toEqual(entries.slice(0, 4).map((e) => relOf(e.id)).sort());
   });
 });
 
@@ -335,10 +424,7 @@ describe("getSliceContent", () => {
       role: i % 2 === 0 ? "user" : "agent",
       content: LONG,
     }));
-    mocks.sliceIdToFilePath.mockReturnValue(
-      "memory/episodic/slices/2026/08/11/1000/timeline/core.md",
-    );
-    mocks.readSliceBody.mockResolvedValue("raw body");
+    mocks.readSlicePart.mockResolvedValue("raw body");
     mocks.readPreviously.mockResolvedValue("previously card");
     mocks.parseSlice.mockReturnValue({
       slice_id: "2026-08-11-1000",
@@ -381,7 +467,7 @@ describe("getSliceContent", () => {
     expect(content!.turns).toHaveLength(9);
     // The truncation is a wire saving only: the read and the parse are the
     // same either way.
-    expect(mocks.readSliceBody).toHaveBeenCalledTimes(1);
+    expect(mocks.readSlicePart).toHaveBeenCalledTimes(1);
   });
 
   it("forwards the demo persona", async () => {
@@ -392,7 +478,7 @@ describe("getSliceContent", () => {
 
   it("returns null instead of throwing when the slice body cannot be read", async () => {
     seedRead(1);
-    mocks.readSliceBody.mockRejectedValue(new Error("gone"));
+    mocks.readSlicePart.mockRejectedValue(new Error("gone"));
 
     expect(await getSliceContent("2026-08-11-1000")).toBeNull();
   });
@@ -415,9 +501,9 @@ describe("getArrivalState", () => {
     entryOverrides: Partial<TimelineSliceEntry> = {},
   ) {
     const entry = makeEntry({ status: "active", end: undefined, ...entryOverrides });
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [entry],
-    });
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(entry.id)]);
+    // The gate reads the slice's OWN header (status / closedBy) — there is
+    // no catalog entry to consult anymore.
     mocks.loadSlice.mockResolvedValue({
       ...makeSlice(entry, turns),
       ...overrides,
@@ -467,44 +553,39 @@ describe("getArrivalState", () => {
   });
 
   it("resumes a time_cap/capacity-checkpointed slice within the idle gap (the next turn continues it)", async () => {
-    // The newest catalog entry is a closed CHECKPOINT whose follow-up slice
+    // The newest slice is a closed CHECKPOINT whose follow-up slice
     // housekeeping will create on the next turn (continuesFrom) — arriving
-    // now must resume, not brief. The gate reads closed_by from the CATALOG
-    // entry and last-activity from the slice turns.
+    // now must resume, not brief. The gate reads closedBy from the SLICE'S
+    // OWN header and last-activity from the slice turns.
     seedLastSlice(
       [makeTurn("q", "2026-08-11T11:45:00.000Z"), makeTurn("a", "2026-08-11T11:46:00.000Z", "agent")],
-      { status: "closed", end: "2026-08-11T11:46:00.000Z" },
-      { status: "closed", closed_by: "time_cap", end: "2026-08-11T11:46:00.000Z" },
+      { status: "closed", closedBy: "time_cap", end: "2026-08-11T11:46:00.000Z" },
     );
     expect((await getArrivalState()).mode).toBe("resume");
 
     seedLastSlice(
       [makeTurn("q", "2026-08-11T11:45:00.000Z")],
-      { status: "closed", end: "2026-08-11T11:45:30.000Z" },
-      { status: "closed", closed_by: "capacity", end: "2026-08-11T11:45:30.000Z" },
+      { status: "closed", closedBy: "capacity", end: "2026-08-11T11:45:30.000Z" },
     );
     expect((await getArrivalState()).mode).toBe("resume");
   });
 
   it("briefs on a genuine boundary (idle_gap / user_explicit / legacy context_lost) even within the idle gap", async () => {
-    for (const closedBy of ["idle_gap", "user_explicit", "context_lost"]) {
+    for (const closedBy of ["idle_gap", "user_explicit", "context_lost"] as const) {
       seedLastSlice(
         [makeTurn("q", "2026-08-11T11:45:00.000Z")],
-        { status: "closed", end: "2026-08-11T11:45:30.000Z" },
-        { status: "closed", closed_by: closedBy, end: "2026-08-11T11:45:30.000Z" },
+        { status: "closed", closedBy, end: "2026-08-11T11:45:30.000Z" },
       );
       expect((await getArrivalState()).mode).toBe("briefing");
     }
   });
 
-  it("briefs on an empty catalog or a missing slice file", async () => {
-    mocks.readTimelineIndex.mockResolvedValue(null);
+  it("briefs on an empty enumeration or a missing slice file", async () => {
+    mocks.enumerateSliceIds.mockResolvedValue([]);
     expect((await getArrivalState()).mode).toBe("briefing");
 
     const entry = makeEntry();
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [entry],
-    });
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(entry.id)]);
     mocks.loadSlice.mockResolvedValue(null);
     expect((await getArrivalState()).mode).toBe("briefing");
   });
@@ -512,17 +593,13 @@ describe("getArrivalState", () => {
   it("falls back to end, then start, when the slice has no turns", async () => {
     // No turns: end is 20 min ago → resume.
     const entry = makeEntry({ end: "2026-08-11T11:40:00.000Z" });
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [entry],
-    });
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(entry.id)]);
     mocks.loadSlice.mockResolvedValue(makeSlice(entry, []));
     expect((await getArrivalState()).mode).toBe("resume");
 
     // No turns, no end: start is 2 h ago → briefing.
     const old = makeEntry({ start: "2026-08-11T10:00:00.000Z", end: undefined });
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 1, needs_marking: 0, slices: [old],
-    });
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(old.id)]);
     mocks.loadSlice.mockResolvedValue(makeSlice(old, []));
     expect((await getArrivalState()).mode).toBe("briefing");
   });
@@ -539,26 +616,124 @@ describe("getArrivalState", () => {
 });
 
 describe("getStrandList", () => {
-  it("aggregates counts and sorts by most recent activity", async () => {
-    mocks.readTimelineIndex.mockResolvedValue({
-      _schema: 1, updated_at: "", slice_count: 3, needs_marking: 0,
-      slices: [
-        makeEntry({ id: "2026-08-11-1000", date: "2026-08-11", start: "2026-08-11T10:00:00.000Z", strands: ["running", "work"] }),
-        makeEntry({ id: "2026-08-12-1000", date: "2026-08-12", start: "2026-08-12T10:00:00.000Z", strands: ["running"] }),
-        makeEntry({ id: "2026-08-13-1000", date: "2026-08-13", start: "2026-08-13T10:00:00.000Z", strands: ["work"] }),
-      ],
-    });
-    // No `description`: the entity layer is no longer read here. It cost one
-    // backend round trip PER STRAND (mostly 404s) to populate a field no
-    // surface rendered — the filter shows a swatch, a name and a count.
-    expect(await getStrandList()).toEqual([
-      { name: "work", count: 2, lastStart: "2026-08-13T10:00:00.000Z" },
-      { name: "running", count: 2, lastStart: "2026-08-12T10:00:00.000Z" },
-    ]);
+  it("always returns an empty list — strands have no live source since v0.19 R3b", async () => {
+    // Strands were a weave-resolved projection (strands.json); §A.2.4 deletes
+    // the projection, so the filter UI and the companion pod read "no
+    // strands" — the honest answer under the case model. The enumeration is
+    // not even consulted.
+    expect(await getStrandList()).toEqual([]);
+    expect(mocks.enumerateSliceIds).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Render matrix (v0.19 R2 / v0.17 §7 acceptance) ──────────────────────
+// {closed_by class} × {in/out of the idle window} × {config drift} — the
+// newest slice's turns must render EXACTLY ONCE across the two surfaces the
+// client composes: the arrival gate (getArrivalState resume) and the paged
+// stream (getSlicePageWithContent).
+
+describe("render matrix — the newest slice renders exactly once", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-11T12:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("returns an empty list when the catalog is missing", async () => {
-    mocks.readTimelineIndex.mockResolvedValue(null);
-    expect(await getStrandList()).toEqual([]);
-  });
+  const KINDS = [
+    { kind: "active", closedBy: undefined },
+    { kind: "checkpoint", closedBy: "time_cap" },
+    { kind: "boundary", closedBy: "idle_gap" },
+  ] as const;
+  // 5 min ago is inside both gaps; 60 min ago is outside gap 30 but inside
+  // gap 120 — the config-drift column flips the recency verdict, never the
+  // boundary verdict.
+  const RECENCY_MINUTES = [5, 60] as const;
+  const GAPS = [30, 120] as const;
+
+  function seedPair(minutesAgo: number, closedBy?: "time_cap" | "idle_gap") {
+    const older = makeEntry({
+      id: "2026-08-11-0900",
+      start: "2026-08-11T09:00:00.000Z",
+      end: "2026-08-11T09:20:00.000Z",
+    });
+    const lastTurnAt = new Date(Date.now() - minutesAgo * 60_000).toISOString();
+    const start = new Date(
+      new Date(lastTurnAt).getTime() - 10 * 60_000,
+    ).toISOString();
+    const hm = start.slice(11, 16).replace(":", "");
+    const latest = makeEntry({
+      id: `2026-08-11-${hm}`,
+      start,
+      status: closedBy ? "closed" : "active",
+      ...(closedBy
+        ? { end: lastTurnAt, closed_by: closedBy }
+        : { end: undefined }),
+    });
+    const turns = [
+      makeTurn("latest user", start),
+      makeTurn("latest agent", lastTurnAt, "agent"),
+    ];
+    mocks.enumerateSliceIds.mockResolvedValue([relOf(older.id), relOf(latest.id)]);
+    const byRel = new Map([
+      [relOf(older.id), older],
+      [relOf(latest.id), latest],
+    ]);
+    mocks.sliceEntryFromDisk.mockImplementation(
+      async (rel: string) => byRel.get(rel) ?? null,
+    );
+    mocks.loadSlice.mockImplementation(async (id: string) => {
+      if (id === latest.id)
+        return {
+          ...makeSlice(latest, turns),
+          // The arrival gate's boundary verdict reads the slice's own header.
+          ...(closedBy ? { closedBy } : {}),
+        };
+      if (id === older.id)
+        return makeSlice(older, [makeTurn(`user in ${older.id}`, older.start)]);
+      return null;
+    });
+    return { older, latest, turns };
+  }
+
+  for (const { kind, closedBy } of KINDS) {
+    for (const minutesAgo of RECENCY_MINUTES) {
+      for (const gap of GAPS) {
+        it(`${kind} / last turn ${minutesAgo} min ago / idleGapMinutes ${gap}`, async () => {
+          const { older, latest, turns } = seedPair(minutesAgo, closedBy);
+          mocks.loadUserConfig.mockResolvedValue({
+            slicing: { maxSliceMinutes: 30, maxTurnsPerSlice: 50, idleGapMinutes: gap },
+          });
+
+          const arrival = await getArrivalState();
+          const expectResume = kind !== "boundary" && minutesAgo < gap;
+          expect(arrival.mode).toBe(expectResume ? "resume" : "briefing");
+
+          // The history page underneath a resume is exclusive at the cursor —
+          // the resumed slice never re-appears below itself.
+          const pageBefore = await getSlicePageWithContent(latest.id);
+          const beforeIds = pageBefore.slices.map((s) => s.id);
+          expect(beforeIds).not.toContain(latest.id);
+          expect(beforeIds).toContain(older.id);
+
+          // The cold-open stream page carries the newest slice exactly once.
+          const firstPage = await getSlicePageWithContent(null);
+          expect(
+            firstPage.slices.map((s) => s.id).filter((id) => id === latest.id),
+          ).toHaveLength(1);
+
+          if (expectResume) {
+            if (arrival.mode !== "resume") throw new Error("unreachable");
+            expect(arrival.sliceId).toBe(latest.id);
+            expect(arrival.turns).toEqual(turns);
+          } else {
+            // A briefing renders none of the slice's turns — the paged
+            // stream (asserted above) is the one surface that shows them.
+            expect(arrival).toEqual({ mode: "briefing" });
+          }
+        });
+      }
+    }
+  }
 });

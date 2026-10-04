@@ -25,7 +25,6 @@
  *      listDocs — THE shared truth table, not a local copy)
  *   any other tool-*            → reading    （正在查阅 N 条记忆）
  *   data-phase                  → housekeeping （正在整理）
- *   data-evolution              → evolving   （正在进化）
  *   non-empty text part         → replying   （正在回复）
  *   data-turn-status: done      → the turn is over — the fold returns null
  *
@@ -57,8 +56,7 @@ export type SubtitleActivityKind =
   | "recalling"
   | "reading"
   | "replying"
-  | "housekeeping"
-  | "evolving";
+  | "housekeeping";
 
 export interface SubtitleLine {
   /** The current caption block — it REPLACES the previous one, never grows. */
@@ -124,8 +122,6 @@ export function foldSubtitleActivity(
       activity = activityForTool(toolNameOf(p));
     } else if (p.type === "data-phase") {
       activity = "housekeeping";
-    } else if (p.type === "data-evolution") {
-      activity = "evolving";
     } else if (p.type === "data-turn-status") {
       const status = (p as { data?: { status?: string } }).data?.status;
       if (status === "done") done = true;

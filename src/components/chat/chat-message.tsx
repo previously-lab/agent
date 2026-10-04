@@ -8,7 +8,6 @@ import { MarkdownRenderer } from "./markdown";
 import { ThinkingSteps } from "./thinking";
 import { PhaseIndicator } from "./phase-indicator";
 import { HousekeepingCard } from "./housekeeping-card";
-import { EvolutionCard } from "./evolution-card";
 import { BridgeToolCard } from "./bridge-tools-card";
 import { BridgeHousekeepingCard } from "./bridge-housekeeping-card";
 import { RecallReferencesBar } from "./recall-references-bar";
@@ -146,8 +145,6 @@ function itemKey(item: StreamItem, index: number): string {
       return `tool-${item.toolCallId}`;
     case "housekeeping":
       return `housekeeping-${index}`;
-    case "evolution":
-      return `evolution-${index}`;
     case "bridge-tools":
       return `bridge-tools-${item.phase}-${index}`;
     case "phase":
@@ -330,15 +327,6 @@ export const ChatMessage = memo(function ChatMessage({
                   }
                   if (item.kind === "housekeeping") {
                     return <HousekeepingCard key={key} steps={item.steps} />;
-                  }
-                  if (item.kind === "evolution") {
-                    return (
-                      <EvolutionCard
-                        key={key}
-                        running={item.running}
-                        data={item.data}
-                      />
-                    );
                   }
                   if (item.kind === "bridge-tools") {
                     // The local CLI's live tool activity (bridge mode).

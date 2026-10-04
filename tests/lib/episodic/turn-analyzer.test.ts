@@ -59,10 +59,6 @@ describe("analyzeTurn", () => {
   it("parses message tags, semantic hint, intent, and close marking from the tool call", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: {
-          reuse: ["rust"],
-          create: [{ tag: "loop", reason: "no existing topic covers loops" }],
-        },
         semantic_hint: { strands: ["rust"], reason: "user mentioned borrow-checker" },
         intent: { type: "code_debug", reason: "user is debugging a failing loop" },
         memory_worthy: true,
@@ -70,7 +66,6 @@ describe("analyzeTurn", () => {
         closed_marking: {
           focus: "Rust loop tests",
           summary: "Debugged failures",
-          tags: ["rust", "testing"],
           tone: "mixed",
         },
       }),
@@ -82,14 +77,9 @@ describe("analyzeTurn", () => {
       existingStrandNames: ["rust", "async"],
       closingSlice: {
         turns: [{ timestamp: "t", role: "user", content: "hi" }],
-        tags: ["rust"],
       },
     });
 
-    expect(result.messageTags).toEqual({
-      reuse: ["rust"],
-      create: [{ tag: "loop", reason: "no existing topic covers loops" }],
-    });
     expect(result.semanticHint).toEqual({
       strands: ["rust"],
       reason: "user mentioned borrow-checker",
@@ -107,7 +97,6 @@ describe("analyzeTurn", () => {
     expect(result.closedMarking).toEqual({
       focus: "Rust loop tests",
       summary: "Debugged failures",
-      tags: ["rust", "testing"],
       tone: "mixed",
     });
   });
@@ -115,7 +104,6 @@ describe("analyzeTurn", () => {
   it("passes through memory_worthy for a trivial turn", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
@@ -129,7 +117,6 @@ describe("analyzeTurn", () => {
   it("extracts an explicit memory update request", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user asked to record a preference" },
         memory_worthy: true,
@@ -147,7 +134,6 @@ describe("analyzeTurn", () => {
   it("extracts an explicit behavioral correction as a memory update", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user correcting agent behavior" },
         memory_worthy: true,
@@ -165,7 +151,6 @@ describe("analyzeTurn", () => {
   it("drops a stale self_model section hint (the v5 card no longer has that section)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user correcting agent behavior" },
         memory_worthy: true,
@@ -185,7 +170,6 @@ describe("analyzeTurn", () => {
   it("omits memory_update when the user did not explicitly ask", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
@@ -199,7 +183,6 @@ describe("analyzeTurn", () => {
   it("omits closed marking when no slice is closing", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
@@ -214,7 +197,6 @@ describe("analyzeTurn", () => {
   it("parses the emotional register and normalizes a missing register to neutral", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user is venting" },
         memory_worthy: false,
@@ -233,7 +215,6 @@ describe("analyzeTurn", () => {
     ai.streamText.mockRejectedValue(new Error("boom"));
     const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
     expect(result).toEqual({
-      messageTags: { reuse: [], create: [] },
       semanticHint: { strands: [], reason: "" },
       memoryWorthy: true,
       emotionalSignal: { intensity: "none", register: "neutral", note: "" },
@@ -243,13 +224,12 @@ describe("analyzeTurn", () => {
   it("returns an empty analysis when the tool call is missing", async () => {
     ai.streamText.mockResolvedValue(noToolCall());
     const result = await analyzeTurn({ model, userMessage: "x", existingStrandNames: [] });
-    expect(result.messageTags).toEqual({ reuse: [], create: [] });
+    expect(result.semanticHint).toEqual({ strands: [], reason: "" });
   });
 
   it("sends a static shared-base system prompt and dynamic content in the user prompt", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: false,
@@ -274,12 +254,11 @@ describe("analyzeTurn", () => {
   it("maps evolve_card when a slice is closing", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "wrapping up" },
         memory_worthy: false,
         emotional_signal: { intensity: "none", register: "neutral", note: "" },
-        closed_marking: { focus: "logistics", summary: "scheduling", tags: ["calendar"], tone: "neutral" },
+        closed_marking: { focus: "logistics", summary: "scheduling", tone: "neutral" },
         evolve_card: { worth: false, reason: "pure logistics, nothing durable" },
       }),
     );
@@ -287,7 +266,7 @@ describe("analyzeTurn", () => {
       model,
       userMessage: "ok",
       existingStrandNames: [],
-      closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }], tags: [] },
+      closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
     });
     expect(result.evolveCard).toEqual({ worth: false, reason: "pure logistics, nothing durable" });
   });
@@ -295,7 +274,6 @@ describe("analyzeTurn", () => {
   it("omits evolve_card when no slice is closing, even if the model returns it", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
@@ -313,7 +291,7 @@ describe("analyzeTurn", () => {
       model,
       userMessage: "x",
       existingStrandNames: [],
-      closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }], tags: [] },
+      closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
     });
     // A missed evolution is permanent memory loss — failure defaults to running.
     expect(result.evolveCard?.worth).toBe(true);
@@ -331,7 +309,6 @@ describe("analyzeTurn", () => {
   it("parses fitness deltas verbatim (capped at 5)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "user correcting recall" },
         memory_worthy: true,
@@ -359,7 +336,6 @@ describe("analyzeTurn", () => {
   it("passes an evidence-less delta through (the store boundary force-zeroes it — no duplication here)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
@@ -374,7 +350,6 @@ describe("analyzeTurn", () => {
   it("omits fitness when the model emits none (the no-signal state)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "greeting" },
         memory_worthy: false,
@@ -388,7 +363,6 @@ describe("analyzeTurn", () => {
   it("lists the supplied mechanical signals in the user prompt", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
@@ -412,7 +386,7 @@ describe("analyzeTurn", () => {
     expect(arg.prompt).toContain("Mechanical signals this slice");
     expect(arg.prompt).toContain("recall_rework");
     // Static prompt carries the scoring discipline, not the per-call signal.
-    expect(arg.system).toContain("Task 7");
+    expect(arg.system).toContain("Task 6");
     expect(arg.system).not.toContain("recall's references");
   });
 
@@ -421,7 +395,6 @@ describe("analyzeTurn", () => {
   it("renders the portrait rubric into the USER prompt, never the static system prompt", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
@@ -445,7 +418,6 @@ describe("analyzeTurn", () => {
   it("omits the rubric block when no portrait is provided", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: true,
@@ -460,7 +432,6 @@ describe("analyzeTurn", () => {
   it("runs with the 50-step anti-loop fuse (the wall clock is the real budget)", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({
-        message_tags: { reuse: [], create: [] },
         semantic_hint: { strands: [], reason: "" },
         intent: { type: "chat", reason: "chat" },
         memory_worthy: false,

@@ -77,11 +77,11 @@ describe("POST /api/episodic/flush validation", () => {
     expect(res.status).toBe(200);
   });
 
-  it("writes only the target slice's timeline/core.md", async () => {
+  it("writes only the target slice's core.md (records root, flat layout)", async () => {
     const res = await POST(flushReq({ sliceId: "2026-07-10-1430", turns: [aTurn] }));
     expect(res.status).toBe(200);
     expect(mockWriteFileLocal).toHaveBeenCalledTimes(1);
     const [path] = mockWriteFileLocal.mock.calls[0];
-    expect(path).toBe("memory/episodic/slices/2026/07/10/1430/timeline/core.md");
+    expect(path).toBe("memory/records/2026/07/10/1430/core.md");
   });
 });

@@ -58,10 +58,9 @@ import {
 } from "@/lib/episodic/flash/librarian";
 
 const SLICE = "2026-09-10-1000";
-const AGENT_PATH =
-  "memory/episodic/slices/2026/09/10/1000/timeline/agent.md";
-const CORE_PATH =
-  "memory/episodic/slices/2026/09/10/1000/timeline/core.md";
+// v0.19 R2: writes land at the records root (flat HHMM/ layout, no timeline/).
+const AGENT_PATH = "memory/records/2026/09/10/1000/agent.md";
+const CORE_PATH = "memory/records/2026/09/10/1000/core.md";
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
   return {

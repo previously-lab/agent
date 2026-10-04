@@ -6,6 +6,7 @@
  */
 import matter from "gray-matter";
 import { fsReadFile, fsWriteFile, type WriteBatch } from "../io-helpers";
+import { readSlicePart } from "../paths";
 import { parseTurns } from "../turn-parser";
 import { renderTimelineMd } from "./render";
 import type { TimeSlice } from "../types";
@@ -18,17 +19,6 @@ import type {
 export const TIMELINE_INDEX_PATH = "memory/episodic/timeline/index.json";
 /** Markdown projection — kept at the legacy path the recall agent reads. */
 export const TIMELINE_MD_PATH = "memory/episodic/timeline.md";
-
-/** A slice's core.md path from its relative path "YYYY/MM/DD/HHMM". */
-export function sliceCorePath(relPath: string): string {
-  return `memory/episodic/slices/${relPath}/timeline/core.md`;
-}
-
-/** A monthly _index.json path (same layout as manager.ts's getIndexPath). */
-export function monthlyIndexPath(year: number, month: number): string {
-  const mm = String(month).padStart(2, "0");
-  return `memory/episodic/slices/${year}/${mm}/_index.json`;
-}
 
 /** Coerce YAML values — gray-matter parses "A: B" strings as objects. */
 function str(v: unknown): string {
@@ -49,7 +39,8 @@ function strArr(v: unknown): string[] {
 export async function sliceEntryFromDisk(relPath: string, batch?: WriteBatch): Promise<TimelineSliceEntry | null> {
   const [y, m, d, hm] = relPath.split("/");
   try {
-    const raw = await fsReadFile(sliceCorePath(relPath), batch);
+    // Dual-root (v0.19 R2): new records root first, legacy slices root on a miss.
+    const raw = await readSlicePart(relPath.split("/").join("-"), "core", batch);
     const { data } = matter(raw);
     // parseTurns handles the frontmatter itself — pass the full file.
     const { turns } = parseTurns(raw);
@@ -57,7 +48,9 @@ export async function sliceEntryFromDisk(relPath: string, batch?: WriteBatch): P
     const summary = str(data.summary);
     const tags = strArr(data.tags);
     const start = str(data.start);
-    const status = (data.status === "closed" ? "closed" : "active") as
+    // v0.19 R2: status is derived, no longer written — a closed_by cause (or
+    // a legacy explicit status: closed) means closed.
+    const status = (data.status === "closed" || data.closed_by ? "closed" : "active") as
       | "closed"
       | "active";
     return {

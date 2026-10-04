@@ -1,43 +1,40 @@
 /**
- * Shared slice-catalog search — the single retrieval implementation for both
- * the user-facing command palette and the recall sub-agent (v0.10 §3.1: agent
- * side and user side search through the SAME functions).
+ * Shared slice-catalog search — the retrieval implementation behind the
+ * user-facing command palette.
  *
  * Pure functions only — no I/O. Callers feed `TimelineSliceEntry[]` in (from
- * `readTimelineIndex`) and get scored hits out. First iteration searches
- * catalog metadata only (focus/summary/tags/open_loops/decisions/strands);
- * cross-slice full-text search is a later candidate.
+ * the live enumeration's point-read headers, v0.19 R3b) and get scored hits
+ * out. The searchable fields are the ones the case-model slice header still
+ * carries: focus / summary / open_loops / decisions. `tags` stopped being
+ * written in R2 and `strands` were a weave-resolved projection field — both
+ * left the weight table with the projection deletion (§A.2.4), and the
+ * palette's `#strand` filter syntax went with them. Cross-slice full-text
+ * search is a later candidate.
  */
 
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 
 /** Catalog fields the keyword query runs against. */
 export type SearchableField =
-  | "tags"
   | "focus"
   | "summary"
   | "open_loops"
-  | "decisions"
-  | "strands";
+  | "decisions";
 
-/** Field weights — tags > focus > summary > open_loops/decisions > strands. */
+/** Field weights — focus > summary > open_loops/decisions (§A.2.4). */
 const FIELD_WEIGHTS: Record<SearchableField, number> = {
-  tags: 5,
   focus: 4,
   summary: 3,
   open_loops: 2,
   decisions: 2,
-  strands: 1,
 };
 
 /** Canonical display order for matchedFields (highest weight first). */
 const FIELD_ORDER: SearchableField[] = [
-  "tags",
   "focus",
   "summary",
   "open_loops",
   "decisions",
-  "strands",
 ];
 
 /** Snippets kept per field — enough for UI highlight, bounded payload. */
@@ -49,15 +46,14 @@ const SNIPPET_RADIUS = 40;
 /** The matched fragments of one field, for UI highlighting. */
 export interface FieldMatch {
   field: SearchableField;
-  /** Matched text fragments — whole items for array fields (tags etc.),
+  /** Matched text fragments — whole items for array fields (open_loops etc.),
    *  windowed excerpts for long string fields. */
   snippets: string[];
 }
 
 export interface SearchHit {
   entry: TimelineSliceEntry;
-  /** Weighted score: sum over fields of weight × hit count. 0 for
-   *  strand-only queries (pure filter, no keyword). */
+  /** Weighted score: sum over fields of weight × hit count. */
   score: number;
   /** Fields with at least one match, in weight order. */
   matchedFields: SearchableField[];
@@ -66,10 +62,9 @@ export interface SearchHit {
 }
 
 /**
- * Filter the catalog to an inclusive YYYY-MM-DD date window — the same
- * semantics as recall's readTimelineWindow: the slice id's first 10 chars
- * (its UTC date) are compared lexicographically; either bound may be omitted.
- * Input order is preserved.
+ * Filter the entries to an inclusive YYYY-MM-DD date window: the slice id's
+ * first 10 chars (its UTC date) are compared lexicographically; either bound
+ * may be omitted. Input order is preserved.
  */
 export function filterByWindow(
   entries: TimelineSliceEntry[],
@@ -85,24 +80,8 @@ export function filterByWindow(
 }
 
 /**
- * Filter the catalog to slices carrying a strand (case-insensitive — the
- * name may be typed by hand in the `#strand` query syntax).
- */
-export function filterByStrand(
-  entries: TimelineSliceEntry[],
-  strand: string,
-): TimelineSliceEntry[] {
-  const needle = strand.trim().toLowerCase();
-  if (!needle) return [];
-  return entries.filter((s) =>
-    s.strands.some((t) => t.toLowerCase() === needle),
-  );
-}
-
-/**
  * Newest-first ordering by slice id (the id's UTC timestamp sorts
- * lexicographically). The one canonical ordering shared by searchCatalog's
- * strand-only path AND the recall sub-agent's timeline pagination (v0.10 §3.1).
+ * lexicographically).
  */
 export function sortNewestFirst(
   entries: readonly TimelineSliceEntry[],
@@ -110,26 +89,10 @@ export function sortNewestFirst(
   return [...entries].sort((a, b) => b.id.localeCompare(a.id));
 }
 
-/** The keyword half of a query — `#strand` tokens stripped. The command
- *  palette uses this to highlight matches inside snippets. */
+/** The keyword the command palette highlights inside snippets. With the
+ *  `#strand` syntax gone this is simply the query, trimmed. */
 export function queryKeyword(query: string): string {
-  return parseQuery(query).keyword;
-}
-
-/** Parsed query: `#name` tokens become strand filters, the rest is the
- *  keyword substring. */
-function parseQuery(query: string): { keyword: string; strands: string[] } {
-  const strands: string[] = [];
-  const rest: string[] = [];
-  for (const token of query.trim().split(/\s+/)) {
-    if (token.startsWith("#")) {
-      const name = token.slice(1);
-      if (name) strands.push(name); // a bare "#" is ignored, not a keyword
-    } else {
-      rest.push(token);
-    }
-  }
-  return { keyword: rest.join(" "), strands };
+  return query.trim();
 }
 
 /** All case-insensitive occurrences of `needle` in `text` (start indices). */
@@ -181,58 +144,30 @@ function matchArray(
 }
 
 /**
- * Search the catalog by keyword (case-insensitive substring over
- * focus/summary/tags/open_loops/decisions/strands), with `#strand` tokens in
- * the query applied as strand filters first.
+ * Search the entries by keyword (case-insensitive substring over
+ * focus/summary/open_loops/decisions).
  *
  * Scoring: per field, weight × hit count (occurrences in string fields,
  * matching items in array fields); summed across fields. Hits sort by score
- * descending, ties broken newest-first by id. A query of only `#strand`
- * tokens is a pure filter — those hits carry score 0 and sort newest-first.
- * An empty query (no keyword, no strands) returns [].
+ * descending, ties broken newest-first by id. An empty query returns [].
  */
 export function searchCatalog(
   entries: TimelineSliceEntry[],
   query: string,
 ): SearchHit[] {
-  const { keyword, strands } = parseQuery(query);
-  const needle = keyword.trim().toLowerCase();
-  if (!needle && strands.length === 0) return [];
-
-  let pool = entries;
-  for (const strand of strands) {
-    pool = filterByStrand(pool, strand);
-  }
-
-  if (!needle) {
-    // Strand-only query: pure filter, no scoring — newest first.
-    return sortNewestFirst(pool).map((entry) => ({
-      entry,
-      score: 0,
-      matchedFields: ["strands"] as SearchableField[],
-      matches: [
-        {
-          field: "strands" as SearchableField,
-          snippets: entry.strands.filter((t) =>
-            strands.some((s) => t.toLowerCase() === s.toLowerCase()),
-          ),
-        },
-      ],
-    }));
-  }
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [];
 
   const hits: SearchHit[] = [];
-  for (const entry of pool) {
+  for (const entry of entries) {
     const matches: FieldMatch[] = [];
     let score = 0;
 
     const fields: Array<[SearchableField, string | string[]]> = [
-      ["tags", entry.tags],
       ["focus", entry.focus],
       ["summary", entry.summary],
       ["open_loops", entry.open_loops],
       ["decisions", entry.decisions],
-      ["strands", entry.strands],
     ];
     for (const [field, value] of fields) {
       const result = Array.isArray(value)
@@ -245,12 +180,11 @@ export function searchCatalog(
     }
 
     if (score > 0) {
-      hits.push({
-        entry,
-        score,
-        matchedFields: matches.map((m) => m.field),
-        matches,
-      });
+      // matchedFields in canonical weight order, not field-iteration order.
+      const matchedFields = FIELD_ORDER.filter((f) =>
+        matches.some((m) => m.field === f),
+      );
+      hits.push({ entry, score, matchedFields, matches });
     }
   }
 

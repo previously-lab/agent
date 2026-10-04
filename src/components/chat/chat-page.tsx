@@ -710,9 +710,10 @@ function Inner({
   }, [messages, t]);
 
   // ── Evolution activity → the companion pod ─────────────────────────────
-  // The pod lives in the SHELL (a second surface; the EvolutionCard in this
-  // tree keeps its own rendering until M3), so the frames cross the
-  // module-level evolution-activity bus instead of props. Each turn's LAST
+  // The pod lives in the SHELL and is now the ONLY evolution surface (M3
+  // retired the chat-side EvolutionCard — the stream classifier skips
+  // data-evolution parts), so the frames cross the module-level
+  // evolution-activity bus instead of props. Each turn's LAST
   // data-evolution part is its current frame; the scan state identity-compares
   // against the last published frame so only NEWLY ARRIVED chunks publish.
   // Bridge brain never runs inline evolution, so nothing publishes there.

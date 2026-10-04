@@ -1,13 +1,15 @@
 /**
  * Memory-data fixture for the v0.10 memory-viz e2e specs — writes time-slice
  * files and the timeline catalog straight into the isolated MEMORY_ROOT (the
- * same dirs the webServer env got, see env.ts). Mirrors the on-disk contract:
+ * same dirs the webServer env got, see env.ts). Mirrors the on-disk contract
+ * (v0.19 R2: records root, flat layout, slimmed frontmatter):
  *
- *   memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/core.md  (slice file)
- *   memory/episodic/timeline/index.json                      (catalog)
+ *   memory/records/YYYY/MM/DD/HHMM/core.md   (slice file)
+ *   memory/episodic/timeline/index.json      (catalog — projection, unchanged)
  *
- * Only ever touches the `episodic/` subtree — `user/config.json` (seeded by
- * prepare-env.mjs, shared with the other specs) stays put.
+ * Only ever touches the `records/` + `episodic/timeline/` subtrees —
+ * `user/config.json` (seeded by prepare-env.mjs, shared with the other specs)
+ * stays put.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -55,7 +57,10 @@ export function sliceIdFromStart(iso: string): string {
 
 function sliceFileDir(id: string): string {
   const [y, m, d, hm] = id.split("-");
-  return path.join(episodicRoot(), "slices", y, m, d, hm, "timeline");
+  if (!E2E_MEMORY_ROOT.includes("previously-e2e")) {
+    throw new Error(`memory-fixture: refusing unexpected path: ${E2E_MEMORY_ROOT}`);
+  }
+  return path.join(E2E_MEMORY_ROOT, "records", y, m, d, hm);
 }
 
 /** JSON.stringify produces valid YAML double-quoted strings / flow arrays. */
@@ -68,10 +73,11 @@ function yamlArray(arr: string[]): string {
 }
 
 function serializeSlice(slice: FixtureSlice): string {
+  // v0.19 R2 slimmed header: status / tags / related_slices are no longer
+  // written — status derives from closed_by on read, tags are dropped.
   const fm: string[] = [
     `slice_id: ${yamlScalar(slice.id)}`,
     `focus: ${yamlScalar(slice.focus ?? "")}`,
-    `status: ${slice.status ?? "closed"}`,
     `start: ${yamlScalar(slice.start)}`,
   ];
   if (slice.end) fm.push(`end: ${yamlScalar(slice.end)}`);
@@ -80,8 +86,6 @@ function serializeSlice(slice: FixtureSlice): string {
     `summary: ${yamlScalar(slice.summary ?? "")}`,
     `open_loops: ${yamlArray([])}`,
     `decisions: ${yamlArray([])}`,
-    `tags: ${yamlArray(slice.tags ?? [])}`,
-    `related_slices: []`,
     `loops: []`,
   );
   if (slice.continuesFrom) fm.push(`continues_from: ${yamlScalar(slice.continuesFrom)}`);

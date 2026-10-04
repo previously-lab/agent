@@ -34,17 +34,15 @@ import { annotateCardTimes, localDateKey } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
 import {
-  findOverdueHorizonItems,
-  parseCard,
-} from "@/lib/episodic/previously-format";
-import {
   classifyWorkflowError,
   errorMessage,
   formatErrorDetail,
 } from "@/lib/chat/workflow-errors";
 import {
   housekeeping,
-  finalizeTurn,
+  persistAgentTurn,
+  scribeSegment,
+  closeTurnStream,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -697,12 +695,12 @@ export function buildMachineContextSection(machineContext: string): string {
 // ─── System prompt assembly (pure — slice-level freeze) ──────────────────
 
 /**
- * The stable space-fiction layer (v0.13 §5 视野注入 — the IDENTITY half,
+ * The stable space-fiction layer (the IDENTITY half of the view fiction,
  * written once, never repeated per turn). States the fiction the product
- * runs on, in the reader's terms, AND the default view: with no per-turn
- * "[当前]" block the user is in the lobby — no slice selected — so a missing
- * block needs no explanation. Constant for the deployment (part of the L0
- * prefix), so the slice-level freeze is untouched.
+ * runs on, in the reader's terms. Constant for the deployment (part of the
+ * L0 prefix), so the slice-level freeze is untouched. The per-turn "[当前]"
+ * view-block half was removed in v0.19 A1 — the fiction no longer references
+ * a per-turn view signal.
  *
  * Wording discipline (design §5): nobody LIVES in the space — including
  * Previously itself; the user and the model watch the SAME screen; the
@@ -710,7 +708,7 @@ export function buildMachineContextSection(machineContext: string): string {
  * space.
  */
 export const SPACE_FICTION_BLOCK = `## 这片空间
-用户与 Previously 一起建造了这片空间：他们在一起回溯、讨论、建设。谁都不生存在这个空间里——包括 Previously 自己。用户和你看着同一块屏幕；用户正在看哪一片，会通过每轮消息末尾的「[当前]」块告诉你——没有这块时，用户通常在大厅，没有选中任何时间片。`;
+用户与 Previously 一起建造了这片空间：他们在一起回溯、讨论、建设。谁都不生存在这个空间里——包括 Previously 自己。用户和你看着同一块屏幕。`;
 
 /**
  * Assemble the turn's system prompt. v0.9: the prompt is FROZEN at slice
@@ -737,24 +735,21 @@ export const SPACE_FICTION_BLOCK = `## 这片空间
  *   L1 previously card — the dynamic semantic pool of WHAT the user did / is
  *                        doing / plans; annotated relative to the SLICE-HEAD
  *                        date; changes only when an evolution rewrites the card
- *   L2b overdueBlock   — Horizon items past their `by` date, derived from the
- *                        RAW card + the slice-head local date: both frozen, so
- *                        the derived block is frozen too
  *   L3 sliceHeadBlock  — slice-start snapshot: local time, date anchors,
  *                        birth continuity, birth-evolution summary, drift hint
- *   L4 timelineBrief   — frozen mode: absolute dates, slices closed before
- *                        this one began
- *   L5 strandsBlock + demoNotice — low-frequency / static
+ *   L5 demoNotice      — static
  *   L5b bridgeNotice — client-mode subscription-bridge limitation notice;
  *                        constant for the deployment's brain config
  *
  * There is no L2 static-rules layer: the card/direction contract and the
- * GROUNDING RULE live in the charter (L0), stated exactly once.
+ * GROUNDING RULE live in the charter (L0), stated exactly once. The strands
+ * menu (L5), the timeline brief (L4), and the overdue-Horizon block (L2b)
+ * were retired in v0.19 A1 (撤清单 §A.2.2).
  *
  * Nothing per-turn remains: the `Sent:` timestamp, intent, emotional register
- * and semantic links were retired in v0.9 (the analyzer still runs; its
- * output feeds housekeeping decisions and agent.md). Precise "now" questions
- * go through the currentTime tool.
+ * and semantic links were retired in v0.9 (the analyzer still runs — in the
+ * scribe segment now — its output feeds the close marking and agent.md).
+ * Precise "now" questions go through the currentTime tool.
  *
  * The full assembled string is also fanned out to thinkDeep sub-agents as
  * `baseSystemPrompt`, so their calls share the same prefix the main agent
@@ -774,10 +769,6 @@ export function assembleSystemPrompt(opts: {
   directionBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
   sliceHeadBlock: string;
-  /** Pre-built frozen "## Timeline (recent)…" pointer block, or "" to omit. */
-  timelineBrief: string;
-  /** Pre-built "## Memory topics…" block, or "" to omit. */
-  strandsBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
   demoNotice: string;
   /**
@@ -786,8 +777,6 @@ export function assembleSystemPrompt(opts: {
    * callers/tests are unaffected.
    */
   bridgeNotice?: string;
-  /** Pre-built overdue-Horizon block (L2b), or "" when nothing is overdue. */
-  overdueBlock: string;
   /** "YYYY-MM-DD" slice-head local date — anchors the card-freshness header. */
   dateAnchor: string;
 }): string {
@@ -796,11 +785,8 @@ export function assembleSystemPrompt(opts: {
     previouslyContent,
     directionBlock,
     sliceHeadBlock,
-    timelineBrief,
-    strandsBlock,
     demoNotice,
     bridgeNotice,
-    overdueBlock,
     dateAnchor,
   } = opts;
   return [
@@ -809,40 +795,12 @@ export function assembleSystemPrompt(opts: {
     directionBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
-    overdueBlock,
     sliceHeadBlock,
-    timelineBrief,
-    strandsBlock,
     demoNotice,
     bridgeNotice ?? "",
   ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-/**
- * L2b — overdue Horizon commitments. Derived from the RAW card and the
- * slice-head local date (both frozen for the slice's life), so the derived
- * block is byte-stable within the slice too. The card itself carries the
- * substance (and the `（已逾期 N 天）` annotations); this block restores the
- * pre-v0.9 "proactively ask about outcomes" nudge without any per-turn input.
- */
-export function buildOverdueBlock(
-  rawCard: string,
-  dateAnchor: string,
-  locale?: string,
-): string {
-  const doc = rawCard.trim() ? parseCard(rawCard) : null;
-  if (!doc) return "";
-  const overdue = findOverdueHorizonItems(doc, dateAnchor);
-  if (overdue.length === 0) return "";
-  const zh = locale === "zh";
-  const items = overdue
-    .map((h) => (zh ? `「${h.text}」（by ${h.by}）` : `"${h.text}" (by ${h.by})`))
-    .join(zh ? "；" : "; ");
-  return zh
-    ? `## 逾期承诺\n以下 Horizon 事项已超过其 by 日期——当它们和当下话题相关时，自然地询问用户结果；不要没头没尾地主动追问：${items}`
-    : `## Overdue commitments\nThese Horizon items are past their "by" date — when one is relevant to the conversation, naturally ask the user how it turned out; never nag unprompted: ${items}`;
 }
 
 // ─── The workflow ────────────────────────────────────────────────────────
@@ -852,28 +810,25 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // ── Pre-turn steps ─────────────────────────────────────────────────────
 
+  const hk = await housekeeping(input);
   const {
     slice,
     previouslyContent,
-    strandsMenu,
     sliceHeadBlock,
     identityPrompt,
     directionBlock,
-    timelineBrief,
-    viewBlock,
     contextPrefix,
     rebuiltHistory,
-  } = await housekeeping(input);
+  } = hk;
 
   // ── Assemble system prompt ──────────────────────────────────────────────
 
   // v0.9 slice-level freeze: EVERY input is anchored to the slice's start —
   // the card annotations and freshness header use the slice-head local date,
-  // the L3 snapshot / timeline brief are built frozen in housekeeping. Within
-  // a slice the assembled string is byte-identical turn over turn, so the
-  // provider's prefix cache is reused on every call; the cache resets only at
-  // the slice boundary (in sync with the card evolution) or when a mid-slice
-  // explicit evolution rewrites the card.
+  // the L3 snapshot is built frozen in housekeeping. Within a slice the
+  // assembled string is byte-identical turn over turn, so the provider's
+  // prefix cache is reused on every call; the cache resets only at the slice
+  // boundary or when an explicit evolution rewrites the card.
   const dateAnchor =
     localDateKey(slice.start, input.clientTimezone) ?? slice.start.slice(0, 10);
   const systemPrompt = assembleSystemPrompt({
@@ -889,16 +844,11 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
       input.locale,
     ),
     // L1b — the evolved user portrait + hypotheses, read in housekeeping this
-    // turn (post-evolution), so a direction landed mid-slice is what the NEXT
-    // turn sees. Within a slice without an evolution it is byte-stable.
+    // turn. Evolution runs post-reply now (A1), so a direction landed this
+    // turn is what the NEXT turn sees; within a slice without an evolution
+    // the layer is byte-stable.
     directionBlock: directionBlock ?? "",
     sliceHeadBlock,
-    timelineBrief: timelineBrief
-      ? `${timelineBrief}\nTimeline lines are pointers. If the user's question has an explicit time anchor (a date, "last week", "in March"), scan further back with readTimelineWindow and open the slice with readSlice before answering. If the question has no time anchor and is topic-shaped ("did we ever talk about X"), look in the document layer first — listDocs to see what exists, readDoc to read one — then fall back to browsing the timeline yourself. Answer specifics only from original slice text.`
-      : "",
-    strandsBlock: strandsMenu
-      ? `## Memory topics\n\n${strandsMenu}\nThese are the threads of the user's history. When the user mentions one, open its topic home with readStrand — its catalogue lines name the documents hanging under it, read them with readDoc — before answering from memory. If the thread holds nothing on the question, say so and answer from what you have.`
-      : "",
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`
       : "",
@@ -910,13 +860,6 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     // constant for the deployment's brain config, so the freeze is intact.
     bridgeNotice:
       input.modelConfig.sdk === "bridge" ? BRIDGE_NOTICE : "",
-    // Derived from the RAW card + the slice-head local date — both frozen, so
-    // this block is byte-stable within the slice (see buildOverdueBlock).
-    overdueBlock: buildOverdueBlock(
-      previouslyContent,
-      dateAnchor,
-      input.locale,
-    ),
     dateAnchor,
   });
 
@@ -1125,14 +1068,6 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
         buildMachineContextSection(input.machineContext),
       );
     }
-    // v0.13 §5 view block (housekeeping-built compact "[当前] …" line): the
-    // SAME outbound-tail mechanics — the volatile half of the view injection,
-    // present only when the client sent a `view` (a slice selected). The
-    // lobby default appends nothing, the persisted turn keeps only the
-    // user's text, and the message count is unchanged.
-    if (viewBlock) {
-      currentMessages = appendBridgeTimeSuffix(currentMessages, viewBlock);
-    }
     let continuations = 0;
     let timeoutContinuations = 0;
     /** Client-visible explanation when the turn ends as a terminal error. */
@@ -1304,9 +1239,16 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     };
   }
 
-  // ── Post-turn persistence ──────────────────────────────────────────────
-
-  await finalizeTurn(slice, outcome, input.turnId);
+  // ── Post-turn steps (v0.19 A1 three stages) ────────────────────────────
+  // 序 1 — the agent turn + cognition join the slice (deduped by turnId).
+  await persistAgentTurn(slice, outcome, input.turnId);
+  // 序 2–7 — the scribe segment: analyze, execute any pending close, due-task
+  // scan, boundary event, explicit-instruction evolution, scribe passes. Runs
+  // even when the reply failed (streamError) — it is the slice boundary's
+  // executor, and every sub-step is idempotent under redelivery.
+  await scribeSegment(input, hk);
+  // Terminal chunks + stream tail.
+  await closeTurnStream(outcome, input.turnId);
 
   if (streamError !== null) {
     throw streamError;

@@ -40,15 +40,15 @@ import {
   recordDocRead,
   logDocReworkSignal,
 } from "@/lib/episodic/rework-signal";
+import { extractSliceIds } from "@/lib/docs/docs-query";
 import {
-  listDocsQuery,
-  readDocQuery,
-  extractSliceIds,
-  type DocsFs,
-  type ReadDocSuccess,
-  type ReadDocFailure,
-} from "@/lib/docs/docs-query";
-import { DOC_KINDS, type DocKind } from "@/lib/docs";
+  parseCaseRef,
+  resolveCaseRefPaths,
+  parseCaseDoc,
+  normalizeCaseRefText,
+  CASE_CATEGORY_LIST,
+  type CaseRef,
+} from "@/lib/docs";
 import {
   DOC_MARKER_PREFIX,
   extractDocMarkers,
@@ -56,13 +56,17 @@ import {
 } from "@/lib/episodic/flash/librarian";
 import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
-import { readStrands, CURRENT_PREVIOUSLY_PATH } from "@/lib/episodic";
-import { findMatchingStrand } from "@/lib/episodic/strands";
 import {
-  readStrandEntity,
-  listStrandEntityNames,
-  resolveStrandEntityName,
-} from "@/lib/episodic/strand-files";
+  CURRENT_PREVIOUSLY_PATH,
+  slicePartPathCandidates,
+  indexPathCandidates,
+  RECORDS_ROOT,
+  LEGACY_SLICES_ROOT,
+  type SlicePart,
+} from "@/lib/episodic";
+import { getOctokit } from "@/lib/github/client";
+import { getRepoConfig } from "@/lib/capabilities";
+import { getDefaultBranch } from "@/lib/tools/batch-write";
 import { migrateToV3, isCardFormat } from "@/lib/episodic/previously-format";
 import {
   annotateSliceWithLocalTime,
@@ -109,10 +113,6 @@ import {
   reassembleSlice,
   type ParsedTurn,
 } from "@/lib/episodic/turn-parser";
-import matter from "gray-matter";
-import { sliceLine } from "@/lib/episodic/timeline/render";
-import { TIMELINE_INDEX_PATH } from "@/lib/episodic/timeline/store";
-import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 
 // ─── Shared tool contexts ────────────────────────────────────────────────
 
@@ -223,6 +223,34 @@ function domainError(e: unknown): string | null {
     : null;
 }
 
+/**
+ * Backend-dispatched raw read (demo / GitHub / local) — the dispatch every
+ * slice read below shares.
+ */
+async function readRawBackend(ctx: ToolContext, path: string): Promise<string> {
+  if (ctx.useDemo) return readFileDemo(path);
+  if (ctx.useGithub) return readFile(path, ctx.repo, ctx.owner);
+  return readFileLocal(path);
+}
+
+/**
+ * Dual-root slice-part read (v0.19 R2): the new records root first, the
+ * legacy slices root on a miss — slices created before the root move stay
+ * readable.
+ */
+async function readSliceRawDual(
+  ctx: ToolContext,
+  sliceId: string,
+  part: SlicePart,
+): Promise<string> {
+  const [primary, fallback] = slicePartPathCandidates(sliceId, part);
+  try {
+    return await readRawBackend(ctx, primary);
+  } catch {
+    return readRawBackend(ctx, fallback);
+  }
+}
+
 
 // ── readSlice — read a time slice's core conversation ─────────────────
 
@@ -249,12 +277,8 @@ export async function readSliceExecute(
   if (!parsed) {
     return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
   }
-  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`;
   try {
-    let raw: string;
-    if (ctx.useDemo) raw = await readFileDemo(path);
-    else if (ctx.useGithub) raw = await readFile(path, ctx.repo, ctx.owner);
-    else raw = await readFileLocal(path);
+    const raw = await readSliceRawDual(ctx, sliceId, "core");
 
     // Apply range filter if requested
     let content: string;
@@ -310,272 +334,6 @@ export async function readSliceExecute(
   }
 }
 
-// ── readSliceSummary — frontmatter only (the cheapest relevance check) ──
-
-export async function readSliceSummaryExecute(
-  { sliceId }: { sliceId: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  const parsed = parseSliceId(sliceId);
-  if (!parsed) {
-    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
-  }
-  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/core.md`;
-  try {
-    const raw = ctx.useDemo
-      ? await readFileDemo(path)
-      : ctx.useGithub
-        ? await readFile(path, ctx.repo, ctx.owner)
-        : await readFileLocal(path);
-    const { data } = matter(raw);
-    const { turns } = parseTurns(raw);
-    const fmt = (v: unknown): string =>
-      Array.isArray(v) && v.length ? v.join("; ") : "(none)";
-    const lines = [
-      `slice ${sliceId}`,
-      `start: ${typeof data.start === "string" ? data.start : "?"}`,
-      `end: ${typeof data.end === "string" ? data.end : "(active)"}`,
-      `turns: ${turns.length}`,
-      `focus: ${typeof data.focus === "string" && data.focus ? data.focus : "(none)"}`,
-      `summary: ${typeof data.summary === "string" && data.summary ? data.summary : "(none)"}`,
-      `tags: ${fmt(data.tags)}`,
-      `tone: ${typeof data.emotional_tone === "string" && data.emotional_tone ? data.emotional_tone : "(none)"}`,
-      `open_loops: ${fmt(data.open_loops)}`,
-      `decisions: ${fmt(data.decisions)}`,
-    ];
-    const note = ctx.timezone ? `\n(时间均为 UTC；本地时区 ${ctx.timezone})` : "";
-    return lines.join("\n") + note;
-  } catch (e) {
-    const msg = domainError(e);
-    if (msg === null) throw e;
-    return `ERROR: ${msg}. This time slice does not exist.`;
-  }
-}
-
-// ── readTimelineWindow — the timeline catalog over a date window ────────
-
-export async function readTimelineWindowExecute(
-  { from, to, limit }: { from?: string; to?: string; limit?: number },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  try {
-    const raw = ctx.useDemo
-      ? await readFileDemo(TIMELINE_INDEX_PATH)
-      : ctx.useGithub
-        ? await readFile(TIMELINE_INDEX_PATH, ctx.repo, ctx.owner)
-        : await readFileLocal(TIMELINE_INDEX_PATH);
-    const idx = JSON.parse(raw) as { slices?: TimelineSliceEntry[] };
-    const slices = (idx.slices ?? [])
-      .filter((s) => {
-        const date = s.id.slice(0, 10); // "YYYY-MM-DD"
-        if (from && date < from) return false;
-        if (to && date > to) return false;
-        return true;
-      })
-      .sort((a, b) => b.id.localeCompare(a.id))
-      .slice(0, limit ?? 20);
-    if (slices.length === 0) {
-      return `(时间线窗口 ${from ?? "开始"} → ${to ?? "现在"} 内没有切片)`;
-    }
-    const windowLabel = `${from ?? "开始"} → ${to ?? "现在"}`;
-    return `时间线窗口 ${windowLabel}（${slices.length} 片，每一行是指针，不是内容——相关就先 readSliceSummary / readSlice）：\n\n${slices.map(sliceLine).join("\n")}`;
-  } catch {
-    return "(时间线目录尚不可用——weave 尚未运行，或演示数据没有目录)";
-  }
-}
-
-// ── listSlices �?browse slice directories ─────────────────────────────
-
-export async function listSlicesExecute(
-  { year, month }: { year?: number; month?: number },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<Array<{ name: string; type: "file" | "dir"; path: string }> | { error: string }> {
-  "use step";
-  const now = new Date();
-  const y = year ?? now.getUTCFullYear();
-  const mo = month ?? now.getUTCMonth() + 1;
-  const mm = String(mo).padStart(2, "0");
-  const path = `memory/episodic/slices/${y}/${mm}`;
-
-  try {
-    if (ctx.useDemo) return await listFilesDemo(path);
-    return ctx.useGithub
-      ? await listFiles(path, ctx.repo, ctx.owner)
-      : await listFilesLocal(path);
-  } catch (e) {
-    const msg = domainError(e);
-    if (msg === null) throw e;
-    return { error: `${msg}` };
-  }
-}
-
-// ── readTimeline �?read monthly index ──────────────────────────────────
-
-export async function readTimelineExecute(
-  { year, month }: { year: number; month: number },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<{ exists: boolean; month: string; slices: unknown[]; timezoneNote?: string }> {
-  "use step";
-  const mm = String(month).padStart(2, "0");
-  const path = `memory/episodic/slices/${year}/${mm}/_index.json`;
-  try {
-    const raw = ctx.useDemo
-      ? await readFileDemo(path)
-      : ctx.useGithub
-        ? await readFile(path, ctx.repo, ctx.owner)
-        : await readFileLocal(path);
-    const data = JSON.parse(raw) as { exists: boolean; month: string; slices: unknown[] };
-
-    // Pre-render each slice's start in the user's local time so the agent never
-    // converts UTC itself (see time-localize.ts).
-    if (Array.isArray(data.slices) && ctx.timezone) {
-      const tz = ctx.timezone; // narrowed string — stable across the map closure
-      const slices = data.slices.map((s) => {
-        if (s && typeof s === "object" && "start" in s && typeof (s as { start?: unknown }).start === "string") {
-          const rec = s as Record<string, unknown>;
-          return { ...rec, localStart: formatLocalTime(rec.start as string, tz).local };
-        }
-        return s;
-      });
-      return {
-        ...data,
-        slices,
-        timezoneNote: `每个 slice 已附带 localStart（用户当地，${tz}）；start 为原始 UTC。`,
-      };
-    }
-    return data;
-  } catch {
-    return { exists: false, month: `${year}-${mm}`, slices: [] };
-  }
-}
-
-// ── readStrand / listStrands — the strand (topic) index, homes-enriched ──
-//
-// These lived inside the retired recall sub-agent (flash/recall.ts); with
-// recall gone they are the main agent's own topic-axis discovery surface.
-// The strand index (strands.json) is the bare keyword→slices map; the topic
-// homes (docs/topic/, see strand-files.ts) carry the prose descriptions that
-// make the list semantically matchable ("also known as X, Y").
-
-/**
- * How many characters of a home description listStrands carries per strand.
- * The list is a discovery surface — one line per strand — not a reader.
- */
-const STRAND_LIST_DESCRIPTION_MAX = 140;
-
-/** How many home files listStrands reads per call. Memory roots can hold
- *  hundreds of strands; each home read is a backend call, so the list caps
- *  description lookups and says when it stopped. */
-const STRAND_LIST_ENTITY_READ_CAP = 50;
-
-/** One-line, length-capped summary of a home description for the list view. */
-function strandListLine(name: string, description: string | null): string {
-  if (!description) return `- ${name}`;
-  const flat = description.replace(/\s+/g, " ").trim();
-  const summary =
-    flat.length > STRAND_LIST_DESCRIPTION_MAX
-      ? `${flat.slice(0, STRAND_LIST_DESCRIPTION_MAX)}…`
-      : flat;
-  return `- ${name} — ${summary}`;
-}
-
-/** Load a strand's home by index key, tolerating casing drift between the
- *  requested name and the stored file. Null when no home exists (old memory
- *  roots have no docs/topic/ directory at all). */
-async function loadStrandEntityByName(
-  name: string,
-  available: ReadonlySet<string>,
-) {
-  const resolved = resolveStrandEntityName(name, available);
-  if (!resolved) return null;
-  return readStrandEntity(resolved);
-}
-
-/** Format the home block readStrand prepends to the slice listing: the FULL
- *  description plus the mechanical activity span. */
-function formatStrandEntityBlock(
-  name: string,
-  entity: { description: string; first_seen: string; last_active: string; aliases: string[] },
-): string {
-  const span = `first seen ${entity.first_seen || "?"}, last active ${entity.last_active || "?"}`;
-  const aliases = entity.aliases.length > 0 ? `; also known as: ${entity.aliases.join(", ")}` : "";
-  return `Strand "${name}": ${entity.description}\n(${span}${aliases})`;
-}
-
-export async function readStrandExecute(
-  { strand }: { strand: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  try {
-    const strands = await readStrands();
-    // Casing drift: the model may ask for "apex" while the index keys "Apex"
-    // (same normalized-match rule as the weave path).
-    const key = findMatchingStrand(strands, strand) ?? strand;
-    const paths = strands[key];
-    if (!paths || paths.length === 0) {
-      return `Strand "${strand}" not found. No slices carry this tag.`;
-    }
-    // Cap the listing like readTimelineWindow does — and SAY so when it
-    // truncates, so the model knows the strand has more slices to chase.
-    const shown = paths.slice(0, 40);
-    const truncation =
-      paths.length > shown.length
-        ? ` (showing ${shown.length} of ${paths.length})`
-        : "";
-    const listing = `Strand "${key}" appears in: ${shown.join(", ")}${truncation}`;
-    // Home layer is optional: no docs/topic/ dir / no file → bare listing,
-    // exactly the pre-home behavior.
-    const entityNames = await listStrandEntityNames();
-    const entity = await loadStrandEntityByName(key, entityNames);
-    if (!entity || !entity.description) return listing;
-    return `${formatStrandEntityBlock(key, entity)}\n${listing}`;
-  } catch {
-    return `Could not read strands index.`;
-  }
-}
-
-export async function listStrandsExecute(
-  _input: Record<string, never>,
-  { context: _ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  try {
-    const strands = await readStrands();
-    const names = Object.keys(strands);
-    if (names.length === 0) return "(no strands yet — no topic tags woven)";
-    // Graceful degradation for old memory roots: no home directory → the
-    // legacy bare-name listing, byte-for-byte the old behavior.
-    const entityNames = await listStrandEntityNames();
-    if (entityNames.size === 0) {
-      return `Known strands (${names.length}): ${names.join(", ")}`;
-    }
-    const described: string[] = [];
-    let omitted = 0;
-    for (const name of names) {
-      if (described.length >= STRAND_LIST_ENTITY_READ_CAP) {
-        omitted += 1;
-        continue;
-      }
-      const entity = await loadStrandEntityByName(name, entityNames);
-      described.push(strandListLine(name, entity?.description ?? null));
-    }
-    const capNote =
-      omitted > 0
-        ? `\n(descriptions omitted for ${omitted} more strands — readStrand a specific one)`
-        : "";
-    return (
-      `Known strands (${names.length}) — match the question semantically against ` +
-      `these names and summaries, then trace the best fit with readStrand:\n` +
-      `${described.join("\n")}${capNote}`
-    );
-  } catch {
-    return "Could not read strands index.";
-  }
-}
-
 // ── readAgentTimeline �?read the agent's cognition for a slice ──────────
 
 export async function readAgentTimelineExecute(
@@ -587,12 +345,8 @@ export async function readAgentTimelineExecute(
   if (!parsed) {
     return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
   }
-  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/timeline/agent.md`;
   try {
-    if (ctx.useDemo) return await readFileDemo(path);
-    return ctx.useGithub
-      ? await readFile(path, ctx.repo, ctx.owner)
-      : await readFileLocal(path);
+    return await readSliceRawDual(ctx, sliceId, "agent");
   } catch (e) {
     const msg = domainError(e);
     if (msg === null) throw e;
@@ -625,15 +379,11 @@ export async function readPreviouslyExecute(
   if (!parsed) {
     return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
   }
-  const path = `memory/episodic/slices/${parsed.y}/${parsed.m}/${parsed.d}/${parsed.hm}/previously.md`;
   try {
-    // Legacy (v1/v2) files are migrated on the fly; the v4 user card is read
-    // as-is. Never exposes the old 长期记忆/短期记忆 headers.
-    const raw = ctx.useDemo
-      ? await readFileDemo(path)
-      : ctx.useGithub
-        ? await readFile(path, ctx.repo, ctx.owner)
-        : await readFileLocal(path);
+    // Dual-root read (v0.19 R2). Legacy (v1/v2) files are migrated on the
+    // fly; the v4 user card is read as-is. Never exposes the old
+    // 长期记忆/短期记忆 headers.
+    const raw = await readSliceRawDual(ctx, sid, "previously");
     const content = raw.trim() ? migrateToV3(raw, sid) : raw;
     if (!ctx.timezone || content === "") return content;
     // Prepend the user-local time banner so the model knows when the snapshot
@@ -646,79 +396,213 @@ export async function readPreviouslyExecute(
   }
 }
 
-// ─── Document tools (v0.15 design §4.2 — the reader side of the doc system) ──
+// ─── Case-tree readers (v0.19 §A.2.1 — the reply segment's read surface) ──
 
 /**
- * The DocsFs the query layer runs on, built per call from the tool context's
- * backend mode — same branch as every other read executor (GitHub / local /
- * demo). The local backend is whitelist-checked and MEMORY_ROOT-aware, so
- * isolated test roots work transparently.
+ * listTree — list the memory tree ONCE, grouped by top-level category
+ * (v0.19 §A.2.1). A TRANSITIONAL PLACEHOLDER: a dedicated retrieval tool
+ * will replace it later (user decision). Purely mechanical: no LLM, no
+ * ranking, no relevance score — the paths themselves (category / case name /
+ * date all live on the path) are the index.
+ *
+ * - GitHub: ONE recursive Git Trees API call returns every path under the
+ *   repo (the same pattern as timeline/enumerate.ts, widened to the whole
+ *   `memory/` tree); the API's own `truncated` flag passes through.
+ * - Local / demo: a recursive walk through the listFiles layer.
+ *
+ * `config/` is filtered out mechanically (engineering state, not documents).
+ * records/ collapses to slice directories (YYYY/MM/DD/HHMM) — the three
+ * files inside a record are fixed machinery, the slice dir is its identity.
  */
-function buildDocsFs(ctx: ToolContext): DocsFs {
-  return {
-    readText: (path) =>
-      ctx.useDemo
-        ? readFileDemo(path)
-        : ctx.useGithub
-          ? readFile(path, ctx.repo, ctx.owner)
-          : readFileLocal(path),
-    listDir: (path) =>
-      ctx.useDemo
-        ? listFilesDemo(path)
-        : ctx.useGithub
-          ? listFiles(path, ctx.repo, ctx.owner)
-          : listFilesLocal(path),
-  };
+export interface ListTreeResult {
+  /** True when the GitHub tree API truncated the listing (list may be incomplete). */
+  truncated: boolean;
+  /** Paths relative to `memory/`, grouped by top-level category, each ascending. */
+  tree: Record<string, string[]>;
 }
 
-/**
- * listDocs — the mechanical directory listing (design §4.2). NO LLM, no
- * ranking, no relevance score: `listDocs("research")` hands the model the
- * file names (date + title, ascending = birth order) and the model reads the
- * list. The directory IS the type; an empty/missing directory is a normal
- * early-system state (files: [] + note), never an error.
- */
-export async function listDocsExecute(
-  { kind, filter }: { kind: DocKind; filter?: string },
+export async function listTreeExecute(
+  _input: Record<string, never>,
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<
-  | { kind: DocKind; files: string[]; note?: string }
-  | { error: string }
-> {
+): Promise<ListTreeResult> {
   "use step";
-  if (!(DOC_KINDS as readonly string[]).includes(kind)) {
-    return {
-      error:
-        `未知的文档类型 "${kind}"——封闭集合只有九个：` +
-        DOC_KINDS.join(" / ") +
-        "。",
-    };
+  if (ctx.useGithub) return listTreeGitHub(ctx);
+  return listTreeWalk(ctx);
+}
+
+async function listTreeGitHub(ctx: ToolContext): Promise<ListTreeResult> {
+  const { owner, repo } = { owner: ctx.owner, repo: ctx.repo };
+  const octokit = getOctokit();
+  const branch = await getDefaultBranch();
+  const { data: ref } = await octokit.rest.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${branch}`,
+  });
+  const { data: tree } = await octokit.rest.git.getTree({
+    owner,
+    repo,
+    tree_sha: ref.object.sha,
+    recursive: "1",
+  });
+
+  const paths: string[] = [];
+  for (const item of tree.tree ?? []) {
+    if (item.type !== "blob") continue;
+    const p = item.path ?? "";
+    if (!p.startsWith("memory/")) continue;
+    const rel = p.slice("memory/".length);
+    if (rel === "" || rel.startsWith("config/")) continue; // config/ = engineering state
+    paths.push(rel);
   }
-  return listDocsQuery(buildDocsFs(ctx), kind, filter);
+  return { truncated: tree.truncated === true, tree: groupTreePaths(paths) };
+}
+
+async function listTreeWalk(ctx: ToolContext): Promise<ListTreeResult> {
+  const paths: string[] = [];
+  const listDir = (path: string) =>
+    ctx.useDemo ? listFilesDemo(path) : listFilesLocal(path);
+
+  async function walk(dir: string): Promise<void> {
+    let entries: Array<{ name: string; type: string }>;
+    try {
+      entries = await listDir(dir);
+    } catch {
+      return; // missing dir — a fresh memory root, fine
+    }
+    for (const e of entries) {
+      const p = `${dir}/${e.name}`;
+      if (e.type === "dir") {
+        await walk(p);
+      } else if (p.startsWith("memory/") && !p.startsWith("memory/config/")) {
+        paths.push(p.slice("memory/".length));
+      }
+    }
+  }
+  await walk("memory");
+  return { truncated: false, tree: groupTreePaths(paths) };
 }
 
 /**
- * readDoc — point-read a document by FILE NAME (design §2.1/§2.2: the file
- * name IS the identity, references are names not paths). Resolution is
- * path-agnostic — every kind directory under `docs/` is a candidate and the
- * first hit wins. Documents are small files: the whole file is returned.
- * A name that resolves nowhere is a dead link — a visible error result,
+ * Group flat memory-relative paths by their top-level category. records/
+ * collapses to slice dirs (`YYYY/MM/DD/HHMM`); every other path is kept
+ * verbatim. Group order: the nine case categories canonically, then records,
+ * then anything else (legacy leftovers) alphabetically. Paths ascending.
+ */
+function groupTreePaths(paths: string[]): Record<string, string[]> {
+  const groups = new Map<string, Set<string>>();
+  for (const rel of paths) {
+    const top = rel.split("/")[0] ?? rel;
+    if (!groups.has(top)) groups.set(top, new Set());
+    if (top === "records") {
+      const segs = rel.split("/");
+      // records/YYYY/MM/DD/HHMM/<file> → the slice dir is the record's identity
+      groups.get(top)!.add(segs.slice(0, 5).join("/"));
+    } else {
+      groups.get(top)!.add(rel);
+    }
+  }
+  const order = (a: string, b: string): number => {
+    const rank = (k: string): number => {
+      const i = CASE_CATEGORY_LIST.indexOf(k as (typeof CASE_CATEGORY_LIST)[number]);
+      return i >= 0 ? i : k === "records" ? 100 : 101;
+    };
+    return rank(a) - rank(b) || a.localeCompare(b);
+  };
+  const tree: Record<string, string[]> = {};
+  for (const key of [...groups.keys()].sort(order)) {
+    tree[key] = [...groups.get(key)!].sort((a, b) => a.localeCompare(b));
+  }
+  return tree;
+}
+
+/** Successful two-segment readDoc result — the whole file, header parsed. */
+export interface ReadCaseDocSuccess {
+  /** The identity that was read (as parsed). */
+  ref: CaseRef;
+  /** The resolved repo-relative path. */
+  path: string;
+  /** Birth date (piece: from the name, same-source rule). */
+  opened: string;
+  /** Seal date, or null while 还在写. */
+  closed: string | null;
+  /** The full raw file text — case docs are small files, read whole. */
+  content: string;
+  /** Tolerant-parse problems; never fatal. */
+  warnings: string[];
+}
+
+/** Dead link / illegal reference — a visible error result, never thrown. */
+export interface ReadCaseDocFailure {
+  error: string;
+}
+
+/**
+ * readDoc — point-read a case document by TWO-SEGMENT reference
+ * (v0.19 §B.2): `分类/case名` → the case's `index.md`; `分类/case名/篇名`
+ * → one dated piece. Resolution runs through case-refs.ts (parse → ordered
+ * candidates, new root first, legacy fallback roots after, §D.1 双根). A
+ * reference that resolves nowhere is a DEAD LINK — a visible error result,
  * never thrown, never blocking.
  *
  * On success the executor records the document + the slice ids its text
- * references (recordDocRead) so the doc_rework probe (§4.4) can later
- * classify readSlice calls against it. Best-effort, never fails the read.
+ * references (recordDocRead) so the doc_rework probe can later classify
+ * readSlice calls against it. Best-effort, never fails the read.
  */
 export async function readDocExecute(
-  { fileName }: { fileName: string },
+  { ref }: { ref: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<ReadDocSuccess | ReadDocFailure> {
+): Promise<ReadCaseDocSuccess | ReadCaseDocFailure> {
   "use step";
-  const result = await readDocQuery(buildDocsFs(ctx), fileName);
-  if (!("error" in result)) {
-    recordDocRead(ctx.sliceId, result.fileName, extractSliceIds(result.content));
+  const parsed = parseCaseRef(ref);
+  if (!parsed) {
+    return {
+      error:
+        `无法解析的引用 "${ref}"——引用应是 分类/case名` +
+        `（如 research/手机调研）或 分类/case名/篇名。`,
+    };
   }
-  return result;
+
+  const readText = (path: string): Promise<string> =>
+    ctx.useDemo
+      ? readFileDemo(path)
+      : ctx.useGithub
+        ? readFile(path, ctx.repo, ctx.owner)
+        : readFileLocal(path);
+
+  const candidates = resolveCaseRefPaths(parsed);
+  for (const path of candidates) {
+    let raw: string;
+    try {
+      raw = await readText(path);
+    } catch {
+      continue; // not at this candidate — try the next
+    }
+    const location =
+      parsed.kind === "piece"
+        ? { category: parsed.category, caseName: parsed.caseName, fileName: parsed.pieceFileName }
+        : parsed.kind === "case"
+          ? { category: parsed.category, caseName: parsed.caseName, fileName: "index.md" }
+          : // legacy root fallback: a bare pre-case name — read as a name-only doc
+            { category: "research" as const, caseName: parsed.name, fileName: `${parsed.name}.md` };
+    const doc = parseCaseDoc(raw, location);
+    const result: ReadCaseDocSuccess = {
+      ref: parsed,
+      path,
+      opened: doc.opened,
+      closed: doc.closed,
+      content: raw,
+      warnings: doc.warnings,
+    };
+    recordDocRead(ctx.sliceId, path, extractSliceIds(raw));
+    return result;
+  }
+
+  return {
+    error:
+      `死链：没有任何文档叫 "${normalizeCaseRefText(ref)}"` +
+      `（已查新根与旧根）。用 listTree 看现有清单。`,
+  };
 }
 
 // ─── noteForSediment — the sediment mailbox producer (v0.15 design §3.1/§4.3) ──
@@ -825,8 +709,15 @@ export async function noteForSedimentExecute(
   let existing = "";
   try {
     // fresh: read-modify-append — a cached base would silently drop markers
-    // other steps landed in between (io-helpers contract).
-    existing = await fsReadFile(agentPath, undefined, { fresh: true });
+    // other steps landed in between (io-helpers contract). Dual-root (v0.19
+    // R2): the mailbox of a slice created before the root move lives under
+    // the legacy slices root; the append below always writes the new root.
+    const [primary, fallback] = slicePartPathCandidates(ctx.sliceId, "agent");
+    try {
+      existing = await fsReadFile(primary, undefined, { fresh: true });
+    } catch {
+      existing = await fsReadFile(fallback, undefined, { fresh: true });
+    }
   } catch {
     // no agent.md yet — this line opens it
   }

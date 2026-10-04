@@ -24,7 +24,6 @@ export {
   tryLoadTodaySlice,
   saveSliceSnapshot,
   ensureIndexEntries,
-  sliceIdToTimelineDir,
   sliceIdToAgentPath,
   writeAgentTimeline,
   readAgentTimeline,
@@ -38,8 +37,24 @@ export {
   readCurrentPreviously,
   writeCurrentPreviously,
 } from "./manager";
+export {
+  RECORDS_ROOT,
+  LEGACY_SLICES_ROOT,
+  sliceDir,
+  slicePartPath,
+  slicePartPathCandidates,
+  legacySlicePartPath,
+  recordsIndexPath,
+  legacyIndexPath,
+  indexPathCandidates,
+  readSlicePart,
+  readSlicePartResolved,
+} from "./paths";
+export type { SlicePart } from "./paths";
 // NOTE: sliceIdToLegacyFilePath was removed in v0.5 — old flat-file format
-//       support dropped. Use sliceIdToTimelineDir / sliceIdToFilePath instead.
+//       support dropped. Use sliceIdToFilePath instead.
+// NOTE: sliceIdToTimelineDir was removed in v0.19 R2 — the records layout is
+//       flat (no timeline/ level). Use sliceDir / slicePartPath from ./paths.
 //
 // NOTE: maintenance.ts v1 types (SliceMetadata, applyMetadataUpdates) were
 //       removed in v0.5.1. Card maintenance / updater passes were removed in
@@ -101,7 +116,11 @@ export type { WriteBatch } from "./io-helpers";
 
 export {
   checkSliceAge,
+  checkIdleGap,
+  sliceCloseClass,
+  SLICE_CLOSE_CLASS,
 } from "./slicer";
+export type { SliceCloseClass } from "./slicer";
 
 export {
   normalizeStrandKey,

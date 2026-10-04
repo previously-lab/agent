@@ -1,73 +1,68 @@
 /**
- * Librarian + scribe — the document write path at the housekeeping boundary
- * (v0.15 design §3.2, §4.3).
+ * Case writers + scribe — the document write path (v0.19 §A.2.3, §B.3, §B.6).
  *
- * THE LIBRARIAN (主题之家维护, §3.2): evolved from the old strand-consolidator
- * description pass. Invoked at the slice-close boundary (the existing
- * mechanical trigger), it judges FOR ITSELF whether anything is worth
- * writing — an empty run is a legal outcome (axiom D: the old ≥5-new-slices /
- * 7-day-cooldown / ≤10-per-pass semantic gates are all deleted; cost
- * discipline comes from the rarity of the trigger — close boundaries only —
- * plus the engineering fuses: step cap + timeout).
+ * THE CASE WRITER (边界 run ①, the old librarian re-shaped): invoked once per
+ * closed slice, it judges FOR ITSELF whether anything is worth writing — an
+ * empty run is a legal outcome (强制触发 ≠ 强制变异; axiom D: no semantic
+ * gates). Tags are dead (R2): "which cases did this slice touch" is the
+ * WRITER'S OWN judgment over the case manifest — writer-is-reader is
+ * structural (§A.2.3): engineering assembles the listTree manifest into the
+ * prompt, the writer reads the current text of the cases it judges relevant
+ * via the readCase tool, then returns write-intents that engineering applies
+ * through the five case ops (§B.3) under the per-case lock. It has no write
+ * tools — the old "blind description" disease cannot recur.
  *
- * Writer-is-reader (§4.3) is STRUCTURAL here, not a prompt plea: the
- * engineering layer assembles the closed slice's content and the full current
- * text of every touched topic home into the prompt BEFORE the call, and the
- * model has no write tools — it returns write-intents that engineering
- * validates and applies through the src/lib/docs pure ops under the per-doc
- * lock. The old consolidator's "blind description" disease (prompt carried
- * only slice ids, no content, no read tools) cannot recur in this shape.
+ * THE SCRIBE (书记段序 7, §A.2.2): picks up the structured one-line markers
+ * the reply segment drops into the slice's agent.md and writes them into
+ * cases: tasks/<名> (date-anchored), research/<名> (sediment), or the five
+ * entity categories. A processed marker gets a `[doc-scribe]` record line in
+ * the same agent.md so a marker is never written twice.
  *
- * Evidence-while-writing (§4.3): every entry the pass lands carries the
- * triggering slice id, stamped MECHANICALLY by the engineering layer — the
- * model can no more forget it than it can forge it.
- *
- * THE SCRIBE (书记段, §3.1/§3.6): picks up the structured one-line markers
- * the reply segment drops into the slice's agent.md ("这值得沉淀 / 这该开个
- * 任务") and writes them into docs/research (sediment), docs/<entityKind>/
- * (entity updates), or docs/task/ (date-anchored task docs). Markers are the
- * inter-stream mailbox (§3.1); a processed marker gets a `[doc-scribe]`
- * record line in the same agent.md so a marker is never written twice.
- *
- * THE MARKER CONTRACT (owned by this module, consumed by the future reply
- * segment — v0.11): one line in agent.md,
+ * THE MARKER CONTRACT (owned by this module, §A.3.1): one line in agent.md,
  *   [doc-marker] {"v":1,"id":"<turnId>-<n>","kind":"sediment|task|question",
  *     "docType":"research|entity","entityKind":"event|person|object|place|org",
- *     "target":"<existing doc file name, optional>","title":"...",
+ *     "target":"<existing case ref 分类/case名, optional>","title":"...",
  *     "dateAnchor":"YYYY-MM-DD (task only)","note":"...","topics":["..."]}
- * "question" markers are NOT the scribe's — they route to the background
- * research pass (flash/doc-research.ts).
+ * `topics` is LEGACY (the strand layer is gone) — tolerated, ignored.
+ * "question" markers are NOT the scribe's — they route to the research pass
+ * (flash/doc-research.ts).
+ *
+ * Evidence-while-writing: the triggering slice id is stamped mechanically
+ * into every landed body — the model can no more forget it than forge it.
  *
  * Never throws at the top level: every failure degrades to a skipped item in
- * the result, so housekeeping is never taken down by a document write.
+ * the result, so the caller is never taken down by a document write.
  */
 import { tool } from "ai";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import type { ModelConfig } from "@/lib/models/registry";
-import type { StrandIndex } from "@/lib/episodic/types";
 import {
-  appendEntry,
-  buildDocFileName,
-  createDocSkeleton,
-  isValidDate,
-  isValidDocFileName,
-  markStatus,
-  normalizeDocRef,
-  rewriteAsOf,
-  serializeDoc,
-  type DocKind,
-  type ParsedDoc,
+  CASE_CATEGORIES,
+  appendTail,
+  caseIndexPath,
+  casePiecePath,
+  closeDoc,
+  createCase,
+  createDoc,
+  isCaseCategory,
+  isValidCaseName,
+  parseCaseDoc,
+  parseCaseRef,
+  resolveCaseRefPaths,
+  rewriteBody,
+  serializeCaseDoc,
+  type CaseCategory,
 } from "@/lib/docs";
 import {
   fsReadFile,
   fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
-import { readTopicDoc } from "@/lib/episodic/strand-files";
-import { updateDocUnderLock } from "@/lib/episodic/doc-lock";
+import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
+import { readSlicePart, readSlicePartResolved } from "../paths";
 
 // ─── Shared bits ───────────────────────────────────────────────────────────
 
@@ -103,312 +98,12 @@ export function buildSliceExcerpt(slice: {
   };
 }
 
-/** Evidence-while-writing, mechanical: the triggering slice id rides every entry. */
+/** Evidence-while-writing, mechanical: the triggering slice id rides every landed body. */
 function stampEvidence(body: string, sliceId: string): string {
   return `${body.trim()}\n\n（证据切片：${sliceId}）`;
 }
 
-/** Strip the `.md` for prose references (design §2.2: the suffix may be omitted). */
-function proseRef(fileName: string): string {
-  return fileName.replace(/\.md$/, "");
-}
-
-// ─── Topic-home directory entries (名录) ───────────────────────────────────
-
-/**
- * Append a 名录 entry to a topic's home ("《…》开设" / "《…》结案" / …), in
- * the SAME batch as the document write that occasioned it (design §3.2:
- * 文档开设/结案时同一次 WriteBatch 给之家追加名录条目; the batch is not a
- * transaction — a half-failure is visible, never blocking).
- *
- * A home that does not exist yet is OPENED by this call — 第一篇文档落地时
- * 新开之家 is one of the two legitimate birth moments (§3.2). The topic name
- * must pass the topic naming rule; an illegal name is refused, never written.
- */
-export async function appendTopicDirectoryEntry(input: {
-  topic: string;
-  docFileName: string;
-  /** The directory verb — a prose convention (开设/结案/作废/更新), not an enum. */
-  action: string;
-  date: string;
-  note?: string;
-  batch?: WriteBatch;
-}): Promise<{ ok: boolean; reason?: string }> {
-  const { topic, docFileName, action, date, note, batch } = input;
-  const fileName = `${topic}.md`;
-  if (!isValidDocFileName(fileName, "topic")) {
-    return { ok: false, reason: `illegal topic name: ${JSON.stringify(topic)}` };
-  }
-  try {
-    // Legacy fallback: a home that exists only in the OLD location becomes
-    // the mutation's base, so the write lands in docs/topic WITHOUT losing
-    // the legacy 初始描述 entry (an in-lock read of the new location still
-    // wins when it exists).
-    const preRead = await readTopicDoc(topic, batch);
-    await updateDocUnderLock("topic", fileName, batch, (current) => {
-      const base =
-        current ??
-        preRead?.doc ??
-        createDocSkeleton({ fileName, kind: "topic", opened: date, heading: topic });
-      return appendEntry(base, {
-        date,
-        title: "名录",
-        body: `《${proseRef(docFileName)}》${action}。${note?.trim() ?? ""}`.trim(),
-      });
-    });
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
-  }
-}
-
-// ─── Merge fallout: void the merged-from homes (mechanical) ────────────────
-
-/**
- * When the strand-merge machinery collapses key `from` into `to`, the
- * merged-from home gets a dated 作废 entry ("已并入《X》") and status `void`
- * — the home is NOT deleted; its history stays readable (design §3.2). A
- * strand with no home (bare index) has nothing to void. Mechanical — no LLM.
- */
-export async function voidMergedTopicHomes(
-  merges: Array<{ from: string; to: string }>,
-  date: string,
-  batch?: WriteBatch,
-): Promise<{ voided: string[]; skipped: Array<{ name: string; reason: string }> }> {
-  const voided: string[] = [];
-  const skipped: Array<{ name: string; reason: string }> = [];
-  for (const { from, to } of merges) {
-    const fileName = `${from}.md`;
-    if (!isValidDocFileName(fileName, "topic")) {
-      skipped.push({ name: from, reason: "illegal topic name" });
-      continue;
-    }
-    try {
-      const preRead = await readTopicDoc(from, batch);
-      if (!preRead) {
-        skipped.push({ name: from, reason: "no home file" });
-        continue;
-      }
-      const result = await updateDocUnderLock("topic", fileName, batch, (current) => {
-        const base = current ?? preRead.doc;
-        const withEntry = appendEntry(base, {
-          date,
-          title: `作废 — 已并入《${to}》`,
-          body:
-            `strands 键 «${from}» 已并入 «${to}»。本之家自即日起作废，` +
-            `历史条目保留备查；后续动态见《${to}》。`,
-        });
-        return markStatus(withEntry, "void", date);
-      });
-      if (result.wrote) voided.push(from);
-      else skipped.push({ name: from, reason: "no home file" });
-    } catch (e) {
-      skipped.push({ name: from, reason: e instanceof Error ? e.message : String(e) });
-    }
-  }
-  return { voided, skipped };
-}
-
-// ─── The librarian pass (LLM, close-boundary) ──────────────────────────────
-
-const librarianSchema = z.object({
-  homes: z
-    .array(
-      z.object({
-        strand: z.string().describe("The strand key this write targets. MUST be one listed in the user message."),
-        action: z
-          .enum(["skip", "open", "append"])
-          .describe(
-            "skip: nothing worth writing (a legal, often correct answer). " +
-            "open: create this strand's home (it has none yet). " +
-            "append: add a dated 动态 entry to the existing home.",
-          ),
-        entryTitle: z.string().optional().describe("Free entry name, e.g. 动态 / 开篇. Required for open/append."),
-        body: z.string().optional().describe("The entry prose. Required for open/append."),
-        asOf: z.string().optional().describe("New one-sentence 截至 understanding of the topic, when it moved."),
-      }),
-    )
-    .max(50),
-  reasoning: z.string().describe("1-2 sentences for the developer log, incl. why strands were skipped."),
-});
-
-const LIBRARIAN_SYSTEM = buildSubAgentSystem(`You are the librarian of a personal memory system. You maintain TOPIC HOMES (主题之家): one prose home per topic strand — what the topic is, what happened to it, which documents hang under it.
-
-A "strand" is a keyword threading through time slices. When a slice closes, you are shown: the slice's content (excerpt), and the strands it touched WITH their current homes in full. You have already read everything you may write about — never invent beyond the shown material.
-
-## Task
-
-Decide, PER STRAND, whether the closed slice carries something worth recording in its home:
-- append: the topic moved — something happened, an understanding changed, a decision landed. Write one dated 动态 entry.
-- open: the strand has no home yet AND it has become a real thread worth a home (a one-off mention is NOT — it stays in the slices).
-- skip: nothing worth writing. Skipping everything is a legal, often correct outcome. Restraint is the default: the home is the topic's long-term memory, not a chat log.
-
-## Rules
-
-1. Ground every entry in the shown slice content. No speculation, no boilerplate ("用户继续讨论了…" is not an entry).
-2. Entries are prose, in the user's language. Never put slice rosters or date bookkeeping in the prose — dates and evidence are stamped mechanically.
-3. Update the 截至 sentence (asOf) only when the one-sentence understanding of the topic actually moved.
-4. A home is append-only: you may add entries and refresh the 截至 sentence, never rewrite old entries.
-
-## Output
-
-Call \`librarianOutput\` with one decision per strand + a short reasoning note.`);
-
-function buildLibrarianPrompt(input: {
-  excerpt: SliceExcerpt;
-  closedSliceId: string;
-  homes: Array<{ name: string; sliceCount: number; doc: ParsedDoc | null }>;
-}): string {
-  const homeBlocks = input.homes
-    .map(({ name, sliceCount, doc }) => {
-      const current = doc
-        ? serializeDoc(doc).trim()
-        : "（尚无之家——值得时才开设）";
-      return `### ${name}（${sliceCount} 片）\n\n${current}`;
-    })
-    .join("\n\n");
-
-  return `## 刚关闭的切片 ${input.closedSliceId}
-
-focus: ${input.excerpt.focus || "（无）"}
-summary: ${input.excerpt.summary || "（无）"}
-
-${input.excerpt.turnsExcerpt || "（无对话摘录）"}
-
-## 触及的主题之家（全文如上，写前已读）
-
-${homeBlocks}
-
-按指示给出每个主题的决定。`;
-}
-
-export interface LibrarianPassInput {
-  model: ModelConfig;
-  closedSliceId: string;
-  excerpt: SliceExcerpt;
-  /** The post-consolidation strand index (authoritative key set). */
-  strands: StrandIndex;
-  /** Merges applied this boundary — their merged-from homes are voided first. */
-  merges: Array<{ from: string; to: string }>;
-  /** User-local date (YYYY-MM-DD) stamping every write. */
-  date: string;
-  batch?: WriteBatch;
-}
-
-export interface LibrarianPassResult {
-  voided: string[];
-  llmRan: boolean;
-  written: string[];
-  skipped: Array<{ name: string; reason: string }>;
-}
-
-/**
- * The librarian pass. Mechanical merge fallout first (void merged-from
- * homes), then — when the closed slice touched any strand — one LLM call
- * over the touched homes. Never throws.
- */
-export async function runLibrarianPass(
-  input: LibrarianPassInput,
-): Promise<LibrarianPassResult> {
-  const { model, closedSliceId, excerpt, strands, merges, date, batch } = input;
-  const skipped: Array<{ name: string; reason: string }> = [];
-
-  const mergeFallout = await voidMergedTopicHomes(merges, date, batch);
-  skipped.push(...mergeFallout.skipped);
-
-  const relPath = closedSliceId.replace(/-/g, "/");
-  const touched = Object.keys(strands).filter((k) => strands[k].includes(relPath));
-  if (touched.length === 0) {
-    return { voided: mergeFallout.voided, llmRan: false, written: [], skipped };
-  }
-
-  // Writer-is-reader: the homes enter the prompt BEFORE the call, in full.
-  const homes: Array<{ name: string; sliceCount: number; doc: ParsedDoc | null }> = [];
-  for (const name of touched) {
-    try {
-      const home = await readTopicDoc(name, batch);
-      homes.push({ name, sliceCount: strands[name].length, doc: home?.doc ?? null });
-    } catch (e) {
-      skipped.push({ name, reason: e instanceof Error ? e.message : String(e) });
-    }
-  }
-  if (homes.length === 0) {
-    return { voided: mergeFallout.voided, llmRan: false, written: [], skipped };
-  }
-
-  const result = await runSubAgent({
-    model,
-    system: LIBRARIAN_SYSTEM,
-    prompt: buildLibrarianPrompt({ excerpt, closedSliceId, homes }),
-    temperature: 0,
-    maxSteps: 50,
-    timeoutMs: 30_000,
-    tools: {
-      librarianOutput: tool({
-        description: "Report the per-strand home decisions.",
-        inputSchema: librarianSchema,
-      }),
-    },
-    toolChoice: "required",
-    reportToolName: "librarianOutput",
-    reportSchema: librarianSchema,
-    progress: { toolName: "librarian" },
-  });
-  if (!result.ok || !result.report) {
-    return {
-      voided: mergeFallout.voided,
-      llmRan: true,
-      written: [],
-      skipped: [...skipped, { name: "*", reason: result.error ?? "no librarian report" }],
-    };
-  }
-
-  const written: string[] = [];
-  const validStrands = new Set(touched);
-  for (const op of result.report.homes) {
-    if (op.action === "skip") continue;
-    if (!validStrands.has(op.strand)) {
-      skipped.push({ name: op.strand, reason: "not a touched strand" });
-      continue;
-    }
-    const body = op.body?.trim();
-    if (!body) {
-      skipped.push({ name: op.strand, reason: "empty entry body" });
-      continue;
-    }
-    const fileName = `${op.strand}.md`;
-    if (!isValidDocFileName(fileName, "topic")) {
-      skipped.push({ name: op.strand, reason: "illegal topic name" });
-      continue;
-    }
-    try {
-      // A legacy-only home (read above for the prompt) is the write's base,
-      // so appending never drops the migrated 初始描述 entry.
-      const preRead = homes.find((h) => h.name === op.strand)?.doc ?? null;
-      const applied = await updateDocUnderLock("topic", fileName, batch, (current) => {
-        const base =
-          current ??
-          preRead ??
-          createDocSkeleton({ fileName, kind: "topic", opened: date, heading: op.strand });
-        let next = appendEntry(base, {
-          date,
-          title: (op.entryTitle?.trim() || (current ? "动态" : "开篇")).trim(),
-          body: stampEvidence(body, closedSliceId),
-        });
-        const asOf = op.asOf?.trim();
-        if (asOf) next = rewriteAsOf(next, { date, text: asOf });
-        return next;
-      });
-      if (applied.wrote) written.push(op.strand);
-    } catch (e) {
-      skipped.push({ name: op.strand, reason: e instanceof Error ? e.message : String(e) });
-    }
-  }
-
-  return { voided: mergeFallout.voided, llmRan: true, written, skipped };
-}
-
-// ─── Markers: the agent.md mailbox (pure parsing) ──────────────────────────
+// ─── Markers: the agent.md mailbox (pure parsing, §A.3.1 — unchanged) ───────
 
 export const DOC_MARKER_PREFIX = "[doc-marker]";
 export const SCRIBE_RECORD_PREFIX = "[doc-scribe]";
@@ -423,15 +118,15 @@ const markerSchema = z.object({
   docType: z.enum(["research", "entity"]).optional(),
   /** sediment+entity only: which of the five entity kinds. */
   entityKind: z.enum(["event", "person", "object", "place", "org"]).optional(),
-  /** Optional existing document file name this marker updates. */
+  /** Optional existing case reference (分类/case名) this marker updates. */
   target: z.string().optional(),
-  /** The doc's title (命名纪律: specific enough that a scope change means a new doc). */
+  /** The case's name (命名纪律: specific enough that a scope change means a new case). */
   title: z.string().min(1),
   /** task only: the date anchor the user stated. */
   dateAnchor: z.string().optional(),
   /** What this is about — the reply segment's one-line note. */
   note: z.string().default(""),
-  /** Topic strands (strands.json keys) this doc belongs to. */
+  /** LEGACY (strands are gone) — tolerated, ignored by the case writers. */
   topics: z.array(z.string()).catch([]).default([]),
 });
 
@@ -485,85 +180,433 @@ export function extractProcessedMarkerIds(agentMd: string, prefix: string): Set<
   return ids;
 }
 
-// ─── The scribe pass (书记段) ──────────────────────────────────────────────
+// ─── The case write machinery (the five ops, §B.3) ─────────────────────────
+
+/**
+ * One validated write intent, in the writer's vocabulary. Engineering applies
+ * it through the five pure ops under the per-case lock — the ops themselves
+ * are the enforcement point for illegal transitions (rewriteBody on a sealed
+ * doc, appendTail on a living one, open on an existing case all throw, loud
+ * and visible).
+ */
+export type CaseWriteIntent =
+  | { action: "open"; category: CaseCategory; caseName: string; body: string }
+  | { action: "rewriteIndex"; category: CaseCategory; caseName: string; body: string }
+  | { action: "appendTail"; category: CaseCategory; caseName: string; line: string }
+  | { action: "addPiece"; category: CaseCategory; caseName: string; title: string; body: string }
+  | { action: "close"; category: CaseCategory; caseName: string; note: string };
+
+export interface CaseWriteOutcome {
+  /** The repo-relative path written. */
+  path: string;
+  /** True when a new file was created (open / addPiece). */
+  created: boolean;
+}
+
+/**
+ * Apply one write intent: per-case lock (`doc:<分类>/<case名>`, §A.3.4), a
+ * FRESH read of the case's index.md inside the lock, the pure op, serialize,
+ * write through the batch-aware fs. Throws on every contract violation — the
+ * caller records the refusal as a visible skip.
+ */
+export async function applyCaseWriteIntent(
+  intent: CaseWriteIntent,
+  date: string,
+  batch?: WriteBatch,
+): Promise<CaseWriteOutcome> {
+  const { category, caseName } = intent;
+  if (!isCaseCategory(category)) {
+    throw new Error(`unknown category: ${JSON.stringify(category)}`);
+  }
+  if (!isValidCaseName(caseName)) {
+    throw new Error(`illegal case name: ${JSON.stringify(caseName)}`);
+  }
+  const identity = `${category}/${caseName}`;
+  const indexPath = caseIndexPath(category, caseName);
+
+  return withSliceLock(`doc:${identity}`, async () => {
+    let currentRaw: string | null = null;
+    try {
+      currentRaw = await fsReadFile(indexPath, batch, { fresh: true });
+    } catch {
+      currentRaw = null; // no index.md yet — the case does not exist (in this root)
+    }
+    const current =
+      currentRaw === null
+        ? null
+        : parseCaseDoc(currentRaw, { category, caseName, fileName: "index.md" });
+
+    switch (intent.action) {
+      case "open": {
+        if (current) {
+          throw new Error(`case ${identity} already exists — use updateIndex / appendTail / addPiece`);
+        }
+        const doc = createCase({ category, caseName, opened: date, body: intent.body });
+        await fsWriteFile(indexPath, serializeCaseDoc(doc), batch);
+        return { path: indexPath, created: true };
+      }
+      case "rewriteIndex": {
+        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        // Throws when sealed (sealed 正文 is frozen — the tail is writable).
+        const next = rewriteBody(current, intent.body);
+        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
+        return { path: indexPath, created: false };
+      }
+      case "appendTail": {
+        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        // Throws while 还在写 (drafts are rewritten, not annotated).
+        const next = appendTail(current, { date, text: intent.line });
+        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
+        return { path: indexPath, created: false };
+      }
+      case "addPiece": {
+        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        // buildPieceFileName inside createDoc throws on an illegal title.
+        const doc = createDoc({ category, caseName, date, title: intent.title, body: intent.body });
+        const piecePath = casePiecePath(category, caseName, doc.fileName);
+        await fsWriteFile(piecePath, serializeCaseDoc(doc), batch);
+        return { path: piecePath, created: true };
+      }
+      case "close": {
+        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        // Throws when already sealed.
+        const next = closeDoc(current, { date, note: intent.note });
+        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
+        return { path: indexPath, created: false };
+      }
+    }
+  });
+}
+
+/**
+ * The readCase read-tool every case writer gets: two-segment reference →
+ * the current full text, or a visible dead-link line. Writer-is-reader is
+ * structural — a writer reads a case before naming it in a write intent.
+ */
+export function makeCaseReadTool(batch?: WriteBatch) {
+  return tool({
+    description:
+      "Read a case by its two-segment reference: '分类/case名' → the case's index.md; " +
+      "'分类/case名/篇名' → one dated piece. Returns the full text, or a dead-link note.",
+    inputSchema: z.object({ ref: z.string() }),
+    execute: async ({ ref }: { ref: string }) => {
+      const parsed = parseCaseRef(ref);
+      if (!parsed) return `（无法解析的引用 "${ref}" — 应是 分类/case名[/篇名]）`;
+      for (const path of resolveCaseRefPaths(parsed)) {
+        try {
+          return await fsReadFile(path, batch);
+        } catch {
+          continue;
+        }
+      }
+      return `（死链：${ref} — 新根与旧根都未找到。先 listTree 看清单。）`;
+    },
+  });
+}
+
+/** The set of existing case identities (`分类/case名`) in a listTree manifest. */
+export function caseIdentsOfManifest(tree: Record<string, string[]>): Set<string> {
+  const idents = new Set<string>();
+  for (const [top, paths] of Object.entries(tree)) {
+    if (!isCaseCategory(top)) continue;
+    for (const p of paths) {
+      const segs = p.split("/");
+      if (segs.length >= 2 && segs[1]) idents.add(`${top}/${segs[1]}`);
+    }
+  }
+  return idents;
+}
+
+/** Render the manifest for a writer prompt: grouped paths, compactly. */
+export function renderManifest(tree: Record<string, string[]>): string {
+  const blocks = Object.entries(tree)
+    .map(([top, paths]) => `### ${top}/\n${paths.join("\n")}`)
+    .join("\n\n");
+  return blocks || "（清单为空——记忆还没有任何 case）";
+}
+
+// ─── The case-writer pass (边界 run ①, the old librarian re-shaped) ────────
+
+const caseWriterSchema = z.object({
+  cases: z
+    .array(
+      z.object({
+        action: z
+          .enum(["skip", "open", "updateIndex", "appendTail", "addPiece", "close"])
+          .describe(
+            "skip: nothing worth writing (a legal, often correct answer). " +
+            "open: create a NEW case (must not exist yet). " +
+            "updateIndex: rewrite the 正文 of an EXISTING, still-being-written case (body = the new full understanding). " +
+            "appendTail: one dated supplement line on a SEALED case. " +
+            "addPiece: a dated piece inside the case. " +
+            "close: seal the case (note = 去向说明).",
+          ),
+        category: z.enum(CASE_CATEGORIES),
+        caseName: z.string().describe("The case name — legal: no 4-digit lead, no separators/traversal/edge whitespace."),
+        /** open/updateIndex/addPiece: the 正文 (updateIndex = the WHOLE new body). */
+        body: z.string().optional(),
+        /** appendTail only. */
+        line: z.string().optional(),
+        /** addPiece only — the piece title (date is stamped mechanically). */
+        title: z.string().optional(),
+        /** close only — 封口/去向说明. */
+        note: z.string().optional(),
+      }),
+    )
+    .max(20),
+  reasoning: z.string().describe("1-2 sentences for the developer log, incl. why cases were skipped."),
+});
+
+const CASE_WRITER_SYSTEM = buildSubAgentSystem(`You are the case writer of a personal memory system (v0.19). Memory is a tree of CASES — one directory per case under a closed category (people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/), each with an index.md (what it is, where it stands) and dated pieces.
+
+A conversation slice just closed. You are shown its content (excerpt) and the case manifest (the whole memory tree, paths only). Judge for yourself WHICH cases this slice touched — read the current text of the ones you consider via readCase BEFORE naming them in a write. You have no write tools: you return write-intents that engineering validates and applies.
+
+## Task
+
+Per case you judge touched:
+- The case does not exist and this slice's content deserves a durable home → open (body = the index.md 正文: what it is, what this slice established).
+- The case exists and is still being written → updateIndex: rewrite the 正文 with the case's CURRENT full understanding (this slice's news merged in). Drafts are rewritten whole, not appended.
+- The case is sealed (closed date in the header) → appendTail: ONE dated line (说得完时) or addPiece (自成一篇时).
+- A research/question case reached its conclusion → close (note = 去向/结论).
+- Nothing worth writing → skip. Skipping EVERYTHING is a legal, often correct outcome: restraint is the default, a case is long-term memory, not a chat log.
+
+## Rules
+
+1. Ground every write in the slice excerpt and what you actually read (readCase). No speculation, no boilerplate.
+2. Prose, in the user's language. No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+3. Names are permanent: a case name is born fixed. Content beyond a case's scope → open a NEW case (and say so in reasoning), never stretch a name.
+4. updateIndex replaces the whole 正文 of a living draft; sealed cases only grow via appendTail/addPiece. Never restate history a case already carries — fold it in silently.
+
+## Output
+
+Call \`caseWriterOutput\` with one decision per case + a short reasoning note.`);
+
+export interface CaseWriterManifest {
+  truncated: boolean;
+  tree: Record<string, string[]>;
+}
+
+export interface LibrarianPassInput {
+  model: ModelConfig;
+  closedSliceId: string;
+  excerpt: SliceExcerpt;
+  /**
+   * The listTree manifest — the writer reads it to judge what this slice
+   * touched. Optional at the seam: a caller that has not wired the manifest
+   * yet gets an empty tree (the writer then knows only what readCase tells
+   * it — degraded but functional).
+   */
+  manifest?: CaseWriterManifest;
+  /** User-local date (YYYY-MM-DD) stamping every write. */
+  date: string;
+  batch?: WriteBatch;
+  /** @deprecated R3a: tags/strands are dead — the writer judges from the manifest. Ignored. */
+  strands?: unknown;
+  /** @deprecated R3a: strand merges died with the strand layer. Ignored. */
+  merges?: unknown;
+}
+
+export interface LibrarianPassResult {
+  /** @deprecated R3a: always [] (merge fallout died with the strand layer). */
+  voided: string[];
+  llmRan: boolean;
+  written: string[];
+  skipped: Array<{ name: string; reason: string }>;
+}
+
+/**
+ * The case-writer pass (边界 run ①). The writer judges over the manifest +
+ * its own readCase reads which cases the closed slice touched; engineering
+ * applies the returned intents through the five ops under the per-case lock.
+ * Never throws.
+ */
+export async function runLibrarianPass(
+  input: LibrarianPassInput,
+): Promise<LibrarianPassResult> {
+  const { model, closedSliceId, excerpt, date, batch } = input;
+  const manifest = input.manifest ?? { truncated: false, tree: {} };
+  const skipped: Array<{ name: string; reason: string }> = [];
+  const existing = caseIdentsOfManifest(manifest.tree);
+
+  const prompt = `## 刚关闭的切片 ${closedSliceId}
+
+focus: ${excerpt.focus || "（无）"}
+summary: ${excerpt.summary || "（无）"}
+
+${excerpt.turnsExcerpt || "（无对话摘录）"}
+
+## case 清单（listTree 全树；判断"这一片碰到哪些 case"是你的工作——用 readCase 读你要写的 case 现状）
+
+${renderManifest(manifest.tree)}
+${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readCase 的死链为准）\n" : ""}
+按指示给出每个 case 的决定。`;
+
+  const result = await runSubAgent({
+    model,
+    system: CASE_WRITER_SYSTEM,
+    prompt,
+    temperature: 0,
+    maxSteps: 50,
+    timeoutMs: 30_000,
+    tools: {
+      readCase: makeCaseReadTool(batch),
+      caseWriterOutput: tool({
+        description: "Report the per-case write decisions.",
+        inputSchema: caseWriterSchema,
+      }),
+    },
+    toolChoice: "required",
+    reportToolName: "caseWriterOutput",
+    reportSchema: caseWriterSchema,
+    progress: { toolName: "librarian" },
+  });
+  if (!result.ok || !result.report) {
+    return {
+      voided: [],
+      llmRan: true,
+      written: [],
+      skipped: [...skipped, { name: "*", reason: result.error ?? "no case-writer report" }],
+    };
+  }
+
+  const written: string[] = [];
+  for (const op of result.report.cases) {
+    if (op.action === "skip") continue;
+    const identity = `${op.category}/${op.caseName}`;
+    // Read-before-write, structural: updating a case that is not in the
+    // manifest means the writer never saw its current state.
+    if (op.action !== "open" && !existing.has(identity)) {
+      skipped.push({ name: identity, reason: "case not in the manifest — readCase it first (dead link?)" });
+      continue;
+    }
+    if (op.action === "open" && existing.has(identity)) {
+      skipped.push({ name: identity, reason: "case already exists — use updateIndex / appendTail / addPiece" });
+      continue;
+    }
+    try {
+      let intent: CaseWriteIntent;
+      switch (op.action) {
+        case "open":
+          if (!op.body?.trim()) throw new Error("open requires a body (the index.md 正文)");
+          intent = { action: "open", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
+          break;
+        case "updateIndex":
+          if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new 正文)");
+          intent = { action: "rewriteIndex", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
+          break;
+        case "appendTail":
+          if (!op.line?.trim()) throw new Error("appendTail requires a line");
+          intent = { action: "appendTail", category: op.category, caseName: op.caseName, line: `${op.line.trim()}（证据切片：${closedSliceId}）` };
+          break;
+        case "addPiece":
+          if (!op.title?.trim() || !op.body?.trim()) {
+            throw new Error("addPiece requires a title and a body");
+          }
+          intent = { action: "addPiece", category: op.category, caseName: op.caseName, title: op.title.trim(), body: stampEvidence(op.body, closedSliceId) };
+          break;
+        case "close":
+          if (!op.note?.trim()) throw new Error("close requires a note (去向说明)");
+          intent = { action: "close", category: op.category, caseName: op.caseName, note: op.note.trim() };
+          break;
+      }
+      const applied = await applyCaseWriteIntent(intent, date, batch);
+      written.push(applied.path.replace(/^memory\//, ""));
+    } catch (e) {
+      skipped.push({ name: identity, reason: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return { voided: [], llmRan: true, written, skipped };
+}
+
+// ─── The scribe pass (书记段序 7) ──────────────────────────────────────────
 
 const scribeSchema = z.object({
   entries: z
     .array(
       z.object({
         id: z.string().describe("The marker id this entry answers."),
-        entryTitle: z.string().describe("Free entry name, e.g. 开篇 / 更新."),
-        body: z.string().describe("The entry prose, grounded in the slice excerpt and the marker note."),
-        asOf: z.string().optional().describe("For a new or moved document: the one-sentence 截至 statement."),
+        /** The case's new full 正文 (open/updateIndex) or ONE tail line (sealed case). */
+        body: z.string().describe("The prose, grounded in the slice excerpt and the marker note."),
       }),
     )
     .max(20),
   reasoning: z.string().describe("1-2 sentences for the developer log."),
 });
 
-const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memory system. A conversation slice left MARKERS — one-line notes the reply segment dropped when it judged something worth sedimenting (a search/recall worth keeping, a task the user stated). Your job: write each marker into its document.
+const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memory system. A conversation slice left MARKERS — one-line notes the reply segment dropped when it judged something worth sedimenting (something to keep, a task the user stated). Your job: write each marker into its CASE.
 
-You are shown: the slice excerpt, and per marker the marker itself plus the CURRENT text of its target document when one exists. You have already read everything you may write about.
+You are shown: the slice excerpt, and per marker the marker itself plus the CURRENT index.md of its target case when one exists. You have already read everything you may write about.
 
 ## Task
 
-One entry per marker:
-- sediment (research): the opening entry states the question and why it was asked; entries record what THIS conversation established. A sediment is one conversation's search/recall, honestly scoped — not a cross-time investigation.
-- sediment (entity): record this conversation's new facts about the thing. A new document's opening entry says what it is and why it will be mentioned again.
-- task: the opening entry states WHAT is to be done, the date anchor, the background, and links; the status stream starts here ("状态：待办" unless the slice shows otherwise).
+One entry per marker — the body is:
+- a NEW case's opening 正文 (what it is, what this slice established — tasks state WHAT, the date anchor, background);
+- or, for an EXISTING case still being written, its new full 正文 — the current understanding with this slice's news folded in (rewrite whole, do not append);
+- or, for a SEALED case (closed date in the header), ONE dated supplement line.
 
 ## Rules
 
 1. Ground every entry in the slice excerpt and the marker note. No invention.
-2. Prose, in the user's language. No slice rosters, no date bookkeeping — dates and evidence ids are stamped mechanically.
-3. Entries append; only the 截至 sentence may be (re)stated. Never contradict a shown existing entry — add the new fact with its date.
+2. Prose, in the user's language. No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+3. Never contradict shown existing text — fold the new fact in with its sense preserved.
 
 ## Output
 
 Call \`scribeOutput\` with one entry per marker you wrote + a short reasoning note. Writing nothing for a marker leaves it for a later pass.`);
 
+/** The v0.15 singular entityKind → the v0.19 category (§B.6). */
+const ENTITY_CATEGORY: Record<string, CaseCategory> = {
+  event: "events",
+  person: "people",
+  object: "things",
+  place: "places",
+  org: "orgs",
+};
+
 interface ScribeTarget {
   marker: DocMarker;
-  kind: DocKind;
-  fileName: string;
+  category: CaseCategory;
+  caseName: string;
   existed: boolean;
   currentText: string | null;
 }
 
 /**
- * Resolve a marker to its target document. Returns null (+reason) when the
- * marker cannot name a legal document — a scribe never writes an illegal
- * name (the slice-id namespace red line included).
+ * Resolve a marker to its target case. Returns null (+reason) when the
+ * marker cannot name a legal case — a scribe never writes an illegal name
+ * (the slice-id namespace red line included).
  */
 function resolveScribeTarget(
   marker: DocMarker,
-  date: string,
-): { kind: DocKind; fileName: string } | { error: string } {
-  if (marker.kind === "task") {
-    try {
-      return { kind: "task", fileName: buildDocFileName("task", date, marker.title) };
-    } catch (e) {
-      return { error: e instanceof Error ? e.message : String(e) };
+): { category: CaseCategory; caseName: string } | { error: string } {
+  const validate = (
+    category: CaseCategory,
+    rawName: string,
+  ): { category: CaseCategory; caseName: string } | { error: string } => {
+    const caseName = rawName.trim();
+    if (!isValidCaseName(caseName)) {
+      return { error: `illegal case name: ${JSON.stringify(rawName)}` };
     }
+    return { category, caseName };
+  };
+
+  if (marker.kind === "task") return validate("tasks", marker.title);
+  if (marker.kind !== "sediment") {
+    return { error: `marker kind ${marker.kind} is not the scribe's` };
   }
-  // sediment
-  const kind: DocKind =
-    marker.docType === "entity" ? (marker.entityKind ?? "object") : "research";
-  if (marker.docType === "entity" && !marker.entityKind) {
-    return { error: "entity sediment requires entityKind" };
+  if (marker.docType === "entity") {
+    if (!marker.entityKind) return { error: "entity sediment requires entityKind" };
+    return validate(ENTITY_CATEGORY[marker.entityKind] ?? "things", marker.title);
   }
   if (marker.target) {
-    const canonical = normalizeDocRef(marker.target);
-    if (canonical && isValidDocFileName(canonical, kind)) {
-      return { kind, fileName: canonical };
+    const ref = parseCaseRef(marker.target);
+    if (ref && ref.kind !== "legacy") {
+      return validate(ref.category, ref.caseName);
     }
-    return { error: `illegal target document: ${JSON.stringify(marker.target)}` };
+    return { error: `illegal target case: ${JSON.stringify(marker.target)}` };
   }
-  try {
-    return { kind, fileName: buildDocFileName(kind, date, marker.title) };
-  } catch (e) {
-    return { error: e instanceof Error ? e.message : String(e) };
-  }
+  return validate("research", marker.title);
 }
 
 export interface ScribePassInput {
@@ -571,11 +614,11 @@ export interface ScribePassInput {
   /** The slice whose agent.md is the mailbox (closed slice at a boundary, else the active one). */
   sliceId: string;
   excerpt: SliceExcerpt;
-  /** Post-consolidation strand index — 名录 entries only land on real strands. */
-  strands: StrandIndex;
   /** User-local date (YYYY-MM-DD) stamping every write. */
   date: string;
   batch?: WriteBatch;
+  /** @deprecated R3a: strands are dead — 名录 died with the topic homes. Ignored. */
+  strands?: unknown;
 }
 
 export interface ScribePassResult {
@@ -586,17 +629,19 @@ export interface ScribePassResult {
 
 /**
  * The scribe pass: read the slice's agent.md, pick up unprocessed
- * sediment/task markers, write their documents (read-before-write under the
- * per-doc lock), append 名录 entries to the markers' topic homes, and record
- * each processed marker back into the same agent.md. Never throws.
+ * sediment/task markers, write their cases (read-before-write under the
+ * per-case lock, via the five ops), and record each processed marker back
+ * into the same agent.md. Never throws.
  */
 export async function runScribePass(input: ScribePassInput): Promise<ScribePassResult> {
-  const { model, sliceId, excerpt, strands, date, batch } = input;
+  const { model, sliceId, excerpt, date, batch } = input;
   const skipped: Array<{ id: string; reason: string }> = [];
 
   let agentMd: string;
   try {
-    agentMd = await fsReadFile(sliceIdToAgentPath(sliceId), batch);
+    // Dual-root read (v0.19 R2): the mailbox of a slice created before the
+    // root move lives under the legacy slices root.
+    agentMd = await readSlicePart(sliceId, "agent", batch);
   } catch {
     return { ran: false, written: [], skipped }; // no agent.md yet — nothing to pick up
   }
@@ -607,10 +652,10 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
   );
   if (todo.length === 0) return { ran: false, written: [], skipped };
 
-  // Resolve targets + pre-read the existing docs (writer-is-reader).
+  // Resolve targets + pre-read the current cases (writer-is-reader).
   const targets: ScribeTarget[] = [];
   for (const marker of todo) {
-    const resolved = resolveScribeTarget(marker, date);
+    const resolved = resolveScribeTarget(marker);
     if ("error" in resolved) {
       skipped.push({ id: marker.id, reason: resolved.error });
       continue;
@@ -618,7 +663,7 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
     let currentText: string | null = null;
     try {
       currentText = await fsReadFile(
-        `memory/docs/${resolved.kind}/${resolved.fileName}`,
+        caseIndexPath(resolved.category, resolved.caseName),
         batch,
         { fresh: true },
       );
@@ -627,8 +672,8 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
     }
     targets.push({
       marker,
-      kind: resolved.kind,
-      fileName: resolved.fileName,
+      category: resolved.category,
+      caseName: resolved.caseName,
       existed: currentText !== null,
       currentText,
     });
@@ -636,13 +681,13 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
   if (targets.length === 0) return { ran: false, written: [], skipped };
 
   const markerBlocks = targets
-    .map(({ marker, kind, fileName, existed, currentText }) => {
+    .map(({ marker, category, caseName, existed, currentText }) => {
       const head =
         `### marker ${marker.id}（kind=${marker.kind}${marker.docType ? `/${marker.docType}` : ""}` +
         `${marker.entityKind ? `/${marker.entityKind}` : ""}）\n` +
         `title: ${marker.title}\nnote: ${marker.note || "（无）"}` +
         `${marker.dateAnchor ? `\n日期锚: ${marker.dateAnchor}` : ""}\n` +
-        `目标文档: docs/${kind}/${fileName}（${existed ? "已存在，全文如下" : "将开设"}）`;
+        `目标 case: ${category}/${caseName}（${existed ? "已存在，index.md 全文如下" : "将开设"}）`;
       return currentText ? `${head}\n\n${currentText.trim()}` : head;
     })
     .join("\n\n");
@@ -654,7 +699,7 @@ summary: ${excerpt.summary || "（无）"}
 
 ${excerpt.turnsExcerpt || "（无对话摘录）"}
 
-## 待落笔的标记（写前已读目标文档）
+## 待落笔的标记（写前已读目标 case）
 
 ${markerBlocks}
 
@@ -669,7 +714,7 @@ ${markerBlocks}
     timeoutMs: 30_000,
     tools: {
       scribeOutput: tool({
-        description: "Report the per-marker document entries.",
+        description: "Report the per-marker case entries.",
         inputSchema: scribeSchema,
       }),
     },
@@ -689,7 +734,6 @@ ${markerBlocks}
   const byMarker = new Map(targets.map((t) => [t.marker.id, t]));
   const written: string[] = [];
   const recordLines: string[] = [];
-  const strandNames = new Set(Object.keys(strands));
 
   for (const entry of result.report.entries) {
     const target = byMarker.get(entry.id);
@@ -702,42 +746,32 @@ ${markerBlocks}
       skipped.push({ id: entry.id, reason: "empty entry body" });
       continue;
     }
-    const { marker, kind, fileName } = target;
+    const { marker, category, caseName } = target;
     // The task's date anchor is a mechanical fact — it rides the entry
     // whether the prose remembers it or not.
     const anchorLine =
-      marker.kind === "task" && marker.dateAnchor && isValidDate(marker.dateAnchor)
+      marker.kind === "task" && marker.dateAnchor
         ? `日期锚：${marker.dateAnchor}\n\n`
         : "";
+    const stamped = stampEvidence(anchorLine + body, sliceId);
     try {
-      await updateDocUnderLock(kind, fileName, batch, (current) => {
-        const base =
-          current ??
-          createDocSkeleton({ fileName, kind, opened: date, heading: marker.title });
-        let next = appendEntry(base, {
-          date,
-          title: entry.entryTitle.trim() || (current ? "更新" : "开篇"),
-          body: stampEvidence(anchorLine + body, sliceId),
+      let intent: CaseWriteIntent;
+      if (!target.existed) {
+        intent = { action: "open", category, caseName, body: stamped };
+      } else {
+        const current = parseCaseDoc(target.currentText ?? "", {
+          category,
+          caseName,
+          fileName: "index.md",
         });
-        const asOf = entry.asOf?.trim();
-        if (asOf) next = rewriteAsOf(next, { date, text: asOf });
-        return next;
-      });
-      written.push(fileName);
-
-      // 名录 entries — same batch, best-effort, only onto real strands.
-      for (const topic of marker.topics) {
-        if (!strandNames.has(topic)) continue;
-        await appendTopicDirectoryEntry({
-          topic,
-          docFileName: fileName,
-          action: target.existed ? "更新" : "开设",
-          date,
-          batch,
-        });
+        intent = current.closed
+          ? { action: "appendTail", category, caseName, line: stamped }
+          : { action: "rewriteIndex", category, caseName, body: stamped };
       }
+      const applied = await applyCaseWriteIntent(intent, date, batch);
+      written.push(applied.path.replace(/^memory\//, ""));
       recordLines.push(
-        `${SCRIBE_RECORD_PREFIX} {"id":${JSON.stringify(entry.id)},"doc":${JSON.stringify(fileName)}}`,
+        `${SCRIBE_RECORD_PREFIX} {"id":${JSON.stringify(entry.id)},"doc":${JSON.stringify(`${category}/${caseName}`)}}`,
       );
     } catch (e) {
       skipped.push({ id: entry.id, reason: e instanceof Error ? e.message : String(e) });
@@ -748,14 +782,19 @@ ${markerBlocks}
   // agent.md, so the next pass (any stream) never double-writes them.
   if (recordLines.length > 0) {
     try {
-      const fresh = await fsReadFile(sliceIdToAgentPath(sliceId), batch).catch(() => "");
+      // Dual-root read (the slice may predate the root move), and the record
+      // append goes back to the root the mailbox was actually read from —
+      // splitting markers (legacy) from records (new) would re-process every
+      // marker on the next pass.
+      const resolved = await readSlicePartResolved(sliceId, "agent", batch).catch(() => null);
+      const fresh = resolved?.content ?? "";
       const next = fresh.trimEnd()
         ? `${fresh.trimEnd()}\n\n${recordLines.join("\n")}\n`
         : `${recordLines.join("\n")}\n`;
-      await fsWriteFile(sliceIdToAgentPath(sliceId), next, batch);
+      await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next, batch);
     } catch {
-      // record loss means a marker may be re-processed — append-only docs
-      // make that a duplicate dated entry, visible and non-fatal (§4.3 rule 2).
+      // record loss means a marker may be re-processed — the case tail is
+      // append-only, so that is a duplicate dated line: visible, non-fatal.
     }
   }
 

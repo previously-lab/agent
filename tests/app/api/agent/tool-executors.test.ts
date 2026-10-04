@@ -1,7 +1,6 @@
 /**
- * Granular memory tools (v0.8) — readSliceSummary (frontmatter only) and
- * readTimelineWindow (catalog over a date window). Local mode; the read layer
- * is an in-memory Map.
+ * Tool executors — currentTime / describeRoom / webSearch / viewImage over an
+ * in-memory local fs (the memory-read executors moved to docs-tools.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -49,10 +48,13 @@ const deps = vi.hoisted(() => ({
   readPlaybook: vi.fn(async () => null),
   resolveSubAgentModel: vi.fn(async () => ({ id: "test-model" })),
 }));
-vi.mock("@/lib/episodic", () => ({
-  readStrands: deps.readStrands,
-  CURRENT_PREVIOUSLY_PATH: "memory/episodic/current-previously.md",
-}));
+vi.mock("@/lib/episodic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/episodic")>();
+  return {
+    ...actual,
+    readStrands: deps.readStrands,
+  };
+});
 vi.mock("@/lib/evolution/store", () => ({
   readPlaybook: deps.readPlaybook,
   capPlaybook: (s: string) => s,
@@ -114,8 +116,6 @@ vi.mock("@/lib/vision/describe-image", () => ({
 }));
 
 import {
-  readSliceSummaryExecute,
-  readTimelineWindowExecute,
   currentTimeExecute,
   describeRoomExecute,
   webSearchExecute,
@@ -144,133 +144,6 @@ function opts(overrides: Partial<ToolContext> = {}): {
   return { context: makeCtx(overrides), toolCallId: "tc1" };
 }
 
-const CORE_PATH =
-  "memory/episodic/slices/2026/08/11/1115/timeline/core.md";
-
-function seedSlice(): void {
-  local.files.set(
-    CORE_PATH,
-    [
-      "---",
-      "slice_id: 2026-08-11-1115",
-      "status: closed",
-      "start: '2026-08-11T11:15:15.117Z'",
-      "focus: '回顾滴滴时期绩效背锅'",
-      "summary: '用户倾诉滴滴经历，探讨平行宇宙'",
-      "tags:",
-      "  - 状态回忆",
-      "  - 创伤克服",
-      "emotional_tone: mixed",
-      "---",
-      "",
-      "## Turn t1 — 2026-08-11T11:15:15.117Z (user)",
-      "",
-      "第一轮",
-      "",
-      "## Turn t2 — 2026-08-11T11:20:00.000Z (agent)",
-      "",
-      "第二轮",
-    ].join("\n"),
-  );
-}
-
-beforeEach(() => {
-  local.files.clear();
-});
-
-describe("readSliceSummaryExecute", () => {
-  it("returns frontmatter fields + turn count (not the body)", async () => {
-    seedSlice();
-    const out = await readSliceSummaryExecute(
-      { sliceId: "2026-08-11-1115" },
-      opts(),
-    );
-    expect(out).toContain("slice 2026-08-11-1115");
-    expect(out).toContain("回顾滴滴时期绩效背锅");
-    expect(out).toContain("用户倾诉滴滴经历，探讨平行宇宙");
-    expect(out).toContain("状态回忆; 创伤克服");
-    expect(out).toContain("turns: 2");
-    expect(out).not.toContain("第一轮"); // never the body
-  });
-
-  it("rejects an invalid slice id", async () => {
-    const out = await readSliceSummaryExecute(
-      { sliceId: "not-a-slice" },
-      opts(),
-    );
-    expect(out).toContain("ERROR");
-  });
-
-  it("errors when the slice does not exist", async () => {
-    const out = await readSliceSummaryExecute(
-      { sliceId: "2026-08-11-9999" },
-      opts(),
-    );
-    expect(out).toContain("ERROR");
-  });
-});
-
-describe("readTimelineWindowExecute", () => {
-  const INDEX_PATH = "memory/episodic/timeline/index.json";
-
-  function seedIndex(): void {
-    local.files.set(
-      INDEX_PATH,
-      JSON.stringify({
-        _schema: 1,
-        updated_at: "2026-08-12T00:00:00.000Z",
-        slice_count: 2,
-        needs_marking: 0,
-        slices: [
-          {
-            id: "2026-08-11-1115",
-            date: "2026-08-11",
-            start: "2026-08-11T11:15:15.117Z",
-            status: "closed",
-            focus: "回顾滴滴时期绩效背锅",
-            summary: "…",
-            tags: ["状态回忆"],
-            strands: [],
-            needs_marking: false,
-          },
-          {
-            id: "2026-08-10-1839",
-            date: "2026-08-10",
-            start: "2026-08-10T18:39:01.366Z",
-            status: "closed",
-            focus: "地址研究",
-            summary: "…",
-            tags: [],
-            strands: [],
-            needs_marking: false,
-          },
-        ],
-      }),
-    );
-  }
-
-  it("filters the catalog by date window and renders pointer lines", async () => {
-    seedIndex();
-    const out = await readTimelineWindowExecute(
-      { from: "2026-08-11", to: "2026-08-11" },
-      opts(),
-    );
-    expect(out).toContain("2026-08-11-1115");
-    expect(out).toContain("回顾滴滴时期绩效背锅");
-    expect(out).not.toContain("2026-08-10-1839"); // outside window
-  });
-
-  it("omitting the window returns the recent slice first", async () => {
-    seedIndex();
-    const out = await readTimelineWindowExecute({}, opts());
-    expect(out.indexOf("2026-08-11-1115")).toBeLessThan(out.indexOf("2026-08-10-1839"));
-  });
-
-  it("degrades gracefully when the catalog is missing", async () => {
-    const out = await readTimelineWindowExecute({}, opts());
-    expect(out).toContain("尚不可用");
-  });
-});
 
 describe("currentTimeExecute", () => {
   beforeEach(() => {

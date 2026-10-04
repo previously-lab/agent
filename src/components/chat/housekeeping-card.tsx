@@ -10,8 +10,9 @@ import { cn } from "@/lib/utils";
 /**
  * Maps a running-phase i18n key to its done-state key. `slicing` is kept for
  * backward compatibility with messages streamed before the housekeeping phases
- * were granularized. Card evolution is NOT a housekeeping phase — it renders
- * as its own stream-positioned card (see evolution-card.tsx).
+ * were granularized. Card evolution is NOT a housekeeping phase — and since
+ * M3 not a conversation-side render at all (its frames feed only the
+ * companion pod via the evolution-activity bus).
  */
 export const PHASE_DONE_KEYS: Record<string, string> = {
   slicing: "sliced",

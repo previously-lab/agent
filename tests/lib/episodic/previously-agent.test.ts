@@ -298,7 +298,6 @@ describe("the merged direction half (directionEval)", () => {
     cardSelfModel: "- Don't decompose emotional venting with thinkDeep",
     recentEvents: [],
     analysis: {
-      messageTags: { reuse: [], create: [] },
       semanticHint: { strands: [], reason: "" },
       memoryWorthy: true,
       emotionalSignal: { intensity: "none", register: "neutral", note: "" },

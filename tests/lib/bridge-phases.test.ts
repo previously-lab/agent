@@ -66,7 +66,6 @@ const SLICE = "2026-08-22-1015";
 
 const VALID_REPORT: HousekeepingPhaseReport = {
   analysis: {
-    tags: { reuse: ["work"], create: ["interview-prep"] },
     semantic_hint: ["work"],
     intent: "chat",
     memory_worthy: true,
@@ -119,7 +118,6 @@ describe("buildHousekeepingPayload", () => {
       closingSlice: {
         sliceId: SLICE,
         turns: [{ role: "user", content: "old turn" }],
-        tags: ["work"],
       },
     });
     expect(task).toContain(`slice ${SLICE} IS closing`);
@@ -150,7 +148,6 @@ describe("buildHousekeepingPayload", () => {
       closingSlice: {
         sliceId: SLICE,
         turns: [{ role: "user", content: "old turn" }],
-        tags: [],
       },
       drySlices: [
         { sliceId: "2026-08-10-1401", conversation: "user: 旧对话\nassistant: 回复" },
@@ -174,7 +171,6 @@ describe("buildHousekeepingPayload", () => {
       closingSlice: {
         sliceId: SLICE,
         turns: [{ role: "user", content: "old turn" }],
-        tags: [],
       },
       strandsForMerge: [
         { name: "心态", slices: 3 },
@@ -548,7 +544,6 @@ describe("runHousekeepingBridge", () => {
 
   it("truncates over-cap arrays instead of rejecting the whole report", async () => {
     const fat = JSON.parse(JSON.stringify(VALID_REPORT));
-    fat.analysis.tags.reuse = ["a", "b", "c", "d", "e", "f", "g"];
     fat.analysis.semantic_hint = ["a", "b", "c", "d", "e", "f"];
     fat.backfill_marks = Array.from({ length: 5 }, (_, i) => ({
       slice_id: `2026-08-1${i}-1000`,
@@ -563,7 +558,6 @@ describe("runHousekeepingBridge", () => {
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.report.analysis.tags.reuse).toHaveLength(5);
     expect(res.report.analysis.semantic_hint).toHaveLength(5);
     expect(res.report.backfill_marks).toHaveLength(3);
   });
@@ -715,12 +709,9 @@ describe("isPhaseOutsourceActive", () => {
 // ─── report → TurnAnalysis adaptation ────────────────────────────────────
 
 describe("adaptHousekeepingReport / degradedAnalysis", () => {
-  it("maps the wire shape onto TurnAnalysis (create tags → {tag}, null → undefined)", () => {
+  it("maps the wire shape onto TurnAnalysis (semantic_hint → strands, null → undefined)", () => {
     const a = adaptHousekeepingReport(VALID_REPORT, false);
-    expect(a.messageTags).toEqual({
-      reuse: ["work"],
-      create: [{ tag: "interview-prep", reason: "" }],
-    });
+    expect(a.semanticHint).toEqual({ strands: ["work"], reason: "" });
     expect(a.memoryWorthy).toBe(true);
     expect(a.memoryUpdate).toBeUndefined();
     expect(a.evolveCard).toBeUndefined(); // not closing
@@ -733,7 +724,6 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
       closed_marking: {
         focus: "interview prep",
         summary: "talked through the friday interview",
-        tags: ["work"],
         tone: "excitedly positive nonsense", // not a valid tone
       },
     };
@@ -749,7 +739,7 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
   it("degradedAnalysis mirrors the analyzer's failure contract", () => {
     const a = degradedAnalysis();
     expect(a.memoryWorthy).toBe(true);
-    expect(a.messageTags).toEqual({ reuse: [], create: [] });
+    expect(a.semanticHint).toEqual({ strands: [], reason: "" });
     expect(a.evolveCard).toBeUndefined();
   });
 

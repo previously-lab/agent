@@ -12,7 +12,6 @@ import {
   toIndexEntry,
   sliceIdToRelPath,
   sliceIdToFilePath,
-  sliceIdToTimelineDir,
   sliceIdToAgentPath,
   sliceIdToPreviouslyPath,
   emptyPreviouslyTemplate,
@@ -22,7 +21,18 @@ import {
   writeCurrentPreviously,
   closeSlice,
   tryLoadTodaySlice,
+  loadSlice,
 } from "../manager";
+import {
+  sliceDir,
+  slicePartPath,
+  slicePartPathCandidates,
+  legacySlicePartPath,
+  indexPathCandidates,
+  readSlicePart,
+  RECORDS_ROOT,
+  LEGACY_SLICES_ROOT,
+} from "../paths";
 import type { TimeSlice, Turn } from "../types";
 
 // ─── Sample data ───────────────────────────────────────────────────────
@@ -60,8 +70,16 @@ describe("serializeSlice", () => {
     expect(md).toContain("---");
     expect(md).toContain("2024-03-15"); // slice_id may be quoted
     expect(md).toContain("focus: Project planning discussion");
-    expect(md).toContain("status: closed");
     expect(md).toContain("2024-03-15T10:00:00.000Z"); // start may be quoted
+  });
+
+  it("never writes status / tags / related_slices (v0.19 R2 header slimming)", () => {
+    const md = serializeSlice(sampleSlice);
+    expect(md).not.toContain("status:");
+    expect(md).not.toContain("tags:");
+    expect(md).not.toContain("related_slices:");
+    // The close record is closed_by alone — status derives from it on read.
+    expect(md).toContain("closed_by: user_explicit");
   });
 
   it("includes all turn headers in body with turnId labels", () => {
@@ -83,8 +101,6 @@ describe("serializeSlice", () => {
     expect(md).toContain("  - Need to confirm budget numbers");
     expect(md).toContain("decisions:");
     expect(md).toContain("  - Use color-coded checklist format");
-    expect(md).toContain("tags:");
-    expect(md).toContain("  - work");
   });
 
   it("omits undefined end field", () => {
@@ -127,7 +143,9 @@ describe("parseSlice", () => {
     expect(parsed.summary).toBe(sampleSlice.summary);
     expect(parsed.open_loops).toEqual(sampleSlice.open_loops);
     expect(parsed.decisions).toEqual(sampleSlice.decisions);
-    expect(parsed.tags).toEqual(sampleSlice.tags);
+    // tags / status are no longer written (R2 slimming): tags parse back as
+    // empty, status derives from closed_by.
+    expect(parsed.tags).toEqual([]);
     expect(parsed.emotional_tone).toBe(sampleSlice.emotional_tone);
   });
 
@@ -293,33 +311,65 @@ describe("sliceIdToRelPath", () => {
 });
 
 describe("sliceIdToFilePath", () => {
-  it("builds the core.md path under timeline/ for a time-bearing id", () => {
+  it("builds the new-root flat core.md path for a time-bearing id (v0.19 R2)", () => {
     expect(sliceIdToFilePath("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/timeline/core.md"
+      "memory/records/2026/07/10/1430/core.md"
     );
   });
 
   it("builds the core.md path for a date-only id", () => {
     expect(sliceIdToFilePath("2026-07-10")).toBe(
-      "memory/episodic/slices/2026/07/10/timeline/core.md"
+      "memory/records/2026/07/10/core.md"
     );
   });
 });
 
-// ─── New directory-based path functions ────────────────────────────────
+// ─── paths.ts dual-root module (v0.19 R2) ────────────────────────────────
 
-describe("sliceIdToTimelineDir", () => {
-  it("builds the timeline directory path", () => {
-    expect(sliceIdToTimelineDir("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/timeline"
+describe("paths — dual-root constants and builders", () => {
+  it("writes target the new flat records layout (no timeline/ level)", () => {
+    expect(sliceDir("2026-07-10-1430")).toBe("memory/records/2026/07/10/1430");
+    expect(slicePartPath("2026-07-10-1430", "core")).toBe(
+      "memory/records/2026/07/10/1430/core.md"
     );
+    expect(slicePartPath("2026-07-10-1430", "agent")).toBe(
+      "memory/records/2026/07/10/1430/agent.md"
+    );
+    expect(slicePartPath("2026-07-10-1430", "previously")).toBe(
+      "memory/records/2026/07/10/1430/previously.md"
+    );
+  });
+
+  it("maps the legacy layout (timeline/ level; previously at slice root)", () => {
+    expect(legacySlicePartPath("2026-07-10-1430", "core")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/timeline/core.md"
+    );
+    expect(legacySlicePartPath("2026-07-10-1430", "agent")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/timeline/agent.md"
+    );
+    expect(legacySlicePartPath("2026-07-10-1430", "previously")).toBe(
+      "memory/episodic/slices/2026/07/10/1430/previously.md"
+    );
+  });
+
+  it("orders read candidates new-root first, legacy on a miss", () => {
+    expect(slicePartPathCandidates("2026-07-10-1430", "core")).toEqual([
+      "memory/records/2026/07/10/1430/core.md",
+      "memory/episodic/slices/2026/07/10/1430/timeline/core.md",
+    ]);
+    expect(indexPathCandidates(2026, 7)).toEqual([
+      "memory/records/2026/07/_index.json",
+      "memory/episodic/slices/2026/07/_index.json",
+    ]);
+    expect(RECORDS_ROOT).toBe("memory/records");
+    expect(LEGACY_SLICES_ROOT).toBe("memory/episodic/slices");
   });
 });
 
 describe("sliceIdToAgentPath", () => {
-  it("builds the agent.md path", () => {
+  it("builds the new-root agent.md path", () => {
     expect(sliceIdToAgentPath("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/timeline/agent.md"
+      "memory/records/2026/07/10/1430/agent.md"
     );
   });
 });
@@ -412,15 +462,15 @@ New turn
 // ─── previously.md path ─────────────────────────────────────────────────
 
 describe("sliceIdToPreviouslyPath", () => {
-  it("builds the previously.md path at slice root (sibling to timeline/)", () => {
+  it("builds the new-root previously.md path", () => {
     expect(sliceIdToPreviouslyPath("2026-07-10-1430")).toBe(
-      "memory/episodic/slices/2026/07/10/1430/previously.md",
+      "memory/records/2026/07/10/1430/previously.md",
     );
   });
 
   it("builds the previously.md path for a date-only id", () => {
     expect(sliceIdToPreviouslyPath("2026-07-10")).toBe(
-      "memory/episodic/slices/2026/07/10/previously.md",
+      "memory/records/2026/07/10/previously.md",
     );
   });
 });
@@ -545,16 +595,21 @@ describe("closedBy round-trip", () => {
   });
 
   it("falls back to user_explicit for legacy closed slices without closed_by", () => {
+    // Legacy files carry an explicit `status: closed`; the shim derives
+    // closedBy from it when closed_by is absent.
     const md = serializeSlice({ ...sampleSlice, closedBy: undefined });
     expect(md).not.toContain("closed_by");
-    expect(parseSlice(md).closedBy).toBe("user_explicit");
+    const legacyMd = md.replace(/^---\n/, "---\nstatus: closed\n");
+    expect(parseSlice(legacyMd).closedBy).toBe("user_explicit");
   });
 
   it("falls back to user_explicit for an unknown closed_by value", () => {
     const md = serializeSlice({
       ...sampleSlice,
       closedBy: "capacity" as const,
-    }).replace("closed_by: capacity", "closed_by: bogus_signal");
+    })
+      .replace("closed_by: capacity", "closed_by: bogus_signal")
+      .replace(/^---\n/, "---\nstatus: closed\n");
     expect(parseSlice(md).closedBy).toBe("user_explicit");
   });
 
@@ -690,33 +745,119 @@ describe("tryLoadTodaySlice — UTC-day-boundary fallback", () => {
   it("recovers a still-active slice from YESTERDAY's UTC directory", async () => {
     const now = new Date();
     const y = new Date(now.getTime() - 86_400_000);
-    const dirOf = (d: Date) =>
-      `memory/episodic/slices/${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}`;
-    const todayDir = dirOf(now);
-    const yesterdayDir = dirOf(y);
+    const dirOf = (root: string, d: Date) =>
+      `${root}/${d.getUTCFullYear()}/${String(d.getUTCMonth() + 1).padStart(2, "0")}/${String(d.getUTCDate()).padStart(2, "0")}`;
+    const yesterdayLegacyDir = dirOf(LEGACY_SLICES_ROOT, y);
 
     vi.mocked(fsListFiles).mockImplementation(async (dir: string) => {
-      if (dir === todayDir) return [];
-      if (dir === yesterdayDir)
-        return [{ name: "2330", path: `${yesterdayDir}/2330`, type: "dir" as const }];
+      if (dir === yesterdayLegacyDir)
+        return [{ name: "2330", path: `${yesterdayLegacyDir}/2330`, type: "dir" as const }];
       return [];
     });
     vi.mocked(fsReadFile).mockResolvedValue(
-      serializeSlice({ ...sampleSlice, status: "active", end: undefined }),
+      serializeSlice({ ...sampleSlice, status: "active", end: undefined, closedBy: undefined }),
     );
 
     const recovered = await tryLoadTodaySlice();
     expect(recovered).not.toBeNull();
     expect(recovered!.status).toBe("active");
-    // Today's directory was scanned first (empty), then yesterday's.
+    // Scan order: today's records root, today's legacy root, then yesterday's
+    // records root, yesterday's legacy root (where the slice lives).
     expect(vi.mocked(fsListFiles).mock.calls.map((c) => c[0])).toEqual([
-      todayDir,
-      yesterdayDir,
+      dirOf(RECORDS_ROOT, now),
+      dirOf(LEGACY_SLICES_ROOT, now),
+      dirOf(RECORDS_ROOT, y),
+      yesterdayLegacyDir,
     ]);
   });
 
   it("returns null when neither today nor yesterday holds an active slice", async () => {
     vi.mocked(fsListFiles).mockResolvedValue([]);
     expect(await tryLoadTodaySlice()).toBeNull();
+  });
+});
+
+// ─── Dual-root mixed storage: parse equivalence (v0.19 R2) ──────────────
+
+describe("dual-root mixed storage — parse equivalence", () => {
+  const ID = "2024-03-15-1000";
+
+  /** The same slice in the legacy on-disk format (status/tags written, no closed_by). */
+  function legacyMarkdown(): string {
+    return serializeSlice({ ...sampleSlice, closedBy: undefined }).replace(
+      /^---\n/,
+      "---\nstatus: closed\ntags:\n  - work\n  - planning\nrelated_slices: []\n",
+    );
+  }
+
+  /** The same slice in the new format (closed_by alone; no status/tags/related_slices). */
+  function newMarkdown(): string {
+    return serializeSlice(sampleSlice); // closedBy: "user_explicit"
+  }
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("loadSlice dual-reads: a new-root hit never touches the legacy path", async () => {
+    vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
+      if (p === slicePartPath(ID, "core")) return newMarkdown();
+      throw new Error(`unexpected read: ${p}`);
+    });
+    const slice = await loadSlice(ID);
+    expect(slice).not.toBeNull();
+    expect(vi.mocked(fsReadFile).mock.calls.map((c) => c[0])).toEqual([
+      slicePartPath(ID, "core"),
+    ]);
+  });
+
+  it("loadSlice falls back to the legacy root on a new-root miss", async () => {
+    vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
+      if (p === legacySlicePartPath(ID, "core")) return legacyMarkdown();
+      throw new Error(`not found: ${p}`);
+    });
+    const slice = await loadSlice(ID);
+    expect(slice).not.toBeNull();
+    expect(vi.mocked(fsReadFile).mock.calls.map((c) => c[0])).toEqual([
+      slicePartPath(ID, "core"),
+      legacySlicePartPath(ID, "core"),
+    ]);
+  });
+
+  it("parses the legacy and new formats into an equivalent TimeSlice", async () => {
+    vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
+      if (p === legacySlicePartPath(ID, "core")) return legacyMarkdown();
+      throw new Error(`not found: ${p}`);
+    });
+    const fromLegacy = (await loadSlice(ID))!;
+
+    vi.mocked(fsReadFile).mockImplementation(async (p: string) => {
+      if (p === slicePartPath(ID, "core")) return newMarkdown();
+      throw new Error(`not found: ${p}`);
+    });
+    const fromRecords = (await loadSlice(ID))!;
+
+    // The shim aligns the derived fields: a legacy `status: closed` without
+    // closed_by means user_explicit; the new format carries closed_by alone.
+    expect(fromLegacy.status).toBe("closed");
+    expect(fromRecords.status).toBe("closed");
+    expect(fromLegacy.closedBy).toBe("user_explicit");
+    expect(fromRecords.closedBy).toBe("user_explicit");
+    expect(fromLegacy.turns).toEqual(fromRecords.turns);
+    expect(fromLegacy.focus).toBe(fromRecords.focus);
+    expect(fromLegacy.summary).toBe(fromRecords.summary);
+    expect(fromLegacy.start).toBe(fromRecords.start);
+    expect(fromLegacy.end).toBe(fromRecords.end);
+    // tags stay READABLE off legacy headers but are never written anew.
+    expect(fromLegacy.tags).toEqual(["work", "planning"]);
+    expect(fromRecords.tags).toEqual([]);
+  });
+
+  it("loadSlice returns null when BOTH roots miss", async () => {
+    vi.mocked(fsReadFile).mockRejectedValue(new Error("gone"));
+    expect(await loadSlice(ID)).toBeNull();
+  });
+
+  it("readSlicePart throws only when both candidates miss", async () => {
+    vi.mocked(fsReadFile).mockRejectedValue(new Error("gone"));
+    await expect(readSlicePart(ID, "core")).rejects.toThrow();
   });
 });

@@ -92,14 +92,18 @@
         "title": "记忆书架",
         "byTopic": "按主题",
         "byKind": "按类型",
+        "byCategory": "按类目",
         "topicsEmpty": "还没有主题之家——文档体系长出来后，这里会逐一出现。",
         "docsEmpty": "这个类型下还没有文档。",
+        "casesEmpty": "这个类目下还没有 case。",
         "catalogEmpty": "这个主题还没有挂接任何文档条目。",
         "loading": "加载中…",
         "loadError": "书架暂时打不开。",
         "back": "返回书架",
         "openedAt": "始于 {date}",
         "updatedAt": "更新于 {date}",
+        "closedAt": "封口于 {date}",
+        "writing": "还在写",
         "status": {
           "active": "进行中",
           "closed": "已结案",
@@ -115,6 +119,17 @@
           "hypothesis": "假说",
           "task": "任务",
           "topic": "主题"
+        },
+        "category": {
+          "people": "人物",
+          "events": "事件",
+          "things": "物品",
+          "places": "地点",
+          "orgs": "组织",
+          "research": "调研",
+          "hypotheses": "假说",
+          "tasks": "任务",
+          "self": "自我"
         }
       }
     },
@@ -159,6 +174,9 @@
       "listDocsDone": "列出了 {kind} · {count} 份文档",
       "readDocRunning": "正在阅读《{name}》…",
       "readDocDone": "阅读了《{name}》",
+      "listTreeRunning": "正在列出记忆树…",
+      "listTreeDone": "列出了记忆树 · {count} 条路径",
+      "listTreeTruncated": "清单可能不完整（GitHub 树上限）。",
       "sources": "{count} 个来源",
       "thinkDeep": "推理片段",
       "thinkDeepRunning": "正在推理「{question}」…",
@@ -186,37 +204,7 @@
       "collapse": "收起"
     },
     "evolution": {
-      "reading": "正在读取记忆...",
-      "reviewing": "正在审查对话模式...",
-      "evolving": "自进化中…",
-      "failed": "自进化失败: {error}",
-      "noChanges": "已检查，无需更新",
-      "evolved": "已进化：{summary}",
-      "noChangesMeta": "—",
-      "added": "+{count} 新增",
-      "reinforced": "↑{count} 强化",
-      "demoted": "↓{count} 降级",
-      "removed": "✕{count} 删除",
-      "superseded": "↻{count} 取代",
-      "previouslyOn": "前情提要",
-      "clickToView": "点击查看",
-      "thoughts": "思考",
-      "applied": "正在应用更新...",
-      "partial": "（部分更新）",
-      "triggerNet": "{bucket} · 近期净分 {score}",
-      "direction": "正在评估进化方向...",
-      "directionUnchanged": "方向：无变化",
-      "directionUpdated": "方向：{summary}",
-      "directionFailed": "方向：评估失败（{reason}）",
-      "directionRejected": "方向：提案未通过校验（{reason}）",
-      "playbookUpdated": "{agent} 工作手册已更新：{summary}",
-      "buckets": {
-        "card": "卡片",
-        "recall": "回忆",
-        "search": "搜索",
-        "thinkdeep": "思考",
-        "interaction": "交流"
-      }
+      "thoughts": "思考"
     },
     "phase": {
       "thinking": "正在思考…",
@@ -500,8 +488,7 @@
     "subtitleRecalling": "（正在回忆）",
     "subtitleReading": "（正在查阅 {count} 条记忆）",
     "subtitleReplying": "（正在回复）",
-    "subtitleHousekeeping": "（正在整理）",
-    "subtitleEvolving": "（正在进化）"
+    "subtitleHousekeeping": "（正在整理）"
   },
   "game": {
     "title": "旅店",

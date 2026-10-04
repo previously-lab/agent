@@ -25,6 +25,16 @@ import {
   type WriteBatch,
 } from "./io-helpers";
 import {
+  dayDirForDate,
+  indexPathCandidates,
+  readSlicePart,
+  recordsIndexPath,
+  sliceIdToRelPath,
+  slicePartPath,
+  RECORDS_ROOT,
+  LEGACY_SLICES_ROOT,
+} from "./paths";
+import {
   newCardTemplate,
   migrateToV3,
   migrateV3ToCard,
@@ -92,50 +102,59 @@ export function createSlice(userMessage: string, timezone: string, turnId: strin
 
 /**
  * Try to recover today's active time slice from disk/GitHub.
- * Used on page refresh — a day is a directory of slice files (DD/HHMM.md),
+ * Used on page refresh — a day is a directory of slice directories (HHMM/),
  * so we scan today's directory and return the most recent slice that is still
  * `active`. Returns null if the directory is missing or holds no active slice.
+ *
+ * Dual-root (v0.19 R2): the new records root is scanned first, the legacy
+ * slices root on a miss — a still-active slice created before the root move
+ * must stay recoverable.
  */
 export async function tryLoadTodaySlice(
   batch?: WriteBatch
 ): Promise<TimeSlice | null> {
   const now = new Date();
-  const today = dirForDate(now);
   // A conversation that crosses the UTC day boundary (00:00 UTC = 08:00 in
   // UTC+8 — morning chats) lives in YESTERDAY's directory. Without this
   // fallback the still-active slice is orphaned: never recovered, never
   // closed, never reviewed by evolution.
-  const yesterday = dirForDate(new Date(now.getTime() - 86_400_000));
-  return (
-    (await scanDirForActiveSlice(today, batch)) ??
-    (await scanDirForActiveSlice(yesterday, batch))
-  );
+  const dates = [now, new Date(now.getTime() - 86_400_000)];
+  for (const d of dates) {
+    for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT] as const) {
+      const found = await scanDirForActiveSlice(
+        dayDirForDate(root, d),
+        root === LEGACY_SLICES_ROOT,
+        batch,
+      );
+      if (found) return found;
+    }
+  }
+  return null;
 }
 
-/** Slice directory path for a UTC date: memory/episodic/slices/YYYY/MM/DD */
-function dirForDate(d: Date): string {
-  const year = d.getUTCFullYear();
-  const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `memory/episodic/slices/${year}/${month}/${day}`;
-}
-
-/** Scan one day directory for the most recent slice still marked `active`. */
+/**
+ * Scan one day directory for the most recent slice still marked `active`.
+ * `legacyLayout` selects the on-disk shape: the new records layout is flat
+ * (`HHMM/core.md`); the legacy layout nests under `HHMM/timeline/core.md` and
+ * may also hold ancient flat `HHMM.md` files.
+ */
 async function scanDirForActiveSlice(
   dir: string,
+  legacyLayout: boolean,
   batch?: WriteBatch
 ): Promise<TimeSlice | null> {
   try {
     const entries = await fsListFiles(dir);
 
-    // NEW format: slice directories (HHMM/) containing timeline/core.md
     const sliceDirs = entries
       .filter((e) => e.type === "dir")
       .sort((a, b) => b.name.localeCompare(a.name));
 
     for (const d of sliceDirs) {
       try {
-        const corePath = `${dir}/${d.name}/timeline/core.md`;
+        const corePath = legacyLayout
+          ? `${dir}/${d.name}/timeline/core.md`
+          : `${dir}/${d.name}/core.md`;
         const raw = await fsReadFile(corePath, batch);
         const slice = parseSlice(raw);
         if (slice.status === "active") return slice;
@@ -144,7 +163,9 @@ async function scanDirForActiveSlice(
       }
     }
 
-    // BACKWARD COMPAT: flat .md files (old format)
+    if (!legacyLayout) return null;
+
+    // BACKWARD COMPAT: flat .md files (ancient legacy format)
     const files = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".md"))
       .sort((a, b) => b.name.localeCompare(a.name));
@@ -198,49 +219,34 @@ export async function closeSlice(
 
 // ─── Path computation ────────────────────────────────────────────────────
 
-/**
- * Derive the slices-relative path (no `slices/` prefix, no `.md`) from a slice_id.
- * New format:  `YYYY-MM-DD-HHMM` → `YYYY/MM/DD/HHMM`
- * Legacy:      `YYYY-MM-DD`      → `YYYY/MM/DD`   (kept for robustness)
- */
-export function sliceIdToRelPath(sliceId: string): string {
-  const p = sliceId.split("-");
-  return p.length >= 4
-    ? `${p[0]}/${p[1]}/${p[2]}/${p[3]}`
-    : `${p[0]}/${p[1]}/${p[2]}`;
-}
-
-/**
- * Compute the path to the slice's timeline directory (no trailing file).
- * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/
- */
-export function sliceIdToTimelineDir(sliceId: string): string {
-  return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}/timeline`;
-}
+// The roots and the dual-root read probes live in ./paths (v0.19 R2: records
+// moved to `memory/records/`, writes go there only, reads dual-probe the
+// legacy `memory/episodic/slices/` root). The builders below are the WRITE
+// targets — all new-root; `sliceIdToRelPath` is re-exported from ./paths.
+export { sliceIdToRelPath } from "./paths";
 
 /**
  * Compute the file path for core.md (the shared conversation record).
- * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/core.md
+ * New layout (flat, no timeline/ level): memory/records/YYYY/MM/DD/HHMM/core.md
  */
 export function sliceIdToFilePath(sliceId: string): string {
-  return `${sliceIdToTimelineDir(sliceId)}/core.md`;
+  return slicePartPath(sliceId, "core");
 }
 
 /**
  * Compute the file path for agent.md (the agent's internal cognitive record).
- * New format: memory/episodic/slices/YYYY/MM/DD/HHMM/timeline/agent.md
+ * New layout: memory/records/YYYY/MM/DD/HHMM/agent.md
  */
 export function sliceIdToAgentPath(sliceId: string): string {
-  return `${sliceIdToTimelineDir(sliceId)}/agent.md`;
+  return slicePartPath(sliceId, "agent");
 }
 
 /**
  * Compute the file path for previously.md (the agent's belief system about
- * the user). Lives at slice root — sibling to timeline/, not inside it.
- * Format: memory/episodic/slices/YYYY/MM/DD/HHMM/previously.md
+ * the user). New layout: memory/records/YYYY/MM/DD/HHMM/previously.md
  */
 export function sliceIdToPreviouslyPath(sliceId: string): string {
-  return `memory/episodic/slices/${sliceIdToRelPath(sliceId)}/previously.md`;
+  return slicePartPath(sliceId, "previously");
 }
 
 /**
@@ -251,12 +257,12 @@ export function getSlicePath(slice: TimeSlice): string {
 }
 
 /**
- * Compute the path to a monthly _index.json file.
- * Format: memory/episodic/slices/YYYY/MM/_index.json
+ * Compute the path to a monthly _index.json file — the WRITE target (new
+ * root: memory/records/YYYY/MM/_index.json). Reads dual-probe both roots,
+ * see readSliceIndexRaw.
  */
 export function getIndexPath(year: number, month: number): string {
-  const mm = String(month).padStart(2, "0");
-  return `memory/episodic/slices/${year}/${mm}/_index.json`;
+  return recordsIndexPath(year, month);
 }
 
 /**
@@ -271,20 +277,22 @@ export function getStrandsPath(): string {
 /**
  * Serialize a TimeSlice to a Markdown string with YAML frontmatter.
  * The frontmatter contains metadata; the body contains turn-by-turn content.
+ *
+ * v0.19 R2 header slimming: `status` / `tags` / `related_slices` are NEVER
+ * written anymore — status derives from `closed_by` (F 状态即记录), tags and
+ * related_slices die with the projection layer. Legacy keys are still
+ * tolerated on READ (see parseSlice).
  */
 export function serializeSlice(slice: TimeSlice): string {
-  const frontmatter: SliceFrontmatter = {
+  const frontmatter: Omit<SliceFrontmatter, "status" | "tags" | "related_slices"> = {
     slice_id: slice.slice_id,
     focus: slice.focus,
-    status: slice.status,
     start: slice.start,
     end: slice.end,
     timezone: slice.timezone,
     summary: slice.summary,
     open_loops: slice.open_loops,
     decisions: slice.decisions,
-    tags: slice.tags,
-    related_slices: slice.related_slices,
     loops: slice.loops,
     emotional_tone: slice.emotional_tone,
     closed_by: slice.closedBy,
@@ -347,10 +355,20 @@ export function parseSlice(raw: string): TimeSlice {
   const decisions = normalizeStringArray(frontmatter.decisions);
   const tags = normalizeStringArray(frontmatter.tags);
 
+  // v0.19 R2 read shim: `status` is DERIVED, never written — a `closed_by`
+  // cause means closed, its absence means active. Legacy slices carry an
+  // explicit `status`; a legacy closed slice without `closed_by` falls back
+  // to user_explicit. Consumers keep reading `status` unchanged until R3.
+  const closedBy = isSlicingSignal(frontmatter.closed_by)
+    ? frontmatter.closed_by
+    : frontmatter.status === "closed"
+      ? "user_explicit"
+      : undefined;
+
   return {
     slice_id: frontmatter.slice_id ?? "",
     focus: normalizeString(frontmatter.focus) ?? "",
-    status: frontmatter.status ?? "active",
+    status: frontmatter.status ?? (closedBy ? "closed" : "active"),
     start: frontmatter.start ?? "",
     end: frontmatter.end,
     timezone: frontmatter.timezone ?? "UTC",
@@ -369,14 +387,7 @@ export function parseSlice(raw: string): TimeSlice {
     continuesFrom: normalizeString(frontmatter.continues_from) || undefined,
     turns,
     estimatedTokens,
-    // The real close signal round-trips through frontmatter since v0.8;
-    // legacy closed slices lack `closed_by` and fall back to user_explicit.
-    closedBy:
-      frontmatter.status === "closed"
-        ? isSlicingSignal(frontmatter.closed_by)
-          ? frontmatter.closed_by
-          : "user_explicit"
-        : undefined,
+    closedBy,
   };
 }
 
@@ -494,22 +505,28 @@ export function appendTurn(slice: TimeSlice, turn: Turn): void {
 // ─── Reading slices ──────────────────────────────────────────────────────
 
 /**
- * Read a monthly _index.json and return its entries.
- * Returns an empty array if the index file does not exist.
+ * Read a monthly _index.json and return its entries — DUAL-ROOT (v0.19 R2):
+ * the new-root and legacy-root indexes of the same month are merged by slice
+ * id (the new root wins a conflict), so a month straddling the root move
+ * still reads whole. Returns an empty array if neither index exists.
  */
 async function readSliceIndexRaw(
   year: number,
   month: number,
   batch?: WriteBatch
 ): Promise<SliceIndexEntry[]> {
-  const indexPath = getIndexPath(year, month);
-  try {
-    const raw = await fsReadFile(indexPath, batch);
-    const parsed: MonthlyIndex = JSON.parse(raw);
-    return parsed.slices ?? [];
-  } catch {
-    return [];
+  const merged = new Map<string, SliceIndexEntry>();
+  // Legacy first, new root second — the new root overwrites shared ids.
+  for (const indexPath of [...indexPathCandidates(year, month)].reverse()) {
+    try {
+      const raw = await fsReadFile(indexPath, batch);
+      const parsed: MonthlyIndex = JSON.parse(raw);
+      for (const e of parsed.slices ?? []) merged.set(e.id, e);
+    } catch {
+      // this root has no index for the month — probe the other
+    }
   }
+  return [...merged.values()];
 }
 
 // There is no cache here. Demo mode used to keep persona-keyed `_indexCache` /
@@ -546,6 +563,8 @@ export async function readStrands(batch?: WriteBatch): Promise<StrandIndex> {
 
 /**
  * Read the full body (Markdown with frontmatter) of a time slice from disk.
+ * Takes a literal path — id-based dual-root reads go through
+ * `readSlicePart(sliceId, "core")` in ./paths.
  */
 export async function readSliceBody(path: string): Promise<string> {
   return fsReadFile(path);
@@ -562,7 +581,7 @@ export async function loadSlice(
   batch?: WriteBatch,
 ): Promise<TimeSlice | null> {
   try {
-    const raw = await fsReadFile(sliceIdToFilePath(sliceId), batch);
+    const raw = await readSlicePart(sliceId, "core", batch);
     return parseSlice(raw);
   } catch {
     return null;
@@ -664,7 +683,9 @@ export async function writeAgentTimeline(
   const agentPath = sliceIdToAgentPath(sliceId);
   let existing = "";
   try {
-    existing = await fsReadFile(agentPath, batch);
+    // Dual-root read: an agent.md created before the root move still seeds
+    // the append; the write itself always lands on the new root.
+    existing = await readSlicePart(sliceId, "agent", batch);
   } catch {
     // File doesn't exist yet — will be created
   }
@@ -675,12 +696,12 @@ export async function writeAgentTimeline(
 }
 
 /**
- * Read the agent's cognitive timeline for a slice.
+ * Read the agent's cognitive timeline for a slice (dual-root).
  * Returns empty string if agent.md doesn't exist.
  */
 export async function readAgentTimeline(sliceId: string): Promise<string> {
   try {
-    return await fsReadFile(sliceIdToAgentPath(sliceId));
+    return await readSlicePart(sliceId, "agent");
   } catch {
     return "";
   }
@@ -703,7 +724,7 @@ async function readPreviouslyRaw(
   batch?: WriteBatch
 ): Promise<string> {
   try {
-    return await fsReadFile(sliceIdToPreviouslyPath(sliceId), batch);
+    return await readSlicePart(sliceId, "previously", batch);
   } catch {
     return "";
   }
@@ -746,30 +767,38 @@ export async function findMostRecentPreviously(
 
   for (let daysBack = 0; daysBack < MAX_DAYS; daysBack++) {
     const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysBack));
-    const year = d.getUTCFullYear();
-    const month = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(d.getUTCDate()).padStart(2, "0");
-    const dir = `memory/episodic/slices/${year}/${month}/${day}`;
 
-    try {
-      const entries = await fsListFiles(dir);
-      const sliceDirs = entries
-        .filter((e) => e.type === "dir")
-        .sort((a, b) => b.name.localeCompare(a.name)); // newest first
+    // Dual-root (v0.19 R2): the new records root first, the legacy slices
+    // root on a miss. previously.md sits at the slice-directory root in BOTH
+    // layouts, so only the day directory differs.
+    for (const root of [RECORDS_ROOT, LEGACY_SLICES_ROOT] as const) {
+      const dir = dayDirForDate(root, d);
 
-      for (const sd of sliceDirs) {
-        try {
-          const prevPath = `${dir}/${sd.name}/previously.md`;
-          const content = await fsReadFile(prevPath, batch);
-          if (content.trim()) {
-            return isCardFormat(content) ? content : migrateToV3(content);
+      try {
+        const entries = await fsListFiles(dir);
+        const sliceDirs = entries
+          .filter((e) => e.type === "dir")
+          .sort((a, b) => b.name.localeCompare(a.name)); // newest first
+
+        let found: string | null = null;
+        for (const sd of sliceDirs) {
+          try {
+            const prevPath = `${dir}/${sd.name}/previously.md`;
+            const content = await fsReadFile(prevPath, batch);
+            if (content.trim()) {
+              found = content;
+              break;
+            }
+          } catch {
+            // No previously.md in this slice directory
           }
-        } catch {
-          // No previously.md in this slice directory
         }
+        if (found !== null) {
+          return isCardFormat(found) ? found : migrateToV3(found);
+        }
+      } catch {
+        // Day directory doesn't exist on this root
       }
-    } catch {
-      // Day directory doesn't exist
     }
   }
 

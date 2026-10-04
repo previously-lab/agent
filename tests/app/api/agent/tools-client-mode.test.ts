@@ -93,11 +93,11 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("mode");
   });
 
-  it("exposes the document readers with context entries", () => {
-    expect(chatTools).toHaveProperty("listDocs");
+  it("exposes the case-tree readers with context entries (v0.19 §A.2.1)", () => {
+    expect(chatTools).toHaveProperty("listTree");
     expect(chatTools).toHaveProperty("readDoc");
     const contexts = buildChatToolsContext(ctx);
-    expect(contexts.listDocs).toBe(ctx);
+    expect(contexts.listTree).toBe(ctx);
     expect(contexts.readDoc).toBe(ctx);
   });
 
@@ -112,24 +112,37 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("dateAnchor");
   });
 
-  it("listDocs input: kind + optional filter", async () => {
+  it("readDoc input: the two-segment ref (分类/case名[/篇名])", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
-    const schema = chatTools.listDocs.inputSchema as unknown as {
+    const schema = chatTools.readDoc.inputSchema as unknown as {
       shape: Record<string, unknown>;
     };
-    expect(schema.shape).toHaveProperty("kind");
-    expect(schema.shape).toHaveProperty("filter");
+    expect(schema.shape).toHaveProperty("ref");
+    expect(schema.shape).not.toHaveProperty("fileName");
   });
 
-  it("reclaims the slice-level browse tools for the main agent (v0.15 §4.2)", () => {
+  it("listTree takes no input", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const schema = chatTools.listTree.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(Object.keys(schema.shape)).toHaveLength(0);
+  });
+
+  it("the retired read tools are gone from the chat surface (v0.19 §A.2.1)", () => {
     for (const name of [
-      "readSliceSummary",
-      "readAgentTimeline",
+      "listDocs",
       "listSlices",
       "readTimeline",
-      "readStrand",
+      "readTimelineWindow",
       "listStrands",
+      "readStrand",
+      "readSliceSummary",
     ] as const) {
+      expect(chatTools).not.toHaveProperty(name);
+    }
+    // The surviving memory surface:
+    for (const name of ["readSlice", "readAgentTimeline", "readPreviously"] as const) {
       expect(chatTools).toHaveProperty(name);
       expect(buildChatToolsContext(ctx)[name]).toBe(ctx);
     }

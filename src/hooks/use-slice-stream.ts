@@ -11,12 +11,12 @@ import { prependPage } from "@/lib/chat/stream-items";
 /** Slices per page — a page is also the seam-anchored prepend unit (§1.4). */
 export const SLICE_PAGE_SIZE = 10;
 /** Safety bound for the "page until the target slice is loaded" jump loop —
- *  sparse catalogs could otherwise page forever (design §10). */
+ *  sparse histories could otherwise page forever (design §10). */
 const MAX_JUMP_PAGES = 50;
 
 export interface SliceStream {
   /** Loaded historical slices, oldest → newest (the still-alive newest slice
-   *  is excluded when `before` pins the initial cursor — see chat-page). */
+   *  is excluded when `initialBefore` pins the first page's cursor to its ID). */
   slices: SliceWithContent[];
   hasMore: boolean;
   loadingOlder: boolean;
@@ -33,7 +33,7 @@ export interface SliceStream {
    * Page backwards until `sliceId` is loaded (wheel jump to an unloaded
    * slice). `onPrepend` fires after each page with the exact stream-item
    * delta — the caller shifts Virtuoso's firstItemIndex by it. Resolves true
-   * when the slice is in the loaded window; false when the catalog was
+   * when the slice is in the loaded window; false when the enumeration was
    * exhausted (or paging stalled) without it.
    */
   loadUntilSlice: (
@@ -43,18 +43,19 @@ export interface SliceStream {
 }
 
 /**
- * Catalog-paged slice window for the unified message stream (v0.10 §1.5/§1.6).
+ * Enumeration-paged slice window for the unified message stream (v0.10 §1.5/§1.6,
+ * re-sourced v0.19 R3b).
  *
- * `initialBefore` pins the FIRST page's cursor (ISO `start` exclusive): the
- * chat page passes the resumed slice's start so the still-alive slice never
- * double-renders (its turns arrive via getArrivalState / the reconnect stash).
+ * `initialBefore` pins the FIRST page's cursor — the still-alive slice's ID
+ * when the caller restored one, so it never double-renders (its turns arrive
+ * via getArrivalState / the reconnect stash). The cursor is a slice ID, not
+ * an ISO start: the server pages off the live enumeration's own ordering
+ * (v0.19 R3b — there is no catalog projection to key on anymore).
  *
- * The window starts EMPTY and is paged in on mount. It used to be restored
- * synchronously from a per-persona snapshot in `slice-cache` (5 min TTL), and
- * that restore is gone with the rest of the client's cache (v0.10 C7): the
- * client holds nothing, the server action reads the catalog and the server
- * caches it, and a remount pays one paging call rather than trusting a
- * client-side copy of a catalog that may have gained a slice since.
+ * The window starts EMPTY and is paged in on mount. The client holds nothing
+ * across mounts: the server action enumerates the tree and point-reads the
+ * window's headers, and the Data Cache absorbs repeat reads — a remount pays
+ * one paging call rather than trusting a client-side copy that may be stale.
  */
 export function useSliceStream(
   persona: string,
@@ -69,7 +70,7 @@ export function useSliceStream(
   const slicesRef = useRef<SliceWithContent[]>([]);
   const hasMoreRef = useRef(true);
   const loadingRef = useRef(false);
-  // The cursor for the NEXT page: the oldest loaded slice's start, or the
+  // The cursor for the NEXT page: the oldest loaded slice's ID, or the
   // initial pin while nothing is loaded yet.
   const initialBeforeRef = useRef<string | null>(initialBefore);
 
@@ -98,7 +99,7 @@ export function useSliceStream(
     try {
       const cursor =
         slicesRef.current.length > 0
-          ? slicesRef.current[0].start
+          ? slicesRef.current[0].id
           : initialBeforeRef.current;
       const page = await getSlicePageWithContent(
         cursor,
@@ -133,8 +134,8 @@ export function useSliceStream(
       if (slicesRef.current.some((s) => s.id === sliceId)) return true;
 
       // Fast path: ONE server round trip loads the whole missing stretch
-      // between the target and the loaded window (the server reads the
-      // timeline index once and loads every slice file in parallel). The
+      // between the target and the loaded window (the server enumerates the
+      // tree once and loads every slice header + file in parallel). The
       // result prepends as a single page, so firstItemIndex shifts once.
       if (!loadingRef.current) {
         loadingRef.current = true;
@@ -149,8 +150,9 @@ export function useSliceStream(
             const added = applyPage(win);
             onPrepend?.(added);
           }
-          // found:false (index lag — the target isn't catalogued yet) or a
-          // thrown call both fall through to the page loop below.
+          // found:false (the slice genuinely isn't on disk — there is no
+          // index to lag anymore) or a thrown call both fall through to the
+          // page loop below.
         } catch {
           // Server hiccup — the page loop retries, one page at a time.
         } finally {
@@ -160,9 +162,9 @@ export function useSliceStream(
         if (slicesRef.current.some((s) => s.id === sliceId)) return true;
       }
 
-      // Fallback: page one at a time (index lag, a failed batch call, or the
-      // batch's cap left the target beyond the window — the loop continues
-      // from the batch's new head).
+      // Fallback: page one at a time (a failed batch call, or the batch's
+      // cap left the target beyond the window — the loop continues from the
+      // batch's new head).
       for (let i = 0; i < MAX_JUMP_PAGES; i++) {
         if (slicesRef.current.some((s) => s.id === sliceId)) return true;
         if (!hasMoreRef.current) return false;

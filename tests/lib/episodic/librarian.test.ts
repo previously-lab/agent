@@ -29,17 +29,15 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
 }));
 
 import {
-  appendTopicDirectoryEntry,
+  applyCaseWriteIntent,
   buildSliceExcerpt,
   extractDocMarkers,
   extractProcessedMarkerIds,
   runLibrarianPass,
   runScribePass,
-  voidMergedTopicHomes,
   DOC_MARKER_PREFIX,
   SCRIBE_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
-import { serializeStrandEntity } from "@/lib/episodic/strand-files";
 import type { ModelConfig } from "@/lib/models/registry";
 
 function streamWith(toolCalls: Array<{ toolName: string; input: unknown }>) {
@@ -49,6 +47,14 @@ function streamWith(toolCalls: Array<{ toolName: string; input: unknown }>) {
     reasoningText: Promise.resolve(undefined),
     sources: Promise.resolve([]),
     warnings: Promise.resolve([]),
+  };
+}
+
+/** One caseWriterOutput call carrying the given decisions. */
+function writerCall(cases: unknown[], reasoning = "r") {
+  return {
+    toolName: "caseWriterOutput",
+    input: { cases, reasoning },
   };
 }
 
@@ -74,12 +80,20 @@ const EXCERPT = {
   turnsExcerpt: "用户: 帮我看看这三款\nagent: 对比如下…",
 };
 
+/** A manifest with one existing research case — NO tags anywhere (R2). */
+const MANIFEST = {
+  truncated: false,
+  tree: {
+    research: ["research/手机调研/index.md"],
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   io.files.clear();
 });
 
-// ─── Pure marker parsing ────────────────────────────────────────────────────
+// ─── Pure marker parsing (§A.3.1 — unchanged) ──────────────────────────────
 
 describe("extractDocMarkers", () => {
   it("parses well-formed marker lines and ignores everything else", () => {
@@ -94,7 +108,7 @@ describe("extractDocMarkers", () => {
     const markers = extractDocMarkers(md);
     expect(markers).toHaveLength(2);
     expect(markers[0].id).toBe("t1-1");
-    expect(markers[0].topics).toEqual(["用户手机"]);
+    expect(markers[0].topics).toEqual(["用户手机"]); // legacy field tolerated
     expect(markers[1].kind).toBe("task");
     expect(markers[1].dateAnchor).toBe("2026-09-08");
   });
@@ -108,7 +122,7 @@ describe("extractDocMarkers", () => {
 describe("extractProcessedMarkerIds", () => {
   it("collects ids from record lines of the given prefix", () => {
     const md = [
-      `${SCRIBE_RECORD_PREFIX} {"id":"t1-1","doc":"2026-08-09-手机购买调研.md"}`,
+      `${SCRIBE_RECORD_PREFIX} {"id":"t1-1","doc":"research/手机调研"}`,
       `[doc-research] {"id":"t1-9","docs":[]}`,
       "普通文本 [doc-scribe] 不在行首不算",
     ].join("\n");
@@ -129,205 +143,321 @@ describe("buildSliceExcerpt", () => {
   });
 });
 
-// ─── Mechanical merge fallout ───────────────────────────────────────────────
+// ─── The five ops (§B.3) ────────────────────────────────────────────────────
 
-describe("voidMergedTopicHomes", () => {
-  it("voids a legacy home into the NEW location with a dated 作废 entry", async () => {
-    io.files.set(
-      "memory/episodic/strands/旧手机.md",
-      serializeStrandEntity({
-        name: "旧手机",
-        first_seen: "2026-07-01",
-        last_active: "2026-08-01",
-        aliases: [],
-        description: "关于旧手机的讨论。",
-      }),
+describe("applyCaseWriteIntent", () => {
+  it("open creates the index.md with opened = the write date", async () => {
+    const out = await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "手机调研", body: "正文。" },
+      DATE,
     );
-    const result = await voidMergedTopicHomes([{ from: "旧手机", to: "用户手机" }], DATE);
-    expect(result.voided).toEqual(["旧手机"]);
-    const raw = io.files.get("memory/docs/topic/旧手机.md")!;
-    expect(raw).toContain("status: void");
-    expect(raw).toContain(`## ${DATE} — 作废 — 已并入《用户手机》`);
-    // history stays readable
-    expect(raw).toContain("关于旧手机的讨论。");
+    expect(out.created).toBe(true);
+    const raw = io.files.get("memory/research/手机调研/index.md")!;
+    expect(raw).toContain("opened: '2026-08-09'");
+    expect(raw).toContain("正文。");
   });
 
-  it("skips a bare-index strand (no home anywhere)", async () => {
-    const result = await voidMergedTopicHomes([{ from: "裸线索", to: "x" }], DATE);
-    expect(result.voided).toEqual([]);
-    expect(result.skipped).toEqual([{ name: "裸线索", reason: "no home file" }]);
+  it("open on an existing case is refused (loud, visible)", async () => {
+    await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "手机调研", body: "一" },
+      DATE,
+    );
+    await expect(
+      applyCaseWriteIntent(
+        { action: "open", category: "research", caseName: "手机调研", body: "二" },
+        DATE,
+      ),
+    ).rejects.toThrow(/already exists/);
+  });
+
+  it("rewriteIndex rewrites a living 正文; appendTail on a living case is refused", async () => {
+    await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "手机调研", body: "初稿。" },
+      DATE,
+    );
+    await applyCaseWriteIntent(
+      { action: "rewriteIndex", category: "research", caseName: "手机调研", body: "改后。" },
+      DATE,
+    );
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("改后。");
+    await expect(
+      applyCaseWriteIntent(
+        { action: "appendTail", category: "research", caseName: "手机调研", line: "补一行" },
+        DATE,
+      ),
+    ).rejects.toThrow(/still being written/);
+  });
+
+  it("close seals (header closed + tail line); rewriteBody after sealing is refused", async () => {
+    await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "手机调研", body: "正文。" },
+      DATE,
+    );
+    await applyCaseWriteIntent(
+      { action: "close", category: "research", caseName: "手机调研", note: "结论已定。" },
+      DATE,
+    );
+    const sealed = io.files.get("memory/research/手机调研/index.md")!;
+    expect(sealed).toContain("closed: '2026-08-09'");
+    expect(sealed).toContain("—— 尾部 ——");
+    expect(sealed).toContain("2026-08-09：结论已定。");
+    // Sealed 正文 is frozen.
+    await expect(
+      applyCaseWriteIntent(
+        { action: "rewriteIndex", category: "research", caseName: "手机调研", body: "x" },
+        DATE,
+      ),
+    ).rejects.toThrow(/sealed/);
+    // …but the tail still grows.
+    await applyCaseWriteIntent(
+      { action: "appendTail", category: "research", caseName: "手机调研", line: "价格已过时。" },
+      DATE,
+    );
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("价格已过时。");
+  });
+
+  it("addPiece writes a dated piece whose opened comes from the name (same-source)", async () => {
+    await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "手机调研", body: "正文。" },
+      DATE,
+    );
+    const out = await applyCaseWriteIntent(
+      { action: "addPiece", category: "research", caseName: "手机调研", title: "报价篇", body: "篇正文。" },
+      DATE,
+    );
+    expect(out.path).toBe("memory/research/手机调研/2026-08-09-报价篇.md");
+    const raw = io.files.get(out.path)!;
+    expect(raw).toContain("opened: '2026-08-09'");
+  });
+
+  it("an illegal case name is refused before anything touches disk", async () => {
+    await expect(
+      applyCaseWriteIntent(
+        { action: "open", category: "research", caseName: "1234-数字开头", body: "x" },
+        DATE,
+      ),
+    ).rejects.toThrow(/illegal case name/);
     expect(io.files.size).toBe(0);
   });
 });
 
-// ─── Directory entries (名录) ───────────────────────────────────────────────
+// ─── The case-writer pass (边界 run ①) ─────────────────────────────────────
 
-describe("appendTopicDirectoryEntry", () => {
-  it("opens the home when the first document lands under a topic", async () => {
-    const result = await appendTopicDirectoryEntry({
-      topic: "用户手机",
-      docFileName: "2026-08-09-手机购买调研.md",
-      action: "开设",
-      date: DATE,
-    });
-    expect(result.ok).toBe(true);
-    const raw = io.files.get("memory/docs/topic/用户手机.md")!;
-    expect(raw).toContain("# 用户手机");
-    expect(raw).toContain(`## ${DATE} — 名录`);
-    expect(raw).toContain("《2026-08-09-手机购买调研》开设。");
-  });
-
-  it("refuses an illegal topic name", async () => {
-    const result = await appendTopicDirectoryEntry({
-      topic: "2026",
-      docFileName: "x.md",
-      action: "开设",
-      date: DATE,
-    });
-    expect(result.ok).toBe(false);
-    expect(io.files.size).toBe(0);
-  });
-});
-
-// ─── The librarian pass ─────────────────────────────────────────────────────
-
-describe("runLibrarianPass", () => {
-  it("does not call the LLM when the closed slice touched no strand", async () => {
-    const result = await runLibrarianPass({
-      model,
-      closedSliceId: SLICE_ID,
-      excerpt: EXCERPT,
-      strands: { 别的主题: ["2026/08/01/0900"] },
-      merges: [],
-      date: DATE,
-    });
-    expect(result.llmRan).toBe(false);
-    expect(ai.streamText).not.toHaveBeenCalled();
-  });
-
-  it("writes the homes the model chooses and stamps the evidence slice", async () => {
+describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
+  it("opens a NEW case the writer judges this slice touched", async () => {
     ai.streamText.mockResolvedValue(
       streamWith([
-        {
-          toolName: "librarianOutput",
-          input: {
-            homes: [
-              {
-                strand: "用户手机",
-                action: "open",
-                entryTitle: "开篇",
-                body: "用户开始挑选新手机，在对比三款机型。",
-                asOf: "用户在挑选新手机。",
-              },
-              { strand: "健身", action: "skip" },
-            ],
-            reasoning: "手机主题值得开家。",
+        writerCall([
+          {
+            action: "open",
+            category: "research",
+            caseName: "充电器调研",
+            body: "用户顺便问了充电器兼容性。",
           },
-        },
+        ]),
       ]),
     );
     const result = await runLibrarianPass({
       model,
       closedSliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: {
-        用户手机: ["2026/08/09/1300"],
-        健身: ["2026/08/09/1300", "2026/08/02/0900"],
-      },
-      merges: [],
+      manifest: MANIFEST,
       date: DATE,
     });
     expect(result.llmRan).toBe(true);
-    expect(result.written).toEqual(["用户手机"]);
-    const raw = io.files.get("memory/docs/topic/用户手机.md")!;
-    expect(raw).toContain("用户开始挑选新手机");
+    expect(result.written).toEqual(["research/充电器调研/index.md"]);
+    const raw = io.files.get("memory/research/充电器调研/index.md")!;
+    expect(raw).toContain("opened: '2026-08-09'");
+    // evidence stamped mechanically
     expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
-    expect(raw).toContain(`> 截至 ${DATE}：用户在挑选新手机。`);
-    // skip means skip — no fitness home.
-    expect(io.files.has("memory/docs/topic/健身.md")).toBe(false);
-    // writer-is-reader: the slice content and home state were IN the prompt.
-    const prompt = String(ai.streamText.mock.calls[0][0].prompt);
-    expect(prompt).toContain("用户对比了三款机型。");
-    expect(prompt).toContain("尚无之家");
   });
 
-  it("ignores ops for strands the slice did not touch", async () => {
+  it("updateIndex on an EXISTING manifest case rewrites its living 正文", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      "---\nopened: 2026-08-01\n---\n\n旧认识。\n",
+    );
     ai.streamText.mockResolvedValue(
       streamWith([
-        {
-          toolName: "librarianOutput",
-          input: {
-            homes: [{ strand: "幻觉主题", action: "open", entryTitle: "开篇", body: "x" }],
-            reasoning: "",
+        writerCall([
+          {
+            action: "updateIndex",
+            category: "research",
+            caseName: "手机调研",
+            body: "旧认识 + 这片的新结论。",
           },
-        },
+        ]),
       ]),
     );
     const result = await runLibrarianPass({
       model,
       closedSliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: { 用户手机: ["2026/08/09/1300"] },
-      merges: [],
+      manifest: MANIFEST,
       date: DATE,
     });
-    expect(result.written).toEqual([]);
-    expect(result.skipped[0].reason).toContain("not a touched strand");
-    expect(io.files.size).toBe(0);
+    expect(result.written).toEqual(["research/手机调研/index.md"]);
+    const raw = io.files.get("memory/research/手机调研/index.md")!;
+    expect(raw).toContain("旧认识 + 这片的新结论。");
+    expect(raw).not.toContain("status:"); // new shape, two dates only
   });
 
-  it("degrades to no writes when the model call fails", async () => {
-    ai.streamText.mockRejectedValue(new Error("worker down"));
+  it("structurally refuses a write to a case that is NOT in the manifest (writer never read it)", async () => {
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        writerCall([
+          { action: "updateIndex", category: "research", caseName: "清单外", body: "x" },
+        ]),
+      ]),
+    );
     const result = await runLibrarianPass({
       model,
       closedSliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: { 用户手机: ["2026/08/09/1300"] },
-      merges: [],
+      manifest: MANIFEST,
       date: DATE,
     });
     expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("not in the manifest");
     expect(io.files.size).toBe(0);
+  });
+
+  it("refuses open on an existing case; skip is a legal empty run", async () => {
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        writerCall([
+          { action: "open", category: "research", caseName: "手机调研", body: "x" },
+          { action: "skip", category: "research", caseName: "别的", body: "y" },
+        ]),
+      ]),
+    );
+    const result = await runLibrarianPass({
+      model,
+      closedSliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped.map((s) => s.reason).join(" ")).toContain("already exists");
+  });
+
+  it("an empty decision list is a legal 空转", async () => {
+    ai.streamText.mockResolvedValue(streamWith([writerCall([], "nothing worth writing")]));
+    const result = await runLibrarianPass({
+      model,
+      closedSliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.llmRan).toBe(true);
+    expect(result.written).toEqual([]);
+    expect(io.files.size).toBe(0);
+  });
+
+  it("a failed LLM run degrades to a skipped item, never throws", async () => {
+    ai.streamText.mockRejectedValue(new Error("provider down"));
+    const result = await runLibrarianPass({
+      model,
+      closedSliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.llmRan).toBe(true);
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("provider down");
   });
 });
 
-// ─── The scribe pass ────────────────────────────────────────────────────────
+// ─── The scribe pass (书记段序 7) ──────────────────────────────────────────
 
-function seedAgentMd(lines: string[]) {
-  io.files.set(AGENT_MD, lines.join("\n") + "\n");
-}
-
-describe("runScribePass", () => {
-  it("returns ran:false when the slice has no agent.md yet", async () => {
+describe("runScribePass — case model, no strands", () => {
+  it("opens a tasks/ case from a task marker, date anchor stamped mechanically", async () => {
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"t1-2","kind":"task","title":"团队 on-site","dateAnchor":"2026-09-08","note":"8 号","topics":[]}`,
+      ].join("\n"),
+    );
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "scribeOutput",
+          input: {
+            entries: [{ id: "t1-2", body: "去团队 on-site，准备演示材料。" }],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
     const result = await runScribePass({
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: {},
       date: DATE,
     });
-    expect(result.ran).toBe(false);
-    expect(ai.streamText).not.toHaveBeenCalled();
+    expect(result.written).toEqual(["tasks/团队 on-site/index.md"]);
+    const raw = io.files.get("memory/tasks/团队 on-site/index.md")!;
+    expect(raw).toContain("日期锚：2026-09-08");
+    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    // mailbox bookkeeping — the marker is recorded so it never double-writes
+    expect(io.files.get(AGENT_MD)).toContain(SCRIBE_RECORD_PREFIX);
   });
 
-  it("writes a sediment marker into docs/research with a 名录 entry and a processed record", async () => {
-    seedAgentMd([
-      `${DOC_MARKER_PREFIX} {"v":1,"id":"t1-1","kind":"sediment","docType":"research","title":"手机购买调研","note":"对比了三款机型","topics":["用户手机"]}`,
-    ]);
+  it("an entity sediment maps to its case category (object → things/)", async () => {
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"t1-3","kind":"sediment","docType":"entity","entityKind":"object","title":"旧手机","note":"","topics":[]}`,
+      ].join("\n"),
+    );
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "scribeOutput",
+          input: { entries: [{ id: "t1-3", body: "用户还有一台旧手机作备用机。" }], reasoning: "r" },
+        },
+      ]),
+    );
+    const result = await runScribePass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      date: DATE,
+    });
+    expect(result.written).toEqual(["things/旧手机/index.md"]);
+  });
+
+  it("updates a LIVING existing case (rewriteIndex) and appends a TAIL line to a SEALED one", async () => {
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"m1","kind":"sediment","title":"活case","note":"","topics":[]}`,
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"m2","kind":"sediment","title":"封case","note":"","topics":[]}`,
+      ].join("\n"),
+    );
+    io.files.set(
+      "memory/research/活case/index.md",
+      "---\nopened: 2026-08-01\n---\n\n还在写的草稿。\n",
+    );
+    io.files.set(
+      "memory/research/封case/index.md",
+      // Serialized form (serializeCaseDoc quotes dates — unquoted YAML dates
+      // parse as Date objects, a latent R1 parse quirk reported upstream).
+      "---\nopened: '2026-08-01'\nclosed: '2026-08-05'\n---\n\n封口的正文。\n\n—— 尾部 ——\n2026-08-05：结案。\n",
+    );
     ai.streamText.mockResolvedValue(
       streamWith([
         {
           toolName: "scribeOutput",
           input: {
             entries: [
-              {
-                id: "t1-1",
-                entryTitle: "开篇",
-                body: "问题：三款机型怎么选。本场对比了屏幕、续航和价格。",
-                asOf: "三款机型各有优劣，未决定。",
-              },
+              { id: "m1", body: "草稿 + 新情况。" },
+              { id: "m2", body: "封口后的一条补充。" },
             ],
-            reasoning: "一篇沉淀。",
+            reasoning: "r",
           },
         },
       ]),
@@ -336,80 +466,33 @@ describe("runScribePass", () => {
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: { 用户手机: ["2026/08/09/1300"] },
       date: DATE,
     });
-    expect(result.written).toEqual([`${DATE}-手机购买调研.md`]);
-
-    const doc = io.files.get(`memory/docs/research/${DATE}-手机购买调研.md`)!;
-    expect(doc).toContain("问题：三款机型怎么选");
-    expect(doc).toContain(`（证据切片：${SLICE_ID}）`);
-
-    const home = io.files.get("memory/docs/topic/用户手机.md")!;
-    expect(home).toContain(`《${DATE}-手机购买调研》开设。`);
-
-    const agentMd = io.files.get(AGENT_MD)!;
-    expect(agentMd).toContain(`${SCRIBE_RECORD_PREFIX} {"id":"t1-1","doc":"${DATE}-手机购买调研.md"}`);
+    expect(result.written).toHaveLength(2);
+    const living = io.files.get("memory/research/活case/index.md")!;
+    expect(living).toContain("草稿 + 新情况。");
+    expect(living).not.toContain("status:");
+    const sealed = io.files.get("memory/research/封case/index.md")!;
+    expect(sealed).toContain("封口的正文。"); // sealed 正文 untouched
+    expect(sealed).toContain("封口后的一条补充。");
   });
 
-  it("writes a task marker into docs/task with the date anchor stamped mechanically", async () => {
-    seedAgentMd([
-      `${DOC_MARKER_PREFIX} {"v":1,"id":"t2-1","kind":"task","title":"团队 on-site","dateAnchor":"2026-09-08","note":"8 号去 on-site","topics":[]}`,
-    ]);
-    ai.streamText.mockResolvedValue(
-      streamWith([
-        {
-          toolName: "scribeOutput",
-          input: {
-            entries: [{ id: "t2-1", entryTitle: "开篇", body: "要做什么：参加团队 on-site。状态：待办。" }],
-            reasoning: "",
-          },
-        },
-      ]),
+  it("already-processed markers are not re-written (mailbox record)", async () => {
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"t1-1","kind":"sediment","title":"x","note":"","topics":[]}`,
+        `${SCRIBE_RECORD_PREFIX} {"id":"t1-1","doc":"research/x"}`,
+      ].join("\n"),
     );
     const result = await runScribePass({
       model,
       sliceId: SLICE_ID,
       excerpt: EXCERPT,
-      strands: {},
-      date: DATE,
-    });
-    expect(result.written).toEqual([`${DATE}-团队 on-site.md`]);
-    const doc = io.files.get(`memory/docs/task/${DATE}-团队 on-site.md`)!;
-    expect(doc).toContain("日期锚：2026-09-08");
-    expect(doc).toContain("状态：待办");
-  });
-
-  it("does not reprocess a marker that already has a record (no LLM call)", async () => {
-    seedAgentMd([
-      `${DOC_MARKER_PREFIX} {"v":1,"id":"t1-1","kind":"sediment","docType":"research","title":"手机购买调研","note":"x","topics":[]}`,
-      `${SCRIBE_RECORD_PREFIX} {"id":"t1-1","doc":"${DATE}-手机购买调研.md"}`,
-    ]);
-    const result = await runScribePass({
-      model,
-      sliceId: SLICE_ID,
-      excerpt: EXCERPT,
-      strands: {},
       date: DATE,
     });
     expect(result.ran).toBe(false);
     expect(ai.streamText).not.toHaveBeenCalled();
-  });
-
-  it("leaves question markers for the research pass", async () => {
-    seedAgentMd([
-      `${DOC_MARKER_PREFIX} {"v":1,"id":"q-1","kind":"question","title":"过去一年手机话题怎么演变的","note":"","topics":["用户手机"]}`,
-    ]);
-    const result = await runScribePass({
-      model,
-      sliceId: SLICE_ID,
-      excerpt: EXCERPT,
-      strands: { 用户手机: ["2026/08/09/1300"] },
-      date: DATE,
-    });
-    expect(result.ran).toBe(false);
-    expect(ai.streamText).not.toHaveBeenCalled();
-    // untouched — no record line
-    expect(io.files.get(AGENT_MD)).not.toContain(SCRIBE_RECORD_PREFIX);
+    expect(io.files.size).toBe(1); // only the agent.md itself
   });
 });

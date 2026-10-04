@@ -36,3 +36,43 @@ export {
   markStatus,
 } from "./document";
 export { normalizeDocRef, docPathCandidates } from "./references";
+// ─── Case model (v0.19 R1) — the new notation layer. The legacy exports
+// above stay in service until the writers switch over (R3/R4). ───
+export {
+  CASE_CATEGORIES,
+  isCaseCategory,
+  caseDirPath,
+  caseIndexPath,
+  casePiecePath,
+  caseAttachmentsPath,
+  MEMORY_ROOT_DIR,
+  LEGACY_DOC_ROOTS,
+  LEGACY_DOC_KINDS,
+  type CaseCategory,
+} from "./paths";
+export {
+  isValidCaseName,
+  isValidPieceFileName,
+  parsePieceFileName,
+  buildPieceFileName,
+  type ParsedPieceName,
+} from "./case-naming";
+export {
+  parseCaseDoc,
+  serializeCaseDoc,
+  createCase,
+  createDoc,
+  rewriteBody,
+  closeDoc,
+  appendTail,
+  type CaseDoc,
+  type TailLine,
+  type CaseDocLocation,
+} from "./case-doc";
+export {
+  normalizeCaseRefText,
+  parseCaseRef,
+  resolveCaseRefPaths,
+  CASE_CATEGORY_LIST,
+  type CaseRef,
+} from "./case-refs";

@@ -21,11 +21,11 @@ import matter from "gray-matter";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import type { ModelConfig } from "@/lib/models/registry";
-import { fsReadFile, fsWriteFile, type WriteBatch } from "../io-helpers";
+import { fsWriteFile, type WriteBatch } from "../io-helpers";
+import { readSlicePartResolved } from "../paths";
 import { parseTurns, type ParsedTurn } from "../turn-parser";
 import {
   readTimelineIndex,
-  sliceCorePath,
   writeTimelineIndex,
   writeTimelineMd,
 } from "../timeline/store";
@@ -117,9 +117,9 @@ export async function collectDrySliceCandidates(opts: {
     const out: Array<{ sliceId: string; conversation: string }> = [];
     for (const entry of candidates) {
       try {
-        const corePath = sliceCorePath(entry.id.split("-").join("/"));
-        const raw = await fsReadFile(corePath, opts.batch);
-        const { turns } = parseTurns(raw);
+        const raw = await readSlicePartResolved(entry.id, "core", opts.batch);
+        if (!raw) continue;
+        const { turns } = parseTurns(raw.content);
         if (turns.length === 0) continue;
         out.push({ sliceId: entry.id, conversation: compressTurns(turns) });
       } catch {
@@ -152,8 +152,12 @@ export async function applyMarksToDrySlices(
       try {
         const entry = idx.slices.find((s) => s.id === mark.id);
         if (!entry || !entry.needs_marking) continue;
-        const corePath = sliceCorePath(mark.id.split("-").join("/"));
-        const raw = await fsReadFile(corePath, batch);
+        // Dual-root read; the write lands IN PLACE on whichever root the read
+        // hit — this is content maintenance on a frozen slice (focus/summary
+        // fill), not a format rewrite, and never a root migration.
+        const resolved = await readSlicePartResolved(mark.id, "core", batch);
+        if (!resolved) continue;
+        const raw = resolved.content;
 
         // Write the marks into the slice's frontmatter (body untouched).
         const parsed = matter(raw);
@@ -161,7 +165,7 @@ export async function applyMarksToDrySlices(
         if (mark.focus) fm.focus = mark.focus;
         if (mark.summary) fm.summary = mark.summary;
         await fsWriteFile(
-          corePath,
+          resolved.path,
           matter.stringify(parsed.content, fm),
           batch,
         );
@@ -210,9 +214,9 @@ export async function backfillDrySliceMarks(opts: {
       // Per-candidate isolation: one unreadable core.md (or a marking
       // failure) skips THAT slice — the rest still get marked.
       try {
-        const corePath = sliceCorePath(candidate.sliceId.split("-").join("/"));
-        const raw = await fsReadFile(corePath, opts.batch);
-        const mark = await markOneSlice(opts.model, raw);
+        const resolved = await readSlicePartResolved(candidate.sliceId, "core", opts.batch);
+        if (!resolved) continue;
+        const mark = await markOneSlice(opts.model, resolved.content);
         if (!mark) continue;
         marks.push({ id: candidate.sliceId, ...mark });
       } catch {

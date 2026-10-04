@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 
-const store = vi.hoisted(() => ({ readTimelineIndex: vi.fn() }));
-vi.mock("@/lib/episodic/timeline/store", () => ({
-  readTimelineIndex: store.readTimelineIndex,
+const store = vi.hoisted(() => ({ getTimelineCatalog: vi.fn() }));
+vi.mock("@/lib/episodic/actions", () => ({
+  getTimelineCatalog: store.getTimelineCatalog,
 }));
 
 import { searchSlices } from "@/lib/search/actions";
@@ -29,28 +29,24 @@ function makeEntry(
 }
 
 const slices = [
-  makeEntry("2026-08-01-0900", { focus: "needle in focus", tags: ["a"] }),
-  makeEntry("2026-08-05-0900", { focus: "needle later", strands: ["s1"] }),
+  makeEntry("2026-08-01-0900", { focus: "needle in focus" }),
+  makeEntry("2026-08-05-0900", { focus: "needle later" }),
 ];
 
 beforeEach(() => {
-  store.readTimelineIndex.mockReset();
-  store.readTimelineIndex.mockResolvedValue({
-    _schema: 1,
-    updated_at: "2026-08-06T00:00:00Z",
-    slice_count: slices.length,
-    needs_marking: 0,
-    slices,
-  });
+  store.getTimelineCatalog.mockReset();
+  // The corpus is the live enumeration's point-read headers (v0.19 R3b) —
+  // the action sees the same shape the projection used to ship.
+  store.getTimelineCatalog.mockResolvedValue(slices);
 });
 
 describe("searchSlices", () => {
-  it("returns [] when the catalog is not built yet", async () => {
-    store.readTimelineIndex.mockResolvedValue(null);
+  it("returns [] when no slices exist yet", async () => {
+    store.getTimelineCatalog.mockResolvedValue([]);
     expect(await searchSlices("needle")).toEqual([]);
   });
 
-  it("searches the full catalog without opts", async () => {
+  it("searches the full corpus without opts", async () => {
     const hits = await searchSlices("needle");
     expect(hits).toHaveLength(2);
     expect(hits[0].entry.id).toBe("2026-08-05-0900"); // tie → newest first
@@ -61,8 +57,7 @@ describe("searchSlices", () => {
     expect(hits.map((h) => h.entry.id)).toEqual(["2026-08-01-0900"]);
   });
 
-  it("supports the #strand syntax through the action", async () => {
-    const hits = await searchSlices("#s1 needle");
-    expect(hits.map((h) => h.entry.id)).toEqual(["2026-08-05-0900"]);
+  it("treats # tokens as ordinary characters — the #strand syntax retired with the projection (§A.2.4)", async () => {
+    expect(await searchSlices("#s1 needle")).toEqual([]);
   });
 });

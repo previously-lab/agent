@@ -62,22 +62,21 @@ describe("mergeTurnsWithRemote", () => {
     expect(merged.turns).toHaveLength(2);
   });
 
-  it("unions tags and loop pointers without duplicates", () => {
-    const remote = serializeSlice(makeSlice({ tags: ["api"], loops: ["loop-1"] }));
+  it("unions loop pointers without duplicates (tags are no longer persisted)", () => {
+    const remote = serializeSlice(makeSlice({ loops: ["loop-1"] }));
     const local = makeSlice({
       turns: [makeTurn("t1", "x")],
-      tags: ["api", "design"],
       loops: ["loop-1", "loop-2"],
     });
 
     const merged = parseSlice(mergeTurnsWithRemote(remote, local));
-    expect(merged.tags).toEqual(["api", "design"]);
     expect(merged.loops).toEqual(["loop-1", "loop-2"]);
   });
 
   it("keeps the REMOTE frontmatter (close marking etc. wins over our stale copy)", () => {
+    // Closed state persists as closed_by alone (v0.19 R2) — status derives.
     const remote = serializeSlice(
-      makeSlice({ focus: "updated remotely", status: "closed", turns: [] }),
+      makeSlice({ focus: "updated remotely", closedBy: "user_explicit", turns: [] }),
     );
     const local = makeSlice({ focus: "stale focus", turns: [makeTurn("t1", "x")] });
 

@@ -1,8 +1,7 @@
 "use client";
 
 import { extractRenderState } from "@/lib/chat/tool-state";
-import { ListFilesRenderer } from "./tool-renderers/list-files";
-import { ListDocsRenderer } from "./tool-renderers/list-docs";
+import { ListTreeRenderer } from "./tool-renderers/list-tree";
 import { ReadDocRenderer } from "./tool-renderers/read-doc";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
@@ -36,12 +35,8 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
 
   switch (toolName) {
     case "readSlice":
-    case "readTimelineWindow":
     case "readAgentTimeline":
     case "readPreviously":
-    case "readTimeline":
-    case "readStrand":
-    case "listStrands":
       return (
         <MemoryToolRenderer
           toolName={toolName}
@@ -50,23 +45,13 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
           state={renderState}
         />
       );
-    case "listSlices":
+    case "listTree":
       return (
-        <ListFilesRenderer
+        <ListTreeRenderer
           toolName={toolName}
-          input={input as { path?: string } | undefined}
-          output={output as Array<{ name: string; type: string }> | undefined}
-          state={renderState}
-        />
-      );
-    case "listDocs":
-      return (
-        <ListDocsRenderer
-          toolName={toolName}
-          input={input as { kind?: string; filter?: string } | undefined}
           output={
             output as
-              | { kind?: string; files?: string[]; note?: string; error?: string }
+              | { truncated?: boolean; tree?: Record<string, string[]> }
               | undefined
           }
           state={renderState}
@@ -76,15 +61,13 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
       return (
         <ReadDocRenderer
           toolName={toolName}
-          input={input as { fileName?: string } | undefined}
+          input={input as { ref?: string } | undefined}
           output={
             output as
               | {
-                  fileName?: string;
-                  kind?: string;
-                  status?: string;
+                  path?: string;
                   opened?: string;
-                  updated?: string;
+                  closed?: string | null;
                   content?: string;
                   warnings?: string[];
                   error?: string;

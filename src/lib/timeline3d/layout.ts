@@ -81,8 +81,6 @@ export interface TimelineNodeLayout {
   /** 0..1, fades with distance from the newest slice. */
   brightness: number;
   strands: string[];
-  /** Catalog tags — the T1 card's neutral chips (Rev 3). */
-  tags: string[];
   /** Turn count (catalog `turn_count`, defaults 1) — the card footer's ticks. */
   turnCount: number;
   /** Emotional tone, when marked — shown on tall cards. */
@@ -324,7 +322,6 @@ export function computeTimelineLayout(
       size,
       brightness,
       strands: entry.strands ?? [],
-      tags: entry.tags ?? [],
       turnCount: turns,
       tone: entry.tone,
       openLoops: entry.open_loops ?? [],
