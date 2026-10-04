@@ -980,10 +980,14 @@ function Inner({
   // briefing arrival over a NON-empty memory folds the panel to the pill and
   // lets the field (history + the tail card) be the arrival view. Fires ONCE
   // per briefing, on the arrival settling: a reader who re-expands the panel
-  // afterwards is left alone.
+  // afterwards is left alone. The episodicReady gate is what keeps the fold
+  // off the LOADING window — before the episodic state settles, `emptyMemory`
+  // is false and `showBriefingCard` reads true for an EMPTY memory too, and
+  // folding there strands the standalone full-screen briefing (the empty
+  // memory's arrival face, §1.2) behind the pill with no way back.
   const briefingFoldedRef = useRef(false);
   useEffect(() => {
-    if (!showBriefingCard) {
+    if (!showBriefingCard || !episodicReady) {
       briefingFoldedRef.current = false;
       return;
     }
@@ -991,7 +995,7 @@ function Inner({
       briefingFoldedRef.current = true;
       panelTier.setMode("pill");
     }
-  }, [showBriefingCard, panelTier]);
+  }, [showBriefingCard, episodicReady, panelTier]);
 
   const handleSelectSlice = useCallback(
     async (sliceId: string, toTime?: string) => {
