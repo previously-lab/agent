@@ -4,8 +4,9 @@
  * v0.8: the timeline is a PROJECTION of the slice files, never a separately
  * maintained truth. `memory/episodic/timeline/index.json` is the canonical
  * structured catalog (renderable by the UI); `memory/episodic/timeline.md` is
- * its markdown projection (read by the main agent / recall). Both are rebuilt
- * by `weaveTimeline` in `weave.ts`.
+ * its markdown projection. v0.19 R3 retired the weave that rebuilt them — the
+ * catalog is read-only legacy surface now (home recap + enumerate live-read;
+ * nothing writes).
  */
 
 /** A single slice's catalog entry — the semantic "profile" that lets a reader
@@ -50,27 +51,4 @@ export interface TimelineSliceEntry {
   closed_by?: string;
 }
 
-/** The canonical catalog file (`timeline/index.json`). */
-export interface TimelineIndex {
-  _schema: number;
-  updated_at: string;
-  slice_count: number;
-  needs_marking: number;
-  slices: TimelineSliceEntry[];
-}
 
-/** What a `weaveTimeline` run changed. */
-export interface TimelineWeaveResult {
-  /** Slices found on disk but absent from the projection — added. */
-  added: number;
-  /** Slices in the projection but absent on disk — dropped (phantom). */
-  removed: number;
-  /** Slices whose `needs_marking` flag flipped to true this run. */
-  newly_dry: number;
-  /** Total slices still needing semantic marking. */
-  needs_marking: number;
-  /** Total slices in the catalog. */
-  total: number;
-  /** True when the run skipped the full reconcile (throttled, still fresh). */
-  skipped: boolean;
-}

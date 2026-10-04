@@ -19,7 +19,6 @@ export const PHASE_DONE_KEYS: Record<string, string> = {
   slice: "sliced",
   tags: "tagged",
   context: "contextLoaded",
-  strands: "strandsWoven",
   analyze: "analyzed",
 };
 

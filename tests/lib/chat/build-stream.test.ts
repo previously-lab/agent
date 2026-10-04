@@ -354,7 +354,7 @@ describe("deriveAgentStage", () => {
     ];
     expect(deriveAgentStage(parts)).toBe("recalling");
     expect(
-      deriveAgentStage([part({ type: "data-tool-progress", data: { toolCallId: "t1", toolName: "recall", text: "x" } })]),
+      deriveAgentStage([part({ type: "data-tool-progress", data: { toolCallId: "t1", toolName: "readDoc", text: "x" } })]),
     ).toBe("recalling");
   });
 

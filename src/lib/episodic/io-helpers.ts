@@ -19,9 +19,10 @@
  * object — not a module global — two turns running concurrently in one
  * process can never flush each other's writes.
  *
- * Extracted from manager.ts to avoid circular imports: global-timeline.ts and
- * recall.ts need these helpers, but importing them from manager.ts would create
- * a cycle when manager.ts itself needs to call generateGlobalTimeline.
+ * Extracted from manager.ts to avoid circular imports: the derived-index
+ * writers needed these helpers, but importing them from manager.ts created a
+ * cycle. (The writers are retired since v0.19 R3 — the note stays as the
+ * reason this module exists separately.)
  */
 import { readFile as readFileGitHub } from "@/lib/tools/readFile";
 import {
@@ -180,7 +181,7 @@ export async function fsReadFile(
   opts?: { fresh?: boolean },
 ): Promise<string> {
   // With a batch, check pending writes first so functions that write and then
-  // read (e.g. write _index.json → generateGlobalTimeline reads it) see the
+  // read (e.g. a projection write followed by its own aggregate read) see the
   // latest in-batch content. A pending NULL is a queued DELETE — the file is
   // gone as far as this batch is concerned.
   const pending = batch?.entries.get(path);

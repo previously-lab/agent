@@ -72,41 +72,13 @@ export type {
   AnalyzeTurnInput,
 } from "./flash/turn-analyzer";
 
-export {
-  generateGlobalTimeline,
-  updateGlobalTimeline,
-} from "./flash/global-timeline";
-
-export {
-  consolidateStrands,
-} from "./flash/strand-consolidator";
-export type {
-  ConsolidationResult,
-} from "./flash/strand-consolidator";
-// ─── v0.8 timeline (first-class derived index) ─────────────────────────
-export {
-  weaveTimeline,
-  readTimelineMd,
-  WEAVE_FRESH_MS,
-} from "./timeline/weave";
-export {
-  renderTimelineMd,
-  buildTimelineBrief,
-  groupByEraAndDay,
-  sliceLine,
-} from "./timeline/render";
-export {
-  readTimelineIndex,
-  sliceEntryFromDisk,
-  upsertTimelineEntry,
-  TIMELINE_INDEX_PATH,
-  TIMELINE_MD_PATH,
-} from "./timeline/store";
-export type {
-  TimelineIndex,
-  TimelineSliceEntry,
-  TimelineWeaveResult,
-} from "./timeline/types";
+// ─── v0.19: the projection writers are retired (R3) — the global timeline,
+// the strand-consolidator, the backfill pass, the timeline weave, and the
+// markdown projection (render.ts) are gone. What remains of the timeline/
+// directory: store.ts (the live per-slice header read), paginate.ts,
+// enumerate.ts, types. ───────────────────────────────────────────────────
+export { sliceEntryFromDisk } from "./timeline/store";
+export type { TimelineSliceEntry } from "./timeline/types";
 
 export {
   createBatch,

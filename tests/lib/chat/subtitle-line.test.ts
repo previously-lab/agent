@@ -33,15 +33,14 @@ describe("foldSubtitleActivity — the activity ladder", () => {
     }
   });
 
-  it("reads the memory-read tools as recalling (the shared isRecallTool table)", () => {
+  it("reads the memory-read tools as recalling (the shared isMemoryReadTool table)", () => {
     // One memory read lights "recalling" — the user-facing （正在回忆）.
+    // The live read surface is the read* family (v0.19 three-action set).
     for (const toolName of [
       "readSlice",
       "readDoc",
-      "readTimelineWindow",
-      "listSlices",
-      "listStrands",
-      "listDocs",
+      "readAgentTimeline",
+      "readPreviously",
     ]) {
       const line = foldSubtitleActivity([
         part({ type: `tool-${toolName}`, toolCallId: "t1", toolName, state: "running" }),

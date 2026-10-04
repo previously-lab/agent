@@ -1,13 +1,13 @@
 /**
- * The question run's research/hypothesis pass (v0.19 §A.2.3-b; was the
- * degraded v0.15 boundary pass).
+ * The question run's research/hypothesis pass (v0.19 §A.2.3-b).
  *
- * THE DEGRADED FORM, ON PURPOSE: the design's real question run is an
- * independent durable run — the lift is another lane's job (A3). What this
- * module implements until then is the same shape riding the housekeeping
- * tail: driven ONLY by the user's "question" markers (no automatic research,
- * no scheduled re-thinking: no marker, no pass). The agenda stays
- * conservative — the markers ARE the agenda.
+ * A3 HAS LANDED: this pass now runs as the QUESTION RUN — an independent
+ * durable run (src/app/api/evolution/question-run.ts), triggered by the
+ * user's "question" markers in a slice's agent.md mailbox. It is no longer
+ * "the degraded form riding the housekeeping tail"; the one-function shape
+ * stayed exactly because the lift was planned, and the pass still takes all
+ * of its agenda from the markers (conservative: no marker, no run; the
+ * markers ARE the agenda).
  *
  * Discipline (same structural shape as the case writer):
  * - writer-is-reader: the case manifest enters the prompt, and the pass gets

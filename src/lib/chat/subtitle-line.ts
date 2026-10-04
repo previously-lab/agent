@@ -21,8 +21,9 @@
  *   tool-thinkDeep              → thinking
  *   tool-webSearch / webFetch   → searching  （正在搜索）
  *   memory-read tools           → recalling  （正在回忆）
- *     (isRecallTool, build-stream.ts: read* / listSlices / listStrands /
- *      listDocs — THE shared truth table, not a local copy)
+ *     (isMemoryReadTool, build-stream.ts: the read* family — readSlice /
+ *      readDoc / readAgentTimeline / readPreviously — THE shared truth
+ *      table, not a local copy)
  *   any other tool-*            → reading    （正在查阅 N 条记忆）
  *   data-phase                  → housekeeping （正在整理）
  *   non-empty text part         → replying   （正在回复）
@@ -43,7 +44,7 @@
  * is invented here.
  */
 
-import { isRecallTool, type AnyPart } from "@/lib/chat/build-stream";
+import { isMemoryReadTool, type AnyPart } from "@/lib/chat/build-stream";
 
 // Re-exported so consumers (and tests) can speak the part vocabulary through
 // this module without importing build-stream directly.
@@ -77,11 +78,11 @@ function toolNameOf(part: AnyPart): string {
 }
 
 /** Which caption block a tool call lights up. The memory-read family is
- *  `isRecallTool`'s call (build-stream.ts) — the SAME truth table the stage
+ *  `isMemoryReadTool`'s call (build-stream.ts) — the SAME truth table the stage
  *  pill derives from, so the caption and the panel can never disagree about
  *  what "回忆" means. Everything else the count carries as "查阅". */
 function activityForTool(toolName: string): SubtitleActivityKind {
-  if (isRecallTool(toolName)) return "recalling";
+  if (isMemoryReadTool(toolName)) return "recalling";
   switch (toolName) {
     case "webSearch":
     case "webFetch":

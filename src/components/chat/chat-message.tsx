@@ -79,15 +79,15 @@ const INK_EDGE_ALPHA = 0.9;
 /**
  * Maps a running-phase i18n key to its done-state key. `slicing` is kept for
  * backward compatibility with messages streamed before the housekeeping phases
- * were granularized; the current phases (slice/tags/context/strands) merge into
- * the HousekeepingCard instead.
+ * were granularized; the current phases (slice/tags/context) merge into
+ * the HousekeepingCard instead. The retired "strands" phase maps to no done
+ * key — old streams fall back to their running label.
  */
 const PHASE_DONE_KEYS: Record<string, string> = {
   slicing: "sliced",
   slice: "sliced",
   tags: "tagged",
   context: "contextLoaded",
-  strands: "strandsWoven",
 };
 
 // ── Stable PhaseIndicator props ──────────────────────────────────────────

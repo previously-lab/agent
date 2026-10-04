@@ -203,15 +203,12 @@ export function progressStageTone(stage?: string): "thinking" | "answer" {
  *  THE one truth table for "this tool reads the memory": shared by
  *  `deriveAgentStage` here and by the pill subtitle's activity fold
  *  (`lib/chat/subtitle-line.ts`) — a second copy is how the caption and the
- *  stage pill drift apart. */
-export function isRecallTool(toolName: string): boolean {
-  return (
-    toolName === "recall" ||
-    toolName.startsWith("read") ||
-    toolName === "listSlices" ||
-    toolName === "listStrands" ||
-    toolName === "listDocs"
-  );
+ *  stage pill drift apart. The read surface is the v0.19 three-action set
+ *  (readSlice / readDoc / readAgentTimeline / readPreviously) — every live
+ *  one starts with "read"; retired names (recall / listSlices / listStrands /
+ *  listDocs) no longer appear here. */
+export function isMemoryReadTool(toolName: string): boolean {
+  return toolName.startsWith("read");
 }
 
 /**
@@ -238,10 +235,10 @@ export function deriveAgentStage(parts: readonly AnyPart[]): AgentStage | null {
       }
     } else if (p.type === "data-tool-progress") {
       const toolName = (p.data as { toolName?: string } | undefined)?.toolName;
-      if (toolName) stage = isRecallTool(toolName) ? "recalling" : "working";
+      if (toolName) stage = isMemoryReadTool(toolName) ? "recalling" : "working";
     } else if (typeof p.type === "string" && p.type.startsWith("tool-")) {
       const toolName = p.toolName ?? p.type.replace("tool-", "");
-      stage = isRecallTool(toolName) ? "recalling" : "working";
+      stage = isMemoryReadTool(toolName) ? "recalling" : "working";
     }
   }
   return stage;
