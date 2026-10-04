@@ -13,6 +13,7 @@
 
 import { streamText, type UIMessageChunk } from "ai";
 import { getWritable } from "workflow";
+import { getHookByToken, resumeHook, start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
 // serialization-class registration for it runs before any doStreamStep
@@ -39,7 +40,13 @@ import {
   recordDocRead,
   logDocReworkSignal,
 } from "@/lib/episodic/rework-signal";
+import {
+  HQ_TOKEN,
+  hqRun,
+  type HQBriefPayload,
+} from "@/app/api/evolution/hq-run";
 import { readSelfSop } from "@/lib/evolution/store";
+
 import { extractSliceIds } from "@/lib/docs/docs-query";
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
@@ -878,6 +885,76 @@ export async function writeCaseExecute(
     return { ok: true, action: "addPiece", path: applied.path };
   } catch (e) {
     return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+
+// ─── reportToHQ — the field's one-way report to HQ (v0.21 §4) ──────────────
+
+export type ReportToHQResult =
+  | { ok: true; delivered: "resumed" | "started"; runId: string }
+  | { ok: false; reason: string };
+
+/**
+ * Start a fresh HQ run carrying this brief as its first payload. Shared by
+ * the "no HQ alive" and "resume raced with HQ exit" fallbacks.
+ */
+async function startHQRun(payload: HQBriefPayload): Promise<ReportToHQResult> {
+  try {
+    const run = await start(hqRun, [payload]);
+    return { ok: true, delivered: "started", runId: run.runId };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: `HQ could not be reached: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}
+
+/**
+ * reportToHQ — hand the scene over to HQ (§4). The payload is ONE piece of
+ * prose (`brief`: what the field sees + its own observations — no
+ * expectations, no instructions) plus the mechanically-attached
+ * `replyToken` (`field:<sliceId>:<startedAtIso>`, same formula the turn
+ * workflow uses for its end-of-turn callback hook — the model never writes
+ * it). The result only says DELIVERED or not — it promises nothing about
+ * what HQ does, and HQ may or may not speak back later.
+ *
+ * Step order (§4): the advisory `getHookByToken` first; a live hook →
+ * `resumeHook` (durable `hook_received` first, then the wake). Any failure
+ * — hook absent (HookNotFoundError), or a race where HQ exited right after
+ * the advisory — falls back to `start(hqRun, [payload])`. A resumeHook
+ * failure can leave the event durable while the wake failed; re-delivering
+ * to a fresh run only appends a duplicate `hook_received`, which HQ absorbs
+ * writer-is-reader style (§11 ③).
+ */
+export async function reportToHQExecute(
+  input: { brief: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<ReportToHQResult> {
+  "use step";
+  const brief = input.brief?.trim() ?? "";
+  if (!brief) return { ok: false, reason: "brief must not be empty." };
+  const payload: HQBriefPayload = {
+    brief,
+    replyToken: `field:${ctx.sliceId}:${ctx.startedAtIso ?? ""}`,
+  };
+  try {
+    // Advisory only (SDK): a hit does not guarantee the hook survives until
+    // resumeHook — the race is closed by the fallback below.
+    await getHookByToken(HQ_TOKEN);
+  } catch {
+    return startHQRun(payload);
+  }
+  try {
+    const resumed = await resumeHook(HQ_TOKEN, payload);
+    return { ok: true, delivered: "resumed", runId: resumed.runId };
+  } catch (e) {
+    console.warn(
+      "[reportToHQ] resumeHook failed — starting a fresh HQ run:",
+      e instanceof Error ? e.message : e,
+    );
+    return startHQRun(payload);
   }
 }
 

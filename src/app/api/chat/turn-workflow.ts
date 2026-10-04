@@ -21,7 +21,7 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount, type ModelMessage } from "ai";
-import { getWritable, sleep } from "workflow";
+import { getWritable, sleep, createHook } from "workflow";
 import type { ModelCallStreamPart } from "@ai-sdk/workflow";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
@@ -43,6 +43,7 @@ import {
   persistAgentTurn,
   scribeSegment,
   closeTurnStream,
+  appendFieldReturnLine,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -1275,7 +1276,67 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
 
+  // ── 收尾 peek：HQ 回程（v0.21 §4，best-effort bonus）───────────────────
+  // 注册时机（SDK create-hook 文档）：createHook() 本身不注册——registration
+  // 只在 workflow suspend 到该 hook 上时才提交。所以外勤可被 HQ 投递的时
+  // 刻只有下面这次 race 挂起之后；HQ 早喊晚喊都是 HookNotFoundError → pass。
+  // 这就是"回程是 bonus 不是通道"（§11 ②）的物理基础，也解释了为什么命
+  // 中率天然低。token 与 reportToHQ executor 附带的 replyToken 同公式
+  // （field:<sliceId>:<startedAtIso>），对话轮 run 据此预建回调点。
+  {
+    const fieldToken = `field:${hk.slice.slice_id}:${input.startedAtIso ?? ""}`;
+    const fieldHook = createHook<string>({ token: fieldToken });
+    try {
+      const iterator = fieldHook[Symbol.asyncIterator]();
+      try {
+        const peek = await raceFieldPeek(iterator);
+        if (peek.kind === "reply" && peek.text.trim()) {
+          // 赶上就带上：一条散文行进本片 agent.md，下一轮读面自然看到。
+          await appendFieldReturnLine(hk.slice.slice_id, peek.text.trim());
+        }
+      } finally {
+        await iterator.return?.();
+      }
+    } catch (err) {
+      // peek 是纯工程顺路：任何失败都不拖垮回合。
+      console.warn(
+        `[Turn:${input.turnId}] HQ-return peek failed (ignored):`,
+        err instanceof Error ? err.message : err,
+      );
+    } finally {
+      fieldHook.dispose();
+    }
+  }
+
   if (streamError !== null) {
     throw streamError;
   }
 }
+
+/**
+ * The peek race itself: the hook's async iterator has no non-blocking read,
+ * so "look once with a short timeout" is expressed as a race between the
+ * next payload and `sleep` (§4 — this shape is the implementation; the
+ * semantics are peek). Exported for the unit tests; production passes the
+ * workflow-runtime `sleep` (second parameter) so the suspension is the
+ * runtime's own.
+ */
+export async function raceFieldPeek(
+  iterator: AsyncIterator<string>,
+  sleepImpl: (ms: number) => Promise<unknown> = (ms) => sleep(ms),
+  timeoutMs: number = FIELD_RETURN_PEEK_MS,
+): Promise<{ kind: "reply"; text: string } | { kind: "closed" } | { kind: "timeout" }> {
+  return Promise.race([
+    iterator.next().then((r) =>
+      r.done ? { kind: "closed" as const } : { kind: "reply" as const, text: String(r.value ?? "") },
+    ),
+    sleepImpl(timeoutMs).then(() => ({ kind: "timeout" as const })),
+  ]);
+}
+
+/**
+ * How long the end-of-turn peek waits for an HQ return before moving on —
+ * a short grace, not a channel. The reply has already been streamed in full;
+ * this only gates the bonus.
+ */
+export const FIELD_RETURN_PEEK_MS = 2_000;

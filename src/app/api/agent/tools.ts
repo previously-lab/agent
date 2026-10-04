@@ -29,6 +29,7 @@ import {
   listTreeExecute,
   readDocExecute,
   writeCaseExecute,
+  reportToHQExecute,
   noteForSedimentExecute,
   type ToolContext,
 } from "./tool-executors";
@@ -335,6 +336,36 @@ export const chatTools = {
     }),
     contextSchema: toolContextSchema,
     execute: writeCaseExecute,
+  }),
+  // The field→HQ channel (v0.21 §4): one-way prose report. The payload is
+  // what the field sees plus its own observations — no expectations, no
+  // instructions, no template; the return address is attached mechanically.
+  // HQ is the same agent working without a mouth: it judges independently
+  // what (if anything) the report is worth.
+  reportToHQ: tool({
+    description:
+      "Report to HQ — hand the scene over to the archive/evolution side of " +
+      "the house. This is a one-way dispatch: your brief is a piece of PLAIN " +
+      "PROSE describing the situation and your own observations, written for " +
+      "a colleague who was not in this conversation. No expectations, no " +
+      "instructions, no template — HQ decides for itself what your report " +
+      "is worth and what to do about it. It may act on it, file it, or " +
+      "decide it needs nothing. It MAY speak back into a later turn of this " +
+      "conversation — treat any such return as a bonus, never as something " +
+      "you are owed or should wait for. The result only tells you the " +
+      "report was dispatched (or why it was not).",
+    inputSchema: z.object({
+      brief: z
+        .string()
+        .min(1)
+        .describe(
+          "The whole report: the scene and your observations, in prose. " +
+          "Pointers (slice ids, case paths) are worth more than summaries — " +
+          "HQ reads the original records itself.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: reportToHQExecute,
   }),
   // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). The reply segment
   // is "只读 + 记账" — this tool is the 记账, the ONE memory write the main
@@ -679,6 +710,7 @@ export function buildChatToolsContext(
     listTree: ctx,
     readDoc: ctx,
     writeCase: ctx,
+    reportToHQ: ctx,
     noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,

@@ -1157,6 +1157,33 @@ async function flushTurnBatch(
 }
 
 /**
+ * 序 6 peek 的落点 — bring a caught HQ return into THIS slice's agent.md as
+ * ONE small prose line (v0.21 §4 回程：赶上就带上，下一轮读面自然看到；
+ * 赶不上不补偿、不留账). Not a mailbox marker — the new channel is prose
+ * (§6 R4; the [doc-*] JSON lines are the frozen legacy exception).
+ * Best-effort: a write failure never takes the turn down.
+ */
+export async function appendFieldReturnLine(
+  sliceId: string,
+  text: string,
+): Promise<void> {
+  "use step";
+  try {
+    const resolved = await readSlicePartResolved(sliceId, "agent").catch(() => null);
+    const existing = resolved?.content ?? "";
+    const date = new Date().toISOString().slice(0, 10);
+    const line = `HQ 回程（${date}）：${text.trim()}`;
+    const next = existing.trimEnd()
+      ? `${existing.trimEnd()}\n\n${line}\n`
+      : `${line}\n`;
+    await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next);
+    console.log(`[Field] HQ return line appended to ${sliceId} agent.md`);
+  } catch (e) {
+    console.warn("[Field] HQ return line append failed (ignored):", e);
+  }
+}
+
+/**
  * 序 1 — persist the agent turn to the episodic slice (the old streamText
  * onFinish). Retries are safe: the agent-turn append is deduped by turnId,
  * and the snapshot write is idempotent.
