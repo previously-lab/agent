@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
- * The background stream's two durable runs (v0.19 §A.2.3). The writer passes
- * (librarian / doc-research / card evolution) are mocked at their module
- * boundaries — what is under test here is the RUN's own contract: trigger
- * discipline, the ①→② order and its seam, empty-pass legality, re-run
- * idempotency via the self/evolution reflection line, and the §A.3.3
- * completion notice.
+ * The background stream's two durable runs (v0.19 §A.2.3, v0.21 §5). The
+ * writer passes (librarian / doc-research / card evolution) are mocked at
+ * their module boundaries — what is under test here is the RUN's own
+ * contract: trigger discipline, the ①→② order and its seam, empty-pass
+ * legality, results-only storage (no run ledger — dedup is writer-is-reader
+ * inside the passes), and the §A.3.3 completion notice.
  */
 
 // In-memory memory root (same pattern as tests/lib/episodic/*).
@@ -99,7 +99,6 @@ import { parseCaseDoc } from "@/lib/docs";
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
-const REFLECTION_PATH = "memory/self/evolution/index.md";
 
 function seedSlice(overrides: Record<string, unknown> = {}) {
   episodic.loadSlice.mockResolvedValue({
@@ -136,17 +135,16 @@ beforeEach(() => {
 });
 
 describe("executeBoundaryRun (§A.2.3-a)", () => {
-  it("an empty pass is a legal outcome — and still records its reflection line", async () => {
+  it("an empty pass is a legal outcome — and writes nothing (results only)", async () => {
     const outcome = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
 
     expect(outcome).toEqual({ ran: true, written: [], cardChanged: false });
     // ① ran (and went idle by itself), ② ran — no "worth it" gate anywhere.
     expect(passes.calls).toEqual(["librarian", "card"]);
-    // ③ — the reflection line lands even on an idle pass (it IS the dedup basis).
-    const reflection = io.files.get(REFLECTION_PATH) ?? "";
-    expect(reflection).toContain(SLICE_ID.replace(/^(\d{4})-(\d{2})-(\d{2})-(\d{4})$/, "$1/$2/$3/$4"));
-    expect(reflection).toContain("（无——这一片没有值得写的东西）");
-    expect(reflection).toContain(DATE);
+    // v0.21 §5: an idle round stores NOTHING — no run ledger, no reflection
+    // line. The run itself wrote no file at all (the mocked passes didn't).
+    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
+    expect(io.files.size).toBe(0);
   });
 
   it("② runs after ① and cites ①'s products (the focus seam)", async () => {
@@ -175,24 +173,23 @@ describe("executeBoundaryRun (§A.2.3-a)", () => {
     // ③'s craft half — SOP writes ride the merged run. Recall is retired
     // (no live SOP load) — only the living colleagues are allowlisted.
     expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
-    // The reflection line names what was updated.
-    expect(io.files.get(REFLECTION_PATH)).toContain("research/手机购买调研/index.md");
   });
 
-  it("a re-run goes idle on the reflection line and overwrites nothing", async () => {
+  it("a re-run carries no mechanical ledger — dedup is writer-is-reader inside the passes", async () => {
     const first = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
     expect(first.ran).toBe(true);
-    const reflectionAfterFirst = io.files.get(REFLECTION_PATH);
-    expect(reflectionAfterFirst).toBeDefined();
+    // The first run left no self/ record of itself.
+    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
     vi.clearAllMocks();
+    passes.calls.length = 0;
 
     const second = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
 
-    expect(second).toEqual({ ran: false, written: [], cardChanged: false });
-    expect(passes.runLibrarianPass).not.toHaveBeenCalled();
-    expect(passes.runCardEvolution).not.toHaveBeenCalled();
-    // Nothing was rewritten — the existing content stands.
-    expect(io.files.get(REFLECTION_PATH)).toBe(reflectionAfterFirst);
+    // No reflection-line dedup anymore: the passes run AGAIN and go idle on
+    // their own reads (writer-is-reader) — the run layer holds no ledger.
+    expect(second).toEqual({ ran: true, written: [], cardChanged: false });
+    expect(passes.calls).toEqual(["librarian", "card"]);
+    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
   });
 
   it("an unreadable slice logs and idles without writing anything", async () => {
@@ -200,7 +197,7 @@ describe("executeBoundaryRun (§A.2.3-a)", () => {
     const outcome = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
     expect(outcome.ran).toBe(false);
     expect(passes.runLibrarianPass).not.toHaveBeenCalled();
-    expect(io.files.has(REFLECTION_PATH)).toBe(false);
+    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
   });
 });
 

@@ -1,33 +1,32 @@
 /**
- * Background-stream step functions (v0.19 §A.2.3) — full Node.js, retried
- * automatically on failure. Kept in a SEPARATE module from the workflow
- * entries (`boundary-run.ts` / `question-run.ts`) so their Node-dependent
- * imports never enter the deterministic workflow sandbox — the same split
- * as chat's turn-workflow.ts / steps.ts.
+ * Background-stream step functions (v0.19 §A.2.3, v0.21 §5) — full Node.js,
+ * retried automatically on failure. Kept in a SEPARATE module from the
+ * workflow entries (`boundary-run.ts` / `question-run.ts`) so their
+ * Node-dependent imports never enter the deterministic workflow sandbox —
+ * the same split as chat's turn-workflow.ts / steps.ts.
  *
- * Two durable runs, both triggered by FACTS the scribe segment posted
- * (trigger/execution separation, §A.2.2 序 5):
+ * v0.21: the boundary run's fixed ①→②→③ sequence is RETIRED as the HQ form
+ * (HQ is an agent + tools now — see hq-agent.ts); this module keeps the
+ * interim entries compilable until P4 retires the trigger chain, and hosts
+ * the shared helpers the HQ agent's tools reuse (buildRunManifest /
+ * buildRunCardReaders / backgroundModel).
  *
- *   boundaryRun — fired once per slice close. In order (the order is
- *     semantic): ① the case writer (the librarian lifted out of the scribe
- *     segment in A1), ② the user model (people/user/index.md — AFTER ① so
- *     it can cite the cases ① just wrote), ③ a look at self/ (SOP writes
- *     ride ②'s run; the run then appends ONE dated prose reflection line to
- *     self/evolution — the only readable dedup basis on a re-run).
- *     Empty is legal: "this slice held nothing worth writing" is a valid
- *     outcome (forced trigger ≠ forced mutation).
+ * HQ stores RESULTS ONLY (v0.21 §5): an idle round writes nothing — there is
+ * no run ledger anymore (the old self/evolution reflection line, written on
+ * every pass and doubled as the mechanical re-run dedup, is gone). Dedup is
+ * entirely writer-is-reader: a re-run reads the current case state and goes
+ * idle when it already reflects the slice. A substantive veto leaves its
+ * REASON as prose in self/ or the relevant case body.
  *
- *   questionRun — fired when the closed slice's mailbox carries unanswered
- *     `question` markers. The doc-research pass (lifted per its own header
- *     design) investigates and writes research/ hypotheses/ cases; when
- *     anything landed, a tasks/ completion notice (closing line = a plain
- *     declarative statement, §A.3.3) is what the NEXT turn's reply segment
- *     reads and states. The runs have no mouth — products land in cases.
+ *   boundaryRun — interim shell (P4 retires): ① the case writer, ② the
+ *     user model (people/user/index.md — AFTER ① so it can cite the cases
+ *     ① just wrote; SOP writes ride ②'s run). Empty is legal.
  *
- * Idempotency is semantic ("writer-is-reader", §A.2.3): a re-run reads the
- * current case state and goes idle when it already reflects the slice. The
- * mechanical backstop is the self/evolution reflection line: a boundary run
- * whose slice id already appears there returns immediately.
+ *   questionRun — the conversation's sub-stream for user-requested long
+ *     work (v0.21 §2): the doc-research pass investigates and writes
+ *     research/ hypotheses/ cases; when anything landed, a tasks/
+ *     completion notice is what the NEXT turn's reply segment reads and
+ *     states. The runs have no mouth — products land in cases.
  */
 import {
   loadSlice,
@@ -36,20 +35,7 @@ import {
   type SlicePart,
 } from "@/lib/episodic";
 import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
-import {
-  fsListFiles,
-  fsReadFile,
-  fsWriteFile,
-} from "@/lib/episodic/io-helpers";
-import { withSliceLock } from "@/lib/episodic/slice-mutex";
-import {
-  appendTail,
-  createCase,
-  parseCaseDoc,
-  rewriteBody,
-  serializeCaseDoc,
-  caseIndexPath,
-} from "@/lib/docs";
+import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
 import {
   buildSliceExcerpt,
   runLibrarianPass,
@@ -87,8 +73,9 @@ export interface QuestionRunInput {
 
 // ─── Shared helpers ────────────────────────────────────────────────────────
 
-/** The deployment's default model — a background run has no turn input. */
-function backgroundModel() {
+/** The deployment's default model — a background run has no turn input.
+ *  Exported for the HQ agent (hq-agent.ts). */
+export function backgroundModel() {
   return getModel(getDefaultModelId());
 }
 
@@ -96,9 +83,10 @@ function backgroundModel() {
  * The listTree manifest for a writer pass — the same mechanical walk the
  * reply segment's listTree tool does (memory/, config/ filtered out,
  * records/ collapsed to slice dirs), rebuilt here on the env-driven io layer
- * so a background run needs no ToolContext.
+ * so a background run needs no ToolContext. Exported for the HQ agent's
+ * listTree tool (hq-agent.ts).
  */
-async function buildRunManifest(): Promise<CaseWriterManifest> {
+export async function buildRunManifest(): Promise<CaseWriterManifest> {
   const paths: string[] = [];
   const walk = async (dir: string): Promise<void> => {
     let entries: Awaited<ReturnType<typeof fsListFiles>>;
@@ -134,9 +122,10 @@ async function buildRunManifest(): Promise<CaseWriterManifest> {
 /**
  * Card-evolution readers for a background run — the same dual-root probes
  * the turn path's buildCardReaders does, but on the env-driven io layer
- * (a background run carries no TurnInput backend flags).
+ * (a background run carries no TurnInput backend flags). Exported for the HQ
+ * agent's tools (hq-agent.ts).
  */
-function buildRunCardReaders(): CardEvolutionReaders {
+export function buildRunCardReaders(): CardEvolutionReaders {
   const readDual = async (sliceId: string, part: SlicePart): Promise<string> => {
     const [primary, fallback] = slicePartPathCandidates(sliceId, part);
     try {
@@ -172,53 +161,7 @@ function buildRunCardReaders(): CardEvolutionReaders {
   };
 }
 
-// ─── self/evolution — the reflection line (boundary run ③'s record) ───────
-
-const SELF_REFLECTION_PATH = caseIndexPath("self", "evolution");
-
-async function readSelfReflectionRaw(): Promise<string | null> {
-  try {
-    return await fsReadFile(SELF_REFLECTION_PATH, undefined, { fresh: true });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Append ONE dated prose line to self/evolution (e.g. "2026-10-04：处理了
- * records/2026/10/04/0131，更新了 research/手机购买调研、people/user"). The
- * case opens on the first line; a living draft grows by body rewrite, a
- * sealed one by tail line (the five-ops discipline, §B.3).
- */
-async function appendSelfReflectionLine(
-  date: string,
-  line: string,
-): Promise<void> {
-  await withSliceLock("doc:self/evolution", async () => {
-    const raw = await readSelfReflectionRaw();
-    if (raw === null) {
-      const doc = createCase({
-        category: "self",
-        caseName: "evolution",
-        opened: date,
-        body: line,
-      });
-      await fsWriteFile(SELF_REFLECTION_PATH, serializeCaseDoc(doc));
-      return;
-    }
-    const doc = parseCaseDoc(raw, {
-      category: "self",
-      caseName: "evolution",
-      fileName: "index.md",
-    });
-    const next = doc.closed
-      ? appendTail(doc, { date, text: line })
-      : rewriteBody(doc, `${doc.body}\n\n${line}`);
-    await fsWriteFile(SELF_REFLECTION_PATH, serializeCaseDoc(next));
-  });
-}
-
-// ─── The boundary run (§A.2.3-a) ───────────────────────────────────────────
+// ─── The boundary run (§A.2.3-a — interim shell, retired by P4) ──────────
 
 export interface BoundaryRunOutcome {
   /** False when the run never executed (already processed / no slice / no model). */
@@ -236,23 +179,8 @@ export async function executeBoundaryRun(
   const { sliceId, date } = input;
   const idle: BoundaryRunOutcome = { ran: false, written: [], cardChanged: false };
 
-  // The reflection line is the only readable dedup basis (§A.2.3): a slice
-  // already recorded there was processed — a re-run goes idle immediately.
-  // The line carries the records path (records/2026/10/04/0131); match both
-  // the dashed id and the path form.
-  const parsedId = parseSliceId(sliceId);
-  const slicePath = parsedId
-    ? `${parsedId.y}/${parsedId.m}/${parsedId.d}/${parsedId.hm}`
-    : sliceId;
-  const reflection = await readSelfReflectionRaw();
-  if (
-    reflection &&
-    (reflection.includes(sliceId) || reflection.includes(slicePath))
-  ) {
-    console.log(`[BoundaryRun] ${sliceId} already processed (self/evolution) — idle`);
-    return idle;
-  }
-
+  // No run ledger (v0.21 §5 — results only): dedup is writer-is-reader inside
+  // the passes themselves; this shell just runs them.
   const slice = await loadSlice(sliceId).catch(() => null);
   if (!slice) {
     console.warn(`[BoundaryRun] ${sliceId} unreadable — nothing to process`);
@@ -315,16 +243,6 @@ export async function executeBoundaryRun(
   });
   console.log(
     `[BoundaryRun] ② user model: changed=${card.changed}${card.error ? ` error=${card.error}` : ""}`,
-  );
-
-  // ③ The reflection line — written ALWAYS (even on an idle pass): it is
-  // the re-run dedup basis, so an idle pass must still record itself.
-  const updated = [...librarian.written];
-  if (card.changed) updated.push("people/user");
-  for (const p of card.playbooks ?? []) updated.push(`self/${p.agent}`);
-  await appendSelfReflectionLine(
-    date,
-    `${date}：处理了 records/${slicePath}，更新了 ${updated.join("、") || "（无——这一片没有值得写的东西）"}。`,
   );
 
   return { ran: true, written: librarian.written, cardChanged: card.changed };
