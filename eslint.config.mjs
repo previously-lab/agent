@@ -24,15 +24,16 @@ const eslintConfig = [
   {
     ignores: [
       "node_modules/**",
-      ".next/**",
+      // Any Next build output — including probe distDirs (NEXT_DIST_DIR=.next-*),
+      // which .gitignore already covers with `.next*/`.
+      ".next*/**",
       "out/**",
       "build/**",
       // Packaged-kernel build artifact (gitignored; see scripts/pack-standalone.mjs).
       "dist-kernel/**",
       "next-env.d.ts",
       // Generated workflow entrypoints (bundled at build time; not hand-written source).
-      "src/app/.well-known/workflow/v1/flow/route.js",
-      "src/app/.well-known/workflow/v1/step/route.js",
+      "src/app/.well-known/workflow/**",
     ],
   },
 ];
