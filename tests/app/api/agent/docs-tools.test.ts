@@ -129,18 +129,23 @@ describe("listTreeExecute", () => {
     expect(r.tree["records"]).toEqual(["records/2026/09/04/2130"]);
   });
 
-  it("mechanically filters config/ out of every group", async () => {
-    io.dirs.set("memory", ["config", "research"]);
+  it("mechanically filters config/ — new root and the legacy settings file — out of every group", async () => {
+    io.dirs.set("memory", ["config", "research", "user"]);
     io.dirs.set("memory/config", ["settings.json", "nested"]);
     io.dirs.set("memory/config/nested", ["deep.json"]);
     io.dirs.set("memory/research", ["手机调研"]);
     io.dirs.set("memory/research/手机调研", ["index.md"]);
+    io.dirs.set("memory/user", ["config.json", "profile.md"]);
 
     const r = await listTreeExecute({}, opts(makeCtx("2026-09-10-1000")));
     expect(r.tree["config"]).toBeUndefined();
     expect(Object.keys(r.tree)).not.toContain("config");
     const all = Object.values(r.tree).flat();
     expect(all.every((p) => !p.startsWith("config/"))).toBe(true);
+    // The pre-v0.19 settings file is the same engineering state under an old
+    // name — filtered too. The user's own profile.md beside it stays listed.
+    expect(all).not.toContain("user/config.json");
+    expect(all).toContain("user/profile.md");
   });
 
   it("returns an empty tree when memory/ does not exist yet", async () => {

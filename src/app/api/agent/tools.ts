@@ -28,6 +28,7 @@ import {
   viewImageExecute,
   listTreeExecute,
   readDocExecute,
+  writeCaseExecute,
   noteForSedimentExecute,
   type ToolContext,
 } from "./tool-executors";
@@ -270,6 +271,62 @@ export const chatTools = {
     }),
     contextSchema: toolContextSchema,
     execute: readDocExecute,
+  }),
+  // The reply segment's ONE bounded write (v0.20 §2.2): open a research
+  // case mid-reply so a research turn writes the document FIRST and answers
+  // FROM it. Category is hard-coded to research/ — no free path elsewhere;
+  // only open + addPiece reach the shared case-write entry (per-case lock,
+  // fresh read in lock); an evidence stamp `source: <sliceId>#<turnId>`
+  // lands as the first line of whatever is written.
+  writeCase: tool({
+    description:
+      "Write a RESEARCH case — the one memory write the reply segment is " +
+      "granted (v0.20 §2.2), for turns that produce a DOCUMENT before the " +
+      "answer. Use it when the 成篇判据 hits (§2.3): the content will be " +
+      "CAME BACK TO (the user will re-raise it / it has a date anchor / it " +
+      "is an ongoing thread) OR it cost real effort this turn (web " +
+      "searches, several slice reads, multi-step reasoning) — a finished " +
+      "piece worth keeping. One-off Q&A that nobody will revisit stays in " +
+      "the slice; do NOT write it here. Discipline: call writeCase FIRST, " +
+      "then base your answer on the case you just wrote, and cite the case " +
+      "path (research/<caseName>[/篇名]) plus this slice's id in the reply. " +
+      "Semantics: if the case does not exist yet it is OPENED — body " +
+      "becomes the case's index.md (the case name is permanent; name it for " +
+      "the QUESTION, specific enough that a scope change means a new case). " +
+      "If it ALREADY exists, pass pieceTitle to ADD one dated piece " +
+      "(《日期》标题》 rules apply); omitting pieceTitle on an existing case " +
+      "is refused — this tool never rewrites an index. The written text " +
+      "carries a mechanical first line `source: <sliceId>#<turnId>` — the " +
+      "evidence stamp linking the case back to this turn; leave it intact.",
+    inputSchema: z.object({
+      caseName: z
+        .string()
+        .min(1)
+        .describe(
+          "The research case's name (no category prefix — research/ is " +
+          "implied): specific enough that a scope change means a NEW case. " +
+          "Undated names ('手机调研') and dated names ('2026-11-05-屏幕供应商') " +
+          "both legal; never start a title with four digits.",
+        ),
+      body: z
+        .string()
+        .min(1)
+        .describe(
+          "The WHOLE content to write: for open — the case's index 正文; " +
+          "for addPiece — the piece's full text. Written verbatim under " +
+          "the mechanical source line.",
+        ),
+      pieceTitle: z
+        .string()
+        .optional()
+        .describe(
+          "Required when adding to an EXISTING case: the dated piece's " +
+          "title (《日期》规则由机械层处理 — pass the bare title, e.g. " +
+          "'报价篇'). Omit when opening a new case.",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: writeCaseExecute,
   }),
   // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). The reply segment
   // is "只读 + 记账" — this tool is the 记账, the ONE memory write the main
@@ -613,6 +670,7 @@ export function buildChatToolsContext(
     readPreviously: ctx,
     listTree: ctx,
     readDoc: ctx,
+    writeCase: ctx,
     noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,

@@ -47,12 +47,15 @@ import {
   resolveCaseRefPaths,
   parseCaseDoc,
   normalizeCaseRefText,
+  caseIndexPath,
+  isValidCaseName,
   CASE_CATEGORY_LIST,
   type CaseRef,
 } from "@/lib/docs";
 import {
   DOC_MARKER_PREFIX,
   extractDocMarkers,
+  applyCaseWriteIntent,
   type DocMarker,
 } from "@/lib/episodic/flash/librarian";
 import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
@@ -454,6 +457,9 @@ async function listTreeGitHub(ctx: ToolContext): Promise<ListTreeResult> {
     if (!p.startsWith("memory/")) continue;
     const rel = p.slice("memory/".length);
     if (rel === "" || rel.startsWith("config/")) continue; // config/ = engineering state
+    // The pre-v0.19 settings file is the same engineering state under an old
+    // name — still on disk as the loader's read fallback, never a case.
+    if (rel === "user/config.json") continue;
     paths.push(rel);
   }
   return { truncated: tree.truncated === true, tree: groupTreePaths(paths) };
@@ -475,7 +481,11 @@ async function listTreeWalk(ctx: ToolContext): Promise<ListTreeResult> {
       const p = `${dir}/${e.name}`;
       if (e.type === "dir") {
         await walk(p);
-      } else if (p.startsWith("memory/") && !p.startsWith("memory/config/")) {
+      } else if (
+        p.startsWith("memory/") &&
+        !p.startsWith("memory/config/") &&
+        p !== "memory/user/config.json" // legacy settings — same state (see listTreeRepo)
+      ) {
         paths.push(p.slice("memory/".length));
       }
     }
@@ -737,6 +747,132 @@ export async function noteForSedimentExecute(
     : `${line}\n`;
   await fsWriteFile(agentPath, next);
   return { ok: true, marker: parsed[0], path: agentPath };
+}
+
+// ─── writeCase — the reply segment's ONE bounded write (v0.20 §2.2) ────────
+
+export type WriteCaseResult =
+  | { ok: true; action: "open" | "addPiece"; path: string }
+  | { ok: false; reason: string };
+
+/** User-local YYYY-MM-DD (the write-date convention background runs use). */
+function userLocalDate(timezone: string | undefined): string {
+  const now = new Date();
+  const tz = timezone?.trim() ? timezone : "UTC";
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    if (get("year") && get("month") && get("day")) {
+      return `${get("year")}-${get("month")}-${get("day")}`;
+    }
+  } catch {
+    // unknown IANA name — fall back to the UTC date
+  }
+  return now.toISOString().slice(0, 10);
+}
+
+/**
+ * writeCase — open a research case (or add a dated piece to an existing
+ * one) IN THE MIDDLE of the reply, so a research turn can write the
+ * document FIRST and then answer FROM it (v0.20 §2.1 选案 (a)).
+ *
+ * Bounded exactly as §2.2 prescribes:
+ * - 分类界: category is hard-coded to `research/` — the input has NO
+ *   category parameter, so no free path to any other category exists;
+ * - 操作界: only `open` and `addPiece` reach `applyCaseWriteIntent`
+ *   (rewriteIndex / appendTail / close are never issued);
+ * - 冲突界: the shared `applyCaseWriteIntent` entry — per-case lock
+ *   `doc:research/<case名>`, fresh read inside the lock — so a concurrent
+ *   background run on the same case serializes visibly instead of
+ *   interleaving bytes.
+ *
+ * The evidence stamp (`source: <sliceId>#<turnId>` as the FIRST line of the
+ * written text) is the only machine field of the case→slice link (§2.2);
+ * records get zero write-back. `toolCallId` is the turn-level call key —
+ * the same key noteForSediment builds its marker id from.
+ */
+export async function writeCaseExecute(
+  input: { caseName: string; body: string; pieceTitle?: string },
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
+): Promise<WriteCaseResult> {
+  "use step";
+  if (ctx.useDemo) {
+    return {
+      ok: false,
+      reason: "Demo mode runs on read-only benchmark data — cases are not written.",
+    };
+  }
+  const category = "research" as const;
+  const caseName = input.caseName?.trim() ?? "";
+  if (!caseName) return { ok: false, reason: "caseName must not be empty." };
+  if (!isValidCaseName(caseName)) {
+    return {
+      ok: false,
+      reason:
+        `illegal case name ${JSON.stringify(caseName)} — no path separators / ` +
+        `traversal / surrounding whitespace; a dated name needs a real date ` +
+        `with a title not starting with four digits.`,
+    };
+  }
+  const body = input.body?.trim() ?? "";
+  if (!body) {
+    return { ok: false, reason: "body must not be empty — write the WHOLE content." };
+  }
+  const pieceTitle = input.pieceTitle?.trim() ?? "";
+
+  const stampedBody = `source: ${ctx.sliceId}#${toolCallId}\n\n${body}`;
+  const date = userLocalDate(ctx.timezone);
+  const indexPath = caseIndexPath(category, caseName);
+
+  // Probe for existence OUTSIDE the lock (fresh read); the in-lock checks
+  // inside applyCaseWriteIntent are the backstop for the open race.
+  let exists = false;
+  try {
+    await fsReadFile(indexPath, undefined, { fresh: true });
+    exists = true;
+  } catch {
+    exists = false;
+  }
+
+  if (!exists) {
+    try {
+      const applied = await applyCaseWriteIntent(
+        { action: "open", category, caseName, body: stampedBody },
+        date,
+      );
+      return { ok: true, action: "open", path: applied.path };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes("already exists")) {
+        return { ok: false, reason: `open refused: ${msg}` };
+      }
+      exists = true; // raced — another writer opened it; fall through
+    }
+  }
+
+  if (!pieceTitle) {
+    return {
+      ok: false,
+      reason:
+        `case ${category}/${caseName} already exists and no pieceTitle was ` +
+        `given. This tool never rewrites an index: pass pieceTitle to ADD a ` +
+        `dated piece to this case, or pick a different caseName for a new case.`,
+    };
+  }
+  try {
+    const applied = await applyCaseWriteIntent(
+      { action: "addPiece", category, caseName, title: pieceTitle, body: stampedBody },
+      date,
+    );
+    return { ok: true, action: "addPiece", path: applied.path };
+  } catch (e) {
+    return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}` };
+  }
 }
 
 
