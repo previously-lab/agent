@@ -8,8 +8,8 @@
  *   memory/episodic/timeline/index.json      (catalog — projection, unchanged)
  *
  * Only ever touches the `records/` + `episodic/timeline/` subtrees —
- * `user/config.json` (seeded by prepare-env.mjs, shared with the other specs)
- * stays put.
+ * `config/settings.json` (seeded by prepare-env.mjs, shared with the other
+ * specs) stays put.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";

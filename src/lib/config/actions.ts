@@ -1,7 +1,9 @@
 "use server";
 
 /**
- * Server action: persist user config to `memory/user/config.json`.
+ * Server action: persist user config to `memory/config/settings.json` (the
+ * v0.19 config/ root — writes never touch the legacy `memory/user/config.json`;
+ * the loader still reads it as a fallback).
  * Accepts a partial config — only the fields the user touched in Settings.
  * Re-validates the home page so the agent picks up new values on next request.
  */
@@ -16,7 +18,7 @@ import { DEFAULTS, mergeConfigOverrides } from "./defaults";
 import { loadUserConfig, invalidateUserConfigCache } from "./loader";
 import type { UserConfig, UserConfigOverrides } from "./types";
 
-const CONFIG_PATH = "memory/user/config.json";
+const CONFIG_PATH = "memory/config/settings.json";
 
 /** Client-safe view of the current config (model ids, limits — no secrets). */
 export async function getUserConfig(): Promise<UserConfig> {
@@ -49,7 +51,7 @@ export async function saveUserConfig(
       // unless the memory root is a git repo; never throws (see local-git).
       const memoryRoot = getMemoryRoot();
       if (isGitRepo(memoryRoot)) {
-        await commitPaths(memoryRoot, ["user/config.json"], "Update user/config.json");
+        await commitPaths(memoryRoot, ["config/settings.json"], "Update config/settings.json");
       }
     }
 

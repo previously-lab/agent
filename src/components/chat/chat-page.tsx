@@ -425,7 +425,7 @@ function Inner({
   arrival: ArrivalState;
 }) {
   // ── Model selection — reactive, persisted to config.json ─────────────
-  // The single source of truth is memory/user/config.json (cross-device, no
+  // The single source of truth is memory/config/settings.json (cross-device, no
   // localStorage). The RSC layout preloads it (initialConfig) so there's no
   // default-flash + mount reconcile; saves still write back via server action.
   // Thinking/effort are NOT client state: the server pins thinking ON at low

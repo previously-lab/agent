@@ -28,9 +28,9 @@ for (const dir of [home, memoryRoot]) {
   await mkdir(dir, { recursive: true });
 }
 
-// memory/user/config.json re-roots at MEMORY_ROOT/user/config.json.
-await mkdir(path.join(memoryRoot, "user"), { recursive: true });
+// memory/config/settings.json re-roots at MEMORY_ROOT/config/settings.json.
+await mkdir(path.join(memoryRoot, "config"), { recursive: true });
 await writeFile(
-  path.join(memoryRoot, "user", "config.json"),
+  path.join(memoryRoot, "config", "settings.json"),
   JSON.stringify({ model: { provider: "bridge/claude" } }, null, 2) + "\n",
 );

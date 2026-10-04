@@ -19,7 +19,7 @@
  * close fires on the first turn after the silence.
  *
  * Thresholds are read from the user config (`src/lib/config/defaults.ts`,
- * overridable via memory/user/config.json) at request time so they can be
+ * overridable via memory/config/settings.json) at request time so they can be
  * adjusted in Settings without a redeploy — this module has NO defaults of
  * its own (the old 15-minute idle-gap constant lived here and is gone).
  */

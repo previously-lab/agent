@@ -1,6 +1,7 @@
 /**
- * User-facing configuration schema. Stored as `memory/user/config.json` in the
- * user's GitHub memory repo — editable via Settings UI, read at request time.
+ * User-facing configuration schema. Stored as `memory/config/settings.json` in
+ * the user's GitHub memory repo (the legacy `memory/user/config.json` is still
+ * read as a fallback) — editable via Settings UI, read at request time.
  * Every field is optional; missing values fall back to defaults.
  */
 

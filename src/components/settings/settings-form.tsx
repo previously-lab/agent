@@ -32,7 +32,7 @@ export function SettingsForm({
   const t = useTranslations("settings");
   const isDemo = dataSource === "demo";
 
-  // ── Config (server-backed: memory/user/config.json) ──
+  // ── Config (server-backed: memory/config/settings.json) ──
   const [maxTurnsPerSlice, setMaxTurnsPerSlice] = useState(initialConfig.slicing.maxTurnsPerSlice);
   const [maxSliceMinutes, setMaxSliceMinutes] = useState(initialConfig.slicing.maxSliceMinutes);
   const [idleGapMinutes, setIdleGapMinutes] = useState(initialConfig.slicing.idleGapMinutes);
@@ -95,7 +95,7 @@ export function SettingsForm({
         </div>
       )}
 
-      {/* Config — tunable agent behaviour (memory/user/config.json) */}
+      {/* Config — tunable agent behaviour (memory/config/settings.json) */}
       <section className="space-y-4">
         <div className="space-y-1">
           <h3 className="text-base font-medium">{t("config.heading")}</h3>

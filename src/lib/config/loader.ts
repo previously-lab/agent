@@ -1,7 +1,9 @@
 /**
- * Server-side config loader. Reads `memory/user/config.json` at request time
- * via the same GitHub / local-fs dual channel as the user profile. If the file
- * is missing or unparseable, returns the full defaults — no runtime error.
+ * Server-side config loader. Reads `memory/config/settings.json` at request
+ * time via the same GitHub / local-fs dual channel as the user profile, with
+ * the legacy `memory/user/config.json` as a read-only fallback (dual-root,
+ * v0.19). If the file is missing or unparseable, returns the full defaults —
+ * no runtime error.
  */
 import { readFile } from "@/lib/tools/readFile";
 import { readFileLocal } from "@/lib/tools/local-fs";
@@ -12,21 +14,28 @@ import { mergeConfig, DEFAULTS } from "./defaults";
 import { demoModelLock } from "@/lib/demo/model-lock";
 import type { UserConfig } from "./types";
 
-const CONFIG_PATH = "memory/user/config.json";
+const CONFIG_PATH = "memory/config/settings.json";
+const LEGACY_CONFIG_PATH = "memory/user/config.json";
 
 const SOURCE = resolveDataSource();
 
-async function readRaw(): Promise<string | null> {
+async function readRawPath(path: string): Promise<string | null> {
   try {
-    if (SOURCE === "demo") return await readFileDemo(CONFIG_PATH);
+    if (SOURCE === "demo") return await readFileDemo(path);
     if (SOURCE === "github") {
       const { owner, repo } = getRepoConfig();
-      return await readFile(CONFIG_PATH, repo, owner);
+      return await readFile(path, repo, owner);
     }
-    return await readFileLocal(CONFIG_PATH);
+    return await readFileLocal(path);
   } catch {
     return null;
   }
+}
+
+async function readRaw(): Promise<string | null> {
+  // Dual-root (v0.19): the new config/ root wins; the legacy user/ path is a
+  // read-only fallback so pre-migration installs behave exactly as before.
+  return (await readRawPath(CONFIG_PATH)) ?? (await readRawPath(LEGACY_CONFIG_PATH));
 }
 
 let cached: UserConfig | null = null;

@@ -10,7 +10,7 @@
  *
  * The repository root is the memory root (getMemoryRoot()), so `filepath`
  * values handed to isomorphic-git are memory-internal relative paths (e.g.
- * `episodic/strands.json`, `user/config.json`) in posix style. When the
+ * `episodic/strands.json`, `config/settings.json`) in posix style. When the
  * memory root is not a git repo the whole layer is inert — zero behavior
  * change versus plain disk writes.
  *

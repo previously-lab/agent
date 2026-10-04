@@ -91,3 +91,47 @@ describe("loadUserConfig cache + invalidation", () => {
     invalidateUserConfigCache();
   });
 });
+
+describe("loadUserConfig dual-root reads (v0.19)", () => {
+  afterEach(async () => {
+    const { invalidateUserConfigCache } = await loadDemoLoader();
+    invalidateUserConfigCache();
+    vi.unstubAllEnvs();
+    mockReadDemo.mockReset();
+  });
+
+  it("reads the new config/ root first and never touches the legacy path", async () => {
+    const { loadUserConfig } = await loadDemoLoader();
+    mockReadDemo.mockImplementation(async (path: string) =>
+      path === "memory/config/settings.json"
+        ? JSON.stringify({ onboarded: true })
+        : JSON.stringify({ onboarded: false }),
+    );
+
+    const config = await loadUserConfig();
+    expect(config.onboarded).toBe(true);
+    expect(mockReadDemo).toHaveBeenCalledTimes(1);
+    expect(mockReadDemo).toHaveBeenCalledWith("memory/config/settings.json");
+  });
+
+  it("falls back to legacy memory/user/config.json when the new root is missing", async () => {
+    const { loadUserConfig } = await loadDemoLoader();
+    mockReadDemo.mockImplementation(async (path: string) =>
+      path === "memory/config/settings.json" ? null : JSON.stringify({ onboarded: true }),
+    );
+
+    const config = await loadUserConfig();
+    expect(config.onboarded).toBe(true);
+    expect(mockReadDemo).toHaveBeenCalledTimes(2);
+    expect(mockReadDemo).toHaveBeenNthCalledWith(2, "memory/user/config.json");
+  });
+
+  it("returns defaults only when both roots are missing", async () => {
+    const { loadUserConfig } = await loadDemoLoader();
+    mockReadDemo.mockResolvedValue(null);
+
+    const config = await loadUserConfig();
+    expect(config.onboarded).toBe(false); // DEFAULTS.onboarded
+    expect(mockReadDemo).toHaveBeenCalledTimes(2);
+  });
+});

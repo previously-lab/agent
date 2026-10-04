@@ -51,7 +51,7 @@ function groupByProvider(models: AvailableModel[]): Map<string, AvailableModel[]
  * (/api/models — env-gated) and shows a grouped picker.
  * Hides entirely when there are 0 or 1 models to choose from.
  *
- * The selection persists to memory/user/config.json (ChatPage owns the model
+ * The selection persists to memory/config/settings.json (ChatPage owns the model
  * state). There is no thinking/effort UI: thinking is always ON at low effort
  * (pinned server-side in start-turn.ts); deep thinking is thinkDeep's job.
  * v0.9: the "Advanced" worker-pin sheet was removed — every sub-agent runs on

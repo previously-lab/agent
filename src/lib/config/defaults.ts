@@ -2,7 +2,7 @@ import type { UserConfig, UserConfigOverrides } from "./types";
 import { resolveModelId } from "@/lib/models/registry";
 
 /**
- * Hard defaults. When `memory/user/config.json` is missing or a field is
+ * Hard defaults. When `memory/config/settings.json` is missing or a field is
  * absent, these values apply. Keep them conservative — they ship to every
  * user who hasn't customized their config.
  */
