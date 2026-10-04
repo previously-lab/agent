@@ -128,7 +128,5 @@ export type {
   Turn,
   SliceFrontmatter,
   TimeSlice,
-  SliceIndexEntry,
-  MonthlyIndex,
   StrandIndex,
 } from "./types";

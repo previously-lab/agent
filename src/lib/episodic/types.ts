@@ -131,26 +131,7 @@ export interface TimeSlice {
   continuesFrom?: string;
 }
 
-// ─── Index structures ────────────────────────────────────────────────
-
-/** One entry in a monthly _index.json */
-export interface SliceIndexEntry {
-  /** Slice identifier in YYYY-MM-DD-HHMM format, e.g. "2026-07-02-1430" */
-  id: string;
-  focus: string;
-  summary: string;
-  tags: string[];
-  status: SliceStatus;
-  start: string;
-  open_loops: string[];
-  decisions: string[];
-}
-
-/** Monthly index stored as _index.json in each year/month directory */
-export interface MonthlyIndex {
-  month: string; // "YYYY-MM"
-  slices: SliceIndexEntry[];
-}
+// ─── Strand index ────────────────────────────────────────────────────
 
 /**
  * Global strands.json structure — the keyword→slice index.

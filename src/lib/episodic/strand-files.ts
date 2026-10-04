@@ -15,11 +15,9 @@
  * has run, reads fall back to the legacy location and convert in memory, so
  * the system keeps working; all NEW writes land in `docs/topic/` only.
  *
- * The recall sub-agent reads these files to match questions to strands
- * SEMANTICALLY (listStrands carries truncated summaries, readStrand the full
- * text) instead of keyword-literal matching alone. Writers: the librarian
- * (home maintenance) and document writers (名录 entries on open/close) —
- * mechanical writes (updateStrands) never touch this layer.
+ * The strand tools (listStrands / readStrand) and the recall sub-agent are
+ * retired (v0.19 R3); what still reads this layer is the game's read path
+ * (`actions.ts` getStrandPaths), registered as a separate case.
  *
  * Reads degrade gracefully: no home in either location or a missing/corrupt
  * file yields `null`, and callers fall back to the bare index.
