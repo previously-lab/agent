@@ -796,7 +796,7 @@ function userLocalDate(timezone: string | undefined): string {
  * to say where it came from says so in prose). records get zero write-back.
  */
 export async function writeCaseExecute(
-  input: { caseName: string; body: string; pieceTitle?: string },
+  input: { category?: string; caseName: string; body: string; pieceTitle?: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<WriteCaseResult> {
   "use step";
@@ -806,7 +806,15 @@ export async function writeCaseExecute(
       reason: "Demo mode runs on read-only benchmark data — cases are not written.",
     };
   }
-  const category = "research" as const;
+  const category = input.category?.trim() || "research";
+  if (category !== "research" && category !== "tasks") {
+    return {
+      ok: false,
+      reason:
+        `category ${JSON.stringify(input.category)} is not writable from here — ` +
+        `allowed: "research" (an investigation) or "tasks" (a commitment).`,
+    };
+  }
   const caseName = input.caseName?.trim() ?? "";
   if (!caseName) return { ok: false, reason: "caseName must not be empty." };
   if (!isValidCaseName(caseName)) {

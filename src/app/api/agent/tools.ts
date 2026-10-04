@@ -272,48 +272,57 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: readDocExecute,
   }),
-  // The reply segment's case write: open a research case mid-reply so a
-  // research turn writes the document FIRST and answers FROM it. Category is
-  // hard-coded to research/ — no free path elsewhere; only open + addPiece
-  // reach the shared case-write entry (per-case lock, fresh read in lock).
-  // Nothing is stamped into the text — the case→slice link is semantic.
+  // The field agent's case write (v0.21 §2): open a case mid-reply so a
+  // research/task turn writes the document FIRST and answers FROM it.
+  // Categories are an enumerated set — research/ or tasks/ — validated in the
+  // executor; people/user and self/ are never writable from here. Only open +
+  // addPiece reach the shared case-write entry (per-case lock, fresh read in
+  // lock). Nothing is stamped into the text — the case→slice link is semantic.
   writeCase: tool({
     description:
-      "Write a RESEARCH case — the one memory write the reply segment is " +
-      "granted (v0.20 §2.2), for turns that produce a DOCUMENT before the " +
-      "answer. Use it when the 成篇判据 hits (§2.3): the content will be " +
-      "CAME BACK TO (the user will re-raise it / it has a date anchor / it " +
-      "is an ongoing thread) OR it cost real effort this turn (web " +
-      "searches, several slice reads, multi-step reasoning) — a finished " +
-      "piece worth keeping. One-off Q&A that nobody will revisit stays in " +
-      "the slice; do NOT write it here. Discipline: call writeCase FIRST, " +
-      "then base your answer on the case you just wrote, and cite the case " +
-      "path (research/<caseName>[/篇名]) plus this slice's id in the reply. " +
-      "Semantics: if the case does not exist yet it is OPENED — body " +
-      "becomes the case's index.md (the case name is permanent; name it for " +
-      "the QUESTION, specific enough that a scope change means a new case). " +
-      "If it ALREADY exists, pass pieceTitle to ADD one dated piece " +
-      "(《日期》标题》 rules apply); omitting pieceTitle on an existing case " +
-      "is refused — this tool never rewrites an index. What you write is " +
-      "exactly what lands: no machine fields are added. If the piece should " +
-      "say where it came from (which conversation, when), say it in prose.",
+      "Write a case document — one of your tools as the field agent (v0.21 " +
+      "§2), for turns that produce a DOCUMENT before the answer. Use it when " +
+      "the 成篇判据 hits: the content will be CAME BACK TO (the user will " +
+      "re-raise it / it has a date anchor / it is an ongoing thread) OR it " +
+      "cost real effort this turn (web searches, several slice reads, " +
+      "multi-step reasoning) — a finished piece worth keeping. One-off Q&A " +
+      "that nobody will revisit stays in the slice; do NOT write it here. " +
+      "Discipline: call writeCase FIRST, then base your answer on the case " +
+      "you just wrote, and cite the case path (<category>/<caseName>[/篇名]) " +
+      "in the reply, the way you would mention a file. Categories: research/ " +
+      "for an investigation, tasks/ for a commitment the user asked you to " +
+      "carry out; people/user and self/ are not yours to write. Semantics: if " +
+      "the case does not exist yet it is OPENED — body becomes the case's " +
+      "index.md (the case name is permanent; name it for the QUESTION, " +
+      "specific enough that a scope change means a new case). If it ALREADY " +
+      "exists, pass pieceTitle to ADD one dated piece (《日期》标题》 rules " +
+      "apply); omitting pieceTitle on an existing case is refused — this tool " +
+      "never rewrites an index. What you write is exactly what lands: no " +
+      "machine fields are added. If the piece should say where it came from " +
+      "(which conversation, when), say it in prose.",
     inputSchema: z.object({
+      category: z
+        .enum(["research", "tasks"])
+        .optional()
+        .describe(
+          "research/ for an investigation, tasks/ for a commitment to carry " +
+          "out. Defaults to research.",
+        ),
       caseName: z
         .string()
         .min(1)
         .describe(
-          "The research case's name (no category prefix — research/ is " +
-          "implied): specific enough that a scope change means a NEW case. " +
-          "Undated names ('手机调研') and dated names ('2026-11-05-屏幕供应商') " +
-          "both legal; never start a title with four digits.",
+          "The case's name (no category prefix): specific enough that a " +
+          "scope change means a NEW case. Undated names ('手机调研') and dated " +
+          "names ('2026-11-05-屏幕供应商') both legal; never start a title " +
+          "with four digits.",
         ),
       body: z
         .string()
         .min(1)
         .describe(
           "The WHOLE content to write: for open — the case's index 正文; " +
-          "for addPiece — the piece's full text. Written verbatim under " +
-          "the mechanical source line.",
+          "for addPiece — the piece's full text. Written verbatim.",
         ),
       pieceTitle: z
         .string()

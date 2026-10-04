@@ -47,7 +47,7 @@ const ctx: ToolContext = {
 };
 
 function call(
-  input: { caseName: string; body: string; pieceTitle?: string },
+  input: { category?: string; caseName: string; body: string; pieceTitle?: string },
   toolCallId = "call-1",
 ) {
   return writeCaseExecute(input, { context: ctx, toolCallId });
@@ -104,6 +104,26 @@ describe("writeCase — the research/ boundary", () => {
     const decoy = io.files.get("memory/tasks/手机调研/index.md")!;
     expect(decoy).toContain("任务案。");
     expect(decoy).not.toContain("调研案。");
+  });
+});
+
+describe("writeCase — the category set", () => {
+  it("tasks/ lands under memory/tasks/", async () => {
+    const r = await call({ category: "tasks", caseName: "订票", body: "用户要订周五的票。" });
+    expect(r).toMatchObject({ ok: true, action: "open", path: "memory/tasks/订票/index.md" });
+  });
+
+  it("defaults to research/ when category is omitted", async () => {
+    const r = await call({ caseName: "默认案", body: "正文" });
+    expect(r).toMatchObject({ ok: true, path: "memory/research/默认案/index.md" });
+  });
+
+  it("a category outside the enumerated set is refused before any write", async () => {
+    for (const category of ["people/user", "self", "events", "records"]) {
+      const r = await call({ category, caseName: "越界案", body: "正文" });
+      expect(r.ok).toBe(false);
+    }
+    expect(io.files.size).toBe(0);
   });
 });
 
