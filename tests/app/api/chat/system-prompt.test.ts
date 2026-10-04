@@ -231,6 +231,70 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
   });
 });
 
+describe("the field/HQ charter (v0.21)", () => {
+  it("frames the agent as ONE agent in two execution units — the field (with the mouth) and HQ (without one)", () => {
+    expect(CHARTER_MD).toContain("ONE agent in two execution units");
+    expect(CHARTER_MD).toContain("**field unit**");
+    expect(CHARTER_MD).toContain("**HQ**");
+    expect(CHARTER_MD).toContain("it wakes only when you send it a dispatch");
+  });
+
+  it("carries the 成篇判据 and the write-BEFORE-you-answer discipline, with the citation as prose", () => {
+    expect(CHARTER_MD).toContain("成篇判据");
+    expect(CHARTER_MD).toContain("will be came back to");
+    expect(CHARTER_MD).toContain("cost real effort this turn");
+    expect(CHARTER_MD).toContain("one-off answers nobody will revisit stay in the slice");
+    expect(CHARTER_MD).toContain("write it BEFORE you answer");
+    expect(CHARTER_MD).toContain("the citation is prose, not a stamp");
+  });
+
+  it("positions writeCase as an ordinary field tool with the research/ + tasks/ category enum and the tasks naming discipline", () => {
+    expect(CHARTER_MD).toContain("an ordinary member of your own tool surface");
+    expect(CHARTER_MD).toContain("**`research/`**");
+    expect(CHARTER_MD).toContain("**`tasks/`**");
+    // The naming discipline: a task case is date-anchored, one action, never a one-off todo.
+    expect(CHARTER_MD).toContain("to be done, carrying a date anchor");
+    expect(CHARTER_MD).toContain("named specific to one action");
+    expect(CHARTER_MD).toContain("a one-off todo never gets a case");
+    // The old "one bounded exception, research only" framing is gone.
+    expect(CHARTER_MD).not.toContain("ONE bounded exception");
+    expect(CHARTER_MD).not.toContain("research cases only");
+  });
+
+  it("reserves people/user and self/ writes to HQ", () => {
+    expect(CHARTER_MD).toContain("**You never write it**");
+    expect(CHARTER_MD).toContain("HQ's write surface alone");
+    expect(CHARTER_MD).toContain("yours to read, HQ's to write");
+  });
+
+  it("carries the dispatch discipline: the scene plus your own observations, no expectations, no instructions", () => {
+    expect(CHARTER_MD).toContain("### Reporting to HQ (发报)");
+    expect(CHARTER_MD).toContain("**your own observations**");
+    expect(CHARTER_MD).toContain("**no expectations and no instructions**");
+    // The payload is prose — never a JSON/field template.
+    expect(CHARTER_MD).toContain("The payload is prose");
+  });
+
+  it("carries NONE of the retired mechanical-trigger or language-discipline wording (v0.21 撤出清单)", () => {
+    // The old boundary-driven pipeline descriptions.
+    expect(CHARTER_MD).not.toContain("runs at conversation boundaries");
+    expect(CHARTER_MD).not.toContain("after the conversation closes");
+    // v0.20's scrapped mechanics (triage / watermark lines / forced wake on close).
+    expect(CHARTER_MD).not.toContain("triage");
+    expect(CHARTER_MD).not.toContain("watermark");
+    expect(CHARTER_MD).not.toContain("[bg-event]");
+    expect(CHARTER_MD).not.toContain("[bg-done]");
+    expect(CHARTER_MD).not.toContain("闭片必唤起");
+    expect(CHARTER_MD).not.toContain("分诊");
+    expect(CHARTER_MD).not.toContain("水位");
+    // The overfit language discipline (裁决 11) never enters the prompt.
+    expect(CHARTER_MD).not.toContain("只收陈述句");
+    expect(CHARTER_MD).not.toContain("禁止承诺未来");
+    expect(CHARTER_MD).not.toContain("statements only");
+    expect(CHARTER_MD).not.toContain("never promise");
+  });
+});
+
 describe("the grounding rule (a claim's home is decided by the claim's type)", () => {
   it("lives in the CHARTER (L0, highest priority), stated exactly once, with the tier split, the hard edge and the in-conversation exemptions", () => {
     expect(CHARTER_MD).toContain("THE GROUNDING RULE");
