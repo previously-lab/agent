@@ -119,6 +119,9 @@ vi.mock("@/lib/episodic", () => episodic);
 // seeded slice ids.
 vi.mock("@/lib/episodic/paths", () => ({
   dayDirForDate: (root: string, _d: Date) => `${root}/2026/07/14`,
+  // attachments.ts resolves the records case dir through this.
+  sliceDir: (sliceId: string) =>
+    `memory/records/${sliceId.replace(/-/g, "/")}`,
 }));
 
 const enumerate = vi.hoisted(() => ({
@@ -154,8 +157,38 @@ const ioHelpers = vi.hoisted(() => ({
     fakeDisk.files.set(path, content);
     return { path, created: true };
   }),
+  fsWriteBinaryFile: vi.fn(async (path: string, data: Buffer) => {
+    fakeDisk.files.set(path, `bin:${data.toString("base64")}`);
+    return { path, created: true };
+  }),
+  fsReadBinaryFile: vi.fn(async (path: string) => {
+    const v = fakeDisk.files.get(path);
+    if (v === undefined) throw new Error(`missing ${path}`);
+    return Buffer.from(v);
+  }),
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ioHelpers);
+
+// The background runs (v0.19 §A.2.3) are fired via start() — mocked at the
+// workflow/api boundary; the run functions themselves are inert references.
+const workflowApi = vi.hoisted(() => ({
+  start: vi.fn(
+    async (_fn: unknown, _args?: unknown[], _opts?: unknown) => ({
+      runId: "mock-run",
+    }),
+  ),
+}));
+vi.mock("workflow/api", () => ({ start: workflowApi.start }));
+const backgroundRuns = vi.hoisted(() => ({
+  boundaryRun: vi.fn(),
+  questionRun: vi.fn(),
+}));
+vi.mock("@/app/api/evolution/boundary-run", () => ({
+  boundaryRun: backgroundRuns.boundaryRun,
+}));
+vi.mock("@/app/api/evolution/question-run", () => ({
+  questionRun: backgroundRuns.questionRun,
+}));
 
 // The scribe pass + mailbox helpers are mocked at their module boundary — the
 // real pass runs an LLM sub-agent.
@@ -431,6 +464,121 @@ beforeEach(() => {
 });
 
 describe("housekeeping step (the reply segment)", () => {
+  it("persists the turn's evidence attachments into the records case and records the names on the user turn (v0.19 §C.1)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const pngDataUrl = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    try {
+      const hk = await housekeeping(
+        makeInput("look at this", {
+          modelMessages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: "look at this" },
+                { type: "file", data: pngDataUrl, mediaType: "image/png", filename: "shot.png" },
+              ],
+            },
+          ] as unknown as TurnInput["modelMessages"],
+        }),
+      );
+
+      // The bytes landed under the slice's attachments dir, turnId-prefixed.
+      const saved = [...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"));
+      expect(saved).toEqual(["memory/records/2026/07/14/0900/attachments/test-id-shot.png"]);
+      // core.md's turn points at its own evidence.
+      const userTurn = hk.slice.turns.find((t) => t.role === "user");
+      expect(userTurn?.content).toContain("[attachments: test-id-shot.png]");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a redelivery does NOT re-persist attachments (userTurnRecorded skips the whole block)", async () => {
+    const pngDataUrl = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
+    const input = makeInput("look at this", {
+      modelMessages: [
+        {
+          role: "user",
+          content: [
+            { type: "file", data: pngDataUrl, mediaType: "image/png", filename: "shot.png" },
+          ],
+        },
+      ] as unknown as TurnInput["modelMessages"],
+    });
+    await housekeeping(input);
+    const savedOnce = [...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"));
+    expect(savedOnce).toHaveLength(1);
+
+    // Second delivery of the SAME turn: the user turn is already recorded.
+    const hk2 = await housekeeping(input);
+    expect([...fakeDisk.files.keys()].filter((k) => k.includes("/attachments/"))).toEqual(savedOnce);
+    const userTurn = hk2.slice.turns.find((t) => t.role === "user");
+    expect(userTurn?.content.match(/\[attachments:/g)).toHaveLength(1);
+  });
+
+  it("an over-fuse attachment is skipped with a visible reason, never thrown", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const big = Buffer.alloc(5 * 1024 * 1024 + 1, 1);
+    const bigDataUrl = `data:application/pdf;base64,${big.toString("base64")}`;
+    try {
+      await housekeeping(
+        makeInput("big file", {
+          modelMessages: [
+            {
+              role: "user",
+              content: [
+                { type: "file", data: bigDataUrl, mediaType: "application/pdf", filename: "big.pdf" },
+              ],
+            },
+          ] as unknown as TurnInput["modelMessages"],
+        }),
+      );
+      expect([...fakeDisk.files.keys()].some((k) => k.includes("/attachments/"))).toBe(false);
+      expect(
+        warnSpy.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0].includes("[Attachments] skipped big.pdf"),
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("§A.3.3: a tasks/ tail line dated today becomes the dueTasksBlock; yesterday's does not", async () => {
+    const { createCase, closeDoc, serializeCaseDoc } = await import("@/lib/docs");
+    const closedToday = closeDoc(
+      createCase({
+        category: "tasks",
+        caseName: "后台回复",
+        opened: "2026-07-14",
+        body: "后台流的完成通知册。",
+      }),
+      { date: "2026-07-14", note: "查了：手机话题 —— 结果已写入 research/手机话题演变/index.md。" },
+    );
+    fakeDisk.taskDirs.add("后台回复");
+    fakeDisk.files.set("memory/tasks/后台回复/index.md", serializeCaseDoc(closedToday));
+    const closedYesterday = closeDoc(
+      createCase({
+        category: "tasks",
+        caseName: "旧账",
+        opened: "2026-07-10",
+        body: "旧任务。",
+      }),
+      { date: "2026-07-13", note: "昨天的结案行不该再陈述。" },
+    );
+    fakeDisk.taskDirs.add("旧账");
+    fakeDisk.files.set("memory/tasks/旧账/index.md", serializeCaseDoc(closedYesterday));
+
+    const hk = await housekeeping(makeInput("hi"));
+
+    expect(hk.dueTasksBlock).toBeDefined();
+    expect(hk.dueTasksBlock).toContain("tasks/后台回复");
+    expect(hk.dueTasksBlock).toContain("查了：手机话题");
+    expect(hk.dueTasksBlock).toContain("state it, don't promise");
+    expect(hk.dueTasksBlock).not.toContain("旧账");
+  });
+
   it("creates a fresh slice when none is on disk and returns it by value", async () => {
     const { slice } = await housekeeping(makeInput("hello world"));
 
@@ -915,7 +1063,7 @@ describe("scribe segment (序 2–7)", () => {
     expect(event.closedBy).toBe("idle_gap");
   });
 
-  it("序 5 logs the count of unanswered question markers in the closed slice's mailbox", async () => {
+  it("序 5 starts the question run when the closed slice's mailbox holds unanswered question markers", async () => {
     fakeDisk.persistSlice(makeSlice({
       slice_id: "2026-07-14-0700",
       status: "closed",
@@ -945,11 +1093,65 @@ describe("scribe segment (序 2–7)", () => {
       const hk = await housekeeping(input);
       await runScribe(input, hk);
 
+      // The question fact fired the question run — fire-and-forget, logged.
+      const questionStarts = workflowApi.start.mock.calls.filter(
+        (c) => c[0] === backgroundRuns.questionRun,
+      );
+      expect(questionStarts).toHaveLength(1);
+      expect(questionStarts[0][1]).toEqual([
+        { sliceId: "2026-07-14-0700", date: "2026-07-14" },
+      ]);
       expect(
         logSpy.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0].includes("1 unanswered question marker(s)"),
+          (c) => typeof c[0] === "string" && c[0].includes("question run started for 2026-07-14-0700"),
         ),
       ).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("序 5 starts the boundary run for the newest closed slice — fired and logged, fire-and-forget", async () => {
+    fakeDisk.persistSlice(makeSlice({
+      slice_id: "2026-07-14-0700",
+      status: "closed",
+      closedBy: "idle_gap",
+      start: "2026-07-14T07:00:00.000Z",
+      end: "2026-07-14T07:30:00.000Z",
+      turns: [{ timestamp: "u0", role: "user", content: "before" }],
+    } as Partial<TimeSlice>));
+    fakeDisk.persistSlice(makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "earlier" }],
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const input = makeInput("follow up", {
+        modelMessages: [
+          { role: "assistant", content: "reply" },
+        ] as unknown as TurnInput["modelMessages"],
+      });
+      const hk = await housekeeping(input);
+      await runScribe(input, hk);
+
+      const boundaryStarts = workflowApi.start.mock.calls.filter(
+        (c) => c[0] === backgroundRuns.boundaryRun,
+      );
+      expect(boundaryStarts).toHaveLength(1);
+      expect(boundaryStarts[0][1]).toEqual([
+        { sliceId: "2026-07-14-0700", date: "2026-07-14" },
+      ]);
+      expect(boundaryStarts[0][2]).toEqual({ region: "hkg1" });
+      // 闭片必唤起 — the firing is in the log.
+      expect(
+        logSpy.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0] === "[Boundary] run started for 2026-07-14-0700",
+        ),
+      ).toBe(true);
+      // No question markers → no question run.
+      expect(
+        workflowApi.start.mock.calls.some((c) => c[0] === backgroundRuns.questionRun),
+      ).toBe(false);
     } finally {
       logSpy.mockRestore();
     }

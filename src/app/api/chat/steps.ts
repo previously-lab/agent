@@ -27,6 +27,9 @@
  */
 import { type UIMessageChunk, type ModelMessage } from "ai";
 import { getWritable } from "workflow";
+import { start } from "workflow/api";
+import { boundaryRun } from "@/app/api/evolution/boundary-run";
+import { questionRun } from "@/app/api/evolution/question-run";
 import {
   createSlice,
   closeSlice,
@@ -71,8 +74,14 @@ import {
 } from "@/lib/episodic/flash/librarian";
 import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
 import { fsListFiles, fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import {
+  dataUrlToBuffer,
+  persistEvidenceAttachments,
+  type EvidenceAttachmentInput,
+} from "@/lib/tools/attachments";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 import { MEMORY_ROOT_DIR, caseIndexPath } from "@/lib/docs/paths";
+import { parseCaseDoc } from "@/lib/docs";
 import {
   readUserModel,
   readUserProfile,
@@ -386,6 +395,80 @@ function messageText(content: ModelMessage["content"]): string {
   return "";
 }
 
+// ─── Evidence attachments (v0.19 §C.1 — the records-case wiring) ──────────
+
+const ATTACHMENT_EXT_BY_MEDIA: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/gif": "gif",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+  "application/pdf": "pdf",
+};
+
+/** A name for an attachment the client gave no filename (image-N.png etc.). */
+function synthesizedAttachmentName(mediaType: string, index: number): string {
+  const ext = ATTACHMENT_EXT_BY_MEDIA[mediaType] ?? "bin";
+  return `attachment-${index + 1}.${ext}`;
+}
+
+/**
+ * The files/images the user sent THIS turn, as bytes: the last user
+ * ModelMessage's file/image parts (a vision model keeps them there), plus
+ * `input.imageAttachments` (a no-vision model gets its images extracted to
+ * data URLs in start-turn). Dedup by source string so a part visible on both
+ * channels lands once. Remote-URL parts are not fetched — skipped visibly.
+ */
+function collectTurnAttachments(input: TurnInput): {
+  files: EvidenceAttachmentInput[];
+  unfetched: string[];
+} {
+  const files: EvidenceAttachmentInput[] = [];
+  const unfetched: string[] = [];
+  const seen = new Set<string>();
+  const pushDecoded = (key: string, data: Buffer, mediaType: string, name?: string) => {
+    if (seen.has(key)) return;
+    seen.add(key);
+    files.push({
+      name: name?.trim() || synthesizedAttachmentName(mediaType, files.length),
+      data,
+    });
+  };
+  const lastUser = [...input.modelMessages].reverse().find((m) => m.role === "user");
+  if (lastUser && Array.isArray(lastUser.content)) {
+    for (const part of lastUser.content) {
+      const p = part as {
+        type: string;
+        data?: unknown;
+        image?: unknown;
+        mediaType?: string;
+        filename?: string;
+      };
+      if (p.type !== "file" && p.type !== "image") continue;
+      const payload = p.type === "image" ? p.image : p.data;
+      const mediaType = p.mediaType ?? "image/png";
+      if (payload instanceof Uint8Array) {
+        pushDecoded(`bin:${payload.byteLength}:${files.length}`, Buffer.from(payload), mediaType, p.filename);
+      } else if (typeof payload === "string") {
+        if (payload.startsWith("data:")) {
+          const decoded = dataUrlToBuffer(payload);
+          if (decoded) pushDecoded(payload, decoded.data, decoded.mediaType, p.filename);
+        } else if (/^https?:\/\//.test(payload)) {
+          unfetched.push(p.filename ?? payload.slice(0, 80));
+        } else {
+          // Raw base64 (convertToModelMessages may decode the data URL).
+          pushDecoded(payload, Buffer.from(payload, "base64"), mediaType, p.filename);
+        }
+      }
+    }
+  }
+  for (const url of input.imageAttachments ?? []) {
+    const decoded = dataUrlToBuffer(url);
+    if (decoded) pushDecoded(url, decoded.data, decoded.mediaType);
+  }
+  return { files, unfetched };
+}
+
 /** Slice turns → wire messages (the shape the model history window uses). */
 function sliceTurnsToMessages(turns: TimeSlice["turns"]): ModelMessage[] {
   return turns.map((t) => ({
@@ -563,6 +646,45 @@ async function scanDueTasks(
 const BOUNDARY_EVENT_PREFIX = "[boundary-event]";
 
 /**
+ * The §A.3.3 delivery surface: tasks/ tail lines dated TODAY are the
+ * background stream's completion statements (a question run's notice, a
+ * task case closed today). Mechanical: parse each task case's index.md,
+ * collect the tail lines stamped with the user's local today. One-day
+ * window by construction — no delivery ledger.
+ */
+async function scanTodayTaskStatements(
+  todayLocal: string,
+  batch: WriteBatch,
+): Promise<Array<{ path: string; statement: string }>> {
+  const out: Array<{ path: string; statement: string }> = [];
+  let entries: Awaited<ReturnType<typeof fsListFiles>>;
+  try {
+    entries = await fsListFiles(`${MEMORY_ROOT_DIR}/tasks`);
+  } catch {
+    return out; // no tasks shelf yet
+  }
+  for (const e of entries) {
+    if (e.type !== "dir") continue;
+    try {
+      const raw = await fsReadFile(caseIndexPath("tasks", e.name), batch);
+      const doc = parseCaseDoc(raw, {
+        category: "tasks",
+        caseName: e.name,
+        fileName: "index.md",
+      });
+      for (const line of doc.tail) {
+        if (line.date === todayLocal) {
+          out.push({ path: `tasks/${e.name}`, statement: line.text });
+        }
+      }
+    } catch {
+      // unreadable / unparseable case — skip
+    }
+  }
+  return out;
+}
+
+/**
  * 序 5 — post the boundary event onto the closed slice's agent.md mailbox:
  * `{v, sliceId, closedBy, dueTasks}`. Idempotent by content (a mailbox that
  * already carries this slice's event is left untouched), so a redelivered
@@ -710,6 +832,10 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   /** The slice we came from — set when we decided a close this call, or
    *  resolved from disk when today has none. Drives the continuity brief. */
   let prevSlice: PrevSliceRef | null = null;
+  /** True when this call minted the slice — createSlice stamps THIS turn's
+   *  turnId on turn 0, so userTurnRecorded alone cannot tell a birth apart
+   *  from a redelivery; the attachment wiring below needs the distinction. */
+  let sliceBornThisCall = false;
   if (closeSignal && diskSlice) {
     prevSlice = toPrevRef(diskSlice);
     pendingClose = { slice: diskSlice, signal: closeSignal };
@@ -725,6 +851,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       input.turnId,
       checkpoint ? diskSlice.slice_id : undefined,
     );
+    sliceBornThisCall = true;
     console.log(
       `[Episodic] Close decided: ${diskSlice.slice_id} (${closeSignal}) — executed post-reply by the scribe segment`,
     );
@@ -733,6 +860,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     console.log(`[Episodic] Restored active slice: ${diskSlice.slice_id} (${diskSlice.turns.length} turns)`);
   } else {
     slice = createSlice(lastUserMessage, clientTimezone, input.turnId);
+    sliceBornThisCall = true;
     console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
   }
 
@@ -757,6 +885,50 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       content: lastUserMessage,
       turnId: input.turnId,
     });
+  }
+
+  // ── 3b. Evidence attachments → the records case (v0.19 §C.1) ──────────
+  // The files/images the user sent THIS turn land in the slice's
+  // attachments/ dir (`<turnId>-<name>`), and the landed names ride the
+  // turn's content so core.md points at its own evidence. Runs on exactly
+  // the deliveries that record the user turn: a slice born this call (its
+  // turn 0 carries this turnId by birth, which userTurnRecorded cannot
+  // distinguish from a redelivery) or a fresh append; a redelivery finds
+  // the turn on disk and skips; a regenerate records nothing. Failures are
+  // visible warnings, never fatal — the turn proceeds without the evidence.
+  if (
+    !input.regenerate &&
+    input.turnId &&
+    (sliceBornThisCall || !userTurnRecorded)
+  ) {
+    const { files, unfetched } = collectTurnAttachments(input);
+    for (const name of unfetched) {
+      console.warn(`[Attachments] remote-URL part not fetched — skipped: ${name}`);
+    }
+    if (files.length > 0) {
+      try {
+        const result = await persistEvidenceAttachments({
+          sliceId: slice.slice_id,
+          turnId: input.turnId,
+          files,
+          batch,
+        });
+        for (const s of result.skipped) {
+          console.warn(`[Attachments] skipped ${s.name}: ${s.reason}`);
+        }
+        if (result.saved.length > 0) {
+          const marker =
+            `\n\n[attachments: ${result.saved.map((s) => s.name).join(", ")}]`;
+          const last = slice.turns.at(-1);
+          if (last?.role === "user") last.content += marker;
+        }
+      } catch (e) {
+        console.warn(
+          "[Attachments] persist failed:",
+          e instanceof Error ? e.message : e,
+        );
+      }
+    }
   }
   await emitPhase(stream, "slice", false, [slice.slice_id]);
 
@@ -889,6 +1061,24 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
       ].join("\n")
     : undefined;
 
+  // ── §A.3.3 delivery — the background stream's completions, stated ─────
+  // Tasks/ tail lines dated TODAY (a question run's notice, a task case
+  // closed today) are declarative statements the reply owes the user. The
+  // block's own text carries the discipline: state, never promise.
+  const todayLocal =
+    localDateKey(input.startedAtIso, clientTimezone) ??
+    input.startedAtIso.slice(0, 10);
+  const taskStatements = await scanTodayTaskStatements(todayLocal, batch);
+  const dueTasksBlock =
+    taskStatements.length > 0
+      ? [
+          "## Completed background work — state it, don't promise",
+          "",
+          "The background stream completed these since (each line is the dated closing note of a real task case). Tell the user naturally, in their language; state facts only — do NOT promise any future work.",
+          ...taskStatements.map((s) => `- ${s.path}: ${s.statement}`),
+        ].join("\n")
+      : undefined;
+
   await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 
   // ── 7. Open UI stream ────────────────────────────────────────────────
@@ -902,6 +1092,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     identityPrompt,
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
+    ...(dueTasksBlock ? { dueTasksBlock } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
     ...(pendingClose ? { pendingClose } : {}),
@@ -1318,6 +1509,24 @@ export async function scribeSegment(
   const prevClosed = await readPrevClosedSlice(slice.slice_id, batch);
   if (prevClosed) {
     await postBoundaryEvent(prevClosed, dueTasks, batch);
+    // 触发/执行分离 (§A.2.3): the facts are posted above; the EXECUTION lives
+    // in independent durable runs, started fire-and-forget. A start failure
+    // never takes the turn down — the mailbox facts stay on disk, so the next
+    // turn's scribe segment re-fires the trigger.
+    try {
+      await start(
+        boundaryRun,
+        [{ sliceId: prevClosed.slice_id, date: todayLocal }],
+        { region: "hkg1" },
+      );
+      // 闭片必唤起 — this log line is the auditable record of the firing.
+      console.log(`[Boundary] run started for ${prevClosed.slice_id}`);
+    } catch (e) {
+      console.warn(
+        "[Boundary] run start failed:",
+        e instanceof Error ? e.message : e,
+      );
+    }
     try {
       const agentMd = await readSlicePart(prevClosed.slice_id, "agent", batch);
       const answered = extractProcessedMarkerIds(agentMd, RESEARCH_RECORD_PREFIX);
@@ -1325,9 +1534,21 @@ export async function scribeSegment(
         (m) => m.kind === "question" && !answered.has(m.id),
       );
       if (openQuestions.length > 0) {
-        console.log(
-          `[Docs] ${openQuestions.length} unanswered question marker(s) sit in ${prevClosed.slice_id}'s mailbox — the background stream's trigger (A3)`,
-        );
+        try {
+          await start(
+            questionRun,
+            [{ sliceId: prevClosed.slice_id, date: todayLocal }],
+            { region: "hkg1" },
+          );
+          console.log(
+            `[Docs] question run started for ${prevClosed.slice_id} (${openQuestions.length} unanswered marker(s))`,
+          );
+        } catch (e) {
+          console.warn(
+            "[Docs] question run start failed:",
+            e instanceof Error ? e.message : e,
+          );
+        }
       }
     } catch {
       // no mailbox on the closed slice — no questions either

@@ -97,6 +97,7 @@
         "docsEmpty": "这个类型下还没有文档。",
         "casesEmpty": "这个类目下还没有 case。",
         "catalogEmpty": "这个主题还没有挂接任何文档条目。",
+        "attachments": "附件",
         "loading": "加载中…",
         "loadError": "书架暂时打不开。",
         "back": "返回书架",

@@ -773,6 +773,12 @@ export function assembleSystemPrompt(opts: {
    * housekeeping; undefined omits the layer entirely.
    */
   userProfileBlock?: string;
+  /**
+   * Pre-built §A.3.3 delivery block (the background stream's completion
+   * statements — tasks/ tail lines dated the user's local today), from
+   * housekeeping; undefined omits the layer entirely.
+   */
+  dueTasksBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
   sliceHeadBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
@@ -791,6 +797,7 @@ export function assembleSystemPrompt(opts: {
     previouslyContent,
     directionBlock,
     userProfileBlock,
+    dueTasksBlock,
     sliceHeadBlock,
     demoNotice,
     bridgeNotice,
@@ -803,6 +810,7 @@ export function assembleSystemPrompt(opts: {
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
     userProfileBlock ?? "",
+    dueTasksBlock ?? "",
     sliceHeadBlock,
     demoNotice,
     bridgeNotice ?? "",
@@ -861,6 +869,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     // housekeeping this turn; its block text states the precedence discipline
     // (on conflict the self-description wins). Absent when no profile exists.
     userProfileBlock,
+    // §A.3.3 — the background stream's completion statements (tasks/ tail
+    // lines dated today), read in housekeeping this turn; the block's own
+    // text carries the "state, never promise" discipline.
+    dueTasksBlock: hk.dueTasksBlock,
     sliceHeadBlock,
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`

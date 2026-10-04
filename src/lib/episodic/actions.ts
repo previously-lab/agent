@@ -34,6 +34,7 @@ import {
 } from "@/lib/docs";
 import { readDirection } from "@/lib/evolution/store";
 import {
+  caseAttachmentsDir,
   isImageAttachmentName,
   readCaseAttachment,
 } from "@/lib/tools/attachments";
@@ -817,7 +818,16 @@ export interface CaseDetail {
   /** Body + preserved bytes + tail, as Markdown (no frontmatter). */
   markdown: string;
   pieces: CasePieceRef[];
+  /** The case's attachments (§C.1) — names only; bytes ride /api/attachments. */
+  attachments: CaseAttachmentRef[];
   warnings: string[];
+}
+
+/** One attachment on a case — the shelf renders images, links the rest. */
+export interface CaseAttachmentRef {
+  name: string;
+  /** True when the name is an image type (rendered inline). */
+  image: boolean;
 }
 
 /** Render a parsed case doc for display: body, tolerated bytes, dated tail. */
@@ -857,6 +867,7 @@ export async function getCaseDetail(
 
   // Pieces live in the new root only — a legacy-hit case has no case dir.
   let pieces: CasePieceRef[] = [];
+  let attachments: CaseAttachmentRef[] = [];
   if (hit.path === caseIndexPath(category, caseName)) {
     const dirEntries = await fsListFiles(caseDirPath(category, caseName)).catch(
       () => [],
@@ -874,6 +885,14 @@ export async function getCaseDetail(
         return { fileName: e.name, date: parsed?.date ?? null, title: parsed?.title ?? null };
       })
       .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+    // Attachments (§C.1): names only — the browser pulls bytes through
+    // /api/attachments, the client never carries base64.
+    attachments = (
+      await fsListFiles(caseAttachmentsDir(category, caseName)).catch(() => [])
+    )
+      .filter((e) => e.type === "file")
+      .map((e) => ({ name: e.name, image: isImageAttachmentName(e.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   if (hit.path.startsWith(`memory/${category}/`)) {
@@ -885,6 +904,7 @@ export async function getCaseDetail(
       closed: doc.closed,
       markdown: caseDocMarkdown(doc),
       pieces,
+      attachments,
       warnings: doc.warnings,
     };
   }
@@ -897,6 +917,7 @@ export async function getCaseDetail(
     closed: legacy?.closed ?? null,
     markdown: legacy?.markdown ?? hit.raw,
     pieces,
+    attachments,
     warnings: legacy?.warnings ?? [],
   };
 }

@@ -9,9 +9,11 @@ import {
 /**
  * v0.10 memory-viz e2e: the unified message stream (paging the older page in at
  * the window's head, and the seams that page is crossed at), the arrival
- * resume/briefing gate (Rev 2: the briefing seats as a stream-tail card), the
- * search palette's jump-to-slice, and the timeline view selected by
- * ?view=timeline (direct URL, the mode switcher, the Ctrl+. toggle).
+ * resume/briefing gate (Rev 2 + the surface split: the briefing seats ONLY as
+ * the R3F field's tail card, and a briefing arrival folds the fullscreen panel
+ * to the pill so the field is the arrival view), the search palette's
+ * jump-to-slice, and the timeline view selected by ?view=timeline (direct URL,
+ * the mode switcher, the Ctrl+. toggle).
  *
  * THE CONVERSATION IS THE R3F FIELD AGAIN (the 2026-09 restore): the
  * camera-navigated billboard field deleted by `419ad3d` is restored, and the
@@ -265,7 +267,7 @@ test.describe("Memory viz (v0.10)", () => {
       ).toHaveCount(0);
     });
 
-    test("seats the briefing as a stream-tail card with history above (Rev 2)", async ({
+    test("seats the briefing as the field's tail card with history above (Rev 2)", async ({
       page,
     }) => {
       const slices = [
@@ -279,25 +281,39 @@ test.describe("Memory viz (v0.10)", () => {
       await seedSlices(slices);
 
       await page.goto("/en/app");
-      // §1.2 Rev 2: the stream is ALWAYS the view — the EmptyBriefing content
-      // rides the stream's tail as a card (not a standalone briefing page).
-      // Its eyebrow is `emptyBriefing.eyebrow`, rendered verbatim.
-      const cardEyebrow = page.getByText("PREVIOUSLY ON", { exact: true });
+      // §1.2 Rev 2 + the surface split: the card's ONLY seat is the R3F
+      // field's tail — the panel never receives a briefing item. The panel
+      // opens fullscreen on the conversation rung, which would leave the
+      // field (and the card) without a seat, so a briefing arrival folds the
+      // panel to the pill: the field IS the arrival view. Its eyebrow is
+      // `emptyBriefing.eyebrow`, rendered verbatim — scoped to the field.
+      const cardEyebrow = conversationField(page).getByText("PREVIOUSLY ON", {
+        exact: true,
+      });
       await expect(cardEyebrow).toBeVisible();
-      await expect(page.locator("textarea")).toBeVisible();
+      // The composer is the PILL's single-line input here — a briefing arrival
+      // folds the panel to the pill tier (the card's only seat is the field's
+      // tail), so the fullscreen form's textarea is not what is on screen.
+      await expect(
+        page.getByRole("textbox", { name: "Send a message..." }),
+      ).toBeVisible();
       await expect(
         page.getByText(/Continuing the conversation from/),
       ).toHaveCount(0);
 
-      // "History above" is literal: the card is the stream's TAIL, so it
-      // renders below the historical turns in the same stream — not above them
-      // and not on a view of its own. (The seeded window fits the viewport
-      // whole, so the two are on screen together rather than one scroll
-      // apart; the scrolling half of that walk is covered by the paging spec
-      // above.)
-      const oldestTurn = page.getByText(sentinel(slices[0], "user"));
+      // "History above" is literal: the card is the field stream's TAIL, so
+      // it renders below the historical turns in the same field — not above
+      // them and not on a view of its own. (The seeded window fits the
+      // viewport whole, so the two are on screen together rather than one
+      // scroll apart; the scrolling half of that walk is covered by the
+      // paging spec above.)
+      const oldestTurn = conversationField(page).getByText(
+        sentinel(slices[0], "user"),
+      );
       await expect(oldestTurn).toBeVisible();
-      await expect(page.getByText(sentinel(slices[0], "agent"))).toBeVisible();
+      await expect(
+        conversationField(page).getByText(sentinel(slices[0], "agent")),
+      ).toBeVisible();
       const cardBox = await cardEyebrow.boundingBox();
       const turnBox = await oldestTurn.boundingBox();
       expect(cardBox).not.toBeNull();
@@ -419,11 +435,11 @@ test.describe("Memory viz (v0.10)", () => {
       const streamHandle = await stream.elementHandle();
       expect(streamHandle).toBeTruthy();
 
-      // The panel opens FULLSCREEN on the conversation rung (the conversation
-      // is the subject there), and a fullscreen panel covers the lens — leave
-      // fullscreen through the panel's own control, the way a reader does,
-      // then drive the rung ladder from the pill.
-      await page.getByRole("button", { name: "Exit full screen" }).click();
+      // The panel opens on the PILL here, not fullscreen: datasetA is all
+      // historical, so arrival is the briefing — and the briefing card's only
+      // seat is the field's tail, so the arrival folds the panel to reveal
+      // the field. (The fullscreen exit control is exercised by the
+      // resume-mode suite, where the panel does open expanded.)
       await expect(
         page.getByRole("button", { name: "Expand to full screen" }),
       ).toBeVisible();
@@ -470,8 +486,11 @@ test.describe("Memory viz (v0.10)", () => {
       // That is the reason the composer is one never-unmounted component with
       // a render-prop form rather than two branches (see `composer-host.tsx`),
       // and it is the thing the old `toBeAttached()` was standing in for.
-      const area = page.locator("textarea").first();
-      await expect(area).toBeAttached();
+      // Briefing arrival already collapsed the panel to the pill tier, whose
+      // composer is a single-line input (the fullscreen textarea only mounts
+      // on Expand).
+      const area = page.getByRole("textbox", { name: "Send a message..." });
+      await expect(area).toBeVisible();
       await area.click();
       await page.keyboard.type("still here");
       await expect(area).toHaveValue("still here");

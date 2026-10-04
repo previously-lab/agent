@@ -147,9 +147,18 @@ export async function seedSlices(slices: FixtureSlice[]): Promise<void> {
   );
 }
 
-/** Remove the seeded `episodic/` subtree (per-test isolation). */
+/** Remove the seeded subtrees (per-test isolation). */
 export async function clearEpisodic(): Promise<void> {
   await rm(episodicRoot(), { recursive: true, force: true });
+  // records/ too: the read surface is LIVE-TREE enumeration now (v0.19 R3b —
+  // there is no catalog projection to clear), so wiping only `episodic/`
+  // left every earlier test's slice files readable and the next test arrived
+  // to a memory it never seeded (a leftover ACTIVE slice flips the arrival
+  // gate from briefing to resume).
+  if (!E2E_MEMORY_ROOT.includes("previously-e2e")) {
+    throw new Error(`memory-fixture: refusing unexpected path: ${E2E_MEMORY_ROOT}`);
+  }
+  await rm(path.join(E2E_MEMORY_ROOT, "records"), { recursive: true, force: true });
 }
 
 /** A two-turn (user + agent) slice at a given UTC start, with sentinel

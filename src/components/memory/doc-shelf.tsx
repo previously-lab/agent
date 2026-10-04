@@ -23,6 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { MarkdownRenderer } from "@/components/chat/markdown";
+import { buildAttachmentDisplay } from "./attachment-display";
 import {
   getCaseDetail,
   getCaseDoc,
@@ -489,6 +490,10 @@ function ShelfCase({
     );
   }
 
+  // Attachments (§C.1): images render inline from /api/attachments (the
+  // browser pulls bytes — never base64 into the client), files link open.
+  const attachmentDisplay = buildAttachmentDisplay(detail);
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 text-xs text-muted-foreground">
@@ -500,6 +505,50 @@ function ShelfCase({
       {detail.markdown && (
         <div className="px-2 font-serif text-sm font-light leading-relaxed">
           <MarkdownRenderer content={detail.markdown} />
+        </div>
+      )}
+      {attachmentDisplay && (
+        <div className="flex flex-col gap-2 px-2">
+          <p className="text-xs font-semibold text-foreground/80">{t("attachments")}</p>
+          {attachmentDisplay.images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {attachmentDisplay.images.map((img) => (
+                <a
+                  key={img.name}
+                  href={img.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={img.name}
+                >
+                  {/* Memory bytes are served raw from /api/attachments — the
+                      next/image optimizer cannot reach them; plain <img>
+                      matches the repo's existing attachment precedent. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={img.url}
+                    alt={img.name}
+                    className="max-h-40 rounded-md border border-border/40 object-contain"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
+          {attachmentDisplay.files.length > 0 && (
+            <ul>
+              {attachmentDisplay.files.map((file) => (
+                <li key={file.name}>
+                  <a
+                    href={file.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block truncate rounded px-1 py-1 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    {file.name}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {detail.pieces.length > 0 && (

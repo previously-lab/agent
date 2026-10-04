@@ -846,16 +846,22 @@ function Inner({
    * needs the answer, not just the dispatch. Resolves `null` when no surface
    * answered within the retry budget (an unmounted field is an honest
    * silence, not a fake landing).
+   *
+   * `ready` refines "answered": the PANEL's list fills the same ref with a
+   * seekKey-less handle while the field is unmounted (fullscreen panel), so
+   * a non-null ref is not proof the FIELD is on the other end. The jump path
+   * waits for the handle that can actually page.
    */
   const withFieldAsync = useCallback(
     <T,>(
       fn: (api: ConversationFieldHandle) => Promise<T>,
       frames = 120,
+      ready?: (api: ConversationFieldHandle) => boolean,
     ): Promise<T | null> => {
       return new Promise((resolve) => {
         const attempt = (left: number) => {
           const api = fieldApiRef.current;
-          if (api) {
+          if (api && (!ready || ready(api))) {
             void fn(api).then(resolve);
             return;
           }
@@ -968,6 +974,25 @@ function Inner({
   // height), and the field is a sibling — neither unmounts.
   const panelTier = usePanelTier();
 
+  // The briefing card seats ONLY in the field's tail (§1.2 Rev 2), and the
+  // field has no seat while the panel is fullscreen (the shell's surface
+  // rule) — but fullscreen is the conversation rung's default tier. So a
+  // briefing arrival over a NON-empty memory folds the panel to the pill and
+  // lets the field (history + the tail card) be the arrival view. Fires ONCE
+  // per briefing, on the arrival settling: a reader who re-expands the panel
+  // afterwards is left alone.
+  const briefingFoldedRef = useRef(false);
+  useEffect(() => {
+    if (!showBriefingCard) {
+      briefingFoldedRef.current = false;
+      return;
+    }
+    if (!briefingFoldedRef.current && panelTier?.mode === "fullscreen") {
+      briefingFoldedRef.current = true;
+      panelTier.setMode("pill");
+    }
+  }, [showBriefingCard, panelTier]);
+
   const handleSelectSlice = useCallback(
     async (sliceId: string, toTime?: string) => {
       if (sliceId === selectedSliceId && !transition) return; // already there
@@ -994,10 +1019,16 @@ function Inner({
       let found: boolean | null = true;
       if (sliceId !== "now") {
         if (panelTier?.mode === "fullscreen") panelTier.setMode("pill");
-        found = await withFieldAsync((api) =>
-          api.seekKey
-            ? api.seekKey("seam-" + sliceId)
-            : Promise.resolve(api.scrollToKey("seam-" + sliceId)),
+        // Wait for the FIELD's handle specifically: the fold above re-mounts
+        // it, but the panel's list holds the shared ref until then (a
+        // seekKey-less handle), and dispatching to it is a silent no-landing.
+        // A generous budget — the field's first mount may compile chunks in
+        // dev. Budget exhausted = the field genuinely cannot host the jump
+        // (the game owns the viewport) — honest silence, not a fake landing.
+        found = await withFieldAsync(
+          (api) => api.seekKey!("seam-" + sliceId),
+          600,
+          (api) => typeof api.seekKey === "function",
         );
       }
 

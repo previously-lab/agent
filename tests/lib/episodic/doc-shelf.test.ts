@@ -371,6 +371,31 @@ describe("getCaseDetail", () => {
     expect(detail!.pieces).toEqual([]);
   });
 
+  it("lists the case's attachments with image flags (§C.1); legacy hits carry none", async () => {
+    seedFiles({
+      "memory/people/手机/index.md": CASE_INDEX_RAW,
+      "memory/people/手机/attachments/2026-09-05-photo.jpg": "binary-bytes",
+      "memory/people/手机/attachments/2026-09-06-报价单.pdf": "binary-bytes",
+    });
+
+    const detail = await getCaseDetail("people", "手机");
+
+    expect(detail).not.toBeNull();
+    expect(detail!.attachments).toEqual([
+      { name: "2026-09-05-photo.jpg", image: true },
+      { name: "2026-09-06-报价单.pdf", image: false },
+    ]);
+
+    // A legacy-root hit has no case dir — no attachments surface.
+    mocks.fsListFiles.mockClear();
+    seedFiles({
+      "memory/episodic/strands/旧手机.md": `---\nfoo: bar\n---\n旧实体。\n`,
+    });
+    const legacy = await getCaseDetail("things", "旧手机");
+    expect(legacy).not.toBeNull();
+    expect(legacy!.attachments).toEqual([]);
+  });
+
   it("rejects an illegal category or case name without touching I/O", async () => {
     expect(await getCaseDetail("bogus", "手机")).toBeNull();
     expect(await getCaseDetail("people", "../evil")).toBeNull();

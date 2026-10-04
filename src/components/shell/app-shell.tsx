@@ -1039,7 +1039,11 @@ export function AppShell() {
             ref={setPaneSlotEl}
             data-conversation-slot
             inert={!onConversationRung || undefined}
-            className={`absolute inset-y-0 left-0 z-0 transition-opacity duration-300 ${
+            // `inset-0`, not `inset-y-0 left-0`: an absolute box with only a
+            // left edge shrink-wraps to ZERO width, and the field portaled
+            // into it measured 0 px — the canvas never sized, no block ever
+            // entered the visible set, and the conversation rendered nothing.
+            className={`absolute inset-0 z-0 transition-opacity duration-300 ${
               onConversationRung
                 ? "opacity-100"
                 : "pointer-events-none opacity-0"

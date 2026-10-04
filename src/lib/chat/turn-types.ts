@@ -204,6 +204,14 @@ export interface HousekeepingResult {
    */
   userProfileBlock?: string;
   /**
+   * The §A.3.3 delivery block (v0.19 A3): the background stream's completion
+   * statements — tasks/ tail lines dated the user's local today (a question
+   * run's notice, a task case closed today). Injected after the profile; its
+   * own text carries the "state, never promise" discipline. Absent when no
+   * background work completed today.
+   */
+  dueTasksBlock?: string;
+  /**
    * Checkpoint carry-over: when the slice was born from a time_cap/capacity
    * close (`slice.continuesFrom`), the previous slice's trailing turns read
    * server-side from the CLOSED slice file. The workflow prepends them to the

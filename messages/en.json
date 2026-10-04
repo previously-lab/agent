@@ -97,6 +97,7 @@
         "docsEmpty": "No documents in this type yet.",
         "casesEmpty": "No cases under this category yet.",
         "catalogEmpty": "No documents are catalogued under this topic yet.",
+        "attachments": "Attachments",
         "loading": "Loading…",
         "loadError": "The shelf couldn't be opened.",
         "back": "Back to shelf",
