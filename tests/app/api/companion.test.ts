@@ -8,6 +8,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // companion-tools.test.ts).
 
 const hoisted = vi.hoisted(() => {
+  // io-helpers snapshots its data source AT MODULE LOAD — STORAGE must be
+  // "local" before any import evaluates (narrate's L1 card read goes through
+  // readUserModel → io-helpers), so the local-backend file map below is hit
+  // instead of the demo backend.
+  process.env.STORAGE = "local";
   const files = new Map<string, string>();
   return {
     files,
@@ -213,6 +218,52 @@ describe("POST /api/companion narration", () => {
     expect(
       (hoisted.streamText.mock.calls.at(-1)?.[0] as { prompt: string }).prompt,
     ).toContain("Chinese");
+  });
+
+  // H5: the L1 card layer reads the FOLDED user model through readUserModel's
+  // dual-root composition (people/user/index.md first, the legacy card on a
+  // miss) — the legacy path alone would serve a card frozen at the v0.19 move.
+  describe("L1 user-model layer (dual-root)", () => {
+    it("prefers the folded model at people/user/index.md over the legacy card", async () => {
+      hoisted.files.set(
+        "memory/people/user/index.md",
+        "## Identity\n\n- 自称 Dream\n\nNEW_ROOT_MODEL_MARK",
+      );
+      hoisted.files.set(
+        "memory/episodic/current-previously.md",
+        "## Identity\n\n- 自称 Dream\n\nLEGACY_CARD_MARK",
+      );
+      await POST(companionReq(validBody()));
+      const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
+        system: string;
+      };
+      expect(call.system).toContain("NEW_ROOT_MODEL_MARK");
+      expect(call.system).not.toContain("LEGACY_CARD_MARK");
+    });
+
+    it("falls back to the legacy card when the new root holds nothing", async () => {
+      hoisted.files.set(
+        "memory/episodic/current-previously.md",
+        "## Identity\n\n- 自称 Dream\n\nLEGACY_CARD_MARK",
+      );
+      await POST(companionReq(validBody()));
+      const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
+        system: string;
+      };
+      expect(call.system).toContain("LEGACY_CARD_MARK");
+      expect(call.system).toContain("## What I know about the user");
+    });
+
+    it("omits the card layer entirely when neither root holds a model", async () => {
+      await POST(companionReq(validBody()));
+      const call = hoisted.streamText.mock.calls.at(-1)?.[0] as {
+        system: string;
+      };
+      expect(call.system).not.toContain("## What I know about the user");
+      // The mouth is not silenced — the playbook and event layers still stand.
+      expect(call.system).toContain("## Companion playbook");
+      expect(call.system).toContain("## Event context");
+    });
   });
 });
 

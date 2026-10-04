@@ -14,7 +14,25 @@ vi.mock("@/lib/tools/local-fs", () => ({
     if (v === undefined) throw new Error(`File not found: "${p}"`);
     return v;
   },
-  listFilesLocal: vi.fn(async () => []),
+  // Directory listing derived from the file map — the readTimeline tool
+  // enumerates month/day/slice directories live (v0.19 §A.2.4) instead of
+  // reading the retired `_index.json` projection.
+  listFilesLocal: async (p: string) => {
+    const prefix = p.endsWith("/") ? p : `${p}/`;
+    const seen = new Map<string, "file" | "dir">();
+    for (const key of files.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
+      const seg = rest.split("/")[0];
+      seen.set(seg, rest.includes("/") ? "dir" : "file");
+    }
+    if (seen.size === 0) throw new Error(`Directory not found: "${p}"`);
+    return [...seen].map(([name, type]) => ({
+      name,
+      type,
+      path: `${prefix}${name}`,
+    }));
+  },
   writeFileLocal: vi.fn(async () => ({ path: "", created: false })),
 }));
 vi.mock("@/lib/tools/readFile", () => ({
@@ -117,8 +135,10 @@ describe("companion readSliceSummary", () => {
     expect(result).toContain(`slice ${SLICE_ID}`);
     expect(result).toContain("focus: test focus");
     expect(result).toContain("summary: test summary");
-    expect(result).toContain("tags: testing");
     expect(result).toContain("turns: 2");
+    // tags are retired (§B.5 — stopped being written): the summary no longer
+    // carries a tags line even when legacy frontmatter still has the field.
+    expect(result).not.toContain("tags:");
     // Timestamps in the summary stay UTC, annotated with the user's zone.
     expect(result).toContain("本地时区 Asia/Shanghai");
   });
@@ -131,28 +151,50 @@ describe("companion readSliceSummary", () => {
 });
 
 describe("companion readTimeline", () => {
-  it("reads the monthly index and pre-renders localStart", async () => {
+  // M1 (read side): the month directory IS the index — slices are enumerated
+  // live from the tree and their headers point-read; no `_index.json`
+  // projection is consulted, so a month whose index was never written (or is
+  // stale) still lists whole.
+  it("enumerates the month live and pre-renders localStart (no _index.json on disk)", async () => {
+    files.set(SLICE_CORE_PATH, SLICE_FIXTURE);
+    const tools = buildCompanionTools(ctx);
+    const result = (await tools.readTimeline.execute({
+      year: 2026,
+      month: 7,
+    }, EXEC_OPTS)) as {
+      exists: boolean;
+      slices: Array<{ id: string; focus?: string; localStart?: string }>;
+      timezoneNote?: string;
+    };
+    expect(result.exists).toBe(true);
+    expect(result.slices.map((s) => s.id)).toEqual([SLICE_ID]);
+    expect(result.slices[0].focus).toBe("test focus");
+    expect(result.slices[0].localStart).toBeTruthy();
+    expect(result.timezoneNote).toContain("localStart");
+  });
+
+  it("merges both roots so a month straddling the root move reads whole", async () => {
+    // One slice still on the legacy layout, one on the new records root.
+    files.set(SLICE_CORE_PATH, SLICE_FIXTURE);
     files.set(
-      "memory/episodic/slices/2026/07/_index.json",
-      JSON.stringify({
-        exists: true,
-        month: "2026-07",
-        slices: [
-          { id: SLICE_ID, start: "2026-07-28T06:58:22.811Z", focus: "f" },
-        ],
-      }),
+      "memory/records/2026/07/29/1015/core.md",
+      SLICE_FIXTURE.replaceAll("2026-07-28-0658", "2026-07-29-1015")
+        .replaceAll("2026-07-28T", "2026-07-29T")
+        .replace("focus: test focus", "focus: new root focus"),
     );
     const tools = buildCompanionTools(ctx);
     const result = (await tools.readTimeline.execute({
       year: 2026,
       month: 7,
-    }, EXEC_OPTS)) as { exists: boolean; slices: Array<{ localStart?: string }>; timezoneNote?: string };
+    }, EXEC_OPTS)) as { exists: boolean; slices: Array<{ id: string }> };
     expect(result.exists).toBe(true);
-    expect(result.slices[0].localStart).toBeTruthy();
-    expect(result.timezoneNote).toContain("localStart");
+    expect(result.slices.map((s) => s.id)).toEqual([
+      "2026-07-28-0658",
+      "2026-07-29-1015",
+    ]);
   });
 
-  it("degrades to an empty month when the index is missing", async () => {
+  it("degrades to an empty month when nothing exists", async () => {
     const tools = buildCompanionTools(ctx);
     const result = (await tools.readTimeline.execute({
       year: 2026,

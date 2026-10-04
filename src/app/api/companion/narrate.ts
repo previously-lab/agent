@@ -12,7 +12,7 @@
  * stable-first for prompt caching, event context last:
  *
  *   L0 identityPrompt — bundled CHARTER + "who you're assisting" (stable)
- *   L1 the living user card (current-previously.md, read live)
+ *   L1 the folded user model (people/user/index.md, dual-root read)
  *   L2 companion playbook (memory/agent-playbooks/companion.md, default on
  *     any read failure)
  *   L3 event context — now (user-local), locale, target sliceId (varies)
@@ -36,8 +36,7 @@ import {
   buildAgentIdentityPrompt,
   parseIdentityFromPreviously,
 } from "@/lib/identity";
-import { CURRENT_PREVIOUSLY_PATH } from "@/lib/episodic/manager";
-import { isCardFormat, migrateToV3 } from "@/lib/episodic/previously-format";
+import { readUserModel } from "@/lib/evolution/store";
 import { formatLocalTime } from "@/lib/turn-priming";
 import {
   buildCompanionTools,
@@ -118,14 +117,13 @@ function capPlaybook(content: string): string {
   );
 }
 
-/** L1 — the living user card, read through the data-source readers exactly
- *  like readPreviouslyExecute's live branch (tool-executors.ts:556-563).
- *  A missing/unreadable card degrades to no card layer — it must not silence
- *  the mouth. */
-async function readLiveCard(ctx: CompanionToolContext): Promise<string> {
+/** L1 — the folded user model (people/user/index.md), through the same
+ *  dual-root read the chat turn uses (readUserModel: new root first, the
+ *  legacy card + direction composed on a miss, §D.1). A missing/unreadable
+ *  model degrades to no card layer — it must not silence the mouth. */
+async function readLiveCard(): Promise<string> {
   try {
-    const raw = await readMemoryFile(ctx, CURRENT_PREVIOUSLY_PATH);
-    return raw.trim() ? (isCardFormat(raw) ? raw : migrateToV3(raw, "current")) : raw;
+    return (await readUserModel())?.full ?? "";
   } catch {
     return "";
   }
@@ -211,11 +209,11 @@ export async function narrateSlice(
   };
 
   // ── System prompt layers (stable first, event context last) ────────────
-  const card = await readLiveCard(toolCtx);
+  const card = await readLiveCard();
   const playbook = await readPlaybookLayer(toolCtx);
 
   // L0 — charter + who you're assisting; the profile is parsed from the same
-  // live card the chat turn parses it from (steps.ts:1977-1980).
+  // user-model read the chat turn parses it from (steps.ts:1038).
   const profile = parseIdentityFromPreviously(card);
   const identityPrompt = buildAgentIdentityPrompt(profile);
 
