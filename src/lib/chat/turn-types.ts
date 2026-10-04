@@ -78,9 +78,10 @@ export interface TurnInput {
    * True when this turn RE-RUNS the previous user message (the client
    * regenerate action — SDK trigger "regenerate-message"). Housekeeping then
    * skips the user-turn append (the question is already in the slice) and the
-   * client-history mismatch detection (a legitimately truncated history), and
-   * emits an interaction_regenerate fitness signal. The new agent turn is
-   * recorded normally — the rejected reply stays in the slice as what happened.
+   * client-history mismatch detection (a legitimately truncated history). The
+   * new agent turn is recorded normally — the rejected reply stays in the
+   * slice as what happened. (v0.19 R4/R5: the interaction_regenerate fitness
+   * signal this used to emit is retired with the fitness store.)
    */
   regenerate?: boolean;
   /**
@@ -136,8 +137,9 @@ export interface EvolutionResult {
   /** Set when the pass ended without a finish call (step cap / timeout) — the
    *  card carries whatever mutations landed before the cutoff. */
   partial?: boolean;
-  /** v1.0: the fitness buckets that forced this run + their current net
-   *  scores — surfaced in the terminal data-evolution frame. */
+  /** v1.0 legacy wire field (fitness buckets + net scores that forced the
+   *  run) — RETIRED with the fitness trigger chain (v0.19 §A.3.2): no
+   *  producer sets it anymore. Kept optional so old clients tolerate it. */
   triggers?: Array<{
     bucket: "card" | "recall" | "search" | "thinkdeep" | "interaction";
     score: number;
@@ -163,7 +165,11 @@ export interface EvolutionResult {
 /** Result of the housekeeping step — slice + prepared context for the agent. */
 export interface HousekeepingResult {
   slice: TimeSlice;
-  /** Content of previously.md for the current slice. */
+  /**
+   * The CARD half of the folded user model (people/user/index.md, v0.19 §B.7)
+   * — what the user did / is doing / plans. Tolerant read falls back to the
+   * legacy current-previously.md.
+   */
   previouslyContent: string;
   /**
    * The frozen slice-head snapshot block (L3): slice-start local time, date
@@ -190,6 +196,13 @@ export interface HousekeepingResult {
    * awaiting migration.
    */
   directionBlock?: string;
+  /**
+   * people/user/profile.md block (v0.19 §B.7): the user's OWN self-description,
+   * injected every turn right after the user model. Only the user writes it;
+   * the block's own text states the precedence discipline (on conflict, the
+   * self-description wins). Absent when no profile exists.
+   */
+  userProfileBlock?: string;
   /**
    * Checkpoint carry-over: when the slice was born from a time_cap/capacity
    * close (`slice.continuesFrom`), the previous slice's trailing turns read

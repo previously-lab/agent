@@ -55,7 +55,8 @@
  *     the doc is append-only: the whole doc is the agent's current best model.
  *
  * The agent only PROPOSES — it holds no write tools. The caller applies an
- * accepted proposal through writeDirection, keeping this module
+ * accepted proposal through writeUserModelDirection (the direction half of
+ * the folded index.md), keeping this module
  * side-effect-free and the single-writer discipline in exactly one place.
  *
  * `runDirectionAgent` is the legacy STANDALONE evaluator (kept for the bridge
@@ -69,7 +70,7 @@ import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import type { ModelConfig } from "@/lib/models/registry";
-import { isDirectionTemplate, type FitnessEvent } from "./store";
+import { isDirectionTemplate } from "./store";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 
 // ─── Proposal validation (the code-level half of the writing discipline) ────
@@ -153,7 +154,7 @@ export function retireExpiredHypotheses(
 // stamping the `proposed` pointer itself (the agent CANNOT forge or refresh a
 // hypothesis's clock). The resulting doc then passes the whole-doc gate
 // (validateDirectionProposal — skeleton / substance / evidence bar) and the
-// engineering TTL (retireExpiredHypotheses) before writeDirection.
+// engineering TTL (retireExpiredHypotheses) before writeUserModelDirection.
 
 /** A refs entry: a slice id, optionally turn-qualified (2026-08-07-0709-abc123). */
 const SLICE_REF_RE = /^\d{4}-\d{2}-\d{2}-\d{4}(-[0-9a-z]{4,})?$/i;
@@ -732,25 +733,7 @@ export function renderDirectionAnalysis(analysis: TurnAnalysis): string {
       `closed slice marking: ${analysis.closedMarking.focus} — ${analysis.closedMarking.summary} (tone ${analysis.closedMarking.tone ?? "?"})`,
     );
   }
-  if (analysis.fitness && analysis.fitness.length > 0) {
-    lines.push("this slice's fitness deltas:");
-    for (const f of analysis.fitness) {
-      lines.push(`- ${f.bucket} ${f.delta}: "${f.evidence}"`);
-    }
-  }
   return lines.join("\n");
-}
-
-/** The newest fitness events, rendered for a direction prompt. */
-export function renderDirectionEvents(recentEvents: FitnessEvent[]): string {
-  return recentEvents.length > 0
-    ? recentEvents
-        .map(
-          (e) =>
-            `- [${e.ts}] slice ${e.sliceId} · ${e.bucket} ${e.delta > 0 ? `+${e.delta}` : e.delta} — "${e.evidence}"`,
-        )
-        .join("\n")
-    : "(no fitness events recorded yet)";
 }
 
 /** The recent closed-slice marking trail, rendered for a direction prompt. */
@@ -779,9 +762,6 @@ export interface DirectionAgentInput {
   /** The card's legacy Self-model section verbatim — rules to MIGRATE into the
    *  Portrait (descriptive phrasing, keep slice refs). Null when none. */
   cardSelfModel: string | null;
-  /** Recent fitness events, all buckets, newest first or last — rendered
-   *  verbatim into the prompt; the caller bounds the count (~30). */
-  recentEvents: FitnessEvent[];
   /** This slice's analyzer output — the freshest evidence. */
   analysis: TurnAnalysis;
   /** Recent closed slices' markings, newest first — the episodic trail the
@@ -853,8 +833,8 @@ type DirectionReport = z.infer<typeof directionReportSchema>;
 
 /**
  * Static role block — the system prompt (shared base + this) never changes
- * between calls; all per-call content (current direction, fitness events, the
- * slice's analysis) goes in the user prompt.
+ * between calls; all per-call content (current direction, the slice's
+ * analysis, the recent marking trail) goes in the user prompt.
  */
 const DIRECTION_ROLE = `You are the Direction Agent — you guard direction.md, the evolution loop's USER PORTRAIT + HYPOTHESIS POOL. The doc describes WHO THE USER IS as a person; it NEVER instructs the agent, and it is NOT a log of what the user did. The user card (facts and states) and the sub-agent playbooks are evolved under this portrait by the merged self-evolution run; you only judge whether the portrait itself should move.
 
@@ -885,7 +865,7 @@ Hypotheses are guesses about the PERSON — traits, preferences, rhythms, patter
 
 ## The anti-convergence rule
 
-If a line tells the agent what to do ("you should/shouldn't…", "always/never…"), it is MISSPELLED — phrase the USER PATTERN that motivates it instead ("the user reacts badly to X", "the user prefers Y"). A single explicit, durable user statement becomes a Portrait entry DIRECTLY, still descriptive ("用户明确不喜欢 X"). Recurrent patterns promote from the hypothesis pool or from recurrent fitness evidence; single-slice impressions stay hypotheses.
+If a line tells the agent what to do ("you should/shouldn't…", "always/never…"), it is MISSPELLED — phrase the USER PATTERN that motivates it instead ("the user reacts badly to X", "the user prefers Y"). A single explicit, durable user statement becomes a Portrait entry DIRECTLY, still descriptive ("用户明确不喜欢 X"). Recurrent patterns promote from the hypothesis pool or from recurrent slice evidence; single-slice impressions stay hypotheses.
 
 ## Legacy migration
 
@@ -912,20 +892,17 @@ There is no "progress" axis, only fit to the current user — when the user chan
 
 ## What you get
 
-The current direction.md (or the untouched template in bootstrap mode), the card's legacy Self-model lines (migration source), the newest fitness events across all buckets (score: -2 explicit complaint / -1 dissatisfaction / +1 approval, each with the user's verbatim evidence), this slice's analysis (including its emotional signal), and the recent closed slices' markings — the episodic trail your portrait must stay consistent with. That is all — you have no read tools; judge from this evidence.
+The current direction.md (or the untouched template in bootstrap mode), the card's legacy Self-model lines (migration source), this slice's analysis (including its emotional signal), and the recent closed slices' markings — the episodic trail your portrait must stay consistent with. That is all — you have no read tools; judge from this evidence.
 
 Report through directionReport: outcome "no_change" + reason, or outcome "propose" with the ATOMIC ops — never a rewritten document; lines you don't touch stay as they are.`;
 
 const DIRECTION_SYSTEM = buildSubAgentSystem(DIRECTION_ROLE);
 
-/** How many recent fitness events the prompt carries (all buckets). */
-export const DIRECTION_RECENT_EVENTS = 30;
-
 /** How many recent closed-slice markings the prompt carries. */
 export const DIRECTION_RECENT_MARKINGS = 10;
 
 /** The dynamic user prompt: mode + current direction + legacy Self-model +
- *  fitness events + analysis + the recent marking trail. */
+ *  analysis + the recent marking trail. */
 function buildDirectionPrompt(input: DirectionAgentInput): string {
   const modeLine =
     input.mode === "bootstrap"
@@ -942,10 +919,6 @@ ${input.current?.trim() || "(not set yet — this would be the FIRST direction)"
 ## Legacy Self-model lines on the card (to MIGRATE into the Portrait — descriptive phrasing, keep their slice refs; the card drops the section)
 
 ${input.cardSelfModel?.trim() || "(none — the card carries no legacy Self-model lines)"}
-
-## Recent fitness events (all buckets, newest ${input.recentEvents.length})
-
-${renderDirectionEvents(input.recentEvents)}
 
 ## Recent closed-slice markings (newest ${input.recentMarkings?.length ?? 0})
 

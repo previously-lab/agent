@@ -351,15 +351,6 @@
       "duration": "{min} 分钟",
       "no": "No.{date}·{time}"
     },
-    "filter": {
-      "label": "筛选时间线",
-      "all": "核心时间线",
-      "placeholder": "搜索线索…",
-      "empty": "没有匹配的线索"
-    },
-    "selected": {
-      "slices": "{count} 片"
-    },
     "lens": {
       "label": "镜头",
       "conversation": "对话",
@@ -372,11 +363,6 @@
     "running": {
       "title": "正在写下来…",
       "hint": "回复正在流式传来。回到对话查看。"
-    },
-    "filteredOut": {
-      "title": "这一页没有属于该线索的时间片",
-      "body": "已加载的范围里没有带上这条线索的时间片——它可能出现在更早的地方。",
-      "loadOlder": "加载更早"
     }
   },
   "settings": {
@@ -605,7 +591,6 @@
     "debugMemoryTitle": "记忆地图",
     "debugMemoryLoading": "读取中…",
     "debugMemoryFailed": "读取失败",
-    "debugStrands": "{count} 个 strand",
     "debugSlices": "{count} 个切片",
     "debugActiveSlice": "活跃切片",
     "debugNoActive": "无",

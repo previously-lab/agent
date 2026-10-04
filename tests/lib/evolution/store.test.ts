@@ -1,8 +1,9 @@
 /**
- * Tests for the evolution data layer store (src/lib/evolution/store.ts):
- * the structural evidence-anchoring invariant, generation net-score math,
- * the generation settle, bounded retention, the mutation archive format,
- * and missing-file tolerance.
+ * Tests for the evolution data layer store (src/lib/evolution/store.ts),
+ * v0.19 R4/R5 surface: the folded people/user/index.md user model
+ * (compose/split seam, dual-root reads, half-preserving writes), profile.md
+ * dual-root reads, the legacy direction doc tolerance, and self/ SOP I/O
+ * (full-document reads, new-root-only writes).
  *
  * Same harness as tests/lib/episodic/batch-mode.test.ts: a temp cwd +
  * STORAGE=local so all I/O lands on the local filesystem backend.
@@ -55,394 +56,178 @@ function writeOnDisk(relPath: string, content: string) {
   fs.writeFileSync(fullPath, content, "utf-8");
 }
 
-// ── Missing-file tolerance ───────────────────────────────────────────────
+// ── compose / split seam ─────────────────────────────────────────────────
 
-describe("missing-file tolerance", () => {
-  it("readDirection / readPlaybook return null when the files do not exist", async () => {
+describe("composeUserModel / splitUserModel", () => {
+  it("round-trips card + direction through the separator seam", async () => {
+    const store = await importFresh();
+    const full = store.composeUserModel("# Card\n\nDoing things.", "# Direction\n\nHypotheses.");
+    expect(full).toBe(
+      `# Card\n\nDoing things.${store.USER_MODEL_DIRECTION_SEPARATOR}# Direction\n\nHypotheses.`,
+    );
+    expect(store.splitUserModel(full)).toEqual({
+      card: "# Card\n\nDoing things.",
+      direction: "# Direction\n\nHypotheses.",
+    });
+  });
+
+  it("degenerates cleanly when one half is empty", async () => {
+    const store = await importFresh();
+    expect(store.composeUserModel("# Card only", null)).toBe("# Card only");
+    expect(store.composeUserModel("", "# Direction only")).toBe("# Direction only");
+    expect(store.splitUserModel("# Card only")).toEqual({
+      card: "# Card only",
+      direction: null,
+    });
+  });
+});
+
+// ── readUserModel — dual-root tolerance ──────────────────────────────────
+
+describe("readUserModel", () => {
+  it("returns null on a fresh deployment (neither root holds anything)", async () => {
+    const store = await importFresh();
+    expect(await store.readUserModel()).toBeNull();
+  });
+
+  it("reads the folded index.md from the new root and splits the halves", async () => {
+    writeOnDisk(
+      "memory/people/user/index.md",
+      "# Card\n\nNew root card.\n\n---\n\n# Direction\n\nNew root direction.\n",
+    );
+    const store = await importFresh();
+    const model = await store.readUserModel();
+    expect(model?.card).toBe("# Card\n\nNew root card.");
+    expect(model?.direction).toBe("# Direction\n\nNew root direction.");
+    expect(model?.full).toContain("---");
+  });
+
+  it("composes from the legacy roots on a new-root miss WITHOUT writing back", async () => {
+    writeOnDisk("memory/episodic/current-previously.md", "# Legacy card\n\nOld card.");
+    writeOnDisk("memory/evolution/direction.md", "# Legacy direction\n\nOld direction.");
+    const store = await importFresh();
+    const model = await store.readUserModel();
+    expect(model?.card).toBe("# Legacy card\n\nOld card.");
+    expect(model?.direction).toBe("# Legacy direction\n\nOld direction.");
+    expect(model?.full).toBe(
+      `# Legacy card\n\nOld card.${store.USER_MODEL_DIRECTION_SEPARATOR}# Legacy direction\n\nOld direction.`,
+    );
+    // No backfill: the new root must NOT have been created by a read.
+    expect(readOnDisk("memory/people/user/index.md")).toBeNull();
+  });
+
+  it("prefers the new root when both roots exist", async () => {
+    writeOnDisk("memory/people/user/index.md", "# New card");
+    writeOnDisk("memory/episodic/current-previously.md", "# Legacy card");
+    const store = await importFresh();
+    expect((await store.readUserModel())?.card).toBe("# New card");
+  });
+});
+
+// ── Half-preserving writes ───────────────────────────────────────────────
+
+describe("writeUserModelCard / writeUserModelDirection", () => {
+  it("writeUserModelCard preserves the existing direction half", async () => {
+    writeOnDisk(
+      "memory/people/user/index.md",
+      "# Old card\n\n---\n\n# Direction\n\nKeep me.",
+    );
+    const store = await importFresh();
+    await store.writeUserModelCard("# New card\n\nUpdated.");
+    const written = readOnDisk("memory/people/user/index.md")!;
+    const { card, direction } = store.splitUserModel(written);
+    expect(card).toBe("# New card\n\nUpdated.");
+    expect(direction).toBe("# Direction\n\nKeep me.");
+  });
+
+  it("writeUserModelDirection preserves the existing card half", async () => {
+    writeOnDisk("memory/people/user/index.md", "# Card\n\nKeep me.\n\n---\n\n# Old direction");
+    const store = await importFresh();
+    await store.writeUserModelDirection("# Direction\n\nUpdated.");
+    const written = readOnDisk("memory/people/user/index.md")!;
+    const { card, direction } = store.splitUserModel(written);
+    expect(card).toBe("# Card\n\nKeep me.");
+    expect(direction).toBe("# Direction\n\nUpdated.");
+  });
+
+  it("a card write on a legacy-only deployment carries the legacy direction into the new root", async () => {
+    writeOnDisk("memory/episodic/current-previously.md", "# Legacy card");
+    writeOnDisk("memory/evolution/direction.md", "# Legacy direction");
+    const store = await importFresh();
+    await store.writeUserModelCard("# New card");
+    const written = readOnDisk("memory/people/user/index.md")!;
+    expect(written).toBe(
+      `# New card${store.USER_MODEL_DIRECTION_SEPARATOR}# Legacy direction`,
+    );
+    // Legacy roots are left untouched (read tolerance, not migration).
+    expect(readOnDisk("memory/evolution/direction.md")).toBe("# Legacy direction");
+  });
+});
+
+// ── profile.md — dual-root read, never written by the agent ──────────────
+
+describe("readUserProfile", () => {
+  it("returns null when neither root has a profile", async () => {
+    const store = await importFresh();
+    expect(await store.readUserProfile()).toBeNull();
+  });
+
+  it("reads the new root first, then the legacy memory/user/profile.md", async () => {
+    writeOnDisk("memory/user/profile.md", "Legacy self-description.");
+    const store = await importFresh();
+    expect(await store.readUserProfile()).toBe("Legacy self-description.");
+
+    writeOnDisk("memory/people/user/profile.md", "New self-description.");
+    expect(await store.readUserProfile()).toBe("New self-description.");
+  });
+});
+
+// ── Legacy direction doc tolerance ───────────────────────────────────────
+
+describe("readDirection / isDirectionTemplate", () => {
+  it("returns null when direction.md does not exist", async () => {
     const store = await importFresh();
     expect(await store.readDirection()).toBeNull();
-    expect(await store.readPlaybook("recall")).toBeNull();
   });
 
-  it("readFitness returns the empty store when fitness.json is missing", async () => {
+  it("reads the legacy direction doc", async () => {
+    writeOnDisk("memory/evolution/direction.md", "# Direction\n\nBody.");
     const store = await importFresh();
-    expect(await store.readFitness()).toEqual({
-      events: [],
-      signals: [],
-      directionRejections: [],
-    });
+    expect(await store.readDirection()).toBe("# Direction\n\nBody.");
   });
 
-  it("readFitness degrades to the empty store on a CORRUPT file", async () => {
-    writeOnDisk("memory/evolution/fitness.json", "{not json");
-    const store = await importFresh();
-    expect(await store.readFitness()).toEqual({
-      events: [],
-      signals: [],
-      directionRejections: [],
-    });
-  });
-
-  it("readFitness tolerates a legacy store without the directionRejections field", async () => {
-    writeOnDisk(
-      "memory/evolution/fitness.json",
-      JSON.stringify({ events: [], signals: [] }),
-    );
-    const store = await importFresh();
-    expect((await store.readFitness()).directionRejections).toEqual([]);
-  });
-
-  it("readRecentSignals returns [] when nothing was ever recorded", async () => {
-    const store = await importFresh();
-    expect(await store.readRecentSignals(5)).toEqual([]);
-  });
-
-  it("ensureEvolutionFiles creates direction.md from the template, then never overwrites", async () => {
-    const store = await importFresh();
-    await store.ensureEvolutionFiles();
-    const created = readOnDisk("memory/evolution/direction.md");
-    expect(created).not.toBeNull();
-    for (const section of [
-      "# Portrait",
-      "# Hypotheses",
-      "## Traits & cognitive style",
-      "## Triggers & rhythms",
-      "## Patterns & loops",
-      "## Strengths & resilience",
-      "## Communication preferences",
-      "## Values & boundaries",
-    ]) {
-      expect(created).toContain(section);
-    }
-
-    // Existing content must survive a second ensure.
-    writeOnDisk("memory/evolution/direction.md", "# Direction\n\nCustom evolved content.");
-    await store.ensureEvolutionFiles();
-    expect(readOnDisk("memory/evolution/direction.md")).toBe(
-      "# Direction\n\nCustom evolved content.",
-    );
-  });
-});
-
-// ── Bootstrap gate helper ────────────────────────────────────────────────
-
-describe("isDirectionTemplate", () => {
-  it("is true for null (missing file) and the untouched template, false once written", async () => {
+  it("treats missing content and untouched templates as the bootstrap state", async () => {
     const store = await importFresh();
     expect(store.isDirectionTemplate(null)).toBe(true);
-
-    await store.ensureEvolutionFiles();
-    expect(store.isDirectionTemplate(await store.readDirection())).toBe(true);
-
-    expect(
-      store.isDirectionTemplate("# Direction\n\nCustom evolved content."),
-    ).toBe(false);
+    expect(store.isDirectionTemplate("## Current focus\n\n(Not set yet — fill in.)")).toBe(true);
+    expect(store.isDirectionTemplate("# Direction\n\nReal content.")).toBe(false);
   });
 });
 
-// ── Evidence-anchoring invariant ─────────────────────────────────────────
+// ── self/ SOPs ───────────────────────────────────────────────────────────
 
-describe("appendFitnessEvents evidence invariant", () => {
-  it("forces delta to 0 when evidence is empty or whitespace", async () => {
+describe("self/ SOP I/O", () => {
+  it("readSelfSop returns null when neither root has the SOP", async () => {
     const store = await importFresh();
-    await store.appendFitnessEvents([
-      { ts: "2026-08-27T10:00:00Z", sliceId: "2026-08-27-1000", bucket: "recall", delta: 1, evidence: "" },
-      { ts: "2026-08-27T10:01:00Z", sliceId: "2026-08-27-1000", bucket: "card", delta: -2, evidence: "   " },
-      { ts: "2026-08-27T10:02:00Z", sliceId: "2026-08-27-1000", bucket: "search", delta: 1, evidence: "user said: thanks, exactly what I needed" },
-    ]);
-    const { events } = await store.readFitness();
-    expect(events.map((e) => e.delta)).toEqual([0, 0, 1]);
-  });
-});
-
-// ── Generation net-score math ─────────────────────────────────────────────
-
-describe("bucketNetScore", () => {
-  it("nets a bucket over the whole store (the current generation)", async () => {
-    const { bucketNetScore } = await importFresh();
-    const store = {
-      signals: [],
-      directionRejections: [],
-      events: [
-        { ts: "t1", sliceId: "A", bucket: "recall" as const, delta: -2 as const, evidence: "x" },
-        { ts: "t2", sliceId: "A", bucket: "card" as const, delta: 1 as const, evidence: "x" },
-        { ts: "t3", sliceId: "B", bucket: "recall" as const, delta: -1 as const, evidence: "x" },
-        { ts: "t4", sliceId: "C", bucket: "recall" as const, delta: 1 as const, evidence: "x" },
-      ],
-    };
-    // recall = -2 + -1 + 1 = -2; card = +1; untouched buckets net 0.
-    expect(bucketNetScore(store, "recall")).toBe(-2);
-    expect(bucketNetScore(store, "card")).toBe(1);
-    expect(bucketNetScore(store, "search")).toBe(0);
-  });
-});
-
-// ── Generation settle (v0.9.2) ─────────────────────────────────────────────
-
-describe("resetFitnessGeneration", () => {
-  it("clears events and signals, keeps the direction-rejection backoff", async () => {
-    const store = await importFresh();
-    await store.appendFitnessEvents([
-      { ts: "t1", sliceId: "A", bucket: "recall", delta: -2, evidence: "x" },
-      { ts: "t2", sliceId: "A", bucket: "card", delta: -1, evidence: "y" },
-    ]);
-    await store.appendSignal({
-      ts: "t3",
-      sliceId: "A",
-      type: "interaction_interrupt",
-      detail: "user interrupted the turn mid-stream",
-    });
-    await store.recordDirectionRejection("slice-with-rejection");
-
-    await store.resetFitnessGeneration();
-
-    expect(await store.readFitness()).toEqual({
-      events: [],
-      signals: [],
-      directionRejections: ["slice-with-rejection"],
-    });
+    expect(await store.readSelfSop("search")).toBeNull();
   });
 
-  it("is a no-op on an already-empty generation (no write, no error)", async () => {
+  it("reads the FULL legacy playbook on a new-root miss — no length cap", async () => {
+    const long = `# Search playbook\n\n${"line of guidance\n".repeat(500)}`;
+    writeOnDisk("memory/agent-playbooks/search.md", long);
     const store = await importFresh();
-    await store.resetFitnessGeneration();
-    expect(readOnDisk("memory/evolution/fitness.json")).toBeNull();
+    expect(await store.readSelfSop("search")).toBe(long);
   });
 
-  it("the next generation re-accumulates from zero", async () => {
+  it("writeSelfSop lands on the new root only and readSelfSop prefers it", async () => {
+    writeOnDisk("memory/agent-playbooks/recall.md", "# Legacy recall playbook");
     const store = await importFresh();
-    await store.appendFitnessEvents([
-      { ts: "t1", sliceId: "A", bucket: "interaction", delta: -2, evidence: "x" },
-      { ts: "t2", sliceId: "B", bucket: "interaction", delta: -2, evidence: "y" },
-      { ts: "t3", sliceId: "C", bucket: "interaction", delta: -1, evidence: "z" },
-    ]);
-    await store.resetFitnessGeneration();
-    await store.appendFitnessEvents([
-      { ts: "t4", sliceId: "D", bucket: "interaction", delta: -1, evidence: "fresh" },
-    ]);
-    const { events } = await store.readFitness();
-    expect(events).toHaveLength(1);
-    expect(store.bucketNetScore({ events, signals: [], directionRejections: [] }, "interaction")).toBe(-1);
-  });
-});
-
-// ── Bounded retention ────────────────────────────────────────────────────
-
-describe("bounded retention", () => {
-  // These two do 200+ sequential file writes — under full-suite parallel load
-  // (Windows disk) they can exceed vitest's default 5s test timeout.
-  it("retains only the newest MAX_FITNESS_EVENTS events", { timeout: 30_000 }, async () => {
-    const store = await importFresh();
-    const total = store.MAX_FITNESS_EVENTS + 25;
-    for (let i = 0; i < total; i++) {
-      await store.appendFitnessEvents([
-        {
-          // Zero-padded so lexicographic order IS chronological — the
-          // directory store orders by ts (ISO strings in production).
-          ts: `t${String(i).padStart(4, "0")}`,
-          sliceId: "s",
-          bucket: "interaction",
-          delta: 0,
-          evidence: `e${i}`,
-        },
-      ]);
-    }
-    const { events } = await store.readFitness();
-    expect(events).toHaveLength(store.MAX_FITNESS_EVENTS);
-    // Newest kept, oldest dropped.
-    expect(events[0].evidence).toBe("e25");
-    expect(events[events.length - 1].evidence).toBe(`e${total - 1}`);
-  });
-
-  it("retains only the newest MAX_FITNESS_SIGNALS signals and serves readRecentSignals", { timeout: 30_000 }, async () => {
-    const store = await importFresh();
-    for (let i = 0; i < store.MAX_FITNESS_SIGNALS + 10; i++) {
-      await store.appendSignal({
-        ts: `t${String(i).padStart(4, "0")}`,
-        sliceId: "s",
-        type: "recall_rework",
-        detail: `d${i}`,
-      });
-    }
-    const { signals } = await store.readFitness();
-    expect(signals).toHaveLength(store.MAX_FITNESS_SIGNALS);
-    expect(signals[0].detail).toBe("d10");
-
-    const recent = await store.readRecentSignals(3);
-    expect(recent.map((s) => s.detail)).toEqual([
-      `d${store.MAX_FITNESS_SIGNALS + 7}`,
-      `d${store.MAX_FITNESS_SIGNALS + 8}`,
-      `d${store.MAX_FITNESS_SIGNALS + 9}`,
-    ]);
-  });
-});
-
-// ── Direction-rejection backoff (v1.1 per-slice gate backoff) ───────────
-
-describe("recordDirectionRejection", () => {
-  it("appends a slice id once (idempotent), persisting across reads", async () => {
-    const store = await importFresh();
-    await store.recordDirectionRejection("2026-08-27-1000");
-    await store.recordDirectionRejection("2026-08-27-1000");
-    await store.recordDirectionRejection("2026-08-27-1100");
-    const { directionRejections } = await store.readFitness();
-    expect(directionRejections).toEqual(["2026-08-27-1000", "2026-08-27-1100"]);
-  });
-
-  it("retains only the newest MAX_DIRECTION_REJECTIONS ids", async () => {
-    const store = await importFresh();
-    for (let i = 0; i < store.MAX_DIRECTION_REJECTIONS + 5; i++) {
-      await store.recordDirectionRejection(`2026-08-27-${String(1000 + i)}`);
-    }
-    const { directionRejections } = await store.readFitness();
-    expect(directionRejections).toHaveLength(store.MAX_DIRECTION_REJECTIONS);
-    expect(directionRejections[0]).toBe("2026-08-27-1005");
-    expect(directionRejections.at(-1)).toBe(
-      `2026-08-27-${1000 + store.MAX_DIRECTION_REJECTIONS + 4}`,
+    await store.writeSelfSop("recall", "# Recall SOP\n\nNew overview. Evidence: slice abc.");
+    expect(readOnDisk("memory/self/recall/index.md")).toBe(
+      "# Recall SOP\n\nNew overview. Evidence: slice abc.",
     );
-  });
-});
-
-// ── Directory-level append-only store (v0.16 S0) ──────────────────────────
-
-describe("directory-level append-only store (v0.16 S0)", () => {
-  it("writes ONE file per event/signal under fitness/events/ — no whole-file fitness.json", async () => {
-    const store = await importFresh();
-    await store.appendFitnessEvents([
-      { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q1" },
-      { ts: "2026-10-05T10:01:00.000Z", sliceId: "s", bucket: "card", delta: 1, evidence: "q2" },
-    ]);
-    await store.appendSignal({
-      ts: "2026-10-05T10:02:00.000Z",
-      sliceId: "s",
-      type: "interaction_interrupt",
-      detail: "stopped",
-    });
-
-    const dir = path.join(tmpDir, "memory/evolution/fitness/events");
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
-    expect(files).toHaveLength(3);
-    // ISO-ts prefix + random suffix naming.
-    expect(files.every((f) => /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f]{6}\.json$/.test(f))).toBe(true);
-    // No legacy whole-file store is created.
-    expect(readOnDisk("memory/evolution/fitness.json")).toBeNull();
-    // And the aggregate reads all three back, chronologically.
-    const agg = await store.readFitness();
-    expect(agg.events.map((e) => e.evidence)).toEqual(["q1", "q2"]);
-    expect(agg.signals.map((s) => s.type)).toEqual(["interaction_interrupt"]);
-  });
-
-  it("tolerates and merges a legacy whole-file fitness.json (no crash, both count)", async () => {
-    const store = await importFresh();
-    writeOnDisk(
-      "memory/evolution/fitness.json",
-      JSON.stringify({
-        events: [
-          { ts: "2026-10-01T09:00:00.000Z", sliceId: "s", bucket: "recall", delta: -2, evidence: "legacy q" },
-        ],
-        signals: [
-          { ts: "2026-10-01T09:01:00.000Z", sliceId: "s", type: "recall_rework", detail: "legacy d" },
-        ],
-        directionRejections: ["2026-10-01-0900"],
-      }),
-    );
-    await store.appendFitnessEvents([
-      { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: 1, evidence: "new q" },
-    ]);
-
-    const agg = await store.readFitness();
-    expect(agg.events.map((e) => e.evidence)).toEqual(["legacy q", "new q"]);
-    expect(agg.signals).toHaveLength(1);
-    expect(agg.directionRejections).toEqual(["2026-10-01-0900"]);
-  });
-
-  it("settling clears a legacy whole-file store too (semantics unchanged)", async () => {
-    const store = await importFresh();
-    writeOnDisk(
-      "memory/evolution/fitness.json",
-      JSON.stringify({
-        events: [{ ts: "t1", sliceId: "s", bucket: "card", delta: -1, evidence: "q" }],
-        signals: [],
-        directionRejections: ["rej-slice"],
-      }),
-    );
-    await store.resetFitnessGeneration();
-    const agg = await store.readFitness();
-    expect(agg.events).toEqual([]);
-    expect(agg.directionRejections).toEqual(["rej-slice"]);
-    // The legacy file itself is emptied (not deleted — it keeps its field shape).
-    const legacy = JSON.parse(readOnDisk("memory/evolution/fitness.json")!);
-    expect(legacy.events).toEqual([]);
-    expect(legacy.directionRejections).toEqual(["rej-slice"]);
-  });
-
-  it("batch read-your-writes: an unflushed append is visible to readFitness(batch) only", async () => {
-    const store = await importFresh();
-    const io = await import("@/lib/episodic/io-helpers");
-    const batch = io.createBatch();
-    await store.appendFitnessEvents(
-      [{ ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q" }],
-      batch,
-    );
-    // In-batch: visible. On disk: not yet.
-    expect((await store.readFitness(batch)).events).toHaveLength(1);
-    expect((await store.readFitness()).events).toHaveLength(0);
-    expect(fs.existsSync(path.join(tmpDir, "memory/evolution/fitness/events"))).toBe(false);
-
-    await io.flushBatch(batch, "test flush");
-    expect((await store.readFitness()).events).toHaveLength(1);
-  });
-
-  it("settle converts this batch's own unflushed appends into deletes (generation actually settles at flush)", async () => {
-    const store = await importFresh();
-    const io = await import("@/lib/episodic/io-helpers");
-    const batch = io.createBatch();
-    await store.appendFitnessEvents(
-      [
-        { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q1" },
-        { ts: "2026-10-05T10:01:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q2" },
-      ],
-      batch,
-    );
-    // The evolution run responds and settles — BEFORE the turn's batch flushed.
-    await store.resetFitnessGeneration(batch);
-    await io.flushBatch(batch, "test flush");
-
-    const dir = path.join(tmpDir, "memory/evolution/fitness/events");
-    expect(fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".json")) : []).toEqual([]);
-    expect((await store.readFitness()).events).toEqual([]);
-  });
-
-  it("concurrent appenders never share a filename (500 same-ts appends → 500 files, none lost)", async () => {
-    const store = await importFresh();
-    const ts = "2026-10-05T10:00:00.000Z";
-    await Promise.all(
-      Array.from({ length: 100 }, (_, i) =>
-        store.appendSignal({ ts, sliceId: "s", type: "interaction_interrupt", detail: `d${i}` }),
-      ),
-    );
-    const agg = await store.readFitness();
-    expect(agg.signals).toHaveLength(100);
-    expect(new Set(agg.signals.map((s) => s.detail)).size).toBe(100);
-  });
-});
-
-// ── Playbook IO ──────────────────────────────────────────────────────────
-
-describe("playbook IO", () => {
-  it("round-trips a playbook and caps the injected length with a marker", async () => {
-    const store = await importFresh();
-    expect(await store.readPlaybook("thinkdeep")).toBeNull();
-
-    await store.writePlaybook("thinkdeep", "State the missing facts first.");
-    expect(await store.readPlaybook("thinkdeep")).toBe(
-      "State the missing facts first.",
-    );
-
-    const long = "x".repeat(store.MAX_PLAYBOOK_CHARS + 500);
-    const capped = store.capPlaybook(long);
-    expect(capped.length).toBeLessThan(long.length);
-    expect(capped).toContain("playbook truncated");
-    expect(store.capPlaybook("short")).toBe("short");
+    expect(await store.readSelfSop("recall")).toContain("New overview");
+    // Legacy playbook untouched.
+    expect(readOnDisk("memory/agent-playbooks/recall.md")).toBe("# Legacy recall playbook");
   });
 });

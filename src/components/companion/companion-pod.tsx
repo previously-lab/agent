@@ -40,7 +40,7 @@
  * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
  * read-only instrumentation sections — the last evolution run's structured
  * detail (the full done-frame payload the bus now passes through) and a
- * memory-map summary (strand/slice/active-slice overview fetched ONCE per
+ * memory-map summary (slice/active-slice overview fetched ONCE per
  * panel open from the existing episodic server actions, never polled, with a
  * manual refresh). They ride inside the scroll area under whatever the prose
  * seat shows, and they are why the button now always opens the panel — even
@@ -57,9 +57,7 @@ import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import {
   getEpisodicState,
-  getStrandList,
   getTimelineCatalog,
-  type StrandListItem,
 } from "@/lib/episodic/actions";
 import {
   NarrateError,
@@ -87,9 +85,6 @@ interface LatestNarration {
 
 /** The memory-map snapshot the debug block renders — one fetch per panel open. */
 interface MemoryMapSnapshot {
-  strandCount: number;
-  /** The first few strands by most recent activity, with carrier counts. */
-  topStrands: StrandListItem[];
   sliceCount: number;
   latestSliceId: string | null;
   activeSliceId: string | null;
@@ -266,7 +261,7 @@ function EvolutionDebugSection({
   );
 }
 
-/** The read-only memory-map summary — strand/slice/active-slice overview. */
+/** The read-only memory-map summary — slice/active-slice overview. */
 function MemoryDebugSection({
   memory,
   failed,
@@ -284,16 +279,6 @@ function MemoryDebugSection({
       )}
       {memory && (
         <>
-          <DebugRow
-            label={t("debugStrands", { count: memory.strandCount })}
-            value={
-              memory.topStrands.length > 0
-                ? memory.topStrands
-                    .map((s) => `${s.name} ×${s.count}`)
-                    .join("、")
-                : "—"
-            }
-          />
           <DebugRow
             label={t("debugSlices", { count: memory.sliceCount })}
             value={memory.latestSliceId ?? "—"}
@@ -413,26 +398,23 @@ export function CompanionPod({
 
   // ── Debug: the memory-map summary ─────────────────────────────────────────
   // Fetched ONCE per panel open from the existing episodic server actions —
-  // never polled. Read-only; a manual refresh re-runs the same three reads
+  // never polled. Read-only; a manual refresh re-runs the same two reads
   // (useful right after an evolution run mutates the memory it summarizes).
   const [memoryMap, setMemoryMap] = useState<MemoryMapSnapshot | null>(null);
   const [memoryMapFailed, setMemoryMapFailed] = useState(false);
   const memoryMapSeqRef = useRef(0);
   const loadMemoryMap = useCallback(async () => {
     const seq = ++memoryMapSeqRef.current;
-    const [strands, episodic, catalog] = await Promise.all([
-      getStrandList().catch(() => null),
+    const [episodic, catalog] = await Promise.all([
       getEpisodicState().catch(() => null),
       getTimelineCatalog().catch(() => null),
     ]);
     // A close/reopen superseded this read — its snapshot would be stale.
     if (seq !== memoryMapSeqRef.current) return;
-    setMemoryMapFailed(!strands && !episodic && !catalog);
+    setMemoryMapFailed(!episodic && !catalog);
     setMemoryMap(
-      strands || episodic || catalog
+      episodic || catalog
         ? {
-            strandCount: strands?.length ?? 0,
-            topStrands: strands?.slice(0, 5) ?? [],
             sliceCount: catalog?.length ?? 0,
             latestSliceId: catalog?.at(-1)?.id ?? null,
             activeSliceId: episodic?.active?.slice_id ?? null,

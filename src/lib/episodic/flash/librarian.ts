@@ -126,6 +126,13 @@ const markerSchema = z.object({
   dateAnchor: z.string().optional(),
   /** What this is about — the reply segment's one-line note. */
   note: z.string().default(""),
+  /**
+   * 证据·大段文字 (§C.1): the FULL pasted text, when the sedimented thing
+   * is a long text the user sent. The scribe opens the case with this as the
+   * 正文 and the origin stamped ("用户于 <date> 在切片 <id> 粘贴"). Absent for
+   * ordinary markers — the writer drafts from the slice excerpt.
+   */
+  body: z.string().optional(),
   /** LEGACY (strands are gone) — tolerated, ignored by the case writers. */
   topics: z.array(z.string()).catch([]).default([]),
 });
@@ -753,7 +760,13 @@ ${markerBlocks}
       marker.kind === "task" && marker.dateAnchor
         ? `日期锚：${marker.dateAnchor}\n\n`
         : "";
-    const stamped = stampEvidence(anchorLine + body, sliceId);
+    // 证据·大段文字 (§C.1): a marker carrying the full pasted text opens its
+    // case with the TEXT as the evidence — origin stamped, verbatim. The
+    // model's prose frames it above the original.
+    const pastedBlock = marker.body?.trim()
+      ? `\n\n—— 原文 ——\n用户于 ${date} 在切片 ${sliceId} 粘贴：\n\n${marker.body.trim()}\n`
+      : "";
+    const stamped = stampEvidence(anchorLine + body + pastedBlock, sliceId);
     try {
       let intent: CaseWriteIntent;
       if (!target.existed) {

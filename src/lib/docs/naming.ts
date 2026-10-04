@@ -36,7 +36,7 @@ export function isValidDate(date: string): boolean {
 }
 
 /** Characters that can never appear inside any file-name component. */
-function hasUnsafeChars(name: string): boolean {
+export function hasUnsafeChars(name: string): boolean {
   return (
     name.length === 0 ||
     name !== name.trim() ||
@@ -47,6 +47,27 @@ function hasUnsafeChars(name: string): boolean {
     name === ".." ||
     name.includes("..")
   );
+}
+
+/**
+ * Purify a user-derived name component into a safe file-name fragment — the
+ * SAME unsafe-chars discipline `hasUnsafeChars` validates (separators, NUL,
+ * `.`/`..`, edge whitespace), widened to the control range and the
+ * windows-forbidden set, applied as REPLACEMENT because the input is derived
+ * user input, not an identity the system chose. Every unsafe run becomes one
+ * `-`; repeats and edge dots/spaces collapse; the result is capped at 120
+ * chars. May return "" when nothing survives — the caller owns the fallback.
+ * This is the single source of the sanitize list (the attachments module
+ * used to mirror it).
+ */
+export function sanitizeNameComponent(raw: string): string {
+  return raw
+    .normalize("NFKC")
+    .replace(/[/\\\0-\x1f<>:"|?*]+/g, "-")
+    .replace(/\.\.+/g, ".")
+    .replace(/^[.\s]+|[.\s]+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 120);
 }
 
 /**

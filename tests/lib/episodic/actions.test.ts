@@ -61,7 +61,6 @@ import {
   getSliceJumpWindow,
   getSliceContent,
   getArrivalState,
-  getStrandList,
   getTimelineCatalogPage,
 } from "@/lib/episodic/actions";
 
@@ -612,17 +611,6 @@ describe("getArrivalState", () => {
     mocks.setDemoPersona.mockClear();
     await getArrivalState();
     expect(mocks.setDemoPersona).not.toHaveBeenCalled();
-  });
-});
-
-describe("getStrandList", () => {
-  it("always returns an empty list — strands have no live source since v0.19 R3b", async () => {
-    // Strands were a weave-resolved projection (strands.json); §A.2.4 deletes
-    // the projection, so the filter UI and the companion pod read "no
-    // strands" — the honest answer under the case model. The enumeration is
-    // not even consulted.
-    expect(await getStrandList()).toEqual([]);
-    expect(mocks.enumerateSliceIds).not.toHaveBeenCalled();
   });
 });
 

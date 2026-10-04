@@ -114,7 +114,8 @@ function WorldContract({
 /* The field world's two passes — main scene + the band's braid              */
 /* ------------------------------------------------------------------------ */
 
-export interface WorldBand extends ThreadlineSceneProps {
+export interface WorldBand
+  extends Omit<ThreadlineSceneProps, "strands" | "selected"> {
   /** The band strip's left edge, px from the canvas's left (the rail's
    *  margin) — the braid renders scissored to `[x, x + width]`. */
   x: number;
@@ -197,8 +198,11 @@ function BraidPortal({
   const size = useThree((s) => s.size);
   return createPortal(
     <ThreadlineRig
-      strands={band.strands}
-      selected={band.selected}
+      // The strand field is retired (§A.2.4) — there is no strand list to
+      // feed the braid any more, so it winds with no strand picks and no
+      // focus. Anchoring the band to cases instead is a separate question.
+      strands={[]}
+      selected={[]}
       feed={band.feed}
       range={band.range}
       reducedMotion={band.reducedMotion}

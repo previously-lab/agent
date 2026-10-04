@@ -79,6 +79,16 @@ const episodic = vi.hoisted(() => ({
   ensurePreviously: vi.fn(async (sliceId: string) => `# Previously On\n\n_Active slice: ${sliceId} | Updated: ..._\n`),
   readStrands: vi.fn(async () => ({})),
   readCurrentPreviously: vi.fn(async () => ""),
+  // v0.19 R4 snapshot semantics: the slice's previously.md freezes the FULL
+  // folded user model. Reads hit the fake disk; fresh-deploy seeding misses.
+  readPreviously: vi.fn(async (sliceId: string) => {
+    const v = fakeDisk.files.get(`${sliceId}:previously`);
+    return v ?? "";
+  }),
+  writePreviously: vi.fn(async (sliceId: string, content: string) => {
+    fakeDisk.files.set(`${sliceId}:previously`, content);
+  }),
+  findMostRecentPreviously: vi.fn(async (): Promise<string | null> => null),
   deterministicSliceMark: vi.fn(() => ({ focus: "fallback focus", summary: "fallback summary" })),
   analyzeTurn: vi.fn(),
   // Dual-root disk reads against the fake disk.
@@ -173,6 +183,7 @@ const evolution = vi.hoisted(() => ({
       signal?: string;
       focus?: string;
       triggeredBuckets?: string[];
+      allowedSopWrites?: string[];
       onProgress?: (step: "reading" | "reviewing" | "applied") => void;
       onEvolutionLine?: (line: string, stage: "thinking" | "writing") => void;
     }): Promise<{
@@ -224,9 +235,16 @@ const slicer = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/episodic/slicer", () => slicer);
 
-// The direction layer's store read is mocked (the real one hits the fs).
+// The evolution store reads are mocked (the real ones hit the fs): the folded
+// user model (card + direction halves) and the user's profile. The default is
+// "fresh deployment" — no model, no profile.
 const evolutionStore = vi.hoisted(() => ({
   readDirection: vi.fn(async (): Promise<string | null> => null),
+  readUserModel: vi.fn(
+    async (): Promise<{ card: string; direction: string | null; full: string } | null> =>
+      null,
+  ),
+  readUserProfile: vi.fn(async (): Promise<string | null> => null),
 }));
 vi.mock("@/lib/evolution/store", () => evolutionStore);
 // Partial mock: bridge-phases (importOriginal'd) needs the module's schemas —
@@ -968,7 +986,10 @@ describe("scribe segment (序 2–7)", () => {
     const arg = evolution.runCardEvolution.mock.calls[0][0];
     expect(arg.focus).toBe("Always answer in Chinese");
     expect(arg.signal).toBe("new_observation");
-    expect(arg.triggeredBuckets).toEqual([]);
+    // v0.19 R4: the fitness trigger chain is retired — the explicit channel
+    // carries NO trigger buckets and NO SOP write allowance.
+    expect(arg.triggeredBuckets).toBeUndefined();
+    expect(arg.allowedSopWrites).toBeUndefined();
     // The changed run's summary freezes into the slice (replaying in the L3
     // slice-head block on later turns) and is re-snapshotted in this batch.
     expect(hk.slice.evolutionSummary).toBe("记下了语言偏好");
@@ -1138,7 +1159,6 @@ describe("scribe segment — bridge (outsourced) path", () => {
       },
       backfill_marks: [],
       strand_merges: [],
-      fitness: [],
       direction: null,
       playbooks: [],
       ...overrides,

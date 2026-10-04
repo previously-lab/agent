@@ -25,11 +25,12 @@ import {
   type HousekeepingPhaseReport,
 } from "@/lib/bridge-phases";
 import { runBridge } from "@/lib/bridge";
-import { writePlaybook, MAX_PLAYBOOK_CHARS } from "@/lib/evolution/store";
 import {
-  writeCurrentPreviously,
-  writePreviously,
-} from "@/lib/episodic";
+  readUserModel,
+  writeSelfSop,
+  writeUserModelCard,
+} from "@/lib/evolution/store";
+import { writePreviously } from "@/lib/episodic";
 import {
   newCardTemplate,
   serializeCard,
@@ -44,23 +45,27 @@ vi.mock("@/lib/bridge", () => ({
 }));
 
 vi.mock("@/lib/episodic", () => ({
-  writeCurrentPreviously: vi.fn(async () => {}),
   writePreviously: vi.fn(async () => {}),
 }));
 
-// writePlaybook is the single-writer boundary under test; keep the rest of
-// the store (capPlaybook, MAX_PLAYBOOK_CHARS, the fitness read/write fns)
-// real so the applier's capping behavior is exercised, not mocked away.
+// The evolution store is the single-writer boundary under test (the folded
+// people/user/index.md card write + self/ SOP writes); readUserModel is
+// mocked to null so the snapshot falls back to the mutated card.
 vi.mock("@/lib/evolution/store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/evolution/store")>();
-  return { ...actual, writePlaybook: vi.fn(async () => {}) };
+  return {
+    ...actual,
+    readUserModel: vi.fn(async () => null),
+    writeSelfSop: vi.fn(async () => {}),
+    writeUserModelCard: vi.fn(async () => {}),
+  };
 });
 
 const runBridgeMock = vi.mocked(runBridge);
-const writeCurrentMock = vi.mocked(writeCurrentPreviously);
+const writeCardMock = vi.mocked(writeUserModelCard);
 const writeSliceMock = vi.mocked(writePreviously);
-const writePlaybookMock = vi.mocked(writePlaybook);
+const writeSopMock = vi.mocked(writeSelfSop);
 
 const SLICE = "2026-08-22-1015";
 
@@ -88,7 +93,6 @@ const VALID_REPORT: HousekeepingPhaseReport = {
   },
   backfill_marks: [],
   strand_merges: [],
-  fitness: [],
   direction: null,
   playbooks: [],
 };
@@ -189,55 +193,38 @@ describe("buildHousekeepingPayload", () => {
     expect(context).not.toContain("Strand merge candidates");
   });
 
-  it("carries the direction doc + mechanical signals in context when provided", () => {
+  it("carries the direction doc in context when provided", () => {
     const { task, context } = buildHousekeepingPayload({
       ...baseInput(),
       directionContent: "# Direction\n\nKeep answers concrete.",
-      signals: [
-        {
-          ts: "2026-08-22T10:00:00Z",
-          sliceId: SLICE,
-          type: "recall_rework",
-          detail: "main agent read slice 2026-08-20-1430 outside recall's references",
-        },
-      ],
     });
-    expect(task).toContain("Fitness scoring");
     expect(task).toContain("Direction verdict");
-    expect(task).toContain('"fitness"');
     expect(task).toContain('"direction"');
     expect(context).toContain("Current evolution direction");
     expect(context).toContain("Keep answers concrete.");
-    expect(context).toContain("Mechanical signals this slice");
-    expect(context).toContain("recall_rework");
   });
 
-  it("omits the signals section when none are provided", () => {
-    const { context } = buildHousekeepingPayload(baseInput());
-    expect(context).not.toContain("Mechanical signals this slice");
-  });
-
-  it("lists triggered colleagues' playbooks for the folded-in job 8 when provided", () => {
+  it("lists allowlisted colleagues' SOPs for the folded-in SOP job when provided", () => {
     const { task, context } = buildHousekeepingPayload({
       ...baseInput(),
-      playbookTriggerBuckets: ["recall"],
+      sopWriteAllowlist: ["recall"],
       playbooks: [
         { agent: "recall", content: "- read the full slice before concluding" },
-        { agent: "search", content: "- unused: bucket did not trigger" },
+        { agent: "search", content: "- unused: not allowlisted" },
       ],
     });
-    expect(task).toContain("Colleague playbooks");
+    expect(task).toContain("SOP evolution");
     expect(task).toContain('"playbooks"');
-    expect(context).toContain("Colleague playbooks (job 8 input)");
+    expect(context).toContain("self/ SOPs writable this run");
     expect(context).toContain("### recall");
     expect(context).toContain("- read the full slice before concluding");
-    // search did not trigger — its playbook is not offered.
+    // search is not allowlisted — its SOP is not offered.
     expect(context).not.toContain("### search");
   });
 
-  it("omits the colleague-playbooks section when no bucket triggered", () => {
+  it("omits the self/ SOP section when no colleague is allowlisted", () => {
     const { context } = buildHousekeepingPayload(baseInput());
-    expect(context).not.toContain("Colleague playbooks");
+    expect(context).not.toContain("self/ SOPs writable this run");
   });
 
   it("names the direction mode in context (migrate re-shape, lowered bar)", () => {
@@ -346,10 +333,12 @@ describe("runHousekeepingBridge", () => {
     if (res.ok) expect(res.report.strand_merges).toEqual([]);
   });
 
-  it("tolerates omitted fitness / direction fields (v1.0 — old reports stay valid)", async () => {
+  it("tolerates an omitted direction field AND ignores a legacy fitness key (v0.19 — old reports stay valid)", async () => {
     const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    delete sparse.fitness;
     delete sparse.direction;
+    // An old client still sending fitness: the unknown key is stripped, the
+    // report stays valid.
+    sparse.fitness = [{ bucket: "recall", delta: -1, evidence: "x" }];
     runBridgeMock.mockResolvedValue({
       status: "ok",
       result: JSON.stringify(sparse),
@@ -358,8 +347,8 @@ describe("runHousekeepingBridge", () => {
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.report.fitness).toEqual([]);
     expect(res.report.direction).toBeNull();
+    expect("fitness" in res.report).toBe(false);
   });
 
   it("tolerates an omitted playbooks field (old clients — defaults to [])", async () => {
@@ -465,12 +454,8 @@ describe("runHousekeepingBridge", () => {
     if (res.ok) expect(res.report.playbooks).toHaveLength(3);
   });
 
-  it("parses fitness deltas and a direction ops verdict when present", async () => {
+  it("parses a direction ops verdict when present", async () => {
     const rich = JSON.parse(JSON.stringify(VALID_REPORT));
-    rich.fitness = [
-      { bucket: "recall", delta: -1, evidence: "main agent re-read slice 2026-08-20-1430 outside recall's references" },
-      { bucket: "interaction", delta: 1, evidence: "exactly what I needed" },
-    ];
     rich.direction = {
       ops: [
         {
@@ -497,12 +482,6 @@ describe("runHousekeepingBridge", () => {
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.report.fitness).toHaveLength(2);
-    expect(res.report.fitness[0]).toEqual({
-      bucket: "recall",
-      delta: -1,
-      evidence: "main agent re-read slice 2026-08-20-1430 outside recall's references",
-    });
     expect(res.report.direction).not.toBeNull();
     expect(res.report.direction).not.toBe("no_change");
     if (res.report.direction && res.report.direction !== "no_change") {
@@ -523,23 +502,6 @@ describe("runHousekeepingBridge", () => {
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.report.direction).toBe("no_change");
-  });
-
-  it("truncates an over-cap fitness array instead of rejecting the report", async () => {
-    const fat = JSON.parse(JSON.stringify(VALID_REPORT));
-    fat.fitness = Array.from({ length: 8 }, (_, i) => ({
-      bucket: "interaction",
-      delta: 1,
-      evidence: `e${i}`,
-    }));
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(fat),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.fitness).toHaveLength(5);
   });
 
   it("truncates over-cap arrays instead of rejecting the whole report", async () => {
@@ -742,21 +704,6 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
     expect(a.semanticHint).toEqual({ strands: [], reason: "" });
     expect(a.evolveCard).toBeUndefined();
   });
-
-  it("maps report fitness deltas onto TurnAnalysis.fitness (empty → undefined)", () => {
-    const withFitness: HousekeepingPhaseReport = {
-      ...VALID_REPORT,
-      fitness: [
-        { bucket: "recall", delta: -1, evidence: "re-read outside references" },
-      ],
-    };
-    const a = adaptHousekeepingReport(withFitness, false);
-    expect(a.fitness).toEqual([
-      { bucket: "recall", delta: -1, evidence: "re-read outside references" },
-    ]);
-    // The no-signal state carries NO fitness field — housekeeping appends nothing.
-    expect(adaptHousekeepingReport(VALID_REPORT, false).fitness).toBeUndefined();
-  });
 });
 
 // ─── card-mutation application (card-session machinery) ──────────────────
@@ -837,7 +784,7 @@ describe("applyCardMutations", () => {
 // ─── write-back ──────────────────────────────────────────────────────────
 
 describe("applyBridgeCardEvolution", () => {
-  it("writes the live card + per-slice snapshot when substance moved", async () => {
+  it("writes the folded model's card half + the per-slice FULL-model snapshot when substance moved", async () => {
     const res = await applyBridgeCardEvolution({
       card: newCardTemplate(SLICE),
       sliceId: SLICE,
@@ -847,7 +794,7 @@ describe("applyBridgeCardEvolution", () => {
     });
     expect(res.changed).toBe(true);
     expect(res.summary).toBe("A durable interview commitment was stated.");
-    expect(writeCurrentMock).toHaveBeenCalledOnce();
+    expect(writeCardMock).toHaveBeenCalledOnce();
     expect(writeSliceMock).toHaveBeenCalledWith(SLICE, expect.any(String), undefined);
   });
 
@@ -861,23 +808,24 @@ describe("applyBridgeCardEvolution", () => {
     });
     expect(res.changed).toBe(false);
     expect(res.note).toContain("rejected by validation");
-    expect(writeCurrentMock).not.toHaveBeenCalled();
+    expect(writeCardMock).not.toHaveBeenCalled();
     expect(writeSliceMock).not.toHaveBeenCalled();
   });
 });
 
-// ─── playbook-write application (the writePlaybook bucket gate) ────────────
+// ─── SOP-write application (the writeSop allowlist gate) ─────────────────
 
 describe("applyBridgePlaybookWrites", () => {
-  it("writes a triggered bucket's playbook through writePlaybook", async () => {
+  it("writes an allowlisted colleague's SOP in FULL through writeSelfSop (no cap)", async () => {
     const batch = { writes: [] } as unknown as Parameters<
       typeof applyBridgePlaybookWrites
     >[2];
+    const longSop = "- on emotional topics, read the full slice first\n" + "x".repeat(5000);
     const res = await applyBridgePlaybookWrites(
       [
         {
           agent: "recall",
-          content: "- on emotional topics, read the full slice before concluding",
+          content: longSop,
           evidence: [SLICE],
           expected_benefit: "fewer re-reads outside references",
         },
@@ -885,12 +833,8 @@ describe("applyBridgePlaybookWrites", () => {
       ["recall"] as const,
       batch,
     );
-    expect(writePlaybookMock).toHaveBeenCalledOnce();
-    expect(writePlaybookMock).toHaveBeenCalledWith(
-      "recall",
-      "- on emotional topics, read the full slice before concluding",
-      batch,
-    );
+    expect(writeSopMock).toHaveBeenCalledOnce();
+    expect(writeSopMock).toHaveBeenCalledWith("recall", longSop, batch);
     expect(res.applied).toEqual([
       { agent: "recall", summary: "fewer re-reads outside references" },
     ]);
@@ -901,10 +845,10 @@ describe("applyBridgePlaybookWrites", () => {
     const res = await applyBridgePlaybookWrites([], ["recall"] as const);
     expect(res.applied).toEqual([]);
     expect(res.skipped).toEqual([]);
-    expect(writePlaybookMock).not.toHaveBeenCalled();
+    expect(writeSopMock).not.toHaveBeenCalled();
   });
 
-  it("does NOT write when the gate is not triggered (the writePlaybook gate)", async () => {
+  it("does NOT write when the colleague is not allowlisted (the allowlist gate)", async () => {
     const res = await applyBridgePlaybookWrites(
       [
         {
@@ -914,30 +858,30 @@ describe("applyBridgePlaybookWrites", () => {
           expected_benefit: "",
         },
       ],
-      ["recall"] as const, // search did NOT trigger
+      ["recall"] as const, // search is NOT allowlisted this run
     );
-    expect(writePlaybookMock).not.toHaveBeenCalled();
+    expect(writeSopMock).not.toHaveBeenCalled();
     expect(res.applied).toEqual([]);
     expect(res.skipped).toEqual([
       {
         agent: "search",
-        reason: expect.stringContaining('the "search" bucket did NOT trigger'),
+        reason: expect.stringContaining('the "search" SOP is not writable this run'),
       },
     ]);
   });
 
-  it("skips empty content even for a triggered bucket", async () => {
+  it("skips empty content even for an allowlisted colleague", async () => {
     const res = await applyBridgePlaybookWrites(
       [{ agent: "thinkdeep", content: "   ", evidence: [], expected_benefit: "" }],
       ["thinkdeep"] as const,
     );
-    expect(writePlaybookMock).not.toHaveBeenCalled();
+    expect(writeSopMock).not.toHaveBeenCalled();
     expect(res.skipped).toEqual([
-      { agent: "thinkdeep", reason: "playbook content is empty" },
+      { agent: "thinkdeep", reason: "SOP content is empty" },
     ]);
   });
 
-  it("gates each write independently (mixed triggered / non-triggered)", async () => {
+  it("gates each write independently (mixed allowlisted / not)", async () => {
     const res = await applyBridgePlaybookWrites(
       [
         { agent: "recall", content: "- note one", evidence: [], expected_benefit: "" },
@@ -946,34 +890,14 @@ describe("applyBridgePlaybookWrites", () => {
       ],
       ["recall", "thinkdeep"] as const,
     );
-    expect(writePlaybookMock).toHaveBeenCalledTimes(2);
-    expect(writePlaybookMock.mock.calls.map((c) => c[0])).toEqual([
+    expect(writeSopMock).toHaveBeenCalledTimes(2);
+    expect(writeSopMock.mock.calls.map((c) => c[0])).toEqual([
       "recall",
       "thinkdeep",
     ]);
     expect(res.applied.map((a) => a.agent)).toEqual(["recall", "thinkdeep"]);
     // Generic summary when the report left expected_benefit empty.
-    expect(res.applied[0].summary).toBe("Rewrote the recall playbook");
+    expect(res.applied[0].summary).toBe("Rewrote the recall SOP");
     expect(res.skipped.map((s) => s.agent)).toEqual(["search"]);
-  });
-
-  it("caps over-long content through capPlaybook (the injection budget)", async () => {
-    const res = await applyBridgePlaybookWrites(
-      [
-        {
-          agent: "recall",
-          content: "- big note\n" + "x".repeat(MAX_PLAYBOOK_CHARS + 500),
-          evidence: [],
-          expected_benefit: "",
-        },
-      ],
-      ["recall"] as const,
-    );
-    expect(res.applied).toHaveLength(1);
-    const written = writePlaybookMock.mock.calls[0][1];
-    expect(written).toContain("[…playbook truncated at 2000 chars]");
-    expect(written.length).toBeLessThanOrEqual(
-      MAX_PLAYBOOK_CHARS + "[…playbook truncated at 2000 chars]".length + 2,
-    );
   });
 });

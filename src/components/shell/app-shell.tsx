@@ -23,10 +23,9 @@
  * lease / `?at=` suppression up as they change — the layout talks to the
  * world through that channel; it does not own it.
  *
- * Catalog loading is lazy: the timeline data layer (catalog window + strand
- * list) is fetched on the first switch to a card rung. Addressing a slice
- * (terminal entrance, card click) loads the full catalog so the slice is
- * always resolvable.
+ * Catalog loading is lazy: the timeline catalog window is fetched on the
+ * first switch to a card rung. Addressing a slice (terminal entrance, card
+ * click) loads the full catalog so the slice is always resolvable.
  *
  * THE URL IS DEV-ONLY. The only query params anyone reads are the debug
  * gallery's (`?view=game&debug=rooms&page=&skin=`, game-shell.tsx) and the
@@ -70,10 +69,8 @@ import {
   type WorldTransitionPhase,
 } from "@/lib/timeline3d/world-transition";
 import {
-  getStrandList,
   getTimelineCatalog,
   getTimelineCatalogPage,
-  type StrandListItem,
 } from "@/lib/episodic/actions";
 import { invalidateHotelData } from "@/lib/game/hotel-data";
 import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
@@ -226,11 +223,6 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  /** The strand picks, in the order they were added. An EMPTY list is 核心时间线
-   *  — the unfiltered timeline — which is why this is a list and not a nullable
-   *  name: "nothing selected" is a real state, not the absence of one. */
-  const [strands, setStrands] = useState<string[]>([]);
-  const [strandList, setStrandList] = useState<StrandListItem[]>([]);
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
   const [oldestMonth, setOldestMonth] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -696,44 +688,11 @@ export function AppShell() {
   // `minOffsetFor`.
   const chromeInset = useChromeInset();
 
-  // NOTE — there is deliberately no `selectedCount` here any more. It was the
-  // band caption's number, and it was only ever exact for a SINGLE pick: with
-  // several, the counts overlap (a slice can carry two chosen strands) and
-  // summing them overcounts. The board bar names the picks instead, which
-  // cannot be wrong. A number that can be wrong is worse than no number.
-
-  const toggleStrand = useCallback((name: string) => {
-    setStrands((prev) =>
-      prev.includes(name) ? prev.filter((s) => s !== name) : [...prev, name],
-    );
-  }, []);
-  const clearStrands = useCallback(() => setStrands([]), []);
-
-  const ambientStrands = useMemo(
-    () => strandList.slice(0, 12).map((s) => s.name),
-    [strandList],
-  );
-
   const range = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     if (entries.length === 0) return { oldest: today, now: today };
     return { oldest: entries[0].date, now: today };
   }, [entries]);
-
-  // ── Strand list loads on mount in BOTH views (the axis focus chip lives in
-  //    the always-mounted band); the catalog stays lazy for the timeline. ────
-  useEffect(() => {
-    if (strandList.length > 0) return;
-    let cancelled = false;
-    getStrandList()
-      .then((strands) => {
-        if (!cancelled) setStrandList(strands);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [strandList.length]);
 
   // ── Lazy catalog load on the first CARD rung. A slice address (the shared
   //    cursor, or a transition's terminal slice) loads the full catalog so the
@@ -787,11 +746,10 @@ export function AppShell() {
   const refreshCatalog = useCallback(async () => {
     try {
       const page = await getTimelineCatalogPage(null);
-      // A settled turn may have written a new slice (or rewoven strands) —
-      // kill the hotel's cached lane so the next game entry re-derives
-      // instead of serving pre-turn doors. Bumping on every successful
-      // refresh is deliberate: strand-only changes have no client-visible
-      // growth signal, and an unnecessary re-fetch beats stale doors.
+      // A settled turn may have written a new slice — kill the hotel's
+      // cached lane so the next game entry re-derives instead of serving
+      // pre-turn doors. Bumping on every successful refresh is deliberate:
+      // an unnecessary re-fetch beats stale doors.
       invalidateHotelData();
       setEntries((prev) => {
         const have = new Set(prev.map((e) => e.id));
@@ -1042,8 +1000,6 @@ export function AppShell() {
             ? {
                 x: bandX,
                 width: bandW,
-                strands: ambientStrands,
-                selected: strands,
                 feed,
                 range,
                 reducedMotion,
@@ -1149,7 +1105,6 @@ export function AppShell() {
                       onCursorSlice={reportCursor}
                       onNarrate={bridgeBrain === false ? startNarration : undefined}
                       initialAtId={focusId ?? undefined}
-                      strands={strands}
                       feed={feed}
                       // Same freeze as the chat field — the one-writer rule
                       // holds through the move (the overlay's half gets the
@@ -1181,19 +1136,15 @@ export function AppShell() {
           )}
         </AnimatePresence>
 
-        {/* THE BOARD BAR — the zoom lens and the strand selector, together at
-            the top of the screen. Mounted with the SHELL rather than with the
-            card field, because the control that gets you back to the
-            conversation must not disappear at exactly the moment you are on
-            the conversation. See `board-bar.tsx`. */}
+        {/* THE BOARD BAR — the zoom lens, floating at the top of the screen.
+            Mounted with the SHELL rather than with the card field, because
+            the control that gets you back to the conversation must not
+            disappear at exactly the moment you are on the conversation. See
+            `board-bar.tsx`. */}
         <BoardBar
           rung={rung}
           onRungChange={setRung}
           reducedMotion={reducedMotion}
-          strands={strands}
-          strandList={strandList}
-          onToggleStrand={toggleStrand}
-          onClearStrands={clearStrands}
         />
         {/* The two ends, floating on the same right-hand edge as the lens. They
             used to sit ON the rail, which by then held a thumb, a readout, a

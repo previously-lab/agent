@@ -34,13 +34,14 @@ import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_
 import { describeImage } from "@/lib/vision/describe-image";
 import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
-import { readPlaybook, capPlaybook } from "@/lib/evolution/store";
 import {
   checkDocRework,
   recordDocRead,
   logDocReworkSignal,
 } from "@/lib/episodic/rework-signal";
+import { readSelfSop } from "@/lib/evolution/store";
 import { extractSliceIds } from "@/lib/docs/docs-query";
+import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
   parseCaseRef,
   resolveCaseRefPaths,
@@ -319,8 +320,8 @@ export async function readSliceExecute(
 
     // doc_rework probe (design v0.15 §4.4): the read slice is one a readDoc
     // earlier this conversation referenced — the document was not credited
-    // for the fact it carried. Lands in the memory-quality fitness bucket
-    // (the recall bucket, renamed in meaning, mechanism unchanged).
+    // for the fact it carried. Logged as an audit line on the slice's
+    // agent.md (v0.19 R4/R5: the fitness bucket it used to feed is retired).
     const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
     if (docReworkFile) {
       await logDocReworkSignal(ctx.sliceId, sliceId, docReworkFile);
@@ -636,6 +637,12 @@ export interface NoteForSedimentInput {
   dateAnchor?: string;
   /** Topic strands (strands.json keys) this belongs to. */
   topics?: string[];
+  /**
+   * 证据·大段文字 (§C.1): the FULL pasted text when the sedimented thing is
+   * a long text — the scribe opens the case with this verbatim, origin
+   * stamped. Conservative: absent for ordinary markers.
+   */
+  body?: string;
 }
 
 export type NoteForSedimentResult =
@@ -691,6 +698,7 @@ export async function noteForSedimentExecute(
     ...(input.entityKind ? { entityKind: input.entityKind } : {}),
     ...(input.target?.trim() ? { target: input.target.trim() } : {}),
     ...(anchor ? { dateAnchor: anchor } : {}),
+    ...(input.body?.trim() ? { body: input.body } : {}),
   };
 
   // Contract check against the consumer's parser BEFORE touching disk — a
@@ -766,9 +774,8 @@ export async function webSearchExecute(
   // searchViaFlash. searchViaFlash errors (transient search failures)
   // still throw and get step retries — only a timeout returns an error result.
   //
-  // The evolved researcher playbook (design v1.0 §2.4) rides into the user
-  // prompt — never the static system prompt (prefix cache). Missing → omitted.
-  const playbook = await readPlaybook("search");
+  // v0.19 R5 (§C.2): the researcher's SOP (self/search/index.md) is loaded by
+  // the sub-agent runner itself at spawn — full text into the system prompt.
   let timed: Awaited<ReturnType<typeof withStepTimeout<WebSearchResult>>>;
   try {
     timed = await withStepTimeout(
@@ -776,7 +783,6 @@ export async function webSearchExecute(
         searchViaFlash(
           query,
           { toolCallId, toolName: "webSearch" },
-          playbook ?? undefined,
           { scout: mode === "scout" },
         ),
       SEARCH_TIMEOUT_MS,
@@ -949,6 +955,32 @@ export async function viewImageExecute(
     imageInput = {
       data: dataUrl,
       mediaType: match?.[1] ?? "image/png",
+    };
+  } else if (source.startsWith("doc:")) {
+    // A case attachment (v0.19 §C.1): doc:<分类>/<case名>/<附件名> — the
+    // unit identity a document cites. Bytes come back through the binary
+    // read path; a dead name is a visible error, never a throw.
+    const refText = source.slice("doc:".length);
+    const segments = refText.split("/");
+    const category = segments[0] ?? "";
+    const caseName = segments[1] ?? "";
+    const fileName = segments.slice(2).join("/");
+    if (segments.length !== 3 || !caseName || !fileName) {
+      return `ERROR: Invalid doc attachment source "${source}". Expected "doc:<分类>/<case名>/<附件名>", e.g. "doc:research/手机调研/2026-09-05-photo.jpg".`;
+    }
+    let attachment: { data: Buffer; mediaType: string };
+    try {
+      attachment = await readCaseAttachment({
+        category: category as Parameters<typeof readCaseAttachment>[0]["category"],
+        caseName,
+        fileName,
+      });
+    } catch (e) {
+      return `ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    }
+    imageInput = {
+      data: `data:${attachment.mediaType};base64,${attachment.data.toString("base64")}`,
+      mediaType: attachment.mediaType,
     };
   } else {
     imageInput = { url: source };
@@ -1301,11 +1333,6 @@ export async function thinkDeepExecute(
   // the step returns around STEP_TOTAL_MS no matter how long setup took.
   const stepStartMs = Date.now();
 
-  // The evolved thinkDeep playbook (design v1.0 §2.4) — appended to the
-  // fragment's user payload as a short Working-notes suffix after the
-  // question, never the system prompt (prefix cache). Missing → omitted.
-  const playbook = await readPlaybook("thinkdeep");
-
   // Single fragment (index 0 of 1) → streams WITHOUT the [i/N] prefix.
   return runThinkDeepFragment(
     { question, effort },
@@ -1316,7 +1343,6 @@ export async function thinkDeepExecute(
       baseSystemPrompt: ctx.baseSystemPrompt,
       toolCallId,
       stepStartMs,
-      playbook: playbook ?? undefined,
     },
   );
 }
@@ -1336,13 +1362,10 @@ async function runThinkDeepFragment(
     baseSystemPrompt?: string;
     toolCallId: string;
     stepStartMs: number;
-    /** Evolved working notes (memory/agent-playbooks/thinkdeep.md) — appended
-     *  to the user payload after the question. Absent → no block. */
-    playbook?: string;
   },
 ): Promise<ThinkDeepFragmentResult> {
   const { question, effort = "low" } = fragment;
-  const { modelConfig, baseSystemPrompt, toolCallId, stepStartMs, playbook } = opts;
+  const { modelConfig, baseSystemPrompt, toolCallId, stepStartMs } = opts;
 
   const prefix = total > 1 ? `[${index + 1}/${total}] ` : "";
 
@@ -1354,7 +1377,14 @@ async function runThinkDeepFragment(
     true,
     effort,
   );
-  const system = buildSubAgentSystemPrompt(baseSystemPrompt);
+  // self/ SOP spawn loading (v0.19 §C.2): the thinkdeep SOP rides the SYSTEM
+  // prompt in FULL (this fragment runner predates the shared runSubAgent, so
+  // it loads directly). Absent/unreadable → no block, never a failed spawn.
+  const sop = await readSelfSop("thinkdeep").catch(() => null);
+  const baseSystem = buildSubAgentSystemPrompt(baseSystemPrompt);
+  const system = sop?.trim()
+    ? `${baseSystem}\n\n## Your SOP (self/thinkdeep/index.md — follow it unless it conflicts with the question)\n\n${sop.trim()}`
+    : baseSystem;
   const dateAnchor = new Date().toISOString().slice(0, 10);
 
   const userPrompt = [
@@ -1367,15 +1397,6 @@ async function runThinkDeepFragment(
     "you emit is preserved and returned to the caller.",
     "",
     `Sub-question: ${question.trim()}`,
-    // Evolved working notes (design v1.0 §2.4) — a short suffix after the
-    // question, capped so a bloated playbook cannot flood the prompt.
-    ...(playbook?.trim()
-      ? [
-          "",
-          "Working notes (your evolved playbook — follow these unless they conflict with the question):",
-          capPlaybook(playbook.trim()),
-        ]
-      : []),
     "",
     "You have no tools and no search. Reason with what is given; state plainly",
     "anything you lack.",

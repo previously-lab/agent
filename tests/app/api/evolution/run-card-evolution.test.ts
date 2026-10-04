@@ -1,19 +1,24 @@
 /**
- * runCardEvolution — the inline card-evolution step's write-back rules.
- * The contract that matters: a FAILED agent errors and writes nothing; a
- * PARTIAL pass (step limit without finish) is written back like any other
- * result with the note flagged; a no-change pass writes nothing.
+ * runCardEvolution — the inline card-evolution step's write-back rules
+ * (v0.19 R4/R5). The contract that matters: a FAILED agent errors and writes
+ * nothing; a PARTIAL pass (step limit without finish) is written back like
+ * any other result with the note flagged; a no-change pass writes nothing.
+ * Writes land on the folded people/user/index.md (card / direction halves)
+ * and self/ SOPs; the per-slice previously.md snapshot freezes the FULL
+ * index.md, only when something moved.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import { runPreviouslyAgent } from "@/lib/episodic/flash/previously-agent";
+import { writePreviously } from "@/lib/episodic";
 import {
-  readCurrentPreviously,
-  writeCurrentPreviously,
-  writePreviously,
-  readTimelineIndex,
-} from "@/lib/episodic";
-import { writeDirection } from "@/lib/evolution/store";
+  readUserModel,
+  readUserProfile,
+  writeUserModelCard,
+  writeUserModelDirection,
+  writeSelfSop,
+  composeUserModel,
+} from "@/lib/evolution/store";
 import {
   newCardTemplate,
   serializeCard,
@@ -24,25 +29,29 @@ vi.mock("@/lib/episodic/flash/previously-agent", () => ({
   runPreviouslyAgent: vi.fn(),
 }));
 vi.mock("@/lib/episodic", () => ({
-  readCurrentPreviously: vi.fn(),
-  writeCurrentPreviously: vi.fn(),
   writePreviously: vi.fn(),
-  readTimelineIndex: vi.fn(async () => ({ slices: [] })),
 }));
-// The evolution store boundary (direction / playbook writes) is mocked so
-// the tests stay hermetic — the real module would read/write
-// memory/evolution/ on the local fs.
-vi.mock("@/lib/evolution/store", () => ({
-  writeDirection: vi.fn(async () => {}),
-  writePlaybook: vi.fn(async () => {}),
-}));
+// The evolution store boundary (people/user/index.md + self/ writes) is
+// mocked so the tests stay hermetic — the real module would read/write
+// memory/ on the local fs.
+vi.mock("@/lib/evolution/store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/evolution/store")>();
+  return {
+    ...actual,
+    readUserModel: vi.fn(),
+    readUserProfile: vi.fn(async () => null),
+    writeUserModelCard: vi.fn(async () => {}),
+    writeUserModelDirection: vi.fn(async () => {}),
+    writeSelfSop: vi.fn(async () => {}),
+  };
+});
 
 const runPreviouslyAgentMock = vi.mocked(runPreviouslyAgent);
-const readMock = vi.mocked(readCurrentPreviously);
-const writeCurrentMock = vi.mocked(writeCurrentPreviously);
+const readModelMock = vi.mocked(readUserModel);
+const writeCardMock = vi.mocked(writeUserModelCard);
+const writeDirectionMock = vi.mocked(writeUserModelDirection);
+const writeSopMock = vi.mocked(writeSelfSop);
 const writeSliceMock = vi.mocked(writePreviously);
-const writeDirectionMock = vi.mocked(writeDirection);
-const timelineMock = vi.mocked(readTimelineIndex);
 
 const MODEL = {
   id: "deepseek-v4-flash",
@@ -83,7 +92,8 @@ function baseInput() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  readMock.mockResolvedValue(BASE);
+  // The folded model: card half = BASE, no direction half.
+  readModelMock.mockResolvedValue({ card: BASE, direction: null, full: BASE });
 });
 
 describe("write-back rules", () => {
@@ -102,8 +112,9 @@ describe("write-back rules", () => {
     expect(res.note).toMatch(/^\[partial\] /);
     expect(res.note).toContain("step limit reached without finish");
     expect(res.partial).toBe(true);
-    expect(writeCurrentMock).toHaveBeenCalledWith(CHANGED, undefined);
-    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, CHANGED, undefined);
+    expect(writeCardMock).toHaveBeenCalledWith(CHANGED, undefined);
+    // The snapshot freezes the FULL folded index.md, not just the card.
+    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, BASE, undefined);
     expect(res.summary).toBe("记下了你周五的面试");
   });
 
@@ -119,11 +130,11 @@ describe("write-back rules", () => {
     expect(res.ran).toBe(true);
     expect(res.changed).toBe(false);
     expect(res.error).toBe("Previously Agent worker unavailable");
-    expect(writeCurrentMock).not.toHaveBeenCalled();
+    expect(writeCardMock).not.toHaveBeenCalled();
     expect(writeSliceMock).not.toHaveBeenCalled();
   });
 
-  it("a no-change pass writes nothing (stamps are ignored)", async () => {
+  it("a no-change pass writes nothing (stamps are ignored) — no card write, no snapshot", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
       reasoning: "nothing new",
@@ -135,7 +146,8 @@ describe("write-back rules", () => {
     expect(res.error).toBeUndefined();
     expect(res.note).toBe("nothing new"); // no [partial] flag on a clean pass
     expect(res.partial).toBeUndefined();
-    expect(writeCurrentMock).not.toHaveBeenCalled();
+    expect(writeCardMock).not.toHaveBeenCalled();
+    expect(writeSliceMock).not.toHaveBeenCalled();
   });
 
   it("forwards onEvolutionLine to the Previously Agent's onLine (live thinking)", async () => {
@@ -150,13 +162,13 @@ describe("write-back rules", () => {
     expect(runPreviouslyAgentMock.mock.calls[0][0].onLine).toBe(onEvolutionLine);
   });
 
-  it("surfaces accepted playbook writes with their benefit summaries (v1.0 §2.4)", async () => {
+  it("applies SOP writes through writeSelfSop and surfaces them as playbooks (v0.19 §C.2)", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
       reasoning: "recall keeps guessing",
       summary: "",
       mutations: [],
-      playbookWrites: [
+      sopWrites: [
         {
           agent: "recall" as const,
           content: "On emotional topics, read the full slice first.",
@@ -166,12 +178,17 @@ describe("write-back rules", () => {
       ],
     });
     const res = await runCardEvolution(baseInput());
+    expect(writeSopMock).toHaveBeenCalledWith(
+      "recall",
+      "On emotional topics, read the full slice first.",
+      undefined,
+    );
     expect(res.playbooks).toEqual([
       { agent: "recall", summary: "fewer unverified recall answers" },
     ]);
   });
 
-  it("omits the playbooks field when no playbook mutation landed", async () => {
+  it("omits the playbooks field when no SOP mutation landed", async () => {
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
       reasoning: "nothing new",
@@ -180,9 +197,20 @@ describe("write-back rules", () => {
     });
     const res = await runCardEvolution(baseInput());
     expect(res.playbooks).toBeUndefined();
+    expect(writeSopMock).not.toHaveBeenCalled();
   });
 
-  it("writes a changed card back to the live card and the slice snapshot", async () => {
+  it("writes a changed card to the folded model and snapshots the FULL index.md", async () => {
+    // After the card write the folded model reads back with the direction
+    // half carried — the snapshot must freeze the WHOLE document (§B.7).
+    const FULL = composeUserModel(CHANGED, "# Direction\n\nKeep me.");
+    readModelMock
+      .mockResolvedValueOnce({ card: BASE, direction: null, full: BASE })
+      .mockResolvedValueOnce({
+        card: CHANGED,
+        direction: "# Direction\n\nKeep me.",
+        full: FULL,
+      });
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: CHANGED,
       reasoning: "folded new identity fact",
@@ -191,8 +219,8 @@ describe("write-back rules", () => {
     });
     const res = await runCardEvolution(baseInput());
     expect(res.changed).toBe(true);
-    expect(writeCurrentMock).toHaveBeenCalledWith(CHANGED, undefined);
-    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, CHANGED, undefined);
+    expect(writeCardMock).toHaveBeenCalledWith(CHANGED, undefined);
+    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, FULL, undefined);
   });
 });
 
@@ -224,7 +252,6 @@ describe("the merged direction half (v1.1)", () => {
       current: null,
       mode: "steady" as const,
       cardSelfModel: null,
-      recentEvents: [],
       analysis: {
         messageTags: { reuse: [], create: [] },
         semanticHint: { strands: [], reason: "" },
@@ -247,7 +274,7 @@ describe("the merged direction half (v1.1)", () => {
     };
   }
 
-  it("a valid proposal is written through writeDirection", async () => {
+  it("a valid proposal is written through writeUserModelDirection", async () => {
     runPreviouslyAgentMock.mockResolvedValue(agentResultWithProposal(VALID_DIRECTION));
     const res = await runCardEvolution({ ...baseInput(), directionEval: directionEvalInput() });
     expect(res.direction).toEqual({
@@ -255,6 +282,8 @@ describe("the merged direction half (v1.1)", () => {
       summary: "First direction: concreteness",
     });
     expect(writeDirectionMock).toHaveBeenCalledWith(VALID_DIRECTION, undefined);
+    // The direction move alone triggers the full-model snapshot.
+    expect(writeSliceMock).toHaveBeenCalledWith(SLICE, BASE, undefined);
   });
 
   it("a REJECTED proposal reports outcome rejected with the reason (never a fake no_change) and writes nothing", async () => {
@@ -282,15 +311,7 @@ describe("the merged direction half (v1.1)", () => {
     expect(writeDirectionMock).not.toHaveBeenCalled();
   });
 
-  it("the engineering TTL runs even on a no-change verdict — expired hypotheses are retired", async () => {
-    timelineMock.mockResolvedValueOnce({
-      slices: [
-        { id: "2026-08-12-0900" },
-        { id: "2026-08-13-0900" },
-        { id: "2026-08-14-0900" },
-        { id: "2026-08-15-0900" },
-      ],
-    } as unknown as Awaited<ReturnType<typeof readTimelineIndex>>);
+  it("the inline run's hypothesis TTL cannot retire: the retired timeline catalog leaves only the current slice id (v0.19 degradation, A2 owns the richer trail)", async () => {
     const current = `${VALID_DIRECTION}\n- [proposed 2026-08-11-0900] The user may prefer voice notes — falsify if: never used`;
     runPreviouslyAgentMock.mockResolvedValue({
       updatedCard: BASE,
@@ -302,13 +323,10 @@ describe("the merged direction half (v1.1)", () => {
       ...baseInput(),
       directionEval: { ...directionEvalInput(), current },
     });
-    // 4 catalog slices + the current one are all newer than the proposed
-    // pointer → the expired guess is stripped and the doc written.
-    expect(res.direction?.outcome).toBe("updated");
-    expect(res.direction?.summary).toContain("Retired 1 expired");
-    const written = writeDirectionMock.mock.calls[0][0];
-    expect(written).not.toContain("voice notes");
-    expect(written).toContain("terse replies under time pressure");
+    // Only [input.sliceId] is newer than the proposed pointer — below the
+    // TTL of 4 — so the expired guess survives the inline run untouched.
+    expect(res.direction?.outcome).toBe("no_change");
+    expect(writeDirectionMock).not.toHaveBeenCalled();
   });
 
   it("a write failure surfaces outcome failed — never masquerading as no_change", async () => {

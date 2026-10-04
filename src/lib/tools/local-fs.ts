@@ -102,10 +102,61 @@ export async function deleteFileLocal(path: string): Promise<void> {
   }
 }
 
+/**
+ * Write raw bytes (attachments). Same whitelist and size discipline as the
+ * text writer — the caller enforces the binary fuse (5MB) BEFORE calling;
+ * this layer enforces it again as the last-resort guard.
+ */
+export async function writeBinaryFileLocal(
+  path: string,
+  data: Buffer
+): Promise<{ path: string; created: boolean }> {
+  if (!isPathAllowed(path)) {
+    throw new Error(`Access denied: path "${path}" is outside allowed directories`);
+  }
+
+  if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
+    throw new Error(
+      `File too large (${data.byteLength} bytes). Maximum is ${MAX_BINARY_FILE_SIZE_BYTES} bytes.`
+    );
+  }
+
+  const fullPath = resolveLocalDataPath(path);
+  const dir = dirname(fullPath);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const existed = existsSync(fullPath);
+  writeFileSync(fullPath, data);
+
+  return { path, created: !existed };
+}
+
+/** Read raw bytes (attachments). Throws when the file does not exist. */
+export async function readBinaryFileLocal(path: string): Promise<Buffer> {
+  if (!isPathAllowed(path)) {
+    throw new Error(`Access denied: path "${path}" is outside allowed directories`);
+  }
+
+  const fullPath = resolveLocalDataPath(path);
+  if (!existsSync(fullPath)) {
+    throw new Error(`File not found: "${path}"`);
+  }
+  if (statSync(fullPath).isDirectory()) {
+    throw new Error(`"${path}" is a directory, not a file`);
+  }
+
+  return readFileSync(fullPath);
+}
+
+/** Binary fuse ceiling — attachments above this are REFUSED, never truncated. */
+export const MAX_BINARY_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+
 export async function listFilesLocal(
   path: string,
   opts?: ReadOptions
-): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string; size?: number }>> {
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
@@ -124,7 +175,7 @@ export async function listFilesLocal(
 
 async function listLocalDirect(
   path: string
-): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string; size?: number }>> {
   const fullPath = resolveLocalDataPath(path);
   if (!existsSync(fullPath)) {
     throw new Error(`Directory not found: "${path}"`);
@@ -132,7 +183,7 @@ async function listLocalDirect(
 
   const stat = statSync(fullPath);
   if (stat.isFile()) {
-    return [{ name: path.split("/").pop() ?? path, type: "file", path }];
+    return [{ name: path.split("/").pop() ?? path, type: "file", path, size: stat.size }];
   }
 
   const entries = readdirSync(fullPath);
@@ -143,6 +194,8 @@ async function listLocalDirect(
       name,
       type: entryStat.isDirectory() ? "dir" as const : "file" as const,
       path: `${path.replace(/\/$/, "")}/${name}`,
+      // Present for files; the per-case attachment fuse (25MB) sums these.
+      ...(entryStat.isDirectory() ? {} : { size: entryStat.size }),
     };
   });
 }

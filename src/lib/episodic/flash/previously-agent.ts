@@ -9,9 +9,10 @@
  *       addHypothesis / promoteHypothesis / … — atomic ops, validated per op,
  *       `proposed` pointers code-stamped); the caller runs the whole-doc gate
  *       (validateDirectionProposal) + the engineering hypothesis TTL
- *       (retireExpiredHypotheses) and applies through writeDirection.
- *   (b) CARD + PLAYBOOKS under the (possibly new) direction — evolve
- *       previously.md (the v5 user card) and the triggered-bucket playbooks.
+ *       (retireExpiredHypotheses) and applies through writeUserModelDirection
+ *       (the direction half of the folded people/user/index.md, §B.7).
+ *   (b) CARD + SOPs under the (possibly new) direction — evolve
+ *       previously.md (the v5 user card) and the allowed self/ SOPs.
  *
  * The card is a PURE dynamic semantic memory pool with the user's time axis
  * explicit — what the user did, is doing, will do:
@@ -41,7 +42,7 @@
  * the write with a finish-now instruction. Untouched entries are preserved by
  * construction. The direction side's frequency protection is likewise in code:
  * the proposal is validated before being applied, the card mutations keep the
- * CardSession caps, and writePlaybook stays hard-gated on triggered buckets.
+ * CardSession caps, and writeSop stays hard-gated on the run's allowlist.
  *
  * Each evolution pass is INCREMENTAL: it evaluates only the new evidence (the
  * recent exchange, or the just-closed slice) against the current card and
@@ -64,11 +65,9 @@ import { z } from "zod";
 import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
-import { capPlaybook, type FitnessBucket, type FitnessEvent, type FitnessSignal } from "@/lib/evolution/store";
-import type { PlaybookAgent } from "@/lib/evolution/paths";
+import type { SelfAgent } from "@/lib/evolution/paths";
 import {
   renderDirectionAnalysis,
-  renderDirectionEvents,
   renderDirectionMarkings,
   applyDirectionOps,
   emptyDirectionDoc,
@@ -112,14 +111,14 @@ export type PreviouslySignal =
   | "self_reflection";
 
 /**
- * One playbook mutation the agent proposed and the code ACCEPTED (the bucket
- * was triggered). Written to disk by the caller (runCardEvolution) together
- * with its mutations-archive record — this module stays side-effect-free
- * except through the caller-provided reader callbacks.
+ * One SOP mutation the agent proposed and the code ACCEPTED (the caller
+ * allowed it). Written to disk by the caller (runCardEvolution) — this module
+ * stays side-effect-free except through the caller-provided reader callbacks.
  */
-export interface PlaybookWrite {
-  agent: PlaybookAgent;
-  /** capPlaybook-capped content — the injection budget is enforced here. */
+export interface SopWrite {
+  agent: SelfAgent;
+  /** The FULL new SOP — loaded verbatim into the sub-agent's system prompt at
+   *  spawn (no injection cap; the length discipline is the writer's). */
   content: string;
   evidence: string[];
   expectedBenefit: string;
@@ -140,8 +139,6 @@ export interface DirectionEvalInput {
   /** The card's legacy Self-model lines verbatim — to be folded into the
    *  Portrait (descriptive phrasing, keep slice refs). Null when none. */
   cardSelfModel: string | null;
-  /** Recent fitness events across ALL buckets — the direction's evidence. */
-  recentEvents: FitnessEvent[];
   /** Recent closed slices' markings, newest first. */
   recentMarkings?: DirectionMarking[];
   /** This slice's analyzer output — the freshest evidence. */
@@ -182,17 +179,19 @@ export interface PreviouslyAgentInput {
    */
   direction?: string | null;
   /**
-   * The fitness buckets that TRIGGERED this run (design §2.5 — deterministic,
-   * code-level scoring in src/lib/evolution/triggers.ts). Playbook writes are
-   * gated on this: writePlaybook REJECTS any agent whose bucket is not listed.
+   * The user's OWN self-description (people/user/profile.md), when one exists
+   * (§B.7): only the user writes it, so on any conflict with the model you
+   * maintain, THE SELF-DESCRIPTION WINS — fold the model toward it, never the
+   * other way around.
    */
-  triggeredBuckets?: FitnessBucket[];
-  /** Recent fitness events for the triggered buckets — the evidence to
-   *  re-read before deciding what to change (scores are sensors, not judges). */
-  fitnessEvents?: FitnessEvent[];
-  /** This slice's mechanical signals (recall verify/rework) — context for
-   *  recall-bucket triggers. */
-  fitnessSignals?: FitnessSignal[];
+  userProfile?: string | null;
+  /**
+   * The self/ colleagues whose SOP this run may rewrite (v0.19 §C.2 — the
+   * boundary run's ③ lists them; the explicit memory_update channel passes
+   * NONE, so writeSop rejects every call there). Absent/empty → all SOP
+   * writes REJECTED.
+   */
+  allowedSopWrites?: SelfAgent[];
 
   // ── Tool implementations (callbacks provided by the executor) ──────
 
@@ -236,20 +235,21 @@ export interface PreviouslyAgentOutput {
    */
   failed?: boolean;
   /**
-   * Accepted playbook mutations (v1.0 §2.4 — one per triggered recall /
-   * search / thinkdeep bucket). NOT yet written to disk — the caller applies
-   * them (writePlaybook) next to the card write-back.
+   * Accepted SOP mutations (v0.19 §C.2 — one per allowed self/ colleague).
+   * NOT yet written to disk — the caller applies them (writeSelfSop) next to
+   * the card write-back.
    */
-  playbookWrites?: PlaybookWrite[];
+  sopWrites?: SopWrite[];
   /** The agent's one-line expected benefit for this pass's changes (design
-   *  §2.7 — recorded with the playbook write). */
+   *  §2.7 — recorded with the SOP write). */
   expectedBenefit?: string;
   /**
    * The direction half's outcome (v1.1 merged run) — present only when
    * `directionEval` was set AND the agent's direction MUTATION OPS actually
    * changed the working doc. NOT yet written: the caller runs the whole-doc
    * gate (validateDirectionProposal, mode-aware) + the engineering TTL
-   * (retireExpiredHypotheses) and applies through writeDirection; a rejection
+   * (retireExpiredHypotheses) and applies through writeUserModelDirection; a
+   * rejection
    * is logged and skipped, never fatal.
    */
   direction?: { doc: string; summary: string };
@@ -265,17 +265,21 @@ export interface PreviouslyAgentOutput {
 const PREVIOUSLY_ROLE = `You are the Previously Agent — the merged SELF-EVOLUTION agent. You do NOT talk to users. You work autonomously. ONE run, two domains, IN THIS ORDER:
 
 1. **Direction first** (when the task carries a "Direction evaluation" section): evaluate direction.md — the loop's USER PORTRAIT + HYPOTHESIS POOL — and, if it should move, edit it through the direction MUTATION tools (addPortraitEntry / updatePortraitEntry / removePortraitEntry / addHypothesis / promoteHypothesis / removeHypothesis), then note what moved on \`finish\`'s \`directionSummary\`.
-2. **Then the card** (+ triggered-bucket playbooks) — evolved UNDER the direction as it stands AFTER your proposal (your own accepted changes apply).
+2. **Then the card** (+ allowed self/ SOPs) — evolved UNDER the direction as it stands AFTER your proposal (your own accepted changes apply).
 
 ## What the card is
 
-A compact, bounded snapshot of the user across their time axis — what they did, are doing, will do. NOT an event log, NOT an additive archive, and NOT a rulebook:
+The card half of \`people/user/index.md\` — the agent's complete current understanding of the user: who they are, what they're doing, what they plan. A compact, bounded snapshot of the user across their time axis — what they did, are doing, will do. NOT an event log, NOT an additive archive, and NOT a rulebook:
 1. **Identity** — structured head: name, how to address them, pronouns, aliases.
 2. **Past** — ONE rolling third-person paragraph describing the user, updated IN PLACE — plus durable anchor facts.
 3. **Now** — current-state semantic compression: short hooks into what is happening right now, each carrying \`since\`. Expiry is YOURS: items past ${CARD_NOW_EXPIRY_DAYS} days are listed in the task — promote durable substance to Past or drop the hook.
 4. **Horizon** — future-facing open loops: commitments, deadlines, awaited replies. Each carries an explicit \`by: YYYY-MM-DD\`. Horizon items NEVER age-expire; overdue ones are KEPT until fulfilled.
 
 The raw evidence lives in the time slices; the card only summarizes and points at them via refs.
+
+**LENGTH DISCIPLINE (hard)**: the card is an OVERVIEW, not a warehouse — it is injected into EVERY turn, so it must CONVERGE in length. Fold, compress, and drop hooks as they settle; never let the card grow monotonically. Detail stays in the slices (cite them via refs).
+
+**THE USER'S SELF-DESCRIPTION WINS**: when the task carries a "User's self-description" section (people/user/profile.md — written by the user themselves, never by you), treat it as authoritative. On any conflict between it and the model you maintain, fold YOUR model toward the self-description.
 
 ## One fact, one home
 
@@ -292,7 +296,7 @@ direction.md has a fixed skeleton: \`# Portrait\` (six fixed \`##\` dimensions) 
 - **Portrait** — CONFIRMED understanding of the user as a PERSON, in six fixed dimensions (always all present): \`## Traits & cognitive style\`, \`## Triggers & rhythms\`, \`## Patterns & loops\`, \`## Strengths & resilience\`, \`## Communication preferences\`, \`## Values & boundaries\`. An entry is portrait-grade ONLY when it holds across contexts, outlives the event that evidenced it, and predicts ("用户面对不确定时先搭建结构再行动" qualifies; "用户周四聊了面试" is a case note and belongs nowhere here). NEVER imperative — if a line tells you (the agent) what to do, it is misspelled: phrase the USER PATTERN that motivates it instead. Body text carries NO names/dates/events/slice ids — evidence rides ONLY as a trailing \`— refs: YYYY-MM-DD-HHMM, …\` tail.
 - **Hypotheses** — a bounded DYNAMIC pool of GUESSES about the user's traits/patterns (≤10), each line exactly: \`- [proposed YYYY-MM-DD-HHMM] <the guess> — falsify if: <condition>\`. Lifecycle: confirmed (evidence from ≥2 distinct slices, or explicit user confirmation) → PROMOTE into the matching Portrait dimension IN THE SAME RUN (a confirmed guess never lingers in the pool); refuted → REMOVE; still unverified 4 slices after its \`proposed\` pointer → RETIRE (re-proposable later — and engineering enforces the TTL deterministically, so an expired guess you keep is stripped from the applied doc anyway). Refill the pool toward 10 each run with honest, falsifiable guesses about the PERSON — never predictions about events.
 - A single explicit, DURABLE user statement ("用户明确不喜欢 X") becomes a Portrait entry directly (descriptive). Single-slice impressions stay hypotheses.
-- "No change" is the common and correct outcome for the direction — one loud slice is card/playbook material. A proposal that violates the writing discipline is rejected by code, so stay within it.
+- "No change" is the common and correct outcome for the direction — one loud slice is card/SOP material. A proposal that violates the writing discipline is rejected by code, so stay within it.
 - Mode BOOTSTRAP (never written) or MIGRATE (an old skeleton: \`# Direction\` / \`# Anti-goals\`, or the first portrait skeleton's \`# Evidence\` / \`# Log\`): seed/re-abstract the doc wholesale (event-shaped notes become portrait-grade lines, pointers into trailing refs); a single slice pointer suffices. Steady mode: ≥2 distinct slice pointers across the doc.
 
 ## How you write the card — MUTATIONS, never the whole file
@@ -306,7 +310,7 @@ You edit an in-memory copy of the card through write tools. Each write is valida
 | \`addPastAnchor(text, refs)\` / \`removePastAnchor(match)\` | Durable fact ("still true in 3 years"), ≤ ${PAST_ANCHOR_MAX_CHARS} chars, refs required, ≤ ${PAST_ANCHORS_MAX} total. |
 | \`addNow(text, refs, since?)\` / \`removeNow(match)\` / \`promoteNowToPast(match)\` | Current-state hook, ≤ ${NOW_ITEM_MAX_CHARS} chars, refs required, ≤ ${CARD_NOW_MAX} total. \`since\` defaults to today. Promote moves the hook to Past anchors (keeps refs). |
 | \`addHorizon(text, by, refs)\` / \`resolveHorizon(match, note?)\` | Open loop, ≤ ${HORIZON_ITEM_MAX_CHARS} chars, \`by: YYYY-MM-DD\` + refs required, ≤ ${HORIZON_MAX} total. Resolve removes it — the ONLY way a Horizon item leaves. |
-| \`writePlaybook(agent, content, evidence, expectedBenefit)\` | Rewrite a sub-agent colleague's working notes (agent ∈ recall / search / thinkdeep). GATED: accepted ONLY when that colleague's bucket triggered this run (the task lists the triggered buckets) — otherwise REJECTED. |
+| \`writeSop(agent, content, evidence, expectedBenefit)\` | Rewrite a self/ colleague's SOP (agent ∈ recall / search / thinkdeep). GATED: accepted ONLY when that colleague is listed as allowed this run — otherwise REJECTED. Evidence MUST cite records slice ids. |
 | \`readSlice(sliceId, range?)\` | Read conversation from any slice. Verify what the user actually said. |
 | \`readAgentTimeline(sliceId)\` | Read agent.md — the reasoning + tool calls. Process context for judging how interactions went. |
 | \`readPreviously(sliceId)\` | Read a past slice's card snapshot. Check how long a fact has been held. |
@@ -327,11 +331,15 @@ Compare the conversation in the task against the current card. Incorporate anyth
 - Fragmented or non-English card content → rewrite those entries cleanly (ONE flowing English Past paragraph, every entry in English) while preserving substance.
 - Nothing new AND the card is already clean → make no writes; just \`finish\` with a short reasoning.
 
-## Playbooks
+## self/ — SOPs and self-assessment
 
-You also maintain your colleagues' PLAYBOOKS — short working notes injected into the recall / search / thinkdeep sub-agents' prompts (e.g. "on emotional topics, read the full slice before concluding"). A playbook write is a MUTATION with a hard gate: \`writePlaybook\` is accepted ONLY for a colleague whose bucket the task says triggered this run, and every write must carry its evidence (slice pointers / user quotes) and its expected benefit. A playbook is short guidance, not an archive — rewrite it in place, cap applies.
+You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documents loaded IN FULL into the recall / search / thinkdeep sub-agents' system prompts at spawn (e.g. "on emotional topics, read the full slice before concluding"). An SOP write is a MUTATION with a hard gate: \`writeSop\` is accepted ONLY for a colleague the task lists as allowed this run, and every write must carry its evidence — **cite the records slice ids in the prose itself** ("because slice 2026-08-07-0709 showed …") — and its expected benefit.
 
-Scores are sensors, not judges: a triggered bucket means RE-READ the original evidence (the fitness events in the task quote the user's own words; readSlice the slices they point to) and then decide for yourself what — if anything — to change. A trigger never obliges a mutation.
+**Evidence discipline**: with fitness scoring gone, your only credential is the record. An SOP change without slice-id citations is worthless — never propose one.
+
+**Self-assessment**: dissatisfaction with your own craft ("three searches this week missed, the order is suspect") lands as DATED PROSE at the tail of the relevant self/ case's index.md — no thresholds, no scores. When you rewrite an SOP, fold or supersede the stale self-assessment lines it answers.
+
+An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim, so keep it tight.
 
 ## Identity head — stable, minimal
 
@@ -417,10 +425,6 @@ ${evalInput.current?.trim() || "(not set yet — this would be the FIRST directi
 
 ${evalInput.cardSelfModel?.trim() || "(none — the card carries no legacy Self-model lines)"}
 
-### Recent fitness events (all buckets, newest ${evalInput.recentEvents.length})
-
-${renderDirectionEvents(evalInput.recentEvents)}
-
 ### Recent closed-slice markings (newest ${evalInput.recentMarkings?.length ?? 0})
 
 ${renderDirectionMarkings(evalInput.recentMarkings)}
@@ -466,33 +470,25 @@ function buildUserPrompt(input: PreviouslyAgentInput): string {
 ${input.direction.trim()}`
       : "";
 
-  const triggered = input.triggeredBuckets ?? [];
-  const fitnessSection =
-    triggered.length > 0
+  const allowedSops = input.allowedSopWrites ?? [];
+  const sopSection =
+    allowedSops.length > 0
       ? `
 
-## Fitness triggers (why this run happened — scores are sensors, not judges)
+## self/ SOPs writable this run
 
-Triggered buckets: ${triggered.join(", ")}
-${
-  (input.fitnessEvents ?? []).length > 0
-    ? `\nRecent evidence for the triggered buckets (the user's own words — re-read the slices they point to before deciding):\n${(input.fitnessEvents ?? [])
-        .map(
-          (e) =>
-            `- [${e.ts}] slice ${e.sliceId} · ${e.bucket} ${e.delta > 0 ? `+${e.delta}` : e.delta} — "${e.evidence}"`,
-        )
-        .join("\n")}`
-    : ""
-}${
-  (input.fitnessSignals ?? []).length > 0
-    ? `\nMechanical signals this slice:\n${(input.fitnessSignals ?? [])
-        .map((s) => `- ${s.type} — ${s.detail}`)
-        .join("\n")}`
-    : ""
-}
-
-A triggered bucket authorizes (never obliges) a \`writePlaybook\` for the matching colleague (${["recall", "search", "thinkdeep"].filter((b) => triggered.includes(b as FitnessBucket)).join(", ") || "none of the playbook colleagues triggered — writePlaybook will REJECT every call"}).`
+These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write cites its records slice ids in the prose.`
       : "";
+
+  const profileSection = input.userProfile?.trim()
+    ? `
+
+## User's self-description (people/user/profile.md — written by the user, NEVER by you)
+
+${input.userProfile.trim()}
+
+On any conflict with the model you maintain, THE SELF-DESCRIPTION WINS — fold your model toward it.`
+    : "";
 
   return `## Time context
 
@@ -502,7 +498,7 @@ ${buildTimeContext(input)}
 
 ${signalLabels[signal]}
 Note: "${note}"${tagsNote}
-Current slice: \`${currentSliceId}\`${deepNote}${directionSection}${fitnessSection}
+Current slice: \`${currentSliceId}\`${deepNote}${directionSection}${sopSection}${profileSection}
 
 ## Current card (your working copy starts from this)
 
@@ -532,7 +528,7 @@ export interface DirectionSession {
 function buildTools(
   input: PreviouslyAgentInput,
   session: CardSession,
-  playbookWrites: PlaybookWrite[],
+  sopWrites: SopWrite[],
   directionSession: DirectionSession | null,
 ) {
   /** Apply ONE direction op to the working copy; OK/REJECTED like the card tools. */
@@ -715,58 +711,59 @@ function buildTools(
       }),
       execute: async ({ match, note }) => sessionResolveHorizon(session, match, note),
     }),
-    // ── Playbook mutation (v1.0 §2.4 — the evolution agent is the single
-    // writer of card / direction / playbooks; the write lands on an in-memory
-    // list here and is persisted by the caller with its archive record) ──
-    writePlaybook: tool({
+    // ── SOP mutation (v0.19 §C.2 — the evolution agent is the single writer
+    // of card / direction / self/ SOPs; the write lands on an in-memory list
+    // here and is persisted by the caller next to the card write-back) ──
+    writeSop: tool({
       description:
-        "Rewrite a sub-agent colleague's playbook (short working notes injected into its " +
-        "prompt) — agent ∈ recall / search / thinkdeep. HARD GATE: accepted ONLY when that " +
-        "colleague's bucket triggered this run (the task lists them); otherwise REJECTED. " +
-        "Carry the evidence (slice pointers / user quotes) and the expected benefit — a " +
-        "mutation without them is not archivable.",
+        "Rewrite a self/ colleague's SOP (the document loaded in full into its " +
+        "system prompt at spawn) — agent ∈ recall / search / thinkdeep. HARD GATE: " +
+        "accepted ONLY when that colleague is listed as allowed this run; otherwise " +
+        "REJECTED. Carry the evidence (slice ids cited in the prose) and the " +
+        "expected benefit — a mutation without them is not archivable. Self-" +
+        "assessment (dated prose about what disappointed you) belongs at the " +
+        "tail of the same document.",
       inputSchema: z.object({
         agent: z.enum(["recall", "search", "thinkdeep"]),
         content: z
           .string()
-          .describe("The FULL new playbook — short behavioral guidance, rewritten in place."),
+          .describe("The FULL new SOP — short behavioral guidance, rewritten in place, slice ids cited in the prose."),
         evidence: z
           .array(z.string())
           .describe("Slice pointers / verbatim user quotes backing this change."),
         expectedBenefit: z
           .string()
-          .describe("One line: what improves if this playbook holds."),
+          .describe("One line: what improves if this SOP holds."),
       }),
       execute: async ({ agent, content, evidence, expectedBenefit }) => {
-        // Code-level gate: no bucket trigger → no playbook write, with the
-        // reason spelled out (the model sees this and moves on).
-        const triggered = input.triggeredBuckets ?? [];
-        if (!triggered.includes(agent)) {
+        // Code-level gate: not allowlisted → no SOP write, with the reason
+        // spelled out (the model sees this and moves on).
+        const allowed = input.allowedSopWrites ?? [];
+        if (!allowed.includes(agent)) {
           return (
-            `REJECTED — the "${agent}" bucket did NOT trigger this run ` +
-            `(triggered: ${triggered.join(", ") || "none"}). Playbook writes need a ` +
-            "fitness trigger; leave the playbook as it is."
+            `REJECTED — the "${agent}" SOP is not writable this run ` +
+            `(allowed: ${allowed.join(", ") || "none"}). SOP writes belong to ` +
+            "the boundary run's self/ step; leave the SOP as it is."
           );
         }
         if (!content.trim()) {
-          return "REJECTED — playbook content is empty.";
+          return "REJECTED — SOP content is empty.";
         }
-        const capped = capPlaybook(content.trim());
+        const trimmed = content.trim();
         // One write per agent per pass: a rewrite replaces this pass's earlier
-        // draft (the playbook is a whole-document overwrite anyway).
-        const existingIdx = playbookWrites.findIndex((w) => w.agent === agent);
-        const write: PlaybookWrite = {
+        // draft (the SOP is a whole-document overwrite anyway).
+        const existingIdx = sopWrites.findIndex((w) => w.agent === agent);
+        const write: SopWrite = {
           agent,
-          content: capped,
+          content: trimmed,
           evidence: evidence.filter((e) => e.trim().length > 0),
           expectedBenefit: expectedBenefit.trim(),
         };
-        if (existingIdx >= 0) playbookWrites.splice(existingIdx, 1, write);
-        else playbookWrites.push(write);
+        if (existingIdx >= 0) sopWrites.splice(existingIdx, 1, write);
+        else sopWrites.push(write);
         return (
-          `OK — ${agent} playbook staged (${capped.length} chars` +
-          (capped.length < content.trim().length ? ", truncated to the cap" : "") +
-          "). It is applied when this pass ends."
+          `OK — ${agent} SOP staged (${trimmed.length} chars). ` +
+          "It is applied when this pass ends."
         );
       },
     }),
@@ -860,7 +857,7 @@ function buildTools(
 
 // ─── Runner call ──────────────────────────────────────────────────────────
 
-/** The run does BOTH domains (direction + card/playbooks) — the cap is an
+/** The run does BOTH domains (direction + card/SOPs) — the cap is an
  *  anti-loop fuse, not the budget (the wall clock is): generous by design. */
 const MAX_STEPS = 50;
 /** Wall-clock budget per attempt (unified runner: SDK timeout + backstop) —
@@ -886,7 +883,7 @@ interface AttemptOutcome {
 async function attemptCall(
   input: PreviouslyAgentInput,
   session: CardSession,
-  playbookWrites: PlaybookWrite[],
+  sopWrites: SopWrite[],
   directionSession: DirectionSession | null,
   temperature: number,
 ): Promise<AttemptOutcome> {
@@ -899,7 +896,7 @@ async function attemptCall(
     model: input.model,
     system: PREVIOUSLY_SYSTEM,
     prompt: buildUserPrompt(input),
-    tools: buildTools(input, session, playbookWrites, directionSession),
+    tools: buildTools(input, session, sopWrites, directionSession),
     reportToolName: "finish",
     reportSchema: finishReportSchema,
     maxSteps: MAX_STEPS,
@@ -940,14 +937,14 @@ async function attempt(
   temperature: number,
 ): Promise<PreviouslyAgentOutput> {
   // A fresh session per attempt — a retried pass never inherits half-applied
-  // mutations. The staged playbook writes and the direction working copy are
+  // mutations. The staged SOP writes and the direction working copy are
   // likewise per-attempt.
   const session = createCardSession(
     input.previouslyContent,
     input.currentSliceId,
     today,
   );
-  const playbookWrites: PlaybookWrite[] = [];
+  const sopWrites: SopWrite[] = [];
   const directionSession: DirectionSession | null = input.directionEval
     ? {
         // Steady mode edits the on-disk doc; bootstrap/migrate BUILD the new
@@ -962,7 +959,7 @@ async function attempt(
         log: [],
       }
     : null;
-  const r = await attemptCall(input, session, playbookWrites, directionSession, temperature);
+  const r = await attemptCall(input, session, sopWrites, directionSession, temperature);
   const failed = r.failed === true;
   // The direction moved when the working copy differs from the on-disk doc.
   const directionChanged =
@@ -977,8 +974,8 @@ async function attempt(
     failed: failed || undefined,
     partial: r.partial,
     // Playbook writes stage independently of the card's finish state: a
-    // partial pass may still have landed a valid playbook mutation.
-    ...(playbookWrites.length > 0 && !failed ? { playbookWrites } : {}),
+    // partial pass may still have landed a valid SOP mutation.
+    ...(sopWrites.length > 0 && !failed ? { sopWrites } : {}),
     ...(r.expectedBenefit ? { expectedBenefit: r.expectedBenefit } : {}),
     // Direction ops likewise land per-attempt; a partial pass may still have
     // moved the direction. The caller runs the whole-doc gate + TTL.

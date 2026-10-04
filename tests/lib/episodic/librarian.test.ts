@@ -495,4 +495,38 @@ describe("runScribePass — case model, no strands", () => {
     expect(ai.streamText).not.toHaveBeenCalled();
     expect(io.files.size).toBe(1); // only the agent.md itself
   });
+
+  it("证据·大段文字 (§C.1): a marker carrying `body` opens the case with the FULL text + origin stamped", async () => {
+    const longText = "第一行原文。\n\n第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。";
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"t9-1","kind":"sediment","title":"配置参考","note":"存下这个","topics":[],"body":${JSON.stringify(longText)}}`,
+      ].join("\n"),
+    );
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "scribeOutput",
+          input: {
+            entries: [{ id: "t9-1", body: "用户粘贴的一段配置资料，值得长期留存。" }],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
+    const result = await runScribePass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      date: DATE,
+    });
+    expect(result.written).toEqual(["research/配置参考/index.md"]);
+    const raw = io.files.get("memory/research/配置参考/index.md")!;
+    // 出处 stamped at the head of the original-text block
+    expect(raw).toContain(`用户于 ${DATE} 在切片 ${SLICE_ID} 粘贴`);
+    // the FULL text is carried verbatim — not the one-line note
+    expect(raw).toContain("第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。");
+    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+  });
 });

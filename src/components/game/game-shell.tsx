@@ -259,60 +259,85 @@ export function GameShell({
         // through each slice, leading to the next slice on that strand. Its
         // own try/catch — a strand-read failure must degrade to "no strand
         // doors", never take the corridor down with it.
+        //
+        // THE SOURCE IS RETIRED: strands.json has not been generated since
+        // A1 (§A.2.4), so this graph can only grow staler until it is empty.
+        // An empty graph draws NO doors — no empty doorframes, no wrong
+        // doors — and says so once. Anchoring the rooms to CASES instead is
+        // a separate piece of work, not a patch on this resolver.
         try {
           const graph = buildStrandGraph(await getStrandPaths());
           if (cancelled) return;
-          const entryById = new Map(catalog.map((entry) => [entry.id, entry]));
-          // The strand hotels (HD4): each strand's path (chronological)
-          // becomes a corridor door list, newest first like the core
-          // corridor. Labels come from the catalog entry when one exists;
-          // a strand-only slice (not on the core timeline) gets its bare id.
-          const strandTimelines = new Map<string, readonly CorridorDoor[]>();
-          for (const [name, path] of graph.paths) {
-            strandTimelines.set(
-              name,
-              [...path].reverse().map((id) => {
-                const entry = entryById.get(id);
-                return {
-                  sliceId: id,
-                  label: entry
-                    ? formatDoorLabel(entry.date, entry.start, locale)
-                    : id,
-                  start: entry?.start,
-                };
-              }),
+          if (graph.paths.size === 0) {
+            if (!warnedStrandFailure) {
+              warnedStrandFailure = true;
+              console.warn(
+                "[game] strand source retired/empty; rooms render without strand doors",
+              );
+            }
+            setTimelines(NO_TIMELINES);
+            setRoomDoors(NO_ROOM_DOORS);
+            // Corridor-only lane, cached exactly as the failure path does.
+            writeHotelData(locale, {
+              doors: corridorDoors,
+              roomDoors: NO_ROOM_DOORS,
+              timelines: NO_TIMELINES,
+            });
+          } else {
+            const entryById = new Map(
+              catalog.map((entry) => [entry.id, entry]),
             );
+            // The strand hotels (HD4): each strand's path (chronological)
+            // becomes a corridor door list, newest first like the core
+            // corridor. Labels come from the catalog entry when one exists;
+            // a strand-only slice (not on the core timeline) gets its bare id.
+            const strandTimelines = new Map<string, readonly CorridorDoor[]>();
+            for (const [name, path] of graph.paths) {
+              strandTimelines.set(
+                name,
+                [...path].reverse().map((id) => {
+                  const entry = entryById.get(id);
+                  return {
+                    sliceId: id,
+                    label: entry
+                      ? formatDoorLabel(entry.date, entry.start, locale)
+                      : id,
+                    start: entry?.start,
+                  };
+                }),
+              );
+            }
+            setTimelines(strandTimelines);
+            const roomDoorMap = buildRoomDoorMap({
+              graph,
+              sliceIds: corridorDoors.map((door) => door.sliceId),
+              // Plaque: the strand name + the destination's date, in the
+              // corridor doors' own label format ("工作 → Sep 15 · 07:46"),
+              // plus the destination slice's door NUMBER as a `#HHMM`
+              // suffix (B.14 rule 1) — the room renderer splits the suffix
+              // off (before any truncation) and hangs it on its own small
+              // plate, the corridor plate's twin. Unlit doors are labeled
+              // by the resolver with the bare name and get no number: an
+              // unlit door has no destination (B.4).
+              label: ({ strand, destinationSliceId }) => {
+                const entry = entryById.get(destinationSliceId);
+                const date = entry
+                  ? formatDoorLabel(entry.date, entry.start, locale)
+                  : destinationSliceId;
+                const clock = sliceClockTime(destinationSliceId);
+                return clock
+                  ? `${strand} → ${date}#${clock}`
+                  : `${strand} → ${date}`;
+              },
+            });
+            setRoomDoors(roomDoorMap);
+            // The full lane is derived — cache it for the next view switch.
+            writeHotelData(locale, {
+              doors: corridorDoors,
+              roomDoors: roomDoorMap,
+              timelines: strandTimelines,
+            });
           }
-          setTimelines(strandTimelines);
-          const roomDoorMap = buildRoomDoorMap({
-            graph,
-            sliceIds: corridorDoors.map((door) => door.sliceId),
-            // Plaque: the strand name + the destination's date, in the
-            // corridor doors' own label format ("工作 → Sep 15 · 07:46"),
-            // plus the destination slice's door NUMBER as a `#HHMM`
-            // suffix (B.14 rule 1) — the room renderer splits the suffix
-            // off (before any truncation) and hangs it on its own small
-            // plate, the corridor plate's twin. Unlit doors are labeled
-            // by the resolver with the bare name and get no number: an
-            // unlit door has no destination (B.4).
-            label: ({ strand, destinationSliceId }) => {
-              const entry = entryById.get(destinationSliceId);
-              const date = entry
-                ? formatDoorLabel(entry.date, entry.start, locale)
-                : destinationSliceId;
-              const clock = sliceClockTime(destinationSliceId);
-              return clock
-                ? `${strand} → ${date}#${clock}`
-                : `${strand} → ${date}`;
-            },
-          });
-          setRoomDoors(roomDoorMap);
-          // The full lane is derived — cache it for the next view switch.
-          writeHotelData(locale, {
-            doors: corridorDoors,
-            roomDoors: roomDoorMap,
-            timelines: strandTimelines,
-          });
         } catch (err) {
           if (cancelled) return;
           if (!warnedStrandFailure) {

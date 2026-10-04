@@ -268,7 +268,7 @@ describe("webSearchExecute mode threading", () => {
       { context: makeCtx(), toolCallId: "tc-web" },
     );
     expect(searchFlashDeps.searchViaFlash).toHaveBeenCalledTimes(1);
-    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
     expect(opts).toEqual({ scout: true });
   });
 
@@ -277,7 +277,7 @@ describe("webSearchExecute mode threading", () => {
       { query: "best Rust web frameworks", mode: "standard" },
       { context: makeCtx(), toolCallId: "tc-web" },
     );
-    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
     expect(opts).toEqual({ scout: false });
   });
 
@@ -286,7 +286,7 @@ describe("webSearchExecute mode threading", () => {
       { query: "best Rust web frameworks" },
       { context: makeCtx(), toolCallId: "tc-web" },
     );
-    const [, , , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
+    const [, , opts] = searchFlashDeps.searchViaFlash.mock.calls[0]!;
     expect(opts).toEqual({ scout: false });
   });
 });

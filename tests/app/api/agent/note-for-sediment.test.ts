@@ -137,6 +137,22 @@ describe("noteForSedimentExecute", () => {
     });
   });
 
+  it("证据·大段文字 (§C.1): a `body` rides the marker verbatim to the scribe", async () => {
+    const longText = "原文第一段。\n\n原文第二段——很长，逐字保留。";
+    const r = await noteForSedimentExecute(
+      {
+        kind: "sediment",
+        title: "配置参考",
+        note: "存下这个",
+        body: longText,
+      },
+      opts(makeCtx()),
+    );
+    expect(r.ok).toBe(true);
+    const markers = extractDocMarkers(io.files.get(AGENT_PATH)!);
+    expect(markers[0].body).toBe(longText);
+  });
+
   it("is idempotent: a retried step with the same toolCallId appends nothing twice", async () => {
     const ctx = makeCtx();
     const input = { kind: "question" as const, title: "充电器要不要一起买" };

@@ -179,11 +179,11 @@ describe("retry on hard failure", () => {
   });
 });
 
-describe("writePlaybook — the v1.0 playbook mutation gate", () => {
-  it("REJECTS a playbook write whose bucket did NOT trigger this run", async () => {
+describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
+  it("REJECTS every SOP write when no colleague is allowlisted (the explicit-request path)", async () => {
     let rejection = "";
     runSubAgentMock.mockImplementation(async (opts) => {
-      rejection = await callTool(opts, "writePlaybook", {
+      rejection = await callTool(opts, "writeSop", {
         agent: "recall",
         content: "Read full slices on emotional topics first.",
         evidence: ["2026-08-20-1430"],
@@ -191,16 +191,16 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
       });
       return { ok: true, report: { reasoning: "tried", summary: "" }, text: "" };
     });
-    // triggeredBuckets absent entirely — the explicit-request path.
+    // allowedSopWrites absent entirely — the explicit memory_update channel.
     const out = await runPreviouslyAgent(baseInput());
     expect(rejection).toContain("REJECTED");
-    expect(rejection).toContain("did NOT trigger");
-    expect(out.playbookWrites).toBeUndefined();
+    expect(rejection).toContain("not writable this run");
+    expect(out.sopWrites).toBeUndefined();
   });
 
-  it("ACCEPTS a playbook write for a triggered bucket and stages it (capped) for the caller", async () => {
+  it("ACCEPTS a write for an allowlisted colleague and stages the FULL text (no cap) for the caller", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
-      const ok = await callTool(opts, "writePlaybook", {
+      const ok = await callTool(opts, "writeSop", {
         agent: "recall",
         content: "Read full slices on emotional topics first.",
         evidence: ["2026-08-20-1430", ""],
@@ -210,9 +210,9 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
       return { ok: true, report: { reasoning: "done", summary: "", expectedBenefit: "fewer shallow recalls" }, text: "" };
     });
     const out = await runPreviouslyAgent(
-      baseInput({ triggeredBuckets: ["recall"] }),
+      baseInput({ allowedSopWrites: ["recall"] }),
     );
-    expect(out.playbookWrites).toEqual([
+    expect(out.sopWrites).toEqual([
       {
         agent: "recall",
         content: "Read full slices on emotional topics first.",
@@ -223,10 +223,10 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
     expect(out.expectedBenefit).toBe("fewer shallow recalls");
   });
 
-  it("rejects a write for a DIFFERENT playbook bucket than the triggered one", async () => {
+  it("rejects a write for a colleague NOT allowlisted this run", async () => {
     let rejection = "";
     runSubAgentMock.mockImplementation(async (opts) => {
-      rejection = await callTool(opts, "writePlaybook", {
+      rejection = await callTool(opts, "writeSop", {
         agent: "thinkdeep",
         content: "x",
         evidence: [],
@@ -234,20 +234,20 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
       });
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
     });
-    const out = await runPreviouslyAgent(baseInput({ triggeredBuckets: ["recall"] }));
+    const out = await runPreviouslyAgent(baseInput({ allowedSopWrites: ["recall"] }));
     expect(rejection).toContain("REJECTED");
-    expect(out.playbookWrites).toBeUndefined();
+    expect(out.sopWrites).toBeUndefined();
   });
 
   it("a rewrite within one pass REPLACES the earlier staged draft", async () => {
     runSubAgentMock.mockImplementation(async (opts) => {
-      await callTool(opts, "writePlaybook", {
+      await callTool(opts, "writeSop", {
         agent: "search",
         content: "first draft",
         evidence: [],
         expectedBenefit: "a",
       });
-      await callTool(opts, "writePlaybook", {
+      await callTool(opts, "writeSop", {
         agent: "search",
         content: "second draft",
         evidence: [],
@@ -255,12 +255,12 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
       });
       return { ok: true, report: { reasoning: "t", summary: "" }, text: "" };
     });
-    const out = await runPreviouslyAgent(baseInput({ triggeredBuckets: ["search"] }));
-    expect(out.playbookWrites).toHaveLength(1);
-    expect(out.playbookWrites![0].content).toBe("second draft");
+    const out = await runPreviouslyAgent(baseInput({ allowedSopWrites: ["search"] }));
+    expect(out.sopWrites).toHaveLength(1);
+    expect(out.sopWrites![0].content).toBe("second draft");
   });
 
-  it("the direction + triggered-bucket context lands in the USER prompt, never the system prompt", async () => {
+  it("the direction, SOP-allowlist and self-description context land in the USER prompt, never the system prompt", async () => {
     runSubAgentMock.mockResolvedValue({
       ok: true,
       report: { reasoning: "nothing", summary: "" },
@@ -269,25 +269,32 @@ describe("writePlaybook — the v1.0 playbook mutation gate", () => {
     await runPreviouslyAgent(
       baseInput({
         direction: "# Direction\n\nKeep answers concrete.",
-        triggeredBuckets: ["recall"],
-        fitnessEvents: [
-          {
-            ts: "2026-08-26T10:00:00Z",
-            sliceId: "2026-08-26-1000",
-            bucket: "recall",
-            delta: -2,
-            evidence: "这根本不是我们聊过的内容",
-          },
-        ],
+        allowedSopWrites: ["recall"],
+        userProfile: "我是设计师，回答请简短。",
       }),
     );
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.prompt).toContain("## Evolution direction");
     expect(opts.prompt).toContain("Keep answers concrete.");
-    expect(opts.prompt).toContain("Triggered buckets: recall");
-    expect(opts.prompt).toContain("这根本不是我们聊过的内容");
-    expect(opts.system).not.toContain("Triggered buckets");
+    expect(opts.prompt).toContain("## self/ SOPs writable this run");
+    expect(opts.prompt).toContain("recall");
+    expect(opts.prompt).toContain("## User's self-description");
+    expect(opts.prompt).toContain("我是设计师，回答请简短。");
+    expect(opts.system).not.toContain("SOPs writable this run");
     expect(opts.system).not.toContain("Keep answers concrete.");
+    expect(opts.system).not.toContain("我是设计师");
+  });
+
+  it("the writer's prompt carries the length discipline and the self-description-wins rule", async () => {
+    runSubAgentMock.mockResolvedValue({
+      ok: true,
+      report: { reasoning: "nothing", summary: "" },
+      text: "",
+    });
+    await runPreviouslyAgent(baseInput());
+    const opts = runSubAgentMock.mock.calls[0][0];
+    expect(opts.system).toContain("LENGTH DISCIPLINE");
+    expect(opts.system).toContain("THE USER'S SELF-DESCRIPTION WINS");
   });
 });
 
@@ -296,7 +303,6 @@ describe("the merged direction half (directionEval)", () => {
     current: "# Portrait\n\nThe user prefers concrete answers.\n\n# Hypotheses\n\n# Evidence\n\n- 2026-08-20-1430 — x\n\n# Log",
     mode: "steady",
     cardSelfModel: "- Don't decompose emotional venting with thinkDeep",
-    recentEvents: [],
     analysis: {
       semanticHint: { strands: [], reason: "" },
       memoryWorthy: true,

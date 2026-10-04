@@ -106,9 +106,8 @@ async function resolveModelConfig(id: string): Promise<{
   return { model: fallback.id, modelConfig: fallback };
 }
 
-/** Injection cap for the live playbook — same budget as the evolved
- *  playbooks (MAX_PLAYBOOK_CHARS in src/lib/evolution/store.ts), inlined so
- *  this module stays free of the evolution write path's import graph. */
+/** Injection cap for the live companion playbook (the companion's own
+ *  prompt budget — unrelated to the self/ SOPs, which load in full). */
 const PLAYBOOK_MAX_CHARS = 2000;
 
 function capPlaybook(content: string): string {

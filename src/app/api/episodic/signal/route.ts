@@ -5,11 +5,10 @@
  * The interrupt signal cannot ride a chat request — there IS no request when
  * the user hits stop — so the client POSTs it here fire-and-forget
  * (fetch keepalive). The signal is attributed to the active slice and lands
- * in the fitness store + the slice's agent.md through the same double-write
- * path as the recall rework signals (logInteractionSignal). The regenerate
- * signal is NOT accepted here: it rides its own chat turn (the regenerate
- * body flag) and is recorded inside housekeeping — accepting it here too
- * would double-record.
+ * as an audit line on the slice's agent.md (logInteractionSignal — v0.19
+ * R4/R5: the fitness-store half of the old double-write is retired). The
+ * regenerate signal is NOT accepted here: it rides its own chat turn (the
+ * regenerate body flag).
  *
  * Instrumentation, never user-facing: the response is best-effort and a
  * missing/active-less slice simply drops the signal.

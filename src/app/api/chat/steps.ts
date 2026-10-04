@@ -34,13 +34,14 @@ import {
   saveSliceSnapshot,
   tryLoadTodaySlice,
   writeAgentTimeline,
-  ensurePreviously,
+  readPreviously,
+  writePreviously,
+  findMostRecentPreviously,
   readStrands,
   deterministicSliceMark,
   createBatch,
   flushBatch,
   analyzeTurn,
-  readCurrentPreviously,
   sliceIdToFilePath,
   sliceIdToAgentPath,
   slicePartPathCandidates,
@@ -72,7 +73,10 @@ import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
 import { fsListFiles, fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 import { MEMORY_ROOT_DIR, caseIndexPath } from "@/lib/docs/paths";
-import { readDirection } from "@/lib/evolution/store";
+import {
+  readUserModel,
+  readUserProfile,
+} from "@/lib/evolution/store";
 import { buildDirectionBlock } from "@/lib/evolution/direction-agent";
 import {
   adaptHousekeepingReport,
@@ -271,10 +275,10 @@ async function emitEvolutionResult(
       ...(result.error ? { error: result.error } : {}),
       // A pass cut off without a finish call — the card is partial work.
       ...(result.partial ? { partial: true } : {}),
-      // v1.0 calibration details (design §2.3/§2.5): why the run fired, the
-      // direction verdict (v1.1 merged run — evaluated inside the one
-      // runCardEvolution call), and the playbook mutations applied. All
-      // optional — absent on analyzer-gated / explicit-request / bridge runs.
+      // Calibration details (design §2.3): the direction verdict (v1.1 merged
+      // run — evaluated inside the one runCardEvolution call) and the SOP
+      // mutations applied. All optional. (`triggers` is the retired fitness
+      // wire field — no producer sets it post-v0.19; the spread is inert.)
       ...(result.triggers?.length ? { triggers: result.triggers } : {}),
       ...(result.direction ? { direction: result.direction } : {}),
       ...(result.playbooks?.length ? { playbooks: result.playbooks } : {}),
@@ -759,9 +763,31 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // ── Phase: context — load the user profile (previously + identity) ───
   await emitPhase(stream, "context", true);
 
-  // ── 4. Ensure previously.md (pure copy forward, no decay) ────────────
-  const previouslyContent = await ensurePreviously(slice.slice_id, batch);
-  console.log(`[Previously] Seeded previously.md for ${slice.slice_id}`);
+  // ── 4. people/user read face + per-slice snapshot (v0.19 R4, §B.7) ────
+  // The folded user model (people/user/index.md — card + direction in ONE
+  // document) and the user's own self-description (profile.md) are the ONLY
+  // case injected every turn. Tolerant reads fall back to the legacy roots
+  // (current-previously.md / evolution/direction.md / user/profile.md).
+  const userModel = await readUserModel(batch).catch(() => null);
+  const userProfile = await readUserProfile(batch).catch(() => null);
+  // The card half drives the identity head parse and the L1 injection block.
+  const previouslyContent = userModel?.card ?? "";
+
+  // Snapshot semantics (§B.7): the slice's previously.md freezes the FULL
+  // index.md as it stands this turn — readPreviously is thereafter "the user
+  // model as of that slice". Fresh deployments seed from the most recent
+  // legacy snapshot so the chain never breaks. Write only on change.
+  const modelSnapshot =
+    userModel?.full ??
+    (await findMostRecentPreviously(batch).catch(() => null)) ??
+    "";
+  if (modelSnapshot.trim()) {
+    const existingSnap = await readPreviously(slice.slice_id).catch(() => "");
+    if (existingSnap !== modelSnapshot) {
+      await writePreviously(slice.slice_id, modelSnapshot, batch);
+      console.log(`[Previously] Snapshotted people/user/index.md for ${slice.slice_id}`);
+    }
+  }
 
   // ── 5. Durable snapshot, then THE reply segment's one commit ─────────
   // No projection writes here anymore (A1): the timeline catalog / global
@@ -840,15 +866,28 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   const profile = parseIdentityFromPreviously(previouslyContent);
   const identityPrompt = buildAgentIdentityPrompt(profile);
 
-  // The direction layer for the main agent's system prompt (v1.1): read per
-  // turn like the card. Evolution runs in the scribe segment now (post-reply,
-  // v0.19 A1), so a direction landed this turn is what the NEXT turn reads —
-  // within a slice without an evolution the layer is byte-stable. Missing /
-  // template / legacy-skeleton docs omit the layer entirely
-  // (buildDirectionBlock returns "").
-  const directionBlock = buildDirectionBlock(
-    await readDirection().catch(() => null),
-  );
+  // The direction layer for the main agent's system prompt: the direction
+  // HALF of the folded people/user/index.md (readUserModel already falls
+  // back to the legacy direction.md). Evolution runs in the scribe segment
+  // (post-reply, v0.19 A1), so a direction landed this turn is what the NEXT
+  // turn reads — within a slice without an evolution the layer is
+  // byte-stable. Missing / template / legacy-skeleton docs omit the layer
+  // entirely (buildDirectionBlock returns "").
+  const directionBlock = buildDirectionBlock(userModel?.direction ?? null);
+
+  // people/user/profile.md — the user's OWN self-description (§B.7): the
+  // user is its only writer, and on conflict with the model above THE
+  // SELF-DESCRIPTION WINS — that discipline is stated to the model in the
+  // block itself. Absent profile → the layer is omitted.
+  const userProfileBlock = userProfile?.trim()
+    ? [
+        "## The user's own words about themselves (profile.md)",
+        "",
+        userProfile.trim(),
+        "",
+        "This is the user's self-description — they wrote it directly, and only they can change it. When it conflicts with anything in the model above, THE SELF-DESCRIPTION WINS; treat the model entry as stale and say so when it comes up.",
+      ].join("\n")
+    : undefined;
 
   await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 
@@ -862,6 +901,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
     sliceHeadBlock,
     identityPrompt,
     ...(directionBlock ? { directionBlock } : {}),
+    ...(userProfileBlock ? { userProfileBlock } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
     ...(pendingClose ? { pendingClose } : {}),
@@ -1159,7 +1199,8 @@ export async function scribeSegment(
     // outage (memoryWorthy=true, no tags, deterministic closed marking below)
     // and additionally SKIPS the evolution — no second bridge spawn on a
     // broken bridge.
-    const bridgeCardRaw = await readCurrentPreviously(batch);
+    const bridgeCardRaw =
+      (await readUserModel(batch).catch(() => null))?.card ?? "";
     // Forward the client agent's live tool activity into the turn stream so
     // the user can watch the CLI work during the analysis — the same
     // data-phase channel + payload the chat bridge model uses
@@ -1316,7 +1357,8 @@ export async function scribeSegment(
         // Bridge path: the mutation proposals arrived in the SAME bridge call
         // as the analysis — apply them through the card-session machinery
         // (applyBridgeCardEvolution), no second spawn.
-        const cardRaw = await readCurrentPreviously(batch);
+        const cardRaw =
+          (await readUserModel(batch).catch(() => null))?.card ?? "";
         if (bridgeReport && bridgeReport.evolution.mutations.length > 0) {
           // The card opens in its running state first — a terminal chunk out
           // of nowhere reads as "it never ran".
@@ -1348,10 +1390,11 @@ export async function scribeSegment(
           });
         }
       } else {
-        // The direction doc is orientation for the product phase even on an
-        // explicit-request run (no direction evaluation and no fitness
-        // buckets here).
-        const direction = await readDirection().catch(() => null);
+        // The direction half of the folded model is orientation for the
+        // product phase even on an explicit-request run (no direction
+        // evaluation and no SOP writes on this channel).
+        const direction =
+          (await readUserModel(batch).catch(() => null))?.direction ?? null;
         evolutionResult = await withSliceLock("evolution", () =>
           runCardEvolution({
             model: input.modelConfig,
@@ -1366,7 +1409,6 @@ export async function scribeSegment(
             batch,
             todayDate: todayLocal,
             direction,
-            triggeredBuckets: [],
           }),
         );
         await emitEvolutionResult(stream, evolutionResult);

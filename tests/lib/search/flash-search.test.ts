@@ -191,7 +191,7 @@ describe("searchViaFlash", () => {
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
       text: "",
     });
-    await searchViaFlash("q", undefined, undefined, { scout: true });
+    await searchViaFlash("q", undefined, { scout: true });
     const opts = runner.runSubAgent.mock.calls[0]![0];
 
     expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
@@ -212,7 +212,7 @@ describe("searchViaFlash", () => {
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
       text: "",
     });
-    await searchViaFlash("q", undefined, undefined, { scout: true });
+    await searchViaFlash("q", undefined, { scout: true });
     const opts = runner.runSubAgent.mock.calls[0]![0];
     const webFetch = opts.tools.webFetch as {
       execute: (input: { url: string }) => Promise<string>;

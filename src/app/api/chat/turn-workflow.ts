@@ -767,6 +767,12 @@ export function assembleSystemPrompt(opts: {
    * omits the layer entirely.
    */
   directionBlock?: string;
+  /**
+   * Pre-built people/user/profile.md block (L1c — the user's OWN
+   * self-description; its text states the precedence discipline), from
+   * housekeeping; undefined omits the layer entirely.
+   */
+  userProfileBlock?: string;
   /** Frozen slice-head snapshot block (L3), from buildSliceHeadBlock. */
   sliceHeadBlock: string;
   /** Pre-built "## Demo mode…" block, or "" to omit. */
@@ -784,6 +790,7 @@ export function assembleSystemPrompt(opts: {
     identityPrompt,
     previouslyContent,
     directionBlock,
+    userProfileBlock,
     sliceHeadBlock,
     demoNotice,
     bridgeNotice,
@@ -795,6 +802,7 @@ export function assembleSystemPrompt(opts: {
     directionBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
+    userProfileBlock ?? "",
     sliceHeadBlock,
     demoNotice,
     bridgeNotice ?? "",
@@ -817,6 +825,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     sliceHeadBlock,
     identityPrompt,
     directionBlock,
+    userProfileBlock,
     contextPrefix,
     rebuiltHistory,
   } = hk;
@@ -848,6 +857,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     // turn is what the NEXT turn sees; within a slice without an evolution
     // the layer is byte-stable.
     directionBlock: directionBlock ?? "",
+    // L1c — the user's own self-description (people/user/profile.md), read in
+    // housekeeping this turn; its block text states the precedence discipline
+    // (on conflict the self-description wins). Absent when no profile exists.
+    userProfileBlock,
     sliceHeadBlock,
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`

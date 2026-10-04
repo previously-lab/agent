@@ -24,7 +24,11 @@
  * a cycle when manager.ts itself needs to call generateGlobalTimeline.
  */
 import { readFile as readFileGitHub } from "@/lib/tools/readFile";
-import { writeFile as writeFileGitHub, deleteFile as deleteFileGitHub } from "@/lib/tools/writeFile";
+import {
+  writeFile as writeFileGitHub,
+  writeBinaryFile as writeBinaryFileGitHub,
+  deleteFile as deleteFileGitHub,
+} from "@/lib/tools/writeFile";
 import { listFiles as listFilesGitHub } from "@/lib/tools/listFiles";
 import { commitBatchToGitHub, type BatchEntry } from "@/lib/tools/batch-write";
 import {
@@ -32,6 +36,9 @@ import {
   writeFileLocal,
   listFilesLocal,
   deleteFileLocal,
+  writeBinaryFileLocal,
+  readBinaryFileLocal,
+  MAX_BINARY_FILE_SIZE_BYTES,
 } from "@/lib/tools/local-fs";
 import {
   readFileDemo,
@@ -58,11 +65,18 @@ const DEMO_MODE = isDemo(DATA_SOURCE);
  */
 export interface WriteBatch {
   readonly entries: Map<string, string | null>;
+  /**
+   * Side-channel for BINARY queued writes: paths here were queued by
+   * `fsWriteBinaryFile` and their `entries` value is a BASE64 string. Kept
+   * out of `entries`' value type so the existing string contract (and every
+   * current caller, incl. the finalize-turn self-heal) is untouched.
+   */
+  readonly encodings?: Map<string, "base64">;
 }
 
 /** Begin collecting writes into a fresh batch. */
 export function createBatch(): WriteBatch {
-  return { entries: new Map() };
+  return { entries: new Map(), encodings: new Map() };
 }
 
 /**
@@ -78,7 +92,8 @@ export function createBatch(): WriteBatch {
  * A queued entry with a NULL content is a DELETE: the file is removed by the
  * flush instead of written. Deletes and writes ride the same commit, so a
  * settle (delete spent files) and the appends it responds to can never land
- * out of order.
+ * out of order. Base64-encoded entries (see `encodings`) become base64
+ * blobs — attachments land byte-identical through the same commit.
  */
 export async function flushBatch(
   batch: WriteBatch,
@@ -88,7 +103,7 @@ export async function flushBatch(
 
   const entries: BatchEntry[] = [];
   for (const [path, content] of batch.entries) {
-    entries.push({ path, content });
+    entries.push({ path, content, encoding: batch.encodings?.get(path) });
   }
 
   if (DEMO_MODE) {
@@ -103,16 +118,20 @@ export async function flushBatch(
   if (USE_GITHUB) {
     await commitBatchToGitHub(entries, message);
     batch.entries.clear();
+    batch.encodings?.clear();
     return;
   }
 
   // Local filesystem — apply individually, then record one git commit for
   // the whole batch (mirrors the GitHub backend's N-files-1-commit batch).
-  for (const { path, content } of entries) {
+  for (const { path, content, encoding } of entries) {
     if (content === null) await deleteFileLocal(path);
-    else await writeFileLocal(path, content);
+    else if (encoding === "base64") {
+      await writeBinaryFileLocal(path, Buffer.from(content, "base64"));
+    } else await writeFileLocal(path, content);
   }
   batch.entries.clear();
+  batch.encodings?.clear();
   await commitLocalWrites(
     entries.map((e) => e.path),
     message,
@@ -233,9 +252,71 @@ export async function fsDeleteFile(
   );
 }
 
+/**
+ * Write raw BYTES (attachments, §C.1). With a batch the content is queued
+ * BASE64 (flagged in the batch's `encodings` side-channel) and becomes a
+ * base64 blob in the batch commit; without a batch the backend is written
+ * immediately. The binary fuse (5MB) is enforced HERE, structurally: an
+ * oversize attachment is REFUSED with a visible error — never truncated.
+ */
+export async function fsWriteBinaryFile(
+  path: string,
+  data: Buffer,
+  batch?: WriteBatch,
+): Promise<{ path: string; created: boolean }> {
+  if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
+    throw new Error(
+      `Attachment too large (${data.byteLength} bytes). Maximum is ${Math.round(MAX_BINARY_FILE_SIZE_BYTES / 1024 / 1024)}MB — the file was NOT saved (nothing is truncated silently).`,
+    );
+  }
+
+  if (batch) {
+    batch.entries.set(path, data.toString("base64"));
+    batch.encodings?.set(path, "base64");
+    return { path, created: true };
+  }
+
+  if (DEMO_MODE) {
+    // demo data is read-only preview — refuse rather than fake it
+    throw new Error("Demo mode runs on read-only benchmark data — attachments are not saved.");
+  }
+  if (USE_GITHUB) {
+    const { owner, repo } = getRepoConfig();
+    return writeBinaryFileGitHub(path, data, repo, owner);
+  }
+  const result = await writeBinaryFileLocal(path, data);
+  await commitLocalWrites(
+    [path],
+    `Add attachment ${path.replace(/\\/g, "/").replace(/^memory\//, "")}`,
+  );
+  return result;
+}
+
+/**
+ * Read raw BYTES back (the viewImage doc: source path). No batch support —
+ * attachment reads are point reads outside a write window. Throws when the
+ * file is missing; the caller surfaces that as a visible error.
+ */
+export async function fsReadBinaryFile(path: string): Promise<Buffer> {
+  if (DEMO_MODE) {
+    // demo-fs is a text layer; attachments are a local/github concern
+    throw new Error(`Binary read not supported in demo mode: "${path}"`);
+  }
+  if (USE_GITHUB) {
+    const { owner, repo } = getRepoConfig();
+    const octokit = (await import("@/lib/github/client")).getOctokit();
+    const res = await octokit.rest.repos.getContent({ owner, repo, path });
+    if (Array.isArray(res.data) || !("content" in res.data) || typeof res.data.content !== "string") {
+      throw new Error(`Not a file: "${path}"`);
+    }
+    return Buffer.from(res.data.content.replace(/\n/g, ""), "base64");
+  }
+  return readBinaryFileLocal(path);
+}
+
 export async function fsListFiles(
   path: string,
-): Promise<Array<{ name: string; type: "file" | "dir"; path: string }>> {
+): Promise<Array<{ name: string; type: "file" | "dir"; path: string; size?: number }>> {
   if (DEMO_MODE) return listFilesDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();

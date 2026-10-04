@@ -13,7 +13,6 @@
  */
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import { hashString } from "./layout";
-import { normalizeStrandName } from "./ink";
 
 /** Zoom levels: 0 = slice rows · 1 = day stacks · 2 = week stacks. */
 export type StackLevel = 0 | 1 | 2;
@@ -392,34 +391,6 @@ function anchorStartMs(anchorId: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})$/.exec(anchorId);
   if (!m) return 0;
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]);
-}
-
-/**
- * Filter the catalog to the carriers of any selected strand — an empty list is
- * 核心时间线, no filter.
- *
- * UNION, not intersection: picking "running" and "work" asks for the slices
- * about either thread, which is the standard reading of a multi-select facet.
- * The band agrees — both threads light up — so requiring BOTH would leave the
- * reader looking at fewer cards than lines.
- */
-export function filterByStrand(
-  entries: TimelineSliceEntry[],
-  strands: readonly string[],
-): TimelineSliceEntry[] {
-  if (strands.length === 0) return entries;
-  // BOTH SIDES GO THROUGH `normalizeStrandName`, and that is not tidiness.
-  // `strands.json` keeps the FIRST spelling it ever saw for a strand — so the
-  // board bar offers "Fitness" — while a slice's own `tags` keep whatever the
-  // agent wrote that turn, which may be "fitness". Comparing raw strings makes
-  // the band and the field disagree about the same pick: the band (which does
-  // normalise, see `ink.ts`) lights the thread for both spellings, and this
-  // filter drops the slices carrying the other one. The strip then says "these
-  // slices are in that strand" while the pane says "not here".
-  const wanted = new Set(strands.map(normalizeStrandName));
-  return entries.filter((e) =>
-    e.strands.some((s) => wanted.has(normalizeStrandName(s))),
-  );
 }
 
 // ─── Shared animation easing ────────────────────────────────────────────────

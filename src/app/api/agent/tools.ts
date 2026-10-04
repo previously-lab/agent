@@ -340,6 +340,14 @@ export const chatTools = {
         .describe(
           "LEGACY, ignored by the case-model writers — kept for mailbox compatibility.",
         ),
+      body: z
+        .string()
+        .optional()
+        .describe(
+          "sediment only: the FULL pasted text when sedimenting a long text the user sent " +
+          "('存下这个') — the scribe opens the case with this verbatim, origin stamped. " +
+          "Omit for ordinary markers.",
+        ),
     }),
     contextSchema: toolContextSchema,
     execute: noteForSedimentExecute,
@@ -485,15 +493,17 @@ export const chatTools = {
       "See an image — a link the user pasted, an image found during research, " +
       "or a user attachment on a non-vision model. One-shot look: pass a " +
       "`question` to say what you want to know about the image. For `source`, " +
-      "use an http(s) URL or `attachment:N` where N is the attachment number " +
-      "from the placeholder in the user's message. NOT for pages — use webFetch " +
-      "for those.",
+      "use an http(s) URL, `attachment:N` where N is the attachment number " +
+      "from the placeholder in the user's message, or " +
+      "`doc:<分类>/<case名>/<附件名>` for an image attachment stored in a " +
+      "memory case (v0.19 §C.1). NOT for pages — use webFetch for those.",
     inputSchema: z.object({
       source: z
         .string()
         .describe(
-          "Image source: an http(s) URL, or 'attachment:N' referring to the Nth " +
-          "image attachment of the current turn.",
+          "Image source: an http(s) URL, 'attachment:N' referring to the Nth " +
+          "image attachment of the current turn, or 'doc:<分类>/<case名>/<附件名>' " +
+          "for an image attachment stored in a memory case.",
         ),
       question: z
         .string()

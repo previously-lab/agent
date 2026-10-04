@@ -351,15 +351,6 @@
       "duration": "{min} MIN",
       "no": "No.{date}·{time}"
     },
-    "filter": {
-      "label": "Filter timeline",
-      "all": "Core timeline",
-      "placeholder": "Search strands…",
-      "empty": "No matching strands"
-    },
-    "selected": {
-      "slices": "{count, plural, one {# slice} other {# slices}}"
-    },
     "lens": {
       "label": "Lens",
       "conversation": "Conversation",
@@ -372,11 +363,6 @@
     "running": {
       "title": "Writing it down…",
       "hint": "A reply is streaming. Open the conversation."
-    },
-    "filteredOut": {
-      "title": "Nothing here carries that strand",
-      "body": "The loaded window has no slice tagged with it — the strand may only occur further back.",
-      "loadOlder": "Load earlier"
     }
   },
   "settings": {
@@ -605,7 +591,6 @@
     "debugMemoryTitle": "Memory map",
     "debugMemoryLoading": "Reading…",
     "debugMemoryFailed": "Couldn't read memory state.",
-    "debugStrands": "{count} strands",
     "debugSlices": "{count} slices",
     "debugActiveSlice": "Active slice",
     "debugNoActive": "none",

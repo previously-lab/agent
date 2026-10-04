@@ -226,18 +226,17 @@ describe("doc_rework probe (§4.4)", () => {
     const ctx = makeCtx("2026-09-10-1000");
 
     await readDocExecute({ ref: "research/手机调研" }, opts(ctx));
-    expect(sinks.appendSignal).not.toHaveBeenCalled();
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
 
     const out = await readSliceExecute({ sliceId: "2026-09-04-2130" }, opts(ctx));
     expect(out).toContain("turn content");
-    expect(sinks.appendSignal).toHaveBeenCalledTimes(1);
-    const signal = sinks.appendSignal.mock.calls[0][0] as {
-      type: string;
-      detail: string;
-    };
-    expect(signal.type).toBe("doc_rework");
-    expect(signal.detail).toContain("2026-09-04-2130");
+    // v0.19 R4/R5: signals land as the agent.md audit line (+ run log), not
+    // the retired fitness store.
     expect(sinks.writeAgentTimeline).toHaveBeenCalledTimes(1);
+    const line = sinks.writeAgentTimeline.mock.calls[0][1] as string;
+    expect(line).toContain("doc_rework");
+    expect(line).toContain("2026-09-04-2130");
+    expect(line).toContain("memory/research/手机调研/index.md");
   });
 
   it("stays silent when the read slice is not referenced by any read doc", async () => {
@@ -247,13 +246,13 @@ describe("doc_rework probe (§4.4)", () => {
 
     await readDocExecute({ ref: "research/手机调研" }, opts(ctx));
     await readSliceExecute({ sliceId: "2026-09-06-0900" }, opts(ctx));
-    expect(sinks.appendSignal).not.toHaveBeenCalled();
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
   });
 
   it("stays silent when readSlice runs before any readDoc", async () => {
     io.files.set(CORE_PATH, "slice core\n");
     const ctx = makeCtx("2026-09-10-1002");
     await readSliceExecute({ sliceId: "2026-09-04-2130" }, opts(ctx));
-    expect(sinks.appendSignal).not.toHaveBeenCalled();
+    expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
   });
 });

@@ -8,7 +8,6 @@ import {
   backingSheets,
   cardEmFor,
   cardGeometryFor,
-  filterByStrand,
   frameGeometryFor,
   framePitchFor,
   frameVariantFor,
@@ -162,58 +161,6 @@ describe("indexForAnchor", () => {
 
   it("returns -1 for empty rows", () => {
     expect(indexForAnchor([], "2024-08-17-0121")).toBe(-1);
-  });
-});
-
-describe("filterByStrand normalises BOTH sides", () => {
-  // The band highlights a strand by its NORMALISED name (`ink.ts`), while
-  // `strands.json` keeps the first spelling it ever saw and a slice's own tags
-  // keep whatever the agent wrote that turn. Comparing raw strings made the
-  // two views disagree about one pick: the strip lit a thread for slices the
-  // pane had filtered out.
-  const spellings = [
-    entry("2024-08-17T01:21:00.000Z", { strands: ["Fitness"] }),
-    entry("2024-08-18T10:00:00.000Z", { strands: ["fitness "] }),
-    entry("2024-08-19T10:00:00.000Z", { strands: ["Ｆｉｔｎｅｓｓ"] }),
-    entry("2024-08-20T10:00:00.000Z", { strands: ["running"] }),
-  ];
-
-  it("matches every spelling of one strand, whichever one is picked", () => {
-    expect(filterByStrand(spellings, ["Fitness"])).toHaveLength(3);
-    expect(filterByStrand(spellings, ["fitness"])).toHaveLength(3);
-    expect(filterByStrand(spellings, [" FITNESS "])).toHaveLength(3);
-  });
-
-  it("still excludes a strand that is genuinely absent", () => {
-    expect(filterByStrand(spellings, ["swimming"])).toHaveLength(0);
-  });
-});
-
-describe("filterByStrand", () => {
-  const entries = [
-    entry("2024-08-17T01:21:00.000Z", { strands: ["running"] }),
-    entry("2024-08-18T10:00:00.000Z", { strands: ["work", "running"] }),
-    entry("2024-08-19T10:00:00.000Z", { strands: ["work"] }),
-  ];
-
-  it("no strands keeps everything (核心时间线)", () => {
-    expect(filterByStrand(entries, [])).toBe(entries);
-  });
-
-  it("keeps only carriers of the strand", () => {
-    expect(filterByStrand(entries, ["running"])).toHaveLength(2);
-    expect(filterByStrand(entries, ["work"])).toHaveLength(2);
-    expect(filterByStrand(entries, ["nope"])).toHaveLength(0);
-  });
-
-  it("UNIONS several strands rather than intersecting them", () => {
-    // All three slices carry one or the other; none carries both "work" and
-    // "running" alone, so an intersection would return two, not three.
-    expect(filterByStrand(entries, ["running", "work"])).toHaveLength(3);
-  });
-
-  it("returns the same carrier for a strand repeated in the list", () => {
-    expect(filterByStrand(entries, ["work", "work"])).toHaveLength(2);
   });
 });
 

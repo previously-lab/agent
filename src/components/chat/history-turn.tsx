@@ -14,6 +14,10 @@ import { strandTint } from "@/lib/timeline3d/ink";
 // ~70% of the tooth so a quarter to a third of the grain survives through
 // the fill; INK_EDGE_ALPHA is the dot-gain boundary, the SAME hue at
 // slightly higher opacity — never a light/dark relief pair.
+//
+// The film used to hue-shift with the owning slice's first strand. The
+// strand layer is retired (§A.2.4) — the slice carries no strands — so the
+// bubble prints in the ONE neutral strandless grey, always.
 
 /** Interior film alpha — ~30% of the paper texture shows through. */
 const INK_FILM_ALPHA = 0.7;
@@ -24,9 +28,8 @@ const INK_EDGE_ALPHA = 0.9;
  * A single historical turn — pure body bubbles (design §1.2: history renders
  * as plain text, no tool state). Rendered by the unified message stream.
  *
- * The user bubble tints with the owning slice's FIRST strand (the same
- * accent the timeline cards use, via layout.ts's shared helpers); a
- * strandless slice tints with the neutral strandless grey.
+ * The user bubble prints in the neutral strandless ink — the strand tint it
+ * once took went with the strand layer (§A.2.4).
  */
 export function HistoryTurn({
   role,
@@ -34,22 +37,20 @@ export function HistoryTurn({
   sliceId,
   turnId,
   timestamp,
-  strands,
 }: {
   role: string;
   content: string;
   sliceId: string;
   turnId?: string;
   timestamp: string;
-  /** The owning slice's strands (always set for history items). */
+  /** @deprecated Retired with the strand layer (§A.2.4) — accepted (the
+   *  non-writable callers still pass it) and ignored. */
   strands?: string[];
 }) {
   const isUser = role === "user";
-  const userTint = isUser
-    ? strandTint(strands?.[0], INK_FILM_ALPHA)
-    : undefined;
+  const userTint = isUser ? strandTint(undefined, INK_FILM_ALPHA) : undefined;
   const userTintEdge = isUser
-    ? strandTint(strands?.[0], INK_EDGE_ALPHA)
+    ? strandTint(undefined, INK_EDGE_ALPHA)
     : undefined;
 
   return (
@@ -79,7 +80,7 @@ export function HistoryTurn({
               )}
             </div>
             <BubbleContent
-              // Strand ink from JS — the film arrives as --user-tint and the
+              // Neutral ink from JS — the film arrives as --user-tint and the
               // dot-gain edge as --user-tint-edge; .user-tint in globals.css
               // owns the fill, the ring utility owns the denser boundary. No
               // relief shadow either side. Agent turns stay variant="ghost":

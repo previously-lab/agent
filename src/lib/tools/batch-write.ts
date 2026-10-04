@@ -17,6 +17,12 @@ export interface BatchEntry {
   path: string;
   /** null = delete the file at `path` (the tree item carries sha: null). */
   content: string | null;
+  /**
+   * Blob encoding — "base64" for BINARY payloads (attachments): the content
+   * string is already base64 and rides the Git Data API as a base64 blob,
+   * byte-identical through the batch commit. Absent = utf-8 text (unchanged).
+   */
+  encoding?: "utf-8" | "base64";
 }
 
 // ─── Default branch resolution (cached per process) ─────────────────────
@@ -98,9 +104,11 @@ export async function commitBatchToGitHub(
   const baseTree = commit.tree.sha;
 
   // 3. Create blobs for each file; a null content is a DELETE (tree item
-  //    with sha: null removes the path from the tree).
+  //    with sha: null removes the path from the tree). Binary payloads
+  //    (attachments) arrive base64 with encoding "base64" — the blob keeps
+  //    the bytes intact through the batch commit.
   const treeItems = await Promise.all(
-    entries.map(async ({ path, content }) => {
+    entries.map(async ({ path, content, encoding }) => {
       if (content === null) {
         return {
           path,
@@ -113,7 +121,7 @@ export async function commitBatchToGitHub(
         owner,
         repo,
         content,
-        encoding: "utf-8",
+        encoding: encoding === "base64" ? "base64" : "utf-8",
       });
       return {
         path,

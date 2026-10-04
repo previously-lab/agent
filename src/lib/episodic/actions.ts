@@ -33,6 +33,10 @@ import {
   type CaseCategory,
 } from "@/lib/docs";
 import { readDirection } from "@/lib/evolution/store";
+import {
+  isImageAttachmentName,
+  readCaseAttachment,
+} from "@/lib/tools/attachments";
 import { loadUserConfig } from "@/lib/config/loader";
 import { sliceEntryFromDisk } from "./timeline/store";
 import { enumerateSliceIds } from "./timeline/enumerate";
@@ -49,7 +53,8 @@ export interface SliceSummary {
   status: "active" | "closed";
   open_loops: string[];
   decisions: string[];
-  /** The slice's strands — the chat user bubble's tint source. */
+  /** Always `[]` — the projection was retired (§A.2.4). The field survives
+   *  only because the (non-writable) chat stream pipeline still carries it. */
   strands: string[];
   turnCount?: number;
   timezone?: string;
@@ -353,7 +358,8 @@ export type ArrivalState =
       turns: Turn[];
       focus: string;
       start: string;
-      /** The resumed slice's strands — the restored turns' tint source. */
+      /** Always `[]` — the projection was retired (§A.2.4). The field
+       *  survives only because the chat stream pipeline still carries it. */
       strands: string[];
     }
   | { mode: "briefing" };
@@ -471,37 +477,20 @@ export async function getTimelineCatalogPage(
   return { ...page, entries };
 }
 
-/** One strand's selector row (Rev 8 §R8 筛选器). */
-export interface StrandListItem {
-  name: string;
-  /** Slices carrying the strand. */
-  count: number;
-  /** UTC ISO start of the newest carrier — sort key for "最近活跃". */
-  lastStart: string;
-}
-
-/**
- * The strand list for the timeline filter. RETURNS EMPTY since v0.19 R3b:
- * strands were never on-disk slice data — they were tags resolved against
- * `strands.json` during the weave, and §A.2.4 deletes both the projection and
- * tags themselves. There is no live source to aggregate from; the filter UI
- * and the companion pod's strand count read this as "no strands", which is
- * the honest answer under the case model.
- */
-export async function getStrandList(): Promise<StrandListItem[]> {
-  return [];
-}
-
 /**
  * The raw strand path lists — strand → slice positions exactly as stored in
  * `strands.json` (`"2026/06/22/1400"` slash format, NOT normalised to slice
- * ids). This is the read `getStrandList` doesn't do (v0.11-strand-field §5):
- * the strand-door graph (`src/lib/game/strand-graph.ts`) builds from it.
+ * ids). The strand-door graph (`src/lib/game/strand-graph.ts`) builds from it.
+ *
+ * THE SOURCE IS RETIRED (§A.2.4): strands.json has not been written since A1,
+ * so this only ever serves a stale snapshot, then nothing. The game handles
+ * the empty case explicitly (game-shell.tsx); anchoring rooms to cases is a
+ * separate piece of work.
  *
  * ONE read of the thin index, deliberately — no entity-layer round trips, no
  * normalisation; shaping the positions is the pure graph builder's job, so
  * the same payload feeds any consumer's own build. Returns an empty object
- * when the strand index doesn't exist yet (same fallback as `readStrands`).
+ * when the strand index doesn't exist (same fallback as `readStrands`).
  */
 export async function getStrandPaths(): Promise<StrandIndex> {
   return readStrands();
@@ -967,8 +956,7 @@ export async function getCaseDoc(
 }
 
 /** First readable path of a candidate list, or null (a dead link). */
-async function readFirstExisting(
-  paths: string[],
+async function readFirstExisting(  paths: string[],
 ): Promise<{ path: string; raw: string } | null> {
   for (const path of paths) {
     const raw = await fsReadFile(path).catch(() => null);

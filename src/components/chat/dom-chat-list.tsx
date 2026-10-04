@@ -570,7 +570,6 @@ export function DomChatList({
               sliceId={item.sliceId}
               turnId={item.turn.turnId}
               timestamp={item.turn.timestamp}
-              strands={item.strands}
             />
           </div>
         );
@@ -582,7 +581,6 @@ export function DomChatList({
               isStreaming={item.isStreaming}
               startedAt={item.startedAt}
               onRegenerate={item.onRegenerate}
-              strands={item.strands}
             />
           </div>
         );

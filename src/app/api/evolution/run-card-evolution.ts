@@ -1,26 +1,20 @@
 /**
- * runCardEvolution — the inline, synchronous card-evolution step.
+ * runCardEvolution — the inline, synchronous user-model evolution step.
  *
- * v0.7b: evolution no longer runs in a separate parallel workflow fired by the
- * client. It runs synchronously inside the turn's housekeeping step, so the
- * new slice's card is always the freshly-evolved one. This function is the
- * callable core: given the current card + the content to fold in, it runs the
- * Previously Agent (which edits the card through validated MUTATION tools —
- * never a whole-file rewrite), and writes both the live card
- * (current-previously.md) and the per-slice snapshot when the substance moved.
+ * Evolution runs synchronously inside the turn's scribe segment (v0.19 A1),
+ * on the EXPLICIT memory_update channel only (§A.3.2 — the fitness trigger
+ * chain is retired). This function is the callable core: given the current
+ * model + the content to fold in, it runs the Previously Agent (which edits
+ * the card through validated MUTATION tools — never a whole-file rewrite),
+ * and writes both the folded live model (people/user/index.md, §B.7 — card
+ * and direction halves in ONE document) and the per-slice previously.md
+ * snapshot (the FULL index.md as it stands) when the substance moved.
  *
  * There is deliberately NO mechanical post-processing of the agent's output:
  * caps and format are enforced inside the write tools (rejections come back
  * with compression instructions), so every byte of the final card is the
- * agent's own decision. Engineering owns the trigger and the write-back;
+ * agent's own decision. Engineering owns the channel and the write-back;
  * the model owns the content.
- *
- * v1.0 (design §2.3/§2.7): the run also carries the evolution context
- * (direction.md orientation + the triggered fitness buckets, which gate the
- * agent's writePlaybook), and this function is the SINGLE-WRITER boundary —
- * accepted card/playbook/direction writes land here. Evolution has no
- * direction and no fossil archive (v0.9.2): a mutation is never judged
- * against its predecessor and nothing rolls back.
  *
  * v1.1 (merged run): at a slice boundary the ONE agent run also evaluates
  * direction.md FIRST (input.directionEval) and edits a working copy through
@@ -28,30 +22,30 @@
  * (validateDirectionProposal, mode-aware), retires expired hypotheses
  * deterministically (retireExpiredHypotheses — the pool TTL is engineering's
  * half of the lifecycle, and it runs even on a no-change verdict), and
- * applies through writeDirection — the old Phase-1 write path. A rejected
- * doc is logged and skipped, never fatal; the verdict rides the result's
- * `direction` field for the terminal data-evolution frame.
+ * applies through writeUserModelDirection — the direction half of the folded
+ * index.md. A rejected doc is logged and skipped, never fatal; the verdict
+ * rides the result's `direction` field for the terminal data-evolution frame.
  *
  * Streaming is surfaced via the optional `onProgress` callback (phase steps)
  * and `onEvolutionLine` (the Previously Agent's live thinking/writing lines)
- * so the caller (housekeeping) can push data-evolution chunks to the client —
- * no idle wait.
+ * so the caller (the scribe segment) can push data-evolution chunks to the
+ * client — no idle wait.
  */
 import { runPreviouslyAgent, type DirectionEvalInput, type PreviouslySignal } from "@/lib/episodic/flash/previously-agent";
 import { parseCard } from "@/lib/episodic/previously-format";
 import { sameCardSubstance } from "@/lib/episodic/card-session";
 import { diffCardLines, summarizeCardChanges, type CardChangeSummary, type CardMutation } from "@/lib/episodic/card-diff";
-import { readCurrentPreviously, writeCurrentPreviously, writePreviously, readTimelineIndex } from "@/lib/episodic";
+import { writePreviously } from "@/lib/episodic";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
-  writeDirection,
-  writePlaybook,
-  type FitnessBucket,
-  type FitnessEvent,
-  type FitnessSignal,
+  readUserModel,
+  readUserProfile,
+  writeUserModelCard,
+  writeUserModelDirection,
+  writeSelfSop,
 } from "@/lib/evolution/store";
-import type { PlaybookAgent } from "@/lib/evolution/paths";
+import type { SelfAgent } from "@/lib/evolution/paths";
 import { validateDirectionProposal, retireExpiredHypotheses } from "@/lib/evolution/direction-agent";
 
 export interface CardEvolutionReaders {
@@ -105,12 +99,10 @@ export interface RunCardEvolutionInput {
   /** Orientation-only direction content (explicit-request path — no direction
    *  evaluation runs there). Ignored when directionEval is set. */
   direction?: string | null;
-  /** The fitness buckets that triggered this run — gates writePlaybook. */
-  triggeredBuckets?: FitnessBucket[];
-  /** Recent fitness events for the triggered buckets (evidence to re-read). */
-  fitnessEvents?: FitnessEvent[];
-  /** This slice's mechanical signals (recall verify/rework). */
-  fitnessSignals?: FitnessSignal[];
+  /** The self/ colleagues whose SOPs this run may rewrite (v0.19 §C.2 — only
+   *  the boundary run's ③ passes any; the explicit memory_update channel
+   *  passes none). Gates the agent's writeSop. */
+  allowedSopWrites?: SelfAgent[];
 }
 
 export interface RunCardEvolutionResult {
@@ -131,10 +123,10 @@ export interface RunCardEvolutionResult {
   /** Set when the pass ended WITHOUT a finish call (step cap / timeout) — the
    *  written card carries the mutations that landed before the cutoff. */
   partial?: boolean;
-  /** v1.0 §2.4: the playbook mutations actually written this run — agent +
-   *  the one-line summary from its mutation-archive record (the expected
-   *  benefit). Surfaced on the terminal data-evolution frame. */
-  playbooks?: Array<{ agent: PlaybookAgent; summary: string }>;
+  /** v0.19 §C.2: the SOP rewrites actually written this run — agent +
+   *  the one-line expected benefit. Surfaced on the terminal data-evolution
+   *  frame. */
+  playbooks?: Array<{ agent: SelfAgent; summary: string }>;
   /** v1.1: the direction half's verdict (merged run only — absent when no
    *  directionEval was carried). "failed" covers a write error; a REJECTED
    *  proposal reports outcome "rejected" with the validation reason (never
@@ -156,8 +148,10 @@ export async function runCardEvolution(
   input: RunCardEvolutionInput,
 ): Promise<RunCardEvolutionResult> {
   input.onProgress?.("reading");
-  const rawCard = await readCurrentPreviously(input.batch);
-  const baseCard = rawCard.trim() ? rawCard : "";
+  // The folded user model (people/user/index.md, §B.7) — the card half is
+  // the agent's working copy; tolerant read falls back to the legacy roots.
+  const model = await readUserModel(input.batch);
+  const baseCard = model?.card ?? "";
   const signal: PreviouslySignal = VALID_SIGNALS.includes(input.signal ?? "new_observation")
     ? (input.signal as PreviouslySignal)
     : "new_observation";
@@ -186,9 +180,8 @@ export async function runCardEvolution(
     todayLocal: input.todayDate,
     direction: input.direction,
     directionEval: input.directionEval,
-    triggeredBuckets: input.triggeredBuckets,
-    fitnessEvents: input.fitnessEvents,
-    fitnessSignals: input.fitnessSignals,
+    userProfile: await readUserProfile(input.batch).catch(() => null),
+    allowedSopWrites: input.allowedSopWrites,
     readSliceFn: input.readers.readSlice,
     readAgentTimelineFn: input.readers.readAgentTimeline,
     readPreviouslyFn: input.readers.readPreviously,
@@ -205,15 +198,19 @@ export async function runCardEvolution(
   // mutation ops (per-op validation in applyDirectionOps; `proposed` pointers
   // code-stamped). The resulting doc still passes the whole-doc gate here
   // (validateDirectionProposal, mode-aware) and the engineering TTL
-  // (retireExpiredHypotheses) before writeDirection. A rejected doc is logged
+  // (retireExpiredHypotheses) before writeUserModelDirection. A rejected doc
+  // is logged
   // and SKIPPED (never fatal); a write failure is surfaced as outcome
   // "failed", never masquerading as "no_change". The TTL also runs on a
   // NO-CHANGE verdict — expiry is engineering's, not the agent's. ──────────
   let directionOutcome: RunCardEvolutionResult["direction"];
+  let directionMoved = false;
   if (input.directionEval) {
     const currentDir = input.directionEval.current;
-    const idx = await readTimelineIndex().catch(() => null);
-    const sliceIds = [...(idx?.slices ?? []).map((s) => s.id), input.sliceId];
+    // The hypothesis TTL needs a slice-id trail to age against; the timeline
+    // catalog projection is retired (v0.19 A1), so the current slice is the
+    // only certain id — the boundary run (A2) owns a richer trail.
+    const sliceIds = [input.sliceId];
     const proposal = result.direction;
     if (!proposal) {
       // No agent move — engineering still retires expired hypotheses.
@@ -221,7 +218,8 @@ export async function runCardEvolution(
         const aged = retireExpiredHypotheses(currentDir.trim(), sliceIds);
         if (aged.retired.length > 0) {
           try {
-            await writeDirection(aged.doc, input.batch);
+            await writeUserModelDirection(aged.doc, input.batch);
+            directionMoved = true;
             directionOutcome = {
               outcome: "updated",
               summary: `Retired ${aged.retired.length} expired hypothesis(es)`,
@@ -262,7 +260,8 @@ export async function runCardEvolution(
               `[Evolution] direction: retired ${aged.retired.length} expired hypothesis(es)`,
             );
           }
-          await writeDirection(aged.doc, input.batch);
+          await writeUserModelDirection(aged.doc, input.batch);
+          directionMoved = true;
           directionOutcome = { outcome: "updated", summary };
           console.log(`[Evolution] direction updated: ${summary}`);
         } catch (e) {
@@ -298,31 +297,38 @@ export async function runCardEvolution(
   // is kept fresh by ensurePreviously copying the live card forward each turn.)
   const changed = !sameCardSubstance(parseCard(baseCard), parseCard(result.updatedCard));
   if (changed) {
-    // Live card — the next turn's conversation reads this.
-    await writeCurrentPreviously(result.updatedCard, input.batch);
-    // Per-slice snapshot — the closed slice's final card.
-    await writePreviously(input.sliceId, result.updatedCard, input.batch);
+    // The folded model — the next turn's conversation reads this. The
+    // direction half is preserved inside index.md by the store helper.
+    await writeUserModelCard(result.updatedCard, input.batch);
+  }
+  if (changed || directionMoved) {
+    // Per-slice snapshot — previously.md now freezes the FULL people/user/
+    // index.md (card + direction as they stand at this boundary, §B.7).
+    const finalModel = await readUserModel(input.batch).catch(() => null);
+    if (finalModel) {
+      await writePreviously(input.sliceId, finalModel.full, input.batch);
+    }
   }
 
-  // ── Playbook write-back — the evolution agent is the single writer of
-  // card / playbooks. The playbooks that actually landed are surfaced on the
-  // terminal evolution frame so the UI can tell the "what changed" story
-  // (design §2.4). ────────────────────────────────────────────────────────
-  const playbookWrites = result.playbookWrites ?? [];
-  const appliedPlaybooks: Array<{ agent: PlaybookAgent; summary: string }> = [];
+  // ── SOP write-back — the evolution agent is the single writer of card /
+  // direction / self/ SOPs (v0.19 §C.2). The SOPs that actually landed are
+  // surfaced on the terminal evolution frame so the UI can tell the "what
+  // changed" story. ────────────────────────────────────────────────────────
+  const sopWrites = result.sopWrites ?? [];
+  const appliedPlaybooks: Array<{ agent: SelfAgent; summary: string }> = [];
   if (!result.failed) {
     try {
-      for (const pw of playbookWrites) {
-        await writePlaybook(pw.agent, pw.content, input.batch);
+      for (const sw of sopWrites) {
+        await writeSelfSop(sw.agent, sw.content, input.batch);
         appliedPlaybooks.push({
-          agent: pw.agent,
+          agent: sw.agent,
           summary:
-            pw.expectedBenefit.trim() || `Rewrote the ${pw.agent} playbook`,
+            sw.expectedBenefit.trim() || `Rewrote the ${sw.agent} SOP`,
         });
       }
     } catch (e) {
       console.warn(
-        "[Evolution] playbook write failed (the card write landed):",
+        "[Evolution] SOP write failed (the card write landed):",
         e instanceof Error ? e.message : e,
       );
     }

@@ -10,6 +10,13 @@ vi.mock("@/lib/models/provider", () => ({
   createModel: vi.fn((c: unknown) => ({ _mock: c })),
 }));
 
+const evolutionStore = vi.hoisted(() => ({
+  readSelfSop: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock("@/lib/evolution/store", () => ({
+  readSelfSop: evolutionStore.readSelfSop,
+}));
+
 const workflow = vi.hoisted(() => {
   const writer = { write: vi.fn(async () => {}), releaseLock: vi.fn() };
   return {
@@ -181,6 +188,28 @@ describe("runSubAgent", () => {
     fakeStream();
     await runSubAgent(baseOpts());
     expect(lastCall().stopWhen).toBeUndefined();
+  });
+
+  it("appends the self/ SOP in FULL to the system prompt when selfSop is set (§C.2 spawn loading)", async () => {
+    const sop = `# Search SOP\n\n${"guidance line\n".repeat(300)}`;
+    evolutionStore.readSelfSop.mockResolvedValueOnce(sop);
+    fakeStream();
+    await runSubAgent(baseOpts({ selfSop: "search" }));
+    const system = lastCall().system as string;
+    expect(system).toContain("## Your SOP (self/search/index.md");
+    expect(system).toContain(sop.trim()); // FULL text — no injection cap
+    expect(system.startsWith("static system")).toBe(true);
+  });
+
+  it("leaves the system prompt untouched when the SOP is absent or unreadable", async () => {
+    fakeStream();
+    await runSubAgent(baseOpts({ selfSop: "search" })); // readSelfSop → null
+    expect(lastCall().system).toBe("static system");
+
+    evolutionStore.readSelfSop.mockRejectedValueOnce(new Error("disk gone"));
+    fakeStream();
+    await runSubAgent(baseOpts({ selfSop: "search" }));
+    expect(lastCall().system).toBe("static system"); // degrades, never fails
   });
 
   it("requests thinking ON at low effort by default (DeepSeek shape)", async () => {

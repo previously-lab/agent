@@ -77,10 +77,9 @@ export type EvolutionStepData = {
   /** Set when the run was cut short — only part of the update was applied. */
   partial?: boolean;
   /**
-   * v1.0: the fitness buckets whose scores FORCED this run, each with its
-   * current windowed net score (design §2.5). Empty/omitted when the run was
-   * gated by the analyzer's judgment or an explicit user request instead —
-   * the card then shows no score rows.
+   * v1.0 legacy wire field (the fitness buckets whose scores FORCED the run,
+   * design §2.5) — RETIRED with the fitness trigger chain (v0.19 §A.3.2): no
+   * producer sets it anymore. Kept optional for wire tolerance.
    */
   triggers?: Array<{
     bucket: "card" | "recall" | "search" | "thinkdeep" | "interaction";

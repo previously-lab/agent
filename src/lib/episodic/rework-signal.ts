@@ -1,24 +1,26 @@
 /**
- * Memory-quality signal instrumentation (design v0.15 §4.4).
+ * Memory-quality signal instrumentation (design v0.15 §4.4, trimmed in v0.19
+ * R4/R5).
  *
  * The recall colleague is retired: the `recall_verify` / `recall_rework`
- * producers (v1.0 §2.6) are gone with it. Historical fitness data may still
- * contain those values — every READER must tolerate them (the analyzer treats
- * them as legacy noise, parsing never crashes on them).
+ * producers (v1.0 §2.6) are gone with it.
  *
  * What this module still produces:
  *
  *   - "doc_rework" — the document-side probe (§4.4): the main agent reads a
  *     document with readDoc, then opens with readSlice one of the slices THAT
  *     document referenced: the document was not credited for the fact it
- *     carried. This is the implicit memory-quality demerit now. It lands in
- *     the fitness store's recall BUCKET (the bucket is "memory quality" in
- *     meaning — the mechanism serves memory no matter which producer
- *     emitted); the analyzer decides what the ratio means, including §7's
- *     adjudication of whole mechanisms.
+ *     carried.
  *   - "interaction_regenerate" / "interaction_interrupt" — the user's own
  *     hands on the UI (regenerate = the previous reply was rejected;
  *     interrupt = cut off mid-stream).
+ *
+ * v0.19 R4/R5: the fitness store is RETIRED (design v0.19 §C.2 — selection
+ * pressure is prose self-assessment under self/ now), so signals no longer
+ * land in any machine-readable store. Each signal is one compact structured
+ * line in the CURRENT slice's agent.md (human/audit-readable, via manager.ts's
+ * writeAgentTimeline) plus a server-log line for run-log reconciliation
+ * (§D.4 附 3: the fitness instruments' home is the run log, not disk state).
  *
  * The per-conversation record is module-level per-process state — the same
  * pattern manager.ts already uses for the active slice. Workflow steps in one
@@ -27,14 +29,10 @@
  * conversations are short-lived and an unbounded map would leak across the
  * process lifetime.
  *
- * Every emitted signal lands in TWO places, both best-effort (failures are
- * swallowed with a console.warn — instrumentation must never fail a tool):
- *   1. the fitness store (machine-readable, for the analyzer stage), and
- *   2. one compact structured line in the CURRENT slice's agent.md
- *      (human/audit-readable), via manager.ts's writeAgentTimeline.
+ * Every write is best-effort (failures are swallowed with a console.warn —
+ * instrumentation must never fail a tool).
  */
 
-import { appendSignal } from "@/lib/evolution/store";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import { writeAgentTimeline } from "./manager";
 
@@ -96,10 +94,9 @@ export function checkDocRework(
 }
 
 /**
- * Emit a doc_rework signal: the machine-readable fitness store entry plus
- * one compact audit line in the current slice's agent.md. BOTH writes are
- * best-effort — each failure is warned and swallowed; this function never
- * throws and never fails the calling tool.
+ * Emit a doc_rework signal: one compact audit line in the current slice's
+ * agent.md plus a server-log line. Best-effort — each failure is warned and
+ * swallowed; this function never throws and never fails the calling tool.
  */
 export async function logDocReworkSignal(
   conversationSliceId: string,
@@ -112,19 +109,7 @@ export async function logDocReworkSignal(
     `"${docFileName}" references — the document was not credited ` +
     "for the fact it carried";
 
-  try {
-    await appendSignal({
-      ts,
-      sliceId: conversationSliceId,
-      type: "doc_rework",
-      detail,
-    });
-  } catch (e) {
-    console.warn(
-      "[ReworkSignal] fitness-store write failed:",
-      e instanceof Error ? e.message : e,
-    );
-  }
+  console.log(`[ReworkSignal] doc_rework ${conversationSliceId} — ${detail}`);
 
   try {
     await writeAgentTimeline(
@@ -139,18 +124,17 @@ export async function logDocReworkSignal(
   }
 }
 
-/** Interaction-signal types — the user's own hands on the UI (design §2.6
- *  extended): regenerate = the previous reply was rejected; interrupt = the
- *  reply was cut off mid-stream. Both are dissatisfaction candidates for the
- *  interaction bucket; the analyzer decides, these only record the fact. */
+/** Interaction-signal types — the user's own hands on the UI: regenerate =
+ *  the previous reply was rejected; interrupt = the reply was cut off
+ *  mid-stream. */
 export type InteractionSignalType =
   | "interaction_regenerate"
   | "interaction_interrupt";
 
 /**
- * Emit an interaction signal (regenerate / interrupt): the machine-readable
- * fitness store entry plus one compact audit line in the slice's agent.md.
- * Same double-write, never-throws discipline as logDocReworkSignal.
+ * Emit an interaction signal (regenerate / interrupt): one compact audit
+ * line in the slice's agent.md plus a server-log line. Same never-throws
+ * discipline as logDocReworkSignal.
  */
 export async function logInteractionSignal(
   type: InteractionSignalType,
@@ -160,15 +144,9 @@ export async function logInteractionSignal(
 ): Promise<void> {
   if (!sliceId) return;
   const ts = new Date().toISOString();
+  void batch; // the fitness-store write this batch fed is retired
 
-  try {
-    await appendSignal({ ts, sliceId, type, detail }, batch);
-  } catch (e) {
-    console.warn(
-      "[InteractionSignal] fitness-store write failed:",
-      e instanceof Error ? e.message : e,
-    );
-  }
+  console.log(`[InteractionSignal] ${type} ${sliceId} — ${detail}`);
 
   try {
     await writeAgentTimeline(sliceId, `- **${type}** ${ts} — ${detail}.`);

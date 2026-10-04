@@ -113,3 +113,55 @@ export async function deleteFile(
 
   invalidateReadCache(path, repo, owner);
 }
+
+/**
+ * Write raw bytes (attachments) via the contents API — the content travels
+ * base64, so arbitrary binary lands intact. The 5MB binary fuse is enforced
+ * by the caller (fsWriteBinaryFile); this layer re-checks as the guard.
+ */
+export async function writeBinaryFile(
+  path: string,
+  data: Buffer,
+  repo: string,
+  owner: string,
+  message?: string
+): Promise<{ path: string; created: boolean }> {
+  if (!isPathAllowed(path)) {
+    throw new Error(
+      `Access denied: path "${path}" is outside allowed directories`
+    );
+  }
+
+  const octokit = getOctokit();
+
+  try {
+    let sha: string | undefined;
+    try {
+      const existing = await octokit.rest.repos.getContent({ owner, repo, path });
+      if (!Array.isArray(existing.data)) {
+        sha = existing.data.sha;
+      }
+    } catch {
+      // File doesn't exist — that's fine, we'll create it
+    }
+
+    await octokit.rest.repos.createOrUpdateFileContents({
+      owner,
+      repo,
+      path,
+      message: message ?? `Add attachment ${path}`,
+      content: data.toString("base64"),
+      sha,
+    });
+
+    invalidateReadCache(path, repo, owner);
+    return { path, created: !sha };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Access denied")) {
+      throw error;
+    }
+    throw new Error(
+      `Failed to write "${path}": ${error instanceof Error ? error.message : "unknown error"}`
+    );
+  }
+}

@@ -65,6 +65,8 @@ import { resolveMainModelFromConfig } from "@/lib/models/resolve";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { ProviderSdk } from "@/lib/models/providers";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
+import { readSelfSop } from "@/lib/evolution/store";
+import type { SelfAgent } from "@/lib/evolution/paths";
 import {
   shouldEmitProgress,
   type ProgressLine,
@@ -225,6 +227,14 @@ export interface RunSubAgentOptions<Report> {
    * Everything per-call (task data, current time, signals) goes in `prompt`.
    */
   system?: string;
+  /**
+   * self/ SOP spawn loading (v0.19 §C.2): when set, the engineering layer
+   * reads `memory/self/<name>/index.md` (legacy `agent-playbooks/<name>.md`
+   * fallback) and appends its FULL text to the system prompt — forced loading
+   * is the structure that keeps SOPs from becoming dead paper. No length cap:
+   * the length discipline is the SOP writer's. Absent/blank SOP → no block.
+   */
+  selfSop?: SelfAgent;
   /** The dynamic user prompt: task data, current time, signals. */
   prompt: string;
   /** Tool set — at minimum the report tool the agent reports through. */
@@ -322,6 +332,7 @@ export async function runSubAgent<Report = unknown>(
     progress,
     startLine,
     onLine,
+    selfSop,
   } = opts;
 
   if (!model && !languageModel) {
@@ -331,6 +342,15 @@ export async function runSubAgent<Report = unknown>(
       error: "runSubAgent requires a `model` or a pre-built `languageModel`.",
     };
   }
+
+  // self/ SOP spawn loading (§C.2) — FULL text appended to the system prompt,
+  // once per run; a read failure degrades to "no SOP block", never to a
+  // failed spawn.
+  const sop = selfSop ? await readSelfSop(selfSop).catch(() => null) : null;
+  const effectiveSystem =
+    sop?.trim()
+      ? `${system ?? ""}\n\n## Your SOP (self/${selfSop}/index.md — follow it unless it conflicts with the task)\n\n${sop.trim()}`
+      : system;
 
   const emitter = createProgressEmitter(progress);
   if (startLine) emitter.emit(startLine, "running");
@@ -395,7 +415,7 @@ export async function runSubAgent<Report = unknown>(
     // progressively — never lost, even mid-thought.
     const stream = await streamText({
       model: languageModel ?? createModel(model!),
-      system,
+      system: effectiveSystem,
       prompt,
       tools,
       toolChoice: callToolChoice,

@@ -122,7 +122,6 @@ function baseInput(overrides: Record<string, unknown> = {}) {
     current: null,
     mode: "steady",
     cardSelfModel: null,
-    recentEvents: [],
     analysis: ANALYSIS,
     sliceId: "2026-08-27-1000",
     ...overrides,
@@ -697,22 +696,13 @@ describe("runDirectionAgent", () => {
     if (res.outcome === "failed") expect(res.reason).toContain("boom");
   });
 
-  it("sends a static system prompt; direction + events + analysis ride the user prompt", async () => {
+  it("sends a static system prompt; direction + analysis ride the user prompt", async () => {
     ai.streamText.mockResolvedValue(
       makeToolCall({ outcome: "no_change", reason: "nothing" }),
     );
     await runDirectionAgent(
       baseInput({
         current: "# Portrait\n\nCurrent portrait text.",
-        recentEvents: [
-          {
-            ts: "2026-08-26T10:00:00Z",
-            sliceId: "2026-08-26-1000",
-            bucket: "recall",
-            delta: -1,
-            evidence: "not what we discussed",
-          },
-        ],
       }),
     );
     const arg = ai.streamText.mock.calls.at(-1)?.[0] as {
@@ -722,7 +712,6 @@ describe("runDirectionAgent", () => {
     expect(arg.system).toContain("Direction Agent");
     expect(arg.system).not.toContain("Current portrait text");
     expect(arg.prompt).toContain("Current portrait text");
-    expect(arg.prompt).toContain("not what we discussed");
     expect(arg.prompt).toContain("2026-08-27-1000");
   });
 

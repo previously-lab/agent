@@ -7,14 +7,13 @@
  * card. (The atmosphere moved to the SHELL below the shared canvas, §14; the
  * vignette died with the aurora it framed.)
  *
- * Catalog window, strand selection, scroll progress/zoom refs, and the calendar
+ * Catalog window, scroll progress/zoom refs, and the calendar
  * range are owned by the shell and passed in as props so the left AxisBand can
  * read the same values.
  */
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
-import { filterByStrand } from "@/lib/timeline3d/stacks";
 import type { FieldRung } from "@/lib/timeline3d/units";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
 import dynamic from "next/dynamic";
@@ -42,8 +41,6 @@ export interface TimelineSceneProps {
   onNarrate?: (sliceId: string, timeLabel?: string) => void;
   /** Slice id from `?at=` — the list lands on it, flashed. */
   initialAtId?: string;
-  /** The current picks, in order. Empty = 核心时间线 (no filter). */
-  strands: readonly string[];
   /** The shared band feed — forwarded to the left band. */
   feed: FieldFeed;
   /** True while the timeline is the visible pane and therefore owns the feed.
@@ -180,7 +177,6 @@ export function TimelineScene({
   onCursorSlice,
   onNarrate,
   initialAtId,
-  strands,
   feed,
   publishing,
   rung,
@@ -194,8 +190,6 @@ export function TimelineScene({
   exiting,
   frozenRung,
 }: TimelineSceneProps) {
-  const filtered = filterByStrand(entries, strands);
-
   return (
     <div className="relative h-full w-full overflow-hidden">
       {/* The AtmosphereBackdrop (and its keyframes) moved to the SHELL,
@@ -223,15 +217,13 @@ export function TimelineScene({
           the list come to rest clear of it. */}
       <div className="relative h-full w-full">
         <CardField
-          entries={filtered}
-          filteredOut={entries.length > 0 && filtered.length === 0}
+          entries={entries}
           hasMore={hasMore}
           onNeedOlder={onNeedOlder}
           onOpenSlice={onOpenSlice}
           onCursorSlice={onCursorSlice}
           onNarrate={onNarrate}
           initialAtId={initialAtId}
-          genKey={strands.join("|") || "core"}
           reducedMotion={reducedMotion}
           feed={feed}
           publishing={publishing}

@@ -69,7 +69,6 @@ import {
   textLines,
   searchResultToString,
 } from "@/lib/retrieval/doc-segments";
-import { capPlaybook } from "@/lib/evolution/store";
 
 export interface WebSearchResult {
   answer: string;
@@ -319,9 +318,9 @@ export const SEARCH_TIMEOUT_MS = 240_000;
  * searchReport tool call), and the web_search execution itself is a
  * DeepSeek-server black box.
  *
- * `playbook` is the evolved researcher playbook (memory/agent-playbooks/
- * search.md, design v1.0 §2.4) — appended to the USER prompt, never the static
- * system prompt, so the shared prefix cache is untouched. Absent → no block.
+ * The researcher's SOP (self/search/index.md, v0.19 §C.2) is loaded by the
+ * sub-agent runner itself (`selfSop: "search"`) — FULL text into the system
+ * prompt at spawn; absent SOP → no block.
  *
  * Error contract: the runner never throws. Failed runs are re-thrown here as
  * a plain Error carrying the runner's message — EXCEPT a timeout that left
@@ -333,7 +332,6 @@ export const SEARCH_TIMEOUT_MS = 240_000;
 export async function searchViaFlash(
   query: string,
   progress?: SubAgentProgressRef,
-  playbook?: string,
   opts?: { scout?: boolean },
 ): Promise<WebSearchResult> {
   const provider = createAnthropic({
@@ -349,12 +347,6 @@ export async function searchViaFlash(
   const effectiveMaxPageReads = scout ? 3 : MAX_PAGE_READS;
 
   const today = new Date().toISOString().slice(0, 10);
-  // Evolved working notes (design v1.0 §2.4) — appended to the USER prompt so
-  // the static system prompt (and its prefix cache) never changes. Capped so a
-  // bloated playbook cannot flood the prompt; absent playbook → no block.
-  const playbookBlock = playbook?.trim()
-    ? `\n\nEvolved working notes (your researcher playbook — follow these unless they conflict with the query):\n${capPlaybook(playbook.trim())}`
-    : "";
   const scoutBlock = scout
     ? "\n\nYou are one of several researchers working in parallel on different sub-questions — stay tightly scoped to your query."
     : "";
@@ -371,7 +363,8 @@ export async function searchViaFlash(
     system: buildSubAgentSystem(
       buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
     ),
-    prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}${playbookBlock}`,
+    selfSop: "search",
+    prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}`,
     tools: {
       web_search: provider.tools.webSearch_20260209({
         maxUses: effectiveMaxSearchRounds,

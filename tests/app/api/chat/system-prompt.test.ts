@@ -102,6 +102,17 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
     expect(s).not.toContain("GROUNDING RULE");
     expect(s).not.toContain("The recap above holds WHAT");
   });
+
+  it("places the user's self-description (L1c) right after the card, before the slice head — omitted when absent", () => {
+    const PROFILE =
+      "## The user's own words about themselves (profile.md)\n\n我是设计师。\n\nThis is the user's self-description — they wrote it directly, and only they can change it. When it conflicts with anything in the model above, THE SELF-DESCRIPTION WINS; treat the model entry as stale and say so when it comes up.";
+    const s = build({ directionBlock: DIRECTION, userProfileBlock: PROFILE });
+    expect(s).toContain("THE SELF-DESCRIPTION WINS");
+    expect(s.indexOf(PROFILE)).toBeGreaterThan(s.indexOf(PREVIOUSLY));
+    expect(s.indexOf(PROFILE)).toBeLessThan(s.indexOf(SLICE_HEAD));
+    // Default: the layer is omitted entirely (no profile.md).
+    expect(build()).not.toContain("self-description");
+  });
 });
 
 // ─── Bridge mode: notice + fresh-time injection ────────────────────────────
