@@ -41,7 +41,7 @@ import {
 import {
   housekeeping,
   persistAgentTurn,
-  scribeSegment,
+  explicitEvolutionSegment,
   closeTurnStream,
   appendFieldReturnLine,
 } from "./steps";
@@ -749,7 +749,7 @@ export const SPACE_FICTION_BLOCK = `## 这片空间
  *
  * Nothing per-turn remains: the `Sent:` timestamp, intent, emotional register
  * and semantic links were retired in v0.9 (the analyzer still runs — in the
- * scribe segment now — its output feeds the close marking and agent.md).
+ * entry beat now, v0.21 §3 — its output feeds the close marking and agent.md).
  * Precise "now" questions go through the currentTime tool.
  *
  * The full assembled string is also fanned out to thinkDeep sub-agents as
@@ -1265,14 +1265,15 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     };
   }
 
-  // ── Post-turn steps (v0.19 A1 three stages) ────────────────────────────
-  // 序 1 — the agent turn + cognition join the slice (deduped by turnId).
+  // ── Post-turn steps (v0.21 §3) ─────────────────────────────────────────
+  // 落盘这一轮 — the agent turn + cognition join the slice (deduped by
+  // turnId). Pure engineering.
   await persistAgentTurn(slice, outcome, input.turnId);
-  // 序 2–7 — the scribe segment: analyze, execute any pending close, due-task
-  // scan, boundary event, explicit-instruction evolution, scribe passes. Runs
-  // even when the reply failed (streamError) — it is the slice boundary's
-  // executor, and every sub-step is idempotent under redelivery.
-  await scribeSegment(input, hk);
+  // 序 6 — the explicit-instruction channel: runs only when the entry beat's
+  // analysis read an explicit record/correction request in the user's
+  // message; zero LLM, zero writes otherwise (空转零写入). Runs even when the
+  // reply failed (streamError); every write is idempotent under redelivery.
+  await explicitEvolutionSegment(input, hk);
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
 

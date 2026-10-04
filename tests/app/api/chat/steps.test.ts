@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { TimeSlice } from "@/lib/episodic";
-import type { TurnInput, TurnOutcome, HousekeepingResult } from "@/lib/chat/turn-types";
+import type { TurnInput, TurnOutcome } from "@/lib/chat/turn-types";
 
 // ── Mock the step dependencies ──────────────────────────────────────────
 
@@ -168,43 +168,12 @@ const ioHelpers = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ioHelpers);
 
-// The background runs (v0.19 §A.2.3) are fired via start() — mocked at the
-// workflow/api boundary; the run functions themselves are inert references.
-const workflowApi = vi.hoisted(() => ({
-  start: vi.fn(
-    async (_fn: unknown, _args?: unknown[], _opts?: unknown) => ({
-      runId: "mock-run",
-    }),
-  ),
-}));
-vi.mock("workflow/api", () => ({ start: workflowApi.start }));
-const backgroundRuns = vi.hoisted(() => ({
-  boundaryRun: vi.fn(),
-  questionRun: vi.fn(),
-}));
-vi.mock("@/app/api/evolution/boundary-run", () => ({
-  boundaryRun: backgroundRuns.boundaryRun,
-}));
-vi.mock("@/app/api/evolution/question-run", () => ({
-  questionRun: backgroundRuns.questionRun,
-}));
-
-// The scribe pass + mailbox helpers are mocked at their module boundary — the
-// real pass runs an LLM sub-agent.
-const docWritePath = vi.hoisted(() => ({
-  buildSliceExcerpt: vi.fn(() => ({ focus: "", summary: "", turnsExcerpt: "" })),
-  runScribePass: vi.fn(
-    async (_input: unknown): Promise<{
-      ran: boolean;
-      written: string[];
-      skipped: Array<{ id: string; reason: string }>;
-    }> => ({ ran: false, written: [], skipped: [] }),
-  ),
-  extractDocMarkers: vi.fn((): Array<{ id: string; kind: string }> => []),
-  extractProcessedMarkerIds: vi.fn(() => new Set<string>()),
-  RESEARCH_RECORD_PREFIX: "[doc-research]",
-}));
-vi.mock("@/lib/episodic/flash/librarian", () => docWritePath);
+// v0.21 §A.2.2: the turn path no longer starts boundary/question runs, posts
+// [boundary-event] lines, or runs marker-consuming scribe passes — steps.ts
+// imports none of those modules anymore, so no mocks are needed for them
+// here. The disk-level proof is the retired-chain test below ("a closed
+// predecessor's mailbox is never touched"); the code-level proof is the
+// import list itself.
 
 // The inline card evolution is mocked at its module boundary so the explicit
 // channel can be asserted directly.
@@ -337,7 +306,7 @@ vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
 import {
   housekeeping,
   persistAgentTurn,
-  scribeSegment,
+  explicitEvolutionSegment,
   closeTurnStream,
 } from "@/app/api/chat/steps";
 
@@ -433,9 +402,13 @@ function mockCreateSlice(newSliceId: string) {
   );
 }
 
-/** Run the three post-decision steps the way the workflow does. */
-async function runScribe(input: TurnInput, hk: HousekeepingResult) {
-  await scribeSegment(input, hk);
+/** Run the post-reply explicit-instruction channel (序 6) the way the workflow
+ *  does — the housekeeping result threads through BY VALUE (EntryReckoning). */
+async function runExplicitEvolution(
+  input: TurnInput,
+  hk: Awaited<ReturnType<typeof housekeeping>>,
+) {
+  await explicitEvolutionSegment(input, hk);
 }
 
 beforeEach(() => {
@@ -457,12 +430,9 @@ beforeEach(() => {
   episodic.analyzeTurn.mockResolvedValue(baseAnalysis());
   enumerate.enumerateSliceIds.mockResolvedValue([]);
   evolutionStore.readDirection.mockResolvedValue(null);
-  docWritePath.runScribePass.mockResolvedValue({ ran: false, written: [], skipped: [] });
-  docWritePath.extractDocMarkers.mockReturnValue([]);
-  docWritePath.extractProcessedMarkerIds.mockReturnValue(new Set());
 });
 
-describe("housekeeping step (the reply segment)", () => {
+describe("housekeeping step (进场那一拍 — the entry beat)", () => {
   it("persists the turn's evidence attachments into the records case and records the names on the user turn (v0.19 §C.1)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const pngDataUrl = `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`;
@@ -587,11 +557,13 @@ describe("housekeeping step (the reply segment)", () => {
     expect(episodic.saveSliceSnapshot).toHaveBeenCalledWith(slice, expect.anything());
     expect(episodic.appendTurn).not.toHaveBeenCalled();
 
-    // 4 compact housekeeping phases (slice/context × running+done) then the
-    // stream lifecycle chunks. The analyze/strands phases moved to the scribe
-    // segment / were retired.
+    // Compact housekeeping phases (slice / analyze / context × running+done)
+    // then the stream lifecycle chunks. The analyze phase runs in the entry
+    // beat now (v0.21 §3): ONE derivation per non-demo turn — with nothing to
+    // close here it carries no closing slice (zero 归纳, its memoryUpdate
+    // reading still feeds 序 6). No slice-closed row: nothing ended.
     expect(workflowMock.written.map((c) => c.type)).toEqual([
-      ...Array(4).fill("data-phase"),
+      ...Array(6).fill("data-phase"),
       "start",
       "start-step",
     ]);
@@ -600,6 +572,8 @@ describe("housekeeping step (the reply segment)", () => {
       .map((c) => (c.data as { phase: string; running: boolean; compact?: boolean }));
     expect(phases.map((p) => `${p.phase}:${p.running}`)).toEqual([
       "slice:true",
+      "analyze:true",
+      "analyze:false",
       "slice:false",
       "context:true",
       "context:false",
@@ -607,7 +581,7 @@ describe("housekeeping step (the reply segment)", () => {
     expect(phases.every((p) => p.compact === true)).toBe(true);
   });
 
-  it("ZERO LLM and ZERO projection writes in the reply segment (v0.19 A1)", async () => {
+  it("the entry beat's ONE derivation reads the ended page and closes it in the same beat — zero projection writes (v0.21 §3, v0.19 A1)", async () => {
     seedAgedActiveSlice({
       turns: [{ timestamp: "t0", role: "user", content: "old" }],
     });
@@ -615,19 +589,32 @@ describe("housekeeping step (the reply segment)", () => {
 
     await housekeeping(makeInput("new topic"));
 
-    // No LLM pass of any kind.
-    expect(episodic.analyzeTurn).not.toHaveBeenCalled();
+    // The turn's ONE semantic derivation: the ended page's turns are its input
+    // (never this turn's message as the summarization object).
+    expect(episodic.analyzeTurn).toHaveBeenCalledOnce();
+    const analyzeArgs = episodic.analyzeTurn.mock.calls[0][0] as {
+      userMessage: string;
+      closingSlice?: { turns: unknown[] };
+    };
+    expect(analyzeArgs.userMessage).toBe("new topic");
+    expect(analyzeArgs.closingSlice?.turns).toHaveLength(1);
+    // The close is DECIDED and EXECUTED in the same beat (atomic with the
+    // beat's one commit) — no post-reply segment owns it anymore.
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("time_cap");
+    expect(
+      episodic.analyzeTurn.mock.invocationCallOrder[0],
+    ).toBeLessThan(episodic.closeSlice.mock.invocationCallOrder[0]);
+    // No evolution here — that is the post-reply explicit channel (序 6), and
+    // this message carries no explicit instruction anyway.
     expect(bridgePhases.runHousekeepingBridge).not.toHaveBeenCalled();
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
-    expect(docWritePath.runScribePass).not.toHaveBeenCalled();
     // No projection writes / catalog reads on the turn path.
     expect(episodic.weaveTimeline).not.toHaveBeenCalled();
     expect(episodic.upsertTimelineEntry).not.toHaveBeenCalled();
     expect(episodic.generateGlobalTimeline).not.toHaveBeenCalled();
     expect(episodic.readTimelineIndex).not.toHaveBeenCalled();
     expect(episodic.buildTimelineBrief).not.toHaveBeenCalled();
-    // And the close is DECIDED, not executed (the scribe segment owns it).
-    expect(episodic.closeSlice).not.toHaveBeenCalled();
   });
 
   it("restores an active slice and appends the new user turn", async () => {
@@ -749,22 +736,19 @@ describe("housekeeping step (the reply segment)", () => {
 });
 
 describe("slicing policy: close decisions + checkpoint continuation", () => {
-  it("an over-age slice yields a pendingClose(time_cap) — the close itself waits for the scribe segment", async () => {
+  it("an over-age slice is summarized + closed IN the entry beat (time_cap) — decision and execution are atomic", async () => {
     seedAgedActiveSlice({ turns: [{ timestamp: "t0", role: "user", content: "old" }] });
     mockCreateSlice("2026-07-14-1000");
 
     const hk = await housekeeping(makeInput("new topic"));
 
-    expect(episodic.closeSlice).not.toHaveBeenCalled();
-    expect(hk.pendingClose?.signal).toBe("time_cap");
-    expect(hk.pendingClose?.slice.slice_id).toBe("2026-07-14-0900");
-    expect(hk.slice.slice_id).toBe("2026-07-14-1000");
-    expect(hk.slice.continuesFrom).toBe("2026-07-14-0900");
-
-    const input = makeInput("new topic");
-    await runScribe(input, hk);
+    // The close already happened — inside housekeeping, before the user turn
+    // landed on the new slice.
     expect(episodic.closeSlice).toHaveBeenCalledOnce();
     expect(episodic.closeSlice.mock.calls[0][1]).toBe("time_cap");
+    expect((episodic.closeSlice.mock.calls[0][0] as TimeSlice).slice_id).toBe("2026-07-14-0900");
+    expect(hk.slice.slice_id).toBe("2026-07-14-1000");
+    expect(hk.slice.continuesFrom).toBe("2026-07-14-0900");
   });
 
   it("the turn cap forces a close decision (capacity) and links the new slice", async () => {
@@ -775,7 +759,8 @@ describe("slicing policy: close decisions + checkpoint continuation", () => {
 
     const hk = await housekeeping(makeInput("keep going"));
 
-    expect(hk.pendingClose?.signal).toBe("capacity");
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("capacity");
     expect(hk.slice.continuesFrom).toBe("2026-07-14-0900");
     // Only the last 10 turns are carried (from the in-memory closing slice).
     expect(hk.contextPrefix).toHaveLength(10);
@@ -793,7 +778,8 @@ describe("slicing policy: close decisions + checkpoint continuation", () => {
 
     const hk = await housekeeping(makeInput("back after lunch"));
 
-    expect(hk.pendingClose?.signal).toBe("idle_gap");
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("idle_gap");
     // No continuation link, no carry-over — the user left and came back.
     expect(hk.slice.continuesFrom).toBeUndefined();
     expect(hk.contextPrefix).toBeUndefined();
@@ -807,7 +793,9 @@ describe("slicing policy: close decisions + checkpoint continuation", () => {
 
     const hk = await housekeeping(makeInput("much later"));
 
-    expect(hk.pendingClose?.signal).toBe("idle_gap");
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("idle_gap");
+    expect(hk.slice.continuesFrom).toBeUndefined();
   });
 
   it("does NOT idle-close when the gap is below the threshold", async () => {
@@ -825,7 +813,7 @@ describe("slicing policy: close decisions + checkpoint continuation", () => {
     });
     const hk = await housekeeping(input);
 
-    expect(hk.pendingClose).toBeUndefined();
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
     expect(hk.slice.slice_id).toBe("2026-07-14-0900");
   });
 
@@ -940,16 +928,18 @@ describe("slicing policy: close decisions + checkpoint continuation", () => {
   });
 });
 
-describe("scribe segment (序 2–7)", () => {
-  it("analyzes with the closing slice's turns, marks + closes it, posts the boundary event with due tasks, and scribes both slices", async () => {
-    const disk = seedAgedActiveSlice({
+describe("entry reckoning (归纳上一页 + 闭片归档, v0.21 §3)", () => {
+  it("analyzes the ended page's turns, marks + closes it in the same beat, and never touches its mailbox", async () => {
+    seedAgedActiveSlice({
       turns: [
         { timestamp: "t0", role: "user", content: "old" },
         { timestamp: "t1", role: "agent", content: "reply" },
       ],
     });
     mockCreateSlice("2026-07-14-1000");
-    // One due task + one future task on the shelf.
+    // A due task on the shelf — the entry beat does NOT scan it for dispatch
+    // (the 序 4/5 chain is retired; §A.3.3 read-face statements are a separate
+    // channel, asserted in the housekeeping describe above).
     fakeDisk.taskDirs.add("体检");
     fakeDisk.taskDirs.add("报税");
     fakeDisk.files.set("memory/tasks/体检/index.md", "# 体检\n\n日期锚：2026-07-13\n\n去做。\n");
@@ -958,76 +948,118 @@ describe("scribe segment (序 2–7)", () => {
       ...baseAnalysis(),
       closedMarking: { focus: "morning planning", summary: "planned the day", tone: "calm" },
     });
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
-    try {
-      const input = makeInput("wrapping up");
-      const hk = await housekeeping(input);
-      await runScribe(input, hk);
+    const hk = await housekeeping(makeInput("wrapping up"));
 
-      // 序 2 — the analyzer saw the closing slice's turns.
-      expect(episodic.analyzeTurn).toHaveBeenCalledOnce();
-      const analyzeArgs = episodic.analyzeTurn.mock.calls[0][0] as {
-        closingSlice?: { turns: unknown[] };
-      };
-      expect(analyzeArgs.closingSlice?.turns).toHaveLength(2);
+    // The analyzer saw the closing slice's turns — and ONLY those (the
+    // summarization object is the ended page, never this turn's message).
+    expect(episodic.analyzeTurn).toHaveBeenCalledOnce();
+    const analyzeArgs = episodic.analyzeTurn.mock.calls[0][0] as {
+      userMessage: string;
+      closingSlice?: { turns: unknown[] };
+    };
+    expect(analyzeArgs.userMessage).toBe("wrapping up");
+    expect(analyzeArgs.closingSlice?.turns).toHaveLength(2);
 
-      // 序 3 — the close executed with the analyzer's marking.
-      expect(episodic.closeSlice).toHaveBeenCalledOnce();
-      const closedRaw = fakeDisk.files.get("2026-07-14-0900:core");
-      const closedSlice = JSON.parse(closedRaw!) as TimeSlice;
-      expect(closedSlice.status).toBe("closed");
-      expect(closedSlice.focus).toBe("morning planning");
-      expect(closedSlice.summary).toBe("planned the day");
+    // The close executed in the SAME beat, AFTER the analysis, carrying the
+    // analyzer's marking.
+    expect(
+      episodic.analyzeTurn.mock.invocationCallOrder[0],
+    ).toBeLessThan(episodic.closeSlice.mock.invocationCallOrder[0]);
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("time_cap");
+    const closedSlice = JSON.parse(fakeDisk.files.get("2026-07-14-0900:core")!) as TimeSlice;
+    expect(closedSlice.status).toBe("closed");
+    expect(closedSlice.focus).toBe("morning planning");
+    expect(closedSlice.summary).toBe("planned the day");
+    expect(closedSlice.emotional_tone).toBe("calm");
 
-      // 序 5 — exactly one boundary event line on the closed slice's mailbox,
-      // carrying ONLY the due task (锚 ≤ today 2026-07-14).
-      const mailbox = fakeDisk.files.get("2026-07-14-0900:agent") ?? "";
-      const eventLines = mailbox.split("\n").filter((l) => l.startsWith("[boundary-event]"));
-      expect(eventLines).toHaveLength(1);
-      const event = JSON.parse(eventLines[0].slice("[boundary-event]".length));
-      expect(event).toMatchObject({
-        v: 1,
-        sliceId: "2026-07-14-0900",
-        closedBy: "time_cap",
-      });
-      expect(event.dueTasks.join(" ")).toContain("tasks/体检");
-      expect(event.dueTasks.join(" ")).not.toContain("报税");
+    // §A.2.2: no [boundary-event] post, no mailbox write of any kind — the
+    // closed slice's agent.md simply does not exist.
+    expect(fakeDisk.files.get("2026-07-14-0900:agent")).toBeUndefined();
 
-      // 序 7 — the scribe ran on the closed slice first, then the active tail.
-      expect(docWritePath.runScribePass).toHaveBeenCalledTimes(2);
-      const scribeIds = docWritePath.runScribePass.mock.calls.map(
-        (c) => (c[0] as { sliceId: string }).sliceId,
-      );
-      expect(scribeIds).toEqual(["2026-07-14-0900", "2026-07-14-1000"]);
+    // The slice-closed row was emitted (edge-mode checklist).
+    const closedPhase = workflowMock.written.find(
+      (c) =>
+        c.type === "data-phase" &&
+        (c.data as { phase: string }).phase === "slice-closed",
+    );
+    expect(closedPhase).toBeDefined();
 
-      // The slice-closed row was emitted (edge-mode checklist).
-      const closedPhase = workflowMock.written.find(
-        (c) =>
-          c.type === "data-phase" &&
-          (c.data as { phase: string }).phase === "slice-closed",
-      );
-      expect(closedPhase).toBeDefined();
-    } finally {
-      logSpy.mockRestore();
-    }
+    // And the user turn landed on the NEW slice, after the close.
+    expect(hk.slice.slice_id).toBe("2026-07-14-1000");
+    expect(hk.slice.continuesFrom).toBe("2026-07-14-0900");
   });
 
-  it("falls back to a deterministic mark when the analyzer returns no closed marking", async () => {
+  it("falls back to a deterministic mark when the analyzer returns no closed marking (never close dry)", async () => {
     seedAgedActiveSlice({ turns: [{ timestamp: "t0", role: "user", content: "old" }] });
     mockCreateSlice("2026-07-14-1000");
 
-    const input = makeInput("wrapping up");
-    const hk = await housekeeping(input);
-    await runScribe(input, hk);
+    await housekeeping(makeInput("wrapping up"));
 
     const closedSlice = JSON.parse(fakeDisk.files.get("2026-07-14-0900:core")!) as TimeSlice;
+    expect(closedSlice.status).toBe("closed");
     expect(closedSlice.focus).toBe("fallback focus");
     expect(closedSlice.summary).toBe("fallback summary");
   });
 
-  it("no close pending: no closeSlice, but the boundary event still lands on the previous closed slice — once, idempotently", async () => {
-    // A closed predecessor on disk (from an earlier turn), an active slice now.
+  it("no page ends → ZERO summarization: the derivation runs without a closing slice and nothing closes", async () => {
+    fakeDisk.persistSlice(makeSlice({
+      turns: [
+        { timestamp: "t0", role: "user", content: "earlier" },
+        { timestamp: "t1", role: "agent", content: "reply" },
+      ],
+    }));
+
+    const input = makeInput("follow up", {
+      modelMessages: [
+        { role: "assistant", content: "reply" },
+      ] as unknown as TurnInput["modelMessages"],
+    });
+    const hk = await housekeeping(input);
+
+    // The derivation still ran (its memoryUpdate reading feeds 序 6)…
+    expect(episodic.analyzeTurn).toHaveBeenCalledOnce();
+    expect(
+      (episodic.analyzeTurn.mock.calls[0][0] as { closingSlice?: unknown }).closingSlice,
+    ).toBeUndefined();
+    // …but nothing closed: the living page waits for its real end.
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    expect(hk.slice.status).toBe("active");
+    expect(hk.slice.slice_id).toBe("2026-07-14-0900");
+  });
+
+  it("an already-marked page is closed AS-IS — needs_marking idempotency, never re-summarized", async () => {
+    seedAgedActiveSlice({
+      focus: "existing focus",
+      summary: "existing summary",
+      turns: [{ timestamp: "t0", role: "user", content: "old" }],
+    });
+    mockCreateSlice("2026-07-14-1000");
+    // Even when the analyzer WOULD return a marking, it must not land: the
+    // page is already marked, so it is never the derivation's object.
+    episodic.analyzeTurn.mockResolvedValue({
+      ...baseAnalysis(),
+      closedMarking: { focus: "SHOULD NOT LAND", summary: "SHOULD NOT LAND", tone: "calm" },
+    });
+
+    await housekeeping(makeInput("new topic"));
+
+    expect(episodic.analyzeTurn).toHaveBeenCalledOnce();
+    expect(
+      (episodic.analyzeTurn.mock.calls[0][0] as { closingSlice?: unknown }).closingSlice,
+    ).toBeUndefined();
+    expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    const closedSlice = JSON.parse(fakeDisk.files.get("2026-07-14-0900:core")!) as TimeSlice;
+    expect(closedSlice.status).toBe("closed");
+    expect(closedSlice.focus).toBe("existing focus");
+    expect(closedSlice.summary).toBe("existing summary");
+  });
+
+  it("a closed predecessor's mailbox is never touched — the 序 4/5 dispatch chain is retired (v0.21 §A.2.2)", async () => {
+    // A closed predecessor carrying an UNANSWERED question marker on its
+    // mailbox, plus an active slice. Pre-v0.21 the scribe segment would have
+    // posted a [boundary-event] there and fired the boundary/question runs.
     fakeDisk.persistSlice(makeSlice({
       slice_id: "2026-07-14-0700",
       status: "closed",
@@ -1043,6 +1075,8 @@ describe("scribe segment (序 2–7)", () => {
         { timestamp: "t1", role: "agent", content: "reply" },
       ],
     }));
+    const mailboxBefore = '[doc-marker] {"id":"q1","kind":"question","title":"x"}\n';
+    fakeDisk.files.set("2026-07-14-0700:agent", mailboxBefore);
 
     const input = makeInput("follow up", {
       modelMessages: [
@@ -1050,110 +1084,46 @@ describe("scribe segment (序 2–7)", () => {
       ] as unknown as TurnInput["modelMessages"],
     });
     const hk = await housekeeping(input);
-    await runScribe(input, hk);
-    await runScribe(input, hk); // redelivery of the whole segment
+    await runExplicitEvolution(input, hk);
+    await runExplicitEvolution(input, hk); // redelivery of the whole post-reply segment
 
     expect(episodic.closeSlice).not.toHaveBeenCalled();
-    const mailbox = fakeDisk.files.get("2026-07-14-0700:agent") ?? "";
-    const eventLines = mailbox.split("\n").filter((l) => l.startsWith("[boundary-event]"));
-    expect(eventLines).toHaveLength(1);
-    const event = JSON.parse(eventLines[0].slice("[boundary-event]".length));
-    expect(event.closedBy).toBe("idle_gap");
+    // Byte-identical: no [boundary-event], no marker consumption, nothing.
+    expect(fakeDisk.files.get("2026-07-14-0700:agent")).toBe(mailboxBefore);
   });
 
-  it("序 5 starts the question run when the closed slice's mailbox holds unanswered question markers", async () => {
+  it("an orphaned active slice with no re-derivable signal is warned and left open (never fabricate a cause)", async () => {
+    // The orphan is NOT aged and below every cap — nothing re-derives.
     fakeDisk.persistSlice(makeSlice({
-      slice_id: "2026-07-14-0700",
-      status: "closed",
-      closedBy: "idle_gap",
-      start: "2026-07-14T07:00:00.000Z",
-      end: "2026-07-14T07:30:00.000Z",
-      turns: [{ timestamp: "u0", role: "user", content: "before" }],
-    } as Partial<TimeSlice>));
+      slice_id: "2026-07-14-0800",
+      turns: [{ timestamp: "u0", role: "user", content: "orphan" }],
+    }));
     fakeDisk.persistSlice(makeSlice({
       turns: [{ timestamp: "t0", role: "user", content: "earlier" }],
     }));
-    fakeDisk.files.set(
-      "2026-07-14-0700:agent",
-      '[doc-marker] {"id":"q1","kind":"question","title":"x"}\n',
-    );
-    docWritePath.extractDocMarkers.mockReturnValue([
-      { id: "q1", kind: "question" },
-      { id: "q2", kind: "question" },
-    ]);
-    docWritePath.extractProcessedMarkerIds.mockReturnValue(new Set(["q2"]));
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     try {
-      const input = makeInput("hi", {
-        modelMessages: [] as unknown as TurnInput["modelMessages"],
-      });
-      const hk = await housekeeping(input);
-      await runScribe(input, hk);
+      await housekeeping(makeInput("hi"));
 
-      // The question fact fired the question run — fire-and-forget, logged.
-      const questionStarts = workflowApi.start.mock.calls.filter(
-        (c) => c[0] === backgroundRuns.questionRun,
-      );
-      expect(questionStarts).toHaveLength(1);
-      expect(questionStarts[0][1]).toEqual([
-        { sliceId: "2026-07-14-0700", date: "2026-07-14" },
-      ]);
+      expect(episodic.closeSlice).not.toHaveBeenCalled();
       expect(
-        logSpy.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0].includes("question run started for 2026-07-14-0700"),
+        warnSpy.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0].includes("re-derives no close signal"),
         ),
       ).toBe(true);
+      // The derivation ran with NO closing slice — the orphan is skipped, not
+      // summarized.
+      expect(
+        (episodic.analyzeTurn.mock.calls[0][0] as { closingSlice?: unknown }).closingSlice,
+      ).toBeUndefined();
     } finally {
-      logSpy.mockRestore();
+      warnSpy.mockRestore();
     }
   });
+});
 
-  it("序 5 starts the boundary run for the newest closed slice — fired and logged, fire-and-forget", async () => {
-    fakeDisk.persistSlice(makeSlice({
-      slice_id: "2026-07-14-0700",
-      status: "closed",
-      closedBy: "idle_gap",
-      start: "2026-07-14T07:00:00.000Z",
-      end: "2026-07-14T07:30:00.000Z",
-      turns: [{ timestamp: "u0", role: "user", content: "before" }],
-    } as Partial<TimeSlice>));
-    fakeDisk.persistSlice(makeSlice({
-      turns: [{ timestamp: "t0", role: "user", content: "earlier" }],
-    }));
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-
-    try {
-      const input = makeInput("follow up", {
-        modelMessages: [
-          { role: "assistant", content: "reply" },
-        ] as unknown as TurnInput["modelMessages"],
-      });
-      const hk = await housekeeping(input);
-      await runScribe(input, hk);
-
-      const boundaryStarts = workflowApi.start.mock.calls.filter(
-        (c) => c[0] === backgroundRuns.boundaryRun,
-      );
-      expect(boundaryStarts).toHaveLength(1);
-      expect(boundaryStarts[0][1]).toEqual([
-        { sliceId: "2026-07-14-0700", date: "2026-07-14" },
-      ]);
-      expect(boundaryStarts[0][2]).toEqual({ region: "hkg1" });
-      // 闭片必唤起 — the firing is in the log.
-      expect(
-        logSpy.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0] === "[Boundary] run started for 2026-07-14-0700",
-        ),
-      ).toBe(true);
-      // No question markers → no question run.
-      expect(
-        workflowApi.start.mock.calls.some((c) => c[0] === backgroundRuns.questionRun),
-      ).toBe(false);
-    } finally {
-      logSpy.mockRestore();
-    }
-  });
+describe("explicit-instruction channel (序 6)", () => {
 
   it("序 6 runs the evolution ONLY on an explicit instruction — focus = the update, no fitness buckets", async () => {
     fakeDisk.persistSlice(makeSlice({
@@ -1180,7 +1150,7 @@ describe("scribe segment (序 2–7)", () => {
       ] as unknown as TurnInput["modelMessages"],
     });
     const hk = await housekeeping(input);
-    await runScribe(input, hk);
+    await runExplicitEvolution(input, hk);
 
     expect(evolution.runCardEvolution).toHaveBeenCalledOnce();
     const arg = evolution.runCardEvolution.mock.calls[0][0];
@@ -1216,7 +1186,7 @@ describe("scribe segment (序 2–7)", () => {
       ] as unknown as TurnInput["modelMessages"],
     });
     const hk = await housekeeping(input);
-    await runScribe(input, hk);
+    await runExplicitEvolution(input, hk);
 
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
     expect(
@@ -1252,7 +1222,7 @@ describe("scribe segment (序 2–7)", () => {
       ] as unknown as TurnInput["modelMessages"],
     });
     const hk = await housekeeping(input);
-    await runScribe(input, hk);
+    await runExplicitEvolution(input, hk);
 
     const evo = workflowMock.written.filter((c) => c.type === "data-evolution");
     expect(evo.length).toBeGreaterThan(0);
@@ -1282,44 +1252,17 @@ describe("scribe segment (序 2–7)", () => {
     });
   });
 
-  it("demo mode skips the whole scribe segment (no analysis, no scribe, no writes)", async () => {
+  it("demo mode skips the reckoning AND the explicit channel (no analysis, no evolution, no writes)", async () => {
     const hk = await housekeeping(makeInput("记住：以后都用中文", { useDemo: true }));
-    await scribeSegment(makeInput("记住：以后都用中文", { useDemo: true }), hk);
+    await explicitEvolutionSegment(makeInput("记住：以后都用中文", { useDemo: true }), hk);
 
     expect(episodic.analyzeTurn).not.toHaveBeenCalled();
-    expect(docWritePath.runScribePass).not.toHaveBeenCalled();
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
-  });
-
-  it("an orphaned active slice with no re-derivable signal is left for the background scan (warned, never closed)", async () => {
-    // The orphan is NOT aged and below every cap — nothing re-derives.
-    fakeDisk.persistSlice(makeSlice({
-      slice_id: "2026-07-14-0800",
-      turns: [{ timestamp: "u0", role: "user", content: "orphan" }],
-    }));
-    fakeDisk.persistSlice(makeSlice({
-      turns: [{ timestamp: "t0", role: "user", content: "earlier" }],
-    }));
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      const input = makeInput("hi");
-      const hk = await housekeeping(input);
-      await runScribe(input, hk);
-
-      expect(episodic.closeSlice).not.toHaveBeenCalled();
-      expect(
-        warnSpy.mock.calls.some(
-          (c) => typeof c[0] === "string" && c[0].includes("re-derives no close signal"),
-        ),
-      ).toBe(true);
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
   });
 });
 
-describe("scribe segment — bridge (outsourced) path", () => {
+describe("entry beat — bridge (outsourced) path", () => {
   function bridgeInput(msg = "记住这个") {
     const base = makeInput(msg, {
       modelMessages: [
@@ -1374,7 +1317,7 @@ describe("scribe segment — bridge (outsourced) path", () => {
 
     const input = bridgeInput();
     const hk = await housekeeping(input);
-    await scribeSegment(input, hk);
+    await runExplicitEvolution(input, hk);
 
     expect(bridgePhases.runHousekeepingBridge).toHaveBeenCalledOnce();
     const payload = bridgePhases.runHousekeepingBridge.mock.calls[0][0] as Record<string, unknown>;
@@ -1403,7 +1346,7 @@ describe("scribe segment — bridge (outsourced) path", () => {
 
     const input = bridgeInput();
     const hk = await housekeeping(input);
-    await scribeSegment(input, hk);
+    await runExplicitEvolution(input, hk);
 
     expect(bridgePhases.applyBridgeCardEvolution).not.toHaveBeenCalled();
     const cardFrames = workflowMock.written.filter(
@@ -1489,44 +1432,54 @@ describe("kill matrix (workflow redelivery)", () => {
     return JSON.parse(fakeDisk.files.get(`${id}:core`)!) as TimeSlice;
   }
 
-  it("kill after 序 1: redelivery appends nothing twice, closes the orphan exactly once, posts exactly one boundary event", async () => {
+  it("kill after the entry beat: the close is already committed — redelivery dedupes the turn and never re-closes (v0.21 §3)", async () => {
     seedAgedActiveSlice({
       turns: [{ timestamp: "t0", role: "user", content: "old" }],
     });
     mockCreateSlice("2026-07-14-1000");
     const input = makeInput("new topic");
 
-    // ── First delivery: housekeeping + 序 1 land, then the run DIES (no
-    //    scribe segment — the old slice stays active on disk).
+    // ── First delivery: the entry beat lands EVERYTHING (归纳 + 闭片 + 新片
+    //    + user turn) in its one commit; persistAgentTurn appends the reply;
+    //    then the run DIES before the post-reply segment.
     const hk1 = await housekeeping(input);
     await persistAgentTurn(hk1.slice, outcome, input.turnId);
 
+    // The old slice is already closed + marked on the fake disk (deterministic
+    // fallback — the default analyzer verdict carries no closedMarking).
+    expect(diskSlice("2026-07-14-0900").status).toBe("closed");
+
     // ── Redelivery: housekeeping recovers the NEW slice (newer id sorts
-    //    first), dedupes the user turn; the scribe segment re-discovers the
-    //    orphaned old slice from disk and finishes the boundary.
+    //    first), dedupes the user turn; no page ends this time, so the beat's
+    //    derivation runs with NO closing slice (zero re-summarization).
     const hk2 = await housekeeping(input);
     expect(hk2.slice.slice_id).toBe("2026-07-14-1000");
-    expect(hk2.pendingClose).toBeUndefined(); // nothing decided against the new slice
     await persistAgentTurn(hk2.slice, outcome, input.turnId);
-    await scribeSegment(input, hk2);
+    await runExplicitEvolution(input, hk2);
 
     const finalNew = diskSlice("2026-07-14-1000");
     expect(finalNew.turns.filter((t) => t.role === "user" && t.turnId === "test-id")).toHaveLength(1);
     expect(finalNew.turns.filter((t) => t.role === "agent" && t.turnId === "test-id")).toHaveLength(1);
-    expect(episodic.appendTurn).not.toHaveBeenCalledTimes(4); // user + agent, once each... (2 calls total)
+    expect(episodic.appendTurn).toHaveBeenCalledTimes(1); // the agent turn, once
+    // Exactly ONE close across both deliveries — the redelivery found the old
+    // slice already closed and never re-decided it.
     expect(episodic.closeSlice).toHaveBeenCalledOnce();
+    expect(episodic.closeSlice.mock.calls[0][1]).toBe("time_cap");
+    expect(episodic.analyzeTurn).toHaveBeenCalledTimes(2);
+    expect(
+      (episodic.analyzeTurn.mock.calls[1][0] as { closingSlice?: unknown }).closingSlice,
+    ).toBeUndefined();
     const finalOld = diskSlice("2026-07-14-0900");
     expect(finalOld.status).toBe("closed");
     expect(finalOld.closedBy).toBe("time_cap");
-    const mailbox = fakeDisk.files.get("2026-07-14-0900:agent") ?? "";
-    expect(
-      mailbox.split("\n").filter((l) => l.startsWith("[boundary-event]")),
-    ).toHaveLength(1);
+    expect(finalOld.focus).toBe("fallback focus");
+    // §A.2.2: no [boundary-event] was ever posted — the mailbox does not exist.
+    expect(fakeDisk.files.get("2026-07-14-0900:agent")).toBeUndefined();
   });
 
-  it("kill after 序 3: the close is on disk but the event never posted — the next run closes nothing and posts it once", async () => {
-    // Disk state as if 序 3 committed and the run died before 序 5: the old
-    // slice is CLOSED, its mailbox carries no boundary event.
+  it("kill replay with the close already on disk: nothing re-closes, nothing re-summarizes, the mailbox stays untouched", async () => {
+    // Disk state as if the entry beat committed and the run died right after:
+    // the old slice is CLOSED + marked; the successor carries the full turn.
     fakeDisk.persistSlice(makeSlice({
       slice_id: "2026-07-14-0900",
       status: "closed",
@@ -1550,14 +1503,22 @@ describe("kill matrix (workflow redelivery)", () => {
     const input = makeInput("new topic");
 
     const hk = await housekeeping(input);
-    await scribeSegment(input, hk);
-    await scribeSegment(input, hk); // a second redelivery for good measure
+    await runExplicitEvolution(input, hk);
+    const hk2 = await housekeeping(input); // a second redelivery for good measure
+    await runExplicitEvolution(input, hk2);
 
     expect(episodic.closeSlice).not.toHaveBeenCalled();
-    const mailbox = fakeDisk.files.get("2026-07-14-0900:agent") ?? "";
-    expect(
-      mailbox.split("\n").filter((l) => l.startsWith("[boundary-event]")),
-    ).toHaveLength(1);
+    // Every derivation ran WITHOUT a closing slice — a closed page is never
+    // re-read, let alone re-summarized.
+    expect(episodic.analyzeTurn).toHaveBeenCalledTimes(2);
+    for (const call of episodic.analyzeTurn.mock.calls) {
+      expect((call[0] as { closingSlice?: unknown }).closingSlice).toBeUndefined();
+    }
+    expect(fakeDisk.files.get("2026-07-14-0900:agent")).toBeUndefined();
+    // The closed page's marks are byte-identical.
+    const old = diskSlice("2026-07-14-0900");
+    expect(old.focus).toBe("marked");
+    expect(old.summary).toBe("marked");
   });
 });
 
