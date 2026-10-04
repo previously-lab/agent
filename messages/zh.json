@@ -494,10 +494,14 @@
     "collapse": "收起对话",
     "expand": "展开为全屏",
     "exitFullscreen": "退出全屏",
-    "subtitleUser": "你",
     "subtitlePersona": "Previously",
-    "subtitleThinking": "正在整理…",
-    "subtitleReading": "查阅 {count} 条记忆"
+    "subtitleThinking": "（正在思考）",
+    "subtitleSearching": "（正在搜索）",
+    "subtitleRecalling": "（正在回忆）",
+    "subtitleReading": "（正在查阅 {count} 条记忆）",
+    "subtitleReplying": "（正在回复）",
+    "subtitleHousekeeping": "（正在整理）",
+    "subtitleEvolving": "（正在进化）"
   },
   "game": {
     "title": "旅店",

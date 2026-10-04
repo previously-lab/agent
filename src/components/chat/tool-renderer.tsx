@@ -5,7 +5,6 @@ import { ListFilesRenderer } from "./tool-renderers/list-files";
 import { ListDocsRenderer } from "./tool-renderers/list-docs";
 import { ReadDocRenderer } from "./tool-renderers/read-doc";
 import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
-import { RecallToolRenderer } from "./tool-renderers/recall";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { WebFetchRenderer } from "./tool-renderers/web-fetch";
 import { ViewImageRenderer } from "./tool-renderers/view-image";
@@ -42,6 +41,7 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
     case "readPreviously":
     case "readTimeline":
     case "readStrand":
+    case "listStrands":
       return (
         <MemoryToolRenderer
           toolName={toolName}
@@ -51,7 +51,6 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
         />
       );
     case "listSlices":
-    case "listStrands":
       return (
         <ListFilesRenderer
           toolName={toolName}
@@ -129,17 +128,6 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
           input={input}
           output={output}
           state={renderState}
-        />
-      );
-    case "recall":
-      return (
-        <RecallToolRenderer
-          toolName={toolName}
-          input={input}
-          output={output}
-          state={renderState}
-          streamingText={streamingText}
-          streamingStage={streamingStage}
         />
       );
     case "thinkDeep":

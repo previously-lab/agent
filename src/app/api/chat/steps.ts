@@ -1182,6 +1182,16 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   // only; every content decision (expiry, overdue handling, caps, format)
   // belongs to the agent, enforced INSIDE its write tools — there is no
   // mechanical pass that silently edits the card.
+  // v0.16 S1 — SINGLE-WRITER (design §3.2): every evolution write — the
+  // merged run itself (its tools write the card / direction / playbooks
+  // inside), the bridge-mode write applications, the generation settle, and
+  // the direction-rejection backoff — runs under ONE process-wide
+  // `withSliceLock("evolution")`. Two concurrent turns can no longer tear
+  // the card/direction/playbooks apart with interleaved whole-file writes;
+  // cross-process conflicts still surface at commit time (non-fast-forward)
+  // and the loser re-runs (evolution is an idempotent review).
+  const withEvolutionLock = <T>(fn: () => Promise<T>): Promise<T> =>
+    withSliceLock("evolution", fn);
   // v1.1: the trigger check runs EVERY turn, BEFORE the agent reply (the
   // owner's model: when negative feedback is identified, the evolution check
   // must fire — the reply the user is about to read should already reflect
@@ -1347,7 +1357,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
           `[Evolution] direction (bridge): retired ${aged.retired.length} expired hypothesis(es)`,
         );
       }
-      await writeDirection(aged.doc, batch);
+      await withEvolutionLock(() => writeDirection(aged.doc, batch));
       const summary =
         verdict.summary.trim() || "Direction updated (bridge housekeeping report)";
       console.log("[Evolution] direction updated (bridge report)");
@@ -1379,10 +1389,12 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   > => {
     if (!bridgeReport || bridgeReport.playbooks.length === 0) return undefined;
     try {
-      const res = await applyBridgePlaybookWrites(
-        bridgeReport.playbooks,
-        evolutionTriggers.map((t) => t.bucket),
-        batch,
+      const res = await withEvolutionLock(() =>
+        applyBridgePlaybookWrites(
+          bridgeReport.playbooks,
+          evolutionTriggers.map((t) => t.bucket),
+          batch,
+        ),
       );
       console.log(
         `[Evolution] bridge playbooks: ${res.applied.length} applied` +
@@ -1416,7 +1428,7 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
   }) => {
     if (evolutionTriggers.length === 0 || !result.ran || result.error) return;
     try {
-      await resetFitnessGeneration(batch);
+      await withEvolutionLock(() => resetFitnessGeneration(batch));
       console.log(
         `[Evolution] generation settled (triggers: ${evolutionTriggers.map((t) => t.bucket).join(", ")})`,
       );
@@ -1481,14 +1493,16 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
           // The card opens in its running state first — a terminal chunk out
           // of nowhere reads as "it never ran".
           emitEvolutionProgress(stream, "reviewing");
-          evolutionResult = await applyBridgeCardEvolution({
-            card: cardRaw,
-            sliceId: diskSlice.slice_id,
-            today: todayLocal ?? new Date().toISOString().slice(0, 10),
-            reason: bridgeReport.evolution.reason,
-            mutations: bridgeReport.evolution.mutations,
-            batch,
-          });
+          evolutionResult = await withEvolutionLock(() =>
+            applyBridgeCardEvolution({
+              card: cardRaw,
+              sliceId: diskSlice.slice_id,
+              today: todayLocal ?? new Date().toISOString().slice(0, 10),
+              reason: bridgeReport.evolution.reason,
+              mutations: bridgeReport.evolution.mutations,
+              batch,
+            }),
+          );
           await settleFitnessGeneration(evolutionResult);
           await emitEvolutionResult(stream, withDirection(evolutionResult));
           freezeEvolutionSummary(slice);
@@ -1582,39 +1596,43 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
               tone: s.tone,
             }));
           const triggeredBuckets = triggers.map((t) => t.bucket);
-          evolutionResult = await runCardEvolution({
-            model: input.modelConfig,
-            sliceId: diskSlice.slice_id,
-            closedSliceId: diskSlice.slice_id,
-            recentTurns: diskSlice.turns.map((t) => ({ role: t.role, content: t.content })),
-            currentSliceTags: diskSlice.tags,
-            signal: "slice_closed",
-            focus: explicitUpdate?.content,
-            readers: buildCardReaders(input),
-            onProgress: onEvolutionProgress,
-            onEvolutionLine,
-            batch,
-          todayDate: todayLocal,
-          directionEval: {
-            current: currentDirection,
-            mode: directionMode,
-            cardSelfModel,
-            recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
-            recentMarkings,
-            analysis,
-          },
-          triggeredBuckets,
-          fitnessEvents: fitnessStore.events
-            .filter((e) => triggeredBuckets.includes(e.bucket))
-            .slice(-15),
-          fitnessSignals: thisSliceSignals,
-        });
+          evolutionResult = await withEvolutionLock(() =>
+            runCardEvolution({
+              model: input.modelConfig,
+              sliceId: diskSlice.slice_id,
+              closedSliceId: diskSlice.slice_id,
+              recentTurns: diskSlice.turns.map((t) => ({ role: t.role, content: t.content })),
+              currentSliceTags: diskSlice.tags,
+              signal: "slice_closed",
+              focus: explicitUpdate?.content,
+              readers: buildCardReaders(input),
+              onProgress: onEvolutionProgress,
+              onEvolutionLine,
+              batch,
+              todayDate: todayLocal,
+              directionEval: {
+                current: currentDirection,
+                mode: directionMode,
+                cardSelfModel,
+                recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
+                recentMarkings,
+                analysis,
+              },
+              triggeredBuckets,
+              fitnessEvents: fitnessStore.events
+                .filter((e) => triggeredBuckets.includes(e.bucket))
+                .slice(-15),
+              fitnessSignals: thisSliceSignals,
+            }),
+          );
           // A REJECTED direction proposal (the old skeleton survives) must not
           // re-fire the gate on every remaining turn of this slice — record
           // the backoff keyed to the ACTIVE slice. Best-effort: a recording
           // failure just means the gate fires once more next turn.
           if (evolutionResult.direction?.outcome === "rejected") {
-            await recordDirectionRejection(slice.slice_id, batch).catch((e) =>
+            await withEvolutionLock(() =>
+              recordDirectionRejection(slice.slice_id, batch),
+            ).catch((e) =>
               console.warn(
                 "[Evolution] could not record the direction rejection:",
                 e instanceof Error ? e.message : e,
@@ -1721,16 +1739,18 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
             // Open the card in its running state first — a terminal chunk out
             // of nowhere reads as "it never ran".
             emitEvolutionProgress(stream, "reviewing");
-            evolutionResult = await applyBridgeCardEvolution({
-              card: bridgeCardRaw ?? (await readCurrentPreviously(batch)),
-              sliceId: slice.slice_id,
-              today: todayLocal ?? new Date().toISOString().slice(0, 10),
-              reason:
-                bridgeReport.evolution.reason ||
-                `Fitness trigger: ${evolutionTriggers.map((t) => t.bucket).join(", ")}`,
-              mutations: bridgeReport.evolution.mutations,
-              batch,
-            });
+            evolutionResult = await withEvolutionLock(async () =>
+              applyBridgeCardEvolution({
+                card: bridgeCardRaw ?? (await readCurrentPreviously(batch)),
+                sliceId: slice.slice_id,
+                today: todayLocal ?? new Date().toISOString().slice(0, 10),
+                reason:
+                  bridgeReport.evolution.reason ||
+                  `Fitness trigger: ${evolutionTriggers.map((t) => t.bucket).join(", ")}`,
+                mutations: bridgeReport.evolution.mutations,
+                batch,
+              }),
+            );
             await settleFitnessGeneration(evolutionResult);
             await emitEvolutionResult(stream, withDirection({
               ...evolutionResult,
@@ -1782,36 +1802,40 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
               tone: s.tone,
             }));
           const triggeredBuckets = evolutionTriggers.map((t) => t.bucket);
-          evolutionResult = await runCardEvolution({
-            model: input.modelConfig,
-            sliceId: slice.slice_id,
-            recentTurns: input.recentTurns,
-            currentSliceTags: slice.tags,
-            signal: "new_observation",
-            focus: explicitUpdate?.content,
-            readers: buildCardReaders(input),
-            onProgress: onEvolutionProgress,
-            onEvolutionLine,
-            batch,
-            todayDate: todayLocal,
-            directionEval: {
-              current: currentDirection,
-              mode: directionMode,
-              cardSelfModel,
-              recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
-              recentMarkings,
-              analysis,
-            },
-            triggeredBuckets,
-            fitnessEvents: fitnessStore.events
-              .filter((e) => triggeredBuckets.includes(e.bucket))
-              .slice(-15),
-            fitnessSignals: thisSliceSignals,
-          });
+          evolutionResult = await withEvolutionLock(() =>
+            runCardEvolution({
+              model: input.modelConfig,
+              sliceId: slice.slice_id,
+              recentTurns: input.recentTurns,
+              currentSliceTags: slice.tags,
+              signal: "new_observation",
+              focus: explicitUpdate?.content,
+              readers: buildCardReaders(input),
+              onProgress: onEvolutionProgress,
+              onEvolutionLine,
+              batch,
+              todayDate: todayLocal,
+              directionEval: {
+                current: currentDirection,
+                mode: directionMode,
+                cardSelfModel,
+                recentEvents: fitnessStore.events.slice(-DIRECTION_RECENT_EVENTS),
+                recentMarkings,
+                analysis,
+              },
+              triggeredBuckets,
+              fitnessEvents: fitnessStore.events
+                .filter((e) => triggeredBuckets.includes(e.bucket))
+                .slice(-15),
+              fitnessSignals: thisSliceSignals,
+            }),
+          );
           // Same per-slice backoff as the boundary path: a rejected direction
           // proposal silences the gate for the rest of THIS slice.
           if (evolutionResult.direction?.outcome === "rejected") {
-            await recordDirectionRejection(slice.slice_id, batch).catch((e) =>
+            await withEvolutionLock(() =>
+              recordDirectionRejection(slice.slice_id, batch),
+            ).catch((e) =>
               console.warn(
                 "[Evolution] could not record the direction rejection:",
                 e instanceof Error ? e.message : e,
@@ -1853,14 +1877,16 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
           // slice-close branch above.
           emitEvolutionProgress(stream, "reviewing");
           evolutionResult = {
-            ...(await applyBridgeCardEvolution({
-              card: cardRaw,
-              sliceId: slice.slice_id,
-              today: todayLocal ?? new Date().toISOString().slice(0, 10),
-              reason: bridgeReport.evolution.reason || explicitUpdate.content,
-              mutations: bridgeReport.evolution.mutations,
-              batch,
-            })),
+            ...(await withEvolutionLock(() =>
+              applyBridgeCardEvolution({
+                card: cardRaw,
+                sliceId: slice.slice_id,
+                today: todayLocal ?? new Date().toISOString().slice(0, 10),
+                reason: bridgeReport.evolution.reason || explicitUpdate.content,
+                mutations: bridgeReport.evolution.mutations,
+                batch,
+              }),
+            )),
             ...(bridgePlaybooks ? { playbooks: bridgePlaybooks } : {}),
           };
           await emitEvolutionResult(stream, evolutionResult);
@@ -1885,21 +1911,23 @@ export async function housekeeping(input: TurnInput): Promise<HousekeepingResult
         // an explicit-request run (no direction evaluation and no fitness
         // buckets triggered here, so writePlaybook stays gated off).
         const direction = await readDirection().catch(() => null);
-        evolutionResult = await runCardEvolution({
-          model: input.modelConfig,
-          sliceId: slice.slice_id,
-          recentTurns: input.recentTurns,
-          currentSliceTags: slice.tags,
-          focus: explicitUpdate.content,
-          signal: "new_observation",
-          readers: buildCardReaders(input),
-          onProgress: onEvolutionProgress,
-          onEvolutionLine,
-          batch,
-          todayDate: todayLocal,
-          direction,
-          triggeredBuckets: [],
-        });
+        evolutionResult = await withEvolutionLock(() =>
+          runCardEvolution({
+            model: input.modelConfig,
+            sliceId: slice.slice_id,
+            recentTurns: input.recentTurns,
+            currentSliceTags: slice.tags,
+            focus: explicitUpdate.content,
+            signal: "new_observation",
+            readers: buildCardReaders(input),
+            onProgress: onEvolutionProgress,
+            onEvolutionLine,
+            batch,
+            todayDate: todayLocal,
+            direction,
+            triggeredBuckets: [],
+          }),
+        );
         await emitEvolutionResult(stream, evolutionResult);
         freezeEvolutionSummary(slice);
         console.log(

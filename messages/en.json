@@ -494,10 +494,14 @@
     "collapse": "Collapse the conversation",
     "expand": "Expand to full screen",
     "exitFullscreen": "Exit full screen",
-    "subtitleUser": "You",
     "subtitlePersona": "Previously",
-    "subtitleThinking": "Thinking…",
-    "subtitleReading": "Reading {count} memories"
+    "subtitleThinking": "(thinking…)",
+    "subtitleSearching": "(searching…)",
+    "subtitleRecalling": "(recalling…)",
+    "subtitleReading": "(reading {count} memories…)",
+    "subtitleReplying": "(replying…)",
+    "subtitleHousekeeping": "(tidying up…)",
+    "subtitleEvolving": "(evolving…)"
   },
   "game": {
     "title": "The Hotel",

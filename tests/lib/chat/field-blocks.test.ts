@@ -12,6 +12,7 @@ import {
   minOffsetFor,
   originMinOffset,
   prependHeadCount,
+  seekSliceIdOf,
   sliceIdOf,
   splitItems,
   FIELD_ORIGIN_PX,
@@ -117,6 +118,22 @@ describe("sliceIdOf", () => {
         timeIso: "2026-08-11T11:00:00.000Z",
       }),
     ).toBeNull();
+  });
+});
+
+describe("seekSliceIdOf", () => {
+  it("unwraps a seam key into the slice id the pager pages by", () => {
+    expect(seekSliceIdOf("seam-2026-08-11-1010")).toBe("2026-08-11-1010");
+  });
+
+  it("passes a bare slice id through unchanged", () => {
+    expect(seekSliceIdOf("2026-08-11-1010")).toBe("2026-08-11-1010");
+  });
+
+  it("leaves non-seam keys alone (a resume key is not a slice id)", () => {
+    expect(seekSliceIdOf("resume-2026-08-11-1010")).toBe(
+      "resume-2026-08-11-1010",
+    );
   });
 });
 

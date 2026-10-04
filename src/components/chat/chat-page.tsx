@@ -35,7 +35,6 @@ import {
   buildHistoryItems,
   type ResumeBlock,
 } from "@/lib/chat/stream-items";
-import { useSliceStream } from "@/hooks/use-slice-stream";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -102,10 +101,12 @@ interface ChatPageProps {
    *  where it is drawn and the number is owned by the provider, where both
    *  fields can see it. */
   onComposerClearanceChange?: (px: number) => void;
-  /** Publish the newest turn's subtitle line (v0.13 §4) — folded here from
-   *  the live messages by the pure reducer in `lib/chat/subtitle-line.ts`.
-   *  The panel's pill renders it; the overlay lifts the value from this
-   *  page back down into the panel as a prop. */
+  /** Publish the in-flight turn's subtitle line (v0.13 §4) — the current
+   *  discrete activity caption (what the agent is doing, never the reply's
+   *  words), folded here from the live messages by the pure reducer in
+   *  `lib/chat/subtitle-line.ts` and gated on a turn actually being in
+   *  flight. The panel's pill renders it; the overlay lifts the value from
+   *  this page back down into the panel as a prop. */
   onSubtitleLineChange?: (line: SubtitleLine | null) => void;
   /** The shell provider's current-view getter (v0.13 §5 视野注入). Read at SEND
    *  time in the transport body as the structured `view` field — which slice
@@ -352,25 +353,20 @@ export function sliceStartIndex(
 }
 
 /**
- * The unified stream as subtitle sources. History turns carry their
- * persisted markdown body as ONE synthetic text part (slice turns have no
- * AI SDK parts — the fold must quote the words on record, never a
- * paraphrase); live turns carry their raw part stream. Non-turn items —
- * seams, the resume banner, the briefing seat — have nothing to say and
- * are skipped. Oldest → newest, matching the stream's order.
+ * The live run as subtitle sources. The subtitle captions WHAT THE AGENT IS
+ * DOING (the discrete activity blocks, `lib/chat/subtitle-line.ts`), so only
+ * the LIVE turn's messages are sources — history turns (slice-restored,
+ * synthetic text parts) are happened time and never light up the caption.
+ * Oldest → newest, matching the stream's order.
  */
 function subtitleSourcesOf(items: readonly ChatStreamItem[]): SubtitleSource[] {
   const sources: SubtitleSource[] = [];
   for (const item of items) {
-    if (item.kind === "history-turn") {
-      sources.push({
-        role: item.turn.role,
-        parts: [{ type: "text", text: item.turn.content }],
-      });
-    } else if (item.kind === "live") {
+    if (item.kind === "live") {
       sources.push({
         role: item.message.role,
         parts: (item.message.parts ?? []) as AnyPart[],
+        live: true,
       });
     }
   }
@@ -478,8 +474,10 @@ function Inner({
   // ── Unified message stream (v0.10 §1/§2) ──────────────────────────────
   // The resume block: when the newest slice is still alive (and we're not
   // re-attaching to an in-flight run whose stash already carries those turns),
-  // its turns re-enter the stream from the slice itself. The historical
-  // paging cursor is pinned BEFORE that slice so it never double-renders.
+  // its turns re-enter the PANEL from the slice itself — the restored current
+  // conversation, in memory. The repository's paged history does NOT live
+  // here any more (2026-10-04): the R3F field loads it itself, active slice
+  // included, and the two surfaces never share an item list.
   const [resumeBlock] = useState<ResumeBlock | null>(() =>
     arrival.mode === "resume" && !shouldResume
       ? {
@@ -491,47 +489,22 @@ function Inner({
         }
       : null,
   );
-  const [streamCursor] = useState<string | null>(() =>
-    arrival.mode === "resume" ? arrival.start : null,
-  );
-  const stream = useSliceStream(persona, streamCursor);
 
   // The field owns the position, so the jump paths drive it directly rather
-  // than going through a list handle.
+  // than going through a list handle. The same ref also reaches the DOM
+  // list's handle when the panel is the mounted surface (the two handles are
+  // structurally identical; only the field's carries `seekKey`).
   const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
   // The time of the item currently at the top of the viewport (reported by the
-  // stream) — the travel clock rolls FROM where the viewer actually is.
+  // mounted surface) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
 
-  // Page one older slice in. There is no index origin to shift any more: the
-  // field holds its position through a prepend by measuring the added blocks,
-  // which is the same guarantee without a windowing library's bookkeeping.
-  const { loadOlder, loadingOlder } = stream;
-  const pageOlder = useCallback(async () => {
-    await loadOlder();
-  }, [loadOlder]);
-
-  // startReached while a page is in flight (incl. the initial fill) would
-  // no-op through loadOlder's guard — re-fire once it settles so a short list
-  // keeps filling the viewport without requiring a scroll wiggle.
-  const startReachedPendingRef = useRef(false);
-  const handleStartReached = useCallback(() => {
-    if (loadingOlder) {
-      startReachedPendingRef.current = true;
-      return;
-    }
-    void pageOlder();
-  }, [loadingOlder, pageOlder]);
-  useEffect(() => {
-    if (!loadingOlder && startReachedPendingRef.current) {
-      startReachedPendingRef.current = false;
-      void pageOlder();
-    }
-  }, [loadingOlder, pageOlder]);
-
-  // Load the newest slice on mount — feeds the empty briefing. (The 3D
+  // Load the newest slice on mount — feeds the empty briefing and the
+  // empty-memory verdict (`hasMore` included: an empty recent page with more
+  // pages behind it is NOT an empty memory). (The 3D
   // timeline loads its catalog lazily inside AppShell.)
   const [episodicReady, setEpisodicReady] = useState(false);
+  const [episodicHasMore, setEpisodicHasMore] = useState(true);
   useEffect(() => {
     let cancelled = false;
     getEpisodicState(persona)
@@ -539,6 +512,7 @@ function Inner({
         if (cancelled) return;
         setTimelineSlices(data.recent);
         setActiveSlice(data.active);
+        setEpisodicHasMore(data.hasMore);
       })
       .catch(() => {
         // silently ignore
@@ -801,31 +775,29 @@ function Inner({
     }));
   }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice]);
 
-  // ── Arrival forms (v0.10 §1.2 Rev 2): the stream is ALWAYS the view — no
-  // "briefing page vs stream" split. Briefing mode seats the EmptyBriefing
-  // content as a stream-tail card (history pages in above it); resume mode
-  // restores the alive slice's turns under a banner. The standalone
-  // full-screen briefing survives ONLY for an empty memory (not one slice),
-  // known once the first page settles (initialLoaded).
+  // ── Arrival forms (v0.10 §1.2 Rev 2, re-split 2026-10-04): the PANEL is
+  // the in-memory current conversation — no repository history, no paging.
+  // Briefing mode's EmptyBriefing card seats ONLY in the R3F field's tail
+  // (happened time is the field's); resume mode restores the alive slice's
+  // turns under a banner HERE (the restored current conversation). The
+  // standalone full-screen briefing survives ONLY for an empty memory (not
+  // one slice), known once the episodic state settles.
   const emptyMemory =
     arrival.mode === "briefing" &&
-    stream.initialLoaded &&
-    stream.slices.length === 0 &&
-    !stream.hasMore &&
+    episodicReady &&
+    timelineSlices.length === 0 &&
+    !episodicHasMore &&
     messages.length === 0;
   const showBriefingCard = arrival.mode === "briefing" && !emptyMemory;
-  // A mount-time "now" stamp — the briefing tail item's time anchor for the
-  // time indicator / rail.
-  const [briefingTimeIso] = useState(() => new Date().toISOString());
 
   // ── Arrival skeleton cover ─────────────────────────────────────────────
-  // Until the mount fetches settle (episodic state + the first history
-  // page), an isomorphic skeleton covers the pane and crossfades out — the
-  // briefing card / restored turns replace it without a hard cut. A hard
+  // Until the mount fetches settle (the episodic state), an isomorphic
+  // skeleton covers the pane and crossfades out — the
+  // restored turns / the empty state replace it without a hard cut. A hard
   // backstop lifts the cover even if a fetch hangs forever.
   const reducedMotion = useReducedMotion() ?? false;
   const [skeletonBackstop, setSkeletonBackstop] = useState(false);
-  const arrivalReady = episodicReady && stream.initialLoaded;
+  const arrivalReady = episodicReady;
   useEffect(() => {
     if (arrivalReady) return;
     const id = setTimeout(() => setSkeletonBackstop(true), 12_000);
@@ -833,16 +805,13 @@ function Inner({
   }, [arrivalReady]);
   const showArrivalSkeleton = !arrivalReady && !skeletonBackstop;
 
+  // THE PANEL'S ITEMS (2026-10-04): the in-memory current conversation and
+  // nothing else — the arrival-restored resume block plus the live `useChat`
+  // messages. The repository's time slices never enter this list; the R3F
+  // field loads them itself.
   const items = useMemo<ChatStreamItem[]>(() => {
-    const tail: ChatStreamItem[] = showBriefingCard
-      ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
-      : [];
-    return [
-      ...buildHistoryItems(stream.slices, resumeBlock),
-      ...tail,
-      ...liveItems,
-    ];
-  }, [stream.slices, resumeBlock, liveItems, showBriefingCard, briefingTimeIso]);
+    return [...buildHistoryItems([], resumeBlock), ...liveItems];
+  }, [resumeBlock, liveItems]);
   // Refs for the async jump path (scrollToIndex after paging lands).
 
   /**
@@ -866,6 +835,37 @@ function Inner({
         requestAnimationFrame(() => attempt(left - 1));
       };
       attempt(frames);
+    },
+    [],
+  );
+
+  /**
+   * The async form of `withField`: some handle calls RESOLVE — `seekKey`
+   * pages the field until its target slice is loaded — so the jump path
+   * needs the answer, not just the dispatch. Resolves `null` when no surface
+   * answered within the retry budget (an unmounted field is an honest
+   * silence, not a fake landing).
+   */
+  const withFieldAsync = useCallback(
+    <T,>(
+      fn: (api: ConversationFieldHandle) => Promise<T>,
+      frames = 120,
+    ): Promise<T | null> => {
+      return new Promise((resolve) => {
+        const attempt = (left: number) => {
+          const api = fieldApiRef.current;
+          if (api) {
+            void fn(api).then(resolve);
+            return;
+          }
+          if (left <= 0) {
+            resolve(null);
+            return;
+          }
+          requestAnimationFrame(() => attempt(left - 1));
+        };
+        attempt(frames);
+      });
     },
     [],
   );
@@ -940,14 +940,14 @@ function Inner({
 
   // The travel clock's TARGET time: producers that know the slice's start
   // pass it as `toTime` (the timeline card click threads it through
-  // `?atStart=`), everyone else resolves it — loaded stream window, the
-  // recent-summaries catalog, the resume block, else one catalog fetch.
+  // `?atStart=`), everyone else resolves it — the recent-summaries catalog,
+  // the resume block, else one catalog fetch. (The loaded stream window used
+  // to answer too; the panel no longer holds one — the field owns the
+  // repository's slices.)
   // Unknown target → the clock just holds (to = from).
   const resolveSliceStart = useCallback(
     async (sliceId: string): Promise<string | null> => {
-      const known =
-        stream.slices.find((s) => s.id === sliceId)?.start ??
-        timelineSlices.find((s) => s.slice_id === sliceId)?.start;
+      const known = timelineSlices.find((s) => s.slice_id === sliceId)?.start;
       if (known) return known;
       if (resumeBlock?.sliceId === sliceId) return resumeBlock.start;
       try {
@@ -958,8 +958,14 @@ function Inner({
         return null;
       }
     },
-    [stream.slices, timelineSlices, resumeBlock],
+    [timelineSlices, resumeBlock],
   );
+
+  // The panel's tier, hoisted above the jump path: a jump to a past slice
+  // folds the fullscreen panel back to the pill so the field it targets is
+  // visible. The fold is the panel's own pill fold (body folds to zero
+  // height), and the field is a sibling — neither unmounts.
+  const panelTier = usePanelTier();
 
   const handleSelectSlice = useCallback(
     async (sliceId: string, toTime?: string) => {
@@ -980,22 +986,27 @@ function Inner({
       });
       setTransition({ from, to, sliceId });
 
-      // Page backwards beneath the clock until the target slice is in the
-      // stream window (the resume slice is always "loaded" — it's the block
-      // right above the live turns).
-      let found = true;
-      if (sliceId !== "now" && sliceId !== resumeBlock?.sliceId) {
-        // No index bookkeeping to do: the field tracks its own offsets and
-        // absorbs a prepend by measurement, not by shifting a window base.
-        found = await stream.loadUntilSlice(sliceId);
+      // Every past slice lives in the FIELD now (the panel's list is the
+      // in-memory conversation only — it cannot page a slice in). So a jump
+      // folds the fullscreen panel to the pill to reveal the field, then the
+      // field itself pages until the target's seam is loaded and lands on it.
+      let found: boolean | null = true;
+      if (sliceId !== "now") {
+        if (panelTier?.mode === "fullscreen") panelTier.setMode("pill");
+        found = await withFieldAsync((api) =>
+          api.seekKey
+            ? api.seekKey("seam-" + sliceId)
+            : Promise.resolve(api.scrollToKey("seam-" + sliceId)),
+        );
       }
 
       await clockLanded;
       setTransition(null);
 
-      if (!found) {
+      if (found === false) {
         // The catalog exhausted before the target — an honest miss, not a
-        // fake landing.
+        // fake landing. `null` (no surface answered in the retry budget) is
+        // honest silence: the clock closed, nothing to report.
         toast.error(tHist("notFound"));
         return;
       }
@@ -1008,20 +1019,19 @@ function Inner({
           scrollToBottom();
           return;
         }
-        // The field addresses a slice by its seam KEY — the seam carries the
-        // slice id — so it never needs the data-relative index the virtualized
-        // list wanted. A false return means the target is still paging in; the
-        // field lands on it when it appears.
+        // `seekKey` already paged and landed (or left the key pending to be
+        // honoured when the block commits); this re-affirms the target for
+        // the surfaces whose scrollToKey is the only landing path.
         withField((api) => api.scrollToKey("seam-" + sliceId));
       });
     },
     [
       selectedSliceId,
       transition,
-      resumeBlock,
-      stream,
+      panelTier,
       scrollToBottom,
       withField,
+      withFieldAsync,
       resolveSliceStart,
       tHist,
     ],
@@ -1092,25 +1102,24 @@ function Inner({
     onRunningChange?.(isLoading);
   }, [isLoading, onRunningChange]);
 
-  // ── The pill's subtitle line (v0.13 §4) ─────────────────────────────────
-  // The NEWEST message WITH SPEAKABLE TEXT, folded by the pure reducer. The
-  // source is the UNIFIED stream (`items`) — that is what the reader sees:
-  // the slice-driven history plus the live useChat turns. Publishing from
-  // `messages` alone went blank on first load, when the live list is empty
-  // but history already speaks. The walk back is the reducer's
-  // `foldSubtitleLineLatest`: the strip quotes one message's own opening
-  // words, never a paraphrase; only when nothing in the list is speakable
-  // does the fold fall back to the newest message's status (an in-flight
-  // turn's thinking/reading prefix) or null.
+  // ── The pill's subtitle line (v0.13 §4, re-contracted 2026-10-04) ───────
+  // The subtitle captions WHAT THE AGENT IS DOING — discrete activity blocks
+  // (thinking / searching / recalling / …), each replacing the last — never
+  // the reply's text. Sources are the LIVE turn only (history is happened
+  // time), and the line is published only while a turn is actually in
+  // flight: the gate is what makes stop / error / idle drop the caption
+  // immediately (the reducer's own `done` detection covers the clean finish,
+  // where the last activity would otherwise linger one commit).
   useEffect(() => {
-    onSubtitleLineChange?.(foldSubtitleLineLatest(subtitleSourcesOf(items)));
-  }, [items, onSubtitleLineChange]);
+    onSubtitleLineChange?.(
+      isLoading ? foldSubtitleLineLatest(subtitleSourcesOf(items)) : null,
+    );
+  }, [items, isLoading, onSubtitleLineChange]);
 
   // The panel tier this page is hosted at (null only outside a panel): at
   // the pill tier the conversation body is folded away and the stream goes
   // inert with it — the pill is the only interactive surface. The composer
   // is a sibling, not inside the stream column, so it stays live.
-  const panelTier = usePanelTier();
   const panelPill = panelTier?.mode === "pill";
 
   /**
@@ -1186,11 +1195,9 @@ function Inner({
         ) : (
           <UnifiedChatStream
             items={items}
-            loadingOlder={stream.loadingOlder}
-            hasMore={stream.hasMore}
-            onStartReached={handleStartReached}
-            error={error}
+            persona={persona}
             onTopItemChange={handleTopItemChange}
+            error={error}
             // Same rule as the anchors: only the FOREGROUND view publishes, so
             // the band's dot follows whichever field the reader is actually
             // looking at rather than being fought over by both.

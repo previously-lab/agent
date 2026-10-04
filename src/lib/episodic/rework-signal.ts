@@ -1,32 +1,31 @@
 /**
- * Rework-signal instrumentation (v1.0 design §2.6).
+ * Memory-quality signal instrumentation (design v0.15 §4.4).
  *
- * The most valuable implicit fitness signal: the main agent calls `recall`,
- * then opens slices ITSELF with readSlice. readSlice stays in the chat tool
- * surface as the VERIFICATION channel (design §1.4), so not every post-recall
- * read is a penalty:
+ * The recall colleague is retired: the `recall_verify` / `recall_rework`
+ * producers (v1.0 §2.6) are gone with it. Historical fitness data may still
+ * contain those values — every READER must tolerate them (the analyzer treats
+ * them as legacy noise, parsing never crashes on them).
  *
- *   - "verify" — the read slice was among recall's references (the by-design
- *     audit path), or within the set recall searched (the main agent pulling
- *     more original text from a slice recall already surfaced — recall.ts's
- *     contract explicitly allows this).
- *   - "rework" — a recall ran this conversation and the read slice was NOT in
- *     its references or searched trail: the main agent is doing recall's job
- *     itself, i.e. recall's answer was not trusted/used.
- *   - null — no recall has run this conversation (nothing to compare against),
- *     or the read target IS the ongoing conversation slice.
+ * What this module still produces:
  *
- * doc_rework (v0.15 design §4.4) extends the same instrument from the
- * document side: a readDoc whose text references slice X, followed by the
- * main agent opening slice X itself, means the document was not credited
- * for the fact it carried. Same fitness store, same recall bucket — the
- * mechanism serves memory quality no matter which producer is involved.
+ *   - "doc_rework" — the document-side probe (§4.4): the main agent reads a
+ *     document with readDoc, then opens with readSlice one of the slices THAT
+ *     document referenced: the document was not credited for the fact it
+ *     carried. This is the implicit memory-quality demerit now. It lands in
+ *     the fitness store's recall BUCKET (the bucket is "memory quality" in
+ *     meaning — the mechanism serves memory no matter which producer
+ *     emitted); the analyzer decides what the ratio means, including §7's
+ *     adjudication of whole mechanisms.
+ *   - "interaction_regenerate" / "interaction_interrupt" — the user's own
+ *     hands on the UI (regenerate = the previous reply was rejected;
+ *     interrupt = cut off mid-stream).
  *
  * The per-conversation record is module-level per-process state — the same
  * pattern manager.ts already uses for the active slice. Workflow steps in one
- * process share the module, so the recall outcome recorded by recallExecute is
- * visible to a later readSliceExecute. The map is FIFO-bounded: conversations
- * are short-lived and an unbounded map would leak across the process lifetime.
+ * process share the module, so the doc read recorded by readDocExecute is
+ * visible to a later readSliceExecute. The map is FIFO-bounded:
+ * conversations are short-lived and an unbounded map would leak across the
+ * process lifetime.
  *
  * Every emitted signal lands in TWO places, both best-effort (failures are
  * swallowed with a console.warn — instrumentation must never fail a tool):
@@ -39,34 +38,11 @@ import { appendSignal } from "@/lib/evolution/store";
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import { writeAgentTimeline } from "./manager";
 
-/** What recall found, kept per conversation slice for later readSlice checks. */
-export interface RecallOutcome {
-  /** Slice ids of recall's evidence references (the verification set). */
-  referenceIds: string[];
-  /** Recall's searched trail — free-text entries; a slice id may appear
-   *  embedded (e.g. "slice 2026-07-24-1500"), so membership is a substring
-   *  check, not equality. */
-  searchedIds: string[];
-  confidence: number;
-}
-
-export type ReworkKind = "verify" | "rework" | "doc_rework";
-
-/** Max conversations tracked per process — FIFO eviction beyond this. */
-const MAX_TRACKED_CONVERSATIONS = 50;
-
-/** conversation slice id → latest recall outcome. Insertion order = recency
- *  (recordRecallOutcome re-inserts on update), so eviction drops the stalest. */
-const outcomes = new Map<string, RecallOutcome>();
-
 /**
- * doc_rework probe (design v0.15 §4.4): the documents the main agent opened
- * this conversation, each with the slice ids its text references. When a
- * later readSlice opens one of THOSE slices, the document was not credited
- * for the fact it carried — an implicit demerit on document quality. The
- * signal lands in the SAME fitness store / recall bucket (the mechanism
- * serves memory quality regardless of which mechanism produced it); the
- * analyzer decides what the ratio means.
+ * The documents the main agent opened this conversation, each with the slice
+ * ids its text references (extracted by the readDoc executor via docs-query's
+ * extractSliceIds). When a later readSlice opens one of THOSE slices, the
+ * document was not credited for the fact it carried.
  */
 const docReads = new Map<string, Map<string, Set<string>>>();
 
@@ -74,30 +50,9 @@ const docReads = new Map<string, Map<string, Set<string>>>();
 const MAX_TRACKED_DOCS_PER_CONVERSATION = 50;
 
 /**
- * Record the outcome of a successful recall run. Later readSlice calls in the
- * same conversation are classified against THIS record (the latest recall
- * wins — a second recall supersedes the first as the reference point).
- */
-export function recordRecallOutcome(
-  conversationSliceId: string,
-  outcome: RecallOutcome,
-): void {
-  if (!conversationSliceId) return;
-  outcomes.delete(conversationSliceId);
-  outcomes.set(conversationSliceId, outcome);
-  while (outcomes.size > MAX_TRACKED_CONVERSATIONS) {
-    const oldest = outcomes.keys().next().value;
-    if (oldest === undefined) break;
-    outcomes.delete(oldest);
-  }
-}
-
-/**
  * Record a document the main agent read this conversation, with the slice
- * ids the document's text references (extracted by the readDoc executor via
- * docs-query's extractSliceIds). Later readSlice calls are classified
- * against this record by checkDocRework. Same FIFO discipline as
- * recordRecallOutcome.
+ * ids the document's text references. Later readSlice calls are classified
+ * against this record by checkDocRework. FIFO-bounded.
  */
 export function recordDocRead(
   conversationSliceId: string,
@@ -124,9 +79,8 @@ export function recordDocRead(
  * conversation: if the opened slice is one a read document pointed at, the
  * document was not credited for that fact. Returns the document's file name
  * (the identity of the demerit's target), or null when no read document
- * referenced this slice. Independent of the recall check — a slice can be in
- * recall's references (verify) AND in a document's citation set; both facts
- * are recorded, the analyzer weighs them.
+ * referenced this slice. Pure read of the module record — the side-effecting
+ * counterpart is logDocReworkSignal.
  */
 export function checkDocRework(
   conversationSliceId: string,
@@ -142,59 +96,29 @@ export function checkDocRework(
 }
 
 /**
- * Classify a main-agent readSlice against this conversation's last recall
- * outcome. Pure read of the module record — the side-effecting counterpart is
- * logReworkSignal.
+ * Emit a doc_rework signal: the machine-readable fitness store entry plus
+ * one compact audit line in the current slice's agent.md. BOTH writes are
+ * best-effort — each failure is warned and swallowed; this function never
+ * throws and never fails the calling tool.
  */
-export function checkReadSlice(
+export async function logDocReworkSignal(
   conversationSliceId: string,
   readSliceId: string,
-): ReworkKind | null {
-  const outcome = outcomes.get(conversationSliceId);
-  if (!outcome) return null;
-  // Reading the ONGOING conversation slice is never recall verification —
-  // recall excludes it from references by contract, so it would always
-  // misclassify as rework.
-  if (readSliceId === conversationSliceId) return null;
-  if (outcome.referenceIds.includes(readSliceId)) return "verify";
-  // Within recall's searched trail (but not cited): the main agent is pulling
-  // more of an original text recall already surfaced — still the by-design
-  // verification channel, not independent re-search.
-  if (outcome.searchedIds.some((s) => s.includes(readSliceId))) return "verify";
-  return "rework";
-}
-
-/**
- * Emit the signal for a classified readSlice: the machine-readable fitness
- * store entry plus one compact audit line in the current slice's agent.md.
- * BOTH writes are best-effort — each failure is warned and swallowed; this
- * function never throws and never fails the calling tool.
- *
- * `docFileName` is required for kind "doc_rework" — it names the document
- * whose citation set the read slice came from (the demerit's target).
- */
-export async function logReworkSignal(
-  conversationSliceId: string,
-  readSliceId: string,
-  kind: ReworkKind,
-  docFileName?: string,
+  docFileName: string,
 ): Promise<void> {
   const ts = new Date().toISOString();
-  const type =
-    kind === "verify"
-      ? "recall_verify"
-      : kind === "rework"
-        ? "recall_rework"
-        : "doc_rework";
   const detail =
-    kind === "verify"
-      ? `main agent read slice ${readSliceId} within recall's references/searched — by-design verification`
-      : kind === "rework"
-        ? `main agent read slice ${readSliceId} outside recall's references/searched — doing recall's job itself`
-        : `main agent read slice ${readSliceId} that document "${docFileName ?? "?"}" references — the document was not credited for the fact it carried`;
+    `main agent read slice ${readSliceId} that document ` +
+    `"${docFileName}" references — the document was not credited ` +
+    "for the fact it carried";
 
   try {
-    await appendSignal({ ts, sliceId: conversationSliceId, type, detail });
+    await appendSignal({
+      ts,
+      sliceId: conversationSliceId,
+      type: "doc_rework",
+      detail,
+    });
   } catch (e) {
     console.warn(
       "[ReworkSignal] fitness-store write failed:",
@@ -205,7 +129,7 @@ export async function logReworkSignal(
   try {
     await writeAgentTimeline(
       conversationSliceId,
-      `- **${type}** ${ts} — ${detail}.`,
+      `- **doc_rework** ${ts} — ${detail}.`,
     );
   } catch (e) {
     console.warn(
@@ -226,7 +150,7 @@ export type InteractionSignalType =
 /**
  * Emit an interaction signal (regenerate / interrupt): the machine-readable
  * fitness store entry plus one compact audit line in the slice's agent.md.
- * Same double-write, never-throws discipline as logReworkSignal.
+ * Same double-write, never-throws discipline as logDocReworkSignal.
  */
 export async function logInteractionSignal(
   type: InteractionSignalType,

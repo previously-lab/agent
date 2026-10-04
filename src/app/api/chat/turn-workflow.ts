@@ -894,10 +894,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     directionBlock: directionBlock ?? "",
     sliceHeadBlock,
     timelineBrief: timelineBrief
-      ? `${timelineBrief}\nTimeline lines are pointers. If the user's question has an explicit time anchor (a date, "last week", "in March"), scan further back with readTimelineWindow and open the slice with readSlice before answering. If the question has no time anchor and is topic-shaped ("did we ever talk about X"), ask recall DIRECTLY. Answer specifics only from original slice text.`
+      ? `${timelineBrief}\nTimeline lines are pointers. If the user's question has an explicit time anchor (a date, "last week", "in March"), scan further back with readTimelineWindow and open the slice with readSlice before answering. If the question has no time anchor and is topic-shaped ("did we ever talk about X"), look in the document layer first — listDocs to see what exists, readDoc to read one — then fall back to browsing the timeline yourself. Answer specifics only from original slice text.`
       : "",
     strandsBlock: strandsMenu
-      ? `## Memory topics\n\n${strandsMenu}\nWhen the user mentions these topics, ask recall about related past conversations. If it answers that there is no such memory, do not ask again — answer from what you have.`
+      ? `## Memory topics\n\n${strandsMenu}\nThese are the threads of the user's history. When the user mentions one, open its topic home with readStrand — its catalogue lines name the documents hanging under it, read them with readDoc — before answering from memory. If the thread holds nothing on the question, say so and answer from what you have.`
       : "",
     demoNotice: input.useDemo
       ? `## Demo mode (read-only)\n\nYou are running in demo mode. You can browse sample data, recall past conversations, and search the live web — but **writes are not persisted**. No GitHub repo is connected; you are seeing pre-seeded sample memories.\n\nWhen the user asks to save anything or create memories, tell them naturally:\n- This is demo mode and data cannot be saved\n- They need to deploy their own instance to unlock full read/write capabilities\n\nDeployment guide: ${DEPLOY_GUIDE_URL}\n\nIt's perfectly normal for users to explore in demo mode — help them understand what this product can do and what they'll get after deploying.`

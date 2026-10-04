@@ -15,7 +15,8 @@ import { invalidateReadCache } from "@/lib/tools/readFile";
 
 export interface BatchEntry {
   path: string;
-  content: string;
+  /** null = delete the file at `path` (the tree item carries sha: null). */
+  content: string | null;
 }
 
 // ─── Default branch resolution (cached per process) ─────────────────────
@@ -96,9 +97,18 @@ export async function commitBatchToGitHub(
   });
   const baseTree = commit.tree.sha;
 
-  // 3. Create blobs for each file
+  // 3. Create blobs for each file; a null content is a DELETE (tree item
+  //    with sha: null removes the path from the tree).
   const treeItems = await Promise.all(
     entries.map(async ({ path, content }) => {
+      if (content === null) {
+        return {
+          path,
+          mode: "100644" as const,
+          type: "blob" as const,
+          sha: null,
+        };
+      }
       const { data: blob } = await octokit.rest.git.createBlob({
         owner,
         repo,

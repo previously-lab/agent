@@ -34,19 +34,11 @@ import { isPrivateHost, extractText, fetchWithGuard, readBodyCapped, FETCH_BODY_
 import { describeImage } from "@/lib/vision/describe-image";
 import { formatImageMetadata } from "@/lib/vision/image-meta";
 import { isAIConfigured } from "@/lib/capabilities";
-import {
-  runRecallSearch,
-  RECALL_TIMEOUT_MS,
-  type RecallReference,
-  type RecallSearchInput,
-} from "@/lib/episodic/flash/recall";
 import { readPlaybook, capPlaybook } from "@/lib/evolution/store";
 import {
-  recordRecallOutcome,
-  checkReadSlice,
   checkDocRework,
   recordDocRead,
-  logReworkSignal,
+  logDocReworkSignal,
 } from "@/lib/episodic/rework-signal";
 import {
   listDocsQuery,
@@ -65,14 +57,18 @@ import {
 import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import { readStrands, CURRENT_PREVIOUSLY_PATH } from "@/lib/episodic";
+import { findMatchingStrand } from "@/lib/episodic/strands";
+import {
+  readStrandEntity,
+  listStrandEntityNames,
+  resolveStrandEntityName,
+} from "@/lib/episodic/strand-files";
 import { migrateToV3, isCardFormat } from "@/lib/episodic/previously-format";
 import {
   annotateSliceWithLocalTime,
   sliceLocalBanner,
-  sliceIdLocalClock,
-  sliceIdRelPhrase,
 } from "@/lib/episodic/time-localize";
-import { buildDateAnchors, normalizeLocale } from "@/lib/time/relative";
+import { buildDateAnchors } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { loadUserConfig } from "@/lib/config/loader";
 import { DEFAULTS } from "@/lib/config/defaults";
@@ -185,7 +181,7 @@ type ExecuteOpts<C> = {
  * routed client-side by `toolCallId` into the matching tool card. One write per
  * call — tools that want continuous streaming throttle on their own (thinkDeep)
  * and await the write when the status must settle BEFORE the tool result is
- * ordered (webSearch / recall emit a final "found N" status). A stream failure
+ * ordered (webSearch emits a final "found N" status). A stream failure
  * must never fail the tool, so write errors are swallowed and the lock released
  * after each write (an unreleased lock keeps the step's HTTP request alive).
  */
@@ -202,41 +198,6 @@ function emitToolProgress(
         type: "data-tool-progress",
         id: `tool-${toolCallId}`,
         data: { toolCallId, toolName, text, stage },
-      })
-      .then(() => writer.releaseLock())
-      .catch(() => {});
-  } catch {
-    // getWritable() can throw outside a step context — never fail the tool.
-    return Promise.resolve();
-  }
-}
-
-/**
- * Surface a recall run's evidence anchors to the CLIENT as a
- * `data-recall-references` chunk (v0.10 §4.1): the message stream renders them
- * as the clickable "referenced N time slices" bar under the agent's reply.
- * Same best-effort write discipline as emitToolProgress — a stream failure
- * must never fail the tool.
- *
- * Channel reach: this write happens inside the kernel's recall STEP, so it
- * flows under every model backend (BYOK, and the subscription bridge when the
- * recall SUB-AGENT runs over it). The one path where it can never fire is
- * bridge-as-chat-brain (`PREVIOUSLY_BRAIN=bridge` for the chat model itself):
- * that chat agent mounts no kernel tools, so recall never runs there — nothing
- * to transmit, by construction. Phase outsourcing is housekeeping-only and
- * does not touch this path.
- */
-function emitRecallReferences(
-  toolCallId: string,
-  references: Array<{ slice_id: string; note?: string }>,
-): Promise<void> {
-  try {
-    const writer = getWritable<UIMessageChunk>().getWriter();
-    return writer
-      .write({
-        type: "data-recall-references",
-        id: `recall-refs-${toolCallId}`,
-        data: { references },
       })
       .then(() => writer.releaseLock())
       .catch(() => {});
@@ -332,21 +293,13 @@ export async function readSliceExecute(
       ? annotateSliceWithLocalTime(content, ctx.timezone, sliceId)
       : content;
 
-    // Rework-signal instrumentation (design v1.0 §2.6): classify this read
-    // against the conversation's last recall outcome — verify (within recall's
-    // references/searched) or rework (the main agent doing recall's job).
-    // Best-effort: logging failures are swallowed inside, never failing the read.
-    const reworkKind = checkReadSlice(ctx.sliceId, sliceId);
-    if (reworkKind) {
-      await logReworkSignal(ctx.sliceId, sliceId, reworkKind);
-    }
-
     // doc_rework probe (design v0.15 §4.4): the read slice is one a readDoc
     // earlier this conversation referenced — the document was not credited
-    // for the fact it carried. Recorded in the same recall fitness bucket.
+    // for the fact it carried. Lands in the memory-quality fitness bucket
+    // (the recall bucket, renamed in meaning, mechanism unchanged).
     const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
     if (docReworkFile) {
-      await logReworkSignal(ctx.sliceId, sliceId, "doc_rework", docReworkFile);
+      await logDocReworkSignal(ctx.sliceId, sliceId, docReworkFile);
     }
 
     return result;
@@ -498,53 +451,128 @@ export async function readTimelineExecute(
   }
 }
 
-// ── readStrand �?find slices by strand (tag) ───────────────────────────
+// ── readStrand / listStrands — the strand (topic) index, homes-enriched ──
+//
+// These lived inside the retired recall sub-agent (flash/recall.ts); with
+// recall gone they are the main agent's own topic-axis discovery surface.
+// The strand index (strands.json) is the bare keyword→slices map; the topic
+// homes (docs/topic/, see strand-files.ts) carry the prose descriptions that
+// make the list semantically matchable ("also known as X, Y").
+
+/**
+ * How many characters of a home description listStrands carries per strand.
+ * The list is a discovery surface — one line per strand — not a reader.
+ */
+const STRAND_LIST_DESCRIPTION_MAX = 140;
+
+/** How many home files listStrands reads per call. Memory roots can hold
+ *  hundreds of strands; each home read is a backend call, so the list caps
+ *  description lookups and says when it stopped. */
+const STRAND_LIST_ENTITY_READ_CAP = 50;
+
+/** One-line, length-capped summary of a home description for the list view. */
+function strandListLine(name: string, description: string | null): string {
+  if (!description) return `- ${name}`;
+  const flat = description.replace(/\s+/g, " ").trim();
+  const summary =
+    flat.length > STRAND_LIST_DESCRIPTION_MAX
+      ? `${flat.slice(0, STRAND_LIST_DESCRIPTION_MAX)}…`
+      : flat;
+  return `- ${name} — ${summary}`;
+}
+
+/** Load a strand's home by index key, tolerating casing drift between the
+ *  requested name and the stored file. Null when no home exists (old memory
+ *  roots have no docs/topic/ directory at all). */
+async function loadStrandEntityByName(
+  name: string,
+  available: ReadonlySet<string>,
+) {
+  const resolved = resolveStrandEntityName(name, available);
+  if (!resolved) return null;
+  return readStrandEntity(resolved);
+}
+
+/** Format the home block readStrand prepends to the slice listing: the FULL
+ *  description plus the mechanical activity span. */
+function formatStrandEntityBlock(
+  name: string,
+  entity: { description: string; first_seen: string; last_active: string; aliases: string[] },
+): string {
+  const span = `first seen ${entity.first_seen || "?"}, last active ${entity.last_active || "?"}`;
+  const aliases = entity.aliases.length > 0 ? `; also known as: ${entity.aliases.join(", ")}` : "";
+  return `Strand "${name}": ${entity.description}\n(${span}${aliases})`;
+}
 
 export async function readStrandExecute(
   { strand }: { strand: string },
   { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<{ strand: string; slices: string[]; exists: boolean; timezoneNote?: string }> {
+): Promise<string> {
   "use step";
-  const path = "memory/episodic/strands.json";
   try {
-    const raw = ctx.useDemo
-      ? await readFileDemo(path)
-      : ctx.useGithub
-        ? await readFile(path, ctx.repo, ctx.owner)
-        : await readFileLocal(path);
-    const strands = JSON.parse(raw) as Record<string, string[]>;
-    if (!strands[strand]) {
-      return { strand, slices: [], exists: false };
+    const strands = await readStrands();
+    // Casing drift: the model may ask for "apex" while the index keys "Apex"
+    // (same normalized-match rule as the weave path).
+    const key = findMatchingStrand(strands, strand) ?? strand;
+    const paths = strands[key];
+    if (!paths || paths.length === 0) {
+      return `Strand "${strand}" not found. No slices carry this tag.`;
     }
-    // Slice paths are UTC-derived (HHMM is UTC). readSlice already annotates the
-    // user's local time on the content it returns — this note is a reminder.
-    const timezoneNote = ctx.timezone
-      ? `这些 slice 路径是 UTC 派生（HHMM 为 UTC）。需要具体当地时刻时用 readSlice 读取该切片，返回内容已标注本地时钟（${ctx.timezone}）。`
-      : undefined;
-    return { strand, slices: strands[strand], exists: true, timezoneNote };
+    // Cap the listing like readTimelineWindow does — and SAY so when it
+    // truncates, so the model knows the strand has more slices to chase.
+    const shown = paths.slice(0, 40);
+    const truncation =
+      paths.length > shown.length
+        ? ` (showing ${shown.length} of ${paths.length})`
+        : "";
+    const listing = `Strand "${key}" appears in: ${shown.join(", ")}${truncation}`;
+    // Home layer is optional: no docs/topic/ dir / no file → bare listing,
+    // exactly the pre-home behavior.
+    const entityNames = await listStrandEntityNames();
+    const entity = await loadStrandEntityByName(key, entityNames);
+    if (!entity || !entity.description) return listing;
+    return `${formatStrandEntityBlock(key, entity)}\n${listing}`;
   } catch {
-    return { strand, slices: [], exists: false };
+    return `Could not read strands index.`;
   }
 }
 
-// ── listStrands �?list all known strands ───────────────────────────────
-
 export async function listStrandsExecute(
   _input: Record<string, never>,
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<{ strands: string[] }> {
+  { context: _ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
   "use step";
-  const path = "memory/episodic/strands.json";
   try {
-    const raw = ctx.useDemo
-      ? await readFileDemo(path)
-      : ctx.useGithub
-        ? await readFile(path, ctx.repo, ctx.owner)
-        : await readFileLocal(path);
-    const strands = JSON.parse(raw) as Record<string, string[]>;
-    return { strands: Object.keys(strands) };
+    const strands = await readStrands();
+    const names = Object.keys(strands);
+    if (names.length === 0) return "(no strands yet — no topic tags woven)";
+    // Graceful degradation for old memory roots: no home directory → the
+    // legacy bare-name listing, byte-for-byte the old behavior.
+    const entityNames = await listStrandEntityNames();
+    if (entityNames.size === 0) {
+      return `Known strands (${names.length}): ${names.join(", ")}`;
+    }
+    const described: string[] = [];
+    let omitted = 0;
+    for (const name of names) {
+      if (described.length >= STRAND_LIST_ENTITY_READ_CAP) {
+        omitted += 1;
+        continue;
+      }
+      const entity = await loadStrandEntityByName(name, entityNames);
+      described.push(strandListLine(name, entity?.description ?? null));
+    }
+    const capNote =
+      omitted > 0
+        ? `\n(descriptions omitted for ${omitted} more strands — readStrand a specific one)`
+        : "";
+    return (
+      `Known strands (${names.length}) — match the question semantically against ` +
+      `these names and summaries, then trace the best fit with readStrand:\n` +
+      `${described.join("\n")}${capNote}`
+    );
   } catch {
-    return { strands: [] };
+    return "Could not read strands index.";
   }
 }
 
@@ -1214,187 +1242,6 @@ export async function describeRoomExecute(
   return formatRoomDescription(desc, ctx.locale === "zh" ? "zh" : "en");
 }
 
-// ── recall �?semantic search across past conversation slices ─────────
-
-/**
- * Recall tool — the recall sub-agent is a colleague who REMEMBERS past
- * conversations (v1.0; supersedes the v0.9 pointer-only search engine). It
- * receives a natural-language question, reads the actual slices itself
- * (timeline → strands → summaries → quota-bounded full reads), and returns a
- * natural-language answer whose situational assertions are anchored to
- * verbatim quotes in `references` — the auditable attachment the main agent
- * can verify by opening the slice itself.
- *
- * Runs on the unified sub-agent runner (v0.9): the turn's MAIN model with
- * thinking ON at effort "low", streamed progress, and a 240s budget. */
-export async function recallExecute(
-  { question, context }: { question: string; context?: string },
-  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
-): Promise<{
-  answer: string;
-  references: RecallReference[];
-  searched: string[];
-  confidence: number;
-  /** Set when recall found nothing — a definitive signal that recall is exhausted for this question. */
-  note?: string;
-}> {
-  "use step";
-  await emitToolProgress(toolCallId, "recall", "Recalling past conversations…", "running");
-
-  try {
-    const strands = await readStrands();
-
-    // The evolved recall playbook (design v1.0 §2.4) rides into the user
-    // prompt — never the static system prompt (prefix cache). Missing → omitted.
-    const playbook = await readPlaybook("recall");
-
-    // Soft safety net — a backstop on top of the runner's own budget inside
-    // runRecallSearch (SDK timeout hook + its own withStepTimeout). Recall is
-    // best-effort: a timeout returns a partial/empty answer rather than
-    // failing the step, so the main agent gets an honest "couldn't recall"
-    // instead of a hard error. Transient failures inside runRecallSearch
-    // re-throw and reach the triage catch below for the step's auto-retry.
-    const mainModel = await resolveSubAgentModel(ctx);
-
-    // Forward any time-axis context the main agent already established, so the
-    // recall colleague does not redo work already on the timeline.
-    const recallInput: RecallSearchInput = {
-      question,
-      currentSliceId: ctx.sliceId,
-      owner: ctx.owner,
-      repo: ctx.repo,
-      strandsContext: strands,
-      playbook: playbook ?? undefined,
-      useGithub: ctx.useGithub,
-      useDemo: ctx.useDemo,
-      model: mainModel,
-      // The user's clock — timeline pointer lines get local-date
-      // annotations and the prompt states the current local time, so
-      // recall never reads a (UTC) slice id as wall-clock time.
-      timezone: ctx.timezone,
-      nowIso: ctx.startedAtIso,
-      locale: ctx.locale,
-      // The runner streams each sub-agent tool step ("Reading global
-      // timeline…", "Reading slice X…") onto the data-tool-progress
-      // channel as it happens.
-      progress: { toolCallId, toolName: "recall" },
-      knownContext: context,
-    };
-
-    const timed = await withStepTimeout(
-      () => runRecallSearch(recallInput),
-      RECALL_TIMEOUT_MS,
-    );
-
-    if (!timed.ok || timed.result === undefined) {
-      return {
-        answer: "",
-        references: [],
-        searched: [],
-        confidence: 0,
-        note: timed.ok
-          ? "Recall returned no result — treat this topic as having no recoverable past context and do NOT call recall again for it. The user may be sharing this for the first time — receive it as new material, not as a gap you caused."
-          : `Recall timed out after ${Math.round(timed.elapsedMs / 1000)}s before producing anything. Do NOT call recall again for this question; answer from the conversation and your knowledge.`,
-      };
-    }
-
-    // Settle the subtitle on the outcome before the tool result lands.
-    const result = timed.result;
-
-    // Record the outcome for rework-signal detection (design v1.0 §2.6): if
-    // the main agent later readSlice's OUTSIDE these references/searched, it
-    // is doing recall's job itself — the strongest implicit fitness signal.
-    recordRecallOutcome(ctx.sliceId, {
-      referenceIds: result.references.map((r) => r.slice_id),
-      searchedIds: result.searched,
-      confidence: result.confidence,
-    });
-
-    await emitToolProgress(
-      toolCallId,
-      "recall",
-      result.references.length > 0
-        ? `Answered with ${result.references.length} reference${result.references.length === 1 ? "" : "s"}`
-        : "Recall answered",
-      "done",
-    );
-
-    // v0.10 §4.1: hand the evidence anchors to the client too — the reply
-    // gets a clickable "referenced N time slices" bar (jump-to-slice). The
-    // full quotes stay in the tool result; the bar carries id + note only.
-    if (result.references.length > 0) {
-      await emitRecallReferences(
-        toolCallId,
-        result.references.map((r) => ({ slice_id: r.slice_id, note: r.note })),
-      );
-    }
-
-    // A timed-out run is NOT a definitive result — the search never
-    // finished, so an empty answer here means "ran out of time", not "no
-    // such memory" (a miss is information only when the search actually
-    // happened). A partial answer recovered from the cut-off run stays
-    // marked as interrupted and uncertain.
-    const timeoutNote = result.timedOut
-      ? result.answer.trim()
-        ? "Recall hit its time budget mid-search — this is a PARTIAL answer, not a definitive one; treat it as uncertain. The user can ask again later for a fresh, full search."
-        : "Recall hit its time budget before finishing — the memory was NOT fully searched, so this is NOT a definitive miss. Do NOT call recall again right now; answer from the conversation and your knowledge — the user can ask again later for a fresh search."
-      : undefined;
-
-    // An empty-references answer from a COMPLETED search is a DEFINITIVE
-    // result — recall already read the slices, so re-asking the same topic
-    // in different words will not find more. This is the normal shape of a
-    // confident "no such memory", so it keys on references alone.
-    const emptyNote =
-      !result.timedOut && result.references.length === 0
-        ? "Recall found no past memory for this question. This is a definitive result — do NOT call recall again for this topic; answer from the conversation and your knowledge. The user may be sharing this for the first time — receive it as new material, not as a gap you caused."
-        : undefined;
-
-    const note = timeoutNote ?? emptyNote;
-
-    // Pre-render each reference's local clock + relative days (from its
-    // UTC-derived slice id) so the agent knows WHEN a past conversation
-    // happened without converting UTC or doing date arithmetic itself.
-    const annotateNote = (note: string, sliceId: string) => {
-      if (!ctx.timezone) return note;
-      const clock = sliceIdLocalClock(sliceId, ctx.timezone);
-      if (!clock) return note;
-      const rel = sliceIdRelPhrase(sliceId, ctx.timezone, {
-        nowIso: ctx.startedAtIso,
-        locale: ctx.locale ?? "en",
-      });
-      const inner = rel ? `${clock} · ${rel}` : clock;
-      return normalizeLocale(ctx.locale) === "zh"
-        ? `${note}（本地 ${inner}）`
-        : `${note} (local ${inner})`;
-    };
-    return {
-      answer: result.answer,
-      references: result.references.map((r) => ({
-        ...r,
-        note: annotateNote(r.note, r.slice_id),
-      })),
-      searched: result.searched,
-      confidence: result.confidence,
-      ...(note ? { note } : {}),
-    };
-  } catch (err) {
-    // Triage: a deterministic recall failure returns as data so the model sees
-    // "recall is unavailable" instead of a thrown error retrying the step.
-    if (isTransientError(err)) throw err;
-    console.warn(
-      "[Recall] triaged failure:",
-      err instanceof Error ? err.message : err,
-    );
-    return {
-      answer: "",
-      references: [],
-      searched: [],
-      confidence: 0,
-      note: triageErrorMessage(err, "recall"),
-    };
-  }
-}
-
 /**
  * thinkDeep — a reasoning fragment (think-only sub-agent).
  *
@@ -1428,7 +1275,7 @@ export async function recallExecute(
  * main agent receives the partial answer AND the full reasoning so far — the
  * sub-agent's thinking is never lost, even if it is interrupted mid-thought.
  *
- * Why think-only? A sub-agent with tools re-runs the search/recall the main
+ * Why think-only? A sub-agent with tools re-runs the search the main
  * agent already did, and an unbounded tool-loop + thinking guarantees it
  * exhausts the wall before writing (the v2 empty-report bug). Think-only
  * fragments are single-invocation, bounded by construction, and cannot cascade.

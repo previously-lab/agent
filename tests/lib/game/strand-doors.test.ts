@@ -20,7 +20,7 @@
  * before → after the dedupe (how many doors a room gets, the busiest
  * room, the totals) — coordination data, not just assertions.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
@@ -509,14 +509,27 @@ describe("strandAccentFor / CORE_TIMELINE_ID (§11.1)", () => {
   });
 });
 
-describe("real data pass (memory/episodic)", () => {
-  const root = fileURLToPath(new URL("../../../", import.meta.url));
-  const strands = JSON.parse(
-    readFileSync(`${root}memory/episodic/strands.json`, "utf8"),
-  ) as Record<string, string[]>;
-  const timeline = JSON.parse(
-    readFileSync(`${root}memory/episodic/timeline/index.json`, "utf8"),
-  ) as { slices: Array<{ id: string }> };
+// Data present → the pass runs and PRINTS its numbers exactly as before.
+// Data absent (fresh clone / cleared memory — a state the app supports) →
+// the whole describe is skipped instead of failing the suite at load time.
+// MEMORY_ROOT overrides where the memory root is read from (used to point
+// the pass at a fixture copy); default is the repo's own memory/.
+const MEMORY_ROOT =
+  process.env.MEMORY_ROOT ??
+  fileURLToPath(new URL("../../../memory", import.meta.url));
+const STRANDS_PATH = `${MEMORY_ROOT}/episodic/strands.json`;
+const TIMELINE_PATH = `${MEMORY_ROOT}/episodic/timeline/index.json`;
+const hasRealData = existsSync(STRANDS_PATH) && existsSync(TIMELINE_PATH);
+
+describe.skipIf(!hasRealData)("real data pass (memory/episodic)", () => {
+  const strands = hasRealData
+    ? (JSON.parse(readFileSync(STRANDS_PATH, "utf8")) as Record<string, string[]>)
+    : {};
+  const timeline = hasRealData
+    ? (JSON.parse(readFileSync(TIMELINE_PATH, "utf8")) as {
+        slices: Array<{ id: string }>;
+      })
+    : { slices: [] };
 
   // The corridor window exactly as game-shell builds it: catalog oldest→
   // newest, capped to the newest MAX_DOORS, presented reversed.

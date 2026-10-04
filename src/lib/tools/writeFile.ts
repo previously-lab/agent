@@ -71,3 +71,45 @@ export async function writeFile(
     );
   }
 }
+
+/**
+ * Delete a file from the GitHub repository (contents API). Only whitelisted
+ * paths are deletable. A missing file is NOT an error — deletes are
+ * idempotent — anything else throws (the caller's batch keeps the entry for
+ * retry).
+ */
+export async function deleteFile(
+  path: string,
+  repo: string,
+  owner: string,
+  message?: string
+): Promise<void> {
+  if (!isPathAllowed(path)) {
+    throw new Error(
+      `Access denied: path "${path}" is outside allowed directories`
+    );
+  }
+
+  const octokit = getOctokit();
+
+  let sha: string;
+  try {
+    const existing = await octokit.rest.repos.getContent({ owner, repo, path });
+    if (Array.isArray(existing.data) || !existing.data.sha) {
+      return; // not a file — nothing to delete
+    }
+    sha = existing.data.sha;
+  } catch {
+    return; // file doesn't exist — idempotent delete
+  }
+
+  await octokit.rest.repos.deleteFile({
+    owner,
+    repo,
+    path,
+    message: message ?? `Delete ${path}`,
+    sha,
+  });
+
+  invalidateReadCache(path, repo, owner);
+}

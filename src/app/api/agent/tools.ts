@@ -27,7 +27,6 @@ import {
   readPreviouslyExecute,
   webSearchExecute,
   webFetchExecute,
-  recallExecute,
   thinkDeepExecute,
   currentTimeExecute,
   describeRoomExecute,
@@ -84,7 +83,7 @@ export const toolContextSchema = z.object({
   // share the exact same prefix as the main agent — prompt-cache hits across
   // main + sub-agent calls within one turn.
   baseSystemPrompt: z.string().optional(),
-  // The turn's resolved MAIN model — all sub-agents (thinkDeep, recall, …)
+  // The turn's resolved MAIN model — all sub-agents (thinkDeep, webSearch, …)
   // use it directly (the same one injected for the main agent) instead of
   // re-resolving config from GitHub on every fragment step.
   mainModel: modelConfigSchema.optional(),
@@ -107,11 +106,13 @@ export const toolContextSchema = z.object({
 export const conceptTools = {
   readSlice: tool({
     description:
-      "Open a time slice's original conversation record (core timeline). " +
-      "VERIFICATION CHANNEL ONLY — past memory is recall's job: ask it in " +
-      "natural language and it reads the slices for you. Open a slice " +
-      "yourself only to verify one of recall's references or when you need " +
-      "the verbatim original text. " +
+      "Open a time slice's original conversation record (core timeline) — " +
+      "the ONLY source for specific facts (numbers, dates, quotes, promises): " +
+      "read FIRST, then answer. Use it to answer from a slice you located on " +
+      "the time axis (readTimelineWindow, readStrand), to follow a document's " +
+      "evidence chain down to the original text, or whenever you need the " +
+      "verbatim original of anything the user or a document claims about the " +
+      "past. " +
       "Use the optional `range` parameter to fetch only specific turns instead " +
       "of the entire slice — a full slice is the most expensive option. " +
       "`search` matches keywords across the slice (misses return the full slice " +
@@ -325,20 +326,21 @@ export const conceptTools = {
 //     (只读 + 记账, design §4.3): drop a marker line for the slice-close
 //     scribe/librarian passes. Bookkeeping, never document-writing.
 //
-// Topic-axis / unanchored questions go DIRECTLY to recall — never investigate
-// first and then escalate. If the question has NO time anchor ("did we ever
-// talk about apples?", fuzzy memories, cross-topic synthesis), call recall
-// immediately. If you realize mid-scan that the time axis can't settle it,
-// stop and call recall rather than continuing to dig.
+// There is NO memory colleague. Past-memory questions are YOURS: with a
+// time anchor, readTimelineWindow + readSlice; topic-shaped ("did we ever
+// talk about apples?"), listDocs("topic") for the topic homes + listStrands
+// for the keyword index, then readDoc / readSliceSummary to go deeper; when
+// you have keyword or time leads, the slice archive answers in 2–4 calls.
+// If the question is genuinely fuzzy archaeology with no anchor at all, say
+// what you found honestly or offer to open a background task (design §4.2 —
+// no synchronous deep-search detour on the reply path).
 export const chatTools = {
   readSlice: conceptTools.readSlice,
   readTimelineWindow: conceptTools.readTimelineWindow,
   readPreviously: conceptTools.readPreviously,
-  // Slice-level browse tools reclaimed by the main agent (v0.15 design §4.2 —
-  // the charter always said "you own the time axis"; recall's retirement is
-  // adjudicated by the §7 signal, but the read surface is the main agent's
-  // now, not a sub-agent's). listStrands/readStrand fold into
-  // listDocs("topic")/readDoc over time; they stay exposed meanwhile.
+  // Slice-level browse tools owned by the main agent (v0.15 design §4.2 — the
+  // charter always said "you own the time axis"). listStrands/readStrand fold
+  // into listDocs("topic")/readDoc over time; they stay exposed meanwhile.
   readSliceSummary: conceptTools.readSliceSummary,
   readAgentTimeline: conceptTools.readAgentTimeline,
   listSlices: conceptTools.listSlices,
@@ -408,22 +410,27 @@ export const chatTools = {
   // agent.md, consumed by the scribe/librarian passes at slice close.
   noteForSediment: tool({
     description:
-      "Jot a note for LATER sedimentation — BOOKKEEPING, NOT writing a document. " +
-      "Use it the moment you think, mid-conversation, \"this is worth " +
-      "sedimenting\" or \"this should become a task\": a search/recall worth " +
-      "keeping as a research or entity document (kind: 'sediment'), something " +
-      "the user said that anchors a date — \"我 8 号要去 on-site\", " +
-      "\"下周三提醒我…\" — which must become a tracked task document (kind: " +
-      "'task', always pass dateAnchor), or an open thread the background " +
-      "research colleague should investigate later (kind: 'question'). It " +
-      "appends ONE structured marker line to THIS slice's agent.md mailbox; " +
-      "the actual document gets written at slice close by the scribe/librarian " +
-      "passes that read these markers — so after calling this, keep answering " +
-      "and do NOT treat the thing as recorded yet. Do NOT use it for anything " +
-      "in the current conversation (that lives in the slice itself), and do " +
-      "NOT call it for trivia — a one-off mention stays in the slices. " +
-      "title follows the document naming discipline: specific enough that a " +
-      "scope change would mean a NEW document.",
+      "Make THIS conversation leave something behind — your one way to turn " +
+      "what just happened into a document that outlives this chat. Call it the " +
+      "moment any of these happens (do not wait for the conversation to end):\n" +
+      "1. The user mentions something that will come up again — a project, a " +
+      "decision, a thing or person in their world that deserves its own " +
+      "entity or research document (kind 'sediment').\n" +
+      "2. You dug something up that is worth keeping — a search result, a " +
+      "comparison, a conclusion reached across several turns that should " +
+      "become a research document (kind 'sediment').\n" +
+      "3. The user states a date-anchored commitment or arrangement — " +
+      "\"我 8 号要去 on-site\", \"下周三提醒我…\" — which must become a tracked " +
+      "task document (kind 'task', ALWAYS pass dateAnchor).\n" +
+      "4. An open thread surfaces that deserves a proper investigation later — " +
+      "a question too big for this reply (kind 'question').\n" +
+      "It appends ONE marker line to THIS slice's mailbox; the document itself " +
+      "is written at slice close by the passes that read these markers — so " +
+      "after calling it, keep answering and treat the matter as NOT yet " +
+      "recorded. Not for things belonging to the current conversation (they " +
+      "already live in this slice), and not for one-off trivia that will never " +
+      "be mentioned again. Title = the document's title: specific enough that " +
+      "a scope change would mean a NEW document.",
     inputSchema: z.object({
       kind: z
         .enum(["sediment", "task", "question"])
@@ -528,42 +535,6 @@ export const chatTools = {
     inputSchema: z.object({}),
     contextSchema: toolContextSchema,
     execute: currentTimeExecute,
-  }),
-  recall: tool({
-    description:
-      "Ask the recall colleague — a sub-agent who owns the TOPIC AXIS of " +
-      "memory and deep investigation. Use recall DIRECTLY for questions with " +
-      "NO explicit time anchor: topic-shaped queries (\"did we ever talk about " +
-      "apples?\"), fuzzy memories, cross-topic synthesis, or anything the time " +
-      "axis cannot settle. Do NOT browse memory first and then escalate — if " +
-      "the question is hard for readTimelineWindow + readSlice, recall is the " +
-      "first move, not the fallback. For questions WITH an explicit time anchor " +
-      "(\"last week\", \"September 3rd\", \"in March\"), use readTimelineWindow + " +
-      "readSlice yourself; if you realize mid-scan that the time axis can't " +
-      "answer it, stop and call recall. Ask in natural language, colleague to " +
-      "colleague, and refer to the user in the THIRD PERSON — the colleague is " +
-      "not the user, and it describes the user back to you in the third person " +
-      "too. Every situational claim in its answer carries a reference with a " +
-      "VERBATIM quote and the slice id — those references are attached for your " +
-      "audit. An honest \"we haven't talked about this\" is a valid, definitive " +
-      "answer: when it says so, do NOT call recall again for the same topic. " +
-      "Open a slice yourself (readSlice) only when you need to verify one of its " +
-      "references or need more of the original text.",
-    inputSchema: z.object({
-      question: z
-        .string()
-        .describe("A natural-language question about past conversations, asked colleague to colleague. Be specific about the topic, person, event, or period you are asking about."),
-      context: z
-        .string()
-        .optional()
-        .describe(
-          "What you already established on the core timeline before asking: " +
-          "windows you scanned, pointer lines you saw, and why that is not " +
-          "enough. Saves the recall colleague from redoing your work.",
-        ),
-    }),
-    contextSchema: toolContextSchema,
-    execute: recallExecute,
   }),
   webSearch: tool({
     description:
@@ -716,7 +687,7 @@ export const chatTools = {
 // Registered ONLY in client mode (PREVIOUSLY_MODE=client): the bridge command
 // is a local operator-controlled executable and cloud deployments must never
 // expose it (doc/design/v0.9-client.md §2 — mode changes "who do I talk to",
-// never identity). Chat-only, like recall/webSearch.
+// never identity). Chat-only, like webSearch/thinkDeep.
 const delegateTaskTool = tool({
   description:
     "Delegate a self-contained task to the local subscription bridge — an " +
@@ -775,7 +746,6 @@ export function buildChatToolsContext(
     noteForSediment: ctx,
     describeRoom: ctx,
     currentTime: ctx,
-    recall: ctx,
     webSearch: ctx,
     webFetch: ctx,
     viewImage: ctx,

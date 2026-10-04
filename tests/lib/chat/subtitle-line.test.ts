@@ -1,483 +1,226 @@
 import { describe, it, expect } from "vitest";
 import {
-  foldSubtitleLine,
+  foldSubtitleActivity,
   foldSubtitleLineLatest,
-  collapseSubtitleWhitespace,
-  parseSubtitleRuns,
-  stripSubtitleMarkdown,
-  truncateSubtitleText,
-  SUBTITLE_LINE_MAX,
   type AnyPart,
   type SubtitleSource,
 } from "@/lib/chat/subtitle-line";
 
-// foldSubtitleLine is the pure stream→subtitle reducer behind the permanent
-// pill strip (design v0.13 §4). These tests pin the hard product rules: only
-// spoken words ever become text, tool/reasoning activity surfaces only as
-// status, streaming growth is a deterministic fold, and truncation keeps the
-// text inside the two-line budget with an honest `truncated` flag.
+// foldSubtitleActivity is the pure stream→caption reducer behind the pill's
+// subtitle (the 2026-10-04 contract). These tests pin the hard rules: the
+// subtitle captions WHAT THE AGENT IS DOING as ONE discrete block at a time,
+// the latest activity signal wins (blocks replace, never grow), the reply's
+// words never become the caption, and a closed turn folds to null.
 
 function part(p: AnyPart): AnyPart {
   return p;
 }
 
-describe("foldSubtitleLine — skipping parts", () => {
-  it("never shows reasoning content in the text", () => {
-    const line = foldSubtitleLine(
-      [
-        part({ type: "reasoning", text: "Let me think about this carefully..." }),
-        part({ type: "text", text: "The answer is simple." }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("The answer is simple.");
-    expect(line.text).not.toContain("think");
+describe("foldSubtitleActivity — the activity ladder", () => {
+  it("reads reasoning as thinking", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "reasoning", text: "Let me think about this carefully..." }),
+    ]);
+    expect(line).toEqual({ activity: "thinking", count: 0 });
   });
 
-  it("never shows tool names, inputs or outputs in the text", () => {
-    const line = foldSubtitleLine(
-      [
-        part({
-          type: "tool-recall",
-          toolCallId: "t1",
-          toolName: "recall",
-          state: "output-available",
-          input: { query: "solar panels" },
-          output: { slices: [] },
-        }),
-        part({ type: "text", text: "I checked your notes." }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("I checked your notes.");
-    expect(line.text).not.toContain("recall");
+  it("reads webSearch and webFetch as searching", () => {
+    for (const toolName of ["webSearch", "webFetch"]) {
+      const line = foldSubtitleActivity([
+        part({ type: `tool-${toolName}`, toolCallId: "t1", toolName, state: "running" }),
+      ]);
+      expect(line?.activity).toBe("searching");
+    }
   });
 
-  it("ignores data-tool-progress narration even though it is streamed text", () => {
-    const line = foldSubtitleLine(
-      [
-        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" }),
-        part({
-          type: "data-tool-progress",
-          data: { toolCallId: "t1", text: "Searching slice 2024-11-02…", stage: "running" },
-        }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("");
+  it("reads the memory-read tools as recalling (the shared isRecallTool table)", () => {
+    // One memory read lights "recalling" — the user-facing （正在回忆）.
+    for (const toolName of [
+      "readSlice",
+      "readDoc",
+      "readTimelineWindow",
+      "listSlices",
+      "listStrands",
+      "listDocs",
+    ]) {
+      const line = foldSubtitleActivity([
+        part({ type: `tool-${toolName}`, toolCallId: "t1", toolName, state: "running" }),
+      ]);
+      expect(line?.activity).toBe("recalling");
+    }
   });
 
-  it("ignores housekeeping phases, evolution chunks and terminal status parts", () => {
-    const line = foldSubtitleLine(
-      [
-        part({ type: "data-phase", data: { phase: "slice", running: true, compact: true } }),
-        part({ type: "data-evolution", data: { status: "running", step: "reviewing" } }),
-        part({ type: "data-turn-status", data: { status: "interrupted", error: "boom" } }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("");
-    expect(line.status).toBeNull();
-  });
-});
-
-describe("foldSubtitleLine — status ladder", () => {
-  it("reports thinking while only reasoning has arrived", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "reasoning", text: "hmm…" })],
-      "assistant",
-    );
-    expect(line).toMatchObject({ text: "", status: { kind: "thinking" } });
+  it("reads thinkDeep as thinking", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "tool-thinkDeep", toolCallId: "t1", toolName: "thinkDeep", state: "running" }),
+    ]);
+    expect(line?.activity).toBe("thinking");
   });
 
-  it("reports reading with the distinct tool-call count once tools start", () => {
+  it("reads non-memory tools as reading, counting DISTINCT tool calls", () => {
     // The AI SDK emits several parts per call across its lifecycle — the
-    // count must be per toolCallId, not per part.
-    const line = foldSubtitleLine(
-      [
-        part({ type: "reasoning", text: "hmm…" }),
-        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "input-streaming" }),
-        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "output-available" }),
-        part({ type: "tool-readFile", toolCallId: "t2", toolName: "readFile", state: "running" }),
-      ],
-      "assistant",
-    );
-    expect(line.status).toEqual({ kind: "reading", count: 2 });
+    // count must be per toolCallId, not per part. (Memory-read tools are
+    // "recalling", not "reading" — the fixtures here are the residual set.)
+    const line = foldSubtitleActivity([
+      part({ type: "tool-currentTime", toolCallId: "t1", toolName: "currentTime", state: "input-streaming" }),
+      part({ type: "tool-currentTime", toolCallId: "t1", toolName: "currentTime", state: "output-available" }),
+      part({ type: "tool-viewImage", toolCallId: "t2", toolName: "viewImage", state: "running" }),
+    ]);
+    expect(line).toEqual({ activity: "reading", count: 2 });
   });
 
-  it("drops status to null as soon as any text exists", () => {
-    const line = foldSubtitleLine(
-      [
-        part({ type: "reasoning", text: "hmm…" }),
-        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" }),
-        part({ type: "text", text: "So — " }),
-        part({ type: "text", text: "here's what I found." }),
-      ],
-      "assistant",
-    );
-    expect(line).toMatchObject({
-      text: "So — here's what I found.",
-      status: null,
-    });
+  it("derives the tool name from the part type when toolName is absent", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "tool-webSearch", toolCallId: "t1", state: "running" }),
+    ]);
+    expect(line?.activity).toBe("searching");
   });
 
-  it("returns null status before anything has happened", () => {
-    expect(foldSubtitleLine([], "assistant").status).toBeNull();
+  it("reads data-phase as housekeeping and data-evolution as evolving", () => {
+    expect(
+      foldSubtitleActivity([
+        part({ type: "data-phase", data: { phase: "slice", running: true, compact: true } }),
+      ])?.activity,
+    ).toBe("housekeeping");
+    expect(
+      foldSubtitleActivity([
+        part({ type: "data-evolution", data: { status: "running", step: "reviewing" } }),
+      ])?.activity,
+    ).toBe("evolving");
+  });
+
+  it("reads streamed text as replying — the words themselves never surface", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "text", text: "The answer is simple." }),
+    ]);
+    expect(line?.activity).toBe("replying");
+    expect(JSON.stringify(line)).not.toContain("answer");
+  });
+
+  it("ignores whitespace-only text", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "reasoning", text: "hmm…" }),
+      part({ type: "text", text: "  \n " }),
+    ]);
+    expect(line?.activity).toBe("thinking");
   });
 });
 
-describe("foldSubtitleLine — streaming growth is a fold", () => {
-  it("yields the same line for every prefix of the same stream", () => {
-    const full = [
-      part({ type: "reasoning", text: "thinking…" }),
-      part({ type: "text", text: "Hello " }),
-      part({ type: "text", text: "world, " }),
-      part({ type: "text", text: "this grew." }),
+describe("foldSubtitleActivity — blocks REPLACE each other", () => {
+  it("lets the latest signal win across a whole turn", () => {
+    const stream = [
+      part({ type: "reasoning", text: "hmm…" }),
+      part({ type: "tool-readSlice", toolCallId: "t1", toolName: "readSlice", state: "running" }),
+      part({ type: "tool-webSearch", toolCallId: "t2", toolName: "webSearch", state: "running" }),
+      part({ type: "text", text: "Here's what I found." }),
     ];
-    const grown: ReturnType<typeof foldSubtitleLine>[] = [];
-    for (let i = 1; i <= full.length; i++) {
-      grown.push(foldSubtitleLine(full.slice(0, i), "assistant"));
-    }
-    const finalLine = foldSubtitleLine(full, "assistant");
-    expect(grown[grown.length - 1]).toEqual(finalLine);
-    // Growth is prefix-preserving: while untruncated, each step's text starts
-    // with the previous step's text, and the final line equals a one-shot fold.
-    for (let i = 1; i < grown.length; i++) {
-      if (!grown[i].truncated) {
-        expect(grown[i].text.startsWith(grown[i - 1].text)).toBe(true);
-      }
+    const expected = ["thinking", "recalling", "searching", "replying"];
+    for (let i = 1; i <= stream.length; i++) {
+      expect(foldSubtitleActivity(stream.slice(0, i))?.activity).toBe(expected[i - 1]);
     }
   });
 
-  it("handles the bridge authoritative re-emit replacing advisory text", () => {
-    const line = foldSubtitleLine(
-      [
-        part({ type: "text", text: "Advisory draft that " }),
-        part({
-          type: "text",
-          text: "the result wins.",
-          providerMetadata: { "previously-bridge": { authoritative: true } },
-        }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("the result wins.");
-  });
-});
-
-describe("foldSubtitleLine — character budget and truncation", () => {
-  it("collapses newlines and whitespace runs into one line", () => {
-    const line = foldSubtitleLine(
-      [
-        part({
-          type: "text",
-          text: "First paragraph.\n\nSecond   paragraph\twith   spaces.\n\n\nThird.",
-        }),
-      ],
-      "assistant",
-    );
-    expect(line.text).toBe("First paragraph. Second paragraph with spaces. Third.");
-    expect(line.truncated).toBe(false);
-  });
-
-  it("truncates past the cap and sets truncated", () => {
-    const long = "word ".repeat(60).trim(); // ~300 chars
-    const line = foldSubtitleLine([part({ type: "text", text: long })], "assistant");
-    expect(line.text.length).toBeLessThanOrEqual(SUBTITLE_LINE_MAX);
-    expect(line.truncated).toBe(true);
-  });
-
-  it("keeps a two-line opening whole under the raised cap", () => {
-    // The pill subtitle wraps to at most two ~75-character mono lines, so the
-    // cap was raised past the old one-line 120: an opening of 121–150 chars
-    // must survive intact, and only text beyond the cap is cut.
-    const text = "word ".repeat(28).trim(); // 139 chars
-    const line = foldSubtitleLine([part({ type: "text", text })], "assistant");
-    expect(line.text).toBe(text);
-    expect(line.truncated).toBe(false);
-  });
-
-  it("does not cut mid-word when a boundary is within slack of the cap", () => {
-    const text = `${"a".repeat(SUBTITLE_LINE_MAX - 10)} boundaryword tail that pushes past`;
-    const { text: cut, truncated } = truncateSubtitleText(text);
-    expect(truncated).toBe(true);
-    // The cut landed before "boundaryword" (its start is at MAX-20+1, inside
-    // the slack window), so the line must not end mid-word.
-    expect(cut.endsWith("boundaryword")).toBe(false);
-    expect(/\s/.test(cut)).toBe(false);
-  });
-
-  it("keeps short text untruncated", () => {
-    const line = foldSubtitleLine([part({ type: "text", text: "Hi." })], "assistant");
-    expect(line).toMatchObject({ text: "Hi.", truncated: false, status: null });
-  });
-
-  it("strips dangling punctuation left by a word-boundary cut", () => {
-    const text = `${"x".repeat(SUBTITLE_LINE_MAX - 10)}. more words here`;
-    const { text: cut } = truncateSubtitleText(text);
-    expect(cut.endsWith(".")).toBe(false);
-  });
-});
-
-describe("foldSubtitleLine — speakers", () => {
-  it("labels user messages as user", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "text", text: "Where was I?" })],
-      "user",
-    );
-    expect(line.speaker).toBe("user");
-  });
-
-  it("labels assistant output as persona", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "text", text: "You were here." })],
-      "assistant",
-    );
-    expect(line.speaker).toBe("persona");
-  });
-
-  it("counts user attachment file parts as no spoken words", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "file", mediaType: "image/png", url: "data:…" })],
-      "user",
-    );
-    expect(line).toMatchObject({ speaker: "user", text: "", status: null });
-  });
-});
-
-describe("foldSubtitleLine — determinism", () => {
-  it("folds the same stream to the same line, every time", () => {
+  it("is a pure fold: the same stream folds to the same block, every time", () => {
     const parts = [
       part({ type: "reasoning", text: "r" }),
-      part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" }),
-      part({ type: "text", text: "Deterministic " }),
-      part({ type: "text", text: "output." }),
+      part({ type: "tool-readDoc", toolCallId: "t1", toolName: "readDoc", state: "running" }),
     ];
-    const a = foldSubtitleLine(parts, "assistant");
-    const b = foldSubtitleLine(parts.map((p) => ({ ...p })), "assistant");
+    const a = foldSubtitleActivity(parts);
+    const b = foldSubtitleActivity(parts.map((p) => ({ ...p })));
     expect(a).toEqual(b);
   });
 });
 
-describe("foldSubtitleLineLatest — the strip shows the newest message WITH speakable text", () => {
-  const msg = (role: string, parts: AnyPart[]): SubtitleSource => ({
-    role,
-    parts,
+describe("foldSubtitleActivity — silence and closing", () => {
+  it("ignores data-tool-progress narration entirely", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "tool-readSlice", toolCallId: "t1", toolName: "readSlice", state: "running" }),
+      part({
+        type: "data-tool-progress",
+        data: { toolCallId: "t1", text: "Searching slice 2024-11-02…", stage: "running" },
+      }),
+    ]);
+    expect(line?.activity).toBe("recalling");
   });
 
-  it("returns null for an empty message list", () => {
+  it("reads a brand-new assistant message (no parts) as thinking", () => {
+    expect(foldSubtitleActivity([])).toEqual({ activity: "thinking", count: 0 });
+  });
+
+  it("returns null once the turn has closed (data-turn-status: done)", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "reasoning", text: "hmm…" }),
+      part({ type: "text", text: "Done." }),
+      part({ type: "data-turn-status", data: { status: "done" } }),
+    ]);
+    expect(line).toBeNull();
+  });
+
+  it("keeps the last activity on a non-done terminal status (the caller's gate owns that)", () => {
+    const line = foldSubtitleActivity([
+      part({ type: "tool-readDoc", toolCallId: "t1", toolName: "readDoc", state: "running" }),
+      part({ type: "data-turn-status", data: { status: "interrupted", error: "boom" } }),
+    ]);
+    expect(line?.activity).toBe("recalling");
+  });
+});
+
+describe("foldSubtitleLineLatest — the newest LIVE turn speaks", () => {
+  const live = (role: string, parts: AnyPart[]): SubtitleSource => ({
+    role,
+    parts,
+    live: true,
+  });
+  const history = (role: string, parts: AnyPart[]): SubtitleSource => ({
+    role,
+    parts,
+    live: false,
+  });
+
+  it("returns null for an empty list", () => {
     expect(foldSubtitleLineLatest([])).toBeNull();
   });
 
-  it("folds the newest message when it has text", () => {
+  it("returns null when nothing is live — history never captions activity", () => {
     const line = foldSubtitleLineLatest([
-      msg("user", [part({ type: "text", text: "Where was I?" })]),
-      msg("assistant", [part({ type: "text", text: "You were here." })]),
+      history("assistant", [part({ type: "text", text: "You were here." })]),
     ]);
-    expect(line).toMatchObject({ speaker: "persona", text: "You were here." });
+    expect(line).toBeNull();
   });
 
-  it("walks back past a data-only newest message to the newest message with text", () => {
-    // The failing first-load case: the newest entry carries only tool /
-    // housekeeping traffic while an older turn still has words on record —
-    // the strip must quote the older turn, not go blank.
+  it("reads a just-launched turn (newest live message is the user's) as thinking", () => {
     const line = foldSubtitleLineLatest([
-      msg("user", [part({ type: "text", text: "And then?" })]),
-      msg("assistant", [part({ type: "text", text: "The next morning…" })]),
-      msg("assistant", [
-        part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" }),
+      live("user", [part({ type: "text", text: "Where was I?" })]),
+    ]);
+    expect(line).toEqual({ activity: "thinking", count: 0 });
+  });
+
+  it("folds the newest live assistant message", () => {
+    const line = foldSubtitleLineLatest([
+      live("user", [part({ type: "text", text: "And then?" })]),
+      live("assistant", [
+        part({ type: "tool-webSearch", toolCallId: "t1", toolName: "webSearch", state: "running" }),
+      ]),
+    ]);
+    expect(line?.activity).toBe("searching");
+  });
+
+  it("skips history entries between live messages", () => {
+    const line = foldSubtitleLineLatest([
+      history("assistant", [part({ type: "text", text: "Old words." })]),
+      live("assistant", [part({ type: "reasoning", text: "hmm…" })]),
+    ]);
+    expect(line?.activity).toBe("thinking");
+  });
+
+  it("returns null when the newest live turn has closed", () => {
+    const line = foldSubtitleLineLatest([
+      live("user", [part({ type: "text", text: "Hi." })]),
+      live("assistant", [
+        part({ type: "text", text: "Hello." }),
         part({ type: "data-turn-status", data: { status: "done" } }),
       ]),
     ]);
-    expect(line).toMatchObject({ speaker: "persona", text: "The next morning…" });
-  });
-
-  it("walks back past an attachment-only user message", () => {
-    const line = foldSubtitleLineLatest([
-      msg("assistant", [part({ type: "text", text: "I see the photo." })]),
-      msg("user", [part({ type: "file", mediaType: "image/png", url: "data:…" })]),
-    ]);
-    expect(line).toMatchObject({ speaker: "persona", text: "I see the photo." });
-  });
-
-  it("shows the in-flight turn's status when nothing has text yet", () => {
-    // The walk's only fallback: nothing speakable ANYWHERE (the user's
-    // latest was an attachment, the assistant's latest is tool traffic) —
-    // then the newest fold wins, which is how a reading prefix surfaces.
-    const line = foldSubtitleLineLatest([
-      msg("user", [part({ type: "file", mediaType: "image/png", url: "data:…" })]),
-      msg("assistant", [part({ type: "tool-recall", toolCallId: "t1", toolName: "recall", state: "running" })]),
-    ]);
-    expect(line).toMatchObject({ text: "", status: { kind: "reading", count: 1 } });
-  });
-
-  it("shows thinking when the newest turn has reasoning and nothing else", () => {
-    const line = foldSubtitleLineLatest([
-      msg("assistant", [part({ type: "reasoning", text: "hmm…" })]),
-    ]);
-    expect(line).toMatchObject({ text: "", status: { kind: "thinking" } });
-  });
-
-  it("renders an empty line only when the whole list is silent", () => {
-    const line = foldSubtitleLineLatest([
-      msg("assistant", [
-        part({ type: "data-phase", data: { phase: "slice", running: true, compact: true } }),
-      ]),
-    ]);
-    expect(line).toMatchObject({ text: "", status: null });
-  });
-});
-
-describe("parseSubtitleRuns — the inline subset", () => {
-  const plainOf = (runs: ReturnType<typeof parseSubtitleRuns>) =>
-    runs.map((r) => r.text).join("");
-
-  it("joining the runs reproduces the stripped plain string", () => {
-    const raw =
-      "Use **bold** and *em* and `code` — see [the docs](https://example.com).";
-    expect(plainOf(parseSubtitleRuns(raw))).toBe(
-      stripSubtitleMarkdown(raw),
-    );
-    expect(plainOf(parseSubtitleRuns(raw))).toBe(
-      "Use bold and em and code — see the docs.",
-    );
-  });
-
-  it("marks strong, em and code runs with the right emphasis", () => {
-    expect(parseSubtitleRuns("a **b** c *d* e `f` g")).toEqual([
-      { text: "a ", emphasis: null },
-      { text: "b", emphasis: "strong" },
-      { text: " c ", emphasis: null },
-      { text: "d", emphasis: "em" },
-      { text: " e ", emphasis: null },
-      { text: "f", emphasis: "code" },
-      { text: " g", emphasis: null },
-    ]);
-  });
-
-  it("keeps snake_case untouched — underscores inside a word are not markers", () => {
-    const runs = parseSubtitleRuns("the file memory_root stays literal");
-    expect(runs).toEqual([{ text: "the file memory_root stays literal", emphasis: null }]);
-    expect(parseSubtitleRuns("__bold__ here")).toEqual([
-      { text: "bold", emphasis: "strong" },
-      { text: " here", emphasis: null },
-    ]);
-  });
-
-  it("degrades unclosed markers to plain text, never a stray marker run", () => {
-    for (const raw of ["**unclosed", "*unclosed", "`unclosed", "__unclosed", "_unclosed"]) {
-      const runs = parseSubtitleRuns(raw);
-      expect(plainOf(runs)).toBe(raw);
-      expect(runs.every((r) => r.emphasis === null)).toBe(true);
-    }
-  });
-
-  it("degrades `**a *b* c` without losing any character", () => {
-    const raw = "**a *b* c";
-    expect(plainOf(parseSubtitleRuns(raw))).toBe(stripSubtitleMarkdown(raw));
-    expect(plainOf(parseSubtitleRuns(raw))).toBe("*a b* c");
-  });
-
-  it("links keep their label, images speak nothing", () => {
-    expect(plainOf(parseSubtitleRuns("see [the docs](https://x.dev) now"))).toBe(
-      "see the docs now",
-    );
-    expect(
-      plainOf(parseSubtitleRuns("a ![portrait](img.png) b")),
-    ).toBe("a  b");
-  });
-
-  it("drops line-leading furniture (headings, quotes, bullets)", () => {
-    expect(plainOf(parseSubtitleRuns("## Heading starts"))).toBe("Heading starts");
-    expect(plainOf(parseSubtitleRuns("- a list opener"))).toBe("a list opener");
-    expect(plainOf(parseSubtitleRuns("> quoted words"))).toBe("quoted words");
-  });
-
-  it("styled runs never contain their own marker characters", () => {
-    const runs = parseSubtitleRuns(
-      "**a** *b* `c` __d__ _e_ [f](u) and **more** `x`",
-    );
-    for (const run of runs) {
-      if (run.emphasis === "strong") expect(run.text).not.toContain("*");
-      if (run.emphasis === "strong") expect(run.text).not.toContain("_");
-      if (run.emphasis === "em") expect(run.text).not.toContain("*");
-      if (run.emphasis === "em") expect(run.text).not.toContain("_");
-      if (run.emphasis === "code") expect(run.text).not.toContain("`");
-    }
-  });
-});
-
-describe("foldSubtitleLine — runs ride the same truncation", () => {
-  const part = (p: AnyPart): AnyPart => p;
-
-  it("strips markers from text and aligns runs with it exactly", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "text", text: "**你换房间了** — 现在是 `Ballroom`。" })],
-      "assistant",
-    );
-    expect(line.text).toBe("你换房间了 — 现在是 Ballroom。");
-    expect(line.runs.map((r) => r.text).join("")).toBe(line.text);
-    expect(line.runs).toEqual([
-      { text: "你换房间了", emphasis: "strong" },
-      { text: " — 现在是 ", emphasis: null },
-      { text: "Ballroom", emphasis: "code" },
-      { text: "。", emphasis: null },
-    ]);
-  });
-
-  it("keeps text byte-identical to the plain fold for marker-free input", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "text", text: "So — here's what I found." })],
-      "assistant",
-    );
-    expect(line.text).toBe("So — here's what I found.");
-    expect(line.runs).toEqual([{ text: "So — here's what I found.", emphasis: null }]);
-    expect(line.truncated).toBe(false);
-  });
-
-  it("covers exactly the kept prefix on a long truncated reply", () => {
-    // Emphasis late in the reply must not survive the cut, and a run
-    // straddling the cut is split — never re-parsed.
-    const long =
-      `${"opening words ".repeat(6)}**bold tail** ` + "x".repeat(SUBTITLE_LINE_MAX);
-    const line = foldSubtitleLine([part({ type: "text", text: long })], "assistant");
-    expect(line.truncated).toBe(true);
-    expect(line.text.length).toBeLessThanOrEqual(SUBTITLE_LINE_MAX);
-    expect(line.runs.map((r) => r.text).join("")).toBe(line.text);
-    // Every kept character is accounted for by whole or split runs.
-    const covered = line.runs.reduce((n, r) => n + r.text.length, 0);
-    expect(covered).toBe(line.text.length);
-    // The joined plain prefix of the parsed source equals the kept text.
-    const parsed = parseSubtitleRuns(collapseSubtitleWhitespace(long));
-    expect(parsed.map((r) => r.text).join("").startsWith(line.text)).toBe(true);
-  });
-
-  it("returns empty runs when there is no text", () => {
-    const line = foldSubtitleLine(
-      [part({ type: "reasoning", text: "hmm" })],
-      "assistant",
-    );
-    expect(line.text).toBe("");
-    expect(line.runs).toEqual([]);
-  });
-});
-
-describe("collapseSubtitleWhitespace / truncateSubtitleText", () => {
-  it("trims and collapses", () => {
-    expect(collapseSubtitleWhitespace("  a\n\n b\t c  ")).toBe("a b c");
-  });
-
-  it("hard-cuts when no boundary is within slack", () => {
-    const text = "x".repeat(SUBTITLE_LINE_MAX + 50);
-    const { text: cut, truncated } = truncateSubtitleText(text);
-    expect(truncated).toBe(true);
-    expect(cut.length).toBe(SUBTITLE_LINE_MAX);
-  });
-
-  it("respects a custom max", () => {
-    const { text, truncated } = truncateSubtitleText("hello world, again", 11);
-    expect(truncated).toBe(true);
-    expect(text.length).toBeLessThanOrEqual(11);
-    expect(text).toBe("hello");
+    expect(line).toBeNull();
   });
 });

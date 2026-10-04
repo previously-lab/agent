@@ -237,7 +237,9 @@ describe("bounded retention", () => {
     for (let i = 0; i < total; i++) {
       await store.appendFitnessEvents([
         {
-          ts: `t${i}`,
+          // Zero-padded so lexicographic order IS chronological — the
+          // directory store orders by ts (ISO strings in production).
+          ts: `t${String(i).padStart(4, "0")}`,
           sliceId: "s",
           bucket: "interaction",
           delta: 0,
@@ -256,7 +258,7 @@ describe("bounded retention", () => {
     const store = await importFresh();
     for (let i = 0; i < store.MAX_FITNESS_SIGNALS + 10; i++) {
       await store.appendSignal({
-        ts: `t${i}`,
+        ts: `t${String(i).padStart(4, "0")}`,
         sliceId: "s",
         type: "recall_rework",
         detail: `d${i}`,
@@ -298,6 +300,130 @@ describe("recordDirectionRejection", () => {
     expect(directionRejections.at(-1)).toBe(
       `2026-08-27-${1000 + store.MAX_DIRECTION_REJECTIONS + 4}`,
     );
+  });
+});
+
+// ── Directory-level append-only store (v0.16 S0) ──────────────────────────
+
+describe("directory-level append-only store (v0.16 S0)", () => {
+  it("writes ONE file per event/signal under fitness/events/ — no whole-file fitness.json", async () => {
+    const store = await importFresh();
+    await store.appendFitnessEvents([
+      { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q1" },
+      { ts: "2026-10-05T10:01:00.000Z", sliceId: "s", bucket: "card", delta: 1, evidence: "q2" },
+    ]);
+    await store.appendSignal({
+      ts: "2026-10-05T10:02:00.000Z",
+      sliceId: "s",
+      type: "interaction_interrupt",
+      detail: "stopped",
+    });
+
+    const dir = path.join(tmpDir, "memory/evolution/fitness/events");
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    expect(files).toHaveLength(3);
+    // ISO-ts prefix + random suffix naming.
+    expect(files.every((f) => /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f]{6}\.json$/.test(f))).toBe(true);
+    // No legacy whole-file store is created.
+    expect(readOnDisk("memory/evolution/fitness.json")).toBeNull();
+    // And the aggregate reads all three back, chronologically.
+    const agg = await store.readFitness();
+    expect(agg.events.map((e) => e.evidence)).toEqual(["q1", "q2"]);
+    expect(agg.signals.map((s) => s.type)).toEqual(["interaction_interrupt"]);
+  });
+
+  it("tolerates and merges a legacy whole-file fitness.json (no crash, both count)", async () => {
+    const store = await importFresh();
+    writeOnDisk(
+      "memory/evolution/fitness.json",
+      JSON.stringify({
+        events: [
+          { ts: "2026-10-01T09:00:00.000Z", sliceId: "s", bucket: "recall", delta: -2, evidence: "legacy q" },
+        ],
+        signals: [
+          { ts: "2026-10-01T09:01:00.000Z", sliceId: "s", type: "recall_rework", detail: "legacy d" },
+        ],
+        directionRejections: ["2026-10-01-0900"],
+      }),
+    );
+    await store.appendFitnessEvents([
+      { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: 1, evidence: "new q" },
+    ]);
+
+    const agg = await store.readFitness();
+    expect(agg.events.map((e) => e.evidence)).toEqual(["legacy q", "new q"]);
+    expect(agg.signals).toHaveLength(1);
+    expect(agg.directionRejections).toEqual(["2026-10-01-0900"]);
+  });
+
+  it("settling clears a legacy whole-file store too (semantics unchanged)", async () => {
+    const store = await importFresh();
+    writeOnDisk(
+      "memory/evolution/fitness.json",
+      JSON.stringify({
+        events: [{ ts: "t1", sliceId: "s", bucket: "card", delta: -1, evidence: "q" }],
+        signals: [],
+        directionRejections: ["rej-slice"],
+      }),
+    );
+    await store.resetFitnessGeneration();
+    const agg = await store.readFitness();
+    expect(agg.events).toEqual([]);
+    expect(agg.directionRejections).toEqual(["rej-slice"]);
+    // The legacy file itself is emptied (not deleted — it keeps its field shape).
+    const legacy = JSON.parse(readOnDisk("memory/evolution/fitness.json")!);
+    expect(legacy.events).toEqual([]);
+    expect(legacy.directionRejections).toEqual(["rej-slice"]);
+  });
+
+  it("batch read-your-writes: an unflushed append is visible to readFitness(batch) only", async () => {
+    const store = await importFresh();
+    const io = await import("@/lib/episodic/io-helpers");
+    const batch = io.createBatch();
+    await store.appendFitnessEvents(
+      [{ ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q" }],
+      batch,
+    );
+    // In-batch: visible. On disk: not yet.
+    expect((await store.readFitness(batch)).events).toHaveLength(1);
+    expect((await store.readFitness()).events).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir, "memory/evolution/fitness/events"))).toBe(false);
+
+    await io.flushBatch(batch, "test flush");
+    expect((await store.readFitness()).events).toHaveLength(1);
+  });
+
+  it("settle converts this batch's own unflushed appends into deletes (generation actually settles at flush)", async () => {
+    const store = await importFresh();
+    const io = await import("@/lib/episodic/io-helpers");
+    const batch = io.createBatch();
+    await store.appendFitnessEvents(
+      [
+        { ts: "2026-10-05T10:00:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q1" },
+        { ts: "2026-10-05T10:01:00.000Z", sliceId: "s", bucket: "card", delta: -1, evidence: "q2" },
+      ],
+      batch,
+    );
+    // The evolution run responds and settles — BEFORE the turn's batch flushed.
+    await store.resetFitnessGeneration(batch);
+    await io.flushBatch(batch, "test flush");
+
+    const dir = path.join(tmpDir, "memory/evolution/fitness/events");
+    expect(fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".json")) : []).toEqual([]);
+    expect((await store.readFitness()).events).toEqual([]);
+  });
+
+  it("concurrent appenders never share a filename (500 same-ts appends → 500 files, none lost)", async () => {
+    const store = await importFresh();
+    const ts = "2026-10-05T10:00:00.000Z";
+    await Promise.all(
+      Array.from({ length: 100 }, (_, i) =>
+        store.appendSignal({ ts, sliceId: "s", type: "interaction_interrupt", detail: `d${i}` }),
+      ),
+    );
+    const agg = await store.readFitness();
+    expect(agg.signals).toHaveLength(100);
+    expect(new Set(agg.signals.map((s) => s.detail)).size).toBe(100);
   });
 });
 

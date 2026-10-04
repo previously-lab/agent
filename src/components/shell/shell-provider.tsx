@@ -44,14 +44,17 @@
  *   feed             the one FieldFeed object (field-feed.ts). The band, the
  *                    card field and the chat stream share it; it is created
  *                    here so the stream's writer survives a route unmount.
- *   The CONVERSATION SURFACE slots — `paneSlotEl` rendered by the route (the
- *   pane's portal target), `panelSlotEl` by the overlay (the fullscreen
- *   body) — plus the composition of `ConversationSurface` from the slots,
- *   the tier and the route's reported pose. `useState`-backed element refs,
- *   the same handshake world-canvas.tsx uses: the re-render on registration
- *   is the point. A slot is null until its element registers, and a "field"
- *   surface is only ever published WITH a live element — a portal handed a
- *   null or detached element dies exactly at the canvas's connect.
+ *   The CONVERSATION SURFACE slot — `paneSlotEl`, rendered by the route (the
+ *   pane's portal target) — plus the composition of `ConversationSurface`
+ *   from the slot, the tier and the route's reported pose. The pane slot is
+ *   the R3F conversation field's ONLY seat: the panel's fullscreen body is
+ *   the plain DOM list, so a "field" surface is published only while the
+ *   panel is at the pill tier and the world is the field view. A
+ *   `useState`-backed element ref, the same handshake world-canvas.tsx
+ *   uses: the re-render on registration is the point. The slot is null
+ *   until its element registers, and a "field" surface is only ever
+ *   published WITH a live element — a portal handed a null or detached
+ *   element dies exactly at the canvas's connect.
  *   publishing /     the feed's one-writer lease and the `?at=` suppression
  *   suppressAtJump   flag — both computed by the route (it owns the rung and
  *                    the transition machine), pushed here, read by the chat
@@ -68,9 +71,9 @@
  *
  * SSR / HYDRATION NOTE. The initial tier is read ONCE from
  * `window.location`: a `?view=game` cold boot must START at the pill — a
- * wrong first tier renders the fullscreen body (and its R3F portal target)
- * for one commit and folds it the next, and that mount-fold churn at connect
- * time is exactly the crash class this hoist exists to kill. Server and
+ * wrong first tier renders the fullscreen body for one commit and folds it
+ * the next, and that mount-fold churn at connect time is exactly the crash
+ * class this hoist exists to kill. Server and
  * client can therefore disagree on the initial value — safely: `panelMode`
  * reaches no SSR'd markup (the overlay is client-only, and the route reads
  * the tier only in effects and in the client-only canvas's `paused` prop).
@@ -158,9 +161,8 @@ interface ShellValue {
   /** The composer's measured foot inset — see the module header. */
   composerClearance: number;
   setComposerClearance: (px: number) => void;
-  /** Slot registration — `useState`-backed element refs (module header). */
+  /** Slot registration — a `useState`-backed element ref (module header). */
   setPaneSlotEl: (el: HTMLElement | null) => void;
-  setPanelSlotEl: (el: HTMLElement | null) => void;
   /** The route's registration channel — see `WorldDriver`. */
   registerWorldDriver: (driver: WorldDriver | null) => void;
   setWorldPose: (pose: WorldPose | null) => void;
@@ -249,11 +251,10 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   feedRef.current ??= createFieldFeed();
   const feed = feedRef.current;
 
-  // The two conversation-surface slots and the route's reactive pose — see
+  // The conversation-surface slot and the route's reactive pose — see
   // the module header. Null until a real element registers, and null again
   // the moment its branch unmounts (leaving `/app` drops the pane slot).
   const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
-  const [panelSlotEl, setPanelSlotEl] = useState<HTMLElement | null>(null);
   const [worldPose, setWorldPose] = useState<WorldPose | null>(null);
   const [publishing, setFeedPublishing] = useState(true);
   const [suppressAtJump, setSuppressAtJump] = useState(false);
@@ -319,29 +320,22 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // ── THE CONVERSATION SURFACE (the R3F field's host) ─────────────────────
-  // Where the conversation field is allowed to draw: the route's pane slot
-  // while the panel floats beside it (the pill leaves the whole pane free),
-  // the overlay's panel-body slot at fullscreen (where the panel is
-  // viewport-wide), and — with no wide host (the game view below the
-  // fullscreen tier, or a route with no pane at all) — "narrow", where the
-  // DOM list takes the conversation (see `chat/conversation-surface.tsx`).
-  // Before the route reports its pose the default is the field's rules; both
-  // slots are null then, so the surface degrades to "narrow", never to a
+  // The field's ONLY seat is the route's pane slot, and only while the panel
+  // floats beside it at the pill tier (the pill leaves the whole pane free).
+  // Everywhere else the answer is "narrow" and the DOM list carries the
+  // conversation (see `chat/conversation-surface.tsx`): the panel's
+  // fullscreen body (the expanded conversation is plain DOM — history and
+  // the in-flight turn), the game view, and any route with no pane at all.
+  // Before the route reports its pose the default is the field's rules; the
+  // slot is null then, so the surface degrades to "narrow", never to a
   // "field" with a null target.
   const conversationSurface: ConversationSurface = useMemo(() => {
     const view = worldPose?.settled ?? "field";
-    return view === "game"
-      ? panelSlotEl
-        ? { kind: "field", el: panelSlotEl }
-        : { kind: "narrow" }
-      : panelMode === "fullscreen"
-        ? panelSlotEl
-          ? { kind: "field", el: panelSlotEl }
-          : { kind: "narrow" }
-        : paneSlotEl
-          ? { kind: "field", el: paneSlotEl }
-          : { kind: "narrow" };
-  }, [worldPose, panelMode, panelSlotEl, paneSlotEl]);
+    if (view === "game" || panelMode === "fullscreen" || !paneSlotEl) {
+      return { kind: "narrow" };
+    }
+    return { kind: "field", el: paneSlotEl };
+  }, [worldPose, panelMode, paneSlotEl]);
 
   const value = useMemo<ShellValue>(
     () => ({
@@ -358,7 +352,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       composerClearance,
       setComposerClearance,
       setPaneSlotEl,
-      setPanelSlotEl,
       registerWorldDriver,
       setWorldPose,
       setFeedPublishing,

@@ -31,10 +31,27 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
 }));
 
 import {
-  readStrandImpl,
-  listStrandsImpl,
-} from "@/lib/episodic/flash/recall";
+  readStrandExecute,
+  listStrandsExecute,
+  type ToolContext,
+} from "@/app/api/agent/tool-executors";
 import { serializeStrandEntity } from "@/lib/episodic/strand-files";
+
+// The strand read implementations are the main agent's chat tools now (they
+// lived inside the retired recall sub-agent) — thin one-arg wrappers over the
+// (input, opts) executor signature keep the tests below unchanged.
+const ctx: ToolContext = {
+  repo: "local",
+  owner: "local",
+  useGithub: false,
+  useDemo: false,
+  sliceId: "2026-08-11-1115",
+  recentTurns: [],
+};
+const readStrandImpl = (strand: string): Promise<string> =>
+  readStrandExecute({ strand }, { context: ctx, toolCallId: "tc" });
+const listStrandsImpl = (): Promise<string> =>
+  listStrandsExecute({}, { context: ctx, toolCallId: "tc" });
 
 const STRANDS_JSON = "memory/episodic/strands.json";
 

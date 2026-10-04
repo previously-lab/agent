@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
   BRAND_HEX,
@@ -18,12 +18,18 @@ import { PALETTES, VIVID_PALETTES } from "@/lib/game/space-types";
 
 const ALL_PALETTES = [...PALETTES, ...VIVID_PALETTES];
 
-const CORPUS: Record<string, string[]> = JSON.parse(
-  readFileSync(
-    fileURLToPath(new URL("../../../memory/episodic/strands.json", import.meta.url)),
-    "utf8",
-  ),
-);
+// Corpus is the repo's own strands.json; MEMORY_ROOT can point the read at
+// a fixture copy. When the corpus is absent (fresh clone / cleared memory —
+// a state the app supports) the corpus-dependent tests skip instead of
+// failing the file at load time; everything else runs unchanged.
+const MEMORY_ROOT =
+  process.env.MEMORY_ROOT ??
+  fileURLToPath(new URL("../../../memory", import.meta.url));
+const CORPUS_PATH = `${MEMORY_ROOT}/episodic/strands.json`;
+const hasCorpus = existsSync(CORPUS_PATH);
+const CORPUS: Record<string, string[]> = hasCorpus
+  ? JSON.parse(readFileSync(CORPUS_PATH, "utf8"))
+  : {};
 const STRAND_NAMES = Object.keys(CORPUS);
 
 /** The distinguishability metric: Euclidean distance in OKLab. ~0.01 is
@@ -100,7 +106,7 @@ describe("familyMember — determinism and shape", () => {
     expect(all.size).toBe(FAMILY_SIZE);
   });
 
-  it("covers the corpus: the family is at least as large as the real strand count", () => {
+  it.skipIf(STRAND_NAMES.length === 0)("covers the corpus: the family is at least as large as the real strand count", () => {
     expect(FAMILY_SIZE).toBeGreaterThanOrEqual(STRAND_NAMES.length);
   });
 
@@ -157,7 +163,7 @@ describe("familyIndexForName — the strand → family mapping", () => {
     expect(familyIndexForName("")).toBe(0);
   });
 
-  it("fixes the real corpus's collisions — before %5 / after family-of-96", () => {
+  it.skipIf(STRAND_NAMES.length === 0)("fixes the real corpus's collisions — before %5 / after family-of-96", () => {
     // The documented defect (doc/design/v0.11-strand-field.md §2.7) was
     // hash % 5 over ~93 strands. This pins the repair against the REAL
     // corpus and keeps the numbers in the test output for the report.
@@ -179,7 +185,7 @@ describe("familyIndexForName — the strand → family mapping", () => {
     expect(after.shared).toBeLessThan(before.shared * 0.7);
   });
 
-  it("gives colliding strands the best separation the family has", () => {
+  it.skipIf(STRAND_NAMES.length === 0)("gives colliding strands the best separation the family has", () => {
     // Where two strands DO share a slot their colours are identical by
     // definition; the guarantee worth pinning is the other direction —
     // the smallest distance between any two DISTINCT colours the corpus

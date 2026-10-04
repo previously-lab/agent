@@ -15,14 +15,14 @@
  *               the middle (no box of its own; the pill is the container),
  *               and round send/stop + fullscreen buttons on the right —
  *               plus, floating directly ABOVE the pill (never part of the
- *               pill's height or width), the subtitle: an FPS-radio strip —
- *               a fixed-width speaker column (uppercase, letterspaced, the
- *               persona in brand blue / the user in warm grey) with the body
- *               pinned to the column's x, wrapped to at most two lines, the
- *               whole block capped to `--subtitle-block-max` and centred
- *               over the pill — the live rendering of the newest turn, folded
- *               by the pure reducer in `lib/chat/subtitle-line.ts` and passed
- *               in as a prop. The
+ *               pill's height or width), the subtitle: the mini-state's live
+ *               display of WHAT THE AGENT IS DOING, game-subtitle style — a
+ *               fixed-width uppercase speaker column (the persona in brand
+ *               blue) with ONE discrete caption block pinned to the column's
+ *               x — （正在思考） / （正在搜索） / （正在回忆）… — each block
+ *               REPLACING the previous one as the turn advances, never a
+ *               streaming rendering of the reply text (that contract lives
+ *               in `lib/chat/subtitle-line.ts`). The
  *               fullscreen chrome (slim bar + conversation body) folds to
  *               zero height and goes inert, but stays MOUNTED — the live
  *               `useChat` stream, the draft and the scroll position all
@@ -34,7 +34,10 @@
  *               events, the world behind keeps every other pixel.
  *   fullscreen  the same box grown to the viewport (a CSS height transition
  *               FROM the pill's height, not a remount), full capability.
- *               OVERLAY, never a route change — `position: fixed`, so the
+ *               The body is the conversation as a plain DOM surface
+ *               (`DomChatList` — history AND the in-flight turn, one native
+ *               scroll container); no R3F lives in this box. OVERLAY, never
+ *               a route change — `position: fixed`, so the
  *               world canvas behind it is never resized or unmounted; the
  *               provider derives `worldFrozen` from this tier and the app
  *               route's canvas freezes its R3F `frameloop` ("never") while
@@ -73,7 +76,6 @@ import {
 import { useTranslations } from "next-intl";
 import { Maximize2, Minimize2, X } from "lucide-react";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
-import { SUBTITLE_LINE_MAX } from "@/lib/chat/subtitle-line";
 
 export type ConversationPanelMode = "pill" | "fullscreen";
 
@@ -125,10 +127,9 @@ export const PILL_BOTTOM_GAP_PX = 16;
 
 /** The subtitle's static geometry now lives in CSS/Tailwind: the block cap
  *  is `--subtitle-block-max` in globals.css (660px sits between max-w-xl and
- *  max-w-2xl), the speaker column is the `w-28` token (112px), the
- *  column-to-body gap is `gap-3` (12px), and the user's warm-grey ink is the
- *  `.subtitle-user-ink` class. One line's height stays a constant because the
- *  seat computation below uses it: */
+ *  max-w-2xl), the speaker column is the `w-28` token (112px), and the
+ *  column-to-body gap is `gap-3` (12px). One line's height stays a constant
+ *  because the pill-tier box height below adds it: */
 export const SUBTITLE_LINE_HEIGHT_PX = 20;
 
 /** What the panel tells the chat components that render inside it: which
@@ -150,20 +151,13 @@ export function usePanelTier(): PanelTier | null {
 export interface ConversationPanelProps {
   mode: ConversationPanelMode;
   onModeChange: (mode: ConversationPanelMode) => void;
-  /** The pill's one non-control, floating above it: the live radio-line
-   *  rendering of the newest turn (fixed-width speaker column + body pinned
-   *  to the column's x, at most two lines, block capped and centred), or a
-   *  status label in the same column rhythm while there is no text yet —
-   *  folded by the pure reducer in `lib/chat/subtitle-line.ts`. Null when
-   *  there is nothing to say — the line then renders empty so its seat (and
-   *  the pill's position) stays put. Only ever shown at the pill tier. */
+  /** The pill's one non-control, floating above it: the current caption
+   *  block of the IN-FLIGHT turn — what the agent is doing right now
+   *  (thinking / searching / recalling / reading / replying / …), folded by
+   *  the pure reducer in `lib/chat/subtitle-line.ts`. Null when no turn is
+   *  in flight — the line then renders empty so its seat (and the pill's
+   *  position) stays put. Only ever shown at the pill tier. */
   subtitleLine?: SubtitleLine | null;
-  /** An optional surface mounted ABOVE the conversation children inside the
-   *  panel body — the overlay's portal target for the R3F conversation field
-   *  at FULLSCREEN, where the panel is viewport-wide and the field fits.
-   *  Absent at the pill tier (the field then portals into the app route's
-   *  pane slot). */
-  bodyPrefix?: ReactNode;
   /** The conversation surface. Always mounted — see the module header. */
   children: ReactNode;
 }
@@ -172,7 +166,6 @@ export function ConversationPanel({
   mode,
   onModeChange,
   subtitleLine = null,
-  bodyPrefix,
   children,
 }: ConversationPanelProps) {
   const t = useTranslations("conversationPanel");
@@ -218,15 +211,23 @@ export function ConversationPanel({
     [mode, onModeChange],
   );
 
-  // The subtitle seat: one 20px line normally, two when the fold's text is
-  // long enough to wrap (estimated at half the reducer cap — the body track
-  // holds ~75 mono-11px characters per line at the desktop block width). The
-  // estimate only ever reserves a line; `line-clamp-2` owns the real wrap.
-  const subtitleTwoLines =
-    !!subtitleLine?.text &&
-    subtitleLine.text.length > Math.ceil(SUBTITLE_LINE_MAX / 2);
-  const subtitleSeatHeight =
-    SUBTITLE_LINE_HEIGHT_PX * (subtitleTwoLines ? 2 : 1);
+  // The caption block's translated label — one discrete activity, never the
+  // reply's words (the contract is the reducer's, `lib/chat/subtitle-line.ts`).
+  const subtitleLabel = subtitleLine
+    ? subtitleLine.activity === "thinking"
+      ? t("subtitleThinking")
+      : subtitleLine.activity === "searching"
+        ? t("subtitleSearching")
+        : subtitleLine.activity === "recalling"
+          ? t("subtitleRecalling")
+          : subtitleLine.activity === "reading"
+            ? t("subtitleReading", { count: subtitleLine.count })
+            : subtitleLine.activity === "replying"
+              ? t("subtitleReplying")
+              : subtitleLine.activity === "housekeeping"
+                ? t("subtitleHousekeeping")
+                : t("subtitleEvolving")
+    : null;
 
   return (
     <PanelTierContext.Provider value={tier}>
@@ -237,20 +238,19 @@ export function ConversationPanel({
           never resizes. At the pill tier the box itself is chromeless and
           pointer-transparent — only the pill (positioned by the composer
           host) and its buttons eat events; the world keeps every other
-          pixel of the bottom edge. The height at the pill tier is the pill
-          plus the subtitle seat above it: PILL_HEIGHT_PX + one or two 20px
-          subtitle lines + a 4px gap between them + PILL_BOTTOM_GAP_PX. */}
+          pixel. The height at the pill tier is the pill plus the subtitle
+          seat above it: PILL_HEIGHT_PX + one 20px subtitle line + a 4px gap
+          between them + PILL_BOTTOM_GAP_PX. */}
       <div
         ref={panelRef}
         tabIndex={-1}
         onKeyDown={onContainerKeyDown}
         // Height: 100dvh at fullscreen; at the pill tier PILL_HEIGHT_PX +
-        // the subtitle seat (JS-estimated 1–2 lines) + the 4px gap +
-        // PILL_BOTTOM_GAP_PX — only the seat varies with state.
+        // the one-line subtitle seat + the 4px gap + PILL_BOTTOM_GAP_PX.
         style={{
           height: open
             ? "100dvh"
-            : PILL_HEIGHT_PX + subtitleSeatHeight + 4 + PILL_BOTTOM_GAP_PX,
+            : PILL_HEIGHT_PX + SUBTITLE_LINE_HEIGHT_PX + 4 + PILL_BOTTOM_GAP_PX,
         }}
         className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
@@ -263,72 +263,36 @@ export function ConversationPanel({
             fullscreen conversation — the command palette proved it the hard
             way, its items un-clickable while the panel was z-60. */}
         {/* THE SUBTITLE — the pill's one non-control, floating directly above
-            it (never part of the pill's height or width): an FPS-radio
-            strip, capped to `--subtitle-block-max` and centred over the
-            pill — never full-bleed. The speaker column is a fixed-width,
-            uppercase, letterspaced label (the persona in `text-brand`, the
-            user in the warm grey `.subtitle-user-ink`); the body starts at the
-            column's far edge and wraps to at most two lines, the CSS clamp
-            supplying the ellipsis. While the turn has produced no words the
-            status prefix (thinking / reading) takes the label's place in the
-            same column rhythm, capped at the block width. An empty line
+            it (never part of the pill's height or width): the mini-state's
+            live display of WHAT THE AGENT IS DOING, game-subtitle style —
+            a block capped to `--subtitle-block-max` and centred over the pill,
+            never full-bleed. The speaker column is a fixed-width, uppercase,
+            letterspaced persona label in `text-brand`; the caption starts at
+            the column's far edge — ONE discrete block (（正在思考） /
+            （正在搜索） / （正在回忆）…) that REPLACES itself as the turn
+            advances, never a streaming rendering of the reply. An empty line
             still renders (the row keeps the subtitle's seat). */}
         <div
           data-conversation-subtitle
           aria-live="polite"
-          // The reserved seat's height, px — one 20px line, two when the
-          // fold is long enough to wrap (JS estimate; line-clamp-2 owns
-          // the real wrap).
-          style={{ height: subtitleSeatHeight }}
+          // The reserved seat's height, px — exactly one 20px line: the
+          // caption is a single discrete block, it never wraps.
+          style={{ height: SUBTITLE_LINE_HEIGHT_PX }}
           className={`shrink-0 overflow-hidden font-mono text-[11px] leading-5 ${
             open ? "hidden" : "pointer-events-none flex justify-center px-4"
           }`}
         >
-          {subtitleLine && subtitleLine.text ? (
+          {subtitleLabel ? (
             <span className="subtitle-block flex min-w-0 w-full gap-3">
               <span
                 aria-hidden
-                className={`w-28 shrink-0 truncate uppercase tracking-[0.08em] ${
-                  subtitleLine.speaker === "persona"
-                    ? "text-brand"
-                    : "subtitle-user-ink"
-                }`}
+                className="w-28 shrink-0 truncate uppercase tracking-[0.08em] text-brand"
               >
-                {subtitleLine.speaker === "persona"
-                  ? t("subtitlePersona")
-                  : t("subtitleUser")}
-                :
+                {t("subtitlePersona")}:
               </span>
-              <span className="min-w-0 flex-1 break-words text-muted-foreground line-clamp-2">
-                {subtitleLine.runs.length > 0
-                  ? subtitleLine.runs.map((run, index) =>
-                      run.emphasis === "strong" ? (
-                        <strong key={index} className="font-bold text-foreground">
-                          {run.text}
-                        </strong>
-                      ) : run.emphasis === "em" ? (
-                        <em key={index} className="italic">
-                          {run.text}
-                        </em>
-                      ) : run.emphasis === "code" ? (
-                        <code
-                          key={index}
-                          className="rounded-sm bg-foreground/10 px-1 text-foreground"
-                        >
-                          {run.text}
-                        </code>
-                      ) : (
-                        run.text
-                      ),
-                    )
-                  : subtitleLine.text}
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                {subtitleLabel}
               </span>
-            </span>
-          ) : subtitleLine?.status ? (
-            <span className="subtitle-block subtitle-user-ink min-w-0 w-full truncate uppercase tracking-[0.08em]">
-              {subtitleLine.status.kind === "reading"
-                ? t("subtitleReading", { count: subtitleLine.status.count })
-                : t("subtitleThinking")}
             </span>
           ) : null}
         </div>
@@ -392,21 +356,9 @@ export function ConversationPanel({
           }`}
         >
           {/* min-h-0 so the chat's own surface — not this column — grows and
-              scrolls. At fullscreen an optional bodyPrefix (the R3F field's
-              portal target) takes the grow and the conversation children
-              keep their natural height (live strip + composer). */}
-          <div className="flex min-h-0 flex-1 flex-col">
-            {bodyPrefix}
-            <div
-              className={
-                bodyPrefix
-                  ? "flex min-h-0 flex-col"
-                  : "flex min-h-0 flex-1 flex-col"
-              }
-            >
-              {children}
-            </div>
-          </div>
+              scrolls. The body is one plain DOM column (the DOM chat list);
+              no portal target lives here any more. */}
+          <div className="flex min-h-0 flex-1 flex-col">{children}</div>
         </div>
 
         {/* The composer is NOT in this JSX — `ChatPage` renders it

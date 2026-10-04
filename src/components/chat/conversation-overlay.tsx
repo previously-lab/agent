@@ -24,11 +24,13 @@
  * is produced by ChatPage and rendered by the panel, both inside this
  * component, so the wire between them never leaves it.
  *
- * THE PANEL-BODY SLOT stays: at fullscreen the panel is viewport-wide and
- * hosts the R3F field itself, so `bodyPrefix` is the portal target — now
- * registered with the PROVIDER (which composes the surface), not with a
- * route. The field's OTHER seat (the pane slot) is rendered by the app
- * route; see `app-shell.tsx`.
+ * NO R3F IN THIS BOX. The panel body is the conversation as a plain DOM
+ * surface at every tier (fullscreen included): the R3F conversation field's
+ * only seat is the app route's PANE slot (see `app-shell.tsx` and
+ * `chat/conversation-surface.tsx`), and the surface composition
+ * (`shell-provider.tsx`) answers "narrow" whenever the panel is fullscreen,
+ * so the expanded panel always gets `DomChatList` — history and the
+ * in-flight turn alike.
  */
 import { useState } from "react";
 import type { UserConfig } from "@/lib/config/types";
@@ -45,7 +47,7 @@ export function ConversationOverlay({
   initialConfig?: UserConfig;
 }) {
   const shell = useShell();
-  // The pill's subtitle line (v0.13 §4): folded from the unified stream by
+  // The pill's subtitle line (v0.13 §4): folded from the in-flight turn by
   // ChatPage, lifted HERE, and handed back down into the panel as a prop —
   // the panel renders it, the page produces it, and this state is the wire
   // between them.
@@ -56,11 +58,6 @@ export function ConversationOverlay({
       mode={shell.panelMode}
       onModeChange={shell.setPanelMode}
       subtitleLine={subtitleLine}
-      bodyPrefix={
-        shell.panelMode === "fullscreen" ? (
-          <div ref={shell.setPanelSlotEl} className="min-h-0 flex-1" />
-        ) : undefined
-      }
     >
       <ChatPage
         initialConfig={initialConfig}

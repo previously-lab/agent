@@ -20,7 +20,7 @@ import {
   ttlForPath,
   type ReadOptions,
 } from "@/lib/cache/data-cache";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync } from "fs";
 import { join, dirname } from "path";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
@@ -82,6 +82,24 @@ export async function writeFileLocal(
   writeFileSync(fullPath, content, "utf-8");
 
   return { path, created: !existed };
+}
+
+/**
+ * Delete a file. Whitelist-checked like every other access here. A missing
+ * file is NOT an error — deletes are idempotent (a queued delete may race a
+ * file that never landed, and the settle path re-reads listings anyway).
+ */
+export async function deleteFileLocal(path: string): Promise<void> {
+  if (!isPathAllowed(path)) {
+    throw new Error(`Access denied: path "${path}" is outside allowed directories`);
+  }
+
+  const fullPath = resolveLocalDataPath(path);
+  try {
+    rmSync(fullPath, { force: true });
+  } catch {
+    // unreadable / already gone — idempotent delete
+  }
 }
 
 export async function listFilesLocal(

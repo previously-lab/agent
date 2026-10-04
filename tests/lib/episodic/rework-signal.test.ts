@@ -1,59 +1,52 @@
 /**
- * Tests for the rework-signal classification (src/lib/episodic/rework-signal.ts)
- * — the pure per-conversation record: recordRecallOutcome + checkReadSlice.
- * No I/O is exercised here (logReworkSignal's writes are covered implicitly by
- * the store tests); each test uses a unique conversation id because the record
- * is module-level state.
+ * Tests for the doc_rework classification (src/lib/episodic/rework-signal.ts)
+ * — the pure per-conversation record: recordDocRead + checkDocRework.
+ * No I/O is exercised here (logDocReworkSignal's double write is covered by
+ * tests/app/api/agent/docs-tools.test.ts); each test uses a unique
+ * conversation id because the record is module-level state.
  */
 import { describe, it, expect } from "vitest";
-import {
-  recordRecallOutcome,
-  checkReadSlice,
-} from "@/lib/episodic/rework-signal";
+import { recordDocRead, checkDocRework } from "@/lib/episodic/rework-signal";
 
-const OUTCOME = {
-  referenceIds: ["2026-08-20-1430", "2026-08-21-0900"],
-  searchedIds: [
-    "timeline window 2026-08-01 → 2026-08-21",
-    "slice 2026-08-19-2000 (summary only)",
-  ],
-  confidence: 0.8,
-};
-
-describe("checkReadSlice", () => {
-  it("returns null when no recall has run in the conversation", () => {
-    expect(checkReadSlice("conv-none", "2026-08-20-1430")).toBeNull();
+describe("checkDocRework", () => {
+  it("returns null when no document has been read in the conversation", () => {
+    expect(checkDocRework("conv-none", "2026-08-20-1430")).toBeNull();
   });
 
-  it("classifies a read of a referenced slice as verify", () => {
-    recordRecallOutcome("conv-verify", OUTCOME);
-    expect(checkReadSlice("conv-verify", "2026-08-20-1430")).toBe("verify");
+  it("returns the document's file name when the read slice is one it references", () => {
+    recordDocRead("conv-hit", "2026-09-05-手机购买调研.md", [
+      "2026-09-04-2130",
+      "2026-09-05-1030",
+    ]);
+    expect(checkDocRework("conv-hit", "2026-09-04-2130")).toBe(
+      "2026-09-05-手机购买调研.md",
+    );
   });
 
-  it("classifies a read within recall's searched trail as verify", () => {
-    recordRecallOutcome("conv-searched", OUTCOME);
-    // 2026-08-19-2000 was searched (summary only) but not cited.
-    expect(checkReadSlice("conv-searched", "2026-08-19-2000")).toBe("verify");
+  it("returns null for a slice no read document references", () => {
+    recordDocRead("conv-miss", "2026-09-05-手机购买调研.md", ["2026-09-04-2130"]);
+    expect(checkDocRework("conv-miss", "2026-09-06-0900")).toBeNull();
   });
 
-  it("classifies a read outside references AND searched as rework", () => {
-    recordRecallOutcome("conv-rework", OUTCOME);
-    expect(checkReadSlice("conv-rework", "2026-07-01-0800")).toBe("rework");
+  it("checks every document read this conversation", () => {
+    recordDocRead("conv-multi", "a.md", ["2026-09-01-1000"]);
+    recordDocRead("conv-multi", "b.md", ["2026-09-02-1000"]);
+    expect(checkDocRework("conv-multi", "2026-09-02-1000")).toBe("b.md");
+    expect(checkDocRework("conv-multi", "2026-09-01-1000")).toBe("a.md");
   });
 
-  it("returns null when the read target IS the ongoing conversation slice", () => {
-    recordRecallOutcome("conv-self", OUTCOME);
-    expect(checkReadSlice("conv-self", "conv-self")).toBeNull();
+  it("never classifies the ongoing conversation slice", () => {
+    // The conversation IS slice 2026-09-10-1000; reading it is never a
+    // doc_rework signal even when a read document cites it.
+    recordDocRead("2026-09-10-1000", "a.md", ["2026-09-10-1000"]);
+    expect(checkDocRework("2026-09-10-1000", "2026-09-10-1000")).toBeNull();
   });
 
-  it("the latest recall in a conversation supersedes the earlier one", () => {
-    recordRecallOutcome("conv-latest", OUTCOME);
-    recordRecallOutcome("conv-latest", {
-      referenceIds: ["2026-08-22-1000"],
-      searchedIds: [],
-      confidence: 0.5,
-    });
-    expect(checkReadSlice("conv-latest", "2026-08-20-1430")).toBe("rework");
-    expect(checkReadSlice("conv-latest", "2026-08-22-1000")).toBe("verify");
+  it("a document read LATER does not retroactively classify an earlier read", () => {
+    // checkDocRework is a pure read of the current record; the executor calls
+    // it per read, so ordering is enforced by call order, not the record.
+    recordDocRead("conv-order", "a.md", ["2026-09-01-1000"]);
+    expect(checkDocRework("conv-order", "2026-09-01-1000")).toBe("a.md");
+    expect(checkDocRework("conv-order", "2026-09-02-1000")).toBeNull();
   });
 });

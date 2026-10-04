@@ -202,13 +202,18 @@ export function progressStageTone(stage?: string): "thinking" | "answer" {
   return stage === "writing" || stage === "done" ? "answer" : "thinking";
 }
 
-/** Memory-related tools — while they run, the stage reads as "recalling". */
-function isRecallTool(toolName: string): boolean {
+/** Memory-read tools — while they run, the stage reads as "recalling".
+ *  THE one truth table for "this tool reads the memory": shared by
+ *  `deriveAgentStage` here and by the pill subtitle's activity fold
+ *  (`lib/chat/subtitle-line.ts`) — a second copy is how the caption and the
+ *  stage pill drift apart. */
+export function isRecallTool(toolName: string): boolean {
   return (
     toolName === "recall" ||
     toolName.startsWith("read") ||
     toolName === "listSlices" ||
-    toolName === "listStrands"
+    toolName === "listStrands" ||
+    toolName === "listDocs"
   );
 }
 

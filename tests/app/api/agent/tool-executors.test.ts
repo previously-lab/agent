@@ -42,36 +42,28 @@ vi.mock("@/lib/config/loader", () => ({
   })),
 }));
 
-// recallExecute's sub-agent dependencies — mocked so the note-logic tests
-// drive runRecallSearch's outcomes directly (no model calls).
-const recallDeps = vi.hoisted(() => ({
-  runRecallSearch: vi.fn(),
+// readStrands / playbook / sub-agent-model — mocked so the executor tests run
+// without GitHub or model calls.
+const deps = vi.hoisted(() => ({
   readStrands: vi.fn(async () => ({})),
   readPlaybook: vi.fn(async () => null),
-  recordRecallOutcome: vi.fn(),
   resolveSubAgentModel: vi.fn(async () => ({ id: "test-model" })),
 }));
-vi.mock("@/lib/episodic/flash/recall", () => ({
-  runRecallSearch: recallDeps.runRecallSearch,
-  RECALL_TIMEOUT_MS: 240_000,
-}));
 vi.mock("@/lib/episodic", () => ({
-  readStrands: recallDeps.readStrands,
+  readStrands: deps.readStrands,
   CURRENT_PREVIOUSLY_PATH: "memory/episodic/current-previously.md",
 }));
 vi.mock("@/lib/evolution/store", () => ({
-  readPlaybook: recallDeps.readPlaybook,
+  readPlaybook: deps.readPlaybook,
   capPlaybook: (s: string) => s,
 }));
 vi.mock("@/lib/episodic/rework-signal", () => ({
-  recordRecallOutcome: recallDeps.recordRecallOutcome,
-  checkReadSlice: vi.fn(),
   checkDocRework: vi.fn(),
   recordDocRead: vi.fn(),
-  logReworkSignal: vi.fn(),
+  logDocReworkSignal: vi.fn(),
 }));
 vi.mock("@/lib/agents/sub-agent-runner", () => ({
-  resolveSubAgentModel: recallDeps.resolveSubAgentModel,
+  resolveSubAgentModel: deps.resolveSubAgentModel,
 }));
 vi.mock("@/lib/chat/step-timeout", () => ({
   // Passthrough: run the work immediately and report success.
@@ -87,7 +79,7 @@ vi.mock("@/lib/chat/step-timeout", () => ({
 }));
 
 // The workflow run writable — captured so tests can assert the data-* chunks
-// the executors stream to the client (data-tool-progress, data-recall-references).
+// the executors stream to the client (data-tool-progress).
 const workflowMock = vi.hoisted(() => {
   const written: Array<{ type?: string; id?: string; data?: unknown }> = [];
   return {
@@ -126,7 +118,6 @@ import {
   readTimelineWindowExecute,
   currentTimeExecute,
   describeRoomExecute,
-  recallExecute,
   webSearchExecute,
   viewImageExecute,
   type ToolContext,
@@ -379,158 +370,6 @@ describe("describeRoomExecute", () => {
       opts({ locale: "en" }),
     );
     expect(out).toMatch(/^ERROR: Invalid slice ID/);
-  });
-});
-
-describe("recallExecute context threading", () => {
-  beforeEach(() => {
-    recallDeps.runRecallSearch.mockReset();
-  });
-
-  it("passes `context` through to runRecallSearch as `knownContext`", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "",
-      references: [],
-      searched: [],
-      confidence: 0,
-    });
-    await recallExecute(
-      {
-        question: "did we discuss apples?",
-        context: "I scanned 2026-08-01 → 2026-08-05 and saw pointer lines for 2026-08-02-1100 but no apple mentions.",
-      },
-      opts(),
-    );
-    const passed = recallDeps.runRecallSearch.mock.calls[0]![0];
-    expect(passed.knownContext).toBe(
-      "I scanned 2026-08-01 → 2026-08-05 and saw pointer lines for 2026-08-02-1100 but no apple mentions.",
-    );
-  });
-
-  it("omits `knownContext` when no context is provided", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "",
-      references: [],
-      searched: [],
-      confidence: 0,
-    });
-    await recallExecute({ question: "did we discuss apples?" }, opts());
-    const passed = recallDeps.runRecallSearch.mock.calls[0]![0];
-    expect(passed.knownContext).toBeUndefined();
-  });
-});
-
-describe("recallExecute note logic", () => {
-  beforeEach(() => {
-    recallDeps.runRecallSearch.mockReset();
-  });
-
-  it("flags a timeout that produced NOTHING as an unfinished search — never a definitive miss", async () => {
-    // The regression this guards: the runner-internal timeout used to surface
-    // as {answer:"", references:[], confidence:0} — indistinguishable from an
-    // honest "no such memory", so the main agent was told not to ask again.
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "",
-      references: [],
-      searched: [],
-      confidence: 0,
-      timedOut: true,
-    });
-    const out = await recallExecute({ question: "did we discuss apples?" }, opts());
-    expect(out.note).toContain("time budget");
-    expect(out.note).toContain("NOT fully searched");
-    expect(out.note).not.toContain("This is a definitive result");
-  });
-
-  it("marks a partial answer recovered from a timed-out run as interrupted", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "We talked about apples… (partial)",
-      references: [],
-      searched: [],
-      confidence: 0.2,
-      timedOut: true,
-    });
-    const out = await recallExecute({ question: "q" }, opts());
-    expect(out.answer).toContain("apples");
-    expect(out.note).toContain("PARTIAL answer");
-    expect(out.note).not.toContain("This is a definitive result");
-  });
-
-  it("treats an empty-references answer from a COMPLETED search as definitive — confidence no longer gates it", async () => {
-    // A confident, honest "no such memory" is the normal shape of a miss; it
-    // must earn the definitive note just like a confidence-0 one.
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "You two haven't talked about this.",
-      references: [],
-      searched: ["global timeline", "strand: apples"],
-      confidence: 0.9,
-    });
-    const out = await recallExecute({ question: "q" }, opts());
-    expect(out.note).toContain("definitive result");
-    expect(out.note).toContain("do NOT call recall again");
-  });
-
-  it("adds no note when the answer carries references", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "Yes — you talked about it.",
-      references: [
-        { slice_id: "2026-08-01-1000", quote: "apples are great", note: "backs it" },
-      ],
-      searched: ["global timeline"],
-      confidence: 0.8,
-    });
-    const out = await recallExecute({ question: "q" }, opts());
-    expect(out.note).toBeUndefined();
-    expect(out.references).toHaveLength(1);
-  });
-});
-
-describe("recallExecute references channel (v0.10 §4.1)", () => {
-  beforeEach(() => {
-    recallDeps.runRecallSearch.mockReset();
-    workflowMock.written.length = 0;
-  });
-
-  it("streams the evidence anchors as a data-recall-references chunk", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "Yes — you talked about it.",
-      references: [
-        { slice_id: "2026-08-01-1000", quote: "apples are great", note: "backs it" },
-        { slice_id: "2026-08-02-1100", quote: "more apples", note: "backs that" },
-      ],
-      searched: ["global timeline"],
-      confidence: 0.8,
-    });
-    await recallExecute({ question: "q" }, opts());
-    const chunk = workflowMock.written.find(
-      (c) => c.type === "data-recall-references",
-    );
-    expect(chunk).toBeDefined();
-    // One part per recall call — the id routes the merge client-side.
-    expect(chunk!.id).toBe("recall-refs-tc1");
-    const data = chunk!.data as {
-      references: Array<{ slice_id: string; note?: string; quote?: string }>;
-    };
-    // The bar carries id + note only — quotes stay in the tool result.
-    expect(data.references.map((r) => r.slice_id)).toEqual([
-      "2026-08-01-1000",
-      "2026-08-02-1100",
-    ]);
-    expect(data.references[0].note).toBeTruthy();
-    expect(data.references[0].quote).toBeUndefined();
-  });
-
-  it("emits nothing when the answer has no references", async () => {
-    recallDeps.runRecallSearch.mockResolvedValue({
-      answer: "You two haven't talked about this.",
-      references: [],
-      searched: ["global timeline"],
-      confidence: 0.9,
-    });
-    await recallExecute({ question: "q" }, opts());
-    expect(
-      workflowMock.written.some((c) => c.type === "data-recall-references"),
-    ).toBe(false);
   });
 });
 

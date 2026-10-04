@@ -4,7 +4,7 @@
  *
  * rework-signal itself is REAL; only its two sinks are mocked (the fitness
  * store append and the agent.md timeline write), so the classification chain
- * recordDocRead → checkDocRework → logReworkSignal("doc_rework") is exercised
+ * recordDocRead → checkDocRework → logDocReworkSignal is exercised
  * for real. No memory/ directory is touched — all paths are map keys.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";

@@ -18,13 +18,16 @@
  *   A BILLBOARD IS ANCHORED BY ITS TOP EDGE, so a block that grows grows
  *   DOWNWARD and moves nothing above it.
  *
- * That is why history and the live turn can use the same mechanism. A finished
- * block is measured once, when it enters the overscan window, and its height is
- * then FIXED — reading it, scrolling it or evicting it can never change it. The
- * live block grows as tokens arrive, and because it is last, its growth cannot
- * move a single block that is already placed. The camera decides what to do
- * about the growth: follow if the reader is already at the live edge, do
- * nothing at all if they have scrolled away.
+ * That is why a field of FINISHED blocks can be measured once and frozen. A
+ * finished block is measured once, when it enters the overscan window, and
+ * its height is then FIXED — reading it, scrolling it or evicting it can
+ * never change it. HISTORY IS THE FIELD'S WHOLE CONTENT (2026-10-04): the
+ * turn in flight never enters the 3D field — it renders in the plain DOM
+ * surfaces (the expanded panel's `DomChatList`, the pill's subtitle
+ * caption) — so the block list this field lays out only ever grows by
+ * PAGING, never by streaming. The live-edge follow mechanism below is kept
+ * verbatim from the pre-split field; with an always-empty live block it
+ * simply rests at the history tail.
  *
  * THE ONE DIRECTION THAT PROPERTY DOES NOT COVER IS UPWARD. A block arriving
  * ABOVE the reader is exactly the case where "grows downward, moves nothing
@@ -40,6 +43,15 @@
  * SCALE IS NOT A CONCERN. Only the blocks crossing the viewport, plus one
  * screen of overscan, exist as portals. The rest are numbers in an offset
  * table, so the mounted count is a handful however long the conversation gets.
+ *
+ * THE FIELD READS THE REPOSITORY ITSELF (2026-10-04). Its content is the
+ * happened time slices — catalog → slice content, paged older on request,
+ * the ACTIVE slice included — loaded through its own `useSliceStream`,
+ * deliberately independent of the chat's `useChat` state. The chat panel
+ * owns the in-memory current conversation (plain DOM); this field owns
+ * history; the two never share an item list. Paging policy lives here too:
+ * the window's head pages older, and `seekKey` pages until a jump target is
+ * loaded before landing on it.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -55,7 +67,6 @@ import {
 } from "next-intl";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useTier } from "@/hooks/use-tier";
-import { ErrorBanner } from "./error-banner";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import type { FieldAnchor } from "@/lib/timeline3d/winding";
@@ -74,6 +85,7 @@ import {
   minOffsetFor,
   ORIGIN_REGION,
   prependHeadCount,
+  seekSliceIdOf,
   sliceIdOf,
   splitItems,
   type GateBand,
@@ -81,6 +93,8 @@ import {
   type StreamBlock,
 } from "@/lib/chat/field-blocks";
 import { buildOffsets, visibleRangeFor } from "@/lib/timeline3d/field-offsets";
+import { buildHistoryItems } from "@/lib/chat/stream-items";
+import { useSliceStream } from "@/hooks/use-slice-stream";
 import { SliceGate } from "./slice-gate";
 import { FieldOrigin } from "./field-origin";
 import { HistoryTurn } from "./history-turn";
@@ -114,9 +128,14 @@ const INDICATOR_HOLD_MS = 1000;
  *  ref-object handshake is its established shape for exactly this. */
 export interface ConversationFieldHandle {
   /** Bring the block containing `key` to the top of the viewport. Returns false
-   *  when that key is not loaded, which is the caller's signal to page more in
-   *  and try again — the field never fetches on its own. */
+   *  when that key is not loaded yet — the field remembers it and lands when
+   *  the block appears (see `seekKey` for the page-and-land form). */
   scrollToKey(key: string): boolean;
+  /** Page the repository until `key`'s slice is loaded, then land on it.
+   *  Resolves false when the catalog exhausted without the key — the caller
+   *  reports the miss. Optional: the DOM-list handle has no paging, so callers
+   *  must tolerate its absence (that surface holds no history to seek). */
+  seekKey?(key: string): Promise<boolean>;
   /** Absolute offset in px, clamped. */
   scrollToOffset(px: number): void;
   /** Where the camera is now, px. */
@@ -126,7 +145,10 @@ export interface ConversationFieldHandle {
 }
 
 export interface ConversationFieldProps {
-  items: ChatStreamItem[];
+  /** The persona whose repository the field reads — the field loads its own
+   *  slices (catalog → content, newest page first, the ACTIVE slice included),
+   *  independent of the chat's `useChat` state. */
+  persona: string;
   /** What the left band reads — see `field-feed.ts`. The card field publishes
    *  through the SAME object in the timeline view, so the band needs no second
    *  code path. */
@@ -138,8 +160,6 @@ export interface ConversationFieldProps {
   publishing?: boolean;
   /** Filled with the imperative handle; see `ConversationFieldHandle`. */
   apiRef?: React.MutableRefObject<ConversationFieldHandle | null>;
-  /** Called when the reader asks for the older page at the window's head. */
-  onNeedOlder: () => void;
   /** The block at the top of the viewport, reported only when it CHANGES.
    *  Replaces what the virtualized list read off `rangeChanged`. Its one
    *  consumer is the travel clock, which reads the time it is travelling FROM;
@@ -147,14 +167,6 @@ export interface ConversationFieldProps {
    *  read by nothing, but it is still reported because the clock's caller
    *  signature carries it. `sliceId` is null for the live run. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
-  /** True while older slices are being paged in — shown at the window's head. */
-  loadingOlder?: boolean;
-  /** Whether the catalog still holds slices older than the loaded window.
-   *  False turns the head of the window into "the beginning of this memory"
-   *  rather than an invitation to load more. */
-  hasMore?: boolean;
-  /** A failed turn, shown as a banner under the content. */
-  error?: Error;
   /** Briefing payload, seated as the tail card exactly as in the stream. */
   briefing?: React.ComponentProps<typeof EmptyBriefing> | null;
   /** False while the reader has scrolled away from the live edge — growth must
@@ -622,17 +634,13 @@ function FieldScene({
 // ─── The field ──────────────────────────────────────────────────────────────
 
 export function ConversationField({
-  items,
+  persona,
   feed,
   // No lease, no writes. Defaulting the other way would quietly restore the
   // bug this exists to kill: two writers on one band, ordered by render.
   publishing = false,
   apiRef,
-  onNeedOlder,
   onTopItemChange,
-  loadingOlder,
-  hasMore,
-  error,
   briefing,
   following,
   insetTop = 0,
@@ -644,6 +652,27 @@ export function ConversationField({
   const reducedMotion = useReducedMotion() ?? false;
   const { column } = useTier();
   const tField = useTranslations("timeline3d");
+
+  // ── Self-loading (2026-10-04, the three-surface split) ──────────────────
+  // THE FIELD READS THE REPOSITORY ITSELF: catalog → slice content, newest
+  // page first, the ACTIVE slice included (the null cursor pins nothing
+  // out). This is deliberately independent of the chat's `useChat` state —
+  // the panel owns the in-memory current conversation, the field owns
+  // happened time, and the two never share an item list. Older paging and
+  // jump paging (loadUntilSlice) live here now too: the window's head and
+  // `seekKey` are both this component's own callers.
+  const stream = useSliceStream(persona, null);
+  // A mount-time "now" stamp — the briefing tail item's time anchor.
+  const [briefingTimeIso] = useState(() => new Date().toISOString());
+  const items = useMemo<ChatStreamItem[]>(() => {
+    const history = buildHistoryItems(stream.slices, null);
+    return briefing
+      ? [...history, { kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
+      : history;
+  }, [stream.slices, briefing, briefingTimeIso]);
+  const handleNeedOlder = useCallback(() => {
+    void stream.loadOlder();
+  }, [stream]);
 
   const { history, live } = useMemo(() => splitItems(items), [items]);
   const blocks = useMemo<Block[]>(() => groupBlocks(history), [history]);
@@ -869,9 +898,12 @@ export function ConversationField({
     }
   }, [maxOffset]);
 
-  // The imperative handle. `scrollToKey` deliberately does NOT fetch: the
-  // caller pages until the key exists and calls again, which keeps the paging
-  // policy in one place instead of split across two components.
+  // The imperative handle. `scrollToKey` still does not page on its own — it
+  // remembers an unloaded key and lands when the block appears; `seekKey` is
+  // the page-and-land form: the field owns the repository window now, so the
+  // paging policy lives HERE, one place, not split across two components.
+  const loadUntilSliceRef = useRef(stream.loadUntilSlice);
+  loadUntilSliceRef.current = stream.loadUntilSlice;
   useEffect(() => {
     if (!apiRef) return;
     apiRef.current = {
@@ -894,10 +926,24 @@ export function ConversationField({
         // the paging resolves, which is BEFORE React has committed the new
         // blocks; the handle it calls therefore still closes over the old
         // list. Remembering the key and honouring it when the block appears
-        // makes the jump reliable without the caller polling. The field still
-        // fetches nothing itself — the paging policy stays with the caller.
+        // makes the jump reliable without the caller polling.
         pendingKeyRef.current = key;
         return false;
+      },
+      async seekKey(key) {
+        arrivingRef.current = false;
+        const found = await loadUntilSliceRef.current(seekSliceIdOf(key));
+        if (!found) return false;
+        // Loaded — land now if the block is committed, else leave the key
+        // pending and the honour-on-appear effect lands it.
+        const i = findBlockFor(key);
+        if (i !== null) {
+          setTarget(offsetsRef.current[i] ?? 0);
+          pendingKeyRef.current = null;
+        } else {
+          pendingKeyRef.current = key;
+        }
+        return true;
       },
       scrollToOffset(px) {
         arrivingRef.current = false;
@@ -1215,9 +1261,9 @@ export function ConversationField({
           column={column}
           hasOrigin={hasOrigin}
           oldestIso={oldestIso}
-          hasMore={hasMore !== false}
-          loadingOlder={loadingOlder === true}
-          onNeedOlder={onNeedOlder}
+          hasMore={stream.hasMore}
+          loadingOlder={stream.loadingOlder}
+          onNeedOlder={handleNeedOlder}
           offsetRef={offsetRef}
           dirRef={dirRef}
           heightsRef={heightsRef}
@@ -1242,8 +1288,6 @@ export function ConversationField({
       {isMobile && (
         <StreamTimeIndicator timeIso={topTime} visible={indicatorVisible} />
       )}
-
-      {error && <ErrorBanner error={error} />}
     </div>
   );
 }

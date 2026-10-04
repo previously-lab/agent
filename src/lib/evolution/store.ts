@@ -5,26 +5,39 @@
  * direction-agent.ts); this module only guarantees the
  * data layer is safe to build on:
  *
- *   - All reads/writes route through io-helpers (fsReadFile / fsWriteFile), so
- *     demo / GitHub / local resolution — and explicit WriteBatch threading —
- *     behave exactly like the rest of the memory subsystem.
+ *   - All reads/writes route through io-helpers (fsReadFile / fsWriteFile /
+ *     fsListFiles / fsDeleteFile), so demo / GitHub / local resolution — and
+ *     explicit WriteBatch threading — behave exactly like the rest of the
+ *     memory subsystem.
  *   - Missing files degrade to null / empty stores, never to errors: a fresh
  *     deployment has no evolution data yet, and that is a normal state.
  *   - Evidence-anchoring is STRUCTURAL, not prompt-level: a fitness event with
  *     blank evidence is force-stored with delta 0 (design §2.5 — "无证据强制归
  *     0"). No caller, however buggy or hallucinating, can score without evidence.
- *   - The stores are BOUNDED (newest ~200 events / ~200 signals): the files are
- *     read whole on every use, so unbounded growth would eventually flood every
- *     evolution prompt that quotes them.
+ *   - The fitness store is DIRECTORY-LEVEL append-only (v0.16 S0, design §3.1):
+ *     one event/signal per file under `fitness/events/`, so concurrent writers
+ *     (two turns' housekeepings, the interrupt signal route) can never clobber
+ *     each other — GitHub's contents API has no append, and only one-file-per-
+ *     entry is real append-only. Reads aggregate the directory; the legacy
+ *     whole-file `fitness.json` is still read and merged (old repos), and
+ *     never crashes the parse. Aggregation serves at most the newest
+ *     ~200 events / ~200 signals — a pure safety valve; generations are
+ *     naturally bounded because a successful evolution run settles by
+ *     DELETING the spent files.
  */
 
+import { randomBytes } from "crypto";
 import {
   fsReadFile,
   fsWriteFile,
+  fsListFiles,
+  fsDeleteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import {
   DIRECTION_PATH,
+  DIRECTION_REJECTED_PATH,
+  FITNESS_EVENTS_DIR,
   FITNESS_PATH,
   playbookPath,
   type PlaybookAgent,
@@ -217,7 +230,10 @@ export interface FitnessStore {
   directionRejections: string[];
 }
 
-/** Retention bounds — the store is read whole, so it must not grow forever. */
+/** Read-side retention bounds — a pure safety valve applied at aggregation;
+ * generations are naturally bounded because settle DELETES the spent entry
+ * files (v0.16 S0). The store is read whole on every use, so even a runaway
+ * generation must not flood every evolution prompt that quotes it. */
 export const MAX_FITNESS_EVENTS = 200;
 export const MAX_FITNESS_SIGNALS = 200;
 /** Rejection ids are one-per-slice at most; only the CURRENT slice's
@@ -228,98 +244,237 @@ export function emptyFitnessStore(): FitnessStore {
   return { events: [], signals: [], directionRejections: [] };
 }
 
+// ─── Directory-level append-only fitness store (v0.16 S0) ────────────────
+
 /**
- * Read the fitness store. Missing or CORRUPT files both degrade to the empty
- * store — the store is an append log of soft signals, and losing it must never
- * break a turn.
+ * One event/signal per file under `fitness/events/` — `<sanitized-ts>-<rand6>.json`.
+ * Concurrent writers never share a filename, so appends cannot clobber each
+ * other no matter who races whom (two turns' housekeepings, the interrupt
+ * signal route). The random suffix covers batches of events sharing one ts.
  */
-export async function readFitness(batch?: WriteBatch): Promise<FitnessStore> {
-  try {
-    const raw = await fsReadFile(FITNESS_PATH, batch);
-    const parsed = JSON.parse(raw) as Partial<FitnessStore>;
-    return {
-      events: Array.isArray(parsed.events) ? parsed.events : [],
-      signals: Array.isArray(parsed.signals) ? parsed.signals : [],
-      directionRejections: Array.isArray(parsed.directionRejections)
-        ? parsed.directionRejections
-        : [],
-    };
-  } catch {
-    return emptyFitnessStore();
-  }
+function fitnessEntryPath(ts: string): string {
+  const safe = ts.replace(/[^\w.-]/g, "-");
+  return `${FITNESS_EVENTS_DIR}/${safe}-${randomBytes(3).toString("hex")}.json`;
 }
 
-async function writeFitness(
-  store: FitnessStore,
-  batch?: WriteBatch,
-): Promise<void> {
-  // Keep the newest entries — the tail is what the generation aggregation
-  // (bucketNetScore) and the analyzer actually read. (Generations keep the
-  // store small by design; the caps are a pure safety valve.)
-  const bounded: FitnessStore = {
-    events: store.events.slice(-MAX_FITNESS_EVENTS),
-    signals: store.signals.slice(-MAX_FITNESS_SIGNALS),
-    directionRejections: store.directionRejections.slice(
-      -MAX_DIRECTION_REJECTIONS,
-    ),
+/** A directory entry is a scored event when it carries `bucket`, a mechanical
+ * signal when it carries `type` — the two shapes are disjoint by contract. */
+function classifyFitnessEntry(
+  parsed: unknown,
+): { kind: "event"; event: FitnessEvent } | { kind: "signal"; signal: FitnessSignal } | null {
+  if (!parsed || typeof parsed !== "object") return null;
+  if ("bucket" in parsed) {
+    return { kind: "event", event: parsed as unknown as FitnessEvent };
+  }
+  if ("type" in parsed) {
+    return { kind: "signal", signal: parsed as unknown as FitnessSignal };
+  }
+  return null;
+}
+
+/** Chronological order — entry timestamps are ISO strings, so lexical order
+ *  IS time order. */
+function byTs(a: { ts: string }, b: { ts: string }): number {
+  return a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0;
+}
+
+/**
+ * Read the fitness store: aggregate the directory store, merge the LEGACY
+ * whole-file `fitness.json` (old repos may still have one — merging it here
+ * migrates reads forward with zero ceremony), and honor this batch's pending
+ * entries so the trigger math sees this turn's own appends (read-your-writes).
+ * Missing, corrupt, or unclassifiable entries are skipped — the store is a
+ * soft-signal log, and losing some of it must never break a turn.
+ */
+export async function readFitness(batch?: WriteBatch): Promise<FitnessStore> {
+  const events: FitnessEvent[] = [];
+  const signals: FitnessSignal[] = [];
+
+  // 1. Directory store, with the batch's pending view layered on top.
+  const dirEntries = new Map<string, unknown>();
+  try {
+    for (const f of await fsListFiles(FITNESS_EVENTS_DIR)) {
+      if (f.type !== "file" || !f.name.endsWith(".json")) continue;
+      try {
+        dirEntries.set(f.name, JSON.parse(await fsReadFile(f.path)));
+      } catch {
+        // corrupt entry file — skip it, never crash the aggregation
+      }
+    }
+  } catch {
+    // directory absent — a fresh deployment, fine
+  }
+  if (batch) {
+    const prefix = `${FITNESS_EVENTS_DIR}/`;
+    for (const [p, content] of batch.entries) {
+      if (!p.startsWith(prefix) || !p.endsWith(".json")) continue;
+      const name = p.slice(prefix.length);
+      if (content === null) {
+        dirEntries.delete(name); // queued delete
+      } else {
+        try {
+          dirEntries.set(name, JSON.parse(content));
+        } catch {
+          dirEntries.delete(name);
+        }
+      }
+    }
+  }
+  for (const parsed of dirEntries.values()) {
+    const entry = classifyFitnessEntry(parsed);
+    if (entry?.kind === "event") events.push(entry.event);
+    else if (entry?.kind === "signal") signals.push(entry.signal);
+  }
+
+  // 2. Legacy whole-file store — merged, tolerated, never fatal.
+  let legacyRejections: string[] = [];
+  try {
+    const parsed = JSON.parse(await fsReadFile(FITNESS_PATH, batch)) as Partial<FitnessStore>;
+    if (Array.isArray(parsed.events)) {
+      events.push(...(parsed.events as FitnessEvent[]));
+    }
+    if (Array.isArray(parsed.signals)) {
+      signals.push(...(parsed.signals as FitnessSignal[]));
+    }
+    if (Array.isArray(parsed.directionRejections)) {
+      legacyRejections = parsed.directionRejections as string[];
+    }
+  } catch {
+    // absent or corrupt — fine
+  }
+
+  // 3. directionRejections: the live small file first, legacy folded in
+  //    (deduped, order-preserved), tail-capped.
+  const liveRejections: string[] = [];
+  try {
+    const parsed = JSON.parse(await fsReadFile(DIRECTION_REJECTED_PATH, batch)) as unknown;
+    if (Array.isArray(parsed)) liveRejections.push(...(parsed as string[]));
+  } catch {
+    // absent — fine
+  }
+  const seen = new Set(liveRejections);
+  const directionRejections = [...liveRejections];
+  for (const id of legacyRejections) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      directionRejections.push(id);
+    }
+  }
+
+  events.sort(byTs);
+  signals.sort(byTs);
+  return {
+    events: events.slice(-MAX_FITNESS_EVENTS),
+    signals: signals.slice(-MAX_FITNESS_SIGNALS),
+    directionRejections: directionRejections.slice(-MAX_DIRECTION_REJECTIONS),
   };
-  await fsWriteFile(FITNESS_PATH, JSON.stringify(bounded, null, 2), batch);
 }
 
 /**
  * Append scored events. STRUCTURAL evidence-anchoring: an event whose
  * evidence is empty/whitespace is stored with delta 0 no matter what the
  * caller passed — scoring without evidence is impossible by construction
- * here, not by prompt discipline.
+ * here, not by prompt discipline. Each event becomes its OWN file: a pure
+ * append, no read-modify-write, safe under unbounded concurrency.
  */
 export async function appendFitnessEvents(
   events: FitnessEvent[],
   batch?: WriteBatch,
 ): Promise<void> {
   if (events.length === 0) return;
-  const store = await readFitness(batch);
   const normalized = events.map((e) =>
     e.evidence.trim() ? e : { ...e, delta: 0 as const },
   );
-  store.events.push(...normalized);
-  await writeFitness(store, batch);
+  for (const e of normalized) {
+    await fsWriteFile(fitnessEntryPath(e.ts), JSON.stringify(e), batch);
+  }
 }
 
-/** Append one mechanical signal (see FitnessSignal). */
+/** Append one mechanical signal (see FitnessSignal) — its own file, same
+ *  directory-level append-only discipline as the scored events. */
 export async function appendSignal(
   signal: FitnessSignal,
   batch?: WriteBatch,
 ): Promise<void> {
-  const store = await readFitness(batch);
-  store.signals.push(signal);
-  await writeFitness(store, batch);
+  await fsWriteFile(fitnessEntryPath(signal.ts), JSON.stringify(signal), batch);
 }
 
 /**
  * Settle the current generation (v0.9.2): a SUCCESSFUL evolution run has
  * responded to everything the store was holding — the outcome already
  * sedimented into the card / direction / playbooks, so the scored events
- * and mechanical signals that produced it are spent and cleared. Every
- * bucket re-accumulates from zero; there is deliberately no cross-generation
- * bookkeeping (evolution has no direction — nothing is judged against its
- * predecessor and nothing rolls back). directionRejections survive: they are
- * a per-slice UI backoff, not selection pressure. Never demo-reachable —
+ * and mechanical signals that produced it are spent and DELETED (settle is
+ * removal, not bookkeeping: no cross-generation archive, semantics identical
+ * to the old clear-the-file). Deleting the spent entry files cannot race a
+ * concurrent append — a new signal/event is a NEW file, untouched here.
+ * Every bucket re-accumulates from zero. directionRejections survive: they
+ * are a per-slice UI backoff, not selection pressure. An already-empty
+ * generation is a strict no-op (no writes). Never demo-reachable —
  * housekeeping's evolution block is skipped entirely in demo mode.
  */
 export async function resetFitnessGeneration(batch?: WriteBatch): Promise<void> {
   const store = await readFitness(batch);
   if (store.events.length === 0 && store.signals.length === 0) return;
-  await writeFitness(
-    { events: [], signals: [], directionRejections: store.directionRejections },
-    batch,
-  );
+
+  // Delete every spent entry file — both the on-disk ones and this batch's
+  // own not-yet-flushed appends (a queued delete converts the pending write;
+  // the Map's last-set-wins does exactly that).
+  const prefix = `${FITNESS_EVENTS_DIR}/`;
+  const names = new Set<string>();
+  try {
+    for (const f of await fsListFiles(FITNESS_EVENTS_DIR)) {
+      if (f.type === "file" && f.name.endsWith(".json")) names.add(f.name);
+    }
+  } catch {
+    // directory absent — nothing on disk
+  }
+  if (batch) {
+    for (const p of batch.entries.keys()) {
+      if (p.startsWith(prefix) && p.endsWith(".json")) names.add(p.slice(prefix.length));
+    }
+  }
+  for (const name of names) {
+    await fsDeleteFile(`${FITNESS_EVENTS_DIR}/${name}`, batch);
+  }
+
+  // Legacy whole-file store: clear it too if it still holds anything (kept
+  // whole-file only for this legacy clear; the live store is the directory).
+  try {
+    const legacy = JSON.parse(
+      await fsReadFile(FITNESS_PATH, batch),
+    ) as Partial<FitnessStore>;
+    if (
+      (legacy.events?.length ?? 0) > 0 ||
+      (legacy.signals?.length ?? 0) > 0
+    ) {
+      await fsWriteFile(
+        FITNESS_PATH,
+        JSON.stringify(
+          {
+            events: [],
+            signals: [],
+            directionRejections: Array.isArray(legacy.directionRejections)
+              ? legacy.directionRejections
+              : [],
+          },
+          null,
+          2,
+        ),
+        batch,
+      );
+    }
+  } catch {
+    // absent or corrupt — nothing to clear
+  }
 }
 
 /**
  * Record that this slice's direction proposal was REJECTED by validation —
  * the per-slice backoff for the migrate/bootstrap gate (see the
- * directionRejections field). Idempotent per slice. Never demo-reachable:
- * housekeeping's evolution block is skipped entirely in demo mode.
+ * directionRejections field). Idempotent per slice. The rejections live in
+ * their own small file, written only on the evolution path (inside the
+ * evolution lock, v0.16 S1). Never demo-reachable: housekeeping's evolution
+ * block is skipped entirely in demo mode.
  */
 export async function recordDirectionRejection(
   sliceId: string,
@@ -327,8 +482,10 @@ export async function recordDirectionRejection(
 ): Promise<void> {
   const store = await readFitness(batch);
   if (store.directionRejections.includes(sliceId)) return;
-  store.directionRejections.push(sliceId);
-  await writeFitness(store, batch);
+  const next = [...store.directionRejections, sliceId].slice(
+    -MAX_DIRECTION_REJECTIONS,
+  );
+  await fsWriteFile(DIRECTION_REJECTED_PATH, JSON.stringify(next), batch);
 }
 
 /** The newest `n` signals, oldest-first (chronological read order). */

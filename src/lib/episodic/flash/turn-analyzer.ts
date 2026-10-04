@@ -16,9 +16,10 @@
  *   5. fitness        — this slice's evidence-anchored satisfaction deltas per
  *      bucket (v1.0 design §2.5 — the analyzer SCORES, never aggregates; the
  *      deterministic trigger math lives in src/lib/evolution/triggers.ts).
- *      This slice's mechanical signals (recall verify/rework, §2.6; doc_rework,
- *      v0.15 §4.4) are an input, each recall_rework/recall_repeat/doc_rework a
- *      -1 candidate for recall.
+ *      This slice's mechanical signals (doc_rework, v0.15 §4.4 — legacy
+ *      recall_rework/recall_repeat entries from historical data are tolerated
+ *      and ignored) are an input: each doc_rework is a -1 candidate for the
+ *      memory-quality (recall) bucket.
  *      The scoring RUBRIC is the direction doc's Portrait section (the loop's
  *      learned criteria) when one exists — a turn matching a known failure
  *      pattern scores -1 with evidence even without an explicit complaint.
@@ -83,7 +84,7 @@ export interface FitnessDelta {
   bucket: FitnessBucket;
   delta: -2 | -1 | 0 | 1;
   /** The user's EXACT words backing a non-zero delta (or the supplied
-   *  mechanical-signal detail for a recall -1 candidate). */
+   *  mechanical-signal detail for a doc_rework -1 candidate). */
   evidence: string;
 }
 
@@ -144,11 +145,12 @@ export interface AnalyzeTurnInput {
   /** Present only when a slice is about to close this turn — enables Task 3. */
   closingSlice?: { turns: Turn[]; tags: string[] };
   /**
-   * This slice's mechanical fitness signals (design §2.6 — recall
-   * verify/rework instrumentation; v0.15 §4.4 adds doc_rework — a read
-   * document's cited slice was re-opened with readSlice). Each
-   * recall_rework / recall_repeat / doc_rework is a -1 CANDIDATE for the
-   * recall bucket in Task 7; its detail may serve as the evidence.
+   * This slice's mechanical fitness signals (v0.15 §4.4 — doc_rework: a read
+   * document's cited slice was re-opened with readSlice, i.e. the document
+   * was not credited). Each doc_rework is a -1 CANDIDATE for the
+   * memory-quality (recall) bucket in Task 7; its detail may serve as the
+   * evidence. Legacy recall_verify / recall_rework / recall_repeat entries
+   * may appear in historical data — tolerate and ignore them.
    */
   signals?: FitnessSignal[];
   /**
@@ -288,8 +290,9 @@ const analyzeSchema = z.object({
           .enum(["card", "recall", "search", "thinkdeep", "interaction"])
           .describe(
             "What the signal attributes to: card = the user card's content; recall = the " +
-            "recall colleague's answers; search = the research colleague; thinkdeep = the " +
-            "thinking pod; interaction = the main agent's general conduct.",
+            "memory layer (the recall bucket — now memory quality: documents, slice reads); " +
+            "search = the research colleague; thinkdeep = the thinking pod; interaction = " +
+            "the main agent's general conduct.",
           ),
         delta: z
           .union([z.literal(-2), z.literal(-1), z.literal(0), z.literal(1)])
@@ -302,7 +305,7 @@ const analyzeSchema = z.object({
           .string()
           .describe(
             "The user's EXACT words (verbatim quote) backing a non-zero delta. No quote → " +
-            "do NOT emit the entry. For a recall -1 candidate from a supplied mechanical " +
+            "do NOT emit the entry. For a doc_rework -1 candidate from a supplied mechanical " +
             "signal, the signal's detail line serves as the evidence — quoting it is allowed.",
           ),
       }),
@@ -388,11 +391,11 @@ When in doubt, worth: true — a wasted review is cheap, a missed evolution is p
 
 Score the user's satisfaction/dissatisfaction signals in THIS slice, attributed to a bucket. This is the evolution loop's selection pressure — another agent aggregates your deltas; you only report single, evidence-anchored observations.
 
-- Buckets: card (the user card's content), recall (the recall colleague's answers), search (the research colleague), thinkdeep (the thinking pod), interaction (the main agent's general conduct).
+- Buckets: card (the user card's content), recall (the memory layer — documents + slice reads; the bucket keeps its name, the recall colleague itself is retired), search (the research colleague), thinkdeep (the thinking pod), interaction (the main agent's general conduct).
 - delta: -2 = explicit complaint or correction ("that's wrong", "stop doing X"); -1 = signs of dissatisfaction (frustration, asking again, disappointment) OR — when the input carries the evolved USER PORTRAIT — a turn matching a KNOWN FAILURE PATTERN in it (the portrait is the loop's learned rubric, so a recurrence scores even when the user didn't complain this time); +1 = explicit approval ("exactly what I needed", "记住了真好"). 0 = no signal — but prefer emitting NO entry at all.
 - EVIDENCE RULE (hard): every non-zero delta MUST quote the user's exact words in evidence — for a portrait-pattern -1, quote the words in THIS slice that show the pattern recurring. No quote → do not emit the entry. A delta without evidence is force-zeroed downstream anyway — don't waste it.
 - Never infer satisfaction from your own performance guesses; never score on the agent's behalf. The portrait rubric is the ONE sanctioned exception to "explicit signals only" — and only for -1, never -2.
-- Mechanical signals: when the input lists a recall_rework / recall_repeat / doc_rework signal, treat it as a -1 CANDIDATE for the recall bucket (the main agent re-did recall's job, or re-opened a slice a read document already cited — the document was not credited; both are implicit distrust of the memory layer). When it lists an interaction_regenerate / interaction_interrupt signal, treat it as a -1 CANDIDATE for the interaction bucket (the user rejected the previous reply or cut it off mid-stream). The signal's detail line may serve as the evidence. recall_verify is neutral — no entry.
+- Mechanical signals: when the input lists a doc_rework signal, treat it as a -1 CANDIDATE for the recall bucket (the main agent re-opened with readSlice a slice a read document already cited — the document was not credited, an implicit distrust of the memory layer). When it lists an interaction_regenerate / interaction_interrupt signal, treat it as a -1 CANDIDATE for the interaction bucket (the user rejected the previous reply or cut it off mid-stream). The signal's detail line may serve as the evidence. Legacy recall_verify / recall_rework / recall_repeat entries may appear in historical data — they are neutral now: no entry.
 - Max 5 entries. Nothing signaled → omit the fitness field entirely.`);
 
 /** The dynamic user prompt: current message, existing topics, closing slice. */
@@ -423,10 +426,11 @@ Return closed_marking AND evolve_card per your Task 6 instructions.`
 
 ## Mechanical signals this slice (Task 7 input)
 
-Instrumentation recorded these this slice (recall verify/rework tracking + document-credit tracking):
+Instrumentation recorded these this slice (document-credit tracking):
+
 ${input.signals.map((s) => `- ${s.type} — ${s.detail}`).join("\n")}
 
-Each recall_rework / recall_repeat / doc_rework is a -1 CANDIDATE for the recall bucket; each interaction_regenerate / interaction_interrupt is a -1 CANDIDATE for the interaction bucket (its detail may serve as evidence). recall_verify is neutral — no entry.`
+Each doc_rework is a -1 CANDIDATE for the recall bucket; each interaction_regenerate / interaction_interrupt is a -1 CANDIDATE for the interaction bucket (its detail may serve as evidence). Legacy recall_verify / recall_rework / recall_repeat entries are neutral — no entry.`
       : "";
 
   const portraitSection = input.portrait?.trim()

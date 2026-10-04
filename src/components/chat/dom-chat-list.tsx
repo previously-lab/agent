@@ -2,20 +2,22 @@
 
 /**
  * DomChatList — the conversation as a DOM scroll container with windowed
- * mounting. The NARROW-surface renderer: the R3F conversation field was
- * restored (`conversation-field.tsx`, see `unified-chat-stream.tsx`) and owns
- * the conversation wherever a wide surface exists, but it is authored against
- * the window-derived tier column (680 px) and cannot fit the conversation
- * panel's 420–520 px dock — so on surfaces with no wide host (the game's
- * docked/pilled panel) THIS list carries the conversation, exactly as it did
- * before the restore.
+ * mounting. THE PANEL'S renderer (2026-10-04): the expanded conversation is
+ * this list, and its content is the IN-MEMORY current conversation — the
+ * `useChat` messages plus the arrival-restored resume block — with ZERO
+ * repository paging. The repository's time slices (older paging, the
+ * window's head, jump paging) belong to the R3F field
+ * (`conversation-field.tsx`), which loads them itself; the two surfaces
+ * never share an item list. The game view and other narrow surfaces get the
+ * same panel content.
  *
  * HISTORY. Until v0.11 the conversation rendered inside an R3F canvas
  * (`conversation-field.tsx`, then deleted): every block a billboard, the
  * scroll position a camera offset the field owned. The DOM surface below was
  * written for the "the conversation in flight is plain DOM" decision (design
  * doc §13/§14.5); the user's 2026-09 ruling restores the field for the 2.5D
- * view and keeps this surface for the narrow one.
+ * view and keeps this surface for the narrow one, and the 2026-10 split
+ * makes this list the panel's ONLY surface.
  *
  * What is KEPT from the field, because none of it was 3D-specific:
  *
@@ -24,34 +26,24 @@
  *     estimate until then — and the mounted window is the viewport plus one
  *     screen of overscan. A long conversation mounts a handful of rows.
  *
- *   - A PREPEND IS COMPENSATED, NOT ANCHORED. History pages arrive ABOVE the
- *     reader, the one direction "grows downward, moves nothing above" cannot
- *     cover. When items land at the head, `scrollTop` is shifted by exactly
- *     the height they add — MEASURED off the freshly-committed rows in the
- *     same frame, never estimated — so the reader's view of what they were
- *     reading is pixel-identical and the new conversations sit off-screen
- *     above them. The same rule fires per ROW for anything the measurement
- *     could not cover (a row that was never mounted): a row re-measuring
- *     above the viewport top shifts `scrollTop` by the delta between its
- *     estimate and its real height. `overflow-anchor: none` on the scroller
- *     keeps the browser's own anchoring out of it — two compensations
- *     fighting was the old stack's measured bug.
+ *   - A PREPEND IS COMPENSATED, NOT ANCHORED. The resume block is fixed, but
+ *     the mechanism stays honest: if items ever land ABOVE the reader, when
+ *     they do `scrollTop` is shifted by exactly the height they add —
+ *     MEASURED off the freshly-committed rows in the same frame, never
+ *     estimated — so the reader's view of what they were reading is
+ *     pixel-identical. `overflow-anchor: none` on the scroller keeps the
+ *     browser's own anchoring out of it — two compensations fighting was the
+ *     old stack's measured bug.
  *
  *   - THE LIVE EDGE IS A PIN, NOT A TRIGGER. The reader is either at the
  *     bottom (following) or not. Growth pins the scroll to the tail only
  *     while following; scrolling away releases it, scrolling back re-arms
  *     it. Sending a message re-pins (the page calls `scrollToBottom`).
  *
- *   - PAGING IS ASKED FOR, NEVER INFERRED. The window's head is a
- *     `FieldOrigin` the reader walks to; its button is the only thing that
- *     pages older slices. It arms (offers the page) when the reader stands
- *     in the head region — the same mutable `GateSignal` the field used,
- *     now driven by `scrollTop` instead of a camera.
- *
  *   - THE BAND FEED HAS ONE WRITER. While this surface owns the pane it
  *     publishes progress and block anchors to the shared `FieldFeed` and
  *     consumes its seek requests; while the timeline owns the pane it
-     *     writes nothing. See `field-feed.ts` for why that rule exists.
+ *     writes nothing. See `field-feed.ts` for why that rule exists.
  *
  * `ChatStreamItem` and its halves live in `lib/chat/stream-items.ts`, the
  * layout arithmetic in `lib/chat/stream-layout.ts` — both pure, both tested.
@@ -71,9 +63,7 @@ import { ChatMessage } from "./chat-message";
 import { HistoryTurn } from "./history-turn";
 import { SliceSeam } from "./slice-seam";
 import { ResumeBanner } from "./resume-banner";
-import { EmptyBriefing } from "./empty-briefing";
 import { ErrorBanner } from "./error-banner";
-import { FieldOrigin } from "./field-origin";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import {
@@ -82,11 +72,7 @@ import {
   topStreamIndex,
   visibleStreamRange,
 } from "@/lib/chat/stream-layout";
-import {
-  FIELD_ORIGIN_PX,
-  sliceIdOf,
-  type GateSignal,
-} from "@/lib/chat/field-blocks";
+import { sliceIdOf } from "@/lib/chat/field-blocks";
 import {
   clearFeed,
   offsetFor,
@@ -130,23 +116,11 @@ export interface ChatStreamHandle {
 
 export interface DomChatListProps {
   items: ChatStreamItem[];
-  /** Fired when the reader asks for the older page at the window's head. */
-  onStartReached: () => void;
   /** The item at the top of the viewport — the travel clock's "from".
    *  `sliceId` is null for the live run. Reported only when it CHANGES. */
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
-  /** True while older slices are being paged in — shown at the window's head. */
-  loadingOlder: boolean;
-  /** Whether the catalog still holds older slices — decides whether the
-   *  window's head offers the older page or reads as the beginning. */
-  hasMore?: boolean;
   /** A failed turn, shown as a banner under the content. */
   error: Error | undefined;
-  /** Briefing-mode arrival card props (§1.2 Rev 2). When set, the parent seats
-   *  a `briefing` item at the stream tail and it renders through these. */
-  briefing?: React.ComponentProps<
-    typeof import("./empty-briefing").EmptyBriefing
-  > | null;
   /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
   feed?: FieldFeed;
   /** True only while the chat view OWNS the band. The stream keeps rendering
@@ -165,12 +139,8 @@ export interface DomChatListProps {
 
 export function DomChatList({
   items,
-  onStartReached,
   onTopItemChange,
-  loadingOlder,
-  hasMore,
   error,
-  briefing,
   feed,
   publishing = false,
   apiRef,
@@ -196,15 +166,10 @@ export function DomChatList({
   const offsetsRef = useRef(offsets);
   offsetsRef.current = offsets;
 
-  // The window's head (FieldOrigin) sits ABOVE item 0 as a fixed-height
-  // region of its own, exactly as in the field — the first row's top is
-  // `originH`, and the origin is always the top of the content.
-  const hasHistory = items.some(
-    (i) => i.kind !== "live" && i.kind !== "briefing",
-  );
-  const originH = hasHistory ? FIELD_ORIGIN_PX : 0;
-  const oldestIso = hasHistory ? (items[0]?.timeIso ?? "") : "";
-  const contentPx = originH + (offsets[items.length] ?? 0);
+  // No window's head: the panel pages NOTHING (the repository's slices and
+  // their paging belong to the R3F field), so the content starts at row 0.
+  const originH = 0;
+  const contentPx = offsets[items.length] ?? 0;
   const contentPxRef = useRef(contentPx);
   contentPxRef.current = contentPx;
   const originHRef = useRef(originH);
@@ -222,7 +187,6 @@ export function DomChatList({
   const followingRef = useRef(true);
   const arrivingRef = useRef(true);
   const pendingKeyRef = useRef<string | null>(null);
-  const originSignalRef = useRef<GateSignal>({ armed: false, dir: "past" });
   const onTopItemChangeRef = useRef(onTopItemChange);
   onTopItemChangeRef.current = onTopItemChange;
   const topKeyRef = useRef("");
@@ -258,9 +222,6 @@ export function DomChatList({
       const atBottom = st >= el.scrollHeight - el.clientHeight - BOTTOM_SLOP_PX;
       if (!atBottom) arrivingRef.current = false;
       followingRef.current = atBottom;
-      // The head ARMS when the reader stands in it — the same signal the
-      // field drove from its camera, now read off the scroll position.
-      originSignalRef.current.armed = st <= FIELD_ORIGIN_PX;
       reportTop(st);
       setIndicatorVisible(true);
       if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
@@ -597,7 +558,9 @@ export function DomChatList({
       case "resume-banner":
         return <ResumeBanner startIso={item.startIso} />;
       case "briefing":
-        return briefing ? <EmptyBriefing variant="card" {...briefing} /> : null;
+        // The arrival briefing card seats ONLY in the R3F field's tail now —
+        // the panel (this list) never receives a briefing item.
+        return null;
       case "history-turn":
         return (
           <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
@@ -647,22 +610,11 @@ export function DomChatList({
           paddingBottom: insetBottom + TAIL_PAD_PX,
         }}
       >
-        {/* The windowed content's total height, px — origin + measured row
+        {/* The windowed content's total height, px — the measured row
             offsets (+ the error reserve): the virtualizer's extent. */}
         <div className="relative" style={{ height: innerPx }}>
-          {hasHistory && (
-            <div className="absolute inset-x-0 top-0">
-              <FieldOrigin
-                oldestIso={oldestIso}
-                hasMore={hasMore !== false}
-                loading={loadingOlder === true}
-                onLoadOlder={onStartReached}
-                signal={originSignalRef.current}
-              />
-            </div>
-          )}
-          {/* Each mounted row's absolute top, px — the origin strip plus the
-              row's offset in the measured table (virtualizer placement). */}
+          {/* Each mounted row's absolute top, px — the row's offset in the
+              measured table (virtualizer placement). */}
           {items.slice(start, end).map((item, k) => (
             <div
               key={item.key}

@@ -24,13 +24,14 @@
  * a cycle when manager.ts itself needs to call generateGlobalTimeline.
  */
 import { readFile as readFileGitHub } from "@/lib/tools/readFile";
-import { writeFile as writeFileGitHub } from "@/lib/tools/writeFile";
+import { writeFile as writeFileGitHub, deleteFile as deleteFileGitHub } from "@/lib/tools/writeFile";
 import { listFiles as listFilesGitHub } from "@/lib/tools/listFiles";
 import { commitBatchToGitHub, type BatchEntry } from "@/lib/tools/batch-write";
 import {
   readFileLocal,
   writeFileLocal,
   listFilesLocal,
+  deleteFileLocal,
 } from "@/lib/tools/local-fs";
 import {
   readFileDemo,
@@ -56,7 +57,7 @@ const DEMO_MODE = isDemo(DATA_SOURCE);
  * which replaces a stale slice file with a re-merged one before retrying).
  */
 export interface WriteBatch {
-  readonly entries: Map<string, string>;
+  readonly entries: Map<string, string | null>;
 }
 
 /** Begin collecting writes into a fresh batch. */
@@ -65,7 +66,7 @@ export function createBatch(): WriteBatch {
 }
 
 /**
- * Commit all queued writes as a single git commit (GitHub mode; local mode
+ * Commit all queued changes as a single git commit (GitHub mode; local mode
  * writes to disk and records one best-effort commit via local-git when the
  * memory root is a git repo).
  * If the queue is empty this is a no-op.
@@ -73,6 +74,11 @@ export function createBatch(): WriteBatch {
  * On SUCCESS the batch is emptied. On FAILURE the entries are kept, so the
  * caller can inspect/adjust the queue and retry the flush (see finalizeTurn's
  * write-conflict self-heal).
+ *
+ * A queued entry with a NULL content is a DELETE: the file is removed by the
+ * flush instead of written. Deletes and writes ride the same commit, so a
+ * settle (delete spent files) and the appends it responds to can never land
+ * out of order.
  */
 export async function flushBatch(
   batch: WriteBatch,
@@ -87,7 +93,8 @@ export async function flushBatch(
 
   if (DEMO_MODE) {
     for (const { path, content } of entries) {
-      await writeFileDemo(path, content);
+      if (content !== null) await writeFileDemo(path, content);
+      // demo data is read-only — queued deletes are dropped
     }
     batch.entries.clear();
     return;
@@ -99,10 +106,11 @@ export async function flushBatch(
     return;
   }
 
-  // Local filesystem — write individually, then record one git commit for
+  // Local filesystem — apply individually, then record one git commit for
   // the whole batch (mirrors the GitHub backend's N-files-1-commit batch).
   for (const { path, content } of entries) {
-    await writeFileLocal(path, content);
+    if (content === null) await deleteFileLocal(path);
+    else await writeFileLocal(path, content);
   }
   batch.entries.clear();
   await commitLocalWrites(
@@ -154,9 +162,13 @@ export async function fsReadFile(
 ): Promise<string> {
   // With a batch, check pending writes first so functions that write and then
   // read (e.g. write _index.json → generateGlobalTimeline reads it) see the
-  // latest in-batch content.
+  // latest in-batch content. A pending NULL is a queued DELETE — the file is
+  // gone as far as this batch is concerned.
   const pending = batch?.entries.get(path);
   if (pending !== undefined) {
+    if (pending === null) {
+      throw new Error(`File not found: "${path}" (deleted in this batch)`);
+    }
     return pending;
   }
 
@@ -189,6 +201,36 @@ export async function fsWriteFile(
   // no-op unless the memory root is a git repo).
   await commitLocalWrites([path], `Update ${path.replace(/\\/g, "/").replace(/^memory\//, "")}`);
   return result;
+}
+
+/**
+ * Delete a file. With a batch the delete is queued (a null entry) and rides
+ * the batch's single commit; without a batch the backend is deleted
+ * immediately. Missing files are NOT an error — deletes are idempotent.
+ */
+export async function fsDeleteFile(
+  path: string,
+  batch?: WriteBatch,
+): Promise<void> {
+  if (batch) {
+    // A queued delete shadows any queued write of the same path (Map
+    // last-set-wins) — this is what lets a settle convert this turn's own
+    // not-yet-flushed appends into deletes.
+    batch.entries.set(path, null);
+    return;
+  }
+
+  if (DEMO_MODE) return; // demo data is read-only
+  if (USE_GITHUB) {
+    const { owner, repo } = getRepoConfig();
+    await deleteFileGitHub(path, repo, owner);
+    return;
+  }
+  await deleteFileLocal(path);
+  await commitLocalWrites(
+    [path],
+    `Delete ${path.replace(/\\/g, "/").replace(/^memory\//, "")}`,
+  );
 }
 
 export async function fsListFiles(

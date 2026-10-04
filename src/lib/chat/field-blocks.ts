@@ -420,3 +420,10 @@ export function armedGate(
   }
   return best;
 }
+
+/** The slice id a SEEK key addresses. Seam keys carry it (`seam-<id>` — the
+ *  same convention `sliceIdOf` reads); anything else is returned verbatim.
+ *  The field's `seekKey` pages by this id when the key is not yet loaded. */
+export function seekSliceIdOf(key: string): string {
+  return key.startsWith("seam-") ? key.slice("seam-".length) : key;
+}
