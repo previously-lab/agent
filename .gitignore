@@ -64,6 +64,19 @@ memory/episodic/
 memory/evolution/
 memory/docs/
 memory/user/config.json
+# v0.19 case roots — same policy as the legacy ones above: the local copy is
+# scratch, never committed.
+memory/records/
+memory/people/
+memory/research/
+memory/hypotheses/
+memory/events/
+memory/things/
+memory/places/
+memory/orgs/
+memory/tasks/
+memory/self/
+memory/config/
 
 # ===== Testing =====
 coverage/
