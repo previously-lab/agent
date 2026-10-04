@@ -46,7 +46,7 @@ import {
   backgroundModel,
   buildRunCardReaders,
   buildRunManifest,
-} from "./background-steps";
+} from "./hq-context";
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
