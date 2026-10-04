@@ -1,14 +1,15 @@
 /**
  * Background-stream step functions (v0.19 §A.2.3, v0.21 §5) — full Node.js,
  * retried automatically on failure. Kept in a SEPARATE module from the
- * workflow entries (`boundary-run.ts` / `question-run.ts`) so their
- * Node-dependent imports never enter the deterministic workflow sandbox —
- * the same split as chat's turn-workflow.ts / steps.ts.
+ * workflow entry (`question-run.ts`) so its Node-dependent imports never
+ * enter the deterministic workflow sandbox — the same split as chat's
+ * turn-workflow.ts / steps.ts.
  *
- * v0.21: the boundary run's fixed ①→②→③ sequence is RETIRED as the HQ form
- * (HQ is an agent + tools now — see hq-agent.ts); this module keeps the
- * interim entries compilable until P4 retires the trigger chain, and hosts
- * the shared helpers the HQ agent's tools reuse (buildRunManifest /
+ * v0.21 P4: the boundary run is RETIRED — HQ's only trigger is the field's
+ * report (reportToHQ → hq-run.ts), and closing a slice no longer starts any
+ * background run. What remains here is the conversation's question
+ * sub-stream body; the capabilities the HQ agent's tools reuse live in lib/
+ * (the writer passes) and hq-context.ts (buildRunManifest /
  * buildRunCardReaders / backgroundModel).
  *
  * HQ stores RESULTS ONLY (v0.21 §5): an idle round writes nothing — there is
@@ -17,10 +18,6 @@
  * entirely writer-is-reader: a re-run reads the current case state and goes
  * idle when it already reflects the slice. A substantive veto leaves its
  * REASON as prose in self/ or the relevant case body.
- *
- *   boundaryRun — interim shell (P4 retires): ① the case writer, ② the
- *     user model (people/user/index.md — AFTER ① so it can cite the cases
- *     ① just wrote; SOP writes ride ②'s run). Empty is legal.
  *
  *   questionRun — the conversation's sub-stream for user-requested long
  *     work (v0.21 §2): the doc-research pass investigates and writes
@@ -31,126 +28,23 @@
 import { loadSlice, readSlicePart } from "@/lib/episodic";
 import {
   buildSliceExcerpt,
-  runLibrarianPass,
   applyCaseWriteIntent,
   extractDocMarkers,
   extractProcessedMarkerIds,
   RESEARCH_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
-import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
-import { readUserModel } from "@/lib/evolution/store";
-import { detectDirectionMode } from "@/lib/evolution/direction-agent";
-import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 // A step module may export ONLY step functions — the run-shared helpers
 // therefore live in their own module (see hq-context.ts for the rule).
-import {
-  backgroundModel,
-  buildRunManifest,
-  buildRunCardReaders,
-} from "./hq-context";
+import { backgroundModel, buildRunManifest } from "./hq-context";
 
 // ─── Shared input shapes (serializable — they cross the run boundary) ──────
-
-export interface BoundaryRunInput {
-  /** The slice that just closed (the boundary event's subject). */
-  sliceId: string;
-  /** User-local date (YYYY-MM-DD) — every write stamps the user's clock. */
-  date: string;
-}
 
 export interface QuestionRunInput {
   /** The slice whose agent.md mailbox carries the question markers. */
   sliceId: string;
   /** User-local date (YYYY-MM-DD). */
   date: string;
-}
-
-// ─── The boundary run (§A.2.3-a — interim shell, retired by P4) ──────────
-
-export interface BoundaryRunOutcome {
-  /** False when the run never executed (already processed / no slice / no model). */
-  ran: boolean;
-  /** What ① the case writer landed (memory-relative paths). */
-  written: string[];
-  /** Whether ② moved the user model. */
-  cardChanged: boolean;
-}
-
-export async function executeBoundaryRun(
-  input: BoundaryRunInput,
-): Promise<BoundaryRunOutcome> {
-  "use step";
-  const { sliceId, date } = input;
-  const idle: BoundaryRunOutcome = { ran: false, written: [], cardChanged: false };
-
-  // No run ledger (v0.21 §5 — results only): dedup is writer-is-reader inside
-  // the passes themselves; this shell just runs them.
-  const slice = await loadSlice(sliceId).catch(() => null);
-  if (!slice) {
-    console.warn(`[BoundaryRun] ${sliceId} unreadable — nothing to process`);
-    return idle;
-  }
-  const model = backgroundModel();
-  if (!model) {
-    console.warn("[BoundaryRun] no default model configured — idle");
-    return idle;
-  }
-
-  const excerpt = buildSliceExcerpt(slice);
-  const manifest = await buildRunManifest();
-
-  // ① Case writer — which cases did this slice touch? (the old librarian,
-  // lifted out of the scribe segment in A1). Never throws.
-  const librarian = await runLibrarianPass({
-    model,
-    closedSliceId: sliceId,
-    excerpt,
-    manifest,
-    date,
-  });
-  console.log(
-    `[BoundaryRun] ① case writer: ${librarian.written.length} written, ${librarian.skipped.length} skipped`,
-  );
-
-  // ② User model — AFTER ① so it cites the cases ① just wrote. The ①→②
-  // seam is explicit: ①'s written list rides the focus line into ②'s note.
-  const userModel = await readUserModel().catch(() => null);
-  const directionCurrent = userModel?.direction ?? null;
-  // A boundary run owns no turn analysis — the direction half gets the
-  // minimal one (the freshest evidence is the closed slice itself, which the
-  // agent reads through the readers).
-  const minimalAnalysis: TurnAnalysis = {
-    memoryWorthy: true,
-    emotionalSignal: { intensity: "none", register: "neutral", note: "" },
-  };
-  const card = await runCardEvolution({
-    model,
-    sliceId,
-    closedSliceId: sliceId,
-    recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
-    focus:
-      `① 档案员刚更新的 case：${librarian.written.join("、") || "（无——①空转）"}。` +
-      `用户模型的更新应引用这些 case（若有），而不是泛泛而谈。`,
-    signal: "slice_closed",
-    readers: buildRunCardReaders(),
-    todayDate: date,
-    directionEval: {
-      current: directionCurrent,
-      mode: detectDirectionMode(directionCurrent),
-      cardSelfModel: null,
-      analysis: minimalAnalysis,
-    },
-    // ③'s craft half — SOP rewrites ride this one merged run (§C.2). Only
-    // colleagues with a LIVE spawn-time SOP load are allowlisted (search,
-    // thinkdeep) — recall is retired (v0.19 R6, review M7).
-    allowedSopWrites: ["search", "thinkdeep"],
-  });
-  console.log(
-    `[BoundaryRun] ② user model: changed=${card.changed}${card.error ? ` error=${card.error}` : ""}`,
-  );
-
-  return { ran: true, written: librarian.written, cardChanged: card.changed };
 }
 
 // ─── The question run (§A.2.3-b) ───────────────────────────────────────────

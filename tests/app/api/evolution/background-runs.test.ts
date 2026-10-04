@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
- * The background stream's two durable runs (v0.19 §A.2.3, v0.21 §5). The
- * writer passes (librarian / doc-research / card evolution) are mocked at
- * their module boundaries — what is under test here is the RUN's own
- * contract: trigger discipline, the ①→② order and its seam, empty-pass
+ * The background stream's question run (v0.19 §A.2.3-b, v0.21 §5) — the
+ * boundary run is retired (v0.21 P4: HQ's only trigger is the field's
+ * report). The doc-research pass is mocked at its module boundary — what is
+ * under test here is the RUN's own contract: trigger discipline, empty-pass
  * legality, results-only storage (no run ledger — dedup is writer-is-reader
  * inside the passes), and the §A.3.3 completion notice.
  */
@@ -57,26 +57,15 @@ const episodic = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/episodic", () => episodic);
 
-// The passes are mocked at their boundaries; everything ELSE in the librarian
-// module (marker parsing, applyCaseWriteIntent, buildSliceExcerpt) stays real.
+// The doc-research pass is mocked at its boundary; everything in the
+// librarian module (marker parsing, applyCaseWriteIntent, buildSliceExcerpt)
+// stays real.
 const passes = vi.hoisted(() => ({
-  runLibrarianPass: vi.fn(),
   runDocResearchPass: vi.fn(),
-  runCardEvolution: vi.fn(),
   calls: [] as string[],
 }));
-vi.mock("@/lib/episodic/flash/librarian", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/episodic/flash/librarian")>();
-  return {
-    ...actual,
-    runLibrarianPass: passes.runLibrarianPass,
-  };
-});
 vi.mock("@/lib/episodic/flash/doc-research", () => ({
   runDocResearchPass: passes.runDocResearchPass,
-}));
-vi.mock("@/app/api/evolution/run-card-evolution", () => ({
-  runCardEvolution: passes.runCardEvolution,
 }));
 
 vi.mock("@/lib/models/registry", () => ({
@@ -84,17 +73,7 @@ vi.mock("@/lib/models/registry", () => ({
   getDefaultModelId: vi.fn(() => "test-model"),
 }));
 
-vi.mock("@/lib/evolution/store", () => ({
-  readUserModel: vi.fn(async (): Promise<null> => null),
-  // detectDirectionMode (kept real) needs this from the store module.
-  isDirectionTemplate: (current: string | null): boolean =>
-    !current || !current.trim(),
-}));
-
-import {
-  executeBoundaryRun,
-  executeQuestionRun,
-} from "@/app/api/evolution/background-steps";
+import { executeQuestionRun } from "@/app/api/evolution/background-steps";
 import { parseCaseDoc } from "@/lib/docs";
 
 const DATE = "2026-08-09";
@@ -119,86 +98,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   io.files.clear();
   passes.calls.length = 0;
-  passes.runLibrarianPass.mockImplementation(async () => {
-    passes.calls.push("librarian");
-    return { voided: [], llmRan: true, written: [], skipped: [] };
-  });
-  passes.runCardEvolution.mockImplementation(async () => {
-    passes.calls.push("card");
-    return { ran: true, changed: false, droppedRecent: 0, note: "reviewed" };
-  });
   passes.runDocResearchPass.mockImplementation(async () => {
     passes.calls.push("research");
     return { ran: true, written: [], skipped: [] };
   });
   seedSlice();
-});
-
-describe("executeBoundaryRun (§A.2.3-a)", () => {
-  it("an empty pass is a legal outcome — and writes nothing (results only)", async () => {
-    const outcome = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
-
-    expect(outcome).toEqual({ ran: true, written: [], cardChanged: false });
-    // ① ran (and went idle by itself), ② ran — no "worth it" gate anywhere.
-    expect(passes.calls).toEqual(["librarian", "card"]);
-    // v0.21 §5: an idle round stores NOTHING — no run ledger, no reflection
-    // line. The run itself wrote no file at all (the mocked passes didn't).
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
-    expect(io.files.size).toBe(0);
-  });
-
-  it("② runs after ① and cites ①'s products (the focus seam)", async () => {
-    passes.runLibrarianPass.mockImplementation(async () => {
-      passes.calls.push("librarian");
-      return {
-        voided: [],
-        llmRan: true,
-        written: ["research/手机购买调研/index.md"],
-        skipped: [],
-      };
-    });
-
-    await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
-
-    expect(passes.calls).toEqual(["librarian", "card"]);
-    const cardInput = passes.runCardEvolution.mock.calls[0][0] as {
-      signal: string;
-      closedSliceId?: string;
-      focus?: string;
-      allowedSopWrites?: string[];
-    };
-    expect(cardInput.signal).toBe("slice_closed");
-    expect(cardInput.closedSliceId).toBe(SLICE_ID);
-    expect(cardInput.focus).toContain("research/手机购买调研/index.md");
-    // ③'s craft half — SOP writes ride the merged run. Recall is retired
-    // (no live SOP load) — only the living colleagues are allowlisted.
-    expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
-  });
-
-  it("a re-run carries no mechanical ledger — dedup is writer-is-reader inside the passes", async () => {
-    const first = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
-    expect(first.ran).toBe(true);
-    // The first run left no self/ record of itself.
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
-    vi.clearAllMocks();
-    passes.calls.length = 0;
-
-    const second = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
-
-    // No reflection-line dedup anymore: the passes run AGAIN and go idle on
-    // their own reads (writer-is-reader) — the run layer holds no ledger.
-    expect(second).toEqual({ ran: true, written: [], cardChanged: false });
-    expect(passes.calls).toEqual(["librarian", "card"]);
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
-  });
-
-  it("an unreadable slice logs and idles without writing anything", async () => {
-    episodic.loadSlice.mockResolvedValue(null);
-    const outcome = await executeBoundaryRun({ sliceId: SLICE_ID, date: DATE });
-    expect(outcome.ran).toBe(false);
-    expect(passes.runLibrarianPass).not.toHaveBeenCalled();
-    expect([...io.files.keys()].some((k) => k.startsWith("memory/self/"))).toBe(false);
-  });
 });
 
 describe("executeQuestionRun (§A.2.3-b)", () => {

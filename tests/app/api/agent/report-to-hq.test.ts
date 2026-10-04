@@ -23,7 +23,6 @@ vi.mock("workflow/api", () => ({
 }));
 
 vi.mock("@/app/api/evolution/background-steps", () => ({
-  executeBoundaryRun: vi.fn(),
   executeQuestionRun: vi.fn(),
 }));
 
