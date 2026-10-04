@@ -32,6 +32,15 @@ const CORPUS: Record<string, string[]> = hasCorpus
   : {};
 const STRAND_NAMES = Object.keys(CORPUS);
 
+// The strand source is RETIRED with the v0.19 case model
+// (doc/design/v0.19-memory-units.md): strands.json is no longer generated,
+// so a corpus found at CORPUS_PATH today is a stale pre-retirement artifact
+// and asserting against it pins a dead corpus shape. The case-anchored
+// rework is a separate job — the corpus-dependent tests below skip until
+// then; flip this flag when a live strand source returns and they run as-is.
+const STRAND_SOURCE_RETIRED = true;
+const corpusUsable = !STRAND_SOURCE_RETIRED && STRAND_NAMES.length > 0;
+
 /** The distinguishability metric: Euclidean distance in OKLab. ~0.01 is
  *  one just-noticeable difference, so the floor below (~0.017) is ≈1.7 JND
  *  — the most a 96-member family squeezed into a 180° hue arc can promise
@@ -106,7 +115,7 @@ describe("familyMember — determinism and shape", () => {
     expect(all.size).toBe(FAMILY_SIZE);
   });
 
-  it.skipIf(STRAND_NAMES.length === 0)("covers the corpus: the family is at least as large as the real strand count", () => {
+  it.skipIf(!corpusUsable)("covers the corpus: the family is at least as large as the real strand count", () => {
     expect(FAMILY_SIZE).toBeGreaterThanOrEqual(STRAND_NAMES.length);
   });
 
@@ -163,7 +172,7 @@ describe("familyIndexForName — the strand → family mapping", () => {
     expect(familyIndexForName("")).toBe(0);
   });
 
-  it.skipIf(STRAND_NAMES.length === 0)("fixes the real corpus's collisions — before %5 / after family-of-96", () => {
+  it.skipIf(!corpusUsable)("fixes the real corpus's collisions — before %5 / after family-of-96", () => {
     // The documented defect (doc/design/v0.11-strand-field.md §2.7) was
     // hash % 5 over ~93 strands. This pins the repair against the REAL
     // corpus and keeps the numbers in the test output for the report.
@@ -185,7 +194,7 @@ describe("familyIndexForName — the strand → family mapping", () => {
     expect(after.shared).toBeLessThan(before.shared * 0.7);
   });
 
-  it.skipIf(STRAND_NAMES.length === 0)("gives colliding strands the best separation the family has", () => {
+  it.skipIf(!corpusUsable)("gives colliding strands the best separation the family has", () => {
     // Where two strands DO share a slot their colours are identical by
     // definition; the guarantee worth pinning is the other direction —
     // the smallest distance between any two DISTINCT colours the corpus

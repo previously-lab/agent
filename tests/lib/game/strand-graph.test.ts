@@ -203,7 +203,15 @@ const STRANDS_PATH = `${MEMORY_ROOT}/episodic/strands.json`;
 const TIMELINE_PATH = `${MEMORY_ROOT}/episodic/timeline/index.json`;
 const hasRealData = existsSync(STRANDS_PATH) && existsSync(TIMELINE_PATH);
 
-describe.skipIf(!hasRealData)("real data sanity pass (memory/episodic)", () => {
+// The strand source is RETIRED with the v0.19 case model
+// (doc/design/v0.19-memory-units.md): strands.json is no longer generated,
+// so a file found at STRANDS_PATH today is a stale pre-retirement artifact
+// and asserting against it pins a dead corpus shape. The case-anchored
+// rework is a separate job — skip until then. The block below is untouched:
+// flip this flag when a live strand source returns and it runs as-is.
+const STRAND_SOURCE_RETIRED = true;
+
+describe.skipIf(STRAND_SOURCE_RETIRED || !hasRealData)("real data sanity pass (memory/episodic)", () => {
   const strands = hasRealData
     ? (JSON.parse(readFileSync(STRANDS_PATH, "utf8")) as Record<string, string[]>)
     : {};
