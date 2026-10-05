@@ -229,7 +229,13 @@ export function DeskField({
     if (el) {
       const w = el.clientWidth;
       const h = el.clientHeight;
-      setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      // A zero box means the node is not in a laid-out state (detached or
+      // its shell has gone blank at a deck edge) — the previous measure is
+      // still the truth. Accepting the zero collapsed the deck to one
+      // sheet and let the clamp hijack the page mid-turn (the flicker).
+      if (w > 0 && h > 0) {
+        setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+      }
     }
   }, []);
 
@@ -284,36 +290,42 @@ export function DeskField({
   }, [ready, pageBox.w, model.markdown]);
 
   // A new lower bound re-plans the container width; the growth loop below
-  // then verifies it against the real layout.
+  // then verifies it against the real layout. INERT WHILE A TURN IS IN
+  // FLIGHT (see the loop) — a mid-gesture re-plan is the flicker.
   useEffect(() => {
+    if (turn !== null) return;
     setPlan({ columns: lowerBound, passes: 0 });
-  }, [lowerBound]);
+  }, [lowerBound, turn]);
 
   // The measurement loop — the page count IS the column count, and the
   // runtime tells it for free: with `column-fill: auto` the browser
   // fragments the whole flow into page-height columns on demand, letting
   // excess columns overflow the box horizontally (verified in the running
   // app: a 1-page-wide box reported scrollWidth = 4 × pageW for a 4-page
-  // document). So the count is scrollWidth / pageW, and the plan only ever
-  // widens to fit it. The vertical spill check rides along as the
-  // conservative signal for engines that clip instead of overflowing.
+  // document). So the count is scrollWidth / pageW, full stop. A vertical
+  // spill NEVER grows the count: a block taller than one page (a long
+  // break-avoided item at print scale) overflows its column permanently,
+  // and reading that as "needs another column" grew the plan +8 deep in
+  // the trace (a taller column is a pagination imperfection prints
+  // tolerate, not a missing page). INERT WHILE A TURN IS IN FLIGHT: every
+  // input is frozen then, and re-planning mid-gesture collapses the deck
+  // for a frame — the reader-visible flicker.
   useLayoutEffect(() => {
     const el = pagesRef.current;
-    if (!el || !ready || pageBox.w <= 0) return;
-    const byWidth = Math.max(1, Math.round(el.scrollWidth / pageBox.w));
-    const byHeight =
-      el.scrollHeight > el.clientHeight + 1 ? plan.columns + 1 : 1;
-    const actual = Math.max(byWidth, byHeight);
+    if (!el || !ready || pageBox.w <= 0 || turn !== null) return;
+    const actual = Math.max(1, Math.round(el.scrollWidth / pageBox.w));
     if (actual > plan.columns && plan.passes < MAX_MEASURE_PASSES) {
       setPlan({ columns: actual, passes: plan.passes + 1 });
     }
-  }, [ready, model.markdown, pageBox, plan]);
+  }, [ready, model.markdown, pageBox, plan, turn]);
 
   // The pane resizes (window, dvh shifts): the pagebox is re-measured and
   // the lower-bound effect re-plans — rAF-debounced so a drag's event storm
   // collapses into one re-pagination. Re-subscribes when the single-sheet ↔
   // stack swap replaces the pagebox element (an observer on a detached node
-  // would silently stop watching).
+  // would silently stop watching) AND when the top slot's occupant changes
+  // (every turn) — the observer must follow the live pagebox, never a shell
+  // that a later edge blanks.
   const stacked = ready && plan.columns > 1;
   useEffect(() => {
     const el = boxRef.current;
@@ -324,7 +336,13 @@ export function DeskField({
       raf = requestAnimationFrame(() => {
         const w = el.clientWidth;
         const h = el.clientHeight;
-        setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+        // The observed node can outlive its seat in the deck (its shell
+        // goes blank at an edge, or the single-sheet form replaces the
+        // stack) — a detached node measures 0×0 and must not rewrite the
+        // page box (see attachBoxRef; same flicker, same guard).
+        if (w > 0 && h > 0) {
+          setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+        }
       });
     });
     ro.observe(el);
@@ -332,13 +350,18 @@ export function DeskField({
       ro.disconnect();
       cancelAnimationFrame(raf);
     };
-  }, [stacked, boxRef]);
+  }, [stacked, order, boxRef]);
 
   // Re-pagination can only shrink the count under a resize — clamp, never
-  // throw the reader off the document.
+  // throw the reader off the document. INERT WHILE A TURN IS IN FLIGHT: the
+  // turn owns the page number between start and settle, and a transient
+  // count must never hijack it (observed: a one-frame total=1 clamped the
+  // reader back to page 1 mid-turn — the deck collapsed to a single page-1
+  // sheet and re-expanded, repeatedly, until the count recovered).
   useEffect(() => {
+    if (turn !== null) return;
     setPage((p) => clampPage(p, total));
-  }, [total]);
+  }, [total, turn]);
 
   const settleTurn = useCallback(() => {
     const active = turnRef.current;
