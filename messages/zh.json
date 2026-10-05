@@ -550,11 +550,16 @@
     "loading": "正在取这份文档…",
     "notFoundHeading": "找不到这份文档",
     "notFoundBody": "文库里没有与「{ref}」对应的文档，它可能已被移动、改名或封存。",
-    "page": "· {n} ·"
+    "page": "· {n} ·",
+    "prevPage": "上一页",
+    "nextPage": "下一页",
+    "pagePosition": "{current} / {total}"
   },
   "library": {
     "title": "文库",
-    "empty": "从左侧选一份 case 或篇，文档会在这里打开。",
+    "toggle": "打开文库",
+    "close": "关闭文库",
+    "empty": "打开文库选一份 case 或篇，文档会摊在桌上。",
     "casesEmpty": "这个类目下还没有 case。",
     "piecesEmpty": "还没有篇——case 总览就是全文。",
     "attachments": "附件",

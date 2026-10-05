@@ -393,14 +393,19 @@ test.describe("Memory viz (v0.10)", () => {
         "true",
       );
 
-      // EVERY CARD RUNG IS THE DOCUMENT READER NOW (v0.23): the left library
-      // column is the rung's content, and with the seeded dataset holding no
-      // documents the paper's seat reads as the quiet empty hint.
-      await expect(page.locator("[data-doc-library]")).toBeVisible({
+      // EVERY CARD RUNG IS THE DOCUMENT READER NOW (v0.23): the library is
+      // the floating toggle's panel (v0.24 — the column retired), and with
+      // the seeded dataset holding no documents the paper's seat reads as
+      // the quiet empty hint.
+      await expect(page.locator("[data-library-toggle]")).toBeVisible({
+        timeout: 30_000,
+      });
+      await page.locator("[data-library-toggle]").click();
+      await expect(page.locator("[data-library-panel]")).toBeVisible({
         timeout: 30_000,
       });
       await expect(
-        page.getByText(/Pick a case or a piece on the left/),
+        page.getByText(/Open the library and pick a case or a piece/),
       ).toBeVisible();
       // The 「NOW · 现在」 caption that used to be asserted here is DELETED —
       // a label with no action sitting in the bottom centre, exactly where the
@@ -468,10 +473,15 @@ test.describe("Memory viz (v0.10)", () => {
       ).toBeVisible();
       await expect(page.getByRole("textbox", { name: "Send a message..." })).toBeVisible();
 
-      // The pane IS the reader at a card rung (v0.23): the library column is
-      // up. The card field is retired, and every card rung renders this same
-      // reader — the ladder no longer promises different content per rung.
-      await expect(page.locator("[data-doc-library]")).toBeVisible({
+      // The pane IS the reader at a card rung (v0.23): the floating library
+      // is up — the toggle at the left edge, its panel on demand. The card
+      // field is retired, and every card rung renders this same reader —
+      // the ladder no longer promises different content per rung.
+      await expect(page.locator("[data-library-toggle]")).toBeVisible({
+        timeout: 30_000,
+      });
+      await page.locator("[data-library-toggle]").click();
+      await expect(page.locator("[data-library-panel]")).toBeVisible({
         timeout: 30_000,
       });
 
@@ -552,9 +562,9 @@ test.describe("Memory viz (v0.10)", () => {
       }).toPass();
       // Wait for the reader to actually render before toggling back: a rung
       // change issued while the reader chrome is still mounting is dropped,
-      // swallowing the return toggle. Gate on the library column being up —
-      // the reader IS the card rung's content.
-      await expect(page.locator("[data-doc-library]")).toBeVisible({
+      // swallowing the return toggle. Gate on the floating library toggle
+      // being up — the reader IS the card rung's content.
+      await expect(page.locator("[data-library-toggle]")).toBeVisible({
         timeout: 30_000,
       });
       await expect(async () => {

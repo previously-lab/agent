@@ -1,30 +1,114 @@
 /*
- * Document desk — the paper's print typography (v0.22 §10), scoped to
- * `.desk-paper`. The goal: a page that would not look wrong PRINTED. Tailwind
- * owns the utilities on the element (paper tokens, contact shadow); the
- * print grammar — sizes, measure, indent, margins, hairlines — lives here
- * as real CSS. The markdown body keeps the MarkdownRenderer shell; these
- * rules override typeset.css inside the scope only (the component is
- * untouched). Ink discipline: everything flat ink; the recess lives on
- * exactly two small strings (the header date and the page number, §12.1).
+ * Document desk — the paged paper (v0.24). The sheet is now an A4-proportioned
+ * PAGE of a paginated document: the markdown flows through CSS multi-column
+ * layout inside a fixed-height 版心, one column per page, and a stack of
+ * paper shells (the card field's stacked-papers look) carries the current,
+ * next, and previous pages. Tailwind owns the utilities on the elements
+ * (paper tokens, contact shadow); the print grammar — sizes, measure, indent,
+ * margins, hairlines, the stack geometry, the flip — lives here as real CSS.
+ * Ink discipline: everything flat ink; the recess lives on exactly two small
+ * strings (the header date and the page number, §12.1).
+ *
+ * The transform/animation values that depend on measured state arrive as CSS
+ * variables written from JS (--sx/--sy/--sr per shell, --desk-pages-w,
+ * --desk-page-w, --desk-page-i, --desk-page-h); nothing here is inline.
  */
 
-.desk-paper {
-  /* The sheet: the measure plus the page margins (§10 版心 — 62–68ch of
-     measure, 3–3.5em side margins). The root em sets the margin unit, and
-     the root face is the serif so `ch` measures the body face. */
-  width: min(calc(66ch + 7em), 88vw);
-  height: 86vh;
-  font-family: var(--font-serif, serif);
-  font-size: 16px;
-  /* Starts invisible; the pull-out's frame loop writes this per frame from
-     the choreography's progress, so the value here is only the state before
-     the first frame (never a static style in the markup). */
+/* ── The stack: the A4 sizing element. The sheet's height drives its width
+   (pane-width clamp inside the min); the aspect ratio is A4's. The entrance
+   beat writes opacity per frame from the choreography's progress, so the
+   value here is only the state before the first frame. ──────────────── */
+.desk-stack {
+  position: relative;
+  height: min(86vh, calc((100vw - 3rem) * 297 / 210));
+  aspect-ratio: 210 / 297;
+  perspective: 2000px;
   opacity: 0;
   /* §12.2 — the ONLY dynamic modulation: pointermove rewrites this locally
      scoped intensity (default 1, bounded 0.7–1.3 by recessIntensityFor);
      it reaches the two recessed strings below and nothing else. */
   --recess-i: 1;
+}
+
+/* ── A shell: one sheet's slot in the deck. Its rest pose comes from its
+   depth as --sx/--sy/--sr (shellOffsetForDepth) and transitions with the
+   ring shift on every flip. preserve-3d lets the flip animation inside
+   use the stack's perspective; the shells themselves paint in DOM order
+   (the container is a flat context), so no sheet ever pops above the
+   flying one except via --flying. ─────────────────────────────────── */
+.desk-shell {
+  position: absolute;
+  inset: 0;
+  transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
+  transition: transform 480ms cubic-bezier(0.65, 0, 0.35, 1);
+  transform-style: preserve-3d;
+  pointer-events: none;
+}
+
+.desk-shell--top {
+  pointer-events: auto;
+}
+
+.desk-shell--flying {
+  z-index: 6;
+}
+
+/* ── The flip: the whole rigid sheet turns over its centre line. Two faces
+   (front content / blank paper back, each backface-hidden) so the second
+   half of the flight shows paper, never mirrored text. transform/opacity
+   only — the compositor owns this, the desk's frame loop is untouched.
+   The duration matches FLIP_MS in desk-model.ts. ───────────────────── */
+.desk-flip {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.desk-shell--flying .desk-flip {
+  animation: desk-flip-turn 480ms cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+
+@keyframes desk-flip-turn {
+  0% {
+    transform: rotateY(0deg) translateZ(0px);
+  }
+  50% {
+    transform: rotateY(90deg) translateZ(40px);
+  }
+  100% {
+    transform: rotateY(180deg) translateZ(0px);
+  }
+}
+
+/* The sheet itself: the paper stock, the §10 typographic root (the root em
+   sets the margin unit, and the root face is the serif so `ch` measures the
+   body face). No overflow here — the faces carry it; preserve-3d above
+   forbids it. */
+.desk-paper {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 2px;
+  font-family: var(--font-serif, serif);
+  font-size: 16px;
+}
+
+.desk-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 2px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* The back of a printed sheet is blank paper — the sheet stock shows
+   through; nothing prints on it. */
+.desk-face-back {
+  transform: rotateY(180deg);
 }
 
 /* ── Header (§10 页眉): mono small line, case ref left / date right, one
@@ -55,8 +139,9 @@
     color-mix(in oklab, var(--paper) calc(55% / var(--recess-i, 1)), white);
 }
 
-/* ── Body: the scroll region. The paper is a real DOM scroll container;
-   the scrollbar stays hidden (§11.4 — the scroll is the paper moving). ── */
+/* ── Body: the 版心, now a page viewport — no scrolling (v0.24: the paper
+   never clips a document mid-line because a document no longer lives on
+   one sheet). ─────────────────────────────────────────────────────── */
 .desk-bodywrap {
   position: relative;
   flex: 1 1 0%;
@@ -66,36 +151,61 @@
 .desk-body {
   position: absolute;
   inset: 0;
-  overflow-y: auto;
-  scrollbar-width: none;
-  padding: 2em 3.25em 3em;
+  overflow: hidden;
 }
 
-.desk-body::-webkit-scrollbar {
-  display: none;
-}
-
-/* The edge veils (§11.4): at the very top/bottom of the scroll the paper's
-   own tone veils the text a little; appearing/disappearing with the scroll
-   position is the only shadow play the page edges get. */
-.desk-veil {
+/* ONE page box: constant size (this is the measured 版心 — the column
+   container inside is N pages wide, so the box, not the container, is the
+   measurement source), and the clip edge the pages slide under. */
+.desk-pagebox {
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 2.25em;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 200ms ease;
+  inset: 2em 3.25em 3em;
+  overflow: hidden;
 }
 
-.desk-veil-top {
+/* The flowed document. One page wide per column (column-fill: auto packs
+   each column to the page height); --desk-pages-w (N × page width, from JS)
+   sizes the box; --desk-page-i slides the shell's assigned page into view —
+   the percentage resolves against the pagebox, so no per-page pixel math.
+   The pagebox clips, so a still-measuring first paint shows exactly page 1
+   and nothing spills. */
+.desk-pages {
+  position: absolute;
   top: 0;
-  background: linear-gradient(to bottom, var(--paper) 12%, transparent);
+  bottom: 0;
+  left: calc(var(--desk-page-i, 0) * -100%);
+  width: var(--desk-pages-w, 100%);
+  orphans: 2;
+  widows: 2;
+  column-width: var(--desk-page-w, 100%);
+  column-gap: 0;
+  column-fill: auto;
 }
 
-.desk-veil-bottom {
-  bottom: 0;
-  background: linear-gradient(to top, var(--paper) 12%, transparent);
+/* The single-column measurer: same flow, natural height, invisible. Its
+   scrollHeight feeds pageCountLowerBound. */
+.desk-measure {
+  position: absolute;
+  inset: 2em auto auto 3.25em;
+  right: 3.25em;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Reduced-motion page turn: a quiet fade instead of the flip. The pages
+   remount on the new page (the field keys them by page under reduced
+   motion), replaying the animation. */
+.desk-pages--fade {
+  animation: desk-page-fade 150ms ease-out;
+}
+
+@keyframes desk-page-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* ── The document title (§10: 24–28px serif light). ───────────────────── */
@@ -117,9 +227,9 @@
   opacity: 0.72;
 }
 
-/* ── Footer (§10 页脚): mono smaller line, centred page number, category
+/* ── Footer (§10 页脚): mono smaller line, centred folio, category
    bottom-right, one hairline above. The bottom margin takes §10's 3.5–4em
-   ruling (audit F13 — it sat at 3em). ─────────────────────────────────── */
+   ruling. ─────────────────────────────────────────────────────────── */
 .desk-foot {
   margin: 0 3.25em 3.5em;
   padding-top: 0.9em;
@@ -165,13 +275,15 @@
 }
 
 /* Chinese paragraphs take the 2em first-line indent (§10, confirmed);
-   English paragraphs keep the bare flow spacing. Switched by locale. */
-.desk-paper[data-locale="zh"] .typeset p {
+   English paragraphs keep the bare flow spacing. Switched by locale —
+   the stack root carries data-locale so the hidden measurer (outside the
+   paper) typesets identically to the sheets. */
+.desk-stack[data-locale="zh"] .typeset p {
   text-indent: 2em;
 }
 
-.desk-paper[data-locale="zh"] .typeset blockquote p,
-.desk-paper[data-locale="zh"] .typeset li p {
+.desk-stack[data-locale="zh"] .typeset blockquote p,
+.desk-stack[data-locale="zh"] .typeset li p {
   text-indent: 0;
 }
 
@@ -198,7 +310,9 @@
    frame — never the dark UI slab. The interactive chrome (copy / collapse
    buttons, the collapse fade) fails the print test (§11.2–3) and is
    suppressed inside this scope only; the language tag stays — it prints
-   like a figure label. */
+   like a figure label. A block MAY cross a page break (code continues —
+   print-permitted); that freedom is also what keeps the pagination
+   measurement convergent. */
 .desk-paper .code-block {
   margin-block-start: var(--typeset-flow, 0.9em);
   border-color: var(--paper-line);
@@ -224,17 +338,33 @@
   display: none;
 }
 
-/* Tables and rules stay hairline-thin on the paper's own line tone. */
+/* Tables and rules stay hairline-thin on the paper's own line tone. A table
+   crosses a page break BETWEEN rows, never through one. */
 .desk-paper .typeset table {
   font-size: 0.9em;
 }
 
-.desk-paper .typeset hr {
-  background: var(--paper-line);
+.desk-paper .typeset tr,
+.desk-paper .typeset li,
+.desk-paper .typeset blockquote {
+  break-inside: avoid;
 }
 
-@media print {
-  .desk-veil {
-    display: none;
-  }
+.desk-paper .typeset h1,
+.desk-paper .typeset h2,
+.desk-paper .typeset h3,
+.desk-paper .typeset h4,
+.desk-paper .typeset h5,
+.desk-paper .typeset h6 {
+  break-after: avoid;
+}
+
+.desk-paper .typeset img {
+  break-inside: avoid;
+  max-width: 100%;
+  max-height: calc(var(--desk-page-h, 32em) - 4em);
+}
+
+.desk-paper .typeset hr {
+  background: var(--paper-line);
 }

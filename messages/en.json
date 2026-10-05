@@ -550,11 +550,16 @@
     "loading": "Fetching the document…",
     "notFoundHeading": "Document not found",
     "notFoundBody": "Nothing in the library matches \"{ref}\". It may have been moved, renamed, or sealed.",
-    "page": "· {n} ·"
+    "page": "· {n} ·",
+    "prevPage": "Previous page",
+    "nextPage": "Next page",
+    "pagePosition": "{current} / {total}"
   },
   "library": {
     "title": "Library",
-    "empty": "Pick a case or a piece on the left — the document opens here.",
+    "toggle": "Document library",
+    "close": "Close library",
+    "empty": "Open the library and pick a case or a piece — the document opens here.",
     "casesEmpty": "No cases under this category yet.",
     "piecesEmpty": "No pieces yet — the case overview is the whole document.",
     "attachments": "Attachments",

@@ -85,7 +85,7 @@ import { useTier } from "@/hooks/use-tier";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
-import { DocLibrary } from "@/components/shelf/doc-library";
+import { LibraryControl } from "@/components/shelf/library-control";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 
 // THE CANVAS AND THE GAME LOAD AS THEIR OWN CHUNKS (§13.2): the shared
@@ -622,6 +622,9 @@ export function AppShell() {
       notFoundBody: (ref) => tDesk("notFoundBody", { ref }),
       categoryName: (category) => tLibrary(`category.${category}`),
       page: (n) => tDesk("page", { n }),
+      prevPage: tDesk("prevPage"),
+      nextPage: tDesk("nextPage"),
+      pagePosition: (current, total) => tDesk("pagePosition", { current, total }),
     }),
     [tDesk, tLibrary],
   );
@@ -781,26 +784,10 @@ export function AppShell() {
   }, [onConversationRung, setSuppressAtJump]);
   useEffect(() => () => setSuppressAtJump(false), [setSuppressAtJump]);
 
-  // ── THE READER LAYOUT (v0.23) ────────────────────────────────────────────
-  // The library column's width is MEASURED, not assumed: it is the single
-  // source the desk's camera offset reads, so the paper centres in the main
-  // area to the column's right (world px = screen px at the z=0 plane; a
-  // camera x of -D shifts content right by D). Below `md` the column hides
-  // and the measurement reads 0 — the paper then centres in the full pane.
-  const libColRef = useRef<HTMLElement | null>(null);
-  const [libColW, setLibColW] = useState(0);
-  useLayoutEffect(() => {
-    const el = libColRef.current;
-    if (!el) {
-      setLibColW(0);
-      return;
-    }
-    const update = () => setLibColW(el.offsetWidth);
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [onConversationRung]);
+  // ── THE READER LAYOUT (v0.24) ────────────────────────────────────────────
+  // No left column any more: the library is a floating control (see
+  // LibraryControl), the canvas keeps the full pane, and the desk's camera
+  // offset is 0 — the paper centres in the whole pane.
 
   // ── THE ONE CANVAS (§14 merge) ───────────────────────────────────────────
   // Both worlds render in the shell-owned WorldCanvas, the game joining the
@@ -810,16 +797,15 @@ export function AppShell() {
   // is mounted, even in the reader (where the band's DOM is gone): the
   // canvas gates the field world's renderer on `band !== null`
   // (world-canvas.tsx), so nulling it would blank the desk scene too — the
-  // empty retired braid just winds unseen under the library column.
+  // empty retired braid just winds unseen behind the reader.
   const { spec } = useTier();
   const bandX = spec.railMargin;
   const bandW = spec.railW;
-  const camXOffset = -(bandX + bandW) / 2;
-  // The desk's camera offset. On the CONVERSATION rung the band still takes
-  // its strip, so the paper keeps the band-based shift it has always had.
-  // In the READER the band is gone and the library column takes its place:
-  // the paper centres in the main area, shifted right by half the column.
-  const deskCamXOffset = onConversationRung ? camXOffset : -libColW / 2;
+  // The desk renders only in the reader (it mounts when `deskDoc` is set,
+  // which only the library can do), and the reader is full-width — the
+  // floating library control reserves no pane — so the desk's camera offset
+  // is 0: the paper centres in the whole pane. The prop stays as the desk's
+  // centre-me-elsewhere seam.
 
   // The field world's DOM layer (band, pane, floating chrome) rides the
   // move's phase: as the DESTINATION it arrives with the dissolve — it
@@ -863,7 +849,7 @@ export function AppShell() {
       />
       {/* LEFT: the time axis — CONVERSATION RUNG ONLY (v0.23). In the reader
           the card rungs are the document library's, and the band renders
-          nowhere; its braid still winds in the canvas under the column (the
+          nowhere; its braid still winds in the canvas behind the reader (the
           band prop must stay non-null, see above), unseen. The band's DOM
           waits for the same phase as the rest of the field chrome: it
           arrives with the dissolve when the field is the destination and
@@ -905,28 +891,18 @@ export function AppShell() {
 
         {fieldChrome && (
           <>
-        {/* THE LIBRARY COLUMN (v0.23) — the reader's three-level filter,
-            the pane's left strip. DOM chrome over the canvas; the desk's
-            camera shifts right by half its measured width so the paper
-            centres in the main area. Below `md` it hides and the reader is
-            the paper alone. */}
+        {/* THE FLOATING LIBRARY (v0.24) — the reader's three-level filter as
+            one of the app's floating islands, mid-left. The canvas keeps the
+            full pane; the paper centres. Below `md` this is the shelf's only
+            door — the control never hides. */}
         {!onConversationRung && (
-          <aside
-            ref={libColRef}
-            data-doc-library
-            className="absolute inset-y-0 left-0 z-20 hidden w-64 flex-col border-r border-border bg-background md:flex"
-          >
-            <DocLibrary persona={persona} />
-          </aside>
+          <LibraryControl persona={persona} reducedMotion={reducedMotion} />
         )}
 
-        {/* THE EMPTY READER — nothing open: a quiet hint centred in the main
-            area (to the column's right), no new visual language. */}
+        {/* THE EMPTY READER — nothing open: a quiet hint centred in the
+            pane, no new visual language. */}
         {!onConversationRung && deskDoc === null && (
-          <div
-            className="pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center justify-center"
-            style={{ left: libColW }}
-          >
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
             <p className="max-w-60 px-6 text-center text-sm leading-relaxed text-muted-foreground/70">
               {tLibrary("empty")}
             </p>
@@ -952,7 +928,7 @@ export function AppShell() {
             >
               <DeskField
                 docRef={deskDoc}
-                camXOffset={deskCamXOffset}
+                camXOffset={0}
                 reducedMotion={reducedMotion}
                 texts={deskTexts}
               />
