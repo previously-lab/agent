@@ -32,8 +32,9 @@
  *               still there at fullscreen. The pill tier's box is
  *               pointer-transparent: only the pill and its buttons eat
  *               events, the world behind keeps every other pixel.
- *   fullscreen  the same box grown to the viewport (a CSS height transition
- *               FROM the pill's height, not a remount), full capability.
+ *   fullscreen  the same box grown to the viewport short of the top chrome
+ *               (a CSS height transition FROM the pill's height, not a
+ *               remount), full capability.
  *               The body is the conversation as a plain DOM surface
  *               (`DomChatList` — history AND the in-flight turn, one native
  *               scroll container); no R3F lives in this box. OVERLAY, never
@@ -75,6 +76,7 @@ import {
 } from "react";
 import { useTranslations } from "next-intl";
 import { Maximize2, Minimize2, X } from "lucide-react";
+import { useChromeInset } from "@/hooks/use-chrome-inset";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
 export type ConversationPanelMode = "pill" | "fullscreen";
@@ -171,6 +173,10 @@ export function ConversationPanel({
   const t = useTranslations("conversationPanel");
   const panelRef = useRef<HTMLDivElement>(null);
   const open = mode === "fullscreen";
+  // The measured painted bottom of the fixed top chrome (header + board bar)
+  // — the fullscreen box stops SHORT of it, so the chrome's islands stay
+  // visible and clickable no matter which tier is up.
+  const chromeInset = useChromeInset();
 
   // `Cmd/Ctrl+J` — one registration per surface (the panel is mounted once
   // per page). Deps re-register on mode change rather than holding a ref:
@@ -232,25 +238,30 @@ export function ConversationPanel({
 
   return (
     <PanelTierContext.Provider value={tier}>
-      {/* THE ONE BOX — a floating pill at the pill tier, the viewport at
-          fullscreen; the change is a height transition, not a remount.
-          `fixed` (overlay) is the "覆盖，不挤压" rule made structural:
-          nothing in the layout can feel this box, so the canvas behind it
-          never resizes. At the pill tier the box itself is chromeless and
-          pointer-transparent — only the pill (positioned by the composer
-          host) and its buttons eat events; the world keeps every other
-          pixel. The height at the pill tier is the pill plus the subtitle
-          seat above it: PILL_HEIGHT_PX + one 20px subtitle line + a 4px gap
-          between them + PILL_BOTTOM_GAP_PX. */}
+      {/* THE ONE BOX — a floating pill at the pill tier, the viewport SHORT
+          OF the top chrome at fullscreen; the change is a height transition,
+          not a remount. `fixed` (overlay) is the "覆盖，不挤压" rule made
+          structural: nothing in the layout can feel this box, so the canvas
+          behind it never resizes. The fullscreen height deducts the measured
+          chrome inset (useChromeInset) so the fixed header and board bar are
+          never covered — their islands must stay clickable in both tiers (a
+          fullscreen arrival once swallowed the header badge whole). At the
+          pill tier the box itself is chromeless and pointer-transparent —
+          only the pill (positioned by the composer host) and its buttons eat
+          events; the world keeps every other pixel. The height at the pill
+          tier is the pill plus the subtitle seat above it: PILL_HEIGHT_PX +
+          one 20px subtitle line + a 4px gap between them +
+          PILL_BOTTOM_GAP_PX. */}
       <div
         ref={panelRef}
         tabIndex={-1}
         onKeyDown={onContainerKeyDown}
-        // Height: 100dvh at fullscreen; at the pill tier PILL_HEIGHT_PX +
-        // the one-line subtitle seat + the 4px gap + PILL_BOTTOM_GAP_PX.
+        // Height: the viewport minus the measured top chrome at fullscreen;
+        // at the pill tier PILL_HEIGHT_PX + the one-line subtitle seat + the
+        // 4px gap + PILL_BOTTOM_GAP_PX.
         style={{
           height: open
-            ? "100dvh"
+            ? `calc(100dvh - ${chromeInset}px)`
             : PILL_HEIGHT_PX + SUBTITLE_LINE_HEIGHT_PX + 4 + PILL_BOTTOM_GAP_PX,
         }}
         className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
