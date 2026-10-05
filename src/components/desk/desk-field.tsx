@@ -345,7 +345,6 @@ function DeskScene({
             ref={paperRef}
             data-locale={locale}
             className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact relative flex flex-col overflow-hidden rounded-sm text-card-foreground"
-            style={{ opacity: 0 }}
             onPointerMove={onPaperPointerMove}
           >
             <header className="desk-head flex items-baseline justify-between gap-8">

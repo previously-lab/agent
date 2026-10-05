@@ -17,6 +17,10 @@
   height: 86vh;
   font-family: var(--font-serif, serif);
   font-size: 16px;
+  /* Starts invisible; the pull-out's frame loop writes this per frame from
+     the choreography's progress, so the value here is only the state before
+     the first frame (never a static style in the markup). */
+  opacity: 0;
   /* §12.2 — the ONLY dynamic modulation: pointermove rewrites this locally
      scoped intensity (default 1, bounded 0.7–1.3 by recessIntensityFor);
      it reaches the two recessed strings below and nothing else. */
