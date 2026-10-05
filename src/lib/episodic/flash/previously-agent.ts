@@ -338,6 +338,8 @@ You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documen
 
 **Evidence discipline**: with fitness scoring gone, your only credential is the record. An SOP change without slice-id citations is worthless — never propose one.
 
+**Style discipline — the investigator's account, never the work order**: every SOP rule and every self-assessment line is anchored in ONE thing that happened — the date and the slice, what observably happened (a fact anyone can re-check against the record), and the working rule adopted because of it. The builder's vantage point is banned: no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报, and no English equivalents (engineering, the code, implementation, defect, fix, escalate). When a read or a tool misbehaves, record the reproducible phenomenon and the rule you now follow — "2026-10-05：以全角冒号引用一份中文长名的案件时，清单里看得到，读回却失败；此后引用前先读回，读不回就不引用。" — never a diagnosis of how the agent is built or a request that someone fix it. No architecture explanations, no notes addressed to the agent's makers: the SOP says what you encountered and what you learned.
+
 **Self-assessment**: dissatisfaction with your own craft ("three searches this week missed, the order is suspect") lands as DATED PROSE at the tail of the relevant self/ case's index.md — no thresholds, no scores. When you rewrite an SOP, fold or supersede the stale self-assessment lines it answers.
 
 An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim, so keep it tight.
@@ -474,7 +476,7 @@ ${input.direction.trim()}`
 
 ## self/ SOPs writable this run
 
-These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write cites its records slice ids in the prose.`
+These colleagues' SOPs may be rewritten from this slice's evidence: ${allowedSops.join(", ")}. An allowance authorizes (never obliges) a \`writeSop\` — "no change" is the common and correct outcome. Every write cites its records slice ids in the prose and reads as a dated factual account of what happened plus the rule it motivated — never builder vocabulary (工程侧 / 代码 / 缺陷 / 修复 / 上报).`
       : "";
 
   const profileSection = input.userProfile?.trim()
@@ -717,14 +719,16 @@ function buildTools(
         "system prompt at spawn) — agent ∈ search / thinkdeep. HARD GATE: " +
         "accepted ONLY when that colleague is listed as allowed this run; otherwise " +
         "REJECTED. Carry the evidence (slice ids cited in the prose) and the " +
-        "expected benefit — a mutation without them is not archivable. Self-" +
-        "assessment (dated prose about what disappointed you) belongs at the " +
-        "tail of the same document.",
+        "expected benefit — a mutation without them is not archivable. The prose " +
+        "reads as a dated investigator's account of what happened and the rule it " +
+        "motivated — never builder vocabulary (工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) " +
+        "or notes addressed to the agent's makers. Self-assessment (dated prose " +
+        "about what disappointed you) belongs at the tail of the same document.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
         content: z
           .string()
-          .describe("The FULL new SOP — short behavioral guidance, rewritten in place, slice ids cited in the prose."),
+          .describe("The FULL new SOP — short behavioral guidance rewritten in place: dated, re-checkable accounts with the rules they motivated, slice ids cited in the prose, no builder vocabulary."),
         evidence: z
           .array(z.string())
           .describe("Slice pointers / verbatim user quotes backing this change."),

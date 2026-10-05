@@ -240,4 +240,22 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(cardInput.closedSliceId).toBe(SLICE_ID);
     expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
   });
+
+  it("the role prompt bans the builder's vantage point from self/ writes", async () => {
+    runSubAgentMock.mockImplementation(async () => ({
+      ok: true,
+      report: { actions: [], note: "idle" },
+      text: "",
+    }));
+
+    await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    const opts = runSubAgentMock.mock.calls[0][0];
+    // The investigator's-account discipline lives in the static role prompt…
+    expect(opts.system).toContain("investigator's account");
+    expect(opts.system).toContain("工程侧");
+    // …and on the writeSelfSop tool surface itself.
+    const sopTool = opts.tools.writeSelfSop as unknown as { description: string };
+    expect(sopTool.description).toContain("工程侧");
+  });
 });

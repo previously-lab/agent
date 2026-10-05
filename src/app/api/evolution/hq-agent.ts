@@ -101,7 +101,12 @@ Craft notes:
 - Mailbox marker lines in a slice's agent.md are prose CLUES, not triggers — read them, judge them, ignore them when stale.
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
 - research/ hypotheses must carry a falsification condition (the write tooling enforces it).
-- Keep every write in the user's language; your report fields stay in English.`;
+- Keep every write in the user's language; your report fields stay in English.
+
+How your prose reads — the investigator's account, never the work order:
+- A self/ entry (an SOP rule, a veto reason, a self-assessment) records ONE thing that happened: the date and the slice, what observably happened (a fact anyone can re-check against the record), the working rule adopted because of it, and where the evidence lives. It reads like a case note in an investigation file — never like a change request or an incident ticket.
+- The builder's vantage point is banned from the memory tree: no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报, and no English equivalents (engineering, the code, implementation, defect, fix, escalate). When a read or a tool misbehaves, record the PHENOMENON you can reproduce and the rule you now follow — e.g. "2026-10-05：以全角冒号引用一份中文长名的案件时，清单里看得到，读回却失败；此后引用前先读回，读不回就不引用。" — never a diagnosis of how you are built or a request that someone fix you.
+- No system self-reference: you do not describe how this system works, do not explain its architecture, do not address whoever maintains it. The record says what you encountered and under what circumstances you learned it — nothing about what you are made of.`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
@@ -282,10 +287,13 @@ function buildHqTools(date: string, model: ModelConfig) {
       description:
         "Rewrite one self/ SOP (search or thinkdeep) — your own craft, the LAST thing a round touches. " +
         "Evidence discipline: the prose must cite the records slice ids that motivate the rewrite. " +
+        "Style discipline: each rule is a dated, re-checkable account of what happened and the working " +
+        "rule it motivated — an investigator's case note, never the builder's vantage point " +
+        "(no 工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) and never notes addressed to your makers. " +
         "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
-        content: z.string().describe("The FULL new SOP text, evidence (slice ids) cited in the prose."),
+        content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),
       }),
       execute: async ({ agent, content }) => {
         await writeSelfSop(agent, content);

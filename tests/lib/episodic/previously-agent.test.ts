@@ -316,6 +316,22 @@ describe("writeSop — the v0.19 SOP mutation gate (§C.2)", () => {
     expect(opts.system).toContain("LENGTH DISCIPLINE");
     expect(opts.system).toContain("THE USER'S SELF-DESCRIPTION WINS");
   });
+
+  it("the SOP style discipline bans the builder's vantage point — in the role prompt and next to the offer", async () => {
+    runSubAgentMock.mockResolvedValue({
+      ok: true,
+      report: { reasoning: "nothing", summary: "" },
+      text: "",
+    });
+    await runPreviouslyAgent(baseInput({ allowedSopWrites: ["search"] }));
+    const opts = runSubAgentMock.mock.calls[0][0];
+    // The static role prompt carries the investigator's-account discipline…
+    expect(opts.system).toContain("investigator's account");
+    expect(opts.system).toContain("工程侧");
+    // …and the dynamic section offering the SOP writes repeats it.
+    expect(opts.prompt).toContain("## self/ SOPs writable this run");
+    expect(opts.prompt).toContain("工程侧");
+  });
 });
 
 describe("the merged direction half (directionEval)", () => {
