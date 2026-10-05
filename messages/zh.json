@@ -91,37 +91,14 @@
       "shelf": {
         "menuLabel": "书架",
         "title": "记忆书架",
-        "byTopic": "按主题",
-        "byKind": "按类型",
         "byCategory": "按类目",
-        "topicsEmpty": "还没有主题之家——文档体系长出来后，这里会逐一出现。",
         "docsEmpty": "这个类型下还没有文档。",
         "casesEmpty": "这个类目下还没有 case。",
-        "catalogEmpty": "这个主题还没有挂接任何文档条目。",
         "attachments": "附件",
         "loading": "加载中…",
         "loadError": "书架暂时打不开。",
         "back": "返回书架",
         "openedAt": "始于 {date}",
-        "updatedAt": "更新于 {date}",
-        "closedAt": "封口于 {date}",
-        "writing": "还在写",
-        "status": {
-          "active": "进行中",
-          "closed": "已结案",
-          "void": "已作废"
-        },
-        "kind": {
-          "event": "事件",
-          "person": "人物",
-          "object": "物品",
-          "place": "地点",
-          "org": "组织",
-          "research": "调研",
-          "hypothesis": "假说",
-          "task": "任务",
-          "topic": "主题"
-        },
         "category": {
           "people": "人物",
           "events": "事件",

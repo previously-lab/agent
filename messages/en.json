@@ -91,37 +91,14 @@
       "shelf": {
         "menuLabel": "Shelf",
         "title": "Memory shelf",
-        "byTopic": "By topic",
-        "byKind": "By type",
         "byCategory": "By category",
-        "topicsEmpty": "No topic homes yet — they appear here as the document system grows.",
         "docsEmpty": "No documents in this type yet.",
         "casesEmpty": "No cases under this category yet.",
-        "catalogEmpty": "No documents are catalogued under this topic yet.",
         "attachments": "Attachments",
         "loading": "Loading…",
         "loadError": "The shelf couldn't be opened.",
         "back": "Back to shelf",
         "openedAt": "Opened {date}",
-        "updatedAt": "Updated {date}",
-        "closedAt": "Closed {date}",
-        "writing": "Open",
-        "status": {
-          "active": "Active",
-          "closed": "Closed",
-          "void": "Void"
-        },
-        "kind": {
-          "event": "Events",
-          "person": "People",
-          "object": "Objects",
-          "place": "Places",
-          "org": "Organizations",
-          "research": "Research",
-          "hypothesis": "Hypotheses",
-          "task": "Tasks",
-          "topic": "Topics"
-        },
         "category": {
           "people": "People",
           "events": "Events",
