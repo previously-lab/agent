@@ -38,6 +38,7 @@ import {
   DOC_MARKER_PREFIX,
   SCRIBE_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
+import { CaseWriteRefusal, parseCaseDoc } from "@/lib/docs";
 import type { ModelConfig } from "@/lib/models/registry";
 
 function streamWith(toolCalls: Array<{ toolName: string; input: unknown }>) {
@@ -143,10 +144,10 @@ describe("buildSliceExcerpt", () => {
   });
 });
 
-// ─── The five ops (§B.3) ────────────────────────────────────────────────────
+// ─── The write ops (§B.3) + the v0.21 write window ──────────────────────────
 
 describe("applyCaseWriteIntent", () => {
-  it("open creates the index.md with opened = the write date", async () => {
+  it("open creates the index.md with opened = the write date and a fresh updated stamp", async () => {
     const out = await applyCaseWriteIntent(
       { action: "open", category: "research", caseName: "手机调研", body: "正文。" },
       DATE,
@@ -155,6 +156,8 @@ describe("applyCaseWriteIntent", () => {
     const raw = io.files.get("memory/research/手机调研/index.md")!;
     expect(raw).toContain("opened: '2026-08-09'");
     expect(raw).toContain("正文。");
+    // The mechanical stamp: ISO with a time of day, restamped on every write.
+    expect(raw).toMatch(/updated: '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
   it("open on an existing case is refused (loud, visible)", async () => {
@@ -170,7 +173,7 @@ describe("applyCaseWriteIntent", () => {
     ).rejects.toThrow(/already exists/);
   });
 
-  it("rewriteIndex rewrites a living 正文; appendTail on a living case is refused", async () => {
+  it("rewriteIndex lands INSIDE the window; appendTail is allowed there too (harmless)", async () => {
     await applyCaseWriteIntent(
       { action: "open", category: "research", caseName: "手机调研", body: "初稿。" },
       DATE,
@@ -180,40 +183,84 @@ describe("applyCaseWriteIntent", () => {
       DATE,
     );
     expect(io.files.get("memory/research/手机调研/index.md")).toContain("改后。");
-    await expect(
-      applyCaseWriteIntent(
-        { action: "appendTail", category: "research", caseName: "手机调研", line: "补一行" },
-        DATE,
-      ),
-    ).rejects.toThrow(/still being written/);
+    await applyCaseWriteIntent(
+      { action: "appendTail", category: "research", caseName: "手机调研", line: "补一行" },
+      DATE,
+    );
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("补一行");
   });
 
-  it("close seals (header closed + tail line); rewriteBody after sealing is refused", async () => {
+  it("OUTSIDE the window: rewriteIndex is refused with a structured code; tail/piece still grow", async () => {
+    io.files.set(
+      "memory/research/旧案/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的正文。\n",
+    );
+    const refusal = await applyCaseWriteIntent(
+      { action: "rewriteIndex", category: "research", caseName: "旧案", body: "x" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(CaseWriteRefusal);
+    expect(refusal.code).toBe("rewrite_window_closed");
+    expect(refusal.message).toContain("appendTail");
+    // …but the tail still grows, and a new piece is always allowed.
     await applyCaseWriteIntent(
-      { action: "open", category: "research", caseName: "手机调研", body: "正文。" },
+      { action: "appendTail", category: "research", caseName: "旧案", line: "价格已过时。" },
       DATE,
     );
-    await applyCaseWriteIntent(
-      { action: "close", category: "research", caseName: "手机调研", note: "结论已定。" },
+    expect(io.files.get("memory/research/旧案/index.md")).toContain("价格已过时。");
+    const piece = await applyCaseWriteIntent(
+      { action: "addPiece", category: "research", caseName: "旧案", title: "报价篇", body: "篇正文。" },
       DATE,
     );
-    const sealed = io.files.get("memory/research/手机调研/index.md")!;
-    expect(sealed).toContain("closed: '2026-08-09'");
-    expect(sealed).toContain("—— 尾部 ——");
-    expect(sealed).toContain("2026-08-09：结论已定。");
-    // Sealed 正文 is frozen.
-    await expect(
-      applyCaseWriteIntent(
-        { action: "rewriteIndex", category: "research", caseName: "手机调研", body: "x" },
-        DATE,
-      ),
-    ).rejects.toThrow(/sealed/);
-    // …but the tail still grows.
+    expect(piece.created).toBe(true);
+    // …and every write restamps `updated`, re-opening the window.
+    expect(io.files.get("memory/research/旧案/index.md")).toMatch(
+      /updated: '\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
+    );
     await applyCaseWriteIntent(
-      { action: "appendTail", category: "research", caseName: "手机调研", line: "价格已过时。" },
+      { action: "rewriteIndex", category: "research", caseName: "旧案", body: "窗口重开后的整篇重写。" },
       DATE,
     );
-    expect(io.files.get("memory/research/手机调研/index.md")).toContain("价格已过时。");
+    expect(io.files.get("memory/research/旧案/index.md")).toContain("窗口重开后的整篇重写。");
+  });
+
+  it("expectedUpdated: a moved case refuses the rewrite (rewrite_conflict); a match proceeds", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      `---\nopened: '2026-08-09'\nupdated: '${new Date().toISOString()}'\n---\n\n读过的正文。\n`,
+    );
+    // The stamp the caller read ≠ the stamp on disk → structured refusal.
+    const conflict = await applyCaseWriteIntent(
+      {
+        action: "rewriteIndex",
+        category: "research",
+        caseName: "手机调研",
+        body: "基于旧读的重写。",
+        expectedUpdated: "2026-08-09T00:00:00.000Z",
+      },
+      DATE,
+    ).catch((e) => e);
+    expect(conflict).toBeInstanceOf(CaseWriteRefusal);
+    expect(conflict.code).toBe("rewrite_conflict");
+    expect(conflict.message).toContain("Re-read");
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("读过的正文。"); // untouched
+    // The stamp the caller actually read (quotes tolerated) → the rewrite lands.
+    const disk = parseCaseDoc(io.files.get("memory/research/手机调研/index.md")!, {
+      category: "research",
+      caseName: "手机调研",
+      fileName: "index.md",
+    });
+    await applyCaseWriteIntent(
+      {
+        action: "rewriteIndex",
+        category: "research",
+        caseName: "手机调研",
+        body: "基于新读的重写。",
+        expectedUpdated: `'${disk.updated}'`,
+      },
+      DATE,
+    );
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("基于新读的重写。");
   });
 
   it("addPiece writes a dated piece whose opened comes from the name (same-source)", async () => {
@@ -269,13 +316,13 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
     const raw = io.files.get("memory/research/充电器调研/index.md")!;
     expect(raw).toContain("opened: '2026-08-09'");
     // evidence stamped mechanically
-    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    expect(raw).toContain(`(refs: ${SLICE_ID})`);
   });
 
-  it("updateIndex on an EXISTING manifest case rewrites its living 正文", async () => {
+  it("updateIndex on an EXISTING in-window case rewrites its 正文", async () => {
     io.files.set(
       "memory/research/手机调研/index.md",
-      "---\nopened: 2026-08-01\n---\n\n旧认识。\n",
+      `---\nopened: '2026-08-01'\nupdated: '${new Date().toISOString()}'\n---\n\n旧认识。\n`,
     );
     ai.streamText.mockResolvedValue(
       streamWith([
@@ -299,7 +346,37 @@ describe("runLibrarianPass — judges from the manifest, NO tags (R3a)", () => {
     expect(result.written).toEqual(["research/手机调研/index.md"]);
     const raw = io.files.get("memory/research/手机调研/index.md")!;
     expect(raw).toContain("旧认识 + 这片的新结论。");
-    expect(raw).not.toContain("status:"); // new shape, two dates only
+    expect(raw).not.toContain("status:"); // new shape: opened + updated only
+  });
+
+  it("updateIndex on an out-of-window case is SKIPPED with the structured refusal (visible)", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的旧认识。\n",
+    );
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        writerCall([
+          {
+            action: "updateIndex",
+            category: "research",
+            caseName: "手机调研",
+            body: "想整篇重写。",
+          },
+        ]),
+      ]),
+    );
+    const result = await runLibrarianPass({
+      model,
+      closedSliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0]?.reason).toContain("outside its write window");
+    // The settled 正文 is untouched.
+    expect(io.files.get("memory/research/手机调研/index.md")).toContain("沉淀的旧认识。");
   });
 
   it("structurally refuses a write to a case that is NOT in the manifest (writer never read it)", async () => {
@@ -401,7 +478,7 @@ describe("runScribePass — case model, no strands", () => {
     expect(result.written).toEqual(["tasks/团队 on-site/index.md"]);
     const raw = io.files.get("memory/tasks/团队 on-site/index.md")!;
     expect(raw).toContain("日期锚：2026-09-08");
-    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    expect(raw).toContain(`(refs: ${SLICE_ID})`);
     // mailbox bookkeeping — the marker is recorded so it never double-writes
     expect(io.files.get(AGENT_MD)).toContain(SCRIBE_RECORD_PREFIX);
   });
@@ -430,7 +507,7 @@ describe("runScribePass — case model, no strands", () => {
     expect(result.written).toEqual(["things/旧手机/index.md"]);
   });
 
-  it("updates a LIVING existing case (rewriteIndex) and appends a TAIL line to a SEALED one", async () => {
+  it("rewrites an IN-WINDOW case (rewriteIndex) and appends a dated line to an OUT-OF-WINDOW one", async () => {
     io.files.set(
       AGENT_MD,
       [
@@ -440,13 +517,13 @@ describe("runScribePass — case model, no strands", () => {
     );
     io.files.set(
       "memory/research/活case/index.md",
-      "---\nopened: 2026-08-01\n---\n\n还在写的草稿。\n",
+      `---\nopened: '2026-08-01'\nupdated: '${new Date().toISOString()}'\n---\n\n还在写的草稿。\n`,
     );
     io.files.set(
       "memory/research/封case/index.md",
-      // Serialized form (serializeCaseDoc quotes dates — unquoted YAML dates
-      // parse as Date objects, a latent R1 parse quirk reported upstream).
-      "---\nopened: '2026-08-01'\nclosed: '2026-08-05'\n---\n\n封口的正文。\n\n—— 尾部 ——\n2026-08-05：结案。\n",
+      // A historical sealed doc (closed retired, parse-tolerated): its last
+      // write predates the window either way, so the tail is the only growth.
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-05T00:00:00.000Z'\nclosed: '2026-08-05'\n---\n\n封口的正文。\n\n—— 尾部 ——\n2026-08-05：结案。\n",
     );
     ai.streamText.mockResolvedValue(
       streamWith([
@@ -527,6 +604,6 @@ describe("runScribePass — case model, no strands", () => {
     expect(raw).toContain(`用户于 ${DATE} 在切片 ${SLICE_ID} 粘贴`);
     // the FULL text is carried verbatim — not the one-line note
     expect(raw).toContain("第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。");
-    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    expect(raw).toContain(`(refs: ${SLICE_ID})`);
   });
 });

@@ -5,7 +5,6 @@ import {
   createCase,
   createDoc,
   rewriteBody,
-  closeDoc,
   appendTail,
   type CaseDoc,
 } from "@/lib/docs";
@@ -16,6 +15,7 @@ const PIECE = {
   fileName: "2026-09-05-手机购买调研.md",
 };
 
+/** A HISTORICAL sealed doc (pre-v0.21): `closed` is retired but parse-tolerated. */
 const SEALED_RAW = `---
 opened: '2026-09-05'
 closed: '2026-10-02'
@@ -29,11 +29,13 @@ closed: '2026-10-02'
 `;
 
 describe("parseCaseDoc — new format", () => {
-  it("parses a sealed doc fully", () => {
+  it("parses a historical sealed doc fully (closed tolerated, inert)", () => {
     const doc = parseCaseDoc(SEALED_RAW, PIECE);
     expect(doc.warnings).toEqual([]);
     expect(doc.opened).toBe("2026-09-05");
-    expect(doc.closed).toBe("2026-10-02");
+    expect(doc.closed).toBe("2026-10-02"); // history, surfaced verbatim
+    // No `updated` on a pre-window doc — resolves to the birth date silently.
+    expect(doc.updated).toBe("2026-09-05");
     expect(doc.body).toContain("买 16 Pro");
     expect(doc.tail).toEqual([
       { date: "2026-10-02", text: "封口。结论如上。" },
@@ -41,7 +43,7 @@ describe("parseCaseDoc — new format", () => {
     ]);
   });
 
-  it("treats absent closed as 还在写", () => {
+  it("treats absent closed as-is (null) — sealing is the window now, not a field", () => {
     const raw = `---
 opened: '2026-09-05'
 ---
@@ -53,21 +55,48 @@ opened: '2026-09-05'
     expect(doc.tail).toEqual([]);
   });
 
-  it("UNQUOTED YAML dates: closed/opened arrive as Date objects and survive", () => {
-    // `closed: 2026-10-02` (no quotes) is the most natural hand/model write —
-    // js-yaml parses it as a Date. Dropping it would read a SEALED doc as
-    // 还在写. Both fields must normalize to YYYY-MM-DD strings.
+  it("the updated stamp keeps its TIME OF DAY (the window measures minutes)", () => {
+    const raw = `---
+opened: '2026-09-05'
+updated: '2026-09-05T13:22:10.000Z'
+---
+
+正文。
+`;
+    const doc = parseCaseDoc(raw, PIECE);
+    expect(doc.updated).toBe("2026-09-05T13:22:10.000Z");
+    expect(doc.warnings).toEqual([]);
+  });
+
+  it("UNQUOTED ISO timestamps arrive as Date objects and survive untruncated", () => {
+    // js-yaml parses an unquoted ISO timestamp as a Date — truncating it to
+    // YYYY-MM-DD would silently pin the write window to midnight.
     const raw = `---
 opened: 2026-09-05
+updated: 2026-09-05T13:22:10.000Z
 closed: 2026-10-02
 ---
 
 正文。
 `;
     const doc = parseCaseDoc(raw, PIECE);
-    expect(doc.closed).toBe("2026-10-02");
     expect(doc.opened).toBe("2026-09-05");
+    expect(doc.updated).toBe("2026-09-05T13:22:10.000Z");
+    expect(doc.closed).toBe("2026-10-02");
     expect(doc.warnings).toEqual([]);
+  });
+
+  it("a garbage updated value warns and falls back to opened — no crash", () => {
+    const raw = `---
+opened: '2026-09-05'
+updated: 刚才
+---
+
+正文。
+`;
+    const doc = parseCaseDoc(raw, PIECE);
+    expect(doc.updated).toBe("2026-09-05");
+    expect(doc.warnings.some((w) => w.includes("updated"))).toBe(true);
   });
 
   it("unquoted opened on index.md normalizes too", () => {
@@ -86,7 +115,7 @@ index 正文。
     expect(doc.warnings).toEqual([]);
   });
 
-  it("a garbage closed value warns and reads as 还在写 — no crash", () => {
+  it("a garbage closed value warns and reads as absent — no crash", () => {
     const raw = `---
 opened: '2026-09-05'
 closed: 昨天的
@@ -161,7 +190,7 @@ opened: '2026-09-09'
 });
 
 describe("legacy tolerance (v0.15 three-field header)", () => {
-  it("status: active maps to unsealed, 截至块 promoted to body", () => {
+  it("status: active is ignored; the legacy date-only updated parses first-class", () => {
     const raw = `---
 status: active
 opened: '2026-09-05'
@@ -178,15 +207,15 @@ updated: '2026-09-12'
     const doc = parseCaseDoc(raw, PIECE);
     expect(doc.closed).toBeNull();
     expect(doc.opened).toBe("2026-09-05"); // name wins over header
+    expect(doc.updated).toBe("2026-09-12"); // the legacy stamp is the anchor now
     expect(doc.body).toContain("截至 2026-09-12：倾向 16 Pro");
     expect(doc.warnings.some((w) => w.includes("status"))).toBe(true);
-    expect(doc.warnings.some((w) => w.includes("updated"))).toBe(true);
     // the legacy entry stream survives verbatim
     expect(doc.preserved).toContain("## 2026-09-05 — 开篇");
     expect(doc.preserved).toContain("预算六千以内");
   });
 
-  it("status: closed maps to closed: <updated> with a warning", () => {
+  it("status: closed maps to a historical closed: <updated> with a warning", () => {
     const raw = `---
 status: closed
 opened: '2026-09-05'
@@ -196,10 +225,11 @@ updated: '2026-09-20'
 `;
     const doc = parseCaseDoc(raw, PIECE);
     expect(doc.closed).toBe("2026-09-20");
+    expect(doc.updated).toBe("2026-09-20");
     expect(doc.warnings.some((w) => w.includes("status: closed"))).toBe(true);
   });
 
-  it("status: void also maps to a seal date (supersession prose stays in the stream)", () => {
+  it("status: void also maps to a historical seal date (supersession prose stays in the stream)", () => {
     const raw = `---
 status: void
 opened: '2026-09-05'
@@ -225,29 +255,30 @@ updated: '2026-09-25'
 });
 
 describe("serializeCaseDoc round-trip", () => {
-  it("preserves substance through a full cycle", () => {
+  it("preserves substance through a full cycle (historical closed round-trips)", () => {
     const doc = parseCaseDoc(SEALED_RAW, PIECE);
     const again = parseCaseDoc(serializeCaseDoc(doc), PIECE);
     expect(again.warnings).toEqual([]);
     expect(again.opened).toBe(doc.opened);
+    expect(again.updated).toBe(doc.updated);
     expect(again.closed).toBe(doc.closed);
     expect(again.body).toBe(doc.body);
     expect(again.tail).toEqual(doc.tail);
   });
 
-  it("emits only opened/closed — legacy fields are dropped", () => {
+  it("drops legacy status; updated is emitted first-class", () => {
     const doc = parseCaseDoc(
       "---\nstatus: closed\nopened: '2026-09-05'\nupdated: '2026-09-20'\n---\n> 截至 2026-09-20：x。\n",
       PIECE,
     );
     const out = serializeCaseDoc(doc);
     expect(out).not.toContain("status:");
-    expect(out).not.toContain("updated:");
-    expect(out).toContain("closed: '2026-09-20'");
+    expect(out).toContain("updated: '2026-09-20'");
+    expect(out).toContain("closed: '2026-09-20'"); // historical, round-tripped
   });
 });
 
-describe("the five ops — matrix enforcement", () => {
+describe("the write ops — pure, clock-free (time guards live in the write entry)", () => {
   let living: CaseDoc;
   beforeEach(() => {
     living = createCase({
@@ -258,9 +289,10 @@ describe("the five ops — matrix enforcement", () => {
     });
   });
 
-  it("createCase seeds an unsealed index doc", () => {
+  it("createCase seeds an index doc with updated = the birth date", () => {
     expect(living.fileName).toBe("index.md");
     expect(living.opened).toBe("2026-09-05");
+    expect(living.updated).toBe("2026-09-05");
     expect(living.closed).toBeNull();
     expect(living.body).toBe("初始正文。");
   });
@@ -275,6 +307,7 @@ describe("the five ops — matrix enforcement", () => {
     });
     expect(piece.fileName).toBe("2026-09-08-报价篇.md");
     expect(piece.opened).toBe("2026-09-08");
+    expect(piece.updated).toBe("2026-09-08");
   });
 
   it("createDoc rejects a red-line title", () => {
@@ -289,7 +322,7 @@ describe("the five ops — matrix enforcement", () => {
     ).toThrow();
   });
 
-  it("rewriteBody works while living and does NOT archive the old draft", () => {
+  it("rewriteBody replaces the 正文 and does NOT archive the old draft", () => {
     const next = rewriteBody(living, "全新正文。");
     expect(next.body).toBe("全新正文。");
     // draft semantics: old draft is gone, no archive anywhere
@@ -298,39 +331,27 @@ describe("the five ops — matrix enforcement", () => {
     expect(living.body).toBe("初始正文。"); // pure
   });
 
-  it("rewriteBody on a sealed doc THROWS", () => {
-    const sealed = closeDoc(living, { date: "2026-10-02", note: "封口。" });
-    expect(() => rewriteBody(sealed, "改")).toThrow();
+  it("rewriteBody is unconditional at the op level — the window guard is the write entry's", () => {
+    // A doc carrying a historical closed date: the pure op does not consult
+    // it (sealing is retired); whether a rewrite may LAND is decided by the
+    // write entry's window check (tested in librarian.test.ts).
+    const historical = parseCaseDoc(SEALED_RAW, PIECE);
+    const next = rewriteBody(historical, "重写。");
+    expect(next.body).toBe("重写。");
+    expect(next.closed).toBe("2026-10-02"); // history carried along, inert
   });
 
-  it("appendTail on a living doc THROWS", () => {
-    expect(() => appendTail(living, { date: "2026-10-03", text: "补充" })).toThrow();
+  it("appendTail is always allowed — window or not, sealed history or not", () => {
+    const draft = appendTail(living, { date: "2026-10-03", text: "补充" });
+    expect(draft.tail).toEqual([{ date: "2026-10-03", text: "补充" }]);
+    const historical = parseCaseDoc(SEALED_RAW, PIECE);
+    const again = appendTail(historical, { date: "2026-11-10", text: "再补一行。" });
+    expect(again.tail).toHaveLength(3);
+    expect(again.body).toBe(historical.body); // body untouched
   });
 
-  it("closeDoc lands closed + the closing line in the same op", () => {
-    const sealed = closeDoc(living, { date: "2026-10-02", note: "封口。结论如上。" });
-    expect(sealed.closed).toBe("2026-10-02");
-    expect(sealed.tail).toEqual([{ date: "2026-10-02", text: "封口。结论如上。" }]);
-    // and the two halves are born together: the header round-trips with the line
-    const again = parseCaseDoc(serializeCaseDoc(sealed), {
-      category: "people",
-      caseName: "user",
-      fileName: "index.md",
-    });
-    expect(again.closed).toBe("2026-10-02");
-    expect(again.tail).toHaveLength(1);
-  });
-
-  it("closeDoc on a sealed doc THROWS; double-tail after sealing is fine", () => {
-    const sealed = closeDoc(living, { date: "2026-10-02", note: "封口。" });
-    expect(() => closeDoc(sealed, { date: "2026-10-03", note: "再封" })).toThrow();
-    const withNote = appendTail(sealed, { date: "2026-11-01", text: "补充一行。" });
-    expect(withNote.tail).toHaveLength(2);
-    expect(withNote.body).toBe(sealed.body); // body untouched
-  });
-
-  it("closeDoc rejects empty note and bad dates", () => {
-    expect(() => closeDoc(living, { date: "2026-10-02", note: "  " })).toThrow();
-    expect(() => closeDoc(living, { date: "2026-13-40", note: "x" })).toThrow();
+  it("appendTail rejects empty text and bad dates", () => {
+    expect(() => appendTail(living, { date: "2026-10-03", text: "  " })).toThrow();
+    expect(() => appendTail(living, { date: "2026-13-40", text: "x" })).toThrow();
   });
 });

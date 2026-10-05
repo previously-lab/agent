@@ -14,10 +14,11 @@
  *   READ tools (readCase / readSlice) for cross-record digging — it is a
  *   reader before it is a writer.
  * - evidence-while-writing: the triggering slice id is stamped mechanically.
- * - writes are validated intents applied through the five case ops (§B.3)
- *   under the per-case lock. A hypothesis whose body carries no falsification
- *   condition is REFUSED (§B.6: 无证伪条件拒开) — the refusal is recorded,
- *   visible.
+ * - writes are validated intents applied through the case write ops (§B.3 —
+ *   open / rewriteIndex / appendTail / addPiece; close retired with the
+ *   v0.21 write window) under the per-case lock. A hypothesis whose body
+ *   carries no falsification condition is REFUSED (§B.6: 无证伪条件拒开) —
+ *   the refusal is recorded, visible.
  *
  * Never throws: failures degrade to skipped items in the result.
  */
@@ -29,6 +30,7 @@ import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
   CASE_CATEGORIES,
+  DOC_WRITE_WINDOW_RULE,
   isValidCaseName,
   type CaseCategory,
 } from "@/lib/docs";
@@ -54,13 +56,12 @@ import {
 
 const writeOpSchema = z.object({
   action: z
-    .enum(["open", "updateIndex", "appendTail", "addPiece", "close"])
+    .enum(["open", "updateIndex", "appendTail", "addPiece"])
     .describe(
       "open: a NEW case (category + caseName; body = the index.md body). " +
-      "updateIndex: rewrite the body of an EXISTING living case. " +
-      "appendTail: one dated line on a SEALED case. " +
-      "addPiece: a dated piece inside an existing case. " +
-      "close: seal a case (note = the conclusion / where it goes).",
+      "updateIndex: rewrite the body of an EXISTING case still inside its write window. " +
+      "appendTail: ONE dated line — the only in-place growth once the write window has closed. " +
+      "addPiece: a dated piece inside an existing case (always allowed).",
     ),
   category: z.enum(CASE_CATEGORIES),
   caseName: z.string().describe("The case name — permanent at birth; legal per the red-line rule."),
@@ -70,8 +71,6 @@ const writeOpSchema = z.object({
   line: z.string().optional(),
   /** addPiece only — the piece title. */
   title: z.string().optional(),
-  /** close only. */
-  note: z.string().optional(),
 });
 
 const researchSchema = z.object({
@@ -86,16 +85,16 @@ You are shown: the triggering question markers, the slice they came from, and th
 ## Task
 
 Per question, judge: is there enough in the record to write something durable?
-- research: answer a question. A case's index.md carries what is known and where it stands; pieces hold dated expansions; close seals it with the conclusion next to its evidence chain. New evidence continuing the SAME question updates the living case; a changed scope means a NEW case (names are permanent).
-- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused. Evidence entries accumulate; close states confirmed / refuted / retired in prose.
+- research: answer a question. A case's index.md carries what is known and where it stands; pieces hold dated expansions. New evidence continuing the SAME question updates the case inside its write window, or appends a dated line once the window has closed; a changed scope means a NEW case (names are permanent).
+- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused. Evidence entries accumulate as dated lines; the outcome (confirmed / refuted / retired) is stated in prose the same way.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
 
 ## Rules
 
 1. Ground everything in what you actually read (cases, slices). Cite slice ids in the prose when a fact comes from one.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence stamps are mechanical.
-3. Living cases are rewritten whole (updateIndex); sealed cases grow only via appendTail/addPiece. Never restate what a case already carries.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence stamps are mechanical.
+3. ${DOC_WRITE_WINDOW_RULE} Never restate what a case already carries.
 4. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
 
 ## Output
@@ -135,7 +134,7 @@ export interface DocResearchPassResult {
  * The question research/hypothesis pass — ONE function, question-driven.
  * Picks up unprocessed "question" markers from the slice's agent.md,
  * investigates with readCase/readSlice, and writes research/ hypotheses/
- * cases through the five ops under the per-case lock. Never throws.
+ * cases through the case write ops under the per-case lock. Never throws.
  */
 export async function runDocResearchPass(
   input: DocResearchPassInput,
@@ -287,14 +286,6 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
           }
           applied = await applyCaseWriteIntent(
             { action: "addPiece", category, caseName: op.caseName, title: op.title.trim(), body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
-            date, batch,
-          );
-          break;
-        }
-        case "close": {
-          if (!op.note?.trim()) throw new Error("close requires a note (the conclusion / where it goes)");
-          applied = await applyCaseWriteIntent(
-            { action: "close", category, caseName: op.caseName, note: op.note.trim() },
             date, batch,
           );
           break;

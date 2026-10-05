@@ -150,11 +150,11 @@ describe("runDocResearchPass — case model", () => {
     expect(io.files.get(AGENT_MD)).toContain(RESEARCH_RECORD_PREFIX);
   });
 
-  it("updates an existing living case via rewriteIndex", async () => {
+  it("updates an existing in-window case via rewriteIndex", async () => {
     seedQuestions();
     io.files.set(
       "memory/research/已有调研/index.md",
-      "---\nopened: 2026-08-01\n---\n\n旧进展。\n",
+      `---\nopened: '2026-08-01'\nupdated: '${new Date().toISOString()}'\n---\n\n旧进展。\n`,
     );
     ai.streamText.mockResolvedValue(
       streamWith([

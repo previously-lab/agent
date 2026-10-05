@@ -118,7 +118,7 @@ describe("executeQuestionRun (§A.2.3-b)", () => {
     expect([...io.files.keys()].some((k) => k.startsWith("memory/tasks/"))).toBe(false);
   });
 
-  it("research that lands posts a §A.3.3 completion notice (real task case, closed, declarative statement)", async () => {
+  it("research that lands posts a §A.3.3 completion notice (real task case, dated tail line, declarative statement)", async () => {
     episodic.readSlicePart.mockResolvedValue(QUESTION_MAILBOX);
     passes.runDocResearchPass.mockImplementation(async () => {
       passes.calls.push("research");
@@ -140,8 +140,9 @@ describe("executeQuestionRun (§A.2.3-b)", () => {
       caseName: "后台回复",
       fileName: "index.md",
     });
-    // The completion credential: closed, with the closing line dated today.
-    expect(doc.closed).toBe(DATE);
+    // The completion credential: a declarative statement as today's tail line
+    // (close is retired — nobody seals; the dated line IS the record).
+    expect(doc.closed).toBeNull();
     const closing = doc.tail.find((l) => l.date === DATE);
     expect(closing).toBeDefined();
     expect(closing!.text).toContain("手机话题这一年的演变");
@@ -164,7 +165,7 @@ describe("executeQuestionRun (§A.2.3-b)", () => {
       skipped: [],
     }));
     await executeQuestionRun({ sliceId: SLICE_ID, date: DATE });
-    // Second run, another landing — the case is sealed now.
+    // Second run, another landing — the case already exists, the tail grows.
     passes.runDocResearchPass.mockImplementation(async () => ({
       ran: true,
       written: ["research/另一问题/index.md"],

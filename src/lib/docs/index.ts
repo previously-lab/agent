@@ -63,12 +63,19 @@ export {
   createCase,
   createDoc,
   rewriteBody,
-  closeDoc,
   appendTail,
   type CaseDoc,
   type TailLine,
   type CaseDocLocation,
 } from "./case-doc";
+export {
+  DOC_WRITE_WINDOW_MINUTES,
+  DOC_WRITE_WINDOW_MS,
+  DOC_WRITE_WINDOW_RULE,
+  isWithinWriteWindow,
+  CaseWriteRefusal,
+  type CaseWriteRefusalCode,
+} from "./write-window";
 export {
   normalizeCaseRefText,
   parseCaseRef,

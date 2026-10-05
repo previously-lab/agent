@@ -38,6 +38,10 @@ import {
   type CaseWriteIntent,
 } from "@/lib/episodic/flash/librarian";
 import type { CaseCategory } from "@/lib/docs";
+// Direct module path, not the "@/lib/docs" barrel: this file is reachable
+// from the "use workflow" bundle, and the barrel re-exports case-doc.ts
+// (gray-matter → node:*), which the workflow bundler rejects.
+import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import { readUserModel, writeSelfSop } from "@/lib/evolution/store";
@@ -144,18 +148,27 @@ function buildHqTools(date: string, model: ModelConfig) {
 
     writeCase: tool({
       description:
-        "Apply ONE case write through the five ops (per-case lock, fresh read inside, illegal transitions REJECTED). " +
-        "open: new case (category + caseName + body). rewriteIndex: rewrite the body of a LIVE case (body). " +
-        "appendTail: one dated line on a SEALED case (line). addPiece: a dated piece (title + body). " +
-        "close: seal a case (note = the conclusion / where it goes). Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/.",
+        "Apply ONE case write through the case write ops (per-case lock, fresh read inside, illegal transitions REJECTED with a structured reason). " +
+        "open: new case (category + caseName + body). rewriteIndex: rewrite the body of a case still inside its write window (body; " +
+        "pass expectedUpdated = the updated stamp you read from the case header — the rewrite is refused when the case moved since your read). " +
+        "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
+        "addPiece: a dated piece (title + body, always allowed). " +
+        "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. " +
+        DOC_WRITE_WINDOW_RULE,
       inputSchema: z.object({
-        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "close"]),
+        action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece"]),
         category: z.string(),
         caseName: z.string(),
         body: z.string().optional(),
         line: z.string().optional(),
         title: z.string().optional(),
-        note: z.string().optional(),
+        expectedUpdated: z
+          .string()
+          .optional()
+          .describe(
+            "rewriteIndex only, RECOMMENDED: the updated stamp you read from the case header just now. " +
+            "The write is refused when the case moved since that read.",
+          ),
       }),
       execute: async (args) => {
         // The runtime category check lives in applyCaseWriteIntent
@@ -169,7 +182,14 @@ function buildHqTools(date: string, model: ModelConfig) {
             break;
           case "rewriteIndex":
             if (!args.body) return "REJECTED: rewriteIndex requires body";
-            intent = { action: "rewriteIndex", ...base, body: args.body };
+            intent = {
+              action: "rewriteIndex",
+              ...base,
+              body: args.body,
+              ...(args.expectedUpdated !== undefined
+                ? { expectedUpdated: args.expectedUpdated }
+                : {}),
+            };
             break;
           case "appendTail":
             if (!args.line) return "REJECTED: appendTail requires line";
@@ -178,10 +198,6 @@ function buildHqTools(date: string, model: ModelConfig) {
           case "addPiece":
             if (!args.title || !args.body) return "REJECTED: addPiece requires title and body";
             intent = { action: "addPiece", ...base, title: args.title, body: args.body };
-            break;
-          case "close":
-            if (!args.note) return "REJECTED: close requires note";
-            intent = { action: "close", ...base, note: args.note };
             break;
         }
         try {
@@ -294,7 +310,8 @@ function buildHqTools(date: string, model: ModelConfig) {
         "rule it motivated — an investigator's case note, never the builder's vantage point " +
         "(no 工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) and never notes addressed to your makers. " +
         "House style: one sentence one meaning, active voice, no filler — the full rules sit in your role prompt. " +
-        "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter.",
+        "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter. " +
+        DOC_WRITE_WINDOW_RULE,
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
         content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),

@@ -182,6 +182,73 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(raw).toContain("想换手机");
   });
 
+  it("writeCase: rewriteIndex is window-gated; expectedUpdated guards against a moved case", async () => {
+    const fresh = new Date().toISOString();
+    io.files.set(
+      "memory/research/手机购买调研/index.md",
+      `---\nopened: '2026-08-01'\nupdated: '${fresh}'\n---\n\n读过的正文。\n`,
+    );
+    io.files.set(
+      "memory/research/旧案/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的正文。\n",
+    );
+    runSubAgentMock.mockImplementation(async (opts) => {
+      // Out of window, no stamp → structured refusal pointing at the tail.
+      const r1 = await callTool(opts, "writeCase", {
+        action: "rewriteIndex",
+        category: "research",
+        caseName: "旧案",
+        body: "x",
+      });
+      expect(r1).toContain("REJECTED:");
+      expect(r1).toContain("outside its write window");
+      // In window but the case moved since the read → conflict refusal.
+      const r2 = await callTool(opts, "writeCase", {
+        action: "rewriteIndex",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "基于旧读的重写。",
+        expectedUpdated: "2026-08-09T00:00:00.000Z",
+      });
+      expect(r2).toContain("REJECTED:");
+      expect(r2).toContain("moved since you read it");
+      // In window with the stamp actually read → the rewrite lands.
+      const r3 = await callTool(opts, "writeCase", {
+        action: "rewriteIndex",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "基于新读的重写。",
+        expectedUpdated: fresh,
+      });
+      expect(r3).toContain("OK:");
+      // …and the out-of-window case still grows by dated tail lines.
+      const r4 = await callTool(opts, "writeCase", {
+        action: "appendTail",
+        category: "research",
+        caseName: "旧案",
+        line: "价格已过时。",
+      });
+      expect(r4).toContain("OK:");
+      return {
+        ok: true,
+        report: { actions: ["research/手机购买调研/index.md"], note: "Window guards verified." },
+        text: "",
+      };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    expect(io.files.get("memory/research/手机购买调研/index.md")).toContain("基于新读的重写。");
+    expect(io.files.get("memory/research/旧案/index.md")).toContain("沉淀的正文。"); // 正文 untouched
+    expect(io.files.get("memory/research/旧案/index.md")).toContain("价格已过时。");
+    // The write-window discipline rides the tool surface itself.
+    const writeCaseTool = runSubAgentMock.mock.calls[0][0].tools.writeCase as unknown as {
+      description: string;
+    };
+    expect(writeCaseTool.description).toContain("Write-window discipline");
+  });
+
   it("a substantive veto lands as PROSE in self/, not as a counter", async () => {
     const reason =
       "核对了 records/2026/08/09/1300：mailbox 的问题标记所指内容已在 research/手机购买调研 覆盖，决定不再开新 case。";
@@ -257,5 +324,6 @@ describe("handleBrief (v0.21 §5)", () => {
     // …and on the writeSelfSop tool surface itself.
     const sopTool = opts.tools.writeSelfSop as unknown as { description: string };
     expect(sopTool.description).toContain("工程侧");
+    expect(sopTool.description).toContain("Write-window discipline");
   });
 });

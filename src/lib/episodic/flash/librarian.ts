@@ -9,8 +9,10 @@
  * structural (§A.2.3): engineering assembles the listTree manifest into the
  * prompt, the writer reads the current text of the cases it judges relevant
  * via the readCase tool, then returns write-intents that engineering applies
- * through the five case ops (§B.3) under the per-case lock. It has no write
- * tools — the old "blind description" disease cannot recur.
+ * through the case write ops (§B.3 — open / rewriteIndex / appendTail /
+ * addPiece; close retired with the v0.21 write window) under the per-case
+ * lock. It has no write tools — the old "blind description" disease cannot
+ * recur.
  *
  * THE SCRIBE (书记段序 7, §A.2.2): picks up the structured one-line markers
  * the reply segment drops into the slice's agent.md and writes them into
@@ -44,16 +46,18 @@ import {
   appendTail,
   caseIndexPath,
   casePiecePath,
-  closeDoc,
   createCase,
   createDoc,
   isCaseCategory,
   isValidCaseName,
+  isWithinWriteWindow,
   parseCaseDoc,
   parseCaseRef,
   resolveCaseRefPaths,
   rewriteBody,
   serializeCaseDoc,
+  CaseWriteRefusal,
+  DOC_WRITE_WINDOW_RULE,
   type CaseCategory,
 } from "@/lib/docs";
 import {
@@ -101,7 +105,7 @@ export function buildSliceExcerpt(slice: {
 
 /** Evidence-while-writing, mechanical: the triggering slice id rides every landed body. */
 function stampEvidence(body: string, sliceId: string): string {
-  return `${body.trim()}\n\n（证据切片：${sliceId}）`;
+  return `${body.trim()}\n\n(refs: ${sliceId})`;
 }
 
 // ─── Markers: the agent.md mailbox (pure parsing, §A.3.1 — unchanged) ───────
@@ -188,21 +192,42 @@ export function extractProcessedMarkerIds(agentMd: string, prefix: string): Set<
   return ids;
 }
 
-// ─── The case write machinery (the five ops, §B.3) ─────────────────────────
+// ─── The case write machinery (the write ops, §B.3 + the v0.21 window) ────
 
 /**
  * One validated write intent, in the writer's vocabulary. Engineering applies
- * it through the five pure ops under the per-case lock — the ops themselves
- * are the enforcement point for illegal transitions (rewriteBody on a sealed
- * doc, appendTail on a living one, open on an existing case all throw, loud
- * and visible).
+ * it through the pure ops under the per-case lock, with a FRESH read inside
+ * the lock. The guards that own TIME live here (the ops are pure and
+ * clock-free):
+ *
+ * - `rewriteIndex` (whole-body rewrite) lands ONLY inside the write window
+ *   (`now − updated ≤ window`, write-window.ts) — past the window the 正文
+ *   is settled and the refusal says so, structured (CaseWriteRefusal
+ *   `rewrite_window_closed`: re-read, then appendTail / addPiece).
+ * - `rewriteIndex` may carry `expectedUpdated` — the `updated` stamp the
+ *   caller read before drafting. After the in-lock fresh read, a disk stamp
+ *   that differs means the case moved under the caller: the rewrite is
+ *   refused, structured (`rewrite_conflict`). Absent the parameter, the
+ *   window rule alone decides.
+ * - `appendTail` and `addPiece` are always allowed; `open` creates a new
+ *   file. `close` is RETIRED — sealing is the window closing, nobody's act.
+ *
+ * EVERY write restamps `updated` to the write instant (ISO) — the model
+ * never touches the stamp.
  */
 export type CaseWriteIntent =
   | { action: "open"; category: CaseCategory; caseName: string; body: string }
-  | { action: "rewriteIndex"; category: CaseCategory; caseName: string; body: string }
+  | {
+      action: "rewriteIndex";
+      category: CaseCategory;
+      caseName: string;
+      body: string;
+      /** Optimistic concurrency: the `updated` stamp the caller based its
+       *  rewrite on. A different stamp on disk → structured refusal. */
+      expectedUpdated?: string;
+    }
   | { action: "appendTail"; category: CaseCategory; caseName: string; line: string }
-  | { action: "addPiece"; category: CaseCategory; caseName: string; title: string; body: string }
-  | { action: "close"; category: CaseCategory; caseName: string; note: string };
+  | { action: "addPiece"; category: CaseCategory; caseName: string; title: string; body: string };
 
 export interface CaseWriteOutcome {
   /** The repo-relative path written. */
@@ -213,9 +238,12 @@ export interface CaseWriteOutcome {
 
 /**
  * Apply one write intent: per-case lock (`doc:<分类>/<case名>`, §A.3.4), a
- * FRESH read of the case's index.md inside the lock, the pure op, serialize,
- * write through the batch-aware fs. Throws on every contract violation — the
- * caller records the refusal as a visible skip.
+ * FRESH read of the case's index.md inside the lock, the time guards
+ * (optimistic `expectedUpdated` check first, then the write window), the
+ * pure op, a mechanical `updated` restamp, serialize, write through the
+ * batch-aware fs. Throws on every contract violation — the caller records
+ * the refusal as a visible skip (a CaseWriteRefusal carries a structured
+ * `code`; any other Error is a plain contract violation).
  */
 export async function applyCaseWriteIntent(
   intent: CaseWriteIntent,
@@ -233,6 +261,8 @@ export async function applyCaseWriteIntent(
   const indexPath = caseIndexPath(category, caseName);
 
   return withSliceLock(`doc:${identity}`, async () => {
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
     let currentRaw: string | null = null;
     try {
       currentRaw = await fsReadFile(indexPath, batch, { fresh: true });
@@ -250,37 +280,54 @@ export async function applyCaseWriteIntent(
           throw new Error(`case ${identity} already exists — use updateIndex / appendTail / addPiece`);
         }
         const doc = createCase({ category, caseName, opened: date, body: intent.body });
-        await fsWriteFile(indexPath, serializeCaseDoc(doc), batch);
+        await fsWriteFile(indexPath, serializeCaseDoc({ ...doc, updated: nowIso }), batch);
         return { path: indexPath, created: true };
       }
       case "rewriteIndex": {
         if (!current) throw new Error(`case ${identity} does not exist — open it first`);
-        // Throws when sealed (sealed 正文 is frozen — the tail is writable).
+        // Optimistic concurrency (ETag on the resolved stamp — surrounding
+        // quotes tolerated: callers copy the value out of a raw header).
+        if (intent.expectedUpdated !== undefined) {
+          const expected = intent.expectedUpdated.trim().replace(/^['"]|['"]$/g, "");
+          if (current.updated !== expected) {
+            throw new CaseWriteRefusal(
+              "rewrite_conflict",
+              `rewriteIndex refused: ${identity} moved since you read it ` +
+                `(updated on disk: ${current.updated || "(none)"}; you based the rewrite on: ${expected || "(none)"}). ` +
+                "Re-read the current text, then append a dated supplement (appendTail) or add a piece (addPiece) instead.",
+            );
+          }
+        }
+        // The write window: a whole-body rewrite lands only while the case
+        // is still being worked on. Past the window the 正文 is settled.
+        if (!isWithinWriteWindow(current.updated, nowMs)) {
+          throw new CaseWriteRefusal(
+            "rewrite_window_closed",
+            `rewriteIndex refused: ${identity} is outside its write window ` +
+              `(last write ${current.updated || "unknown"}). The 正文 is settled — ` +
+              "re-read it, then append a dated correction/supplement (appendTail) or open a new piece (addPiece).",
+          );
+        }
         const next = rewriteBody(current, intent.body);
-        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
+        await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso }), batch);
         return { path: indexPath, created: false };
       }
       case "appendTail": {
         if (!current) throw new Error(`case ${identity} does not exist — open it first`);
-        // Throws while 还在写 (drafts are rewritten, not annotated).
+        // Always allowed — past the window the tail is the only in-place
+        // growth; inside the window a dated line is harmless.
         const next = appendTail(current, { date, text: intent.line });
-        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
+        await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso }), batch);
         return { path: indexPath, created: false };
       }
       case "addPiece": {
         if (!current) throw new Error(`case ${identity} does not exist — open it first`);
-        // buildPieceFileName inside createDoc throws on an illegal title.
+        // Always allowed (a NEW file). buildPieceFileName inside createDoc
+        // throws on an illegal title.
         const doc = createDoc({ category, caseName, date, title: intent.title, body: intent.body });
         const piecePath = casePiecePath(category, caseName, doc.fileName);
-        await fsWriteFile(piecePath, serializeCaseDoc(doc), batch);
+        await fsWriteFile(piecePath, serializeCaseDoc({ ...doc, updated: nowIso }), batch);
         return { path: piecePath, created: true };
-      }
-      case "close": {
-        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
-        // Throws when already sealed.
-        const next = closeDoc(current, { date, note: intent.note });
-        await fsWriteFile(indexPath, serializeCaseDoc(next), batch);
-        return { path: indexPath, created: false };
       }
     }
   });
@@ -299,7 +346,7 @@ export function makeCaseReadTool(batch?: WriteBatch) {
     inputSchema: z.object({ ref: z.string() }),
     execute: async ({ ref }: { ref: string }) => {
       const parsed = parseCaseRef(ref);
-      if (!parsed) return `（无法解析的引用 "${ref}" — 应是 分类/case名[/篇名]）`;
+      if (!parsed) return `(unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>])`;
       for (const path of resolveCaseRefPaths(parsed)) {
         try {
           return await fsReadFile(path, batch);
@@ -307,7 +354,7 @@ export function makeCaseReadTool(batch?: WriteBatch) {
           continue;
         }
       }
-      return `（死链：${ref} — 新根与旧根都未找到。先 listTree 看清单。）`;
+      return `(dead link: ${ref} — found under neither the new nor the legacy root; run listTree for the current manifest.)`;
     },
   });
 }
@@ -340,14 +387,13 @@ const caseWriterSchema = z.object({
     .array(
       z.object({
         action: z
-          .enum(["skip", "open", "updateIndex", "appendTail", "addPiece", "close"])
+          .enum(["skip", "open", "updateIndex", "appendTail", "addPiece"])
           .describe(
             "skip: nothing worth writing (a legal, often correct answer). " +
             "open: create a NEW case (must not exist yet). " +
-            "updateIndex: rewrite the body of an EXISTING, still-being-written case (body = the new full understanding). " +
-            "appendTail: one dated supplement line on a SEALED case. " +
-            "addPiece: a dated piece inside the case. " +
-            "close: seal the case (note = the conclusion / where it goes).",
+            "updateIndex: rewrite the body of an EXISTING case still inside its write window (body = the new full understanding). " +
+            "appendTail: ONE dated supplement line — the only in-place growth once the write window has closed. " +
+            "addPiece: a dated piece inside the case (always allowed).",
           ),
         category: z.enum(CASE_CATEGORIES),
         caseName: z.string().describe("The case name — legal: no 4-digit lead, no separators/traversal/edge whitespace."),
@@ -357,8 +403,6 @@ const caseWriterSchema = z.object({
         line: z.string().optional(),
         /** addPiece only — the piece title (date is stamped mechanically). */
         title: z.string().optional(),
-        /** close only — the conclusion / where it goes. */
-        note: z.string().optional(),
       }),
     )
     .max(20),
@@ -373,17 +417,16 @@ A conversation slice just closed. You are shown its content (excerpt) and the ca
 
 Per case you judge touched:
 - The case does not exist and this slice's content deserves a durable home → open (body = the index.md body: what it is, what this slice established).
-- The case exists and is still being written → updateIndex: rewrite the body with the case's CURRENT full understanding (this slice's news merged in). Drafts are rewritten whole, not appended.
-- The case is sealed (closed date in the header) → appendTail: ONE dated line (when it fits in a sentence) or addPiece (when it stands as a piece of its own).
-- A research/question case reached its conclusion → close (note = the conclusion / where it goes).
+- The case exists and is still inside its write window (check the header's updated stamp) → updateIndex: rewrite the body with the case's CURRENT full understanding (this slice's news merged in).
+- The case's write window has closed → appendTail: ONE dated line (when it fits in a sentence) or addPiece (when it stands as a piece of its own).
 - Nothing worth writing → skip. Skipping EVERYTHING is a legal, often correct outcome: restraint is the default, a case is long-term memory, not a chat log.
 
 ## Rules
 
 1. Ground every write in the slice excerpt and what you actually read (readCase). No speculation, no boilerplate.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence slice ids are stamped mechanically.
 3. Names are permanent: a case name is born fixed. Content beyond a case's scope → open a NEW case (and say so in reasoning), never stretch a name.
-4. updateIndex replaces the whole body of a living draft; sealed cases only grow via appendTail/addPiece. Never restate history a case already carries — fold it in silently.
+4. ${DOC_WRITE_WINDOW_RULE} Never restate history a case already carries — fold it in silently.
 
 ## Output
 
@@ -427,7 +470,7 @@ export interface LibrarianPassResult {
 /**
  * The case-writer pass (边界 run ①). The writer judges over the manifest +
  * its own readCase reads which cases the closed slice touched; engineering
- * applies the returned intents through the five ops under the per-case lock.
+ * applies the returned intents through the case write ops under the per-case lock.
  * Never throws.
  */
 export async function runLibrarianPass(
@@ -506,17 +549,13 @@ Report one decision per case as instructed.`;
           break;
         case "appendTail":
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
-          intent = { action: "appendTail", category: op.category, caseName: op.caseName, line: `${op.line.trim()}（证据切片：${closedSliceId}）` };
+          intent = { action: "appendTail", category: op.category, caseName: op.caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
           break;
         case "addPiece":
           if (!op.title?.trim() || !op.body?.trim()) {
             throw new Error("addPiece requires a title and a body");
           }
           intent = { action: "addPiece", category: op.category, caseName: op.caseName, title: op.title.trim(), body: stampEvidence(op.body, closedSliceId) };
-          break;
-        case "close":
-          if (!op.note?.trim()) throw new Error("close requires a note (the conclusion / where it goes)");
-          intent = { action: "close", category: op.category, caseName: op.caseName, note: op.note.trim() };
           break;
       }
       const applied = await applyCaseWriteIntent(intent, date, batch);
@@ -536,7 +575,7 @@ const scribeSchema = z.object({
     .array(
       z.object({
         id: z.string().describe("The marker id this entry answers."),
-        /** The case's new full body (open/updateIndex) or ONE tail line (sealed case). */
+        /** The case's new full body (open/updateIndex) or ONE dated tail line. */
         body: z.string().describe("The prose, grounded in the slice excerpt and the marker note."),
       }),
     )
@@ -552,14 +591,15 @@ You are shown: the slice excerpt, and per marker the marker itself plus the CURR
 
 One entry per marker — the body is:
 - a NEW case's opening body (what it is, what this slice established — tasks state WHAT, the date anchor, background);
-- or, for an EXISTING case still being written, its new full body — the current understanding with this slice's news folded in (rewrite whole, do not append);
-- or, for a SEALED case (closed date in the header), ONE dated supplement line.
+- or, for an EXISTING case still inside its write window (check the header's updated stamp), its new full body — the current understanding with this slice's news folded in (rewrite whole, do not append);
+- or, for a case whose write window has closed, ONE dated supplement line.
 
 ## Rules
 
 1. Ground every entry in the slice excerpt and the marker note. No invention.
-2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates, the updated stamp, and evidence slice ids are stamped mechanically.
 3. Never contradict shown existing text — fold the new fact in with its sense preserved.
+4. ${DOC_WRITE_WINDOW_RULE}
 
 ## Output
 
@@ -642,7 +682,7 @@ export interface ScribePassResult {
 /**
  * The scribe pass: read the slice's agent.md, pick up unprocessed
  * sediment/task markers, write their cases (read-before-write under the
- * per-case lock, via the five ops), and record each processed marker back
+ * per-case lock, via the case write ops), and record each processed marker back
  * into the same agent.md. Never throws.
  */
 export async function runScribePass(input: ScribePassInput): Promise<ScribePassResult> {
@@ -777,14 +817,24 @@ Report one entry per marker as instructed.`;
       if (!target.existed) {
         intent = { action: "open", category, caseName, body: stamped };
       } else {
+        // The write window decides the shape: inside → whole-body rewrite
+        // (with the scribe's pre-read stamp as the optimistic ETag); outside
+        // → one dated tail line. The in-lock guards are the backstop when
+        // the case moved between the pre-read and this write.
         const current = parseCaseDoc(target.currentText ?? "", {
           category,
           caseName,
           fileName: "index.md",
         });
-        intent = current.closed
-          ? { action: "appendTail", category, caseName, line: stamped }
-          : { action: "rewriteIndex", category, caseName, body: stamped };
+        intent = isWithinWriteWindow(current.updated, Date.now())
+          ? {
+              action: "rewriteIndex",
+              category,
+              caseName,
+              body: stamped,
+              expectedUpdated: current.updated,
+            }
+          : { action: "appendTail", category, caseName, line: stamped };
       }
       const applied = await applyCaseWriteIntent(intent, date, batch);
       written.push(applied.path.replace(/^memory\//, ""));

@@ -66,6 +66,10 @@ import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+// Direct module path, not the "@/lib/docs" barrel: this file is reachable
+// from the "use workflow" bundle, and the barrel re-exports case-doc.ts
+// (gray-matter → node:*), which the workflow bundler rejects.
+import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import type { SelfAgent } from "@/lib/evolution/paths";
 import {
   renderDirectionAnalysis,
@@ -350,6 +354,8 @@ You also maintain your colleagues' SOPs — the \`self/<name>/index.md\` documen
 **Self-assessment**: dissatisfaction with your own craft ("three searches this week missed, the order is suspect") lands as DATED PROSE at the tail of the relevant self/ case's index.md — no thresholds, no scores. When you rewrite an SOP, fold or supersede the stale self-assessment lines it answers.
 
 An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim, so keep it tight.
+
+${DOC_WRITE_WINDOW_RULE}
 
 ## Identity head — stable, minimal
 

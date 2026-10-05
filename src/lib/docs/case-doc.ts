@@ -1,39 +1,46 @@
 /**
- * Case document format + the five write-ops (v0.19 §B.3, §B.4, §D.4).
+ * Case document format + the write-ops (v0.19 §B.3, §D.4; v0.21 write window).
  *
  * On-disk shape (`index.md` and pieces are isomorphic):
  *
  *   ---
- *   opened: 2026-09-05      # the ONLY mandatory header field
- *   closed: 2026-10-02      # optional — present = sealed (写完封口), absent = 还在写
- *   ---
+ *   opened: 2026-09-05              # birth date (YYYY-MM-DD) — immutable
+ *   updated: 2026-09-05T13:22:10.000Z   # last-write stamp (ISO) — restamped
+ *   ---                             #   mechanically on EVERY write
  *
  *   正文：一次写完整的完整文本——这份文档当下的全部认识。
  *
  *   —— 尾部 ——
- *   2026-10-02：封口。结论如上；供应商部分另开 research/…。
- *   2026-11-09：文中价格已过时，最新见 …。
+ *   2026-10-02：文中价格已过时，最新见 …。
+ *   2026-11-09：供应商部分另开 research/…。
  *
  * Rules (structure, not suggestion):
- * - Header = two dates, nothing else. `closed` present means sealed; state
- *   is DERIVED from the record (axiom F), never stored as a status field.
+ * - Header = `opened` + `updated`, nothing else. `updated` is a MACHINE
+ *   timestamp (ISO, UTC): the write entry restamps it on every write; the
+ *   model never touches it. It anchors the WRITE WINDOW (see
+ *   write-window.ts): within the window the 正文 may be rewritten whole;
+ *   past it the document grows only by dated tail lines / new pieces.
+ * - `closed` is RETIRED (v0.21): no op produces it and no guard consults
+ *   it — sealing is the window closing, produced by time alone. The READ
+ *   side stays tolerant: a historical `closed:` line parses without error
+ *   (surfaced on the parsed doc for readers) and round-trips verbatim — no
+ *   migration rewrite of historical files.
  * - Same-source rule: a piece's `opened` and the birth date in its name come
  *   from the same variable — implemented by parsing the name and filling
  *   `opened` from it. On parse, a header/date mismatch is a WARNING and the
  *   NAME (identity) wins.
- * - 正文 is written whole, in one pass. While 还在写 it may be rewritten
- *   freely (`rewriteBody`) — drafts are NOT archived (no history mechanism,
- *   §D.4). After sealing, 正文 is frozen byte-for-byte; only the tail grows.
- * - 尾部 = dated supplement lines, one per line, append-only, ONLY after
- *   sealing (`appendTail`). `closeDoc` lands the `closed` date and the
- *   closing tail line in the SAME op (they are born and die together).
+ * - 正文 is written whole, in one pass. Inside the write window it may be
+ *   rewritten freely (`rewriteBody`) — drafts are NOT archived (no history
+ *   mechanism, §D.4). Past the window the 正文 is settled; only the tail
+ *   grows (`appendTail` — always allowed, inside the window too).
+ * - 尾部 = dated supplement lines, one per line, append-only.
  * - Tolerant-parse contract: a broken file always opens — problems become
  *   warnings and unrecognized bytes are preserved verbatim (`preserved`).
  *
- * The five ops are PURE (no I/O). The ops layer is also the only
- * enforcement point for illegal transitions: `rewriteBody` on a sealed doc,
- * `appendTail`/`closeDoc` on a living doc, and any illegal name all throw —
- * rejections are loud, never silent.
+ * The ops are PURE (no I/O, no clock). Illegal NAMES still throw here, loud
+ * and visible; the TIME guards (write window, optimistic `expectedUpdated`
+ * check) live in the write entry (`applyCaseWriteIntent`, librarian.ts),
+ * which owns the fresh-read-inside-the-lock and the wall clock.
  */
 import matter from "gray-matter";
 import { isValidDate } from "./naming";
@@ -66,7 +73,19 @@ export interface CaseDoc {
    * `index.md` it comes from the header.
    */
   opened: string;
-  /** Seal date, or null while 还在写. */
+  /**
+   * Last-write stamp (ISO datetime on new writes; a legacy date-only value
+   * is tolerated), RESOLVED: the header's `updated`, falling back to
+   * `opened` for documents written before the field existed (their last
+   * known write is their birth). "" when neither exists — reads as
+   * out-of-window everywhere.
+   */
+  updated: string;
+  /**
+   * RETIRED (v0.21) — the historical seal date, parse-tolerated and
+   * round-tripped verbatim for old files. Never produced by any op, never
+   * consulted by any guard: sealing is the write window closing.
+   */
   closed: string | null;
   /** 正文 — the complete current text, written whole. */
   body: string;
@@ -92,17 +111,31 @@ function normalizeString(v: unknown): string {
 
 /**
  * Normalize a date header field to a YYYY-MM-DD string, eating every shape
- * YAML can hand us: a `Date` (UNQUOTED `closed: 2026-10-02` parses as one —
- * dropping it would silently read a sealed doc as 还在写), a plain string,
- * or a nested object with a `date` key (the v0.18 closed-block shape).
- * Returns "" when nothing date-like is there; validity is checked by the
- * caller so bad values degrade to warnings, never exceptions.
+ * YAML can hand us: a `Date` (UNQUOTED `opened: 2026-10-02` parses as one),
+ * a plain string, or a nested object with a `date` key (the v0.18
+ * closed-block shape). Returns "" when nothing date-like is there; validity
+ * is checked by the caller so bad values degrade to warnings, never
+ * exceptions.
  */
 function normalizeDateValue(v: unknown): string {
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === "string") return v;
   if (v && typeof v === "object") {
     return normalizeString((v as Record<string, unknown>).date);
+  }
+  return "";
+}
+
+/**
+ * Normalize the `updated` stamp — like normalizeDateValue but PRESERVING the
+ * time of day: an unquoted ISO timestamp arrives as a Date and must not be
+ * truncated to its date (the write window measures minutes).
+ */
+function normalizeStampValue(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string") return v;
+  if (v && typeof v === "object") {
+    return normalizeStampValue((v as Record<string, unknown>).date);
   }
   return "";
 }
@@ -139,7 +172,7 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
   }
 
   const unknownFields = Object.keys(data).filter(
-    (k) => k !== "opened" && k !== "closed" && k !== "status" && k !== "updated",
+    (k) => k !== "opened" && k !== "updated" && k !== "closed" && k !== "status",
   );
   if (unknownFields.length > 0) {
     warnings.push(`忽略未知 header 字段: ${unknownFields.join(", ")}`);
@@ -167,11 +200,22 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
     warnings.push(`opened "${opened}" 不是合法 YYYY-MM-DD 日期`);
   }
 
-  // ── closed: direct date, or the legacy shapes mapped forward ──
-  // `closed` is the single most consequential bit (present = sealed, body
-  // frozen; absent = 还在写), so a parse miss here is a state lie. Accept
-  // Date / string / nested-object shapes; a value that is present but not a
-  // valid date warns and reads as UNSEALED — visible, never a crash.
+  // ── updated: the last-write stamp (ISO on new writes, legacy date-only
+  // tolerated). Absent on every pre-window document — falls back to opened
+  // silently (their last known write is their birth); that is history, not
+  // a problem, so no warning. A present-but-unparseable value warns and
+  // falls back the same way.
+  let updated = normalizeStampValue(data.updated);
+  if (updated && Number.isNaN(new Date(updated).getTime())) {
+    warnings.push(`updated "${updated}" 不是合法时间戳，按 opened 处理`);
+    updated = "";
+  }
+  if (!updated) updated = opened;
+
+  // ── closed (RETIRED, read-tolerant): a historical seal date is parsed and
+  // surfaced verbatim, but nothing consults it. Accept Date / string /
+  // nested-object shapes; a value that is present but not a valid date
+  // warns and reads as absent — visible, never a crash.
   let closed: string | null = null;
   const rawClosed = data.closed;
   if (rawClosed !== undefined && rawClosed !== null && rawClosed !== "") {
@@ -185,27 +229,25 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
       if (isValidDate(d)) {
         closed = d;
       } else {
-        warnings.push(`closed "${d}" 不是合法 YYYY-MM-DD 日期，按还在写处理`);
+        warnings.push(`closed "${d}" 不是合法 YYYY-MM-DD 日期，按无 closed 处理`);
       }
     }
   }
 
-  // Legacy v0.15 three-field header: status (+updated) — mapped per §D.1.
+  // Legacy v0.15 three-field header: status — mapped per §D.1. (The legacy
+  // `updated` needs no mapping: it parses as the first-class stamp above.)
   const legacyStatus = normalizeString(data.status);
-  const legacyUpdated = normalizeString(data.updated);
-  if (legacyStatus || legacyUpdated) {
+  if (legacyStatus) {
+    const legacyUpdated = normalizeString(data.updated);
     if (legacyStatus === "closed" || legacyStatus === "void") {
       if (!closed && legacyUpdated) {
         closed = legacyUpdated;
         warnings.push(
-          `旧版 status: ${legacyStatus} 映射为 closed: ${legacyUpdated}（以 header 日期封口）`,
+          `旧版 status: ${legacyStatus} 映射为 closed: ${legacyUpdated}（历史封口日期，已退役）`,
         );
       }
-    } else if (legacyStatus) {
-      warnings.push(`旧版 status: ${legacyStatus} 已忽略（closed 缺席 = 还在写）`);
-    }
-    if (legacyUpdated) {
-      warnings.push("旧版 updated 字段已忽略（日期记法由正文与尾部承载）");
+    } else {
+      warnings.push(`旧版 status: ${legacyStatus} 已忽略（状态标记已退役）`);
     }
   }
 
@@ -277,6 +319,7 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
     category,
     caseName,
     opened,
+    updated,
     closed,
     body: bodyLines.join("\n").trim(),
     tail,
@@ -288,14 +331,16 @@ export function parseCaseDoc(raw: string, location: CaseDocLocation): CaseDoc {
 // ─── Serialize ──────────────────────────────────────────────────────────────
 
 /**
- * Serialize back to Markdown: the two-date header, the body, the tail
- * (under its marker), and any preserved bytes verbatim at the end. Emits
- * ONLY the new shape — a doc that round-trips here is new-format on disk
- * (legacy bytes in `preserved` excepted: tolerance keeps them readable).
+ * Serialize back to Markdown: the `opened` + `updated` header (a historical
+ * `closed` line round-trips verbatim — read tolerance, never a new seal),
+ * the body, the tail (under its marker), and any preserved bytes verbatim
+ * at the end. Emits ONLY the new shape — a doc that round-trips here is
+ * new-format on disk (legacy bytes in `preserved` excepted).
  */
 export function serializeCaseDoc(doc: CaseDoc): string {
   const fm: Record<string, unknown> = {};
   if (doc.opened) fm.opened = doc.opened;
+  if (doc.updated) fm.updated = doc.updated;
   if (doc.closed) fm.closed = doc.closed;
 
   const parts: string[] = [doc.body];
@@ -308,7 +353,8 @@ export function serializeCaseDoc(doc: CaseDoc): string {
   return matter.stringify(parts.filter((p) => p.trim() !== "").join("\n\n") + "\n", fm);
 }
 
-// ─── The five write-ops (pure; illegal transitions throw) ───────────────────
+// ─── The write-ops (pure; illegal names throw — time guards live in the
+//     write entry, which owns the clock and the locked fresh read) ──────────
 
 function assertDate(date: string, field: string): void {
   if (!isValidDate(date)) {
@@ -328,6 +374,7 @@ function baseDoc(
     category: input.category,
     caseName: input.caseName,
     opened,
+    updated: opened,
     closed: null,
     body: "",
     tail: [],
@@ -340,7 +387,8 @@ function baseDoc(
  * createCase — seed a case's `index.md` (the one mandatory document). The
  * case directory itself is created by the writer layer; this op produces
  * the document with its birth date. `opened` is REQUIRED (a case name
- * carries no date — the header is the only birth record).
+ * carries no date — the header is the only birth record). `updated` starts
+ * at the birth date; the write entry restamps it to the write instant.
  */
 export function createCase(input: {
   category: CaseCategory;
@@ -373,53 +421,21 @@ export function createDoc(input: {
 }
 
 /**
- * rewriteBody — replace the 正文 wholesale. Only while 还在写 (draft
- * semantics: the old draft is NOT archived, §D.4). Throws on a sealed doc.
+ * rewriteBody — replace the 正文 wholesale (draft semantics: the old draft
+ * is NOT archived, §D.4). The op itself is unconditional; the WRITE WINDOW
+ * guard (only within the window may a rewrite land) is enforced by the
+ * write entry, which owns the clock.
  */
 export function rewriteBody(doc: CaseDoc, body: string): CaseDoc {
-  if (doc.closed) {
-    throw new Error(
-      `rewriteBody refused: ${doc.caseName}/${doc.fileName} is sealed (closed ${doc.closed}) — sealed 正文 is frozen; use appendTail`,
-    );
-  }
   return { ...doc, body: body.trim() };
 }
 
 /**
- * closeDoc — seal the document: header gains `closed: <date>` AND the tail
- * gains the closing line IN THE SAME OP (the block and the record are born
- * together, axiom F). Only while 还在写; `note` is the closing/去向 prose.
- */
-export function closeDoc(
-  doc: CaseDoc,
-  close: { date: string; note: string },
-): CaseDoc {
-  if (doc.closed) {
-    throw new Error(
-      `closeDoc refused: ${doc.caseName}/${doc.fileName} is already sealed (closed ${doc.closed})`,
-    );
-  }
-  assertDate(close.date, "close.date");
-  const note = close.note.trim();
-  if (!note) throw new Error("closeDoc requires a closing note (去向说明)");
-  return {
-    ...doc,
-    closed: close.date,
-    tail: [...doc.tail, { date: close.date, text: note }],
-  };
-}
-
-/**
- * appendTail — add one dated supplement line. Only on a SEALED document
- * (sealed 正文 is frozen; the tail is the only writable region). Throws
- * while 还在写 (drafts are rewritten via `rewriteBody`, not annotated).
+ * appendTail — add one dated supplement line. Always allowed: past the
+ * write window the tail is the document's only in-place growth, and inside
+ * the window an extra dated line is harmless.
  */
 export function appendTail(doc: CaseDoc, line: { date: string; text: string }): CaseDoc {
-  if (!doc.closed) {
-    throw new Error(
-      `appendTail refused: ${doc.caseName}/${doc.fileName} is still being written (no closed date) — rewrite the body or closeDoc first`,
-    );
-  }
   assertDate(line.date, "line.date");
   const text = line.text.trim();
   if (!text) throw new Error("appendTail requires non-empty text");

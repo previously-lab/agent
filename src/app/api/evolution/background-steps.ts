@@ -104,8 +104,8 @@ export async function executeQuestionRun(
     return { ran: result.ran, written: result.written };
   }
 
-  // §A.3.3 notification: the payload is a REAL task case whose closed/tail
-  // closing line is the completion credential; the statement is declarative
+  // §A.3.3 notification: the payload is a REAL task case whose dated tail
+  // lines are the completion credential; the statement is declarative
   // only (a mechanical template — no promises are structurally possible).
   // The next turn's reply segment picks up today's tail lines and states them.
   const statement =
@@ -130,32 +130,19 @@ export async function executeQuestionRun(
   try {
     const applied = await applyCaseWriteIntent(
       {
-        action: "close",
+        action: "appendTail",
         category: NOTICE_CASE.category,
         caseName: NOTICE_CASE.caseName,
-        note: statement,
+        line: statement,
       },
       date,
     );
     noticePath = applied.path;
-  } catch {
-    try {
-      const applied = await applyCaseWriteIntent(
-        {
-          action: "appendTail",
-          category: NOTICE_CASE.category,
-          caseName: NOTICE_CASE.caseName,
-          line: statement,
-        },
-        date,
-      );
-      noticePath = applied.path;
-    } catch (e) {
-      console.warn(
-        "[QuestionRun] completion notice failed:",
-        e instanceof Error ? e.message : e,
-      );
-    }
+  } catch (e) {
+    console.warn(
+      "[QuestionRun] completion notice failed:",
+      e instanceof Error ? e.message : e,
+    );
   }
   if (noticePath) {
     console.log(`[QuestionRun] completion notice → ${noticePath}`);

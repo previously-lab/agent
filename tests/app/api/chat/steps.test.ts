@@ -515,29 +515,29 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
   });
 
   it("§A.3.3: a tasks/ tail line dated today becomes the dueTasksBlock; yesterday's does not", async () => {
-    const { createCase, closeDoc, serializeCaseDoc } = await import("@/lib/docs");
-    const closedToday = closeDoc(
+    const { createCase, appendTail, serializeCaseDoc } = await import("@/lib/docs");
+    const todayCase = appendTail(
       createCase({
         category: "tasks",
         caseName: "后台回复",
         opened: "2026-07-14",
         body: "后台流的完成通知册。",
       }),
-      { date: "2026-07-14", note: "查了：手机话题 —— 结果已写入 research/手机话题演变/index.md。" },
+      { date: "2026-07-14", text: "查了：手机话题 —— 结果已写入 research/手机话题演变/index.md。" },
     );
     fakeDisk.taskDirs.add("后台回复");
-    fakeDisk.files.set("memory/tasks/后台回复/index.md", serializeCaseDoc(closedToday));
-    const closedYesterday = closeDoc(
+    fakeDisk.files.set("memory/tasks/后台回复/index.md", serializeCaseDoc(todayCase));
+    const yesterdayCase = appendTail(
       createCase({
         category: "tasks",
         caseName: "旧账",
         opened: "2026-07-10",
         body: "旧任务。",
       }),
-      { date: "2026-07-13", note: "昨天的结案行不该再陈述。" },
+      { date: "2026-07-13", text: "昨天的结案行不该再陈述。" },
     );
     fakeDisk.taskDirs.add("旧账");
-    fakeDisk.files.set("memory/tasks/旧账/index.md", serializeCaseDoc(closedYesterday));
+    fakeDisk.files.set("memory/tasks/旧账/index.md", serializeCaseDoc(yesterdayCase));
 
     const hk = await housekeeping(makeInput("hi"));
 

@@ -16,6 +16,10 @@ import { tool } from "ai";
 import { z } from "zod";
 import { isClientMode } from "@/lib/mode";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+// Direct module path, not the "@/lib/docs" barrel: this file is reachable
+// from the "use workflow" bundle, and the barrel re-exports case-doc.ts
+// (gray-matter → node:*), which the workflow bundler rejects.
+import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import {
   readSliceExecute,
   readAgentTimelineExecute,
@@ -212,7 +216,7 @@ export const conceptTools = {
 //     path. No ranking, no relevance score — read the list.
 //   - readDoc: point-read a case document by reference — `<category>/<case>`
 //     → the case's index.md; `<category>/<case>/<piece>` → one dated piece.
-//     Judge freshness from the opened/closed dates in the header.
+//     Judge freshness from the opened date and the updated stamp in the header.
 //   - readSlice: point-read the original conversation record — the ONLY
 //     source for specific facts (numbers, dates, quotes, promises): read
 //     FIRST, then answer. `range` fetches only the turns you need.
@@ -261,7 +265,8 @@ export const chatTools = {
       "`<category>/<case>` (e.g. 'research/手机调研') → that case's index.md — what " +
       "it is, where it stands, which pieces hang in it; `<category>/<case>/<piece>` → " +
       "one dated piece. Case docs are small files — the whole file is " +
-      "returned: the opened/closed dates (closed = sealed, the body is frozen), the " +
+      "returned: the opened date and the updated stamp (the last write — " +
+      "historical docs may still carry a retired closed date, inert), the " +
       "body, and the dated tail lines. Judge freshness yourself from those " +
       "dates — contradictions between documents are time, read them " +
       "newest-first. Grounding rule applies: a document may summarize, but " +
@@ -306,9 +311,10 @@ export const chatTools = {
       "exists, pass pieceTitle to ADD one dated piece (the date prefix is " +
       "stamped mechanically — pass the bare title); omitting pieceTitle on an " +
       "existing case is refused — this tool never rewrites an index. What you " +
-      "write is exactly what lands: no machine fields are added. If the piece " +
-      "should say where it came from (which conversation, when), say it in " +
-      "prose." +
+      "write is exactly what lands: no machine fields are added (dates and " +
+      "the updated stamp are stamped mechanically). If the piece should say " +
+      "where it came from (which conversation, when), say it in prose. " +
+      DOC_WRITE_WINDOW_RULE +
       `\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
       category: z
