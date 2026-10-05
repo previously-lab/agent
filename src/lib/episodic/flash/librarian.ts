@@ -108,6 +108,22 @@ function stampEvidence(body: string, sliceId: string): string {
   return `${body.trim()}\n\n(refs: ${sliceId})`;
 }
 
+/** Does this hypothesis body carry a falsification condition? (§B.6) */
+export function hasFalsificationCondition(body: string): boolean {
+  return body.includes("证伪") || /falsif/i.test(body);
+}
+
+/**
+ * A tail line is ONE line: whitespace runs collapse so multi-line prose can
+ * never reach the dated-tail serialization (a multi-line line would have its
+ * extra lines dropped into preserved on re-parse, silently degrading the
+ * document). `collapsed` reports whether the text actually changed.
+ */
+export function normalizeTailLine(line: string): { line: string; collapsed: boolean } {
+  const collapsedLine = line.replace(/\s+/g, " ").trim();
+  return { line: collapsedLine, collapsed: collapsedLine !== line };
+}
+
 // ─── Markers: the agent.md mailbox (pure parsing, §A.3.1 — unchanged) ───────
 
 export const DOC_MARKER_PREFIX = "[doc-marker]";
@@ -211,6 +227,11 @@ export function extractProcessedMarkerIds(agentMd: string, prefix: string): Set<
  *   window rule alone decides.
  * - `appendTail` and `addPiece` are always allowed; `open` creates a new
  *   file. `close` is RETIRED — sealing is the window closing, nobody's act.
+ * - `open` refuses a `hypotheses` case whose body carries no falsification
+ *   condition (§B.6) — the entry guard owns the check so every writer
+ *   (field, HQ, the passes) meets the same bar.
+ * - `appendTail` normalizes its line to ONE line (whitespace collapse) and
+ *   reports the collapse in the outcome's warnings.
  *
  * EVERY write restamps `updated` to the write instant (ISO) — the model
  * never touches the stamp.
@@ -234,6 +255,9 @@ export interface CaseWriteOutcome {
   path: string;
   /** True when a new file was created (open / addPiece). */
   created: boolean;
+  /** Non-fatal write-time adjustments the caller may surface — e.g. a tail
+   *  line whose line breaks were collapsed to keep it one line. */
+  warnings?: string[];
 }
 
 /**
@@ -279,6 +303,12 @@ export async function applyCaseWriteIntent(
         if (current) {
           throw new Error(`case ${identity} already exists — use updateIndex / appendTail / addPiece`);
         }
+        if (category === "hypotheses" && !hasFalsificationCondition(intent.body)) {
+          throw new Error(
+            `hypotheses case refused: ${identity} carries no falsification condition — ` +
+              "state it in the body as 'falsify if: …' (证伪条件: …)",
+          );
+        }
         const doc = createCase({ category, caseName, opened: date, body: intent.body });
         await fsWriteFile(indexPath, serializeCaseDoc({ ...doc, updated: nowIso }), batch);
         return { path: indexPath, created: true };
@@ -315,10 +345,22 @@ export async function applyCaseWriteIntent(
       case "appendTail": {
         if (!current) throw new Error(`case ${identity} does not exist — open it first`);
         // Always allowed — past the window the tail is the only in-place
-        // growth; inside the window a dated line is harmless.
-        const next = appendTail(current, { date, text: intent.line });
+        // growth; inside the window a dated line is harmless. The line is
+        // normalized to ONE line: a multi-line line would corrupt the
+        // dated-tail serialization on the next parse.
+        const { line, collapsed } = normalizeTailLine(intent.line);
+        if (!line) {
+          throw new Error(`appendTail refused: ${identity} — the line is empty once flattened to one line`);
+        }
+        const next = appendTail(current, { date, text: line });
         await fsWriteFile(indexPath, serializeCaseDoc({ ...next, updated: nowIso }), batch);
-        return { path: indexPath, created: false };
+        return {
+          path: indexPath,
+          created: false,
+          ...(collapsed
+            ? { warnings: [`tail line for ${identity} contained line breaks — collapsed to one line`] }
+            : {}),
+        };
       }
       case "addPiece": {
         if (!current) throw new Error(`case ${identity} does not exist — open it first`);

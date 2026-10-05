@@ -286,6 +286,61 @@ describe("applyCaseWriteIntent", () => {
     ).rejects.toThrow(/illegal case name/);
     expect(io.files.size).toBe(0);
   });
+
+  it("open refuses a hypotheses case whose body carries no falsification condition (§B.6)", async () => {
+    await expect(
+      applyCaseWriteIntent(
+        { action: "open", category: "hypotheses", caseName: "用户偏好小屏", body: "猜测：用户偏好小屏手机。" },
+        DATE,
+      ),
+    ).rejects.toThrow(/no falsification condition/);
+    expect(io.files.size).toBe(0); // refused before anything touches disk
+    // The same test the research pass uses: 证伪 / falsif.
+    await applyCaseWriteIntent(
+      {
+        action: "open",
+        category: "hypotheses",
+        caseName: "用户偏好小屏",
+        body: "猜测：用户偏好小屏手机。证伪条件：用户下次主动选择 6.7 寸以上机型。",
+      },
+      DATE,
+    );
+    expect(io.files.get("memory/hypotheses/用户偏好小屏/index.md")).toContain("证伪条件");
+    // Other categories open freely — the gate is hypotheses-only.
+    await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "普通调研", body: "没有证伪字样也行。" },
+      DATE,
+    );
+  });
+
+  it("appendTail collapses a multi-line line to ONE line and records the collapse as a warning", async () => {
+    io.files.set(
+      "memory/research/旧案/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的正文。\n",
+    );
+    const out = await applyCaseWriteIntent(
+      { action: "appendTail", category: "research", caseName: "旧案", line: "第一行\n第二行  缩进" },
+      DATE,
+    );
+    const raw = io.files.get("memory/research/旧案/index.md")!;
+    expect(raw).toContain("第一行 第二行 缩进");
+    expect(raw).not.toContain("第一行\n第二行");
+    // The collapse is recorded, not silent.
+    expect(out.warnings?.join(" ")).toContain("collapsed to one line");
+    // An already-one-line line lands clean, with no warning.
+    const clean = await applyCaseWriteIntent(
+      { action: "appendTail", category: "research", caseName: "旧案", line: "本来就一行。" },
+      DATE,
+    );
+    expect(clean.warnings).toBeUndefined();
+    // A whitespace-only line has nothing to append once flattened.
+    await expect(
+      applyCaseWriteIntent(
+        { action: "appendTail", category: "research", caseName: "旧案", line: "  \n  " },
+        DATE,
+      ),
+    ).rejects.toThrow(/empty once flattened/);
+  });
 });
 
 // ─── The case-writer pass (边界 run ①) ─────────────────────────────────────
@@ -481,6 +536,53 @@ describe("runScribePass — case model, no strands", () => {
     expect(raw).toContain(`(refs: ${SLICE_ID})`);
     // mailbox bookkeeping — the marker is recorded so it never double-writes
     expect(io.files.get(AGENT_MD)).toContain(SCRIBE_RECORD_PREFIX);
+  });
+
+  it("an OUT-OF-WINDOW entry with a multi-line body lands as ONE collapsed tail line (never corrupts the tail)", async () => {
+    io.files.set(
+      AGENT_MD,
+      [
+        `${DOC_MARKER_PREFIX} {"v":1,"id":"m3","kind":"sediment","title":"封case","note":"","topics":[]}`,
+      ].join("\n"),
+    );
+    io.files.set(
+      "memory/research/封case/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-05T00:00:00.000Z'\n---\n\n封口的正文。\n\n—— 尾部 ——\n2026-08-05：结案。\n",
+    );
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "scribeOutput",
+          input: {
+            // A multi-line body (the failure mode: extra lines used to drop
+            // into preserved on re-parse).
+            entries: [{ id: "m3", body: "第一行\n第二行\n\n第四行" }],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
+    const result = await runScribePass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      date: DATE,
+    });
+    expect(result.written).toEqual(["research/封case/index.md"]);
+    const sealed = io.files.get("memory/research/封case/index.md")!;
+    // The whole stamped entry collapsed into ONE dated line.
+    expect(sealed).toContain(`2026-08-09：第一行 第二行 第四行 (refs: ${SLICE_ID})`);
+    // A re-parse finds a clean tail — nothing degrades into preserved.
+    const reparsed = parseCaseDoc(sealed, {
+      category: "research",
+      caseName: "封case",
+      fileName: "index.md",
+    });
+    expect(reparsed.warnings).toEqual([]);
+    expect(reparsed.tail.map((t) => t.text)).toEqual([
+      "结案。",
+      `第一行 第二行 第四行 (refs: ${SLICE_ID})`,
+    ]);
   });
 
   it("an entity sediment maps to its case category (object → things/)", async () => {

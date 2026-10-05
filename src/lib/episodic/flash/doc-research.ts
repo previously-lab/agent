@@ -45,6 +45,7 @@ import {
   applyCaseWriteIntent,
   extractDocMarkers,
   extractProcessedMarkerIds,
+  hasFalsificationCondition,
   makeCaseReadTool,
   renderManifest,
   type CaseWriterManifest,
@@ -102,11 +103,6 @@ Writing nothing is a legal outcome — the record may simply be too thin. A ques
 Call \`docResearchOutput\` with your writes (or empty) + reasoning.
 
 ${DOC_HOUSE_STYLE}`);
-
-/** Does this hypothesis body carry a falsification condition? (§B.6) */
-function hasFalsificationCondition(body: string): boolean {
-  return body.includes("证伪") || /falsif/i.test(body);
-}
 
 export interface DocResearchPassInput {
   model: ModelConfig;
