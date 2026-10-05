@@ -67,8 +67,9 @@ export function deskPaperModel(
 
 /** Pages a column container must hold at minimum: the natural content height
  *  over the page height, rounded up. Break-avoid rules can only push content
- *  LATER (never earlier), so this is a true lower bound — the layout loop in
- *  desk-field grows from here one column at a time. */
+ *  LATER (never earlier), so this is a true lower bound; the layout loop in
+ *  desk-field reads the exact count off the column overflow and widens to
+ *  it. */
 export function pageCountLowerBound(
   naturalH: number,
   pageH: number,

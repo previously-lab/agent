@@ -1,21 +1,22 @@
 "use client";
 
 /**
- * The document library column (v0.23) — the pane's permanent three-level
- * filter: category → case → piece. The browsing tree moved OUT of the
- * retired modal (DocShelfDialog) into this page column; the row components
- * are the dialog's own, moved with their data contracts intact (getCaseShelf
- * / getCaseDetail, one server-action round trip per open, the shelf's own
- * rhythm).
+ * The document library tree (v0.23; panel content since v0.24) — the
+ * three-level filter: category → case → piece. The browsing tree moved OUT
+ * of the retired modal (DocShelfDialog) into the reader's left column, and
+ * the column moved into the floating LibraryControl's panel — the row
+ * components are the dialog's own, moved with their data contracts intact
+ * (getCaseShelf / getCaseDetail, one server-action round trip per open, the
+ * shelf's own rhythm).
  *
- * THE TERMINAL ACTION NEVER READS INSIDE THE COLUMN. A case opens its own
+ * THE TERMINAL ACTION NEVER READS INSIDE THE TREE. A case opens its own
  * `index.md` on the desk — a case with NO pieces is finally readable, the
  * v0.22 gap where only pieces could reach the tabletop. A piece opens that
  * piece, cited by its stem (no `.md` — the ref names a document by
  * identity, case-refs.ts tolerates the suffix anyway). Reading lives on
- * the paper; the column only filters.
+ * the paper; the tree only filters.
  *
- * The ACTIVE DOCUMENT is whatever `deskDoc` currently names — the column
+ * The ACTIVE DOCUMENT is whatever `deskDoc` currently names — the tree
  * holds no selection copy, so Escape (put the document back) clears every
  * highlight by itself. The expanded case is local browsing state and stays
  * put when the paper closes.
