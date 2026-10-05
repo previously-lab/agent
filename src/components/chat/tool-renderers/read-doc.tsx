@@ -8,6 +8,7 @@ import { ToolLayout } from "../tool-layout";
 interface ReadDocOutput {
   path?: string;
   opened?: string;
+  updated?: string;
   closed?: string | null;
   content?: string;
   warnings?: string[];
@@ -31,9 +32,9 @@ function refLabel(input: { ref?: string } | undefined, output: ReadDocOutput | u
 /**
  * readDoc renderer — two-segment case-document point-read (v0.19 §B.2).
  * The summary is the reference (identity); the expanded view shows the
- * opened/closed dates (closed = sealed — the freshness material the reader
- * judges by eye), the full document text, and the dead-link error when the
- * reference resolved nowhere.
+ * opened date and the updated stamp (v0.21 — the freshness material the
+ * reader judges by eye), the full document text, and the dead-link error
+ * when the reference resolved nowhere.
  */
 export function ReadDocRenderer({ toolName: _toolName, input, output, state }: ReadDocRendererProps) {
   const t = useTranslations("chat.tool");
@@ -48,12 +49,10 @@ export function ReadDocRenderer({ toolName: _toolName, input, output, state }: R
     <p className="text-xs leading-relaxed text-muted-foreground">{error}</p>
   ) : output?.content ? (
     <div className="space-y-2">
-      {(output.opened || output.closed !== undefined) && (
+      {(output.opened || output.updated) && (
         <p className="font-mono text-xs text-muted-foreground">
           opened: {output.opened || "?"}
-          {output.closed
-            ? ` · closed: ${output.closed}（sealed）`
-            : " · 还在写"}
+          {output.updated ? ` · updated: ${output.updated}` : ""}
         </p>
       )}
       <pre className="font-mono text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">

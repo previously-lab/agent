@@ -544,7 +544,11 @@ export interface ReadCaseDocSuccess {
   path: string;
   /** Birth date (piece: from the name, same-source rule). */
   opened: string;
-  /** Seal date, or null while 还在写. */
+  /** Last-write stamp (ISO, UTC) — the write window's anchor and the
+   *  reader's freshness material; a pre-window file resolves to its birth. */
+  updated: string;
+  /** RETIRED (v0.21) — a historical seal date on old files, inert: kept so
+   *  the reader sees what the file says, never consulted for state. */
   closed: string | null;
   /** The full raw file text — case docs are small files, read whole. */
   content: string;
@@ -610,6 +614,7 @@ export async function readDocExecute(
       ref: parsed,
       path,
       opened: doc.opened,
+      updated: doc.updated,
       closed: doc.closed,
       content: raw,
       warnings: doc.warnings,
