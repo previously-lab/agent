@@ -11,10 +11,16 @@ export default defineConfig({
     // which vitest is not meant to touch), so a run that should take eight
     // seconds takes four minutes and reports failures from branches that are
     // not this one.
+    // `.next-probe/**` / `.next-e2e/**` are the NEXT_DIST_DIR litter of the
+    // dev-smoke / e2e gates — while they exist they carry compiled dependency
+    // test files (e.g. @vercel/oidc) that the root-anchored `node_modules/**`
+    // above does not catch.
     exclude: [
       "tests/e2e/**",
       "node_modules/**",
       ".next/**",
+      ".next-probe/**",
+      ".next-e2e/**",
       "dist-kernel/**",
       ".claude/**",
     ],
