@@ -12,11 +12,11 @@ import {
   clampPage,
   deskPaperModel,
   pageCountLowerBound,
-  pageForShellDepth,
+  pageForShellSlot,
   panelModeForDeskOpen,
   recessIntensityFor,
   SHELL_COUNT,
-  shellOffsetForDepth,
+  shellOffsetForSlot,
 } from "@/components/desk/desk-model";
 import type { CaseDocContent } from "@/lib/episodic/actions";
 
@@ -154,39 +154,39 @@ describe("clampPage (v0.24)", () => {
   });
 });
 
-describe("pageForShellDepth — the deck invariant (v0.24)", () => {
-  it("top carries the current page, under-top the next, the bottom the previous", () => {
-    // [k-1][blank][blank][k+1][k] for k = 3 of 10, SHELL_COUNT = 5
-    expect(pageForShellDepth(3, 10, 4, SHELL_COUNT)).toBe(3);
-    expect(pageForShellDepth(3, 10, 3, SHELL_COUNT)).toBe(4);
-    expect(pageForShellDepth(3, 10, 0, SHELL_COUNT)).toBe(2);
-    expect(pageForShellDepth(3, 10, 1, SHELL_COUNT)).toBeNull();
-    expect(pageForShellDepth(3, 10, 2, SHELL_COUNT)).toBeNull();
+describe("pageForShellSlot — the deck invariant (v0.24)", () => {
+  it("top carries the current page, the second the next, the bottom the previous", () => {
+    // [k][k+1][blank][blank][k-1] for k = 3 of 10, SHELL_COUNT = 5
+    expect(pageForShellSlot(3, 10, 0, SHELL_COUNT)).toBe(3);
+    expect(pageForShellSlot(3, 10, 1, SHELL_COUNT)).toBe(4);
+    expect(pageForShellSlot(3, 10, 4, SHELL_COUNT)).toBe(2);
+    expect(pageForShellSlot(3, 10, 2, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(3, 10, 3, SHELL_COUNT)).toBeNull();
   });
 
   it("clamps the current page into range before deriving the neighbours", () => {
     // A resize shrank the document to 2 pages while the reader sat on 5.
-    expect(pageForShellDepth(5, 2, 4, SHELL_COUNT)).toBe(2);
-    expect(pageForShellDepth(5, 2, 3, SHELL_COUNT)).toBeNull();
-    expect(pageForShellDepth(5, 2, 0, SHELL_COUNT)).toBe(1);
+    expect(pageForShellSlot(5, 2, 0, SHELL_COUNT)).toBe(2);
+    expect(pageForShellSlot(5, 2, 1, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(5, 2, 4, SHELL_COUNT)).toBe(1);
   });
 
   it("page 1 has no previous; the last page has no next", () => {
-    expect(pageForShellDepth(1, 10, 0, SHELL_COUNT)).toBeNull();
-    expect(pageForShellDepth(10, 10, 3, SHELL_COUNT)).toBeNull();
-    expect(pageForShellDepth(1, 1, 3, SHELL_COUNT)).toBeNull();
-    expect(pageForShellDepth(1, 1, 0, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(1, 10, 4, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(10, 10, 1, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(1, 1, 1, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(1, 1, 4, SHELL_COUNT)).toBeNull();
   });
 });
 
-describe("shellOffsetForDepth — the peek cascade (v0.24)", () => {
-  it("the top sheet sits at (0,0,0°); every sheet beneath slips down-right cumulatively", () => {
-    expect(shellOffsetForDepth(SHELL_COUNT - 1)).toEqual({ x: 0, y: 0, r: 0 });
-    expect(shellOffsetForDepth(0)).toEqual({ x: 20, y: 16, r: 1.4 });
-    expect(shellOffsetForDepth(3)).toEqual({ x: 5, y: 4, r: 0.35 });
+describe("shellOffsetForSlot — the peek cascade (v0.24)", () => {
+  it("the top sheet sits at (0,0,0°); every slot beneath slips down-right cumulatively", () => {
+    expect(shellOffsetForSlot(0)).toEqual({ x: 0, y: 0, r: 0 });
+    expect(shellOffsetForSlot(4)).toEqual({ x: 20, y: 16, r: 1.4 });
+    expect(shellOffsetForSlot(1)).toEqual({ x: 5, y: 4, r: 0.35 });
   });
 
   it("never goes negative above the top (a single sheet stacks at zero)", () => {
-    expect(shellOffsetForDepth(SHELL_COUNT)).toEqual({ x: 0, y: 0, r: 0 });
+    expect(shellOffsetForSlot(-1)).toEqual({ x: 0, y: 0, r: 0 });
   });
 });

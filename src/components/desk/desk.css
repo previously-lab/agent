@@ -1,28 +1,41 @@
 /*
- * Document desk — the paged paper (v0.24). The sheet is now an A4-proportioned
- * PAGE of a paginated document: the markdown flows through CSS multi-column
- * layout inside a fixed-height 版心, one column per page, and a stack of
- * paper shells (the card field's stacked-papers look) carries the current,
- * next, and previous pages. Tailwind owns the utilities on the elements
- * (paper tokens, contact shadow); the print grammar — sizes, measure, indent,
- * margins, hairlines, the stack geometry, the flip — lives here as real CSS.
- * Ink discipline: everything flat ink; the recess lives on exactly two small
- * strings (the header date and the page number, §12.1).
+ * Document desk — the paged paper (v0.24, shuffle + print scale revisions).
+ * The sheet is an A4-proportioned PAGE of a paginated document: the markdown
+ * flows through CSS multi-column layout inside a fixed-height 版心, one
+ * column per page, and a stack of paper slots (the card field's
+ * stacked-papers look) carries the current, next, and previous pages.
  *
- * The transform/animation values that depend on measured state arrive as CSS
- * variables written from JS (--sx/--sy/--sr per shell, --desk-pages-w,
- * --desk-page-w, --desk-page-i, --desk-page-h); nothing here is inline.
+ * PRINT SCALE. The sheet's typography is expressed in millimetres via one
+ * variable, --desk-mm (the sheet height ÷ 297), so the type-to-paper ratio
+ * is A4-true at every sheet size: a 547×774 sheet IS a 210×297mm page at
+ * ≈2.6px/mm, the 4mm body ≈ 11pt, the 25mm side margins leave a 160mm text
+ * block — exactly what a printed A4 page proportions. §10's older absolute
+ * sizes (15–16px body, 3.5em margins) are superseded by this scale (see
+ * doc/design/v0.24-paged-reader.md).
+ *
+ * THE TURN IS A SHUFFLE, NOT A FLIP (user ruling): the top sheet lifts off
+ * the deck, travels, and is put at the very back — no rotation anywhere.
+ * Only the traveling sheet ever changes transform; the sheets that stay put
+ * hold still while it leaves, then the deck closes rank beneath it during
+ * the landing beat, landing exactly on the resting offsets. transform/
+ * box-shadow/z-index only — the compositor owns the beat; the desk's frame
+ * loop is untouched.
+ *
+ * The transform/animation values that depend on state arrive as CSS
+ * variables written from JS (--sx/--sy/--sr/--sz per slot, --from-* for the
+ * participants, --desk-pages-w, --desk-page-w, --desk-page-i); nothing here
+ * is inline.
  */
 
-/* ── The stack: the A4 sizing element. The sheet's height drives its width
-   (pane-width clamp inside the min); the aspect ratio is A4's. The entrance
-   beat writes opacity per frame from the choreography's progress, so the
-   value here is only the state before the first frame. ──────────────── */
+/* ── The stack: the A4 sizing element, and the source of the print millimetre.
+   The sheet's height drives its width (pane-width clamp inside the min); the
+   aspect ratio is A4's. The entrance beat writes opacity per frame from the
+   choreography's progress. ─────────────────────────────────────────── */
 .desk-stack {
+  --desk-mm: calc(min(86vh, calc((100vw - 3rem) * 297 / 210)) / 297);
   position: relative;
   height: min(86vh, calc((100vw - 3rem) * 297 / 210));
   aspect-ratio: 210 / 297;
-  perspective: 2000px;
   opacity: 0;
   /* §12.2 — the ONLY dynamic modulation: pointermove rewrites this locally
      scoped intensity (default 1, bounded 0.7–1.3 by recessIntensityFor);
@@ -30,18 +43,17 @@
   --recess-i: 1;
 }
 
-/* ── A shell: one sheet's slot in the deck. Its rest pose comes from its
-   depth as --sx/--sy/--sr (shellOffsetForDepth) and transitions with the
-   ring shift on every flip. preserve-3d lets the flip animation inside
-   use the stack's perspective; the shells themselves paint in DOM order
-   (the container is a flat context), so no sheet ever pops above the
-   flying one except via --flying. ─────────────────────────────────── */
+/* ── A slot: one sheet's seat in the deck. Its pose comes from its slot as
+   --sx/--sy/--sr (shellOffsetForSlot) and its paint order from --sz; both
+   are static for the slot's whole life — a sheet only ever moves inside
+   the two turn animations below, never by a transition, so a settle can
+   never flash: at landing the animations' end values already equal the
+   resting pose. ─────────────────────────────────────────────────────── */
 .desk-shell {
   position: absolute;
   inset: 0;
   transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
-  transition: transform 480ms cubic-bezier(0.65, 0, 0.35, 1);
-  transform-style: preserve-3d;
+  z-index: var(--sz, 1);
   pointer-events: none;
 }
 
@@ -49,41 +61,103 @@
   pointer-events: auto;
 }
 
-.desk-shell--flying {
-  z-index: 6;
+/* ── The turn (v0.24 shuffle): the traveling sheet's gesture. It lifts off
+   (a small up/outward move with a slight scale, its contact shadow
+   deepening), arcs away, and is put at the very back — for "next" that
+   means sliding UNDER the deck two-thirds through (the z-index steps down
+   once, while the overlap region is blank paper, so the tuck reads as the
+   deck closing over it); for "prev" it travels OVER the deck and lands on
+   top. The deck block holds still for the leave, then closes rank in the
+   landing beat (desk-close-rank, delayed so the two gestures read as one).
+   Duration matches TURN_MS in desk-model.ts. ─────────────────────────── */
+.desk-shell--travel-next {
+  --lift-x: 48px;
+  --lift-y: -72px;
+  --lift-r: 2deg;
+  --arc-x: 84px;
+  --arc-y: -16px;
+  animation: desk-travel 480ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
-/* ── The flip: the whole rigid sheet turns over its centre line. Two faces
-   (front content / blank paper back, each backface-hidden) so the second
-   half of the flight shows paper, never mirrored text. transform/opacity
-   only — the compositor owns this, the desk's frame loop is untouched.
-   The duration matches FLIP_MS in desk-model.ts. ───────────────────── */
-.desk-flip {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
+.desk-shell--travel-prev {
+  --lift-x: 28px;
+  --lift-y: -72px;
+  --lift-r: -2deg;
+  --arc-x: 30px;
+  --arc-y: -56px;
+  animation: desk-travel 480ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
-.desk-shell--flying .desk-flip {
-  animation: desk-flip-turn 480ms cubic-bezier(0.65, 0, 0.35, 1) both;
+.desk-shell--travel-next .desk-paper,
+.desk-shell--travel-prev .desk-paper {
+  animation: desk-travel-shadow 480ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
-@keyframes desk-flip-turn {
+@keyframes desk-travel {
   0% {
-    transform: rotateY(0deg) translateZ(0px);
+    transform: translate(var(--from-x), var(--from-y)) rotate(var(--from-r))
+      scale(1);
+    z-index: 6;
   }
-  50% {
-    transform: rotateY(90deg) translateZ(40px);
+  32% {
+    transform: translate(
+        calc(var(--from-x) + var(--lift-x)),
+        calc(var(--from-y) + var(--lift-y))
+      )
+      rotate(calc(var(--from-r) + var(--lift-r)))
+      scale(1.05);
+    z-index: 6;
+  }
+  68% {
+    transform: translate(
+        calc((var(--from-x) + var(--sx)) / 2 + var(--arc-x)),
+        calc((var(--from-y) + var(--sy)) / 2 + var(--arc-y))
+      )
+      rotate(calc((var(--from-r) + var(--sr)) / 2))
+      scale(1.04);
+    z-index: 6;
+  }
+  78% {
+    z-index: var(--sz);
   }
   100% {
-    transform: rotateY(180deg) translateZ(0px);
+    transform: translate(var(--sx), var(--sy)) rotate(var(--sr)) scale(1);
+    z-index: var(--sz);
   }
 }
 
-/* The sheet itself: the paper stock, the §10 typographic root (the root em
-   sets the margin unit, and the root face is the serif so `ch` measures the
-   body face). No overflow here — the faces carry it; preserve-3d above
-   forbids it. */
+/* The staying sheets hold still while the traveler leaves, then step one
+   seat as it lands — the deck closing under it. Ends exactly on the
+   resting offsets, at the same instant the traveler settles. */
+.desk-shell--close {
+  animation: desk-close-rank 240ms cubic-bezier(0.4, 0, 0.2, 1) 240ms both;
+}
+
+@keyframes desk-close-rank {
+  from {
+    transform: translate(var(--from-x), var(--from-y)) rotate(var(--from-r));
+  }
+  to {
+    transform: translate(var(--sx), var(--sy)) rotate(var(--sr));
+  }
+}
+
+/* The lifted sheet's shadow deepens off the stack and settles back —
+   the weight of the paper in hand. */
+@keyframes desk-travel-shadow {
+  0%,
+  100% {
+    box-shadow: var(--shadow-paper-contact, 0 1px 2px rgb(0 0 0 / 0.2));
+  }
+  30%,
+  70% {
+    box-shadow: 0 26px 48px -16px rgb(0 0 0 / 0.5);
+  }
+}
+
+/* The sheet itself: the paper stock and the print-scaled typographic root
+   (the root em is the body face, so `ch` measures the body and every em
+   inside stays proportionate to the 4mm body). */
 .desk-paper {
   position: absolute;
   inset: 0;
@@ -91,7 +165,7 @@
   flex-direction: column;
   border-radius: 2px;
   font-family: var(--font-serif, serif);
-  font-size: 16px;
+  font-size: calc(var(--desk-mm) * 4);
 }
 
 .desk-face {
@@ -101,24 +175,16 @@
   flex-direction: column;
   overflow: hidden;
   border-radius: 2px;
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
 }
 
-/* The back of a printed sheet is blank paper — the sheet stock shows
-   through; nothing prints on it. */
-.desk-face-back {
-  transform: rotateY(180deg);
-}
-
-/* ── Header (§10 页眉): mono small line, case ref left / date right, one
-   hairline rule beneath. ─────────────────────────────────────────────── */
+/* ── Header (页眉): mono small line, case ref left / date right, one
+   hairline rule beneath. Sits inside the top print margin. ───────────── */
 .desk-head {
-  margin: 3.5em 3.25em 0;
-  padding-bottom: 0.9em;
+  margin: calc(var(--desk-mm) * 10) calc(var(--desk-mm) * 25) 0;
+  padding-bottom: calc(var(--desk-mm) * 2);
   border-bottom: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: calc(var(--desk-mm) * 3);
   line-height: 1.6;
   letter-spacing: 0.14em;
   color: var(--color-foreground);
@@ -139,9 +205,9 @@
     color-mix(in oklab, var(--paper) calc(55% / var(--recess-i, 1)), white);
 }
 
-/* ── Body: the 版心, now a page viewport — no scrolling (v0.24: the paper
-   never clips a document mid-line because a document no longer lives on
-   one sheet). ─────────────────────────────────────────────────────── */
+/* ── Body: the 版心, a page viewport — no scrolling (the paper never clips
+   a document mid-line because a document no longer lives on one sheet).
+   ───────────────────────────────────────────────────────────────────── */
 .desk-bodywrap {
   position: relative;
   flex: 1 1 0%;
@@ -156,16 +222,17 @@
 
 /* ONE page box: constant size (this is the measured 版心 — the column
    container inside is N pages wide, so the box, not the container, is the
-   measurement source), and the clip edge the pages slide under. */
+   measurement source), and the clip edge the pages slide under. Sides sit
+   at the 25mm print margin, leaving the 160mm text block A4 prints. */
 .desk-pagebox {
   position: absolute;
-  inset: 2em 3.25em 3em;
+  inset: calc(var(--desk-mm) * 4) calc(var(--desk-mm) * 25);
   overflow: hidden;
 }
 
 /* The flowed document. One page wide per column (column-fill: auto packs
    each column to the page height); --desk-pages-w (N × page width, from JS)
-   sizes the box; --desk-page-i slides the shell's assigned page into view —
+   sizes the box; --desk-page-i slides the slot's assigned page into view —
    the percentage resolves against the pagebox, so no per-page pixel math.
    The pagebox clips, so a still-measuring first paint shows exactly page 1
    and nothing spills. */
@@ -183,16 +250,18 @@
 }
 
 /* The single-column measurer: same flow, natural height, invisible. Its
-   scrollHeight feeds pageCountLowerBound. */
+   scrollHeight feeds pageCountLowerBound; only the width must match the
+   pagebox (the top inset is irrelevant to a height measure). */
 .desk-measure {
   position: absolute;
-  inset: 2em auto auto 3.25em;
-  right: 3.25em;
+  top: calc(var(--desk-mm) * 20);
+  left: calc(var(--desk-mm) * 25);
+  right: calc(var(--desk-mm) * 25);
   visibility: hidden;
   pointer-events: none;
 }
 
-/* Reduced-motion page turn: a quiet fade instead of the flip. The pages
+/* Reduced-motion page turn: a quiet fade instead of the travel. The pages
    remount on the new page (the field keys them by page under reduced
    motion), replaying the animation. */
 .desk-pages--fade {
@@ -208,11 +277,11 @@
   }
 }
 
-/* ── The document title (§10: 24–28px serif light). ───────────────────── */
+/* ── The document title: print-display size (6.5mm ≈ 18pt light serif). ── */
 .desk-title {
-  margin: 0 0 1.1em;
+  margin: 0 0 calc(var(--desk-mm) * 4);
   font-family: var(--font-serif, serif);
-  font-size: 26px;
+  font-size: calc(var(--desk-mm) * 6.5);
   font-weight: 300;
   line-height: 1.3;
   letter-spacing: 0.01em;
@@ -222,31 +291,30 @@
 /* The not-found paper and the loading line: quiet small print, same ink. */
 .desk-note {
   font-family: var(--font-serif, serif);
-  font-size: 15px;
+  font-size: calc(var(--desk-mm) * 3.6);
   line-height: 1.8;
   opacity: 0.72;
 }
 
-/* ── Footer (§10 页脚): mono smaller line, centred folio, category
-   bottom-right, one hairline above. The bottom margin takes §10's 3.5–4em
-   ruling. ─────────────────────────────────────────────────────────── */
+/* ── Footer (页脚): mono smaller line, centred folio, category
+   bottom-right, one hairline above. Sits inside the bottom print margin.
+   ───────────────────────────────────────────────────────────────────── */
 .desk-foot {
-  margin: 0 3.25em 3.5em;
-  padding-top: 0.9em;
+  margin: 0 calc(var(--desk-mm) * 25) calc(var(--desk-mm) * 10);
+  padding-top: calc(var(--desk-mm) * 2);
   border-top: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 10.5px;
+  font-size: calc(var(--desk-mm) * 3);
   line-height: 1.6;
   letter-spacing: 0.14em;
   color: var(--color-foreground);
   opacity: 0.72;
 }
 
-/* ── The markdown body, re-rhythmmed for print (§10) ──────────────────── */
-
+/* ── The markdown body, re-rhythmmed for print (§10's grammar, print scale) */
 .desk-paper .typeset {
-  --typeset-size: 16px;
-  --typeset-leading: 1.8;
+  --typeset-size: calc(var(--desk-mm) * 4);
+  --typeset-leading: 1.5;
   --typeset-flow: 0.9em;
   font-family: var(--font-serif, serif);
 }
@@ -316,7 +384,7 @@
 .desk-paper .code-block {
   margin-block-start: var(--typeset-flow, 0.9em);
   border-color: var(--paper-line);
-  border-radius: 4px;
+  border-radius: 1px;
   background-color: var(--paper-plate);
 }
 

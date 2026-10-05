@@ -23,15 +23,15 @@
  * PAGINATION (v0.24). One sheet = one PAGE of the document. The markdown
  * flows through CSS multi-column layout inside a fixed-height 版心 (one
  * column per page; `column-fill: auto` packs each column to the page
- * height) and a ring of five paper SHELLS carries the current, next, and
- * previous pages (the other two are blank paper, their edges peeking —
- * the card field's stacked-papers look). A turn flips the top sheet over
- * its centre line to the deck bottom (or the bottom sheet forward, going
- * back): pure CSS transform animation, blank paper back, the deck re-
- * cascades as the ring shifts. Measurement is browser-native (no JS line
- * measuring): the natural height of a hidden single-column copy gives the
- * page-count lower bound; a hidden-measure loop grows the column container
- * one column at a time while any content still spills.
+ * height) and five paper SLOTS carry the current, next, and previous pages
+ * (the other two are blank paper, their edges peeking — the card field's
+ * stacked-papers look). A turn SHUFFLES (the user's ruling — no rotation):
+ * the top sheet lifts off, travels, and is put at the very back; the deck
+ * closes rank beneath it; going back is the same gesture in reverse. Pure
+ * CSS transform animation, only the traveler ever moves. Measurement is
+ * browser-native (no JS line measuring): the natural height of a hidden
+ * single-column copy gives the page-count lower bound; the exact count
+ * reads off the column overflow.
  *
  * I18N ACROSS THE PORTAL. drei's `<Html>` mounts the paper in the Canvas's
  * own React root. The desk's few UI strings arrive as PROPS (the
@@ -76,13 +76,13 @@ import {
 import { MarkdownRenderer } from "@/components/chat/markdown";
 import {
   clampPage,
-  FLIP_MS,
+  TURN_MS,
   pageCountLowerBound,
-  pageForShellDepth,
+  pageForShellSlot,
   deskPaperModel,
   recessIntensityFor,
   SHELL_COUNT,
-  shellOffsetForDepth,
+  shellOffsetForSlot,
   type DeskPaperModel,
 } from "./desk-model";
 import "./desk.css";
@@ -188,10 +188,20 @@ export function DeskField({
   const ready = !loading && model.markdown !== null;
 
   const [page, setPage] = useState(1);
-  const [flip, setFlip] = useState<"next" | "prev" | null>(null);
-  // The deck ring: depth(i) = (i + shift) mod SHELL_COUNT. A "next" turn
-  // shifts +1 (the top shell wraps to the bottom); "prev" shifts −1.
-  const [shift, setShift] = useState(0);
+  // The turn (a shuffle, not a flip): which direction is in flight and
+  // which shell is traveling. The slot ORDER rotates at turn START (every
+  // sheet's resting pose is recomputed then; the ones that stay put hold
+  // still for the leave and close rank in the landing beat — see desk.css).
+  // The page number bumps at SETTLE: the traveling sheet already shows the
+  // page its new slot derives, and every other visible surface is unchanged
+  // — a settle can paint no flash.
+  const [turn, setTurn] = useState<{
+    dir: "next" | "prev";
+    traveler: number;
+  } | null>(null);
+  const [order, setOrder] = useState<number[]>(() =>
+    Array.from({ length: SHELL_COUNT }, (_, i) => i),
+  );
   const [pageBox, setPageBox] = useState({ w: 0, h: 0 });
   const [naturalH, setNaturalH] = useState(0);
   const [plan, setPlan] = useState({ columns: 1, passes: 0 });
@@ -227,16 +237,22 @@ export function DeskField({
   const total = plan.columns;
   const totalRef = useRef(total);
   totalRef.current = total;
-  const flipRef = useRef(flip);
-  flipRef.current = flip;
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
+  // Settle is idempotent by a synchronous flag, not by state: the landing
+  // reports through animationend AND a timeout backstop — if the main
+  // thread is busy when the backstop fires, the state guard alone would
+  // still be stale and the page would bump twice (observed: 1 → 2 → 3).
+  const settledRef = useRef(true);
 
-  // A new document restarts at page 1 with no flip in flight — the render-
+  // A new document restarts at page 1 with no turn in flight — the render-
   // phase reset (no frame flashes the old document's last page).
   const lastDocRef = useRef(docRef);
   if (lastDocRef.current !== docRef) {
     lastDocRef.current = docRef;
     setPage(1);
-    setFlip(null);
+    setTurn(null);
+    settledRef.current = true;
   }
 
   // The flow's natural height from the hidden single-column measurer. The
@@ -324,37 +340,50 @@ export function DeskField({
     setPage((p) => clampPage(p, total));
   }, [total]);
 
-  const settleFlip = useCallback(() => {
-    const dir = flipRef.current;
-    if (!dir) return;
-    setPage((p) => clampPage(p + (dir === "next" ? 1 : -1), totalRef.current));
-    setShift((s) => (dir === "next" ? s + 1 : s - 1));
-    setFlip(null);
+  const settleTurn = useCallback(() => {
+    const active = turnRef.current;
+    if (!active || settledRef.current) return;
+    settledRef.current = true;
+    setPage((p) =>
+      clampPage(p + (active.dir === "next" ? 1 : -1), totalRef.current),
+    );
+    setTurn(null);
   }, []);
 
-  // The flip's landing normally reports through animationend; the timeout
-  // is the backstop for the event that never arrives (unmounted mid-beats
-  // included) — the ring must never stay half-shifted.
+  // The traveler's landing normally reports through animationend; the
+  // timeout is the backstop for the event that never arrives (unmounted
+  // mid-beat included) — the turn must never stay half-committed.
   useEffect(() => {
-    if (!flip) return;
-    const t = setTimeout(settleFlip, FLIP_MS + 120);
+    if (!turn) return;
+    const t = setTimeout(settleTurn, TURN_MS + 120);
     return () => clearTimeout(t);
-  }, [flip, settleFlip]);
+  }, [turn, settleTurn]);
 
   const turnPage = useCallback(
     (dir: "next" | "prev") => {
-      if (flip !== null || !ready) return;
+      if (turn !== null || !ready) return;
       const target = page + (dir === "next" ? 1 : -1);
       if (target < 1 || target > total) return;
       if (reducedMotion) {
-        // No motion: the sheets do not move, the content swaps in place
+        // No motion: the sheets do not travel, the content swaps in place
         // under a quiet fade (the CSS replays it via the remount).
         setPage(target);
         return;
       }
-      setFlip(dir);
+      // The shuffle: the top sheet (or the bottom, going back) is taken out
+      // and put at the very back. The slot order rotates NOW — the resting
+      // poses update immediately, the staying sheets hold still for the
+      // leave (their close-rank beat is delayed into the landing), and the
+      // traveler animates from its old seat to its new one.
+      setOrder((prev) =>
+        dir === "next"
+          ? [...prev.slice(1), prev[0]]
+          : [prev[prev.length - 1], ...prev.slice(0, -1)],
+      );
+      settledRef.current = false;
+      setTurn({ dir, traveler: dir === "next" ? order[0] : order[SHELL_COUNT - 1] });
     },
-    [flip, ready, page, total, reducedMotion],
+    [turn, ready, page, total, reducedMotion, order],
   );
   const turnPageRef = useRef(turnPage);
   turnPageRef.current = turnPage;
@@ -375,7 +404,7 @@ export function DeskField({
       const now = performance.now();
       if (now - lastEvent > WHEEL_QUIET_MS) acc = 0;
       lastEvent = now;
-      if (flipRef.current) return;
+      if (turnRef.current) return;
       acc += e.deltaY;
       if (acc >= WHEEL_THRESHOLD_PX) {
         acc = 0;
@@ -409,14 +438,14 @@ export function DeskField({
         title: model.title,
         page,
         total,
-        flip,
-        shift,
+        turn,
+        order,
         planColumns: plan.columns,
         pageBox,
         pagesRef,
         attachBoxRef,
         attachMeasureRef,
-        onFlipEnd: settleFlip,
+        onTravelEnd: settleTurn,
         onTurn: turnPage,
       }}
     />,
@@ -489,7 +518,7 @@ export function DeskField({
                 type="button"
                 data-page-prev
                 aria-label={texts.prevPage}
-                disabled={flip !== null || page <= 1}
+                disabled={turn !== null || page <= 1}
                 onClick={() => turnPage("prev")}
                 className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
               >
@@ -506,7 +535,7 @@ export function DeskField({
                 type="button"
                 data-page-next
                 aria-label={texts.nextPage}
-                disabled={flip !== null || page >= total}
+                disabled={turn !== null || page >= total}
                 onClick={() => turnPage("next")}
                 className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
               >
@@ -528,16 +557,19 @@ interface PagingProps {
   title: string;
   page: number;
   total: number;
-  flip: "next" | "prev" | null;
-  shift: number;
+  /** The shuffle in flight, if any: direction + the traveling shell's id. */
+  turn: { dir: "next" | "prev"; traveler: number } | null;
+  /** The deck: which shell occupies each slot, slot 0 = the visible top.
+   *  Rotates at turn start; shells are keyed by id, not slot. */
+  order: number[];
   planColumns: number;
   pageBox: { w: number; h: number };
   pagesRef: RefObject<HTMLDivElement | null>;
   attachBoxRef: (el: HTMLDivElement | null) => void;
   attachMeasureRef: (el: HTMLDivElement | null) => void;
-  onFlipEnd: () => void;
+  onTravelEnd: () => void;
   /** The page turn, owned by the field above — the swipe hands it a
-   *  direction and the same gate as the buttons applies (flipping state,
+   *  direction and the same gate as the buttons applies (turn state,
    *  bounds, reduced motion). */
   onTurn: (dir: "next" | "prev") => void;
 }
@@ -653,49 +685,37 @@ function DeskScene({
     title,
     page,
     total,
-    flip,
-    shift,
+    turn,
+    order,
     planColumns,
     pageBox,
     pagesRef,
     attachBoxRef,
     attachMeasureRef,
-    onFlipEnd,
+    onTravelEnd,
     onTurn,
   } = paging;
-
-  // The deck ring: slot i sits at depth (i + shift) mod SHELL_COUNT —
-  // depth 0 = deck bottom, SHELL_COUNT-1 = the visible top. Shells paint in
-  // ascending depth (DOM order is the paint order in the flat stack
-  // context); only the flying sheet needs an explicit lift.
-  const depthOf = useCallback(
-    (slot: number) =>
-      (((slot + shift) % SHELL_COUNT) + SHELL_COUNT) % SHELL_COUNT,
-    [shift],
-  );
-  const slots = useMemo(
-    () =>
-      Array.from({ length: SHELL_COUNT }, (_, i) => i).sort(
-        (a, b) => depthOf(a) - depthOf(b),
-      ),
-    [depthOf],
-  );
 
   // One shell when the document is not a stack at all: in flight, dead
   // link, or a single page (backingSheets(1) = 0 — a one-page document
   // wears no pile).
   const stacked = ready && total > 1;
-  const renderedSlots = stacked ? slots : [SHELL_COUNT - 1];
-  const topDepth = SHELL_COUNT - 1;
+  // The visible slots, top (0) to bottom (SHELL_COUNT-1), each holding its
+  // occupant shell id. Shells render in slot order and paint by --sz, both
+  // derived from the slot — a shell never moves except inside the two turn
+  // animations.
+  const slots = stacked
+    ? Array.from({ length: SHELL_COUNT }, (_, i) => i)
+    : [0];
 
-  // The landing handshake: the flip animation reports here (it bubbles off
-  // whichever shell was flying); the ring shift and the page bump settle
-  // the new arrangement.
+  // The landing handshake: the traveler's animation reports here (the
+  // close-rank beats end at the same instant); the page bump and the turn
+  // state's retirement settle the new arrangement.
   const onStackAnimationEnd = useCallback(
     (e: ReactAnimationEvent) => {
-      if (e.animationName === "desk-flip-turn") onFlipEnd();
+      if (e.animationName === "desk-travel") onTravelEnd();
     },
-    [onFlipEnd],
+    [onTravelEnd],
   );
 
   // The horizontal swipe: a page turn is a flick across the paper. Nothing
@@ -725,8 +745,13 @@ function DeskScene({
   }, []);
 
   // The flow — one full copy of the document per content shell, translated
-  // to the shell's page by --desk-page-i.
-  const flow = ready && markdown !== null ? (
+  // to the shell's page by --desk-page-i. MEMOIZED on the document alone:
+  // a turn changes paging state every few hundred milliseconds, and without
+  // this each turn would re-parse and re-layout all four markdown copies
+  // (three shells + the measurer) before the animation could even start.
+  const flow = useMemo(
+    () =>
+      ready && markdown !== null ? (
     <>
       <h1 className="desk-title">{title}</h1>
       {/* The body keeps its real components (CodeBlock's hooks included) —
@@ -735,8 +760,10 @@ function DeskScene({
       <NextIntlClientProvider messages={messages} locale={locale}>
         <MarkdownRenderer content={markdown} />
       </NextIntlClientProvider>
-    </>
-  ) : null;
+        </>
+      ) : null,
+    [ready, markdown, title, locale, messages],
+  );
 
   return (
     <>
@@ -783,20 +810,45 @@ function DeskScene({
             onPointerUp={onStackPointerUp}
             onPointerCancel={onStackPointerCancel}
           >
-            {renderedSlots.map((slot) => {
-              const depth = stacked ? depthOf(slot) : topDepth;
-              const offset = shellOffsetForDepth(depth);
+            {slots.map((slot) => {
+              const shellId = stacked ? order[slot] : 0;
+              const offset = shellOffsetForSlot(slot);
+              // The pages derive from the turn's TARGET page while a turn
+              // is in flight: the traveling sheet keeps showing the page it
+              // physically carries, the revealed sheet keeps the page it
+              // already showed, and every change lands on covered slots —
+              // so the settle repaints nothing.
+              const effectivePage = clampPage(
+                page + (turn ? (turn.dir === "next" ? 1 : -1) : 0),
+                total,
+              );
               const shellPage = stacked
-                ? pageForShellDepth(page, total, depth, SHELL_COUNT)
+                ? pageForShellSlot(effectivePage, total, slot, SHELL_COUNT)
                 : 1;
-              const isTop = depth === topDepth;
-              const isFlying =
-                flip !== null &&
-                depth === (flip === "next" ? topDepth : 0);
+              const isTop = slot === 0;
+              const isTraveler = turn !== null && shellId === turn.traveler;
+              // Where this shell sits at the END of the gesture: its new
+              // slot's resting pose. The traveler animates from its old
+              // seat (--from-*) to here; the staying sheets hold --from-*
+              // until the landing beat, then close rank to here.
               const shellStyle = {
                 "--sx": `${offset.x}px`,
                 "--sy": `${offset.y}px`,
                 "--sr": `${offset.r}deg`,
+                "--sz": SHELL_COUNT - slot,
+                ...(turn
+                  ? isTraveler
+                    ? {
+                        "--from-x": `${shellOffsetForSlot(turn.dir === "next" ? 0 : SHELL_COUNT - 1).x}px`,
+                        "--from-y": `${shellOffsetForSlot(turn.dir === "next" ? 0 : SHELL_COUNT - 1).y}px`,
+                        "--from-r": `${shellOffsetForSlot(turn.dir === "next" ? 0 : SHELL_COUNT - 1).r}deg`,
+                      }
+                    : {
+                        "--from-x": `${shellOffsetForSlot(turn.dir === "next" ? slot + 1 : slot - 1).x}px`,
+                        "--from-y": `${shellOffsetForSlot(turn.dir === "next" ? slot + 1 : slot - 1).y}px`,
+                        "--from-r": `${shellOffsetForSlot(turn.dir === "next" ? slot + 1 : slot - 1).r}deg`,
+                      }
+                  : null),
               } as CSSProperties;
               const boxStyle = {
                 "--desk-page-h":
@@ -811,98 +863,91 @@ function DeskScene({
               } as CSSProperties;
               return (
                 <div
-                  key={slot}
-                  data-desk-shell={depth}
+                  key={shellId}
+                  data-desk-shell={slot}
                   className={`desk-shell${isTop ? " desk-shell--top" : ""}${
-                    isFlying ? " desk-shell--flying" : ""
+                    turn
+                      ? isTraveler
+                        ? ` desk-shell--travel-${turn.dir}`
+                        : " desk-shell--close"
+                      : ""
                   }`}
                   style={shellStyle}
                 >
-                  <div className="desk-flip">
-                    <div
-                      className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact text-card-foreground"
-                      data-locale={locale}
-                      onPointerMove={onPaperPointerMove}
-                    >
-                      {shellPage === null ? (
-                        // Blank paper: the stack's peek, nothing printed.
-                        <div
-                          className="desk-face desk-face-front"
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <div className="desk-face desk-face-front">
-                          <header className="desk-head flex items-baseline justify-between gap-8">
-                            <span className="truncate">
-                              {model.caseRef ?? model.title}
-                            </span>
-                            <span className="desk-recess shrink-0 tabular-nums">
-                              {model.date}
-                            </span>
-                          </header>
+                  <div
+                    className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact text-card-foreground"
+                    data-locale={locale}
+                    onPointerMove={onPaperPointerMove}
+                  >
+                    {shellPage === null ? (
+                      // Blank paper: the stack's peek, nothing printed.
+                      <div className="desk-face" aria-hidden="true" />
+                    ) : (
+                      <div className="desk-face">
+                        <header className="desk-head flex items-baseline justify-between gap-8">
+                          <span className="truncate">
+                            {model.caseRef ?? model.title}
+                          </span>
+                          <span className="desk-recess shrink-0 tabular-nums">
+                            {model.date}
+                          </span>
+                        </header>
 
-                          <div className="desk-bodywrap">
-                            <div className="desk-body">
-                              <div
-                                className="desk-pagebox"
-                                ref={isTop ? attachBoxRef : undefined}
-                                style={boxStyle}
-                              >
-                                {ready ? (
-                                  <div
-                                    className={`desk-pages${
-                                      reducedMotion && isTop
-                                        ? " desk-pages--fade"
-                                        : ""
-                                    }`}
-                                    key={reducedMotion && isTop ? page : slot}
-                                    ref={isTop ? pagesRef : undefined}
-                                    style={pagesStyle}
-                                  >
-                                    <div className="desk-flow">{flow}</div>
-                                  </div>
-                                ) : (
-                                  <div className="desk-pages">
-                                    {loading ? (
+                        <div className="desk-bodywrap">
+                          <div className="desk-body">
+                            <div
+                              className="desk-pagebox"
+                              ref={isTop ? attachBoxRef : undefined}
+                              style={boxStyle}
+                            >
+                              {ready ? (
+                                <div
+                                  className={`desk-pages${
+                                    reducedMotion && isTop
+                                      ? " desk-pages--fade"
+                                      : ""
+                                  }`}
+                                  key={reducedMotion && isTop ? page : shellId}
+                                  ref={isTop ? pagesRef : undefined}
+                                  style={pagesStyle}
+                                >
+                                  <div className="desk-flow">{flow}</div>
+                                </div>
+                              ) : (
+                                <div className="desk-pages">
+                                  {loading ? (
+                                    <p className="desk-note">
+                                      {texts.loading}
+                                    </p>
+                                  ) : (
+                                    <>
+                                      <h1 className="desk-title">
+                                        {texts.notFoundHeading}
+                                      </h1>
                                       <p className="desk-note">
-                                        {texts.loading}
+                                        {texts.notFoundBody(docRef)}
                                       </p>
-                                    ) : (
-                                      <>
-                                        <h1 className="desk-title">
-                                          {texts.notFoundHeading}
-                                        </h1>
-                                        <p className="desk-note">
-                                          {texts.notFoundBody(docRef)}
-                                        </p>
-                                      </>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
+                                    </>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
-
-                          <footer className="desk-foot flex items-baseline">
-                            <span className="flex-1" />
-                            <span className="desk-recess tabular-nums">
-                              {texts.page(shellPage)}
-                            </span>
-                            <span className="flex-1 truncate text-right">
-                              {model.category
-                                ? texts.categoryName(model.category)
-                                : ""}
-                            </span>
-                          </footer>
                         </div>
-                      )}
-                      {/* The back of a printed sheet: blank paper (the stock
-                          shows through), never mirrored text. */}
-                      <div
-                        className="desk-face desk-face-back"
-                        aria-hidden="true"
-                      />
-                    </div>
+
+                        <footer className="desk-foot flex items-baseline">
+                          <span className="flex-1" />
+                          <span className="desk-recess tabular-nums">
+                            {texts.page(shellPage)}
+                          </span>
+                          <span className="flex-1 truncate text-right">
+                            {model.category
+                              ? texts.categoryName(model.category)
+                              : ""}
+                          </span>
+                        </footer>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
