@@ -88,6 +88,7 @@ import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
 import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
 import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
+import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import {
   AtmosphereBackdrop,
@@ -150,6 +151,7 @@ export function AppShell() {
     setPanelMode,
     worldFrozen,
     sharedSlice,
+    deskDoc,
     reportCursor,
     getCursor,
     feed,
@@ -655,6 +657,22 @@ export function AppShell() {
   // so there is nothing to clean up and no console noise.
   const tCompanion = useTranslations("companion");
   const tGame = useTranslations("game");
+  // The desk's injected strings (v0.22): the Html portal is a separate React
+  // root, so the paper's chrome strings go in as props (FrameCardTexts
+  // pattern). The footer's category name reuses the shelf's category keys.
+  const tDesk = useTranslations("desk");
+  const tShelf = useTranslations("chat.input.shelf");
+  const deskTexts = useMemo<DeskTexts>(
+    () => ({
+      regionLabel: tDesk("regionLabel"),
+      loading: tDesk("loading"),
+      notFoundHeading: tDesk("notFoundHeading"),
+      notFoundBody: (ref) => tDesk("notFoundBody", { ref }),
+      categoryName: (category) => tShelf(`category.${category}`),
+      page: (n) => tDesk("page", { n }),
+    }),
+    [tDesk, tShelf],
+  );
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
   useEffect(() => {
@@ -809,7 +827,31 @@ export function AppShell() {
   // viewport so both fields share one coordinate system) is still true and
   // still worth doing — but it is a rendering change, not a navigation one, and
   // it is not what stood between the reader and a single ladder.
-  const showCardField = rung !== "conversation";
+  const showCardField = rung !== "conversation" && deskDoc === null;
+
+  // ── THE DESK'S TURN AT THE FIELD SLOT (v0.22) ────────────────────────────
+  // The document desk is the card field's MUTUALLY EXCLUSIVE pane mate: while
+  // `deskDoc` is set the card field unmounts and the desk registers the same
+  // field world slot. But the slot is last-write-wins with an unconditional
+  // null cleanup on unmount (world-slot.tsx), and AnimatePresence keeps a
+  // leaving branch mounted through its 300 ms exit — so "CardField unmounts,
+  // then the desk registers" is NOT automatic, and neither is the reverse.
+  // Two scenes registered at once (or a late cleanup landing on a fresh
+  // registration) fights itself. The rule: THE TWO OWNERS ARE NEVER MOUNTED
+  // TOGETHER — each branch mounts only after the other's exit completed
+  // (`onExitComplete`), in both directions.
+  const [cardFieldExited, setCardFieldExited] = useState(
+    () => rung === "conversation",
+  );
+  const [deskExited, setDeskExited] = useState(true);
+  const timelinePresent = showCardField && deskExited;
+  const deskPresent = deskDoc !== null && cardFieldExited;
+  useEffect(() => {
+    if (timelinePresent) setCardFieldExited(false);
+  }, [timelinePresent]);
+  useEffect(() => {
+    if (deskPresent) setDeskExited(false);
+  }, [deskPresent]);
   /** True while the conversation rung is up — the pane slot's visibility
    *  switch (the field's R3F band is read in the pane there, dimmed away at
    *  a card rung). The PANEL half of the conversation is the layout overlay's
@@ -1053,8 +1095,8 @@ export function AppShell() {
 
         {fieldChrome && (
           <>
-        <AnimatePresence>
-          {showCardField && (
+        <AnimatePresence onExitComplete={() => setCardFieldExited(true)}>
+          {timelinePresent && (
             <motion.div
               key="timeline"
               // Opacity only — the slide's x lives on the inner layer, set
@@ -1136,6 +1178,33 @@ export function AppShell() {
                 )}
               </AnimatePresence>
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* THE DOCUMENT DESK (v0.22) — the card field's mutually exclusive
+            pane mate: same field world, same slot, and the sequencing rule
+            from showCardField's note (the two owners are never mounted
+            together — this branch mounts only after the timeline's exit
+            completed, and the timeline waits for this one's). The pane swap
+            is the same opacity idiom as the conversation↔cards switch; the
+            paper's own entrance beat plays inside the scene. */}
+        <AnimatePresence onExitComplete={() => setDeskExited(true)}>
+          {deskDoc !== null && cardFieldExited && (
+            <motion.div
+              key="desk"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-0 z-10"
+            >
+              <DeskField
+                docRef={deskDoc}
+                camXOffset={camXOffset}
+                reducedMotion={reducedMotion}
+                texts={deskTexts}
+              />
             </motion.div>
           )}
         </AnimatePresence>

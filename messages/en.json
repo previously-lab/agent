@@ -567,5 +567,12 @@
     "continue": "Continue",
     "settings": "Settings",
     "lastSpoke": "Last spoke {gap}"
+  },
+  "desk": {
+    "regionLabel": "Document desk — Escape puts the document back",
+    "loading": "Fetching the document…",
+    "notFoundHeading": "Document not found",
+    "notFoundBody": "Nothing on the shelf matches \"{ref}\". It may have been moved, renamed, or sealed.",
+    "page": "· {n} ·"
   }
 }

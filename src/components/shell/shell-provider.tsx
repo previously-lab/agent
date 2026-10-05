@@ -100,6 +100,7 @@ import {
   type ConversationSurface,
 } from "@/components/chat/conversation-surface";
 import { ShellNavContext, type ShellNav } from "@/components/shell/shell-nav";
+import { panelModeForDeskOpen } from "@/components/desk/desk-model";
 
 /**
  * The world's pose, as the route last reported it. The SURFACE composition
@@ -141,6 +142,15 @@ interface ShellValue {
   worldFrozen: boolean;
   /** The shared slice address — the one cursor every surface reads. */
   sharedSlice: string | null;
+  /** The document on the desk (v0.22): a case ref, or null when the desk is
+   *  away. One field, no persistence — a refresh puts nothing on the desk. */
+  deskDoc: string | null;
+  /** Pull a document onto the desk (the shelf's terminal open action). A
+   *  fullscreen panel folds to the pill first — fullscreen freezes the
+   *  world's frame loop and covers the canvas the desk renders in. */
+  openDesk: (ref: string) => void;
+  /** Put the document back; the card field returns by the pane's rules. */
+  closeDesk: () => void;
   /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
    *  — the room the reader walks into, the card a scroll centres — moves
    *  the SAME cursor the nav actions own, but steers NO world (the nav
@@ -210,6 +220,19 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     initialPanelTier,
   );
   const worldFrozen = panelMode === "fullscreen";
+
+  // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order, no
+  // persistence. The shelf dialog (in the layout-level overlay) writes it,
+  // the app shell reads it; this provider is their common ancestor. Opening
+  // folds a fullscreen panel to the pill first (panelModeForDeskOpen), the
+  // same rule as leaving `/app` (fullscreen would freeze the world the desk
+  // renders in).
+  const [deskDoc, setDeskDoc] = useState<string | null>(null);
+  const openDesk = useCallback((ref: string) => {
+    setPanelMode(panelModeForDeskOpen);
+    setDeskDoc(ref);
+  }, []);
+  const closeDesk = useCallback(() => setDeskDoc(null), []);
 
   // The navigation cursor, plus a read-anywhere mirror for the send-time
   // getter (the transport reads it at SEND time, outside React's render).
@@ -343,6 +366,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       setPanelMode,
       worldFrozen,
       sharedSlice,
+      deskDoc,
+      openDesk,
+      closeDesk,
       reportCursor,
       getCursor,
       getChatView,
@@ -363,6 +389,9 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       panelMode,
       worldFrozen,
       sharedSlice,
+      deskDoc,
+      openDesk,
+      closeDesk,
       reportCursor,
       getCursor,
       getChatView,

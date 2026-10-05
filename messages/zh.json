@@ -567,5 +567,12 @@
     "continue": "继续",
     "settings": "设置",
     "lastSpoke": "上次对话 {gap}"
+  },
+  "desk": {
+    "regionLabel": "文档桌面——按 Esc 把文档放回书架",
+    "loading": "正在取这份文档…",
+    "notFoundHeading": "找不到这份文档",
+    "notFoundBody": "书架上没有与「{ref}」对应的文档，它可能已被移动、改名或封存。",
+    "page": "· {n} ·"
   }
 }

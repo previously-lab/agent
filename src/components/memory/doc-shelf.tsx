@@ -23,12 +23,11 @@ import {
 } from "@/components/ui/dialog";
 import { MarkdownRenderer } from "@/components/chat/markdown";
 import { buildAttachmentDisplay } from "./attachment-display";
+import { useShell } from "@/components/shell/shell-provider";
 import {
   getCaseDetail,
-  getCaseDoc,
   getCaseShelf,
   type CaseDetail,
-  type CaseDocContent,
   type CaseShelf,
 } from "@/lib/episodic/actions";
 import type { CaseCategory } from "@/lib/docs";
@@ -48,18 +47,19 @@ const CATEGORY_ICONS: Record<CaseCategory, typeof FileText> = {
 type ShelfView =
   | { type: "root" }
   | { type: "category"; category: CaseCategory }
-  | { type: "case"; category: CaseCategory; name: string }
-  | { type: "caseDoc"; ref: string };
+  | { type: "case"; category: CaseCategory; name: string };
 
 /**
- * The memory shelf: one dialog over the case tree. The root lists the nine
- * categories — a category lists its cases, a case opens its `index.md` plus
- * its piece list, and any piece (or case reference) opens through
- * `getCaseDoc` with dual-root tolerance (§D.1). Everything loads lazily in
- * event handlers (one server-action round trip per open / per level),
- * exactly like the MemoryDocs popover it extends. Header dates are
- * displayed verbatim — no staleness or status is computed or rendered
- * (closure is time-window derived, not a label).
+ * The memory shelf: one dialog over the case tree — the desk's TEMPORARY
+ * FILTER (v0.22 §4). The root lists the nine categories — a category lists
+ * its cases, a case opens its `index.md` plus its piece list. The terminal
+ * "open a piece" action does NOT read inside the dialog: it pulls the
+ * document onto the desk (`openDesk`) and closes the dialog — reading lives
+ * on the tabletop now, and the in-dialog reading view is retired.
+ * Everything loads lazily in event handlers (one server-action round trip
+ * per open / per level), exactly like the MemoryDocs popover it extends.
+ * Header dates are displayed verbatim — no staleness or status is computed
+ * or rendered (closure is time-window derived, not a label).
  */
 export function DocShelfDialog({
   open,
@@ -71,11 +71,11 @@ export function DocShelfDialog({
   persona?: string;
 }) {
   const t = useTranslations("chat.input.shelf");
+  const { openDesk } = useShell();
   const [view, setView] = useState<ShelfView>({ type: "root" });
   const [caseShelf, setCaseShelf] = useState<CaseShelf | null>(null);
   const [shelfFailed, setShelfFailed] = useState(false);
   const [caseDetail, setCaseDetail] = useState<CaseDetail | null>(null);
-  const [caseDoc, setCaseDoc] = useState<CaseDocContent | null>(null);
   const [pending, setPending] = useState(false);
 
   // The dialog is fully controlled (the popover menu click flips `open`), so
@@ -90,7 +90,6 @@ export function DocShelfDialog({
     setCaseShelf(null);
     setShelfFailed(false);
     setCaseDetail(null);
-    setCaseDoc(null);
     setPending(true);
     getCaseShelf(persona)
       .then(setCaseShelf)
@@ -101,7 +100,6 @@ export function DocShelfDialog({
   const openCategory = useCallback((category: CaseCategory) => {
     setView({ type: "category", category });
     setCaseDetail(null);
-    setCaseDoc(null);
   }, []);
 
   const openCase = useCallback(
@@ -117,23 +115,20 @@ export function DocShelfDialog({
     [persona],
   );
 
+  // The terminal action (v0.22 §4): pull the document OUT of the dialog and
+  // onto the desk — the dialog only filters, the tabletop is where reading
+  // happens.
   const openCaseDoc = useCallback(
     (ref: string) => {
-      setView({ type: "caseDoc", ref });
-      setCaseDoc(null);
-      setPending(true);
-      getCaseDoc(ref, persona)
-        .then(setCaseDoc)
-        .catch(() => setCaseDoc(null))
-        .finally(() => setPending(false));
+      openDesk(ref);
+      onOpenChange(false);
     },
-    [persona],
+    [openDesk, onOpenChange],
   );
 
   const backToRoot = useCallback(() => {
     setView({ type: "root" });
     setCaseDetail(null);
-    setCaseDoc(null);
   }, []);
 
   const viewTitle =
@@ -141,9 +136,7 @@ export function DocShelfDialog({
       ? t(`category.${view.category}`)
       : view.type === "case"
         ? view.name
-        : view.type === "caseDoc"
-          ? (view.ref.split("/").pop() ?? view.ref).replace(/\.md$/, "")
-          : t("title");
+        : t("title");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -187,9 +180,6 @@ export function DocShelfDialog({
               openCaseDoc(`${view.category}/${view.name}/${pieceFileName}`)
             }
           />
-        )}
-        {view.type === "caseDoc" && (
-          <ShelfCaseDoc doc={caseDoc} pending={pending} />
         )}
       </DialogContent>
     </Dialog>
@@ -392,44 +382,6 @@ function ShelfCase({
             </li>
           ))}
         </ul>
-      )}
-    </div>
-  );
-}
-
-function ShelfCaseDoc({
-  doc,
-  pending,
-}: {
-  doc: CaseDocContent | null;
-  pending: boolean;
-}) {
-  const t = useTranslations("chat.input.shelf");
-
-  if (pending && !doc) {
-    return <p className="py-4 text-sm text-muted-foreground">{t("loading")}</p>;
-  }
-  if (!doc) {
-    return (
-      <p className="py-4 text-sm text-muted-foreground italic">{t("loadError")}</p>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      {doc.opened && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 text-xs text-muted-foreground">
-          <span>{t("openedAt", { date: doc.opened })}</span>
-        </div>
-      )}
-      {doc.markdown ? (
-        <div className="px-2 font-serif text-sm font-light leading-relaxed">
-          <MarkdownRenderer content={doc.markdown} />
-        </div>
-      ) : (
-        <p className="px-2 text-sm text-muted-foreground italic">
-          {t("docsEmpty")}
-        </p>
       )}
     </div>
   );

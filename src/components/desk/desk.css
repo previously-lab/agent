@@ -1,0 +1,235 @@
+/*
+ * Document desk — the paper's print typography (v0.22 §10), scoped to
+ * `.desk-paper`. The goal: a page that would not look wrong PRINTED. Tailwind
+ * owns the utilities on the element (paper tokens, contact shadow); the
+ * print grammar — sizes, measure, indent, margins, hairlines — lives here
+ * as real CSS. The markdown body keeps the MarkdownRenderer shell; these
+ * rules override typeset.css inside the scope only (the component is
+ * untouched). Ink discipline: everything flat ink; the recess lives on
+ * exactly two small strings (the header date and the page number, §12.1).
+ */
+
+.desk-paper {
+  /* The sheet: the measure plus the page margins (§10 版心 — 62–68ch of
+     measure, 3–3.5em side margins). The root em sets the margin unit, and
+     the root face is the serif so `ch` measures the body face. */
+  width: min(calc(66ch + 7em), 88vw);
+  height: 86vh;
+  font-family: var(--font-serif, serif);
+  font-size: 16px;
+  /* §12.2 — the ONLY dynamic modulation: pointermove rewrites this locally
+     scoped intensity (default 1, bounded 0.7–1.3 by recessIntensityFor);
+     it reaches the two recessed strings below and nothing else. */
+  --recess-i: 1;
+}
+
+/* ── Header (§10 页眉): mono small line, case ref left / date right, one
+   hairline rule beneath. ─────────────────────────────────────────────── */
+.desk-head {
+  margin: 3.5em 3.25em 0;
+  padding-bottom: 0.9em;
+  border-bottom: 1px solid var(--paper-line);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+/* ── The two recessed strings (§12.1: the header date and the page number —
+   exactly two, the FrameCard discipline). The recipe is the globals'
+   --paper-ink-recess with the paper share divided by the local --recess-i:
+   stronger intensity = a whiter lip. ─────────────────────────────────── */
+.desk-recess {
+  text-shadow: 1px 1px 1px
+    color-mix(in oklab, var(--paper) calc(60% / var(--recess-i, 1)), white);
+}
+
+.dark .desk-recess {
+  text-shadow: 1px 1px 2px
+    color-mix(in oklab, var(--paper) calc(55% / var(--recess-i, 1)), white);
+}
+
+/* ── Body: the scroll region. The paper is a real DOM scroll container;
+   the scrollbar stays hidden (§11.4 — the scroll is the paper moving). ── */
+.desk-bodywrap {
+  position: relative;
+  flex: 1 1 0%;
+  min-height: 0;
+}
+
+.desk-body {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 2em 3.25em 3em;
+}
+
+.desk-body::-webkit-scrollbar {
+  display: none;
+}
+
+/* The edge veils (§11.4): at the very top/bottom of the scroll the paper's
+   own tone veils the text a little; appearing/disappearing with the scroll
+   position is the only shadow play the page edges get. */
+.desk-veil {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2.25em;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.desk-veil-top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--paper) 12%, transparent);
+}
+
+.desk-veil-bottom {
+  bottom: 0;
+  background: linear-gradient(to top, var(--paper) 12%, transparent);
+}
+
+/* ── The document title (§10: 24–28px serif light). ───────────────────── */
+.desk-title {
+  margin: 0 0 1.1em;
+  font-family: var(--font-serif, serif);
+  font-size: 26px;
+  font-weight: 300;
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+
+/* The not-found paper and the loading line: quiet small print, same ink. */
+.desk-note {
+  font-family: var(--font-serif, serif);
+  font-size: 15px;
+  line-height: 1.8;
+  opacity: 0.72;
+}
+
+/* ── Footer (§10 页脚): mono smaller line, centred page number, category
+   bottom-right, one hairline above. ───────────────────────────────────── */
+.desk-foot {
+  margin: 0 3.25em 3em;
+  padding-top: 0.9em;
+  border-top: 1px solid var(--paper-line);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+/* ── The markdown body, re-rhythmmed for print (§10) ──────────────────── */
+
+.desk-paper .typeset {
+  --typeset-size: 16px;
+  --typeset-leading: 1.8;
+  --typeset-flow: 0.9em;
+  font-family: var(--font-serif, serif);
+}
+
+.desk-paper .typeset h1,
+.desk-paper .typeset h2,
+.desk-paper .typeset h3,
+.desk-paper .typeset h4,
+.desk-paper .typeset h5,
+.desk-paper .typeset h6 {
+  font-family: var(--font-serif, serif);
+  font-weight: 500;
+}
+
+.desk-paper .typeset h1 {
+  font-size: 1.4em;
+}
+
+.desk-paper .typeset h2 {
+  font-size: 1.2em;
+  border-block-end-color: var(--paper-line);
+}
+
+.desk-paper .typeset h3 {
+  font-size: 1.05em;
+}
+
+/* Chinese paragraphs take the 2em first-line indent (§10, confirmed);
+   English paragraphs keep the bare flow spacing. Switched by locale. */
+.desk-paper[data-locale="zh"] .typeset p {
+  text-indent: 2em;
+}
+
+.desk-paper[data-locale="zh"] .typeset blockquote p,
+.desk-paper[data-locale="zh"] .typeset li p {
+  text-indent: 0;
+}
+
+/* Lists hang their markers (§10 悬挂缩进). */
+.desk-paper .typeset ul,
+.desk-paper .typeset ol {
+  padding-inline-start: 1.5em;
+}
+
+/* Quotes: a hairline on the left, never a grey fill (§10). */
+.desk-paper .typeset blockquote {
+  border-inline-start: 1px solid var(--paper-line);
+  color: inherit;
+  opacity: 0.86;
+}
+
+/* Inline code: flat ink in a hairline frame, no fill. */
+.desk-paper .typeset code {
+  background-color: transparent;
+  border-color: var(--paper-line);
+}
+
+/* Code blocks (§10): one tone below the sheet (the plate) in a hairline
+   frame — never the dark UI slab. The interactive chrome (copy / collapse
+   buttons, the collapse fade) fails the print test (§11.2–3) and is
+   suppressed inside this scope only; the language tag stays — it prints
+   like a figure label. */
+.desk-paper .code-block {
+  margin-block-start: var(--typeset-flow, 0.9em);
+  border-color: var(--paper-line);
+  border-radius: 4px;
+  background-color: var(--paper-plate);
+}
+
+.desk-paper .code-block > div:first-child {
+  background-color: transparent;
+  border-bottom-color: var(--paper-line);
+}
+
+.desk-paper .code-block button {
+  display: none;
+}
+
+.desk-paper .code-block pre {
+  max-height: none;
+  background-color: transparent;
+}
+
+.desk-paper .code-block pre + div {
+  display: none;
+}
+
+/* Tables and rules stay hairline-thin on the paper's own line tone. */
+.desk-paper .typeset table {
+  font-size: 0.9em;
+}
+
+.desk-paper .typeset hr {
+  background: var(--paper-line);
+}
+
+@media print {
+  .desk-veil {
+    display: none;
+  }
+}
