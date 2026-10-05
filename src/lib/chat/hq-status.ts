@@ -20,6 +20,14 @@
 export type HQRunStatus = "running" | "completed" | "idle" | "failed";
 
 export interface HQStatus {
+  /**
+   * The current/last HQ run's durable workflow run id — written by the
+   * CLAIMING run itself (never by a dispatch, which may name a duplicate
+   * that loses the claim and exits). This is the pod's attach target for
+   * the activity stream (GET /api/evolution/hq/[runId]/stream): the stream
+   * replays, so reconnecting is simply re-attaching to this id.
+   */
+  runId: string | null;
   /** ISO time the current/last HQ run started (claimed the token). */
   runStartedAt: string | null;
   /** Null before the first run ever claims the token. */
@@ -35,6 +43,7 @@ export interface HQStatus {
 }
 
 export const HQ_STATUS_EMPTY: HQStatus = {
+  runId: null,
   runStartedAt: null,
   runStatus: null,
   briefsHandled: 0,
@@ -61,6 +70,7 @@ export function normalizeHQStatus(raw: unknown): HQStatus {
   if (!raw || typeof raw !== "object") return HQ_STATUS_EMPTY;
   const o = raw as Record<string, unknown>;
   return {
+    runId: typeof o.runId === "string" ? o.runId : null,
     runStartedAt: typeof o.runStartedAt === "string" ? o.runStartedAt : null,
     runStatus: RUN_STATUSES.includes(o.runStatus as HQRunStatus)
       ? (o.runStatus as HQRunStatus)

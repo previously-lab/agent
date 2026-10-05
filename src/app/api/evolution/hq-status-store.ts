@@ -94,10 +94,19 @@ export async function recordHQDispatch(brief: string): Promise<void> {
 }
 
 /** An HQ run claimed the token and starts work. The last run's outcome stays
- *  visible in the other fields until this one settles. */
-export async function recordHQRunStarted(): Promise<void> {
+ *  visible in the other fields until this one settles. `runId` is the
+ *  claiming run's OWN durable id (read from the workflow metadata inside the
+ *  step — never taken from a dispatch receipt, which may name a duplicate
+ *  that loses the claim and exits): the pod attaches its activity stream to
+ *  it. */
+export async function recordHQRunStarted(runId?: string): Promise<void> {
   const at = new Date().toISOString();
-  await mergeHQStatus((s) => ({ ...s, runStartedAt: at, runStatus: "running" }));
+  await mergeHQStatus((s) => ({
+    ...s,
+    runStartedAt: at,
+    runStatus: "running",
+    ...(runId ? { runId } : {}),
+  }));
 }
 
 /**

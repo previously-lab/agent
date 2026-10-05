@@ -12,9 +12,52 @@
  * hq-steps → hq-agent → sub-agent-runner → models/provider → … →
  * turn-workflow → tools → tool-executors).
  * (docs/errors/node-js-module-in-workflow)
+ *
+ * The static imports stay sandbox-safe: `workflow` / `workflow/api`
+ * primitives plus the PURE frame contract (`@/lib/chat/hq-stream` — no fs,
+ * no next). Each beat of the run emits ONE `data-hq-activity` frame into the
+ * run's durable stream (getWritable in a step — the tool-executors pattern),
+ * so the companion pod can watch HQ live and re-attach after a reload; the
+ * frames are third-person activity, never speech (HQ has no mouth, §9).
  */
+import { getWritable, getWorkflowMetadata } from "workflow";
 import { resumeHook } from "workflow/api";
+import type { UIMessageChunk } from "ai";
 import { HQ_TOKEN, type HQBriefPayload } from "./hq-contract";
+import {
+  HQ_ACTIVITY_CHUNK,
+  type HQActivityFrame,
+} from "@/lib/chat/hq-stream";
+
+// ─── Activity frames (the pod's live feed) ────────────────────────────────
+
+/** Per-invocation frame sequence; the ms timestamp disambiguates across steps. */
+let frameSeq = 0;
+
+/**
+ * Emit ONE activity frame into the run's stream. Best-effort: a gone stream
+ * (client disconnected, or no run context when a unit test drives the step
+ * directly) must never break the beat the frame describes. The writer is
+ * acquired per frame and released immediately — never held across the
+ * brief's await, where runSubAgent's own tool-progress writer takes the
+ * same stream's lock.
+ */
+async function emitHQActivity(frame: HQActivityFrame): Promise<void> {
+  try {
+    const writer = getWritable<UIMessageChunk>().getWriter();
+    try {
+      await writer.write({
+        type: HQ_ACTIVITY_CHUNK,
+        id: `hq-${Date.now().toString(36)}-${(frameSeq++).toString(36)}`,
+        data: frame,
+      } as UIMessageChunk);
+    } finally {
+      writer.releaseLock();
+    }
+  } catch {
+    /* stream gone / no run context — the beat itself already happened */
+  }
+}
 
 /**
  * One brief's round summary, returned to the run shell so IT can accumulate
@@ -69,6 +112,13 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
   const sliceId = payload.replyToken.startsWith("field:")
     ? payload.replyToken.split(":")[1] || undefined
     : undefined;
+  // 开始核对 — the pod sees the round begin before the (possibly minutes-long)
+  // agent work below.
+  await emitHQActivity({
+    kind: "reading",
+    at: new Date().toISOString(),
+    ...(sliceId ? { sliceId } : {}),
+  });
   const date = new Date().toISOString().slice(0, 10);
   const { handleBrief } = await import("./hq-agent");
   const outcome = await handleBrief({
@@ -78,6 +128,31 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
   });
   const { recordHQBriefOutcome } = await import("./hq-status-store");
   await recordHQBriefOutcome({ actions: outcome.actions });
+  // The round's beat: landed writes ("wrote research/X"), a deliberate
+  // no-write ("idle — nothing to write" — a veto that produced no write is
+  // mechanically an empty round, its short reason riding the note), or the
+  // failure line. HQ's own one-paragraph account (outcome.note) rides the
+  // wrote/idle frames so the panel can show WHY, not only WHAT.
+  if (outcome.error) {
+    await emitHQActivity({
+      kind: "failed",
+      at: new Date().toISOString(),
+      error: outcome.error,
+    });
+  } else if (outcome.actions.length > 0) {
+    await emitHQActivity({
+      kind: "wrote",
+      at: new Date().toISOString(),
+      paths: outcome.actions,
+      ...(outcome.note ? { note: outcome.note } : {}),
+    });
+  } else {
+    await emitHQActivity({
+      kind: "idle",
+      at: new Date().toISOString(),
+      ...(outcome.note ? { note: outcome.note } : {}),
+    });
+  }
   return {
     actions: outcome.actions,
     ...(outcome.error ? { error: outcome.error } : {}),
@@ -86,12 +161,24 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
 
 /**
  * Run-start mark ("use step"): an HQ run claimed the token — the pointer's
- * runStatus goes "running" until markHQRunFinished settles it.
+ * runStatus goes "running" until markHQRunFinished settles it. The run's OWN
+ * durable id rides along (read from the workflow metadata HERE, inside the
+ * claiming run — a dispatch receipt can name a duplicate that loses the
+ * claim, so the pointer never trusts it): that id is the pod's stream-attach
+ * target. The "started" frame opens the run's activity feed.
  */
 export async function markHQRunStarted(): Promise<void> {
   "use step";
   const { recordHQRunStarted } = await import("./hq-status-store");
-  await recordHQRunStarted();
+  let runId: string | undefined;
+  try {
+    runId = getWorkflowMetadata().workflowRunId;
+  } catch {
+    // No workflow context (a unit test driving the step directly) — the
+    // pointer keeps its previous runId rather than learning a false one.
+  }
+  await recordHQRunStarted(runId);
+  await emitHQActivity({ kind: "started", at: new Date().toISOString() });
 }
 
 /**
@@ -99,6 +186,8 @@ export async function markHQRunStarted(): Promise<void> {
  * done, or a failure that escaped a brief). `wrote` / `errored` are the
  * RUN-level accumulation across all of its briefs; the store maps them to
  * the terminal status (完成 / 空转 / 失败) and the definitive brief count.
+ * The "finished" frame closes the activity feed with the same mapping —
+ * pointer first, frame second, so a lost frame never costs the settlement.
  */
 export async function markHQRunFinished(result: {
   handled: number;
@@ -108,4 +197,10 @@ export async function markHQRunFinished(result: {
   "use step";
   const { recordHQRunFinished } = await import("./hq-status-store");
   await recordHQRunFinished(result);
+  await emitHQActivity({
+    kind: "finished",
+    at: new Date().toISOString(),
+    status: result.errored ? "failed" : result.wrote ? "completed" : "idle",
+    handled: Math.max(0, Math.floor(result.handled)),
+  });
 }

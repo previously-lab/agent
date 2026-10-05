@@ -16,6 +16,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   /** call-order log: handoff must precede run resolution */
   order: [] as string[],
+  /** the data-hq-activity chunks written into the run's stream */
+  frames: [] as Array<{ type: string; id: string; data: unknown }>,
   resumeHook: vi.fn(async () => {
     h.order.push("handoff");
     return { runId: "run-primary" };
@@ -27,7 +29,7 @@ const h = vi.hoisted(() => ({
     },
   ),
   /** the hq.json status pointer — mocked so tests never touch real memory/ */
-  recordRunStarted: vi.fn(async () => {
+  recordRunStarted: vi.fn(async (_runId?: string) => {
     h.order.push("runStarted");
   }),
   recordBriefOutcome: vi.fn(async () => {}),
@@ -46,6 +48,17 @@ vi.mock("workflow", () => ({
   createHook: () => makeHook(),
   sleep: (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, Math.min(ms, 5))),
+  // the run's durable id, read inside the claiming run's step
+  getWorkflowMetadata: () => ({ workflowRunId: "run-1" }),
+  // the run stream's writable — frames land in h.frames
+  getWritable: () => ({
+    getWriter: () => ({
+      write: async (chunk: { type: string; id: string; data: unknown }) => {
+        h.frames.push(chunk);
+      },
+      releaseLock: () => {},
+    }),
+  }),
 }));
 
 vi.mock("workflow/api", () => ({
@@ -105,6 +118,7 @@ const BRIEF: HQBriefPayload = {
 beforeEach(() => {
   vi.clearAllMocks();
   h.order.length = 0;
+  h.frames.length = 0;
   h.behavior = { conflict: null, queue: [], pend: true };
 });
 
@@ -127,6 +141,8 @@ describe("hqRun — claim and conflict", () => {
   it("the status pointer follows the claim: running at start, settled at finish", async () => {
     await hqRun(BRIEF);
     expect(h.recordRunStarted).toHaveBeenCalledTimes(1);
+    // the run's OWN durable id rides the start mark (never a dispatch's say-so)
+    expect(h.recordRunStarted).toHaveBeenCalledWith("run-1");
     expect(h.recordBriefOutcome).toHaveBeenCalledWith({ actions: [] });
     expect(h.recordRunFinished).toHaveBeenCalledTimes(1);
     expect(h.recordRunFinished).toHaveBeenCalledWith({
@@ -225,5 +241,76 @@ describe("hqRun — the work loop", () => {
       wrote: false,
       errored: false,
     });
+  });
+});
+
+describe("hqRun — the activity frames (the pod's live feed)", () => {
+  /** The frame kinds in stream order. */
+  const kinds = () => h.frames.map((f) => (f.data as { kind: string }).kind);
+
+  it("every chunk is a data-hq-activity frame with a unique id", async () => {
+    await hqRun(BRIEF);
+    expect(h.frames.length).toBeGreaterThan(0);
+    for (const f of h.frames) expect(f.type).toBe("data-hq-activity");
+    expect(new Set(h.frames.map((f) => f.id)).size).toBe(h.frames.length);
+  });
+
+  it("an idle run beats: started → reading → idle(note) → finished(idle)", async () => {
+    await hqRun(BRIEF);
+    expect(kinds()).toEqual(["started", "reading", "idle", "finished"]);
+    const reading = h.frames[1].data as { sliceId?: string };
+    expect(reading.sliceId).toBe("2026-10-04-0131");
+    // HQ's own account rides the idle frame — the veto's short reason lives here
+    const idle = h.frames[2].data as { note?: string };
+    expect(idle.note).toBe("idle — nothing substantive");
+    const finished = h.frames[3].data as { status?: string; handled?: number };
+    expect(finished).toMatchObject({ status: "idle", handled: 1 });
+  });
+
+  it("a writing run beats wrote(paths + note) and settles completed", async () => {
+    h.handleBrief.mockResolvedValueOnce({
+      actions: ["memory/research/screen-vendor/index.md"],
+      note: "核对切片后写下一个案件。",
+    });
+    await hqRun(BRIEF);
+    expect(kinds()).toEqual(["started", "reading", "wrote", "finished"]);
+    expect(h.frames[2].data).toMatchObject({
+      paths: ["memory/research/screen-vendor/index.md"],
+      note: "核对切片后写下一个案件。",
+    });
+    expect(h.frames[3].data).toMatchObject({ status: "completed", handled: 1 });
+  });
+
+  it("a failed brief beats failed(error) and the run settles failed", async () => {
+    h.handleBrief.mockResolvedValueOnce({
+      actions: [],
+      note: "",
+      error: "no default model configured",
+    });
+    await hqRun(BRIEF);
+    expect(kinds()).toEqual(["started", "reading", "failed", "finished"]);
+    expect(h.frames[2].data).toMatchObject({
+      error: "no default model configured",
+    });
+    expect(h.frames[3].data).toMatchObject({ status: "failed", handled: 1 });
+  });
+
+  it("a multi-brief run repeats the round beats; a deduped rival emits NOTHING", async () => {
+    const second: HQBriefPayload = { brief: "又一条。", replyToken: BRIEF.replyToken };
+    h.behavior = { conflict: null, queue: [second], pend: true };
+    await hqRun(BRIEF);
+    expect(kinds()).toEqual([
+      "started",
+      "reading", "idle",
+      "reading", "idle",
+      "finished",
+    ]);
+
+    vi.clearAllMocks();
+    h.frames.length = 0;
+    h.behavior = { conflict: { runId: "run-primary" }, queue: [], pend: true };
+    await hqRun(BRIEF);
+    // the rival's stream is dead on arrival — nobody attaches to it
+    expect(h.frames).toEqual([]);
   });
 });

@@ -60,6 +60,7 @@ describe("readHQStatus", () => {
   it("a missing pointer is the EMPTY status, not an error", async () => {
     const { readHQStatus } = await importStore();
     expect(await readHQStatus()).toEqual({
+      runId: null,
       runStartedAt: null,
       runStatus: null,
       briefsHandled: 0,
@@ -90,6 +91,7 @@ describe("readHQStatus", () => {
     );
     const { readHQStatus } = await importStore();
     expect(await readHQStatus()).toEqual({
+      runId: null,
       runStartedAt: null,
       runStatus: null,
       briefsHandled: 0,
@@ -134,6 +136,26 @@ describe("the run lifecycle marks", () => {
     expect(s.runStatus).toBe("running");
     expect(typeof s.runStartedAt).toBe("string");
     expect(s.lastBriefPreview).toBe("现场：一条简报。");
+  });
+
+  it("the claiming run's OWN id lands on the pointer (the pod's attach target)", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+    await recordHQRunStarted("run-abc");
+    let s = await readHQStatus();
+    expect(s.runId).toBe("run-abc");
+    expect(s.runStatus).toBe("running");
+
+    // finishing settles the status but KEEPS the id — a finished run's
+    // stream stays replayable, so the attach target outlives the run
+    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    s = await readHQStatus();
+    expect(s.runId).toBe("run-abc");
+    expect(s.runStatus).toBe("idle");
+
+    // the next claim overwrites it
+    await recordHQRunStarted("run-def");
+    expect((await readHQStatus()).runId).toBe("run-def");
   });
 
   it("finish maps wrote/errored to 完成 / 空转 / 失败 and the definitive count", async () => {
