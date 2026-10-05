@@ -47,7 +47,7 @@ import {
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
-import { AnimatePresence, animate, motion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 import { useTranslations, useLocale } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -61,7 +61,6 @@ import {
   subscribeEvolutionActivity,
 } from "@/lib/chat/evolution-activity";
 import {
-  DISSOLVE_START,
   transitionPhase,
   WORLD_TRANSITION,
   WORLD_TRANSITION_MS,
@@ -81,19 +80,13 @@ import {
   type WorldDriver,
 } from "@/components/shell/shell-provider";
 import { ISLAND } from "@/components/layout/island";
-import { useChromeInset } from "@/hooks/use-chrome-inset";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { useTier } from "@/hooks/use-tier";
 import { AxisBand, JumpControls } from "@/components/timeline-3d/axis-band";
 import { BoardBar } from "@/components/shell/board-bar";
-import { TimelineScene } from "@/components/timeline-3d/timeline-scene";
-import { TimelineFallback } from "@/components/timeline-3d/timeline-fallback";
 import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
+import { DocLibrary } from "@/components/shelf/doc-library";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
-import {
-  AtmosphereBackdrop,
-  TIMELINE_KEYFRAMES,
-} from "@/components/timeline-3d/atmosphere";
 
 // THE CANVAS AND THE GAME LOAD AS THEIR OWN CHUNKS (§13.2): the shared
 // canvas pulls in three/fiber, the game its postprocessing chain — a visitor
@@ -116,19 +109,6 @@ import {
   type NarrationTarget,
 } from "@/components/companion/companion-pod";
 
-/** The rung-switch slide's travel, px (world units at the z=0 plane — the
- *  field camera's 1:1 screen mapping, camera.ts). Pre-merge value, restored
- *  (556ae16 took the slide out with the per-pane canvases; §14's single
- *  canvas moves the CAMERA instead of the DOM layer — same gesture). */
-const RUNG_SLIDE_X = 24;
-
-/** The data-hold's bound (ms): how long a move into the field may wait at
- *  the dissolve threshold for the catalog before proceeding into the
- *  destination's fallback skeleton. An unbounded hold would pin
- *  WORLD_TRANSITION.active — the input gate — forever when the catalog
- *  fetch fails (see the clock's exception-path note). */
-const TRANSITION_DATA_WAIT_MS = 8000;
-
 export function AppShell() {
   // THE URL IS DEV-ONLY. `?view=game` is read ONCE, as the cold-boot world,
   // so the debug gallery's link (`?view=game&debug=rooms`, game-shell.tsx)
@@ -136,6 +116,9 @@ export function AppShell() {
   // here and nothing ever writes it: a refresh returns to the field at the
   // conversation rung, exactly like a fresh visit.
   const searchParams = useSearchParams();
+  // The demo persona rides the dev-only URL, exactly like `?view=game` —
+  // read once at mount, forwarded to the library column's server actions.
+  const persona = searchParams.get("persona") ?? undefined;
   const [settledView, setSettledView] = useState<WorldKind>(() =>
     searchParams.get("view") === "game" ? "game" : "field",
   );
@@ -152,10 +135,8 @@ export function AppShell() {
     worldFrozen,
     sharedSlice,
     deskDoc,
-    reportCursor,
     getCursor,
     feed,
-    composerClearance,
     setPaneSlotEl,
     registerWorldDriver,
     setWorldPose,
@@ -226,14 +207,13 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
-  const [oldestMonth, setOldestMonth] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
   const [timelineReady, setTimelineReady] = useState(false);
-  const loadingRef = useRef(false);
   /** A turn is streaming. Reported by the overlay's `ChatPage` through the
-   *  driver (it is the only half that knows — `useChat`'s `isLoading`); the
-   *  card field draws its abstract placeholder from it. See `RunningCard`. */
-  const [running, setRunning] = useState(false);
+   *  driver (it is the only half that knows — `useChat`'s `isLoading`). The
+   *  value had one reader, the card field's `RunningCard`, which retired
+   *  with the card field (v0.23); the SETTER stays — the WorldDriver
+   *  contract still carries it. */
+  const [, setRunning] = useState(false);
 
   // ── THE WORLD TRANSITION MACHINE (world-transition.ts) ────────────────────
   // The shell owns the move: WHICH worlds are mounted (one settled, two
@@ -270,14 +250,10 @@ export function AppShell() {
    *  that restores it instead of moving the cursor. */
   const prevRoomCursorRef = useRef<string | null>(null);
   const settledRef = useRef<WorldKind>(view);
-  const readyRef = useRef(false);
   const reducedMotionRef = useRef(reducedMotion);
   useEffect(() => {
     settledRef.current = settledView;
   }, [settledView]);
-  useEffect(() => {
-    readyRef.current = timelineReady;
-  }, [timelineReady]);
   useEffect(() => {
     reducedMotionRef.current = reducedMotion;
   }, [reducedMotion]);
@@ -499,22 +475,10 @@ export function AppShell() {
           return;
         }
         const elapsedMs = performance.now() - started;
-        let p = Math.min(1, elapsedMs / duration);
-        // The dissolve waits for the destination's data: hold at the
-        // threshold — the hotel parked at the terminal's eye pose — until
-        // the catalog has loaded enough for the field world to mount the
-        // focused card. The hold is BOUNDED: a catalog fetch that failed
-        // leaves the destination showing its designed fallback skeleton
-        // (TimelineFallback), and an unbounded hold would pin the input
-        // gate forever — the exception path must still end the move.
-        if (
-          transitionTo === "field" &&
-          p >= DISSOLVE_START &&
-          !readyRef.current &&
-          elapsedMs < TRANSITION_DATA_WAIT_MS
-        ) {
-          p = DISSOLVE_START;
-        }
+        const p = Math.min(1, elapsedMs / duration);
+        // (v0.23) The data hold retired with the card field: the reader is
+        // the field world's destination now and mounts nothing that waits
+        // on the catalog, so the dissolve never holds at the threshold.
         WORLD_TRANSITION.progress = p;
         const phase = transitionPhase(p);
         setTransition((prev) =>
@@ -572,19 +536,6 @@ export function AppShell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view, panelMode, setPanelMode, beginTransition]);
-
-  // ── 回到现在 (v0.13 §6) — an explicit JUMP, never a scroll ─────────────
-  // "Now" is the live stream, not the newest card: the newest slice is NOT
-  // in the card stack's reachable set (the stack is the bounded past), so
-  // the corner control leaves the stack for the conversation rung and
-  // clears the cursor — the default state is no slice selected (§2/§5), and
-  // the next request carries no view block. At the conversation rung the
-  // same corner button keeps its old seek-to-bottom, because the chat
-  // field's live edge IS now.
-  const returnToNow = useCallback(() => {
-    reportCursor(null);
-    setRung("conversation");
-  }, [reportCursor]);
 
   // ── THE WORLD GATE (v0.13 §6) — returning to the world is a CHOICE ─────
   // The field's way into the hotel used to be a bare button that started
@@ -659,19 +610,20 @@ export function AppShell() {
   const tGame = useTranslations("game");
   // The desk's injected strings (v0.22): the Html portal is a separate React
   // root, so the paper's chrome strings go in as props (FrameCardTexts
-  // pattern). The footer's category name reuses the shelf's category keys.
+  // pattern). The footer's category name and the reader's chrome read the
+  // library namespace — the category table's one home since v0.23.
   const tDesk = useTranslations("desk");
-  const tShelf = useTranslations("chat.input.shelf");
+  const tLibrary = useTranslations("library");
   const deskTexts = useMemo<DeskTexts>(
     () => ({
       regionLabel: tDesk("regionLabel"),
       loading: tDesk("loading"),
       notFoundHeading: tDesk("notFoundHeading"),
       notFoundBody: (ref) => tDesk("notFoundBody", { ref }),
-      categoryName: (category) => tShelf(`category.${category}`),
+      categoryName: (category) => tLibrary(`category.${category}`),
       page: (n) => tDesk("page", { n }),
     }),
-    [tDesk, tShelf],
+    [tDesk, tLibrary],
   );
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
@@ -692,32 +644,17 @@ export function AppShell() {
     });
   }, [tCompanion]);
 
-  // ── THE PANE'S TWO FLOATING INSETS ───────────────────────────────────────
-  // What the chrome covers at the top edge and what the composer covers at the
-  // foot, in px. The top one is measured from the chrome itself
-  // (`use-chrome-inset.ts`); the foot one is measured by the overlay's
-  // composer (`composer-host.tsx`) and arrives through the PROVIDER, because
-  // both fields float under the same two controls and the provider is the
-  // one place above both of them.
-  //
-  // They are RANGE insets, not container padding: the fields fill the pane and
-  // the content travels under the controls on its way past them, coming to rest
-  // clear of them. A padding on the pane would crop the content instead — see
-  // `minOffsetFor`.
-  const chromeInset = useChromeInset();
-
   const range = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     if (entries.length === 0) return { oldest: today, now: today };
     return { oldest: entries[0].date, now: today };
   }, [entries]);
 
-  // ── Lazy catalog load on the first CARD rung. A slice address (the shared
-  //    cursor, or a transition's terminal slice) loads the full catalog so the
-  //    addressed slice is always resolvable; otherwise loads the latest month
-  //    window. ───────────────────────────────────────────────────────────────
-  // A live transition's slice leads: it is the field's landing focus the
-  // moment the move completes.
+  // ── Lazy catalog load on the first CARD rung (the reader's rungs count).
+  //    A slice address (the shared cursor, or a transition's terminal slice)
+  //    loads the full catalog; otherwise the latest month window. The
+  //    catalog feeds the band's RANGE and the settle refresh below — the
+  //    card rows it once also fed retired with the card field. ──────────────
   const focusId = transition?.sliceId ?? sharedSlice;
   useEffect(() => {
     if (rung === "conversation" || timelineReady) return;
@@ -728,19 +665,15 @@ export function AppShell() {
           const catalog = await getTimelineCatalog();
           if (cancelled) return;
           setEntries(catalog);
-          setOldestMonth(catalog[0]?.date.slice(0, 7) ?? null);
-          setHasMore(false);
         } else {
           const page = await getTimelineCatalogPage(null);
           if (cancelled) return;
           setEntries(page.entries);
-          setOldestMonth(page.oldestMonth);
-          setHasMore(page.hasMore);
         }
         setTimelineReady(true);
       } catch {
-        // A failed boot load leaves the fallback in place; the user can retry
-        // by zooming out to a card rung again.
+        // A failed boot load leaves the band's range at today; the next
+        // card-rung visit retries.
       }
     })();
     return () => {
@@ -751,15 +684,12 @@ export function AppShell() {
   /**
    * Re-read the newest catalog page after a turn settles, and APPEND.
    *
-   * Appending is the whole trick, and it is not an optimisation. `rows` is
-   * `groupForLevel(entries, level)`, so replacing `entries` reorders the
-   * reader's list under them; and `buildOffsets` recomputes every `tops[i]`,
-   * so a head that moves invalidates the one offset table everything
-   * positional reads. A new slice is always the NEWEST — `groupForLevel` sorts
-   * by `start` — so it can only ever land at the tail, where nothing above it
-   * moves. Returning `prev` BY IDENTITY when there is nothing new is the other
-   * half: React bails out, `rows` never recomputes, and a settle with no new
-   * slice costs one no-op render.
+   * Appending is the whole trick, and it is not an optimisation: replacing
+   * `entries` reorders a list built from it, while a new slice is always
+   * the NEWEST — it can only ever land at the tail, where nothing above it
+   * moves. Returning `prev` BY IDENTITY when there is nothing new is the
+   * other half: React bails out and a settle with no new slice costs one
+   * no-op render.
    */
   const refreshCatalog = useCallback(async () => {
     try {
@@ -783,87 +713,21 @@ export function AppShell() {
     }
   }, []);
 
-  const loadOlder = useCallback(async () => {
-    if (!hasMore || loadingRef.current || !oldestMonth) return;
-    loadingRef.current = true;
-    try {
-      const page = await getTimelineCatalogPage(oldestMonth);
-      if (page.entries.length === 0) {
-        setHasMore(false);
-        return;
-      }
-      setEntries((prev) => {
-        const have = new Set(prev.map((e) => e.id));
-        const older = page.entries.filter((e) => !have.has(e.id));
-        return older.length > 0 ? [...older, ...prev] : prev;
-      });
-      setOldestMonth(page.oldestMonth);
-      setHasMore(page.hasMore);
-    } catch {
-      // A failed prefetch is silent: the list just finds no older rows and the
-      // next edge approach retries.
-    } finally {
-      loadingRef.current = false;
-    }
-  }, [hasMore, oldestMonth]);
-
-  // ── ONE LADDER, TWO RENDERERS ─────────────────────────────────────────────
+  // ── THE PANE'S TWO MODES (v0.23) ─────────────────────────────────────────
   // The rung is the navigation now; there is no view mode beside it. The
-  // CONVERSATION rung is drawn by the chat's own field and the three card rungs
-  // by the card field, because the two have genuinely different jobs rather
-  // than two settings of one thing:
+  // CONVERSATION rung is the chat's own surface and is UNTOUCHED here. Every
+  // CARD rung is the DOCUMENT READER: the library filter column on the left
+  // (shelf/doc-library.tsx) and the desk's tabletop + paper in the main
+  // area — a quiet placeholder while nothing is open.
   //
-  //   - the conversation rung must show the turn that is being written RIGHT
-  //     NOW, which lives only in `useChat`'s messages — the card field's rows
-  //     come from the persisted catalog (`groupForLevel(entries)`) and have no
-  //     path to it. Giving it one means threading a streaming array through
-  //     props or a store, which is the re-render storm `card-field.tsx:30-36`
-  //     documents.
-  //   - the card rungs must show the pile, the deal and the rung transitions,
-  //     which the conversation field has no concept of.
-  //
-  // So: one LADDER the reader navigates, two RENDERERS behind it. The camera
-  // unification the previous note here described (derive `CAM_Z` from the
-  // viewport so both fields share one coordinate system) is still true and
-  // still worth doing — but it is a rendering change, not a navigation one, and
-  // it is not what stood between the reader and a single ladder.
-  const showCardField = rung !== "conversation" && deskDoc === null;
-
-  // ── THE DESK'S TURN AT THE FIELD SLOT (v0.22) ────────────────────────────
-  // The document desk is the card field's MUTUALLY EXCLUSIVE pane mate: while
-  // `deskDoc` is set the card field unmounts and the desk registers the same
-  // field world slot. But the slot is last-write-wins with an unconditional
-  // null cleanup on unmount (world-slot.tsx), and AnimatePresence keeps a
-  // leaving branch mounted through its 300 ms exit — so "CardField unmounts,
-  // then the desk registers" is NOT automatic, and neither is the reverse.
-  // Two scenes registered at once (or a late cleanup landing on a fresh
-  // registration) fights itself. The rule: THE TWO OWNERS ARE NEVER MOUNTED
-  // TOGETHER — each branch mounts only after the other's exit completed
-  // (`onExitComplete`), in both directions.
-  const [cardFieldExited, setCardFieldExited] = useState(
-    () => rung === "conversation",
-  );
-  const [deskExited, setDeskExited] = useState(true);
-  const timelinePresent = showCardField && deskExited;
-  const deskPresent = deskDoc !== null && cardFieldExited;
-  useEffect(() => {
-    if (timelinePresent) setCardFieldExited(false);
-  }, [timelinePresent]);
-  useEffect(() => {
-    if (deskPresent) setDeskExited(false);
-  }, [deskPresent]);
-  /** True while the conversation rung is up — the pane slot's visibility
-   *  switch (the field's R3F band is read in the pane there, dimmed away at
-   *  a card rung). The PANEL half of the conversation is the layout overlay's
-   *  business; this is only the slot's. */
+  // THE CARD FIELD no longer renders in the pane. Its code stays in the
+  // tree untouched (`timeline-3d/**`, backed up at branch
+  // `backup/card-field-v0.22` + tag `v0.22-card-field`) — the pane simply
+  // stops mounting it. The mutual-exclusion choreography the desk shared
+  // with it (exit latches, never-mounted-together) retired with it: the
+  // desk is now the slot's only owner and mounts the moment `deskDoc` is
+  // set.
   const onConversationRung = rung === "conversation";
-  /** THE OWNERSHIP RULE, in one line. Exactly one pane publishes to the band at
-   *  a time: the card field while a card rung is up, the chat otherwise. The
-   *  other field is still mounted and still animating — it simply writes
-   *  nothing, which is why this is a lease rather than a merge. The chat half
-   *  lives in the overlay now, so the lease is PUSHED to the provider (below)
-   *  instead of handed down as a prop. */
-  const panePublishes = showCardField;
 
   // ── THE ROUTE → PROVIDER CHANNEL ─────────────────────────────────────────
   // Registration and pushes, all laid out in one place:
@@ -901,93 +765,61 @@ export function AppShell() {
     setWorldPose({ settled: settledView, rung });
   }, [settledView, rung, setWorldPose]);
   useEffect(() => () => setWorldPose(null), [setWorldPose]);
+  // THE FEED LEASE (v0.23). The pane publishes nothing any more — the card
+  // field retired — so the chat half owns the band feed everywhere except
+  // mid-transition, exactly the conversation-rung rule the card field used
+  // to hold at card rungs.
   useLayoutEffect(() => {
-    setFeedPublishing(!panePublishes && !transitionActive);
-  }, [panePublishes, transitionActive, setFeedPublishing]);
+    setFeedPublishing(!transitionActive);
+  }, [transitionActive, setFeedPublishing]);
   useEffect(() => () => setFeedPublishing(true), [setFeedPublishing]);
+  // `?at=` suppression keeps the deep link from jumping the (dimmed) chat
+  // while the reader is up — the same card-rung rule as before, now keyed
+  // off the rung itself.
   useLayoutEffect(() => {
-    setSuppressAtJump(showCardField);
-  }, [showCardField, setSuppressAtJump]);
+    setSuppressAtJump(!onConversationRung);
+  }, [onConversationRung, setSuppressAtJump]);
   useEffect(() => () => setSuppressAtJump(false), [setSuppressAtJump]);
 
-  // ── THE RUNG SLIDE (the 556ae16 regression, restored in-canvas) ──────────
-  // Pre-merge, the timeline pane was a DOM layer carrying its OWN canvas, so
-  // its enter/exit SLIDED the whole scene (x: 24, 0.3 s, ease-out-expo). The
-  // merge moved the cards into the shell's shared canvas, which must not
-  // move — and the transition degenerated to an opacity fade. The slide is
-  // restored by moving the two halves together: ONE framer animation writes
-  // BOTH the field camera's x offset and the DOM layer's transform every
-  // tick, so the GL content and the Html card faces travel as one plane
-  // (world px = screen px at the z=0 plane) — exactly like the pre-merge
-  // per-pane canvas under its CSS transform. The x never rides in the
-  // motion element's props: an `initial x` would hydrate differently for a
-  // reduced-motion client (the server cannot know the preference), and the
-  // imperative transform keeps server and client markup identical. A
-  // reduced-motion reader gets opacity only, the offset pinned at 0.
-  const paneSlideRef = useRef(0); // camera offset (world px)
-  const paneLayerRef = useRef<HTMLDivElement | null>(null); // the DOM layer
-  const setSlide = (v: number) => {
-    paneSlideRef.current = v;
-    const el = paneLayerRef.current;
-    if (el) el.style.transform = v === 0 ? "" : `translateX(${v}px)`;
-  };
-  // True while the timeline layer is EXITING (the conversation rung took
-  // over and AnimatePresence is playing the 0.3 s exit): the field freezes
-  // on its last card rung — the world content the reader was looking at is
-  // what slides out, not one frame of the conversation rung's units.
-  const [timelineExiting, setTimelineExiting] = useState(false);
-  // Layout effect: the snap + animation must be in place BEFORE the entering
-  // world's first paint (a passive effect would let one frame flash at 0).
+  // ── THE READER LAYOUT (v0.23) ────────────────────────────────────────────
+  // The library column's width is MEASURED, not assumed: it is the single
+  // source the desk's camera offset reads, so the paper centres in the main
+  // area to the column's right (world px = screen px at the z=0 plane; a
+  // camera x of -D shifts content right by D). Below `md` the column hides
+  // and the measurement reads 0 — the paper then centres in the full pane.
+  const libColRef = useRef<HTMLElement | null>(null);
+  const [libColW, setLibColW] = useState(0);
   useLayoutEffect(() => {
-    if (showCardField) {
-      setTimelineExiting(false);
-      if (reducedMotion) {
-        setSlide(0);
-        return;
-      }
-      // Enter: the world appears at +24 — where the pre-merge layer's
-      // initial x sat — and travels to 0 over the same 300 ms.
-      setSlide(RUNG_SLIDE_X);
-      const controls = animate(RUNG_SLIDE_X, 0, {
-        duration: 0.3,
-        ease: [0.22, 1, 0.36, 1],
-        onUpdate: setSlide,
-      });
-      return () => controls.stop();
+    const el = libColRef.current;
+    if (!el) {
+      setLibColW(0);
+      return;
     }
-    setTimelineExiting(true);
-    if (reducedMotion) {
-      setSlide(0);
-      const t = setTimeout(() => setTimelineExiting(false), 0);
-      return () => clearTimeout(t);
-    }
-    const controls = animate(paneSlideRef.current, RUNG_SLIDE_X, {
-      duration: 0.3,
-      ease: [0.22, 1, 0.36, 1],
-      onUpdate: setSlide,
-      onComplete: () => setTimelineExiting(false),
-    });
-    // Backstop: onComplete can race a fast re-enter, and the exiting freeze
-    // must never outlive the layer it describes.
-    const t = setTimeout(() => setTimelineExiting(false), 350);
-    return () => {
-      controls.stop();
-      clearTimeout(t);
-    };
-  }, [showCardField, reducedMotion]);
+    const update = () => setLibColW(el.offsetWidth);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [onConversationRung]);
 
   // ── THE ONE CANVAS (§14 merge) ───────────────────────────────────────────
-  // Both worlds render in the shell-owned WorldCanvas — the card field's two
-  // canvases (the pane's card field and the band's braid) are subtrees of it
-  // now, and the game joins it as the other world. The band's rect comes
-  // from the same tier spec the AxisBand sizes itself by, so the braid's
-  // scissor window lands exactly under the band's DOM; `camXOffset` parks
-  // the card field's camera half a band-width left of the canvas centre so
-  // the cards stay centred in the PANE (a parallel shift, not a turn).
+  // Both worlds render in the shell-owned WorldCanvas, the game joining the
+  // field as the other world. The band's rect comes from the same tier spec
+  // the AxisBand sizes itself by, so the braid's scissor window lands
+  // exactly under the band's DOM. THE BAND PROP STAYS while the field world
+  // is mounted, even in the reader (where the band's DOM is gone): the
+  // canvas gates the field world's renderer on `band !== null`
+  // (world-canvas.tsx), so nulling it would blank the desk scene too — the
+  // empty retired braid just winds unseen under the library column.
   const { spec } = useTier();
   const bandX = spec.railMargin;
   const bandW = spec.railW;
   const camXOffset = -(bandX + bandW) / 2;
+  // The desk's camera offset. On the CONVERSATION rung the band still takes
+  // its strip, so the paper keeps the band-based shift it has always had.
+  // In the READER the band is gone and the library column takes its place:
+  // the paper centres in the main area, shifted right by half the column.
+  const deskCamXOffset = onConversationRung ? camXOffset : -libColW / 2;
 
   // The field world's DOM layer (band, pane, floating chrome) rides the
   // move's phase: as the DESTINATION it arrives with the dissolve — it
@@ -1007,26 +839,6 @@ export function AppShell() {
     // §3.1 moved them to the layout's ShellProvider, above the overlay too.)
     <WorldSceneProvider>
     <div className="relative flex h-dvh overflow-hidden">
-      {/* The field world's page atmosphere, UNDER the canvas (the canvas is
-          transparent; the aurora used to sit behind the pane's own canvas,
-          now it sits behind the shared one). Inset past the band so the
-          strip keeps the plain page background it has always had. Mounted
-          only at a card rung and while the field world is up, exactly as
-          before. */}
-      {mountedWorlds.includes("field") && showCardField && (
-        <>
-          <style>{TIMELINE_KEYFRAMES}</style>
-          {/* The atmosphere fills the pane to the RIGHT of the band; the
-              band's left edge and width are measured layout values (px). */}
-          <div
-            aria-hidden
-            className="absolute inset-y-0 right-0 z-0"
-            style={{ left: bandX + bandW }}
-          >
-            <AtmosphereBackdrop />
-          </div>
-        </>
-      )}
       {/* The floating chrome (app-header) is a FIELD-world fixture; the game
           keeps only its own overlay. Hidden with a style tag because the
           header itself is not this file's to change. Hidden from the start
@@ -1049,23 +861,21 @@ export function AppShell() {
             : null
         }
       />
-      {/* LEFT: the time axis. It is not a timeline-view affordance — it is
-          where the app's strands live — but its braid renders in the
-          field world's scene, so the band's DOM waits for the same phase
-          as the rest of the field chrome: it arrives with the dissolve
-          when the field is the destination and stays while the field is
-          the source. The right pane supplies the anchors either way: the
-          card field's rows in the timeline, the chat stream's slice seams
-          in chat, so the braid winds at whatever the user is actually
-          looking at. Field world only — the game owns the whole viewport. */}
-      {fieldChrome && <AxisBand range={range} feed={feed} />}
+      {/* LEFT: the time axis — CONVERSATION RUNG ONLY (v0.23). In the reader
+          the card rungs are the document library's, and the band renders
+          nowhere; its braid still winds in the canvas under the column (the
+          band prop must stay non-null, see above), unseen. The band's DOM
+          waits for the same phase as the rest of the field chrome: it
+          arrives with the dissolve when the field is the destination and
+          stays while the field is the source. Field world only — the game
+          owns the whole viewport. */}
+      {fieldChrome && onConversationRung && <AxisBand range={range} feed={feed} />}
 
-      {/* RIGHT: the conversation field's pane slot + the timeline overlay
-          when active. THE CONVERSATION LAYER ITSELF IS NOT HERE any more —
-          §3.1 mounted it at the layout (chat/conversation-overlay.tsx), a
-          sibling of this route that survives navigation and world rebuilds.
-          Only the field's pane slot remains, because the R3F band still
-          reaches into this pane. */}
+      {/* RIGHT: the conversation field's pane slot + the reader chrome. THE
+          CONVERSATION LAYER ITSELF IS NOT HERE any more — §3.1 mounted it at
+          the layout (chat/conversation-overlay.tsx), a sibling of this route
+          that survives navigation and world rebuilds. Only the field's pane
+          slot remains, because the R3F band still reaches into this pane. */}
       <div className="relative flex-1 min-w-0 flex flex-col">
         {/* THE CONVERSATION FIELD'S PANE SLOT — the restored R3F conversation
             renders HERE, in the 2.5D view, exactly where the conversation
@@ -1095,102 +905,43 @@ export function AppShell() {
 
         {fieldChrome && (
           <>
-        <AnimatePresence onExitComplete={() => setCardFieldExited(true)}>
-          {timelinePresent && (
-            <motion.div
-              key="timeline"
-              // Opacity only — the slide's x lives on the inner layer, set
-              // imperatively by THE RUNG SLIDE above (one animation drives
-              // the DOM transform and the camera offset together, and an
-              // `initial x` here would hydrate differently for a reduced-
-              // motion client).
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0 z-10 flex flex-col"
-            >
-              {/* THE SLIDING LAYER: plain div, so framer never touches the
-                  transform — THE RUNG SLIDE's onUpdate owns it, writing the
-                  same value to the camera offset and this transform every
-                  tick (the two halves move as one plane). */}
-              <div
-                ref={paneLayerRef}
-                className="absolute inset-0 will-change-transform"
-              >
-              {/* Catalog-loading crossfade: the arrival swaps a structured
-                  skeleton for the live scene without a hard cut. */}
-              <AnimatePresence mode="wait" initial={false}>
-                {!timelineReady ? (
-                  <motion.div
-                    key="fallback"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: reducedMotion ? 0 : 0.25 }}
-                    className="absolute inset-0"
-                  >
-                    <TimelineFallback />
-                  </motion.div>
-                ) : (
-                  <motion.div
-                    key="scene"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: reducedMotion ? 0 : 0.25 }}
-                    className="absolute inset-0"
-                  >
-                    <TimelineScene
-                      entries={entries}
-                      hasMore={hasMore}
-                      onNeedOlder={loadOlder}
-                      onOpenSlice={nav.openSlice}
-                      // ONE CURSOR (§6): the card a scroll centres IS the
-                      // slice the reader stands at — the quiet write, no
-                      // world motion (see card-field.tsx).
-                      onCursorSlice={reportCursor}
-                      onNarrate={bridgeBrain === false ? startNarration : undefined}
-                      initialAtId={focusId ?? undefined}
-                      feed={feed}
-                      // Same freeze as the chat field — the one-writer rule
-                      // holds through the move (the overlay's half gets the
-                      // lease through the provider; see the driver pushes).
-                      publishing={panePublishes && !transitionActive}
-                      rung={rung}
-                      onRungChange={setRung}
-                      reducedMotion={reducedMotion}
-                      running={running}
-                      insetTop={chromeInset}
-                      insetBottom={composerClearance}
-                      // §14.1 rule 2's freeze now lives on the shared canvas
-                      // itself (WorldCanvas frameloop="never" while the panel
-                      // is fullscreen) — pause, never unmount.
-                      camXOffset={camXOffset}
-                      // The rung slide, restored: the camera offset the
-                      // world content travels during the 0.3 s switch, and
-                      // the exit freeze (the field keeps its last card rung
-                      // while this layer slides out).
-                      slideRef={paneSlideRef}
-                      exiting={timelineExiting}
-                      frozenRung={lastCardRungRef.current}
-                    />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* THE LIBRARY COLUMN (v0.23) — the reader's three-level filter,
+            the pane's left strip. DOM chrome over the canvas; the desk's
+            camera shifts right by half its measured width so the paper
+            centres in the main area. Below `md` it hides and the reader is
+            the paper alone. */}
+        {!onConversationRung && (
+          <aside
+            ref={libColRef}
+            data-doc-library
+            className="absolute inset-y-0 left-0 z-20 hidden w-64 flex-col border-r border-border bg-background md:flex"
+          >
+            <DocLibrary persona={persona} />
+          </aside>
+        )}
 
-        {/* THE DOCUMENT DESK (v0.22) — the card field's mutually exclusive
-            pane mate: same field world, same slot, and the sequencing rule
-            from showCardField's note (the two owners are never mounted
-            together — this branch mounts only after the timeline's exit
-            completed, and the timeline waits for this one's). The pane swap
-            is the same opacity idiom as the conversation↔cards switch; the
-            paper's own entrance beat plays inside the scene. */}
-        <AnimatePresence onExitComplete={() => setDeskExited(true)}>
-          {deskDoc !== null && cardFieldExited && (
+        {/* THE EMPTY READER — nothing open: a quiet hint centred in the main
+            area (to the column's right), no new visual language. */}
+        {!onConversationRung && deskDoc === null && (
+          <div
+            className="pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center justify-center"
+            style={{ left: libColW }}
+          >
+            <p className="max-w-60 px-6 text-center text-sm leading-relaxed text-muted-foreground/70">
+              {tLibrary("empty")}
+            </p>
+          </div>
+        )}
+
+        {/* THE DOCUMENT DESK (v0.22, the reader's main area since v0.23) —
+            the field slot's only owner now: it mounts the moment `deskDoc`
+            is set, swaps the paper in place when the ref changes (the
+            pull-out re-plays inside the scene), and unmounts on Escape.
+            The pane swap is the same 300 ms opacity idiom as the old
+            conversation↔cards switch; the paper's own entrance beat plays
+            inside the scene. */}
+        <AnimatePresence>
+          {deskDoc !== null && (
             <motion.div
               key="desk"
               initial={{ opacity: 0 }}
@@ -1201,7 +952,7 @@ export function AppShell() {
             >
               <DeskField
                 docRef={deskDoc}
-                camXOffset={camXOffset}
+                camXOffset={deskCamXOffset}
                 reducedMotion={reducedMotion}
                 texts={deskTexts}
               />
@@ -1224,15 +975,12 @@ export function AppShell() {
             crossing dot and these two — a 32px column where the controls were
             competing with the thing they controlled. The rail says where time
             IS; the right edge is where you act on it. */}
-        <JumpControls
-          feed={feed}
-          // 回到现在 (§6): at a card rung the bottom control is the explicit
-          // jump to NOW — the conversation rung, cursor cleared — because the
-          // newest slice is not in the stack's reachable set. At the
-          // conversation rung it keeps its seek-to-bottom: the chat field's
-          // live edge IS now.
-          onNow={rung !== "conversation" ? returnToNow : undefined}
-        />
+        {/* THE JUMP CONTROLS — CONVERSATION RUNG ONLY (v0.23). They only
+            ever served the card field; in the reader the left edge is the
+            library column's, so the controls' stack is gone. On the
+            conversation rung the bottom control keeps its old
+            seek-to-bottom: the chat field's live edge IS now. */}
+        {onConversationRung && <JumpControls feed={feed} />}
         {/* THE COMPANION POD — the companion stream's floating presence. It
             holds the narration the 「讲讲这片」 entry starts (pod button +
             panel in one component, streaming and all) AND the evolution

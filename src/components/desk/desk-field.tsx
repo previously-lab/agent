@@ -57,6 +57,7 @@ import {
 import { MarkdownRenderer } from "@/components/chat/markdown";
 import {
   deskPaperModel,
+  DOC_FIRST_PAGE,
   recessIntensityFor,
   type DeskPaperModel,
 } from "./desk-model";
@@ -242,6 +243,18 @@ function DeskScene({
   const tableMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const paperRef = useRef<HTMLDivElement>(null);
 
+  // THE SWAP RE-PLAYS THE PULL-OUT (v0.23): the reader stays mounted while
+  // `docRef` changes (picking another document in the library column), and
+  // the entrance beat runs again for the new sheet — the paper dips below
+  // the viewport and rises with the fresh content instead of swapping in
+  // place. The write happens during render so no frame flashes the old
+  // sheet with the new ref's loading state (the ref write is idempotent).
+  const lastDocRefRef = useRef(docRef);
+  if (lastDocRefRef.current !== docRef) {
+    lastDocRefRef.current = docRef;
+    animRef.current.t = 0;
+  }
+
   useFrame((_, rawDt) => {
     const dt = Math.min(rawDt, 0.1);
     const anim = animRef.current;
@@ -389,7 +402,7 @@ function DeskScene({
 
             <footer className="desk-foot flex items-baseline">
               <span className="flex-1" />
-              <span className="desk-recess tabular-nums">{texts.page(1)}</span>
+              <span className="desk-recess tabular-nums">{texts.page(DOC_FIRST_PAGE)}</span>
               <span className="flex-1 truncate text-right">
                 {model.category ? texts.categoryName(model.category) : ""}
               </span>

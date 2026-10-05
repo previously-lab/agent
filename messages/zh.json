@@ -87,30 +87,7 @@
         "direction": "进化方向"
       },
       "docsLoading": "加载中…",
-      "docsEmpty": "暂无内容",
-      "shelf": {
-        "menuLabel": "书架",
-        "title": "记忆书架",
-        "byCategory": "按类目",
-        "docsEmpty": "这个类型下还没有文档。",
-        "casesEmpty": "这个类目下还没有 case。",
-        "attachments": "附件",
-        "loading": "加载中…",
-        "loadError": "书架暂时打不开。",
-        "back": "返回书架",
-        "openedAt": "始于 {date}",
-        "category": {
-          "people": "人物",
-          "events": "事件",
-          "things": "物品",
-          "places": "地点",
-          "orgs": "组织",
-          "research": "调研",
-          "hypotheses": "假说",
-          "tasks": "任务",
-          "self": "自我"
-        }
-      }
+      "docsEmpty": "暂无内容"
     },
     "attachment": "附件",
     "actions": {
@@ -569,10 +546,31 @@
     "lastSpoke": "上次对话 {gap}"
   },
   "desk": {
-    "regionLabel": "文档桌面——按 Esc 把文档放回书架",
+    "regionLabel": "文档桌面——按 Esc 把文档放回文库",
     "loading": "正在取这份文档…",
     "notFoundHeading": "找不到这份文档",
-    "notFoundBody": "书架上没有与「{ref}」对应的文档，它可能已被移动、改名或封存。",
+    "notFoundBody": "文库里没有与「{ref}」对应的文档，它可能已被移动、改名或封存。",
     "page": "· {n} ·"
+  },
+  "library": {
+    "title": "文库",
+    "empty": "从左侧选一份 case 或篇，文档会在这里打开。",
+    "casesEmpty": "这个类目下还没有 case。",
+    "piecesEmpty": "还没有篇——case 总览就是全文。",
+    "attachments": "附件",
+    "loading": "加载中…",
+    "loadError": "文库暂时打不开。",
+    "openedAt": "始于 {date}",
+    "category": {
+      "people": "人物",
+      "events": "事件",
+      "things": "物品",
+      "places": "地点",
+      "orgs": "组织",
+      "research": "调研",
+      "hypotheses": "假说",
+      "tasks": "任务",
+      "self": "自我"
+    }
   }
 }

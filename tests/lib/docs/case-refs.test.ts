@@ -52,6 +52,28 @@ describe("parseCaseRef — two-segment references", () => {
     });
   });
 
+  it("REGRESSION (v0.23): the shelf's file-name ref (with .md) opens the listed piece", () => {
+    // The bug the reader shipped with: the piece row built
+    // `research/<case>/<篇名>.md` and the parse failed, so a listed
+    // document came back "找不到这份文档". Both shapes must resolve.
+    const expected = {
+      kind: "piece",
+      category: "research",
+      caseName: "华北与北京落点",
+      pieceFileName: "2026-10-05-华北与北京落点.md",
+    };
+    expect(
+      parseCaseRef("research/华北与北京落点/2026-10-05-华北与北京落点.md"),
+    ).toEqual(expected);
+    expect(
+      parseCaseRef("research/华北与北京落点/2026-10-05-华北与北京落点"),
+    ).toEqual(expected);
+    // A doubled suffix still strips down to the listed file.
+    expect(
+      parseCaseRef("research/华北与北京落点/2026-10-05-华北与北京落点.md.md"),
+    ).toEqual(expected);
+  });
+
   it("tolerates 《》 and path prefixes on new-root refs", () => {
     expect(parseCaseRef("《research/手机购买调研》")).toEqual({
       kind: "case",

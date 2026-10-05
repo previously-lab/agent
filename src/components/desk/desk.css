@@ -118,9 +118,10 @@
 }
 
 /* ── Footer (§10 页脚): mono smaller line, centred page number, category
-   bottom-right, one hairline above. ───────────────────────────────────── */
+   bottom-right, one hairline above. The bottom margin takes §10's 3.5–4em
+   ruling (audit F13 — it sat at 3em). ─────────────────────────────────── */
 .desk-foot {
-  margin: 0 3.25em 3em;
+  margin: 0 3.25em 3.5em;
   padding-top: 0.9em;
   border-top: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);

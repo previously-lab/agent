@@ -222,11 +222,11 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const worldFrozen = panelMode === "fullscreen";
 
   // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order, no
-  // persistence. The shelf dialog (in the layout-level overlay) writes it,
-  // the app shell reads it; this provider is their common ancestor. Opening
-  // folds a fullscreen panel to the pill first (panelModeForDeskOpen), the
-  // same rule as leaving `/app` (fullscreen would freeze the world the desk
-  // renders in).
+  // persistence. The page's library column (shelf/doc-library.tsx) writes
+  // it, the app shell reads it; this provider is their common ancestor.
+  // Opening folds a fullscreen panel to the pill first
+  // (panelModeForDeskOpen), the same rule as leaving `/app` (fullscreen
+  // would freeze the world the desk renders in).
   const [deskDoc, setDeskDoc] = useState<string | null>(null);
   const openDesk = useCallback((ref: string) => {
     setPanelMode(panelModeForDeskOpen);

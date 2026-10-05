@@ -87,30 +87,7 @@
         "direction": "Direction"
       },
       "docsLoading": "Loading…",
-      "docsEmpty": "Nothing here yet.",
-      "shelf": {
-        "menuLabel": "Shelf",
-        "title": "Memory shelf",
-        "byCategory": "By category",
-        "docsEmpty": "No documents in this type yet.",
-        "casesEmpty": "No cases under this category yet.",
-        "attachments": "Attachments",
-        "loading": "Loading…",
-        "loadError": "The shelf couldn't be opened.",
-        "back": "Back to shelf",
-        "openedAt": "Opened {date}",
-        "category": {
-          "people": "People",
-          "events": "Events",
-          "things": "Things",
-          "places": "Places",
-          "orgs": "Organizations",
-          "research": "Research",
-          "hypotheses": "Hypotheses",
-          "tasks": "Tasks",
-          "self": "Self"
-        }
-      }
+      "docsEmpty": "Nothing here yet."
     },
     "attachment": "Attachment",
     "actions": {
@@ -572,7 +549,28 @@
     "regionLabel": "Document desk — Escape puts the document back",
     "loading": "Fetching the document…",
     "notFoundHeading": "Document not found",
-    "notFoundBody": "Nothing on the shelf matches \"{ref}\". It may have been moved, renamed, or sealed.",
+    "notFoundBody": "Nothing in the library matches \"{ref}\". It may have been moved, renamed, or sealed.",
     "page": "· {n} ·"
+  },
+  "library": {
+    "title": "Library",
+    "empty": "Pick a case or a piece on the left — the document opens here.",
+    "casesEmpty": "No cases under this category yet.",
+    "piecesEmpty": "No pieces yet — the case overview is the whole document.",
+    "attachments": "Attachments",
+    "loading": "Loading…",
+    "loadError": "The library couldn't be opened.",
+    "openedAt": "Opened {date}",
+    "category": {
+      "people": "People",
+      "events": "Events",
+      "things": "Things",
+      "places": "Places",
+      "orgs": "Organizations",
+      "research": "Research",
+      "hypotheses": "Hypotheses",
+      "tasks": "Tasks",
+      "self": "Self"
+    }
   }
 }

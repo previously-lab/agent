@@ -58,6 +58,11 @@ export function deskPaperModel(
   };
 }
 
+/** The footer's page number. One sheet holds exactly one document, so the
+ *  printed number is always that document's first page — a named constant
+ *  rather than a magic literal at the call site (v0.23, audit F13). */
+export const DOC_FIRST_PAGE = 1;
+
 /** The recess-type intensity for the pointer's height over the paper
  *  (v0.22 §12.2): 1 at mid-page, stronger toward the upper-left light,
  *  bounded 0.7–1.3. This locally scoped `--recess-i` is the ONLY dynamic
