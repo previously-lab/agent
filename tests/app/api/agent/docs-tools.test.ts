@@ -213,7 +213,7 @@ describe("readDocExecute (two-segment)", () => {
     );
     expect(r).toHaveProperty("error");
     if ("error" in r) {
-      expect(r.error).toContain("死链");
+      expect(r.error).toContain("dead link");
       expect(r.error).toContain("listTree");
     }
   });

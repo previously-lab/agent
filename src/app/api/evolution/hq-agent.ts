@@ -35,6 +35,7 @@ import {
   makeCaseReadTool,
   renderManifest,
   runLibrarianPass,
+  runScribePass,
   type CaseWriteIntent,
 } from "@/lib/episodic/flash/librarian";
 import type { CaseCategory } from "@/lib/docs";
@@ -211,23 +212,33 @@ function buildHqTools(date: string, model: ModelConfig) {
 
     archiveSliceCases: tool({
       description:
-        "Run the case-writer pass over a closed slice: which cases did this slice touch? " +
-        "The writer judges over the manifest + its own readCase reads; engineering applies the intents. " +
-        "An empty result is legal — writer-is-reader dedup lives inside the pass.",
+        "Run the case-writer pass AND the scribe pass over a slice: which cases did this slice touch, " +
+        "and which sediment/task markers in its mailbox are still unwritten? " +
+        "The writer judges over the manifest + its own readCase reads; the scribe over the mailbox markers + " +
+        "their target cases; engineering applies the intents. " +
+        "An empty result is legal — writer-is-reader dedup lives inside the passes.",
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
         const slice = await loadSlice(sliceId).catch(() => null);
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
+        const excerpt = buildSliceExcerpt(slice);
         const result = await runLibrarianPass({
           model,
           closedSliceId: sliceId,
-          excerpt: buildSliceExcerpt(slice),
+          excerpt,
           manifest: await buildRunManifest(),
           date,
         });
+        // The same slice's mailbox: sediment/task markers the field dropped
+        // land as cases here — this is the scribe pass's production caller.
+        const scribe = await runScribePass({ model, sliceId, excerpt, date });
         return (
           `written: ${result.written.join(", ") || "(none)"}\n` +
-          `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}`
+          `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}\n` +
+          `scribe written: ${scribe.written.join(", ") || "(none)"}` +
+          (scribe.skipped.length > 0
+            ? `\nscribe skipped: ${scribe.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}`
+            : "")
         );
       },
     }),
@@ -311,7 +322,8 @@ function buildHqTools(date: string, model: ModelConfig) {
         "(no 工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) and never notes addressed to your makers. " +
         "House style: one sentence one meaning, active voice, no filler — the full rules sit in your role prompt. " +
         "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter. " +
-        DOC_WRITE_WINDOW_RULE,
+        "An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim " +
+        "into the colleague's prompt at spawn, so keep it tight.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
         content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),

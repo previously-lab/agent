@@ -582,8 +582,7 @@ export async function readDocExecute(
   if (!parsed) {
     return {
       error:
-        `无法解析的引用 "${ref}"——引用应是 分类/case名` +
-        `（如 research/手机调研）或 分类/case名/篇名。`,
+        `unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>]`,
     };
   }
 
@@ -625,8 +624,8 @@ export async function readDocExecute(
 
   return {
     error:
-      `死链：没有任何文档叫 "${normalizeCaseRefText(ref)}"` +
-      `（已查新根与旧根）。用 listTree 看现有清单。`,
+      `dead link: no document named "${normalizeCaseRefText(ref)}" ` +
+      "(checked the new and legacy roots) — run listTree for the current manifest",
   };
 }
 
@@ -637,9 +636,10 @@ export async function readDocExecute(
  * memory by design — v0.15 §4.3 designates the reply segment as "只读 + 记账":
  * this tool is the 记账. It appends ONE structured `[doc-marker]` line to the
  * CURRENT slice's agent.md (the inter-stream mailbox, §3.1); the actual
- * document write still happens at slice close, in the scribe/librarian passes
- * that consume these markers. It never touches core.md (the evidence record)
- * and never writes a document itself.
+ * document write happens later, when HQ archives the slice — the
+ * scribe/librarian passes that consume these markers run on HQ's archive. It
+ * never touches core.md (the evidence record) and never writes a document
+ * itself.
  */
 export interface NoteForSedimentInput {
   /** sediment = worth keeping as a document; task = a date-anchored to-do the
@@ -804,8 +804,8 @@ function userLocalDate(timezone: string | undefined): string {
  * document FIRST and then answer FROM it (v0.20 §2.1 选案 (a)).
  *
  * Bounded exactly as §2.2 prescribes:
- * - 分类界: category is hard-coded to `research/` — the input has NO
- *   category parameter, so no free path to any other category exists;
+ * - 分类界: the input's category enum admits only research/ + tasks/
+ *   (tools.ts — no free path to any other category exists);
  * - 操作界: only `open` and `addPiece` reach `applyCaseWriteIntent`
  *   (rewriteIndex / appendTail / close are never issued);
  * - 冲突界: the shared `applyCaseWriteIntent` entry — per-case lock

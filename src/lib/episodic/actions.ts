@@ -732,7 +732,8 @@ export interface CaseShelfItem {
   name: string;
   /** Birth date from the header ("" when absent — tolerated, see §B.3). */
   opened: string;
-  /** Seal date, or null while 还在写. */
+  /** RETIRED (v0.21) — a historical seal date on old files, inert: parse-
+   *  tolerated so the shelf can carry it, never a live state. */
   closed: string | null;
   /** First prose line of the body, truncated. */
   preview: string | null;
@@ -1004,8 +1005,9 @@ function renderLegacyDoc(
   const doc = parseDoc(raw, fileName, kind);
   return {
     opened: doc.frontmatter.opened,
-    // The old three-value status maps onto the seal semantics (§D.1): an
-    // active doc is 还在写, anything else reads as closed at `updated`.
+    // The legacy three-value status is parse-tolerated only (§D.1): an
+    // active doc reads null, anything else reads its updated stamp. The
+    // field is inert — never a live state.
     closed:
       doc.frontmatter.status === "active"
         ? null

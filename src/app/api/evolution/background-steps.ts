@@ -119,8 +119,8 @@ export async function executeQuestionRun(
         category: NOTICE_CASE.category,
         caseName: NOTICE_CASE.caseName,
         body:
-          "后台流的完成通知册——每当问题 run 的研究落地，结案行进尾部；" +
-          "下一回合的回复段读到当天的尾部行后向用户陈述。",
+          "问题 run 是这场对话的子流；这是它的完成通知册——每当问题 run 的研究落地，" +
+          "结案行进尾部；下一回合的回复段读到当天的尾部行后向用户陈述。",
       },
       date,
     );

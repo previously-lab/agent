@@ -74,7 +74,15 @@ export function parseCaseRef(ref: string): CaseRef | null {
     const caseName = segments[1];
     if (!isValidCaseName(caseName)) return null;
     if (segments.length === 2) return { kind: "case", category, caseName };
-    const piece = segments[2];
+    // The piece segment tolerates a trailing `.md` of its own (v0.23): the
+    // shelf's rows once handed `parseCaseRef` the FILE NAME (`…/篇名.md`),
+    // and a listed document must never come back "not found". normalize-
+    // CaseRefText already strips one whole-ref suffix; this strip is the
+    // segment-level backstop, so the validator below always sees the stem.
+    const rawPiece = segments[2];
+    const piece = rawPiece.endsWith(".md")
+      ? rawPiece.slice(0, -".md".length)
+      : rawPiece;
     if (segments.length === 3 && isValidPieceFileName(`${piece}.md`)) {
       return { kind: "piece", category, caseName, pieceFileName: `${piece}.md` };
     }

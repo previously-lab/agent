@@ -445,9 +445,9 @@ export const chatTools = {
       "4. An open thread surfaces that deserves a proper investigation later — " +
       "a question too big for this reply (kind 'question').\n" +
       "It appends ONE marker line to THIS slice's mailbox; the document itself " +
-      "is written at slice close by the passes that read these markers — so " +
-      "after calling it, keep answering and treat the matter as NOT yet " +
-      "recorded. Not for things belonging to the current conversation (they " +
+      "is written later, when HQ archives this slice (the passes that read " +
+      "these markers run on HQ's archive) — so after calling it, keep " +
+      "answering and treat the matter as NOT yet recorded. Not for things belonging to the current conversation (they " +
       "already live in this slice), and not for one-off trivia that will never " +
       "be mentioned again. Title = the document's title: specific enough that " +
       "a scope change would mean a NEW document.",

@@ -64,12 +64,17 @@ vi.mock("@/lib/agents/sub-agent-runner", () => ({ runSubAgent: vi.fn() }));
 // machinery (applyCaseWriteIntent, makeCaseReadTool, renderManifest) stays REAL.
 const passes = vi.hoisted(() => ({
   runLibrarianPass: vi.fn(),
+  runScribePass: vi.fn(),
   runDocResearchPass: vi.fn(),
   runCardEvolution: vi.fn(),
 }));
 vi.mock("@/lib/episodic/flash/librarian", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/episodic/flash/librarian")>();
-  return { ...actual, runLibrarianPass: passes.runLibrarianPass };
+  return {
+    ...actual,
+    runLibrarianPass: passes.runLibrarianPass,
+    runScribePass: passes.runScribePass,
+  };
 });
 vi.mock("@/lib/episodic/flash/doc-research", () => ({
   runDocResearchPass: passes.runDocResearchPass,
@@ -125,6 +130,7 @@ beforeEach(() => {
     ],
   });
   passes.runLibrarianPass.mockResolvedValue({ voided: [], llmRan: true, written: [], skipped: [] });
+  passes.runScribePass.mockResolvedValue({ ran: true, written: [], skipped: [] });
   passes.runDocResearchPass.mockResolvedValue({ ran: true, written: [], skipped: [] });
   passes.runCardEvolution.mockResolvedValue({
     ran: true,
@@ -308,6 +314,48 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
   });
 
+  it("archiveSliceCases runs the case-writer AND the scribe over the same slice", async () => {
+    passes.runScribePass.mockResolvedValue({
+      ran: true,
+      written: ["tasks/团队on-site/index.md"],
+      skipped: [{ id: "t1-2", reason: "illegal case name" }],
+    });
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
+      expect(r).toContain("written: (none)");
+      expect(r).toContain("scribe written: tasks/团队on-site/index.md");
+      expect(r).toContain("scribe skipped: t1-2 (illegal case name)");
+      return {
+        ok: true,
+        report: { actions: ["tasks/团队on-site/index.md"], note: "Archived the slice." },
+        text: "",
+      };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    // Both passes ran, over the SAME slice — the scribe consumes the slice's
+    // sediment/task markers here (its only production caller).
+    expect(passes.runLibrarianPass).toHaveBeenCalledTimes(1);
+    expect(passes.runScribePass).toHaveBeenCalledTimes(1);
+    const writerInput = passes.runLibrarianPass.mock.calls[0][0] as {
+      closedSliceId: string;
+      excerpt: { focus: string };
+      date: string;
+    };
+    const scribeInput = passes.runScribePass.mock.calls[0][0] as {
+      sliceId: string;
+      excerpt: { focus: string };
+      date: string;
+    };
+    expect(writerInput.closedSliceId).toBe(SLICE_ID);
+    expect(scribeInput.sliceId).toBe(SLICE_ID);
+    expect(writerInput.excerpt.focus).toBe("手机话题");
+    expect(scribeInput.excerpt.focus).toBe("手机话题");
+    expect(scribeInput.date).toBe(DATE);
+  });
+
   it("the role prompt bans the builder's vantage point from self/ writes", async () => {
     runSubAgentMock.mockImplementation(async () => ({
       ok: true,
@@ -321,9 +369,12 @@ describe("handleBrief (v0.21 §5)", () => {
     // The investigator's-account discipline lives in the static role prompt…
     expect(opts.system).toContain("investigator's account");
     expect(opts.system).toContain("工程侧");
-    // …and on the writeSelfSop tool surface itself.
+    // …and on the writeSelfSop tool surface itself. SOPs are exempt from the
+    // document write window (mutation-style whole rewrites) — the surface
+    // carries the SOP doctrine instead.
     const sopTool = opts.tools.writeSelfSop as unknown as { description: string };
     expect(sopTool.description).toContain("工程侧");
-    expect(sopTool.description).toContain("Write-window discipline");
+    expect(sopTool.description).toContain("short guidance, not an archive");
+    expect(sopTool.description).not.toContain("Write-window discipline");
   });
 });
