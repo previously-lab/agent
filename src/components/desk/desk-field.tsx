@@ -53,6 +53,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { Html } from "@react-three/drei";
@@ -199,6 +200,29 @@ export function DeskField({
   const boxRef = useRef<HTMLDivElement | null>(null);
   const measureRef = useRef<HTMLDivElement | null>(null);
 
+  // Callback refs, not plain refs: the scene's portal DOM (inside the
+  // dynamically-loaded canvas chunk) can establish itself in a later commit
+  // than any of the field's effects — a missed attach must not leave the
+  // measurement state at zero until some unrelated re-render. The callback
+  // measures at attach time; the effects below re-measure on the content
+  // and width changes. All setters are equality-guarded, so a re-attach
+  // with the same numbers re-renders nothing.
+  const attachMeasureRef = useCallback((el: HTMLDivElement | null) => {
+    measureRef.current = el;
+    if (el) {
+      const h = el.scrollHeight;
+      setNaturalH((prev) => (prev === h ? prev : h));
+    }
+  }, []);
+  const attachBoxRef = useCallback((el: HTMLDivElement | null) => {
+    boxRef.current = el;
+    if (el) {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    }
+  }, []);
+
   const lowerBound = pageCountLowerBound(naturalH, pageBox.h);
   const total = plan.columns;
   const totalRef = useRef(total);
@@ -215,18 +239,10 @@ export function DeskField({
     setFlip(null);
   }
 
-  // The measured 版心 (one page column's width/height) — read from the
-  // pagebox, whose size is constant regardless of how many pages wide the
-  // column container inside it is planned.
-  useLayoutEffect(() => {
-    const el = boxRef.current;
-    if (!el) return;
-    const w = el.clientWidth;
-    const h = el.clientHeight;
-    setPageBox((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
-  }, [ready, model.markdown]);
-
-  // The flow's natural height from the hidden single-column measurer.
+  // The flow's natural height from the hidden single-column measurer. The
+  // attach callback captures the first measure; this effect re-measures on
+  // content and width changes (the callback does not re-fire when only the
+  // element's content changes).
   useLayoutEffect(() => {
     const el = measureRef.current;
     if (!el || !ready) return;
@@ -257,18 +273,23 @@ export function DeskField({
     setPlan({ columns: lowerBound, passes: 0 });
   }, [lowerBound]);
 
-  // The measurement loop: while content still spills past the planned
-  // columns, widen by one column. First pass without spill is minimal, so
-  // the loop IS the page count. The dependency on `plan` is the loop: each
-  // widening re-renders, the effect re-runs, and the spill is re-read —
-  // until it is gone or the pass budget is spent (a wider plan, never a
-  // clip).
+  // The measurement loop — the page count IS the column count, and the
+  // runtime tells it for free: with `column-fill: auto` the browser
+  // fragments the whole flow into page-height columns on demand, letting
+  // excess columns overflow the box horizontally (verified in the running
+  // app: a 1-page-wide box reported scrollWidth = 4 × pageW for a 4-page
+  // document). So the count is scrollWidth / pageW, and the plan only ever
+  // widens to fit it. The vertical spill check rides along as the
+  // conservative signal for engines that clip instead of overflowing.
   useLayoutEffect(() => {
     const el = pagesRef.current;
     if (!el || !ready || pageBox.w <= 0) return;
-    const spill = el.scrollHeight - el.clientHeight;
-    if (spill > 1 && plan.passes < MAX_MEASURE_PASSES) {
-      setPlan((p) => ({ columns: p.columns + 1, passes: p.passes + 1 }));
+    const byWidth = Math.max(1, Math.round(el.scrollWidth / pageBox.w));
+    const byHeight =
+      el.scrollHeight > el.clientHeight + 1 ? plan.columns + 1 : 1;
+    const actual = Math.max(byWidth, byHeight);
+    if (actual > plan.columns && plan.passes < MAX_MEASURE_PASSES) {
+      setPlan({ columns: actual, passes: plan.passes + 1 });
     }
   }, [ready, model.markdown, pageBox, plan]);
 
@@ -393,8 +414,8 @@ export function DeskField({
         planColumns: plan.columns,
         pageBox,
         pagesRef,
-        boxRef,
-        measureRef,
+        attachBoxRef,
+        attachMeasureRef,
         onFlipEnd: settleFlip,
         onTurn: turnPage,
       }}
@@ -450,48 +471,51 @@ export function DeskField({
         onKeyDown={onKeyDown}
         className="relative h-full w-full outline-none"
       />
-      {/* THE PAGE CONTROL — floating with the app's other chrome (the board
-          bar takes the top, the pod the right edge, the composer the bottom
-          centre; the bottom-left is free). It lives OUTSIDE the Html portal
-          (a fixed element would break inside the projected transform) as a
-          sibling of the canvas region, which is why the page state lives in
-          this component and not deeper. */}
-      {ready && total > 1 && (
-        <div
-          data-page-controls
-          className="pointer-events-none fixed bottom-4 left-4 z-50 sm:left-6"
-        >
-          <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
-            <button
-              type="button"
-              data-page-prev
-              aria-label={texts.prevPage}
-              disabled={flip !== null || page <= 1}
-              onClick={() => turnPage("prev")}
-              className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-            >
-              <ChevronLeft className="size-4 shrink-0" />
-            </button>
-            <span
-              data-page-readout
-              aria-live="polite"
-              className="min-w-10 px-1 text-center font-mono text-xs tabular-nums text-muted-foreground"
-            >
-              {texts.pagePosition(page, total)}
-            </span>
-            <button
-              type="button"
-              data-page-next
-              aria-label={texts.nextPage}
-              disabled={flip !== null || page >= total}
-              onClick={() => turnPage("next")}
-              className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
-            >
-              <ChevronRight className="size-4 shrink-0" />
-            </button>
-          </div>
-        </div>
-      )}
+      {/* THE PAGE CONTROL — floating with the app's other chrome. The
+          bottom-left corner itself is the world gate's seat (z-20 at the pane
+          root), so the control stacks one bar-height above it (bottom-14) —
+          both stay clickable. It also lives OUTSIDE the desk's pane branch,
+          which the pane caps at z-10: under the gate even a z-50 control
+          would lose every hit test, so it renders through a body-level
+          portal (page state stays here, where it is owned). */}
+      {ready && total > 1 &&
+        createPortal(
+          <div
+            data-page-controls
+            className="pointer-events-none fixed bottom-14 left-4 z-50 sm:left-6"
+          >
+            <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
+              <button
+                type="button"
+                data-page-prev
+                aria-label={texts.prevPage}
+                disabled={flip !== null || page <= 1}
+                onClick={() => turnPage("prev")}
+                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
+              >
+                <ChevronLeft className="size-4 shrink-0" />
+              </button>
+              <span
+                data-page-readout
+                aria-live="polite"
+                className="min-w-10 px-1 text-center font-mono text-xs tabular-nums text-muted-foreground"
+              >
+                {texts.pagePosition(page, total)}
+              </span>
+              <button
+                type="button"
+                data-page-next
+                aria-label={texts.nextPage}
+                disabled={flip !== null || page >= total}
+                onClick={() => turnPage("next")}
+                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
+              >
+                <ChevronRight className="size-4 shrink-0" />
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -509,8 +533,8 @@ interface PagingProps {
   planColumns: number;
   pageBox: { w: number; h: number };
   pagesRef: RefObject<HTMLDivElement | null>;
-  boxRef: RefObject<HTMLDivElement | null>;
-  measureRef: RefObject<HTMLDivElement | null>;
+  attachBoxRef: (el: HTMLDivElement | null) => void;
+  attachMeasureRef: (el: HTMLDivElement | null) => void;
   onFlipEnd: () => void;
   /** The page turn, owned by the field above — the swipe hands it a
    *  direction and the same gate as the buttons applies (flipping state,
@@ -634,8 +658,8 @@ function DeskScene({
     planColumns,
     pageBox,
     pagesRef,
-    boxRef,
-    measureRef,
+    attachBoxRef,
+    attachMeasureRef,
     onFlipEnd,
     onTurn,
   } = paging;
@@ -821,7 +845,7 @@ function DeskScene({
                             <div className="desk-body">
                               <div
                                 className="desk-pagebox"
-                                ref={isTop ? boxRef : undefined}
+                                ref={isTop ? attachBoxRef : undefined}
                                 style={boxStyle}
                               >
                                 {ready ? (
@@ -890,7 +914,7 @@ function DeskScene({
             {ready && flow && (
               <div
                 className="desk-measure"
-                ref={measureRef}
+                ref={attachMeasureRef}
                 aria-hidden="true"
               >
                 <div className="desk-flow">{flow}</div>
