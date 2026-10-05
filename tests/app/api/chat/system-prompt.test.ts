@@ -315,6 +315,22 @@ describe("the field/HQ charter (v0.21)", () => {
     expect(CHARTER_MD).toContain("written in the user's own language, and one document never mixes languages");
   });
 
+  it("teaches the write-window lifecycle, not the retired closed/draft one (v0.21 §12)", () => {
+    // The header is opened + a mechanical updated stamp the model never touches.
+    expect(CHARTER_MD).toContain("`updated`, a mechanical stamp");
+    // The window decides rewriting: whole-body rewrites only while it is open.
+    expect(CHARTER_MD).toContain("**write window**");
+    expect(CHARTER_MD).toContain("each write within 30 minutes of the last");
+    expect(CHARTER_MD).toContain("the body may be rewritten whole");
+    // Past the window: dated tail lines / new pieces / a pointer at a new document.
+    expect(CHARTER_MD).toContain("open a NEW document and leave one line in the original pointing at it");
+    // The retired lifecycle is gone.
+    expect(CHARTER_MD).not.toContain("an optional `closed`");
+    expect(CHARTER_MD).not.toContain("may be rewritten freely");
+    expect(CHARTER_MD).not.toContain("the body is frozen");
+    expect(CHARTER_MD).not.toContain("a draft");
+  });
+
   it("carries NONE of the retired mechanical-trigger or language-discipline wording (v0.21 撤出清单)", () => {
     // The old boundary-driven pipeline descriptions.
     expect(CHARTER_MD).not.toContain("runs at conversation boundaries");
