@@ -368,7 +368,10 @@ test.describe("Memory viz (v0.10)", () => {
   // and the floating lens is the only control that moves along it. The rung
   // is the shell's IN-MEMORY state: the URL carries no navigation (deep-link
   // explains what little query contract remains), so these tests drive the
-  // lens and assert on the lens's own pressed state.
+  // lens and assert on the lens's own pressed state. SINCE v0.23 THE LADDER
+  // IS VESTIGIAL: every card rung renders the same document reader (the
+  // library column and the paper), so these specs assert the reader's chrome,
+  // not different content per rung.
   test.describe("the rung ladder", () => {
     /** The floating zoom lens. Its segments are named by rung. */
     const lens = (page: Page) => page.getByRole("group", { name: "Lens" });
@@ -390,10 +393,15 @@ test.describe("Memory viz (v0.10)", () => {
         "true",
       );
 
-      // The card field IS the data view at a card rung.
-      await expect(page.locator(".tl-card-in").first()).toBeVisible({
+      // EVERY CARD RUNG IS THE DOCUMENT READER NOW (v0.23): the left library
+      // column is the rung's content, and with the seeded dataset holding no
+      // documents the paper's seat reads as the quiet empty hint.
+      await expect(page.locator("[data-doc-library]")).toBeVisible({
         timeout: 30_000,
       });
+      await expect(
+        page.getByText(/Pick a case or a piece on the left/),
+      ).toBeVisible();
       // The 「NOW · 现在」 caption that used to be asserted here is DELETED —
       // a label with no action sitting in the bottom centre, exactly where the
       // compact composer puts a button, so readers clicked it expecting the
@@ -411,7 +419,7 @@ test.describe("Memory viz (v0.10)", () => {
       });
     });
 
-    test("the lens moves along the ladder over the live conversation", async ({
+    test("the lens swaps the pane between the conversation and the reader over the live conversation", async ({
       page,
     }) => {
       test.slow();
@@ -450,7 +458,7 @@ test.describe("Memory viz (v0.10)", () => {
         "true",
       );
       // The conversation layer COLLAPSES TO ITS PILL here (v0.13 §4): at a
-      // card rung the reader came to look at the cards, so the pill is the
+      // card rung the reader came to read the documents, so the pill is the
       // only interactive surface — one row with attach / input / send-stop /
       // expand. What must not happen is the conversation being UNMOUNTED;
       // the node-identity check below carries that invariant, and the pill's
@@ -460,7 +468,10 @@ test.describe("Memory viz (v0.10)", () => {
       ).toBeVisible();
       await expect(page.getByRole("textbox", { name: "Send a message..." })).toBeVisible();
 
-      await expect(page.locator(".tl-card-in").first()).toBeVisible({
+      // The pane IS the reader at a card rung (v0.23): the library column is
+      // up. The card field is retired, and every card rung renders this same
+      // reader — the ladder no longer promises different content per rung.
+      await expect(page.locator("[data-doc-library]")).toBeVisible({
         timeout: 30_000,
       });
 
@@ -516,7 +527,7 @@ test.describe("Memory viz (v0.10)", () => {
       await expect(stream).toBeVisible();
     });
 
-    test("Cmd/Ctrl+. toggles the conversation against the last card rung", async ({
+    test("Cmd/Ctrl+. toggles the conversation against the reader", async ({
       page,
     }) => {
       test.slow();
@@ -539,10 +550,11 @@ test.describe("Memory viz (v0.10)", () => {
           { timeout: 3_000 },
         );
       }).toPass();
-      // Wait for the scene to actually render before toggling back: a rung
-      // change issued while the card field is still mounting is dropped,
-      // swallowing the return toggle. Gate on the stack list being up.
-      await expect(page.locator(".tl-card-in").first()).toBeVisible({
+      // Wait for the reader to actually render before toggling back: a rung
+      // change issued while the reader chrome is still mounting is dropped,
+      // swallowing the return toggle. Gate on the library column being up —
+      // the reader IS the card rung's content.
+      await expect(page.locator("[data-doc-library]")).toBeVisible({
         timeout: 30_000,
       });
       await expect(async () => {
