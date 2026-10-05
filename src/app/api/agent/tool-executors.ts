@@ -45,6 +45,7 @@ import {
   hqRun,
   type HQBriefPayload,
 } from "@/app/api/evolution/hq-run";
+import { recordHQDispatch } from "@/app/api/evolution/hq-status-store";
 import { questionRun } from "@/app/api/evolution/question-run";
 import { readSelfSop } from "@/lib/evolution/store";
 
@@ -921,14 +922,7 @@ async function startHQRun(payload: HQBriefPayload): Promise<ReportToHQResult> {
 }
 
 /**
- * reportToHQ — hand the scene over to HQ (§4). The payload is ONE piece of
- * prose (`brief`: what the field sees + its own observations — no
- * expectations, no instructions) plus the mechanically-attached
- * `replyToken` (`field:<sliceId>:<startedAtIso>`, same formula the turn
- * workflow uses for its end-of-turn callback hook — the model never writes
- * it). The result only says DELIVERED or not — it promises nothing about
- * what HQ does, and HQ may or may not speak back later.
- *
+ * Deliver the brief to HQ (private helper — the step below stays thin).
  * Step order (§4): the advisory `getHookByToken` first; a live hook →
  * `resumeHook` (durable `hook_received` first, then the wake). Any failure
  * — hook absent (HookNotFoundError), or a race where HQ exited right after
@@ -937,17 +931,7 @@ async function startHQRun(payload: HQBriefPayload): Promise<ReportToHQResult> {
  * to a fresh run only appends a duplicate `hook_received`, which HQ absorbs
  * writer-is-reader style (§11 ③).
  */
-export async function reportToHQExecute(
-  input: { brief: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<ReportToHQResult> {
-  "use step";
-  const brief = input.brief?.trim() ?? "";
-  if (!brief) return { ok: false, reason: "brief must not be empty." };
-  const payload: HQBriefPayload = {
-    brief,
-    replyToken: `field:${ctx.sliceId}:${ctx.startedAtIso ?? ""}`,
-  };
+async function deliverHQBrief(payload: HQBriefPayload): Promise<ReportToHQResult> {
   try {
     // Advisory only (SDK): a hit does not guarantee the hook survives until
     // resumeHook — the race is closed by the fallback below.
@@ -965,6 +949,36 @@ export async function reportToHQExecute(
     );
     return startHQRun(payload);
   }
+}
+
+/**
+ * reportToHQ — hand the scene over to HQ (§4). The payload is ONE piece of
+ * prose (`brief`: what the field sees + its own observations — no
+ * expectations, no instructions) plus the mechanically-attached
+ * `replyToken` (`field:<sliceId>:<startedAtIso>`, same formula the turn
+ * workflow uses for its end-of-turn callback hook — the model never writes
+ * it). The result only says DELIVERED or not — it promises nothing about
+ * what HQ does, and HQ may or may not speak back later.
+ *
+ * A confirmed delivery also lands in the hq.json status pointer
+ * (hq-status-store.ts) — the companion pod's "last dispatch" line. The
+ * record is best-effort (the store swallows its own errors) and never
+ * changes what this tool answers.
+ */
+export async function reportToHQExecute(
+  input: { brief: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<ReportToHQResult> {
+  "use step";
+  const brief = input.brief?.trim() ?? "";
+  if (!brief) return { ok: false, reason: "brief must not be empty." };
+  const payload: HQBriefPayload = {
+    brief,
+    replyToken: `field:${ctx.sliceId}:${ctx.startedAtIso ?? ""}`,
+  };
+  const result = await deliverHQBrief(payload);
+  if (result.ok) await recordHQDispatch(brief);
+  return result;
 }
 
 

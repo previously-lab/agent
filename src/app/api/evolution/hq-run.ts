@@ -36,7 +36,7 @@ import {
   type HQBriefPayload,
   type HQRunOutcome,
 } from "./hq-contract";
-import { handoffBriefToPrimary, handleHQBrief } from "./hq-steps";
+import { handoffBriefToPrimary, handleHQBrief, markHQRunStarted, markHQRunFinished } from "./hq-steps";
 
 export { HQ_TOKEN } from "./hq-contract";
 export type { HQBriefPayload, HQRunOutcome } from "./hq-contract";
@@ -64,28 +64,45 @@ export async function hqRun(initial: HQBriefPayload): Promise<HQRunOutcome> {
       return { kind: "dedupedTo", runId: conflict.runId };
     }
 
-    // 收工前的循环：每条简报 = 一轮独立工作；下一条与宽限 race。
+    // The visibility pointer (hq-status-store.ts): "running" from the claim
+    // until the finish mark below settles 完成 / 空转 / 失败. A deduped rival
+    // exits BEFORE this mark — the primary's run owns the pointer.
+    await markHQRunStarted();
+
+    // 收工前的循环：每条简报 = 一轮独立工作；下一条与宽限 race。Run-level
+    // facts accumulate across briefs for the finish mark.
     let handled = 0;
+    let wrote = false;
+    let errored = false;
     let pending: HQBriefPayload | null = initial;
-    const iterator = hook[Symbol.asyncIterator]();
     try {
-      while (pending) {
-        await handleHQBrief(pending);
-        handled += 1;
-        pending = null;
-        const next = await Promise.race<
-          HQBriefPayload | "idle" | "done"
-        >([
-          iterator
-            .next()
-            .then((r): HQBriefPayload | "done" => (r.done ? "done" : r.value)),
-          sleep(HQ_IDLE_GRACE_MS).then((): "idle" => "idle"),
-        ]);
-        if (next === "idle" || next === "done") break;
-        pending = next;
+      const iterator = hook[Symbol.asyncIterator]();
+      try {
+        while (pending) {
+          const round = await handleHQBrief(pending);
+          handled += 1;
+          if (round.actions.length > 0) wrote = true;
+          if (round.error) errored = true;
+          pending = null;
+          const next = await Promise.race<
+            HQBriefPayload | "idle" | "done"
+          >([
+            iterator
+              .next()
+              .then((r): HQBriefPayload | "done" => (r.done ? "done" : r.value)),
+            sleep(HQ_IDLE_GRACE_MS).then((): "idle" => "idle"),
+          ]);
+          if (next === "idle" || next === "done") break;
+          pending = next;
+        }
+      } finally {
+        await iterator.return?.();
       }
+    } catch (e) {
+      errored = true;
+      throw e;
     } finally {
-      await iterator.return?.();
+      await markHQRunFinished({ handled, wrote, errored });
     }
     return { kind: "claimed", handled };
   } finally {

@@ -17,6 +17,19 @@ import { resumeHook } from "workflow/api";
 import { HQ_TOKEN, type HQBriefPayload } from "./hq-contract";
 
 /**
+ * One brief's round summary, returned to the run shell so IT can accumulate
+ * the run-level facts (did anything land, did anything fail) it reports to
+ * the status pointer at finish. Type export only — the step-module rule
+ * (step files export step functions + types).
+ */
+export interface HQBriefRound {
+  /** What HQ landed this round (paths / case refs; empty = an idle round). */
+  actions: string[];
+  /** Set when the round failed (HQ never throws — a failure rides here). */
+  error?: string;
+}
+
+/**
  * Conflict handoff. `resumeHook` is a runtime function that MUST be called
  * outside a workflow function (SDK contract) — hence this "use step". It
  * durably writes `hook_received` and only then wakes the primary run, so a
@@ -41,8 +54,14 @@ export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<vo
  * are named by (createSlice). Failure never throws out of here: handleBrief
  * returns { error } and logs it, and a failed brief simply lands nothing
  * (§5 — HQ's products are writes).
+ *
+ * The round's outcome is ALSO recorded into the hq.json status pointer
+ * (hq-status-store.ts — the pod panel's visibility layer) and returned to
+ * the shell, which accumulates the run-level facts for recordHQRunFinished.
+ * The status store is imported dynamically for the same reason `./hq-agent`
+ * is (see the module header).
  */
-export async function handleHQBrief(payload: HQBriefPayload): Promise<void> {
+export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRound> {
   "use step";
   // replyToken is `field:<sliceId>:<startedAtIso>` (attached mechanically by
   // the reportToHQ executor) — the slice id is the one pointer the shell
@@ -52,9 +71,41 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<void> {
     : undefined;
   const date = new Date().toISOString().slice(0, 10);
   const { handleBrief } = await import("./hq-agent");
-  await handleBrief({
+  const outcome = await handleBrief({
     brief: payload.brief,
     date,
     ...(sliceId ? { sliceId } : {}),
   });
+  const { recordHQBriefOutcome } = await import("./hq-status-store");
+  await recordHQBriefOutcome({ actions: outcome.actions });
+  return {
+    actions: outcome.actions,
+    ...(outcome.error ? { error: outcome.error } : {}),
+  };
+}
+
+/**
+ * Run-start mark ("use step"): an HQ run claimed the token — the pointer's
+ * runStatus goes "running" until markHQRunFinished settles it.
+ */
+export async function markHQRunStarted(): Promise<void> {
+  "use step";
+  const { recordHQRunStarted } = await import("./hq-status-store");
+  await recordHQRunStarted();
+}
+
+/**
+ * Run-finish mark ("use step"): the shell's loop ended (idle grace, hook
+ * done, or a failure that escaped a brief). `wrote` / `errored` are the
+ * RUN-level accumulation across all of its briefs; the store maps them to
+ * the terminal status (完成 / 空转 / 失败) and the definitive brief count.
+ */
+export async function markHQRunFinished(result: {
+  handled: number;
+  wrote: boolean;
+  errored: boolean;
+}): Promise<void> {
+  "use step";
+  const { recordHQRunFinished } = await import("./hq-status-store");
+  await recordHQRunFinished(result);
 }

@@ -38,13 +38,20 @@
  * and the panel replays the newest completion when there is no narration.
  *
  * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
- * read-only instrumentation sections — the last evolution run's structured
- * detail (the full done-frame payload the bus now passes through) and a
- * memory-map summary (slice/active-slice overview fetched ONCE per
- * panel open from the existing episodic server actions, never polled, with a
- * manual refresh). They ride inside the scroll area under whatever the prose
- * seat shows, and they are why the button now always opens the panel — even
- * with an empty seat the internals are worth reaching.
+ * read-only instrumentation sections — the HQ activity face (the field↔HQ
+ * channel made visible: last dispatch, run status, recent writes, read from
+ * the memory/config/hq.json pointer via GET /api/evolution/hq-status and
+ * POLLED ~3s while the panel is open — HQ runs in its own durable run, so no
+ * session-local bus can ever see it) and a memory-map summary (slice/
+ * active-slice overview fetched ONCE per panel open from the existing
+ * episodic server actions, never polled, with a manual refresh). They ride
+ * inside the scroll area under whatever the prose seat shows, and they are
+ * why the button now always opens the panel — even with an empty seat the
+ * internals are worth reaching.
+ *
+ * TWO ENTRIES, ONE PANEL: the composer's evolution-stream button asks this
+ * pod to open via the companion-panel request bus
+ * (`lib/chat/companion-panel.ts`); the panel itself is only ever drawn here.
  *
  * The pod renders in the SHELL (not the card field) so a narration survives
  * rung switches and view changes — the same ownership rule the dock had.
@@ -55,6 +62,8 @@ import { useLocale, useTranslations } from "next-intl";
 import { AudioLines, CircleAlert, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
+import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
+import { fetchHQStatus, type HQStatus } from "@/lib/chat/hq-status";
 import {
   getEpisodicState,
   getTimelineCatalog,
@@ -150,113 +159,91 @@ function DebugSection({
   );
 }
 
-/** The last evolution run's structured detail — labels localized, values raw. */
-function EvolutionDebugSection({
-  latest,
-  t,
-}: {
-  latest: EvolutionPresence["latest"];
-  t: CompanionT;
-}) {
-  if (!latest) {
-    return (
-      <p className="text-muted-foreground/80">{t("debugEvolutionEmpty")}</p>
-    );
+/** How the last HQ run settled — the label row's value, localized. */
+function hqRunStatusLabel(status: HQStatus, t: CompanionT): string {
+  switch (status.runStatus) {
+    case "running":
+      return t("hqRunning");
+    case "completed":
+      return t("hqCompleted");
+    case "idle":
+      return t("hqIdle");
+    case "failed":
+      return t("hqFailed");
+    default:
+      return "—";
   }
-  const d = latest.detail;
-  const status = latest.failed
-    ? t("debugStatusFailed")
-    : latest.hasChanges === false
-      ? t("debugStatusNoChanges")
-      : latest.hasChanges === true
-        ? t("debugStatusChanged")
-        : t("debugStatusUnknown");
-  const directionOutcome = d?.direction
-    ? (
-        {
-          no_change: t("debugDirectionNoChange"),
-          updated: t("debugDirectionUpdated"),
-          failed: t("debugDirectionFailed"),
-          rejected: t("debugDirectionRejected"),
-        } as const
-      )[d.direction.outcome]
-    : undefined;
+}
+
+/**
+ * The HQ activity face — the field↔HQ channel made visible (v0.21 §5). HQ
+ * works in its OWN durable run, so the session-local evolution bus can never
+ * see it; this section reads the hq.json pointer instead: the field's last
+ * dispatch (time + the brief's first line), whether HQ is running and how
+ * its last run settled with how many briefs it handled, and the documents it
+ * wrote most recently. Labels localized, values raw.
+ */
+function HQStatusSection({
+  hq,
+  failed,
+  t,
+  locale,
+}: {
+  hq: HQStatus | null;
+  failed: boolean;
+  t: CompanionT;
+  locale: string;
+}) {
+  if (!hq && !failed) {
+    return <p className="text-muted-foreground/80">{t("hqLoading")}</p>;
+  }
+  if (!hq) {
+    return <p className="text-muted-foreground/80">{t("hqFailedToLoad")}</p>;
+  }
+  if (!hq.lastDispatchAt && !hq.runStatus) {
+    return <p className="text-muted-foreground/80">{t("hqEmpty")}</p>;
+  }
+
+  const timeFmt = new Intl.DateTimeFormat(locale, {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const fmtTime = (iso: string | null): string => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "—" : timeFmt.format(d);
+  };
+  const statusLabel = hqRunStatusLabel(hq, t);
 
   return (
     <div className="space-y-1.5">
-      <DebugRow label={t("debugStatus")} value={status} />
-      {latest.error && <DebugRow label={t("debugError")} value={latest.error} />}
-      <DebugRow label={t("debugTurn")} value={latest.turnId} mono />
-      {latest.summary?.trim() && (
-        <DebugRow label={t("debugSummary")} value={latest.summary} />
+      <DebugRow label={t("hqDispatch")} value={fmtTime(hq.lastDispatchAt)} mono />
+      {hq.lastBriefPreview && (
+        <p className="break-words text-foreground/70">{hq.lastBriefPreview}</p>
       )}
-      {d?.changes && (
-        <DebugRow
-          label={t("debugChangesLabel")}
-          value={t("debugChanges", {
-            added: d.changes.added,
-            reinforced: d.changes.reinforced,
-            demoted: d.changes.demoted,
-            removed: d.changes.removed,
-            superseded: d.changes.superseded,
-          })}
-        />
-      )}
-      {d?.partial && (
-        <p className="text-amber-600 dark:text-amber-400">{t("debugPartial")}</p>
-      )}
-      {d?.direction && (
-        <DebugRow
-          label={t("debugDirection")}
-          value={directionOutcome ?? d.direction.outcome}
-        />
-      )}
-      {d?.direction?.summary?.trim() && (
-        <p className="break-words">{d.direction.summary}</p>
-      )}
-      {d && d.triggers && d.triggers.length > 0 && (
-        <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-          <span className="shrink-0 text-muted-foreground/70">
-            {t("debugTriggers")}
-          </span>
-          {d.triggers.map((trigger) => (
-            <span key={trigger.bucket} className="font-mono text-[10px]">
-              {`${trigger.bucket} ${trigger.score > 0 ? "+" : ""}${trigger.score}`}
-            </span>
-          ))}
+      <DebugRow
+        label={t("hqStatus")}
+        value={
+          hq.runStatus === "running"
+            ? `${statusLabel} · ${t("hqSince", { time: fmtTime(hq.runStartedAt) })}`
+            : statusLabel
+        }
+      />
+      <DebugRow label={t("hqBriefs")} value={String(hq.briefsHandled)} />
+      {hq.recentWrites.length > 0 && (
+        <div className="space-y-0.5">
+          <span className="text-muted-foreground/70">{t("hqWrites")}</span>
+          <ul className="space-y-0.5">
+            {hq.recentWrites.slice(0, 5).map((path) => (
+              <li key={path} className="break-all font-mono text-[10px]">
+                {path}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
-      {d && d.playbooks && d.playbooks.length > 0 && (
-        <ul className="space-y-0.5">
-          {d.playbooks.map((playbook, i) => (
-            <li key={`${playbook.agent}-${i}`} className="break-words">
-              <span className="font-mono text-[10px]">{playbook.agent}</span>
-              {` — ${playbook.summary}`}
-            </li>
-          ))}
-        </ul>
-      )}
-      {d && d.mutations && d.mutations.length > 0 && (
-        <ul className="space-y-0.5">
-          {d.mutations.map((mutation, i) => (
-            <li key={i} className="flex gap-1.5">
-              <span
-                className={
-                  mutation.type === "added"
-                    ? "shrink-0 text-emerald-600 dark:text-emerald-400"
-                    : "shrink-0 text-red-500 dark:text-red-400"
-                }
-              >
-                {mutation.type === "added"
-                  ? t("debugMutationsAdded")
-                  : t("debugMutationsRemoved")}
-              </span>
-              <span className="min-w-0 break-words">{mutation.text}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {d?.note?.trim() && <DebugRow label={t("debugNote")} value={d.note} />}
     </div>
   );
 }
@@ -396,6 +383,41 @@ export function CompanionPod({
     }
   }, [target, status, text]);
 
+  // ── Debug: the HQ activity face ───────────────────────────────────────────
+  // HQ works in its own durable run, so the only honest read on it is the
+  // hq.json pointer behind GET /api/evolution/hq-status. Fetched on open and
+  // POLLED every 3s while the panel is open (a debug surface gets a poll, not
+  // an SSE channel); closing the panel stops the clock. The seq guard drops
+  // responses that land after a newer fetch started.
+  const [hq, setHq] = useState<HQStatus | null>(null);
+  const [hqFailed, setHqFailed] = useState(false);
+  const hqSeqRef = useRef(0);
+  const loadHQ = useCallback(async () => {
+    const seq = ++hqSeqRef.current;
+    try {
+      const res = await fetchHQStatus();
+      if (seq !== hqSeqRef.current) return;
+      setHq(res.status);
+      setHqFailed(false);
+    } catch {
+      if (seq !== hqSeqRef.current) return;
+      setHqFailed(true);
+    }
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    void loadHQ();
+    const id = setInterval(() => void loadHQ(), 3000);
+    return () => clearInterval(id);
+  }, [open, loadHQ]);
+
+  // The composer's evolution-stream button is this panel's SECOND entry —
+  // a request only ever opens; closing stays the panel's own gesture.
+  useEffect(
+    () => subscribeCompanionPanelRequests(() => setOpen(true)),
+    [],
+  );
+
   // ── Debug: the memory-map summary ─────────────────────────────────────────
   // Fetched ONCE per panel open from the existing episodic server actions —
   // never polled. Read-only; a manual refresh re-runs the same two reads
@@ -440,8 +462,8 @@ export function CompanionPod({
 
   const toggle = () => {
     // Debug phase: the button always opens the panel. Even with nothing in
-    // the prose seat the two debug blocks below (evolution detail + memory
-    // map) are worth reaching — the old "quiet pet does not perform an empty
+    // the prose seat the two debug blocks below (HQ activity + memory map)
+    // are worth reaching — the old "quiet pet does not perform an empty
     // trick" guard went when they arrived.
     setOpen((o) => !o);
   };
@@ -624,19 +646,35 @@ export function CompanionPod({
               ) : null}
 
               {/* Debug instrumentation (dev phase) — additive to whatever the
-                  prose seat above shows. Two read-only blocks: the last
-                  evolution run's structured detail, and a memory-map summary
-                  fetched once per open. Raw values on purpose — this exists
-                  to make internal state visible, not to be pretty. */}
+                  prose seat above shows. Two read-only blocks: the HQ activity
+                  face (polled while open), and a memory-map summary fetched
+                  once per open. Raw values on purpose — this exists to make
+                  internal state visible, not to be pretty. */}
               <div
                 data-companion-pod-debug
                 className="space-y-3 border-t border-foreground/10 px-4 py-3 font-sans text-[11px] leading-relaxed text-foreground/80"
               >
                 <DebugSection
-                  id="evolution"
-                  title={t("debugEvolutionTitle")}
+                  id="hq"
+                  title={t("hqTitle")}
+                  action={
+                    <button
+                      type="button"
+                      onClick={() => void loadHQ()}
+                      aria-label={t("debugRefresh")}
+                      title={t("debugRefresh")}
+                      className={`${ISLAND_CONTROL} size-5`}
+                    >
+                      <RefreshCw className="size-3" />
+                    </button>
+                  }
                 >
-                  <EvolutionDebugSection latest={evolution?.latest ?? null} t={t} />
+                  <HQStatusSection
+                    hq={hq}
+                    failed={hqFailed}
+                    t={t}
+                    locale={locale}
+                  />
                 </DebugSection>
                 <DebugSection
                   id="memory"

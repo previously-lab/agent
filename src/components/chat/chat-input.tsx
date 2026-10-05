@@ -2,13 +2,14 @@
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUp, Maximize2, Square, Paperclip, X } from "lucide-react";
+import { ArrowUp, Maximize2, Minimize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelSelector } from "./model-selector";
 import { MemoryDocs } from "./memory-docs";
 import { ISLAND } from "@/components/layout/island";
+import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
 
 /** The textarea's floor and ceiling, in px. The floor is what an empty
@@ -53,6 +54,69 @@ interface ChatInputProps {
   collapsed?: boolean;
   /** Restore the full composer. Required when `collapsed`. */
   onExpand?: () => void;
+}
+
+/**
+ * The evolution stream's entry — one click opens the companion pod's HQ
+ * panel (the field↔HQ activity face). The pod owns the panel; this button
+ * only publishes a request on the companion-panel bus
+ * (`lib/chat/companion-panel.ts`), so every composer form shares it verbatim.
+ */
+function HQStreamButton({
+  className,
+  iconClassName,
+}: {
+  className: string;
+  iconClassName: string;
+}) {
+  const t = useTranslations("chat.input");
+  return (
+    <button
+      type="button"
+      data-hq-stream
+      onClick={() => requestCompanionPanelOpen()}
+      aria-label={t("hqStream")}
+      title={t("hqStream")}
+      className={className}
+    >
+      <Radio aria-hidden className={iconClassName} />
+    </button>
+  );
+}
+
+/**
+ * The panel tier verb inside the composer row — at fullscreen it folds back
+ * to the pill, at the pill it grows to fullscreen (the same reducePanelMode
+ * event the panel's own slim bar sends). Renders nothing off-panel.
+ */
+function FullscreenToggle({
+  className,
+  iconClassName,
+}: {
+  className: string;
+  iconClassName: string;
+}) {
+  const tPanel = useTranslations("conversationPanel");
+  const tier = usePanelTier();
+  if (!tier) return null;
+  const fullscreen = tier.mode === "fullscreen";
+  const label = fullscreen ? tPanel("exitFullscreen") : tPanel("expand");
+  return (
+    <button
+      type="button"
+      data-panel-fullscreen
+      onClick={() => tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))}
+      aria-label={label}
+      title={label}
+      className={className}
+    >
+      {fullscreen ? (
+        <Minimize2 aria-hidden className={iconClassName} />
+      ) : (
+        <Maximize2 aria-hidden className={iconClassName} />
+      )}
+    </button>
+  );
 }
 
 export function ChatInput({
@@ -187,13 +251,17 @@ export function ChatInput({
 
   // ── THE PILL FORM (v0.13 §4) ─────────────────────────────────────────────
   // The conversation panel's collapsed tier: the floating glass pill's ONE
-  // row, exactly the four controls the ruling allows — a round attach button
-  // on the left, a single-line input in the middle (no box of its own; the
-  // pill's chrome is the container), and round send/stop + fullscreen
-  // buttons on the right. Attach reuses the same `useImageAttachments`
-  // state as the full form (one component, early returns — a draft or a
-  // staged image survives expanding to fullscreen verbatim), and stop
-  // reuses the same `onStop` the full form's button calls.
+  // row. Reading order (the v0.21 composer ruling): the LEFT end holds the
+  // two entries that lead away from the row — attach, and the evolution
+  // stream's HQ panel; the single-line input takes the middle (no box of its
+  // own; the pill's chrome is the container); the RIGHT end walks towards
+  // the act — the model picker (md and up; the phone's width belongs to the
+  // input), the fullscreen verb, and send/stop as the RIGHTMOST control,
+  // the outer corner "do the thing" owns in every form. Attach reuses the
+  // same `useImageAttachments` state as the full form (one component, early
+  // returns — a draft or a staged image survives expanding to fullscreen
+  // verbatim), and stop reuses the same `onStop` the full form's button
+  // calls.
   if (tier?.mode === "pill") {
     return (
       <div
@@ -229,6 +297,12 @@ export function ChatInput({
           className="hidden"
           accept="image/*"
         />
+        {/* The evolution stream — the HQ panel's second entry (the pod's
+            floating button is the first). One panel, two doors. */}
+        <HQStreamButton
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          iconClassName="size-4"
+        />
         {/* The single line — a real one-line input, not a resized textarea.
             Enter sends, as in the full form. */}
         <input
@@ -239,8 +313,32 @@ export function ChatInput({
           aria-label={t("placeholder")}
           className="h-9 min-w-0 flex-1 bg-transparent font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-muted-foreground"
         />
+        {/* The model picker joins the rightward walk on md and up — on the
+            phone the input keeps the width. `contents` lets the selector's
+            own trigger sit in the row as if the wrapper were not there (and
+            the selector itself renders nothing when there is ≤1 model). */}
+        <div className="hidden md:contents">
+          <ModelSelector
+            currentModelId={currentModelId}
+            onModelChange={onModelChange}
+          />
+        </div>
+        {/* Expand — the pill's one way up, through the panel's own
+            transition table. */}
+        <button
+          type="button"
+          data-pill-expand
+          onClick={() =>
+            tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
+          }
+          aria-label={tPanel("expand")}
+          title={tPanel("expand")}
+          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+        >
+          <Maximize2 className="size-4" />
+        </button>
         {/* Send / stop — one button, two faces, exactly like the full
-            form's. */}
+            form's, and always the RIGHTMOST control. */}
         {isLoading && onStop ? (
           <button
             type="button"
@@ -267,20 +365,6 @@ export function ChatInput({
             <ArrowUp className="size-4" />
           </button>
         )}
-        {/* Expand — the pill's one way up, through the panel's own
-            transition table. */}
-        <button
-          type="button"
-          data-pill-expand
-          onClick={() =>
-            tier && tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))
-          }
-          aria-label={tPanel("expand")}
-          title={tPanel("expand")}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-        >
-          <Maximize2 className="size-4" />
-        </button>
       </div>
     );
   }
@@ -384,6 +468,14 @@ export function ChatInput({
             accept="image/*"
           />
 
+          {/* The evolution stream — opens the companion pod's HQ panel (the
+              field↔HQ activity face). One panel, two doors: this button and
+              the pod's floating one. */}
+          <HQStreamButton
+            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
+            iconClassName="h-3.5 w-3.5"
+          />
+
           {/* Memory docs — previously / direction viewer. The one control that
               is in BOTH forms: reading the memory is not a conversation act,
               and gating it behind opening the composer would make the app's
@@ -391,12 +483,17 @@ export function ChatInput({
           <MemoryDocs persona={persona} />
         </div>
 
-        {/* Right side — model then send, in that order, so the send button
-            keeps the outer corner it owns in the compact form too. */}
+        {/* Right side — model, then the fullscreen verb, then send: the walk
+            towards the act, so the send button keeps the outer corner it owns
+            in every form. */}
         <div className="flex shrink-0 items-center gap-1.5">
           <ModelSelector
             currentModelId={currentModelId}
             onModelChange={onModelChange}
+          />
+          <FullscreenToggle
+            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
+            iconClassName="h-3.5 w-3.5"
           />
           {isLoading && onStop ? (
             <button

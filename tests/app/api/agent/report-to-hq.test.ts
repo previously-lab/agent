@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
   resumeHook: vi.fn(),
   start: vi.fn(),
+  /** the hq.json status pointer — mocked so tests never touch real memory/ */
+  recordHQDispatch: vi.fn(async () => {}),
 }));
 
 vi.mock("workflow/api", () => ({
@@ -24,6 +26,10 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("@/app/api/evolution/background-steps", () => ({
   executeQuestionRun: vi.fn(),
+}));
+
+vi.mock("@/app/api/evolution/hq-status-store", () => ({
+  recordHQDispatch: h.recordHQDispatch,
 }));
 
 import { reportToHQExecute, type ToolContext } from "@/app/api/agent/tool-executors";
@@ -64,6 +70,10 @@ describe("reportToHQ — HQ alive", () => {
     const payload = h.resumeHook.mock.calls[0][1] as Record<string, unknown>;
     expect(Object.keys(payload).sort()).toEqual(["brief", "replyToken"]);
     expect(h.start).not.toHaveBeenCalled();
+    // a confirmed delivery lands in the status pointer — the panel's
+    // "last dispatch" line carries the brief prose
+    expect(h.recordHQDispatch).toHaveBeenCalledTimes(1);
+    expect(h.recordHQDispatch).toHaveBeenCalledWith(BRIEF);
   });
 
   it("empty brief is refused before any dispatch", async () => {
@@ -71,6 +81,8 @@ describe("reportToHQ — HQ alive", () => {
     expect(r.ok).toBe(false);
     expect(h.getHookByToken).not.toHaveBeenCalled();
     expect(h.start).not.toHaveBeenCalled();
+    // nothing was dispatched, so nothing is recorded
+    expect(h.recordHQDispatch).not.toHaveBeenCalled();
   });
 });
 
@@ -88,6 +100,9 @@ describe("reportToHQ — HQ absent (HookNotFoundError on the advisory)", () => {
     expect(args).toHaveLength(1);
     expect(args[0]).toEqual({ brief: BRIEF, replyToken: REPLY_TOKEN });
     expect(h.resumeHook).not.toHaveBeenCalled();
+    // delivered via a fresh start — still a confirmed delivery, still recorded
+    expect(h.recordHQDispatch).toHaveBeenCalledTimes(1);
+    expect(h.recordHQDispatch).toHaveBeenCalledWith(BRIEF);
   });
 });
 
@@ -111,5 +126,7 @@ describe("reportToHQ — resume raced with HQ exit", () => {
     const r = await reportToHQExecute({ brief: BRIEF }, { context: ctx, toolCallId: "call-1" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("HQ could not be reached");
+    // HQ never received the brief, so the pointer stays silent
+    expect(h.recordHQDispatch).not.toHaveBeenCalled();
   });
 });

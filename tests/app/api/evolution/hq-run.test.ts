@@ -20,9 +20,19 @@ const h = vi.hoisted(() => ({
     h.order.push("handoff");
     return { runId: "run-primary" };
   }),
-  handleBrief: vi.fn(async () => {
-    h.order.push("handleBrief");
-    return { actions: [], note: "idle — nothing substantive" };
+  handleBrief: vi.fn(
+    async (): Promise<{ actions: string[]; note: string; error?: string }> => {
+      h.order.push("handleBrief");
+      return { actions: [], note: "idle — nothing substantive" };
+    },
+  ),
+  /** the hq.json status pointer — mocked so tests never touch real memory/ */
+  recordRunStarted: vi.fn(async () => {
+    h.order.push("runStarted");
+  }),
+  recordBriefOutcome: vi.fn(async () => {}),
+  recordRunFinished: vi.fn(async () => {
+    h.order.push("runFinished");
   }),
   /** per-test hook behavior, installed by makeHook */
   behavior: null as null | {
@@ -44,6 +54,12 @@ vi.mock("workflow/api", () => ({
 
 vi.mock("@/app/api/evolution/hq-agent", () => ({
   handleBrief: h.handleBrief,
+}));
+
+vi.mock("@/app/api/evolution/hq-status-store", () => ({
+  recordHQRunStarted: h.recordRunStarted,
+  recordHQBriefOutcome: h.recordBriefOutcome,
+  recordHQRunFinished: h.recordRunFinished,
 }));
 
 import { hqRun, HQ_TOKEN, type HQBriefPayload } from "@/app/api/evolution/hq-run";
@@ -108,6 +124,50 @@ describe("hqRun — claim and conflict", () => {
     expect(h.resumeHook).not.toHaveBeenCalled();
   });
 
+  it("the status pointer follows the claim: running at start, settled at finish", async () => {
+    await hqRun(BRIEF);
+    expect(h.recordRunStarted).toHaveBeenCalledTimes(1);
+    expect(h.recordBriefOutcome).toHaveBeenCalledWith({ actions: [] });
+    expect(h.recordRunFinished).toHaveBeenCalledTimes(1);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: false,
+      errored: false,
+    });
+    // started precedes finished
+    expect(h.order).toEqual(["runStarted", "handleBrief", "runFinished"]);
+  });
+
+  it("a brief that landed writes settles the run as wrote; a failed brief as errored", async () => {
+    h.handleBrief.mockResolvedValueOnce({
+      actions: ["memory/people/user/index.md"],
+      note: "wrote the user model",
+    });
+    await hqRun(BRIEF);
+    expect(h.recordBriefOutcome).toHaveBeenCalledWith({
+      actions: ["memory/people/user/index.md"],
+    });
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: true,
+      errored: false,
+    });
+
+    vi.clearAllMocks();
+    h.order.length = 0;
+    h.handleBrief.mockResolvedValueOnce({
+      actions: [],
+      note: "",
+      error: "no default model configured",
+    });
+    await hqRun(BRIEF);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: false,
+      errored: true,
+    });
+  });
+
   it("a replyToken without a slice id → sliceId omitted (the brief prose is still whole)", async () => {
     await hqRun({ brief: "没有指针的简报。", replyToken: "field::2026-10-04T01:31:00.000Z" });
     expect(h.handleBrief).toHaveBeenCalledWith({
@@ -132,8 +192,11 @@ describe("hqRun — claim and conflict", () => {
     expect(h.resumeHook).toHaveBeenCalledTimes(1);
     expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, BRIEF);
     expect(h.order).toEqual(["handoff"]);
-    // a deduped rival does no HQ work itself
+    // a deduped rival does no HQ work itself — and never touches the status
+    // pointer, which the PRIMARY's run owns
     expect(h.handleBrief).not.toHaveBeenCalled();
+    expect(h.recordRunStarted).not.toHaveBeenCalled();
+    expect(h.recordRunFinished).not.toHaveBeenCalled();
   });
 });
 
@@ -154,6 +217,13 @@ describe("hqRun — the work loop", () => {
       brief: second.brief,
       date: expect.any(String),
       sliceId: "2026-10-04-0131",
+    });
+    // the finish mark carries the run's definitive count across BOTH briefs
+    expect(h.recordBriefOutcome).toHaveBeenCalledTimes(2);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 2,
+      wrote: false,
+      errored: false,
     });
   });
 });
