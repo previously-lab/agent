@@ -145,7 +145,7 @@ describe("runDocResearchPass — case model", () => {
     expect(result.written).toEqual(["research/手机话题演变调研/index.md"]);
     const raw = io.files.get("memory/research/手机话题演变调研/index.md")!;
     expect(raw).toContain("opened: '2026-08-09'");
-    expect(raw).toContain(`（证据切片：${SLICE_ID}）`);
+    expect(raw).toContain(`(refs: ${SLICE_ID})`);
     // The question is recorded as processed — never re-seen.
     expect(io.files.get(AGENT_MD)).toContain(RESEARCH_RECORD_PREFIX);
   });
@@ -223,6 +223,39 @@ describe("runDocResearchPass — case model", () => {
     expect(result.written).toEqual(["hypotheses/用户偏好小屏-有证伪/index.md"]);
     expect(result.skipped.map((s) => s.reason).join(" ")).toContain("falsification");
     expect(io.files.has("memory/hypotheses/用户偏好小屏/index.md")).toBe(false);
+  });
+
+  it("ACCEPTS an English hypothesis stating 'falsify if: …' (the gate reads both languages)", async () => {
+    seedQuestions();
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        {
+          toolName: "docResearchOutput",
+          input: {
+            writes: [
+              {
+                action: "open",
+                category: "hypotheses",
+                caseName: "小屏偏好-en",
+                body: "Guess: the user prefers compact phones — falsify if: they next choose a 6.7-inch-plus model on their own.",
+              },
+            ],
+            reasoning: "r",
+          },
+        },
+      ]),
+    );
+    const result = await runDocResearchPass({
+      model,
+      sliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+    });
+    expect(result.written).toEqual(["hypotheses/小屏偏好-en/index.md"]);
+    const raw = io.files.get("memory/hypotheses/小屏偏好-en/index.md")!;
+    expect(raw).toContain("falsify if:");
+    expect(raw).toContain(`(refs: ${SLICE_ID})`);
   });
 
   it("the question run may only OPEN research/ or hypotheses/ cases", async () => {

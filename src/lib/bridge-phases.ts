@@ -37,6 +37,7 @@
  * never-throw degradation contract).
  */
 import { z } from "zod";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import {
   getBridgeCommand,
   getBridgeTimeoutMs,
@@ -377,6 +378,10 @@ Direction mutation vocabulary (the direction.ops array — the ONLY way the dire
 - {"op":"remove_hypothesis","match":"…"} — a refuted guess leaves the pool.
 
 The card is a PURE semantic memory pool (Identity/Past/Now/Horizon — what the user did, is doing, will do): it NEVER carries rules, lessons, or analysis. Patterns/tendencies about the user belong to the direction Portrait (job 6), guesses to its hypothesis pool. One fact, one home.
+
+Language and style: ${DOC_LANGUAGE_RULE}
+
+${DOC_HOUSE_STYLE}
 
 OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, no markdown fence — matching this schema:
 {

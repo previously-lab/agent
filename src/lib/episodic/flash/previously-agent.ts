@@ -65,6 +65,7 @@ import { z } from "zod";
 import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { SelfAgent } from "@/lib/evolution/paths";
 import {
   renderDirectionAnalysis,
@@ -290,6 +291,12 @@ The raw evidence lives in the time slices; the card only summarizes and points a
 
 The card must NEVER carry rules, lessons, or analysis. If the card you are reading still has a \`## Self-model\` section (legacy), you MUST migrate it this run: fold each line into the Portrait — DESCRIPTIVE phrasing about the user, keeping its slice refs — and do not re-create the section (the writer drops it).
 
+## Language and house style
+
+${DOC_LANGUAGE_RULE}
+
+${DOC_HOUSE_STYLE}
+
 ## The direction discipline (portrait + hypothesis pool)
 
 direction.md has a fixed skeleton: \`# Portrait\` (six fixed \`##\` dimensions) / \`# Hypotheses\`. You edit it through MUTATION TOOLS, one targeted op per call — never a whole-doc rewrite; entries you never touch stay exactly as they are, and engineering stamps every hypothesis's \`[proposed …]\` pointer itself.
@@ -329,7 +336,7 @@ Compare the conversation in the task against the current card. Incorporate anyth
 - A commitment, deadline, or awaited reply → a Horizon line with \`by\` + refs.
 - **Horizon resolution rule**: when the user reports the outcome of an open loop, RESOLVE it — and record the outcome via addNow (or the Past profile if durable). Overdue items are KEPT, never silently dropped.
 - A user correction / explicit preference → update the Past paragraph AND consider the direction side (a durable stated preference is a Portrait entry; a suspected one is a hypothesis).
-- Fragmented or non-English card content → rewrite those entries cleanly (ONE flowing English Past paragraph, every entry in English) while preserving substance.
+- Fragmented or mixed-language card content → rewrite those entries cleanly in the user's language while preserving substance.
 - Nothing new AND the card is already clean → make no writes; just \`finish\` with a short reasoning.
 
 ## self/ — SOPs and self-assessment
@@ -647,7 +654,7 @@ function buildTools(
         `Rewrite the rolling Past profile paragraph IN PLACE (≤ ${CARD_PROFILE_MAX_CHARS} chars). ` +
         "Preserve what is still accurate; fold in new durable substance.",
       inputSchema: z.object({
-        text: z.string().describe("The full new profile paragraph, English."),
+        text: z.string().describe("The full new profile paragraph, in the user's language."),
       }),
       execute: async ({ text }) => sessionUpdatePastProfile(session, text),
     }),

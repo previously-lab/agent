@@ -30,15 +30,26 @@ function build(overrides: Partial<Opts> = {}): string {
 }
 
 describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
-  it("orders layers by stability: L0 charter → L0b space fiction → L1b direction → L1 card → L3 slice head → L5 demo", () => {
-    const s = build({ directionBlock: DIRECTION });
+  it("orders layers by stability: L0 charter → L0b space fiction → L1b direction → L1a assisting → L1 card → L3 slice head → L5 demo → L6 due tasks", () => {
+    const ASSISTING = "## Who you're assisting\nName: Alan";
+    const DUE = "## Background work that landed today";
+    const s = build({
+      directionBlock: DIRECTION,
+      assistingBlock: ASSISTING,
+      dueTasksBlock: DUE,
+    });
     expect(s.indexOf(IDENTITY)).toBe(0); // L0 leads the prompt
     expect(s.indexOf(SPACE_FICTION_BLOCK)).toBeGreaterThan(s.indexOf(IDENTITY));
     // WHO (the user model) frames the reading of WHAT (the card).
     expect(s.indexOf(DIRECTION)).toBeGreaterThan(s.indexOf(SPACE_FICTION_BLOCK));
-    expect(s.indexOf(PREVIOUSLY)).toBeGreaterThan(s.indexOf(DIRECTION));
+    // L1a — the assisting tail sits with the user-model layers, out of L0.
+    expect(s.indexOf(ASSISTING)).toBeGreaterThan(s.indexOf(DIRECTION));
+    expect(s.indexOf(ASSISTING)).toBeLessThan(s.indexOf(PREVIOUSLY));
+    expect(s.indexOf(PREVIOUSLY)).toBeGreaterThan(s.indexOf(ASSISTING));
     expect(s.indexOf(SLICE_HEAD)).toBeGreaterThan(s.indexOf(PREVIOUSLY));
     expect(s.indexOf(DEMO)).toBeGreaterThan(s.indexOf(SLICE_HEAD)); // L5 tail
+    expect(s.indexOf(DUE)).toBeGreaterThan(s.indexOf(DEMO)); // L6 — the very tail
+    expect(s.trim().endsWith(DUE)).toBe(true);
   });
 
   it("CORE REGRESSION: byte-identical when assembled twice within one slice (prefix cache)", () => {
@@ -76,8 +87,8 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
   });
 
   it("the space fiction states the co-built space without referencing any per-turn view signal (A1)", () => {
-    expect(SPACE_FICTION_BLOCK).toContain("谁都不生存在这个空间里");
-    expect(SPACE_FICTION_BLOCK).toContain("同一块屏幕");
+    expect(SPACE_FICTION_BLOCK).toContain("Nobody lives in this space");
+    expect(SPACE_FICTION_BLOCK).toContain("the same screen");
     expect(SPACE_FICTION_BLOCK).not.toContain("[当前]");
     expect(build()).toContain(SPACE_FICTION_BLOCK);
   });
@@ -95,6 +106,17 @@ describe("assembleSystemPrompt (v0.9 slice-level freeze)", () => {
     expect(s.indexOf(DIRECTION)).toBeLessThan(s.indexOf(PREVIOUSLY));
     // Default: the layer is omitted entirely (template / legacy direction docs).
     expect(build()).not.toContain("Direction — who the user is");
+  });
+
+  it("places the assisting block (L1a) between the direction and the card header — omitted when absent", () => {
+    const ASSISTING = "## Who you're assisting\nName: Alan";
+    const s = build({ directionBlock: DIRECTION, assistingBlock: ASSISTING });
+    expect(s.indexOf(ASSISTING)).toBeGreaterThan(s.indexOf(DIRECTION));
+    expect(s.indexOf(ASSISTING)).toBeLessThan(
+      s.indexOf("## What I know about the user"),
+    );
+    // Default: the layer is omitted entirely (no identity head).
+    expect(build()).not.toContain("Who you're assisting");
   });
 
   it("carries NO inline static-rules layer — the two documents' contract lives in the charter (L0), stated once", () => {
@@ -239,9 +261,9 @@ describe("the field/HQ charter (v0.21)", () => {
     expect(CHARTER_MD).toContain("it wakes only when you send it a dispatch");
   });
 
-  it("carries the 成篇判据 and the write-BEFORE-you-answer discipline, with the citation as prose", () => {
-    expect(CHARTER_MD).toContain("成篇判据");
-    expect(CHARTER_MD).toContain("will be came back to");
+  it("carries the revisit bar and the write-BEFORE-you-answer discipline, with the citation as prose", () => {
+    expect(CHARTER_MD).toContain("revisit bar");
+    expect(CHARTER_MD).toContain("will be revisited");
     expect(CHARTER_MD).toContain("cost real effort this turn");
     expect(CHARTER_MD).toContain("one-off answers nobody will revisit stay in the slice");
     expect(CHARTER_MD).toContain("write it BEFORE you answer");
@@ -268,11 +290,29 @@ describe("the field/HQ charter (v0.21)", () => {
   });
 
   it("carries the dispatch discipline: the scene plus your own observations, no expectations, no instructions", () => {
-    expect(CHARTER_MD).toContain("### Reporting to HQ (发报)");
+    expect(CHARTER_MD).toContain("### Reporting to HQ (the dispatch)");
     expect(CHARTER_MD).toContain("**your own observations**");
     expect(CHARTER_MD).toContain("**no expectations and no instructions**");
     // The payload is prose — never a JSON/field template.
     expect(CHARTER_MD).toContain("The payload is prose");
+  });
+
+  it("narrates ONE person to the user — the two units are never separate people", () => {
+    expect(CHARTER_MD).toContain("To the user there is only ever you");
+    expect(CHARTER_MD).toContain("it is you, working while the user is away");
+    // The retired colleague metaphors are gone.
+    expect(CHARTER_MD).not.toContain("one of your colleagues");
+    expect(CHARTER_MD).not.toContain("researcher colleague");
+    expect(CHARTER_MD).not.toContain("air support");
+    // The copy metaphor replaced them.
+    expect(CHARTER_MD).toContain("one of your copies is dispatched");
+    expect(CHARTER_MD).toContain("a search-desk copy of yourself");
+  });
+
+  it("pins the language rule: prompts are English, memory documents are the user's language and never mixed", () => {
+    expect(CHARTER_MD).toContain("The languages of your work");
+    expect(CHARTER_MD).toContain("Prompts and instructions are English");
+    expect(CHARTER_MD).toContain("written in the user's own language, and one document never mixes languages");
   });
 
   it("carries NONE of the retired mechanical-trigger or language-discipline wording (v0.21 撤出清单)", () => {

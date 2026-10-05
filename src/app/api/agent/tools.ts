@@ -15,6 +15,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { isClientMode } from "@/lib/mode";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import {
   readSliceExecute,
   readAgentTimelineExecute,
@@ -200,25 +201,30 @@ export const conceptTools = {
 
 // ─── Chat tool set ───────────────────────────────────────────────────────
 //
-// The reply segment's read surface (v0.19 §A.2.1, final shape). There is
-// NO memory colleague: past-memory questions are YOURS.
+// The reply segment's tool surface. There is NO memory colleague:
+// past-memory questions are YOURS.
 //
-// Memory surface:
+// Read surface:
 //   - listTree: the WHOLE memory tree in one call, grouped by top-level
 //     category (people/ events/ things/ … records/). A TRANSITIONAL
 //     PLACEHOLDER — a dedicated retrieval tool will replace it. The paths
 //     themselves are the index: category / case name / date all live on the
 //     path. No ranking, no relevance score — read the list.
-//   - readDoc: point-read a case document by TWO-SEGMENT reference —
-//     `分类/case名` → the case's index.md; `分类/case名/篇名` → one dated
-//     piece. Judge freshness from the opened/closed dates in the header.
+//   - readDoc: point-read a case document by reference — `<category>/<case>`
+//     → the case's index.md; `<category>/<case>/<piece>` → one dated piece.
+//     Judge freshness from the opened/closed dates in the header.
 //   - readSlice: point-read the original conversation record — the ONLY
 //     source for specific facts (numbers, dates, quotes, promises): read
 //     FIRST, then answer. `range` fetches only the turns you need.
 //   - readAgentTimeline / readPreviously: your own cognition for a slice /
 //     the user-card snapshot of that moment.
-//   - noteForSediment: the sediment mailbox — the reply segment's ONE write
-//     (只读 + 记账): drop a marker line for the boundary-run writers.
+//
+// Write surface (v0.21): TWO writes, both one-way.
+//   - writeCase: the field's own case write (research/ + tasks/ only) — the
+//     document lands immediately, written BEFORE the answer.
+//   - noteForSediment: the sediment mailbox — one marker line into the
+//     current slice's agent.md, consumed by HQ and the scribe/research
+//     passes at slice close. A marker is a clue, not an order.
 //
 // How to find things: listTree first (what cases exist), readDoc into the
 // promising ones, readSlice down to the evidence. If the question is
@@ -252,11 +258,11 @@ export const chatTools = {
   readDoc: tool({
     description:
       "Read a case document by its TWO-SEGMENT reference (v0.19 §B.2): " +
-      "`分类/case名` (e.g. 'research/手机调研') → that case's index.md — what " +
-      "it is, where it stands, which pieces hang in it; `分类/case名/篇名` → " +
+      "`<category>/<case>` (e.g. 'research/手机调研') → that case's index.md — what " +
+      "it is, where it stands, which pieces hang in it; `<category>/<case>/<piece>` → " +
       "one dated piece. Case docs are small files — the whole file is " +
-      "returned: the opened/closed dates (closed = sealed, 写完封口), the " +
-      "正文, and the dated 尾部 lines. Judge freshness yourself from those " +
+      "returned: the opened/closed dates (closed = sealed, the body is frozen), the " +
+      "body, and the dated tail lines. Judge freshness yourself from those " +
       "dates — contradictions between documents are time, read them " +
       "newest-first. Grounding rule applies: a document may summarize, but " +
       "specific facts (numbers, dates, quotes, promises) enter your answers " +
@@ -268,7 +274,7 @@ export const chatTools = {
       ref: z
         .string()
         .describe(
-          "Two-segment reference: '分类/case名' or '分类/case名/篇名', e.g. 'research/手机调研' or 'tasks/8号on-site' (《》 marks and a .md suffix tolerated).",
+          "Two-segment reference: '<category>/<case>' or '<category>/<case>/<piece>', e.g. 'research/手机调研' or 'tasks/8号on-site' (《》 marks and a .md suffix tolerated).",
         ),
     }),
     contextSchema: toolContextSchema,
@@ -284,24 +290,26 @@ export const chatTools = {
     description:
       "Write a case document — one of your tools as the field agent (v0.21 " +
       "§2), for turns that produce a DOCUMENT before the answer. Use it when " +
-      "the 成篇判据 hits: the content will be CAME BACK TO (the user will " +
+      "the revisit bar trips: the content will be revisited (the user will " +
       "re-raise it / it has a date anchor / it is an ongoing thread) OR it " +
       "cost real effort this turn (web searches, several slice reads, " +
       "multi-step reasoning) — a finished piece worth keeping. One-off Q&A " +
       "that nobody will revisit stays in the slice; do NOT write it here. " +
       "Discipline: call writeCase FIRST, then base your answer on the case " +
-      "you just wrote, and cite the case path (<category>/<caseName>[/篇名]) " +
+      "you just wrote, and cite the case path (<category>/<caseName>[/<piece>]) " +
       "in the reply, the way you would mention a file. Categories: research/ " +
       "for an investigation, tasks/ for a commitment the user asked you to " +
       "carry out; people/user and self/ are not yours to write. Semantics: if " +
       "the case does not exist yet it is OPENED — body becomes the case's " +
       "index.md (the case name is permanent; name it for the QUESTION, " +
       "specific enough that a scope change means a new case). If it ALREADY " +
-      "exists, pass pieceTitle to ADD one dated piece (《日期》标题》 rules " +
-      "apply); omitting pieceTitle on an existing case is refused — this tool " +
-      "never rewrites an index. What you write is exactly what lands: no " +
-      "machine fields are added. If the piece should say where it came from " +
-      "(which conversation, when), say it in prose.",
+      "exists, pass pieceTitle to ADD one dated piece (the date prefix is " +
+      "stamped mechanically — pass the bare title); omitting pieceTitle on an " +
+      "existing case is refused — this tool never rewrites an index. What you " +
+      "write is exactly what lands: no machine fields are added. If the piece " +
+      "should say where it came from (which conversation, when), say it in " +
+      "prose." +
+      `\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
       category: z
         .enum(["research", "tasks"])
@@ -323,7 +331,7 @@ export const chatTools = {
         .string()
         .min(1)
         .describe(
-          "The WHOLE content to write: for open — the case's index 正文; " +
+          "The WHOLE content to write: for open — the case's index body; " +
           "for addPiece — the piece's full text. Written verbatim.",
         ),
       pieceTitle: z
@@ -331,8 +339,8 @@ export const chatTools = {
         .optional()
         .describe(
           "Required when adding to an EXISTING case: the dated piece's " +
-          "title (《日期》规则由机械层处理 — pass the bare title, e.g. " +
-          "'报价篇'). Omit when opening a new case.",
+          "title (the date prefix is stamped mechanically — pass the bare " +
+          "title, e.g. '报价篇'). Omit when opening a new case.",
         ),
     }),
     contextSchema: toolContextSchema,
@@ -348,9 +356,10 @@ export const chatTools = {
       "Report to HQ — hand the scene over to the archive/evolution side of " +
       "the house. This is a one-way dispatch: your brief is a piece of PLAIN " +
       "PROSE describing the situation and your own observations, written for " +
-      "a colleague who was not in this conversation. No expectations, no " +
-      "instructions, no template — HQ decides for itself what your report " +
-      "is worth and what to do about it. It may act on it, file it, or " +
+      "yourself at the archival post — the you that was not in this " +
+      "conversation. No expectations, no instructions, no template — HQ " +
+      "decides for itself what your report is worth and what to do about it. " +
+      "It may act on it, file it, or " +
       "decide it needs nothing. It MAY speak back into a later turn of this " +
       "conversation — treat any such return as a bonus, never as something " +
       "you are owed or should wait for. The result only tells you the " +
@@ -409,10 +418,10 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: startLongTaskExecute,
   }),
-  // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). The reply segment
-  // is "只读 + 记账" — this tool is the 记账, the ONE memory write the main
-  // agent is granted: a single structured marker line into the current slice's
-  // agent.md, consumed by the scribe/librarian passes at slice close.
+  // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). One of the reply
+  // segment's TWO writes (alongside writeCase): a single structured marker
+  // line into the current slice's agent.md, consumed by HQ and the
+  // scribe/research passes at slice close — a clue, not an order.
   noteForSediment: tool({
     description:
       "Make THIS conversation leave something behind — your one way to turn " +
@@ -448,7 +457,7 @@ export const chatTools = {
         .string()
         .min(1)
         .describe(
-          "The document's title (命名纪律: specific enough that a scope change means a new document).",
+          "The document's title (naming discipline: specific enough that a scope change means a new document).",
         ),
       note: z
         .string()
@@ -466,7 +475,7 @@ export const chatTools = {
         .string()
         .optional()
         .describe(
-          "sediment only: an EXISTING case reference to update (分类/case名, from listTree/readDoc), when this updates one rather than opening one.",
+          "sediment only: an EXISTING case reference to update (<category>/<case>, from listTree/readDoc), when this updates one rather than opening one.",
         ),
       dateAnchor: z
         .string()
@@ -550,7 +559,7 @@ export const chatTools = {
   }),
   webSearch: tool({
     description:
-      "Hand a research question to the web-research colleague — a sub-agent " +
+      "Hand a research question to a search-desk copy of yourself — a sub-agent " +
       "that searches the live web AND reads the most promising pages itself, " +
       "then returns a real answer that combines what it found with its own " +
       "knowledge (web claims carry source mentions), plus its confidence " +
@@ -633,14 +642,14 @@ export const chatTools = {
       "`question` to say what you want to know about the image. For `source`, " +
       "use an http(s) URL, `attachment:N` where N is the attachment number " +
       "from the placeholder in the user's message, or " +
-      "`doc:<分类>/<case名>/<附件名>` for an image attachment stored in a " +
+      "`doc:<category>/<case>/<attachment>` for an image attachment stored in a " +
       "memory case (v0.19 §C.1). NOT for pages — use webFetch for those.",
     inputSchema: z.object({
       source: z
         .string()
         .describe(
           "Image source: an http(s) URL, 'attachment:N' referring to the Nth " +
-          "image attachment of the current turn, or 'doc:<分类>/<case名>/<附件名>' " +
+          "image attachment of the current turn, or 'doc:<category>/<case>/<attachment>' " +
           "for an image attachment stored in a memory case.",
         ),
       question: z

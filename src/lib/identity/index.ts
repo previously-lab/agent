@@ -13,6 +13,7 @@
  */
 import matter from "gray-matter";
 import { CHARTER_MD } from "./agent-prompt.generated";
+import { buildAssistingBlock } from "./assisting-block";
 import type { UserProfile } from "./user-profile";
 
 const charter = matter(CHARTER_MD);
@@ -24,30 +25,15 @@ const charterBody = charter.content.trim();
  * Compose the agent's base system prompt: the bundled charter + who you're
  * assisting. The caller passes the already-loaded user profile and appends
  * the evolved layers (direction, card) and the frozen context blocks.
+ * Composed from charter + buildAssistingBlock so the workflow can also split
+ * the two apart (see ./assisting-block.ts) — the output bytes are unchanged.
  */
 export function buildAgentIdentityPrompt(profile: UserProfile | null): string {
-  const parts: string[] = [
+  const base =
     charterBody ||
-      `You are ${charterName}, a personal AI agent that remembers everything the user does.`,
-  ];
-
-  if (profile) {
-    const lines: string[] = [];
-    if (profile.name) lines.push(`Name: ${profile.name}`);
-    if (profile.aliases?.length) {
-      lines.push(`Aliases: ${profile.aliases.join(", ")}`);
-    }
-    if (profile.addressAs) lines.push(`Address them as: ${profile.addressAs}`);
-    if (profile.pronouns) lines.push(`Pronouns: ${profile.pronouns}`);
-    if (profile.timezone) lines.push(`Timezone: ${profile.timezone}`);
-    if (lines.length > 0 || profile.body) {
-      let block = "## Who you're assisting\n" + lines.join("\n");
-      if (profile.body) block += `\n\n${profile.body}`;
-      parts.push(block.trim());
-    }
-  }
-
-  return parts.join("\n\n");
+    `You are ${charterName}, a personal AI agent that remembers everything the user does.`;
+  const assisting = buildAssistingBlock(profile);
+  return assisting ? `${base}\n\n${assisting}` : base;
 }
 
 export {

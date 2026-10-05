@@ -111,9 +111,10 @@ export interface TurnInput {
    * STRUCTURED field, never as text; sanitized in startTurn (shape +
    * parseSliceId-strict sliceId), omitted from TurnInput when absent — the
    * lobby default, which needs no block at all (the stable system prompt
-   * states it). The workflow injects the server-rendered compact block into
-   * the last user message's OUTBOUND copy — it can never reach the persisted
-   * slice turn (steps.ts persists only `lastUserMessage`).
+   * states it). Sanitized and carried by value, but currently NO injection
+   * point consumes it: the per-turn view block was retired in v0.19 A1
+   * (the SPACE_FICTION_BLOCK states the fiction once, view-free). The field
+   * stays on the wire for forward compatibility.
    */
   view?: CurrentView;
 }
@@ -183,6 +184,10 @@ export interface HousekeepingResult {
    * The agent's constitution: SOUL + "who you're assisting" + DIRECTIVES
    * (memory access rules included), derived from previously.md's identity
    * section. Injected into the system prompt. See src/lib/identity.
+   * The workflow splits the "Who you're assisting" tail out with
+   * splitIdentityPrompt and injects it as its own block (L1a, after the
+   * direction layer); callers that need the whole prompt unsplit (the
+   * companion narrate) use it as-is.
    */
   identityPrompt: string;
   /**

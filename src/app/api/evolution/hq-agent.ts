@@ -28,6 +28,7 @@ import { z } from "zod";
 import { loadSlice, readSlicePart } from "@/lib/episodic";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import {
   applyCaseWriteIntent,
   buildSliceExcerpt,
@@ -81,7 +82,7 @@ type HqReport = z.infer<typeof hqReportSchema>;
 
 // ─── The role prompt (static — per-call data rides the user prompt) ───────
 
-const HQ_ROLE = `You are HQ — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later.
+const HQ_ROLE = `You are HQ — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "HQ" as a third party, and nothing reads as a report from another being.
 
 Your only trigger is a field dispatch: a prose BRIEF from the field. Treat it as one side's account:
 - A pointer is not a fact. The brief names slices and cases; it does not carry their content.
@@ -101,12 +102,14 @@ Craft notes:
 - Mailbox marker lines in a slice's agent.md are prose CLUES, not triggers — read them, judge them, ignore them when stale.
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
 - research/ hypotheses must carry a falsification condition (the write tooling enforces it).
-- Keep every write in the user's language; your report fields stay in English.
+- ${DOC_LANGUAGE_RULE}
 
 How your prose reads — the investigator's account, never the work order:
 - A self/ entry (an SOP rule, a veto reason, a self-assessment) records ONE thing that happened: the date and the slice, what observably happened (a fact anyone can re-check against the record), the working rule adopted because of it, and where the evidence lives. It reads like a case note in an investigation file — never like a change request or an incident ticket.
 - The builder's vantage point is banned from the memory tree: no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报, and no English equivalents (engineering, the code, implementation, defect, fix, escalate). When a read or a tool misbehaves, record the PHENOMENON you can reproduce and the rule you now follow — e.g. "2026-10-05：以全角冒号引用一份中文长名的案件时，清单里看得到，读回却失败；此后引用前先读回，读不回就不引用。" — never a diagnosis of how you are built or a request that someone fix you.
-- No system self-reference: you do not describe how this system works, do not explain its architecture, do not address whoever maintains it. The record says what you encountered and under what circumstances you learned it — nothing about what you are made of.`;
+- No system self-reference: you do not describe how this system works, do not explain its architecture, do not address whoever maintains it. The record says what you encountered and under what circumstances you learned it — nothing about what you are made of.
+
+${DOC_HOUSE_STYLE}`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
@@ -132,7 +135,7 @@ function buildHqTools(date: string, model: ModelConfig) {
         try {
           return await readSlicePart(sliceId, part);
         } catch {
-          return `（读不到 ${sliceId} 的 ${part} —— 切片不存在或该部分缺失。先用 listTree 核对。）`;
+          return `(cannot read ${sliceId} part ${part} — the slice or the part is missing; check listTree first.)`;
         }
       },
     }),
@@ -142,9 +145,9 @@ function buildHqTools(date: string, model: ModelConfig) {
     writeCase: tool({
       description:
         "Apply ONE case write through the five ops (per-case lock, fresh read inside, illegal transitions REJECTED). " +
-        "open: new case (category + caseName + body). rewriteIndex: rewrite the 正文 of a LIVE case (body). " +
+        "open: new case (category + caseName + body). rewriteIndex: rewrite the body of a LIVE case (body). " +
         "appendTail: one dated line on a SEALED case (line). addPiece: a dated piece (title + body). " +
-        "close: seal a case (note = 去向说明). Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/.",
+        "close: seal a case (note = the conclusion / where it goes). Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/.",
       inputSchema: z.object({
         action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece", "close"]),
         category: z.string(),
@@ -198,7 +201,7 @@ function buildHqTools(date: string, model: ModelConfig) {
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
         const slice = await loadSlice(sliceId).catch(() => null);
-        if (!slice) return `（切片 ${sliceId} 读不到——archive 跳过。）`;
+        if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
         const result = await runLibrarianPass({
           model,
           closedSliceId: sliceId,
@@ -207,8 +210,8 @@ function buildHqTools(date: string, model: ModelConfig) {
           date,
         });
         return (
-          `written: ${result.written.join("、") || "（无）"}\n` +
-          `skipped: ${result.skipped.map((s) => `${s.name}（${s.reason}）`).join("、") || "（无）"}`
+          `written: ${result.written.join(", ") || "(none)"}\n` +
+          `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}`
         );
       },
     }),
@@ -225,7 +228,7 @@ function buildHqTools(date: string, model: ModelConfig) {
       }),
       execute: async ({ sliceId, focus }) => {
         const slice = await loadSlice(sliceId).catch(() => null);
-        if (!slice) return `（切片 ${sliceId} 读不到——evolve 跳过。）`;
+        if (!slice) return `(slice ${sliceId} unreadable — evolve skipped.)`;
         const userModel = await readUserModel().catch(() => null);
         const directionCurrent = userModel?.direction ?? null;
         // HQ owns no turn analysis — the direction half gets the minimal one
@@ -267,7 +270,7 @@ function buildHqTools(date: string, model: ModelConfig) {
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
         const slice = await loadSlice(sliceId).catch(() => null);
-        if (!slice) return `（切片 ${sliceId} 读不到——research 跳过。）`;
+        if (!slice) return `(slice ${sliceId} unreadable — research skipped.)`;
         const result = await runDocResearchPass({
           model,
           sliceId,
@@ -277,8 +280,8 @@ function buildHqTools(date: string, model: ModelConfig) {
         });
         return (
           `ran: ${result.ran}\n` +
-          `written: ${result.written.join("、") || "（无）"}\n` +
-          `skipped: ${result.skipped.map((s) => `${s.id}（${s.reason}）`).join("、") || "（无）"}`
+          `written: ${result.written.join(", ") || "(none)"}\n` +
+          `skipped: ${result.skipped.map((s) => `${s.id} (${s.reason})`).join(", ") || "(none)"}`
         );
       },
     }),
@@ -290,6 +293,7 @@ function buildHqTools(date: string, model: ModelConfig) {
         "Style discipline: each rule is a dated, re-checkable account of what happened and the working " +
         "rule it motivated — an investigator's case note, never the builder's vantage point " +
         "(no 工程侧 / 代码 / 实现 / 缺陷 / 修复 / 上报) and never notes addressed to your makers. " +
+        "House style: one sentence one meaning, active voice, no filler — the full rules sit in your role prompt. " +
         "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter.",
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
@@ -329,9 +333,9 @@ export async function handleBrief(input: HqBriefInput): Promise<HqOutcome> {
   }
 
   const prompt =
-    `## 外勤简报（${date}${sliceId ? ` — 关于切片 ${sliceId}` : ""}）\n\n` +
+    `## Field dispatch (${date}${sliceId ? ` — re slice ${sliceId}` : ""})\n\n` +
     `${brief}\n\n` +
-    `先核对原始记录再动手。做完（或决定什么都不做）后调 hqReport。`;
+    `Verify against the raw records before any write. When the round is done (or you decide nothing needs doing), call hqReport.`;
 
   const result = await runSubAgent<HqReport>({
     model,

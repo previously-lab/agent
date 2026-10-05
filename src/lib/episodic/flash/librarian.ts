@@ -37,6 +37,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
   CASE_CATEGORIES,
@@ -343,20 +344,20 @@ const caseWriterSchema = z.object({
           .describe(
             "skip: nothing worth writing (a legal, often correct answer). " +
             "open: create a NEW case (must not exist yet). " +
-            "updateIndex: rewrite the 正文 of an EXISTING, still-being-written case (body = the new full understanding). " +
+            "updateIndex: rewrite the body of an EXISTING, still-being-written case (body = the new full understanding). " +
             "appendTail: one dated supplement line on a SEALED case. " +
             "addPiece: a dated piece inside the case. " +
-            "close: seal the case (note = 去向说明).",
+            "close: seal the case (note = the conclusion / where it goes).",
           ),
         category: z.enum(CASE_CATEGORIES),
         caseName: z.string().describe("The case name — legal: no 4-digit lead, no separators/traversal/edge whitespace."),
-        /** open/updateIndex/addPiece: the 正文 (updateIndex = the WHOLE new body). */
+        /** open/updateIndex/addPiece: the body (updateIndex = the WHOLE new body). */
         body: z.string().optional(),
         /** appendTail only. */
         line: z.string().optional(),
         /** addPiece only — the piece title (date is stamped mechanically). */
         title: z.string().optional(),
-        /** close only — 封口/去向说明. */
+        /** close only — the conclusion / where it goes. */
         note: z.string().optional(),
       }),
     )
@@ -371,22 +372,24 @@ A conversation slice just closed. You are shown its content (excerpt) and the ca
 ## Task
 
 Per case you judge touched:
-- The case does not exist and this slice's content deserves a durable home → open (body = the index.md 正文: what it is, what this slice established).
-- The case exists and is still being written → updateIndex: rewrite the 正文 with the case's CURRENT full understanding (this slice's news merged in). Drafts are rewritten whole, not appended.
-- The case is sealed (closed date in the header) → appendTail: ONE dated line (说得完时) or addPiece (自成一篇时).
-- A research/question case reached its conclusion → close (note = 去向/结论).
+- The case does not exist and this slice's content deserves a durable home → open (body = the index.md body: what it is, what this slice established).
+- The case exists and is still being written → updateIndex: rewrite the body with the case's CURRENT full understanding (this slice's news merged in). Drafts are rewritten whole, not appended.
+- The case is sealed (closed date in the header) → appendTail: ONE dated line (when it fits in a sentence) or addPiece (when it stands as a piece of its own).
+- A research/question case reached its conclusion → close (note = the conclusion / where it goes).
 - Nothing worth writing → skip. Skipping EVERYTHING is a legal, often correct outcome: restraint is the default, a case is long-term memory, not a chat log.
 
 ## Rules
 
 1. Ground every write in the slice excerpt and what you actually read (readCase). No speculation, no boilerplate.
-2. Prose, in the user's language. No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence slice ids are stamped mechanically.
 3. Names are permanent: a case name is born fixed. Content beyond a case's scope → open a NEW case (and say so in reasoning), never stretch a name.
-4. updateIndex replaces the whole 正文 of a living draft; sealed cases only grow via appendTail/addPiece. Never restate history a case already carries — fold it in silently.
+4. updateIndex replaces the whole body of a living draft; sealed cases only grow via appendTail/addPiece. Never restate history a case already carries — fold it in silently.
 
 ## Output
 
-Call \`caseWriterOutput\` with one decision per case + a short reasoning note.`);
+Call \`caseWriterOutput\` with one decision per case + a short reasoning note.
+
+${DOC_HOUSE_STYLE}`);
 
 export interface CaseWriterManifest {
   truncated: boolean;
@@ -435,18 +438,18 @@ export async function runLibrarianPass(
   const skipped: Array<{ name: string; reason: string }> = [];
   const existing = caseIdentsOfManifest(manifest.tree);
 
-  const prompt = `## 刚关闭的切片 ${closedSliceId}
+  const prompt = `## Just-closed slice ${closedSliceId}
 
-focus: ${excerpt.focus || "（无）"}
-summary: ${excerpt.summary || "（无）"}
+focus: ${excerpt.focus || "(none)"}
+summary: ${excerpt.summary || "(none)"}
 
-${excerpt.turnsExcerpt || "（无对话摘录）"}
+${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
-## case 清单（listTree 全树；判断"这一片碰到哪些 case"是你的工作——用 readCase 读你要写的 case 现状）
+## Case manifest (the full listTree — judging which cases this slice touched is your job; readCase the ones you may write)
 
 ${renderManifest(manifest.tree)}
-${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readCase 的死链为准）\n" : ""}
-按指示给出每个 case 的决定。`;
+${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
+Report one decision per case as instructed.`;
 
   const result = await runSubAgent({
     model,
@@ -494,11 +497,11 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
       let intent: CaseWriteIntent;
       switch (op.action) {
         case "open":
-          if (!op.body?.trim()) throw new Error("open requires a body (the index.md 正文)");
+          if (!op.body?.trim()) throw new Error("open requires a body (the index.md body)");
           intent = { action: "open", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "updateIndex":
-          if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new 正文)");
+          if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new body)");
           intent = { action: "rewriteIndex", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "appendTail":
@@ -512,7 +515,7 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
           intent = { action: "addPiece", category: op.category, caseName: op.caseName, title: op.title.trim(), body: stampEvidence(op.body, closedSliceId) };
           break;
         case "close":
-          if (!op.note?.trim()) throw new Error("close requires a note (去向说明)");
+          if (!op.note?.trim()) throw new Error("close requires a note (the conclusion / where it goes)");
           intent = { action: "close", category: op.category, caseName: op.caseName, note: op.note.trim() };
           break;
       }
@@ -533,7 +536,7 @@ const scribeSchema = z.object({
     .array(
       z.object({
         id: z.string().describe("The marker id this entry answers."),
-        /** The case's new full 正文 (open/updateIndex) or ONE tail line (sealed case). */
+        /** The case's new full body (open/updateIndex) or ONE tail line (sealed case). */
         body: z.string().describe("The prose, grounded in the slice excerpt and the marker note."),
       }),
     )
@@ -548,19 +551,21 @@ You are shown: the slice excerpt, and per marker the marker itself plus the CURR
 ## Task
 
 One entry per marker — the body is:
-- a NEW case's opening 正文 (what it is, what this slice established — tasks state WHAT, the date anchor, background);
-- or, for an EXISTING case still being written, its new full 正文 — the current understanding with this slice's news folded in (rewrite whole, do not append);
+- a NEW case's opening body (what it is, what this slice established — tasks state WHAT, the date anchor, background);
+- or, for an EXISTING case still being written, its new full body — the current understanding with this slice's news folded in (rewrite whole, do not append);
 - or, for a SEALED case (closed date in the header), ONE dated supplement line.
 
 ## Rules
 
 1. Ground every entry in the slice excerpt and the marker note. No invention.
-2. Prose, in the user's language. No date bookkeeping — dates and evidence slice ids are stamped mechanically.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence slice ids are stamped mechanically.
 3. Never contradict shown existing text — fold the new fact in with its sense preserved.
 
 ## Output
 
-Call \`scribeOutput\` with one entry per marker you wrote + a short reasoning note. Writing nothing for a marker leaves it for a later pass.`);
+Call \`scribeOutput\` with one entry per marker you wrote + a short reasoning note. Writing nothing for a marker leaves it for a later pass.
+
+${DOC_HOUSE_STYLE}`);
 
 /** The v0.15 singular entityKind → the v0.19 category (§B.6). */
 const ENTITY_CATEGORY: Record<string, CaseCategory> = {
@@ -690,27 +695,27 @@ export async function runScribePass(input: ScribePassInput): Promise<ScribePassR
   const markerBlocks = targets
     .map(({ marker, category, caseName, existed, currentText }) => {
       const head =
-        `### marker ${marker.id}（kind=${marker.kind}${marker.docType ? `/${marker.docType}` : ""}` +
-        `${marker.entityKind ? `/${marker.entityKind}` : ""}）\n` +
-        `title: ${marker.title}\nnote: ${marker.note || "（无）"}` +
-        `${marker.dateAnchor ? `\n日期锚: ${marker.dateAnchor}` : ""}\n` +
-        `目标 case: ${category}/${caseName}（${existed ? "已存在，index.md 全文如下" : "将开设"}）`;
+        `### marker ${marker.id} (kind=${marker.kind}${marker.docType ? `/${marker.docType}` : ""}` +
+        `${marker.entityKind ? `/${marker.entityKind}` : ""})\n` +
+        `title: ${marker.title}\nnote: ${marker.note || "(none)"}` +
+        `${marker.dateAnchor ? `\ndateAnchor: ${marker.dateAnchor}` : ""}\n` +
+        `target case: ${category}/${caseName} (${existed ? "exists — current index.md below" : "to be opened"})`;
       return currentText ? `${head}\n\n${currentText.trim()}` : head;
     })
     .join("\n\n");
 
-  const prompt = `## 切片 ${sliceId}
+  const prompt = `## Slice ${sliceId}
 
-focus: ${excerpt.focus || "（无）"}
-summary: ${excerpt.summary || "（无）"}
+focus: ${excerpt.focus || "(none)"}
+summary: ${excerpt.summary || "(none)"}
 
-${excerpt.turnsExcerpt || "（无对话摘录）"}
+${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
-## 待落笔的标记（写前已读目标 case）
+## Markers to write (targets read before writing)
 
 ${markerBlocks}
 
-按指示给出每个标记的条目。`;
+Report one entry per marker as instructed.`;
 
   const result = await runSubAgent({
     model,

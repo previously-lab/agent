@@ -30,6 +30,7 @@ import type {
   TurnOutcome,
 } from "@/lib/chat/turn-types";
 import { DEPLOY_GUIDE_URL } from "@/lib/capabilities";
+import { splitIdentityPrompt } from "@/lib/identity/assisting-block";
 import { annotateCardTimes, localDateKey } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
@@ -708,8 +709,8 @@ export function buildMachineContextSection(machineContext: string): string {
  * user's real-world whereabouts ("我在公司") must never be mapped onto the
  * space.
  */
-export const SPACE_FICTION_BLOCK = `## 这片空间
-用户与 Previously 一起建造了这片空间：他们在一起回溯、讨论、建设。谁都不生存在这个空间里——包括 Previously 自己。用户和你看着同一块屏幕。`;
+export const SPACE_FICTION_BLOCK = `## This space
+The user and Previously built this space together: they look back, discuss, and build in it side by side. Nobody lives in this space — including Previously itself. The user and you are looking at the same screen.`;
 
 /**
  * Assemble the turn's system prompt. v0.9: the prompt is FROZEN at slice
@@ -722,8 +723,8 @@ export const SPACE_FICTION_BLOCK = `## 这片空间
  * Layer order (most stable first — prefix caching matches from the first
  * byte to the first difference):
  *   L0 identityPrompt  — the CHARTER (mission + the two documents' contract
- *                        incl. the GROUNDING RULE + protocols + guardrails)
- *                        plus "who you're assisting"; changes only with code
+ *                        incl. the GROUNDING RULE + protocols + guardrails);
+ *                        changes only with code
  *   L0b SPACE_FICTION_BLOCK — the product's stable fiction (the space is
  *                        co-built, nobody lives in it, same screen) + the
  *                        lobby default; a deployment constant
@@ -733,19 +734,32 @@ export const SPACE_FICTION_BLOCK = `## 这片空间
  *                        direction; the prefix-cache drift on those turns is
  *                        accepted deliberately). WHO the user is comes first:
  *                        it frames how the card below should be read
+ *   L1a assistingBlock — "who you're assisting" (the identity head parsed from
+ *                        the user model), split out of the identity prompt so
+ *                        the WHO sits with the user-model layers instead of
+ *                        inside the charter; changes only when the identity
+ *                        head changes
  *   L1 previously card — the dynamic semantic pool of WHAT the user did / is
  *                        doing / plans; annotated relative to the SLICE-HEAD
  *                        date; changes only when an evolution rewrites the card
+ *   L1c userProfileBlock — the user's own self-description (profile.md);
+ *                        changes only when the user edits it
  *   L3 sliceHeadBlock  — slice-start snapshot: local time, date anchors,
  *                        birth continuity, birth-evolution summary, drift hint
  *   L5 demoNotice      — static
  *   L5b bridgeNotice — client-mode subscription-bridge limitation notice;
  *                        constant for the deployment's brain config
+ *   L6 dueTasksBlock   — the background stream's completion statements (tasks/
+ *                        tail lines dated the user's local today); the LEAST
+ *                        stable block (it can appear mid-slice when background
+ *                        work lands), so it rides the tail where a change
+ *                        costs the least prefix
  *
  * There is no L2 static-rules layer: the card/direction contract and the
- * GROUNDING RULE live in the charter (L0), stated exactly once. The strands
- * menu (L5), the timeline brief (L4), and the overdue-Horizon block (L2b)
- * were retired in v0.19 A1 (撤清单 §A.2.2).
+ * GROUNDING RULE live in the charter in full, and each tool description
+ * carries its own one-line reminder. The strands menu (L5), the timeline
+ * brief (L4), and the overdue-Horizon block (L2b) were retired in v0.19 A1
+ * (撤清单 §A.2.2).
  *
  * Nothing per-turn remains: the `Sent:` timestamp, intent, emotional register
  * and semantic links were retired in v0.9 (the analyzer still runs — in the
@@ -757,7 +771,7 @@ export const SPACE_FICTION_BLOCK = `## 这片空间
  * warmed.
  */
 export function assembleSystemPrompt(opts: {
-  /** SOUL + "who you're assisting" + DIRECTIVES — stable across slices. */
+  /** The CHARTER alone (the assisting tail rides assistingBlock) — stable across slices. */
   identityPrompt: string;
   /** The user card (previously.md) — changes only on evolution. */
   previouslyContent: string;
@@ -768,6 +782,11 @@ export function assembleSystemPrompt(opts: {
    * omits the layer entirely.
    */
   directionBlock?: string;
+  /**
+   * The "Who you're assisting" block (L1a), split out of the identity prompt
+   * by splitIdentityPrompt; ""/undefined omits the layer entirely.
+   */
+  assistingBlock?: string;
   /**
    * Pre-built people/user/profile.md block (L1c — the user's OWN
    * self-description; its text states the precedence discipline), from
@@ -797,6 +816,7 @@ export function assembleSystemPrompt(opts: {
     identityPrompt,
     previouslyContent,
     directionBlock,
+    assistingBlock,
     userProfileBlock,
     dueTasksBlock,
     sliceHeadBlock,
@@ -808,13 +828,14 @@ export function assembleSystemPrompt(opts: {
     identityPrompt,
     SPACE_FICTION_BLOCK,
     directionBlock ?? "",
+    assistingBlock ?? "",
     `## What I know about the user — the living recap (${dateAnchor})`,
     previouslyContent,
     userProfileBlock ?? "",
-    dueTasksBlock ?? "",
     sliceHeadBlock,
     demoNotice,
     bridgeNotice ?? "",
+    dueTasksBlock ?? "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -849,8 +870,14 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // boundary or when an explicit evolution rewrites the card.
   const dateAnchor =
     localDateKey(slice.start, input.clientTimezone) ?? slice.start.slice(0, 10);
+  // The "Who you're assisting" tail leaves the L0 charter for L1a: the WHO
+  // (the identity head) sits with the user-model layers, and L0 stays pure
+  // code-stable text. The split is byte-exact (see assisting-block.ts).
+  const { charter: identityCharter, assisting: assistingBlock } =
+    splitIdentityPrompt(identityPrompt);
   const systemPrompt = assembleSystemPrompt({
-    identityPrompt,
+    identityPrompt: identityCharter,
+    assistingBlock,
     // Relative-time annotations are added to the INJECTED copy only — the
     // stored card keeps raw ISO dates (see src/lib/time/relative.ts). Anchored
     // to the slice start: the phrases are day-granular, so they can't drift

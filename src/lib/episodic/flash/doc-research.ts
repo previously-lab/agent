@@ -25,6 +25,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
+import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
 import type { ModelConfig } from "@/lib/models/registry";
 import {
   CASE_CATEGORIES,
@@ -55,15 +56,15 @@ const writeOpSchema = z.object({
   action: z
     .enum(["open", "updateIndex", "appendTail", "addPiece", "close"])
     .describe(
-      "open: a NEW case (category + caseName; body = the index.md 正文). " +
-      "updateIndex: rewrite the 正文 of an EXISTING living case. " +
+      "open: a NEW case (category + caseName; body = the index.md body). " +
+      "updateIndex: rewrite the body of an EXISTING living case. " +
       "appendTail: one dated line on a SEALED case. " +
       "addPiece: a dated piece inside an existing case. " +
-      "close: seal a case (note = 去向/结论).",
+      "close: seal a case (note = the conclusion / where it goes).",
     ),
   category: z.enum(CASE_CATEGORIES),
   caseName: z.string().describe("The case name — permanent at birth; legal per the red-line rule."),
-  /** open/updateIndex/addPiece: the 正文 (updateIndex = the WHOLE new body). */
+  /** open/updateIndex/addPiece: the body (updateIndex = the WHOLE new body). */
   body: z.string().optional(),
   /** appendTail only. */
   line: z.string().optional(),
@@ -86,24 +87,26 @@ You are shown: the triggering question markers, the slice they came from, and th
 
 Per question, judge: is there enough in the record to write something durable?
 - research: answer a question. A case's index.md carries what is known and where it stands; pieces hold dated expansions; close seals it with the conclusion next to its evidence chain. New evidence continuing the SAME question updates the living case; a changed scope means a NEW case (names are permanent).
-- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — without one the write is refused. Evidence entries accumulate; close states confirmed / refuted / retired in prose.
+- hypothesis: a guess about the world/affairs WITH an explicit falsification condition — state it as 'falsify if: …' (证伪条件: …); without one the write is refused. Evidence entries accumulate; close states confirmed / refuted / retired in prose.
 
 Writing nothing is a legal outcome — the record may simply be too thin. A question you did not write about stays for a later pass.
 
 ## Rules
 
 1. Ground everything in what you actually read (cases, slices). Cite slice ids in the prose when a fact comes from one.
-2. Prose, in the user's language. No date bookkeeping — dates and evidence stamps are mechanical.
+2. ${DOC_LANGUAGE_RULE} No date bookkeeping — dates and evidence stamps are mechanical.
 3. Living cases are rewritten whole (updateIndex); sealed cases grow only via appendTail/addPiece. Never restate what a case already carries.
 4. Scope honesty: if the question was already answered by an existing case, say so in reasoning and write nothing.
 
 ## Output
 
-Call \`docResearchOutput\` with your writes (or empty) + reasoning.`);
+Call \`docResearchOutput\` with your writes (or empty) + reasoning.
+
+${DOC_HOUSE_STYLE}`);
 
 /** Does this hypothesis body carry a falsification condition? (§B.6) */
 function hasFalsificationCondition(body: string): boolean {
-  return body.includes("证伪");
+  return body.includes("证伪") || /falsif/i.test(body);
 }
 
 export interface DocResearchPassInput {
@@ -159,26 +162,26 @@ export async function runDocResearchPass(
   const questionBlocks = (questions as DocMarker[])
     .map(
       (q) =>
-        `### marker ${q.id}\ntitle: ${q.title}\nnote: ${q.note || "（无）"}`,
+        `### marker ${q.id}\ntitle: ${q.title}\nnote: ${q.note || "(none)"}`,
     )
     .join("\n\n");
 
-  const prompt = `## 触发切片 ${sliceId}
+  const prompt = `## Triggering slice ${sliceId}
 
-focus: ${excerpt.focus || "（无）"}
-summary: ${excerpt.summary || "（无）"}
+focus: ${excerpt.focus || "(none)"}
+summary: ${excerpt.summary || "(none)"}
 
-${excerpt.turnsExcerpt || "（无对话摘录）"}
+${excerpt.turnsExcerpt || "(no conversation excerpt)"}
 
-## 用户的问题（驱动本次 pass 的全部议程——保守：除此之外不研究任何事）
+## The user's questions (the pass's whole agenda — conservative: research nothing beyond them)
 
 ${questionBlocks}
 
-## case 清单（listTree 全树；"已有什么"的目录）
+## Case manifest (the full listTree — the catalog of what exists)
 
 ${renderManifest(manifest.tree)}
-${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readCase 的死链为准）\n" : ""}
-用 readCase / readSlice 取证，然后按指示给出写操作。`;
+${manifest.truncated ? "\n(the manifest may be truncated — a missing case shows as a readCase dead link)\n" : ""}
+Gather evidence with readCase / readSlice, then report the writes as instructed.`;
 
   const tools = {
     readCase: makeCaseReadTool(batch),
@@ -193,7 +196,7 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
           // records root move.
           return await readSlicePart(id, "core", batch);
         } catch {
-          return `（切片 ${id} 不存在或不可读）`;
+          return `(slice ${id} does not exist or is unreadable)`;
         }
       },
     }),
@@ -257,7 +260,7 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
         case "open": {
           if (!op.body?.trim()) throw new Error("open requires a body");
           applied = await applyCaseWriteIntent(
-            { action: "open", category, caseName: op.caseName, body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            { action: "open", category, caseName: op.caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -265,7 +268,7 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
         case "updateIndex": {
           if (!op.body?.trim()) throw new Error("updateIndex requires a body");
           applied = await applyCaseWriteIntent(
-            { action: "rewriteIndex", category, caseName: op.caseName, body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            { action: "rewriteIndex", category, caseName: op.caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -273,7 +276,7 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
         case "appendTail": {
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
           applied = await applyCaseWriteIntent(
-            { action: "appendTail", category, caseName: op.caseName, line: `${op.line.trim()}（证据切片：${sliceId}）` },
+            { action: "appendTail", category, caseName: op.caseName, line: `${op.line.trim()} (refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -283,13 +286,13 @@ ${manifest.truncated ? "\n（清单可能被截断——缺失的 case 以 readC
             throw new Error("addPiece requires a title and a body");
           }
           applied = await applyCaseWriteIntent(
-            { action: "addPiece", category, caseName: op.caseName, title: op.title.trim(), body: `${op.body.trim()}\n\n（证据切片：${sliceId}）` },
+            { action: "addPiece", category, caseName: op.caseName, title: op.title.trim(), body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;
         }
         case "close": {
-          if (!op.note?.trim()) throw new Error("close requires a note (去向说明)");
+          if (!op.note?.trim()) throw new Error("close requires a note (the conclusion / where it goes)");
           applied = await applyCaseWriteIntent(
             { action: "close", category, caseName: op.caseName, note: op.note.trim() },
             date, batch,
