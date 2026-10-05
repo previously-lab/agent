@@ -42,13 +42,15 @@
  * affected. The call itself runs on the unified sub-agent runner
  * (src/lib/agents/sub-agent-runner.ts): thinking ON at effort "low" (via the
  * Anthropic-shaped effort mapping — this adapter speaks the Anthropic
- * protocol), a 50-step cap, and a 240s wall-clock budget (sized for the 6-page
- * read quota). The provider path is unchanged: the runner receives a PRE-BUILT
+ * protocol), EXPLICIT output/thinking budgets (the compat endpoint's 4096 /
+ * 1024 defaults silently truncated reports — see SEARCH_MAX_OUTPUT_TOKENS),
+ * a 50-step cap, and a 240s wall-clock budget (sized for the 6-page read
+ * quota). The provider path is unchanged: the runner receives a PRE-BUILT
  * model instance so the custom endpoint + normalizing fetch stay exactly as
  * they were.
  */
 import { createAnthropic } from "@ai-sdk/anthropic";
-import { tool } from "ai";
+import { tool, type PrepareStepFunction, type ToolSet } from "ai";
 import { z } from "zod";
 import {
   runSubAgent,
@@ -82,8 +84,24 @@ export interface WebSearchResult {
   suggestedReads: Array<{ url: string; title: string; reason: string }>;
 }
 
-/** Server-side search rounds Flash may use per query. */
-const MAX_SEARCHES_PER_QUERY = 3;
+/** Server-side search rounds Flash may use per query. 5 (was 3): a real run
+ *  died on `max_uses_exceeded` at 3 — legitimate multi-angle research
+ *  (reformulate after each read) hit the ceiling, and the provider's error
+ *  variant then took the whole stream down (see normalizingFetch). 5 matches
+ *  Anthropic's own default max_uses and pairs with the 6-page read quota; the
+ *  50-step cap and 240s budget still bound the run. */
+const MAX_SEARCHES_PER_QUERY = 5;
+
+/** Explicit generation budgets for the research run (pinned 2026-11 after a
+ *  production failure): DeepSeek's Anthropic-compatible endpoint does not
+ *  recognize `deepseek-v4-flash`, so an absent max_tokens falls back to 4096
+ *  and thinking to a 1024-token budget — the searchReport JSON was truncated
+ *  mid-call and temperature dropped with a warning. 16K output leaves ample
+ *  room for the cited answer after a 4K thinking budget. This is the
+ *  sanctioned exception to the runner's no-maxOutputTokens default: here the
+ *  ABSENT field is the silent truncator, not the cap. */
+const SEARCH_MAX_OUTPUT_TOKENS = 16_000;
+const SEARCH_THINKING_BUDGET_TOKENS = 4_096;
 
 /** Pages the researcher may read in full per run. Reading pages is the
  *  expensive leg (fetch + context); a model that keeps "just one more page"
@@ -98,40 +116,109 @@ const WEB_FETCH_TIMEOUT_MS = 30_000;
 const WEB_FETCH_MAX_CHARS = 15_000;
 
 /**
- * DeepSeek's Anthropic-compatible endpoint has one spec deviation (verified
- * 2026-07-17, scripts/archive/smoke-search.mjs): web_search_tool_result ERRORS come
- * wrapped in an array ("content":[{error}]) where the Anthropic spec — and
- * @ai-sdk/anthropic's response schema — expect a bare object. Normalize at
- * the fetch boundary so the SDK can parse the response.
+ * DeepSeek's Anthropic-compatible endpoint deviates from the spec on
+ * web_search_tool_result ERRORS (verified 2026-07-17, scripts/archive/smoke-search.mjs;
+ * re-diagnosed 2026-11 on a production stream crash): the error comes wrapped
+ * in an array ("content":[{error}]) where the Anthropic spec — and
+ * @ai-sdk/anthropic's response AND stream-event schemas — expect a bare
+ * object. Left as-is, the streamed variant fails schema validation
+ * (AI_TypeValidationError) and kills the whole research stream; the
+ * half-written step then 400s the provider's NEXT request ("tool_use ids
+ * were found without tool_result blocks"). Normalize at the fetch boundary —
+ * BOTH whole-body JSON and SSE `data:` event payloads (streamText streams) —
+ * so the SDK always sees the spec shape: a failed round becomes an ordinary
+ * provider-executed tool error (isError), the tool_use keeps its paired
+ * tool_result, and the run continues with the rounds it has left.
  */
+
+/**
+ * Replace DeepSeek's array-wrapped web_search error with the spec's bare
+ * error object, anywhere in a parsed payload (message content blocks, stream
+ * event content_blocks). Logs each rewritten failure — a provider-side search
+ * failure must be visible in the server log, not silent. Returns true when a
+ * block was rewritten.
+ */
+function normalizeWebSearchErrors(node: unknown): boolean {
+  if (Array.isArray(node)) {
+    let hit = false;
+    for (const item of node) hit = normalizeWebSearchErrors(item) || hit;
+    return hit;
+  }
+  if (node === null || typeof node !== "object") return false;
+  const record = node as Record<string, unknown>;
+  let hit = false;
+  if (record.type === "web_search_tool_result" && Array.isArray(record.content)) {
+    const err = (record.content as Array<Record<string, unknown> | null>).find(
+      (c) => c?.type === "web_search_tool_result_error",
+    );
+    if (err) {
+      // Rebuild rather than reuse: the SDK schema requires error_code — an
+      // error item missing it would still fail validation downstream.
+      record.content = {
+        type: "web_search_tool_result_error",
+        error_code:
+          typeof err.error_code === "string" ? err.error_code : "unavailable",
+      };
+      hit = true;
+      console.warn(
+        "[WebSearch] search round failed provider-side:",
+        (record.content as { error_code: string }).error_code,
+      );
+    }
+  }
+  for (const value of Object.values(record)) {
+    hit = normalizeWebSearchErrors(value) || hit;
+  }
+  return hit;
+}
+
 const normalizingFetch: typeof fetch = async (url, init) => {
   const res = await fetch(url, init);
   const text = await res.text();
+  const rebuild = (body: string) =>
+    new Response(body, {
+      status: res.status,
+      statusText: res.statusText,
+      headers: res.headers,
+    });
+
+  // Streaming path (streamText): an SSE event stream — normalize the JSON
+  // payload of each `data:` line, pass everything else through untouched.
+  const contentType = res.headers.get("content-type") ?? "";
+  if (
+    contentType.includes("text/event-stream") ||
+    text.startsWith("event:") ||
+    text.startsWith("data:")
+  ) {
+    let touched = false;
+    const out = text.split("\n").map((line) => {
+      const eol = line.endsWith("\r") ? "\r" : "";
+      const body = eol ? line.slice(0, -1) : line;
+      if (!body.startsWith("data:")) return line;
+      const payload = body.slice(5).trimStart();
+      if (!payload || payload === "[DONE]") return line;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(payload);
+      } catch {
+        return line;
+      }
+      if (!normalizeWebSearchErrors(parsed)) return line;
+      touched = true;
+      return `data: ${JSON.stringify(parsed)}${eol}`;
+    });
+    return rebuild(touched ? out.join("\n") : text);
+  }
+
+  // Non-streaming path: whole-body JSON.
   let body: unknown;
   try {
     body = JSON.parse(text);
   } catch {
-    return new Response(text, res);
+    return rebuild(text);
   }
-  const content = (body as { content?: unknown })?.content;
-  if (Array.isArray(content)) {
-    for (const block of content as Array<Record<string, unknown>>) {
-      if (
-        block?.type === "web_search_tool_result" &&
-        Array.isArray(block.content)
-      ) {
-        const err = (block.content as Array<Record<string, unknown>>).find(
-          (c) => c?.type === "web_search_tool_result_error"
-        );
-        if (err) block.content = err;
-      }
-    }
-  }
-  return new Response(JSON.stringify(body), {
-    status: res.status,
-    statusText: res.statusText,
-    headers: res.headers,
-  });
+  normalizeWebSearchErrors(body);
+  return rebuild(JSON.stringify(body));
 };
 
 // ─── Researcher tool: webFetch (in-module) ──────────────────────────────
@@ -267,6 +354,29 @@ const searchReportSchema = tool({
 const MAX_SEARCH_STEPS = 50;
 
 /**
+ * prepareStep factory: the step wall is the classic "never filed the report"
+ * case — the model burns its budget searching/reading and runs out of steps
+ * before searchReport. On the LAST permitted step, swap the instructions for
+ * an urgent report-now directive. toolChoice is deliberately NOT forced:
+ * DeepSeek's thinking mode 400s on a forced tool_choice (see the runner's
+ * deepseekDowngrade), and this run keeps thinking on.
+ */
+function finalStepReportDirective(
+  systemPrompt: string,
+): PrepareStepFunction<ToolSet> {
+  return ({ stepNumber }) =>
+    stepNumber >= MAX_SEARCH_STEPS - 1
+      ? {
+          instructions:
+            `${systemPrompt}\n\n# FINAL STEP — REPORT NOW\n\n` +
+            "This is your last step: the run's step budget is exhausted after it. " +
+            "You MUST call searchReport in this step with whatever you already have — " +
+            "a partial report beats a lost one. Do NOT start new searches or page reads.",
+        }
+      : {};
+}
+
+/**
  * Build the research sub-agent's role block for a specific run mode. The
  * system prompt is `buildSubAgentSystem(buildSearchRole(r, p))` (shared static
  * base + this block). The shared base is fully static, so provider prompt
@@ -289,6 +399,8 @@ Process:
    - answer: a real answer to the query (2-5 paragraphs), synthesizing what you found with your own knowledge. Every claim that comes from the web must mention its source. Answer in the query's language — it reaches the user, so it overrides the shared base's English default.
    - recommendation: your researcher's assessment — how confident you are, what is solid, what is uncertain or conflicting between sources.
    - suggested_reads: 0-3 pages worth a follow-up look (your colleague's own verification, or further reading for the user).
+
+searchReport is the ONLY channel your work reaches the main agent through — a prose final message is thrown away. Every run MUST end with a searchReport call, even a partial one: if you are running out of steps, time, or search rounds, stop researching and report what you already have. A thin report beats a lost one.
 
 Distinguish what the sources SAY from what YOU know — never blend the two silently. If the search found nothing usable, say so plainly in the answer instead of papering over it.`;
 }
@@ -342,8 +454,8 @@ export async function searchViaFlash(
 
   const scout = opts?.scout ?? false;
   // Effective caps: scout is a lean fan-out leg with half the page-read quota
-  // and one fewer search round; standard mode keeps the exported constants.
-  const effectiveMaxSearchRounds = scout ? 2 : MAX_SEARCHES_PER_QUERY;
+  // and fewer search rounds; standard mode keeps the exported constants.
+  const effectiveMaxSearchRounds = scout ? 3 : MAX_SEARCHES_PER_QUERY;
   const effectiveMaxPageReads = scout ? 3 : MAX_PAGE_READS;
 
   const today = new Date().toISOString().slice(0, 10);
@@ -355,14 +467,26 @@ export async function searchViaFlash(
   let pageReads = 0;
   // Per-run image-read quota (MAX_IMAGE_READS).
   let imageReads = 0;
+  const systemPrompt = buildSubAgentSystem(
+    buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
+  );
   const res = await runSubAgent<SearchReport>({
     languageModel: provider("deepseek-v4-flash"),
     // The pre-built model speaks the Anthropic protocol — the effort mapping
     // must use the Anthropic provider-options shape, not DeepSeek's.
     effortSdk: "anthropic",
-    system: buildSubAgentSystem(
-      buildSearchRole(effectiveMaxSearchRounds, effectiveMaxPageReads),
-    ),
+    system: systemPrompt,
+    // Explicit budgets — the compat endpoint's defaults (4096 output / 1024
+    // thinking) silently truncated reports; see the constants above.
+    maxOutputTokens: SEARCH_MAX_OUTPUT_TOKENS,
+    providerOptions: {
+      anthropic: {
+        thinking: {
+          type: "enabled",
+          budgetTokens: SEARCH_THINKING_BUDGET_TOKENS,
+        },
+      },
+    },
     selfSop: "search",
     prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}`,
     tools: {
@@ -459,6 +583,9 @@ export async function searchViaFlash(
     reportToolName: "searchReport",
     reportSchema: searchReportInputSchema,
     maxSteps: MAX_SEARCH_STEPS,
+    // A run that burns its whole step budget on research must still file its
+    // report — the final step's instructions become a report-now directive.
+    prepareStep: finalStepReportDirective(systemPrompt),
     timeoutMs: SEARCH_TIMEOUT_MS,
     progress,
     onToolProgress: ({ toolName, input: toolInput }) => {
@@ -541,14 +668,19 @@ export async function searchViaFlash(
     };
   }
 
-  // searchReport not called — fall back to the free-text answer.
+  // searchReport not called — DEGRADE, never drop: the final text still goes
+  // back as the answer, flagged in the recommendation as an unfiled recovery
+  // so the main agent treats it with care, and logged for the server console.
   console.warn(
-    "[WebSearch] searchReport not called. Final text:",
+    "[WebSearch] searchReport not called — degrading to the run's final text:",
     res.text?.slice(0, 200) ?? "(no text)",
   );
   return {
     answer: res.text ?? "",
-    recommendation: "",
+    recommendation:
+      "The researcher ended its run without filing the structured searchReport — " +
+      "this answer was recovered verbatim from its final message; treat it as " +
+      "lower-confidence and unverified.",
     suggestedReads: [],
     sources,
   };

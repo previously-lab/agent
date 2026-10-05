@@ -234,10 +234,33 @@ describe("runSubAgent", () => {
     expect(lastCall().timeout).toBe(12_000);
   });
 
-  it("never sets maxOutputTokens (project-wide ban)", async () => {
+  it("omits maxOutputTokens by default (project-wide ban)", async () => {
     fakeStream();
     await runSubAgent(baseOpts());
     expect("maxOutputTokens" in lastCall()).toBe(false);
+  });
+
+  it("forwards an explicit maxOutputTokens opt-in (flash-search exception)", async () => {
+    fakeStream();
+    await runSubAgent(baseOpts({ maxOutputTokens: 16_000 }));
+    expect(lastCall().maxOutputTokens).toBe(16_000);
+  });
+
+  it("merges caller providerOptions over the effort mapping (one level deep)", async () => {
+    fakeStream();
+    await runSubAgent(
+      baseOpts({
+        providerOptions: {
+          deepseek: { thinking: { type: "enabled", budgetTokens: 4_096 } },
+        },
+      }),
+    );
+    expect(lastCall().providerOptions).toEqual({
+      deepseek: {
+        thinking: { type: "enabled", budgetTokens: 4_096 },
+        reasoningEffort: "low",
+      },
+    });
   });
 
   it("defaults temperature to 0.1 and honors overrides", async () => {
@@ -358,6 +381,44 @@ describe("runSubAgent", () => {
     const second = ai.streamText.mock.calls[1]?.[0] as Record<string, unknown>;
     expect(second.toolChoice).toBe("required");
     expect(second.providerOptions).toMatchObject({
+      deepseek: { thinking: { type: "disabled" } },
+    });
+    warn.mockRestore();
+  });
+
+  it("ignores caller providerOptions on the thinking-off retry (would resurrect the forced-choice 400)", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ai.streamText
+      .mockImplementationOnce(async () => ({
+        text: Promise.resolve("prose answer, no tool call"),
+        toolCalls: Promise.resolve([]),
+        reasoningText: Promise.resolve(undefined),
+        sources: Promise.resolve([]),
+        warnings: Promise.resolve([]),
+      }))
+      .mockImplementationOnce(async () => ({
+        text: Promise.resolve(""),
+        toolCalls: Promise.resolve([
+          { toolName: "report", input: { verdict: "retried", count: 2 } },
+        ]),
+        reasoningText: Promise.resolve(undefined),
+        sources: Promise.resolve([]),
+        warnings: Promise.resolve([]),
+      }));
+    const res = await runSubAgent(
+      baseOpts({
+        toolChoice: "required",
+        providerOptions: {
+          deepseek: { thinking: { type: "enabled", budgetTokens: 4_096 } },
+        },
+      }),
+    );
+    expect(res.ok).toBe(true);
+    expect(ai.streamText).toHaveBeenCalledTimes(2);
+    const second = ai.streamText.mock.calls[1]?.[0] as Record<string, unknown>;
+    // The thinking-disabled shape stands — the caller's thinking override is
+    // NOT merged into a thinking-off attempt.
+    expect(second.providerOptions).toEqual({
       deepseek: { thinking: { type: "disabled" } },
     });
     warn.mockRestore();

@@ -28,6 +28,7 @@ import { searchViaFlash } from "@/lib/search/flash-search";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("searchViaFlash", () => {
@@ -86,20 +87,27 @@ describe("searchViaFlash", () => {
     expect(out.sources).toEqual([{ title: "A", url: "https://example.com/a" }]);
   });
 
-  it("falls back to the free-text answer when searchReport was never called", async () => {
+  it("degrades to the flagged final text when searchReport was never called (material is never dropped silently)", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: undefined,
       text: "plain answer text",
       sources: [],
     });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const out = await searchViaFlash("q");
-    expect(out).toEqual({
-      answer: "plain answer text",
-      recommendation: "",
-      suggestedReads: [],
-      sources: [],
-    });
+    // The final text still reaches the caller as the answer…
+    expect(out.answer).toBe("plain answer text");
+    // …flagged as an unfiled recovery so the main agent treats it with care…
+    expect(out.recommendation).toContain("without filing the structured searchReport");
+    expect(out.recommendation).toContain("lower-confidence");
+    expect(out.suggestedReads).toEqual([]);
+    expect(out.sources).toEqual([]);
+    // …and the degradation is loud in the server log.
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("[WebSearch] searchReport not called"),
+      expect.any(String),
+    );
   });
 
   it("re-throws failed runs so the executor's triage keeps retry/error classification", async () => {
@@ -164,7 +172,7 @@ describe("searchViaFlash", () => {
     expect(out).toContain("Page-read quota exhausted");
   });
 
-  it("uses standard-mode effective caps (6 pages / 3 search rounds) by default", async () => {
+  it("uses standard-mode effective caps (6 pages / 5 search rounds) by default", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
@@ -174,8 +182,8 @@ describe("searchViaFlash", () => {
     const opts = runner.runSubAgent.mock.calls[0]![0];
 
     expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 3 });
-    expect(opts.system).toContain("up to 3 search rounds");
+    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 5 });
+    expect(opts.system).toContain("up to 5 search rounds");
     expect(opts.system).toContain("read at most 6 pages per run");
     expect(opts.tools.webFetch.description).toContain(
       "one of your 6 page-read slots",
@@ -185,7 +193,7 @@ describe("searchViaFlash", () => {
     );
   });
 
-  it("uses scout-mode effective caps (3 pages / 2 search rounds) when opts.scout is true", async () => {
+  it("uses scout-mode effective caps (3 pages / 3 search rounds) when opts.scout is true", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
@@ -195,8 +203,8 @@ describe("searchViaFlash", () => {
     const opts = runner.runSubAgent.mock.calls[0]![0];
 
     expect(anthropic.webSearchToolFn).toHaveBeenCalledTimes(1);
-    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 2 });
-    expect(opts.system).toContain("up to 2 search rounds");
+    expect(anthropic.webSearchToolFn).toHaveBeenCalledWith({ maxUses: 3 });
+    expect(opts.system).toContain("up to 3 search rounds");
     expect(opts.system).toContain("read at most 3 pages per run");
     expect(opts.tools.webFetch.description).toContain(
       "one of your 3 page-read slots",
@@ -276,5 +284,188 @@ describe("searchViaFlash", () => {
     }
     const out = await viewImage.execute({ url: "https://example.com/b.png" });
     expect(out).toContain("Image-read quota exhausted");
+  });
+
+  it("pins explicit output and thinking budgets (the compat endpoint's 4096/1024 defaults silently truncate)", async () => {
+    runner.runSubAgent.mockResolvedValue({
+      ok: true,
+      report: { answer: "a", recommendation: "r", suggested_reads: [] },
+      text: "",
+    });
+    await searchViaFlash("q");
+    const opts = runner.runSubAgent.mock.calls[0]![0];
+    expect(opts.maxOutputTokens).toBe(16_000);
+    expect(opts.providerOptions).toEqual({
+      anthropic: { thinking: { type: "enabled", budgetTokens: 4_096 } },
+    });
+  });
+
+  it("swaps in a report-now directive on the final step only (prepareStep)", async () => {
+    runner.runSubAgent.mockResolvedValue({
+      ok: true,
+      report: { answer: "a", recommendation: "r", suggested_reads: [] },
+      text: "",
+    });
+    await searchViaFlash("q");
+    const opts = runner.runSubAgent.mock.calls[0]![0];
+    const prep = opts.prepareStep as (o: { stepNumber: number }) => {
+      instructions?: string;
+    };
+    // Mid-run steps get no override.
+    expect(prep({ stepNumber: 0 })).toEqual({});
+    expect(prep({ stepNumber: 48 })).toEqual({});
+    // The last step of the 50-step budget: instructions become report-now.
+    const last = prep({ stepNumber: 49 });
+    expect(last.instructions).toContain("FINAL STEP — REPORT NOW");
+    expect(last.instructions).toContain("MUST call searchReport");
+    // The base role is preserved ahead of the directive.
+    expect(last.instructions).toContain("independent researcher");
+  });
+
+  /** Capture the normalizing fetch the adapter hands to the Anthropic provider. */
+  async function captureBoundaryFetch(): Promise<typeof fetch> {
+    runner.runSubAgent.mockResolvedValue({
+      ok: true,
+      report: { answer: "a", recommendation: "r", suggested_reads: [] },
+      text: "",
+    });
+    await searchViaFlash("q");
+    const calls = anthropic.createAnthropic.mock.calls as unknown as Array<
+      [{ fetch: typeof fetch }]
+    >;
+    return calls[0]![0].fetch;
+  }
+
+  it("normalizes array-wrapped web_search errors in whole-body JSON responses (error variant must not crash the stream)", async () => {
+    const boundaryFetch = await captureBoundaryFetch();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: "msg_1",
+              type: "message",
+              content: [
+                {
+                  type: "web_search_tool_result",
+                  tool_use_id: "srvtoolu_1",
+                  content: [
+                    {
+                      type: "web_search_tool_result_error",
+                      error_code: "max_uses_exceeded",
+                    },
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
+      method: "POST",
+    });
+    const body = (await res.json()) as {
+      content: Array<{ content: unknown }>;
+    };
+    // The bare error object — the only error shape the SDK schema accepts.
+    expect(body.content[0]!.content).toEqual({
+      type: "web_search_tool_result_error",
+      error_code: "max_uses_exceeded",
+    });
+    // The provider-side failure is loud in the server log, not silent.
+    expect(warn).toHaveBeenCalledWith(
+      "[WebSearch] search round failed provider-side:",
+      "max_uses_exceeded",
+    );
+  });
+
+  it("normalizes array-wrapped web_search errors inside SSE event streams", async () => {
+    const boundaryFetch = await captureBoundaryFetch();
+    const sse = [
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"srvtoolu_1","content":[{"type":"web_search_tool_result_error","error_code":"max_uses_exceeded"}]}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":1}',
+      '',
+      '',
+    ].join("\n");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(sse, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          }),
+      ),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
+      method: "POST",
+    });
+    const out = await res.text();
+    const lines = out.split("\n");
+    const startLine = lines.find((l) =>
+      l.startsWith('data: {"type":"content_block_start"'),
+    )!;
+    const event = JSON.parse(startLine.slice(5)) as {
+      content_block: { content: unknown };
+    };
+    expect(event.content_block.content).toEqual({
+      type: "web_search_tool_result_error",
+      error_code: "max_uses_exceeded",
+    });
+    // Everything else passes through byte-identical.
+    expect(lines[0]).toBe("event: content_block_start");
+    expect(out).toContain('data: {"type":"content_block_stop","index":1}');
+    expect(warn).toHaveBeenCalledWith(
+      "[WebSearch] search round failed provider-side:",
+      "max_uses_exceeded",
+    );
+  });
+
+  it("leaves successful web_search result arrays untouched (the paired tool_result stays valid)", async () => {
+    const boundaryFetch = await captureBoundaryFetch();
+    const payload = {
+      id: "msg_2",
+      type: "message",
+      content: [
+        {
+          type: "web_search_tool_result",
+          tool_use_id: "srvtoolu_1",
+          content: [
+            {
+              type: "web_search_result",
+              url: "https://example.com/a",
+              title: "A",
+              encrypted_content: "enc-1",
+            },
+          ],
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const res = await boundaryFetch("https://api.deepseek.com/anthropic/v1/messages", {
+      method: "POST",
+    });
+    expect(await res.json()).toEqual(payload);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

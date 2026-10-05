@@ -35,8 +35,9 @@
  *   - steps:      `stopWhen: isStepCount(maxSteps)` when a cap is given.
  *   - output:     the report-tool pattern — the model reports through a
  *                 designated tool whose input is zod-validated into `report`.
- *   - hooks:      optional `prepareStep` passthrough (e.g. recall forcing its
- *                 report tool on the final step) and `onToolProgress`, which
+ *   - hooks:      optional `prepareStep` passthrough (e.g. flash-search
+ *                 swapping in a report-now directive on the final step) and
+ *                 `onToolProgress`, which
  *                 turns each sub-agent tool start into a progress line on the
  *                 run's own emitter.
  *
@@ -45,8 +46,12 @@
  * pre-built `languageModel` instead of a ModelConfig; `effortSdk` then picks
  * the SDK family used for the effort mapping.
  *
- * There is deliberately NO `maxOutputTokens` here (project-wide ban): a hard
- * token cap is invisible to the model and silently truncates the report.
+ * There is deliberately NO default `maxOutputTokens` here (project-wide ban):
+ * a hard token cap is invisible to the model and silently truncates the
+ * report. Callers may OPT IN (`maxOutputTokens`) when the provider's own
+ * implicit default is worse — flash-search: DeepSeek's Anthropic-compatible
+ * endpoint falls back to 4096 output / 1024 thinking when the fields are
+ * absent, which truncated the searchReport mid-call.
  * The runner never throws — every failure is a structured `{ ok: false }`.
  */
 import {
@@ -60,7 +65,10 @@ import type { UIMessageChunk } from "ai";
 import { getWritable } from "workflow";
 import type { z } from "zod";
 import { createModel } from "@/lib/models/provider";
-import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
+import {
+  normalizeReasoningEffort,
+  type ProviderOptions,
+} from "@/lib/models/effort-injector";
 import { resolveMainModelFromConfig } from "@/lib/models/resolve";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { ProviderSdk } from "@/lib/models/providers";
@@ -247,8 +255,8 @@ export interface RunSubAgentOptions<Report> {
   reportSchema?: z.ZodType<Report>;
   /** Hard step cap (`stopWhen: isStepCount(maxSteps)`). Uncapped when omitted. */
   maxSteps?: number;
-  /** Per-step override passthrough (AI SDK native) — e.g. recall forcing the
-   *  report tool when the step budget is nearly exhausted. */
+  /** Per-step override passthrough (AI SDK native) — e.g. flash-search
+   *  swapping in a report-now directive when the step budget runs out. */
   prepareStep?: PrepareStepFunction<ToolSet>;
   /**
    * Map each sub-agent tool start to a progress line, streamed live on the
@@ -262,6 +270,19 @@ export interface RunSubAgentOptions<Report> {
   timeoutMs?: number;
   /** Reasoning effort — thinking is ON by default. Default "low". */
   effort?: "low" | "medium" | "high";
+  /**
+   * Explicit output-token ceiling. Omitted by default (project-wide ban: a
+   * cap the model can't see silently truncates the report). Opt in ONLY when
+   * the provider's implicit default is worse — see the header note.
+   */
+  maxOutputTokens?: number;
+  /**
+   * Provider-specific options merged OVER the effort mapping (one level deep
+   * per provider namespace: a caller's `anthropic.thinking` replaces the
+   * mapped `anthropic.thinking` wholesale). Applied only on thinking-ON
+   * attempts — the thinking-disabled retry keeps its plain disable shape.
+   */
+  providerOptions?: ProviderOptions;
   /** Thinking toggle. Default ON. A forced-report call that hit the DeepSeek
    *  thinking×tool_choice wall is retried with this OFF automatically. */
   thinking?: boolean;
@@ -304,6 +325,20 @@ const BACKSTOP_GRACE_MS = 3_000;
 /** Default wall-clock budget for the cheap structured sub-agents. */
 const DEFAULT_TIMEOUT_MS = 30_000;
 
+/** Merge caller provider options OVER the effort mapping — one level deep per
+ *  provider namespace (the caller's `anthropic.thinking` replaces the mapped
+ *  `anthropic.thinking` wholesale; sibling keys survive). */
+function mergeProviderOptions(
+  base: ProviderOptions | undefined,
+  override: ProviderOptions,
+): ProviderOptions {
+  const out: ProviderOptions = { ...(base ?? {}) };
+  for (const [ns, value] of Object.entries(override)) {
+    out[ns] = { ...(out[ns] ?? {}), ...value };
+  }
+  return out;
+}
+
 /**
  * Run one bounded sub-agent invocation. NEVER throws: timeouts and errors
  * return structured `{ ok: false, timedOut?, error }` results so the caller's
@@ -329,6 +364,8 @@ export async function runSubAgent<Report = unknown>(
     effort = "low",
     thinking = true,
     temperature = 0.1,
+    maxOutputTokens,
+    providerOptions: providerOptionsOverride,
     progress,
     startLine,
     onLine,
@@ -405,12 +442,19 @@ export async function runSubAgent<Report = unknown>(
   ): Promise<StreamFinal> => {
     text = "";
     reasoning = "";
-    const providerOptions = normalizeReasoningEffort(
+    const effortOptions = normalizeReasoningEffort(
       sdk,
       model?.id ?? "prebuilt",
       callThinking,
       effort,
     );
+    // Caller overrides apply only on thinking-ON attempts — a thinking-off
+    // retry keeps its plain disable shape (merging a thinking override there
+    // would resurrect the DeepSeek thinking × forced-choice 400).
+    const providerOptions =
+      callThinking && providerOptionsOverride
+        ? mergeProviderOptions(effortOptions, providerOptionsOverride)
+        : effortOptions;
     // streamText (not generateText) so onChunk captures BOTH channels
     // progressively — never lost, even mid-thought.
     const stream = await streamText({
@@ -421,6 +465,8 @@ export async function runSubAgent<Report = unknown>(
       toolChoice: callToolChoice,
       temperature,
       providerOptions,
+      // Opt-in only (project-wide ban — see the header note); absent by default.
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(maxSteps !== undefined ? { stopWhen: isStepCount(maxSteps) } : {}),
       ...(prepareStep ? { prepareStep } : {}),
       ...(onToolProgress

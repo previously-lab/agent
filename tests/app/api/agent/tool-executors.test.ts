@@ -291,6 +291,36 @@ describe("webSearchExecute mode threading", () => {
   });
 });
 
+describe("webSearchExecute failure triage", () => {
+  beforeEach(() => {
+    searchFlashDeps.searchViaFlash.mockReset();
+    vi.stubEnv("DEEPSEEK_API_KEY", "test-key");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns an error tool result (never throws) when the adapter fails deterministically — the tool_use stays paired", async () => {
+    // The web_search_tool_result_error schema crash (AI_TypeValidationError)
+    // is DETERMINISTIC: it must surface as a model-readable tool result so the
+    // turn's history never keeps an orphan tool_use (the follow-up 400).
+    searchFlashDeps.searchViaFlash.mockRejectedValue(
+      new Error(
+        "Type validation failed: value did not match schema for web_search_tool_result",
+      ),
+    );
+    const out = await webSearchExecute(
+      { query: "q" },
+      { context: makeCtx(), toolCallId: "tc-web" },
+    );
+    expect(out).toHaveProperty("error");
+    const { error } = out as { error: string };
+    expect(error).toContain("[webSearch unavailable]");
+    expect(error).toContain("deterministic failure");
+  });
+});
+
 describe("viewImageExecute", () => {
   beforeEach(() => {
     visionDeps.describeImage.mockReset();
