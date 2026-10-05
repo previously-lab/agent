@@ -40,10 +40,16 @@ export type CaseRef =
  * Strip the tolerable decorations off a citation: surrounding whitespace,
  * 《》 book-title marks, a leading/trailing slash, and one `.md` suffix.
  * Returns the bare reference text (which may still contain `/` separators).
+ *
+ * IDENTITY-PRESERVING (v0.24): no case folding here — the on-disk name IS
+ * the identity, and NFKC would fold full-width punctuation (：（）) and
+ * digits (２０２６) to half-width, producing paths that do not exist. The
+ * fold survives ONLY as a fallback in `resolveCaseRefPaths`, after every
+ * exact candidate.
  */
 export function normalizeCaseRefText(ref: string): string {
   if (typeof ref !== "string") return "";
-  let s = ref.normalize("NFKC").trim();
+  let s = ref.trim();
   s = s.replace(/[《》]/g, "").trim();
   s = s.replace(/^[\\/]+/, "").replace(/[\\/]+$/, "");
   if (s.endsWith(".md")) s = s.slice(0, -".md".length);
@@ -106,8 +112,27 @@ export function parseCaseRef(ref: string): CaseRef | null {
  * globs for the file name) — an empty result is impossible here; a ref that
  * parses always yields at least one candidate, and a ref that resolves
  * against none of them is a dead link discovered at read time.
+ *
+ * EXACT-FIRST (v0.24): the on-disk name is the identity, so the candidates
+ * for the name as written always come first. When (and only when) NFKC
+ * folding CHANGES a name component, the same candidate list rebuilt from the
+ * folded name is appended afterwards — a legacy citation written with
+ * full-width digits/punctuation still has a path to its half-width file, but
+ * a name that resolves exactly is never mutated away from its on-disk form.
  */
 export function resolveCaseRefPaths(ref: CaseRef): string[] {
+  const exact = exactCaseRefPaths(ref);
+  const folded = foldCaseRef(ref);
+  if (!folded) return exact;
+  const seen = new Set(exact);
+  return [
+    ...exact,
+    ...exactCaseRefPaths(folded).filter((p) => !seen.has(p)),
+  ];
+}
+
+/** The exact-name candidates, new root first, legacy roots after (§D.1). */
+function exactCaseRefPaths(ref: CaseRef): string[] {
   if (ref.kind === "case") {
     return [
       caseIndexPath(ref.category, ref.caseName),
@@ -125,6 +150,33 @@ export function resolveCaseRefPaths(ref: CaseRef): string[] {
     ...LEGACY_DOC_KINDS.map((kind) => `memory/docs/${kind}/${ref.name}.md`),
     `memory/episodic/strands/${ref.name}.md`,
   ];
+}
+
+/**
+ * NFKC-fold a ref's name components; null when folding changes nothing.
+ * The category segment is ASCII by construction and never folds.
+ */
+function foldCaseRef(ref: CaseRef): CaseRef | null {
+  const fold = (s: string): string | null => {
+    const f = s.normalize("NFKC");
+    return f === s ? null : f;
+  };
+  if (ref.kind === "case") {
+    const caseName = fold(ref.caseName);
+    return caseName === null ? null : { ...ref, caseName };
+  }
+  if (ref.kind === "piece") {
+    const caseName = fold(ref.caseName);
+    const pieceFileName = fold(ref.pieceFileName);
+    if (caseName === null && pieceFileName === null) return null;
+    return {
+      ...ref,
+      caseName: caseName ?? ref.caseName,
+      pieceFileName: pieceFileName ?? ref.pieceFileName,
+    };
+  }
+  const name = fold(ref.name);
+  return name === null ? null : { ...ref, name };
 }
 
 /** The nine case categories, re-exported for input validation at call sites. */

@@ -154,3 +154,68 @@ describe("resolveCaseRefPaths — new root first, legacy fallback", () => {
     }
   });
 });
+
+// REGRESSION (v0.24): NFKC in normalizeCaseRefText folded full-width
+// punctuation/digits to half-width, so every case whose on-disk name carries
+// （）：and friends resolved a path that does not exist and printed the
+// not-found paper. The on-disk name is the identity: exact candidates
+// first, the NFKC-folded variant only appended as a legacy fallback.
+describe("full-width names — exact identity, folded fallback (v0.24)", () => {
+  it("normalization does NOT fold full-width punctuation or digits", () => {
+    expect(normalizeCaseRefText("research/厄尔尼诺对我国天气的影响（2026 年秋冬）")).toBe(
+      "research/厄尔尼诺对我国天气的影响（2026 年秋冬）",
+    );
+    expect(normalizeCaseRefText("２０２６-０９-０５-手机购买调研")).toBe(
+      "２０２６-０９-０５-手机购买调研",
+    );
+  });
+
+  it("a full-width case name parses verbatim and its first candidate is the exact on-disk path", () => {
+    const ref = parseCaseRef("research/RSI 的两种形态：脚手架式自我改进 vs 权重式自我改进");
+    expect(ref).toEqual({
+      kind: "case",
+      category: "research",
+      caseName: "RSI 的两种形态：脚手架式自我改进 vs 权重式自我改进",
+    });
+    const paths = resolveCaseRefPaths(ref!);
+    expect(paths[0]).toBe(
+      "memory/research/RSI 的两种形态：脚手架式自我改进 vs 权重式自我改进/index.md",
+    );
+    // The folded path exists only as a trailing fallback, after every exact
+    // candidate, never replacing the identity.
+    expect(paths[paths.length - 1]).toBe(
+      "memory/episodic/strands/RSI 的两种形态:脚手架式自我改进 vs 权重式自我改进.md",
+    );
+    expect(paths).toContain(
+      "memory/research/RSI 的两种形态:脚手架式自我改进 vs 权重式自我改进/index.md",
+    );
+  });
+
+  it("a name that needs no fold gets no extra candidates (people/user)", () => {
+    const ref = parseCaseRef("people/user");
+    expect(ref).toEqual({ kind: "case", category: "people", caseName: "user" });
+    const paths = resolveCaseRefPaths(ref!);
+    expect(paths).toEqual([
+      "memory/people/user/index.md",
+      ...LEGACY_DOC_ROOTS.map((root) => `${root}/user.md`),
+    ]);
+  });
+
+  it("a legacy citation written with full-width digits resolves via the folded fallback", () => {
+    const ref = parseCaseRef("２０２６-０９-０５-手机购买调研");
+    expect(ref).toEqual({
+      kind: "legacy",
+      name: "２０２６-０９-０５-手机购买调研",
+    });
+    const paths = resolveCaseRefPaths(ref!);
+    // Every exact candidate precedes every folded one.
+    const exact = paths.filter((p) => p.includes("２０２６"));
+    const folded = paths.filter((p) => p.includes("2026-09-05"));
+    expect(exact.length).toBeGreaterThan(0);
+    expect(folded.length).toBeGreaterThan(0);
+    expect(paths.indexOf(exact[exact.length - 1])).toBeLessThan(
+      paths.indexOf(folded[0]),
+    );
+    expect(folded).toContain("memory/docs/topic/2026-09-05-手机购买调研.md");
+  });
+});
