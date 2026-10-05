@@ -212,6 +212,10 @@ describe("buildHousekeepingPayload", () => {
     });
     expect(task).toContain("SOP evolution");
     expect(task).toContain('"playbooks"');
+    // The SOP style discipline rides the static task contract and the offer.
+    expect(task).toContain("investigator's account");
+    expect(task).toContain("工程侧");
+    expect(context).toContain("工程侧");
     expect(context).toContain("self/ SOPs writable this run");
     expect(context).toContain("### search");
     expect(context).toContain("- quote the slice before answering");
