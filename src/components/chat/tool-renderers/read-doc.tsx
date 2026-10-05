@@ -9,7 +9,6 @@ interface ReadDocOutput {
   path?: string;
   opened?: string;
   updated?: string;
-  closed?: string | null;
   content?: string;
   warnings?: string[];
   error?: string;

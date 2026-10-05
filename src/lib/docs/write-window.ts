@@ -55,10 +55,12 @@ export class CaseWriteRefusal extends Error {
 
 /**
  * The write-window discipline sentence — the SINGLE SOURCE every writer
- * surface interpolates (the field's writeCase, HQ's writeCase/writeSelfSop,
- * the case-writer / scribe / research passes, the Previously Agent's SOP
- * section, the bridge housekeeping contract). ONE sentence, one meaning;
- * prompt-facing, so it stays English and carries no backticks.
+ * surface interpolates (the field's writeCase, HQ's writeCase, the
+ * case-writer / scribe / research passes, the bridge housekeeping contract).
+ * The SOP surfaces and the card segment are EXEMPT by design: they are
+ * mutation-style whole rewrites with no header to carry a stamp, so the
+ * sentence is not stated where nothing could enforce it. ONE sentence, one
+ * meaning; prompt-facing, so it stays English and carries no backticks.
  */
 export const DOC_WRITE_WINDOW_RULE =
   "Write-window discipline: a document's first write is its FULL text. " +
