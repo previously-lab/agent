@@ -61,7 +61,9 @@ const SETTLE_MS = 3500;
 /** How long the full mock stream takes to finish (sum of the step delays). */
 const DEMO_TIMEOUT_MS = 60_000;
 
-/** Injected CSS — hides the Next.js dev-mode indicator + any stray corner chrome. */
+/** Injected CSS — hides the Next.js dev-mode indicator + any stray corner chrome.
+ *  Next 16's dev tools live in a shadow root this CSS cannot reach; the deep
+ *  remover below (hideDevTools) handles those after mount. */
 const HIDE_DEV_CSS = `
   #devtools-indicator, .nextjs-toast, #next-logo,
   [id*="nextjs"], [class*="nextjs-toast"], [id*="devtools-indicator"] {
@@ -71,6 +73,30 @@ const HIDE_DEV_CSS = `
     pointer-events: none !important;
   }
 `;
+
+/** Recursively pierce shadow roots and remove the Next 16 dev-tools
+ *  indicator — it lives in a <nextjs-portal> shadow root page CSS cannot
+ *  reach (the #devtools-indicator/#next-logo hooks are inside it). */
+async function hideDevTools(page) {
+  await page
+    .evaluate(() => {
+      const remove = (sel, root) => {
+        root.querySelectorAll?.(sel).forEach((el) => el.remove());
+      };
+      const walk = (root) => {
+        if (!root || !root.querySelectorAll) return;
+        // The portal host itself is light DOM — drop it with the whole tree.
+        remove("nextjs-portal", root);
+        remove("#devtools-indicator", root);
+        remove("[data-next-badge-root]", root);
+        root.querySelectorAll("*").forEach((el) => {
+          if (el.shadowRoot) walk(el.shadowRoot);
+        });
+      };
+      walk(document);
+    })
+    .catch(() => {});
+}
 
 function parseArgs(argv) {
   const args = { shots: DEFAULT_SHOTS, fullPage: false, scale: 2 };
@@ -104,11 +130,16 @@ async function settle(page) {
   await page.waitForTimeout(SETTLE_MS);
 }
 
-/** Shared navigation — load, hide dev indicator, settle. */
+/** Shared navigation — load, hide dev indicator, settle, then remove the
+ *  shadow-DOM dev tools (they mount during the settle window). */
 async function openPage(page, route, { fullPage = false } = {}) {
   await page.goto(`${BASE}${route}`, { waitUntil: "networkidle", timeout: 30_000 });
   await hideDevIndicator(page);
+  // The dev-tools badge mounts on its own schedule (post-hydration /
+  // post-compile) — sweep twice, once early and once after the settle.
+  await hideDevTools(page);
   await settle(page);
+  await hideDevTools(page);
 }
 
 async function captureShot(browser, shot, outPath, fullPage, scale, selector) {

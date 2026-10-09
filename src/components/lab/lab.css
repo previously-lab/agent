@@ -1,0 +1,923 @@
+/*
+ * THE VISUAL LAB (dev-only) — geometry for the lab recipes.
+ * A discussion medium, not product CSS: every recipe-specific measurement
+ * lives here; the material itself (stock, grain, contact shadow, relief,
+ * line, recess, foil tokens) comes from globals.css' paper contract, and the
+ * cover replica reuses home-paper.css' classes so it tracks the real cover.
+ * One light everywhere: upper-left, matching the house light field.
+ *
+ * This file only loads on the lab route, so the chrome-hiding rule below is
+ * route-scoped by construction: the lab's shots are element-level, and the
+ * app's fixed islands would otherwise paint across every recipe (the same
+ * trick app-shell uses for its own full-bleed surface).
+ */
+[data-app-header],
+[data-board-bar],
+[data-world-gate] {
+  display: none;
+}
+
+/* ── Root & recipe chrome ─────────────────────────────────────────────── */
+.lab-root {
+  min-height: 100vh;
+  background: var(--background);
+}
+
+.lab-topbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 22px 40px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lab-recipe {
+  min-height: 100vh;
+  padding: 46px 40px 54px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  border-bottom: 1px solid var(--border);
+}
+
+.lab-recipe-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lab-variant-chip {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.lab-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+}
+
+/* The board every stage seats its paper on — the same sheet as everything
+ * else; separation from the page is the contact shadow. */
+.lab-board {
+  background-color: var(--paper);
+  background-image: var(--paper-grain-map);
+  border-radius: 3px;
+  box-shadow: var(--paper-contact);
+}
+
+/* ── Sheet & pile (recipe 01) ─────────────────────────────────────────── */
+.lab-sheet {
+  border-radius: 2px;
+}
+
+.lab-pilewrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Room for the down-right cascade so captions never collide. */
+  padding: 10px 60px 26px 10px;
+}
+
+.lab-pile {
+  position: relative;
+  aspect-ratio: 210 / 297;
+  /* The buried sheets overflow the box down-right; the caption must clear
+   * the deepest sheet edge + its contact shadow (--lab-cd, set per pile). */
+  margin-bottom: var(--lab-cd, 0px);
+}
+
+.lab-pile-sheet {
+  position: absolute;
+  inset: 0;
+  box-shadow: var(--paper-contact);
+  transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
+}
+
+.lab-pile-caption {
+  margin-top: 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+
+/* The printed cover — type sized off the sheet width (÷210 × 4.2 is the
+ * print millimetre at this sheet's size), so covers stay A4-true at any
+ * pile scale. */
+.lab-cover {
+  font-size: calc(var(--lab-pile-w, 200px) / 210 * 4.2);
+}
+
+.lab-cover-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 6em 6.5em 5.5em;
+}
+
+.lab-cover-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 2.55em;
+  line-height: 1.5;
+  letter-spacing: 0.12em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-cover-title {
+  margin-top: 2em;
+  font-family: var(--font-serif, serif);
+  font-weight: 300;
+  font-size: 6.6em;
+  line-height: 1.22;
+  letter-spacing: 0.01em;
+  color: var(--color-foreground);
+}
+
+.lab-cover-rule {
+  height: 1px;
+  background: var(--paper-line);
+}
+
+.lab-cover-inner--case .lab-cover-rule {
+  margin-top: auto;
+  margin-bottom: 3.2em;
+}
+
+.lab-cover-transcript {
+  flex: 1;
+  margin-top: 1.6em;
+  font-family: var(--font-serif, serif);
+  font-size: 3.3em;
+  line-height: 1.75;
+  color: var(--color-foreground);
+  opacity: 0.62;
+}
+
+.lab-cover-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+}
+
+.lab-cover-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.6em;
+  padding: 0 2.2em;
+  border-radius: 2px;
+  box-shadow: var(--paper-raise);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 2.3em;
+  letter-spacing: 0.16em;
+  color: var(--color-foreground);
+  opacity: 0.8;
+}
+
+.lab-cover-side {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 2.5em;
+  letter-spacing: 0.08em;
+  color: var(--color-foreground);
+  opacity: 0.5;
+}
+
+/* The two pile rows on the stage (case / record). */
+.lab-pile-board {
+  width: 100%;
+  max-width: 1180px;
+  padding: 38px 30px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+}
+
+.lab-pile-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-around;
+  gap: 16px;
+}
+
+.lab-row-label {
+  flex-shrink: 0;
+  width: 84px;
+  padding-top: 14px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* ── Scene variant frame (recipes 01b / 02b) ──────────────────────────── */
+.lab-scene-board {
+  position: relative;
+  width: 100%;
+  max-width: 1180px;
+  overflow: hidden;
+  background-color: var(--paper);
+  background-image: var(--paper-grain-map);
+  border-radius: 3px;
+  box-shadow: var(--paper-contact);
+}
+
+.lab-scene {
+  position: relative;
+  width: 100%;
+}
+
+.lab-scene canvas {
+  display: block;
+}
+
+.lab-scene-content {
+  position: relative;
+}
+
+.lab-scene-pile,
+.lab-scene-row {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Grid (recipe 02) ─────────────────────────────────────────────────── */
+.lab-grid-board {
+  width: 100%;
+  max-width: 1180px;
+  padding: 24px 30px 0;
+}
+
+.lab-grid-field {
+  position: relative;
+  height: 560px;
+  overflow: hidden;
+}
+
+.lab-grid-columns {
+  display: grid;
+  grid-template-columns: 84px repeat(4, 1fr);
+  padding-bottom: 12px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  opacity: 0.8;
+}
+
+.lab-grid-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  height: 250px;
+  padding-top: 18px;
+  border-top: 1px solid var(--paper-line);
+}
+
+.lab-grid-row .lab-row-label {
+  padding-top: 6px;
+}
+
+.lab-grid-cells {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-around;
+}
+
+.lab-grid-fade {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 110px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--paper));
+}
+
+.lab-empty-cell {
+  width: 126px;
+  aspect-ratio: 210 / 297;
+  border: 1px dashed var(--paper-line);
+  border-radius: 2px;
+  opacity: 0.4;
+}
+
+/* ── Grid, mobile (recipe 02m) ────────────────────────────────────────── */
+.lab-phone {
+  position: relative;
+  width: 390px;
+  height: 844px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--paper);
+  background-image: var(--paper-grain-map);
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  box-shadow: var(--paper-lift);
+  padding: 18px 20px;
+}
+
+.lab-phone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 4px 12px;
+}
+
+.lab-phone-pile {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lab-phone-peek {
+  position: absolute;
+  right: 45px;
+  bottom: 48px;
+  left: 45px;
+  height: 118px;
+  overflow: hidden;
+  opacity: 0.92;
+}
+
+.lab-phone-peek .lab-pilewrap {
+  padding: 0;
+}
+
+.lab-phone-foot {
+  padding: 12px 4px 6px;
+  text-align: center;
+}
+
+/* ── Paper close-up (recipe 03) ───────────────────────────────────────── */
+/* Print scale, lab-namespaced: --lab-mm = sheet height ÷ 297, the desk's
+ * --desk-mm idiom (body 4mm, mono 3mm, title 6.5mm, 25mm side margins). */
+.lab-paper-board {
+  position: relative;
+  width: 100%;
+  max-width: 1180px;
+  padding: 42px 40px;
+  display: flex;
+  justify-content: center;
+}
+
+.lab-paper-sheet {
+  --lab-mm: calc(min(70vh, 690px) / 297);
+  position: relative;
+  height: calc(var(--lab-mm) * 297);
+  aspect-ratio: 210 / 297;
+  display: flex;
+  flex-direction: column;
+  border-radius: 2px;
+  background-color: var(--paper);
+  background-image: var(--paper-grain-map);
+  box-shadow: var(--paper-contact);
+  font-family: var(--font-serif, serif);
+  font-size: calc(var(--lab-mm) * 4);
+  line-height: 1.5;
+  color: var(--color-foreground);
+}
+
+.lab-paper-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  margin: calc(var(--lab-mm) * 10) calc(var(--lab-mm) * 25) 0;
+  padding-bottom: calc(var(--lab-mm) * 2);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(var(--lab-mm) * 3);
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-paper-rule {
+  height: 1px;
+  margin: 0 calc(var(--lab-mm) * 25);
+  background: var(--paper-line);
+}
+
+.lab-paper-title {
+  margin: calc(var(--lab-mm) * 8) calc(var(--lab-mm) * 25)
+    calc(var(--lab-mm) * 4);
+  font-weight: 300;
+  font-size: calc(var(--lab-mm) * 6.5);
+  line-height: 1.3;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+
+.lab-paper-body {
+  flex: 1;
+  margin: 0 calc(var(--lab-mm) * 25);
+  overflow: hidden;
+}
+
+.lab-paper-body p {
+  margin-bottom: 0.9em;
+}
+
+.lab-paper-zh {
+  text-indent: 2em;
+}
+
+.lab-paper-foot {
+  display: flex;
+  align-items: baseline;
+  margin: 0 calc(var(--lab-mm) * 25) calc(var(--lab-mm) * 10);
+  padding-top: calc(var(--lab-mm) * 2);
+  border-top: 1px solid var(--paper-line);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(var(--lab-mm) * 3);
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-paper-foot-cat {
+  flex: 1;
+  text-align: right;
+}
+
+/* The edge veils — the sheet's face is lit; its lower-right edge falls away
+ * into the board, its upper-left catches the lamp. Ink included: light
+ * falls on top of everything. */
+.lab-edge-veil {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow:
+    inset calc(var(--lab-mm) * -7) calc(var(--lab-mm) * -7)
+      calc(var(--lab-mm) * 12) calc(var(--lab-mm) * -5)
+      oklch(from var(--paper) calc(l + 0.035) c h / 0.9),
+    inset calc(var(--lab-mm) * 6) calc(var(--lab-mm) * 6)
+      calc(var(--lab-mm) * 10) calc(var(--lab-mm) * -4)
+      color-mix(in oklab, var(--paper) 76%, black);
+}
+
+/* Feature callouts along the board's right margin. */
+.lab-notes {
+  position: absolute;
+  inset: 0 28px 0 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+
+.lab-note {
+  position: absolute;
+  max-width: 200px;
+  padding-right: 18px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  line-height: 1.6;
+  letter-spacing: 0.08em;
+  text-align: right;
+  color: var(--muted-foreground);
+}
+
+.lab-note::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 84px;
+  height: 1px;
+  margin-right: 6px;
+  background: var(--paper-line);
+}
+
+.lab-note-tick {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  width: 12px;
+  height: 1px;
+  background: var(--muted-foreground);
+  opacity: 0.7;
+}
+
+.lab-note--recess {
+  top: 10%;
+}
+
+.lab-note--rule {
+  top: 19%;
+}
+
+.lab-note--grain {
+  top: 40%;
+}
+
+.lab-note--veil {
+  top: 84%;
+}
+
+/* ── Cover candidates (recipe 04) ─────────────────────────────────────── */
+.lab-cover-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  justify-content: center;
+  gap: 26px;
+}
+
+.lab-covercard-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lab-covercard-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.lab-covercard-board {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 404px;
+  min-height: 566px;
+  padding: 32px;
+  border-radius: 3px;
+  box-shadow: var(--paper-contact);
+}
+
+/* (a) no foil — the primary action pressed INTO the card: plate fill, sink
+ * edges, matte ink. No metal at all. */
+.lab-item-deboss {
+  background-color: var(--paper-plate);
+  box-shadow: var(--paper-sink);
+  color: color-mix(in oklab, var(--foreground) 90%, var(--paper));
+}
+
+/* (b/c) the restrained leaf — a narrow gleam band whose bright stop is a
+ * whisper off the sheet, never the current foil's white mirror flash. The
+ * band's position is a CSS variable: fixed for (b), pointer-driven for (c). */
+.lab-foil {
+  background-image: linear-gradient(
+    105deg,
+    oklch(from var(--paper) calc(l * 0.52) c h) 0%,
+    oklch(from var(--paper) calc(l * 0.78) c h) 32%,
+    color-mix(in oklab, var(--paper) 22%, white) 42%,
+    oklch(from var(--paper) calc(l * 0.78) c h) 54%,
+    oklch(from var(--paper) calc(l * 0.52) c h) 100%
+  );
+  background-size: 190% 100%;
+  background-position-x: var(--foil-x, 34%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.dark .lab-foil {
+  background-image: linear-gradient(
+    105deg,
+    color-mix(in oklab, var(--paper) 48%, white) 0%,
+    color-mix(in oklab, var(--paper) 30%, white) 32%,
+    color-mix(in oklab, var(--paper) 10%, white) 42%,
+    color-mix(in oklab, var(--paper) 30%, white) 54%,
+    color-mix(in oklab, var(--paper) 48%, white) 100%
+  );
+}
+
+/* ── Room (recipe 05) ─────────────────────────────────────────────────── */
+/* A composition, not a 3D scene: a wall, a floor tipped in perspective,
+ * sheets lying on the floor plane. Paper tones only — the room is lit by
+ * the same upper-left house light. */
+.lab-room {
+  position: relative;
+  width: 100%;
+  max-width: 1180px;
+  height: 620px;
+  overflow: hidden;
+  border-radius: 3px;
+  box-shadow: var(--paper-contact);
+}
+
+.lab-room--compact {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.lab-room-wall {
+  position: absolute;
+  inset: 0 0 54% 0;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--paper) 86%, black),
+    color-mix(in oklab, var(--paper) 93%, black)
+  );
+}
+
+.lab-room-glow {
+  position: absolute;
+  top: 4%;
+  left: 7%;
+  width: 400px;
+  height: 400px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    oklch(from var(--paper) calc(l + 0.05) c h / 0.95),
+    transparent 62%
+  );
+}
+
+.lab-room-floor {
+  position: absolute;
+  top: 46%;
+  right: -12%;
+  bottom: -26%;
+  left: -12%;
+  transform: perspective(1100px) rotateX(42deg);
+  transform-origin: 50% 0;
+  background: linear-gradient(
+    165deg,
+    color-mix(in oklab, var(--paper) 97%, black) 0%,
+    color-mix(in oklab, var(--paper) 89%, black) 55%,
+    color-mix(in oklab, var(--paper) 78%, black) 100%
+  );
+}
+
+.lab-room-seam {
+  position: absolute;
+  top: 46%;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--paper) 70%, black),
+    transparent
+  );
+}
+
+/* Dark stock compresses near-black mixes into one void: the floor must sit
+ * clearly BELOW the sheets (pure paper) so the near-black contact shadows
+ * carry the separation, and the lamp reads as a glow painted on top — not
+ * by lightening the floor base to the sheet's own brightness. Same light,
+ * same materials, levels the dark stock can express. */
+.dark .lab-room-wall {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklab, var(--paper) 72%, black),
+    color-mix(in oklab, var(--paper) 84%, black)
+  );
+}
+
+.dark .lab-room-floor {
+  background: linear-gradient(
+    165deg,
+    color-mix(in oklab, var(--paper) 84%, black) 0%,
+    color-mix(in oklab, var(--paper) 72%, black) 55%,
+    color-mix(in oklab, var(--paper) 56%, black) 100%
+  );
+}
+
+.dark .lab-room-glow {
+  top: -2%;
+  left: 4%;
+  width: 640px;
+  height: 640px;
+  background: radial-gradient(
+    circle,
+    oklch(from var(--paper) calc(l + 0.13) c h / 0.9),
+    transparent 60%
+  );
+}
+
+.lab-room-sheet {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 7%;
+  padding: 7%;
+  transform: rotate(var(--rs-r, 0deg));
+  box-shadow: var(--paper-contact);
+}
+
+.lab-room-sheet-title {
+  font-family: var(--font-serif, serif);
+  font-weight: 300;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-foreground);
+}
+
+.lab-room-sheet-line {
+  height: 1px;
+  background: var(--paper-line);
+}
+
+.lab-room-sheet-tag {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 6px;
+  letter-spacing: 0.16em;
+  color: var(--color-foreground);
+  opacity: 0.7;
+}
+
+.lab-room-sheet-record {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 7px;
+  letter-spacing: 0.1em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-room-sheet-record--dim {
+  opacity: 0.5;
+}
+
+/* ── Transition (recipe 06) ───────────────────────────────────────────── */
+.lab-frame-strip {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.lab-frame-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 332px;
+}
+
+.lab-frame {
+  position: relative;
+  width: 332px;
+  height: 462px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+.lab-frame-title {
+  font-size: 13px;
+  color: var(--color-foreground);
+}
+
+.lab-frame-title .font-mono {
+  margin-right: 6px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--muted-foreground);
+}
+
+.lab-frame-caption {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.lab-frame-arrow {
+  align-self: center;
+  padding-bottom: 64px;
+  font-size: 20px;
+  color: var(--muted-foreground);
+  opacity: 0.6;
+}
+
+/* Frame 2 — the desk from a high oblique angle. */
+.lab-desk-view {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklab, var(--background) 62%, var(--paper));
+}
+
+.lab-desk-plane {
+  transform: perspective(900px) rotateX(48deg);
+  transform-origin: 50% 62%;
+}
+
+.lab-desk-plane-inner {
+  padding: 26px 30px;
+  border-radius: 3px;
+  box-shadow: var(--paper-lift);
+}
+
+.lab-desk-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.lab-desk-row .lab-pilewrap,
+.lab-open-pile .lab-pilewrap {
+  padding: 6px 52px 20px 6px;
+}
+
+.lab-desk-rowlabel {
+  margin-top: 16px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* Frame 3 — one pile opened into its page. */
+.lab-open-view {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in oklab, var(--background) 62%, var(--paper));
+}
+
+.lab-open-sheet {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: 212px;
+  height: 300px;
+  padding: 16px 18px;
+  border-radius: 2px;
+  box-shadow: var(--paper-lift);
+  transform: rotate(-2deg);
+}
+
+.lab-open-head {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 6px;
+  line-height: 1.6;
+  letter-spacing: 0.12em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-open-rule {
+  height: 1px;
+  margin-block: 9px;
+  background: var(--paper-line);
+}
+
+.lab-open-text {
+  margin-bottom: 6px;
+  font-family: var(--font-serif, serif);
+  font-size: 8px;
+  line-height: 1.6;
+  color: var(--color-foreground);
+  opacity: 0.82;
+}
+
+.lab-open-foot {
+  display: flex;
+  margin-top: auto;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 6px;
+  letter-spacing: 0.12em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+}
+
+.lab-open-pile {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  z-index: 1;
+  transform: rotate(4deg);
+}
