@@ -746,7 +746,7 @@ export function CompanionPod({
                 : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }
             }
             aria-label={t("dockLabel")}
-            className="pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(30rem,calc(100dvh-18rem))] w-[min(23rem,calc(100vw-2rem))] flex-col rounded-2xl bg-card/90 ring-1 ring-foreground/10 shadow-[0_24px_60px_-20px_rgba(15,23,42,0.5)] backdrop-blur-md dark:shadow-[0_24px_60px_-20px_rgba(0,0,0,0.8)]"
+            className="pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(30rem,calc(100dvh-18rem))] w-[min(23rem,calc(100vw-2rem))] flex-col rounded-2xl bg-paper bg-paper-grain-card text-card-foreground shadow-paper-contact"
           >
             {/* Chrome — sans, and it never scrolls away: the flex column caps
                 the panel's height and the prose below takes the overflow. The
