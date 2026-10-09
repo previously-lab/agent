@@ -37,10 +37,6 @@
   height: min(86vh, calc((100vw - 3rem) * 297 / 210));
   aspect-ratio: 210 / 297;
   opacity: 0;
-  /* §12.2 — the ONLY dynamic modulation: pointermove rewrites this locally
-     scoped intensity (default 1, bounded 0.7–1.3 by recessIntensityFor);
-     it reaches the two recessed strings below and nothing else. */
-  --recess-i: 1;
 }
 
 /* ── A slot: one sheet's seat in the deck. Its pose comes from its slot as
@@ -189,20 +185,6 @@
   letter-spacing: 0.14em;
   color: var(--color-foreground);
   opacity: 0.72;
-}
-
-/* ── The two recessed strings (§12.1: the header date and the page number —
-   exactly two, the FrameCard discipline). The recipe is the globals'
-   --paper-ink-recess with the paper share divided by the local --recess-i:
-   stronger intensity = a whiter lip. ─────────────────────────────────── */
-.desk-recess {
-  text-shadow: 1px 1px 1px
-    color-mix(in oklab, var(--paper) calc(60% / var(--recess-i, 1)), white);
-}
-
-.dark .desk-recess {
-  text-shadow: 1px 1px 2px
-    color-mix(in oklab, var(--paper) calc(55% / var(--recess-i, 1)), white);
 }
 
 /* ── Body: the 版心, a page viewport — no scrolling (the paper never clips

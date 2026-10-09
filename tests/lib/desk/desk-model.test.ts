@@ -1,7 +1,7 @@
 /**
  * The document desk's pure decisions (v0.22 P1): the paper's view model
- * (title / case ref / category / the dead-link "not found" call), the
- * §12.2 recess intensity bounds, and the provider's open-desk panel fold.
+ * (title / case ref / category / the dead-link "not found" call) and the
+ * provider's open-desk panel fold.
  * The repo's vitest env is node (no component rendering), so everything the
  * desk decides lives here in React-free functions and is covered directly.
  */
@@ -14,7 +14,6 @@ import {
   pageCountLowerBound,
   pageForShellSlot,
   panelModeForDeskOpen,
-  recessIntensityFor,
   SHELL_COUNT,
   shellOffsetForSlot,
 } from "@/components/desk/desk-model";
@@ -69,21 +68,6 @@ describe("deskPaperModel", () => {
 
   it("an empty body is NOT a dead link — the paper still prints", () => {
     expect(deskPaperModel("research/手机调研", doc("")).markdown).toBe("");
-  });
-});
-
-describe("recessIntensityFor (§12.2)", () => {
-  it("is 1 at mid-page, strongest toward the light, weakest at the foot", () => {
-    expect(recessIntensityFor(0.5)).toBe(1);
-    expect(recessIntensityFor(0)).toBe(1.3);
-    expect(recessIntensityFor(1)).toBeCloseTo(0.7);
-  });
-
-  it("clamps out-of-range and non-finite input instead of escaping 0.7–1.3", () => {
-    expect(recessIntensityFor(-5)).toBe(1.3);
-    expect(recessIntensityFor(2)).toBeCloseTo(0.7);
-    expect(recessIntensityFor(Number.NaN)).toBe(1);
-    expect(recessIntensityFor(Number.POSITIVE_INFINITY)).toBe(1);
   });
 });
 

@@ -140,16 +140,6 @@ export function shellOffsetForSlot(slot: number): {
  *  desk.css match this. */
 export const TURN_MS = 480;
 
-/** The recess-type intensity for the pointer's height over the paper
- *  (v0.22 §12.2): 1 at mid-page, stronger toward the upper-left light,
- *  bounded 0.7–1.3. This locally scoped `--recess-i` is the ONLY dynamic
- *  light modulation the desk is allowed — it touches nothing global. */
-export function recessIntensityFor(relY: number): number {
-  if (!Number.isFinite(relY)) return 1;
-  const clamped = Math.min(1, Math.max(0, relY));
-  return Math.min(1.3, Math.max(0.7, 1 + (0.5 - clamped) * 0.6));
-}
-
 /** openDesk folds a fullscreen conversation back to the pill first (v0.22
  *  §3): fullscreen freezes the world's frame loop and covers the canvas the
  *  desk renders in. */

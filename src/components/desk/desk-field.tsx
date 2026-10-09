@@ -80,7 +80,6 @@ import {
   pageCountLowerBound,
   pageForShellSlot,
   deskPaperModel,
-  recessIntensityFor,
   SHELL_COUNT,
   shellOffsetForSlot,
   type DeskPaperModel,
@@ -692,16 +691,6 @@ function DeskScene({
     if (stack) stack.style.opacity = `${anim.t}`;
   });
 
-  // §12.2 — pointermove rewrites the paper-scoped --recess-i (0.7–1.3),
-  // reaching only the header date and the folio. The global light field is
-  // never touched.
-  const onPaperPointerMove = useCallback((e: ReactPointerEvent) => {
-    const el = e.currentTarget as HTMLElement;
-    const rect = el.getBoundingClientRect();
-    const relY = (e.clientY - rect.top) / rect.height;
-    el.style.setProperty("--recess-i", recessIntensityFor(relY).toFixed(3));
-  }, []);
-
   const {
     ready,
     markdown,
@@ -900,7 +889,6 @@ function DeskScene({
                   <div
                     className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact text-card-foreground"
                     data-locale={locale}
-                    onPointerMove={onPaperPointerMove}
                   >
                     {shellPage === null ? (
                       // Blank paper: the stack's peek, nothing printed.
@@ -911,7 +899,7 @@ function DeskScene({
                           <span className="truncate">
                             {model.caseRef ?? model.title}
                           </span>
-                          <span className="desk-recess shrink-0 tabular-nums">
+                          <span className="shrink-0 tabular-nums">
                             {model.date}
                           </span>
                         </header>
@@ -960,7 +948,7 @@ function DeskScene({
 
                         <footer className="desk-foot flex items-baseline">
                           <span className="flex-1" />
-                          <span className="desk-recess tabular-nums">
+                          <span className="tabular-nums">
                             {texts.page(shellPage)}
                           </span>
                           <span className="flex-1 truncate text-right">
