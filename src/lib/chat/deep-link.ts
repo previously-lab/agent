@@ -17,15 +17,6 @@
  *
  * Pure — no React, no browser. Unit-tested in `tests/lib/chat/deep-link.test.ts`.
  */
-import type { FieldRung } from "@/lib/timeline3d/units";
-
-/**
- * The rung `/` opens at — the conversation, so a bare visit lands exactly where
- * it always has: on the live conversation. (The card field's own default is
- * `day`; that is the right default for someone who asked for the timeline by
- * clicking a card, and the wrong one for someone who just opened the app.)
- */
-export const DEFAULT_RUNG: FieldRung = "conversation";
 
 /**
  * Extract a valid `at` anchor from a query string (with or without the

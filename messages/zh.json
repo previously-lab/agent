@@ -308,6 +308,11 @@
       "hint": "回复正在流式传来。回到对话查看。"
     }
   },
+  "rungs": {
+    "label": "世界",
+    "scene": "现场",
+    "manuscript": "原稿"
+  },
   "settings": {
     "pageTitle": "设置",
     "pageSubtitleClient": "本地内核模式",

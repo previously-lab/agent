@@ -5,15 +5,11 @@
  * conversation layer and the route content share.
  *
  * WHY THIS EXISTS. The conversation layer used to live INSIDE AppShell, and
- * the conversation field reached its home by portaling into DOM slots whose
- * refs AppShell owned. That made the overlay a prisoner of the route: any
- * rebuild of the shell subtree remounted the panel, and a slot ref that had
- * not registered yet handed the R3F portal a null target — the
- * `CanvasImpl.connect: addEventListener of null` crash class. §3.1's ruling:
- * the conversation layer is a real floating layer — mounted once at the
- * layout, a sibling of the route content, above the canvas by z-index,
- * surviving navigation and world rebuilds. For that, the state the overlay
- * and the routes SHARE had to move up with it; this provider is that state.
+ * any rebuild of the shell subtree remounted the panel. §3.1's ruling: the
+ * conversation layer is a real floating layer — mounted once at the layout, a
+ * sibling of the route content, above the canvas by z-index, surviving
+ * navigation and world rebuilds. For that, the state the overlay and the
+ * routes SHARE had to move up with it; this provider is that state.
  *
  * WHAT LIVES HERE, AND WHY IT CANNOT STAY IN A ROUTE:
  *
@@ -24,59 +20,41 @@
  *                    (fullscreen freezes) and consumed by the route's canvas
  *                    (`paused` → frameloop="never" — pause, never unmount).
  *   sharedSlice      the ONE cursor every surface reads AND every surface
- *                    moves (v0.13 §6 一个游标). Written by the nav actions,
+ *                    moves (v0.13 §6 一个游标). Written by the nav action,
  *                    and quietly by the surfaces themselves: the world's
- *                    roaming (game-canvas reports the room the reader
- *                    stands in) and the card stack's scrolling (card-field
- *                    reports the centred card) move the SAME cursor through
- *                    `reportCursor` — the write that steers no world. Read
- *                    by the route (field focus / hotel door), by
- *                    `getChatView`, and at call time by `getCursor`.
- *   nav (ShellNav)   focusSlice / standAtSlice / openSlice. Each moves the
- *                    cursor HERE and delegates the world motion to the
- *                    route's registered driver — the transition machine and
- *                    the rung belong to the world, and the world belongs to
- *                    the route.
+ *                    roaming (game-canvas reports the room the reader stands
+ *                    in) moves the SAME cursor through `reportCursor` — the
+ *                    write that steers no world. Read by the route (the hotel
+ *                    door, the world gate) and at call time by `getCursor`.
+ *   nav (ShellNav)   standAtSlice. It moves the cursor HERE and delegates
+ *                    the world motion to the route's registered driver — the
+ *                    transition machine belongs to the world, and the world
+ *                    belongs to the route.
  *   getChatView      the per-turn 视野 getter (v0.13 §5), read by the chat
  *                    transport at SEND time, never render time. No cursor, or
  *                    no registered world (off `/app`), is the lobby:
  *                    undefined, and the request carries no view block.
- *   feed             the one FieldFeed object (field-feed.ts). The band, the
- *                    card field and the chat stream share it; it is created
- *                    here so the stream's writer survives a route unmount.
- *   The CONVERSATION SURFACE slot — `paneSlotEl`, rendered by the route (the
- *   pane's portal target) — plus the composition of `ConversationSurface`
- *   from the slot, the tier and the route's reported pose. The pane slot is
- *   the R3F conversation field's ONLY seat: the panel's fullscreen body is
- *   the plain DOM list, so a "field" surface is published only while the
- *   panel is at the pill tier and the world is the field view. A
- *   `useState`-backed element ref, the same handshake world-canvas.tsx
- *   uses: the re-render on registration is the point. The slot is null
- *   until its element registers, and a "field" surface is only ever
- *   published WITH a live element — a portal handed a null or detached
- *   element dies exactly at the canvas's connect.
- *   publishing /     the feed's one-writer lease and the `?at=` suppression
- *   suppressAtJump   flag — both computed by the route (it owns the rung and
- *                    the transition machine), pushed here, read by the chat
- *                    stream in the overlay.
+ *   feed             the one FieldFeed object (field-feed.ts). The band's
+ *                    braid and the chat stream share it; it is created here
+ *                    so the stream's writer survives a route unmount.
+ *   publishing       the feed's one-writer lease, computed and pushed by the
+ *                    route.
  *   composerClearance the composer's measured foot inset — measured inside
- *                    the overlay's ChatPage, consumed by the route's card
- *                    field; the provider is the one place above both.
+ *                    the overlay's ChatPage, consumed by the chat stream; the
+ *                    provider is the one place above both.
  *
- * THE ROUTE'S HALF — `WorldDriver`. The world (canvas, transition machine,
- * rung) stays in `/app`; the layout TALKS to it through a registered driver
- * instead of owning it. AppShell registers on mount and unregisters on
- * unmount: off `/app` the nav actions still move the cursor but drive no
- * world (there is none to drive), and `getChatView` falls back to the lobby.
+ * THE ROUTE'S HALF — `WorldDriver`. The world (canvas, transition machine)
+ * stays in `/app`; the layout TALKS to it through a registered driver instead
+ * of owning it. AppShell registers on mount and unregisters on unmount: off
+ * `/app` the nav action still moves the cursor but drives no world (there is
+ * none to drive), and `getChatView` falls back to the lobby.
  *
- * SSR / HYDRATION NOTE. The initial tier is read ONCE from
- * `window.location`: a `?view=game` cold boot must START at the pill — a
- * wrong first tier renders the fullscreen body for one commit and folds it
- * the next, and that mount-fold churn at connect time is exactly the crash
- * class this hoist exists to kill. Server and
- * client can therefore disagree on the initial value — safely: `panelMode`
- * reaches no SSR'd markup (the overlay is client-only, and the route reads
- * the tier only in effects and in the client-only canvas's `paused` prop).
+ * SSR / HYDRATION NOTE. The first tier is the PILL everywhere: the
+ * conversation is a floating capability over whichever world the route opens
+ * on, never a surface of its own — so no route may be covered by a fullscreen
+ * conversation on its first commit. `panelMode` reaches no SSR'd markup (the
+ * overlay is client-only, and the route reads the tier only in effects and in
+ * the client-only canvas's `paused` prop).
  */
 import {
   createContext,
@@ -88,50 +66,36 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { FieldRung } from "@/lib/timeline3d/units";
 import type { CurrentView } from "@/lib/chat/current-view";
-import { DEFAULT_RUNG } from "@/lib/chat/deep-link";
 import { createFieldFeed, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
-import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import type { ConversationPanelMode } from "@/components/chat/conversation-panel";
-import {
-  ConversationSurfaceProvider,
-  type ConversationSurface,
-} from "@/components/chat/conversation-surface";
+import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import { ShellNavContext, type ShellNav } from "@/components/shell/shell-nav";
 import { panelModeForDeskOpen } from "@/components/desk/desk-model";
 
 /**
- * The world's pose, as the route last reported it. The SURFACE composition
- * below needs it reactively (a settle into the hotel swaps the field's
- * portal target); the per-turn view getter reads the same pair through the
- * driver's `getPose` instead, because it runs at send time, outside React.
+ * The world's pose, as the route last reported it. The per-turn view getter
+ * reads it through the driver's `getPose` instead of this state, because it
+ * runs at send time, outside React.
  */
 export interface WorldPose {
   settled: WorldKind;
-  rung: FieldRung;
 }
 
 /**
  * What the route (the world) implements and the provider calls. The cursor
- * half of every nav action lives in the provider; these are the WORLD-MOTION
- * halves, plus the two turn callbacks the overlay's ChatPage reports and the
- * pose read the send-time getter needs.
+ * half of the nav action lives in the provider; these are the WORLD-MOTION
+ * halves, plus the turn callback the overlay's ChatPage reports and the pose
+ * read the send-time getter needs.
  */
 export interface WorldDriver {
-  /** Address a slice to the CARD FIELD (the old focusSlice minus the cursor). */
-  focusSlice: (sliceId: string) => void;
-  /** Address a slice to the HOTEL (the old standAtSlice minus the cursor). */
+  /** Address a slice to the HOTEL: the reader stands at the slice's door. */
   standAtSlice: (sliceId: string) => void;
-  /** The CONVERSATION jump (the old openSlice minus the cursor). */
-  openSlice: (sliceId: string, start?: string) => void;
   /** The live pose, read at CALL time — never a render-time snapshot. */
   getPose: () => WorldPose;
-  /** A turn settled — the route refreshes its card catalog. */
+  /** A turn settled — the route refreshes its catalog and the hotel's doors. */
   onTurnSettled: () => void;
-  /** A turn started/stopped streaming — the route draws the running card. */
-  setRunning: (running: boolean) => void;
 }
 
 interface ShellValue {
@@ -149,12 +113,12 @@ interface ShellValue {
    *  fullscreen panel folds to the pill first — fullscreen freezes the
    *  world's frame loop and covers the canvas the desk renders in. */
   openDesk: (ref: string) => void;
-  /** Put the document back; the card field returns by the pane's rules. */
+  /** Put the document back; the desk's seat empties. */
   closeDesk: () => void;
   /** The cursor's QUIET write (v0.13 §6 一个游标): the surfaces' own motion
-   *  — the room the reader walks into, the card a scroll centres — moves
-   *  the SAME cursor the nav actions own, but steers NO world (the nav
-   *  actions are the only writers that also drive world motion). */
+   *  — the room the reader walks into — moves the SAME cursor the nav action
+   *  owns, but steers NO world (the nav action is the only writer that also
+   *  drives world motion). */
   reportCursor: (sliceId: string | null) => void;
   /** The cursor at CALL time (the synchronously-written ref, not the render
    *  snapshot) — for event-callback readers that can outrun the render
@@ -166,22 +130,16 @@ interface ShellValue {
   feed: FieldFeed;
   /** The feed's one-writer lease, computed and pushed by the route. */
   publishing: boolean;
-  /** True while the route's card rungs own the `?at=` anchor. */
-  suppressAtJump: boolean;
   /** The composer's measured foot inset — see the module header. */
   composerClearance: number;
   setComposerClearance: (px: number) => void;
-  /** Slot registration — a `useState`-backed element ref (module header). */
-  setPaneSlotEl: (el: HTMLElement | null) => void;
   /** The route's registration channel — see `WorldDriver`. */
   registerWorldDriver: (driver: WorldDriver | null) => void;
   setWorldPose: (pose: WorldPose | null) => void;
   setFeedPublishing: (publishing: boolean) => void;
-  setSuppressAtJump: (suppress: boolean) => void;
-  /** Forwarders the overlay's ChatPage reports through; they reach the
-   *  registered driver, and no-op off `/app` (no world to refresh). */
+  /** The forwarder the overlay's ChatPage reports through; it reaches the
+   *  registered driver, and no-ops off `/app` (no world to refresh). */
   reportTurnSettled: () => void;
-  reportRunning: (running: boolean) => void;
 }
 
 const ShellContext = createContext<ShellValue | null>(null);
@@ -194,31 +152,10 @@ export function useShell(): ShellValue {
   return shell;
 }
 
-/** The FIRST tier is the cold-boot verdict, not a placeholder (see the
- *  module header's SSR note): the pill for a `?view=game` boot, for a
- *  non-default rung, and for any route that is not the app surface itself —
- *  a route with no world behind it (settings) must never be covered by a
- *  fullscreen conversation on its first commit (folding it afterwards would
- *  mount and unmount the panel's portal target in one commit — exactly the
- *  R3F connect-time churn this hoist exists to kill). Fullscreen only for
- *  the app's own cold boot, whose first screen IS the conversation. The
- *  window pathname carries the locale prefix; stripping the first segment
- *  recovers the route. */
-function initialPanelTier(): ConversationPanelMode {
-  if (typeof window !== "undefined") {
-    if (new URLSearchParams(window.location.search).get("view") === "game") {
-      return "pill";
-    }
-    const path = window.location.pathname.replace(/^\/[^/]+/, "") || "/";
-    if (path !== "/" && path !== "/app") return "pill";
-  }
-  return DEFAULT_RUNG !== "conversation" ? "pill" : "fullscreen";
-}
-
 export function ShellProvider({ children }: { children: ReactNode }) {
-  const [panelMode, setPanelMode] = useState<ConversationPanelMode>(
-    initialPanelTier,
-  );
+  // The first tier is the PILL on every route — see the module header's SSR
+  // note. The conversation is a floating capability, never an opening surface.
+  const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
   const worldFrozen = panelMode === "fullscreen";
 
   // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order, no
@@ -268,23 +205,20 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [reportCursor]);
 
   // THE FEED IS ONE OBJECT WITH ONE WRITER (lib/timeline3d/field-feed.ts).
-  // Created here, above both of its fields' owners, so the chat stream's
-  // half survives the app route unmounting.
+  // Created here, above the stream's owner, so the chat stream's writer
+  // survives the app route unmounting.
   const feedRef = useRef<FieldFeed | null>(null);
   feedRef.current ??= createFieldFeed();
   const feed = feedRef.current;
 
-  // The conversation-surface slot and the route's reactive pose — see
-  // the module header. Null until a real element registers, and null again
-  // the moment its branch unmounts (leaving `/app` drops the pane slot).
-  const [paneSlotEl, setPaneSlotEl] = useState<HTMLElement | null>(null);
+  // The route's reactive pose — see the module header. Null off `/app` (a
+  // route with no world registers no driver and reports no pose).
   const [worldPose, setWorldPose] = useState<WorldPose | null>(null);
   const [publishing, setFeedPublishing] = useState(true);
-  const [suppressAtJump, setSuppressAtJump] = useState(false);
   const [composerClearance, setComposerClearance] = useState(0);
 
-  // The route's driver. A REF, not state: callers (the nav actions, the
-  // send-time getter, the turn forwarders) all read it at call time, and a
+  // The route's driver. A REF, not state: callers (the nav action, the
+  // send-time getter, the turn forwarder) all read it at call time, and a
   // registration must not re-render the layout's whole subtree.
   const driverRef = useRef<WorldDriver | null>(null);
   const registerWorldDriver = useCallback((driver: WorldDriver | null) => {
@@ -295,8 +229,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   // What the reader is currently looking at, derived at SEND time from the
   // shared cursor and the world's live pose (never render time — the
   // transport asks when the message leaves). Standing at the slice's door in
-  // the hotel = room; the slice rung's focused card in the field = card;
-  // ANYTHING ELSE — no shared address, a pile rung, the conversation rung,
+  // the hotel = room; ANYTHING ELSE — no shared address, the reader's desk,
   // or no registered world (a route without one) — is the lobby: the getter
   // returns undefined and the request carries NO view, so the server injects
   // no per-turn block. A mid-move read uses the settled world: that is where
@@ -307,29 +240,20 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     const pose = driverRef.current?.getPose();
     if (!pose) return undefined;
     if (pose.settled === "game") return { sliceId, surface: "room" };
-    if (pose.rung === "slice") return { sliceId, surface: "card" };
     return undefined;
   }, []);
 
-  // ── THE NAVIGATION ACTIONS (shell-nav.ts) ───────────────────────────────
-  // The memory form of the old `?slice=` / `?at=` contract. Each action moves
-  // the cursor HERE (the provider owns it) and then delegates the world
-  // motion to the registered driver — with no driver (off `/app`) the cursor
-  // still moves and nothing else happens, which is the honest state of a
-  // route that has no world.
+  // ── THE NAVIGATION ACTION (shell-nav.ts) ────────────────────────────────
+  // The memory form of the old `?slice=` contract. It moves the cursor HERE
+  // (the provider owns it) and then delegates the world motion to the
+  // registered driver — with no driver (off `/app`) the cursor still moves
+  // and nothing else happens, which is the honest state of a route that has
+  // no world.
   const nav = useMemo<ShellNav>(
     () => ({
-      focusSlice: (sliceId) => {
-        reportCursor(sliceId);
-        driverRef.current?.focusSlice(sliceId);
-      },
       standAtSlice: (sliceId) => {
         reportCursor(sliceId);
         driverRef.current?.standAtSlice(sliceId);
-      },
-      openSlice: (sliceId, start) => {
-        reportCursor(sliceId);
-        driverRef.current?.openSlice(sliceId, start);
       },
     }),
     [reportCursor],
@@ -338,27 +262,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const reportTurnSettled = useCallback(() => {
     driverRef.current?.onTurnSettled();
   }, []);
-  const reportRunning = useCallback((running: boolean) => {
-    driverRef.current?.setRunning(running);
-  }, []);
-
-  // ── THE CONVERSATION SURFACE (the R3F field's host) ─────────────────────
-  // The field's ONLY seat is the route's pane slot, and only while the panel
-  // floats beside it at the pill tier (the pill leaves the whole pane free).
-  // Everywhere else the answer is "narrow" and the DOM list carries the
-  // conversation (see `chat/conversation-surface.tsx`): the panel's
-  // fullscreen body (the expanded conversation is plain DOM — history and
-  // the in-flight turn), the game view, and any route with no pane at all.
-  // Before the route reports its pose the default is the field's rules; the
-  // slot is null then, so the surface degrades to "narrow", never to a
-  // "field" with a null target.
-  const conversationSurface: ConversationSurface = useMemo(() => {
-    const view = worldPose?.settled ?? "field";
-    if (view === "game" || panelMode === "fullscreen" || !paneSlotEl) {
-      return { kind: "narrow" };
-    }
-    return { kind: "field", el: paneSlotEl };
-  }, [worldPose, panelMode, paneSlotEl]);
 
   const value = useMemo<ShellValue>(
     () => ({
@@ -374,16 +277,12 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       getChatView,
       feed,
       publishing,
-      suppressAtJump,
       composerClearance,
       setComposerClearance,
-      setPaneSlotEl,
       registerWorldDriver,
       setWorldPose,
       setFeedPublishing,
-      setSuppressAtJump,
       reportTurnSettled,
-      reportRunning,
     }),
     [
       panelMode,
@@ -397,20 +296,16 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       getChatView,
       feed,
       publishing,
-      suppressAtJump,
       composerClearance,
       registerWorldDriver,
       reportTurnSettled,
-      reportRunning,
     ],
   );
 
   return (
     <ShellContext.Provider value={value}>
       <ShellNavContext.Provider value={nav}>
-        <ConversationSurfaceProvider value={conversationSurface}>
-          {children}
-        </ConversationSurfaceProvider>
+        {children}
       </ShellNavContext.Provider>
     </ShellContext.Provider>
   );

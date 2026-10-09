@@ -308,6 +308,11 @@
       "hint": "A reply is streaming. Open the conversation."
     }
   },
+  "rungs": {
+    "label": "Worlds",
+    "scene": "Scene",
+    "manuscript": "Manuscript"
+  },
   "settings": {
     "pageTitle": "Settings",
     "pageSubtitleClient": "Local kernel mode",

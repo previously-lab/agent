@@ -9,17 +9,10 @@
  */
 import { describe, it, expect } from "vitest";
 import {
-  DEFAULT_RUNG,
   parseAtParam,
   parseAtStartParam,
   stripAtParam,
 } from "@/lib/chat/deep-link";
-
-describe("DEFAULT_RUNG", () => {
-  it("is the conversation — a bare visit opens the live stream", () => {
-    expect(DEFAULT_RUNG).toBe("conversation");
-  });
-});
 
 describe("parseAtParam", () => {
   it("extracts the slice id", () => {
