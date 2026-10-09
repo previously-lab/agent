@@ -9,11 +9,12 @@ import "./home-paper.css";
  *
  * Zones, top to bottom inside the card (geometry in home-paper.css):
  *
- *   HEAD    the running head — "Previously on {name}" at a document
- *           running head's scale (serif, quiet), the dateline a small
- *           mono line under the name, and a hairline rule closing the
- *           head. The block is flush-left and optically centred in the
- *           sheet (the head carries flex-1).
+ *   HEAD    the running head — "Previously on {name}" at print-display
+ *           size (10mm serif, the sheet's largest voice), the dateline
+ *           a 3mm mono line under the name, and a hairline rule closing
+ *           the head. The block is flush-left inside the sheet's 25mm
+ *           print margins and optically centred (the head carries
+ *           flex-1).
  *   ACTIONS 继续 → `/app`, 设置 → `/settings` — printed labels: serif
  *           text with at most a hairline rule; the hover/focus state is
  *           an ink change plus that hairline, never a glow. 继续 carries
@@ -52,10 +53,10 @@ export function HomeScreen({
   return (
     <main className="bg-paper bg-paper-grain flex min-h-dvh flex-col items-center justify-center px-6 py-16">
       {/* The first sheet — one paper, one colour; the lift shadow is the
-          only separation from the board. min-h-125 (500px) gives the head
-          room to optically centre, the height the lab's cover board was
-          judged at. */}
-      <div className="home-card bg-paper bg-paper-grain-card shadow-paper-lift min-h-125 w-full max-w-sm">
+          only separation from the board. The sheet's geometry is A4 and
+          lives entirely in home-paper.css (width-driven, print scale via
+          --home-mm); the material classes are all that stays here. */}
+      <div className="home-card bg-paper bg-paper-grain-card shadow-paper-lift">
         <header className="home-head">
           <h1 className="home-run">
             {eyebrowLead} {eyebrowPreposition} {name}

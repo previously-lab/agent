@@ -1,6 +1,7 @@
 /* The home's paper (v0.13 paper prototype, reworked pass; re-ruled
-   2026-10-10 — plain printing). The MATERIAL lives in globals.css as
-   `@theme inline` tokens over the --paper-* variables (bg-paper /
+   2026-10-10 — plain printing; re-ruled 2026-10-11 — print scale, the
+   type belongs to the sheet, v0.25a §九). The MATERIAL lives in globals.css
+   as `@theme inline` tokens over the --paper-* variables (bg-paper /
    bg-paper-grain / bg-paper-grain-card / bg-paper-line /
    shadow-paper-lift) — this file only lays that material out on the
    home route: the first sheet and the print on it. The composition is
@@ -8,79 +9,101 @@
    archive's first sheet, not a book cover. Pure design values live
    here; nothing is measured or JS-driven. */
 
-/* The card — the first sheet of the archive. Its elevation is
-   shadow-paper-lift (the app's own card shadow): the strongest depth
-   cue on the page, and the ONLY separation from the board, because the
-   two sheets are one colour. The head inside is a flex column: the
-   running-head block carries flex-1 so it centres optically in whatever
-   height the sheet takes. Geometry only here. */
+/* The card — the archive's first sheet: a REAL A4 portrait, the same
+   sheet the reader's desk prints on (v0.24: height = min(86vh, (100vw
+   − 3rem) × 297/210), aspect 210/297). Here the sheet is width-driven —
+   width = that height × 210/297, clamped to the flow — so the aspect
+   holds in every context that re-renders these classes (the lab's
+   cover replica sizes it to its own board) and it never overflows a
+   narrow viewport.
+
+   PRINT SCALE (owner ruling 2026-10-06, v0.25a §九): the sheet's
+   typography is expressed in millimetres via ONE variable, --home-mm.
+   The sheet is a query container, so 100cqw is its own rendered width:
+   on A4, width/210 == height/297, hence --home-mm = 100cqw/210 IS the
+   sheet height ÷ 297 — the type-to-paper ratio is A4-true at every
+   sheet size, exactly the reader's --desk-mm rule. No Tailwind text-*
+   steps, no raw px inside the sheet. The element itself may not use
+   --home-mm (a query container cannot query itself), so the print
+   margins live on the blocks inside it. */
 .home-card {
+  --home-mm: calc(100cqw / 210);
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
+  width: min(calc(min(86vh, calc((100vw - 3rem) * 297 / 210)) * 210 / 297), 100%);
+  max-width: calc(100vw - 3rem);
+  aspect-ratio: 210 / 297;
   border-radius: 3px;
-  padding: clamp(1.75rem, 5vw, 2.5rem);
 }
 
-/* The running head — "Previously on {name}" at a document running
-   head's scale, the dateline a small mono line under the name. Serif
-   display, quiet: 15px is the document head's own size (no Tailwind
-   step lands there — text-sm reads small, text-base reads like a
-   standfirst), the weight stays 400 and the ink runs at 85% strength
-   like type printed on uncoated stock. */
+/* The running head — the name at print-display size (10mm ≈ 28pt
+   serif, the largest voice on the sheet), the dateline a 3mm mono line
+   under it. The head carries flex-1 and the 25mm print margins (A4's
+   own side margin — the same 160mm text block the reader prints), so
+   the block sits flush-left and optically centred in whatever height
+   the sheet takes. Geometry only here. */
 .home-head {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 4px;
+  gap: calc(var(--home-mm) * 2);
+  margin-inline: calc(var(--home-mm) * 25);
+  padding-top: calc(var(--home-mm) * 25);
 }
 
 .home-run {
   font-family: var(--font-serif, serif);
   font-weight: 400;
-  font-size: 15px;
-  line-height: 1.4;
+  font-size: calc(var(--home-mm) * 10);
+  line-height: 1.3;
   letter-spacing: 0.01em;
   color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
 }
 
-/* The dateline — the document header's own voice: mono, tracked, small.
-   12px is the mono utility size; the 0.14em tracking is the date line's
-   letterpress spacing, the same read the lab's document header sets. */
+/* The dateline — the document header's own voice: mono, tracked, 3mm —
+   the same size and 0.14em letterpress spacing the reader's 页眉 sets. */
 .home-date {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: calc(var(--home-mm) * 3);
   line-height: 1.6;
   letter-spacing: 0.14em;
   color: var(--muted-foreground);
 }
 
-/* The hairline that closes the head — flat ink (bg-paper-line's
-   colour), full measure of the sheet's inner column. */
+/* The hairline that closes the head — flat ink, full measure of the
+   sheet's 160mm inner column. A printed hairline is ≈0.25mm; below the
+   sheet's ~2.6px/mm that rounds to a device pixel, so the max() keeps
+   the line one true pixel rather than a fractional anti-aliased wash. */
 .home-rule {
   width: 100%;
-  height: 1px;
-  margin-top: 12px;
+  height: max(1px, calc(var(--home-mm) * 0.25));
+  margin-top: calc(var(--home-mm) * 4);
   background: var(--paper-line);
 }
 
-/* The actions — printed labels, stacked flush-left: serif text with at
-   most a hairline rule beneath. 18px is text-lg's step; the 3px padding
-   seats the underline like a rule, not a browser default. */
+/* The actions — printed labels at 4mm, stacked flush-left in the
+   foot's 25mm margins: serif text with at most a hairline rule
+   beneath. The 12mm above seats them at the foot of the sheet the way
+   a title page carries its imprint; the 6mm stack is the label
+   leading. */
 .home-actions {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 12px;
-  padding-top: 28px;
+  gap: calc(var(--home-mm) * 6);
+  margin-inline: calc(var(--home-mm) * 25);
+  margin-bottom: calc(var(--home-mm) * 25);
+  padding-top: calc(var(--home-mm) * 12);
 }
 
 .home-action {
-  padding-bottom: 3px;
-  border-bottom: 1px solid transparent;
+  padding-bottom: calc(var(--home-mm) * 1);
+  border-bottom: max(1px, calc(var(--home-mm) * 0.25)) solid transparent;
   font-family: var(--font-serif, serif);
-  font-size: 18px;
+  font-size: calc(var(--home-mm) * 4);
   line-height: 1.4;
   color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
   transition:
