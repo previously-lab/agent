@@ -1,8 +1,8 @@
 /*
  * THE VISUAL LAB (dev-only) — geometry for the lab recipes.
  * A discussion medium, not product CSS: every recipe-specific measurement
- * lives here; the material itself (stock, grain, contact shadow, relief,
- * line, recess, foil tokens) comes from globals.css' paper contract, and the
+ * lives here; the material itself (stock, grain, contact shadow, relief
+ * and line tokens) comes from globals.css' paper contract, and the
  * cover replica reuses home-paper.css' classes so it tracks the real cover.
  * One light everywhere: upper-left, matching the house light field.
  *
@@ -523,10 +523,6 @@
   height: 1px;
   background: var(--muted-foreground);
   opacity: 0.7;
-}
-
-.lab-note--recess {
-  top: 10%;
 }
 
 .lab-note--rule {

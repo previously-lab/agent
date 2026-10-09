@@ -54,7 +54,7 @@ function PileOpened() {
       <div className="lab-open-sheet bg-paper bg-paper-grain-card">
         <header className="lab-open-head">
           <span>records / SLICE 12</span>
-          <span className="text-shadow-paper-recess">2026-10-04</span>
+          <span>2026-10-04</span>
         </header>
         <div className="lab-open-rule" aria-hidden="true" />
         <p className="lab-open-text">
@@ -67,7 +67,7 @@ function PileOpened() {
         <div className="lab-open-rule" aria-hidden="true" />
         <footer className="lab-open-foot">
           <span className="flex-1" />
-          <span className="text-shadow-paper-recess tabular-nums">1 / 6</span>
+          <span className="tabular-nums">1 / 6</span>
         </footer>
       </div>
       <div className="lab-open-pile">

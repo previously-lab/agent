@@ -165,7 +165,7 @@ export function CoverSheet({
       ) : (
         <div className="lab-cover-inner lab-cover-inner--record">
           <header className="lab-cover-head">
-            <span className="text-shadow-paper-recess">{meta.date}</span>
+            <span>{meta.date}</span>
             <span>{meta.slice}</span>
             <span>{meta.rounds}</span>
           </header>
