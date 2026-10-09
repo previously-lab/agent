@@ -11,7 +11,9 @@ import {
  * the window's head, and the seams that page is crossed at), the arrival
  * resume/briefing gate (Rev 2 + the surface split: the briefing seats ONLY as
  * the R3F field's tail card, and a briefing arrival folds the fullscreen panel
- * to the pill so the field is the arrival view), the search palette's
+ * to the pill so the field is the arrival view — while the EXPANDED tier must
+ * still render the briefing history, the P0 blank-fullscreen regression), the
+ * search palette's
  * jump-to-slice, and the timeline view selected by ?view=timeline (direct URL,
  * the mode switcher, the Ctrl+. toggle).
  *
@@ -319,6 +321,50 @@ test.describe("Memory viz (v0.10)", () => {
       expect(cardBox).not.toBeNull();
       expect(turnBox).not.toBeNull();
       expect(cardBox!.y).toBeGreaterThan(turnBox!.y);
+    });
+
+    test("the expanded tier renders the briefing history the split left blank (P0)", async ({
+      page,
+    }) => {
+      const slices = datasetA();
+      await seedSlices(slices);
+
+      await page.goto("/en/app");
+      // The briefing folds the panel to the pill (the suite above covers why)
+      // — the expand verb is the reader's way back to the fullscreen tier,
+      // and that tier must not be the blank surface the v0.25 pass measured
+      // (1440×0, chrome-only innerText).
+      await page
+        .getByRole("button", { name: "Expand to full screen" })
+        .click();
+
+      // The fullscreen body's DOM list carries the cold-open page's turns —
+      // the same ten-slice window the field renders in the pane (S02..S11;
+      // S00/S01 are outside the first page and never load here).
+      const panel = page.locator("#conversation-panel");
+      const newest = slices[slices.length - 1];
+      await expect(panel.getByText(sentinel(newest, "user"))).toBeVisible();
+      await expect(panel.getByText(sentinel(newest, "agent"))).toBeVisible();
+
+      // The tier scrolls: ten slices of two turns exceed the viewport.
+      const scroller = panel.locator("[data-conversation-field]");
+      await expect
+        .poll(() =>
+          scroller.evaluate(
+            (el) => (el as HTMLElement).scrollHeight - (el as HTMLElement).clientHeight,
+          ),
+        )
+        .toBeGreaterThan(0);
+
+      // The window's head is reachable: scrolling to the top mounts the
+      // oldest slice of the loaded page, and the slices outside it stay
+      // unloaded (the panel pages nothing older — happened-time browsing is
+      // the field's job).
+      await scroller.evaluate((el) => {
+        (el as HTMLElement).scrollTop = 0;
+      });
+      await expect(panel.getByText(sentinel(slices[2], "user"))).toBeVisible();
+      await expect(panel.getByText(sentinel(slices[0], "user"))).toHaveCount(0);
     });
   });
 

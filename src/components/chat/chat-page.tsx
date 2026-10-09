@@ -22,10 +22,13 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   getArrivalState,
   getEpisodicState,
+  getSlicePageWithContent,
   getSliceStart,
   type ArrivalState,
   type SliceSummary,
+  type SliceWithContent,
 } from "@/lib/episodic/actions";
+import { SLICE_PAGE_SIZE } from "@/hooks/use-slice-stream";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
@@ -806,13 +809,45 @@ function Inner({
   }, [arrivalReady]);
   const showArrivalSkeleton = !arrivalReady && !skeletonBackstop;
 
-  // THE PANEL'S ITEMS (2026-10-04): the in-memory current conversation and
-  // nothing else — the arrival-restored resume block plus the live `useChat`
-  // messages. The repository's time slices never enter this list; the R3F
-  // field loads them itself.
+  // ── Briefing history: the expanded tier's content ────────────────────────
+  // A briefing arrival restores NOTHING into the panel (the resume block is
+  // the still-alive slice's alone), so on a briefing arrival the panel's
+  // item list was empty and the expanded tier rendered a blank body — the
+  // dead surface the v0.25 product pass measured (chrome-only innerText,
+  // zero message rows). The acceptance is that fullscreen renders history
+  // and the in-flight turn, so the panel composes the same cold-open page
+  // the field does (`useSliceStream`'s null cursor — the ten newest slices,
+  // the newest included). The gate's briefing contract stays untouched
+  // (no turns in the arrival payload; the paged stream is the surface that
+  // shows them), and the turns still render exactly once ON SCREEN: at the
+  // pill tier the panel body is folded to zero height, at fullscreen the
+  // field is unmounted. The list stays read-only — the panel pages nothing
+  // older; happened-time browsing remains the field's job.
+  const [briefingSlices, setBriefingSlices] = useState<SliceWithContent[] | null>(
+    null,
+  );
+  useEffect(() => {
+    if (arrival.mode !== "briefing" || shouldResume || emptyMemory) return;
+    let cancelled = false;
+    getSlicePageWithContent(null, SLICE_PAGE_SIZE, persona)
+      .then((page) => {
+        if (!cancelled) setBriefingSlices(page.slices);
+      })
+      .catch(() => {
+        /* best-effort — a blank tier is the honest failure */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [arrival.mode, shouldResume, emptyMemory, persona]);
+
+  // THE PANEL'S ITEMS (2026-10-04, briefing history added 2026-10-06): the
+  // in-memory current conversation — the arrival-restored resume block plus
+  // the live `useChat` messages — and, on a briefing arrival, the newest
+  // page of repository history the field would otherwise render alone.
   const items = useMemo<ChatStreamItem[]>(() => {
-    return [...buildHistoryItems([], resumeBlock), ...liveItems];
-  }, [resumeBlock, liveItems]);
+    return [...buildHistoryItems(briefingSlices ?? [], resumeBlock), ...liveItems];
+  }, [briefingSlices, resumeBlock, liveItems]);
   // Refs for the async jump path (scrollToIndex after paging lands).
 
   /**
@@ -1236,9 +1271,12 @@ function Inner({
             error={error}
             // Same rule as the anchors: only the FOREGROUND view publishes, so
             // the band's dot follows whichever field the reader is actually
-            // looking at rather than being fought over by both.
+            // looking at rather than being fought over by both. The FOLDED
+            // tier is not a surface — a zero-height box publishing progress
+            // and anchors for a conversation nobody can see fights the field
+            // (the pane's visible writer) over the same feed.
             feed={feed}
-            publishing={publishing}
+            publishing={publishing && !panelPill}
             fieldApiRef={fieldApiRef}
             insetTop={insetTop}
             insetBottom={insetBottom}
