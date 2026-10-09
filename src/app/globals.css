@@ -57,13 +57,10 @@
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-paper: var(--paper);
-  --color-paper-plate: var(--paper-plate);
   --color-paper-line: var(--paper-line);
   --background-image-paper-grain: var(--paper-grain-map);
   --background-image-paper-grain-card: var(--paper-grain-map);
   --shadow-paper-lift: var(--paper-lift);
-  --shadow-paper-sink: var(--paper-sink);
-  --shadow-paper-raise: var(--paper-raise);
   --shadow-paper-contact: var(--paper-contact);
   --text-shadow-paper-recess: var(--paper-ink-recess);
   --radius-sm: calc(var(--radius) - 4px);
@@ -263,19 +260,19 @@
    tooth show faintly through — a quarter to a third survives), and its
    EDGE IS VERY SLIGHTLY DENSER than its interior (dot gain). Nothing
    sinks in and nothing stands out any more. The region-relief vocabulary
-   below (--paper-sink / --paper-raise and their lip variables) is
-   RETIRED from the timeline — the card field no longer uses it anywhere
-   — but the tokens stay in the contract because the home screen still
-   consumes them (home is out of that lane's scope; stripping the tokens
-   would silently unstyle its pressed edges).
+   (--paper-raise and its lip variables) is RETIRED from the timeline and
+   the home screen both — paper-and-ink has no raised regions anywhere —
+   but the tokens stay in the contract because the visual lab's pile
+   cover-tag still consumes --paper-raise (stripping it would silently
+   unstyle the lab).
 
    THE DERIVATION IS DOCUMENT-LEVEL. In the seed era it had to live per
    surface: an inherited custom property carries its SUBSTITUTED value,
    so a descendant's re-seed could never re-derive the ancestor's
    variables (measured, Chromium 2026-09 — a blue board seed could not
    escape :root's grey). The seed is gone, so the derivation lives once
-   on :root / .dark and every surface — and every descendant plate,
-   rule, fade — reads the same resolved value.
+   on :root / .dark and every surface — and every descendant rule,
+   fade — reads the same resolved value.
 
    STOCK    --paper   the sheet. Light: l [0.97, 0.99] · c [0.007, 0.03]
             · h ≈ 88. Dark: l [0.21, 0.215] · c [0.003, 0.035] ·
@@ -288,15 +285,14 @@
             COMPOSITE lands at the stock colours. The derivation's hue
             is a LITERAL (the achromatic origin's powerless hue breaks
             clamp() — see the :root note).
-            --paper-plate   a sunken region's fill: the sheet one tone
-            step DOWN (Δl ≈ 0.04 light, ≈ 0.06 dark — levels compress
-            near black so the dark step is wider; both land at the same
-            ≈10–15/255 below the face), chroma slightly up so the recess
-            keeps the sheet's character as it darkens.
+            --paper-plate   a one-tone-step-down fill — once a sunken
+            region's colour, now the desk's printed code-block tint
+            (flat ink film, not a recess). Δl ≈ 0.04 light, ≈ 0.06 dark
+            (levels compress near black, so the dark step is wider).
    RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
             pressed edge — RETIRED from the timeline (paper-and-ink has
-            no sunken or raised regions), retained for the home screen's
-            consumption. The dark side is a deep slate in the paper's
+            no sunken or raised regions), retained only for the lab's
+            cover-tag. The dark side is a deep slate in the paper's
             own hue family (warm brown under the old warm stock) at
             high alpha — 0.42 light, near-opaque dark — and the light
             side a near-white at 0.7 light / 0.3 dark (on dark stock the
@@ -375,9 +371,6 @@
             comma-separated token:
               --background-image-paper-grain       (board: grain)
               --background-image-paper-grain-card  (card: grain)
-            A sunken plate takes NO grain token — it is
-            `bg-paper-plate shadow-paper-sink`, tone-step fill plus
-            pressed edges only.
             THE LIGHT FIELD once rode these tokens as a second layer;
             it now lives in ONE viewport-fixed overlay
             (.paper-light-field) because gradient percentages are
@@ -401,27 +394,23 @@
   --paper: oklch(0.978 0.005 256);
   --paper: oklch(from var(--background) clamp(0.973, l, 0.983) clamp(0.005, c, 0.03) 256);
 
-  /* The sunken fill: one tone step below the face. */
+  /* The one-tone-step fill: the desk's printed code-block tint. */
   --paper-plate: oklch(0.938 0.006 256);
   --paper-plate: oklch(from var(--paper) calc(l - 0.04) calc(c * 1.15) h);
 
   /* The pressed-edge lips. lo = the occluded (shadow) side: a deep cool
      slate in the paper's own hue family, Kinetics-class alpha. hi = the
-     side that catches light: near-white. */
+     side that catches light: near-white. Only the lab's cover-tag still
+     presses an edge with these. */
   --paper-relief-lo: oklch(0.352 0.011 256 / 0.42);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.36) calc(c * 2.2) h / 0.42);
   --paper-relief-hi: oklch(0.99 0.002 256 / 0.7);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
-  /* The relief recipes — pressed-edge pairs, bound to the shadow tokens.
-     Light falls from one upper-left everywhere: a sunken edge shadows its
-     top lip (1px offset + ½px blur lands a ≈2px dense band — the widest
-     a pressed edge may be before it reads as a gradient) and catches
-     light on a crisp 1px bottom lip; a raised edge swaps the pair. Text
-     never carries these — regions and rules only. */
-  --paper-sink:
-    inset 0 1px 0.5px 0 var(--paper-relief-lo),
-    inset 0 -1px 0 0 var(--paper-relief-hi);
+  /* The one pressed-edge recipe left: a raised lip for the lab's
+     cover-tag (light falls from the upper-left: the top edge catches
+     light on a crisp 1px lip, the bottom shadows). Regions only — text
+     never carries it. */
   --paper-raise:
     inset 0 1px 0 0 var(--paper-relief-hi),
     inset 0 -1px 0.5px 0 var(--paper-relief-lo);
@@ -430,8 +419,7 @@
      card, the briefing card and the skeletons carry
      (shadow-[0_34px_80px_-20px_...]). A sheet lifts off the page by
      exactly as much as every other card in the product, and there is no
-     second stack to keep in step with it. The inset relief lip is NOT
-     part of the elevation — relief lives in --paper-sink / --paper-raise.
+     second stack to keep in step with it.
      (The timeline's slice card no longer wears this: it is a sheet lying
      on the board, separated by the CONTACT shadow below — not a floating
      panel. --paper-lift stays for the surfaces that still float: home,
@@ -525,13 +513,13 @@
   --paper: oklch(0.120 0.002 256);
   --paper: oklch(from var(--background) clamp(0.117, l, 0.122) clamp(0.002, c, 0.035) 256);
 
-  /* The sunken fill: levels compress near black, so the tone step is
-     wider — the same ≈10–15/255 below the face as light. */
+  /* The one-tone-step fill, dark stock: levels compress near black, so
+     the tone step is wider. */
   --paper-plate: oklch(0.068 0.003 256);
   --paper-plate: oklch(from var(--paper) calc(l - 0.06) calc(c * 1.15) h);
 
   /* The pressed-edge lips. No room below near-black: the dark side goes
-     near-opaque and the sunken read leans on the highlight. */
+     near-opaque and the pressed edge reads via the highlight. */
   --paper-relief-lo: oklch(0.05 0.003 256 / 0.8);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.4) calc(c * 1.5) h / 0.8);
   --paper-relief-hi: oklch(0.99 0.001 87 / 0.3);
@@ -584,49 +572,15 @@
      recessed type text-shadow-paper-recess (the centre date + clock only)
    The timeline is PAPER AND INK: printed regions are ink film on the
    sheet — flatter, partly covering the grain, slightly denser at the
-   edge — never sunken plates or raised marks. The relief recipes below
-   (sunken plate `bg-paper-plate shadow-paper-sink`, raised mark
-   `shadow-paper-raise`) are retained for the HOME SCREEN, which still
-   consumes them; the card field uses none of them.
+   edge — never sunken plates or raised marks. No surface consumes the
+   region-relief recipes any more: the home screen prints plain (the
+   owner's 2026-10-10 ruling), and only the visual lab's pile cover-tag
+   still presses a raised edge (`--paper-raise`); the card field uses
+   none of them.
    The grain is the sheet element's OWN background, never an overlay div;
    the texture carries its amplitude in alpha, so plain source-over is the
    correct compositing and the amplitude survives whatever the stock
    colour is. */
-
-/* The one metallic treatment, for the single primary interactive item:
-   flat leaf ink (a gradient fill, no glyph shadow — not embossing). The
-   105deg, the same upper-left light that lights every relief edge. The
-   sweep must cross BRIGHTER than the sheet at its gleam: paper near
-   white leaves only white above it, so the centre stop is white — the
-   mirror flash a real foil tag throws back. Every other stop is derived. */
-.paper-foil {
-  background-image: linear-gradient(
-    105deg,
-    oklch(from var(--paper) calc(l * 0.3) c h) 0%,
-    color-mix(in oklab, var(--paper) 25%, white) 38%,
-    white 50%,
-    color-mix(in oklab, var(--paper) 25%, white) 62%,
-    oklch(from var(--paper) calc(l * 0.3) c h) 100%
-  );
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* On dark stock, metal leaf reads as silver: the sweep brightens toward
-   its gleam instead of sinking into the board at its ends. Same one
-   treatment, tuned per theme — the light sweep's dark ends disappear on
-   near-black paper. */
-.dark .paper-foil {
-  background-image: linear-gradient(
-    105deg,
-    color-mix(in oklab, var(--paper) 40%, white) 0%,
-    color-mix(in oklab, var(--paper) 15%, white) 40%,
-    color-mix(in oklab, var(--paper) 5%, white) 50%,
-    color-mix(in oklab, var(--paper) 15%, white) 60%,
-    color-mix(in oklab, var(--paper) 40%, white) 100%
-  );
-}
 
 /* Scrollbar styles */
 @layer base {
@@ -1043,10 +997,6 @@
   --subtitle-block-max: 660px;
   --subtitle-user-ink: oklch(0.6 0.015 75);
   --pill-max-width: 600px;
-  /* Home tuned type (home-screen.tsx): 44px straddles text-4xl/5xl, and the
-     leading falls between the leading scale's steps. */
-  --home-name-size: 44px;
-  --home-name-leading: 1.15;
 }
 
 .subtitle-user-ink {
@@ -1057,10 +1007,6 @@
    CSS, never applied inline just to read a var. */
 .subtitle-block {
   max-width: var(--subtitle-block-max);
-}
-.home-name-type {
-  font-size: var(--home-name-size);
-  line-height: var(--home-name-leading);
 }
 
 .pill-box {

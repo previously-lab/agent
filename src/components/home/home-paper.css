@@ -1,44 +1,103 @@
-/* The home's paper (v0.13 paper prototype, reworked pass). The MATERIAL
-   lives in globals.css as `@theme inline` tokens over the --paper-*
-   variables (bg-paper / bg-paper-grain / bg-paper-grain-card /
-   bg-paper-plate / bg-paper-line / shadow-paper-lift / shadow-paper-sink
-   / shadow-paper-raise) — this file only lays that material out on the
-   home route: the board sheet, the card lying on it, and the printed
-   relief on the content regions. Pure design values live here; nothing
-   is measured or JS-driven. */
+/* The home's paper (v0.13 paper prototype, reworked pass; re-ruled
+   2026-10-10 — plain printing). The MATERIAL lives in globals.css as
+   `@theme inline` tokens over the --paper-* variables (bg-paper /
+   bg-paper-grain / bg-paper-grain-card / bg-paper-line /
+   shadow-paper-lift) — this file only lays that material out on the
+   home route: the first sheet and the print on it. The composition is
+   the lab's intertitle candidate, ported verbatim: the home card is the
+   archive's first sheet, not a book cover. Pure design values live
+   here; nothing is measured or JS-driven. */
 
-/* The card — the second sheet. Its elevation is shadow-paper-lift (the
-   app's own card shadow): the strongest depth cue on the page, and the
-   ONLY separation from the board, because the two sheets are one
-   colour. Geometry only here. */
+/* The card — the first sheet of the archive. Its elevation is
+   shadow-paper-lift (the app's own card shadow): the strongest depth
+   cue on the page, and the ONLY separation from the board, because the
+   two sheets are one colour. The head inside is a flex column: the
+   running-head block carries flex-1 so it centres optically in whatever
+   height the sheet takes. Geometry only here. */
 .home-card {
+  display: flex;
+  flex-direction: column;
   border-radius: 3px;
   padding: clamp(1.75rem, 5vw, 2.5rem);
 }
 
-/* The sunken content region: identity + dateline printed INTO the card
-   (bg-paper-plate shadow-paper-sink in the markup — tone-step fill plus
-   the sink edges; only the plate's geometry lives here). */
-.home-plate {
-  border-radius: 2px;
-  padding: 0.875rem 1rem 1rem;
+/* The running head — "Previously on {name}" at a document running
+   head's scale, the dateline a small mono line under the name. Serif
+   display, quiet: 15px is the document head's own size (no Tailwind
+   step lands there — text-sm reads small, text-base reads like a
+   standfirst), the weight stays 400 and the ink runs at 85% strength
+   like type printed on uncoated stock. */
+.home-head {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
 }
 
-/* The raised label-like regions: the two menu items as printed tags.
-   Geometry only — the lift is the shadow-paper-raise utility. */
-.home-item {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.5rem;
-  padding: 0 1rem;
-  border-radius: 2px;
+.home-run {
+  font-family: var(--font-serif, serif);
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
 }
 
-/* The foil's only interaction state: a breath of brightness, not a colour
-   change (metallic leaf does not recolour, it catches more light). */
-.home-foil {
-  transition: filter 150ms ease;
+/* The dateline — the document header's own voice: mono, tracked, small.
+   12px is the mono utility size; the 0.14em tracking is the date line's
+   letterpress spacing, the same read the lab's document header sets. */
+.home-date {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--muted-foreground);
 }
-.home-foil:hover {
-  filter: brightness(1.05);
+
+/* The hairline that closes the head — flat ink (bg-paper-line's
+   colour), full measure of the sheet's inner column. */
+.home-rule {
+  width: 100%;
+  height: 1px;
+  margin-top: 12px;
+  background: var(--paper-line);
+}
+
+/* The actions — printed labels, stacked flush-left: serif text with at
+   most a hairline rule beneath. 18px is text-lg's step; the 3px padding
+   seats the underline like a rule, not a browser default. */
+.home-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 28px;
+}
+
+.home-action {
+  padding-bottom: 3px;
+  border-bottom: 1px solid transparent;
+  font-family: var(--font-serif, serif);
+  font-size: 18px;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+/* 设置 stays matte and faint until asked for. */
+.home-action--quiet {
+  color: var(--muted-foreground);
+}
+
+/* The printed state — ink change plus the hairline rule, never a glow.
+   focus-visible carries the same read: the label is the focus ring. */
+.home-action:hover,
+.home-action:focus-visible {
+  border-bottom-color: var(--paper-line);
+  color: var(--foreground);
+  outline: none;
 }
