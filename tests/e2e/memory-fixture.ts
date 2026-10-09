@@ -161,6 +161,76 @@ export async function clearEpisodic(): Promise<void> {
   await rm(path.join(E2E_MEMORY_ROOT, "records"), { recursive: true, force: true });
 }
 
+// ─── Case fixtures (the archive field's piles, v0.25a §四) ─────────────────
+// A case lives at memory/<category>/<case>/: an `index.md` (frontmatter
+// `opened: 'YYYY-MM-DD'`) plus dated pieces `<YYYY-MM-DD>-<标题>.md`. The
+// category list mirrors CASE_CATEGORIES in src/lib/docs/paths.ts — e2e files
+// never import from src (Playwright resolves no "@/" alias), so the fixture
+// keeps its own copy of the on-disk contract, same as the slice serializer
+// above.
+
+const CASE_CATEGORY_DIRS = [
+  "people",
+  "events",
+  "things",
+  "places",
+  "orgs",
+  "research",
+  "hypotheses",
+  "tasks",
+  "self",
+] as const;
+
+export interface FixtureCase {
+  /** One of the nine case categories (see CASE_CATEGORY_DIRS). */
+  category: string;
+  /** The case directory name (plain or `<YYYY-MM-DD>-<标题>`). */
+  name: string;
+  /** Birth stamp for the index header; "" writes no `opened` line. */
+  opened: string;
+  /** Dated pieces — each becomes one `<date>-<title>.md` sheet in the pile. */
+  pieces: { date: string; title: string }[];
+}
+
+function casesGuard(): void {
+  if (!E2E_MEMORY_ROOT.includes("previously-e2e")) {
+    throw new Error(`memory-fixture: refusing unexpected path: ${E2E_MEMORY_ROOT}`);
+  }
+}
+
+/** Write case directories straight into the isolated MEMORY_ROOT. */
+export async function seedCases(cases: FixtureCase[]): Promise<void> {
+  casesGuard();
+  for (const c of cases) {
+    const dir = path.join(E2E_MEMORY_ROOT, c.category, c.name);
+    await mkdir(dir, { recursive: true });
+    const fm = c.opened ? `opened: ${JSON.stringify(c.opened)}\n` : "";
+    await writeFile(
+      path.join(dir, "index.md"),
+      `---\n${fm}---\n\nCase ${c.name} — the seeded index.\n`,
+      "utf8",
+    );
+    for (const piece of c.pieces) {
+      await writeFile(
+        path.join(dir, `${piece.date}-${piece.title}.md`),
+        `---\nopened: ${JSON.stringify(piece.date)}\n---\n\nPiece ${piece.title} of ${c.name}.\n`,
+        "utf8",
+      );
+    }
+  }
+}
+
+/** Remove the nine category subtrees (per-test isolation). config/ stays. */
+export async function clearCases(): Promise<void> {
+  casesGuard();
+  for (const category of CASE_CATEGORY_DIRS) {
+    await rm(path.join(E2E_MEMORY_ROOT, category), {
+      recursive: true,
+      force: true,
+    });
+  }
+}
+
 /** A two-turn (user + agent) slice at a given UTC start, with sentinel
  *  content so specs can assert on exact text. */
 export function makeSlice(

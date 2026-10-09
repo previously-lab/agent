@@ -67,6 +67,7 @@ import {
   type ReactNode,
 } from "react";
 import type { CurrentView } from "@/lib/chat/current-view";
+import type { CaseCategory } from "@/lib/docs";
 import { createFieldFeed, type FieldFeed } from "@/lib/timeline3d/field-feed";
 import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import type { ConversationPanelMode } from "@/components/chat/conversation-panel";
@@ -109,6 +110,12 @@ interface ShellValue {
   /** The document on the desk (v0.22): a case ref, or null when the desk is
    *  away. One field, no persistence — a refresh puts nothing on the desk. */
   deskDoc: string | null;
+  /** The archive field's category filter (v0.25a §四): the library control's
+   *  category selection IS this filter — the shelf's browsing tree and the
+   *  field's columns answer the same question, so the state lives here,
+   *  above both. null = the whole archive. */
+  archiveCategory: CaseCategory | null;
+  setArchiveCategory: (category: CaseCategory | null) => void;
   /** Pull a document onto the desk (the shelf's terminal open action). A
    *  fullscreen panel folds to the pill first — fullscreen freezes the
    *  world's frame loop and covers the canvas the desk renders in. */
@@ -170,6 +177,14 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     setDeskDoc(ref);
   }, []);
   const closeDesk = useCallback(() => setDeskDoc(null), []);
+
+  // THE ARCHIVE FIELD'S FILTER (v0.25a §四). The library control's category
+  // selection doubles as the field's column filter — lifted here because the
+  // two surfaces are siblings in the route, and a panel close must not throw
+  // the filter away.
+  const [archiveCategory, setArchiveCategory] = useState<CaseCategory | null>(
+    null,
+  );
 
   // The navigation cursor, plus a read-anywhere mirror for the send-time
   // getter (the transport reads it at SEND time, outside React's render).
@@ -270,6 +285,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       worldFrozen,
       sharedSlice,
       deskDoc,
+      archiveCategory,
+      setArchiveCategory,
       openDesk,
       closeDesk,
       reportCursor,
@@ -289,6 +306,7 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       worldFrozen,
       sharedSlice,
       deskDoc,
+      archiveCategory,
       openDesk,
       closeDesk,
       reportCursor,

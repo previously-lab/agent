@@ -133,6 +133,7 @@ export function DeskField({
   camXOffset,
   reducedMotion,
   texts,
+  leaving = false,
 }: {
   /** The open document's reference (`deskDoc` — never null here: app-shell
    *  mounts the desk only when a ref is set). */
@@ -143,6 +144,11 @@ export function DeskField({
   camXOffset: number;
   reducedMotion: boolean;
   texts: DeskTexts;
+  /** The shell's handover says the desk is on its way out (the pane's
+   *  handover is hand-timed — AnimatePresence mode="wait" wedges under
+   *  usePresence, so presence never reaches this deep). Optional: every
+   *  pre-handover caller (none left) read absence as "not leaving". */
+  leaving?: boolean;
 }) {
   const { closeDesk } = useShell();
   const locale = useLocale();
@@ -152,7 +158,11 @@ export function DeskField({
   // Presence rides the pane's AnimatePresence: false while this branch plays
   // its exit — the scene gets it as a PROP because presence context, like
   // every context, stops at the Canvas root.
+  // Presence rides the pane's handover: true while this branch plays its
+  // exit — the scene gets it as a PROP because the handover state, like
+  // every context, stops at the Canvas root.
   const [isPresent] = usePresence();
+  const leave = leaving || !isPresent;
 
   // The document arrives lazily, one server-action round trip per open —
   // the shelf's own rhythm. `undefined` = in flight; null = dead link (the
@@ -453,7 +463,7 @@ export function DeskField({
       dark={dark}
       camXOffset={camXOffset}
       reducedMotion={reducedMotion}
-      exiting={!isPresent}
+      exiting={leave}
       paging={{
         ready,
         markdown: model.markdown,

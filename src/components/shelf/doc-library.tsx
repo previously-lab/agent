@@ -20,6 +20,11 @@
  * holds no selection copy, so Escape (put the document back) clears every
  * highlight by itself. The expanded case is local browsing state and stays
  * put when the paper closes.
+ *
+ * THE CATEGORY SELECTION IS ALSO THE ARCHIVE FIELD'S FILTER (v0.25a §四):
+ * the selected category lives in the shell provider (`archiveCategory`),
+ * and the field renders only that column while it is set. Re-click the open
+ * category to clear. The case-level browsing (`activeCase`) stays local.
  */
 import { useCallback, useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
@@ -65,12 +70,9 @@ function pieceRef(category: CaseCategory, caseName: string, stem: string): strin
 
 export function DocLibrary({ persona }: { persona?: string }) {
   const t = useTranslations("library");
-  const { deskDoc, openDesk } = useShell();
+  const { deskDoc, openDesk, archiveCategory, setArchiveCategory } = useShell();
   const [caseShelf, setCaseShelf] = useState<CaseShelf | null>(null);
   const [shelfFailed, setShelfFailed] = useState(false);
-  const [activeCategory, setActiveCategory] = useState<CaseCategory | null>(
-    null,
-  );
   const [activeCase, setActiveCase] = useState<{
     category: CaseCategory;
     name: string;
@@ -96,13 +98,18 @@ export function DocLibrary({ persona }: { persona?: string }) {
   }, [persona]);
 
   // One category open at a time; re-clicking the open one collapses it.
-  // Collapsing or leaving a category collapses its case with it — the desk
-  // keeps whatever document it holds, the column just stops browsing it.
-  const selectCategory = useCallback((category: CaseCategory) => {
-    setActiveCategory((prev) => (prev === category ? null : category));
-    setActiveCase(null);
-    setCaseDetail(null);
-  }, []);
+  // The selection IS the archive field's filter (see the module header), so
+  // it writes the provider, not a local copy. Collapsing or leaving a
+  // category collapses its case with it — the desk keeps whatever document
+  // it holds, the column just stops browsing it.
+  const selectCategory = useCallback(
+    (category: CaseCategory) => {
+      setArchiveCategory(archiveCategory === category ? null : category);
+      setActiveCase(null);
+      setCaseDetail(null);
+    },
+    [archiveCategory, setArchiveCategory],
+  );
 
   // A case IS its `index.md`: opening it puts the index on the desk AND
   // expands the piece list beneath the row.
@@ -146,7 +153,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
       </h2>
       {caseShelf.categories.map(({ category, cases }) => {
         const Icon = CATEGORY_ICONS[category];
-        const categoryOpen = activeCategory === category;
+        const categoryOpen = archiveCategory === category;
         return (
           <section key={category}>
             <button

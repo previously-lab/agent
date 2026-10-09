@@ -50,7 +50,7 @@ import {
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { useTranslations, useLocale } from "next-intl";
 import { Hotel, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -81,6 +81,11 @@ import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { useTier } from "@/hooks/use-tier";
 import { BoardBar } from "@/components/shell/board-bar";
 import { DeskField, type DeskTexts } from "@/components/desk/desk-field";
+import {
+  ArchiveField,
+  invalidateArchiveField,
+} from "@/components/archive/archive-field";
+import type { FieldRig } from "@/components/timeline-3d/field-rig";
 import { LibraryControl } from "@/components/shelf/library-control";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 
@@ -581,7 +586,51 @@ export function AppShell() {
    * other half: React bails out and a settle with no new slice costs one
    * no-op render.
    */
+  // THE ARCHIVE FIELD'S TWO SHELL-HELD CHANNELS. The rig (the field's scroll
+  // physics state) lives HERE so a desk round trip — open a pile, Escape
+  // back — and a hotel round trip both return the reader to the exact scroll
+  // position: the field component remounts, the rig object does not. The
+  // dataGen counter is the turn-settled re-aggregation trigger (a settled
+  // turn may have written a case); the data itself caches in the field's
+  // module (archive-field.tsx), invalidated alongside.
+  const archiveRigRef = useRef<FieldRig>({
+    target: 0,
+    current: 0,
+    releaseAt: 0,
+    anchorIndex: 0,
+    genAt: 0,
+    hoverKey: null,
+    dealOrigins: null,
+    dealEligible: null,
+  });
+  const [archiveGen, setArchiveGen] = useState(0);
+
+  // THE FIELD ⇄ DESK HANDOVER, HAND-TIMED (the JSX below carries the why).
+  // `shownSide` trails `handoverSide` by the leaving side's beat — archive
+  // exits in 220ms, the desk in 300ms (their old AnimatePresence numbers);
+  // a reversal mid-beat (open, then Escape inside the beat) simply cancels
+  // the timer and the leaving side fades back in, never having unmounted.
+  const handoverSide = deskDoc !== null ? "desk" : "archive";
+  const [shownSide, setShownSide] = useState<"archive" | "desk">("archive");
+  const handoverLeaving = shownSide !== handoverSide;
+  useEffect(() => {
+    if (shownSide === handoverSide) return;
+    const t = setTimeout(
+      () => setShownSide(handoverSide),
+      reducedMotion ? 0 : handoverSide === "desk" ? 220 : 300,
+    );
+    return () => clearTimeout(t);
+  }, [shownSide, handoverSide, reducedMotion]);
+  // The desk's last live ref, so its exit beat still has a document to show.
+  const lastDeskDocRef = useRef<string | null>(null);
+  if (deskDoc !== null) lastDeskDocRef.current = deskDoc;
   const refreshCatalog = useCallback(async () => {
+    // A settled turn may have written new CASES too — the archive field's
+    // aggregated read is session-cached, so drop it and let the mounted
+    // field re-aggregate (its dataGen prop bumps below on success AND on
+    // failure: a missed catalog refresh never gates the field's freshness).
+    invalidateArchiveField();
+    setArchiveGen((g) => g + 1);
     try {
       const page = await getTimelineCatalogPage(null);
       // A settled turn may have written a new slice — kill the hotel's
@@ -605,10 +654,11 @@ export function AppShell() {
 
   // ── THE READER'S RUNG (v0.23–v0.26) ──────────────────────────────────────
   // The field world IS the document reader: the floating library control
-  // (shelf/library-control.tsx) on the left edge and the desk's tabletop +
-  // paper in the main area — a quiet placeholder while nothing is open. The
-  // conversation is not a rung any more; it floats above both worlds as the
-  // layout's overlay.
+  // (shelf/library-control.tsx) on the left edge, and the pane itself owned
+  // by the ARCHIVE FIELD (archive/archive-field.tsx — the piles' grid, the
+  // 原稿 default) until a pile or the shelf opens a document onto the desk
+  // (desk/desk-field.tsx). The conversation is not a rung any more; it
+  // floats above both worlds as the layout's overlay.
 
   // ── THE ROUTE → PROVIDER CHANNEL ─────────────────────────────────────────
   // Registration and pushes, all laid out in one place:
@@ -726,39 +776,71 @@ export function AppShell() {
             door — the control never hides. */}
         <LibraryControl persona={persona} reducedMotion={reducedMotion} />
 
-        {/* THE EMPTY READER — nothing open: a quiet hint centred in the
-            pane, no new visual language. */}
-        {deskDoc === null && (
-          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-            <p className="max-w-60 px-6 text-center text-sm leading-relaxed text-muted-foreground/70">
-              {tLibrary("empty")}
-            </p>
-          </div>
-        )}
-
-        {/* THE DOCUMENT DESK (v0.22) — the pane's owner: it mounts the
-            moment `deskDoc` is set, swaps the paper in place when the ref
-            changes (the pull-out re-plays inside the scene), and unmounts on
-            Escape. The paper's entrance beat plays inside the scene. */}
-        <AnimatePresence>
-          {deskDoc !== null && (
-            <motion.div
-              key="desk"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="absolute inset-0 z-10"
-            >
+        {/* THE ARCHIVE FIELD ⇄ THE DOCUMENT DESK (v0.25a §四) — the pane's
+            owner, mutually exclusive through a HAND-TIMED handover: while
+            nothing is open the archive field stands (the piles' grid IS the
+            原稿 default — the empty-desk placeholder is gone); opening a pile
+            dims the field out, then the desk's pull-out beat plays. NOT
+            AnimatePresence mode="wait": under motion v12 the presence
+            subscription both fields carry wedges the removal — the exit
+            plays, the old branch never unmounts, the desk never mounts
+            (measured 2026-10-10). The hand-timed version also keeps the
+            world-slot handshake honest: the LEAVING side keeps its scene
+            registered through its beat and unregisters on unmount; only
+            then does the entering side mount and register — the slot's
+            cleanup is a blind null, so the survivor must come second. The
+            field's rig is shell-held (above): Escape returns to the same
+            scroll. */}
+        {shownSide === "archive" ? (
+          <motion.div
+            key="archive"
+            // The wrapper has no paint of its own (the piles render through
+            // the field's own portal layer) — the fade only TIMES the
+            // handover; the visible beats are the units' own (archive.css).
+            // pointer-events-none is LOAD-BEARING: this pane (z-10) stacks
+            // above the world canvas (z-0), so a hit-testable branch would
+            // swallow every click aimed at a pile. The field's gestures are
+            // all window-bound; nothing in this branch needs a hit.
+            initial={{ opacity: 0 }}
+            animate={{ opacity: handoverLeaving ? 0 : 1 }}
+            transition={{
+              duration: reducedMotion ? 0 : 0.22,
+              ease: [0.22, 1, 0.36, 1],
+            }}
+            className="pointer-events-none absolute inset-0 z-10"
+          >
+            <ArchiveField
+              persona={persona}
+              rig={archiveRigRef}
+              dataGen={archiveGen}
+              reducedMotion={reducedMotion}
+              leaving={handoverLeaving}
+            />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="desk"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: handoverLeaving ? 0 : 1 }}
+            transition={{
+              duration: reducedMotion ? 0 : 0.3,
+              ease: [0.22, 1, 0.36, 1],
+            }}
+            className="absolute inset-0 z-10"
+          >
+            {/* The leaving desk outlives its ref: deskDoc is already null
+                during the return beat, so the desk keeps the last one. */}
+            {(deskDoc ?? lastDeskDocRef.current) !== null && (
               <DeskField
-                docRef={deskDoc}
+                docRef={(deskDoc ?? lastDeskDocRef.current)!}
                 camXOffset={0}
                 reducedMotion={reducedMotion}
                 texts={deskTexts}
+                leaving={handoverLeaving}
               />
-            </motion.div>
-          )}
-        </AnimatePresence>
+            )}
+          </motion.div>
+        )}
 
         {/* THE BOARD BAR — the two rungs, floating at the top of the screen.
             Field-world chrome: in the hotel the game's own Exit is the way

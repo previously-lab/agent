@@ -440,6 +440,13 @@
     "emptyDesc": "与 agent 聊天后，会话历史将出现在这里。",
     "placeholderPreview": "会话内容将在连接 GitHub 后加载。"
   },
+  "archiveField": {
+    "fieldLabel": "档案场——一沓一沓的 case，新的在上",
+    "pileAria": "{name}（{category}），{count} 份文档",
+    "openedAt": "始于 {date}",
+    "weekOf": "{date} 当周",
+    "undated": "无日期"
+  },
   "missions": {
     "emptyTitle": "暂无任务",
     "emptyDesc": "使用聊天在 tasks/ 中创建任务文件。agent 可以帮你跟踪任务状态。",

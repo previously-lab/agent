@@ -440,6 +440,13 @@
     "emptyDesc": "Session history will appear here after you chat with agents.",
     "placeholderPreview": "Session content will load from GitHub when connected."
   },
+  "archiveField": {
+    "fieldLabel": "Archive field — the cases as piles, newest first",
+    "pileAria": "{name} — {category}, {count, plural, one {# document} other {# documents}}",
+    "openedAt": "opened {date}",
+    "weekOf": "Week of {date}",
+    "undated": "Undated"
+  },
   "missions": {
     "emptyTitle": "No missions yet",
     "emptyDesc": "Use Chat to create task files in tasks/. The agent can help you track mission status.",
