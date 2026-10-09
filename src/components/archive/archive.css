@@ -1,0 +1,253 @@
+/*
+ * The archive field (v0.25a §四) — the 原稿 rung's default surface: a grid of
+ * piles (rows = time buckets, columns = the case categories, a cell = one
+ * pile, one case). Rendered as DOM inside the field world's canvas (drei
+ * `<Html transform>`, 1 world unit = 1 CSS px — the card field's own
+ * projection), scrolled by the preserved rig.
+ *
+ * PRINT SCALE (§九). A pile is a small drawing of an A4 stack, so its cover
+ * typesets itself from its OWN height: `--archive-mm = pile height ÷ 297`,
+ * written per pile from the field's geometry (archive-model.ts), and every
+ * cover measurement is a `calc(var(--archive-mm) * N)` millimetre equivalent
+ * — never a Tailwind text step, never a bare px. At pile size only display
+ * print is legible, so the cover prints exactly what a glance can read
+ * (§九's ruling): the case name big, one stamp line small, NO paragraph.
+ *
+ * The pile's cascade (the buried sheets peeking down-right) reuses the lab
+ * recipe's step verbatim — the lab is untracked, so the numbers are copied
+ * (PILE_SHEET_STEP in archive-model.ts), never imported. Per-sheet poses
+ * arrive as CSS variables; the field's geometry arrives as variables; state
+ * arrives as data attributes. Static styling lives here.
+ */
+
+/* ── One pile: the A4-proportioned stack. Sizing arrives as
+   --archive-pile-w / --archive-pile-h from the model; the mm scale derives
+   from the pile's own height. The margin makes room for the deepest buried
+   sheet's peek plus its contact shadow (--archive-cd, set per pile). ── */
+.archive-pile {
+  --archive-mm: calc(var(--archive-pile-h, 178px) / 297);
+  position: relative;
+  display: block;
+  width: var(--archive-pile-w, 126px);
+  height: var(--archive-pile-h, 178px);
+  margin-bottom: var(--archive-cd, 0px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  transition: transform 180ms ease-out;
+}
+
+@media (hover: hover) {
+  .archive-pile:hover {
+    transform: translateY(calc(var(--archive-mm) * -3));
+  }
+  .archive-pile:hover .archive-sheet--cover {
+    box-shadow: var(--paper-lift);
+  }
+}
+
+.archive-pile:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: 3px;
+}
+
+/* One sheet in the pile. The cover is sheet 0; the buried sheets are blank
+   paper — an unprinted sheet, not a grey skeleton (the card field's rule).
+   Each sheet's pose is its own --sx/--sy/--sr step; paint order is --sz. */
+.archive-sheet {
+  position: absolute;
+  inset: 0;
+  border-radius: 2px;
+  transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
+  z-index: var(--sz, 1);
+}
+
+.archive-sheet--cover {
+  transition: box-shadow 180ms ease-out;
+}
+
+/* ── The printed cover (§九). Everything below is a millimetre equivalent
+   off the pile's own height. The 4.2mm root em, the 25/27mm margins, the
+   28mm display title and the 10.5mm stamp lines are the lab recipe's
+   proportions (the owner-approved reference): at pile scale anything smaller
+   would be noise, and anything more would be a paragraph. ── */
+.archive-cover-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--archive-mm) * 25) calc(var(--archive-mm) * 27)
+    calc(var(--archive-mm) * 22);
+  overflow: hidden;
+  border-radius: inherit;
+  font-size: calc(var(--archive-mm) * 4.2);
+}
+
+.archive-cover-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(var(--archive-mm) * 10.5);
+  line-height: 1.5;
+  letter-spacing: 0.12em;
+  color: var(--color-foreground);
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+.archive-cover-head > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.archive-cover-title {
+  margin-top: calc(var(--archive-mm) * 16);
+  font-family: var(--font-serif, serif);
+  font-weight: 300;
+  font-size: calc(var(--archive-mm) * 28);
+  line-height: 1.22;
+  letter-spacing: 0.01em;
+  color: var(--color-foreground);
+  /* A long case name clamps — the full name lives on the document, the cover
+     only has to be recognisable (§九: print less, never smaller). */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.archive-cover-rule {
+  height: 1px;
+  margin-top: auto;
+  margin-bottom: calc(var(--archive-mm) * 12);
+  background: var(--paper-line);
+}
+
+.archive-cover-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(var(--archive-mm) * 10.5);
+  letter-spacing: 0.1em;
+  color: var(--color-foreground);
+  opacity: 0.55;
+  white-space: nowrap;
+}
+
+.archive-cover-foot > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── The field's rows (inside the scene's Html portals). The row is a CSS
+   grid: the label column, then one track per category; a cell lands on its
+   category's track by --archive-col (1-based grid line, written from the
+   model's column index). Track widths arrive as --archive-grid-cols. ── */
+.archive-unit {
+  width: var(--archive-field-w, 100%);
+  height: var(--archive-unit-h, 100%);
+}
+
+.archive-header,
+.archive-row {
+  display: grid;
+  grid-template-columns: var(--archive-grid-cols);
+  column-gap: 8px;
+  align-items: start;
+}
+
+.archive-header {
+  align-items: end;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--paper-line);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+  opacity: 0.8;
+}
+
+.archive-header > span,
+.archive-row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archive-row {
+  padding-top: 20px;
+}
+
+.archive-row-label {
+  padding-top: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.archive-cell {
+  grid-column: var(--archive-col);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* ── The single-column layout (below md): a bucket label line, then one
+   pile per unit, centred — roughly one pile per screen, the next peeks. ── */
+.archive-bucket {
+  display: flex;
+  align-items: flex-end;
+  padding: 0 4px 10px;
+  border-bottom: 1px solid var(--paper-line);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.archive-pileunit {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 22px;
+}
+
+/* ── The entrance: rows rise and settle on a fresh field, staggered by
+   --archive-delay (capped in JS). Reduced motion, a return with the data
+   already warm (data-archive-instant), and the exit beat all skip it. ── */
+@media (prefers-reduced-motion: no-preference) {
+  .archive-unit--enter {
+    animation: archive-unit-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    animation-delay: var(--archive-delay, 0ms);
+  }
+}
+
+@keyframes archive-unit-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The field hands over to the desk: the rows dim and settle, the desk's own
+   pull-out beat plays next (the app shell sequences the two, never both).
+   Per unit, because each unit's DOM is its own Html portal root. */
+.archive-unit--exiting {
+  opacity: 0;
+  transition: opacity 200ms ease-in;
+}
