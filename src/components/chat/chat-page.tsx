@@ -4,17 +4,14 @@ import { useChat } from "@ai-sdk/react";
 import { WorkflowChatTransport } from "@ai-sdk/workflow";
 import { useMemo, useState, useRef, useCallback, useEffect, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
+import { usePathname } from "@/i18n/navigation";
 import type { UIMessage } from "ai";
 import { ChatInput } from "./chat-input";
 import { ComposerHost } from "./composer-host";
 import { usePanelTier } from "./conversation-panel";
-import type { FieldRung } from "@/lib/timeline3d/units";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
-import { UnifiedChatStream } from "./unified-chat-stream";
-import type { ConversationFieldHandle } from "./conversation-field";
+import { DomChatList, type ChatStreamHandle } from "./dom-chat-list";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
-// The stream's item model moved to its own module: the conversation field
-// renders the same items and must not import the stream component to get them.
 import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
@@ -59,50 +56,31 @@ import {
   type SubtitleSource,
 } from "@/lib/chat/subtitle-line";
 import type { CurrentView } from "@/lib/chat/current-view";
-import type { FieldAnchor } from "@/lib/timeline3d/winding";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 
 interface ChatPageProps {
   /** Server-preloaded user config (RSC) — seeds the selected model so the
    *  chat starts on the real value instead of flashing defaults. */
   initialConfig?: UserConfig;
-  /** When true the `?at=` search param is ignored. Used by the shell while a
-   *  card rung is up, because the card field handles the deep-link anchor. */
-  suppressAtJump?: boolean;
-  /** The zoom rung. This page draws the CONVERSATION rung; at any other rung
-   *  the card field is on top and this page's content is dimmed out of the way
-   *  — except for its composer, which collapses to a button and stays live, so
-   *  a reader looking at the cards can still say something. */
-  rung?: FieldRung;
-  /** Ask the shell for a rung — the composer uses it to return to the
-   *  conversation on send, which is where the reply will actually appear. */
-  onRungChange?: (rung: FieldRung) => void;
-  /** A turn finished and its slice is on disk. The shell refreshes the card
-   *  field's catalog; see the effect in `Inner`. */
+  /** A turn finished and its slice is on disk. The shell refreshes the
+   *  catalog and the hotel's doors; see the effect in `Inner`. */
   onTurnSettled?: () => void;
   /** The shared band feed, owned by the layout-level shell provider — see
    *  `field-feed.ts`. */
   feed?: FieldFeed;
-  /** True only while the chat view OWNS the band (the conversation rung). Both
-   *  fields are mounted at once while a card rung is up, and two writers on one
-   *  feed is what the feed exists to prevent. */
+  /** The feed's one-writer lease, computed by the route (nobody publishes
+   *  mid-move). */
   publishing?: boolean;
-  /** Report whether a turn is streaming. The card rungs have no row for a
-   *  slice that has not closed, so the shell draws the abstract placeholder
-   *  instead — and only the chat half knows a reply is in flight. */
-  onRunningChange?: (running: boolean) => void;
   /** The floating chrome's height at the pane's top edge, px — measured once
-   *  by the shell (`use-chrome-inset`) and shared with the card field. */
+   *  by the shell (`use-chrome-inset`). */
   insetTop?: number;
   /** The floating composer's height at the pane's foot, px — BUBBLED UP rather
-   *  than held here, because the card field floats over the same foot and the
-   *  layout-level shell provider is the one place both fields can read the
-   *  number from (v0.13 §3.1). */
+   *  than held here, because the layout-level shell provider is the one place
+   *  above both the measurer and the stream that clears it (v0.13 §3.1). */
   insetBottom?: number;
   /** Report that measurement upward. The composer is the only thing that knows
    *  how tall it is (a growing textarea, an attachment row), so it is measured
-   *  where it is drawn and the number is owned by the provider, where both
-   *  fields can see it. */
+   *  where it is drawn and the number is owned by the provider. */
   onComposerClearanceChange?: (px: number) => void;
   /** Publish the in-flight turn's subtitle line (v0.13 §4) — the current
    *  discrete activity caption (what the agent is doing, never the reply's
@@ -128,13 +106,9 @@ interface MountVerdict extends ArrivalDecision {
 
 export function ChatPage({
   initialConfig,
-  suppressAtJump,
-  rung = "conversation",
-  onRungChange,
   onTurnSettled,
   feed,
   publishing,
-  onRunningChange,
   insetTop,
   insetBottom,
   onComposerClearanceChange,
@@ -164,13 +138,9 @@ export function ChatPage({
   return (
     <Inner
       initialConfig={initialConfig}
-      suppressAtJump={suppressAtJump}
-      rung={rung}
-      onRungChange={onRungChange}
       onTurnSettled={onTurnSettled}
       feed={feed}
       publishing={publishing}
-      onRunningChange={onRunningChange}
       insetTop={insetTop}
       insetBottom={insetBottom}
       onComposerClearanceChange={onComposerClearanceChange}
@@ -250,10 +220,6 @@ const CHAT_ID_KEY = "previously:chatId";
 const SEND_MESSAGE_WINDOW = 10; // ~5 turns of working memory
 /** Cap the persisted conversation so a long session can't overflow localStorage. */
 const PERSIST_MESSAGE_CAP = 200;
-
-/** Virtuoso prepend pattern: the list's absolute index origin. Big enough
- *  that any realistic history depth of prepended pages stays positive. */
-const FIRST_ITEM_INDEX_BASE = 100_000;
 
 function readStoredRunId(): string | null {
   if (typeof localStorage === "undefined") return null;
@@ -335,27 +301,6 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 /**
- * The stream index where a slice's block begins: its seam when one is
- * rendered above it (so the jump lands with the seam in view), else its
- * resume banner, else its first turn.
- */
-export function sliceStartIndex(
-  items: readonly ChatStreamItem[],
-  sliceId: string,
-): number | null {
-  const seamIdx = items.findIndex(
-    (i) => i.kind === "seam" && i.key === `seam-${sliceId}`,
-  );
-  if (seamIdx >= 0) return seamIdx;
-  const idx = items.findIndex(
-    (i) =>
-      (i.kind === "history-turn" && i.sliceId === sliceId) ||
-      (i.kind === "resume-banner" && i.key === `resume-${sliceId}`),
-  );
-  return idx >= 0 ? idx : null;
-}
-
-/**
  * The live run as subtitle sources. The subtitle captions WHAT THE AGENT IS
  * DOING (the discrete activity blocks, `lib/chat/subtitle-line.ts`), so only
  * the LIVE turn's messages are sources — history turns (slice-restored,
@@ -380,13 +325,9 @@ function subtitleSourcesOf(items: readonly ChatStreamItem[]): SubtitleSource[] {
 
 function Inner({
   initialConfig,
-  suppressAtJump,
-  rung,
-  onRungChange,
   onTurnSettled,
   feed,
   publishing,
-  onRunningChange,
   insetTop,
   insetBottom,
   onComposerClearanceChange,
@@ -398,18 +339,12 @@ function Inner({
   arrival,
 }: {
   initialConfig?: UserConfig;
-  suppressAtJump?: boolean;
-  /** The zoom rung, and the way to ask for another — see ChatPageProps. */
-  rung: FieldRung;
-  onRungChange?: (rung: FieldRung) => void;
   /** A turn settled — see ChatPageProps. */
   onTurnSettled?: () => void;
   /** The shared band feed — see ChatPageProps. */
   feed?: FieldFeed;
-  /** True only while the conversation rung owns the band — see ChatPageProps. */
+  /** The feed's one-writer lease — see ChatPageProps. */
   publishing?: boolean;
-  /** Whether a turn is streaming — see ChatPageProps. */
-  onRunningChange?: (running: boolean) => void;
   /** The pane's two floating insets — see `ChatPageProps`. */
   insetTop?: number;
   insetBottom?: number;
@@ -478,9 +413,7 @@ function Inner({
   // The resume block: when the newest slice is still alive (and we're not
   // re-attaching to an in-flight run whose stash already carries those turns),
   // its turns re-enter the PANEL from the slice itself — the restored current
-  // conversation, in memory. The repository's paged history does NOT live
-  // here any more (2026-10-04): the R3F field loads it itself, active slice
-  // included, and the two surfaces never share an item list.
+  // conversation, in memory.
   const [resumeBlock] = useState<ResumeBlock | null>(() =>
     arrival.mode === "resume" && !shouldResume
       ? {
@@ -493,11 +426,9 @@ function Inner({
       : null,
   );
 
-  // The field owns the position, so the jump paths drive it directly rather
-  // than going through a list handle. The same ref also reaches the DOM
-  // list's handle when the panel is the mounted surface (the two handles are
-  // structurally identical; only the field's carries `seekKey`).
-  const fieldApiRef = useRef<ConversationFieldHandle | null>(null);
+  // The DOM list owns the position, so the jump paths drive it through this
+  // handle (filled by the list below — see `dom-chat-list.tsx`).
+  const streamApiRef = useRef<ChatStreamHandle | null>(null);
   // The time of the item currently at the top of the viewport (reported by the
   // mounted surface) — the travel clock rolls FROM where the viewer actually is.
   const topTimeRef = useRef<string | null>(null);
@@ -655,11 +586,10 @@ function Inner({
   /**
    * A turn just SETTLED — the stream is done and the slice is now persisted.
    *
-   * This is the moment the card field needs to know about: its rows come from
-   * the catalog, and the catalog is fetched once, so a slice written by the
-   * turn that just finished is invisible to the cards until something asks
-   * again. Nothing else in the app re-fetches it, which means a reader who
-   * finished a conversation at the `week` rung would not find it there.
+   * This is the moment the shell needs to know about: the catalog is fetched
+   * once, so a slice written by the turn that just finished is invisible to
+   * the band's range and the hotel's doors until something asks again.
+   * Nothing else in the app re-fetches it.
    *
    * Keyed on the falling edge only. `isLoading` is true for the whole stream,
    * so firing on the value would re-fetch on every token.
@@ -779,13 +709,14 @@ function Inner({
     }));
   }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice]);
 
-  // ── Arrival forms (v0.10 §1.2 Rev 2, re-split 2026-10-04): the PANEL is
-  // the in-memory current conversation — no repository history, no paging.
-  // Briefing mode's EmptyBriefing card seats ONLY in the R3F field's tail
-  // (happened time is the field's); resume mode restores the alive slice's
-  // turns under a banner HERE (the restored current conversation). The
-  // standalone full-screen briefing survives ONLY for an empty memory (not
-  // one slice), known once the episodic state settles.
+  // ── Arrival forms (v0.10 §1.2 Rev 2, re-seated with the two-rungs rewrite):
+  // the PANEL is the in-memory current conversation — plus, on a briefing
+  // arrival, the cold-open page of history with the EmptyBriefing card seated
+  // as a stream item between the two (the field that used to host the card
+  // retired with the rung ladder). Resume mode restores the alive slice's
+  // turns under a banner HERE. The standalone full-screen briefing survives
+  // ONLY for an empty memory (not one slice), known once the episodic state
+  // settles.
   const emptyMemory =
     arrival.mode === "briefing" &&
     episodicReady &&
@@ -815,14 +746,13 @@ function Inner({
   // item list was empty and the expanded tier rendered a blank body — the
   // dead surface the v0.25 product pass measured (chrome-only innerText,
   // zero message rows). The acceptance is that fullscreen renders history
-  // and the in-flight turn, so the panel composes the same cold-open page
-  // the field does (`useSliceStream`'s null cursor — the ten newest slices,
-  // the newest included). The gate's briefing contract stays untouched
-  // (no turns in the arrival payload; the paged stream is the surface that
-  // shows them), and the turns still render exactly once ON SCREEN: at the
-  // pill tier the panel body is folded to zero height, at fullscreen the
-  // field is unmounted. The list stays read-only — the panel pages nothing
-  // older; happened-time browsing remains the field's job.
+  // and the in-flight turn, so the panel composes the cold-open page itself
+  // (`getSlicePageWithContent`'s null cursor — the ten newest slices, the
+  // newest included). The gate's briefing contract stays untouched (no turns
+  // in the arrival payload; the paged stream is the surface that shows
+  // them). The list stays read-only — the panel pages nothing older;
+  // happened-time browsing deeper than the cold-open page belongs to the
+  // archive dispatch.
   const [briefingSlices, setBriefingSlices] = useState<SliceWithContent[] | null>(
     null,
   );
@@ -841,28 +771,36 @@ function Inner({
     };
   }, [arrival.mode, shouldResume, emptyMemory, persona]);
 
-  // THE PANEL'S ITEMS (2026-10-04, briefing history added 2026-10-06): the
-  // in-memory current conversation — the arrival-restored resume block plus
-  // the live `useChat` messages — and, on a briefing arrival, the newest
-  // page of repository history the field would otherwise render alone.
+  // THE PANEL'S ITEMS (2026-10-04; the briefing card re-seated HERE with the
+  // two-rungs rewrite — the field that hosted it is gone): the cold-open page
+  // of repository history on a briefing arrival, the briefing card as a
+  // stream item between history and the live edge, the arrival-restored
+  // resume block, and the live `useChat` messages.
+  const [briefingTimeIso] = useState(() => new Date().toISOString());
   const items = useMemo<ChatStreamItem[]>(() => {
-    return [...buildHistoryItems(briefingSlices ?? [], resumeBlock), ...liveItems];
-  }, [briefingSlices, resumeBlock, liveItems]);
-  // Refs for the async jump path (scrollToIndex after paging lands).
+    const card: ChatStreamItem[] = showBriefingCard
+      ? [{ kind: "briefing", key: "briefing", timeIso: briefingTimeIso }]
+      : [];
+    return [
+      ...buildHistoryItems(briefingSlices ?? [], resumeBlock),
+      ...card,
+      ...liveItems,
+    ];
+  }, [briefingSlices, resumeBlock, liveItems, showBriefingCard, briefingTimeIso]);
 
   /**
-   * Run `fn` against the field's handle as soon as it exists.
+   * Run `fn` against the list's handle as soon as it exists.
    *
-   * The field mounts BELOW this component and fills its handle from an effect,
+   * The list mounts BELOW this component and fills its handle from an effect,
    * so a jump that fires during the mount sequence — and `?at=` is consumed
    * exactly then — would find nothing. Retrying is bounded, so a genuinely
-   * absent field gives up rather than spinning. `scrollToKey` needs no retry
+   * absent list gives up rather than spinning. `scrollToKey` needs no retry
    * of its own: it remembers an unloaded target and lands when it arrives.
    */
-  const withField = useCallback(
-    (fn: (api: ConversationFieldHandle) => void, frames = 120) => {
+  const withStream = useCallback(
+    (fn: (api: ChatStreamHandle) => void, frames = 120) => {
       const attempt = (left: number) => {
-        const api = fieldApiRef.current;
+        const api = streamApiRef.current;
         if (api) {
           fn(api);
           return;
@@ -875,46 +813,9 @@ function Inner({
     [],
   );
 
-  /**
-   * The async form of `withField`: some handle calls RESOLVE — `seekKey`
-   * pages the field until its target slice is loaded — so the jump path
-   * needs the answer, not just the dispatch. Resolves `null` when no surface
-   * answered within the retry budget (an unmounted field is an honest
-   * silence, not a fake landing).
-   *
-   * `ready` refines "answered": the PANEL's list fills the same ref with a
-   * seekKey-less handle while the field is unmounted (fullscreen panel), so
-   * a non-null ref is not proof the FIELD is on the other end. The jump path
-   * waits for the handle that can actually page.
-   */
-  const withFieldAsync = useCallback(
-    <T,>(
-      fn: (api: ConversationFieldHandle) => Promise<T>,
-      frames = 120,
-      ready?: (api: ConversationFieldHandle) => boolean,
-    ): Promise<T | null> => {
-      return new Promise((resolve) => {
-        const attempt = (left: number) => {
-          const api = fieldApiRef.current;
-          if (api && (!ready || ready(api))) {
-            void fn(api).then(resolve);
-            return;
-          }
-          if (left <= 0) {
-            resolve(null);
-            return;
-          }
-          requestAnimationFrame(() => attempt(left - 1));
-        };
-        attempt(frames);
-      });
-    },
-    [],
-  );
-
   const scrollToBottom = useCallback(() => {
-    withField((api) => api.scrollToBottom());
-  }, [withField]);
+    withStream((api) => api.scrollToBottom());
+  }, [withStream]);
 
   const handleSubmit = async (message: string, images: File[]) => {
     // Sending snaps back to the present: the jump target is cleared and the
@@ -1004,33 +905,23 @@ function Inner({
   );
 
   // The panel's tier, hoisted above the jump path: a jump to a past slice
-  // folds the fullscreen panel back to the pill so the field it targets is
-  // visible. The fold is the panel's own pill fold (body folds to zero
-  // height), and the field is a sibling — neither unmounts.
+  // RISES the pill to fullscreen, because the target lives in this list and
+  // the reader should land looking at it. Rising is an /app-only move — the
+  // overlay-mount gate force-folds fullscreen on utility routes.
   const panelTier = usePanelTier();
+  const pathname = usePathname();
+  const onApp = pathname === "/app";
 
-  // The briefing card seats ONLY in the field's tail (§1.2 Rev 2), and the
-  // field has no seat while the panel is fullscreen (the shell's surface
-  // rule) — but fullscreen is the conversation rung's default tier. So a
-  // briefing arrival over a NON-empty memory folds the panel to the pill and
-  // lets the field (history + the tail card) be the arrival view. Fires ONCE
-  // per briefing, on the arrival settling: a reader who re-expands the panel
-  // afterwards is left alone. The episodicReady gate is what keeps the fold
-  // off the LOADING window — before the episodic state settles, `emptyMemory`
-  // is false and `showBriefingCard` reads true for an EMPTY memory too, and
-  // folding there strands the standalone full-screen briefing (the empty
-  // memory's arrival face, §1.2) behind the pill with no way back.
-  const briefingFoldedRef = useRef(false);
+  // An EMPTY memory's arrival face is the standalone full-screen briefing —
+  // the first-install ruling (首装仍落对话): the panel RISES once, on /app,
+  // when the verdict lands. Ref-guarded: a reader who folds it afterwards is
+  // left alone.
+  const emptyRisenRef = useRef(false);
   useEffect(() => {
-    if (!showBriefingCard || !episodicReady) {
-      briefingFoldedRef.current = false;
-      return;
-    }
-    if (!briefingFoldedRef.current && panelTier?.mode === "fullscreen") {
-      briefingFoldedRef.current = true;
-      panelTier.setMode("pill");
-    }
-  }, [showBriefingCard, episodicReady, panelTier]);
+    if (!emptyMemory || !onApp || emptyRisenRef.current) return;
+    emptyRisenRef.current = true;
+    panelTier?.setMode("fullscreen");
+  }, [emptyMemory, onApp, panelTier]);
 
   const handleSelectSlice = useCallback(
     async (sliceId: string, toTime?: string) => {
@@ -1051,38 +942,18 @@ function Inner({
       });
       setTransition({ from, to, sliceId });
 
-      // Every past slice lives in the FIELD now (the panel's list is the
-      // in-memory conversation only — it cannot page a slice in). So a jump
-      // folds the fullscreen panel to the pill to reveal the field, then the
-      // field itself pages until the target's seam is loaded and lands on it.
-      let found: boolean | null = true;
-      if (sliceId !== "now") {
-        if (panelTier?.mode === "fullscreen") panelTier.setMode("pill");
-        // Wait for the FIELD's handle specifically: the fold above re-mounts
-        // it, but the panel's list holds the shared ref until then (a
-        // seekKey-less handle), and dispatching to it is a silent no-landing.
-        // A generous budget — the field's first mount may compile chunks in
-        // dev. Budget exhausted = the field genuinely cannot host the jump
-        // (the game owns the viewport) — honest silence, not a fake landing.
-        found = await withFieldAsync(
-          (api) => api.seekKey!("seam-" + sliceId),
-          600,
-          (api) => typeof api.seekKey === "function",
-        );
+      // Every jump target lives in THIS list — the conversation is a floating
+      // capability, so a jump to a past slice RISES the panel to show it.
+      // The list pages nothing: a slice older than the cold-open page is an
+      // honest miss (happened-time browsing is the archive dispatch's job).
+      if (sliceId !== "now" && onApp && panelTier?.mode === "pill") {
+        panelTier.setMode("fullscreen");
       }
 
       await clockLanded;
       setTransition(null);
-
-      if (found === false) {
-        // The catalog exhausted before the target — an honest miss, not a
-        // fake landing. `null` (no surface answered in the retry budget) is
-        // honest silence: the clock closed, nothing to report.
-        toast.error(tHist("notFound"));
-        return;
-      }
-
       setSelectedSliceId(sliceId);
+
       // Scroll once the stream is visible again (the exit fade is 0.3s, but
       // the list beneath is live the whole time — one frame is enough).
       requestAnimationFrame(() => {
@@ -1090,30 +961,37 @@ function Inner({
           scrollToBottom();
           return;
         }
-        // `seekKey` already paged and landed (or left the key pending to be
-        // honoured when the block commits); this re-affirms the target for
-        // the surfaces whose scrollToKey is the only landing path.
-        withField((api) => api.scrollToKey("seam-" + sliceId));
+        withStream((api) => {
+          const found = api.scrollToKey("seam-" + sliceId);
+          if (found) return;
+          // Not loaded. While a briefing arrival's history page is still on
+          // the wire the handle REMEMBERS the key and lands when the items
+          // commit; once the page has settled, a miss is honest — report it.
+          const pagePending =
+            arrival.mode === "briefing" && briefingSlices === null;
+          if (!pagePending) toast.error(tHist("notFound"));
+        });
       });
     },
     [
       selectedSliceId,
       transition,
+      onApp,
       panelTier,
       scrollToBottom,
-      withField,
-      withFieldAsync,
+      withStream,
       resolveSliceStart,
+      arrival.mode,
+      briefingSlices,
       tHist,
     ],
   );
 
-  // M2 jump bus: the search palette, the recall references bar and the
-  // timeline view request a stream jump through the module-level slice-jump
-  // bus (or via `?at=`, below) — the handler is the same select path
-  // (page-until-loaded + scroll-to-seam + the travel clock as the loading
-  // state). A jump stashed while the chat page wasn't mounted replays once,
-  // on registration.
+  // M2 jump bus: the search palette and the recall references bar request a
+  // stream jump through the module-level slice-jump bus (or via `?at=`,
+  // below) — the handler is the same select path (rise the panel + the
+  // travel clock as the loading state + scroll-to-seam). A jump stashed
+  // while the chat page wasn't mounted replays once, on registration.
   useEffect(() => {
     const unregister = registerSliceJumpHandler((sliceId, start) => {
       void handleSelectSlice(sliceId, start);
@@ -1123,20 +1001,16 @@ function Inner({
     return unregister;
   }, [handleSelectSlice]);
 
-  // `?at=<sliceId>&atStart=<iso>` — the timeline → chat half of the context
-  // carry (the wheel fallback's pick, the L3 traverse, a shared link). The
-  // chat page stays MOUNTED at the layout (v0.13 §3.1: the overlay survives
-  // navigation and rung switches), so this must react to searchParam
-  // changes, not just the initial mount. Consumed once: the
+  // `?at=<sliceId>&atStart=<iso>` — a shared link's conversation deep link.
+  // The chat page stays MOUNTED at the layout (v0.13 §3.1: the overlay
+  // survives navigation and world switches), so this must react to
+  // searchParam changes, not just the initial mount. Consumed once: the
   // params are stripped (replaceState, no navigation) so a refresh or a
   // re-render never re-fires the jump. `atStart` is the target slice's ISO
-  // start from the timeline card — passing it as the clock's `to` skips the
-  // catalog fetch resolveSliceStart would otherwise need. When the shell
-  // has the timeline view active it suppresses this so the timeline handles
-  // the anchor.
+  // start — passing it as the clock's `to` skips the catalog fetch
+  // resolveSliceStart would otherwise need.
   const searchParams = useSearchParams();
   useEffect(() => {
-    if (suppressAtJump) return;
     const at = parseAtParam(searchParams.toString());
     if (!at) return;
     const atStart = parseAtStartParam(searchParams.toString());
@@ -1146,14 +1020,11 @@ function Inner({
       window.location.pathname + stripAtParam(searchParams.toString()) + window.location.hash,
     );
     void handleSelectSlice(at, atStart ?? undefined);
-  }, [searchParams, handleSelectSlice, suppressAtJump]);
+  }, [searchParams, handleSelectSlice]);
 
-  // The slice at the top of the viewport. It used to be PUBLISHED here, into a
-  // module global the header's mode switcher read to build
-  // `/?view=timeline&at=…` — carrying the reading position across the view
-  // switch. That switch is gone (the rung replaced it, and the lens does not
-  // carry a position), so the publication went with it. The TIME half stays:
-  // the travel clock reads `topTimeRef` for the "from" end of its interval.
+  // The slice at the top of the viewport. The TIME half is all that is left
+  // of it: the travel clock reads `topTimeRef` for the "from" end of its
+  // interval.
   const handleTopItemChange = useCallback((iso: string, _sliceId: string | null) => {
     topTimeRef.current = iso;
   }, []);
@@ -1161,17 +1032,6 @@ function Inner({
   // The "PREVIOUSLY ON" eyebrow over the travel readout — same brand mark as
   // the empty briefing's title card.
   const tBrief = useTranslations("emptyBriefing");
-
-  const onConversationRung = rung === "conversation";
-
-  // Tell the shell whether a reply is in flight, so a card rung can draw the
-  // running-slice placeholder. This is the ONLY piece of turn state the shell
-  // needs, which is why it is a one-boolean callback rather than a store: the
-  // card field cannot render a live turn (its rows come from the closed-slice
-  // catalog), so all it can honestly say is "one is happening".
-  useEffect(() => {
-    onRunningChange?.(isLoading);
-  }, [isLoading, onRunningChange]);
 
   // ── The pill's subtitle line (v0.13 §4, re-contracted 2026-10-04) ───────
   // The subtitle captions WHAT THE AGENT IS DOING — discrete activity blocks
@@ -1194,19 +1054,18 @@ function Inner({
   const panelPill = panelTier?.mode === "pill";
 
   /**
-   * Sending comes HOME first. At a card rung the composer is collapsed, and a
-   * reader who sends from there is answered at the conversation rung — so the
-   * submit switches rung and then runs the normal path. Doing it in that order
-   * means the field is already mounted and following the live edge when the
-   * first token arrives, instead of the reply streaming into a pane nobody is
-   * looking at.
+   * Sending RISES the panel first. The reply is written into the
+   * conversation's list, and watching it arrive is the point of sending — so
+   * a send from the pill rises to fullscreen and then runs the normal path.
+   * /app only: utility routes force-fold the fullscreen tier
+   * (conversation-overlay-mount.tsx), so rising there would fold right back.
    */
   // Not memoized, deliberately: `handleSubmit` is not either (it closes over
   // the whole turn state), so a `useCallback` here would either recreate on
   // every render anyway or need a ref to hide that — machinery for a prop that
   // is not memoized on the other end either.
-  const submitFromAnyRung = (...args: Parameters<typeof handleSubmit>) => {
-    if (!onConversationRung) onRungChange?.("conversation");
+  const submitAndRise = (...args: Parameters<typeof handleSubmit>) => {
+    if (onApp && panelTier?.mode === "pill") panelTier.setMode("fullscreen");
     return handleSubmit(...args);
   };
 
@@ -1214,10 +1073,10 @@ function Inner({
     <>
       {/* ── Content — the conversation's own column, inside the panel body
            (the panel itself hangs at the layout — v0.13 §3.1; the app shell
-           owns the world canvas and the left time axis, this component owns
-           only the conversation). The stream is always
-           mounted (§1.2 Rev 2) — briefing mode rides its tail as a card; only
-           an EMPTY memory falls back to the full-screen empty briefing.
+           owns the world canvas, this component owns only the conversation).
+           The stream is always mounted (§1.2 Rev 2) — briefing mode rides it
+           as a card item; only an EMPTY memory falls back to the full-screen
+           empty briefing.
 
            THE COLUMN RESERVES NOTHING, and that is the point. It used to carry
            `pt-24 pb-36` as the chrome's and the composer's keep-out, which read
@@ -1225,21 +1084,15 @@ function Inner({
            a padding here shrinks the viewport and cuts the content off at that
            edge — pixels the reader can never scroll to, because they are
            outside the field rather than merely behind a control. The room now
-           comes off the CONTENT's own extent instead (the field's range, the
-           scroller's padding below), so the field fills the pane and content
-           passes under the floating chrome on its way past it. ── */}
+           comes off the CONTENT's own extent instead (the scroller's padding
+           below), so the list fills the pane and content passes under the
+           floating chrome on its way past it. ── */}
       <div
-        className={`relative flex-1 overflow-hidden transition-opacity duration-300 ${
-          onConversationRung ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
-        // Dimmed-and-mounted, not unmounted: this subtree holds the field's
-        // camera position and the live stream, and a rung change must not
-        // rebuild either. `inert` is what makes "hidden" mean hidden — the
-        // content is off the focus order and out of the accessibility tree,
-        // which `opacity-0` alone does not do. The same applies at the
-        // panel's pill tier, where the body folds to zero height and the
-        // pill is the only interactive surface.
-        inert={!onConversationRung || panelPill || undefined}
+        className="relative flex-1 overflow-hidden"
+        // `inert` at the pill tier: the body folds to zero height there and
+        // the pill is the only interactive surface — `inert` keeps the folded
+        // content off the focus order and out of the accessibility tree.
+        inert={panelPill || undefined}
       >
         {emptyMemory ? (
           // THIS ONE IS A REAL SCROLLER, and there the padding IS the content
@@ -1264,20 +1117,16 @@ function Inner({
             />
           </div>
         ) : (
-          <UnifiedChatStream
+          <DomChatList
             items={items}
-            persona={persona}
             onTopItemChange={handleTopItemChange}
             error={error}
-            // Same rule as the anchors: only the FOREGROUND view publishes, so
-            // the band's dot follows whichever field the reader is actually
-            // looking at rather than being fought over by both. The FOLDED
-            // tier is not a surface — a zero-height box publishing progress
-            // and anchors for a conversation nobody can see fights the field
-            // (the pane's visible writer) over the same feed.
+            // The FOLDED tier is not a surface: a zero-height body publishing
+            // progress and anchors for a conversation nobody can see is a lie
+            // the band cannot tell from a still one.
             feed={feed}
             publishing={publishing && !panelPill}
-            fieldApiRef={fieldApiRef}
+            apiRef={streamApiRef}
             insetTop={insetTop}
             insetBottom={insetBottom}
             briefing={
@@ -1364,25 +1213,22 @@ function Inner({
       {/* ── The composer. A FLOATING overlay, not a footer: it used to be a
            `shrink-0` child that took its height out of the column, which made
            it page furniture in an app that has none. `ComposerHost` positions
-           it and reports how much room it needs, and that number travels up to
-           the layout-level provider — the card field floats over the same
-           foot, so the owner of the number has to be above both fields. See
+           it and reports how much room it needs, and that number travels up
+           to the layout-level provider, the one place above both the measurer
+           and the stream that clears it. See
            `ChatPageProps.onComposerClearanceChange`. ── */}
       <ComposerHost
-        rung={rung}
         onClearanceChange={onComposerClearanceChange}
-        composer={({ collapsed, expand }) => (
+        composer={
           <ChatInput
-            collapsed={collapsed}
-            onExpand={expand}
-            onSubmit={submitFromAnyRung}
+            onSubmit={submitAndRise}
             isLoading={isLoading}
             onStop={handleStop}
             persona={persona}
             currentModelId={selectedModel}
             onModelChange={handleModelChange}
           />
-        )}
+        }
       />
     </>
   );

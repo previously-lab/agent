@@ -1,4 +1,4 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import {
   clearEpisodic,
   makeSlice,
@@ -7,25 +7,20 @@ import {
 } from "./memory-fixture";
 
 /**
- * v0.10 memory-viz e2e: the unified message stream (paging the older page in at
- * the window's head, and the seams that page is crossed at), the arrival
- * resume/briefing gate (Rev 2 + the surface split: the briefing seats ONLY as
- * the R3F field's tail card, and a briefing arrival folds the fullscreen panel
- * to the pill so the field is the arrival view — while the EXPANDED tier must
- * still render the briefing history, the P0 blank-fullscreen regression), the
- * search palette's
- * jump-to-slice, and the timeline view selected by ?view=timeline (direct URL,
- * the mode switcher, the Ctrl+. toggle).
+ * Memory-viz e2e, two-rungs rewrite (v0.26): the conversation is a FLOATING
+ * layer — the pill by default, risen to fullscreen by the expand verb, by a
+ * send, or by a slice jump — and the world has exactly two rungs: 原稿 /
+ * Manuscript (the document reader) and 现场 / Scene (the hotel), switched by
+ * the board bar through the shell's transition machine. The four-rung ladder
+ * and its R3F conversation field are retired: `dom-chat-list.tsx` is the only
+ * conversation surface, so these specs read a plain DOM scroller.
  *
- * THE CONVERSATION IS THE R3F FIELD AGAIN (the 2026-09 restore): the
- * camera-navigated billboard field deleted by `419ad3d` is restored, and the
- * conversation rung renders it IN THE PANE — the wheel drives its camera, the
- * position is the field's own offset, and the specs read the DOM contract
- * back (`data-armed` on the window's armed head, seam text in the viewport).
- * The ONE difference from the old field: the turn IN FLIGHT never enters it —
- * the ongoing turn renders as plain DOM in the conversation panel (§14.1), so
- * these no-chat-turn specs see history only. Read
- * `conversation-field.tsx`'s header before changing how any of this moves.
+ * What is covered: the arrival resume/briefing gate (the briefing card is a
+ * stream item in the panel's list, between the cold-open history page and the
+ * live edge; an EMPTY memory auto-rises the panel once), the cold-open page's
+ * honest boundary (the panel pages NOTHING older — happened-time browsing
+ * belongs to the archive dispatch), the search palette's jump-to-slice (which
+ * RISES the panel), and the two-rung board bar + the Ctrl+. world toggle.
  *
  * All specs seed slice files + the timeline catalog straight into the
  * isolated MEMORY_ROOT (see memory-fixture.ts) — no chat turn ever runs, so
@@ -45,66 +40,28 @@ function sentinel(slice: FixtureSlice, role: "user" | "agent"): string {
 }
 
 /**
- * Move the conversation field's camera up by one wheel notch.
+ * The conversation list's ROOT — the DOM scroller that owns the position.
  *
- * The pointer only has to be over the field for the wheel to reach it — the
- * field owns its own input handling. It renders in the PANE at the
- * conversation rung (the restored surface, left of the docked conversation
- * panel), so the pointer is parked on the field's own root — what a reader
- * does before scrolling — rather than at a viewport-relative point that
- * could land on the panel overlay or the world canvas.
- */
-async function wheelUp(page: Page, px: number): Promise<void> {
-  await conversationField(page).hover();
-  await page.mouse.wheel(0, -px);
-}
-
-/**
- * The head of the loaded window, ARMED — the only state in which it offers the
- * older page. Paging is ASKED FOR in this field, never inferred from a camera
- * position, and this is where the reader asks. The field arms the head's
- * signal from the camera offset; the solo face is what tells the window's head
- * apart from a slice gate in the timeline (see `field-origin.tsx`).
- */
-function armedOrigin(page: Page) {
-  return page.locator('[data-armed="true"]:has(.gate-face-solo)');
-}
-
-/**
- * The conversation field's ROOT — the element that owns the camera and the
- * wheel. It is what "the conversation stayed mounted" is true of.
- *
- * `data-conversation-field` is the field's own stable hook: e2e specs and
- * probes have always addressed the conversation through it, and a selector
- * is stabler than a class list.
+ * `data-conversation-field` is the conversation's stable hook: e2e specs and
+ * probes have always addressed the conversation through it (it named the
+ * retired R3F field's root before; it now names the DOM list's scroller),
+ * and a selector is stabler than a class list.
  */
 function conversationField(page: Page) {
   return page.locator("[data-conversation-field]");
 }
 
 /**
- * The element's screen y once the camera has STOPPED moving.
- *
- * The head arms itself the moment the camera enters the head region, which
- * can be one wheel event before the blocks above have finished settling — so
- * an arming assertion is not a settled one, and a position sampled there is a
- * position in transit. Two consecutive samples that agree are the field at
- * rest.
+ * Rise the floating panel to fullscreen — the pill's expand verb, then the
+ * fullscreen tier's own control proves the rise landed. (`Exit full screen`
+ * has TWO visible seats at the fullscreen tier — the panel's slim bar and the
+ * composer toolbar's collapse — hence `.first()`.)
  */
-async function settledY(locator: Locator): Promise<number> {
-  let last = Number.NaN;
-  await expect
-    .poll(
-      async () => {
-        const y = (await locator.boundingBox())?.y ?? Number.NaN;
-        const stable = Number.isFinite(y) && Math.abs(y - last) <= 0.5;
-        last = y;
-        return stable;
-      },
-      { timeout: 15_000 },
-    )
-    .toBe(true);
-  return last;
+async function risePanel(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Expand to full screen" }).click();
+  await expect(
+    page.getByRole("button", { name: "Exit full screen" }).first(),
+  ).toBeVisible();
 }
 
 /**
@@ -142,101 +99,16 @@ function freshSlice(): FixtureSlice {
   return slice;
 }
 
-test.describe("Memory viz (v0.10)", () => {
+test.describe("Memory viz (two rungs)", () => {
   // NOT serial. Every test here seeds its OWN slices and `afterEach` clears
   // them, so the tests are already independent — and the config's one worker
   // is what stops them racing the shared dev server. Serial mode bought
   // nothing and cost a lot: one failure SKIPPED every test after it, so a
-  // single known-broken case (see the briefing test below) hid five working
-  // ones. A failure should now be exactly as loud as it is.
-
+  // single known-broken case hid five working ones. A failure should now be
+  // exactly as loud as it is.
 
   test.afterEach(async () => {
     await clearEpisodic();
-  });
-
-  test.describe("unified message stream", () => {
-    test("scroll-up pages older slices in across seams without losing the position", async ({
-      page,
-    }) => {
-      const slices = datasetA();
-      await seedSlices(slices);
-
-      // Engage the stream by jumping to S09 (deep inside the initial 10-slice
-      // page) — the time-travel clock plays, then the stream lands on S09's
-      // seam. The landing is deliberately far from the window's head, so the
-      // paging below is caused by the reader's own scroll, not by arriving.
-      await page.goto(`/en?at=${slices[9].id}`);
-      await expect(
-        page.getByText(sentinel(slices[9], "user")),
-      ).toBeVisible();
-      // The initial page is the newest 10 slices: S00/S01 are NOT loaded yet.
-      await expect(page.getByText(sentinel(slices[0], "user"))).toHaveCount(0);
-      // ...and the head of that window is far above, so it is DORMANT: it
-      // offers no older page until the reader actually stands in it.
-      await expect(armedOrigin(page)).toHaveCount(0);
-
-      // Scroll up to the head. The head arms itself there and offers the older
-      // page — the one place where "show me earlier" is a coherent thing to
-      // ask, because it is where the reader has arrived.
-      await expect(async () => {
-        await wheelUp(page, 2000);
-        await expect(armedOrigin(page)).toHaveCount(1, { timeout: 2_000 });
-      }).toPass({ timeout: 30_000 });
-
-      // The reader's place, taken once the scroll has come to rest in the head:
-      // the oldest slice in the loaded window, at the top of the viewport.
-      const anchor = page.getByText(sentinel(slices[2], "user"));
-      await expect(anchor).toBeVisible();
-      const beforeY = await settledY(anchor);
-
-      await armedOrigin(page)
-        .getByRole("button", { name: "Load earlier" })
-        .click();
-
-      // The page lands: S00/S01 are in the window and the catalog is exhausted,
-      // so the head stops offering an older page and reads as the beginning of
-      // the memory instead.
-      const head = page.getByText("The beginning of this memory");
-      await expect(head).toHaveCount(1, { timeout: 20_000 });
-      // The page arrived ABOVE the reader and pushed the head off-screen —
-      // without that, the position assertion below would hold vacuously.
-      await expect(head).not.toBeInViewport();
-
-      // THE READER'S PLACE DID NOT MOVE. A page arriving ABOVE the reader is
-      // the one direction "a billboard grows downward, moves nothing above"
-      // cannot cover — so the field compensates: `relayout` moves the camera
-      // by exactly the height the prepended blocks add (re-measuring as they
-      // settle), and the turn the reader was at the top of the viewport on is
-      // still at the same screen y, with the new conversations off-screen
-      // above them to be scrolled into. A failure here is the view jumping by
-      // a page's height.
-      await expect
-        .poll(async () => {
-          const box = await anchor.boundingBox();
-          return box === null ? null : Math.abs(box.y - beforeY);
-        })
-        .toBeLessThanOrEqual(2);
-
-      // Now walk up into the page that arrived: the oldest slice's turns
-      // render, and the boundary between the two slices that arrived is a real
-      // GATE the reader passes through — the field's `SliceGate` intertitle
-      // (fixed height; arming changes what it paints, never its box), not a
-      // hairline that got lost with the page. (The gate is addressed by the
-      // conversations it stands between: its armed face names the older
-      // slice's focus on the back face.)
-      const seamGate = page
-        .getByRole("separator", { name: "Between conversations" })
-        .filter({ hasText: slices[0].focus! });
-      await expect(async () => {
-        await wheelUp(page, 1200);
-        await expect(
-          page.getByText(sentinel(slices[0], "user")),
-        ).toBeVisible({ timeout: 2_000 });
-        await expect(seamGate).toBeInViewport({ timeout: 2_000 });
-      }).toPass({ timeout: 30_000 });
-      await expect(page.getByText(sentinel(slices[0], "agent"))).toBeVisible();
-    });
   });
 
   test.describe("arrival gate", () => {
@@ -250,18 +122,19 @@ test.describe("Memory viz (v0.10)", () => {
       await seedSlices([old, fresh]);
 
       await page.goto("/en/app");
+      // The panel opens on the PILL everywhere — the restored turns are in
+      // its folded body, so the rise comes first.
+      await risePanel(page);
       // chat.resume.banner — the restored turns sit directly under it.
+      const panel = page.locator("#conversation-panel");
       await expect(
-        page.getByText(/Continuing the conversation from/),
-      ).toBeVisible();
-      // Scoped to the FIELD: the pill's subtitle now renders the newest line
-      // too, so an unscoped text match is ambiguous (Playwright strict mode)
-      // — the conversation's own copy is the one inside the field.
-      await expect(
-        conversationField(page).getByText(sentinel(fresh, "user")),
+        panel.getByText(/Continuing the conversation from/),
       ).toBeVisible();
       await expect(
-        conversationField(page).getByText(sentinel(fresh, "agent")),
+        panel.getByText(sentinel(fresh, "user")),
+      ).toBeVisible();
+      await expect(
+        panel.getByText(sentinel(fresh, "agent")),
       ).toBeVisible();
       // The empty briefing is the OTHER branch — it must not render here.
       await expect(
@@ -269,7 +142,7 @@ test.describe("Memory viz (v0.10)", () => {
       ).toHaveCount(0);
     });
 
-    test("seats the briefing as the field's tail card with history above (Rev 2)", async ({
+    test("seats the briefing card in the stream with history above (Rev 2)", async ({
       page,
     }) => {
       const slices = [
@@ -283,39 +156,28 @@ test.describe("Memory viz (v0.10)", () => {
       await seedSlices(slices);
 
       await page.goto("/en/app");
-      // §1.2 Rev 2 + the surface split: the card's ONLY seat is the R3F
-      // field's tail — the panel never receives a briefing item. The panel
-      // opens fullscreen on the conversation rung, which would leave the
-      // field (and the card) without a seat, so a briefing arrival folds the
-      // panel to the pill: the field IS the arrival view. Its eyebrow is
-      // `emptyBriefing.eyebrow`, rendered verbatim — scoped to the field.
-      const cardEyebrow = conversationField(page).getByText("PREVIOUSLY ON", {
-        exact: true,
-      });
-      await expect(cardEyebrow).toBeVisible();
-      // The composer is the PILL's single-line input here — a briefing arrival
-      // folds the panel to the pill tier (the card's only seat is the field's
-      // tail), so the fullscreen form's textarea is not what is on screen.
+      // A briefing arrival over a NON-empty memory leaves the panel at the
+      // pill — the world is the opening surface and the card waits inside
+      // the risen panel. The pill's single-line input is what is on screen.
       await expect(
         page.getByRole("textbox", { name: "Send a message..." }),
       ).toBeVisible();
+      await risePanel(page);
+      // The card is a stream item now (`emptyBriefing.eyebrow`, rendered
+      // verbatim) — scoped to the panel's list.
+      const panel = page.locator("#conversation-panel");
+      const cardEyebrow = panel.getByText("PREVIOUSLY ON", { exact: true });
+      await expect(cardEyebrow).toBeVisible();
       await expect(
         page.getByText(/Continuing the conversation from/),
       ).toHaveCount(0);
 
-      // "History above" is literal: the card is the field stream's TAIL, so
-      // it renders below the historical turns in the same field — not above
-      // them and not on a view of its own. (The seeded window fits the
-      // viewport whole, so the two are on screen together rather than one
-      // scroll apart; the scrolling half of that walk is covered by the
-      // paging spec above.)
-      const oldestTurn = conversationField(page).getByText(
-        sentinel(slices[0], "user"),
-      );
+      // "History above" is literal: the card seats BETWEEN the cold-open
+      // history page and the live edge, so it renders below the historical
+      // turns in the same list — not above them and not on a view of its own.
+      const oldestTurn = panel.getByText(sentinel(slices[0], "user"));
       await expect(oldestTurn).toBeVisible();
-      await expect(
-        conversationField(page).getByText(sentinel(slices[0], "agent")),
-      ).toBeVisible();
+      await expect(panel.getByText(sentinel(slices[0], "agent"))).toBeVisible();
       const cardBox = await cardEyebrow.boundingBox();
       const turnBox = await oldestTurn.boundingBox();
       expect(cardBox).not.toBeNull();
@@ -323,24 +185,38 @@ test.describe("Memory viz (v0.10)", () => {
       expect(cardBox!.y).toBeGreaterThan(turnBox!.y);
     });
 
-    test("the expanded tier renders the briefing history the split left blank (P0)", async ({
+    test("an empty memory rises the panel to the full briefing on its own", async ({
+      page,
+    }) => {
+      await seedSlices([]);
+
+      await page.goto("/en/app");
+      // 首装仍落对话: with NOTHING in memory the arrival face is the
+      // standalone full-screen briefing, so the panel rises itself (once) —
+      // no expand click. The fullscreen tier's own control is the proof.
+      await expect(
+        page.getByRole("button", { name: "Exit full screen" }).first(),
+      ).toBeVisible({ timeout: 15_000 });
+      await expect(
+        page.getByText("PREVIOUSLY ON", { exact: true }),
+      ).toBeVisible();
+    });
+
+    test("the fullscreen tier renders the cold-open page and pages nothing older (P0)", async ({
       page,
     }) => {
       const slices = datasetA();
       await seedSlices(slices);
 
       await page.goto("/en/app");
-      // The briefing folds the panel to the pill (the suite above covers why)
-      // — the expand verb is the reader's way back to the fullscreen tier,
-      // and that tier must not be the blank surface the v0.25 pass measured
-      // (1440×0, chrome-only innerText).
-      await page
-        .getByRole("button", { name: "Expand to full screen" })
-        .click();
+      // The panel opens on the pill — the expand verb is the reader's way to
+      // the fullscreen tier, and that tier must not be the blank surface the
+      // v0.25 pass measured (1440×0, chrome-only innerText).
+      await risePanel(page);
 
       // The fullscreen body's DOM list carries the cold-open page's turns —
-      // the same ten-slice window the field renders in the pane (S02..S11;
-      // S00/S01 are outside the first page and never load here).
+      // the ten-slice window (S02..S11; S00/S01 are outside the page and
+      // never load here).
       const panel = page.locator("#conversation-panel");
       const newest = slices[slices.length - 1];
       await expect(panel.getByText(sentinel(newest, "user"))).toBeVisible();
@@ -358,8 +234,8 @@ test.describe("Memory viz (v0.10)", () => {
 
       // The window's head is reachable: scrolling to the top mounts the
       // oldest slice of the loaded page, and the slices outside it stay
-      // unloaded (the panel pages nothing older — happened-time browsing is
-      // the field's job).
+      // unloaded — the panel pages NOTHING older; happened-time browsing
+      // deeper than the cold-open page belongs to the archive dispatch.
       await scroller.evaluate((el) => {
         (el as HTMLElement).scrollTop = 0;
       });
@@ -370,7 +246,7 @@ test.describe("Memory viz (v0.10)", () => {
 
 
   test.describe("search palette", () => {
-    test("Cmd/Ctrl+K searches the catalog and jumps to the slice in the stream", async ({
+    test("Cmd/Ctrl+K searches the catalog and rises the panel to the slice", async ({
       page,
     }) => {
       const slices = datasetA();
@@ -395,195 +271,118 @@ test.describe("Memory viz (v0.10)", () => {
       await expect(hit).toBeVisible();
       await hit.click();
 
-      // The palette closes and the stream jump lands on S07 (already inside
-      // the initial page, so the travel clock is the only wait).
+      // The palette closes and the jump RISES the panel (the target lives in
+      // the list, and the reader should land looking at it), plays the travel
+      // clock, and lands on S07 (already inside the cold-open page, so the
+      // clock is the only wait).
       await expect(page.locator("[cmdk-input]")).toHaveCount(0);
-      // Scoped to the FIELD for the same reason as the arrival-gate test: the
-      // pill's subtitle renders the newest line too, so an unscoped match is
-      // ambiguous.
       await expect(
-        conversationField(page).getByText(sentinel(slices[7], "user")),
+        page.getByRole("button", { name: "Exit full screen" }).first(),
+      ).toBeVisible();
+      const panel = page.locator("#conversation-panel");
+      await expect(
+        panel.getByText(sentinel(slices[7], "user")),
       ).toBeVisible();
       await expect(
-        conversationField(page).getByText(sentinel(slices[7], "agent")),
+        panel.getByText(sentinel(slices[7], "agent")),
       ).toBeVisible();
     });
   });
 
-  // The app is ONE LADDER at four zooms — conversation → slice → day → week —
-  // and the floating lens is the only control that moves along it. The rung
-  // is the shell's IN-MEMORY state: the URL carries no navigation (deep-link
-  // explains what little query contract remains), so these tests drive the
-  // lens and assert on the lens's own pressed state. SINCE v0.23 THE LADDER
-  // IS VESTIGIAL: every card rung renders the same document reader (the
-  // library column and the paper), so these specs assert the reader's chrome,
-  // not different content per rung.
-  test.describe("the rung ladder", () => {
-    /** The floating zoom lens. Its segments are named by rung. */
-    const lens = (page: Page) => page.getByRole("group", { name: "Lens" });
-    const lensButton = (page: Page, rung: string) =>
-      lens(page).getByRole("button", { name: rung });
+  // The world has TWO rungs — 原稿 / Manuscript (the reader) and 现场 /
+  // Scene (the hotel) — and the board bar is the control that moves between
+  // them. The rung is the shell's IN-MEMORY state: the URL carries no
+  // navigation (deep-link explains what little query contract remains), so
+  // these tests drive the bar and assert on its own pressed state. The
+  // conversation is not a rung — it floats above either world as the pill.
+  test.describe("the two rungs", () => {
+    /** The board bar's rung group and one tag in it. */
+    const rungs = (page: Page) => page.getByRole("group", { name: "Worlds" });
+    const rungButton = (page: Page, name: string) =>
+      rungs(page).getByRole("button", { name });
 
-    // The first card-rung hit compiles the three.js chunk in dev — allow
-    // triple the default timeout.
-    // The rung is IN-MEMORY state now (the shell owns it; the URL carries
-    // no navigation) — "the rung it names" is what the lens selects.
-    test("the lens renders the rung it selects", async ({ page }) => {
-      test.slow();
-      await seedSlices(datasetA());
-
-      await page.goto("/en/app");
-      await lensButton(page, "Slice").click();
-      await expect(lensButton(page, "Slice")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
-
-      // EVERY CARD RUNG IS THE DOCUMENT READER NOW (v0.23): the library is
-      // the floating toggle's panel (v0.24 — the column retired), and with
-      // the seeded dataset holding no documents the paper's seat reads as
-      // the quiet empty hint.
-      await expect(page.locator("[data-library-toggle]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await page.locator("[data-library-toggle]").click();
-      await expect(page.locator("[data-library-panel]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(
-        page.getByText(/Open the library and pick a case or a piece/),
-      ).toBeVisible();
-      // The 「NOW · 现在」 caption that used to be asserted here is DELETED —
-      // a label with no action sitting in the bottom centre, exactly where the
-      // compact composer puts a button, so readers clicked it expecting the
-      // button. It also said something the field already says: the bottom of
-      // the list is now, and the core line's blue spine marks the present on
-      // the rail. What replaces it as the "this rung is fully assembled"
-      // assertion is the BOARD BAR: the zoom control and the strand selector,
-      // which must exist at every rung because the lens is the only way back
-      // to the conversation.
-      await expect(page.locator("[data-board-bar]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(page.locator("canvas").first()).toBeVisible({
-        timeout: 30_000,
-      });
-    });
-
-    test("the lens swaps the pane between the conversation and the reader over the live conversation", async ({
+    // The first hotel mount compiles the three.js chunk in dev — allow
+    // triple the default timeout anywhere the game world mounts.
+    test("the app opens on 原稿 and the board bar moves to 现场 and back", async ({
       page,
     }) => {
       test.slow();
       await seedSlices(datasetA());
 
-      // `/` opens on the conversation — the finest rung — which is where the
-      // app has always opened.
       await page.goto("/en/app");
-      await expect(lensButton(page, "Conversation")).toHaveAttribute(
+      // The opening rung is the reader: the Manuscript tag is pressed, the
+      // library control is up, and the conversation floats as the pill.
+      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
         "aria-pressed",
         "true",
       );
+      await expect(page.locator("[data-library-toggle]")).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(
+        page.getByRole("button", { name: "Expand to full screen" }),
+      ).toBeVisible();
+
+      // To the hotel: the move is a transition, and once it settles the
+      // game's own Exit is on screen and the board bar is gone — the hotel
+      // keeps its viewport clear of product chrome.
+      await rungButton(page, "Scene").click();
+      await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(rungs(page)).toHaveCount(0, { timeout: 30_000 });
+
+      // Back to the reader through the game's own exit.
+      await page.getByRole("button", { name: "Exit" }).click();
+      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
+        "aria-pressed",
+        "true",
+        { timeout: 30_000 },
+      );
+    });
+
+    test("the draft survives a round trip through the hotel", async ({
+      page,
+    }) => {
+      test.slow();
+      await seedSlices(datasetA());
+
+      await page.goto("/en/app");
       // Hydration gate before clicking (the onClick attaches on mount) — the
       // client badge only renders after its mount-time fetch resolved.
       await expect(
         page.getByRole("button", { name: "Local", exact: true }),
       ).toBeVisible();
 
-      // Capture the conversation stream's root so we can prove it survives.
-      const stream = conversationField(page);
-      const streamHandle = await stream.elementHandle();
-      expect(streamHandle).toBeTruthy();
-
-      // The panel opens on the PILL here, not fullscreen: datasetA is all
-      // historical, so arrival is the briefing — and the briefing card's only
-      // seat is the field's tail, so the arrival folds the panel to reveal
-      // the field. (The fullscreen exit control is exercised by the
-      // resume-mode suite, where the panel does open expanded.)
-      await expect(
-        page.getByRole("button", { name: "Expand to full screen" }),
-      ).toBeVisible();
-
-      await lensButton(page, "Slice").click();
-      await expect(lensButton(page, "Slice")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
-      // The conversation layer COLLAPSES TO ITS PILL here (v0.13 §4): at a
-      // card rung the reader came to read the documents, so the pill is the
-      // only interactive surface — one row with attach / input / send-stop /
-      // expand. What must not happen is the conversation being UNMOUNTED;
-      // the node-identity check below carries that invariant, and the pill's
-      // own controls prove the composer came with it.
-      await expect(
-        page.getByRole("button", { name: "Expand to full screen" }),
-      ).toBeVisible();
-      await expect(page.getByRole("textbox", { name: "Send a message..." })).toBeVisible();
-
-      // The pane IS the reader at a card rung (v0.23): the floating library
-      // is up — the toggle at the left edge, its panel on demand. The card
-      // field is retired, and every card rung renders this same reader —
-      // the ladder no longer promises different content per rung.
-      await expect(page.locator("[data-library-toggle]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await page.locator("[data-library-toggle]").click();
-      await expect(page.locator("[data-library-panel]")).toBeVisible({
-        timeout: 30_000,
-      });
-
-      // The field's DOM NODE is no longer guaranteed to be the same across a
-      // tier change: an opaque fullscreen conversation has to host the field's
-      // column inside the panel, while the pill tier hosts it in the pane — so
-      // moving between them moves the portal target and React rebuilds the
-      // subtree. What must survive is the conversation's STATE, which the
-      // draft round-trip below proves end to end (and the messages survive as
-      // React state, never as DOM). Known, accepted loss: the stream's scroll
-      // offset resets to the live edge on a tier change.
-      await expect(stream).toHaveCount(1);
-
-      // Back to the conversation: the rung returns to the default (the lens
-      // shows Conversation pressed — the rung never rode the URL).
-      await lensButton(page, "Conversation").click();
-      await expect(lensButton(page, "Conversation")).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
-      // THE REAL INVARIANT, and a stronger one than the node identity above:
-      // what the reader typed survives the round trip through a card rung.
-      // That is the reason the composer is one never-unmounted component with
-      // a render-prop form rather than two branches (see `composer-host.tsx`),
-      // and it is the thing the old `toBeAttached()` was standing in for.
-      // Briefing arrival already collapsed the panel to the pill tier, whose
-      // composer is a single-line input (the fullscreen textarea only mounts
-      // on Expand).
-      const area = page.getByRole("textbox", { name: "Send a message..." });
-      await expect(area).toBeVisible();
-      await area.click();
+      // The pill's single-line input takes the draft.
+      const pillInput = page.getByRole("textbox", { name: "Send a message..." });
+      await expect(pillInput).toBeVisible();
+      await pillInput.click();
       await page.keyboard.type("still here");
-      await expect(area).toHaveValue("still here");
+      await expect(pillInput).toHaveValue("still here");
 
-      await lensButton(page, "Slice").click();
-      await expect(lensButton(page, "Slice")).toHaveAttribute(
+      // The conversation layer lives at the LAYOUT, so the world switch does
+      // not unmount it: the same pill floats over the hotel, draft intact.
+      await rungButton(page, "Scene").click();
+      await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+        timeout: 30_000,
+      });
+      await expect(pillInput).toHaveValue("still here");
+
+      // And back: same composer instance, same draft — and it survives
+      // expanding to the fullscreen form too (one never-unmounted component).
+      await page.getByRole("button", { name: "Exit" }).click();
+      await expect(rungButton(page, "Manuscript")).toHaveAttribute(
         "aria-pressed",
         "true",
+        { timeout: 30_000 },
       );
-      // The pill is the collapsed tier again, and the composer is the SAME
-      // instance across tiers — the draft survives expanding back to
-      // fullscreen, which is the invariant the never-unmounted render prop
-      // was standing in for.
-      await expect(
-        page.getByRole("button", { name: "Expand to full screen" }),
-      ).toBeVisible();
-      await expect(page.getByRole("textbox", { name: "Send a message..." })).toHaveValue(
-        "still here",
-      );
+      await expect(pillInput).toHaveValue("still here");
       await page.getByRole("button", { name: "Expand to full screen" }).click();
       await expect(page.locator("textarea").first()).toHaveValue("still here");
-
-      await expect(stream).toBeVisible();
     });
 
-    test("Cmd/Ctrl+. toggles the conversation against the reader", async ({
+    test("Cmd/Ctrl+. toggles between the reader and the hotel", async ({
       page,
     }) => {
       test.slow();
@@ -597,30 +396,26 @@ test.describe("Memory viz (v0.10)", () => {
       ).toBeVisible();
       // The listener mounts after the gate button under full-suite load, so
       // press-until-toggled instead of firing once into a dead window. The
-      // toggle is memory state: the lens's pressed segment is the assertion.
+      // hotel's own Exit button is the "we are in 现场" assertion — the
+      // board bar unmounts there, so it cannot answer.
       await expect(async () => {
         await page.keyboard.press("Control+.");
-        await expect(lensButton(page, "Slice")).toHaveAttribute(
+        await expect(page.getByRole("button", { name: "Exit" })).toBeVisible({
+          timeout: 3_000,
+        });
+      }).toPass({ timeout: 60_000 });
+      // Toggling back before the hotel settles is a REVERSAL, not a drop —
+      // the toggle reads the live move's destination. Still, gate on the
+      // hotel having settled (the Exit above) so the assertions do not race
+      // the transition machine.
+      await expect(async () => {
+        await page.keyboard.press("Control+.");
+        await expect(rungButton(page, "Manuscript")).toHaveAttribute(
           "aria-pressed",
           "true",
           { timeout: 3_000 },
         );
-      }).toPass();
-      // Wait for the reader to actually render before toggling back: a rung
-      // change issued while the reader chrome is still mounting is dropped,
-      // swallowing the return toggle. Gate on the floating library toggle
-      // being up — the reader IS the card rung's content.
-      await expect(page.locator("[data-library-toggle]")).toBeVisible({
-        timeout: 30_000,
-      });
-      await expect(async () => {
-        await page.keyboard.press("Control+.");
-        await expect(lensButton(page, "Conversation")).toHaveAttribute(
-          "aria-pressed",
-          "true",
-          { timeout: 3_000 },
-        );
-      }).toPass();
+      }).toPass({ timeout: 60_000 });
     });
   });
 });

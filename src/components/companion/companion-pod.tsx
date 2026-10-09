@@ -12,14 +12,12 @@
  * it plays.
  *
  * PLACEMENT, MEASURED (scripts/probe-pod.mjs): the pod floats on the right
- * edge, 220px above the viewport foot + the safe-area inset. JumpControls'
- * stack (bottom-36/bottom-32 + two size-7 buttons + gap) tops out at ~206px on
- * a 390px phone and ~190px at ≥640px, so 220 clears both with margin; the
- * collapsed composer is a bottom-centre pill under ~70px, and the pod's
- * right-edge column never meets it. (An EXPANDED composer card can grow over
- * ~300px tall — JumpControls accept the same overlap; chrome yields to an
- * open composer.) 220 is a verified constant, not a guess: the probe fails
- * the build's geometry assertions if any of the measured rects touch.
+ * edge, 220px above the viewport foot + the safe-area inset. The pill (the
+ * panel's collapsed tier) is a bottom-centre bar under ~70px, and the pod's
+ * right-edge column never meets it. (An open composer's card can grow over
+ * ~300px tall — chrome yields to an open composer.) 220 is a verified
+ * constant, not a guess: the probe fails the build's geometry assertions if
+ * any of the measured rects touch.
  *
  * One narration at a time, unchanged: a new target (new `gen`) aborts the
  * previous reader, and dismissing an unfinished stream ends it. The button

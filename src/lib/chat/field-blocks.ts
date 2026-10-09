@@ -1,16 +1,16 @@
 /**
- * The conversation field's block model — pure, no React, no three.js.
+ * The conversation stream's block model — pure, no React, no three.js.
  *
- * The field lays the stream out as a vertical run of BLOCKS, each anchored by
- * its top edge. A block is one slice's region, and the gate that follows it —
- * the `seam` between that slice and the next — is its bottom edge. This module
+ * The stream lays out as a vertical run of BLOCKS, each anchored by its top
+ * edge. A block is one slice's region, and the gate that follows it — the
+ * `seam` between that slice and the next — is its bottom edge. This module
  * owns that grouping, the fixed sizes the layout assumes, and the rule that
  * decides which boundary is currently announcing itself.
  *
- * It was lifted out of `conversation-field.tsx` because every one of these was
- * already pure: they take a stream item list and return numbers or strings.
- * Living inside the component meant they could only be checked by driving the
- * whole R3F field in a browser, which is a bad price for arithmetic.
+ * It was lifted out of the retired R3F `conversation-field.tsx`: every one of
+ * these was already pure — they take a stream item list and return numbers or
+ * strings. Living inside a component meant they could only be checked by
+ * driving the whole field in a browser, which is a bad price for arithmetic.
  */
 
 import type { ChatStreamItem } from "./stream-items";
@@ -127,9 +127,9 @@ export const ORIGIN_REGION = -1;
  * rest of the responsive table — a single field could be a constant, but a
  * phone cannot afford one. The invariant this comment used to carry still
  * holds and is now enforced by there being one function: the column width is
- * ONE number per render, shared by `conversation-field.tsx` and
- * `conversation-unit.tsx`, or the same slice reflows when the reader changes
- * rung. Both call `columnFor(window.innerWidth)`; neither re-derives it.
+ * ONE number per render, shared by the skeleton's column and the card field's
+ * conversation units alike, or the same slice reflows between surfaces. All
+ * call `columnFor(window.innerWidth)`; none re-derives it.
  */
 
 /**
@@ -423,7 +423,7 @@ export function armedGate(
 
 /** The slice id a SEEK key addresses. Seam keys carry it (`seam-<id>` — the
  *  same convention `sliceIdOf` reads); anything else is returned verbatim.
- *  The field's `seekKey` pages by this id when the key is not yet loaded. */
+ *  The retired field's `seekKey` paged by this id; kept for the archive field. */
 export function seekSliceIdOf(key: string): string {
   return key.startsWith("seam-") ? key.slice("seam-".length) : key;
 }

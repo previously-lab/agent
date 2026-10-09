@@ -4,13 +4,14 @@
  * ConversationOverlayMount — the gate and the lazy seat for the conversation
  * overlay (`conversation-overlay.tsx`).
  *
- * WHY DYNAMIC. The overlay statically reaches @react-three/fiber through the
- * conversation field, and this mount is imported by the LAYOUT — shared by
- * every route. Only a dynamic import keeps three.js out of the home route's
- * chunk (v0.13 §3's one hard engineering rule: the home does not hang R3F),
- * while the layout still hosts the layer for every route that wants it.
- * `ssr: false` because the overlay is pure client chrome — and because the
- * pathname gate below must not render different trees on server and client.
+ * WHY DYNAMIC. This mount is imported by the LAYOUT — shared by every route —
+ * and the overlay pulls in the whole chat surface (the stream, the markdown
+ * renderer, the composer). Only a dynamic import keeps that chunk out of the
+ * home route (v0.13 §3's one hard engineering rule: the home loads as little
+ * as it can), while the layout still hosts the layer for every route that
+ * wants it. `ssr: false` because the overlay is pure client chrome — and
+ * because the pathname gate below must not render different trees on server
+ * and client.
  *
  * WHY THE GATE. The home route has NO conversation ability (the reader's
  * ruling: no pill, no subtitle, no fullscreen — the home is a start screen,

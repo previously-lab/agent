@@ -8,29 +8,24 @@
  * two-tier `ConversationPanel` (pill / fullscreen, §4) with the one
  * always-mounted `ChatPage` inside it. It used to render INSIDE the route's
  * shell, which made the panel a prisoner of the route's lifetime — any
- * rebuild of the shell subtree remounted the panel, and the conversation
- * field's R3F band reached its seat through portal slots the shell owned.
- * Now the layer is hosted by `[locale]/layout.tsx` (through the gate in
+ * rebuild of the shell subtree remounted the panel. Now the layer is hosted
+ * by `[locale]/layout.tsx` (through the gate in
  * `conversation-overlay-mount.tsx`), floats above the canvas by z-index, and
  * survives navigation and world rebuilds: the draft, the attachments and the
  * live `useChat` stream no longer depend on which route is mounted.
  *
  * EVERYTHING SHARED ARRIVES THROUGH `useShell()` (shell-provider.tsx): the
  * tier and its setter, the feed, the send-time view getter, the feed lease
- * and `?at=` suppression the route computes, the composer clearance this
- * subtree measures and the route's card field reads, and the two turn
- * callbacks — forwarded to the world's registered driver, no-ops on routes
- * with no world. The only state owned HERE is the pill's subtitle line: it
- * is produced by ChatPage and rendered by the panel, both inside this
- * component, so the wire between them never leaves it.
+ * the route computes, the composer clearance this subtree measures, and the
+ * turn-settled callback — forwarded to the world's registered driver, a no-op
+ * on routes with no world. The only state owned HERE is the pill's subtitle
+ * line: it is produced by ChatPage and rendered by the panel, both inside
+ * this component, so the wire between them never leaves it.
  *
  * NO R3F IN THIS BOX. The panel body is the conversation as a plain DOM
- * surface at every tier (fullscreen included): the R3F conversation field's
- * only seat is the app route's PANE slot (see `app-shell.tsx` and
- * `chat/conversation-surface.tsx`), and the surface composition
- * (`shell-provider.tsx`) answers "narrow" whenever the panel is fullscreen,
- * so the expanded panel always gets `DomChatList` — history and the
- * in-flight turn alike.
+ * surface at every tier (`DomChatList` — history and the in-flight turn
+ * alike). The conversation is a floating capability, not a rung: the two
+ * rungs are the worlds (现场 / 原稿), and the panel rises over either.
  */
 import { useState } from "react";
 import type { UserConfig } from "@/lib/config/types";
@@ -61,18 +56,15 @@ export function ConversationOverlay({
     >
       <ChatPage
         initialConfig={initialConfig}
-        suppressAtJump={shell.suppressAtJump}
-        rung="conversation"
         onTurnSettled={shell.reportTurnSettled}
         feed={shell.feed}
         // v0.13 §5 — the current view rides each turn's request so the model
         // knows what the reader is looking at (see the provider's getChatView).
         getView={shell.getChatView}
         // Frozen while a world transition runs: the feed is one-writer
-        // (field-feed.ts), and a move mounts/unmounts the fields around the
-        // band — nobody publishes mid-move. The route computes the lease.
+        // (field-feed.ts), and a move unmounts one world and mounts the
+        // other — nobody publishes mid-move. The route computes the lease.
         publishing={shell.publishing}
-        onRunningChange={shell.reportRunning}
         onSubtitleLineChange={setSubtitleLine}
         insetTop={0}
         insetBottom={shell.composerClearance}

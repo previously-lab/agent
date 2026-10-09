@@ -979,7 +979,6 @@
    inherited — putting this on the container would take every island down
    with it. And if 3D picking is ever wanted, it needs a different answer:
    this rule says a canvas is a surface, not a control. */
-[data-conversation-field] canvas,
 [data-card-field] canvas {
   pointer-events: none;
 }

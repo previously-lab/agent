@@ -43,9 +43,9 @@ interface ChatInputProps {
    * either. Model selection does not survive for the same reason — it is a
    * setting for the next message, and there is no next message to write yet.
    *
-   * (Latent in the conversation-panel surface: the shell pins the hosted
-   * ChatPage's rung to "conversation", so the panel never asks for this
-   * form. The panel's collapsed tier draws the PILL form instead.)
+   * (Fully latent: the card rungs that asked for this form retired with the
+   * ladder — nothing renders the collapsed composer any more. The panel's
+   * collapsed tier draws the PILL form instead.)
    *
    * The component stays MOUNTED across the forms (this is one component
    * with early returns, not several), so typed text and staged image

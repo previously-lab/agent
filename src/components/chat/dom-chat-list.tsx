@@ -2,22 +2,20 @@
 
 /**
  * DomChatList — the conversation as a DOM scroll container with windowed
- * mounting. THE PANEL'S renderer (2026-10-04): the expanded conversation is
- * this list, and its content is the IN-MEMORY current conversation — the
- * `useChat` messages plus the arrival-restored resume block — with ZERO
- * repository paging. The repository's time slices (older paging, the
- * window's head, jump paging) belong to the R3F field
- * (`conversation-field.tsx`), which loads them itself; the two surfaces
- * never share an item list. The game view and other narrow surfaces get the
- * same panel content.
+ * mounting. THE conversation surface (two-rungs rewrite): the R3F
+ * conversation field retired with the rung ladder, so this list is the ONLY
+ * renderer — the panel's body at every tier. Its content is the IN-MEMORY
+ * current conversation (the `useChat` messages plus the arrival-restored
+ * resume block) and, on a briefing arrival, the cold-open page of repository
+ * history with the briefing card seated as an item between the two. The list
+ * pages NOTHING older — happened-time browsing deeper than the cold-open page
+ * belongs to the archive dispatch.
  *
  * HISTORY. Until v0.11 the conversation rendered inside an R3F canvas
- * (`conversation-field.tsx`, then deleted): every block a billboard, the
- * scroll position a camera offset the field owned. The DOM surface below was
- * written for the "the conversation in flight is plain DOM" decision (design
- * doc §13/§14.5); the user's 2026-09 ruling restores the field for the 2.5D
- * view and keeps this surface for the narrow one, and the 2026-10 split
- * makes this list the panel's ONLY surface.
+ * (`conversation-field.tsx`): every block a billboard, the scroll position a
+ * camera offset the field owned. This DOM surface was written for the "the
+ * conversation in flight is plain DOM" decision (design doc §13/§14.5), and
+ * the two-rungs rewrite makes it the only one left.
  *
  * What is KEPT from the field, because none of it was 3D-specific:
  *
@@ -40,10 +38,10 @@
  *     while following; scrolling away releases it, scrolling back re-arms
  *     it. Sending a message re-pins (the page calls `scrollToBottom`).
  *
- *   - THE BAND FEED HAS ONE WRITER. While this surface owns the pane it
- *     publishes progress and block anchors to the shared `FieldFeed` and
- *     consumes its seek requests; while the timeline owns the pane it
- *     writes nothing. See `field-feed.ts` for why that rule exists.
+ *   - THE BAND FEED HAS ONE WRITER. While the panel body is on screen this
+ *     list publishes progress and block anchors to the shared `FieldFeed`
+ *     and consumes its seek requests; folded to the pill it writes nothing.
+ *     See `field-feed.ts` for why that rule exists.
  *
  * `ChatStreamItem` and its halves live in `lib/chat/stream-items.ts`, the
  * layout arithmetic in `lib/chat/stream-layout.ts` — both pure, both tested.
@@ -64,6 +62,7 @@ import { HistoryTurn } from "./history-turn";
 import { SliceSeam } from "./slice-seam";
 import { ResumeBanner } from "./resume-banner";
 import { ErrorBanner } from "./error-banner";
+import { EmptyBriefing } from "./empty-briefing";
 import { StreamTimeIndicator } from "./stream-time-indicator";
 import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import {
@@ -121,11 +120,14 @@ export interface DomChatListProps {
   onTopItemChange?: (timeIso: string, sliceId: string | null) => void;
   /** A failed turn, shown as a banner under the content. */
   error: Error | undefined;
+  /** Briefing-mode arrival card props (§1.2 Rev 2), rendered for the
+   *  `briefing` stream item. Typed from the component itself so a new
+   *  briefing prop cannot be added without this list carrying it. */
+  briefing?: React.ComponentProps<typeof EmptyBriefing> | null;
   /** The shared band feed, owned by the app shell — see `field-feed.ts`. */
   feed?: FieldFeed;
-  /** True only while the chat view OWNS the band. The stream keeps rendering
-   *  while the timeline is open, but the card field owns the feed then, and
-   *  two writers on one feed is exactly what the feed exists to prevent. */
+  /** The feed's one-writer lease — the list publishes only while the panel
+   *  body is actually on screen (the folded pill tier is not a surface). */
   publishing?: boolean;
   /** Filled with the stream's imperative handle, for the page's jumps. */
   apiRef?: MutableRefObject<ChatStreamHandle | null>;
@@ -141,6 +143,7 @@ export function DomChatList({
   items,
   onTopItemChange,
   error,
+  briefing,
   feed,
   publishing = false,
   apiRef,
@@ -558,9 +561,10 @@ export function DomChatList({
       case "resume-banner":
         return <ResumeBanner startIso={item.startIso} />;
       case "briefing":
-        // The arrival briefing card seats ONLY in the R3F field's tail now —
-        // the panel (this list) never receives a briefing item.
-        return null;
+        // The arrival briefing card is a stream item between the cold-open
+        // history page and the live edge (§1.2 Rev 2) — the page passes the
+        // live data props in; null when this arrival has no card.
+        return briefing ? <EmptyBriefing variant="card" {...briefing} /> : null;
       case "history-turn":
         return (
           <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
