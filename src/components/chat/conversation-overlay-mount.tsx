@@ -41,12 +41,7 @@ export function ConversationOverlayMount({
 }) {
   const pathname = usePathname();
   const { panelMode, setPanelMode } = useShell();
-  const gated =
-    pathname === "/" ||
-    pathname.startsWith("/playground") ||
-    // The visual lab (dev-only) is a component gallery like the playground:
-    // an overlay pill would sit inside every recipe screenshot.
-    pathname.startsWith("/lab");
+  const gated = pathname === "/" || pathname.startsWith("/playground");
   const onApp = pathname === "/app";
 
   // Leaving the app surface folds the conversation to its pill: the layer

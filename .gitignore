@@ -95,3 +95,7 @@ benchmark-data/
 # ===== Misc =====
 *.pem
 /.swc
+
+# ===== The visual lab (a dev-only discussion medium; kept local, never shipped) =====
+src/components/lab/
+src/app/\[locale\]/lab/
