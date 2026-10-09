@@ -7,7 +7,6 @@ import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelSelector } from "./model-selector";
-import { MemoryDocs } from "./memory-docs";
 import { ISLAND } from "@/components/layout/island";
 import { requestCompanionPanelOpen } from "@/lib/chat/companion-panel";
 import { reducePanelMode, usePanelTier } from "./conversation-panel";
@@ -23,8 +22,6 @@ interface ChatInputProps {
   onSubmit: (message: string, images: File[]) => void;
   isLoading: boolean;
   onStop?: () => void;
-  /** Demo-mode persona — forwarded to the MemoryDocs server action. */
-  persona?: string;
   // Model selection — owned by ChatPage so the request body and the toolbar
   // stay in sync. ChatInput renders the control, ChatPage persists.
   // Thinking is always ON at low effort (pinned server-side in start-turn.ts);
@@ -36,12 +33,13 @@ interface ChatInputProps {
    *
    * This is the composer at a card rung, where the reader is looking at the
    * field and an empty box the size of a card would sit on top of it. What
-   * survives the collapse is what still makes sense from there — the memory
-   * docs (reading them is not a conversation act) and the control that
-   * restores the full composer. The attach button does NOT survive: choosing
-   * a file is the first half of sending, and a send button is not on screen
-   * either. Model selection does not survive for the same reason — it is a
-   * setting for the next message, and there is no next message to write yet.
+   * survives the collapse is the control that restores the full composer.
+   * The attach button does NOT survive: choosing a file is the first half of
+   * sending, and a send button is not on screen either. Model selection does
+   * not survive for the same reason — it is a setting for the next message,
+   * and there is no next message to write yet. (The memory-docs button that
+   * once survived here retired with v0.25b: the library's Dossier section is
+   * the archive's only door.)
    *
    * (Fully latent: the card rungs that asked for this form retired with the
    * ladder — nothing renders the collapsed composer any more. The panel's
@@ -123,7 +121,6 @@ export function ChatInput({
   onSubmit,
   isLoading,
   onStop,
-  persona,
   currentModelId,
   onModelChange,
   collapsed = false,
@@ -219,8 +216,6 @@ export function ChatInput({
         data-composer-pill
         className={`${ISLAND} flex items-center gap-0.5 p-1`}
       >
-        <MemoryDocs persona={persona} />
-
         <button
           type="button"
           data-composer-collapsed
@@ -475,12 +470,6 @@ export function ChatInput({
             className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
             iconClassName="h-3.5 w-3.5"
           />
-
-          {/* Memory docs — previously / direction viewer. The one control that
-              is in BOTH forms: reading the memory is not a conversation act,
-              and gating it behind opening the composer would make the app's
-              own record of itself the hardest thing in it to reach. */}
-          <MemoryDocs persona={persona} />
         </div>
 
         {/* Right side — model, then the fullscreen verb, then send: the walk

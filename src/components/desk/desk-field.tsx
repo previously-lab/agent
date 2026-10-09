@@ -73,6 +73,12 @@ import {
   getCaseDoc,
   type CaseDocContent,
 } from "@/lib/episodic/actions";
+import {
+  getDossierDoc,
+  getRecordDoc,
+  type RecordDocContent,
+} from "@/lib/archive/actions";
+import { deskRefKind } from "@/lib/archive/refs";
 import { MarkdownRenderer } from "@/components/chat/markdown";
 import {
   clampPage,
@@ -107,6 +113,15 @@ export interface DeskTexts {
   nextPage: string;
   /** The page control's readout, `{current} / {total}`. */
   pagePosition(current: number, total: number): string;
+  /** The transcript paper's speaker labels (v0.25b §三) — handed to the
+   *  record read, which composes the turns' markdown with them. */
+  recordUserLabel: string;
+  recordAgentLabel: string;
+  /** The record paper's footer right line: the slice's turn count. */
+  recordTurns(count: number): string;
+  /** A dossier paper's display title + header line (the library's Dossier
+   *  labels — previously / direction). */
+  dossierTitle(name: "previously" | "direction"): string;
 }
 
 /** The entrance/exit beat, seconds — the pane swap's own 300 ms. */
@@ -166,12 +181,28 @@ export function DeskField({
 
   // The document arrives lazily, one server-action round trip per open —
   // the shelf's own rhythm. `undefined` = in flight; null = dead link (the
-  // not-found paper); a throw surfaces as the same not-found paper.
+  // not-found paper); a throw surfaces as the same not-found paper. The
+  // ref's vocabulary picks the read (refs.ts): a case/piece/legacy ref rides
+  // getCaseDoc; records/<sliceId> reads the slice's transcript (composed
+  // with THIS locale's speaker labels — a locale switch refetches); a
+  // dossier/<name> ref reads the self-document verbatim.
   const [doc, setDoc] = useState<CaseDocContent | null | undefined>(undefined);
+  const recordUserLabel = texts.recordUserLabel;
+  const recordAgentLabel = texts.recordAgentLabel;
   useEffect(() => {
     let live = true;
     setDoc(undefined);
-    getCaseDoc(docRef)
+    const kind = deskRefKind(docRef);
+    const read: Promise<CaseDocContent | RecordDocContent | null> =
+      kind === "record"
+        ? getRecordDoc(docRef, {
+            user: recordUserLabel,
+            agent: recordAgentLabel,
+          })
+        : kind === "dossier"
+          ? getDossierDoc(docRef)
+          : getCaseDoc(docRef);
+    read
       .then((d) => {
         if (live) setDoc(d);
       })
@@ -181,12 +212,21 @@ export function DeskField({
     return () => {
       live = false;
     };
-  }, [docRef]);
+  }, [docRef, recordUserLabel, recordAgentLabel]);
   const loading = doc === undefined;
   const model = useMemo(
     () => deskPaperModel(docRef, doc ?? null),
     [docRef, doc],
   );
+  // The paper's display title: a record prints NONE (§三 — the transcript's
+  // identity is the header's date + slice id + turn count; the body is the
+  // turns alone); a dossier prints its localized name; a case its own.
+  const displayTitle =
+    model.kind === "record"
+      ? ""
+      : model.kind === "dossier" && model.dossier
+        ? texts.dossierTitle(model.dossier)
+        : model.title;
 
   // ── PAGING (v0.24) ────────────────────────────────────────────────────
   // The current page is ephemeral reading state: it lives HERE (not in the
@@ -467,7 +507,7 @@ export function DeskField({
       paging={{
         ready,
         markdown: model.markdown,
-        title: model.title,
+        title: displayTitle,
         page,
         total,
         turn,
@@ -775,7 +815,9 @@ function DeskScene({
     () =>
       ready && markdown !== null ? (
     <>
-      <h1 className="desk-title">{title}</h1>
+      {/* A record's title is "" (§三: the header carries the identity) —
+          no display line opens the transcript. */}
+      {title !== "" && <h1 className="desk-title">{title}</h1>}
       {/* The body keeps its real components (CodeBlock's hooks included) —
           re-wrapped in intl context, the conversation field's
           BillboardBlock pattern. */}
@@ -907,7 +949,12 @@ function DeskScene({
                       <div className="desk-face">
                         <header className="desk-head flex items-baseline justify-between gap-8">
                           <span className="truncate">
-                            {model.caseRef ?? model.title}
+                            {/* The dossier's line is its localized name (no
+                                case ref); a record's is the slice id (set as
+                                caseRef by the model); a case's its ref. */}
+                            {model.kind === "dossier" && model.dossier
+                              ? texts.dossierTitle(model.dossier)
+                              : (model.caseRef ?? model.title)}
                           </span>
                           <span className="shrink-0 tabular-nums">
                             {model.date}
@@ -962,9 +1009,14 @@ function DeskScene({
                             {texts.page(shellPage)}
                           </span>
                           <span className="flex-1 truncate text-right">
-                            {model.category
-                              ? texts.categoryName(model.category)
-                              : ""}
+                            {/* The record paper's right line is its turn
+                                count (§三's header/footer ruling); a case's
+                                is its category; a dossier prints none. */}
+                            {model.kind === "record" && model.turnCount !== null
+                              ? texts.recordTurns(model.turnCount)
+                              : model.category
+                                ? texts.categoryName(model.category)
+                                : ""}
                           </span>
                         </footer>
                       </div>

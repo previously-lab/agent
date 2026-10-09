@@ -9,6 +9,12 @@
  * (getCaseShelf / getCaseDetail, one server-action round trip per open, the
  * shelf's own rhythm).
  *
+ * THE DOSSIER (v0.25b §三): the two self-documents (previously / direction)
+ * pin ABOVE the tree as their own section — the archive is memory's only
+ * door now that the composer's memory-docs popover is retired. A dossier
+ * row opens its document on the desk (`dossier/<name>`) exactly like a case
+ * row opens `index.md`; reading lives on the paper here too.
+ *
  * THE TERMINAL ACTION NEVER READS INSIDE THE TREE. A case opens its own
  * `index.md` on the desk — a case with NO pieces is finally readable, the
  * v0.22 gap where only pieces could reach the tabletop. A piece opens that
@@ -32,7 +38,9 @@ import {
   BookMarked,
   Building2,
   CalendarDays,
+  Compass,
   FileText,
+  History,
   Lightbulb,
   ListChecks,
   MapPin,
@@ -48,6 +56,11 @@ import {
   type CaseDetail,
   type CaseShelf,
 } from "@/lib/episodic/actions";
+import {
+  getDossierList,
+  type DossierEntry,
+} from "@/lib/archive/actions";
+import type { DossierDocName } from "@/lib/archive/refs";
 import type { CaseCategory } from "@/lib/docs";
 
 const CATEGORY_ICONS: Record<CaseCategory, typeof FileText> = {
@@ -62,6 +75,12 @@ const CATEGORY_ICONS: Record<CaseCategory, typeof FileText> = {
   self: Sparkles,
 };
 
+/** The Dossier rows' icons — the retired memory-docs popover's own pair. */
+const DOSSIER_ICONS: Record<DossierDocName, typeof History> = {
+  previously: History,
+  direction: Compass,
+};
+
 /** A case row hands its pieces here as the STEM (no `.md`) — the reference
  *  names the document by identity; the parser appends the suffix. */
 function pieceRef(category: CaseCategory, caseName: string, stem: string): string {
@@ -73,6 +92,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
   const { deskDoc, openDesk, archiveCategory, setArchiveCategory } = useShell();
   const [caseShelf, setCaseShelf] = useState<CaseShelf | null>(null);
   const [shelfFailed, setShelfFailed] = useState(false);
+  const [dossier, setDossier] = useState<DossierEntry[] | null>(null);
   const [activeCase, setActiveCase] = useState<{
     category: CaseCategory;
     name: string;
@@ -82,7 +102,9 @@ export function DocLibrary({ persona }: { persona?: string }) {
 
   // The shelf loads ONCE at mount — the column is a permanent pane fixture,
   // not a dialog that refetches per open. Detail still rides one round trip
-  // per case open, exactly like the dialog did.
+  // per case open, exactly like the dialog did. The Dossier's availability
+  // read rides the same mount effect (parallel, independent — a missing
+  // self-document dims its row, never errors the shelf).
   useEffect(() => {
     let live = true;
     getCaseShelf(persona)
@@ -91,6 +113,13 @@ export function DocLibrary({ persona }: { persona?: string }) {
       })
       .catch(() => {
         if (live) setShelfFailed(true);
+      });
+    getDossierList(persona)
+      .then((list) => {
+        if (live) setDossier(list);
+      })
+      .catch(() => {
+        if (live) setDossier(null);
       });
     return () => {
       live = false;
@@ -151,6 +180,40 @@ export function DocLibrary({ persona }: { persona?: string }) {
       <h2 className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">
         {t("title")}
       </h2>
+      {/* THE DOSSIER (v0.25b §三 / v0.25 §3.4) — the two self-documents
+          (previously / direction), pinned above the category tree. They are
+          papers, not popovers: a row opens its document on the desk under
+          `dossier/<name>`. A document missing on disk renders dimmed and
+          never opens a dead paper. */}
+      {dossier !== null && dossier.some((d) => d.available) && (
+        <section data-dossier>
+          <h3 className="px-2 pb-0.5 pt-1 text-xs font-medium text-muted-foreground/70">
+            {t("dossier.title")}
+          </h3>
+          <ul className="pb-1">
+            {dossier.map((entry) => {
+              const Icon = DOSSIER_ICONS[entry.name];
+              const active = deskDoc === entry.ref;
+              return (
+                <li key={entry.name}>
+                  <button
+                    type="button"
+                    data-dossier-doc={entry.name}
+                    disabled={!entry.available}
+                    onClick={() => openDesk(entry.ref)}
+                    className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-40 ${
+                      active ? "bg-muted" : ""
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{t(`dossier.${entry.name}`)}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       {caseShelf.categories.map(({ category, cases }) => {
         const Icon = CATEGORY_ICONS[category];
         const categoryOpen = archiveCategory === category;

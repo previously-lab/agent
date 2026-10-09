@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { ArchivePile } from "@/lib/archive/actions";
+import type { ArchivePile, ArchiveRecord } from "@/lib/archive/actions";
 import {
   archiveColumns,
   archiveGeometry,
@@ -20,6 +20,7 @@ import {
 
 function pile(over: Partial<ArchivePile>): ArchivePile {
   return {
+    kind: "case",
     category: "research",
     name: "case",
     ref: "research/case",
@@ -133,11 +134,76 @@ describe("bucketCells", () => {
       "2026-10-06",
     )[0];
     const cells = bucketCells(bucket, ["people", "self"]);
-    expect(cells.map((cell) => cell.piles.map((p) => p.name))).toEqual([
+    expect(
+      cells.map((cell) => cell.piles.map((p) => ("name" in p ? p.name : p.ref))),
+    ).toEqual([
       ["p1"],
       ["s1", "s2"],
     ]);
     expect(cells.map((cell) => cell.column)).toEqual([0, 1]);
+  });
+});
+
+// ─── Records (v0.25b §三) — one record pile per time bucket ────────────────
+
+function record(sliceId: string, turns: number): ArchiveRecord {
+  return { sliceId, date: sliceId.slice(0, 10), turns };
+}
+
+describe("records in the field", () => {
+  it("a bucket with only records is still a row", () => {
+    const buckets = buildBuckets([], "2026-10-06", [record("2026-10-05-0900", 4)]);
+    expect(buckets.map((b) => b.key)).toEqual(["d:2026-10-05"]);
+    expect(buckets[0].piles).toEqual([]);
+    expect(buckets[0].record).toMatchObject({
+      kind: "record",
+      ref: "records/2026-10-05-0900",
+      slices: 1,
+      turns: 4,
+    });
+  });
+
+  it("folds a bucket's slices into ONE pile: newest slice opens, turns sum", () => {
+    const buckets = buildBuckets([], "2026-10-06", [
+      record("2026-10-06-0900", 4),
+      record("2026-10-06-2130", 8),
+      record("2026-10-04-1200", 3),
+    ]);
+    expect(buckets.map((b) => b.key)).toEqual(["d:2026-10-06", "d:2026-10-04"]);
+    expect(buckets[0].record).toMatchObject({
+      ref: "records/2026-10-06-2130",
+      date: "2026-10-06",
+      slices: 2,
+      turns: 12,
+    });
+  });
+
+  it("cases and records share a bucket without merging", () => {
+    const [bucket] = buildBuckets(
+      [pile({ name: "a", updated: "2026-10-06" })],
+      "2026-10-06",
+      [record("2026-10-06-0900", 4)],
+    );
+    expect(bucket.piles.map((p) => p.name)).toEqual(["a"]);
+    expect(bucket.record?.ref).toBe("records/2026-10-06-0900");
+  });
+
+  it("the records column trails, and exists only while records do", () => {
+    expect(archiveColumns([pile({ category: "self" })])).toEqual(["self"]);
+    expect(
+      archiveColumns([pile({ category: "self" })], [record("2026-10-06-0900", 4)]),
+    ).toEqual(["self", "records"]);
+  });
+
+  it("the record pile takes the records column's cell", () => {
+    const [bucket] = buildBuckets(
+      [pile({ category: "self", name: "s", updated: "2026-10-06" })],
+      "2026-10-06",
+      [record("2026-10-06-0900", 4)],
+    );
+    const cells = bucketCells(bucket, ["self", "records"]);
+    expect(cells.map((cell) => cell.column)).toEqual([0, 1]);
+    expect(cells[1].piles).toEqual([bucket.record]);
   });
 });
 
@@ -173,7 +239,9 @@ describe("buildArchiveUnits", () => {
     expect(units.map((u) => u.kind)).toEqual(["header", "row", "row"]);
     const row = units[1];
     if (row.kind !== "row") throw new Error("expected a row");
-    expect(row.cells.flatMap((c) => c.piles).map((p) => p.name)).toEqual(["a", "b"]);
+    expect(
+      row.cells.flatMap((c) => c.piles).map((p) => ("name" in p ? p.name : p.ref)),
+    ).toEqual(["a", "b"]);
     expect(row.height).toBe(geo.rowH);
   });
 

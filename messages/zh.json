@@ -79,15 +79,7 @@
       "byokHint": "使用你自己的 API key(推荐)——直连 API:流式、快、无需本地 CLI。",
       "bridgeNotInstalled": "未安装",
       "bridgeConfigure": "去配置",
-      "hqStream": "进化流（HQ）",
-      "docsTooltip": "记忆文档",
-      "docsLabel": "记忆文档",
-      "docs": {
-        "previously": "前情提要",
-        "direction": "进化方向"
-      },
-      "docsLoading": "加载中…",
-      "docsEmpty": "暂无内容"
+      "hqStream": "进化流（HQ）"
     },
     "attachment": "附件",
     "actions": {
@@ -445,7 +437,10 @@
     "pileAria": "{name}（{category}），{count} 份文档",
     "openedAt": "始于 {date}",
     "weekOf": "{date} 当周",
-    "undated": "无日期"
+    "undated": "无日期",
+    "recordsLabel": "记录",
+    "recordTurns": "{count} 轮",
+    "recordPileAria": "{date}——{slices} 场对话，共 {turns} 轮"
   },
   "missions": {
     "emptyTitle": "暂无任务",
@@ -565,7 +560,10 @@
     "page": "· {n} ·",
     "prevPage": "上一页",
     "nextPage": "下一页",
-    "pagePosition": "{current} / {total}"
+    "pagePosition": "{current} / {total}",
+    "recordUser": "你",
+    "recordAgent": "Previously",
+    "recordTurns": "{count} 轮"
   },
   "library": {
     "title": "文库",
@@ -578,6 +576,11 @@
     "loading": "加载中…",
     "loadError": "文库暂时打不开。",
     "openedAt": "始于 {date}",
+    "dossier": {
+      "title": "卷宗",
+      "previously": "前情提要",
+      "direction": "进化方向"
+    },
     "category": {
       "people": "人物",
       "events": "事件",

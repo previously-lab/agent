@@ -6,9 +6,16 @@
  * (`timeline-3d/**`, untouched — everything here is an IMPORT) to documents.
  *
  *   rows = time buckets (day for the trailing week, ISO week beyond),
- *   columns = the case categories (empty ones simply have no column),
- *   a cell = ONE PILE = one case (its index + its pieces), its thickness the
+ *   columns = the case categories (empty ones simply have no column) plus
+ *   the synthetic trailing RECORDS column (v0.25b §三 — exists only while
+ *   slices exist, and a category filter hides it: a category question is
+ *   about cases),
+ *   a cell = ONE PILE — one case (its index + its pieces), its thickness the
  *   tiered page volume, its cover printed at the pile's own mm scale (§九).
+ *   Every bucket also carries its ONE RECORD PILE (the bucket's slices
+ *   folded together, thickness tiered off the TURN volume, opening the
+ *   newest slice's transcript on the desk); a bucket with only records is
+ *   still a row.
  *
  * THE MACHINERY REUSED. The scroll rig (`FieldRig`), the offset table
  * (`buildOffsets`), the virtual scroll (`visibleRangeFor`), the rubber band
@@ -80,9 +87,15 @@ import {
   buildArchiveUnits,
   buildBuckets,
   localTodayIso,
+  type ArchiveBucket,
   type ArchiveUnit,
 } from "./archive-model";
-import { ArchivePileView, type ArchivePileTexts } from "./archive-pile";
+import {
+  ArchivePileView,
+  RecordPileView,
+  type ArchivePileTexts,
+  type RecordPileTexts,
+} from "./archive-pile";
 import "./archive.css";
 
 /** The floating chrome's own gestures stay its own — a wheel or a drag that
@@ -155,14 +168,31 @@ export function ArchiveField({
           count: pile.pages,
         }),
       categoryLabel: (category) => tLibrary(`category.${category}`),
+      columnLabel: (column) =>
+        column === "records" ? t("recordsLabel") : tLibrary(`category.${column}`),
       dateLabel: (date) => stamp.format(new Date(`${date}T00:00:00`)),
       openedLabel: (opened) => (opened ? t("openedAt", { date: opened }) : ""),
     };
   }, [t, tLibrary, locale]);
 
+  // The record pile's printed strings — same portal constraint. The stamp
+  // line is the §九 pile-scale ruling made literal: label · date · turns.
+  const recordTexts = useMemo<RecordPileTexts>(() => {
+    const stamp = dateTimeFormat(locale, { month: "short", day: "numeric" });
+    return {
+      recordAria: (pile, bucket) =>
+        t("recordPileAria", {
+          date: bucket,
+          slices: pile.slices,
+          turns: pile.turns,
+        }),
+      stampLabel: (pile) =>
+        `${t("recordsLabel")} · ${stamp.format(new Date(`${pile.date}T00:00:00`))} · ${t("recordTurns", { count: pile.turns })}`,
+    };
+  }, [t, locale]);
+
   const bucketLabel = useCallback(
-    (unit: Extract<ArchiveUnit, { kind: "row" | "bucket" }>): string => {
-      const bucket = unit.bucket;
+    (bucket: ArchiveBucket): string => {
       if (bucket.kind === "undated") return t("undated");
       const date = dateTimeFormat(locale, {
         month: "short",
@@ -214,8 +244,14 @@ export function ArchiveField({
       ) ?? [],
     [state, archiveCategory],
   );
+  // The records sit OUTSIDE the category grammar — a category filter is a
+  // question about cases, and the record piles leave with the other columns.
+  const records = useMemo(
+    () => (archiveCategory === null ? (state?.data.records ?? []) : []),
+    [state, archiveCategory],
+  );
   const today = useMemo(() => localTodayIso(), []);
-  const columns = useMemo(() => archiveColumns(piles), [piles]);
+  const columns = useMemo(() => archiveColumns(piles, records), [piles, records]);
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   /** The piles' DOM escape hatch. drei's Html portals mount INSIDE the world
@@ -242,8 +278,14 @@ export function ArchiveField({
   const singleColumn = fieldSize.w < 768 || columns.length <= 1;
   const geo = archiveGeometry(fieldSize.w || 1280, Math.max(columns.length, 1));
   const units = useMemo(
-    () => buildArchiveUnits(buildBuckets(piles, today), columns, geo, singleColumn),
-    [piles, today, columns, geo, singleColumn],
+    () =>
+      buildArchiveUnits(
+        buildBuckets(piles, today, records),
+        columns,
+        geo,
+        singleColumn,
+      ),
+    [piles, today, records, columns, geo, singleColumn],
   );
   const layout = useMemo(
     () =>
@@ -453,6 +495,7 @@ export function ArchiveField({
         insetTop={insetTop}
         insetBottom={insetBottom}
         pileTexts={pileTexts}
+        recordTexts={recordTexts}
         bucketLabel={bucketLabel}
         onOpenPile={openPile}
       />
@@ -481,8 +524,9 @@ export function ArchiveField({
         className="pointer-events-none absolute inset-0 overflow-hidden"
       />
       {/* The empty archive — the quiet line the empty desk used to carry,
-          wording and all (the dispatch's ruling: reuse, never invent). */}
-      {state !== null && piles.length === 0 && (
+          wording and all (the dispatch's ruling: reuse, never invent).
+          Empty means BOTH nothing written and nothing said. */}
+      {state !== null && piles.length === 0 && records.length === 0 && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <p className="max-w-60 px-6 text-center text-sm leading-relaxed text-muted-foreground/70">
             {tLibrary("empty")}
@@ -513,6 +557,7 @@ function ArchiveScene({
   insetTop,
   insetBottom,
   pileTexts,
+  recordTexts,
   bucketLabel,
   onOpenPile,
 }: {
@@ -534,7 +579,8 @@ function ArchiveScene({
   insetTop: number;
   insetBottom: number;
   pileTexts: ArchivePileTexts;
-  bucketLabel: (unit: Extract<ArchiveUnit, { kind: "row" | "bucket" }>) => string;
+  recordTexts: RecordPileTexts;
+  bucketLabel: (bucket: ArchiveBucket) => string;
   onOpenPile: (ref: string) => void;
 }) {
   const size = useThree((s) => s.size);
@@ -688,6 +734,7 @@ function ArchiveScene({
                   exiting={exiting}
                   dealGen={dealGen}
                   pileTexts={pileTexts}
+                  recordTexts={recordTexts}
                   bucketLabel={bucketLabel}
                   onOpenPile={onOpenPile}
                 />
@@ -712,6 +759,7 @@ function ArchiveUnitView({
   exiting,
   dealGen,
   pileTexts,
+  recordTexts,
   bucketLabel,
   onOpenPile,
 }: {
@@ -724,7 +772,8 @@ function ArchiveUnitView({
   exiting: boolean;
   dealGen: number;
   pileTexts: ArchivePileTexts;
-  bucketLabel: (unit: Extract<ArchiveUnit, { kind: "row" | "bucket" }>) => string;
+  recordTexts: RecordPileTexts;
+  bucketLabel: (bucket: ArchiveBucket) => string;
   onOpenPile: (ref: string) => void;
 }) {
   const stateClass = `${enter ? " archive-unit--enter" : ""}${
@@ -752,7 +801,7 @@ function ArchiveUnitView({
       >
         <span />
         {unit.columns.map((c) => (
-          <span key={c}>{pileTexts.categoryLabel(c)}</span>
+          <span key={c}>{pileTexts.columnLabel(c)}</span>
         ))}
       </div>
     );
@@ -764,7 +813,7 @@ function ArchiveUnitView({
         className={`archive-unit archive-bucket${stateClass}`}
         style={unitStyle}
       >
-        <span>{bucketLabel(unit)}</span>
+        <span>{bucketLabel(unit.bucket)}</span>
       </div>
     );
   }
@@ -775,13 +824,24 @@ function ArchiveUnitView({
         className={`archive-unit archive-pileunit${stateClass}`}
         style={unitStyle}
       >
-        <ArchivePileView
-          pile={unit.pile}
-          width={geo.pileW}
-          height={geo.pileH}
-          texts={pileTexts}
-          onOpen={onOpenPile}
-        />
+        {unit.pile.kind === "record" ? (
+          <RecordPileView
+            pile={unit.pile}
+            bucketLabel={bucketLabel(unit.bucket)}
+            width={geo.pileW}
+            height={geo.pileH}
+            texts={recordTexts}
+            onOpen={onOpenPile}
+          />
+        ) : (
+          <ArchivePileView
+            pile={unit.pile}
+            width={geo.pileW}
+            height={geo.pileH}
+            texts={pileTexts}
+            onOpen={onOpenPile}
+          />
+        )}
       </div>
     );
   }
@@ -797,23 +857,35 @@ function ArchiveUnitView({
         } as React.CSSProperties
       }
     >
-      <p className="archive-row-label">{bucketLabel(unit)}</p>
+      <p className="archive-row-label">{bucketLabel(unit.bucket)}</p>
       {unit.cells.map((cell) => (
         <div
           key={`${dealGen}:${cell.column}`}
           className="archive-cell"
           style={{ "--archive-col": cell.column + 2 } as React.CSSProperties}
         >
-          {cell.piles.map((pile) => (
-            <ArchivePileView
-              key={pile.ref}
-              pile={pile}
-              width={geo.pileW}
-              height={geo.pileH}
-              texts={pileTexts}
-              onOpen={onOpenPile}
-            />
-          ))}
+          {cell.piles.map((pile) =>
+            pile.kind === "record" ? (
+              <RecordPileView
+                key={pile.ref}
+                pile={pile}
+                bucketLabel={bucketLabel(unit.bucket)}
+                width={geo.pileW}
+                height={geo.pileH}
+                texts={recordTexts}
+                onOpen={onOpenPile}
+              />
+            ) : (
+              <ArchivePileView
+                key={pile.ref}
+                pile={pile}
+                width={geo.pileW}
+                height={geo.pileH}
+                texts={pileTexts}
+                onOpen={onOpenPile}
+              />
+            ),
+          )}
         </div>
       ))}
     </div>

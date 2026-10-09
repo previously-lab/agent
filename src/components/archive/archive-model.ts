@@ -24,7 +24,7 @@
  * derives from the pile's own height in CSS (`--archive-mm`, archive.css),
  * never from the screen (§九).
  */
-import type { ArchivePile } from "@/lib/archive/actions";
+import type { ArchivePile, ArchiveRecord } from "@/lib/archive/actions";
 import { CASE_CATEGORIES, type CaseCategory } from "@/lib/docs";
 
 // ─── Thickness tiers — THE one place ────────────────────────────────────────
@@ -60,6 +60,27 @@ export function sheetsForTier(tier: PileTier): number {
 
 export type BucketKind = "day" | "week" | "undated";
 
+/** The record pile (v0.25b §三): ONE pile per time bucket holding that
+ *  bucket's slices — past conversations as paper. Its thickness tiers off
+ *  the bucket's TURN volume; its open target is the bucket's NEWEST slice
+ *  (the pile's top sheet — older slices wait for the record browser, a
+ *  later dispatch). */
+export interface RecordPile {
+  kind: "record";
+  /** `records/<sliceId>` — the bucket's newest slice. */
+  ref: string;
+  /** The bucket's own date ("" for the undated row — records never land
+   *  there: a slice id always carries its date). */
+  date: string;
+  /** How many conversations the pile holds. */
+  slices: number;
+  /** Their summed turn volume — the thickness driver. */
+  turns: number;
+}
+
+/** What a cell/pile unit can hold: a case pile or the bucket's record pile. */
+export type FieldPile = ArchivePile | RecordPile;
+
 export interface ArchiveBucket {
   /** Stable identity: `d:2026-10-06` / `w:2026-10-05` (the Monday) / `u:`. */
   key: string;
@@ -69,6 +90,8 @@ export interface ArchiveBucket {
   date: string;
   /** Newest-touched first inside the bucket, then by name. */
   piles: ArchivePile[];
+  /** The bucket's record pile, null when no slice lands here. */
+  record: RecordPile | null;
 }
 
 /** A write within the trailing week gets its own day; older writes week up. */
@@ -117,21 +140,50 @@ export function bucketKeyFor(
 
 /**
  * Group the (already filtered) piles into buckets, newest first; the undated
- * row always sorts last — a case with no date has no claim to any when.
+ * row always sorts last — a case with no date has no claim to any when. The
+ * records bucket alongside the cases: every slice lands by its own date, a
+ * bucket with ONLY records is still a row (a day you talked but wrote no
+ * case is still a day in the archive), and each bucket's slices fold into
+ * ONE record pile.
  */
 export function buildBuckets(
   piles: readonly ArchivePile[],
   today: string,
+  records: readonly ArchiveRecord[] = [],
 ): ArchiveBucket[] {
   const byKey = new Map<string, ArchiveBucket>();
-  for (const pile of piles) {
-    const { key, kind, date } = bucketKeyFor(pile.updated, today);
+  const bucketFor = (date: string): ArchiveBucket => {
+    const { key, kind, date: bucketDate } = bucketKeyFor(date, today);
     let bucket = byKey.get(key);
     if (!bucket) {
-      bucket = { key, kind, date, piles: [] };
+      bucket = { key, kind, date: bucketDate, piles: [], record: null };
       byKey.set(key, bucket);
     }
-    bucket.piles.push(pile);
+    return bucket;
+  };
+  for (const pile of piles) {
+    bucketFor(pile.updated).piles.push(pile);
+  }
+  // The records fold: per bucket, the newest slice is the pile's open target
+  // and the summed turns drive its thickness tier.
+  const recordSlices = new Map<string, ArchiveRecord[]>();
+  for (const record of records) {
+    const bucket = bucketFor(record.date);
+    const list = recordSlices.get(bucket.key) ?? [];
+    list.push(record);
+    recordSlices.set(bucket.key, list);
+  }
+  for (const [key, list] of recordSlices) {
+    const bucket = byKey.get(key);
+    if (!bucket) continue;
+    const sorted = [...list].sort((a, b) => b.sliceId.localeCompare(a.sliceId));
+    bucket.record = {
+      kind: "record",
+      ref: `records/${sorted[0].sliceId}`,
+      date: bucket.date,
+      slices: sorted.length,
+      turns: sorted.reduce((sum, r) => sum + r.turns, 0),
+    };
   }
   const buckets = [...byKey.values()];
   for (const bucket of buckets) {
@@ -148,38 +200,57 @@ export function buildBuckets(
 
 // ─── Columns ────────────────────────────────────────────────────────────────
 
+/** The records column — the synthetic trailing column the record piles live
+ *  in. NOT a case category: the case filter (`archiveCategory`) hides the
+ *  records with the rest of the grid's mismatch, and the records column
+ *  exists only while records do. */
+export type ArchiveColumn = CaseCategory | "records";
+
 /**
  * The field's columns, in the category table's own order, EMPTY CATEGORIES
  * REMOVED (the dispatch's ruling: empty categories do not produce empty
- * piles — a category with nothing in the current data has no column).
+ * piles — a category with nothing in the current data has no column). The
+ * records column trails whenever any record exists.
  */
-export function archiveColumns(piles: readonly ArchivePile[]): CaseCategory[] {
+export function archiveColumns(
+  piles: readonly ArchivePile[],
+  records: readonly ArchiveRecord[] = [],
+): ArchiveColumn[] {
   const present = new Set(piles.map((p) => p.category));
-  return CASE_CATEGORIES.filter((c) => present.has(c));
+  const columns: ArchiveColumn[] = CASE_CATEGORIES.filter((c) =>
+    present.has(c),
+  );
+  if (records.length > 0) columns.push("records");
+  return columns;
 }
 
 /** One bucket's cells in column order — only non-empty cells exist, and a
  *  collision (two cases sharing a bucket × category) keeps BOTH piles: the
  *  cell holds them side by side, shrinking to fit. Hiding one would be a
  *  lie about the archive's contents. `column` is the index into the field's
- *  column list — the row's grid placement reads it. */
+ *  column list — the row's grid placement reads it. The record pile takes
+ *  the records column's cell, alone by construction (one per bucket). */
 export interface ArchiveCell {
   column: number;
-  piles: ArchivePile[];
+  piles: FieldPile[];
 }
 
 export function bucketCells(
   bucket: ArchiveBucket,
-  columns: readonly CaseCategory[],
+  columns: readonly ArchiveColumn[],
 ): ArchiveCell[] {
   const rank = new Map(columns.map((c, i) => [c, i]));
-  const cells = new Map<number, ArchivePile[]>();
+  const cells = new Map<number, FieldPile[]>();
   for (const pile of bucket.piles) {
     const r = rank.get(pile.category);
     if (r === undefined) continue;
     const cell = cells.get(r) ?? [];
     cell.push(pile);
     cells.set(r, cell);
+  }
+  if (bucket.record) {
+    const r = rank.get("records");
+    if (r !== undefined) cells.set(r, [bucket.record]);
   }
   return [...cells.entries()]
     .sort((a, b) => a[0] - b[0])
@@ -257,7 +328,7 @@ export function archiveGeometry(
 // ─── Units — what the virtual scroller lays out ─────────────────────────────
 
 export type ArchiveUnit =
-  | { kind: "header"; key: string; height: number; columns: CaseCategory[] }
+  | { kind: "header"; key: string; height: number; columns: ArchiveColumn[] }
   | {
       kind: "row";
       key: string;
@@ -271,16 +342,17 @@ export type ArchiveUnit =
       height: number;
       bucket: ArchiveBucket;
     }
-  | { kind: "pile"; key: string; height: number; pile: ArchivePile };
+  | { kind: "pile"; key: string; height: number; pile: FieldPile; bucket: ArchiveBucket };
 
 /**
  * Flatten the buckets into the scroll units. Desktop: a column-header unit,
  * then one row per bucket. Single-column: one label unit per bucket, then
- * one unit per pile — the same field, one pile per screen.
+ * one unit per pile — the same field, one pile per screen. The record pile
+ * trails its bucket's case piles, its grid column's own order.
  */
 export function buildArchiveUnits(
   buckets: readonly ArchiveBucket[],
-  columns: readonly CaseCategory[],
+  columns: readonly ArchiveColumn[],
   geo: ArchiveGeometry,
   singleColumn: boolean,
 ): ArchiveUnit[] {
@@ -301,12 +373,17 @@ export function buildArchiveUnits(
         height: geo.bucketH,
         bucket,
       });
-      for (const pile of bucket.piles) {
+      const bucketPiles: FieldPile[] = [
+        ...bucket.piles,
+        ...(bucket.record ? [bucket.record] : []),
+      ];
+      for (const pile of bucketPiles) {
         units.push({
           kind: "pile",
           key: `p:${bucket.key}:${pile.ref}`,
           height: geo.pileUnitH,
           pile,
+          bucket,
         });
       }
     } else {

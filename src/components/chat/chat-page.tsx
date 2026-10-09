@@ -1224,7 +1224,6 @@ function Inner({
             onSubmit={submitAndRise}
             isLoading={isLoading}
             onStop={handleStop}
-            persona={persona}
             currentModelId={selectedModel}
             onModelChange={handleModelChange}
           />

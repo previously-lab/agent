@@ -135,6 +135,7 @@ export function AppShell() {
     worldFrozen,
     sharedSlice,
     deskDoc,
+    openDesk,
     getCursor,
     feed,
     registerWorldDriver,
@@ -522,6 +523,13 @@ export function AppShell() {
       prevPage: tDesk("prevPage"),
       nextPage: tDesk("nextPage"),
       pagePosition: (current, total) => tDesk("pagePosition", { current, total }),
+      // The record paper's strings (v0.25b §三): the transcript's speaker
+      // labels ride INTO the record read (the markdown composes server-side
+      // with them), the turn count prints in the footer.
+      recordUserLabel: tDesk("recordUser"),
+      recordAgentLabel: tDesk("recordAgent"),
+      recordTurns: (count) => tDesk("recordTurns", { count }),
+      dossierTitle: (name) => tLibrary(`dossier.${name}`),
     }),
     [tDesk, tLibrary],
   );
@@ -624,6 +632,7 @@ export function AppShell() {
   // The desk's last live ref, so its exit beat still has a document to show.
   const lastDeskDocRef = useRef<string | null>(null);
   if (deskDoc !== null) lastDeskDocRef.current = deskDoc;
+
   const refreshCatalog = useCallback(async () => {
     // A settled turn may have written new CASES too — the archive field's
     // aggregated read is session-cached, so drop it and let the mounted

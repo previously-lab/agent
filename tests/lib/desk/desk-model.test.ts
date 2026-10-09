@@ -69,6 +69,40 @@ describe("deskPaperModel", () => {
   it("an empty body is NOT a dead link — the paper still prints", () => {
     expect(deskPaperModel("research/手机调研", doc("")).markdown).toBe("");
   });
+
+  it("a record ref is the transcript paper: no title, slice id top-left, turns for the footer", () => {
+    const model = deskPaperModel("records/2026-10-05-1430", {
+      ...doc("**You**\n\nhello", "2026-10-05"),
+      turnCount: 12,
+    });
+    expect(model.kind).toBe("record");
+    expect(model.title).toBe("");
+    expect(model.caseRef).toBe("2026-10-05-1430");
+    expect(model.date).toBe("2026-10-05");
+    expect(model.category).toBeNull();
+    expect(model.turnCount).toBe(12);
+  });
+
+  it("the record branch routes BEFORE the case grammar — the slice id would otherwise parse as a legacy name", () => {
+    expect(deskPaperModel("records/2026-10-05-1430", null).kind).toBe("record");
+  });
+
+  it("a dead record ref still prints the not-found paper, header intact", () => {
+    const model = deskPaperModel("records/2026-10-05-1430", null);
+    expect(model.markdown).toBeNull();
+    expect(model.caseRef).toBe("2026-10-05-1430");
+    expect(model.turnCount).toBeNull();
+  });
+
+  it("a dossier ref is a self-document paper: named, no case furniture", () => {
+    const model = deskPaperModel("dossier/previously", doc("# Previously on"));
+    expect(model.kind).toBe("dossier");
+    expect(model.dossier).toBe("previously");
+    expect(model.title).toBe("previously");
+    expect(model.caseRef).toBeNull();
+    expect(model.category).toBeNull();
+    expect(model.turnCount).toBeNull();
+  });
 });
 
 describe("panelModeForDeskOpen", () => {
@@ -100,6 +134,9 @@ describe("desk locale keys", () => {
       "page",
       "pagePosition",
       "prevPage",
+      "recordAgent",
+      "recordTurns",
+      "recordUser",
       "regionLabel",
     ]);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());

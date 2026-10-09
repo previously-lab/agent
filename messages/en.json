@@ -79,15 +79,7 @@
       "byokHint": "Your own API key (recommended) — direct API connection: streaming, fast, no local CLI needed.",
       "bridgeNotInstalled": "not installed",
       "bridgeConfigure": "Configure",
-      "hqStream": "Evolution stream (HQ)",
-      "docsTooltip": "Memory docs",
-      "docsLabel": "Memory documents",
-      "docs": {
-        "previously": "Previously on",
-        "direction": "Direction"
-      },
-      "docsLoading": "Loading…",
-      "docsEmpty": "Nothing here yet."
+      "hqStream": "Evolution stream (HQ)"
     },
     "attachment": "Attachment",
     "actions": {
@@ -445,7 +437,10 @@
     "pileAria": "{name} — {category}, {count, plural, one {# document} other {# documents}}",
     "openedAt": "opened {date}",
     "weekOf": "Week of {date}",
-    "undated": "Undated"
+    "undated": "Undated",
+    "recordsLabel": "Records",
+    "recordTurns": "{count, plural, one {# turn} other {# turns}}",
+    "recordPileAria": "{date} — {slices, plural, one {# conversation} other {# conversations}}, {turns, plural, one {# turn} other {# turns}}"
   },
   "missions": {
     "emptyTitle": "No missions yet",
@@ -565,7 +560,10 @@
     "page": "· {n} ·",
     "prevPage": "Previous page",
     "nextPage": "Next page",
-    "pagePosition": "{current} / {total}"
+    "pagePosition": "{current} / {total}",
+    "recordUser": "You",
+    "recordAgent": "Previously",
+    "recordTurns": "{count, plural, one {# turn} other {# turns}}"
   },
   "library": {
     "title": "Library",
@@ -578,6 +576,11 @@
     "loading": "Loading…",
     "loadError": "The library couldn't be opened.",
     "openedAt": "Opened {date}",
+    "dossier": {
+      "title": "Dossier",
+      "previously": "Previously on",
+      "direction": "Direction"
+    },
     "category": {
       "people": "People",
       "events": "Events",
