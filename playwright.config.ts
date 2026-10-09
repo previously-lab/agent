@@ -54,6 +54,10 @@ export default defineConfig({
             PREVIOUSLY_BRAIN: "bridge",
             PREVIOUSLY_HOME: E2E_HOME,
             MEMORY_ROOT: E2E_MEMORY_ROOT,
+            // The e2e dev server compiles into its own dist dir so a `pnpm
+            // build` (or a probe build) never clobbers a running suite — and
+            // vice versa. Covered by the `.next*/` gitignore rule.
+            NEXT_DIST_DIR: ".next-e2e",
             // .env.local must not leak a datasource override (e.g. a
             // developer's STORAGE=demo) into the seeded local fixture.
             STORAGE: "local",

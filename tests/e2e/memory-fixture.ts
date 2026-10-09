@@ -231,6 +231,39 @@ export async function clearCases(): Promise<void> {
   }
 }
 
+// ─── Dossier fixtures (the library's pinned section, v0.25b §三) ───────────
+// The two self-documents the Dossier reads — paths mirror DOSSIER_PATHS in
+// src/lib/archive/actions.ts (e2e files never import from src, so the
+// fixture keeps its own copy of the contract, same as the serializers above).
+
+const DOSSIER_FILES = {
+  previously: path.join("episodic", "current-previously.md"),
+  direction: path.join("evolution", "direction.md"),
+} as const;
+
+/** Sentinel body — specs assert on this exact text on the desk. */
+export function dossierSentinel(name: keyof typeof DOSSIER_FILES): string {
+  return `DOSSIER ${name} sentinel body`;
+}
+
+/** Write both Dossier documents into the isolated MEMORY_ROOT. */
+export async function seedDossier(): Promise<void> {
+  casesGuard();
+  for (const name of Object.keys(DOSSIER_FILES) as (keyof typeof DOSSIER_FILES)[]) {
+    const file = path.join(E2E_MEMORY_ROOT, DOSSIER_FILES[name]);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `${dossierSentinel(name)}\n`, "utf8");
+  }
+}
+
+/** Remove both Dossier documents (per-test isolation). */
+export async function clearDossier(): Promise<void> {
+  casesGuard();
+  for (const rel of Object.values(DOSSIER_FILES)) {
+    await rm(path.join(E2E_MEMORY_ROOT, rel), { force: true });
+  }
+}
+
 /** A two-turn (user + agent) slice at a given UTC start, with sentinel
  *  content so specs can assert on exact text. */
 export function makeSlice(

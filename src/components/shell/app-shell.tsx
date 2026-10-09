@@ -905,7 +905,12 @@ export function AppShell() {
               duration: reducedMotion ? 0 : 0.3,
               ease: [0.22, 1, 0.36, 1],
             }}
-            className="absolute inset-0 z-10"
+            // pointer-events-none is LOAD-BEARING, same as the archive
+            // branch above: this pane (z-10) stacks above the world canvas
+            // (z-0), so a hit-testable branch would swallow every click
+            // meant for the paper (which portals pane-side — desk-field's
+            // portalRef — and re-enables events on its own inner layer).
+            className="pointer-events-none absolute inset-0 z-10"
           >
             {/* The leaving desk outlives its ref: deskDoc is already null
                 during the return beat, so the desk keeps the last one. */}

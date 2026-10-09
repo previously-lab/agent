@@ -39,6 +39,14 @@
  * (CodeBlock and friends call hooks), so it is re-wrapped in
  * `NextIntlClientProvider` — the conversation field's BillboardBlock
  * pattern.
+ *
+ * THE PORTAL IS PANE-SIDE (v0.25b). `<Html portal>` mounts the paper's DOM
+ * into the wrapper's own overlay div, not the canvas's z-0 container — the
+ * archive field's pattern, adopted after an elementFromPoint probe showed
+ * the canvas-side mount dead to every hit (the z-10 pane branch swallowed
+ * them). The whole chain — the app shell's desk branch, this wrapper, the
+ * portal div — is pointer-events-none; only the stack itself re-enables
+ * hits (Html's `pointerEvents` prop).
  */
 import {
   useCallback,
@@ -490,6 +498,18 @@ export function DeskField({
     return () => window.removeEventListener("wheel", onWheel);
   }, [ready, total]);
 
+  /** The paper's DOM escape hatch — the archive field's own pattern. drei's
+   *  Html mounts INSIDE the world canvas's container by default — a z-0
+   *  sibling BELOW this pane, whose box swallows every hit before it reaches
+   *  the paper (the elementFromPoint probe that proved it). Mounting the
+   *  stack's DOM into THIS div — a child of the pane, same box as the canvas
+   *  — puts the paper back in hit range. The chain stays pointer-events-none
+   *  except the stack itself (Html's `pointerEvents` prop), so the desk's
+   *  empty margin lets every gesture fall through exactly as before.
+   *  Declared BEFORE the scene registration: the paging bundle hands it
+   *  down, so the const must precede it. */
+  const portalRef = useRef<HTMLDivElement | null>(null);
+
   // The scene registration — unchanged handshake, new paging bundle.
   useWorldScene(
     "field",
@@ -519,6 +539,7 @@ export function DeskField({
         attachMeasureRef,
         onTravelEnd: settleTurn,
         onTurn: turnPage,
+        portalRef,
       }}
     />,
   );
@@ -566,12 +587,23 @@ export function DeskField({
         // Focusable so the Escape/arrows binding has somewhere to listen —
         // the card field's wrapper pattern. The desk's whole DOM presence is
         // this region; the paper arrives back over it as the Html portal.
+        // pointer-events-none is LOAD-BEARING: the pane (z-10) stacks above
+        // the world canvas (z-0), so a hit-testable wrapper would swallow
+        // every click meant for the paper.
         tabIndex={0}
         role="region"
         aria-label={texts.regionLabel}
         onKeyDown={onKeyDown}
-        className="relative h-full w-full outline-none"
-      />
+        className="pointer-events-none relative h-full w-full outline-none"
+      >
+        {/* The paper's DOM lands HERE (drei Html `portal`), a pane-side
+            overlay with the canvas's own box — see portalRef above. */}
+        <div
+          ref={portalRef}
+          data-desk-portal
+          className="pointer-events-none absolute inset-0 overflow-hidden"
+        />
+      </div>
       {/* THE PAGE CONTROL — floating with the app's other chrome. The
           bottom-left corner itself is the world gate's seat (z-20 at the pane
           root), so the control stacks one bar-height above it (bottom-14) —
@@ -644,6 +676,10 @@ interface PagingProps {
    *  direction and the same gate as the buttons applies (turn state,
    *  bounds, reduced motion). */
   onTurn: (dir: "next" | "prev") => void;
+  /** The pane-side mount for the paper's DOM — the field's portalRef (the
+   *  archive field's portal pattern: inside the pane's z-10 box, not the
+   *  canvas's z-0 container, so hits reach the paper). */
+  portalRef: RefObject<HTMLDivElement | null>;
 }
 
 function DeskScene({
@@ -756,6 +792,7 @@ function DeskScene({
     attachMeasureRef,
     onTravelEnd,
     onTurn,
+    portalRef,
   } = paging;
 
   // One shell when the document is not a stack at all: in flight, dead
@@ -862,6 +899,9 @@ function DeskScene({
           // the paper's DOM px are world units, so print sizes stay honest.
           distanceFactor={400}
           zIndexRange={[30, 21]}
+          // drei's type wants a non-null current; the div mounts with the
+          // field's own DOM, before the scene's first frame.
+          portal={portalRef as unknown as RefObject<HTMLElement>}
           pointerEvents="auto"
         >
           <div
