@@ -575,42 +575,135 @@
   box-shadow: var(--paper-contact);
 }
 
-/* (a) no foil — the primary action pressed INTO the card: plate fill, sink
- * edges, matte ink. No metal at all. */
-.lab-item-deboss {
-  background-color: var(--paper-plate);
-  box-shadow: var(--paper-sink);
-  color: color-mix(in oklab, var(--foreground) 90%, var(--paper));
+.lab-covercard {
+  display: flex;
+  flex-direction: column;
+  min-height: 500px;
 }
 
-/* (b/c) the restrained leaf — a narrow gleam band whose bright stop is a
- * whisper off the sheet, never the current foil's white mirror flash. The
- * band's position is a CSS variable: fixed for (b), pointer-driven for (c). */
-.lab-foil {
-  background-image: linear-gradient(
-    105deg,
-    oklch(from var(--paper) calc(l * 0.52) c h) 0%,
-    oklch(from var(--paper) calc(l * 0.78) c h) 32%,
-    color-mix(in oklab, var(--paper) 22%, white) 42%,
-    oklch(from var(--paper) calc(l * 0.78) c h) 54%,
-    oklch(from var(--paper) calc(l * 0.52) c h) 100%
-  );
-  background-size: 190% 100%;
-  background-position-x: var(--foil-x, 34%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+/* The owner's ruling (2026-10-10): ordinary printing — ink on stock, set
+ * like the document body. The candidates differ ONLY in typographic design.
+ * Brand line, name, dateline: the document's own voices (serif display,
+ * mono date). Actions: printed labels — hover/focus is an ink change plus
+ * a hairline rule, never a glow. No plates, no relief, no metal. */
+
+.lab-brand {
+  font-family: var(--font-serif, serif);
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.02em;
+  color: var(--muted-foreground);
 }
 
-.dark .lab-foil {
-  background-image: linear-gradient(
-    105deg,
-    color-mix(in oklab, var(--paper) 48%, white) 0%,
-    color-mix(in oklab, var(--paper) 30%, white) 32%,
-    color-mix(in oklab, var(--paper) 10%, white) 42%,
-    color-mix(in oklab, var(--paper) 30%, white) 54%,
-    color-mix(in oklab, var(--paper) 48%, white) 100%
-  );
+.lab-name {
+  margin-top: 2px;
+  font-family: var(--font-serif, serif);
+  font-weight: 300;
+  font-size: var(--home-name-size, 44px);
+  line-height: var(--home-name-leading, 1.15);
+  color: var(--foreground);
+}
+
+.lab-date {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: 0.14em;
+  color: var(--muted-foreground);
+}
+
+.lab-rule {
+  height: 1px;
+  background: var(--paper-line);
+}
+
+/* (a) title page — centred stack, generous margins, no rules. */
+.lab-tp {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+}
+
+/* (b) editorial — flush left, one hairline under the name block, the
+ * dateline a mono line beneath the rule (the document header's language). */
+.lab-ed {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-top: 12px;
+}
+
+.lab-ed .lab-rule {
+  width: 100%;
+  margin-block: 14px 12px;
+}
+
+/* (c) intertitle — the name at running-head size, the dateline under it,
+ * a hairline closing the head: the archive's first sheet. */
+.lab-it {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+
+.lab-it-name {
+  font-family: var(--font-serif, serif);
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.4;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
+}
+
+.lab-it .lab-rule {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* The actions, printed labels. */
+.lab-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 28px;
+}
+
+.lab-actions--centre {
+  align-items: center;
+}
+
+.lab-action {
+  padding-bottom: 3px;
+  border-bottom: 1px solid transparent;
+  font-family: var(--font-serif, serif);
+  font-size: 18px;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--foreground) 85%, var(--paper));
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.lab-action--quiet {
+  color: var(--muted-foreground);
+}
+
+/* The quiet state promised by the ruling: ink change + hairline rule. */
+.lab-action:hover,
+.lab-action:focus-visible {
+  border-bottom-color: var(--paper-line);
+  color: var(--foreground);
+  outline: none;
 }
 
 /* ── Room (recipe 05) ─────────────────────────────────────────────────── */
