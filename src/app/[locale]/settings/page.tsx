@@ -1,5 +1,6 @@
 import { getTranslations, setRequestLocale } from "next-intl/server";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { AppearanceMirrors } from "./appearance-mirrors";
 import { ClientSection } from "@/components/settings/client-section";
 import { VersionSection } from "@/components/settings/version-section";
 import { Separator } from "@/components/ui/separator";
@@ -46,6 +47,11 @@ export default async function SettingsPage({
             dataSource={source}
             canWrite={canWrite}
           />
+          {/* 外观 / Appearance — the theme and language switches the More
+              menu already owns, mirrored here so the page has settings of
+              its own (v0.25 §3.6). Same hooks, same message keys: a second
+              door to one state, not a second implementation. */}
+          <AppearanceMirrors />
         </section>
 
         {/* 本地设置 / Local settings — client mode only (server-gated; the
