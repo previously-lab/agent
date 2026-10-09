@@ -75,6 +75,13 @@ import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import { ShellNavContext, type ShellNav } from "@/components/shell/shell-nav";
 import { panelModeForDeskOpen } from "@/components/desk/desk-model";
 
+/** The desk's memory (v0.25b, product-pass §4): the last document the
+ *  reader opened, so a returning reader's desk opens on his paper instead
+ *  of the bare archive. Written on every open; a dead ref is dropped by the
+ *  app shell's restore preflight. The `previously:<name>:vN` naming follows
+ *  the lens-switcher's hint key. */
+export const LAST_DOCUMENT_KEY = "previously:last-document:v1";
+
 /**
  * The world's pose, as the route last reported it. The per-turn view getter
  * reads it through the driver's `getPose` instead of this state, because it
@@ -107,8 +114,10 @@ interface ShellValue {
   worldFrozen: boolean;
   /** The shared slice address — the one cursor every surface reads. */
   sharedSlice: string | null;
-  /** The document on the desk (v0.22): a case ref, or null when the desk is
-   *  away. One field, no persistence — a refresh puts nothing on the desk. */
+  /** The document on the desk (v0.22): a case/record/dossier ref, or null
+   *  when the desk is away. The field lives here (no persistence of the
+   *  LIVE desk) — the cross-session memory is the LAST_DOCUMENT_KEY write
+   *  in openDesk, restored by the app shell's preflight. */
   deskDoc: string | null;
   /** The archive field's category filter (v0.25a §四): the library control's
    *  category selection IS this filter — the shelf's browsing tree and the
@@ -165,9 +174,11 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const [panelMode, setPanelMode] = useState<ConversationPanelMode>("pill");
   const worldFrozen = panelMode === "fullscreen";
 
-  // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order, no
-  // persistence. The page's library column (shelf/doc-library.tsx) writes
-  // it, the app shell reads it; this provider is their common ancestor.
+  // THE DOCUMENT DESK (v0.22 P1). Just the ref — no placement, no order.
+  // Every open also writes the desk's memory (LAST_DOCUMENT_KEY, above):
+  // the reader's NEXT session restores it. The page's library column
+  // (shelf/doc-library.tsx) and the archive field's piles write it, the app
+  // shell reads it; this provider is their common ancestor.
   // Opening folds a fullscreen panel to the pill first
   // (panelModeForDeskOpen), the same rule as leaving `/app` (fullscreen
   // would freeze the world the desk renders in).
@@ -175,6 +186,12 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   const openDesk = useCallback((ref: string) => {
     setPanelMode(panelModeForDeskOpen);
     setDeskDoc(ref);
+    try {
+      window.localStorage.setItem(LAST_DOCUMENT_KEY, ref);
+    } catch {
+      // Storage can be denied (private mode) — the memory is a convenience,
+      // never a gate.
+    }
   }, []);
   const closeDesk = useCallback(() => setDeskDoc(null), []);
 

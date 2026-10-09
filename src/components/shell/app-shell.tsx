@@ -70,9 +70,13 @@ import {
   type WorldTransitionPhase,
 } from "@/lib/timeline3d/world-transition";
 import { getTimelineCatalogPage } from "@/lib/episodic/actions";
+import { getCaseDoc, getSliceStart } from "@/lib/episodic/actions";
+import { getDossierDoc } from "@/lib/archive/actions";
+import { deskRefKind, parseRecordRef } from "@/lib/archive/refs";
 import { invalidateHotelData } from "@/lib/game/hotel-data";
 import { useShellNav } from "@/components/shell/shell-nav";
 import {
+  LAST_DOCUMENT_KEY,
   useShell,
   type WorldDriver,
 } from "@/components/shell/shell-provider";
@@ -109,6 +113,11 @@ import {
   CompanionPod,
   type NarrationTarget,
 } from "@/components/companion/companion-pod";
+
+/** The desk-memory restore runs ONCE per JS session (module scope — the
+ *  provider's deskDoc survives route remounts, so a remounted shell must
+ *  not re-open what the reader put back). See the restore effect below. */
+let restoreAttempted = false;
 
 export function AppShell() {
   // THE URL IS DEV-ONLY. `?view=game` is read ONCE, as the cold-boot world,
@@ -633,6 +642,67 @@ export function AppShell() {
   const lastDeskDocRef = useRef<string | null>(null);
   if (deskDoc !== null) lastDeskDocRef.current = deskDoc;
 
+  // THE DESK'S MEMORY (v0.25b, product-pass §4 / R2): a returning reader's
+  // desk opens on the last document he read — ONCE per session (the module
+  // flag below: closing the desk re-runs this effect through the deskDoc
+  // dependency, and must not reopen what the reader just put back). The
+  // ref is PREFLIGHTED by kind before anything opens: a live document
+  // opens; a dead one (moved, renamed, sealed) drops its stale key and the
+  // archive stands — the field's honest placeholder is the fallback, and a
+  // dead ref never blocks behind a not-found paper. Restored only on the
+  // field world — a `?view=game` cold boot has the hotel as its explicit
+  // destination. StrictMode-safe: the once-guard is module state (the
+  // simulated remount's second pass returns early), and the preflight's
+  // continuation is provider-owned (openDesk is layout-level), so the
+  // simulated cleanup cannot strand the restore — the deskDocRef check at
+  // resolution keeps a slow preflight from overriding a document the
+  // reader opened by hand in the meantime.
+  const deskDocRef = useRef<string | null>(deskDoc);
+  useEffect(() => {
+    deskDocRef.current = deskDoc;
+  }, [deskDoc]);
+  useEffect(() => {
+    if (restoreAttempted) return;
+    restoreAttempted = true;
+    if (deskDoc !== null) return;
+    if (searchParams.get("view") === "game") return;
+    let remembered: string | null = null;
+    try {
+      remembered = window.localStorage.getItem(LAST_DOCUMENT_KEY);
+    } catch {
+      return; // storage denied — the archive stands.
+    }
+    if (!remembered) return;
+    const kind = deskRefKind(remembered);
+    const record = kind === "record" ? parseRecordRef(remembered) : null;
+    const exists: Promise<boolean> =
+      kind === "record"
+        ? record
+          ? getSliceStart(record.sliceId).then((s) => s !== null)
+          : Promise.resolve(false)
+        : kind === "dossier"
+          ? getDossierDoc(remembered).then((d) => d !== null)
+          : getCaseDoc(remembered).then((d) => d !== null);
+    exists
+      .then((ok) => {
+        if (!ok) {
+          try {
+            window.localStorage.removeItem(LAST_DOCUMENT_KEY);
+          } catch {
+            // same denial tolerance as the write.
+          }
+          return;
+        }
+        if (deskDocRef.current === null) openDesk(remembered);
+      })
+      .catch(() => {
+        // A failed preflight opens nothing and keeps the key — a flaky read
+        // must not erase the memory; the next boot retries.
+      });
+    // searchParams is read once per cold boot by contract (the URL is
+    // dev-only); deskDoc/openDesk are the live gates.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deskDoc, openDesk]);
   const refreshCatalog = useCallback(async () => {
     // A settled turn may have written new CASES too — the archive field's
     // aggregated read is session-cached, so drop it and let the mounted
