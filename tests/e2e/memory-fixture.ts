@@ -188,8 +188,12 @@ export interface FixtureCase {
   name: string;
   /** Birth stamp for the index header; "" writes no `opened` line. */
   opened: string;
+  /** Index body override (default: the one-line seeded index body). A case
+   *  that cites its scenes carries its `(refs: <sliceId>)` stamp and its
+   *  cross-case references here (v0.25a §五). */
+  body?: string;
   /** Dated pieces — each becomes one `<date>-<title>.md` sheet in the pile. */
-  pieces: { date: string; title: string }[];
+  pieces: { date: string; title: string; body?: string }[];
 }
 
 function casesGuard(): void {
@@ -207,13 +211,13 @@ export async function seedCases(cases: FixtureCase[]): Promise<void> {
     const fm = c.opened ? `opened: ${JSON.stringify(c.opened)}\n` : "";
     await writeFile(
       path.join(dir, "index.md"),
-      `---\n${fm}---\n\nCase ${c.name} — the seeded index.\n`,
+      `---\n${fm}---\n\n${c.body ?? `Case ${c.name} — the seeded index.`}\n`,
       "utf8",
     );
     for (const piece of c.pieces) {
       await writeFile(
         path.join(dir, `${piece.date}-${piece.title}.md`),
-        `---\nopened: ${JSON.stringify(piece.date)}\n---\n\nPiece ${piece.title} of ${c.name}.\n`,
+        `---\nopened: ${JSON.stringify(piece.date)}\n---\n\n${piece.body ?? `Piece ${piece.title} of ${c.name}.`}\n`,
         "utf8",
       );
     }
