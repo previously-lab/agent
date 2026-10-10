@@ -27,18 +27,23 @@ export interface DeskPaperModel {
    *  record: the transcript's identity lives entirely in the header (§三:
    *  date + slice id + turn count), the body is the turns alone. */
   title: string;
-  /** The header's top-left line: the case reference ("research / 手机调研"),
+  /** The running head's left line: the case reference ("research / 手机调研"),
    *  the record's slice id, or null for a legacy ref / a dossier paper (the
    *  dossier prints its localized name there instead). */
   caseRef: string | null;
-  /** The header's top-right date — the document's `opened`, verbatim. */
+  /** The header's date — the document's `opened`, verbatim. Printed 700
+   *  tabular in both heads (the masthead's data line, the runhead's right
+   *  slot). */
   date: string;
-  /** The footer's bottom-right category, or null for a non-case paper. */
+  /** The bare category the masthead's data line and the footer's right slot
+   *  print, or null for a non-case paper (a record wears the records label;
+   *  a dossier prints none). */
   category: CaseCategory | null;
   /** The body markdown, or null for a dead link (the not-found paper). */
   markdown: string | null;
   kind: DeskPaperKind;
-  /** Record papers: the slice's turn count — the footer's right line. */
+  /** Record papers: the slice's turn count — the first page's masthead
+   *  source line. */
   turnCount: number | null;
   /** Dossier papers: which self-document (drives the localized title). */
   dossier: DossierDocName | null;

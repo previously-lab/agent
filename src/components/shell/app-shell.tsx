@@ -522,6 +522,7 @@ export function AppShell() {
   const tDesk = useTranslations("desk");
   const tLibrary = useTranslations("library");
   const tRungs = useTranslations("rungs");
+  const tArchive = useTranslations("archiveField");
   const deskTexts = useMemo<DeskTexts>(
     () => ({
       regionLabel: tDesk("regionLabel"),
@@ -539,6 +540,11 @@ export function AppShell() {
       recordUserLabel: tDesk("recordUser"),
       recordAgentLabel: tDesk("recordAgent"),
       recordTurns: (count) => tDesk("recordTurns", { count }),
+      // The v0.27 masthead: the record paper's bare category is the
+      // archive's own records label; its source line prints the slice id
+      // and the turn count the footer used to carry.
+      recordCategory: tArchive("recordsLabel"),
+      recordSource: (ref, turns) => tDesk("recordSource", { ref, turns }),
       dossierTitle: (name) => tLibrary(`dossier.${name}`),
       // The place line (v0.25a §五): the rung's own name leads, then the
       // room's archetype label (desk.archetype.*) and the slice's day.
@@ -546,7 +552,7 @@ export function AppShell() {
       archetypeName: (id) => tDesk(`archetype.${id}`),
       placeAria: tDesk("placeAria"),
     }),
-    [tDesk, tLibrary, tRungs],
+    [tDesk, tLibrary, tRungs, tArchive],
   );
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
@@ -968,7 +974,7 @@ export function AppShell() {
             reading session does not move it) / 取消 (stay). With neither,
             the button keeps its old direct move. The way back out of the
             hotel is unchanged: the game's own exit button or Escape. */}
-        <div className="absolute bottom-4 left-4 z-20">
+        <div className="absolute bottom-17 left-2 z-20 md:bottom-4 md:left-4">
           {worldGateOpen && (
             <>
               {/* The click-away: a bare layer, not a focusable control. */}

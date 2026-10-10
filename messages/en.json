@@ -565,6 +565,7 @@
     "recordUser": "You",
     "recordAgent": "Previously",
     "recordTurns": "{count, plural, one {# turn} other {# turns}}",
+    "recordSource": "Slice {ref} · {turns}",
     "placeAria": "Stand at this document's scene",
     "archetype": {
       "meadow": "Meadow",

@@ -137,6 +137,7 @@ describe("desk locale keys", () => {
       "placeAria",
       "prevPage",
       "recordAgent",
+      "recordSource",
       "recordTurns",
       "recordUser",
       "regionLabel",

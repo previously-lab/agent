@@ -159,7 +159,6 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 2px;
   font-family: var(--font-serif, serif);
   font-size: calc(var(--desk-mm) * 4);
 }
@@ -170,21 +169,112 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 2px;
 }
 
-/* ── Header (页眉): mono small line, case ref left / date right, one
-   hairline rule beneath. Sits inside the top print margin. ───────────── */
-.desk-head {
-  margin: calc(var(--desk-mm) * 10) calc(var(--desk-mm) * 25) 0;
+/* ── THE FIRST-PAGE MASTHEAD (v0.27 原稿, ported from lab archive-paper.css
+   with --desk-mm): the wordmark in the heaviest ink on the sheet, a heavy
+   rule, then the one row of functional data (时间 · 位置 · 分类, written
+   bare) with the descriptive source line set smaller beneath it. The
+   hairline at the bottom brackets the data block into a BAND with the
+   masthead's own heavy rule. Nothing is faded — print does not grey its own
+   letterhead; the hierarchy is made by WEIGHT, size and tracking. ─────── */
+.desk-masthead {
+  margin: calc(var(--desk-mm) * 12) calc(var(--desk-mm) * 25) 0;
+  padding-bottom: calc(var(--desk-mm) * 2);
+  border-bottom: 1px solid var(--paper-line);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--desk-mm) * 1.6);
+  color: var(--color-foreground);
+}
+
+/* THE MARK — the heaviest thing on the sheet. */
+.desk-wordmark {
+  font-family: var(--font-sans, sans-serif);
+  font-size: calc(var(--desk-mm) * 7.5);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.025em;
+}
+
+.desk-masthead-rule {
+  height: calc(var(--desk-mm) * 0.5);
+  margin-top: calc(var(--desk-mm) * 1);
+  background: var(--color-foreground);
+}
+
+.desk-masthead-info {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--desk-mm) * 0.9);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: calc(var(--desk-mm) * 2.9);
+  line-height: 1.4;
+}
+
+/* One line, three values: 时间 · 位置 · 分类. The place absorbs the slack
+   so the category sits at the right edge. */
+.desk-masthead-row {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--desk-mm) * 5);
+}
+
+.desk-masthead-time {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.desk-masthead-place {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  letter-spacing: 0.03em;
+}
+
+.desk-masthead-cat {
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  white-space: nowrap;
+}
+
+/* The descriptive register under the data row — regular, smaller, tracked. */
+.desk-masthead-line {
+  font-size: calc(var(--desk-mm) * 2.6);
+  letter-spacing: 0.06em;
+}
+
+/* ── THE CONTINUATION RUNHEAD: every page after the first carries a single
+   running line — the document's ref left, its time right — instead of
+   introducing itself again. ─────────────────────────────────────────── */
+.desk-runhead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(var(--desk-mm) * 6);
+  margin: calc(var(--desk-mm) * 14) calc(var(--desk-mm) * 25) 0;
   padding-bottom: calc(var(--desk-mm) * 2);
   border-bottom: 1px solid var(--paper-line);
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: calc(var(--desk-mm) * 3);
-  line-height: 1.6;
-  letter-spacing: 0.14em;
+  font-size: calc(var(--desk-mm) * 2.7);
+  line-height: 1.45;
+  letter-spacing: 0.1em;
   color: var(--color-foreground);
-  opacity: 0.72;
+}
+
+.desk-runhead-ref {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk-runhead-time {
+  white-space: nowrap;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Body: the 版心, a page viewport — no scrolling (the paper never clips
@@ -275,7 +365,6 @@
   font-family: var(--font-serif, serif);
   font-size: calc(var(--desk-mm) * 3.6);
   line-height: 1.8;
-  opacity: 0.72;
 }
 
 /* ── Footer (页脚): mono smaller line, centred folio, category
@@ -290,7 +379,13 @@
   line-height: 1.6;
   letter-spacing: 0.14em;
   color: var(--color-foreground);
-  opacity: 0.72;
+}
+
+/* The footer's right slot: the bare category (调研, never 分类: 调研) —
+   the same weight + tracking the masthead's category wears. */
+.desk-foot-cat {
+  font-weight: 700;
+  letter-spacing: 0.22em;
 }
 
 /* ── The markdown body, re-rhythmmed for print (§10's grammar, print scale) */
@@ -347,7 +442,6 @@
 .desk-paper .typeset blockquote {
   border-inline-start: 1px solid var(--paper-line);
   color: inherit;
-  opacity: 0.86;
 }
 
 /* Inline code: flat ink in a hairline frame, no fill. */
@@ -366,7 +460,7 @@
 .desk-paper .code-block {
   margin-block-start: var(--typeset-flow, 0.9em);
   border-color: var(--paper-line);
-  border-radius: 1px;
+  border-radius: 0;
   background-color: var(--paper-plate);
 }
 

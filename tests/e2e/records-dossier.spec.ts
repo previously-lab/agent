@@ -108,9 +108,16 @@ test.describe("Records are papers", () => {
     await expect(
       page.locator(".desk-flow").getByText("You", { exact: true }).first(),
     ).toBeVisible();
-    // The header carries the slice id, the footer the turn count.
-    await expect(page.locator(".desk-head").first()).toContainText(newestA);
-    await expect(page.locator(".desk-foot").first()).toContainText("2 turns");
+    // The first page's masthead carries the slice id + the turn count in its
+    // source line (v0.27: they moved up from the footer); the footer's right
+    // slot now prints the bare category, same as a case paper.
+    await expect(
+      page.locator(".desk-masthead-line").first(),
+    ).toContainText(newestA);
+    await expect(
+      page.locator(".desk-masthead-line").first(),
+    ).toContainText("2 turns");
+    await expect(page.locator(".desk-foot").first()).toContainText("Records");
   });
 
   test("the Dossier pins atop the library and opens on the desk", async ({

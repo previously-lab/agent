@@ -565,6 +565,7 @@
     "recordUser": "你",
     "recordAgent": "Previously",
     "recordTurns": "{count} 轮",
+    "recordSource": "切片 {ref} · {turns}",
     "placeAria": "走到这份文档的现场",
     "archetype": {
       "meadow": "草甸",

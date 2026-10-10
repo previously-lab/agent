@@ -17,8 +17,13 @@
  *
  * THE DESK OWNS THE CAMERA. Per-frame camera writes are the slot owner's
  * job (FieldScene does the same for the cards); the shell centres the paper
- * in the full pane (v0.24: the library is a floating control, so the
- * reader's `camXOffset` is 0 — there is no column to clear).
+ * in the full pane. THE GIVE-WAY (v0.25 §3.1 R1-A): when the floating
+ * library panel is open at ≥lg, the paper pans RIGHT by the panel's
+ * measured width — a damped ~300 ms camera move, not a layout jump, and the
+ * sheet's own size never changes (the anti-goal). The offset is DERIVED
+ * from the DOM (`useLibraryPanelShift` below — the use-chrome-inset idiom:
+ * the panel measures itself, the desk reacts), so the panel's open state
+ * has no second copy.
  *
  * PAGINATION (v0.24). One sheet = one PAGE of the document. The markdown
  * flows through CSS multi-column layout inside a fixed-height 版心 (one
@@ -135,8 +140,14 @@ export interface DeskTexts {
    *  record read, which composes the turns' markdown with them. */
   recordUserLabel: string;
   recordAgentLabel: string;
-  /** The record paper's footer right line: the slice's turn count. */
+  /** The record paper's turn count (v0.25b §三) — the transcript read hands
+   *  it through; the first page's masthead source line prints it. */
   recordTurns(count: number): string;
+  /** The record paper's bare category (v0.27 原稿): the archive's records
+   *  label, printed where a case paper prints its category. */
+  recordCategory: string;
+  /** The record masthead's source line: 切片号 · 轮数 (v0.27 原稿 §4.3). */
+  recordSource(ref: string, turns: string): string;
   /** A dossier paper's display title + header line (the library's Dossier
    *  labels — previously / direction). */
   dossierTitle(name: "previously" | "direction"): string;
@@ -168,6 +179,68 @@ const WHEEL_QUIET_MS = 150;
  *  dominance the horizontal component needs over the vertical one. */
 const SWIPE_THRESHOLD_PX = 56;
 
+/** The give-way breakpoint (v0.25 R1-A): at ≥lg the paper pans aside; below
+ *  it the panel closes on selection instead (library-control's half of the
+ *  ruling) — a phone never gets both the panel and a shifted sheet. */
+const LIBRARY_GIVEWAY_MQ = "(min-width: 1024px)";
+
+/** How wide the open library panel stands, in px — 0 when it is closed or
+ *  the viewport is below lg. The panel renders `[data-library-panel]` and
+ *  its toggle carries `aria-expanded`, so the desk MEASURES the truth
+ *  instead of importing a copy of the panel's state (the chrome-inset
+ *  idiom). The open signal reads off the TOGGLE, not the panel's presence:
+ *  the panel lingers through its exit beat, and the paper's return pan
+ *  starts on the close click, not 200 ms after it.
+ *
+ *  Two observers because the two inputs change differently: the toggle's
+ *  aria-expanded and the panel's mount/unmount are mutations on the
+ *  control's subtree; the panel's WIDTH follows the viewport (its formula
+ *  is viewport-derived), which is a resize. rAF-debounced, equality-guarded. */
+function measureLibraryPanelWidth(): number {
+  if (!window.matchMedia(LIBRARY_GIVEWAY_MQ).matches) return 0;
+  const control = document.querySelector("[data-library-control]");
+  const toggle = control?.querySelector("[data-library-toggle]");
+  if (toggle?.getAttribute("aria-expanded") !== "true") return 0;
+  const panel = control?.querySelector("[data-library-panel]");
+  if (!panel) return 0;
+  return panel.getBoundingClientRect().width;
+}
+
+function useLibraryPanelShift(): number {
+  const [shift, setShift] = useState(0);
+  useEffect(() => {
+    const apply = () => {
+      const w = measureLibraryPanelWidth();
+      setShift((prev) => (prev === w ? prev : w));
+    };
+    apply();
+    let frame = 0;
+    const remeasure = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(apply);
+    };
+    const mo = new MutationObserver(remeasure);
+    // The desk mounts inside the shell that already rendered the control —
+    // the root is there by the time this effect runs.
+    const root = document.querySelector("[data-library-control]");
+    if (root) {
+      mo.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-expanded"],
+      });
+    }
+    window.addEventListener("resize", remeasure);
+    return () => {
+      cancelAnimationFrame(frame);
+      mo.disconnect();
+      window.removeEventListener("resize", remeasure);
+    };
+  }, []);
+  return shift;
+}
+
 export function DeskField({
   docRef,
   camXOffset,
@@ -179,8 +252,10 @@ export function DeskField({
    *  mounts the desk only when a ref is set). */
   docRef: string;
   /** The field camera's half-band x shift — 0 in the reader (the library
-   *  control floats; there is no column to clear). The desk still writes
-   *  its own camera, offset included. */
+   *  control floats; there is no column to clear). The give-way pan (v0.25
+   *  R1-A) is ADDED ON TOP inside the field: it derives from the panel's
+   *  measured width, not from this prop. The desk still writes its own
+   *  camera, offset included. */
   camXOffset: number;
   reducedMotion: boolean;
   texts: DeskTexts;
@@ -204,6 +279,15 @@ export function DeskField({
   // every context, stops at the Canvas root.
   const [isPresent] = usePresence();
   const leave = leaving || !isPresent;
+
+  // The give-way (v0.25 R1-A): the open library panel's measured width,
+  // SUBTRACTED from the camera's x — the camera looks at (camX, 0, 0), so a
+  // negative shift puts the view's centre left of the paper and the paper
+  // reads shifted RIGHT (the card field's band bias is the same sign
+  // convention). The scene damps toward the target, so open/close is a pan,
+  // not a jump.
+  const panelShift = useLibraryPanelShift();
+  const effectiveCamX = camXOffset - panelShift;
 
   // The document arrives lazily, one server-action round trip per open —
   // the shelf's own rhythm. `undefined` = in flight; null = dead link (the
@@ -614,7 +698,7 @@ export function DeskField({
       locale={locale}
       messages={messages}
       dark={dark}
-      camXOffset={camXOffset}
+      camXOffset={effectiveCamX}
       reducedMotion={reducedMotion}
       exiting={leave}
       docRefCtx={docRefCtx}
@@ -710,7 +794,7 @@ export function DeskField({
         createPortal(
           <div
             data-page-controls
-            className="pointer-events-none fixed bottom-14 left-4 z-50 sm:left-6"
+            className="pointer-events-none fixed bottom-27 left-2 z-50 md:bottom-14 md:left-4"
           >
             <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
               <button
@@ -815,6 +899,24 @@ function DeskScene({
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
 
+  // The bare category (v0.27 原稿): the masthead's data line and the
+  // footer's right slot print the SAME value — a case's translated
+  // category, the record paper's 记录, nothing for a dossier/legacy paper.
+  const categoryLabel =
+    model.kind === "record"
+      ? texts.recordCategory
+      : model.category
+        ? texts.categoryName(model.category)
+        : "";
+  // The first page's source line: only the record paper prints one — the
+  // slice id + the turn count that used to ride the footer (§4.3).
+  const recordSourceLine =
+    model.kind === "record" &&
+    model.caseRef !== null &&
+    model.turnCount !== null
+      ? texts.recordSource(model.caseRef, texts.recordTurns(model.turnCount))
+      : null;
+
   // The clip planes follow the viewport because the camera DISTANCE does
   // (camera.ts) — the same correction FieldScene applies, before paint.
   useLayoutEffect(() => {
@@ -839,6 +941,9 @@ function DeskScene({
   const groupRef = useRef<THREE.Group>(null);
   const tableMatRef = useRef<THREE.MeshStandardMaterial>(null);
   const stackRef = useRef<HTMLDivElement>(null);
+  // The give-way pan's in-flight x (v0.25 R1-A) — starts AT the prop so a
+  // desk mounted under an already-open panel never pans on entrance.
+  const camXAnimRef = useRef(camXOffset);
 
   // THE SWAP RE-PLAYS THE PULL-OUT (v0.23): the reader stays mounted while
   // `docRef` changes (picking another document in the library), and the
@@ -865,11 +970,22 @@ function DeskScene({
     const eased = 1 - Math.pow(1 - anim.t, 3);
 
     // THE CAMERA IS THE DESK'S (see the module header): a parallel shift
-    // centring the stack in the PANE (0 in the reader — no column). No
-    // scroll drift, never a turn.
+    // centring the stack in the PANE. The give-way pan (v0.25 R1-A) DAMPS
+    // toward the prop — the panel's open/close arrives as a new target and
+    // the paper glides over ~300 ms (λ=12 settles inside the pane's own
+    // beat) instead of jumping; reduced motion snaps. No scroll drift,
+    // never a turn.
+    let camX = camXAnimRef.current;
+    if (reducedMotion || camX === camXOffset) {
+      camX = camXOffset;
+    } else {
+      camX = THREE.MathUtils.damp(camX, camXOffset, 12, dt);
+      if (Math.abs(camX - camXOffset) < 0.5) camX = camXOffset;
+    }
+    camXAnimRef.current = camX;
     const camZ = camZFor(size.height);
-    camera.position.set(camXOffset, 0, camZ);
-    camera.lookAt(camXOffset, 0, 0);
+    camera.position.set(camX, 0, camZ);
+    camera.lookAt(camX, 0, 0);
 
     const group = groupRef.current;
     if (group) {
@@ -1092,19 +1208,59 @@ function DeskScene({
                       <div className="desk-face" aria-hidden="true" />
                     ) : (
                       <div className="desk-face">
-                        <header className="desk-head flex items-baseline justify-between gap-8">
-                          <span className="truncate">
-                            {/* The dossier's line is its localized name (no
-                                case ref); a record's is the slice id (set as
-                                caseRef by the model); a case's its ref. */}
-                            {model.kind === "dossier" && model.dossier
-                              ? texts.dossierTitle(model.dossier)
-                              : (model.caseRef ?? model.title)}
-                          </span>
-                          <span className="shrink-0 tabular-nums">
-                            {model.date}
-                          </span>
-                        </header>
+                        {/* The head is page-aware (v0.27 原稿 §4.3): the
+                            FIRST page opens with the masthead — the wordmark
+                            and the file's identity (时间 · 位置 · 裸分类,
+                            then the record paper's source line); every page
+                            after it carries only the running line. The head
+                            lives on the physical shell, so shellPage drives
+                            the swap — the paging mechanism is untouched. */}
+                        {shellPage === 1 ? (
+                          <header className="desk-masthead">
+                            <p className="desk-wordmark">Previously</p>
+                            <div
+                              className="desk-masthead-rule"
+                              aria-hidden="true"
+                            />
+                            <div className="desk-masthead-info">
+                              <div className="desk-masthead-row">
+                                <span className="desk-masthead-time">
+                                  {model.date}
+                                </span>
+                                {place !== null && (
+                                  <span className="desk-masthead-place">
+                                    {place.label}
+                                  </span>
+                                )}
+                                {categoryLabel !== "" && (
+                                  <span className="desk-masthead-cat">
+                                    {categoryLabel}
+                                  </span>
+                                )}
+                              </div>
+                              {recordSourceLine !== null && (
+                                <span className="desk-masthead-line">
+                                  {recordSourceLine}
+                                </span>
+                              )}
+                            </div>
+                          </header>
+                        ) : (
+                          <header className="desk-runhead">
+                            <span className="desk-runhead-ref">
+                              {/* The dossier's line is its localized name (no
+                                  case ref); a record's is the slice id (set
+                                  as caseRef by the model); a case's its
+                                  ref. */}
+                              {model.kind === "dossier" && model.dossier
+                                ? texts.dossierTitle(model.dossier)
+                                : (model.caseRef ?? model.title)}
+                            </span>
+                            <span className="desk-runhead-time">
+                              {model.date}
+                            </span>
+                          </header>
+                        )}
 
                         <div className="desk-bodywrap">
                           <div className="desk-body">
@@ -1174,15 +1330,13 @@ function DeskScene({
                           <span className="tabular-nums">
                             {texts.page(shellPage)}
                           </span>
-                          <span className="flex-1 truncate text-right">
-                            {/* The record paper's right line is its turn
-                                count (§三's header/footer ruling); a case's
-                                is its category; a dossier prints none. */}
-                            {model.kind === "record" && model.turnCount !== null
-                              ? texts.recordTurns(model.turnCount)
-                              : model.category
-                                ? texts.categoryName(model.category)
-                                : ""}
+                          <span className="desk-foot-cat flex-1 truncate text-right">
+                            {/* The bare category (v0.27 原稿 §4.3): a case
+                                prints its translated category, a record
+                                prints 记录 (its turn count moved to the
+                                first page's source line), a dossier prints
+                                nothing. */}
+                            {categoryLabel}
                           </span>
                         </footer>
                       </div>
