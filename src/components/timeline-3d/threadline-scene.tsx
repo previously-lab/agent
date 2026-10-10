@@ -448,6 +448,14 @@ export interface ThreadlineSceneProps {
 
   /** Whether to skip motion. */
   reducedMotion: boolean;
+  /** Whether the blue "present" spine (the core line and its companion
+   *  hairline) paints. Default true. The archive surface's braid is pure
+   *  ambient decoration — it is fed no strands and no selection, so the
+   *  core's 「核心时间线 is the answer」 semantics have nothing to mark, and
+   *  the composition (world-canvas's BraidPortal) passes false: the threads
+   *  keep winding, the spine stays away (v0.27 — the retired timeline's
+   *  leftover the reader saw as a stray blue rail). */
+  spine?: boolean;
 }
 
 interface SlotBake {
@@ -778,6 +786,7 @@ export function ThreadlineRig(props: ThreadlineRigProps) {
     feed,
     reducedMotion,
     dark,
+    spine = true,
   } = props;
   const { size } = useThree();
   const camera = useThree((s) => s.camera);
@@ -978,30 +987,32 @@ export function ThreadlineRig(props: ThreadlineRigProps) {
     // The WEIGHT never changes — same tube, same opacity. Only the ink moves,
     // and it moves by `nextF`, the same eased focus value every other transition
     // here rides, so the change is a tween rather than a cut.
-    coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
-    const coreOpacity = CORE_OPACITY;
-    // The core and its companion carry ONE colour for the whole line, so it
-    // rides on the material rather than on per-instance colours (which stay
-    // white and multiply through harmlessly).
-    const coreMat = coreLineRef.current?.material as
-      | THREE.MeshBasicMaterial
-      | undefined;
-    if (coreMat) {
-      coreMat.color.copy(coreColor.current);
-      coreMat.opacity = coreOpacity;
-    }
-    // The companion rides with the core and rides the same way — it is the
-    // second half of the spine, so it takes the core's ink and whitens it by
-    // the same fraction, whether that ink is the brand blue or the resting
-    // grey. Derived here rather than baked, because the core's colour is no
-    // longer a constant (see above).
-    companionColor.current.copy(coreColor.current).lerp(WHITE_INK, COMPANION_WHITEN);
-    const companionMat = companionLineRef.current?.material as
-      | THREE.MeshBasicMaterial
-      | undefined;
-    if (companionMat) {
-      companionMat.color.copy(companionColor.current);
-      companionMat.opacity = coreOpacity * 0.55;
+    if (spine) {
+      coreColor.current.copy(build.core).lerp(build.idleColor, nextF);
+      const coreOpacity = CORE_OPACITY;
+      // The core and its companion carry ONE colour for the whole line, so it
+      // rides on the material rather than on per-instance colours (which stay
+      // white and multiply through harmlessly).
+      const coreMat = coreLineRef.current?.material as
+        | THREE.MeshBasicMaterial
+        | undefined;
+      if (coreMat) {
+        coreMat.color.copy(coreColor.current);
+        coreMat.opacity = coreOpacity;
+      }
+      // The companion rides with the core and rides the same way — it is the
+      // second half of the spine, so it takes the core's ink and whitens it by
+      // the same fraction, whether that ink is the brand blue or the resting
+      // grey. Derived here rather than baked, because the core's colour is no
+      // longer a constant (see above).
+      companionColor.current.copy(coreColor.current).lerp(WHITE_INK, COMPANION_WHITEN);
+      const companionMat = companionLineRef.current?.material as
+        | THREE.MeshBasicMaterial
+        | undefined;
+      if (companionMat) {
+        companionMat.color.copy(companionColor.current);
+        companionMat.opacity = coreOpacity * 0.55;
+      }
     }
 
     // ── The strand set for this frame (§2.4) ─────────────────────────────
@@ -1520,12 +1531,14 @@ export function ThreadlineRig(props: ThreadlineRigProps) {
 
     // The core and its companion are straight by construction, so they are
     // placed from their baked points and only their THICKNESS is live.
-    writeStraightLine(coreLineRef.current, build.corePoints, coreRadius);
-    writeStraightLine(
-      companionLineRef.current,
-      build.companionPoints,
-      companionRadius,
-    );
+    if (spine) {
+      writeStraightLine(coreLineRef.current, build.corePoints, coreRadius);
+      writeStraightLine(
+        companionLineRef.current,
+        build.companionPoints,
+        companionRadius,
+      );
+    }
   });
 
   if (!build) return null;
@@ -1536,25 +1549,31 @@ export function ThreadlineRig(props: ThreadlineRigProps) {
           they neither depth-test against it nor write depth: they stay legible
           THROUGH the bundle rather than being occluded by it, which is what
           they did as ribbons and what the strip's whole reading order depends
-          on. The frame loop hands them their colour. */}
-      <TubeLine
-        segments={segments}
-        onObject={(el) => {
-          coreLineRef.current = el;
-        }}
-        depthTest={false}
-        depthWrite={false}
-        renderOrder={2}
-      />
-      <TubeLine
-        segments={segments}
-        onObject={(el) => {
-          companionLineRef.current = el;
-        }}
-        depthTest={false}
-        depthWrite={false}
-        renderOrder={2}
-      />
+          on. The frame loop hands them their colour. Mounted only when the
+          composition wants the spine (the `spine` prop) — the archive's
+          ambient braid winds without it. */}
+      {spine && (
+        <>
+          <TubeLine
+            segments={segments}
+            onObject={(el) => {
+              coreLineRef.current = el;
+            }}
+            depthTest={false}
+            depthWrite={false}
+            renderOrder={2}
+          />
+          <TubeLine
+            segments={segments}
+            onObject={(el) => {
+              companionLineRef.current = el;
+            }}
+            depthTest={false}
+            depthWrite={false}
+            renderOrder={2}
+          />
+        </>
+      )}
       {build.slots.map((slot, s) => (
         <TubeLine
           key={`strand-slot-${s}`}

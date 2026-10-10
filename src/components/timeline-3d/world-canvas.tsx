@@ -203,6 +203,10 @@ function BraidPortal({
       // focus. Anchoring the band to cases instead is a separate question.
       strands={[]}
       selected={[]}
+      // …and with nothing for 「核心时间线 is the answer」 to mark, the blue
+      // PRESENT spine is the retired timeline's leftover (v0.27): the
+      // archive surface keeps the ambient threads, not the spine.
+      spine={false}
       feed={band.feed}
       range={band.range}
       reducedMotion={band.reducedMotion}
