@@ -420,7 +420,8 @@
     "title": "旅店",
     "loading": "正在布置长廊……",
     "exit": "离开",
-    "enter": "进入"
+    "enter": "进入",
+    "readDoc": "阅读"
   },
   "memory": {
     "emptyTitle": "暂无记忆",
@@ -563,7 +564,26 @@
     "pagePosition": "{current} / {total}",
     "recordUser": "你",
     "recordAgent": "Previously",
-    "recordTurns": "{count} 轮"
+    "recordTurns": "{count} 轮",
+    "placeAria": "走到这份文档的现场",
+    "archetype": {
+      "meadow": "草甸",
+      "plains": "原野",
+      "pool": "水池",
+      "forest": "森林",
+      "ocean": "海洋",
+      "lake": "湖泊",
+      "beach": "海滩",
+      "snowfield": "雪原",
+      "hotel-room": "客房",
+      "pool-hall": "泳池厅",
+      "library": "图书馆",
+      "ballroom": "舞厅",
+      "ducks": "鸭子",
+      "cats": "猫",
+      "dogs": "狗",
+      "balloons": "气球"
+    }
   },
   "library": {
     "title": "文库",

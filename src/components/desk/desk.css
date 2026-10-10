@@ -418,3 +418,50 @@
 .desk-paper .typeset hr {
   background: var(--paper-line);
 }
+
+/* ── In-paper reference links (v0.25a §五). A candidate the verify pass
+   found ALIVE prints as a button wearing the surrounding prose's exact
+   metrics — the swap from plain text happens in place, so nothing reflows
+   and no page recounts. The link's only mark is the printed fine rule
+   (underline on the paper's own line tone); hovering inks the rule in. A
+   DEAD reference keeps the span: a dashed fine rule, visible but no door.
+   ───────────────────────────────────────────────────────────────────── */
+.doc-ref,
+.desk-place {
+  appearance: none;
+  display: inline;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-style: solid;
+  text-decoration-thickness: max(1px, calc(var(--desk-mm) * 0.2));
+  text-underline-offset: calc(var(--desk-mm) * 0.8);
+  text-decoration-color: var(--paper-line);
+}
+
+.doc-ref:hover,
+.doc-ref:focus-visible,
+.desk-place:hover,
+.desk-place:focus-visible {
+  text-decoration-color: currentColor;
+}
+
+.doc-ref:focus-visible,
+.desk-place:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: calc(var(--desk-mm) * 0.6);
+}
+
+.doc-ref--dead {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: max(1px, calc(var(--desk-mm) * 0.2));
+  text-underline-offset: calc(var(--desk-mm) * 0.8);
+  text-decoration-color: var(--paper-line);
+}

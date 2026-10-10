@@ -420,7 +420,8 @@
     "title": "The Hotel",
     "loading": "Preparing the corridor…",
     "exit": "Exit",
-    "enter": "Enter"
+    "enter": "Enter",
+    "readDoc": "Read"
   },
   "memory": {
     "emptyTitle": "No memories yet",
@@ -563,7 +564,26 @@
     "pagePosition": "{current} / {total}",
     "recordUser": "You",
     "recordAgent": "Previously",
-    "recordTurns": "{count, plural, one {# turn} other {# turns}}"
+    "recordTurns": "{count, plural, one {# turn} other {# turns}}",
+    "placeAria": "Stand at this document's scene",
+    "archetype": {
+      "meadow": "Meadow",
+      "plains": "Plains",
+      "pool": "Pool",
+      "forest": "Forest",
+      "ocean": "Ocean",
+      "lake": "Lake",
+      "beach": "Beach",
+      "snowfield": "Snowfield",
+      "hotel-room": "Hotel Room",
+      "pool-hall": "Pool Hall",
+      "library": "Library",
+      "ballroom": "Ballroom",
+      "ducks": "Ducks",
+      "cats": "Cats",
+      "dogs": "Dogs",
+      "balloons": "Balloons"
+    }
   },
   "library": {
     "title": "Library",

@@ -84,10 +84,20 @@ import {
 import {
   getDossierDoc,
   getRecordDoc,
+  verifyRefs,
   type RecordDocContent,
+  type VerifiedRef,
 } from "@/lib/archive/actions";
 import { deskRefKind } from "@/lib/archive/refs";
-import { MarkdownRenderer } from "@/components/chat/markdown";
+import { extractMarkdownRefs } from "@/lib/archive/ref-tokens";
+import {
+  DocRefProvider,
+  MarkdownRenderer,
+  type DocRefContextValue,
+} from "@/components/chat/markdown";
+import { useShellNav } from "@/components/shell/shell-nav";
+import { compileSpaceRecipe } from "@/lib/game/space-recipe";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   clampPage,
   TURN_MS,
@@ -130,6 +140,13 @@ export interface DeskTexts {
   /** A dossier paper's display title + header line (the library's Dossier
    *  labels — previously / direction). */
   dossierTitle(name: "previously" | "direction"): string;
+  /** The place line's leading word (v0.25a §五 — the rung's own name:
+   *  现场 / Scene). */
+  sceneName: string;
+  /** The place line's room name: the archetype's localized label. */
+  archetypeName(id: string): string;
+  /** aria-label of the footer's place button (it leaves for the scene). */
+  placeAria: string;
 }
 
 /** The entrance/exit beat, seconds — the pane swap's own 300 ms. */
@@ -173,7 +190,8 @@ export function DeskField({
    *  pre-handover caller (none left) read absence as "not leaving". */
   leaving?: boolean;
 }) {
-  const { closeDesk } = useShell();
+  const { closeDesk, openDesk } = useShell();
+  const nav = useShellNav();
   const locale = useLocale();
   const messages = useMessages();
   const { resolvedTheme } = useTheme();
@@ -235,6 +253,81 @@ export function DeskField({
       : model.kind === "dossier" && model.dossier
         ? texts.dossierTitle(model.dossier)
         : model.title;
+
+  // ── REFERENCE LINKS + THE PLACE LINE (v0.25a §五) ─────────────────────
+  // The candidates ride the SAME grammar the remark plugin renders
+  // (ref-tokens.ts), so every span the paper can underline is a span this
+  // batch pre-verified. A record paper's own slice joins the batch — its
+  // door is the place line's first candidate. The map is NOT reset on a
+  // document swap: stale entries go unqueried, and the live links of the
+  // previous paper never flash back to plain text mid-pull-out.
+  const refCandidates = useMemo(
+    () => (model.markdown ? extractMarkdownRefs(model.markdown) : []),
+    [model.markdown],
+  );
+  const verifyBatch = useMemo(
+    () =>
+      model.kind === "record" && model.caseRef !== null
+        ? [...refCandidates, `records/${model.caseRef}`]
+        : refCandidates,
+    [refCandidates, model.kind, model.caseRef],
+  );
+  const [refStatus, setRefStatus] = useState<ReadonlyMap<string, VerifiedRef>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (verifyBatch.length === 0) return;
+    let live = true;
+    verifyRefs(verifyBatch)
+      .then((verified) => {
+        if (live) setRefStatus(new Map(verified.map((v) => [v.ref, v])));
+      })
+      .catch(() => {
+        // A failed verify pass leaves every candidate inert (plain text).
+      });
+    return () => {
+      live = false;
+    };
+  }, [verifyBatch]);
+
+  const docRefCtx = useMemo<DocRefContextValue>(
+    () => ({
+      status: new Map(Array.from(refStatus, ([ref, v]) => [ref, v.alive])),
+      onOpen: openDesk,
+    }),
+    [refStatus, openDesk],
+  );
+
+  // The place line: the newest ALIVE record candidate still inside the
+  // hotel's door window — (refs:) stamps and, for the record paper, the
+  // slice itself are the only sources. A document whose scene has slid out
+  // of the corridor (or none resolves at all) prints nothing.
+  const place = useMemo(() => {
+    let sliceId: string | null = null;
+    for (const v of refStatus.values()) {
+      if (v.kind !== "record" || !v.alive || !v.door?.inHotelWindow) continue;
+      const id = v.ref.slice("records/".length);
+      if (sliceId === null || id > sliceId) sliceId = id;
+    }
+    if (sliceId === null) return null;
+    const archetype = compileSpaceRecipe(sliceId).archetype;
+    // The calendar half parses BY COMPONENTS (the door label's own ruling —
+    // a bare new Date("YYYY-MM-DD") reads as UTC midnight).
+    const [y, m, d] = sliceId.split("-").map(Number);
+    const day =
+      y && m && d
+        ? dateTimeFormat(locale, { month: "short", day: "numeric" }).format(
+            new Date(y, m - 1, d),
+          )
+        : sliceId.slice(0, 10);
+    return {
+      sliceId,
+      label: `${texts.sceneName} · ${texts.archetypeName(archetype)} · ${day}`,
+    };
+  }, [refStatus, locale, texts]);
+  const goToPlace = useCallback(() => {
+    if (place !== null) nav.standAtSlice(place.sliceId);
+  }, [place, nav]);
 
   // ── PAGING (v0.24) ────────────────────────────────────────────────────
   // The current page is ephemeral reading state: it lives HERE (not in the
@@ -524,6 +617,8 @@ export function DeskField({
       camXOffset={camXOffset}
       reducedMotion={reducedMotion}
       exiting={leave}
+      docRefCtx={docRefCtx}
+      place={place !== null ? { label: place.label, onGo: goToPlace } : null}
       paging={{
         ready,
         markdown: model.markdown,
@@ -693,6 +788,8 @@ function DeskScene({
   camXOffset,
   reducedMotion,
   exiting,
+  docRefCtx,
+  place,
   paging,
 }: {
   model: DeskPaperModel;
@@ -705,6 +802,14 @@ function DeskScene({
   camXOffset: number;
   reducedMotion: boolean;
   exiting: boolean;
+  /** The reference-link context (v0.25a §五) — arrives as a PROP because the
+   *  paper renders in the Html portal's own React root, where the field's
+   *  context stops. Re-provided around the flow below. */
+  docRefCtx: DocRefContextValue;
+  /** The footer's place line, null when no (refs:) stamp resolves to a door
+   *  still on the corridor. `onGo` stands the reader at that slice's room —
+   *  the paper stays open on the desk for the way back. */
+  place: { label: string; onGo: () => void } | null;
   paging: PagingProps;
 }) {
   const size = useThree((s) => s.size);
@@ -1019,7 +1124,11 @@ function DeskScene({
                                   ref={isTop ? pagesRef : undefined}
                                   style={pagesStyle}
                                 >
-                                  <div className="desk-flow">{flow}</div>
+                                  <div className="desk-flow">
+                                    <DocRefProvider value={docRefCtx}>
+                                      {flow}
+                                    </DocRefProvider>
+                                  </div>
                                 </div>
                               ) : (
                                 <div className="desk-pages">
@@ -1044,7 +1153,24 @@ function DeskScene({
                         </div>
 
                         <footer className="desk-foot flex items-baseline">
-                          <span className="flex-1" />
+                          <span className="flex-1 truncate text-left">
+                            {/* The place line (v0.25a §五): when the paper's
+                                (refs:) resolve to a door on the corridor, the
+                                footer's left slot prints the scene's name —
+                                a click stands the reader at that room; the
+                                paper stays on the desk for the way back. */}
+                            {place !== null && (
+                              <button
+                                type="button"
+                                className="desk-place"
+                                data-desk-place
+                                aria-label={texts.placeAria}
+                                onClick={place.onGo}
+                              >
+                                {place.label}
+                              </button>
+                            )}
+                          </span>
                           <span className="tabular-nums">
                             {texts.page(shellPage)}
                           </span>
@@ -1075,7 +1201,11 @@ function DeskScene({
                 ref={attachMeasureRef}
                 aria-hidden="true"
               >
-                <div className="desk-flow">{flow}</div>
+                <div className="desk-flow">
+                                    <DocRefProvider value={docRefCtx}>
+                                      {flow}
+                                    </DocRefProvider>
+                                  </div>
               </div>
             )}
           </div>

@@ -124,15 +124,17 @@ describe("desk locale keys", () => {
     );
 
   it("en.json and zh.json carry the same desk.* keys, all non-empty", () => {
-    const en = read("en.json").desk as Record<string, string>;
-    const zh = read("zh.json").desk as Record<string, string>;
+    const en = read("en.json").desk as Record<string, unknown>;
+    const zh = read("zh.json").desk as Record<string, unknown>;
     expect(Object.keys(en).sort()).toEqual([
+      "archetype",
       "loading",
       "nextPage",
       "notFoundBody",
       "notFoundHeading",
       "page",
       "pagePosition",
+      "placeAria",
       "prevPage",
       "recordAgent",
       "recordTurns",
@@ -140,9 +142,20 @@ describe("desk locale keys", () => {
       "regionLabel",
     ]);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
-    for (const value of [...Object.values(en), ...Object.values(zh)]) {
+    // The place line's room names nest one level (desk.archetype.*) —
+    // same locale parity, leaf-checked below.
+    const enArch = en.archetype as Record<string, unknown>;
+    const zhArch = zh.archetype as Record<string, unknown>;
+    expect(Object.keys(zhArch).sort()).toEqual(Object.keys(enArch).sort());
+    const leaves = (obj: Record<string, unknown>): unknown[] =>
+      Object.values(obj).flatMap((v) =>
+        typeof v === "object" && v !== null
+          ? leaves(v as Record<string, unknown>)
+          : [v],
+      );
+    for (const value of [...leaves(en), ...leaves(zh)]) {
       expect(typeof value).toBe("string");
-      expect(value.length).toBeGreaterThan(0);
+      expect((value as string).length).toBeGreaterThan(0);
     }
   });
 });

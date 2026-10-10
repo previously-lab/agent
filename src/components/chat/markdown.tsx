@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { createContext, memo, useContext, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -19,7 +19,50 @@ import { CodeBlock } from "./code-block";
 import { MermaidBlock } from "./mermaid-block";
 import { MarkdownBlockquote, extractText } from "@/components/markdown/admonition";
 import { remarkCodeFilename } from "@/lib/markdown/remark-code-filename";
+import { remarkDocRefs } from "@/lib/markdown/remark-doc-refs";
 import { cn } from "@/lib/utils";
+
+/** Liveness + open action for in-paper reference links (v0.22 §7). The desk
+ *  provides one per open document; without a provider every `doc-ref` node
+ *  renders as its plain text, so the chat pipeline is untouched. */
+export interface DocRefContextValue {
+  /** Normalized ref → alive. Refs not yet verified are absent (plain text). */
+  status: ReadonlyMap<string, boolean>;
+  onOpen: (ref: string) => void;
+}
+
+export const DocRefContext = createContext<DocRefContextValue | null>(null);
+export const DocRefProvider = DocRefContext.Provider;
+
+interface DocRefElementProps {
+  children?: React.ReactNode;
+  "data-ref"?: string;
+}
+
+/** Renderer for the custom <doc-ref> hast element. Pending refs render as
+ *  plain text so the verify pass never flashes a dead style on live ones. */
+function DocRef({ children, ...props }: DocRefElementProps) {
+  const ctx = useContext(DocRefContext);
+  const ref = props["data-ref"];
+  if (!ctx || !ref || !ctx.status.has(ref)) return <>{children}</>;
+  if (ctx.status.get(ref)) {
+    return (
+      <button
+        type="button"
+        className="doc-ref"
+        data-ref={ref}
+        onClick={() => ctx.onOpen(ref)}
+      >
+        {children}
+      </button>
+    );
+  }
+  return (
+    <span className="doc-ref doc-ref--dead" data-ref={ref}>
+      {children}
+    </span>
+  );
+}
 
 /** Parse a fence meta string (```ts:app/page.tsx or ```ts filename="x.ts"). */
 function parseFilename(meta: unknown): string | undefined {
@@ -144,7 +187,10 @@ function createComponents(isStreaming: boolean): Components {
     hr() {
       return <Separator />;
     },
-  };
+
+    /* ── In-paper reference links (inert without a DocRefProvider) ── */
+    "doc-ref": DocRef,
+  } as Components;
 }
 
 interface MarkdownRendererProps {
@@ -181,7 +227,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       )}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkCodeFilename]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkCodeFilename, remarkDocRefs]}
         rehypePlugins={[rehypeHighlight, rehypeKatex, rehypeSlug]}
         components={comps}
       >

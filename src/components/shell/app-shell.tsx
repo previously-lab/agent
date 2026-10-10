@@ -521,6 +521,7 @@ export function AppShell() {
   // library namespace — the category table's one home since v0.23.
   const tDesk = useTranslations("desk");
   const tLibrary = useTranslations("library");
+  const tRungs = useTranslations("rungs");
   const deskTexts = useMemo<DeskTexts>(
     () => ({
       regionLabel: tDesk("regionLabel"),
@@ -539,8 +540,13 @@ export function AppShell() {
       recordAgentLabel: tDesk("recordAgent"),
       recordTurns: (count) => tDesk("recordTurns", { count }),
       dossierTitle: (name) => tLibrary(`dossier.${name}`),
+      // The place line (v0.25a §五): the rung's own name leads, then the
+      // room's archetype label (desk.archetype.*) and the slice's day.
+      sceneName: tRungs("scene"),
+      archetypeName: (id) => tDesk(`archetype.${id}`),
+      placeAria: tDesk("placeAria"),
     }),
-    [tDesk, tLibrary],
+    [tDesk, tLibrary, tRungs],
   );
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
@@ -1044,6 +1050,13 @@ export function AppShell() {
             <GameShell
               onExit={() => beginTransition("field", null)}
               focusSlice={sharedSlice}
+              // A room paper reads in the ORIGINAL manuscript (v0.25a §五):
+              // the desk opens on the field world while the game world
+              // stays mounted behind it — the way back is the desk's Esc.
+              onOpenDoc={(ref) => {
+                openDesk(ref);
+                beginTransition("field", null);
+              }}
             />
           </div>
         )}
