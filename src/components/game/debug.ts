@@ -150,6 +150,11 @@ export const GAME_DEBUG = {
   /** Probe/e2e hook: fire the anchor interaction if one is in reach (the
    *  same path as the Enter/E key). Set by GameCanvas, cleared on unmount. */
   interact: undefined as undefined | (() => void),
+  /** Probe/e2e mirror of the ACTIVE room's loose papers (v0.25a §五 B②):
+   *  each sheet's desk ref and WORLD XZ — written by GameCanvas when the
+   *  room's document list resolves, empty in the corridor. Probes teleport
+   *  to a sheet and fire interact() instead of entering the scene graph. */
+  papers: [] as { ref: string; x: number; z: number }[],
   /** The depart-flare clock (§13.2's screen-lit beat) — the shared record
    *  every terminal's frame loop reads. Probes can stamp t0 to stage the
    *  flare (or read it to time the real one). */

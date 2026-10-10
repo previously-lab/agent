@@ -111,6 +111,7 @@ import { useFrame } from "@react-three/fiber";
 import { WALL_HEIGHT, WINDOW_SLICES, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
+import { RoomPapers, type RoomPaperItem } from "./room-papers";
 import { smoothstep } from "@/lib/game/math";
 import { createRng, deriveSubSeed, hashString, WORLD_SEED } from "@/lib/game/seed";
 import { doorGlowColor } from "@/lib/game/space-recipe";
@@ -7774,6 +7775,7 @@ export function SpaceScene({
   roomDoors,
   roomDoorCount: roomDoorCountProp,
   onRoomDoor,
+  papers,
 }: {
   recipe: SpaceRecipe;
   door: DoorRef;
@@ -7803,6 +7805,10 @@ export function SpaceScene({
   /** Fires once per strand door when the player walks through it (latched
    *  per door per mount; never fires for the entrance). */
   onRoomDoor?: (key: string) => void;
+  /** The room's loose papers (v0.25a §五 B②): spot + document, resolved by
+   *  the integrator (pure spots + async list). Absent/empty = a bare floor.
+   *  Render-only data, the roomDoors pattern. */
+  papers?: readonly RoomPaperItem[];
 }): JSX.Element {
   const spec = ARCHETYPES[recipe.archetype];
   const { dir, rotationY } = roomOrientationFor(door);
@@ -10067,6 +10073,14 @@ export function SpaceScene({
           neighborSlots={terminalNeighborSlots}
         />
       </group>
+
+      {/* The loose papers (v0.25a §五 B②): the slice's own record and the
+          documents that stamped it, flat on the floor of the entrance's
+          open band — papers, not UI cards. Walk up, Enter, and the sheet
+          opens in the original manuscript (the desk). */}
+      {papers !== undefined && papers.length > 0 && (
+        <RoomPapers papers={papers} scaledRecipe={scaledRecipe} />
+      )}
 
       {/* The door from inside: same frame and glow as the corridor face;
           the hinged slab mounts once the corridor is gone — before that

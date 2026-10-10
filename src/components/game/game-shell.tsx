@@ -12,7 +12,7 @@ import {
   buildRoomDoorMap,
   type RoomDoorMap,
 } from "@/lib/game/strand-doors";
-import { readHotelData, writeHotelData } from "@/lib/game/hotel-data";
+import { readHotelData, writeHotelData, HOTEL_WINDOW_DOORS } from "@/lib/game/hotel-data";
 import { debugUnitsFor, isDebugPage } from "@/lib/game/debug-catalog";
 import {
   DEBUG_PAGE_PARAM,
@@ -27,7 +27,7 @@ import type { CorridorDoor } from "./corridor";
  * bounds the walk to the newest MAX_DOORS slices; older history can stream in
  * once the corridor proves out.
  */
-const MAX_DOORS = 200;
+const MAX_DOORS = HOTEL_WINDOW_DOORS;
 
 /**
  * Empty-state fallback (fresh user / unwoven demo env): a static corridor so
@@ -125,9 +125,13 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
 export function GameShell({
   onExit,
   focusSlice = null,
+  onOpenDoc,
 }: {
   onExit: () => void;
   focusSlice?: string | null;
+  /** A room paper's interact (v0.25a §五 B②): open the sheet's document in
+   *  the original manuscript — the app shell switches worlds (desk) there. */
+  onOpenDoc?: (ref: string) => void;
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -432,6 +436,7 @@ export function GameShell({
           roomDoors={roomDoors}
           timelines={timelines}
           focusSlice={focusSlice}
+          onOpenDoc={onOpenDoc}
         />
       ) : (
         <GameLoading />

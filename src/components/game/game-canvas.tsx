@@ -220,6 +220,17 @@ import {
   templatePlanFor,
 } from "@/lib/game/room-templates";
 import { terrainHeight, waterRectFor, waterSideFor } from "@/lib/game/terrain";
+import {
+  PAPER_REACH,
+  roomPaperSpotsFor,
+  type RoomPaperSpot,
+} from "@/lib/game/room-papers";
+import {
+  getRoomPapers,
+  type RoomPaper,
+} from "@/lib/archive/actions";
+import { ROOM_PAPER_LIMIT } from "@/lib/archive/refs";
+import { type RoomPaperItem } from "./room-papers";
 import { Corridor, LOBBY_BLOCKERS, type CorridorDoor } from "./corridor";
 import { SpaceScene, roomTemplateForDoorCount, MOUNT_TRACE, ROOM_ROOT } from "./space";
 import {
@@ -369,6 +380,17 @@ interface AnchorHud {
   z: number;
   faceX: number;
   faceZ: number;
+}
+
+/** The paper HUD payload (v0.25a §五 B②) — set while the player stands in
+ *  reach of a loose sheet AND the sheet is nearer than the anchor terminal
+ *  (the loop arbitrates: the closer interaction wins the prompt AND the
+ *  interact key). `x`/`z` are the sheet's world position. */
+interface PaperHud {
+  ref: string;
+  title: string;
+  x: number;
+  z: number;
 }
 
 /** Live player/atmosphere/fade state for probes — re-exported from the
@@ -872,6 +894,10 @@ function roomGeometryForSpace(
   doors: readonly RoomDoorPlacement[];
   seams: readonly SeamWall[];
   terminal: TerminalAnchor;
+  /** The loose papers' floor spots (v0.25a §五 B②) — the MAXIMUM count
+   *  (ROOM_PAPER_LIMIT); the async document list renders a prefix, and the
+   *  resolver's prefix stability keeps the drawn sheets put. */
+  paperSpots: RoomPaperSpot[];
 } {
   const { door, recipe, scaledRecipe, scale } = space;
   const scaleFactor = scale.factor;
@@ -906,13 +932,23 @@ function roomGeometryForSpace(
     undefined,
     template ? templatePlanFor(template) : undefined,
   );
+  const terminal = terminalForSpace(space, plan);
+  // The papers' spots take the terminal resolver's own inputs (A6 — the
+  // same composeRoom staging, the same scaled water rect); terminalForSpace
+  // derives its comp internally, so the compose call here is the papers'
+  // own copy of the same pure result.
+  const paperSpots = roomPaperSpotsFor({
+    sliceId: recipe.sliceId,
+    plan,
+    comp: composeRoom(recipe.sliceId, plan, scaleFactor),
+    width,
+    wallThick,
+    water: waterRectFor(scaledRecipe),
+    terminal,
+    count: ROOM_PAPER_LIMIT,
+  });
   if (count <= 0) {
-    return {
-      plan,
-      doors: [],
-      seams,
-      terminal: terminalForSpace(space, plan),
-    };
+    return { plan, doors: [], seams, terminal, paperSpots };
   }
   const walls = wallSegmentsFor(plan, wallThick);
   const hostable = hostableWallsFor(plan, walls, roomOrientationFor(door).dir);
@@ -925,7 +961,7 @@ function roomGeometryForSpace(
     undefined,
     template ? doorAffordanceFor(template) : undefined,
   );
-  return { plan, doors, seams, terminal: terminalForSpace(space, plan) };
+  return { plan, doors, seams, terminal, paperSpots };
 }
 
 /**
@@ -1412,6 +1448,9 @@ function GameLoop({
   roomPlan,
   roomSeams,
   roomTerminal,
+  roomPapers,
+  paperHudRef,
+  setPaperHud,
   lobbyAnchorLabel,
   departingRef,
   departWatchRef,
@@ -1487,6 +1526,14 @@ function GameLoop({
    *  resolution space.tsx rendered; null when no space is active, then the
    *  lobby machine is the anchor candidate). */
   roomTerminal: TerminalAnchor | null;
+  /** The active room's loose papers (v0.25a §五 B② — room-local spots with
+   *  their documents; empty in the corridor, and empty until the room's
+   *  document list resolves). */
+  roomPapers: readonly RoomPaperItem[];
+  /** The latest in-reach sheet that WON the arbitration against the anchor
+   *  (also read by the interact key handler). */
+  paperHudRef: MutableRefObject<PaperHud | null>;
+  setPaperHud: (paper: PaperHud | null) => void;
   /** Localized label for the lobby terminal's HUD prompt. */
   lobbyAnchorLabel: string;
   /** Latched by the anchor interaction: freezes movement while the
@@ -1796,9 +1843,39 @@ function GameLoop({
     dbgAnchor.sliceId = aSlice;
     dbgAnchor.near = aSlice !== null ? Math.max(0, 1 - aDist / aReach) : 0;
 
+    // 4b. THE LOOSE PAPERS (v0.25a §五 B②): the nearest in-reach sheet of
+    // the ACTIVE room (world = door + local·dir — the terminal's own
+    // mirror). Sheet and anchor arbitrate by distance: the nearer takes
+    // the prompt AND the interact key; the door prompt yields to either.
+    let pHud: PaperHud | null = null;
+    if (space !== null && roomPapers.length > 0) {
+      const dir = space.door.z > 0 ? 1 : -1;
+      let best = PAPER_REACH;
+      for (const rp of roomPapers) {
+        const wx = space.door.x + dir * rp.spot.x;
+        const wz = space.door.z + dir * rp.spot.z;
+        const d = Math.hypot(p.x - wx, p.z - wz);
+        if (d <= best) {
+          best = d;
+          pHud = { ref: rp.ref, title: rp.title, x: wx, z: wz };
+        }
+      }
+      // A tie keeps the anchor — the room's own machine was there first.
+      if (pHud !== null && aHud !== null && aDist <= best) pHud = null;
+    }
+    const prevPaper = paperHudRef.current;
+    if (
+      (prevPaper === null) !== (pHud === null) ||
+      prevPaper?.ref !== pHud?.ref
+    ) {
+      paperHudRef.current = pHud;
+      setPaperHud(pHud);
+    }
+
     // 5. HUD prompt — setState only when the nearest door identity changes.
-    // The anchor wins while in reach (its prompt replaces the door's).
-    const near = aHud !== null ? null : nearestDoor(p.x, p.z, sliceIds, HUD_DIST, layout);
+    // The anchor wins while in reach (its prompt replaces the door's), and
+    // a won sheet wins over both (4b's arbitration).
+    const near = aHud !== null || pHud !== null ? null : nearestDoor(p.x, p.z, sliceIds, HUD_DIST, layout);
     const nearId = near ? near.sliceId : null;
     if (nearId !== hudIdRef.current) {
       hudIdRef.current = nearId;
@@ -1823,20 +1900,28 @@ function GameLoop({
 function Hud({
   door,
   anchor,
+  paper,
   enterHint,
+  readHint,
 }: {
   door: CorridorDoor | null;
   anchor: AnchorHud | null;
+  /** The in-reach loose sheet that won the loop's arbitration (v0.25a §五) —
+   *  wins over the anchor exactly when it is nearer. */
+  paper: PaperHud | null;
   enterHint: string;
+  /** The paper prompt's verb ("Read") — a sheet is opened, not entered. */
+  readHint: string;
 }): JSX.Element | null {
-  const label = anchor ? anchor.label : door?.label;
+  const label = paper ? paper.title : anchor ? anchor.label : door?.label;
+  const hint = paper ? readHint : enterHint;
   if (label === undefined) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-24 z-10 flex justify-center">
       <div className="rounded-full bg-black/35 px-4 py-1.5 font-serif text-sm text-neutral-300 backdrop-blur-sm">
         <span className="text-neutral-100">{label}</span>
         <span className="mx-2 text-neutral-500">·</span>
-        <span>{enterHint}</span>
+        <span>{hint}</span>
       </div>
     </div>
   );
@@ -1979,6 +2064,7 @@ export default function GameCanvas({
   timelines,
   onActiveSliceChange,
   focusSlice = null,
+  onOpenDoc,
 }: {
   /** The CORE timeline's door list (newest first) — the spawn hotel. */
   doors: readonly CorridorDoor[];
@@ -2000,6 +2086,9 @@ export default function GameCanvas({
    *  layout math the door manager uses; an unknown id is ignored (the
    *  corridor opens at its spawn, exactly as without the param). */
   focusSlice?: string | null;
+  /** A loose paper's interact (v0.25a §五 B②): open the sheet's document in
+   *  the original manuscript (the shell switches the world to the desk). */
+  onOpenDoc?: (ref: string) => void;
 }): JSX.Element {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -2010,14 +2099,28 @@ export default function GameCanvas({
   // press can never double-navigate, and freezes movement in GameLoop.
   const [hudAnchor, setHudAnchor] = useState<AnchorHud | null>(null);
   const anchorHudRef = useRef<AnchorHud | null>(null);
+  // The loose papers' prompt (v0.25a §五 B②): the in-reach sheet that WON
+  // the loop's arbitration against the anchor terminal (the nearer one
+  // takes the prompt and the interact key).
+  const [hudPaper, setHudPaper] = useState<PaperHud | null>(null);
+  const paperHudRef = useRef<PaperHud | null>(null);
+  const onOpenDocRef = useRef(onOpenDoc);
+  onOpenDocRef.current = onOpenDoc;
   const departingRef = useRef(false);
   const departWatchRef = useRef(false);
   const interactRef = useRef<() => void>(() => {});
   useEffect(() => {
     interactRef.current = () => {
+      if (WORLD_TRANSITION.active) return;
+      // A sheet in reach reads in the original manuscript — no flare, no
+      // depart latch: the desk opens over the game and the room waits.
+      const paper = paperHudRef.current;
+      if (paper !== null) {
+        onOpenDocRef.current?.(paper.ref);
+        return;
+      }
       const anchor = anchorHudRef.current;
       if (anchor === null || departingRef.current) return;
-      if (WORLD_TRANSITION.active) return;
       departingRef.current = true;
       TERMINAL_DEPART.t0 = performance.now();
       // The depart flare plays first; then the shell's transition machine
@@ -2312,6 +2415,69 @@ export default function GameCanvas({
         : roomGeometryForSpace(activeSpace, activeSpace.roomDoorCount),
     [activeSpace],
   );
+
+  // THE ROOM'S LOOSE PAPERS (v0.25a §五 B②): the slice's own record sheet +
+  // the newest documents that stamped it. The list arrives async (one
+  // server-action read per room); the spots are the geometry chain's pure
+  // derivation, already here. The pack carries its slice id so a stale list
+  // can never print against the next room's spots.
+  const [roomPapersPack, setRoomPapersPack] = useState<{
+    sliceId: string;
+    papers: RoomPaper[];
+  } | null>(null);
+  useEffect(() => {
+    const sliceId = mountedSpace?.recipe.sliceId ?? null;
+    if (sliceId === null) {
+      setRoomPapersPack(null);
+      return;
+    }
+    let live = true;
+    getRoomPapers(sliceId)
+      .then((papers) => {
+        if (live) setRoomPapersPack({ sliceId, papers });
+      })
+      .catch(() => {
+        if (live) setRoomPapersPack({ sliceId, papers: [] });
+      });
+    return () => {
+      live = false;
+    };
+  }, [mountedSpace?.recipe.sliceId]);
+  // Spot × document merge. The geometry call duplicates activeRoomGeometry's
+  // derivation when the mounted room IS the active one — one extra pure pass
+  // per mount, the A6 price both lanes already pay.
+  const mountedPapers = useMemo<RoomPaperItem[]>(() => {
+    if (
+      mountedSpace === null ||
+      roomPapersPack === null ||
+      roomPapersPack.sliceId !== mountedSpace.recipe.sliceId
+    )
+      return [];
+    const spots = roomGeometryForSpace(
+      mountedSpace,
+      mountedSpace.roomDoorCount,
+    ).paperSpots;
+    return roomPapersPack.papers.flatMap((paper, i) => {
+      const spot = spots[i];
+      return spot === undefined
+        ? []
+        : [{ spot, ref: paper.ref, title: paper.title, date: paper.date }];
+    });
+  }, [mountedSpace, roomPapersPack]);
+  // Probe mirror (e2e): the ACTIVE room's sheets in world coordinates — a
+  // probe teleports to one and fires interact(), never enters the scene.
+  useEffect(() => {
+    if (activeSpace === null) {
+      GAME_DEBUG.papers = [];
+      return;
+    }
+    const dir = activeSpace.door.z > 0 ? 1 : -1;
+    GAME_DEBUG.papers = mountedPapers.map((p) => ({
+      ref: p.ref,
+      x: activeSpace.door.x + dir * p.spot.x,
+      z: activeSpace.door.z + dir * p.spot.z,
+    }));
+  }, [activeSpace, mountedPapers]);
 
   /** Land the player in the CURRENT hotel's lobby, just inside the return
    *  door on the north wall — the arrival point strand-door hops and
@@ -2755,6 +2921,7 @@ export default function GameCanvas({
             roomDoors={roomDoors?.get(mountedSpace.recipe.sliceId)}
             roomDoorCount={mountedSpace.roomDoorCount}
             onRoomDoor={handleRoomDoor}
+            papers={mountedPapers}
           />
         )}
         <LightConfigCompiler
@@ -2794,6 +2961,9 @@ export default function GameCanvas({
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
           roomSeams={activeRoomGeometry?.seams ?? NO_ROOM_SEAMS}
           roomTerminal={activeRoomGeometry?.terminal ?? null}
+          roomPapers={mountedPapers}
+          paperHudRef={paperHudRef}
+          setPaperHud={setHudPaper}
           lobbyAnchorLabel={hotelName}
           departingRef={departingRef}
           departWatchRef={departWatchRef}
@@ -2831,7 +3001,13 @@ export default function GameCanvas({
 
   return (
     <div className="relative h-full w-full">
-      <Hud door={hudDoor} anchor={hudAnchor} enterHint={t("enter")} />
+      <Hud
+        door={hudDoor}
+        anchor={hudAnchor}
+        paper={hudPaper}
+        enterHint={t("enter")}
+        readHint={t("readDoc")}
+      />
     </div>
   );
 }
