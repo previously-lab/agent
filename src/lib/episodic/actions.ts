@@ -32,7 +32,6 @@ import {
   parsePieceFileName,
   type CaseCategory,
 } from "@/lib/docs";
-import { readDirection } from "@/lib/evolution/store";
 import {
   caseAttachmentsDir,
   isImageAttachmentName,
@@ -684,38 +683,6 @@ export async function getTurnCognition(
   } catch {
     return null;
   }
-}
-
-// ─── Memory docs viewer (previously / direction) ─────────────────────────
-
-export interface MemoryDocs {
-  /** The slice the previously.md snapshot belongs to (null when no slices exist). */
-  sliceId: string | null;
-  /** previously.md of the current slice — the latest slice when none is active. */
-  previously: string | null;
-  /** memory/evolution/direction.md */
-  direction: string | null;
-}
-
-/**
- * Read the user-facing memory documents in one round-trip. The "current"
- * slice is simply the NEWEST slice in the live enumeration — an active slice
- * is always the newest (a new slice only starts after the previous one
- * closes), so this covers both "the current slice" and "the latest slice
- * when none is active".
- */
-export async function getMemoryDocs(persona?: string): Promise<MemoryDocs> {
-  if (persona) setDemoPersona(persona);
-
-  const ids = await listLiveSliceIds();
-  const latestId = ids[ids.length - 1] ?? null;
-
-  const [previously, direction] = await Promise.all([
-    latestId ? readPreviously(latestId).catch(() => null) : Promise.resolve(null),
-    readDirection(),
-  ]);
-
-  return { sliceId: latestId, previously, direction };
 }
 
 // ─── Case shelf (v0.19 R3b: live enumeration + index.md point reads) ──────
