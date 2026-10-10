@@ -277,6 +277,9 @@ export interface ArchiveGeometry {
   labelW: number;
   pileW: number;
   pileH: number;
+  /** One category column's track width (desktop; 0 single-column) — a
+   *  collision cell splits it between its piles. */
+  colW: number;
   /** The column header row's extent (desktop only). */
   headerH: number;
   /** A bucket row's extent (desktop): pad + pile + cascade room + air. */
@@ -303,6 +306,7 @@ export function archiveGeometry(
       labelW: 0,
       pileW,
       pileH,
+      colW: 0,
       headerH: 0,
       rowH: 0,
       bucketH: 44,
@@ -318,6 +322,7 @@ export function archiveGeometry(
     labelW,
     pileW,
     pileH,
+    colW,
     headerH: 40,
     rowH: 20 + pileH + CASCADE_ROOM + 24,
     bucketH: 0,

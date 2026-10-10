@@ -858,36 +858,48 @@ function ArchiveUnitView({
       }
     >
       <p className="archive-row-label">{bucketLabel(unit.bucket)}</p>
-      {unit.cells.map((cell) => (
-        <div
-          key={`${dealGen}:${cell.column}`}
-          className="archive-cell"
-          style={{ "--archive-col": cell.column + 2 } as React.CSSProperties}
-        >
-          {cell.piles.map((pile) =>
-            pile.kind === "record" ? (
-              <RecordPileView
-                key={pile.ref}
-                pile={pile}
-                bucketLabel={bucketLabel(unit.bucket)}
-                width={geo.pileW}
-                height={geo.pileH}
-                texts={recordTexts}
-                onOpen={onOpenPile}
-              />
-            ) : (
-              <ArchivePileView
-                key={pile.ref}
-                pile={pile}
-                width={geo.pileW}
-                height={geo.pileH}
-                texts={pileTexts}
-                onOpen={onOpenPile}
-              />
-            ),
-          )}
-        </div>
-      ))}
+      {unit.cells.map((cell) => {
+        // A collision cell splits its track between its piles — in BOTH
+        // dimensions, so a shared pile keeps its A4 proportion instead of
+        // being squeezed narrower at full height. The 12 is the cell's CSS
+        // gap (archive.css .archive-cell).
+        const n = cell.piles.length;
+        const w =
+          n > 1
+            ? Math.floor(Math.min(geo.pileW, (geo.colW - 12 * (n - 1)) / n))
+            : geo.pileW;
+        const h = Math.round((w * 297) / 210);
+        return (
+          <div
+            key={`${dealGen}:${cell.column}`}
+            className="archive-cell"
+            style={{ "--archive-col": cell.column + 2 } as React.CSSProperties}
+          >
+            {cell.piles.map((pile) =>
+              pile.kind === "record" ? (
+                <RecordPileView
+                  key={pile.ref}
+                  pile={pile}
+                  bucketLabel={bucketLabel(unit.bucket)}
+                  width={w}
+                  height={h}
+                  texts={recordTexts}
+                  onOpen={onOpenPile}
+                />
+              ) : (
+                <ArchivePileView
+                  key={pile.ref}
+                  pile={pile}
+                  width={w}
+                  height={h}
+                  texts={pileTexts}
+                  onOpen={onOpenPile}
+                />
+              ),
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

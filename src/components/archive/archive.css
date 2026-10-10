@@ -30,6 +30,10 @@
   display: block;
   width: var(--archive-pile-w, 126px);
   height: var(--archive-pile-h, 178px);
+  /* A pile's proportion is A4's — it never shrinks in a flex cell. The model
+     sizes collision cells to fit instead (archive-field.tsx), so a shared
+     track means smaller A4s, never a squeezed one. */
+  flex-shrink: 0;
   margin-bottom: var(--archive-cd, 0px);
   padding: 0;
   border: 0;
@@ -55,11 +59,11 @@
 
 /* One sheet in the pile. The cover is sheet 0; the buried sheets are blank
    paper — an unprinted sheet, not a grey skeleton (the card field's rule).
-   Each sheet's pose is its own --sx/--sy/--sr step; paint order is --sz. */
+   Each sheet's pose is its own --sx/--sy/--sr step; paint order is --sz.
+   Square corners, by the owner's ruling — no border-radius on a sheet. */
 .archive-sheet {
   position: absolute;
   inset: 0;
-  border-radius: 2px;
   transform: translate(var(--sx, 0px), var(--sy, 0px)) rotate(var(--sr, 0deg));
   z-index: var(--sz, 1);
 }
@@ -81,20 +85,23 @@
   padding: calc(var(--archive-mm) * 25) calc(var(--archive-mm) * 27)
     calc(var(--archive-mm) * 22);
   overflow: hidden;
-  border-radius: inherit;
   font-size: calc(var(--archive-mm) * 4.2);
 }
 
+/* The head stamps (category · last write) are the cover's IDENTITY register —
+   bold mono, full ink. Nothing on a sheet is ever faded: fading is a screen
+   convention for "secondary", and print does not grey its own letterhead —
+   hierarchy here is weight (600 vs the foot's regular), size and tracking. */
 .archive-cover-head {
   display: flex;
   justify-content: space-between;
   gap: 1em;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: calc(var(--archive-mm) * 10.5);
+  font-weight: 600;
   line-height: 1.5;
   letter-spacing: 0.12em;
   color: var(--color-foreground);
-  opacity: 0.72;
   white-space: nowrap;
 }
 
@@ -126,6 +133,8 @@
   background: var(--paper-line);
 }
 
+/* The foot stamp (the birth line) is the PROVENANCE register — the same ink
+   as everything else on the sheet, carried by the regular weight. */
 .archive-cover-foot {
   display: flex;
   align-items: baseline;
@@ -135,7 +144,6 @@
   font-size: calc(var(--archive-mm) * 10.5);
   letter-spacing: 0.1em;
   color: var(--color-foreground);
-  opacity: 0.55;
   white-space: nowrap;
 }
 
@@ -146,9 +154,15 @@
 
 /* ── The record cover (v0.25b §三): no head stamps — the bucket IS the
    display line, and one stamp line carries label · date · turns. The title
-   drops into the head's seat so the cover balances without its top line. ── */
+   drops into the head's seat so the cover balances without its top line. That
+   one stamp line is the cover's identity register, so it takes the head's
+   weight (the case cover's foot is provenance and stays regular). ── */
 .archive-cover-inner--record .archive-cover-title {
   margin-top: calc(var(--archive-mm) * 30);
+}
+
+.archive-cover-inner--record .archive-cover-foot {
+  font-weight: 600;
 }
 
 /* ── The field's rows (inside the scene's Html portals). The row is a CSS
