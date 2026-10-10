@@ -12,7 +12,7 @@ import { useLayoutEffect, useState } from "react";
  * something that lives outside the content's own tree.
  *
  * It is measured rather than declared because every candidate constant was
- * wrong in a different place. The chrome is one row from `sm` up and TWO rows
+ * wrong in a different place. The chrome is one row from `md` up and TWO rows
  * at phone width (the settings island wraps under the board bar); it grows a
  * hint bubble on a first visit and loses it on the first rung change; and the
  * brand island grows a badge in demo and client modes. Three constants went

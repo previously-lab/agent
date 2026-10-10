@@ -111,7 +111,7 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
             // letting it eat clicks would wall off the whole bottom edge
             // from the world — only the pill's own glass box (the inner
             // wrapper) opts back in.
-            "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4"
+            "pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-2 md:px-4"
           : // One floating card. 44rem is the reading column's own order of
             // magnitude, so the composer's edges sit near the content's
             // edges without a second measurement to keep in step.

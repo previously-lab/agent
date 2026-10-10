@@ -51,10 +51,10 @@ export function BoardBar({ world, onSelect }: BoardBarProps) {
     //           bar takes the line beneath both. `top-13` is 52 px: the
     //           header's own `p-2` + `h-9` + `gap-2`, so this bar drops exactly
     //           onto the line the header left for it
-    //   sm+     the middle of three, all on one line
+    //   md+     the middle of three, all on one line
     <div
       data-board-bar
-      className="pointer-events-none fixed top-13 right-2 z-50 flex max-w-[calc(100vw-1rem)] sm:top-3 sm:right-auto sm:left-1/2 sm:-translate-x-1/2 md:top-4"
+      className="pointer-events-none fixed top-13 right-2 z-50 flex max-w-[calc(100vw-1rem)] md:top-4 md:right-auto md:left-1/2 md:-translate-x-1/2"
     >
       <div className={`${ISLAND_BAR} pointer-events-auto gap-1 p-1`}>
         <div

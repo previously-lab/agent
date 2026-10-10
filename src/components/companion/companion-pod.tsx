@@ -696,7 +696,7 @@ export function CompanionPod({
   return (
     <div
       data-companion-pod-root
-      className="pointer-events-none fixed right-3 z-40 flex flex-col items-end sm:right-5 companion-pod-root"
+      className="pointer-events-none fixed right-2 z-40 flex flex-col items-end md:right-4 companion-pod-root"
     >
       <button
         type="button"

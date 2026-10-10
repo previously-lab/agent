@@ -46,7 +46,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
     // breakpoint dance. At phone width the header holds ONE line — the brand at
     // its start, the settings at its end — and the BOARD BAR (which the shell
     // renders, because the strand selection is shell state) takes the line
-    // BELOW both, at the same right edge. From `sm` up all three share one
+    // BELOW both, at the same right edge. From `md` up all three share one
     // line, `justify-between` puts the brand at the start and the settings at
     // the end, and the board bar floats centered between them.
     //
@@ -66,7 +66,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
     // far down the pane the floating chrome actually reaches.
     <header
       data-app-header
-      className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap sm:p-3 md:p-4"
+      className="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-wrap items-center justify-between gap-2 p-2 sm:flex-nowrap md:p-4"
     >
       {/* LEFT — the brand intertitle + status badges (status, not actions).
           Hidden on the home: the home itself is the intertitle. */}
