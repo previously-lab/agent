@@ -23,7 +23,9 @@ import {
   isValidCaseName,
   isValidPieceFileName,
   parseCaseDoc,
+  parseCaseRef,
   parsePieceFileName,
+  resolveCaseRefPaths,
   type CaseCategory,
 } from "@/lib/docs";
 import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
@@ -36,9 +38,12 @@ import {
 import {
   parseDossierRef,
   parseRecordRef,
+  ROOM_PAPER_LIMIT,
   type DossierDocName,
   type RecordSpeakerLabels,
 } from "./refs";
+import { stampSliceIds } from "./ref-tokens";
+import { HOTEL_WINDOW_DOORS } from "@/lib/game/hotel-data";
 import { setDemoPersona } from "@/lib/demo/demo-fs";
 
 /** One pile in the archive field — one case. */
@@ -303,4 +308,219 @@ export async function getDossierDoc(
     markdown: raw.trim(),
     warnings: [],
   };
+}
+
+// ─── Reference liveness (v0.22 §7) — the paper's link pass ─────────────────
+// The desk's tokenizer (archive/ref-tokens.ts, pure) finds the candidate
+// refs; THIS action answers the only question the paper asks of the server:
+// which of them name a document that EXISTS. Only alive refs render as
+// links — a dead one stays plain text under a dotted hairline (visible,
+// never blocking — the case-refs axiom). Reads reuse the same paths the
+// opens use: the case grammar's dual-root candidate list, the slice store,
+// the Dossier table.
+
+/** One candidate's verdict. `kind` is the ref's vocabulary (refs.ts routes
+ *  records/dossiers before the case grammar); `door` is set for LIVE record
+ *  refs only — the slice's date plus whether it stands inside the hotel's
+ *  door window (HOTEL_WINDOW_DOORS), which is what the paper's place line
+ *  prints from. */
+export interface VerifiedRef {
+  ref: string;
+  kind: "case" | "piece" | "legacy" | "record" | "dossier";
+  alive: boolean;
+  door?: { date: string; inHotelWindow: boolean };
+}
+
+/** First readable path of a candidate list, or null — the same probe the
+ *  shelf's reads run (episodic keeps its own private copy; a "use server"
+ *  module may not export sync helpers, so the six lines live here too). */
+async function firstExisting(paths: readonly string[]): Promise<boolean> {
+  for (const path of paths) {
+    const raw = await fsReadFile(path).catch(() => null);
+    if (raw !== null) return true;
+  }
+  return false;
+}
+
+/**
+ * Verify a batch of candidate refs. Bounded (the desk's tokenizer can fill
+ * a long document — the cap keeps one open from fanning out unbounded
+ * probes); duplicates collapse before any read. The slice enumeration runs
+ * AT MOST ONCE per call, and only when a live record ref needs its window
+ * rank.
+ */
+export async function verifyRefs(
+  refs: string[],
+  persona?: string,
+): Promise<VerifiedRef[]> {
+  if (persona) setDemoPersona(persona);
+  const unique = [...new Set(refs)].slice(0, 64);
+
+  const results = await mapLimited(unique, ARCHIVE_READ_CONCURRENCY, async (ref) => {
+    const record = parseRecordRef(ref);
+    if (record) {
+      const entry = await sliceEntryFromDisk(
+        record.sliceId.split("-").join("/"),
+      ).catch(() => null);
+      return {
+        ref,
+        kind: "record" as const,
+        alive: entry !== null,
+        // The window rank resolves below, once, across the batch.
+        door: entry ? { date: entry.date, inHotelWindow: false } : undefined,
+      };
+    }
+    const dossier = parseDossierRef(ref);
+    if (dossier) {
+      const raw = await fsReadFile(DOSSIER_PATHS[dossier.name]).catch(() => null);
+      return {
+        ref,
+        kind: "dossier" as const,
+        alive: raw !== null && raw.trim().length > 0,
+      };
+    }
+    const parsed = parseCaseRef(ref);
+    if (!parsed) return { ref, kind: "case" as const, alive: false };
+    return {
+      ref,
+      kind: parsed.kind,
+      alive: await firstExisting(resolveCaseRefPaths(parsed)),
+    };
+  });
+
+  // The hotel window's membership: the newest HOTEL_WINDOW_DOORS slices have
+  // doors (game-shell derives its corridor from the same constant). One
+  // enumeration per call, only when live records ask for it.
+  if (results.some((r) => r.kind === "record" && r.alive)) {
+    const rels = await enumerateSliceIds().catch(() => [] as string[]);
+    const newestFirst = rels
+      .map((rel) => rel.split("/").join("-"))
+      .sort((a, b) => b.localeCompare(a));
+    const rank = new Map(newestFirst.map((id, i) => [id, i]));
+    for (const r of results) {
+      if (r.kind !== "record" || !r.door) continue;
+      const rankOf = rank.get(parseRecordRef(r.ref)!.sliceId);
+      r.door.inHotelWindow =
+        rankOf !== undefined && rankOf < HOTEL_WINDOW_DOORS;
+    }
+  }
+
+  return results;
+}
+
+// ─── The room's papers (v0.25a §五) — a slice's documents, found ───────────
+// A hotel room IS a slice; the papers lying in it are the documents that
+// carry that slice's evidence stamp (`(refs: <sliceId>)`, the tokenizer's
+// stamp harvest) plus the slice's OWN record paper. Read-only, verbatim
+// refs — the desk opens them unchanged.
+
+/** One paper lying in a room. `title` is the glanceable line (the cover
+ *  discipline: case name / piece title / the record's slice id). */
+export interface RoomPaper {
+  ref: string;
+  kind: "record" | "case" | "piece";
+  title: string;
+  /** Birth date (the piece filename's / the index header's), "" when none. */
+  date: string;
+}
+
+/** Does this document's text stamp the slice? Reads the body once. */
+function stampsSlice(markdown: string, sliceId: string): boolean {
+  return stampSliceIds(markdown).includes(sliceId);
+}
+
+/** One case directory → the papers its documents earn in this slice's room
+ *  (usually none). The index and the pieces read in parallel; a document
+ *  whose text never stamps the slice earns nothing. */
+async function readRoomPapersOfCase(
+  category: CaseCategory,
+  name: string,
+  sliceId: string,
+): Promise<RoomPaper[]> {
+  const dirEntries = await fsListFiles(caseDirPath(category, name)).catch(
+    () => [],
+  );
+  const pieceNames = dirEntries
+    .filter(
+      (e) =>
+        e.type === "file" &&
+        e.name !== "index.md" &&
+        e.name.endsWith(".md") &&
+        isValidPieceFileName(e.name),
+    )
+    .map((e) => e.name);
+
+  const fileNames = ["index.md", ...pieceNames];
+  const raws = await mapLimited(fileNames, 4, (fileName) =>
+    fsReadFile(`${caseDirPath(category, name)}/${fileName}`).catch(() => null),
+  );
+
+  const out: RoomPaper[] = [];
+  for (let i = 0; i < fileNames.length; i++) {
+    const raw = raws[i];
+    if (raw === null || !stampsSlice(raw, sliceId)) continue;
+    const fileName = fileNames[i];
+    if (fileName === "index.md") {
+      const doc = parseCaseDoc(raw, { category, caseName: name, fileName });
+      out.push({
+        ref: `${category}/${name}`,
+        kind: "case",
+        title: name,
+        date: doc.opened,
+      });
+    } else {
+      const piece = parsePieceFileName(fileName);
+      // The desk's piece ref names the STEM (the shelf's pieceRef rule —
+      // the parser appends the suffix).
+      out.push({
+        ref: `${category}/${name}/${fileName.replace(/\.md$/, "")}`,
+        kind: "piece",
+        title: piece?.title ?? fileName.replace(/\.md$/, ""),
+        date: piece?.date ?? "",
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * The papers lying in a slice's room: the slice's own record first (the room
+ * always has its transcript — the room exists because the slice does), then
+ * the newest stamped case documents, capped at ROOM_PAPER_LIMIT. An illegal
+ * slice id earns nothing (the red line's shape is the whole validation).
+ */
+export async function getRoomPapers(
+  sliceId: string,
+  persona?: string,
+): Promise<RoomPaper[]> {
+  if (persona) setDemoPersona(persona);
+  if (!parseRecordRef(`records/${sliceId}`)) return [];
+
+  const perCategory = await Promise.all(
+    CASE_CATEGORIES.map(async (category) => {
+      const entries = await fsListFiles(`memory/${category}`).catch(() => []);
+      const names = entries
+        .filter((e) => e.type === "dir" && isValidCaseName(e.name))
+        .map((e) => e.name);
+      const perCase = await mapLimited(names, ARCHIVE_READ_CONCURRENCY, (name) =>
+        readRoomPapersOfCase(category, name, sliceId),
+      );
+      return perCase.flat();
+    }),
+  );
+
+  const stamped = perCategory
+    .flat()
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, ROOM_PAPER_LIMIT - 1);
+
+  return [
+    {
+      ref: `records/${sliceId}`,
+      kind: "record",
+      title: sliceId,
+      date: sliceId.slice(0, 10),
+    },
+    ...stamped,
+  ];
 }

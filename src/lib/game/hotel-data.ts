@@ -37,6 +37,16 @@
 import type { CorridorDoor } from "@/components/game/corridor";
 import type { RoomDoorMap } from "@/lib/game/strand-doors";
 
+/**
+ * The hotel's door window (v1 cap): the corridor materializes only the
+ * NEWEST this-many slices, so a slice id resolves to a hotel door exactly
+ * when its newest-first rank is below this bound. ONE definition, three
+ * readers: GameShell's door list (its old local MAX_DOORS), the archive's
+ * `verifyRefs` (the desk's place line prints only for slices with a door),
+ * and anything else asking "does this slice have a room".
+ */
+export const HOTEL_WINDOW_DOORS = 200;
+
 /** Everything `GameShell` renders from, ready to mount. */
 export interface HotelData {
   doors: readonly CorridorDoor[];

@@ -28,6 +28,13 @@ export function parseRecordRef(refText: string): { sliceId: string } | null {
   return m ? { sliceId: m[1] } : null;
 }
 
+/** The room's loose-papers scatter cap (v0.25a §五 B②): the slice's own
+ *  record plus the newest three stamped documents. More would carpet the
+ *  floor. A VALUE, so it lives here — a "use server" module (actions.ts)
+ *  may not export sync values; the resolver and the game canvas both
+ *  import from here. */
+export const ROOM_PAPER_LIMIT = 4;
+
 /** The Dossier's two documents (the library's pinned section). */
 export type DossierDocName = "previously" | "direction";
 
