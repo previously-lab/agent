@@ -5,20 +5,19 @@
  * Agent, …) resolve to the bridge model and spawn its own CLI subprocess, the
  * WHOLE housekeeping phase is outsourced as ONE bridge call: the client agent
  * returns a single structured JSON report (turn analysis + closed-slice
- * marking + card-evolution decision with mutation proposals
- * + the Phase-1 direction verdict, v1.0 §6); the kernel
+ * marking + card-evolution decision with mutation proposals); the kernel
  * validates it (zod + the existing card-session caps) and applies it through
  * the same downstream code paths as the sub-agent flow.
  *
- * SOP evolution (v0.19 §C.2) rides the SAME report: the client proposes SOP
- * rewrites (report.playbooks) for allowlisted search/thinkdeep
- * colleagues and the kernel applies them through applyBridgePlaybookWrites —
- * the SAME allowlist gate as the merged run's writeSop tool (a write for a
- * colleague not allowlisted this run is skipped, never written). Old clients
- * that omit the field keep the pre-SOP behavior (no SOP evolution). The
- * fitness array is gone from the contract (v0.19 R4/R5 — the fitness trigger
- * chain is retired); old clients still sending it are simply ignored (zod
- * strips unknown keys).
+ * The contract is exactly what the sole caller (housekeeping in
+ * src/app/api/chat/steps.ts) can feed: message, recent turns, the card, the
+ * closing slice. The former jobs 4-7 (dry-slice backfill, strand merge, the
+ * Phase-1 direction verdict, SOP evolution) were removed from the prompt and
+ * the report schema (review F3, 2026-10-12): their payload sections were
+ * never injected — the caller passes none of those inputs — so the report
+ * fields backfill_marks / strand_merges / direction / playbooks were
+ * structurally always empty. Old clients still sending those keys (or the
+ * long-retired fitness array) are tolerated: zod strips unknown keys.
  *
  * Wire contract (shared with the client repo — do not deviate):
  *   stdin : { task, context, phase: "housekeeping", protocol: 2 }
@@ -77,10 +76,7 @@ import type { EvolutionResult } from "@/lib/chat/turn-types";
 import {
   readUserModel,
   writeUserModelCard,
-  writeSelfSop,
 } from "@/lib/evolution/store";
-import { SELF_AGENTS, type SelfAgent } from "@/lib/evolution/paths";
-import { directionOpSchema } from "@/lib/evolution/direction-agent";
 
 // ─── Gate ──────────────────────────────────────────────────────────────────
 
@@ -147,75 +143,13 @@ export type BridgeCardMutation = z.infer<typeof cardMutationSchema>;
 /** Sanity cap — a runaway mutation list is truncated, not rejected. */
 const MAX_MUTATIONS = 40;
 
-/** Mirrors BACKFILL_MAX_PER_TURN in episodic/flash/backfill-marks.ts. */
-const MAX_BACKFILL_MARKS = 3;
-
-const backfillMarkSchema = z.object({
-  slice_id: z.string(),
-  focus: z.string(),
-  summary: z.string(),
-});
-
-/** Cap on the strand_merge proposals accepted from one report. */
-const MAX_STRAND_MERGES = 30;
-
-const strandMergeSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-});
-
 /**
- * SOP rewrite proposal (job 7) — the wire form of the merged run's SopWrite
- * (previously-agent.ts): one FULL rewrite of a colleague's self/<name>/
- * index.md. The LIVE colleagues are search / thinkdeep only (SelfAgent);
- * "recall" stays on the wire enum purely for old-client tolerance — a recall
- * proposal parses, then is skipped at apply time (no live sub-agent loads
- * self/recall anymore, v0.19 R6).
+ * The report schema. ONLY the fields the sole caller can act on: analysis,
+ * closed_marking, evolution. The retired jobs 4-7 fields (backfill_marks /
+ * strand_merges / direction / playbooks — and the even older fitness array)
+ * are gone; an old client still sending them is tolerated by zod's default
+ * unknown-key stripping, never rejected.
  */
-/** The colleagues the wire may NAME — a superset of SelfAgent so a stale
- *  client's recall proposal degrades to a skip instead of nuking the whole
- *  report at schema validation. */
-const PLAYBOOK_AGENTS_WIRE = ["recall", "search", "thinkdeep"] as const;
-
-const playbookWriteSchema = z.object({
-  agent: z.enum(PLAYBOOK_AGENTS_WIRE),
-  content: z.string(),
-  evidence: z.array(z.string()).default([]),
-  expected_benefit: z.string().default(""),
-});
-export type BridgePlaybookWrite = z.infer<typeof playbookWriteSchema>;
-
-/** One write per colleague at most — mirrors the agent-side staging. */
-const MAX_PLAYBOOK_WRITES = 3;
-
-/**
- * The Phase-1 direction verdict (v1.0 §2.3/§6) riding the same report:
- * "no_change" (the common case) or a list of ATOMIC direction ops — the same
- * vocabulary the merged run's direction mutation tools use (single-sourced in
- * direction-agent.ts). The ops are applied to the current doc one by one
- * (applyDirectionOps — per-op structural validation, code-stamped `proposed`
- * pointers), and the result still passes the whole-doc gate
- * (validateDirectionProposal) + the engineering TTL before
- * writeUserModelDirection.
- */
-const directionOutcomeSchema = z.union([
-  z.literal("no_change"),
-  z.object({
-    ops: z.array(directionOpSchema),
-    summary: z.string().default(""),
-    evidence: z.array(z.string()).default([]),
-    expected_benefit: z.string().default(""),
-  }),
-]);
-
-/**
- * Length caps TRUNCATE instead of rejecting — an over-long list (or a missing
- * optional array, see the `.default([])`s) must never nuke the whole report:
- * degradation discards the turn analysis AND the evolution with it, which is
- * exactly what this call exists to provide. Mirrors the mutation-list cap.
- */
-const capped = <T>(arr: T[], n: number): T[] => arr.slice(0, n);
-
 export const housekeepingPhaseReportSchema = z.object({
   analysis: z.object({
     intent: z.enum(WIRE_INTENTS),
@@ -245,38 +179,6 @@ export const housekeepingPhaseReportSchema = z.object({
     reason: z.string(),
     mutations: z.array(cardMutationSchema),
   }),
-  // Dry-slice re-marking folded into the SAME call (replaces the old
-  // per-slice backfill sub-agent spawns). Tolerates omission (an agent that
-  // forgets the field must not nuke the whole report) — unknown slice ids
-  // are filtered out at apply time, never trusted.
-  backfill_marks: z
-    .array(backfillMarkSchema)
-    .transform((a) => capped(a, MAX_BACKFILL_MARKS))
-    .default([]),
-  // Strand near-duplicate merging folded into the SAME call (replaces the old
-  // strand-consolidator sub-agent pass). Offered ONLY on a close boundary when
-  // the index is big enough (payload's "Strand merge candidates" section);
-  // same leniency as backfill_marks — omission tolerated, unknown keys and
-  // no-ops filtered at apply time, never trusted.
-  strand_merges: z
-    .array(strandMergeSchema)
-    .transform((a) => capped(a, MAX_STRAND_MERGES))
-    .default([]),
-  // Direction verdict (v1.0 §2.3/§6 — job 6): absent/null/"no_change" all
-  // mean the direction doc stays untouched.
-  direction: directionOutcomeSchema.nullable().default(null),
-  // SOP evolution (v0.19 §C.2 — job 7): proposed rewrites for the allowed
-  // search / thinkdeep colleagues' self/ SOPs. Tolerates omission
-  // (old clients) — and the allowlist gate is re-applied server-side
-  // (applyBridgePlaybookWrites), so an over-eager proposal for a colleague
-  // not allowlisted this run (or a retired one — "recall" parses on the wire
-  // but is skipped at apply time) is never written. (v0.19 R4/R5: the
-  // fitness array is gone from the contract — unknown-key tolerant, so old
-  // clients sending it are simply ignored.)
-  playbooks: z
-    .array(playbookWriteSchema)
-    .transform((a) => capped(a, MAX_PLAYBOOK_WRITES))
-    .default([]),
 });
 export type HousekeepingPhaseReport = z.infer<
   typeof housekeepingPhaseReportSchema
@@ -298,48 +200,6 @@ export interface HousekeepingBridgeInput {
     sliceId: string;
     turns: Array<{ role: string; content: string }>;
   };
-  /**
-   * Dry slices (closed without focus/summary) up for opportunistic
-   * re-marking — gathered ONLY on a close boundary, each with its compressed
-   * conversation. The agent marks them in the SAME call (backfill_marks in
-   * the report); this replaces the old per-slice backfill sub-agent spawns.
-   */
-  drySlices?: Array<{ sliceId: string; conversation: string }>;
-  /**
-   * Strand merge candidates — offered ONLY on a close boundary when the index
-   * is big enough to be worth a semantic dedupe pass. The agent proposes
-   * from→to merges in the SAME call (strand_merges in the report); the wire
-   * schema parses them leniently, but no apply path exists today (the strand
-   * layer and its consolidator are retired) — the values are accepted and
-   * dropped.
-   */
-  strandsForMerge?: Array<{ name: string; slices: number }>;
-  /**
-   * The self/ colleagues whose SOPs may be rewritten this run (v0.19 §C.2 —
-   * the boundary run's ③ lists them; the explicit memory_update channel
-   * passes NONE). Offered ONLY when non-empty: the client may then propose
-   * SOP rewrites (report.playbooks) for these colleagues; the kernel
-   * re-applies the SAME allowlist gate before anything lands on disk.
-   */
-  sopWriteAllowlist?: SelfAgent[];
-  /** The colleague SOPs' current contents — context for an in-place
-   *  rewrite proposal (job 7). Colleagues not allowlisted are never
-   *  listed. */
-  playbooks?: Array<{ agent: SelfAgent; content: string }>;
-  /**
-   * The current direction.md content (v1.1) — the agent evaluates it in the
-   * SAME call (direction in the report). null/absent = not set yet.
-   */
-  directionContent?: string | null;
-  /** The card's LEGACY Self-model lines verbatim — the migration source for
-   *  the direction verdict (job 6): they fold into the new Portrait; the card
-   *  no longer grows a Self-model section. */
-  selfModelContent?: string | null;
-  /** "bootstrap" = direction.md has never been written and "migrate" = it
-   *  still uses the old # Direction / # Anti-goals skeleton (both carry the
-   *  lowered evidence bar, ≥1 slice pointer); "steady" = the normal high bar
-   *  (≥2 distinct). */
-  directionMode?: "bootstrap" | "migrate" | "steady";
   /** The user's local calendar date (YYYY-MM-DD) — Now/Horizon judgments. */
   todayLocal?: string;
   /** UI locale ("zh" | "en"). */
@@ -359,10 +219,6 @@ One pass, these jobs:
 1. Turn analysis — intent, memory_worthy (false for trivial turns: greetings / "继续" / thanks / small talk), memory_update (ONLY on an explicit record/evolve request or an explicit behavioral correction — the exact content, else null), emotional_signal.
 2. Closed-slice marking — ONLY when the context says a slice is closing: focus (one sentence), summary (≤100 chars), tone.
 3. Card evolution — judge worth (when in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss) and, when worth or memory_update is set, propose card mutations with the op vocabulary below. Never rewrite the whole card; entries you don't touch stay as they are.
-4. Dry-slice backfill — ONLY when the context carries a "Dry slices needing marks" section: one backfill_marks entry per listed slice ({slice_id copied verbatim, focus one sentence, summary ≤100 chars}); [] when the section is absent.
-5. Strand merge — ONLY when the context carries a "Strand merge candidates" section: propose from→to merges for NEAR-DUPLICATE strands (typos / same concept under two names / same entity written differently). Every "to" MUST be a name from the offered list; no chains (A→B and B→C in one pass); do NOT merge distinct concepts that merely share a word; when in doubt, do NOT merge — a wrong merge destroys thread history. [] when the section is absent or the index is already clean.
-6. Direction verdict — the context carries the current evolution direction (direction.md: the loop's USER PORTRAIT + HYPOTHESIS POOL — it describes WHO THE USER IS as a person and NEVER instructs the agent; it is NOT a log of what the user did; the card and SOPs are only its products) plus the card's legacy Self-model lines (rules to MIGRATE, see below). Judge whether the portrait itself should move. "no_change" is the common case — one slice's events are card/SOP material, never direction material by themselves; a single explicit durable user statement becomes a Portrait entry directly (descriptive: "用户明确不喜欢 X"), while suspected patterns enter the hypothesis pool first and promote only when confirmed across ≥2 distinct slices (or explicitly by the user). The new document has two fixed sections: "# Portrait" (CONFIRMED understanding, in six fixed "##" dimensions always all present: Traits & cognitive style / Triggers & rhythms / Patterns & loops / Strengths & resilience / Communication preferences / Values & boundaries; an entry is portrait-grade ONLY when it holds across contexts, outlives the event that evidenced it, and predicts — "用户面对不确定时先搭建结构再行动" qualifies, "用户周四聊了面试" is a case note and belongs nowhere here; NEVER imperative "you should/shouldn't" lines — if a line tells the agent what to do, phrase the USER PATTERN that motivates it instead; body text carries NO names/dates/events/slice ids — evidence rides ONLY as a trailing "— refs: YYYY-MM-DD-HHMM, …" tail), "# Hypotheses" (a bounded DYNAMIC pool of GUESSES about the user's traits/patterns, ≤10, each line exactly "- [proposed YYYY-MM-DD-HHMM] <the guess> — falsify if: <condition>"; confirmed → PROMOTE into the matching Portrait dimension in the same run — a confirmed guess never lingers in the pool; refuted → remove; still unverified 4 slices after its proposed pointer → retire; refill the pool toward 10; guesses are about the PERSON, never predictions about events). Evidence bar: ≥2 DISTINCT slice pointers across the doc steady-state; ≥1 suffices when the mode says BOOTSTRAP or MIGRATE. LEGACY MIGRATION: when the mode says MIGRATE (the doc still uses an old skeleton: # Direction / # Anti-goals, or the first portrait skeleton's # Evidence / # Log) or the Self-model lines below are non-empty, fold every worth-keeping conclusion into the new skeleton wholesale — re-abstract event-shaped notes into portrait-grade lines (names/dates/events out, pointers into trailing refs), re-propose surviving guesses in the new format, drop the rest — and note the card no longer grows a Self-model section. A proposal violating this discipline is rejected by the kernel — and the direction moves ONLY through the direction ops vocabulary below (per-op structural validation; never a rewritten document).
-7. SOP evolution — ONLY when the context carries a "self/ SOPs writable this run" section: for each colleague listed there, judge whether its SOP needs a rewrite from THIS slice's evidence — an allowance authorizes, never obliges; "no change" is the common and correct outcome. Propose via playbooks: [{agent copied verbatim from the section, content (the FULL new SOP — short behavioral guidance, rewritten in place, not an archive), evidence (slice pointers / user quotes — cite the records slice ids in the prose), expected_benefit (one line: what improves if this SOP holds)}]. Style discipline — the investigator's account, never the work order: every SOP rule is anchored in ONE thing that happened (the date and the slice, what observably happened, the working rule adopted because of it); the builder's vantage point is banned — no 工程侧 / 代码 / 实现 / 接口 / 缺陷 / 修复 / 上报 and no English equivalents (record the reproducible phenomenon and the rule you now follow, never a diagnosis of how the agent is built or a request that someone fix it); no architecture explanations, no notes addressed to the agent's makers. The kernel re-checks the allowlist and DISCARDS rewrites for colleagues not listed. [] (or omit) when the section is absent.
 
 Mutation vocabulary (the evolution.mutations array):
 - {"op":"setIdentity","content":"Name: Alan"} — one Identity head line (Name / Address them as / Pronouns / Alias).
@@ -371,14 +227,7 @@ Mutation vocabulary (the evolution.mutations array):
 - {"op":"addNow","content":"…"} / {"op":"removeNow","match":"…"} / {"op":"promoteNowToPast","match":"…"} — current-state hooks.
 - {"op":"addHorizon","content":"…","by":"YYYY-MM-DD"|null,"refs":["<slice-id>",…]} / {"op":"resolveHorizon","match":"…","resolution":"…"} — open loops; resolve is the only way one leaves.
 
-Direction mutation vocabulary (the direction.ops array — the ONLY way the direction moves; never a whole-document rewrite; entries you don't touch stay as they are; the kernel stamps every hypothesis's [proposed …] pointer itself and enforces the pool's expiry TTL):
-- {"op":"add_portrait","dimension":"## …one of the six fixed dimensions…","text":"…","refs":["<slice-id>",…]} — a CONFIRMED portrait entry (descriptive, portrait-grade, no names/dates/events in text; ≥1 ref).
-- {"op":"update_portrait","match":"…","text":"…","refs":[…]} / {"op":"remove_portrait","match":"…"} — replace / remove ONE existing Portrait line by substring.
-- {"op":"add_hypothesis","text":"…","falsify":"…"} — a trait-level guess about the PERSON + its falsification condition.
-- {"op":"promote_hypothesis","match":"…","dimension":"## …","text":"…","refs":[…]} — a CONFIRMED guess leaves the pool and enters the Portrait (portrait-grade re-phrasing) in the same report.
-- {"op":"remove_hypothesis","match":"…"} — a refuted guess leaves the pool.
-
-The card is a PURE semantic memory pool (Identity/Past/Now/Horizon — what the user did, is doing, will do): it NEVER carries rules, lessons, or analysis. Patterns/tendencies about the user belong to the direction Portrait (job 6), guesses to its hypothesis pool. One fact, one home.
+The card is a PURE semantic memory pool (Identity/Past/Now/Horizon — what the user did, is doing, will do): it NEVER carries rules, lessons, or analysis. One fact, one home.
 
 Language and style: ${DOC_LANGUAGE_RULE}
 
@@ -393,13 +242,9 @@ OUTPUT CONTRACT: your final reply must be EXACTLY ONE JSON object — no prose, 
     "emotional_signal": { "intensity": "none"|"light"|"strong", "register": "neutral"|"emotional"|"humorous"|"frustrated"|"excited", "note": string }
   },
   "closed_marking": { "focus": string, "summary": string, "tone": string } | null,
-  "evolution": { "worth": boolean, "reason": string, "mutations": [ …ops above… ] },
-  "backfill_marks": [ { "slice_id": string, "focus": string, "summary": string } ],
-  "strand_merges": [ { "from": string, "to": string } ],
-  "direction": "no_change" | { "ops": [ …direction ops below… ], "summary": string, "evidence": string[], "expected_benefit": string } | null,
-  "playbooks": [ { "agent": "search"|"thinkdeep", "content": string, "evidence": string[], "expected_benefit": string } ]
+  "evolution": { "worth": boolean, "reason": string, "mutations": [ …ops above… ] }
 }
-closed_marking is null when no slice is closing; mutations is [] when nothing changes; backfill_marks is [] when no dry slices were provided; strand_merges is [] when no merge candidates were provided; direction is "no_change" (or omitted) when the direction doc stays as it is; playbooks is [] (or omitted) when no colleague SOP section was provided or nothing needs a rewrite. Analysis, closed_marking, backfill_marks and strand_merges must be produced from the data in this payload ALONE — do not read memory for them. Reading memory is card-evolution forensics ONLY (substantiating mutations, especially self-model lessons), and only through the three evidence commands the workspace allows in this phase (readslice / agentlog / card); the search-type commands (timeline / strands / slicesummary) are gated off in the housekeeping phase and will be refused.`;
+closed_marking is null when no slice is closing; mutations is [] when nothing changes. Analysis and closed_marking must be produced from the data in this payload ALONE — do not read memory for them. Reading memory is card-evolution forensics ONLY (substantiating mutations), and only through the three evidence commands the workspace allows in this phase (readslice / agentlog / card); the search-type commands (timeline / strands / slicesummary) are gated off in the housekeeping phase and will be refused.`;
 
 /** Compress a closing slice's turns (first turn + last 10, chars capped). */
 function compressTurns(turns: Array<{ role: string; content: string }>): string {
@@ -440,60 +285,9 @@ export function buildHousekeepingPayload(input: HousekeepingBridgeInput): {
     }`,
     `## Time\n\nUser's local date: ${input.todayLocal ?? "(unknown)"} · locale: ${input.locale ?? "en"} · card slice: ${input.sliceId}`,
   ];
-  if (input.directionContent !== undefined) {
-    sections.push(
-      `## Current evolution direction (direction.md — evaluate it per job 6; mode: ${
-        input.directionMode === "bootstrap"
-          ? "BOOTSTRAP — never written; seed the minimal baseline, a single slice pointer suffices"
-          : input.directionMode === "migrate"
-            ? "MIGRATE — the doc still uses an OLD skeleton (# Direction / # Anti-goals, or the first portrait skeleton's # Evidence / # Log); re-abstract it wholesale into the new # Portrait (six fixed ## dimensions, refs-tailed pointers) / # Hypotheses skeleton, a single slice pointer suffices"
-            : "steady — the normal bar, ≥2 distinct slice pointers across the doc"
-      })\n\n${
-        input.directionContent?.trim() ||
-        "(not set yet — this would be the FIRST direction)"
-      }`,
-    );
-    sections.push(
-      `## Legacy Self-model lines on the card (migration source for job 6 — fold into the Portrait, descriptive phrasing, keep slice refs; the card no longer grows a Self-model section)\n\n${
-        input.selfModelContent?.trim() || "(none — the card carries no legacy Self-model lines)"
-      }`,
-    );
-  }
-  if (input.sopWriteAllowlist && input.sopWriteAllowlist.length > 0) {
-    const allowed = new Set(
-      input.sopWriteAllowlist.filter((b): b is SelfAgent =>
-        (SELF_AGENTS as readonly string[]).includes(b),
-      ),
-    );
-    const current = new Map(
-      (input.playbooks ?? []).map((p) => [p.agent, p.content]),
-    );
-    sections.push(
-      `## self/ SOPs writable this run (job 7 input)\n\nThese colleagues' SOPs (self/<name>/index.md — loaded in full into their system prompts at spawn) may be rewritten from this slice's evidence. An allowance authorizes, never obliges; "no change" is the common outcome. Propose via playbooks in the report (agent copied verbatim; content is the FULL new SOP, rewritten in place — short guidance, not an archive; cite the records slice ids in the prose). Every write reads as a dated factual account of what happened plus the rule it motivated — never builder vocabulary (工程侧 / 代码 / 缺陷 / 修复 / 上报), never notes addressed to the agent's makers. The kernel re-checks the allowlist and skips rewrites for colleagues not listed.\n\n${[...allowed]
-        .map((agent) => {
-          const body = (current.get(agent) ?? "").trim();
-          return `### ${agent}\n\n${body || "(no SOP yet — a proposal would create it)"}`;
-        })
-        .join("\n\n")}`,
-    );
-  }
   if (closing) {
     sections.push(
       `## Closing slice ${closing.sliceId}\n\nConversation (first turn + last turns):\n${compressTurns(closing.turns)}`,
-    );
-  }
-  if (input.drySlices && input.drySlices.length > 0) {
-    sections.push(
-      `## Dry slices needing marks\n\nThese past slices closed without a summary. Mark each via backfill_marks (slice_id copied verbatim):\n\n${input.drySlices
-        .map((d) => `### ${d.sliceId}\n${d.conversation}`)
-        .join("\n\n")}`,
-    );
-  }
-  if (input.strandsForMerge && input.strandsForMerge.length > 0) {
-    sections.push(
-      `## Strand merge candidates\n\nThe strand index is large enough to be worth a semantic dedupe pass. Propose from→to merges via strand_merges (every "to" copied verbatim from this list; prefer keeping the more specific / more used name):\n\n${input.strandsForMerge
-        .map((s) => `- ${s.name} (${s.slices} slice${s.slices === 1 ? "" : "s"})`)
-        .join("\n")}`,
     );
   }
   return { task, context: sections.join("\n\n") };
@@ -679,6 +473,9 @@ const VALID_TONES: readonly string[] = ["positive", "neutral", "negative", "mixe
  * Map a validated wire report onto the internal TurnAnalysis shape so ALL
  * downstream housekeeping code (closed marking, degradation
  * fallbacks) runs unchanged. Mirrors analyzeTurn's defensive post-processing.
+ * No evolveCard: the bridge path's card evolution applies report.evolution
+ * DIRECTLY (applyBridgeCardEvolution) — nothing consumes the analyzer's
+ * evolve_card gate here.
  */
 export function adaptHousekeepingReport(
   report: HousekeepingPhaseReport,
@@ -695,9 +492,6 @@ export function adaptHousekeepingReport(
       note: a.emotional_signal.note,
     },
     memoryUpdate: a.memory_update ? { content: a.memory_update } : undefined,
-    evolveCard: sliceClosing
-      ? { worth: report.evolution.worth, reason: report.evolution.reason }
-      : undefined,
     closedMarking: cm
       ? {
           focus: cm.focus.trim(),
@@ -713,7 +507,7 @@ export function adaptHousekeepingReport(
 /**
  * The degraded analysis for a failed bridge call — mirrors the analyzer's
  * empty-on-failure contract (memoryWorthy=true, neutral signal).
- * No evolveCard: the caller skips card evolution entirely on bridge failure.
+ * The caller skips card evolution entirely on bridge failure.
  */
 export function degradedAnalysis(): TurnAnalysis {
   return {
@@ -831,7 +625,7 @@ export function applyCardMutations(
         skipped.push({
           op: m.op,
           reason:
-            "the card no longer carries a Self-model section — fold the lesson into the direction Portrait (job 6)",
+            "the card no longer carries a Self-model section — trait lessons belong to the direction Portrait, which the housekeeping bridge report does not carry",
         });
         break;
     }
@@ -906,66 +700,4 @@ export async function applyBridgeCardEvolution(input: {
     mutations: diffCardLines(input.card, applied.card),
     changes: summarizeCardChanges(input.card, applied.card, 0),
   };
-}
-
-// ─── SOP-write application (same allowlist gate as writeSop) ──────────────
-
-export interface ApplyBridgePlaybooksResult {
-  /** SOPs actually written — the same {agent, summary} shape as
-   *  runCardEvolution's `playbooks` result field (summary = the expected
-   *  benefit, or a generic line when the report left it empty). */
-  applied: Array<{ agent: SelfAgent; summary: string }>;
-  /** Writes REJECTED by the allowlist gate (or empty content) — skipped with
-   *  their reason, never thrown, never retried (mirrors the mutation
-   *  applier's `skipped` discipline). */
-  skipped: Array<{ agent: string; reason: string }>;
-}
-
-/**
- * Apply the report's playbooks array through the SAME gate as the merged
- * run's writeSop tool: a rewrite lands ONLY when that colleague is in the
- * caller-computed allowlist for this run (v0.19 §C.2 — the boundary run's
- * ③ allowlists; the explicit channel allowlists none). An over-eager client
- * proposal for a colleague not allowlisted is skipped with the same
- * rejection the agent-side tool produces. The FULL content is written —
- * spawn loading carries no injection cap (the length discipline is the
- * writer's).
- */
-export async function applyBridgePlaybookWrites(
-  writes: BridgePlaybookWrite[],
-  sopWriteAllowlist: readonly SelfAgent[],
-  batch?: WriteBatch,
-): Promise<ApplyBridgePlaybooksResult> {
-  const applied: ApplyBridgePlaybooksResult["applied"] = [];
-  const skipped: ApplyBridgePlaybooksResult["skipped"] = [];
-  for (const w of writes.slice(0, MAX_PLAYBOOK_WRITES)) {
-    // Wire tolerance: an old client's "recall" proposal parses (it stays on
-    // PLAYBOOK_AGENTS_WIRE) but the colleague is RETIRED — no live sub-agent
-    // loads self/recall — so it is skipped here, never written.
-    if (w.agent === "recall") {
-      skipped.push({
-        agent: w.agent,
-        reason: 'the "recall" SOP is retired — no live sub-agent loads it',
-      });
-      continue;
-    }
-    if (!sopWriteAllowlist.includes(w.agent)) {
-      skipped.push({
-        agent: w.agent,
-        reason: `the "${w.agent}" SOP is not writable this run — it stays as it is`,
-      });
-      continue;
-    }
-    const content = w.content.trim();
-    if (!content) {
-      skipped.push({ agent: w.agent, reason: "SOP content is empty" });
-      continue;
-    }
-    await writeSelfSop(w.agent, content, batch);
-    applied.push({
-      agent: w.agent,
-      summary: w.expected_benefit.trim() || `Rewrote the ${w.agent} SOP`,
-    });
-  }
-  return { applied, skipped };
 }

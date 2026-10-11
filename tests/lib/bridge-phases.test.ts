@@ -10,12 +10,16 @@
  *     degrade to { ok: false };
  *   - applyCardMutations routes the wire ops through the card-session
  *     machinery: caps are enforced, rejections land in `skipped` (no throw).
+ *
+ * The report schema is exactly what the sole caller can feed (jobs 1-3). The
+ * retired jobs 4-7 fields (backfill_marks / strand_merges / direction /
+ * playbooks) are GONE from the schema — old clients still sending them are
+ * tolerated via zod's unknown-key stripping (pinned below).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   adaptHousekeepingReport,
   applyBridgeCardEvolution,
-  applyBridgePlaybookWrites,
   applyCardMutations,
   buildHousekeepingPayload,
   degradedAnalysis,
@@ -27,7 +31,6 @@ import {
 import { runBridge } from "@/lib/bridge";
 import {
   readUserModel,
-  writeSelfSop,
   writeUserModelCard,
 } from "@/lib/evolution/store";
 import { writePreviously } from "@/lib/episodic";
@@ -49,15 +52,14 @@ vi.mock("@/lib/episodic", () => ({
 }));
 
 // The evolution store is the single-writer boundary under test (the folded
-// people/user/index.md card write + self/ SOP writes); readUserModel is
-// mocked to null so the snapshot falls back to the mutated card.
+// people/user/index.md card write); readUserModel is mocked to null so the
+// snapshot falls back to the mutated card.
 vi.mock("@/lib/evolution/store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/lib/evolution/store")>();
   return {
     ...actual,
     readUserModel: vi.fn(async () => null),
-    writeSelfSop: vi.fn(async () => {}),
     writeUserModelCard: vi.fn(async () => {}),
   };
 });
@@ -65,7 +67,6 @@ vi.mock("@/lib/evolution/store", async (importOriginal) => {
 const runBridgeMock = vi.mocked(runBridge);
 const writeCardMock = vi.mocked(writeUserModelCard);
 const writeSliceMock = vi.mocked(writePreviously);
-const writeSopMock = vi.mocked(writeSelfSop);
 
 const SLICE = "2026-08-22-1015";
 
@@ -90,10 +91,6 @@ const VALID_REPORT: HousekeepingPhaseReport = {
       },
     ],
   },
-  backfill_marks: [],
-  strand_merges: [],
-  direction: null,
-  playbooks: [],
 };
 
 function baseInput() {
@@ -143,99 +140,28 @@ describe("buildHousekeepingPayload", () => {
     expect(task).toContain("gated off in the housekeeping phase");
   });
 
-  it("lists dry slices for the folded-in backfill job when provided", () => {
+  it("carries ONLY the live jobs 1-3 — the retired jobs 4-7 are gone from task and schema (F3, 2026-10-12)", () => {
     const { task, context } = buildHousekeepingPayload({
       ...baseInput(),
       closingSlice: {
         sliceId: SLICE,
         turns: [{ role: "user", content: "old turn" }],
       },
-      drySlices: [
-        { sliceId: "2026-08-10-1401", conversation: "user: 旧对话\nassistant: 回复" },
-      ],
     });
-    expect(task).toContain("Dry slices needing marks");
-    expect(task).toContain("backfill_marks");
-    expect(context).toContain("Dry slices needing marks");
-    expect(context).toContain("### 2026-08-10-1401");
-    expect(context).toContain("旧对话");
-  });
-
-  it("omits the dry-slice section when none are provided", () => {
-    const { context } = buildHousekeepingPayload(baseInput());
-    expect(context).not.toContain("Dry slices needing marks");
-  });
-
-  it("lists strand merge candidates with slice counts when provided", () => {
-    const { task, context } = buildHousekeepingPayload({
-      ...baseInput(),
-      closingSlice: {
-        sliceId: SLICE,
-        turns: [{ role: "user", content: "old turn" }],
-      },
-      strandsForMerge: [
-        { name: "心态", slices: 3 },
-        { name: "心态调整", slices: 1 },
-      ],
-    });
-    expect(task).toContain("Strand merge candidates");
-    expect(task).toContain("strand_merges");
-    expect(context).toContain("Strand merge candidates");
-    expect(context).toContain("- 心态 (3 slices)");
-    expect(context).toContain("- 心态调整 (1 slice)");
-  });
-
-  it("omits the strand-merge section when no candidates are provided", () => {
-    const { context } = buildHousekeepingPayload(baseInput());
-    expect(context).not.toContain("Strand merge candidates");
-  });
-
-  it("carries the direction doc in context when provided", () => {
-    const { task, context } = buildHousekeepingPayload({
-      ...baseInput(),
-      directionContent: "# Direction\n\nKeep answers concrete.",
-    });
-    expect(task).toContain("Direction verdict");
-    expect(task).toContain('"direction"');
-    expect(context).toContain("Current evolution direction");
-    expect(context).toContain("Keep answers concrete.");
-  });
-
-  it("lists allowlisted colleagues' SOPs for the folded-in SOP job when provided", () => {
-    const { task, context } = buildHousekeepingPayload({
-      ...baseInput(),
-      sopWriteAllowlist: ["search"],
-      playbooks: [
-        { agent: "search", content: "- quote the slice before answering" },
-        { agent: "thinkdeep", content: "- unused: not allowlisted" },
-      ],
-    });
-    expect(task).toContain("SOP evolution");
-    expect(task).toContain('"playbooks"');
-    // The SOP style discipline rides the static task contract and the offer.
-    expect(task).toContain("investigator's account");
-    expect(task).toContain("工程侧");
-    expect(context).toContain("工程侧");
-    expect(context).toContain("self/ SOPs writable this run");
-    expect(context).toContain("### search");
-    expect(context).toContain("- quote the slice before answering");
-    // thinkdeep is not allowlisted — its SOP is not offered.
-    expect(context).not.toContain("### thinkdeep");
-  });
-
-  it("omits the self/ SOP section when no colleague is allowlisted", () => {
-    const { context } = buildHousekeepingPayload(baseInput());
-    expect(context).not.toContain("self/ SOPs writable this run");
-  });
-
-  it("names the direction mode in context (migrate re-shape, lowered bar)", () => {
-    const { context } = buildHousekeepingPayload({
-      ...baseInput(),
-      directionContent: "# Direction\n\nKeep answers concrete.\n\n# Anti-goals\n\nNo fluff.",
-      directionMode: "migrate",
-    });
-    expect(context).toContain("mode: MIGRATE");
-    expect(context).toContain("# Portrait (six fixed ## dimensions, refs-tailed pointers) / # Hypotheses");
+    for (const dead of [
+      "backfill_marks",
+      "strand_merges",
+      "Dry slices needing marks",
+      "Strand merge candidates",
+      "Direction verdict",
+      "SOP evolution",
+      "self/ SOPs writable this run",
+      '"direction"',
+      '"playbooks"',
+    ]) {
+      expect(task).not.toContain(dead);
+      expect(context).not.toContain(dead);
+    }
   });
 });
 
@@ -308,219 +234,28 @@ describe("runHousekeepingBridge", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("tolerates an omitted backfill_marks field (defaults to [])", async () => {
-    const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    delete sparse.backfill_marks;
+  it("tolerates an old client still sending the REMOVED report fields (zod strips unknown keys — never a schema failure)", async () => {
+    // Pre-F3 clients answer with backfill_marks / strand_merges / direction /
+    // playbooks (and the even older fitness array). All are unknown keys now:
+    // stripped, the report stays valid, none of them reach the parsed report.
+    const stale = JSON.parse(JSON.stringify(VALID_REPORT));
+    stale.backfill_marks = [{ slice_id: SLICE, focus: "f", summary: "s" }];
+    stale.strand_merges = [{ from: "a", to: "b" }];
+    stale.direction = "no_change";
+    stale.playbooks = [{ agent: "search", content: "- quote before answering" }];
+    stale.fitness = [{ bucket: "recall", delta: -1, evidence: "x" }];
     runBridgeMock.mockResolvedValue({
       status: "ok",
-      result: JSON.stringify(sparse),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.backfill_marks).toEqual([]);
-  });
-
-  it("tolerates an omitted strand_merges field (defaults to [])", async () => {
-    const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    delete sparse.strand_merges;
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(sparse),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.strand_merges).toEqual([]);
-  });
-
-  it("tolerates an omitted direction field AND ignores a legacy fitness key (v0.19 — old reports stay valid)", async () => {
-    const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    delete sparse.direction;
-    // An old client still sending fitness: the unknown key is stripped, the
-    // report stays valid.
-    sparse.fitness = [{ bucket: "recall", delta: -1, evidence: "x" }];
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(sparse),
+      result: JSON.stringify(stale),
       elapsedMs: 5,
     });
     const res = await runHousekeepingBridge(baseInput());
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.report.direction).toBeNull();
-    expect("fitness" in res.report).toBe(false);
-  });
-
-  it("tolerates an omitted playbooks field (old clients — defaults to [])", async () => {
-    const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    delete sparse.playbooks;
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(sparse),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.playbooks).toEqual([]);
-  });
-
-  it("parses playbook rewrite proposals when present", async () => {
-    const rich = JSON.parse(JSON.stringify(VALID_REPORT));
-    rich.playbooks = [
-      {
-        agent: "recall",
-        content: "- on emotional topics, read the full slice before concluding",
-        evidence: ["2026-08-22-1015"],
-        expected_benefit: "fewer re-reads outside references",
-      },
-    ];
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(rich),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.report.playbooks).toEqual([
-      {
-        agent: "recall",
-        content: "- on emotional topics, read the full slice before concluding",
-        evidence: ["2026-08-22-1015"],
-        expected_benefit: "fewer re-reads outside references",
-      },
-    ]);
-  });
-
-  it("tolerates omitted optional playbook fields (evidence / expected_benefit)", async () => {
-    const sparse = JSON.parse(JSON.stringify(VALID_REPORT));
-    sparse.playbooks = [{ agent: "search", content: "- quote before answering" }];
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(sparse),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.report.playbooks).toEqual([
-      {
-        agent: "search",
-        content: "- quote before answering",
-        evidence: [],
-        expected_benefit: "",
-      },
-    ]);
-  });
-
-  it("degrades on an unknown playbook agent (schema validation failure)", async () => {
-    const bad = JSON.parse(JSON.stringify(VALID_REPORT));
-    bad.playbooks = [{ agent: "card", content: "nope" }];
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(bad),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("schema validation");
-  });
-
-  it("degrades on a non-string playbook content (schema validation failure)", async () => {
-    const bad = JSON.parse(JSON.stringify(VALID_REPORT));
-    bad.playbooks = [{ agent: "recall", content: 42 }];
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(bad),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("schema validation");
-  });
-
-  it("truncates an over-cap playbooks array instead of rejecting the report", async () => {
-    const fat = JSON.parse(JSON.stringify(VALID_REPORT));
-    fat.playbooks = ["recall", "search", "thinkdeep", "recall", "search"].map(
-      (agent) => ({ agent, content: `- note for ${agent}` }),
-    );
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(fat),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.playbooks).toHaveLength(3);
-  });
-
-  it("parses a direction ops verdict when present", async () => {
-    const rich = JSON.parse(JSON.stringify(VALID_REPORT));
-    rich.direction = {
-      ops: [
-        {
-          op: "add_portrait",
-          dimension: "## Communication preferences",
-          text: "The user prefers concrete answers",
-          refs: ["2026-08-20-1430", "2026-08-22-1015"],
-        },
-        {
-          op: "add_hypothesis",
-          text: "The user may think better late at night",
-          falsify: "late-slice energy stays flat",
-        },
-      ],
-      summary: "First direction: concreteness",
-      evidence: ["2026-08-20-1430"],
-      expected_benefit: "Less vague advice",
-    };
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(rich),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.report.direction).not.toBeNull();
-    expect(res.report.direction).not.toBe("no_change");
-    if (res.report.direction && res.report.direction !== "no_change") {
-      expect(res.report.direction.ops).toHaveLength(2);
-      expect(res.report.direction.ops[0]).toMatchObject({ op: "add_portrait" });
-      expect(res.report.direction.summary).toBe("First direction: concreteness");
+    expect(res.report).toEqual(VALID_REPORT);
+    for (const k of ["backfill_marks", "strand_merges", "direction", "playbooks", "fitness"]) {
+      expect(k in res.report).toBe(false);
     }
-  });
-
-  it("accepts direction: \"no_change\" verbatim", async () => {
-    const rich = JSON.parse(JSON.stringify(VALID_REPORT));
-    rich.direction = "no_change";
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(rich),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.report.direction).toBe("no_change");
-  });
-
-  it("truncates over-cap arrays instead of rejecting the whole report", async () => {
-    const fat = JSON.parse(JSON.stringify(VALID_REPORT));
-    fat.backfill_marks = Array.from({ length: 5 }, (_, i) => ({
-      slice_id: `2026-08-1${i}-1000`,
-      focus: "f",
-      summary: "s",
-    }));
-    runBridgeMock.mockResolvedValue({
-      status: "ok",
-      result: JSON.stringify(fat),
-      elapsedMs: 5,
-    });
-    const res = await runHousekeepingBridge(baseInput());
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.report.backfill_marks).toHaveLength(3);
   });
 
   it("tolerates an old client still sending the retired semantic_hint (stripped)", async () => {
@@ -690,11 +425,10 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
     expect(a.semanticHint).toBeUndefined(); // retired with the semantic_hint task
     expect(a.memoryWorthy).toBe(true);
     expect(a.memoryUpdate).toBeUndefined();
-    expect(a.evolveCard).toBeUndefined(); // not closing
     expect(a.closedMarking).toBeUndefined();
   });
 
-  it("carries evolveCard and a validated closed_marking tone when closing", () => {
+  it("carries a validated closed_marking tone when closing", () => {
     const report: HousekeepingPhaseReport = {
       ...VALID_REPORT,
       closed_marking: {
@@ -704,10 +438,10 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
       },
     };
     const a = adaptHousekeepingReport(report, true);
-    expect(a.evolveCard).toEqual({
-      worth: true,
-      reason: "A durable interview commitment was stated.",
-    });
+    // evolveCard is gone from TurnAnalysis entirely (F2b/F3, 2026-10-12): the
+    // bridge path applies report.evolution directly, and the type no longer
+    // even has the field — nothing can consume it here.
+    expect("evolveCard" in a).toBe(false);
     expect(a.closedMarking?.focus).toBe("interview prep");
     expect(a.closedMarking?.tone).toBeNull(); // invalid tone dropped
   });
@@ -716,7 +450,7 @@ describe("adaptHousekeepingReport / degradedAnalysis", () => {
     const a = degradedAnalysis();
     expect(a.memoryWorthy).toBe(true);
     expect(a.semanticHint).toBeUndefined();
-    expect(a.evolveCard).toBeUndefined();
+    expect("evolveCard" in a).toBe(false);
   });
 });
 
@@ -824,114 +558,5 @@ describe("applyBridgeCardEvolution", () => {
     expect(res.note).toContain("rejected by validation");
     expect(writeCardMock).not.toHaveBeenCalled();
     expect(writeSliceMock).not.toHaveBeenCalled();
-  });
-});
-
-// ─── SOP-write application (the writeSop allowlist gate) ─────────────────
-
-describe("applyBridgePlaybookWrites", () => {
-  it("writes an allowlisted colleague's SOP in FULL through writeSelfSop (no cap)", async () => {
-    const batch = { writes: [] } as unknown as Parameters<
-      typeof applyBridgePlaybookWrites
-    >[2];
-    const longSop = "- quote the slice id before answering\n" + "x".repeat(5000);
-    const res = await applyBridgePlaybookWrites(
-      [
-        {
-          agent: "search",
-          content: longSop,
-          evidence: [SLICE],
-          expected_benefit: "fewer ungrounded answers",
-        },
-      ],
-      ["search"] as const,
-      batch,
-    );
-    expect(writeSopMock).toHaveBeenCalledOnce();
-    expect(writeSopMock).toHaveBeenCalledWith("search", longSop, batch);
-    expect(res.applied).toEqual([
-      { agent: "search", summary: "fewer ungrounded answers" },
-    ]);
-    expect(res.skipped).toEqual([]);
-  });
-
-  it("applies nothing for a legacy report (empty playbooks — old clients)", async () => {
-    const res = await applyBridgePlaybookWrites([], ["search"] as const);
-    expect(res.applied).toEqual([]);
-    expect(res.skipped).toEqual([]);
-    expect(writeSopMock).not.toHaveBeenCalled();
-  });
-
-  it("does NOT write when the colleague is not allowlisted (the allowlist gate)", async () => {
-    const res = await applyBridgePlaybookWrites(
-      [
-        {
-          agent: "search",
-          content: "- quote before answering",
-          evidence: [],
-          expected_benefit: "",
-        },
-      ],
-      ["thinkdeep"] as const, // search is NOT allowlisted this run
-    );
-    expect(writeSopMock).not.toHaveBeenCalled();
-    expect(res.applied).toEqual([]);
-    expect(res.skipped).toEqual([
-      {
-        agent: "search",
-        reason: expect.stringContaining('the "search" SOP is not writable this run'),
-      },
-    ]);
-  });
-
-  it("skips empty content even for an allowlisted colleague", async () => {
-    const res = await applyBridgePlaybookWrites(
-      [{ agent: "thinkdeep", content: "   ", evidence: [], expected_benefit: "" }],
-      ["thinkdeep"] as const,
-    );
-    expect(writeSopMock).not.toHaveBeenCalled();
-    expect(res.skipped).toEqual([
-      { agent: "thinkdeep", reason: "SOP content is empty" },
-    ]);
-  });
-
-  it("gates each write independently (mixed allowlisted / not)", async () => {
-    const res = await applyBridgePlaybookWrites(
-      [
-        { agent: "thinkdeep", content: "- note one", evidence: [], expected_benefit: "" },
-        { agent: "search", content: "- note two", evidence: [], expected_benefit: "" },
-      ],
-      ["thinkdeep"] as const,
-    );
-    expect(writeSopMock).toHaveBeenCalledTimes(1);
-    expect(writeSopMock.mock.calls.map((c) => c[0])).toEqual(["thinkdeep"]);
-    expect(res.applied.map((a) => a.agent)).toEqual(["thinkdeep"]);
-    // Generic summary when the report left expected_benefit empty.
-    expect(res.applied[0].summary).toBe("Rewrote the thinkdeep SOP");
-    expect(res.skipped.map((s) => s.agent)).toEqual(["search"]);
-  });
-
-  it("skips a retired recall proposal even when the wire still carries it (old clients)", async () => {
-    // "recall" stays on the wire enum for old-client tolerance, but no live
-    // sub-agent loads self/recall — the write must never land.
-    const res = await applyBridgePlaybookWrites(
-      [
-        {
-          agent: "recall",
-          content: "- read the full slice before concluding",
-          evidence: [SLICE],
-          expected_benefit: "",
-        },
-      ],
-      ["search", "thinkdeep"] as const,
-    );
-    expect(writeSopMock).not.toHaveBeenCalled();
-    expect(res.applied).toEqual([]);
-    expect(res.skipped).toEqual([
-      {
-        agent: "recall",
-        reason: expect.stringContaining("retired"),
-      },
-    ]);
   });
 });

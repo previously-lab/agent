@@ -1,6 +1,12 @@
 /**
  * Backfill an episodic memory dataset (run AFTER audit-memory.mjs).
  *
+ * GENERATION NOTE (2026-10-12): written for the OLD-generation memory root
+ * layout (memory/episodic/ — slices + timeline/index.json + strands.json).
+ * The default target points at the B data repo
+ * (C:/Users/Dream/Documents/GitHub/agent), not this repo. Kept for the
+ * migration window only; the migration plan is doc/design/v1.0-memory-migration.md.
+ *
  * Default target: C:/Users/Dream/Documents/GitHub/agent/memory/episodic
  * (the real data repo — Aftrbrez's own memory/ is an old test copy, never touched)
  *

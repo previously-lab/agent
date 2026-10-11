@@ -49,6 +49,9 @@ export interface SliceSummary {
   focus: string;
   summary: string;
   start: string;
+  // T-07 (review ruling 2026-10-12): intentionally RETAINED derived display
+  // field — the value is derived from closed_by at read time, never persisted;
+  // the v0.17 step-5 type-field removal was ruled NOT to execute.
   status: "active" | "closed";
   open_loops: string[];
   decisions: string[];
@@ -525,6 +528,9 @@ export interface SliceContent {
   focus: string;
   summary: string;
   start: string;
+  // T-07 (review ruling 2026-10-12): intentionally RETAINED derived display
+  // field — the value is derived from closed_by at read time, never persisted;
+  // the v0.17 step-5 type-field removal was ruled NOT to execute.
   status: string;
   /** The slice's recorded timezone (front matter; the record paper's
    *  letterhead prints it next to the wall clock). */

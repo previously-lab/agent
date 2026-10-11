@@ -23,6 +23,9 @@ export interface TimelineSliceEntry {
   end?: string;
   /** Number of turns; only known when the slice was parsed this run. */
   turn_count?: number;
+  // T-07 (review ruling 2026-10-12): intentionally RETAINED derived display
+  // field — the value is derived from closed_by at read time (store.ts), never
+  // persisted; the v0.17 step-5 type-field removal was ruled NOT to execute.
   status: "active" | "closed";
   /** One-sentence focus (strong verb, not a noun label). */
   focus: string;

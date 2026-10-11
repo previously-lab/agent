@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 const execFileP = promisify(execFile);
 const SCRIPT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../../scripts/migrate-strands-to-docs.mjs",
+  // Archived 2026-10-12 (review ruling #9): the docs/topic target was ruled
+  // out, so the script moved to scripts/archive/ — the test still exercises it.
+  "../../../scripts/archive/migrate-strands-to-docs.mjs",
 );
 
 let root: string;

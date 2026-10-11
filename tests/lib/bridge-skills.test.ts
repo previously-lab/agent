@@ -4,10 +4,11 @@
  * skills/recall.md. These tests pin the doc's invariants so a careless edit
  * can't silently break the kernel↔client contract.
  *
- * v1.0 Phase A: the doc now mirrors the kernel recall COLLEAGUE contract
- * (src/lib/episodic/flash/recall.ts) — the sub-agent reads slices ITSELF with
- * the reader commands and answers with verbatim-quote references, instead of
- * the v0.9 pointer-only hits list.
+ * The doc carries the Phase-A colleague contract — the sub-agent reads slices
+ * ITSELF with the reader commands and answers with verbatim-quote references.
+ * Since F3 (2026-10-12) the exploration order leads with the LIVE timeline
+ * enumeration / time windows; the strands index is FROZEN (no new slices
+ * since the strand layer's retirement) and is documented as history only.
  */
 import { describe, it, expect } from "vitest";
 import { RECALL_SKILL_DOC } from "@/lib/bridge-skills";
@@ -44,15 +45,21 @@ describe("RECALL_SKILL_DOC", () => {
     expect(RECALL_SKILL_DOC).toContain("--lines A-B");
   });
 
-  it("prescribes the strands → keyword → time-window → verify exploration order", () => {
-    const strands = RECALL_SKILL_DOC.indexOf("1. STRANDS FIRST");
-    const keyword = RECALL_SKILL_DOC.indexOf("2. KEYWORD PRE-CHECK");
-    const fallback = RECALL_SKILL_DOC.indexOf("3. TIME-WINDOW SCANNING AS FALLBACK");
+  it("prescribes the keyword → time-window → strands-as-history → verify exploration order (F3: strands demoted — the index is FROZEN)", () => {
+    const keyword = RECALL_SKILL_DOC.indexOf("1. KEYWORD SCAN FIRST");
+    const window_ = RECALL_SKILL_DOC.indexOf("2. TIME-WINDOW NARROWING");
+    const strands = RECALL_SKILL_DOC.indexOf("3. STRANDS AS HISTORY ONLY");
     const verify = RECALL_SKILL_DOC.indexOf("4. VERIFY BEFORE ANSWERING");
-    expect(strands).toBeGreaterThan(-1);
-    expect(keyword).toBeGreaterThan(strands);
-    expect(fallback).toBeGreaterThan(keyword);
-    expect(verify).toBeGreaterThan(fallback);
+    expect(keyword).toBeGreaterThan(-1);
+    expect(window_).toBeGreaterThan(keyword);
+    expect(strands).toBeGreaterThan(window_);
+    expect(verify).toBeGreaterThan(strands);
+    // The strands command survives, but documented as a frozen legacy index.
+    expect(RECALL_SKILL_DOC).toContain("{{PREVIOUSLY_CMD}} strands");
+    expect(RECALL_SKILL_DOC).toContain("FROZEN");
+    expect(RECALL_SKILL_DOC).toContain("no new slices enter it");
+    // The timeline catalog is presented as the LIVE index.
+    expect(RECALL_SKILL_DOC).toContain("LIVE catalog");
   });
 
   it("pins the colleague relationship and the current-slice exclusion", () => {

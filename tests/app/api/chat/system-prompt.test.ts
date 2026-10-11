@@ -166,10 +166,16 @@ describe("bridgeNotice (subscription bridge mode)", () => {
     for (const cmd of ["timeline", "strands", "slicesummary", "readslice", "card", "agentlog"]) {
       expect(BRIDGE_NOTICE).toContain(`previously ${cmd}`);
     }
-    // …and past-looking questions go through the recall skill sub-agent,
-    // pointers only.
+    // …but strands is flagged as the FROZEN legacy index it is (F3, 2026-10-12),
+    expect(BRIDGE_NOTICE).toContain("FROZEN legacy index");
+    // and the retired kernel `recall` tool is no longer named in the countermand.
+    expect(BRIDGE_NOTICE).not.toContain("(recall,");
+    // Past-looking questions go through the recall skill sub-agent, which reads
+    // the slices ITSELF and answers with evidence (the Phase-A contract — the
+    // old pointer-only description is gone).
     expect(BRIDGE_NOTICE).toContain("skills/recall.md");
-    expect(BRIDGE_NOTICE).toContain("POINTERS");
+    expect(BRIDGE_NOTICE).not.toContain("POINTERS");
+    expect(BRIDGE_NOTICE).toContain("verbatim-quote evidence");
     // The countermand + output contract survive the rewrite.
     expect(BRIDGE_NOTICE).toContain("thinkDeep guidance elsewhere in this prompt does NOT apply");
     expect(BRIDGE_NOTICE).toContain("rendered verbatim");
