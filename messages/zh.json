@@ -224,7 +224,7 @@
       "notFound": "时间片不存在或不可用。"
     },
     "search": {
-      "title": "搜索记忆",
+      "title": "搜索对话",
       "placeholder": "搜索过去的对话…",
       "hint": "输入关键词搜索焦点、摘要与决策。",
       "searching": "搜索中…",
@@ -436,12 +436,17 @@
   "archiveField": {
     "fieldLabel": "档案场——一沓一沓的 case，新的在上",
     "pileAria": "{name}（{category}），{count} 份文档",
-    "openedAt": "始于 {date}",
     "weekOf": "{date} 当周",
     "undated": "无日期",
     "recordsLabel": "记录",
-    "recordTurns": "{count} 轮",
     "recordPileAria": "{date}——{slices} 场对话，共 {turns} 轮"
+  },
+  "recordSwitch": {
+    "toggle": "{date}的记录",
+    "title": "记录 — {date}",
+    "close": "关闭",
+    "turns": "{count} 轮",
+    "rowAria": "打开 {time} 的记录，{count} 轮"
   },
   "missions": {
     "emptyTitle": "暂无任务",
@@ -558,33 +563,14 @@
     "loading": "正在取这份文档…",
     "notFoundHeading": "找不到这份文档",
     "notFoundBody": "文库里没有与「{ref}」对应的文档，它可能已被移动、改名或封存。",
-    "page": "· {n} ·",
     "prevPage": "上一页",
     "nextPage": "下一页",
     "pagePosition": "{current} / {total}",
+    "zoomOut": "缩小",
+    "zoomIn": "放大",
+    "zoomReset": "整页显示",
     "recordUser": "你",
-    "recordAgent": "Previously",
-    "recordTurns": "{count} 轮",
-    "recordSource": "切片 {ref} · {turns}",
-    "placeAria": "走到这份文档的现场",
-    "archetype": {
-      "meadow": "草甸",
-      "plains": "原野",
-      "pool": "水池",
-      "forest": "森林",
-      "ocean": "海洋",
-      "lake": "湖泊",
-      "beach": "海滩",
-      "snowfield": "雪原",
-      "hotel-room": "客房",
-      "pool-hall": "泳池厅",
-      "library": "图书馆",
-      "ballroom": "舞厅",
-      "ducks": "鸭子",
-      "cats": "猫",
-      "dogs": "狗",
-      "balloons": "气球"
-    }
+    "recordAgent": "Previously"
   },
   "library": {
     "title": "文库",

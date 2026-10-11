@@ -224,7 +224,7 @@
       "notFound": "Slice not found or unavailable."
     },
     "search": {
-      "title": "Search memory",
+      "title": "Search conversations",
       "placeholder": "Search past conversations…",
       "hint": "Search focuses, summaries, and decisions.",
       "searching": "Searching…",
@@ -436,12 +436,17 @@
   "archiveField": {
     "fieldLabel": "Archive field — the cases as piles, newest first",
     "pileAria": "{name} — {category}, {count, plural, one {# document} other {# documents}}",
-    "openedAt": "opened {date}",
     "weekOf": "Week of {date}",
     "undated": "Undated",
     "recordsLabel": "Records",
-    "recordTurns": "{count, plural, one {# turn} other {# turns}}",
     "recordPileAria": "{date} — {slices, plural, one {# conversation} other {# conversations}}, {turns, plural, one {# turn} other {# turns}}"
+  },
+  "recordSwitch": {
+    "toggle": "Records from {date}",
+    "title": "Records — {date}",
+    "close": "Close",
+    "turns": "{count, plural, one {# turn} other {# turns}}",
+    "rowAria": "Open the {time} record, {count, plural, one {# turn} other {# turns}}"
   },
   "missions": {
     "emptyTitle": "No missions yet",
@@ -558,33 +563,14 @@
     "loading": "Fetching the document…",
     "notFoundHeading": "Document not found",
     "notFoundBody": "Nothing in the library matches \"{ref}\". It may have been moved, renamed, or sealed.",
-    "page": "· {n} ·",
     "prevPage": "Previous page",
     "nextPage": "Next page",
     "pagePosition": "{current} / {total}",
+    "zoomOut": "Zoom out",
+    "zoomIn": "Zoom in",
+    "zoomReset": "Fit the whole page",
     "recordUser": "You",
-    "recordAgent": "Previously",
-    "recordTurns": "{count, plural, one {# turn} other {# turns}}",
-    "recordSource": "Slice {ref} · {turns}",
-    "placeAria": "Stand at this document's scene",
-    "archetype": {
-      "meadow": "Meadow",
-      "plains": "Plains",
-      "pool": "Pool",
-      "forest": "Forest",
-      "ocean": "Ocean",
-      "lake": "Lake",
-      "beach": "Beach",
-      "snowfield": "Snowfield",
-      "hotel-room": "Hotel Room",
-      "pool-hall": "Pool Hall",
-      "library": "Library",
-      "ballroom": "Ballroom",
-      "ducks": "Ducks",
-      "cats": "Cats",
-      "dogs": "Dogs",
-      "balloons": "Balloons"
-    }
+    "recordAgent": "Previously"
   },
   "library": {
     "title": "Library",
