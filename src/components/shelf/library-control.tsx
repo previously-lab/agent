@@ -25,13 +25,15 @@
  * picked. Escape closes the PANEL alone: the handler preventDefaults, and
  * the desk's window backstop defers to a claimed key, so the document
  * stays on the desk (a second Escape puts it back). An outside pointerdown
- * closes too; the button toggles.
+ * closes too; the button toggles. Touch has no Escape, so the panel's own
+ * header carries a visible close control (P6 ②, roadmap #9) — the panel is
+ * chrome, not paper, and the control uses the island vocabulary.
  */
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTranslations } from "next-intl";
-import { BookMarked } from "lucide-react";
-import { ISLAND } from "@/components/layout/island";
+import { BookMarked, X } from "lucide-react";
+import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import { useShell } from "@/components/shell/shell-provider";
 import { DocLibrary } from "./doc-library";
 
@@ -124,6 +126,26 @@ export function LibraryControl({
             // the right edge nor covers its own toggle.
             className="pointer-events-auto absolute left-full top-1/2 ml-3 w-[min(23rem,calc(100vw-2rem))] max-md:w-[min(23rem,calc(100vw-68px))] -translate-y-1/2 rounded-2xl bg-background/90 shadow-md ring-1 ring-border/60 backdrop-blur-md"
           >
+            {/* The panel's own header (P6 ②, roadmap #9): a phone has no
+                Escape and the toggle is easy to miss, so the way out lives
+                here, beside the title. The panel is chrome, not paper — the
+                ISLAND_CONTROL vocabulary applies. The header stays OUTSIDE
+                the scroll area so the close is visible at any scroll depth. */}
+            <div className="flex items-center justify-between gap-2 pb-0.5 pl-4 pr-2 pt-2">
+              <h2 className="px-2 pt-1 text-xs font-medium text-muted-foreground">
+                {t("title")}
+              </h2>
+              <button
+                type="button"
+                data-library-close
+                onClick={() => setOpen(false)}
+                aria-label={t("close")}
+                title={t("close")}
+                className={`${ISLAND_CONTROL} size-6 shrink-0`}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
             <div className="max-h-[min(30rem,70dvh)] overflow-y-auto">
               <DocLibrary persona={persona} />
             </div>

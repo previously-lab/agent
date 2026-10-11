@@ -177,9 +177,6 @@ export function DocLibrary({ persona }: { persona?: string }) {
 
   return (
     <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
-      <h2 className="px-2 pb-1 pt-1 text-xs font-medium text-muted-foreground">
-        {t("title")}
-      </h2>
       {/* THE DOSSIER (v0.25b §三 / v0.25 §3.4) — the two self-documents
           (previously / direction), pinned above the category tree. They are
           papers, not popovers: a row opens its document on the desk under
@@ -217,13 +214,19 @@ export function DocLibrary({ persona }: { persona?: string }) {
       {caseShelf.categories.map(({ category, cases }) => {
         const Icon = CATEGORY_ICONS[category];
         const categoryOpen = archiveCategory === category;
+        // R3 (v0.25 §3.1): an EMPTY category dims to 40% and never expands —
+        // the taxonomy stays listed (it is the fiction's skeleton), but an
+        // empty drawer stops shouting. The disabled styling mirrors the
+        // dossier row's own unavailable-document precedent above.
+        const empty = cases.length === 0;
         return (
           <section key={category}>
             <button
               type="button"
               onClick={() => selectCategory(category)}
-              aria-expanded={categoryOpen}
-              className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted ${
+              aria-expanded={empty ? undefined : categoryOpen}
+              disabled={empty}
+              className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-40 ${
                 categoryOpen ? "text-foreground" : "text-foreground/80"
               }`}
             >
