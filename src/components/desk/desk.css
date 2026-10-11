@@ -18,24 +18,89 @@
  * Only the traveling sheet ever changes transform; the sheets that stay put
  * hold still while it leaves, then the deck closes rank beneath it during
  * the landing beat, landing exactly on the resting offsets. transform/
- * box-shadow/z-index only — the compositor owns the beat; the desk's frame
- * loop is untouched.
+ * box-shadow/z-index only — the compositor owns the beat; the desk has no
+ * frame loop (v0.30: the reader is plain DOM, the beat is CSS).
  *
  * The transform/animation values that depend on state arrive as CSS
  * variables written from JS (--sx/--sy/--sr/--sz per slot, --from-* for the
- * participants, --desk-page-w, --desk-page-i); nothing here is inline.
+ * participants, --desk-page-w, --desk-page-i, and the tier stack's
+ * --desk-giveway-x / --desk-pan-x / --desk-pan-y / --desk-zoom); nothing
+ * here is inline.
  */
 
 /* ── The stack: the A4 sizing element, and the source of the print millimetre.
    The sheet's height drives its width (pane-width clamp inside the min); the
-   aspect ratio is A4's. The entrance beat writes opacity per frame from the
-   choreography's progress. ─────────────────────────────────────────── */
+   aspect ratio is A4's. The stack re-enables hits: the pane chain above it
+   is pointer-events-none, and only the paper (the top shell — see
+   .desk-shell--top) takes the pointer, exactly the Html portal's old
+   `pointerEvents="auto"` contract. ────────────────────────────────────── */
 .desk-stack {
   --desk-mm: calc(min(86vh, calc((100vw - 3rem) * 297 / 210)) / 297);
   position: relative;
   height: min(86vh, calc((100vw - 3rem) * 297 / 210));
   aspect-ratio: 210 / 297;
+  pointer-events: auto;
+}
+
+/* ── THE DOCUMENT TIER (v0.30) — the transform stack the migrated reader
+   rides in. Four nested layers, ONE transform each, so each layer's
+   transition animates only its own job and they never fight:
+     .desk-stage    the pane viewport + the entrance/exit pull-out beat
+                    (opacity + rise from below, 300ms — the pane handover's
+                    own beat; overflow clips the turn's arc exactly like the
+                    old portal div);
+     .desk-giveway  the library-panel give-way x — 300ms, the damped glide;
+     .desk-pan      the user's drag pan — NO transition (1:1 pointer tracking);
+     .desk-zoom     the banded scale — 300ms; THE DAMPING IS THIS TRANSITION
+                    (compositor-owned): a zoom step now costs one style
+                    recalc, and only the raster of the two stops, never a
+                    per-frame re-raster of the whole ease.
+   Reduced motion: the translate legs switch off (opacity fade only for the
+   stage; snaps for give-way/zoom), unlayered so they beat Tailwind's
+   motion-reduce. ────────────────────────────────────────────────────── */
+.desk-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   opacity: 0;
+  transform: translateY(60vh);
+  transition:
+    opacity 300ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.desk-stage[data-entered] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.desk-giveway {
+  transform: translate3d(var(--desk-giveway-x, 0px), 0, 0);
+  transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.desk-pan {
+  transform: translate3d(var(--desk-pan-x, 0px), var(--desk-pan-y, 0px), 0);
+}
+
+.desk-zoom {
+  transform: scale(var(--desk-zoom, 1));
+  transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desk-stage {
+    transform: none;
+    transition: opacity 300ms ease-out;
+  }
+  .desk-giveway,
+  .desk-zoom {
+    transition: none;
+  }
 }
 
 /* ── A slot: one sheet's seat in the deck. Its pose comes from its slot as

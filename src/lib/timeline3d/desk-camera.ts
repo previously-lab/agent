@@ -23,6 +23,13 @@
  * renders no components. The damping formula mirrors THREE.MathUtils.damp
  * exactly (`lerp(x, y, 1 − e^(−λ·dt))`) so the wiring can advance the state
  * per frame without importing three into the model.
+ *
+ * TWO APIS COEXIST. The continuous one below (stepZoom/zoomBy/
+ * advanceDeskCamera) is the v0.25a–v0.29 machinery, kept exported while
+ * tests/lib/timeline3d/desk-camera.test.ts still pins it. THE LIVE READER
+ * IS BANDED since v0.30 (the owner's ruling — see DESK_ZOOM_BANDS): the
+ * gestures write stops, the rendered value IS the stop, and the damping
+ * lives in the DOM tier's CSS transition, so no per-frame advance runs.
  */
 
 export const DESK_ZOOM_MIN = 0.7;
@@ -32,8 +39,50 @@ export const DESK_ZOOM_MAX = 2;
 export const DESK_ZOOM_DEFAULT = 1.45;
 /** The reset state (candidate A): the whole page fits the viewport. */
 export const DESK_ZOOM_RESET = 1;
-/** The `+`/`−` step (lab recipe 12's). */
+/** The `+`/`−` step (lab recipe 12's). RETIRED from the live reader with the
+ *  v0.30 banded zoom — the field steps `DESK_ZOOM_BANDS` now. The constant
+ *  stays exported while tests/lib/timeline3d/desk-camera.test.ts (not the
+ *  desk lane's file) still pins it. */
 export const DESK_ZOOM_STEP = 0.15;
+
+/** THE ZOOM BANDS (v0.30, the owner's ruling): a few discrete stops instead
+ *  of the continuous 0.15× stepping — a composited `scale()` between two
+ *  stops re-rasterizes the paper's text layers every frame of the ease, and
+ *  a continuous wheel made that cost land anywhere. Banded, the raster cost
+ *  is identical at every step and the wheel can only rest on a stop. The
+ *  opening default (1.45×) and the reset (1.0×, the whole page) are both
+ *  stops; the range ends (0.7× / 2.0×) are the first and last. */
+export const DESK_ZOOM_BANDS: readonly number[] = [0.7, 1.0, 1.2, 1.45, 1.7, 2.0];
+
+/** The band a zoom value belongs to — the nearest stop by absolute distance
+ *  (a target mid-flight between stops — only possible from a legacy
+ *  continuous gesture — resolves to the closest band, never throws). */
+export function deskZoomBandIndex(zoom: number): number {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let i = 0; i < DESK_ZOOM_BANDS.length; i++) {
+    const d = Math.abs(DESK_ZOOM_BANDS[i] - zoom);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** A `+`/`−` press on the BANDED zoom: one stop from the current target,
+ *  clamped at both ends. The current value jumps WITH the target: the
+ *  reader's zoom lives in a CSS `transform` transition (the damping is CSS
+ *  now), so the JS state IS the stop and the transition animates the pixel
+ *  change. */
+export function stepDeskZoomBand(
+  state: DeskCameraState,
+  dir: 1 | -1,
+): DeskCameraState {
+  const i = deskZoomBandIndex(state.zoomTarget);
+  const next = DESK_ZOOM_BANDS[Math.min(DESK_ZOOM_BANDS.length - 1, Math.max(0, i + dir))];
+  return { ...state, zoom: next, zoomTarget: next };
+}
 
 /** The damping constant — the desk's existing idiom (the give-way pan
  *  settles inside the pane's own 300 ms beat at λ=12). */

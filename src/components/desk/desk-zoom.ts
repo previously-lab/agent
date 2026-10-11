@@ -3,16 +3,17 @@
  * and the range-end predicates behind the `−`/`+` buttons' disabled states.
  *
  * Kept out of desk-field.tsx so the vitest environment can exercise them
- * without mounting the desk (the field module pulls three/drei). The island
- * itself — placement, buttons, the per-frame mirror — lives in desk-field.tsx;
- * this module is only the strings and the clamps' truth.
+ * without mounting the desk. The island itself — placement, buttons, the
+ * mirror — lives in desk-field.tsx; this module is only the strings and
+ * the clamps' truth.
  *
- * THE DISPLAY STRING is the state unit the field mirrors per frame: two
- * decimals plus the fixed `×` sign (the document's furniture convention — the
- * folio, the shelf line — is fixed-form, so the readout never goes through
- * Intl number formatting). The field compares the STRING, not the float: the
- * camera damps at λ=12, so between gestures the text is stable and a re-render
- * fires only while a zoom is visibly easing.
+ * THE DISPLAY STRING is the state unit the field mirrors per gesture: two
+ * decimals plus the fixed `×` sign (the document's furniture convention —
+ * the folio, the shelf line — is fixed-form, so the readout never goes
+ * through Intl number formatting). Banded since v0.30: the zoom only rests
+ * on `DESK_ZOOM_BANDS` stops, so the readout changes once per gesture and
+ * there is no per-frame ease to mirror — the CSS transition on the tier's
+ * scale wrapper is the damping.
  */
 import { DESK_ZOOM_MAX, DESK_ZOOM_MIN } from "@/lib/timeline3d/desk-camera";
 

@@ -921,7 +921,14 @@ export function AppShell() {
     // shell-nav provider is NOT here any more: §3.1 moved it to the layout's
     // ShellProvider, above the overlay too.)
     <WorldSceneProvider>
-    <div className="relative flex h-dvh overflow-hidden">
+    {/* THE VIEWPORT IS FIXED (v0.30): `fixed inset-0` keeps the one canvas
+        and the document tier viewport-locked no matter what any layer's
+        content does — the page can never scroll, so a wheel over the
+        document, the field or the game moves nothing — and
+        `overscroll-behavior: none` kills the rubber-band/bounce that
+        `overflow-hidden` alone does not. (Measured: scrollY stays 0 under
+        trusted wheel input over all three surfaces.) */}
+    <div className="fixed inset-0 flex overflow-hidden overscroll-none">
       {/* The floating chrome (app-header) is a FIELD-world fixture; the game
           keeps only its own overlay. Hidden with a style tag because the
           header itself is not this file's to change. Hidden from the start
