@@ -2,7 +2,7 @@
 
 import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUp, Maximize2, Minimize2, Square, Paperclip, Radio, X } from "lucide-react";
+import { ArrowUp, Maximize2, Square, Paperclip, Radio, X } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useImageAttachments } from "@/hooks/use-image-attachments";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -78,41 +78,6 @@ function HQStreamButton({
       className={className}
     >
       <Radio aria-hidden className={iconClassName} />
-    </button>
-  );
-}
-
-/**
- * The panel tier verb inside the composer row — at fullscreen it folds back
- * to the pill, at the pill it grows to fullscreen (the same reducePanelMode
- * event the panel's own slim bar sends). Renders nothing off-panel.
- */
-function FullscreenToggle({
-  className,
-  iconClassName,
-}: {
-  className: string;
-  iconClassName: string;
-}) {
-  const tPanel = useTranslations("conversationPanel");
-  const tier = usePanelTier();
-  if (!tier) return null;
-  const fullscreen = tier.mode === "fullscreen";
-  const label = fullscreen ? tPanel("exitFullscreen") : tPanel("expand");
-  return (
-    <button
-      type="button"
-      data-panel-fullscreen
-      onClick={() => tier.setMode(reducePanelMode(tier.mode, "toggleFullscreen"))}
-      aria-label={label}
-      title={label}
-      className={className}
-    >
-      {fullscreen ? (
-        <Minimize2 aria-hidden className={iconClassName} />
-      ) : (
-        <Maximize2 aria-hidden className={iconClassName} />
-      )}
     </button>
   );
 }
@@ -472,17 +437,16 @@ export function ChatInput({
           />
         </div>
 
-        {/* Right side — model, then the fullscreen verb, then send: the walk
-            towards the act, so the send button keeps the outer corner it owns
-            in every form. */}
+        {/* Right side — model, then send: the walk towards the act, so the
+            send button keeps the outer corner it owns in every form. The
+            tier verbs are NOT here: the pill form carries the expand (above)
+            and the panel's slim bar carries the exit — a third mounted copy
+            in this row duplicated the control (two buttons shared one
+            aria-label, one of them zero-sized under the bar's `hidden`). */}
         <div className="flex shrink-0 items-center gap-1.5">
           <ModelSelector
             currentModelId={currentModelId}
             onModelChange={onModelChange}
-          />
-          <FullscreenToggle
-            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
-            iconClassName="h-3.5 w-3.5"
           />
           {isLoading && onStop ? (
             <button

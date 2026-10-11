@@ -75,7 +75,7 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslations } from "next-intl";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { Minimize2, X } from "lucide-react";
 import { useChromeInset } from "@/hooks/use-chrome-inset";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
@@ -321,22 +321,24 @@ export function ConversationPanel({
           <span className="flex-1 truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
-          <button
-            type="button"
-            aria-label={
-              mode === "fullscreen" ? t("exitFullscreen") : t("expand")
-            }
-            onClick={() =>
-              onModeChange(reducePanelMode(mode, "toggleFullscreen"))
-            }
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-          >
-            {mode === "fullscreen" ? (
+          {/* The exit verb mounts ONLY at fullscreen: at the pill tier the
+              bar is `hidden` (display:none), which leaves the button in the
+              DOM — zero-sized but still matching its aria-label, a second
+              "Expand to full screen" beside the pill row's real one (the
+              composer's data-pill-expand). The pill's expand verb lives in
+              the pill composer form; this one is the fullscreen tier's own. */}
+          {open && (
+            <button
+              type="button"
+              aria-label={t("exitFullscreen")}
+              onClick={() =>
+                onModeChange(reducePanelMode(mode, "toggleFullscreen"))
+              }
+              className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+            >
               <Minimize2 className="size-4" aria-hidden />
-            ) : (
-              <Maximize2 className="size-4" aria-hidden />
-            )}
-          </button>
+            </button>
+          )}
           <button
             type="button"
             aria-label={t("collapse")}
