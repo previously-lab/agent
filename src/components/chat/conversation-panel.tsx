@@ -32,9 +32,10 @@
  *               still there at fullscreen. The pill tier's box is
  *               pointer-transparent: only the pill and its buttons eat
  *               events, the world behind keeps every other pixel.
- *   fullscreen  the same box grown to the viewport short of the top chrome
- *               (a CSS height transition FROM the pill's height, not a
- *               remount), full capability.
+ *   fullscreen  the same box grown to the WHOLE viewport (a CSS height
+ *               transition FROM the pill's height, not a remount), full
+ *               capability — the surface rises from the bottom over the
+ *               app's own chrome, header and board bar included.
  *               The body is the conversation as a plain DOM surface
  *               (`DomChatList` — history AND the in-flight turn, one native
  *               scroll container); no R3F lives in this box. OVERLAY, never
@@ -75,8 +76,8 @@ import {
   type ReactNode,
 } from "react";
 import { useTranslations } from "next-intl";
-import { Minimize2, X } from "lucide-react";
-import { useChromeInset } from "@/hooks/use-chrome-inset";
+import { X } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type { SubtitleLine } from "@/lib/chat/subtitle-line";
 
 export type ConversationPanelMode = "pill" | "fullscreen";
@@ -173,10 +174,6 @@ export function ConversationPanel({
   const t = useTranslations("conversationPanel");
   const panelRef = useRef<HTMLDivElement>(null);
   const open = mode === "fullscreen";
-  // The measured painted bottom of the fixed top chrome (header + board bar)
-  // — the fullscreen box stops SHORT of it, so the chrome's islands stay
-  // visible and clickable no matter which tier is up.
-  const chromeInset = useChromeInset();
 
   // `Cmd/Ctrl+J` — one registration per surface (the panel is mounted once
   // per page). Deps re-register on mode change rather than holding a ref:
@@ -238,42 +235,55 @@ export function ConversationPanel({
 
   return (
     <PanelTierContext.Provider value={tier}>
-      {/* THE ONE BOX — a floating pill at the pill tier, the viewport SHORT
-          OF the top chrome at fullscreen; the change is a height transition,
-          not a remount. `fixed` (overlay) is the "覆盖，不挤压" rule made
-          structural: nothing in the layout can feel this box, so the canvas
-          behind it never resizes. The fullscreen height deducts the measured
-          chrome inset (useChromeInset) so the fixed header and board bar are
-          never covered — their islands must stay clickable in both tiers (a
-          fullscreen arrival once swallowed the header badge whole). At the
-          pill tier the box itself is chromeless and pointer-transparent —
-          only the pill (positioned by the composer host) and its buttons eat
-          events; the world keeps every other pixel. The height at the pill
-          tier is the pill plus the subtitle seat above it: PILL_HEIGHT_PX +
-          one 20px subtitle line + a 4px gap between them +
-          PILL_BOTTOM_GAP_PX. */}
+      {/* THE ONE BOX — a floating pill at the pill tier, THE SCREEN at
+          fullscreen; the change is a height transition, not a remount, so the
+          live stream, the draft and the scroll position all cross it.
+          `fixed` (overlay) is the "覆盖，不挤压" rule made structural: nothing
+          in the layout can feel this box, so the canvas behind it never
+          resizes. At fullscreen the box is edge to edge — the whole viewport,
+          grown upward from the bottom over everything including the header
+          and the board bar, which is the sheet effect with no portal and no
+          second tree behind it. That is also why its own top row (the title
+          plus the two exit verbs) is the way OUT: the chrome underneath is
+          covered, so nothing there can be clicked — Escape and Cmd/Ctrl+J are
+          the other two exits, and none of the three needs the chrome. At the
+          pill tier the box is chromeless and pointer-transparent — only the
+          pill (positioned by the composer host) and its buttons eat events;
+          the world keeps every other pixel. Its height there is the pill plus
+          the subtitle seat above it: PILL_HEIGHT_PX + one 20px subtitle line +
+          a 4px gap between them + PILL_BOTTOM_GAP_PX. */}
       <div
         ref={panelRef}
         tabIndex={-1}
+        data-panel-tier={mode}
         onKeyDown={onContainerKeyDown}
-        // Height: the viewport minus the measured top chrome at fullscreen;
-        // at the pill tier PILL_HEIGHT_PX + the one-line subtitle seat + the
-        // 4px gap + PILL_BOTTOM_GAP_PX.
+        // Height: the whole viewport at fullscreen; at the pill tier
+        // PILL_HEIGHT_PX + the one-line subtitle seat + the 4px gap +
+        // PILL_BOTTOM_GAP_PX. Bottom-anchored at both tiers, so the growth
+        // reads as the surface rising rather than dropping.
+        // The background transitions WITH the height, and the pill tier names
+        // `bg-transparent` explicitly instead of dropping the class: a class
+        // that disappears stops being transitionable, so the paper used to
+        // vanish in the opening frame and the box shrank invisibly behind
+        // nothing. That was the "closes with no animation" the owner saw.
         style={{
           height: open
-            ? `calc(100dvh - ${chromeInset}px)`
+            ? "100dvh"
             : PILL_HEIGHT_PX + SUBTITLE_LINE_HEIGHT_PX + 4 + PILL_BOTTOM_GAP_PX,
         }}
-        className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+        className={`fixed inset-x-0 bottom-0 flex flex-col outline-none transition-[height,background-color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
           open
-            ? "z-40 bg-background"
-            : "pointer-events-none z-40 overflow-hidden"
+            ? "z-50 bg-paper"
+            : "pointer-events-none z-40 overflow-hidden bg-transparent"
         }`}
       >
-        {/* Z-ORDER: the panel sits BELOW every dialog (z-50 and up) and above
-            the world (auto). A modal must never be trapped behind a
-            fullscreen conversation — the command palette proved it the hard
-            way, its items un-clickable while the panel was z-60. */}
+        {/* Z-ORDER: fullscreen takes z-50 — above the header (40) and above
+            the board bar (50, but earlier in the tree, so the panel wins the
+            tie). Every dialog is portaled to <body>, i.e. appended AFTER this
+            whole subtree, so an equal-z dialog still paints over a fullscreen
+            conversation; the fault this note used to record — the palette's
+            rows un-clickable while the panel was z-60 — cannot come back,
+            because the panel no longer outranks a portal. */}
         {/* THE SUBTITLE — the pill's one non-control, floating directly above
             it (never part of the pill's height or width): the mini-state's
             live display of WHAT THE AGENT IS DOING, game-subtitle style —
@@ -309,44 +319,40 @@ export function ConversationPanel({
           ) : null}
         </div>
 
-        {/* The panel's own slim bar: title + the two tier verbs. Fullscreen
-            only — at the pill tier it stays mounted but hidden (it holds no
-            state; the pill is the collapsed face). In-flow, so the
-            conversation below reserves nothing. */}
+        {/* The panel's own slim bar: the title and THE one exit verb.
+            Fullscreen only — but at the pill tier it FADES OUT rather than
+            going `display:none`, because `display` is not transitionable and
+            that snap was the whole reason the collapse read as "no closing
+            animation". The box clips it (`overflow-hidden`) and is
+            pointer-transparent down there, so a faded-out bar is neither seen
+            nor clickable. In-flow, so the conversation below reserves
+            nothing. */}
         <div
-          className={`h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2 ${
-            open ? "flex" : "hidden"
+          className={`h-10 shrink-0 items-center gap-1 border-b border-foreground/5 px-2 transition-opacity duration-200 ${
+            open ? "flex opacity-100" : "pointer-events-none flex opacity-0"
           }`}
         >
           <span className="flex-1 truncate px-2 text-xs font-medium tracking-[0.08em] text-muted-foreground uppercase">
             {t("title")}
           </span>
-          {/* The exit verb mounts ONLY at fullscreen: at the pill tier the
-              bar is `hidden` (display:none), which leaves the button in the
-              DOM — zero-sized but still matching its aria-label, a second
-              "Expand to full screen" beside the pill row's real one (the
-              composer's data-pill-expand). The pill's expand verb lives in
-              the pill composer form; this one is the fullscreen tier's own. */}
-          {open && (
-            <button
-              type="button"
-              aria-label={t("exitFullscreen")}
-              onClick={() =>
-                onModeChange(reducePanelMode(mode, "toggleFullscreen"))
-              }
-              className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-            >
-              <Minimize2 className="size-4" aria-hidden />
-            </button>
-          )}
-          <button
-            type="button"
-            aria-label={t("collapse")}
+          {/* ONE verb, not two. The minimise and the close were the same
+              action wearing two glyphs — from fullscreen both land on the
+              pill — and two buttons in a corner that small read as a toolbar.
+              It is the shadcn `Button` (the `ghost`/`icon-sm` pair the Sheet's
+              own close button wears), not a hand-rolled box, and it stays
+              MOUNTED at both tiers because the fade needs it in the DOM: at
+              the pill tier the box's own `pointer-events-none` is what keeps
+              it inert. The label is "Exit full screen" because that is what
+              the verb does from here — the e2e suite finds the tier by it. */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={t("exitFullscreen")}
             onClick={() => onModeChange(reducePanelMode(mode, "collapse"))}
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+            className="text-muted-foreground"
           >
-            <X className="size-4" aria-hidden />
-          </button>
+            <X aria-hidden />
+          </Button>
         </div>
 
         {/* THE CONVERSATION BODY — the fullscreen surface. At the pill tier

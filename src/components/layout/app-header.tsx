@@ -95,8 +95,8 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           href="/"
           className={`${ISLAND} inline-flex h-9 max-w-full min-w-0 items-center truncate px-3 text-sm transition-colors`}
         >
-          {t("brand")}{" "}
-          <span className="font-semibold">
+          {t("brand")}
+          <span className="ms-1 font-semibold">
             {identity?.name || t("brandYou")}
           </span>
         </Link>
