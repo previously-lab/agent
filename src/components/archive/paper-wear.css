@@ -1,0 +1,264 @@
+/*
+ * Paper wear (v0.30) — the ageing renderer.
+ *
+ * The descriptor (src/lib/paper/wear.ts) arrives as data-* attributes on the
+ * sheet; EVERYTHING visual lives here. Four shading layers + the light
+ * model, stacked as sibling spans (paper-wear-layers.tsx) ABOVE the print:
+ *
+ *   mottle → edge → folds → ear → light
+ *
+ * Three principles, owner's rulings:
+ *  1. A fold is a SHADING, never a drawing — each crease is a soft band of
+ *     slightly different tone with a hairline highlight along the peak; it
+ *     falls across live text because real light does.
+ *  2. Damage sits only where the set text cannot reach — dog-ears are
+ *     bottom corners only (a cover's head stamps live up top), mottle hugs
+ *     the margins, edge wear is an outer band.
+ *  3. Light first, then wear — every worn sheet gets the directional
+ *     falloff and the top-edge curl; the cure for "clean in an unreal way"
+ *     is the light model, not stains. NOTHING here is a coloured stain:
+ *     every tone derives from --paper / --foreground / white mixes.
+ *
+ * Intensity scales by band through --wear-*-a multipliers, so a sheet ages
+ * without any per-element value ever leaving this file. Chrome is exempt:
+ * only sheets carrying data-wear-band are touched.
+ */
+
+/* ── Band multipliers — the only place ageing strength is set. ── */
+[data-wear-band] {
+  --wear-edge-a: 0;
+  --wear-fold-a: 0;
+  --wear-ear-a: 0;
+  /* The grain map is 1024×600; at pile scale its tooth reads as fine
+     static. Coarsen the tooth on worn stock — age is a larger scale. */
+  background-size: 170% auto;
+}
+
+[data-wear-band="days"] {
+  --wear-edge-a: 0.5;
+  --wear-fold-a: 0.55;
+  --wear-ear-a: 0.55;
+}
+[data-wear-band="weeks"] {
+  --wear-edge-a: 0.7;
+  --wear-fold-a: 0.8;
+  --wear-ear-a: 0.75;
+}
+[data-wear-band="months"] {
+  --wear-edge-a: 0.85;
+  --wear-fold-a: 1;
+  --wear-ear-a: 0.9;
+}
+[data-wear-band="older"] {
+  --wear-edge-a: 1;
+  --wear-fold-a: 1.15;
+  --wear-ear-a: 1;
+}
+
+/* ── Layer chrome: one seat for every shading layer. ── */
+.paper-wear-mottle,
+.paper-wear-edge,
+.paper-wear-folds,
+.paper-wear-ear,
+.paper-wear-light {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ── MOTTLE — the slow tone-unevenness of old stock. Low-frequency radial
+   washes hugging the margins; the centre column (where the 版心 lives)
+   stays untouched. A tone shift, never a stain. ── */
+.paper-wear-mottle {
+  --mottle-a: 0;
+  background:
+    radial-gradient(
+      42% 34% at 10% 6%,
+      color-mix(in oklab, var(--foreground) calc(3% * var(--mottle-a)), transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      38% 30% at 93% 90%,
+      color-mix(in oklab, var(--foreground) calc(2.6% * var(--mottle-a)), transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      55% 40% at 82% 8%,
+      color-mix(in oklab, var(--foreground) calc(2% * var(--mottle-a)), transparent) 0%,
+      transparent 72%
+    );
+}
+
+[data-wear-mottle="1"] .paper-wear-mottle {
+  --mottle-a: 0.7;
+}
+[data-wear-mottle="2"] .paper-wear-mottle {
+  --mottle-a: 1;
+}
+[data-wear-mottle="0"] .paper-wear-mottle {
+  display: none;
+}
+
+/* ── EDGE WEAR — the outer fibres lighten where the sheet has been
+   handled. Strongest at the bottom, lightest at the top-left (the lamp
+   side); depth and alpha grow with the level, then scale by band. ── */
+.paper-wear-edge {
+  --e-depth: 0%;
+  --e-a: 0;
+  background:
+    linear-gradient(
+      to bottom,
+      transparent calc(100% - var(--e-depth)),
+      color-mix(in oklab, white calc(15% * var(--e-a) * var(--wear-edge-a)), transparent)
+    ),
+    linear-gradient(
+      to right,
+      transparent calc(100% - var(--e-depth)),
+      color-mix(in oklab, white calc(12% * var(--e-a) * var(--wear-edge-a)), transparent)
+    ),
+    linear-gradient(
+      to top,
+      transparent calc(100% - var(--e-depth)),
+      color-mix(in oklab, white calc(6% * var(--e-a) * var(--wear-edge-a)), transparent)
+    ),
+    linear-gradient(
+      to left,
+      transparent calc(100% - var(--e-depth)),
+      color-mix(in oklab, white calc(5% * var(--e-a) * var(--wear-edge-a)), transparent)
+    );
+}
+
+[data-wear-edge="1"] .paper-wear-edge {
+  --e-depth: 4%;
+  --e-a: 0.6;
+}
+[data-wear-edge="2"] .paper-wear-edge {
+  --e-depth: 7%;
+  --e-a: 0.85;
+}
+[data-wear-edge="3"] .paper-wear-edge {
+  --e-depth: 10%;
+  --e-a: 1;
+}
+[data-wear-edge="0"] .paper-wear-edge {
+  display: none;
+}
+
+/* ── FOLDS — light across creases. Each crease is one gradient layer: a
+   soft dark band rising to the peak, a hairline highlight AT the peak
+   (light catches the crest), then a slightly deeper shadow where the fold
+   turns away. Unused crease positions sit far off-canvas. A shading across
+   whatever is printed — honest, not pasted on. ── */
+.paper-wear-folds {
+  --f1: -30%;
+  --f2: -30%;
+  --f3: -30%;
+  background:
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--f1) - 10px),
+      color-mix(in oklab, var(--foreground) calc(4.5% * var(--wear-fold-a)), transparent) calc(var(--f1) - 1px),
+      color-mix(in oklab, white calc(18% * var(--wear-fold-a)), transparent) var(--f1),
+      color-mix(in oklab, var(--foreground) calc(7% * var(--wear-fold-a)), transparent) calc(var(--f1) + 2px),
+      transparent calc(var(--f1) + 11px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--f2) - 10px),
+      color-mix(in oklab, var(--foreground) calc(4.5% * var(--wear-fold-a)), transparent) calc(var(--f2) - 1px),
+      color-mix(in oklab, white calc(18% * var(--wear-fold-a)), transparent) var(--f2),
+      color-mix(in oklab, var(--foreground) calc(7% * var(--wear-fold-a)), transparent) calc(var(--f2) + 2px),
+      transparent calc(var(--f2) + 11px)
+    ),
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--f3) - 10px),
+      color-mix(in oklab, var(--foreground) calc(4.5% * var(--wear-fold-a)), transparent) calc(var(--f3) - 1px),
+      color-mix(in oklab, white calc(18% * var(--wear-fold-a)), transparent) var(--f3),
+      color-mix(in oklab, var(--foreground) calc(7% * var(--wear-fold-a)), transparent) calc(var(--f3) + 2px),
+      transparent calc(var(--f3) + 11px)
+    );
+}
+
+/* The single fold rolls its crease to one of three seats; the letter fold
+   (thirds) and quarters fix their own geometry. */
+[data-wear-fold="single"][data-wear-fold-at="upper"] .paper-wear-folds {
+  --f1: 38%;
+}
+[data-wear-fold="single"][data-wear-fold-at="middle"] .paper-wear-folds {
+  --f1: 50%;
+}
+[data-wear-fold="single"][data-wear-fold-at="lower"] .paper-wear-folds {
+  --f1: 62%;
+}
+[data-wear-fold="letter"] .paper-wear-folds {
+  --f1: 33.333%;
+  --f2: 66.667%;
+}
+[data-wear-fold="quarters"] .paper-wear-folds {
+  --f1: 25%;
+  --f2: 50%;
+  --f3: 75%;
+}
+[data-wear-fold="none"] .paper-wear-folds {
+  display: none;
+}
+
+/* ── DOG-EAR — one bottom corner turned once. The flap is a tone mix off
+   the stock (the back of the sheet), bounded by a hairline diagonal; a
+   second hairline just inside the sheet is the fold's tiny contact
+   shadow. Bottom corners only — the head stamps live up top and damage
+   may never cut into text. ── */
+.paper-wear-ear {
+  background-repeat: no-repeat;
+}
+
+[data-wear-ear="br"] .paper-wear-ear {
+  background:
+    linear-gradient(
+      to bottom left,
+      transparent 49.4%,
+      color-mix(in oklab, var(--foreground) calc(13% * var(--wear-ear-a)), transparent) 50%,
+      transparent 50.8%
+    ) right bottom / 13% 11% no-repeat,
+    linear-gradient(
+      to bottom left,
+      color-mix(in oklab, var(--foreground) calc(9% * var(--wear-ear-a)), var(--paper)) 49.6%,
+      transparent 50.4%
+    ) right bottom / 13% 11% no-repeat;
+}
+
+[data-wear-ear="bl"] .paper-wear-ear {
+  background:
+    linear-gradient(
+      to bottom right,
+      transparent 49.4%,
+      color-mix(in oklab, var(--foreground) calc(13% * var(--wear-ear-a)), transparent) 50%,
+      transparent 50.8%
+    ) left bottom / 13% 11% no-repeat,
+    linear-gradient(
+      to bottom right,
+      color-mix(in oklab, var(--foreground) calc(9% * var(--wear-ear-a)), var(--paper)) 49.6%,
+      transparent 50.4%
+    ) left bottom / 13% 11% no-repeat;
+}
+
+[data-wear-ear="none"] .paper-wear-ear {
+  display: none;
+}
+
+/* ── LIGHT — the cure for "clean in an unreal way", and it applies to
+   EVERY worn sheet, fresh or ancient. A soft directional falloff (lamp at
+   the upper-left, matching the house light field) plus a very soft inner
+   shadow along the top edge — as if the sheet's top curls toward the
+   reader. ── */
+.paper-wear-light {
+  box-shadow: inset 0 3px 6px -3px
+    color-mix(in oklab, var(--foreground) 9%, transparent);
+  background: linear-gradient(
+    155deg,
+    color-mix(in oklab, white 7%, transparent) 0%,
+    transparent 45%,
+    color-mix(in oklab, var(--foreground) 3.5%, transparent) 100%
+  );
+}

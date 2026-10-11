@@ -17,6 +17,7 @@
  */
 import type { CSSProperties } from "react";
 import type { ArchivePile } from "@/lib/archive/actions";
+import { paperWear, wearAttrs } from "@/lib/paper/wear";
 import {
   PILE_SHEET_STEP,
   sheetsForTier,
@@ -24,6 +25,17 @@ import {
   type ArchiveColumn,
   type RecordPile,
 } from "./archive-model";
+import { PaperWearLayers } from "./paper-wear-layers";
+import "./paper-wear.css";
+
+/**
+ * The cover's wear (v0.30): seeded by the pile's ref + birth stamp, banded
+ * by the clock — the same document always wears the same fold, and it only
+ * grows older, never re-rolls (src/lib/paper/wear.ts).
+ */
+function coverWear(ref: string, stamp: string): ReturnType<typeof wearAttrs> {
+  return wearAttrs(paperWear(ref, stamp));
+}
 
 /** The strings a record pile prints, prepared by the field (same portal
  *  constraint as ArchivePileTexts above). */
@@ -98,6 +110,7 @@ export function RecordPileView({
             key={i}
             className="archive-sheet archive-sheet--cover bg-paper bg-paper-grain-card shadow-paper-contact"
             style={sheetStyle}
+            {...coverWear(pile.ref, pile.date)}
           >
             <div className="archive-cover-inner archive-cover-inner--record">
               <h3 className="archive-cover-title">{bucketLabel}</h3>
@@ -106,6 +119,7 @@ export function RecordPileView({
                 <span>{texts.stampLabel(pile)}</span>
               </footer>
             </div>
+            <PaperWearLayers />
           </div>
         );
       })}
@@ -184,6 +198,7 @@ export function ArchivePileView({
             key={i}
             className="archive-sheet archive-sheet--cover bg-paper bg-paper-grain-card shadow-paper-contact"
             style={sheetStyle}
+            {...coverWear(pile.ref, pile.opened || pile.updated)}
           >
             <div className="archive-cover-inner">
               <header className="archive-cover-head">
@@ -198,6 +213,7 @@ export function ArchivePileView({
                 <span>{texts.openedLabel(pile.opened)}</span>
               </footer>
             </div>
+            <PaperWearLayers />
           </div>
         );
       })}
