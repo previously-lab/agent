@@ -12,8 +12,8 @@
  * can't consume the signal should at least check `signal.aborted` before its
  * committing write.
  *
- * Used by the long-running tool executors (thinkDeep 240s, recall 120s,
- * webSearch 60s) as a soft safety net on top of the per-provider token budget.
+ * Used by the long-running tool executors (thinkDeep ~298s cap,
+ * webSearch 240s) as a soft safety net on top of the per-provider token budget.
  */
 export class StepTimeoutError extends Error {
   constructor() {

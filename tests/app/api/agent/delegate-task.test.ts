@@ -52,6 +52,19 @@ function opts(): { context: ToolContext; toolCallId: string } {
 }
 
 describe("delegateTaskExecute", () => {
+  it("demo mode refuses BEFORE any bridge process is spawned", async () => {
+    // A working bridge command is configured — the guard must fire first.
+    process.env.PREVIOUSLY_BRIDGE_CMD = bridgeCmd("bridge-ok.mjs");
+    const demoOpts = opts();
+    demoOpts.context = { ...demoOpts.context, useDemo: true };
+    const out = await delegateTaskExecute({ task: "anything" }, demoOpts);
+    expect(out.status).toBe("error");
+    if (out.status === "error") {
+      expect(out.reason).toBe("demo-mode");
+      expect(out.error).toContain("Demo mode");
+    }
+  });
+
   it("returns the bridge stdout as the result on exit 0", async () => {
     process.env.PREVIOUSLY_BRIDGE_CMD = bridgeCmd("bridge-ok.mjs");
     const out = await delegateTaskExecute(

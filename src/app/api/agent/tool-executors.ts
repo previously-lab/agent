@@ -47,7 +47,7 @@ import {
 } from "@/app/api/evolution/hq-run";
 import { recordHQDispatch } from "@/app/api/evolution/hq-status-store";
 import { questionRun } from "@/app/api/evolution/question-run";
-import { readSelfSop } from "@/lib/evolution/store";
+import { readSelfSop, readUserModel } from "@/lib/evolution/store";
 
 import { extractSliceIds } from "@/lib/docs/docs-query";
 import { readCaseAttachment } from "@/lib/tools/attachments";
@@ -70,17 +70,13 @@ import {
 import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import {
-  CURRENT_PREVIOUSLY_PATH,
   slicePartPathCandidates,
-  indexPathCandidates,
-  RECORDS_ROOT,
-  LEGACY_SLICES_ROOT,
   type SlicePart,
 } from "@/lib/episodic";
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { getDefaultBranch } from "@/lib/tools/batch-write";
-import { migrateToV3, isCardFormat } from "@/lib/episodic/previously-format";
+import { migrateToV3 } from "@/lib/episodic/previously-format";
 import {
   annotateSliceWithLocalTime,
   sliceLocalBanner,
@@ -154,7 +150,7 @@ export interface ToolContext {
   baseSystemPrompt?: string;
   /**
    * The turn's resolved MAIN model — the same config injected for the main
-   * agent. All sub-agents (thinkDeep, recall) use it directly so each call
+   * agent. Sub-agents (thinkDeep) use it directly so each call
    * skips the per-step `resolveMainModelFromConfig()` GitHub round-trip.
    */
   mainModel?: ModelConfig;
@@ -312,7 +308,11 @@ export async function readSliceExecute(
         }
         const header = `Lines ${range.start}-${range.end} of ${sliceId}${clamped ? " (clamped)" : ""}:\n\n`;
         content = lineContent === "" ? `${header}(empty range)` : header + lineContent;
-      } else {
+      } else if (
+        range.type === "turns" ||
+        range.type === "last" ||
+        range.type === "date"
+      ) {
         // Classic turn filters.
         const { frontmatter, turns } = parseTurns(raw);
         const filtered = applyRange(turns, range as { type: "turns" | "last" | "date" });
@@ -320,6 +320,8 @@ export async function readSliceExecute(
           filtered.length === 0
             ? `${frontmatter}\n\n_(No turns matched the requested range.)_`
             : reassembleSlice(frontmatter, filtered);
+      } else {
+        return `ERROR: Unknown range type "${range.type}" in ${sliceId}.`;
       }
     } else {
       content = raw;
@@ -375,16 +377,15 @@ export async function readPreviouslyExecute(
 ): Promise<string> {
   "use step";
 
-  // No sliceId → the LIVE card (current-previously.md), the one the current
-  // conversation actually runs on (v0.7 real-time card). A per-slice arg reads
+  // No sliceId → the LIVE user model's card half (people/user/index.md via
+  // readUserModel — the same source the turn workflow injects every turn,
+  // steps.ts). The pre-R4 current-previously.md file is FROZEN (no production
+  // writer since v0.19 R4); readUserModel still tolerates it as the legacy
+  // root, so old deployments keep reading their card. A per-slice arg reads
   // that slice's historical snapshot.
   if (!sliceId) {
-    const raw = ctx.useDemo
-      ? await readFileDemo(CURRENT_PREVIOUSLY_PATH)
-      : ctx.useGithub
-        ? await readFile(CURRENT_PREVIOUSLY_PATH, ctx.repo, ctx.owner)
-        : await readFileLocal(CURRENT_PREVIOUSLY_PATH);
-    return raw.trim() ? (isCardFormat(raw) ? raw : migrateToV3(raw, "current")) : raw;
+    const model = await readUserModel().catch(() => null);
+    return model?.card ?? "";
   }
 
   const sid = sliceId;
@@ -493,7 +494,7 @@ async function listTreeWalk(ctx: ToolContext): Promise<ListTreeResult> {
       } else if (
         p.startsWith("memory/") &&
         !p.startsWith("memory/config/") &&
-        p !== "memory/user/config.json" // legacy settings — same state (see listTreeRepo)
+        p !== "memory/user/config.json" // legacy settings — same state (see listTreeGitHub)
       ) {
         paths.push(p.slice("memory/".length));
       }
@@ -632,8 +633,10 @@ export async function readDocExecute(
 // ─── noteForSediment — the sediment mailbox producer (v0.15 design §3.1/§4.3) ──
 
 /**
- * The reply segment's ONLY write to memory. The main agent is read-only on
- * memory by design — v0.15 §4.3 designates the reply segment as "只读 + 记账":
+ * One of the reply segment's TWO bounded writes to memory (alongside
+ * writeCase since v0.21 — that one lands the document itself). The main
+ * agent is otherwise read-only on memory by design — v0.15 §4.3 designates
+ * the reply segment as "只读 + 记账":
  * this tool is the 记账. It appends ONE structured `[doc-marker]` line to the
  * CURRENT slice's agent.md (the inter-stream mailbox, §3.1); the actual
  * document write happens later, when HQ archives the slice — the
@@ -975,10 +978,20 @@ export async function reportToHQExecute(
   { context: ctx }: ExecuteOpts<ToolContext>,
 ): Promise<ReportToHQResult> {
   "use step";
+  if (ctx.useDemo) {
+    return {
+      ok: false,
+      reason:
+        "Demo mode runs on read-only benchmark data — reports are not dispatched.",
+    };
+  }
   const brief = input.brief?.trim() ?? "";
   if (!brief) return { ok: false, reason: "brief must not be empty." };
   const payload: HQBriefPayload = {
     brief,
+    // The write-window date anchor: the USER-LOCAL date (same helper as
+    // startLongTask), not the HQ runtime's UTC date.
+    date: userLocalDate(ctx.timezone),
     replyToken: `field:${ctx.sliceId}:${ctx.startedAtIso ?? ""}`,
   };
   const result = await deliverHQBrief(payload);
@@ -1276,7 +1289,7 @@ export async function viewImageExecute(
       mediaType: match?.[1] ?? "image/png",
     };
   } else if (source.startsWith("doc:")) {
-    // A case attachment (v0.19 §C.1): doc:<分类>/<case名>/<附件名> — the
+    // A case attachment (v0.19 §C.1): doc:<category>/<case>/<attachment> — the
     // unit identity a document cites. Bytes come back through the binary
     // read path; a dead name is a visible error, never a throw.
     const refText = source.slice("doc:".length);
@@ -1285,7 +1298,7 @@ export async function viewImageExecute(
     const caseName = segments[1] ?? "";
     const fileName = segments.slice(2).join("/");
     if (segments.length !== 3 || !caseName || !fileName) {
-      return `ERROR: Invalid doc attachment source "${source}". Expected "doc:<分类>/<case名>/<附件名>", e.g. "doc:research/手机调研/2026-09-05-photo.jpg".`;
+      return `ERROR: Invalid doc attachment source "${source}". Expected "doc:<category>/<case>/<attachment>", e.g. "doc:research/phone-survey/2026-09-05-photo.jpg".`;
     }
     let attachment: { data: Buffer; mediaType: string };
     try {
@@ -1334,7 +1347,12 @@ export async function viewImageExecute(
 // src/lib/bridge.ts (shared with the bridge main model, see
 // src/lib/models/bridge-model.ts).
 
-export type DelegateTaskResult = BridgeRunResult;
+export type DelegateTaskResult =
+  | BridgeRunResult
+  // Demo refusal — returned before the bridge process is ever spawned. The
+  // BridgeFailureReason enum (lib/bridge.ts) covers spawn outcomes only, so
+  // the demo refusal carries its own reason literal.
+  | { status: "error"; reason: "demo-mode"; error: string; elapsedMs: number };
 
 /**
  * delegateTask — hand a self-contained task to the local subscription bridge
@@ -1347,9 +1365,18 @@ export type DelegateTaskResult = BridgeRunResult;
  */
 export async function delegateTaskExecute(
   { task, context }: { task: string; context?: string },
-  { toolCallId }: ExecuteOpts<ToolContext>,
+  { context: ctx, toolCallId }: ExecuteOpts<ToolContext>,
 ): Promise<DelegateTaskResult> {
   "use step";
+  if (ctx.useDemo) {
+    return {
+      status: "error",
+      reason: "demo-mode",
+      error:
+        "Demo mode runs on read-only benchmark data — bridge tasks are not dispatched.",
+      elapsedMs: 0,
+    };
+  }
   await emitToolProgress(toolCallId, "delegateTask", "Delegating to the local bridge…", "running");
 
   const cmd = getBridgeCommand();
@@ -1387,11 +1414,13 @@ export async function delegateTaskExecute(
  * REALLY now". Zero-input, read-only, and byte-stable per call — it appends to
  * the message tail, so it never breaks the prefix cache.
  *
- * Returns rich text (no disk reads): the user's local time + UTC, this slice's
+ * Returns rich text: the user's local time + UTC, this slice's
  * start / elapsed / remaining-to-cap (the start instant is parsed from the
- * slice id itself — YYYY-MM-DD-HHMM is a UTC label), and a refreshed
- * date-anchor table. The turn count is deliberately omitted: deriving it would
- * require reading the slice file, which is not worth the I/O for a clock check.
+ * slice id itself — YYYY-MM-DD-HHMM is a UTC label; the cap is read from the
+ * user config, falling back to the shipped default when unreadable), and a
+ * refreshed date-anchor table. The turn count is deliberately omitted:
+ * deriving it would require reading the slice file, which is not worth the
+ * I/O for a clock check.
  */
 export async function currentTimeExecute(
   _input: Record<string, never>,
@@ -1540,7 +1569,7 @@ const SUB_AGENT_TIMEOUT_NOTE =
   "The reasoning fragment was interrupted before finishing. The `answer` holds " +
   "the partial conclusion and `reasoning` the thinking trail it already produced " +
   "— work with them (noting the uncertainty). If you need more, gather the " +
-  "missing information yourself (webSearch/recall), embed it, and dispatch a " +
+  "missing information yourself (webSearch/readDoc/readSlice), embed it, and dispatch a " +
   "finer fragment. Do not re-dispatch the same question unchanged — a fragment " +
   "that timed out will likely time out again.";
 

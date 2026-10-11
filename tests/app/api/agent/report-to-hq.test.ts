@@ -5,9 +5,10 @@
  * stubbed because tool-executors statically reaches it via question-run
  * (startLongTask, v0.21 §2) — the mock keeps its heavy graph out of this
  * test. Pins the three dispatch paths and the payload shape: prose `brief`
- * from the model, `replyToken` attached mechanically, nothing else.
+ * from the model, `replyToken` + the user-local `date` attached mechanically,
+ * nothing else.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const h = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
@@ -47,9 +48,16 @@ const ctx: ToolContext = {
 
 const BRIEF = "现场：用户问起屏幕供应商；观察：与 2026-10-04-0131 的讨论直接相关。";
 const REPLY_TOKEN = "field:2026-10-04-0131:2026-10-04T01:31:00.000Z";
+// The user-local date is attached mechanically (no timezone in the base ctx →
+// the UTC date of "now"); shape-pinned, not value-pinned.
+const DATE = expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) as unknown as string;
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("reportToHQ — HQ alive", () => {
@@ -64,11 +72,12 @@ describe("reportToHQ — HQ alive", () => {
     expect(h.resumeHook).toHaveBeenCalledTimes(1);
     expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, {
       brief: BRIEF,
+      date: DATE,
       replyToken: REPLY_TOKEN,
     });
     // the model's prose is the ENTIRE model-authored content of the payload
     const payload = h.resumeHook.mock.calls[0][1] as Record<string, unknown>;
-    expect(Object.keys(payload).sort()).toEqual(["brief", "replyToken"]);
+    expect(Object.keys(payload).sort()).toEqual(["brief", "date", "replyToken"]);
     expect(h.start).not.toHaveBeenCalled();
     // a confirmed delivery lands in the status pointer — the panel's
     // "last dispatch" line carries the brief prose
@@ -84,6 +93,38 @@ describe("reportToHQ — HQ alive", () => {
     // nothing was dispatched, so nothing is recorded
     expect(h.recordHQDispatch).not.toHaveBeenCalled();
   });
+
+  it("demo mode refuses before any dispatch — read-only benchmark data", async () => {
+    const r = await reportToHQExecute(
+      { brief: BRIEF },
+      { context: { ...ctx, useDemo: true }, toolCallId: "call-demo" },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("Demo mode");
+    expect(h.getHookByToken).not.toHaveBeenCalled();
+    expect(h.resumeHook).not.toHaveBeenCalled();
+    expect(h.start).not.toHaveBeenCalled();
+    expect(h.recordHQDispatch).not.toHaveBeenCalled();
+  });
+
+  it("stamps the payload with the USER-LOCAL date (ctx.timezone), not the UTC date", async () => {
+    // 2026-03-02 16:30 UTC = 2026-03-03 00:30 in Asia/Shanghai.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-02T16:30:00.000Z"));
+    h.getHookByToken.mockResolvedValue({ runId: "hq-live" });
+    h.resumeHook.mockResolvedValue({ runId: "hq-live" });
+
+    await reportToHQExecute(
+      { brief: BRIEF },
+      { context: { ...ctx, timezone: "Asia/Shanghai" }, toolCallId: "call-tz" },
+    );
+
+    expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, {
+      brief: BRIEF,
+      date: "2026-03-03",
+      replyToken: REPLY_TOKEN,
+    });
+  });
 });
 
 describe("reportToHQ — HQ absent (HookNotFoundError on the advisory)", () => {
@@ -98,7 +139,7 @@ describe("reportToHQ — HQ absent (HookNotFoundError on the advisory)", () => {
     const [workflowFn, args] = h.start.mock.calls[0];
     expect(workflowFn).toBe(hqRun);
     expect(args).toHaveLength(1);
-    expect(args[0]).toEqual({ brief: BRIEF, replyToken: REPLY_TOKEN });
+    expect(args[0]).toEqual({ brief: BRIEF, date: DATE, replyToken: REPLY_TOKEN });
     expect(h.resumeHook).not.toHaveBeenCalled();
     // delivered via a fresh start — still a confirmed delivery, still recorded
     expect(h.recordHQDispatch).toHaveBeenCalledTimes(1);

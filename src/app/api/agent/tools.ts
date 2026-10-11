@@ -8,7 +8,7 @@
  * individually durable, auto-retried workflow step.
  *
  * Tools are conceptual, not filesystem-oriented. The agent sees slices,
- * strands, timelines, and agent timelines — never file paths. Each tool
+ * case documents, and its own agent timelines — never file paths. Each tool
  * constructs its own path internally and only accesses its specific concept.
  */
 
@@ -85,9 +85,11 @@ export const toolContextSchema = z.object({
   // share the exact same prefix as the main agent — prompt-cache hits across
   // main + sub-agent calls within one turn.
   baseSystemPrompt: z.string().optional(),
-  // The turn's resolved MAIN model — all sub-agents (thinkDeep, webSearch, …)
-  // use it directly (the same one injected for the main agent) instead of
-  // re-resolving config from GitHub on every fragment step.
+  // The turn's resolved MAIN model — the sub-agents that run on the chat
+  // model (thinkDeep) use it directly (the same one injected for the main
+  // agent) instead of re-resolving config from GitHub on every fragment step.
+  // webSearch is the exception: a DeepSeek-only infrastructure call
+  // (tool-executors webSearchExecute), independent of mainModel.
   mainModel: modelConfigSchema.optional(),
   // User-local time rendering (time-localize.ts / the currentTime executor).
   // These MUST be declared here: the workflow step boundary re-parses the

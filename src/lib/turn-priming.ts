@@ -225,7 +225,7 @@ export function buildSliceHeadBlock(input: SliceHeadInput): string {
   const parts: string[] = [
     "## This slice — snapshot at its start",
     `- Slice started: ${t.local} (${t.zone}${offset}) · UTC ${t.utc}`,
-    "- Slice ids are UTC labels (YYYY-MM-DD-HHMM; stored at memory/episodic/slices/YYYY/MM/DD/HHMM). The times in this block are already computed in the user's zone and in UTC.",
+    "- Slice ids are UTC labels (YYYY-MM-DD-HHMM; stored at memory/records/YYYY/MM/DD/HHMM). The times in this block are already computed in the user's zone and in UTC.",
   ];
 
   // Precomputed date anchors — the model resolves "上周五" / "last Friday"

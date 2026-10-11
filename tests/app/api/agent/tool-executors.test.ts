@@ -1,6 +1,7 @@
 /**
- * Tool executors — currentTime / describeRoom / webSearch / viewImage over an
- * in-memory local fs (the memory-read executors moved to docs-tools.test.ts).
+ * Tool executors — currentTime / describeRoom / readPreviously / webSearch /
+ * viewImage over an in-memory local fs (the memory-read executors moved to
+ * docs-tools.test.ts).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -46,6 +47,10 @@ vi.mock("@/lib/config/loader", () => ({
 const deps = vi.hoisted(() => ({
   readStrands: vi.fn(async () => ({})),
   readPlaybook: vi.fn(async () => null),
+  readSelfSop: vi.fn(async () => null),
+  readUserModel: vi.fn(
+    async (): Promise<{ card: string; direction: string | null; full: string } | null> => null,
+  ),
   resolveSubAgentModel: vi.fn(async () => ({ id: "test-model" })),
 }));
 vi.mock("@/lib/episodic", async (importOriginal) => {
@@ -58,6 +63,8 @@ vi.mock("@/lib/episodic", async (importOriginal) => {
 vi.mock("@/lib/evolution/store", () => ({
   readPlaybook: deps.readPlaybook,
   capPlaybook: (s: string) => s,
+  readSelfSop: deps.readSelfSop,
+  readUserModel: deps.readUserModel,
 }));
 vi.mock("@/lib/episodic/rework-signal", () => ({
   checkDocRework: vi.fn(),
@@ -118,6 +125,7 @@ vi.mock("@/lib/vision/describe-image", () => ({
 import {
   currentTimeExecute,
   describeRoomExecute,
+  readPreviouslyExecute,
   webSearchExecute,
   viewImageExecute,
   type ToolContext,
@@ -144,6 +152,62 @@ function opts(overrides: Partial<ToolContext> = {}): {
   return { context: makeCtx(overrides), toolCallId: "tc1" };
 }
 
+
+describe("readPreviouslyExecute", () => {
+  beforeEach(() => {
+    deps.readUserModel.mockReset();
+    deps.readUserModel.mockResolvedValue(null);
+    local.files.clear();
+  });
+
+  it("no sliceId → the LIVE user model's card half (readUserModel), never the frozen current-previously.md", async () => {
+    deps.readUserModel.mockResolvedValue({
+      card: "## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.",
+      direction: null,
+      full: "## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.",
+    });
+    // The frozen legacy file exists on disk — the executor must NOT read it.
+    local.files.set("memory/episodic/current-previously.md", "FROZEN legacy card");
+    const reads: string[] = [];
+    const original = local.readFileLocal;
+    local.readFileLocal = async (p: string) => {
+      reads.push(p);
+      return original(p);
+    };
+    try {
+      const out = await readPreviouslyExecute({}, opts());
+      expect(out).toBe("## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.");
+      expect(deps.readUserModel).toHaveBeenCalledTimes(1);
+      expect(reads).toEqual([]);
+    } finally {
+      local.readFileLocal = original;
+    }
+  });
+
+  it("no sliceId and no user model yet → an empty string (fresh deployment)", async () => {
+    deps.readUserModel.mockResolvedValue(null);
+    const out = await readPreviouslyExecute({}, opts());
+    expect(out).toBe("");
+  });
+
+  it("explicit sliceId → that slice's historical snapshot (dual-root read), with the local-time banner", async () => {
+    // v0.19 R2 records-root layout; card-format content passes migrateToV3
+    // through unchanged.
+    local.files.set(
+      "memory/records/2026/08/11/1115/previously.md",
+      "## Identity\n\n- snapshot line\n\n## Profile\n\nsnapshot body.",
+    );
+    const out = await readPreviouslyExecute({ sliceId: "2026-08-11-1115" }, opts());
+    expect(out).toContain("snapshot body.");
+    expect(out).not.toBe("## Identity\n\n- snapshot line\n\n## Profile\n\nsnapshot body.");
+    expect(deps.readUserModel).not.toHaveBeenCalled();
+  });
+
+  it("explicit sliceId with an invalid id → a visible domain error", async () => {
+    const out = await readPreviouslyExecute({ sliceId: "bogus" }, opts());
+    expect(out).toMatch(/^ERROR: Invalid slice ID/);
+  });
+});
 
 describe("currentTimeExecute", () => {
   beforeEach(() => {
