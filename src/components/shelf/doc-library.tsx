@@ -15,6 +15,18 @@
  * row opens its document on the desk (`dossier/<name>`) exactly like a case
  * row opens `index.md`; reading lives on the paper here too.
  *
+ * THE RECORDS (v0.29): the reader's own conversations — the third section,
+ * pinned between the Dossier and the category tree (self-memory leads: the
+ * self-documents, then the conversations, then the case taxonomy). A row
+ * carries the record idiom's own pair — the slice id's HH:MM wall clock and
+ * its turn count — and opens the transcript on the desk (`records/<sliceId>`)
+ * exactly like the archive field's record piles and the record switch do.
+ * The rows group under the field's own time-bucket labels (the model's
+ * `bucketKeyFor`, day / week-of), so the panel and the field read as one
+ * archive. The data rides the records-only read (`getArchiveRecords`) in
+ * the shelf's mount effect; a reader with no conversations gets an honest
+ * line, not an empty heading.
+ *
  * THE TERMINAL ACTION NEVER READS INSIDE THE TREE. A case opens its own
  * `index.md` on the desk — a case with NO pieces is finally readable, the
  * v0.22 gap where only pieces could reach the tabletop. A piece opens that
@@ -32,8 +44,8 @@
  * and the field renders only that column while it is set. Re-click the open
  * category to clear. The case-level browsing (`activeCase`) stays local.
  */
-import { useCallback, useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import {
   BookMarked,
   Building2,
@@ -57,11 +69,20 @@ import {
   type CaseShelf,
 } from "@/lib/episodic/actions";
 import {
+  getArchiveRecords,
   getDossierList,
+  type ArchiveRecord,
   type DossierEntry,
 } from "@/lib/archive/actions";
 import type { DossierDocName } from "@/lib/archive/refs";
 import type { CaseCategory } from "@/lib/docs";
+import { dateTimeFormat } from "@/lib/time/formatter-cache";
+import {
+  bucketKeyFor,
+  localTodayIso,
+  recordClock,
+  type BucketKind,
+} from "@/components/archive/archive-model";
 
 const CATEGORY_ICONS: Record<CaseCategory, typeof FileText> = {
   people: User,
@@ -89,10 +110,13 @@ function pieceRef(category: CaseCategory, caseName: string, stem: string): strin
 
 export function DocLibrary({ persona }: { persona?: string }) {
   const t = useTranslations("library");
+  const tField = useTranslations("archiveField");
+  const locale = useLocale();
   const { deskDoc, openDesk, archiveCategory, setArchiveCategory } = useShell();
   const [caseShelf, setCaseShelf] = useState<CaseShelf | null>(null);
   const [shelfFailed, setShelfFailed] = useState(false);
   const [dossier, setDossier] = useState<DossierEntry[] | null>(null);
+  const [records, setRecords] = useState<ArchiveRecord[] | null>(null);
   const [activeCase, setActiveCase] = useState<{
     category: CaseCategory;
     name: string;
@@ -103,8 +127,9 @@ export function DocLibrary({ persona }: { persona?: string }) {
   // The shelf loads ONCE at mount — the column is a permanent pane fixture,
   // not a dialog that refetches per open. Detail still rides one round trip
   // per case open, exactly like the dialog did. The Dossier's availability
-  // read rides the same mount effect (parallel, independent — a missing
-  // self-document dims its row, never errors the shelf).
+  // read and the Records' records-only index ride the same mount effect
+  // (parallel, independent — a missing self-document dims its row and a
+  // failed records read hides its section, neither errors the shelf).
   useEffect(() => {
     let live = true;
     getCaseShelf(persona)
@@ -121,10 +146,58 @@ export function DocLibrary({ persona }: { persona?: string }) {
       .catch(() => {
         if (live) setDossier(null);
       });
+    getArchiveRecords(persona)
+      .then((list) => {
+        if (live) setRecords(list);
+      })
+      .catch(() => {
+        if (live) setRecords(null);
+      });
     return () => {
       live = false;
     };
   }, [persona]);
+
+  // THE RECORDS' groups: the field's own time buckets (the model's
+  // `bucketKeyFor` — the trailing week by day, older by ISO week), newest
+  // first, each bucket's slices newest first. The label is the field row
+  // label's own wording (the day, or the week's Monday) — the panel and
+  // the field read as one archive. The bucket frame's NOW is the reader's
+  // local day, which only the client knows (the record switch's own rule).
+  const recordGroups = useMemo(() => {
+    if (records === null || records.length === 0) return [];
+    const today = localTodayIso();
+    const byKey = new Map<
+      string,
+      { kind: BucketKind; date: string; slices: ArchiveRecord[] }
+    >();
+    for (const record of records) {
+      const bucket = bucketKeyFor(record.date, today);
+      const group = byKey.get(bucket.key) ?? {
+        kind: bucket.kind,
+        date: bucket.date,
+        slices: [],
+      };
+      group.slices.push(record);
+      byKey.set(bucket.key, group);
+    }
+    return [...byKey.entries()]
+      .map(([key, group]) => {
+        const date = dateTimeFormat(locale, {
+          month: "short",
+          day: "numeric",
+        }).format(new Date(`${group.date}T00:00:00`));
+        return {
+          key,
+          date: group.date,
+          label: group.kind === "week" ? tField("weekOf", { date }) : date,
+          slices: group.slices.sort((a, b) =>
+            b.sliceId.localeCompare(a.sliceId),
+          ),
+        };
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [records, locale, tField]);
 
   // One category open at a time; re-clicking the open one collapses it.
   // The selection IS the archive field's filter (see the module header), so
@@ -209,6 +282,64 @@ export function DocLibrary({ persona }: { persona?: string }) {
               );
             })}
           </ul>
+        </section>
+      )}
+      {/* THE RECORDS (v0.29) — the reader's own conversations, pinned
+          between the Dossier and the category tree. A row carries the
+          record idiom's own pair (the slice id's HH:MM wall clock and its
+          turn count — the switch's and the piles' vocabulary) and opens
+          the transcript on the desk exactly like the field's record piles
+          do. Hidden while the records-only read is in flight or failed
+          (the Dossier's own precedent); a reader with no conversations
+          gets an honest line under the heading. */}
+      {records !== null && (
+        <section data-records>
+          <h3 className="px-2 pb-0.5 pt-1 text-xs font-medium text-muted-foreground/70">
+            {t("records.title")}
+          </h3>
+          {recordGroups.length === 0 ? (
+            <p className="px-2 pb-1 pt-0.5 text-xs text-muted-foreground italic">
+              {t("records.empty")}
+            </p>
+          ) : (
+            recordGroups.map((group) => (
+              <div key={group.key} data-records-bucket={group.key}>
+                <p className="px-2 pb-0.5 pt-1.5 text-xs text-muted-foreground/70">
+                  {group.label}
+                </p>
+                <ul className="pb-1">
+                  {group.slices.map((record) => {
+                    const ref = `records/${record.sliceId}`;
+                    const active = deskDoc === ref;
+                    const clock = recordClock(record.sliceId);
+                    return (
+                      <li key={record.sliceId}>
+                        <button
+                          type="button"
+                          data-records-row={record.sliceId}
+                          aria-label={t("records.rowAria", {
+                            time: clock,
+                            count: record.turns,
+                          })}
+                          onClick={() => openDesk(ref)}
+                          className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted ${
+                            active ? "bg-muted" : ""
+                          }`}
+                        >
+                          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+                            {clock}
+                          </span>
+                          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                            {t("records.turns", { count: record.turns })}
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            ))
+          )}
         </section>
       )}
       {caseShelf.categories.map(({ category, cases }) => {

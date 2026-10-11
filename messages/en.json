@@ -588,6 +588,12 @@
       "previously": "Previously on",
       "direction": "Direction"
     },
+    "records": {
+      "title": "Conversations",
+      "empty": "No conversations yet — talk with the agent and the record appears here.",
+      "turns": "{count, plural, one {# turn} other {# turns}}",
+      "rowAria": "Open the {time} record, {count, plural, one {# turn} other {# turns}}"
+    },
     "category": {
       "people": "People",
       "events": "Events",

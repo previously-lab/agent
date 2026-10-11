@@ -218,6 +218,16 @@ export function recordSiblings(
     .sort((a, b) => b.sliceId.localeCompare(a.sliceId));
 }
 
+/** A record row's clock: the slice id IS the local wall clock at birth
+ *  (YYYY-MM-DD-HHMM), so the row prints the id's own HH:MM digits — never a
+ *  UTC conversion. The one clock every record surface prints (the switch's
+ *  rows, the shelf's records section, the desk masthead's convention). */
+export function recordClock(sliceId: string): string {
+  return sliceId.length >= 15
+    ? `${sliceId.slice(11, 13)}:${sliceId.slice(13, 15)}`
+    : sliceId;
+}
+
 // ─── Columns ────────────────────────────────────────────────────────────────
 
 /** The records column — the synthetic trailing column the record piles live

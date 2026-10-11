@@ -588,6 +588,12 @@
       "previously": "前情提要",
       "direction": "进化方向"
     },
+    "records": {
+      "title": "对话",
+      "empty": "还没有对话——和 agent 聊过之后，记录会出现在这里。",
+      "turns": "{count} 轮",
+      "rowAria": "打开 {time} 的记录，{count} 轮"
+    },
     "category": {
       "people": "人物",
       "events": "事件",

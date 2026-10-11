@@ -41,15 +41,9 @@ import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   bucketKeyFor,
   localTodayIso,
+  recordClock,
   recordSiblings,
 } from "./archive-model";
-
-/** The row's clock: the id's own HH:MM digits (see the module header). */
-function recordClock(sliceId: string): string {
-  return sliceId.length >= 15
-    ? `${sliceId.slice(11, 13)}:${sliceId.slice(13, 15)}`
-    : sliceId;
-}
 
 export function RecordSwitch({
   persona,

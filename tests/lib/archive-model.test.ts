@@ -13,6 +13,7 @@ import {
   buildArchiveUnits,
   buildBuckets,
   PILE_TIERS,
+  recordClock,
   recordSiblings,
   sheetsForTier,
   tierForPages,
@@ -252,6 +253,17 @@ describe("recordSiblings (v0.28 — the pile's other records, reachable)", () =>
     expect(recordSiblings(records, "2026-10-06-2359", "2026-10-06")).toEqual(
       [],
     );
+  });
+});
+
+describe("recordClock (the one clock every record surface prints)", () => {
+  it("prints the id's own HH:MM digits — never a UTC conversion", () => {
+    expect(recordClock("2026-10-06-0900")).toBe("09:00");
+    expect(recordClock("2026-10-06-2130")).toBe("21:30");
+  });
+
+  it("falls back to the raw id when it carries no clock digits", () => {
+    expect(recordClock("slice")).toBe("slice");
   });
 });
 
