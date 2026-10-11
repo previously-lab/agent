@@ -37,19 +37,41 @@
  * It is mounted by the SHELL, not by either world, because it must exist at
  * either rung. In the hotel the world's own Exit is the way back — the game
  * keeps its viewport clear of product chrome.
+ *
+ * THE SCENE WORD'S SECOND JOB (v0.30) — the door into the hotel used to be
+ * a second, floating gate beside the bar; the bar's own Scene word carries
+ * it now. When the reader is NOT in the scene and there is a room to travel
+ * to (the shared cursor) or one to return to (the remembered cursor), the
+ * word opens the gate's ruling list as a tool panel — the matte square
+ * chrome-panel, hairline chrome-rows, the current room an ink block — and
+ * choosing enters the scene there. With nothing to choose (or already in
+ * the scene, where the world's own doors navigate) the word is the plain
+ * rung switch it always was. The list's labels stay inline per-locale,
+ * exactly like the old gate's, not message keys.
  */
 import { useEffect, useRef, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 import {
   smooth01,
   WORLD_TRANSITION,
 } from "@/lib/timeline3d/world-transition";
 
+export interface SceneChoice {
+  /** The shared cursor's room — entering travels WITH the cursor. */
+  current: string | null;
+  /** The remembered cursor — entering restores the room the reader left. */
+  remembered: string | null;
+}
+
 export interface BoardBarProps {
   /** The rung to light — the settled world, or the destination mid-move. */
   world: WorldKind;
   onSelect: (world: WorldKind) => void;
+  /** The scene's room choices — a non-null field makes the Scene word a menu. */
+  sceneChoice: SceneChoice;
+  /** Enter the hotel at the chosen room (the shell's nav.standAtSlice). */
+  onEnterRoom: (sliceId: string) => void;
 }
 
 /** The two rungs in the strip's left-to-right order. */
@@ -60,14 +82,75 @@ const RUNGS: WorldKind[] = ["game", "field"];
  *  state (which word is old/new), so a coarse clock is fine. */
 const MOVE_SYNC_MS = 120;
 
-export function BoardBar({ world, onSelect }: BoardBarProps) {
+export function BoardBar({ world, onSelect, sceneChoice, onEnterRoom }: BoardBarProps) {
   const t = useTranslations("rungs");
+  const locale = useLocale();
   /** The growing rule's track — `--p` is painted imperatively, no re-render. */
   const lineRef = useRef<HTMLSpanElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   /** The live move, once one is running — drives the old/new word styling. */
   const [move, setMove] = useState<{ from: WorldKind; to: WorldKind } | null>(
     null,
   );
+  /** The Scene word's room menu — open only while the reader is outside
+   *  the scene and a room choice exists (see the module header). */
+  const [sceneMenuOpen, setSceneMenuOpen] = useState(false);
+
+  // The menu's labels are inline per-locale rather than message keys — the
+  // same deliberate choice the old world gate made (messages/ belongs to
+  // another lane, and this list is the gate's list carried over verbatim).
+  const gateText = locale.startsWith("zh")
+    ? {
+        goThis: "前往这个房间",
+        goBack: "回到原来的房间",
+        cancel: "取消 · 继续阅读",
+      }
+    : {
+        goThis: "Go to this room",
+        goBack: "Back to the previous room",
+        cancel: "Cancel · keep reading",
+      };
+
+  // ── THE SCENE WORD'S ROOM MENU ──────────────────────────────────────────
+  // The old world gate's ruling list, verbatim in behaviour: with a cursor
+  // or a remembered room the Scene word offers 前往这个房间 (the travel beat
+  // via nav.standAtSlice — the cursor moves) / 回到原来的房间 (the return) /
+  // 取消 (stay). Escape closes, an outside pointerdown closes, choosing
+  // closes. The gate was FIELD chrome, so the word is a plain rung switch
+  // again once the reader is in the scene.
+  const hasGoThis = sceneChoice.current !== null;
+  const hasGoBack =
+    sceneChoice.remembered !== null &&
+    sceneChoice.remembered !== sceneChoice.current;
+  const menuAvailable = world !== "game" && (hasGoThis || hasGoBack);
+
+  useEffect(() => {
+    if (!sceneMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSceneMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [sceneMenuOpen]);
+
+  useEffect(() => {
+    if (!sceneMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const root = rootRef.current;
+      if (root && e.target instanceof Node && !root.contains(e.target)) {
+        setSceneMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [sceneMenuOpen]);
+
+  // Entering the scene (the toggle, a choice, Ctrl+.) retires the menu: the
+  // word becomes the plain rung switch again, so a stale open flag must not
+  // resurface the panel on the way back out.
+  useEffect(() => {
+    if (world === "game") setSceneMenuOpen(false);
+  }, [world]);
 
   useEffect(() => {
     let raf = 0;
@@ -129,6 +212,7 @@ export function BoardBar({ world, onSelect }: BoardBarProps) {
     //           exactly onto the line the header left for it
     //   md+     the middle of three, all on one line
     <div
+      ref={rootRef}
       data-board-bar
       className="pointer-events-none fixed top-13 right-2 z-50 flex max-w-[calc(100vw-1rem)] md:top-4 md:right-auto md:left-1/2 md:-translate-x-1/2"
     >
@@ -139,6 +223,7 @@ export function BoardBar({ world, onSelect }: BoardBarProps) {
       >
         {RUNGS.map((key, i) => {
           const label = key === "game" ? t("scene") : t("manuscript");
+          const isSceneMenu = key === "game" && menuAvailable;
           return (
             <span key={key} className="inline-flex items-baseline">
               {i > 0 && (
@@ -151,7 +236,12 @@ export function BoardBar({ world, onSelect }: BoardBarProps) {
                 aria-pressed={key === world}
                 aria-label={label}
                 title={label}
-                onClick={() => onSelect(key)}
+                aria-haspopup={isSceneMenu ? "menu" : undefined}
+                aria-expanded={isSceneMenu ? sceneMenuOpen : undefined}
+                onClick={() => {
+                  if (isSceneMenu) setSceneMenuOpen((open) => !open);
+                  else onSelect(key);
+                }}
                 className={`chrome-rung ${key === current ? "is-current" : ""}`}
               >
                 {label}
@@ -169,6 +259,59 @@ export function BoardBar({ world, onSelect }: BoardBarProps) {
           </span>
         )}
       </div>
+      {/* The Scene word's room menu — the old world gate's list, rewritten
+          as a tool tray: matte square panel, hairline rows, the current
+          room an ink block. Anchored to the wrapper's left edge, which is
+          the Scene word's own edge at every breakpoint (the word is the
+          bar's first). */}
+      {menuAvailable && sceneMenuOpen && (
+        <div
+          role="menu"
+          aria-label={t("scene")}
+          className="chrome-panel pointer-events-auto absolute top-full left-0 mt-1 flex w-60 flex-col"
+        >
+          <div className="chrome-panel-head">
+            <h2 className="chrome-engraved">{t("scene")}</h2>
+          </div>
+          {/* The remembered room is the one the reader actually stood in —
+              the ink block. With no memory the cursor's room is the only
+              address, so it carries the block. */}
+          {hasGoThis && (
+            <button
+              type="button"
+              role="menuitem"
+              className={`chrome-row px-3.5 py-2 text-xs ${!hasGoBack ? "is-active" : ""}`}
+              onClick={() => {
+                setSceneMenuOpen(false);
+                onEnterRoom(sceneChoice.current!);
+              }}
+            >
+              {gateText.goThis}
+            </button>
+          )}
+          {hasGoBack && (
+            <button
+              type="button"
+              role="menuitem"
+              className="chrome-row is-active px-3.5 py-2 text-xs"
+              onClick={() => {
+                setSceneMenuOpen(false);
+                onEnterRoom(sceneChoice.remembered!);
+              }}
+            >
+              {gateText.goBack}
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            className="chrome-row px-3.5 py-2 text-xs"
+            onClick={() => setSceneMenuOpen(false)}
+          >
+            {gateText.cancel}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

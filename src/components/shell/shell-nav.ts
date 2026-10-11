@@ -11,7 +11,7 @@
  *
  *   standAtSlice(id) — address a slice to the HOTEL: the reader stands at
  *                      the slice's door (game-canvas.tsx's `focusSlice`).
- *                      The world gate's one addressed move.
+ *                      The board bar's Scene word's one addressed move.
  *
  * There used to be three actions; the other two (the card field's focus and
  * the conversation jump's world half) retired with the conversation rung —

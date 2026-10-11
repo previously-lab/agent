@@ -51,8 +51,8 @@ import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useReducedMotion } from "motion/react";
 import { motion } from "motion/react";
-import { useTranslations, useLocale } from "next-intl";
-import { Hotel, Sparkles } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import type { TimelineSliceEntry } from "@/lib/episodic/timeline/types";
 import {
@@ -83,7 +83,6 @@ import {
   useShell,
   type WorldDriver,
 } from "@/components/shell/shell-provider";
-import { ISLAND } from "@/components/layout/island";
 import { useBridgeBrainActive } from "@/hooks/use-bridge-brain";
 import { useTier } from "@/hooks/use-tier";
 import { BoardBar } from "@/components/shell/board-bar";
@@ -169,8 +168,9 @@ export function AppShell() {
   // URL leg, no reconciliation. `settledView` is the world the reader is in;
   // `transition` is a live move between the worlds (owned by the shell,
   // driven per frame by world-transition.ts). The shared slice address lives
-  // in the provider now; it is consumed two ways: the world gate offers it
-  // as 前往这个房间, the game stands the reader at the slice's door
+  // in the provider now; it is consumed two ways: the board bar's Scene
+  // word offers it as 前往这个房间, the game stands the reader at the slice's
+  // door
   // (game-canvas.tsx's `focusSlice`). The provider's navigation action
   // (shell-nav.ts) composes the cursor write with this transition machine,
   // through the driver registered below.
@@ -244,7 +244,7 @@ export function AppShell() {
   const gameSuspendedRef = useRef(gameSuspended);
   /** THE "WHERE WAS I" MEMORY (v0.13 §6): the cursor's value when the reader
    *  last LEFT the world for the reader — written in startMove on every
-   *  game → field move. The world gate's 回到原来的房间 is the one return
+   *  game → field move. The Scene word's 回到原来的房间 is the one return
    *  that restores it instead of moving the cursor. */
   const prevRoomCursorRef = useRef<string | null>(null);
   const settledRef = useRef<WorldKind>(view);
@@ -298,7 +298,7 @@ export function AppShell() {
       if (from === "game") {
         // THE "WHERE WAS I" MEMORY (v0.13 §6): leaving the world remembers
         // the cursor as it stands — walking has been keeping it current, so
-        // this is the room the reader was last in. The world gate's
+        // this is the room the reader was last in. The Scene word's
         // 回到原来的房间 restores exactly this value. Read through
         // `getCursor` (the provider's synchronously-written ref): an exit
         // fired in the same beat as the room's cursor report can outrun the
@@ -367,6 +367,14 @@ export function AppShell() {
       beginTransition(world, null);
     },
     [beginTransition, setPanelMode],
+  );
+
+  /** The Scene word's room choice, delegated to the provider's nav action:
+   *  the cursor write (theirs) composed with the world move (the driver
+   *  registered below) — the same path the old world gate's rulings took. */
+  const enterRoom = useCallback(
+    (sliceId: string) => nav.standAtSlice(sliceId),
+    [nav],
   );
 
   // `Cmd/Ctrl+.` — the fastest round trip between the two rungs: the reader
@@ -537,38 +545,17 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [view, panelMode, setPanelMode, beginTransition]);
 
-  // ── THE WORLD GATE (v0.13 §6) — returning to the world is a CHOICE ─────
-  // The reader's way into the hotel used to be a bare button that started
-  // the transition. With a cursor (or a remembered one) it now offers the
-  // three rulings first: 前往这个房间 (travel to the room the cursor now
-  // names — the full transition beat, never a hard cut), 回到原来的房间
-  // (the cursor does NOT move — the reading session leaves no trace on it),
-  // or 取消 (stay with the documents). With neither a cursor nor a memory
-  // the gate has nothing to offer and the button keeps its old direct move.
-  const [worldGateOpen, setWorldGateOpen] = useState(false);
-  useEffect(() => {
-    if (!worldGateOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setWorldGateOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [worldGateOpen]);
-  const locale = useLocale();
-  // The gate's labels are inline per-locale rather than message keys:
-  // messages/ belongs to another lane tonight, and the game shell's own
-  // gallery chrome already carries its labels this way.
-  const gateText = locale.startsWith("zh")
-    ? {
-        goThis: "前往这个房间",
-        goBack: "回到原来的房间",
-        cancel: "取消 · 继续阅读",
-      }
-    : {
-        goThis: "Go to this room",
-        goBack: "Back to the previous room",
-        cancel: "Cancel · keep reading",
-      };
+  // ── THE SCENE WORD'S ROOM CHOICES (v0.13 §6, carried by the board bar) ──
+  // The reader's way into the hotel used to be a second door — the floating
+  // world gate — beside the bar's Scene word, doing the same job twice. The
+  // word carries the choice now: with a cursor (or a remembered one) it
+  // offers 前往这个房间 (travel to the room the cursor now names — the full
+  // transition beat, never a hard cut) / 回到原来的房间 (the cursor does NOT
+  // move — the reading session leaves no trace on it) / 取消 (stay with the
+  // documents). With neither a cursor nor a memory the word has nothing to
+  // offer and keeps its old direct move. The board bar owns the menu UI;
+  // these are its data. The way back out of the hotel is unchanged: the
+  // game's own exit button or Escape.
   const prevRoomCursor = prevRoomCursorRef.current;
 
   // ── THE MOUTH STREAM ──────────────────────────────────────────────────────
@@ -607,7 +594,6 @@ export function AppShell() {
   // runs no inline evolution — the bus stays silent and the pod is hidden,
   // so there is nothing to clean up and no console noise.
   const tCompanion = useTranslations("companion");
-  const tGame = useTranslations("game");
   // The desk's injected strings (v0.22): the Html portal is a separate React
   // root, so the paper's CHROME strings go in as props (FrameCardTexts
   // pattern). The paper's own furniture — letterhead category, shelf line,
@@ -1075,6 +1061,11 @@ export function AppShell() {
         <BoardBar
           world={transition ? transition.to : settledView}
           onSelect={selectRung}
+          sceneChoice={{
+            current: sharedSlice,
+            remembered: prevRoomCursor,
+          }}
+          onEnterRoom={enterRoom}
         />
         {/* THE COMPANION POD — the companion stream's floating presence. It
             holds the narration the 「讲讲这片」 entry starts (pod button +
@@ -1096,87 +1087,6 @@ export function AppShell() {
           />
         )}
 
-        {/* THE WORLD GATE (§6) — the reader's way into the hotel, now a
-            CHOICE when there is a cursor to travel to or a room to return to:
-            前往这个房间 (the transition's travel beat, landing at the slice
-            the cursor names) / 回到原来的房间 (the remembered cursor — the
-            reading session does not move it) / 取消 (stay). With neither,
-            the button keeps its old direct move. The way back out of the
-            hotel is unchanged: the game's own exit button or Escape. */}
-        <div className="absolute bottom-17 left-2 z-20 md:bottom-4 md:left-4">
-          {worldGateOpen && (
-            <>
-              {/* The click-away: a bare layer, not a focusable control. */}
-              <div
-                aria-hidden
-                className="fixed inset-0 z-10"
-                onClick={() => setWorldGateOpen(false)}
-              />
-              <div
-                data-world-gate
-                role="menu"
-                aria-label={tGame("title")}
-                className="absolute bottom-11 left-0 z-20 flex w-56 flex-col gap-0.5 rounded-xl bg-background/95 p-1.5 shadow-lg ring-1 ring-border backdrop-blur-md"
-              >
-                {sharedSlice !== null && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="rounded-lg px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-foreground/5"
-                    onClick={() => {
-                      setWorldGateOpen(false);
-                      nav.standAtSlice(sharedSlice);
-                    }}
-                  >
-                    {gateText.goThis}
-                  </button>
-                )}
-                {prevRoomCursor !== null && prevRoomCursor !== sharedSlice && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="rounded-lg px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-                    onClick={() => {
-                      setWorldGateOpen(false);
-                      nav.standAtSlice(prevRoomCursor);
-                    }}
-                  >
-                    {gateText.goBack}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="rounded-lg px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-                  onClick={() => setWorldGateOpen(false)}
-                >
-                  {gateText.cancel}
-                </button>
-              </div>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              if (sharedSlice === null && prevRoomCursor === null) {
-                beginTransition("game", null);
-                return;
-              }
-              setWorldGateOpen((open) => !open);
-            }}
-            aria-label={tGame("title")}
-            aria-haspopup={
-              sharedSlice !== null || prevRoomCursor !== null
-                ? "menu"
-                : undefined
-            }
-            aria-expanded={worldGateOpen || undefined}
-            title={tGame("title")}
-            className={`${ISLAND} pointer-events-auto flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
-          >
-            <Hotel className="size-4" />
-          </button>
-        </div>
           </>
         )}
 
