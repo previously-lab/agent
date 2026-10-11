@@ -63,8 +63,8 @@ export type BucketKind = "day" | "week" | "undated";
 /** The record pile (v0.25b §三): ONE pile per time bucket holding that
  *  bucket's slices — past conversations as paper. Its thickness tiers off
  *  the bucket's TURN volume; its open target is the bucket's NEWEST slice
- *  (the pile's top sheet — older slices wait for the record browser, a
- *  later dispatch). */
+ *  (the pile's top sheet — the reader reaches the bucket's OTHER slices
+ *  through the record switch, `recordSiblings` below). */
 export interface RecordPile {
   kind: "record";
   /** `records/<sliceId>` — the bucket's newest slice. */
@@ -196,6 +196,26 @@ export function buildBuckets(
     if (b.kind === "undated") return -1;
     return b.date.localeCompare(a.date);
   });
+}
+
+/**
+ * The records a record pile folds together (v0.28): every slice sharing the
+ * OPEN record's time bucket, newest first — the record switch's list, by the
+ * field's own bucketing rule. The pile's open target stays the newest (the
+ * list's head); the rest open through the switch. Empty when the slice id
+ * names no record (a dead ref earns no chrome).
+ */
+export function recordSiblings(
+  records: readonly ArchiveRecord[],
+  sliceId: string,
+  today: string,
+): ArchiveRecord[] {
+  const open = records.find((r) => r.sliceId === sliceId);
+  if (!open) return [];
+  const key = bucketKeyFor(open.date, today).key;
+  return records
+    .filter((r) => bucketKeyFor(r.date, today).key === key)
+    .sort((a, b) => b.sliceId.localeCompare(a.sliceId));
 }
 
 // ─── Columns ────────────────────────────────────────────────────────────────

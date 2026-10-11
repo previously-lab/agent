@@ -116,7 +116,9 @@ export function RecordPileView({
 export interface ArchivePileTexts {
   /** The pile's aria-label: the case name, its category, its volume. */
   pileAria(pile: ArchivePile, categoryLabel: string): string;
-  /** The cover's head stamp, left (the translated category name). */
+  /** The category's translated name — chrome only (the aria-label, the
+   *  column header). The cover's head stamp prints the bare English id:
+   *  the stamp is paper, and the paper's furniture is not translated. */
   categoryLabel(category: ArchivePile["category"]): string;
   /** The column header's label — a category name, or the records column's
    *  (the synthetic trailing column is not a category). */
@@ -185,7 +187,9 @@ export function ArchivePileView({
           >
             <div className="archive-cover-inner">
               <header className="archive-cover-head">
-                <span>{categoryLabel}</span>
+                {/* The stamp is paper — the bare English category id,
+                    uppercased, never the translated name. */}
+                <span>{pile.category.toUpperCase()}</span>
                 {pile.updated && <span>{texts.dateLabel(pile.updated)}</span>}
               </header>
               <h3 className="archive-cover-title">{pile.name}</h3>

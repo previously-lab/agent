@@ -28,7 +28,7 @@ import {
   resolveCaseRefPaths,
   type CaseCategory,
 } from "@/lib/docs";
-import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
+import { fsListFiles, fsReadFile, fsFileModifiedDate } from "@/lib/episodic/io-helpers";
 import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
 import { sliceEntryFromDisk } from "@/lib/episodic/timeline/store";
 import {
@@ -204,12 +204,30 @@ async function readArchiveRecords(): Promise<ArchiveRecord[]> {
     .sort((a, b) => a.sliceId.localeCompare(b.sliceId));
 }
 
+/**
+ * The record index WITHOUT the case aggregation (v0.28): the record switch
+ * — the open transcript's bucket siblings — needs the slice list, not the
+ * piles, so it does not pay for the field's whole read. Same enumeration
+ * and bounded header reads as the field's own; the bucketing itself is the
+ * model's (`recordSiblings`, client-side — the bucket frame's NOW is the
+ * reader's local day).
+ */
+export async function getArchiveRecords(
+  persona?: string,
+): Promise<ArchiveRecord[]> {
+  if (persona) setDemoPersona(persona);
+  return readArchiveRecords();
+}
+
 /** The `records/<sliceId>` grammar lives in `./refs` (pure — this module is
  *  `"use server"` and may export only async functions). */
 
 export interface RecordDocContent extends CaseDocContent {
   sliceId: string;
   turnCount: number;
+  /** The slice's recorded timezone — the record paper's letterhead prints
+   *  it next to the wall clock derived from the slice id. */
+  timezone: string;
 }
 
 /**
@@ -245,6 +263,7 @@ export async function getRecordDoc(
     warnings: [],
     sliceId: parsed.sliceId,
     turnCount: slice.totalTurns,
+    timezone: slice.timezone,
   };
 }
 
@@ -299,11 +318,17 @@ export async function getDossierDoc(
   if (persona) setDemoPersona(persona);
   const parsed = parseDossierRef(refText);
   if (!parsed) return null;
-  const raw = await fsReadFile(DOSSIER_PATHS[parsed.name]).catch(() => null);
+  // The letterhead's date line is the file's last write where the backend
+  // has one (local mtime; null on GitHub/demo — the line is then omitted,
+  // never a placeholder).
+  const [raw, modified] = await Promise.all([
+    fsReadFile(DOSSIER_PATHS[parsed.name]).catch(() => null),
+    fsFileModifiedDate(DOSSIER_PATHS[parsed.name]),
+  ]);
   if (raw === null || raw.trim().length === 0) return null;
   return {
     ref: refText,
-    opened: "",
+    opened: modified ?? "",
     closed: null,
     markdown: raw.trim(),
     warnings: [],

@@ -13,6 +13,7 @@ import {
   buildArchiveUnits,
   buildBuckets,
   PILE_TIERS,
+  recordSiblings,
   sheetsForTier,
   tierForPages,
   weekStartFor,
@@ -204,6 +205,53 @@ describe("records in the field", () => {
     const cells = bucketCells(bucket, ["self", "records"]);
     expect(cells.map((cell) => cell.column)).toEqual([0, 1]);
     expect(cells[1].piles).toEqual([bucket.record]);
+  });
+});
+
+describe("recordSiblings (v0.28 — the pile's other records, reachable)", () => {
+  const records = [
+    record("2026-10-06-0900", 4),
+    record("2026-10-06-2130", 8),
+    record("2026-10-04-1200", 3),
+    record("2026-09-20-1015", 5), // Sunday → week of Monday 09-14
+    record("2026-09-15-0800", 2), // same ISO week as the Sunday
+  ];
+
+  it("lists every record sharing the open record's bucket, newest first", () => {
+    expect(
+      recordSiblings(records, "2026-10-06-0900", "2026-10-06").map(
+        (r) => r.sliceId,
+      ),
+    ).toEqual(["2026-10-06-2130", "2026-10-06-0900"]);
+  });
+
+  it("the open record need not be the bucket's newest", () => {
+    expect(
+      recordSiblings(records, "2026-10-06-2130", "2026-10-06").map(
+        (r) => r.sliceId,
+      ),
+    ).toEqual(["2026-10-06-2130", "2026-10-06-0900"]);
+  });
+
+  it("buckets by the field's own rule: days within the week, ISO weeks beyond", () => {
+    // The 09-20 Sunday and the 09-15 Tuesday share the week of Monday 09-14.
+    expect(
+      recordSiblings(records, "2026-09-20-1015", "2026-10-06").map(
+        (r) => r.sliceId,
+      ),
+    ).toEqual(["2026-09-20-1015", "2026-09-15-0800"]);
+    // The 10-04 record is its own day bucket — a one-record bucket.
+    expect(
+      recordSiblings(records, "2026-10-04-1200", "2026-10-06").map(
+        (r) => r.sliceId,
+      ),
+    ).toEqual(["2026-10-04-1200"]);
+  });
+
+  it("an unknown slice id earns nothing", () => {
+    expect(recordSiblings(records, "2026-10-06-2359", "2026-10-06")).toEqual(
+      [],
+    );
   });
 });
 

@@ -157,7 +157,10 @@ export function ArchiveField({
   const exiting = leaving;
 
   // The pile's printed strings — prepared HERE (next-intl context does not
-  // cross the drei Html portal root; the FrameCardTexts pattern).
+  // cross the drei Html portal root; the FrameCardTexts pattern). Only the
+  // CHROME strings (aria-labels, the column headers) are translated: the
+  // cover's stamps are paper, and the paper's furniture is fixed English
+  // (the owner's v0.28 ruling).
   const pileTexts = useMemo<ArchivePileTexts>(() => {
     const stamp = dateTimeFormat(locale, { month: "short", day: "numeric" });
     return {
@@ -171,12 +174,14 @@ export function ArchiveField({
       columnLabel: (column) =>
         column === "records" ? t("recordsLabel") : tLibrary(`category.${column}`),
       dateLabel: (date) => stamp.format(new Date(`${date}T00:00:00`)),
-      openedLabel: (opened) => (opened ? t("openedAt", { date: opened }) : ""),
+      // The cover's birth line — paper furniture, fixed English.
+      openedLabel: (opened) => (opened ? `opened ${opened}` : ""),
     };
   }, [t, tLibrary, locale]);
 
   // The record pile's printed strings — same portal constraint. The stamp
-  // line is the §九 pile-scale ruling made literal: label · date · turns.
+  // line is the §九 pile-scale ruling made literal: label · date · turns,
+  // fixed English (it prints on the cover; only the aria is translated).
   const recordTexts = useMemo<RecordPileTexts>(() => {
     const stamp = dateTimeFormat(locale, { month: "short", day: "numeric" });
     return {
@@ -187,7 +192,7 @@ export function ArchiveField({
           turns: pile.turns,
         }),
       stampLabel: (pile) =>
-        `${t("recordsLabel")} · ${stamp.format(new Date(`${pile.date}T00:00:00`))} · ${t("recordTurns", { count: pile.turns })}`,
+        `Records · ${stamp.format(new Date(`${pile.date}T00:00:00`))} · ${pile.turns} ${pile.turns === 1 ? "turn" : "turns"}`,
     };
   }, [t, locale]);
 
@@ -694,7 +699,13 @@ function ArchiveScene({
       <mesh position={[0, 0, -table.d]}>
         <planeGeometry args={[table.w, table.h]} />
         <meshStandardMaterial
-          color={dark ? 0x23242b : 0xd8dae3}
+          // The same tabletop the desk prints (desk-field.tsx), in the same
+          // reviewed tone: the colour round pinned the desk's plane to the
+          // warm field's hue family (oklch(0.794 0.011 88)) and missed this
+          // twin — the old cool 0xd8dae3 read as a pale bar wherever no pile
+          // covers the field (the owner's "white bar on the left"). Dark was
+          // never the complaint and stays the desk's value.
+          color={dark ? 0x23242b : 0xbfbcb4}
           roughness={0.95}
           metalness={0}
         />
