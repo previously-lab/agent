@@ -33,6 +33,7 @@ import { DemoBadge } from "@/components/layout/demo-badge";
 import { ClientBadge } from "@/components/layout/client-badge";
 import { SearchPalette } from "@/components/layout/search-palette";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
+import { ISLAND } from "@/components/layout/island";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
@@ -76,12 +77,13 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
       {!isHome && (
       <div className="pointer-events-auto flex h-9 min-w-0 items-center gap-1.5">
         {/* "PREVIOUSLY ON {name}" — the same phrase the briefing card and the
-            travel clock wear, typed on the desk's top-left edge as an
-            INSCRIPTION (v0.29 §4.2): mono, not caps, no pill around it. It
-            is the product's own sentence rather than a wordmark, and the
-            WEIGHT SPLIT is the whole reason it works at a glance: the lead
-            is regular, the name is semibold and foreground, so the eye
-            lands on WHO before it reads what is being said about them.
+            travel clock wear, sitting at the desk's top-left as every other
+            control does: a square `ISLAND` in the DEFAULT SANS (the owner's
+            ruling on first look — the mono inscription read wrong on the
+            brand, and mono belongs to the paper's stamps, not to the app's own
+            sentence). The WEIGHT SPLIT is still the whole reason it works at a
+            glance: the lead is regular, the name is semibold and foreground,
+            so the eye lands on WHO before it reads what is said about them.
 
             `You` IS THE ANSWER IN TWO CASES, deliberately: while the identity
             is in flight, and when the profile has no name at all (the server
@@ -91,7 +93,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
             placeholder that becomes "unnamed". */}
         <Link
           href="/"
-          className="chrome-inscription min-w-0 truncate transition-colors"
+          className={`${ISLAND} inline-flex h-9 max-w-full min-w-0 items-center truncate px-3 text-sm transition-colors`}
         >
           {t("brand")}{" "}
           <span className="font-semibold">

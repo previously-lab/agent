@@ -36,16 +36,11 @@
   --ink-accent-paper: oklch(0.68 0.12 256);
 }
 
-/* Register the tokens as theme colors so the utility vocabulary
-   (bg-tool / border-tool-line / ring-tool-line / text-ink-accent…) is
-   generated — the same @theme inline idiom globals.css uses for the
-   paper tokens. */
-@theme inline {
-  --color-tool: var(--tool);
-  --color-tool-line: var(--tool-line);
-  --color-ink-accent: var(--ink-accent);
-  --color-ink-accent-paper: var(--ink-accent-paper);
-}
+/* The theme registration for these tokens lives in `globals.css`, NOT here:
+   Tailwind reads `@theme` only from its entry stylesheet, so the block that
+   used to sit at this spot generated nothing and every `bg-tool` consumer
+   (both menus and the search dialog) rendered with no background at all. If
+   you add a token, register it there. */
 
 /* ── The island material ────────────────────────────────────────────────
    ISLAND — a standalone floating control: matte, square, hairline-ruled,
@@ -197,20 +192,48 @@
 }
 
 /* ── Menus (overflow + search palette) ──────────────────────────────────
-   The highlighted row's hairline turns to ink — no grey wash, no accent
-   fill. */
+   Hover and focus are the primitive's own fill: `--accent`, remapped in
+   globals.css to a matte wash of ink into the tool surface — the same fill
+   every other control gets, with a transition so it arrives instead of
+   snapping. The hairline under a row marks the SELECTED state only; it used
+   to fire on hover too, which is what put a hard black line under whatever
+   the pointer touched. */
 
 .chrome-menu-item {
   border-radius: 0;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
-.chrome-menu-item:focus,
-.chrome-menu-item:focus-visible,
-.chrome-menu-item[data-highlighted],
+/* The SELECTED row keeps a hairline under it… */
 .chrome-menu-item[data-selected="true"] {
-  background: transparent;
   color: var(--foreground);
   box-shadow: inset 0 -1px 0 var(--foreground);
+}
+
+/* …and the row under the POINTER gets the wash. Base UI marks that row with
+   `data-highlighted`; the primitive's own `focus:bg-accent` only covers the
+   keyboard half, so both are named here. This rule comes after the selected
+   one on purpose: hovering the selected row keeps its hairline and gains the
+   wash, since the two set different properties. */
+/* …and the row under the POINTER gets the wash. Named by ROLE, not by a class:
+   only some rows ever carried `chrome-menu-item` (the theme and language
+   radios had it, 设置/文档 did not), so a class-keyed rule silently skipped
+   half of every menu. `:hover` is the reliable pointer signal here — Base UI
+   marks its own row on a child node, and the primitive's `focus:bg-accent`
+   only covers the keyboard half. */
+[role="menuitem"]:hover,
+[role="menuitem"]:focus,
+[role="menuitem"][data-highlighted],
+[role="option"]:hover,
+[role="option"]:focus,
+[role="option"][data-highlighted],
+.chrome-menu-item:hover,
+.chrome-menu-item:focus,
+.chrome-menu-item[data-highlighted] {
+  background: var(--accent);
+  color: var(--foreground);
 }
 
 /* The menu's radio mark is a small ink square (the lab idiom) — the

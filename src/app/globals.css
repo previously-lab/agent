@@ -22,6 +22,15 @@
   --color-brand-950: var(--brand-950);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  /* The chrome's instrument tokens. `instrument.css` defines the VALUES; the
+     registration has to live HERE, because Tailwind reads `@theme` only from
+     its entry stylesheet. Without these four lines `bg-tool` and
+     `bg-tool-line` generate no rule at all, `cn()` strips the primitive's own
+     `bg-popover` in their favour, and every menu comes out with no background. */
+  --color-tool: var(--tool);
+  --color-tool-line: var(--tool-line);
+  --color-ink-accent: var(--ink-accent);
+  --color-ink-accent-paper: var(--ink-accent-paper);
   --font-sans: var(--font-raleway), "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono);
   --font-serif: var(--font-source-serif), "Songti SC", "Noto Serif SC", serif;
@@ -64,17 +73,19 @@
   --shadow-paper-lift: var(--paper-lift);
   --shadow-paper-contact: var(--paper-contact);
   --text-shadow-paper-recess: var(--paper-ink-recess);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-  --radius-3xl: calc(var(--radius) + 12px);
-  --radius-4xl: calc(var(--radius) + 16px);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
 }
 
 :root {
-  --radius: 0.625rem;
+  /* THE PRODUCT IS SQUARE (owner rule 2; the chrome's P4 "round belongs to
+     the world"). One dial: every primitive's rounded-sm/md/lg/xl reads this. */
+  --radius: 0;
   --brand: oklch(0.55 0.25 262);
   --brand-50: oklch(0.97 0.02 262);
   --brand-100: oklch(0.935 0.045 262);
@@ -91,16 +102,21 @@
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
+  /* Every popover, dialog, menu and select draws on the instrument surface —
+     remapped here so a surface cannot be forgotten at a call site (which is
+     how both menus once ended up with no background at all). */
+  --popover: var(--tool);
+  --popover-foreground: var(--foreground);
   --primary: oklch(0.55 0.25 262);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
   --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.955 0.03 262);
-  --accent-foreground: oklch(0.205 0 0);
+  /* The hover/selected fill every primitive reaches for: a matte wash of ink
+     into the tool surface, never the old pale blue, never alpha. */
+  --accent: color-mix(in oklab, var(--foreground) 7%, var(--tool));
+  --accent-foreground: var(--foreground);
   --destructive: oklch(0.577 0.245 27.325);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
@@ -202,16 +218,18 @@
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
   --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  /* Same two remaps as the light block: the instrument surface for every
+     popover, and the ink wash for hover/selected. */
+  --popover: var(--tool);
+  --popover-foreground: var(--foreground);
   --primary: oklch(0.6 0.23 260);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.269 0 0);
   --secondary-foreground: oklch(0.985 0 0);
   --muted: oklch(0.269 0 0);
   --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.28 0.05 260);
-  --accent-foreground: oklch(0.985 0 0);
+  --accent: color-mix(in oklab, var(--foreground) 12%, var(--tool));
+  --accent-foreground: var(--foreground);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);

@@ -192,7 +192,7 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
                   // occupy a row of its own in this stacked layout.
                   // chrome-menu-item: the highlighted row's hairline turns
                   // to ink — the instrument hover, not a grey wash.
-                  className="chrome-menu-item flex-col items-start gap-0.5 rounded-none! py-2 in-data-[slot=dialog-content]:rounded-none! data-selected:bg-transparent! [&>svg]:hidden"
+                  className="chrome-menu-item flex-col items-start gap-0.5 rounded-none! py-2 in-data-[slot=dialog-content]:rounded-none! [&>svg]:hidden"
                 >
                   <span className="flex w-full items-baseline gap-2">
                     <span className="shrink-0 font-mono text-[0.65rem] text-muted-foreground">
