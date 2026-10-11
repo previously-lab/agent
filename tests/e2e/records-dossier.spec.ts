@@ -16,8 +16,8 @@ import {
  * RECORDS — every time bucket in the archive field carries ONE record pile
  * (its thickness tiers off the bucket's turn volume); opening it reads the
  * bucket's NEWEST slice as a verbatim transcript on the A4 desk — speaker
- * labels over the turns, the slice id top-left, the turn count in the
- * footer. DOSSIER — the two self-documents (current-previously / direction)
+ * labels over the turns, and the v0.28 letterhead: the wordmark over the
+ * slice's wall clock + timezone, the bare RECORD, and the day folder. DOSSIER — the two self-documents (current-previously / direction)
  * pin to the top of the library and open on the same desk under
  * `dossier/<name>`. DESK MEMORY — the reader reopens on the last document
  * he had open (localStorage), a dead remembered ref falling back to the
@@ -108,16 +108,20 @@ test.describe("Records are papers", () => {
     await expect(
       page.locator(".desk-flow").getByText("You", { exact: true }).first(),
     ).toBeVisible();
-    // The first page's masthead carries the slice id + the turn count in its
-    // source line (v0.27: they moved up from the footer); the footer's right
-    // slot now prints the bare category, same as a case paper.
-    await expect(
-      page.locator(".desk-masthead-line").first(),
-    ).toContainText(newestA);
-    await expect(
-      page.locator(".desk-masthead-line").first(),
-    ).toContainText("2 turns");
-    await expect(page.locator(".desk-foot").first()).toContainText("Records");
+    // The first page's letterhead (v0.28): the wordmark over three fixed-
+    // English lines — the slice's wall clock + its recorded timezone, the
+    // bare RECORD, and the day folder. No heavy rule; the footer carries
+    // only the folio (the category moved up, the hotel left the paper).
+    const masthead = page.locator(".desk-masthead").first();
+    const clock = `${newestA.slice(0, 10)} ${newestA.slice(11, 13)}:${newestA.slice(13, 15)} · UTC`;
+    await expect(masthead).toContainText(clock);
+    await expect(masthead).toContainText("RECORD");
+    await expect(masthead).toContainText(
+      `records / ${newestA.slice(0, 10)}`,
+    );
+    await expect(page.locator(".desk-masthead-rule")).toHaveCount(0);
+    await expect(page.locator("[data-desk-place]")).toHaveCount(0);
+    await expect(page.locator(".desk-foot").first()).toHaveText(/^\s*· 1 ·\s*$/);
   });
 
   test("the Dossier pins atop the library and opens on the desk", async ({

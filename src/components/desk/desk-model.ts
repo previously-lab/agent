@@ -29,7 +29,7 @@ export interface DeskPaperModel {
   title: string;
   /** The running head's left line: the case reference ("research / 手机调研"),
    *  the record's slice id, or null for a legacy ref / a dossier paper (the
-   *  dossier prints its localized name there instead). */
+   *  dossier prints its fixed English name there instead). */
   caseRef: string | null;
   /** The header's date — the document's `opened`, verbatim. Printed 700
    *  tabular in both heads (the masthead's data line, the runhead's right
@@ -42,15 +42,73 @@ export interface DeskPaperModel {
   /** The body markdown, or null for a dead link (the not-found paper). */
   markdown: string | null;
   kind: DeskPaperKind;
-  /** Record papers: the slice's turn count — the first page's masthead
-   *  source line. */
+  /** Record papers: the slice's turn count. */
   turnCount: number | null;
-  /** Dossier papers: which self-document (drives the localized title). */
+  /** Record papers: the slice's recorded timezone — the letterhead's clock
+   *  line prints it next to the wall clock derived from the slice id. */
+  timezone: string | null;
+  /** Dossier papers: which self-document (drives the fixed English name). */
   dossier: DossierDocName | null;
 }
 
-/** The record read carries the turn count beyond the case document shape. */
-type DeskDocContent = CaseDocContent & { turnCount?: number };
+/** The record read carries the turn count and the timezone beyond the case
+ *  document shape. */
+type DeskDocContent = CaseDocContent & { turnCount?: number; timezone?: string };
+
+/** The dossier's fixed English name (v0.28): the paper's furniture is not
+ *  translated — the letterhead prints it uppercased, the running head and
+ *  the display title print it as written here. */
+export const DOSSIER_NAMES: Record<DossierDocName, string> = {
+  previously: "Previously on",
+  direction: "Direction",
+};
+
+/** The letterhead (v0.28): `Previously` over three tight monospace lines —
+ *  the document's clock, its bare category, and its place on the shelf. A
+ *  line whose data does not exist is null: the paper OMITS it (a dossier is
+ *  honestly three lines), never prints a placeholder. Every word here is
+ *  fixed English — the paper's furniture is not translated. */
+export function mastheadLines(model: DeskPaperModel): {
+  /** Line 2: the stored date, or the record's local wall clock (from the
+   *  slice id's digits) with its recorded timezone. */
+  clock: string | null;
+  /** Line 3: the bare category, uppercased English (RESEARCH / RECORD /
+   *  PREVIOUSLY ON). */
+  category: string | null;
+  /** Line 4: the file's place on the shelf (`research / rsi`,
+   *  `records / 2026-10-04`). */
+  shelf: string | null;
+} {
+  if (model.kind === "record") {
+    const id = model.caseRef ?? "";
+    // The slice id IS the local wall clock at birth (YYYY-MM-DD-HHMM).
+    const clock =
+      id.length >= 15
+        ? `${id.slice(0, 10)} ${id.slice(11, 13)}:${id.slice(13, 15)}${
+            model.timezone ? ` · ${model.timezone}` : ""
+          }`
+        : null;
+    return {
+      clock,
+      category: "RECORD",
+      shelf: id.length >= 10 ? `records / ${id.slice(0, 10)}` : null,
+    };
+  }
+  if (model.kind === "dossier") {
+    return {
+      clock: model.date !== "" ? model.date : null,
+      category: model.dossier
+        ? DOSSIER_NAMES[model.dossier].toUpperCase()
+        : null,
+      shelf: null,
+    };
+  }
+  return {
+    clock: model.date !== "" ? model.date : null,
+    category: model.category ? model.category.toUpperCase() : null,
+    shelf: model.caseRef,
+  };
+}
 
 export function deskPaperModel(
   ref: string,
@@ -68,6 +126,7 @@ export function deskPaperModel(
       markdown: doc === null ? null : doc.markdown,
       kind: "record",
       turnCount: doc?.turnCount ?? null,
+      timezone: doc?.timezone ?? null,
       dossier: null,
     };
   }
@@ -81,6 +140,7 @@ export function deskPaperModel(
       markdown: doc === null ? null : doc.markdown,
       kind: "dossier",
       turnCount: null,
+      timezone: null,
       dossier: dossier.name,
     };
   }
@@ -115,6 +175,7 @@ export function deskPaperModel(
     markdown: doc === null ? null : doc.markdown,
     kind,
     turnCount: null,
+    timezone: null,
     dossier: null,
   };
 }

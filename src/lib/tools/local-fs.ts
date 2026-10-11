@@ -60,6 +60,22 @@ async function readLocalDirect(path: string): Promise<string> {
   return readFileSync(fullPath, "utf-8");
 }
 
+/** The file's last-write date, local `YYYY-MM-DD` — a real stored fact the
+ *  dossier's letterhead prints as its date line. Null when the file does
+ *  not exist. */
+export async function fileModifiedDateLocal(
+  path: string,
+): Promise<string | null> {
+  if (!isPathAllowed(path)) {
+    throw new Error(`Access denied: path "${path}" is outside allowed directories`);
+  }
+  const fullPath = resolveLocalDataPath(path);
+  if (!existsSync(fullPath)) return null;
+  const m = statSync(fullPath).mtime;
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${m.getFullYear()}-${pad(m.getMonth() + 1)}-${pad(m.getDate())}`;
+}
+
 export async function writeFileLocal(
   path: string,
   content: string

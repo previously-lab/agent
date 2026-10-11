@@ -527,6 +527,9 @@ export interface SliceContent {
   summary: string;
   start: string;
   status: string;
+  /** The slice's recorded timezone (front matter; the record paper's
+   *  letterhead prints it next to the wall clock). */
+  timezone: string;
   /** The card's truncated opening rounds by default; every turn under
    *  `{ full: true }` (see `getSliceContent`). */
   turns: Turn[];
@@ -611,6 +614,7 @@ export async function getSliceContent(
       summary: slice.summary,
       start: slice.start,
       status: slice.status,
+      timezone: slice.timezone,
       turns: full ? slice.turns : frameTurns(slice.turns),
       totalTurns: slice.turns.length,
       totalChars,

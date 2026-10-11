@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import {
   clampPage,
   deskPaperModel,
+  mastheadLines,
   pageCountLowerBound,
   pageForShellSlot,
   panelModeForDeskOpen,
@@ -70,10 +71,11 @@ describe("deskPaperModel", () => {
     expect(deskPaperModel("research/手机调研", doc("")).markdown).toBe("");
   });
 
-  it("a record ref is the transcript paper: no title, slice id top-left, turns for the footer", () => {
+  it("a record ref is the transcript paper: no title, slice id as the header ref", () => {
     const model = deskPaperModel("records/2026-10-05-1430", {
       ...doc("**You**\n\nhello", "2026-10-05"),
       turnCount: 12,
+      timezone: "Asia/Shanghai",
     });
     expect(model.kind).toBe("record");
     expect(model.title).toBe("");
@@ -81,6 +83,7 @@ describe("deskPaperModel", () => {
     expect(model.date).toBe("2026-10-05");
     expect(model.category).toBeNull();
     expect(model.turnCount).toBe(12);
+    expect(model.timezone).toBe("Asia/Shanghai");
   });
 
   it("the record branch routes BEFORE the case grammar — the slice id would otherwise parse as a legacy name", () => {
@@ -113,7 +116,9 @@ describe("panelModeForDeskOpen", () => {
 });
 
 // A missing locale key is a visible MISSING_MESSAGE crash in the console —
-// the desk.* set must exist, whole, in BOTH locales.
+// the desk.* set must exist, whole, in BOTH locales. The paper's furniture
+// (letterhead category, shelf line, folio) is fixed English and holds NO
+// keys here (v0.28); only the desk's chrome does.
 describe("desk locale keys", () => {
   const read = (name: string): Record<string, unknown> =>
     JSON.parse(
@@ -127,37 +132,90 @@ describe("desk locale keys", () => {
     const en = read("en.json").desk as Record<string, unknown>;
     const zh = read("zh.json").desk as Record<string, unknown>;
     expect(Object.keys(en).sort()).toEqual([
-      "archetype",
       "loading",
       "nextPage",
       "notFoundBody",
       "notFoundHeading",
-      "page",
       "pagePosition",
-      "placeAria",
       "prevPage",
       "recordAgent",
-      "recordSource",
-      "recordTurns",
       "recordUser",
       "regionLabel",
+      "zoomIn",
+      "zoomOut",
+      "zoomReset",
     ]);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(en).sort());
-    // The place line's room names nest one level (desk.archetype.*) —
-    // same locale parity, leaf-checked below.
-    const enArch = en.archetype as Record<string, unknown>;
-    const zhArch = zh.archetype as Record<string, unknown>;
-    expect(Object.keys(zhArch).sort()).toEqual(Object.keys(enArch).sort());
-    const leaves = (obj: Record<string, unknown>): unknown[] =>
-      Object.values(obj).flatMap((v) =>
-        typeof v === "object" && v !== null
-          ? leaves(v as Record<string, unknown>)
-          : [v],
-      );
-    for (const value of [...leaves(en), ...leaves(zh)]) {
+    for (const value of [...Object.values(en), ...Object.values(zh)]) {
       expect(typeof value).toBe("string");
       expect((value as string).length).toBeGreaterThan(0);
     }
+  });
+});
+
+// The letterhead (v0.28): `Previously` over three fixed-English lines —
+// clock, bare category, shelf — each omitted when its data does not exist.
+describe("mastheadLines", () => {
+  it("a case paper: the stored date, the uppercased category, the shelf ref", () => {
+    const lines = mastheadLines(
+      deskPaperModel("research/rsi", doc("# x", "2026-10-05")),
+    );
+    expect(lines).toEqual({
+      clock: "2026-10-05",
+      category: "RESEARCH",
+      shelf: "research / rsi",
+    });
+  });
+
+  it("a record paper: the wall clock off the slice id + its timezone, RECORD, the day folder", () => {
+    const lines = mastheadLines(
+      deskPaperModel("records/2026-10-04-0131", {
+        ...doc("**You**\n\nhi", "2026-10-04"),
+        turnCount: 4,
+        timezone: "Asia/Shanghai",
+      }),
+    );
+    expect(lines).toEqual({
+      clock: "2026-10-04 01:31 · Asia/Shanghai",
+      category: "RECORD",
+      shelf: "records / 2026-10-04",
+    });
+  });
+
+  it("a dossier paper: honestly three lines — no shelf, the fixed name uppercased", () => {
+    const lines = mastheadLines(
+      deskPaperModel("dossier/previously", doc("# Previously on", "")),
+    );
+    expect(lines).toEqual({
+      clock: null,
+      category: "PREVIOUSLY ON",
+      shelf: null,
+    });
+    expect(
+      mastheadLines(deskPaperModel("dossier/direction", doc("# x"))).category,
+    ).toBe("DIRECTION");
+  });
+
+  it("a dead link omits the clock but keeps the derivable lines", () => {
+    const lines = mastheadLines(
+      deskPaperModel("research/不存在的调研", null),
+    );
+    expect(lines).toEqual({
+      clock: null,
+      category: "RESEARCH",
+      shelf: "research / 不存在的调研",
+    });
+  });
+
+  it("a legacy ref has neither category nor shelf", () => {
+    const lines = mastheadLines(
+      deskPaperModel("用户手机", doc("旧文档", "2026-09-01")),
+    );
+    expect(lines).toEqual({
+      clock: "2026-09-01",
+      category: null,
+      shelf: null,
+    });
   });
 });
 

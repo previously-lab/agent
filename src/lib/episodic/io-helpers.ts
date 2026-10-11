@@ -39,6 +39,7 @@ import {
   deleteFileLocal,
   writeBinaryFileLocal,
   readBinaryFileLocal,
+  fileModifiedDateLocal,
   MAX_BINARY_FILE_SIZE_BYTES,
 } from "@/lib/tools/local-fs";
 import {
@@ -198,6 +199,17 @@ export async function fsReadFile(
     return readFileGitHub(path, repo, owner, opts);
   }
   return readFileLocal(path);
+}
+
+/** The file's last-write date where the backend HAS one — the local
+ *  filesystem's mtime, `YYYY-MM-DD`. The GitHub and demo backends carry no
+ *  mtime, so they answer null and the caller OMITS the line (a dossier's
+ *  letterhead never prints a placeholder for a date it does not have). */
+export async function fsFileModifiedDate(
+  path: string,
+): Promise<string | null> {
+  if (DEMO_MODE || USE_GITHUB) return null;
+  return fileModifiedDateLocal(path).catch(() => null);
 }
 
 export async function fsWriteFile(

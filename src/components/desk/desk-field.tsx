@@ -25,6 +25,17 @@
  * the panel measures itself, the desk reacts), so the panel's open state
  * has no second copy.
  *
+ * THE READER'S CAMERA (v0.25a §一, rule 18). The sheet's size in the world
+ * is FIXED at 210×297mm — zoom and pan are the camera's business, never the
+ * sheet's. Range 0.7×–2×, opening at 1.45× (ruling B: this is a document
+ * reader, it opens readable); `+`/`−` step, `0` resets to the whole page,
+ * drag pans once the zoomed sheet outgrows the viewport (before that the
+ * horizontal swipe still turns pages), ctrl/cmd+wheel — a trackpad pinch
+ * included — zooms while plain wheel keeps turning pages. The state
+ * machine is pure (`lib/timeline3d/desk-camera`): gestures write targets,
+ * the scene damps the current values toward them per frame, and the pan is
+ * clamped every frame so the sheet can never leave the viewport.
+ *
  * PAGINATION (v0.24). One sheet = one PAGE of the document. The markdown
  * flows through CSS multi-column layout inside a fixed-height 版心 (one
  * column per page; `column-fill: auto` packs each column to the page
@@ -77,11 +88,29 @@ import {
   useLocale,
   useMessages,
 } from "next-intl";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
 import { useShell } from "@/components/shell/shell-provider";
 import { useWorldScene } from "@/components/timeline-3d/world-slot";
-import { camZFor, clipPlanesFor } from "@/lib/timeline3d/camera";
+import { camZFor } from "@/lib/timeline3d/camera";
+import {
+  DESK_ZOOM_MAX,
+  DESK_ZOOM_MIN,
+  advanceDeskCamera,
+  clampViewCentre,
+  createDeskCamera,
+  dragPanBy,
+  panBoundsFor,
+  resetDeskCamera,
+  stepZoom,
+  zoomBy,
+  type DeskCameraState,
+} from "@/lib/timeline3d/desk-camera";
 import { ISLAND_BAR, ISLAND_CONTROL } from "@/components/layout/island";
+import {
+  deskZoomAtMax,
+  deskZoomAtMin,
+  formatDeskZoom,
+} from "@/components/desk/desk-zoom";
 import {
   getCaseDoc,
   type CaseDocContent,
@@ -100,15 +129,14 @@ import {
   MarkdownRenderer,
   type DocRefContextValue,
 } from "@/components/chat/markdown";
-import { useShellNav } from "@/components/shell/shell-nav";
-import { compileSpaceRecipe } from "@/lib/game/space-recipe";
-import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   clampPage,
   TURN_MS,
   pageCountLowerBound,
   pageForShellSlot,
   deskPaperModel,
+  mastheadLines,
+  DOSSIER_NAMES,
   SHELL_COUNT,
   shellOffsetForSlot,
   type DeskPaperModel,
@@ -116,7 +144,13 @@ import {
 import "./desk.css";
 
 /** The desk's UI strings, injected from OUTSIDE the Canvas (next-intl
- *  context does not cross the Html portal — see the module header). */
+ *  context does not cross the Html portal — see the module header). Only
+ *  CHROME strings live here (the region, the page control, the not-found
+ *  paper, the transcript's speaker labels); the paper's own furniture —
+ *  the letterhead's category, RECORD, the shelf line, the folio — is fixed
+ *  English and never goes through next-intl (the owner's v0.28 ruling:
+ *  the document's surroundings are not translated; its title and body
+ *  print exactly as stored). */
 export interface DeskTexts {
   /** aria-label of the desk region — carries the Escape affordance. */
   regionLabel: string;
@@ -126,38 +160,23 @@ export interface DeskTexts {
   notFoundHeading: string;
   /** The dead-link paper's body line. */
   notFoundBody(ref: string): string;
-  /** The footer's category name (the shelf's translated category keys). */
-  categoryName(category: string): string;
-  /** The footer's centred folio, the `· 1 ·` form. */
-  page(n: number): string;
   /** aria-label of the page-control's previous-page button. */
   prevPage: string;
   /** aria-label of the page-control's next-page button. */
   nextPage: string;
   /** The page control's readout, `{current} / {total}`. */
   pagePosition(current: number, total: number): string;
+  /** aria-label of the zoom island's zoom-out button. */
+  zoomOut: string;
+  /** aria-label of the zoom island's zoom-in button. */
+  zoomIn: string;
+  /** aria-label of the zoom readout — activating it fits the whole page
+   *  (the visible twin of the `0` key), like the page bar's readout. */
+  zoomReset: string;
   /** The transcript paper's speaker labels (v0.25b §三) — handed to the
    *  record read, which composes the turns' markdown with them. */
   recordUserLabel: string;
   recordAgentLabel: string;
-  /** The record paper's turn count (v0.25b §三) — the transcript read hands
-   *  it through; the first page's masthead source line prints it. */
-  recordTurns(count: number): string;
-  /** The record paper's bare category (v0.27 原稿): the archive's records
-   *  label, printed where a case paper prints its category. */
-  recordCategory: string;
-  /** The record masthead's source line: 切片号 · 轮数 (v0.27 原稿 §4.3). */
-  recordSource(ref: string, turns: string): string;
-  /** A dossier paper's display title + header line (the library's Dossier
-   *  labels — previously / direction). */
-  dossierTitle(name: "previously" | "direction"): string;
-  /** The place line's leading word (v0.25a §五 — the rung's own name:
-   *  现场 / Scene). */
-  sceneName: string;
-  /** The place line's room name: the archetype's localized label. */
-  archetypeName(id: string): string;
-  /** aria-label of the footer's place button (it leaves for the scene). */
-  placeAria: string;
 }
 
 /** The entrance/exit beat, seconds — the pane swap's own 300 ms. */
@@ -266,7 +285,6 @@ export function DeskField({
   leaving?: boolean;
 }) {
   const { closeDesk, openDesk } = useShell();
-  const nav = useShellNav();
   const locale = useLocale();
   const messages = useMessages();
   const { resolvedTheme } = useTheme();
@@ -329,40 +347,32 @@ export function DeskField({
     [docRef, doc],
   );
   // The paper's display title: a record prints NONE (§三 — the transcript's
-  // identity is the header's date + slice id + turn count; the body is the
-  // turns alone); a dossier prints its localized name; a case its own.
+  // identity is the letterhead's clock + shelf lines; the body is the turns
+  // alone); a dossier prints its fixed English name; a case its own.
   const displayTitle =
     model.kind === "record"
       ? ""
       : model.kind === "dossier" && model.dossier
-        ? texts.dossierTitle(model.dossier)
+        ? DOSSIER_NAMES[model.dossier]
         : model.title;
 
-  // ── REFERENCE LINKS + THE PLACE LINE (v0.25a §五) ─────────────────────
+  // ── REFERENCE LINKS (v0.25a §五) ───────────────────────────────────────
   // The candidates ride the SAME grammar the remark plugin renders
   // (ref-tokens.ts), so every span the paper can underline is a span this
-  // batch pre-verified. A record paper's own slice joins the batch — its
-  // door is the place line's first candidate. The map is NOT reset on a
-  // document swap: stale entries go unqueried, and the live links of the
-  // previous paper never flash back to plain text mid-pull-out.
+  // batch pre-verified. The map is NOT reset on a document swap: stale
+  // entries go unqueried, and the live links of the previous paper never
+  // flash back to plain text mid-pull-out.
   const refCandidates = useMemo(
     () => (model.markdown ? extractMarkdownRefs(model.markdown) : []),
     [model.markdown],
-  );
-  const verifyBatch = useMemo(
-    () =>
-      model.kind === "record" && model.caseRef !== null
-        ? [...refCandidates, `records/${model.caseRef}`]
-        : refCandidates,
-    [refCandidates, model.kind, model.caseRef],
   );
   const [refStatus, setRefStatus] = useState<ReadonlyMap<string, VerifiedRef>>(
     () => new Map(),
   );
   useEffect(() => {
-    if (verifyBatch.length === 0) return;
+    if (refCandidates.length === 0) return;
     let live = true;
-    verifyRefs(verifyBatch)
+    verifyRefs(refCandidates)
       .then((verified) => {
         if (live) setRefStatus(new Map(verified.map((v) => [v.ref, v])));
       })
@@ -372,7 +382,7 @@ export function DeskField({
     return () => {
       live = false;
     };
-  }, [verifyBatch]);
+  }, [refCandidates]);
 
   const docRefCtx = useMemo<DocRefContextValue>(
     () => ({
@@ -381,37 +391,6 @@ export function DeskField({
     }),
     [refStatus, openDesk],
   );
-
-  // The place line: the newest ALIVE record candidate still inside the
-  // hotel's door window — (refs:) stamps and, for the record paper, the
-  // slice itself are the only sources. A document whose scene has slid out
-  // of the corridor (or none resolves at all) prints nothing.
-  const place = useMemo(() => {
-    let sliceId: string | null = null;
-    for (const v of refStatus.values()) {
-      if (v.kind !== "record" || !v.alive || !v.door?.inHotelWindow) continue;
-      const id = v.ref.slice("records/".length);
-      if (sliceId === null || id > sliceId) sliceId = id;
-    }
-    if (sliceId === null) return null;
-    const archetype = compileSpaceRecipe(sliceId).archetype;
-    // The calendar half parses BY COMPONENTS (the door label's own ruling —
-    // a bare new Date("YYYY-MM-DD") reads as UTC midnight).
-    const [y, m, d] = sliceId.split("-").map(Number);
-    const day =
-      y && m && d
-        ? dateTimeFormat(locale, { month: "short", day: "numeric" }).format(
-            new Date(y, m - 1, d),
-          )
-        : sliceId.slice(0, 10);
-    return {
-      sliceId,
-      label: `${texts.sceneName} · ${texts.archetypeName(archetype)} · ${day}`,
-    };
-  }, [refStatus, locale, texts]);
-  const goToPlace = useCallback(() => {
-    if (place !== null) nav.standAtSlice(place.sliceId);
-  }, [place, nav]);
 
   // ── PAGING (v0.24) ────────────────────────────────────────────────────
   // The current page is ephemeral reading state: it lives HERE (not in the
@@ -485,14 +464,56 @@ export function DeskField({
   // still be stale and the page would bump twice (observed: 1 → 2 → 3).
   const settledRef = useRef(true);
 
+  // THE READER'S CAMERA (v0.25a §一, rule 18): the sheet's size in the world
+  // is FIXED; zoom (0.7×–2×, opening at 1.45× — ruling B) and pan are the
+  // camera's business. The state machine is pure (lib/timeline3d/desk-camera)
+  // and lives in this ref; gestures write its TARGETS, the scene damps the
+  // current values toward them per frame.
+  const cameraRef = useRef<DeskCameraState>(createDeskCamera());
+
+  // THE ZOOM ISLAND'S MIRROR (v0.28 zoom chrome). The camera is a ref advanced
+  // per frame INSIDE the canvas (below); React sees it only through this
+  // state. The scene reports `{zoom, zoomTarget}` every frame; the mirror
+  // holds the DISPLAY string plus the two range-end flags and re-renders only
+  // when one of them changes, so a settling ease costs a handful of paints,
+  // not 60 fps of setState. The buttons test the TARGET (where the camera is
+  // headed), the readout shows the damped value (what is on screen).
+  const [zoomView, setZoomView] = useState(() => {
+    const cam = cameraRef.current;
+    return {
+      text: formatDeskZoom(cam.zoom),
+      atMin: deskZoomAtMin(cam.zoomTarget),
+      atMax: deskZoomAtMax(cam.zoomTarget),
+    };
+  });
+  const onZoomFrame = useCallback((zoom: number, zoomTarget: number) => {
+    setZoomView((prev) => {
+      const text = formatDeskZoom(zoom);
+      const atMin = deskZoomAtMin(zoomTarget);
+      const atMax = deskZoomAtMax(zoomTarget);
+      if (prev.text === text && prev.atMin === atMin && prev.atMax === atMax) {
+        return prev;
+      }
+      return { text, atMin, atMax };
+    });
+  }, []);
+  const zoomStep = useCallback((dir: 1 | -1) => {
+    cameraRef.current = stepZoom(cameraRef.current, dir);
+  }, []);
+  const zoomReset = useCallback(() => {
+    cameraRef.current = resetDeskCamera(cameraRef.current);
+  }, []);
+
   // A new document restarts at page 1 with no turn in flight — the render-
-  // phase reset (no frame flashes the old document's last page).
+  // phase reset (no frame flashes the old document's last page). The camera
+  // reopens too: every document opens at the readable default, centred.
   const lastDocRef = useRef(docRef);
   if (lastDocRef.current !== docRef) {
     lastDocRef.current = docRef;
     setPage(1);
     setTurn(null);
     settledRef.current = true;
+    cameraRef.current = createDeskCamera();
   }
 
   // The flow's natural height from the hidden single-column measurer. The
@@ -645,11 +666,17 @@ export function DeskField({
   const turnPageRef = useRef(turnPage);
   turnPageRef.current = turnPage;
 
-  // The wheel pages the paper — the 版心 no longer scrolls, so the gesture
-  // is free. Passive (no hijack): the accumulator turns a page at the
-  // threshold and the quiet window eats trackpad momentum.
+  // The wheel's TWO jobs (v0.28 camera). Plain wheel keeps turning pages —
+  // the established gesture: the accumulator turns a page at the threshold
+  // and the quiet window eats trackpad momentum. Ctrl/cmd+wheel — which is
+  // ALSO what a trackpad pinch sends — zooms the camera instead (the lab
+  // recipe's wheel, adapted: multiplicative so pinch's small frequent deltas
+  // and a mouse's ±100 notches both feel right). Only the zoom leg
+  // preventDefaults (keeping the browser's own pinch-zoom out of the fight),
+  // so the listener is non-passive but the page-turn leg stays a pure
+  // observer, exactly as before.
   useEffect(() => {
-    if (!ready || total <= 1) return;
+    if (!ready) return;
     let acc = 0;
     let lastEvent = 0;
     const onWheel = (e: WheelEvent) => {
@@ -658,6 +685,15 @@ export function DeskField({
         acc = 0;
         return;
       }
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        cameraRef.current = zoomBy(
+          cameraRef.current,
+          Math.exp(-e.deltaY * 0.002),
+        );
+        return;
+      }
+      if (total <= 1) return;
       const now = performance.now();
       if (now - lastEvent > WHEEL_QUIET_MS) acc = 0;
       lastEvent = now;
@@ -671,9 +707,26 @@ export function DeskField({
         turnPageRef.current("prev");
       }
     };
-    window.addEventListener("wheel", onWheel, { passive: true });
+    window.addEventListener("wheel", onWheel, { passive: false });
     return () => window.removeEventListener("wheel", onWheel);
   }, [ready, total]);
+
+  /** The camera keys: `+`/`=` and `-` step the zoom (clamped 0.7×–2×), `0`
+   *  resets to the whole page, centred. Returns false for every other key.
+   *  Callers guard modifiers (ctrl/cmd+= is the browser's own zoom) and
+   *  editable targets (a `+` typed into the floating chat is text). */
+  const applyZoomKey = useCallback((key: string): boolean => {
+    if (key === "+" || key === "=") {
+      cameraRef.current = stepZoom(cameraRef.current, 1);
+    } else if (key === "-") {
+      cameraRef.current = stepZoom(cameraRef.current, -1);
+    } else if (key === "0") {
+      cameraRef.current = resetDeskCamera(cameraRef.current);
+    } else {
+      return false;
+    }
+    return true;
+  }, []);
 
   /** The paper's DOM escape hatch — the archive field's own pattern. drei's
    *  Html mounts INSIDE the world canvas's container by default — a z-0
@@ -699,10 +752,11 @@ export function DeskField({
       messages={messages}
       dark={dark}
       camXOffset={effectiveCamX}
+      cameraRef={cameraRef}
+      onZoomFrame={onZoomFrame}
       reducedMotion={reducedMotion}
       exiting={leave}
       docRefCtx={docRefCtx}
-      place={place !== null ? { label: place.label, onGo: goToPlace } : null}
       paging={{
         ready,
         markdown: model.markdown,
@@ -743,9 +797,11 @@ export function DeskField({
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         turnPage("prev");
+      } else if (!(e.ctrlKey || e.metaKey || e.altKey) && applyZoomKey(e.key)) {
+        e.preventDefault();
       }
     },
-    [closeDesk, turnPage],
+    [closeDesk, turnPage, applyZoomKey],
   );
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -753,10 +809,16 @@ export function DeskField({
       if (e.key === "Escape") closeDesk();
       else if (e.key === "ArrowRight") turnPageRef.current("next");
       else if (e.key === "ArrowLeft") turnPageRef.current("prev");
+      else if (!(e.ctrlKey || e.metaKey || e.altKey)) {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest?.('input, textarea, select, [contenteditable="true"]'))
+          return;
+        if (applyZoomKey(e.key)) e.preventDefault();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [closeDesk]);
+  }, [closeDesk, applyZoomKey]);
 
   return (
     <>
@@ -828,6 +890,58 @@ export function DeskField({
           </div>,
           document.body,
         )}
+      {/* THE ZOOM ISLAND (v0.28 zoom chrome) — the reader's camera was
+          gesture-only (`+`/`−`/`0` keys, pinch, ctrl-wheel), and an owner who
+          cannot find the feature is an owner without it. Same floating-island
+          idiom as the page bar, stacked one bar-height + the grid's 4px gap
+          ABOVE it in the bottom-left column (mobile bottom-37 = 108+36+4,
+          desktop bottom-24 = 56+36+4 — the grid-derived seat, not a magic
+          number). The readout is a BUTTON: activating it fits the whole page
+          (the `0` key's visible twin). No aria-live: the damped value changes
+          per frame while a zoom eases, and a polite region would announce the
+          whole interpolation — the static aria-label carries the affordance.
+          Body portal for the same reason as the page bar: the pane caps its
+          branch at z-10, under the world gate. */}
+      {ready &&
+        createPortal(
+          <div
+            data-zoom-controls
+            className="pointer-events-none fixed bottom-37 left-2 z-50 md:bottom-24 md:left-4"
+          >
+            <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
+              <button
+                type="button"
+                data-zoom-out
+                aria-label={texts.zoomOut}
+                disabled={zoomView.atMin}
+                onClick={() => zoomStep(-1)}
+                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
+              >
+                <Minus className="size-4 shrink-0" />
+              </button>
+              <button
+                type="button"
+                data-zoom-readout
+                aria-label={texts.zoomReset}
+                onClick={zoomReset}
+                className={`${ISLAND_CONTROL} min-w-10 px-1 font-mono text-xs tabular-nums`}
+              >
+                {zoomView.text}
+              </button>
+              <button
+                type="button"
+                data-zoom-in
+                aria-label={texts.zoomIn}
+                disabled={zoomView.atMax}
+                onClick={() => zoomStep(1)}
+                className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
+              >
+                <Plus className="size-4 shrink-0" />
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -870,10 +984,11 @@ function DeskScene({
   messages,
   dark,
   camXOffset,
+  cameraRef,
+  onZoomFrame,
   reducedMotion,
   exiting,
   docRefCtx,
-  place,
   paging,
 }: {
   model: DeskPaperModel;
@@ -884,56 +999,55 @@ function DeskScene({
   messages: ReturnType<typeof useMessages>;
   dark: boolean;
   camXOffset: number;
+  /** The reader's camera state (rule 18) — owned by the field above, where
+   *  the key/wheel gestures live; the scene writes its current values per
+   *  frame and reads the sheet's measured size for the pan bounds. */
+  cameraRef: RefObject<DeskCameraState>;
+  /** The zoom island's mirror hook (v0.28 zoom chrome) — the scene reports
+   *  the freshly damped `{zoom, zoomTarget}` each frame; the field guards on
+   *  the display string, so the callback is cheap to fire every frame. */
+  onZoomFrame: (zoom: number, zoomTarget: number) => void;
   reducedMotion: boolean;
   exiting: boolean;
   /** The reference-link context (v0.25a §五) — arrives as a PROP because the
    *  paper renders in the Html portal's own React root, where the field's
    *  context stops. Re-provided around the flow below. */
   docRefCtx: DocRefContextValue;
-  /** The footer's place line, null when no (refs:) stamp resolves to a door
-   *  still on the corridor. `onGo` stands the reader at that slice's room —
-   *  the paper stays open on the desk for the way back. */
-  place: { label: string; onGo: () => void } | null;
   paging: PagingProps;
 }) {
   const size = useThree((s) => s.size);
   const camera = useThree((s) => s.camera);
 
-  // The bare category (v0.27 原稿): the masthead's data line and the
-  // footer's right slot print the SAME value — a case's translated
-  // category, the record paper's 记录, nothing for a dossier/legacy paper.
-  const categoryLabel =
-    model.kind === "record"
-      ? texts.recordCategory
-      : model.category
-        ? texts.categoryName(model.category)
-        : "";
-  // The first page's source line: only the record paper prints one — the
-  // slice id + the turn count that used to ride the footer (§4.3).
-  const recordSourceLine =
-    model.kind === "record" &&
-    model.caseRef !== null &&
-    model.turnCount !== null
-      ? texts.recordSource(model.caseRef, texts.recordTurns(model.turnCount))
-      : null;
+  // The letterhead (v0.28): `Previously` over the model's three derived
+  // lines — clock, bare category, shelf — each omitted when its data does
+  // not exist. Fixed English, one ink; the paper's furniture is not
+  // translated.
+  const head = mastheadLines(model);
 
   // The clip planes follow the viewport because the camera DISTANCE does
-  // (camera.ts) — the same correction FieldScene applies, before paint.
+  // (camera.ts) — the same correction FieldScene applies, before paint. The
+  // desk computes its own pair instead of sharing `clipPlanesFor`: the
+  // reader's camera sits at camZ/zoom, so `near` must bracket the CLOSEST it
+  // ever gets (camZ/2 at the 2× end — the shared function would put `near`
+  // exactly on the sheet).
   useLayoutEffect(() => {
     if (!(camera instanceof THREE.PerspectiveCamera)) return;
-    const { near, far } = clipPlanesFor(size.height);
-    camera.near = near;
-    camera.far = far;
+    const camZ = camZFor(size.height);
+    camera.near = camZ / (2 * DESK_ZOOM_MAX);
+    camera.far = camZ * 2;
     camera.updateProjectionMatrix();
   }, [camera, size.height]);
 
   // The tabletop: one big plane behind the paper, sized to cover the view
   // at its depth (a plane d behind the focal plane renders camZ/(camZ+d)
-  // of its size). Parallel to the sheet, never turned.
+  // of its size). Parallel to the sheet, never turned. The cover is sized
+  // for the FURTHEST the reader's camera ever sits — zoomed out at 0.7× the
+  // visible window is 1/0.7× wider than the derived camera's, and the old
+  // 1.12 margin no longer reached the corners.
   const table = useMemo(() => {
     const camZ = camZFor(size.height);
     const d = camZ * 0.22;
-    const grow = ((camZ + d) / camZ) * 1.12;
+    const grow = ((camZ / DESK_ZOOM_MIN + d) / camZ) * 1.12;
     return { d, w: size.width * grow, h: size.height * grow };
   }, [size.width, size.height]);
 
@@ -944,6 +1058,28 @@ function DeskScene({
   // The give-way pan's in-flight x (v0.25 R1-A) — starts AT the prop so a
   // desk mounted under an already-open panel never pans on entrance.
   const camXAnimRef = useRef(camXOffset);
+
+  // The sheet's size in WORLD units — measured off the top paper's layout
+  // box (offsetWidth/offsetHeight ignore the Html transform's zoom scale,
+  // so this is the fixed 210×297mm object, not its on-screen size). The pan
+  // bounds derive from it. Callback ref + observer, the pagebox's pattern;
+  // a zero box (a blanked shell mid-turn) keeps the previous truth.
+  const paperSizeRef = useRef({ w: 0, h: 0 });
+  const paperRORef = useRef<ResizeObserver | null>(null);
+  const attachPaperRef = useCallback((el: HTMLDivElement | null) => {
+    paperRORef.current?.disconnect();
+    paperRORef.current = null;
+    if (!el) return;
+    const measure = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (w > 0 && h > 0) paperSizeRef.current = { w, h };
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    paperRORef.current = ro;
+  }, []);
 
   // THE SWAP RE-PLAYS THE PULL-OUT (v0.23): the reader stays mounted while
   // `docRef` changes (picking another document in the library), and the
@@ -983,9 +1119,35 @@ function DeskScene({
       if (Math.abs(camX - camXOffset) < 0.5) camX = camXOffset;
     }
     camXAnimRef.current = camX;
-    const camZ = camZFor(size.height);
-    camera.position.set(camX, 0, camZ);
-    camera.lookAt(camX, 0, 0);
+
+    // THE READER'S CAMERA (rule 18): the sheet never changes size — the
+    // camera divides its derived distance by the zoom (1.45× opens readable,
+    // 1.0× is the whole page) and shifts parallel by the user pan, ADDED to
+    // the give-way x. Gestures wrote the targets; here the pan target is
+    // first re-clamped against the sheet's measured bounds (the give-way
+    // shift counts toward the centre, so a panel-open desk can't be panned
+    // off the paper either), then both values damp toward their targets —
+    // reduced motion snaps.
+    const cam = cameraRef.current;
+    const paper = paperSizeRef.current;
+    const bounds = panBoundsFor(
+      paper.w,
+      paper.h,
+      size.width,
+      size.height,
+      cam.zoomTarget,
+    );
+    const centre = clampViewCentre(
+      { x: camX + cam.panTarget.x, y: cam.panTarget.y },
+      bounds,
+    );
+    cam.panTarget = { x: centre.x - camX, y: centre.y };
+    const next = advanceDeskCamera(cam, dt, reducedMotion);
+    cameraRef.current = next;
+    onZoomFrame(next.zoom, next.zoomTarget);
+    const camZ = camZFor(size.height) / next.zoom;
+    camera.position.set(camX + next.pan.x, next.pan.y, camZ);
+    camera.lookAt(camX + next.pan.x, next.pan.y, 0);
 
     const group = groupRef.current;
     if (group) {
@@ -1038,17 +1200,60 @@ function DeskScene({
     [onTravelEnd],
   );
 
-  // The horizontal swipe: a page turn is a flick across the paper. Nothing
-  // is preventDefaulted — there is no scroll to fight.
-  const swipeRef = useRef<{ x: number; y: number; id: number } | null>(null);
+  // Drag on the paper: PAN when the zoomed sheet outgrows the viewport
+  // (grab-the-paper feel; the camera state machine owns the math), the
+  // horizontal SWIPE stays a page turn while the whole page fits (pan
+  // bounds are zero there, so the two gestures never fight). A drag that
+  // panned is never a page turn. Nothing is preventDefaulted — text
+  // selection and dblclick behave exactly as before.
+  const dragRef = useRef<{
+    x: number;
+    y: number;
+    id: number;
+    panned: boolean;
+  } | null>(null);
   const onStackPointerDown = useCallback((e: ReactPointerEvent) => {
-    swipeRef.current = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    dragRef.current = { x: e.clientX, y: e.clientY, id: e.pointerId, panned: false };
   }, []);
+  const onStackPointerMove = useCallback(
+    (e: ReactPointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.id !== e.pointerId) return;
+      const cam = cameraRef.current;
+      const paper = paperSizeRef.current;
+      const bounds = panBoundsFor(
+        paper.w,
+        paper.h,
+        size.width,
+        size.height,
+        cam.zoomTarget,
+      );
+      if (bounds.x <= 0 && bounds.y <= 0) return; // whole page: swipe only
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      // A few px of slack so a click or a double-click never becomes a pan.
+      if (!drag.panned && Math.hypot(dx, dy) < 3) return;
+      if (!drag.panned) {
+        drag.panned = true;
+        e.currentTarget.setPointerCapture(e.pointerId);
+      }
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      cameraRef.current = dragPanBy(cam, dx, dy);
+    },
+    [cameraRef, size.width, size.height],
+  );
   const onStackPointerUp = useCallback(
     (e: ReactPointerEvent) => {
-      const start = swipeRef.current;
-      swipeRef.current = null;
+      const start = dragRef.current;
+      dragRef.current = null;
       if (!start || start.id !== e.pointerId) return;
+      if (start.panned) {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+        return; // a pan is never a page turn
+      }
       const dx = e.clientX - start.x;
       const dy = e.clientY - start.y;
       if (
@@ -1061,7 +1266,7 @@ function DeskScene({
     [onTurn],
   );
   const onStackPointerCancel = useCallback(() => {
-    swipeRef.current = null;
+    dragRef.current = null;
   }, []);
 
   // The flow — one full copy of the document per content shell, translated
@@ -1103,9 +1308,13 @@ function DeskScene({
           ref={tableMatRef}
           // A tone step off the field's backdrop — the sheet separates by
           // its contact shadow, not by a bright slab. GL colours are hex
-          // literals (the CSS tokens don't reach here), pinned to the
-          // paper's cool hue family; both themes are an acceptance point.
-          color={dark ? 0x23242b : 0xd8dae3}
+          // literals (the CSS tokens don't reach here — no scene reads
+          // computed custom properties), so the light value is pinned to
+          // the warm field's hue family: oklch(0.794 0.011 88), the same
+          // ΔL ≈ 0.11 the old cool step had under the white field. Dark is
+          // untouched (the board ruling was light-only). Both themes are
+          // an acceptance point.
+          color={dark ? 0x23242b : 0xbfbcb4}
           roughness={0.95}
           metalness={0}
           transparent
@@ -1132,6 +1341,7 @@ function DeskScene({
             className="desk-stack"
             onAnimationEnd={onStackAnimationEnd}
             onPointerDown={onStackPointerDown}
+            onPointerMove={onStackPointerMove}
             onPointerUp={onStackPointerUp}
             onPointerCancel={onStackPointerCancel}
           >
@@ -1202,45 +1412,39 @@ function DeskScene({
                   <div
                     className="desk-paper bg-paper bg-paper-grain-card shadow-paper-contact text-card-foreground"
                     data-locale={locale}
+                    ref={isTop ? attachPaperRef : undefined}
                   >
                     {shellPage === null ? (
                       // Blank paper: the stack's peek, nothing printed.
                       <div className="desk-face" aria-hidden="true" />
                     ) : (
                       <div className="desk-face">
-                        {/* The head is page-aware (v0.27 原稿 §4.3): the
-                            FIRST page opens with the masthead — the wordmark
-                            and the file's identity (时间 · 位置 · 裸分类,
-                            then the record paper's source line); every page
-                            after it carries only the running line. The head
-                            lives on the physical shell, so shellPage drives
-                            the swap — the paging mechanism is untouched. */}
+                        {/* The head is page-aware (v0.27 原稿 §4.3, v0.28
+                            letterhead): the FIRST page opens with the
+                            letterhead — the wordmark over the file's three
+                            identity lines (clock · bare category · shelf,
+                            each omitted when its data does not exist);
+                            every page after it carries only the running
+                            line. The head lives on the physical shell, so
+                            shellPage drives the swap — the paging mechanism
+                            is untouched. */}
                         {shellPage === 1 ? (
                           <header className="desk-masthead">
                             <p className="desk-wordmark">Previously</p>
-                            <div
-                              className="desk-masthead-rule"
-                              aria-hidden="true"
-                            />
                             <div className="desk-masthead-info">
-                              <div className="desk-masthead-row">
+                              {head.clock !== null && (
                                 <span className="desk-masthead-time">
-                                  {model.date}
+                                  {head.clock}
                                 </span>
-                                {place !== null && (
-                                  <span className="desk-masthead-place">
-                                    {place.label}
-                                  </span>
-                                )}
-                                {categoryLabel !== "" && (
-                                  <span className="desk-masthead-cat">
-                                    {categoryLabel}
-                                  </span>
-                                )}
-                              </div>
-                              {recordSourceLine !== null && (
+                              )}
+                              {head.category !== null && (
+                                <span className="desk-masthead-cat">
+                                  {head.category}
+                                </span>
+                              )}
+                              {head.shelf !== null && (
                                 <span className="desk-masthead-line">
-                                  {recordSourceLine}
+                                  {head.shelf}
                                 </span>
                               )}
                             </div>
@@ -1248,12 +1452,12 @@ function DeskScene({
                         ) : (
                           <header className="desk-runhead">
                             <span className="desk-runhead-ref">
-                              {/* The dossier's line is its localized name (no
-                                  case ref); a record's is the slice id (set
-                                  as caseRef by the model); a case's its
+                              {/* The dossier's line is its fixed English name
+                                  (no case ref); a record's is the slice id
+                                  (set as caseRef by the model); a case's its
                                   ref. */}
                               {model.kind === "dossier" && model.dossier
-                                ? texts.dossierTitle(model.dossier)
+                                ? DOSSIER_NAMES[model.dossier]
                                 : (model.caseRef ?? model.title)}
                             </span>
                             <span className="desk-runhead-time">
@@ -1308,35 +1512,13 @@ function DeskScene({
                           </div>
                         </div>
 
-                        <footer className="desk-foot flex items-baseline">
-                          <span className="flex-1 truncate text-left">
-                            {/* The place line (v0.25a §五): when the paper's
-                                (refs:) resolve to a door on the corridor, the
-                                footer's left slot prints the scene's name —
-                                a click stands the reader at that room; the
-                                paper stays on the desk for the way back. */}
-                            {place !== null && (
-                              <button
-                                type="button"
-                                className="desk-place"
-                                data-desk-place
-                                aria-label={texts.placeAria}
-                                onClick={place.onGo}
-                              >
-                                {place.label}
-                              </button>
-                            )}
-                          </span>
+                        <footer className="desk-foot">
+                          {/* The folio alone (v0.28): the hotel left the
+                              paper — no place line — and the category moved
+                              up into the letterhead, so the footer carries
+                              only the page number, centred, fixed form. */}
                           <span className="tabular-nums">
-                            {texts.page(shellPage)}
-                          </span>
-                          <span className="desk-foot-cat flex-1 truncate text-right">
-                            {/* The bare category (v0.27 原稿 §4.3): a case
-                                prints its translated category, a record
-                                prints 记录 (its turn count moved to the
-                                first page's source line), a dossier prints
-                                nothing. */}
-                            {categoryLabel}
+                            · {shellPage} ·
                           </span>
                         </footer>
                       </div>

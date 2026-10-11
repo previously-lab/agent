@@ -8,17 +8,15 @@ import {
 } from "./memory-fixture";
 
 /**
- * In-paper reference links + the scene line + the room's loose papers
- * (v0.25a §五):
+ * In-paper reference links + the room's loose papers (v0.25a §五):
  *
  * LINKS — a case document's candidate references print as links once the
  * server verify pass finds them alive (a click swaps the desk's paper); a
  * dead reference stays visible as a dashed-underline span, never a button.
  *
- * STAMP + PLACE LINE — a `(refs: <sliceId>)` stamp links to the record
- * paper, and the footer prints the scene line (Scene · room · day) while
- * the slice's door is still on the corridor; clicking it stands the reader
- * at the room (the game world comes up, the paper stays open).
+ * STAMP — a `(refs: <sliceId>)` stamp links to the record paper. (The
+ * footer's scene line is GONE since v0.28: the hotel left the paper — the
+ * room belongs to the scene viewer, never to the document.)
  *
  * ROOM PAPERS — the slice's room carries its own record sheet plus the
  * documents that stamped it, flat on the floor; walking up (teleport — the
@@ -123,7 +121,7 @@ test.describe("In-paper reference links", () => {
     ).toBeVisible({ timeout: 30_000 });
   });
 
-  test("the (refs:) stamp links to the record paper and the footer's scene line walks to the room", async ({
+  test("the (refs:) stamp links to the record paper", async ({
     page,
   }) => {
     const { sliceId } = await openSourceCase(page);
@@ -137,15 +135,9 @@ test.describe("In-paper reference links", () => {
       page.getByText("TURN SCN user question", { exact: false }).first(),
     ).toBeVisible({ timeout: 30_000 });
 
-    // The scene line prints in the footer (Scene · room · day) while the
-    // slice's door is on the corridor; clicking it brings the game world up.
-    const place = page.locator("[data-desk-place]");
-    await expect(place.first()).toBeVisible({ timeout: 30_000 });
-    await expect(place.first()).toContainText("Scene ·");
-    await place.first().click();
-    await expect(
-      page.getByRole("button", { name: "Exit", exact: true }),
-    ).toBeVisible({ timeout: 60_000 });
+    // The hotel left the paper (v0.28): no scene line prints anywhere on
+    // the sheet — the room belongs to the scene viewer, not the document.
+    await expect(page.locator("[data-desk-place]")).toHaveCount(0);
   });
 
   test("the room carries its papers and a sheet opens in the manuscript", async ({

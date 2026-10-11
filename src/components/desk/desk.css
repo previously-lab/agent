@@ -171,13 +171,13 @@
   overflow: hidden;
 }
 
-/* ── THE FIRST-PAGE MASTHEAD (v0.27 原稿, ported from lab archive-paper.css
-   with --desk-mm): the wordmark in the heaviest ink on the sheet, a heavy
-   rule, then the one row of functional data (时间 · 位置 · 分类, written
-   bare) with the descriptive source line set smaller beneath it. The
-   hairline at the bottom brackets the data block into a BAND with the
-   masthead's own heavy rule. Nothing is faded — print does not grey its own
-   letterhead; the hierarchy is made by WEIGHT, size and tracking. ─────── */
+/* ── THE FIRST-PAGE LETTERHEAD (v0.28): the wordmark in the heaviest ink on
+   the sheet, then the file's identity as THREE tight monospace lines — the
+   clock (700, tabular), the bare category (700, tracked, uppercased
+   English), and the shelf line (regular, smaller, tracked). No heavy rule,
+   no faded register: print does not grey its own letterhead; the hierarchy
+   is made by WEIGHT, size and tracking. A line whose data does not exist is
+   omitted from the block. ─────────────────────────────────────────────── */
 .desk-masthead {
   margin: calc(var(--desk-mm) * 12) calc(var(--desk-mm) * 25) 0;
   padding-bottom: calc(var(--desk-mm) * 2);
@@ -197,12 +197,6 @@
   letter-spacing: -0.025em;
 }
 
-.desk-masthead-rule {
-  height: calc(var(--desk-mm) * 0.5);
-  margin-top: calc(var(--desk-mm) * 1);
-  background: var(--color-foreground);
-}
-
 .desk-masthead-info {
   display: flex;
   flex-direction: column;
@@ -212,27 +206,10 @@
   line-height: 1.4;
 }
 
-/* One line, three values: 时间 · 位置 · 分类. The place absorbs the slack
-   so the category sits at the right edge. */
-.desk-masthead-row {
-  display: flex;
-  align-items: baseline;
-  gap: calc(var(--desk-mm) * 5);
-}
-
 .desk-masthead-time {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.desk-masthead-place {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  letter-spacing: 0.03em;
 }
 
 .desk-masthead-cat {
@@ -241,7 +218,7 @@
   white-space: nowrap;
 }
 
-/* The descriptive register under the data row — regular, smaller, tracked. */
+/* The shelf register under the category — regular, smaller, tracked. */
 .desk-masthead-line {
   font-size: calc(var(--desk-mm) * 2.6);
   letter-spacing: 0.06em;
@@ -367,10 +344,14 @@
   line-height: 1.8;
 }
 
-/* ── Footer (页脚): mono smaller line, centred folio, category
-   bottom-right, one hairline above. Sits inside the bottom print margin.
+/* ── Footer (页脚): one hairline above, the centred folio alone (v0.28 —
+   the place line left the paper and the category moved up into the
+   letterhead). Sits inside the bottom print margin.
    ───────────────────────────────────────────────────────────────────── */
 .desk-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
   margin: 0 calc(var(--desk-mm) * 25) calc(var(--desk-mm) * 10);
   padding-top: calc(var(--desk-mm) * 2);
   border-top: 1px solid var(--paper-line);
@@ -379,13 +360,6 @@
   line-height: 1.6;
   letter-spacing: 0.14em;
   color: var(--color-foreground);
-}
-
-/* The footer's right slot: the bare category (调研, never 分类: 调研) —
-   the same weight + tracking the masthead's category wears. */
-.desk-foot-cat {
-  font-weight: 700;
-  letter-spacing: 0.22em;
 }
 
 /* ── The markdown body, re-rhythmmed for print (§10's grammar, print scale) */
@@ -520,8 +494,7 @@
    (underline on the paper's own line tone); hovering inks the rule in. A
    DEAD reference keeps the span: a dashed fine rule, visible but no door.
    ───────────────────────────────────────────────────────────────────── */
-.doc-ref,
-.desk-place {
+.doc-ref {
   appearance: none;
   display: inline;
   margin: 0;
@@ -540,14 +513,11 @@
 }
 
 .doc-ref:hover,
-.doc-ref:focus-visible,
-.desk-place:hover,
-.desk-place:focus-visible {
+.doc-ref:focus-visible {
   text-decoration-color: currentColor;
 }
 
-.doc-ref:focus-visible,
-.desk-place:focus-visible {
+.doc-ref:focus-visible {
   outline: 1px solid currentColor;
   outline-offset: calc(var(--desk-mm) * 0.6);
 }
