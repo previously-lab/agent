@@ -66,9 +66,12 @@ import {
   transitionPhase,
   WORLD_TRANSITION,
   WORLD_TRANSITION_MS,
+  WORLD_TRANSITION_PAUSE_MS,
   WORLD_TRANSITION_REDUCED_MS,
+  type WorldTransitionMode,
   type WorldTransitionPhase,
 } from "@/lib/timeline3d/world-transition";
+import { GAME_SIM_FREEZE } from "@/components/game/sim-freeze";
 import { getTimelineCatalogPage } from "@/lib/episodic/actions";
 import { getCaseDoc, getSliceStart } from "@/lib/episodic/actions";
 import { getDossierDoc } from "@/lib/archive/actions";
@@ -89,8 +92,10 @@ import {
   ArchiveField,
   invalidateArchiveField,
 } from "@/components/archive/archive-field";
+import { RecordSwitch } from "@/components/archive/record-switch";
 import type { FieldRig } from "@/components/timeline-3d/field-rig";
 import { LibraryControl } from "@/components/shelf/library-control";
+import { WorldBlur } from "@/components/shell/world-blur";
 import type { WorldKind } from "@/components/timeline-3d/world-contract";
 
 // THE CANVAS AND THE GAME LOAD AS THEIR OWN CHUNKS (§13.2): the shared
@@ -129,6 +134,12 @@ export function AppShell() {
   // The demo persona rides the dev-only URL, exactly like `?view=game` —
   // read once at mount, forwarded to the library column's server actions.
   const persona = searchParams.get("persona") ?? undefined;
+  // THE IN-PLACE COMPARISON SWITCH (v0.28 step 1): `?dissolve=1` forces the
+  // old scripted dissolve for game ⇄ field moves — a debug flag read ONCE
+  // at mount (the URL is dev-only), never product UI. Without it, leaving
+  // the hotel for the documents is the Control-style pause: the world
+  // freezes under a blur layer and stays mounted behind the document tier.
+  const [dissolveDebug] = useState(() => searchParams.get("dissolve") === "1");
   const [settledView, setSettledView] = useState<WorldKind>(() =>
     searchParams.get("view") === "game" ? "game" : "field",
   );
@@ -168,11 +179,21 @@ export function AppShell() {
     to: WorldKind;
     sliceId: string | null;
     phase: WorldTransitionPhase;
+    mode: WorldTransitionMode;
   } | null>(null);
+  // THE DOCUMENT PAUSE'S STEADY STATE (v0.28 step 1): a pause-mode move
+  // into the field ends HERE instead of unmounting the game — the hotel
+  // stays mounted behind the document tier, simulation frozen
+  // (GAME_SIM_FREEZE), the blur layer up, the canvas showing the frozen
+  // frame. Leaving for the hotel from this state is a RESUME: no scripted
+  // shot, because the camera never moved.
+  const [gameSuspended, setGameSuspended] = useState(false);
   const view: WorldKind = settledView;
   const mountedWorlds: readonly WorldKind[] = transition
     ? [transition.from, transition.to]
-    : [settledView];
+    : gameSuspended
+      ? ["game", "field"]
+      : [settledView];
   const transitionActive = transition !== null;
   const reducedMotion = useReducedMotion() ?? false;
 
@@ -204,7 +225,11 @@ export function AppShell() {
     to: WorldKind;
     sliceId: string | null;
     phase: WorldTransitionPhase;
+    mode: WorldTransitionMode;
   } | null>(null);
+  /** The suspension state's synchronous mirror for the mode pick (the same
+   *  outrun-the-render-pipeline reason as getCursor below). */
+  const gameSuspendedRef = useRef(false);
   /** THE "WHERE WAS I" MEMORY (v0.13 §6): the cursor's value when the reader
    *  last LEFT the world for the reader — written in startMove on every
    *  game → field move. The world gate's 回到原来的房间 is the one return
@@ -232,14 +257,32 @@ export function AppShell() {
   }, []);
 
   const startMove = useCallback(
-    (from: WorldKind, to: WorldKind, sliceId: string | null) => {
+    (
+      from: WorldKind,
+      to: WorldKind,
+      sliceId: string | null,
+      mode: WorldTransitionMode,
+    ) => {
       const wt = WORLD_TRANSITION;
       wt.active = true;
       wt.id += 1;
       wt.from = from;
       wt.to = to;
+      wt.mode = mode;
       wt.progress = 0;
       wt.reducedMotion = reducedMotionRef.current;
+      if (mode === "pause") {
+        // The world stops as the beat begins. INTO the documents it stays
+        // frozen at settle (the steady state); back INTO the hotel the
+        // clock's finish() unfreezes it once the blur has lifted.
+        GAME_SIM_FREEZE.frozen = true;
+        if (to === "game") {
+          // The resume beat starts now: the blur lifts over a still-frozen
+          // world while the field's chrome plays its exit above it.
+          gameSuspendedRef.current = false;
+          setGameSuspended(false);
+        }
+      }
       if (from === "game") {
         // THE "WHERE WAS I" MEMORY (v0.13 §6): leaving the world remembers
         // the cursor as it stands — walking has been keeping it current, so
@@ -255,6 +298,7 @@ export function AppShell() {
         to,
         sliceId,
         phase: "camera" as WorldTransitionPhase,
+        mode,
       };
       transitionRef.current = t;
       setTransition(t);
@@ -269,19 +313,32 @@ export function AppShell() {
         // A move is already running. The same destination is a no-op (the
         // live move lands there — repeated Enter, Exit pressed twice).
         // The OTHER world is a REVERSAL mid-flight: the live move's
-        // destination becomes the departure world and the dissolve simply
-        // crosses back (Escape/Exit pressed while the hotel mounts). The
+        // destination becomes the departure world and the move simply
+        // crosses back (Escape/Exit pressed while the hotel mounts) — and
+        // it keeps the live move's MECHANISM: it is the same two worlds
+        // crossing back, so a pause move reverses as a pause. The
         // outgoing clock's cleanup will call settleMove with the stale id
         // and no-op — the gate stays live for the new move.
         if (live.to === to) return;
-        startMove(live.to, to, sliceId);
+        startMove(live.to, to, sliceId, live.mode);
         return;
       }
       const from = settledRef.current;
       if (from === to) return;
-      startMove(from, to, sliceId);
+      // THE MODE PICK (v0.28 step 1): leaving the hotel for the documents
+      // is always the pause (the world stays mounted behind them); coming
+      // back is a RESUME only when the hotel is actually still mounted
+      // (gameSuspended) — a cold field → hotel entry keeps the scripted
+      // dissolve. `?dissolve=1` forces the dissolve everywhere.
+      const mode: WorldTransitionMode =
+        !dissolveDebug &&
+        ((from === "game" && to === "field") ||
+          (from === "field" && to === "game" && gameSuspendedRef.current))
+          ? "pause"
+          : "dissolve";
+      startMove(from, to, sliceId, mode);
     },
-    [startMove],
+    [startMove, dissolveDebug],
   );
 
   /** Ask the world to switch rungs — the board bar's two tags and the ⌘/.
@@ -368,11 +425,14 @@ export function AppShell() {
   const transitionFrom = transition?.from;
   const transitionTo = transition?.to;
   const transitionSlice = transition?.sliceId;
+  const transitionMode = transition?.mode;
   useEffect(() => {
     if (transitionFrom === undefined || transitionTo === undefined) return;
     const duration = WORLD_TRANSITION.reducedMotion
       ? WORLD_TRANSITION_REDUCED_MS
-      : WORLD_TRANSITION_MS;
+      : WORLD_TRANSITION.mode === "pause"
+        ? WORLD_TRANSITION_PAUSE_MS
+        : WORLD_TRANSITION_MS;
     const started = performance.now();
     // The move this clock owns: settleMove(id) clears the input gate only
     // when the singleton's id still matches, so a reversal/interrupt that
@@ -385,6 +445,19 @@ export function AppShell() {
       if (cancelled) return;
       cancelled = true;
       settleMove(moveId);
+      if (transitionMode === "pause") {
+        if (transitionTo === "field") {
+          // THE PAUSE'S STEADY STATE: the game does NOT unmount — it stays
+          // mounted behind the document tier, frozen, under the blur layer.
+          gameSuspendedRef.current = true;
+          setGameSuspended(true);
+        } else {
+          // The resume's end: the blur has lifted — the world runs again.
+          gameSuspendedRef.current = false;
+          setGameSuspended(false);
+          GAME_SIM_FREEZE.frozen = false;
+        }
+      }
       setSettledView(transitionTo);
       setTransition(null);
     };
@@ -427,7 +500,15 @@ export function AppShell() {
       cancelAnimationFrame(raf);
       settleMove(moveId);
     };
-  }, [transitionFrom, transitionTo, transitionSlice, worldFrozen, settleMove]);
+  }, [transitionFrom, transitionTo, transitionSlice, transitionMode, worldFrozen, settleMove]);
+
+  // The freeze flag is module state: a route change that unmounts this shell
+  // mid-pause must not leave the hotel frozen for its next mount.
+  useEffect(() => {
+    return () => {
+      GAME_SIM_FREEZE.frozen = false;
+    };
+  }, []);
 
   // Escape in the game world: panel first (anything open folds to the pill),
   // then the view itself (back to the reader, through the transition). The
@@ -516,43 +597,28 @@ export function AppShell() {
   const tCompanion = useTranslations("companion");
   const tGame = useTranslations("game");
   // The desk's injected strings (v0.22): the Html portal is a separate React
-  // root, so the paper's chrome strings go in as props (FrameCardTexts
-  // pattern). The footer's category name and the reader's chrome read the
-  // library namespace — the category table's one home since v0.23.
+  // root, so the paper's CHROME strings go in as props (FrameCardTexts
+  // pattern). The paper's own furniture — letterhead category, shelf line,
+  // folio — is fixed English and never passes through here (v0.28).
   const tDesk = useTranslations("desk");
-  const tLibrary = useTranslations("library");
-  const tRungs = useTranslations("rungs");
-  const tArchive = useTranslations("archiveField");
   const deskTexts = useMemo<DeskTexts>(
     () => ({
       regionLabel: tDesk("regionLabel"),
       loading: tDesk("loading"),
       notFoundHeading: tDesk("notFoundHeading"),
       notFoundBody: (ref) => tDesk("notFoundBody", { ref }),
-      categoryName: (category) => tLibrary(`category.${category}`),
-      page: (n) => tDesk("page", { n }),
       prevPage: tDesk("prevPage"),
       nextPage: tDesk("nextPage"),
       pagePosition: (current, total) => tDesk("pagePosition", { current, total }),
-      // The record paper's strings (v0.25b §三): the transcript's speaker
-      // labels ride INTO the record read (the markdown composes server-side
-      // with them), the turn count prints in the footer.
+      zoomOut: tDesk("zoomOut"),
+      zoomIn: tDesk("zoomIn"),
+      zoomReset: tDesk("zoomReset"),
+      // The record paper's speaker labels (v0.25b §三) ride INTO the record
+      // read — the transcript's markdown composes server-side with them.
       recordUserLabel: tDesk("recordUser"),
       recordAgentLabel: tDesk("recordAgent"),
-      recordTurns: (count) => tDesk("recordTurns", { count }),
-      // The v0.27 masthead: the record paper's bare category is the
-      // archive's own records label; its source line prints the slice id
-      // and the turn count the footer used to carry.
-      recordCategory: tArchive("recordsLabel"),
-      recordSource: (ref, turns) => tDesk("recordSource", { ref, turns }),
-      dossierTitle: (name) => tLibrary(`dossier.${name}`),
-      // The place line (v0.25a §五): the rung's own name leads, then the
-      // room's archetype label (desk.archetype.*) and the slice's day.
-      sceneName: tRungs("scene"),
-      archetypeName: (id) => tDesk(`archetype.${id}`),
-      placeAria: tDesk("placeAria"),
     }),
-    [tDesk, tLibrary, tRungs, tArchive],
+    [tDesk],
   );
   const [evolution, setEvolution] = useState(EVOLUTION_PRESENCE_IDLE);
   const evolutionToastDedupe = useRef(new EvolutionToastDedupe());
@@ -815,14 +881,27 @@ export function AppShell() {
 
   // The field world's DOM layer (the board bar, the library, the desk, the
   // floating chrome) rides the move's phase: as the DESTINATION it arrives
-  // with the dissolve — it never sits over the hotel during the camera beat;
-  // as the SOURCE it stays up until completion, so the reader watches the
-  // field fade through the compositor, not the DOM.
+  // with the dissolve — it never sits over the hotel during the camera beat
+  // (a PAUSE move has no camera beat: the chrome arrives with the blur, at
+  // the move's start); as the SOURCE it stays up until completion, so the
+  // reader watches the field fade through the compositor, not the DOM.
   const fieldChrome = transition
     ? transition.to === "field"
-      ? transition.phase !== "camera"
+      ? transition.mode === "pause" || transition.phase !== "camera"
       : true
     : settledView === "field";
+
+  // THE PAUSE VEIL (v0.28 step 1): the blur layer is up for the whole
+  // suspended steady state and fades in with every pause-mode move into the
+  // documents; a resume (pause mode, destination the hotel) starts with it
+  // mounted and lets the fade run OUT over the beat.
+  const blurMounted =
+    gameSuspended || (transition !== null && transition.mode === "pause");
+  const blurLive =
+    gameSuspended ||
+    (transition !== null &&
+      transition.mode === "pause" &&
+      transition.to === "field");
 
   return (
     // The world-slot provider must sit ABOVE both the canvas and the worlds'
@@ -834,13 +913,32 @@ export function AppShell() {
       {/* The floating chrome (app-header) is a FIELD-world fixture; the game
           keeps only its own overlay. Hidden with a style tag because the
           header itself is not this file's to change. Hidden from the start
-          of a move INTO the hotel, shown from the start of a move OUT. */}
-      {mountedWorlds.includes("game") && (
+          of a move INTO the hotel, shown from the start of a move OUT —
+          which is also why a suspended hotel (mounted behind the documents)
+          never hides it. */}
+      {(transition ? transition.to === "game" : settledView === "game") && (
         <style>{`[data-app-header]{display:none}`}</style>
+      )}
+      {/* THE FIELD BACKDROP (v0.28, board A) — the warm desk surface the
+          paper lies on. The one shared canvas clears TRANSPARENT
+          (world-canvas onCreated), so this div is the field world's
+          ground: the archive piles and the desk's surround show through
+          the canvas onto it. It mounts only while the field world is
+          mounted, so the hotel's own surround keeps the page background
+          and no world switch can show a seam. The chrome, the chat
+          surface and settings never read --field: they stay on
+          --background. */}
+      {mountedWorlds.includes("field") && (
+        <div
+          aria-hidden
+          data-field-backdrop
+          className="absolute inset-0 bg-field"
+        />
       )}
       <WorldCanvas
         worlds={mountedWorlds}
         paused={worldFrozen}
+        suspended={gameSuspended && transition === null}
         band={
           mountedWorlds.includes("field")
             ? {
@@ -854,6 +952,11 @@ export function AppShell() {
         }
       />
 
+      {/* THE PAUSE VEIL — between the canvas (z-0) and the pane's document
+          DOM (z-10): the frozen world reads THROUGH it, defocused, while
+          the paper and the chrome sit crisp above it. */}
+      {blurMounted && <WorldBlur active={blurLive} />}
+
       {/* The field world's DOM: the reader's chrome + the hotel's slot. The
           CONVERSATION LAYER IS NOT HERE — §3.1 mounted it at the layout
           (chat/conversation-overlay.tsx), a sibling of this route that
@@ -866,6 +969,13 @@ export function AppShell() {
             full pane; the paper centres. Below `md` this is the shelf's only
             door — the control never hides. */}
         <LibraryControl persona={persona} reducedMotion={reducedMotion} />
+
+        {/* THE RECORD SWITCH (v0.28) — while a transcript is on the desk,
+            the bucket's OTHER records (the pile opens only the newest). A
+            floating island one toggle below the library's — document picking
+            lives on the left edge, page turning keeps the bottom-left bar.
+            Renders nothing for a one-record bucket or a non-record desk. */}
+        <RecordSwitch persona={persona} reducedMotion={reducedMotion} />
 
         {/* THE ARCHIVE FIELD ⇄ THE DOCUMENT DESK (v0.25a §四) — the pane's
             owner, mutually exclusive through a HAND-TIMED handover: while
@@ -1056,6 +1166,11 @@ export function AppShell() {
             <GameShell
               onExit={() => beginTransition("field", null)}
               focusSlice={sharedSlice}
+              // The hotel's own chrome stands down for the whole pause —
+              // the steady state and both pause-mode flights.
+              suspended={
+                gameSuspended || transition?.mode === "pause"
+              }
               // A room paper reads in the ORIGINAL manuscript (v0.25a §五):
               // the desk opens on the field world while the game world
               // stays mounted behind it — the way back is the desk's Esc.

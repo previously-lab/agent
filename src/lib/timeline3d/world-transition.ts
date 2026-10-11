@@ -68,6 +68,21 @@ export const WORLD_TRANSITION_MS = 1400;
 /** Reduced-motion length: a plain dissolve, no camera scripting. */
 export const WORLD_TRANSITION_REDUCED_MS = 260;
 
+/** The move's MECHANISM (v0.28 step 1). "dissolve" is the scripted
+ *  three-beat move below (camera + compositor cross-fade + settle).
+ *  "pause" is the Control-style document pause: no scripted shot, no
+ *  dissolve quad — the world freezes (GAME_SIM_FREEZE), a DOM blur layer
+ *  rises over the canvas, and the document tier arrives above it; the game
+ *  stays MOUNTED behind the field at the move's end instead of unmounting.
+ *  The shell picks the mode per move (`?dissolve=1` forces "dissolve" —
+ *  the in-place comparison switch, a debug flag, never product UI). */
+export type WorldTransitionMode = "dissolve" | "pause";
+
+/** Pause-mode move length, ms — the blur's fade and the document's arrival
+ *  beat. Far shorter than the dissolve: nothing travels, the world simply
+ *  stops and the interface lands. */
+export const WORLD_TRANSITION_PAUSE_MS = 480;
+
 /** Progress (0..1) where the dissolve starts — the leaving world's scripted
  *  move occupies [0, DISSOLVE_START]. */
 export const DISSOLVE_START = 0.45;
@@ -277,6 +292,11 @@ export interface WorldTransitionLive {
   id: number;
   from: WorldKind;
   to: WorldKind;
+  /** The move's mechanism (see WorldTransitionMode). Pause-mode moves run
+   *  NO scripted shot and NO dissolve quad — the camera rig and the
+   *  transition compositor both early-return on it; the shell's blur layer
+   *  and the sim freeze carry the beat instead. */
+  mode: WorldTransitionMode;
   /** 0..1, written by the shell's rAF clock. */
   progress: number;
   reducedMotion: boolean;
@@ -292,6 +312,7 @@ export const WORLD_TRANSITION: WorldTransitionLive = {
   id: 0,
   from: "field",
   to: "field",
+  mode: "dissolve",
   progress: 0,
   reducedMotion: false,
   anchor: NO_ANCHOR_POSE,
