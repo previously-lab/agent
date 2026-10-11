@@ -1,7 +1,8 @@
 /**
  * Case writers + scribe — the document write path (v0.19 §A.2.3, §B.3, §B.6).
  *
- * THE CASE WRITER (边界 run ①, the old librarian re-shaped): invoked once per
+ * THE CASE WRITER (the old librarian re-shaped; the production caller is
+ * HQ's `archiveSliceCases` tool, api/evolution/hq-agent.ts): invoked once per
  * closed slice, it judges FOR ITSELF whether anything is worth writing — an
  * empty run is a legal outcome (强制触发 ≠ 强制变异; axiom D: no semantic
  * gates). Tags are dead (R2): "which cases did this slice touch" is the
@@ -92,7 +93,7 @@ export function buildSliceExcerpt(slice: {
     .slice(-8)
     .map(
       (t) =>
-        `${t.role === "user" ? "用户" : "agent"}: ` +
+        `${t.role === "user" ? "user" : "agent"}: ` +
         t.content.replace(/\s+/g, " ").trim().slice(0, 300),
     )
     .join("\n");
@@ -301,12 +302,12 @@ export async function applyCaseWriteIntent(
     switch (intent.action) {
       case "open": {
         if (current) {
-          throw new Error(`case ${identity} already exists — use updateIndex / appendTail / addPiece`);
+          throw new Error(`case ${identity} already exists — use rewriteIndex / appendTail / addPiece`);
         }
         if (category === "hypotheses" && !hasFalsificationCondition(intent.body)) {
           throw new Error(
             `hypotheses case refused: ${identity} carries no falsification condition — ` +
-              "state it in the body as 'falsify if: …' (证伪条件: …)",
+              "state it in the body as 'falsify if: …'",
           );
         }
         const doc = createCase({ category, caseName, opened: date, body: intent.body });
@@ -334,7 +335,7 @@ export async function applyCaseWriteIntent(
           throw new CaseWriteRefusal(
             "rewrite_window_closed",
             `rewriteIndex refused: ${identity} is outside its write window ` +
-              `(last write ${current.updated || "unknown"}). The 正文 is settled — ` +
+              `(last write ${current.updated || "unknown"}). The body is settled — ` +
               "re-read it, then append a dated correction/supplement (appendTail) or open a new piece (addPiece).",
           );
         }
@@ -383,8 +384,8 @@ export async function applyCaseWriteIntent(
 export function makeCaseReadTool(batch?: WriteBatch) {
   return tool({
     description:
-      "Read a case by its two-segment reference: '分类/case名' → the case's index.md; " +
-      "'分类/case名/篇名' → one dated piece. Returns the full text, or a dead-link note.",
+      "Read a case by its two-segment reference: 'category/caseName' → the case's index.md; " +
+      "'category/caseName/pieceTitle' → one dated piece. Returns the full text, or a dead-link note.",
     inputSchema: z.object({ ref: z.string() }),
     execute: async ({ ref }: { ref: string }) => {
       const parsed = parseCaseRef(ref);
@@ -419,10 +420,10 @@ export function renderManifest(tree: Record<string, string[]>): string {
   const blocks = Object.entries(tree)
     .map(([top, paths]) => `### ${top}/\n${paths.join("\n")}`)
     .join("\n\n");
-  return blocks || "（清单为空——记忆还没有任何 case）";
+  return blocks || "(empty manifest — no cases in memory yet)";
 }
 
-// ─── The case-writer pass (边界 run ①, the old librarian re-shaped) ────────
+// ─── The case-writer pass (driven by HQ's archiveSliceCases tool) ──────────
 
 const caseWriterSchema = z.object({
   cases: z
@@ -510,7 +511,8 @@ export interface LibrarianPassResult {
 }
 
 /**
- * The case-writer pass (边界 run ①). The writer judges over the manifest +
+ * The case-writer pass (production caller: HQ's `archiveSliceCases` tool).
+ * The writer judges over the manifest +
  * its own readCase reads which cases the closed slice touched; engineering
  * applies the returned intents through the case write ops under the per-case lock.
  * Never throws.

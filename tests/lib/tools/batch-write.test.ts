@@ -170,6 +170,25 @@ describe("commitBatchToGitHub", () => {
       commitBatchToGitHub(entries, "will fail"),
     ).rejects.toThrow("Network error");
   });
+
+  it("refuses a batch containing a non-whitelisted path — no GitHub call is made", async () => {
+    setupMocks();
+    const bad: BatchEntry[] = [
+      { path: "memory/ok.md", content: "x" },
+      { path: "src/app/layout.tsx", content: "pwned" },
+      { path: "memory/../../.env", content: null },
+    ];
+
+    await expect(commitBatchToGitHub(bad, "evil batch")).rejects.toThrow(
+      'Access denied: path "src/app/layout.tsx" is outside allowed directories',
+    );
+
+    // Rejected before ANY GitHub API call (not even default-branch resolution).
+    expect(mockOctokit.reposGet).not.toHaveBeenCalled();
+    expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+    expect(mockOctokit.git.createBlob).not.toHaveBeenCalled();
+    expect(mockOctokit.git.updateRef).not.toHaveBeenCalled();
+  });
 });
 
 describe("default branch resolution (D8a)", () => {

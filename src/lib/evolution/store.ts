@@ -3,8 +3,9 @@
  * v0.19 §B.7 / §C.2 / §D.1):
  *
  *   - people/user/index.md — the folded user model (card + direction prose in
- *     ONE document). The evolution loop is the ONLY writer (boundary run ② /
- *     the explicit memory_update channel); the reply segment and every other
+ *     ONE document). The evolution loop is the ONLY writer (HQ rounds, driven
+ *     by field dispatches / the explicit memory_update channel); the reply
+ *     segment and every other
  *     flow treat it as read-only. Injected every turn next to profile.md.
  *   - people/user/profile.md — the user's OWN self-description. The user is
  *     the only writer (they edit the file directly); the agent never writes
@@ -24,8 +25,8 @@
  *
  * The fitness store (events/signals/triggers) is RETIRED (§C.2): selection
  * pressure is now prose self-assessment under self/, and the only evolution
- * triggers left are the boundary fact and the explicit memory_update channel
- * (§A.3.2).
+ * triggers left are the field dispatch (HQ's sole trigger — hq-agent.ts) and
+ * the explicit memory_update channel (§A.3.2).
  */
 
 import {

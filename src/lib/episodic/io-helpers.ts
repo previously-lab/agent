@@ -49,7 +49,7 @@ import {
 } from "@/lib/demo/demo-fs";
 import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
-import { getMemoryRoot } from "@/lib/whitelist";
+import { getMemoryRoot, isPathAllowed } from "@/lib/whitelist";
 import { commitPaths, isGitRepo } from "./local-git";
 
 // ─── Environment detection ───────────────────────────────────────────────
@@ -311,6 +311,14 @@ export async function fsWriteBinaryFile(
  * file is missing; the caller surfaces that as a visible error.
  */
 export async function fsReadBinaryFile(path: string): Promise<Buffer> {
+  // Whitelist re-check: the GitHub branch below bypasses readFile.ts (where
+  // the text read path validates), so the check lives at the seam — same
+  // rule, same message as the single-write/single-read paths.
+  if (!isPathAllowed(path)) {
+    throw new Error(
+      `Access denied: path "${path}" is outside allowed directories`,
+    );
+  }
   if (DEMO_MODE) {
     // demo-fs is a text layer; attachments are a local/github concern
     throw new Error(`Binary read not supported in demo mode: "${path}"`);

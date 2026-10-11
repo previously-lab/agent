@@ -12,6 +12,7 @@
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { invalidateReadCache } from "@/lib/tools/readFile";
+import { isPathAllowed } from "@/lib/whitelist";
 
 export interface BatchEntry {
   path: string;
@@ -82,6 +83,17 @@ export async function commitBatchToGitHub(
   entries: BatchEntry[],
   message: string,
 ): Promise<string> {
+  // Whitelist re-check, per path, before anything reaches the GitHub API —
+  // the single-write path validates inside writeFile/readFile; the batch path
+  // bypasses them, so the check lives here (same rule, same message).
+  for (const { path } of entries) {
+    if (!isPathAllowed(path)) {
+      throw new Error(
+        `Access denied: path "${path}" is outside allowed directories`,
+      );
+    }
+  }
+
   const { owner, repo } = getRepoConfig();
   const octokit = getOctokit();
   const branch = await resolveDefaultBranch(octokit, owner, repo);

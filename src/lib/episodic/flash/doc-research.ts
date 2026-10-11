@@ -294,7 +294,8 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
   }
 
   // Every question marker this pass SAW is recorded as processed — the pass
-  // is single-shot per boundary; an unanswered question stays visible in
+  // is single-shot per run (the boundary concept is retired; the caller is
+  // HQ); an unanswered question stays visible in
   // reasoning, not as a growing backlog.
   const recordLines: string[] = [];
   for (const q of questions) {
