@@ -180,27 +180,15 @@ export function deskPaperModel(
   };
 }
 
-// ─── Pagination (v0.24) — the pure half of the paged reader ──────────────
-// The DOM half (multicol layout, column counting) needs a real layout engine
-// and lives in desk-field.tsx; everything decidable without a browser is
-// here and vitest-covered. Model: one sheet = one page; the flowed markdown
-// renders in full inside each CONTENT shell and is translated to the shell's
-// page, so a shell's visible page derives purely from (page, depth).
-
-/** Pages a column container must hold at minimum: the natural content height
- *  over the page height, rounded up. Break-avoid rules can only push content
- *  LATER (never earlier), so this is a true lower bound; the layout loop in
- *  desk-field reads the exact count off the column overflow and widens to
- *  it. */
-export function pageCountLowerBound(
-  naturalH: number,
-  pageH: number,
-): number {
-  if (!Number.isFinite(naturalH) || !Number.isFinite(pageH) || pageH <= 0) {
-    return 1;
-  }
-  return Math.max(1, Math.ceil(naturalH / pageH));
-}
+// ─── Pagination (v0.24, cyclic in v0.29) — the pure half of the paged
+// reader. The DOM half (multicol layout, column counting) needs a real
+// layout engine and lives in desk-field.tsx; everything decidable without a
+// browser is here and vitest-covered. Model: one sheet = one page; the
+// flowed markdown renders in full inside each CONTENT shell and is
+// translated to the shell's page, so a shell's visible page derives purely
+// from (page, depth). The stack is a CYCLE (the owner's ruling): turning
+// forward past the last page returns to the first, back past the first
+// returns to the last — like turning a held stack of paper over.
 
 /** Keep a requested page inside [1, total] (resize re-pagination can shrink
  *  the count out from under the reader). */
@@ -210,6 +198,14 @@ export function clampPage(page: number, total: number): number {
   return Math.min(Math.max(1, p), t);
 }
 
+/** The cycle's step: page ± n wrapped into [1, total]. */
+export function wrapPage(page: number, total: number): number {
+  const t = Number.isFinite(total) && total >= 1 ? Math.floor(total) : 1;
+  if (t <= 1) return 1;
+  const p = Number.isFinite(page) ? Math.round(page) : 1;
+  return ((((p - 1) % t) + t) % t) + 1;
+}
+
 /** Which document page a stack slot carries, given the reader's current
  *  page — the deck invariant (top-down slots):
  *
@@ -217,9 +213,11 @@ export function clampPage(page: number, total: number): number {
  *
  *  Slot 0 = the visible top sheet; slot 1 = the next page (the reveal target
  *  when the top is taken away); the last slot = the previous page (the
- *  prev-turn traveler). Everything else is blank paper — edges peek, nothing
- *  lies about pages that are not the current, next, or previous one.
- *  Null = blank. */
+ *  prev-turn traveler). The neighbours wrap (the stack is a cycle), so at
+ *  the document's ends the reveal is the other end's page — never a blank
+ *  sheet standing in for a page that exists. The middle slots stay blank
+ *  paper — edges peek, nothing lies about pages that are not the current,
+ *  next, or previous one. Null = blank. */
 export function pageForShellSlot(
   page: number,
   total: number,
@@ -227,13 +225,9 @@ export function pageForShellSlot(
   shellCount: number,
 ): number | null {
   if (slot === 0) return clampPage(page, total);
-  if (slot === 1) {
-    const next = clampPage(page, total) + 1;
-    return next <= total ? next : null;
-  }
+  if (slot === 1) return wrapPage(clampPage(page, total) + 1, total);
   if (slot === shellCount - 1) {
-    const prev = clampPage(page, total) - 1;
-    return prev >= 1 ? prev : null;
+    return wrapPage(clampPage(page, total) - 1, total);
   }
   return null;
 }

@@ -36,18 +36,24 @@
  * the scene damps the current values toward them per frame, and the pan is
  * clamped every frame so the sheet can never leave the viewport.
  *
- * PAGINATION (v0.24). One sheet = one PAGE of the document. The markdown
- * flows through CSS multi-column layout inside a fixed-height 版心 (one
- * column per page; `column-fill: auto` packs each column to the page
- * height) and five paper SLOTS carry the current, next, and previous pages
- * (the other two are blank paper, their edges peeking — the card field's
- * stacked-papers look). A turn SHUFFLES (the user's ruling — no rotation):
- * the top sheet lifts off, travels, and is put at the very back; the deck
- * closes rank beneath it; going back is the same gesture in reverse. Pure
- * CSS transform animation, only the traveler ever moves. Measurement is
- * browser-native (no JS line measuring): the natural height of a hidden
- * single-column copy gives the page-count lower bound; the exact count
- * reads off the column overflow.
+ * PAGINATION (v0.24, cyclic in v0.29). One sheet = one PAGE of the
+ * document. The markdown flows through CSS multi-column layout inside a
+ * fixed-height 版心 (one column per page; `column-fill: auto` packs each
+ * column to the page height) and five paper SLOTS carry the current, next,
+ * and previous pages (the other two are blank paper, their edges peeking —
+ * the card field's stacked-papers look). A turn SHUFFLES (the user's ruling
+ * — no rotation): the top sheet lifts off, travels, and is put at the very
+ * back; the deck closes rank beneath it; going back is the same gesture in
+ * reverse. Pure CSS transform animation, only the traveler ever moves. THE
+ * STACK IS A CYCLE (v0.29, the owner's ruling): forward past the last page
+ * returns to the first, back past the first to the last — like turning a
+ * held stack of paper over. Nothing prints a total: the count is READ off
+ * the live layout (the flow container stays one page wide, the browser
+ * fragments the content into as many overflow columns as it needs, and
+ * scrollWidth / pageW IS the true count — no measurer, no lower bound, no
+ * growth loop, and never a sheet beyond what the flow fills); the only
+ * page indicator is the folio printed on the sheet itself, true by
+ * construction.
  *
  * I18N ACROSS THE PORTAL. drei's `<Html>` mounts the paper in the Canvas's
  * own React root. The desk's few UI strings arrive as PROPS (the
@@ -131,8 +137,8 @@ import {
 } from "@/components/chat/markdown";
 import {
   clampPage,
+  wrapPage,
   TURN_MS,
-  pageCountLowerBound,
   pageForShellSlot,
   deskPaperModel,
   mastheadLines,
@@ -164,8 +170,12 @@ export interface DeskTexts {
   prevPage: string;
   /** aria-label of the page-control's next-page button. */
   nextPage: string;
-  /** The page control's readout, `{current} / {total}`. */
-  pagePosition(current: number, total: number): string;
+  /** RETIRED (v0.29): the island no longer prints a position — the stack is
+   *  a cycle and a total is never announced (the folio on the sheet is the
+   *  only page indicator). Optional so the shell's wiring keeps compiling
+   *  until the shell lane deletes it (app-shell.tsx `pagePosition`, and the
+   *  `desk.pagePosition` key in messages/en.json + messages/zh.json). */
+  pagePosition?(current: number, total: number): string;
   /** aria-label of the zoom island's zoom-out button. */
   zoomOut: string;
   /** aria-label of the zoom island's zoom-in button. */
@@ -181,12 +191,6 @@ export interface DeskTexts {
 
 /** The entrance/exit beat, seconds — the pane swap's own 300 ms. */
 const DESK_BEAT_S = 0.3;
-
-/** The measurement loop's growth budget: one column per pass from the lower
- *  bound, so the first pass without spill IS the minimum page count. A doc
- *  needs more passes only when that many break-avoid blocks force early
- *  column ends; beyond the cap we accept the (wider) plan — never a clip. */
-const MAX_MEASURE_PASSES = 8;
 
 /** Wheel paging: accumulated deltaY per turn, and the quiet window that
  *  resets the accumulator (trackpad momentum decays — without the reset a
@@ -416,27 +420,51 @@ export function DeskField({
     Array.from({ length: SHELL_COUNT }, (_, i) => i),
   );
   const [pageBox, setPageBox] = useState({ w: 0, h: 0 });
-  const [naturalH, setNaturalH] = useState(0);
-  const [plan, setPlan] = useState({ columns: 1, passes: 0 });
+  // THE TRUE COUNT (v0.29) — read off the live layout, never computed from a
+  // guess: the flow container stays ONE page wide, the browser fragments the
+  // content into as many page-height columns as it needs (overflowing
+  // horizontally), and scrollWidth / pageW is the exact filled-column count.
+  // 1 until the first measure lands (the single-sheet form until then).
+  const [total, setTotal] = useState(1);
+
+  const totalRef = useRef(total);
+  totalRef.current = total;
+  const turnRef = useRef(turn);
+  turnRef.current = turn;
 
   const pagesRef = useRef<HTMLDivElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
-  const measureRef = useRef<HTMLDivElement | null>(null);
+
+  // The count read, self-contained on the node: the pages container stays
+  // one page wide, so its clientWidth IS the page width and scrollWidth /
+  // clientWidth the exact filled-column count — no dependence on the
+  // pageBox state's settling order.
+  const readTotal = useCallback((el: HTMLDivElement) => {
+    const w = el.clientWidth;
+    if (w <= 0) return; // not in a laid-out state — keep the previous truth
+    const actual = Math.max(1, Math.round(el.scrollWidth / w));
+    setTotal((prev) => (prev === actual ? prev : actual));
+  }, []);
 
   // Callback refs, not plain refs: the scene's portal DOM (inside the
   // dynamically-loaded canvas chunk) can establish itself in a later commit
   // than any of the field's effects — a missed attach must not leave the
-  // measurement state at zero until some unrelated re-render. The callback
-  // measures at attach time; the effects below re-measure on the content
-  // and width changes. All setters are equality-guarded, so a re-attach
-  // with the same numbers re-renders nothing.
-  const attachMeasureRef = useCallback((el: HTMLDivElement | null) => {
-    measureRef.current = el;
-    if (el) {
-      const h = el.scrollHeight;
-      setNaturalH((prev) => (prev === h ? prev : h));
-    }
-  }, []);
+  // measurement state at zero until some unrelated re-render (observed:
+  // `ready` flips before the portal mounts the flow, and with no further
+  // state change a plain effect never re-fires — the count stuck at 1).
+  // The callback measures at attach time; the effects below re-measure on
+  // the content and width changes. All setters are equality-guarded, so a
+  // re-attach with the same numbers re-renders nothing. INERT WHILE A TURN
+  // IS IN FLIGHT: the top slot's occupant changes at turn start, moving
+  // this ref between shells — re-counting mid-gesture collapses the deck
+  // for a frame (the reader-visible flicker).
+  const attachPagesRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      pagesRef.current = el;
+      if (el && turnRef.current === null) readTotal(el);
+    },
+    [readTotal],
+  );
   const attachBoxRef = useCallback((el: HTMLDivElement | null) => {
     boxRef.current = el;
     if (el) {
@@ -452,12 +480,6 @@ export function DeskField({
     }
   }, []);
 
-  const lowerBound = pageCountLowerBound(naturalH, pageBox.h);
-  const total = plan.columns;
-  const totalRef = useRef(total);
-  totalRef.current = total;
-  const turnRef = useRef(turn);
-  turnRef.current = turn;
   // Settle is idempotent by a synchronous flag, not by state: the landing
   // reports through animationend AND a timeout backstop — if the main
   // thread is busy when the backstop fires, the state guard alone would
@@ -512,76 +534,53 @@ export function DeskField({
     lastDocRef.current = docRef;
     setPage(1);
     setTurn(null);
+    setTotal(1);
     settledRef.current = true;
     cameraRef.current = createDeskCamera();
   }
 
-  // The flow's natural height from the hidden single-column measurer. The
-  // attach callback captures the first measure; this effect re-measures on
-  // content and width changes (the callback does not re-fire when only the
-  // element's content changes).
+  // THE COUNT IS READ, NOT PLANNED (v0.29). The top sheet's flow container
+  // stays one page wide; with `column-fill: auto` the browser fragments the
+  // whole flow into page-height columns on demand, letting the excess
+  // overflow the box horizontally — so scrollWidth / pageW is the exact
+  // filled-column count, in both directions (it shrinks as readily as it
+  // grows: the container's own width no longer floors the reading). A
+  // vertical spill NEVER grows the count: a block taller than one page
+  // overflows its column permanently, and reading that as "needs another
+  // column" counted air (a taller column is a pagination imperfection
+  // prints tolerate, not a missing page). The attach callback above covers
+  // the late-portal mount; THIS effect covers the later changes — content
+  // swap, pane resize. INERT WHILE A TURN IS IN FLIGHT: every input is
+  // frozen then, and re-counting mid-gesture collapses the deck for a
+  // frame — the reader-visible flicker.
   useLayoutEffect(() => {
-    const el = measureRef.current;
-    if (!el || !ready) return;
-    const h = el.scrollHeight;
-    setNaturalH((prev) => (prev === h ? prev : h));
-  }, [ready, model.markdown, pageBox.w]);
+    const el = pagesRef.current;
+    if (!el || !ready || turn !== null) return;
+    readTotal(el);
+  }, [ready, model.markdown, pageBox, turn, readTotal]);
 
-  // Re-measure when the page box changes (resize) or the webfonts land —
-  // either can move the natural height after the first measure.
+  // The webfonts can land after the first measure and re-break the flow —
+  // re-read the count then.
   useEffect(() => {
     if (!ready) return;
     let live = true;
     document.fonts?.ready.then(() => {
-      const el = measureRef.current;
-      if (live && el) {
-        const h = el.scrollHeight;
-        setNaturalH((prev) => (prev === h ? prev : h));
-      }
+      const el = pagesRef.current;
+      if (live && el && turnRef.current === null) readTotal(el);
     });
     return () => {
       live = false;
     };
-  }, [ready, pageBox.w, model.markdown]);
-
-  // A new lower bound re-plans the container width; the growth loop below
-  // then verifies it against the real layout. INERT WHILE A TURN IS IN
-  // FLIGHT (see the loop) — a mid-gesture re-plan is the flicker.
-  useEffect(() => {
-    if (turn !== null) return;
-    setPlan({ columns: lowerBound, passes: 0 });
-  }, [lowerBound, turn]);
-
-  // The measurement loop — the page count IS the column count, and the
-  // runtime tells it for free: with `column-fill: auto` the browser
-  // fragments the whole flow into page-height columns on demand, letting
-  // excess columns overflow the box horizontally (verified in the running
-  // app: a 1-page-wide box reported scrollWidth = 4 × pageW for a 4-page
-  // document). So the count is scrollWidth / pageW, full stop. A vertical
-  // spill NEVER grows the count: a block taller than one page (a long
-  // break-avoided item at print scale) overflows its column permanently,
-  // and reading that as "needs another column" grew the plan +8 deep in
-  // the trace (a taller column is a pagination imperfection prints
-  // tolerate, not a missing page). INERT WHILE A TURN IS IN FLIGHT: every
-  // input is frozen then, and re-planning mid-gesture collapses the deck
-  // for a frame — the reader-visible flicker.
-  useLayoutEffect(() => {
-    const el = pagesRef.current;
-    if (!el || !ready || pageBox.w <= 0 || turn !== null) return;
-    const actual = Math.max(1, Math.round(el.scrollWidth / pageBox.w));
-    if (actual > plan.columns && plan.passes < MAX_MEASURE_PASSES) {
-      setPlan({ columns: actual, passes: plan.passes + 1 });
-    }
-  }, [ready, model.markdown, pageBox, plan, turn]);
+  }, [ready, pageBox.w, model.markdown, readTotal]);
 
   // The pane resizes (window, dvh shifts): the pagebox is re-measured and
-  // the lower-bound effect re-plans — rAF-debounced so a drag's event storm
+  // the count re-read — rAF-debounced so a drag's event storm
   // collapses into one re-pagination. Re-subscribes when the single-sheet ↔
   // stack swap replaces the pagebox element (an observer on a detached node
   // would silently stop watching) AND when the top slot's occupant changes
   // (every turn) — the observer must follow the live pagebox, never a shell
   // that a later edge blanks.
-  const stacked = ready && plan.columns > 1;
+  const stacked = ready && total > 1;
   useEffect(() => {
     const el = boxRef.current;
     if (!el) return;
@@ -623,7 +622,7 @@ export function DeskField({
     if (!active || settledRef.current) return;
     settledRef.current = true;
     setPage((p) =>
-      clampPage(p + (active.dir === "next" ? 1 : -1), totalRef.current),
+      wrapPage(p + (active.dir === "next" ? 1 : -1), totalRef.current),
     );
     setTurn(null);
   }, []);
@@ -639,9 +638,10 @@ export function DeskField({
 
   const turnPage = useCallback(
     (dir: "next" | "prev") => {
-      if (turn !== null || !ready) return;
-      const target = page + (dir === "next" ? 1 : -1);
-      if (target < 1 || target > total) return;
+      if (turn !== null || !ready || total <= 1) return;
+      // THE CYCLE (v0.29): no edge rejection — forward past the last page
+      // wraps to the first, back past the first to the last.
+      const target = wrapPage(page + (dir === "next" ? 1 : -1), total);
       if (reducedMotion) {
         // No motion: the sheets do not travel, the content swaps in place
         // under a quiet fade (the CSS replays it via the remount).
@@ -765,11 +765,9 @@ export function DeskField({
         total,
         turn,
         order,
-        planColumns: plan.columns,
         pageBox,
-        pagesRef,
+        pagesRef: attachPagesRef,
         attachBoxRef,
-        attachMeasureRef,
         onTravelEnd: settleTurn,
         onTurn: turnPage,
         portalRef,
@@ -845,13 +843,19 @@ export function DeskField({
           className="pointer-events-none absolute inset-0 overflow-hidden"
         />
       </div>
-      {/* THE PAGE CONTROL — floating with the app's other chrome. The
-          bottom-left corner itself is the world gate's seat (z-20 at the pane
-          root), so the control stacks one bar-height above it (bottom-14) —
-          both stay clickable. It also lives OUTSIDE the desk's pane branch,
-          which the pane caps at z-10: under the gate even a z-50 control
-          would lose every hit test, so it renders through a body-level
-          portal (page state stays here, where it is owned). */}
+      {/* THE PAGE CONTROL (v0.29: two turn buttons, NO readout) — the stack
+          is a cycle: turn back / turn forward, past either end the other
+          end's sheet arrives. Nothing prints a position or a total — the
+          folio on the sheet itself is the only page indicator, true by
+          construction. The buttons disable only while a turn is in flight
+          (the cycle has no edges to guard). Floating with the app's other
+          chrome: the bottom-left corner itself is the world gate's seat
+          (z-20 at the pane root), so the control stacks one bar-height
+          above it (bottom-14) — both stay clickable. It also lives OUTSIDE
+          the desk's pane branch, which the pane caps at z-10: under the
+          gate even a z-50 control would lose every hit test, so it renders
+          through a body-level portal (page state stays here, where it is
+          owned). */}
       {ready && total > 1 &&
         createPortal(
           <div
@@ -863,24 +867,17 @@ export function DeskField({
                 type="button"
                 data-page-prev
                 aria-label={texts.prevPage}
-                disabled={turn !== null || page <= 1}
+                disabled={turn !== null}
                 onClick={() => turnPage("prev")}
                 className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
               >
                 <ChevronLeft className="size-4 shrink-0" />
               </button>
-              <span
-                data-page-readout
-                aria-live="polite"
-                className="min-w-10 px-1 text-center font-mono text-xs tabular-nums text-muted-foreground"
-              >
-                {texts.pagePosition(page, total)}
-              </span>
               <button
                 type="button"
                 data-page-next
                 aria-label={texts.nextPage}
-                disabled={turn !== null || page >= total}
+                disabled={turn !== null}
                 onClick={() => turnPage("next")}
                 className={`${ISLAND_CONTROL} size-7 disabled:pointer-events-none disabled:opacity-40`}
               >
@@ -959,15 +956,17 @@ interface PagingProps {
   /** The deck: which shell occupies each slot, slot 0 = the visible top.
    *  Rotates at turn start; shells are keyed by id, not slot. */
   order: number[];
-  planColumns: number;
   pageBox: { w: number; h: number };
-  pagesRef: RefObject<HTMLDivElement | null>;
+  /** The top sheet's flow container — a CALLBACK ref (the field measures
+   *  the true page count at attach time; the portal DOM can mount later
+   *  than any field effect). */
+  pagesRef: (el: HTMLDivElement | null) => void;
   attachBoxRef: (el: HTMLDivElement | null) => void;
-  attachMeasureRef: (el: HTMLDivElement | null) => void;
   onTravelEnd: () => void;
   /** The page turn, owned by the field above — the swipe hands it a
-   *  direction and the same gate as the buttons applies (turn state,
-   *  bounds, reduced motion). */
+   *  direction and the same gate as the buttons applies (turn state, the
+   *  one-page guard, reduced motion). The cycle wraps; there are no edge
+   *  bounds to check. */
   onTurn: (dir: "next" | "prev") => void;
   /** The pane-side mount for the paper's DOM — the field's portalRef (the
    *  archive field's portal pattern: inside the pane's z-10 box, not the
@@ -1168,11 +1167,9 @@ function DeskScene({
     total,
     turn,
     order,
-    planColumns,
     pageBox,
     pagesRef,
     attachBoxRef,
-    attachMeasureRef,
     onTravelEnd,
     onTurn,
     portalRef,
@@ -1272,8 +1269,8 @@ function DeskScene({
   // The flow — one full copy of the document per content shell, translated
   // to the shell's page by --desk-page-i. MEMOIZED on the document alone:
   // a turn changes paging state every few hundred milliseconds, and without
-  // this each turn would re-parse and re-layout all four markdown copies
-  // (three shells + the measurer) before the animation could even start.
+  // this each turn would re-parse and re-layout all three markdown copies
+  // before the animation could even start.
   const flow = useMemo(
     () =>
       ready && markdown !== null ? (
@@ -1352,8 +1349,9 @@ function DeskScene({
               // is in flight: the traveling sheet keeps showing the page it
               // physically carries, the revealed sheet keeps the page it
               // already showed, and every change lands on covered slots —
-              // so the settle repaints nothing.
-              const effectivePage = clampPage(
+              // so the settle repaints nothing. The step wraps (the stack
+              // is a cycle).
+              const effectivePage = wrapPage(
                 page + (turn ? (turn.dir === "next" ? 1 : -1) : 0),
                 total,
               );
@@ -1390,8 +1388,6 @@ function DeskScene({
                   pageBox.h > 0 ? `${pageBox.h}px` : undefined,
               } as CSSProperties;
               const pagesStyle = {
-                "--desk-pages-w":
-                  pageBox.w > 0 ? `${planColumns * pageBox.w}px` : undefined,
                 "--desk-page-w":
                   pageBox.w > 0 ? `${pageBox.w}px` : undefined,
                 "--desk-page-i": (shellPage ?? 1) - 1,
@@ -1527,23 +1523,6 @@ function DeskScene({
                 </div>
               );
             })}
-            {/* The single-column measurer: the same flow at natural height,
-                invisible. Its scrollHeight feeds the page-count lower
-                bound; the growth loop verifies it against the real
-                columns. */}
-            {ready && flow && (
-              <div
-                className="desk-measure"
-                ref={attachMeasureRef}
-                aria-hidden="true"
-              >
-                <div className="desk-flow">
-                                    <DocRefProvider value={docRefCtx}>
-                                      {flow}
-                                    </DocRefProvider>
-                                  </div>
-              </div>
-            )}
           </div>
         </Html>
       </group>

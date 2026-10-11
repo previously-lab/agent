@@ -23,8 +23,7 @@
  *
  * The transform/animation values that depend on state arrive as CSS
  * variables written from JS (--sx/--sy/--sr/--sz per slot, --from-* for the
- * participants, --desk-pages-w, --desk-page-w, --desk-page-i); nothing here
- * is inline.
+ * participants, --desk-page-w, --desk-page-i); nothing here is inline.
  */
 
 /* ── The stack: the A4 sizing element, and the source of the print millimetre.
@@ -269,45 +268,36 @@
   overflow: hidden;
 }
 
-/* ONE page box: constant size (this is the measured 版心 — the column
-   container inside is N pages wide, so the box, not the container, is the
-   measurement source), and the clip edge the pages slide under. Sides sit
-   at the 25mm print margin, leaving the 160mm text block A4 prints. */
+/* ONE page box: constant size (the measured 版心 — its width is the page
+   width every count and column derives from), and the clip edge the pages
+   slide under. Sides sit at the 25mm print margin, leaving the 160mm text
+   block A4 prints. */
 .desk-pagebox {
   position: absolute;
   inset: calc(var(--desk-mm) * 4) calc(var(--desk-mm) * 25);
   overflow: hidden;
 }
 
-/* The flowed document. One page wide per column (column-fill: auto packs
-   each column to the page height); --desk-pages-w (N × page width, from JS)
-   sizes the box; --desk-page-i slides the slot's assigned page into view —
-   the percentage resolves against the pagebox, so no per-page pixel math.
-   The pagebox clips, so a still-measuring first paint shows exactly page 1
-   and nothing spills. */
+/* The flowed document. The container stays ONE page wide; with
+   column-fill: auto the browser fragments the content into page-height
+   columns on demand, letting the excess overflow the box horizontally —
+   so the field reads the TRUE page count straight off the top sheet's
+   scrollWidth / pageW (v0.29: no measurer, no lower bound, no growth loop;
+   the count shrinks as readily as it grows). --desk-page-i slides the
+   slot's assigned page into view — the percentage resolves against the
+   pagebox, so no per-page pixel math. The pagebox clips, so the overflow
+   columns are never seen except the one slid into view. */
 .desk-pages {
   position: absolute;
   top: 0;
   bottom: 0;
   left: calc(var(--desk-page-i, 0) * -100%);
-  width: var(--desk-pages-w, 100%);
+  width: 100%;
   orphans: 2;
   widows: 2;
   column-width: var(--desk-page-w, 100%);
   column-gap: 0;
   column-fill: auto;
-}
-
-/* The single-column measurer: same flow, natural height, invisible. Its
-   scrollHeight feeds pageCountLowerBound; only the width must match the
-   pagebox (the top inset is irrelevant to a height measure). */
-.desk-measure {
-  position: absolute;
-  top: calc(var(--desk-mm) * 20);
-  left: calc(var(--desk-mm) * 25);
-  right: calc(var(--desk-mm) * 25);
-  visibility: hidden;
-  pointer-events: none;
 }
 
 /* Reduced-motion page turn: a quiet fade instead of the travel. The pages
@@ -395,8 +385,7 @@
 
 /* Chinese paragraphs take the 2em first-line indent (§10, confirmed);
    English paragraphs keep the bare flow spacing. Switched by locale —
-   the stack root carries data-locale so the hidden measurer (outside the
-   paper) typesets identically to the sheets. */
+   the stack root carries data-locale so every sheet typesets the same. */
 .desk-stack[data-locale="zh"] .typeset p {
   text-indent: 2em;
 }

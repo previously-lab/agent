@@ -12,11 +12,11 @@ import {
   clampPage,
   deskPaperModel,
   mastheadLines,
-  pageCountLowerBound,
   pageForShellSlot,
   panelModeForDeskOpen,
   SHELL_COUNT,
   shellOffsetForSlot,
+  wrapPage,
 } from "@/components/desk/desk-model";
 import type { CaseDocContent } from "@/lib/episodic/actions";
 
@@ -219,18 +219,24 @@ describe("mastheadLines", () => {
   });
 });
 
-describe("pageCountLowerBound (v0.24)", () => {
-  it("is the natural height over the page height, rounded up", () => {
-    expect(pageCountLowerBound(1000, 500)).toBe(2);
-    expect(pageCountLowerBound(1001, 500)).toBe(3);
-    expect(pageCountLowerBound(500, 500)).toBe(1);
+describe("wrapPage (v0.29 — the stack is a cycle)", () => {
+  it("steps forward past the last page back to the first", () => {
+    expect(wrapPage(4, 3)).toBe(1);
+    expect(wrapPage(3, 3)).toBe(3);
+    expect(wrapPage(2, 3)).toBe(2);
   });
 
-  it("never returns below 1, and guards the unmeasured states", () => {
-    expect(pageCountLowerBound(0, 500)).toBe(1);
-    expect(pageCountLowerBound(1000, 0)).toBe(1);
-    expect(pageCountLowerBound(Number.NaN, 500)).toBe(1);
-    expect(pageCountLowerBound(1000, Number.NaN)).toBe(1);
+  it("steps back past the first page to the last", () => {
+    expect(wrapPage(0, 3)).toBe(3);
+    expect(wrapPage(-1, 3)).toBe(2);
+    expect(wrapPage(1, 3)).toBe(1);
+  });
+
+  it("degenerates to page 1 on a one-page document or garbage input", () => {
+    expect(wrapPage(5, 1)).toBe(1);
+    expect(wrapPage(2, 0)).toBe(1);
+    expect(wrapPage(Number.NaN, 4)).toBe(1);
+    expect(wrapPage(3, Number.NaN)).toBe(1);
   });
 });
 
@@ -247,7 +253,7 @@ describe("clampPage (v0.24)", () => {
   });
 });
 
-describe("pageForShellSlot — the deck invariant (v0.24)", () => {
+describe("pageForShellSlot — the deck invariant (v0.24, cyclic in v0.29)", () => {
   it("top carries the current page, the second the next, the bottom the previous", () => {
     // [k][k+1][blank][blank][k-1] for k = 3 of 10, SHELL_COUNT = 5
     expect(pageForShellSlot(3, 10, 0, SHELL_COUNT)).toBe(3);
@@ -260,15 +266,21 @@ describe("pageForShellSlot — the deck invariant (v0.24)", () => {
   it("clamps the current page into range before deriving the neighbours", () => {
     // A resize shrank the document to 2 pages while the reader sat on 5.
     expect(pageForShellSlot(5, 2, 0, SHELL_COUNT)).toBe(2);
-    expect(pageForShellSlot(5, 2, 1, SHELL_COUNT)).toBeNull();
+    expect(pageForShellSlot(5, 2, 1, SHELL_COUNT)).toBe(1);
     expect(pageForShellSlot(5, 2, 4, SHELL_COUNT)).toBe(1);
   });
 
-  it("page 1 has no previous; the last page has no next", () => {
-    expect(pageForShellSlot(1, 10, 4, SHELL_COUNT)).toBeNull();
-    expect(pageForShellSlot(10, 10, 1, SHELL_COUNT)).toBeNull();
-    expect(pageForShellSlot(1, 1, 1, SHELL_COUNT)).toBeNull();
-    expect(pageForShellSlot(1, 1, 4, SHELL_COUNT)).toBeNull();
+  it("the ends WRAP: page 1's previous is the last page, the last page's next is the first", () => {
+    expect(pageForShellSlot(1, 10, 4, SHELL_COUNT)).toBe(10);
+    expect(pageForShellSlot(10, 10, 1, SHELL_COUNT)).toBe(1);
+    expect(pageForShellSlot(10, 10, 4, SHELL_COUNT)).toBe(9);
+    expect(pageForShellSlot(1, 10, 1, SHELL_COUNT)).toBe(2);
+  });
+
+  it("a two-page cycle shows the other page both ways; one page is never stacked", () => {
+    expect(pageForShellSlot(1, 2, 1, SHELL_COUNT)).toBe(2);
+    expect(pageForShellSlot(1, 2, 4, SHELL_COUNT)).toBe(2);
+    expect(pageForShellSlot(1, 1, 1, SHELL_COUNT)).toBe(1);
   });
 });
 
