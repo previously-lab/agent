@@ -71,7 +71,7 @@ describe("appendFieldReturnLine — 赶上就带上", () => {
 
     const next = io.files.get(agentPath)!;
     expect(next.startsWith("既有 mailbox 内容。")).toBe(true);
-    expect(next).toContain("HQ 回程（");
+    expect(next).toContain("Field return (");
     expect(next).toContain("供应商案已归档，见 research/屏幕供应商。");
     // prose line, not a JSON marker (R4: new channels are prose)
     expect(next).not.toContain("[doc-");
@@ -80,18 +80,18 @@ describe("appendFieldReturnLine — 赶上就带上", () => {
   it("creates agent.md when the slice has none yet", async () => {
     await appendFieldReturnLine("2026-10-04-0131", "回程内容。");
     const agentPath = slicePartPath("2026-10-04-0131", "agent");
-    expect(io.files.get(agentPath)).toContain("HQ 回程（");
+    expect(io.files.get(agentPath)).toContain("Field return (");
   });
 
   it("the date stamp rides the USER's clock: the caller's local date, else the slice's own naming date — never bare UTC", async () => {
     await appendFieldReturnLine("2026-10-04-0131", "显式日期。", "2026-10-05");
     const agentPath = slicePartPath("2026-10-04-0131", "agent");
-    expect(io.files.get(agentPath)).toContain("HQ 回程（2026-10-05）：显式日期。");
+    expect(io.files.get(agentPath)).toContain("Field return (2026-10-05): 显式日期。");
 
     io.files.clear();
     // no date handed over — the slice id is named by the user's local calendar
     await appendFieldReturnLine("2026-10-04-0131", "切片命名日期。");
-    expect(io.files.get(agentPath)).toContain("HQ 回程（2026-10-04）：切片命名日期。");
+    expect(io.files.get(agentPath)).toContain("Field return (2026-10-04): 切片命名日期。");
   });
 
   it("a write failure is swallowed — never throws into the turn", async () => {

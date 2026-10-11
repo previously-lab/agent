@@ -167,6 +167,24 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
       ...(outcome.note ? { note: outcome.note } : {}),
     });
   }
+  // 回程（v0.21 §4）：结果帧落盘之后，把 HQ 这一轮的散文陈述
+  // (outcome.note — its own account of the round) 喊回外勤的回调 hook。
+  // Best-effort bonus, never a channel: the field's hook is registered only
+  // once its turn run suspends on the closing peek (turn-workflow.ts), so an
+  // early or late call alike lands HookNotFoundError — swallowed silently, no
+  // compensation, no ledger (§11 ②). And no failure here may take the HQ
+  // round down: the whole beat is wrapped, lesser errors logged and eaten.
+  if (payload.replyToken && !outcome.error && outcome.note.trim()) {
+    try {
+      await resumeHook(payload.replyToken, outcome.note);
+    } catch (e) {
+      if (HookNotFoundError.is(e)) {
+        console.debug(`[HQ] field return missed (hook gone): ${payload.replyToken}`);
+      } else {
+        console.warn("[HQ] field return failed (ignored):", e);
+      }
+    }
+  }
   return {
     actions: outcome.actions,
     ...(outcome.error ? { error: outcome.error } : {}),

@@ -42,6 +42,26 @@ vi.mock("@/lib/episodic/slice-mutex", () => ({
 
 const episodic = vi.hoisted(() => ({
   loadSlice: vi.fn(),
+  closeSlice: vi.fn(
+    async (
+      slice: {
+        status: string;
+        closedBy?: string;
+        end?: string;
+        turns: Array<{ timestamp: string }>;
+      },
+      signal: string,
+    ) => {
+      // the real closeSlice (manager.ts): status + closed_by + end = last
+      // turn's timestamp, then persist. The mock mutates in place — the
+      // tests' loadSlice hands out the SAME object, so a second markSlice
+      // call observes the close.
+      slice.status = "closed";
+      slice.closedBy = signal;
+      slice.end = slice.turns.at(-1)?.timestamp ?? "now";
+      return slice;
+    },
+  ),
   readSlicePart: vi.fn(async (sliceId: string, part: string) => {
     const v = io.files.get(`${sliceId}:${part}`);
     if (v === undefined) throw new Error(`missing ${sliceId}:${part}`);
@@ -429,6 +449,84 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(writerInput.excerpt.focus).toBe("手机话题");
     expect(scribeInput.excerpt.focus).toBe("手机话题");
     expect(scribeInput.date).toBe(DATE);
+  });
+
+  it("markSlice seals an orphaned ACTIVE slice (closed_by: context_lost), idempotently", async () => {
+    // An active slice past the date window: the conversation long ended, the
+    // close never fired, and findStaleActiveSlice only scans the last two
+    // days — HQ is its only closer (T-08).
+    const orphan = {
+      slice_id: SLICE_ID,
+      focus: "旧对话",
+      summary: "",
+      status: "active",
+      tags: [],
+      turns: [{ timestamp: "2026-08-09T13:20:00.000Z", role: "user", content: "最后一句" }],
+    };
+    episodic.loadSlice.mockResolvedValue(orphan);
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r1 = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      expect(r1).toContain(`closed: ${SLICE_ID}`);
+      expect(r1).toContain("context_lost");
+      expect(r1).toContain("2026-08-09T13:20:00.000Z"); // end = last turn's stamp
+      // Second call: the same object now reads closed → no-op, NO rewrite.
+      const r2 = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      expect(r2).toContain("no-op");
+      expect(r2).toContain("context_lost");
+      expect(episodic.closeSlice).toHaveBeenCalledTimes(1);
+      expect(episodic.closeSlice).toHaveBeenCalledWith(orphan, "context_lost");
+      return {
+        ok: true,
+        report: { actions: [`records/${SLICE_ID} sealed`], note: "Sealed the orphan." },
+        text: "",
+      };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    // the capability is announced on the tool surface and in the role prompt
+    const opts = runSubAgentMock.mock.calls[0][0];
+    const markSliceTool = opts.tools.markSlice as unknown as { description: string };
+    expect(markSliceTool.description).toContain("context_lost");
+    expect(opts.system).toContain("orphan");
+  });
+
+  it("markSlice on an already-closed slice is a no-op — closed_by named, never rewritten", async () => {
+    episodic.loadSlice.mockResolvedValue({
+      slice_id: SLICE_ID,
+      focus: "",
+      summary: "",
+      status: "closed",
+      closedBy: "idle_gap",
+      tags: [],
+      turns: [{ timestamp: "t0", role: "user", content: "x" }],
+    });
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      expect(r).toContain("no-op");
+      expect(r).toContain("idle_gap");
+      return { ok: true, report: { actions: [], note: "already closed" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+  });
+
+  it("markSlice on an unreadable slice reports and writes nothing", async () => {
+    episodic.loadSlice.mockRejectedValue(new Error("missing"));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "markSlice", { sliceId: SLICE_ID });
+      expect(r).toContain("unreadable");
+      return { ok: true, report: { actions: [], note: "nothing marked" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
   });
 
   it("the role prompt bans the builder's vantage point from self/ writes", async () => {

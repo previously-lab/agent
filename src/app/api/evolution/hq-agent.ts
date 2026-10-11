@@ -25,7 +25,7 @@
  */
 import { tool } from "ai";
 import { z } from "zod";
-import { loadSlice, readSlicePart } from "@/lib/episodic";
+import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -104,6 +104,8 @@ You decide what to do and in what order. The natural order, when several things 
 2. Cases usually before people/user — the user model should cite the cases the round just wrote, not speak in generalities.
 3. self/ comes last — craft reflections are informed by everything else the round did.
 
+Housekeeping you own: an ACTIVE slice past the date window is an orphan — the conversation long ended but the close never fired, and the field's stale-scan only looks back two days. When a read shows you one, seal it with markSlice (closed_by: context_lost); a capability, not a per-round obligation.
+
 Craft notes:
 - Mailbox marker lines in a slice's agent.md are prose CLUES, not triggers — read them, judge them, ignore them when stale.
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
@@ -147,6 +149,28 @@ function buildHqTools(date: string, model: ModelConfig) {
     }),
 
     readCase: makeCaseReadTool(),
+
+    markSlice: tool({
+      description:
+        "Seal one slice that is still ACTIVE past the date window — an orphan: the conversation long ended " +
+        "but the close never fired (the field's stale-scan only looks back two days, so older orphans have no " +
+        "other closer). Verify with readSlice first that it is genuinely orphaned. The close stamps " +
+        "closed_by: context_lost — the scene was lost, not checkpointed. An already-closed slice is a no-op.",
+      inputSchema: z.object({
+        sliceId: z.string().describe("e.g. 2026-10-04-0131"),
+      }),
+      execute: async ({ sliceId }) => {
+        const slice = await loadSlice(sliceId).catch(() => null);
+        if (!slice) return `(slice ${sliceId} unreadable — nothing marked.)`;
+        // Idempotent: closed_by is authoritative — a slice already sealed
+        // (by anyone, for any cause) is never rewritten.
+        if (slice.status !== "active" || slice.closedBy) {
+          return `no-op: ${sliceId} is already closed (closed_by: ${slice.closedBy ?? "unknown"}).`;
+        }
+        const closed = await closeSlice(slice, "context_lost");
+        return `closed: ${sliceId} (closed_by: ${closed.closedBy}, end: ${closed.end})`;
+      },
+    }),
 
     writeCase: tool({
       description:

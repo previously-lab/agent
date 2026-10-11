@@ -18,8 +18,16 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
   /** the data-hq-activity chunks written into the run's stream */
   frames: [] as Array<{ type: string; id: string; data: unknown }>,
-  resumeHook: vi.fn(async () => {
-    h.order.push("handoff");
+  /** field returns (回程): resumeHook calls whose token is NOT HQ_TOKEN */
+  fieldReturns: [] as Array<{ token: string; value: unknown }>,
+  resumeHook: vi.fn(async (token: string, value?: unknown) => {
+    // Claim/handoff calls (HQ_TOKEN) join the order log; the field return
+    // rides after the round and is tracked apart from that ordering.
+    if (token === HQ_TOKEN) {
+      h.order.push("handoff");
+    } else {
+      h.fieldReturns.push({ token, value });
+    }
     return { runId: "run-primary" };
   }),
   handleBrief: vi.fn(
@@ -124,6 +132,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.order.length = 0;
   h.frames.length = 0;
+  h.fieldReturns.length = 0;
   h.behavior = { conflict: null, queue: [], pend: true };
 });
 
@@ -140,7 +149,12 @@ describe("hqRun — claim and conflict", () => {
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       sliceId: "2026-10-04-0131",
     });
-    expect(h.resumeHook).not.toHaveBeenCalled();
+    // No HQ_TOKEN handoff — but the round's note rode back on the brief's
+    // replyToken (§4 回程, best-effort: this mock's hook is always there).
+    expect(h.order).not.toContain("handoff");
+    expect(h.fieldReturns).toEqual([
+      { token: BRIEF.replyToken, value: "idle — nothing substantive" },
+    ]);
   });
 
   it("the status pointer follows the claim: running at start, settled at finish", async () => {
@@ -173,9 +187,14 @@ describe("hqRun — claim and conflict", () => {
       wrote: true,
       errored: false,
     });
+    // a successful round's note rides back to the field
+    expect(h.fieldReturns).toEqual([
+      { token: BRIEF.replyToken, value: "wrote the user model" },
+    ]);
 
     vi.clearAllMocks();
     h.order.length = 0;
+    h.fieldReturns.length = 0;
     h.handleBrief.mockResolvedValueOnce({
       actions: [],
       note: "",
@@ -187,6 +206,8 @@ describe("hqRun — claim and conflict", () => {
       wrote: false,
       errored: true,
     });
+    // a failed round has nothing to say — no field return
+    expect(h.fieldReturns).toEqual([]);
   });
 
   it("a payload.date rides through as the round's date stamp (the field's local clock, not UTC)", async () => {
@@ -242,7 +263,8 @@ describe("hqRun — claim and conflict", () => {
     h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(HQ_TOKEN));
     const outcome = await hqRun(BRIEF);
     expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    expect(h.resumeHook).toHaveBeenCalledTimes(1);
+    // two resumeHook calls: the lost handoff, then the round's field return
+    expect(h.resumeHook).toHaveBeenCalledTimes(2);
     expect(h.handleBrief).toHaveBeenCalledTimes(1);
     expect(h.handleBrief).toHaveBeenCalledWith({
       brief: BRIEF.brief,
@@ -265,6 +287,59 @@ describe("hqRun — claim and conflict", () => {
     expect(outcome).toEqual({ kind: "dedupedTo", runId: "run-primary-2" });
     expect(h.resumeHook).toHaveBeenCalledTimes(2);
     expect(h.handleBrief).not.toHaveBeenCalled();
+  });
+});
+
+describe("hqRun — the field return (v0.21 §4 回程, bonus not channel)", () => {
+  it("a gone field hook (HookNotFoundError) passes silently — the round still settles", async () => {
+    // The field's hook registers only when its turn run suspends on the
+    // closing peek — an early/late HQ shout misses it, and that is normal.
+    h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(BRIEF.replyToken));
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
+    expect(h.resumeHook).toHaveBeenCalledTimes(1);
+    expect(h.resumeHook).toHaveBeenCalledWith(BRIEF.replyToken, "idle — nothing substantive");
+    // the run was not dragged down by the missed return
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: false,
+      errored: false,
+    });
+  });
+
+  it("any OTHER return failure is warned and swallowed, never thrown", async () => {
+    h.resumeHook.mockRejectedValueOnce(new Error("world store down"));
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: false,
+      errored: false,
+    });
+  });
+
+  it("an empty note (a veto with nothing to say) does NOT call back", async () => {
+    h.handleBrief.mockResolvedValueOnce({ actions: [], note: "" });
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
+    expect(h.resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("a multi-brief run returns each round's note on its OWN replyToken", async () => {
+    const second: HQBriefPayload = {
+      brief: "又一条，同片 2026-10-04-0131。",
+      replyToken: "field:2026-10-04-0131:2026-10-04T01:35:00.000Z",
+    };
+    h.behavior = { conflict: null, queue: [second], pend: true };
+    h.handleBrief
+      .mockResolvedValueOnce({ actions: [], note: "第一轮陈述。" })
+      .mockResolvedValueOnce({ actions: [], note: "第二轮陈述。" });
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "claimed", handled: 2 });
+    expect(h.fieldReturns).toEqual([
+      { token: BRIEF.replyToken, value: "第一轮陈述。" },
+      { token: second.replyToken, value: "第二轮陈述。" },
+    ]);
   });
 });
 
