@@ -58,6 +58,7 @@
   --color-card: var(--card);
   --color-paper: var(--paper);
   --color-paper-line: var(--paper-line);
+  --color-field: var(--field);
   --background-image-paper-grain: var(--paper-grain-map);
   --background-image-paper-grain-card: var(--paper-grain-map);
   --shadow-paper-lift: var(--paper-lift);
@@ -249,9 +250,11 @@
    DARK is black cardstock — paper yellows because oxidation chromophores
    absorb blue light, which is invisible against a near-black ground, so
    the dark sheet stays essentially neutral with only a trace of warmth.
-   Both keep the old contract's lightness clamping (the sheet follows the
-   theme's --background lightness, clamped into a readable band, warm
-   static fallbacks).
+   The dark sheet keeps the old contract's lightness clamping (it follows
+   the theme's --background lightness, clamped into a readable band); the
+   light sheet is a STANDALONE literal since the 2026-10-12 ruling (its
+   old derivation base, the field, is a warm token now and would drag its
+   hue — see the :root note).
 
    THE MATERIAL IS PAPER AND INK (the reader's call, 卡纸方案). Two
    surfaces, not four mechanisms: PAPER is the board, the card, and
@@ -266,29 +269,38 @@
    cover-tag still consumes --paper-raise (stripping it would silently
    unstyle the lab).
 
-   THE DERIVATION IS DOCUMENT-LEVEL. In the seed era it had to live per
-   surface: an inherited custom property carries its SUBSTITUTED value,
-   so a descendant's re-seed could never re-derive the ancestor's
-   variables (measured, Chromium 2026-09 — a blue board seed could not
-   escape :root's grey). The seed is gone, so the derivation lives once
-   on :root / .dark and every surface — and every descendant rule,
-   fade — reads the same resolved value.
+   THE DERIVATION IS DOCUMENT-LEVEL, where a derivation remains. In the
+   seed era it had to live per surface: an inherited custom property
+   carries its SUBSTITUTED value, so a descendant's re-seed could never
+   re-derive the ancestor's variables (measured, Chromium 2026-09 — a
+   blue board seed could not escape :root's grey). The seed is gone, so
+   the derivation lives once on :root / .dark and every surface — and
+   every descendant rule, fade — reads the same resolved value. Only the
+   DARK sheet still derives (from --background, hue a literal); the
+   light sheet's ruling made it a standalone literal.
 
-   STOCK    --paper   the sheet. Light: l [0.97, 0.99] · c [0.007, 0.03]
-            · h ≈ 88. Dark: l [0.21, 0.215] · c [0.003, 0.035] ·
-            h ≈ 87. The light floor is a HINT of warmth — 0.007, half
-            the previous 0.014, which read as aged; the composite lands
-            #f7f5f0–#faf8f4, new cardstock. The dark floor is 0.003: a
-            trace of warmth, yellow none. The bands sit off the anchors
-            on the side the grain pushes (the pinned-ink layers shift
-            the composite mean ~3–8%): the base is mixed so the
-            COMPOSITE lands at the stock colours. The derivation's hue
-            is a LITERAL (the achromatic origin's powerless hue breaks
-            clamp() — see the :root note).
+   STOCK    --paper   the sheet. Light: oklch(0.971 0.008 94) — stock A,
+            the 2026-10-12 ruling: the hue moved off the shipped cool 256
+            to a warm neutral, the lightness almost untouched — "not a UI
+            card pretending to be paper" without becoming a beige prop.
+            Dark: l [0.21, 0.215] · c [0.003, 0.035] · h ≈ 87 — the dark
+            side keeps its cool near-black (the same ruling; the warm A/B
+            dark variants exist in the lab for comparison only). The dark
+            floor is 0.003: a trace of warmth, yellow none. The bands sit
+            off the anchors on the side the grain pushes (the pinned-ink
+            layers shift the composite mean ~3–8%): the base is mixed so
+            the COMPOSITE lands at the stock colours. The dark
+            derivation's hue is a LITERAL (the achromatic origin's
+            powerless hue breaks clamp() — measured, a full session of
+            silent fallback before a computed-style probe caught it).
             --paper-plate   a one-tone-step-down fill — once a sunken
             region's colour, now the desk's printed code-block tint
             (flat ink film, not a recess). Δl ≈ 0.04 light, ≈ 0.06 dark
             (levels compress near black, so the dark step is wider).
+   FIELD    --field   the desk the sheet lies on (board A, same ruling):
+            light oklch(0.905 0.009 88), ΔL ≈ 0.066 under the sheet. Its
+            own token — --background stays the chrome's surface. Light
+            only: dark is pinned to the backdrop's current value.
    RELIEF   --paper-relief-lo / --paper-relief-hi   the two lips of a
             pressed edge — RETIRED from the timeline (paper-and-ink has
             no sunken or raised regions), retained only for the lab's
@@ -382,29 +394,42 @@
    wins where supported (the house pattern — see typeset.css). */
 
 :root {
-  /* THE SHEET. Eggshell register: a cool blue-white, NOT grey — grey is
-     chroma going to zero, cool keeps a real, if small, blue chroma. The
-     guard band: L ≥ 0.95, chroma 0.004–0.010, hue 250–265. (The old warm
-     88.7 register read yellow against the brand blue.)
-     HUE IS A LITERAL, measured not reasoned: the origin (--background)
-     is achromatic, its hue component is powerless, and math on a
-     powerless hue (e.g. clamp(85, h, 90)) makes Chromium drop the whole
-     declaration as invalid — the fallback silently painted for a full
-     session until the computed-style probe caught it. */
-  --paper: oklch(0.978 0.005 256);
-  --paper: oklch(from var(--background) clamp(0.973, l, 0.983) clamp(0.005, c, 0.03) 256);
+  /* THE SHEET — stock A, the owner's ruling (2026-10-12, v0.27 §5.1): a warm
+     neutral white, hue 94, lightness almost untouched from the old cool
+     sheet. The diagnosis it answers: the shipped cool 256 read as "a UI
+     card pretending to be paper"; the cure is the HUE, not the lightness.
+     THE VALUE STANDS ALONE. It used to derive from --background (the hue
+     hard-coded as a literal because the achromatic origin's hue is
+     powerless — math on it makes Chromium drop the whole declaration, which
+     silently painted the fallback for a full session until a computed-style
+     probe caught it). That derivation is retired on the light side: the
+     field is no longer the theme's --background but its own warm token, and
+     a warm derivation base would drag the sheet's hue along with it. The
+     DARK sheet still derives — its base never changed. */
+  --paper: oklch(0.971 0.008 94);
+
+  /* THE FIELD — the desk surface the sheet lies on (board A, the same
+     ruling). LIGHT only: a warm mid-grey ΔL ≈ 0.066 under the stock-A
+     sheet, so the paper has figure against it. It is its OWN token, not
+     --background: --background is the chrome's own surface (every floating
+     pill and card is bg-background), and the ruling did not ask to warm the
+     chrome. Only /app's field backdrop and the desk's tabletop read it.
+     DARK is pinned to the backdrop's current value on purpose — the dark
+     side of the board was not part of the ruling, and this binding keeps
+     the dark theme byte-identical. */
+  --field: oklch(0.905 0.009 88);
 
   /* The one-tone-step fill: the desk's printed code-block tint. */
-  --paper-plate: oklch(0.938 0.006 256);
+  --paper-plate: oklch(0.931 0.009 94);
   --paper-plate: oklch(from var(--paper) calc(l - 0.04) calc(c * 1.15) h);
 
   /* The pressed-edge lips. lo = the occluded (shadow) side: a deep cool
      slate in the paper's own hue family, Kinetics-class alpha. hi = the
      side that catches light: near-white. Only the lab's cover-tag still
      presses an edge with these. */
-  --paper-relief-lo: oklch(0.352 0.011 256 / 0.42);
+  --paper-relief-lo: oklch(0.352 0.018 94 / 0.42);
   --paper-relief-lo: oklch(from var(--paper) calc(l * 0.36) calc(c * 2.2) h / 0.42);
-  --paper-relief-hi: oklch(0.99 0.002 256 / 0.7);
+  --paper-relief-hi: oklch(0.99 0.003 94 / 0.7);
   --paper-relief-hi: oklch(from var(--paper) 0.99 calc(c * 0.4) h / 0.7);
 
   /* The one pressed-edge recipe left: a raised lip for the lab's
@@ -512,6 +537,10 @@
      sign, not the amount. Hue literal: see the light block's measured note. */
   --paper: oklch(0.120 0.002 256);
   --paper: oklch(from var(--background) clamp(0.117, l, 0.122) clamp(0.002, c, 0.035) 256);
+
+  /* THE FIELD, dark: pinned to the dark backdrop's current value — the
+     board ruling was light-only, so the dark theme must not move. */
+  --field: oklch(0.145 0 0);
 
   /* The one-tone-step fill, dark stock: levels compress near black, so
      the tone step is wider. */
