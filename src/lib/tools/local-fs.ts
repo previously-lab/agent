@@ -25,6 +25,60 @@ import { join, dirname } from "path";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
+// ─── SIMULATED LOCAL LATENCY (dev-only, env-gated) ──────────────────────────
+// The local backend stands in for GitHub, where every read is a round trip.
+// `PREVIOUSLY_LOCAL_LATENCY_MS` makes the two DIRECT paths (a real file read,
+// a real directory list) sleep that long — one tick per simulated request —
+// so first-paint behaviour can be measured against a realistic backend
+// without deploying. `PREVIOUSLY_LOCAL_LATENCY_LOG=1` prints one line per
+// simulated request (the read census). Both are unset in production, and the
+// GitHub backend never reads them.
+
+const LATENCY_MS = (() => {
+  const n = Number(process.env.PREVIOUSLY_LOCAL_LATENCY_MS ?? "0");
+  return Number.isFinite(n) && n > 0 ? n : 0;
+})();
+
+const LATENCY_LOG = process.env.PREVIOUSLY_LOCAL_LATENCY_LOG === "1";
+
+async function simulateLatency(op: string, path: string): Promise<void> {
+  if (LATENCY_LOG) console.log(`[latency] ${Date.now()} ${op} ${path}`);
+  if (LATENCY_MS > 0) {
+    await new Promise((resolve) => setTimeout(resolve, LATENCY_MS));
+  }
+}
+
+/**
+ * Every file path under `root` (repo-relative), ONE walk and ONE simulated
+ * latency tick — the local stand-in for GitHub's single recursive Trees
+ * call. Direct fs on purpose: paying a tick per directory here would model a
+ * backend nobody has.
+ */
+export async function walkPathsLocal(
+  root: string,
+  maxEntries = 50_000,
+): Promise<string[]> {
+  await simulateLatency("walk", root);
+  const base = resolveLocalDataPath(root);
+  const out: string[] = [];
+  const stack: Array<{ abs: string; rel: string }> = [{ abs: base, rel: root }];
+  while (stack.length && out.length < maxEntries) {
+    const { abs, rel } = stack.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(abs, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      const childRel = `${rel}/${e.name}`;
+      if (e.isDirectory()) stack.push({ abs: join(abs, e.name), rel: childRel });
+      else out.push(childRel);
+    }
+  }
+  return out;
+}
+
 export async function readFileLocal(
   path: string,
   opts?: ReadOptions
@@ -44,6 +98,7 @@ export async function readFileLocal(
 }
 
 async function readLocalDirect(path: string): Promise<string> {
+  await simulateLatency("read", path);
   const fullPath = resolveLocalDataPath(path);
   if (!existsSync(fullPath)) {
     throw new Error(`File not found: "${path}"`);
@@ -192,6 +247,7 @@ export async function listFilesLocal(
 async function listLocalDirect(
   path: string
 ): Promise<Array<{ name: string; type: "file" | "dir"; path: string; size?: number }>> {
+  await simulateLatency("list", path);
   const fullPath = resolveLocalDataPath(path);
   if (!existsSync(fullPath)) {
     throw new Error(`Directory not found: "${path}"`);
