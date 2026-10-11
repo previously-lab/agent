@@ -135,7 +135,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
-import { Environment, Lightformer, OrthographicCamera } from "@react-three/drei";
+import { Environment, Lightformer, OrthographicCamera, PerspectiveCamera } from "@react-three/drei";
 import { Bloom, EffectComposer, N8AO, Vignette } from "@react-three/postprocessing";
 import { useTranslations, useLocale } from "next-intl";
 import { useReducedMotion } from "motion/react";
@@ -151,6 +151,7 @@ import {
   TERMINAL_D,
   TERMINAL_DEPART,
   TERMINAL_FLARE_MS,
+  TERMINAL_H,
   TERMINAL_REACH_LOBBY,
   TERMINAL_REACH_ROOM,
   type TerminalAnchor,
@@ -160,6 +161,7 @@ import {
   hotelShotPose,
   type FollowPose,
 } from "@/lib/timeline3d/world-transition";
+import { GAME_SIM_FREEZE } from "./sim-freeze";
 import { CURSOR_HOOKS } from "@/lib/timeline3d/cursor";
 import {
   LOBBY_LENGTH,
@@ -205,11 +207,33 @@ import {
 import {
   roomPlanFor,
   scaledRecipeFor,
+  scaledWallHeight,
   wallSegmentsFor,
   composeRoom,
   type RoomPlan,
   type ScaleNotation,
 } from "@/lib/game/room-plan";
+import {
+  CHASE_AVATAR_FADE,
+  CHASE_BOOM,
+  CHASE_CAM_HEIGHT,
+  CHASE_FOV,
+  CHASE_LIVE,
+  CHASE_MIN_DIST,
+  CHASE_PIVOT_HEIGHT,
+  CHASE_POS_RATE,
+  CHASE_PROBE_RADIUS,
+  CHASE_PULL_IN_RATE,
+  CHASE_PUSH_OUT_RATE,
+  CHASE_YAW_RATE,
+  TOPDOWN_YAW,
+  castBoom,
+  corridorSolids,
+  moveBasisFor,
+  roomSolids,
+  type GameCameraMode,
+  type SolidBox,
+} from "@/lib/game/chase-camera";
 import {
   hostableWallsFor,
   placeRoomDoors,
@@ -325,6 +349,22 @@ interface Motion {
   moving: boolean;
 }
 
+/** A tap-to-walk target (touch: tap a door or the terminal). Manual input
+ *  (keys or the stick) cancels it the frame it appears; arrival fires the
+ *  anchor interaction when the tap named a terminal. */
+interface WalkTarget {
+  active: boolean;
+  x: number;
+  z: number;
+  /** Arrival radius (m): a door's threshold, the terminal's reach. */
+  arrive: number;
+  /** Fire the interaction on arrival (a tapped terminal). */
+  interact: boolean;
+  /** No-progress timer (s) — a wall the clamp won't pass cancels the walk. */
+  still: number;
+  lastD: number;
+}
+
 /** The one space that may be mounted at a time. `recipe` is the authored
  *  recipe (palette, archetype); `scaledRecipe` is the same recipe with the
  *  room-language scale notation applied to its plan dims — the ONE scaled
@@ -363,6 +403,24 @@ const NO_ROOM_SEAMS: readonly SeamWall[] = [];
  *  stale destination). Referential stability keeps the derived memos from
  *  re-running every render. */
 const NO_TIMELINE_DOORS: readonly CorridorDoor[] = [];
+
+/** The lobby's camera-occlusion blockers (v0.28): the front desk, the
+ *  armchairs, and the anchor terminal at their drawn heights — the chase
+ *  rig's sphere cast keeps out of the furniture the player also cannot
+ *  walk through (LOBBY_BLOCKERS / LOBBY_TERMINAL_BLOCKER). The sight
+ *  line (1.35 → 1.9 m) clears anything lower than ~1.45 m, so in
+ *  practice these bind only close up. Module-level: the inputs are
+ *  constants. */
+const LOBBY_SOLID_BLOCKERS: readonly SolidBox[] = [
+  ...LOBBY_BLOCKERS.map((b, i) => ({ ...b, y1: i === 0 ? 1.1 : 0.9 })),
+  {
+    x0: LOBBY_TERMINAL_BLOCKER.x0,
+    x1: LOBBY_TERMINAL_BLOCKER.x1,
+    z0: LOBBY_TERMINAL_BLOCKER.z0,
+    z1: LOBBY_TERMINAL_BLOCKER.z1,
+    y1: TERMINAL_H * LOBBY_TERMINAL_ANCHOR.scale,
+  },
+];
 
 type PlayerRef = MutableRefObject<PlayerPos>;
 
@@ -408,21 +466,23 @@ declare global {
 const MAX_DT = 0.05;
 
 /**
- * Screen-relative key directions for the fixed camera at a (−12, +16, +12)
- * offset: screen-up (W) is world (+x, −z) — straight away from the camera —
- * and screen-right (D) is world (+x, +z). Derived from the lookAt
- * direction (forward (+x, −z)/√2, right = forward × up), not just the
- * offset signs.
+ * Screen-relative key directions in the CANONICAL screen frame ([right,
+ * up] — W/↑ is screen-up, D/→ is screen-right). The world-space direction
+ * comes from rotating this vector by the camera's live yaw (moveBasisFor,
+ * chase-camera.ts): at TOPDOWN_YAW the result is byte-identical to the
+ * legacy fixed-camera diagonals (screen-up = world (+x, −z)/√2), so the
+ * top-down debug mode keeps the old movement exactly and the chase rig's
+ * "left on screen is left in the world" falls out of the same formula.
  */
 const KEY_DIRS: Record<string, readonly [number, number]> = {
-  w: [Math.SQRT1_2, -Math.SQRT1_2],
-  arrowup: [Math.SQRT1_2, -Math.SQRT1_2],
-  s: [-Math.SQRT1_2, Math.SQRT1_2],
-  arrowdown: [-Math.SQRT1_2, Math.SQRT1_2],
-  a: [-Math.SQRT1_2, -Math.SQRT1_2],
-  arrowleft: [-Math.SQRT1_2, -Math.SQRT1_2],
-  d: [Math.SQRT1_2, Math.SQRT1_2],
-  arrowright: [Math.SQRT1_2, Math.SQRT1_2],
+  w: [0, 1],
+  arrowup: [0, 1],
+  s: [0, -1],
+  arrowdown: [0, -1],
+  a: [-1, 0],
+  arrowleft: [-1, 0],
+  d: [1, 0],
+  arrowright: [1, 0],
 };
 
 const HANDLED_KEYS = new Set(Object.keys(KEY_DIRS));
@@ -437,23 +497,24 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t;
 }
 
-/** Normalized move vector for the pressed keys (diagonals stay unit length). */
-function moveVectorFromKeys(keys: ReadonlySet<string>): { x: number; z: number } {
-  let x = 0;
-  let z = 0;
+/** Move vector in the SCREEN frame ([right, up], unit-clamped) for the
+ *  pressed keys — the GameLoop rotates it by the live camera basis. */
+function moveVectorFromKeys(keys: ReadonlySet<string>): { rx: number; up: number } {
+  let rx = 0;
+  let up = 0;
   for (const key of keys) {
     const dir = KEY_DIRS[key];
     if (dir) {
-      x += dir[0];
-      z += dir[1];
+      rx += dir[0];
+      up += dir[1];
     }
   }
-  const len = Math.hypot(x, z);
+  const len = Math.hypot(rx, up);
   if (len > 1) {
-    x /= len;
-    z /= len;
+    rx /= len;
+    up /= len;
   }
-  return { x, z };
+  return { rx, up };
 }
 
 /** In-room speed factor: clamp(S, 1, ∞)^EXP — miniature rooms keep corridor
@@ -991,28 +1052,71 @@ function terminalForSpace(space: ActiveSpace, plan: RoomPlan): TerminalAnchor {
 /* Scene parts                                                         */
 /* ------------------------------------------------------------------ */
 
-/** Fixed 45° camera: lerped follow point + constant offset, lookAt player.
- *  The ortho zoom lerps (same easing) toward CAMERA_ZOOM divided by the
- *  active room's bounded pull-back — colossal rooms stay legible as rooms,
- *  and the corridor eases back to normal. One exception to the glide: a
- *  strand-door wormhole teleports the player ~90 m down the timeline, so
- *  `snapRef` (set by the transition's fade-out midpoint) snaps the smoothed
- *  focus to the new position on that frame — gated by
- *  STRAND_TELEPORT_CAMERA_SNAP (tuning/render.ts); flip it to false if the
- *  glide is ever wanted back. */
+/**
+ * THE RIG (v0.28). Default: a third-person CHASE camera — pivot at the
+ * avatar's chest (CHASE_PIVOT_HEIGHT), a boom CHASE_BOOM back and
+ * CHASE_CAM_HEIGHT up, FOV CHASE_FOV, focus damped at the repo's λ≈12,
+ * yaw following the avatar's heading lazily while it moves (auto-follow,
+ * never a snap, no look control in v1). Occlusion is a SPHERE CAST from
+ * the pivot toward the desired position against the analytic solids
+ * (chase-camera.ts — the same data the movement clamps use, never render
+ * meshes): on a hit the boom shortens FAST (an occluded camera is a wrong
+ * state, not a smoothed one) and relaxes back SLOW; at/under
+ * CHASE_MIN_DIST the avatar fades (CHASE_LIVE.fade) instead of the camera
+ * entering its head. There is no ceiling anywhere in the world (audited:
+ * corridor.tsx — "No ceilings anywhere — open dollhouse"), so nothing
+ * above the sight line needs culling; camera-facing walls are solid to
+ * the cast only up to their DRAWN sill height, which the sight line
+ * clears (see chase-camera.ts).
+ *
+ * `?view=game&camera=top` (mode "top") keeps the legacy fixed 45°
+ * orthographic dollhouse byte-for-byte — the in-place comparison switch.
+ *
+ * Both modes feed the world transition's scripted shot (world-transition
+ * hotelShotPose): the chase rig reports its live pose with zoom 1, so the
+ * shot's ×SHOT_ZOOM_CLOSE dolly-in plays on the perspective camera's own
+ * zoom and the rise still ends exactly ON the live follow pose. The
+ * strand-door wormhole teleport snaps the smoothed focus (and the chase
+ * boom, which is wrong-state too) on the spot
+ * (STRAND_TELEPORT_CAMERA_SNAP, tuning/render.ts).
+ */
 function CameraRig({
   playerRef,
+  motionRef,
   space,
   snapRef,
+  mode,
+  solids,
+  waterSide,
 }: {
   playerRef: PlayerRef;
+  motionRef: MutableRefObject<Motion>;
   space: ActiveSpace | null;
   snapRef: MutableRefObject<boolean>;
+  mode: GameCameraMode;
+  /** The occlusion solids for the current world state (memoised by the
+   *  integrator — corridor/lobby or the active room). */
+  solids: readonly SolidBox[];
+  waterSide: number;
 }): JSX.Element {
   const focus = useRef(
     new THREE.Vector3(playerRef.current.x, 0, playerRef.current.z),
   );
   const zoomRef = useRef(CAMERA_ZOOM);
+  const yawRef = useRef(TOPDOWN_YAW);
+  const distRef = useRef(CHASE_BOOM);
+  /** One-frame flag: a teleport snap re-casts the boom on the spot. */
+  const distSnapRef = useRef(false);
+  const fadeRef = useRef(1);
+  const groundRef = useRef(0);
+  const cameraRef = useRef<THREE.Camera | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [tapTools] = useState(() => ({
+    raycaster: new THREE.Raycaster(),
+    plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+    ndc: new THREE.Vector2(),
+    hit: new THREE.Vector3(),
+  }));
   const initialPosition = useMemo<[number, number, number]>(
     () => [
       playerRef.current.x + CAM_OFFSET.x,
@@ -1022,36 +1126,199 @@ function CameraRig({
     [playerRef],
   );
 
-  useFrame(({ camera }, dt) => {
+  // Tap projection (tap-to-interact): screen px → the ground-plane point
+  // under it. The touch layer's only scene access — the live camera and
+  // the canvas rect, never meshes. Reads cameraRef/canvasRef per call, so
+  // a mode switch (or the scripted shot) never goes stale.
+  const projectTap = useCallback(
+    (sx: number, sy: number): { x: number; z: number } | null => {
+      const camera = cameraRef.current;
+      const canvas = canvasRef.current;
+      if (camera === null || canvas === null) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      tapTools.ndc.set(
+        ((sx - rect.left) / rect.width) * 2 - 1,
+        -(((sy - rect.top) / rect.height) * 2 - 1),
+      );
+      tapTools.raycaster.setFromCamera(tapTools.ndc, camera);
+      tapTools.plane.constant = -CHASE_LIVE.groundY;
+      const hit = tapTools.raycaster.ray.intersectPlane(tapTools.plane, tapTools.hit);
+      return hit === null ? null : { x: hit.x, z: hit.z };
+    },
+    [tapTools],
+  );
+  useEffect(() => {
+    CHASE_LIVE.projectTap = projectTap;
+    return () => {
+      CHASE_LIVE.projectTap = undefined;
+    };
+  }, [projectTap]);
+
+  // The inverse projection (probe surface): a world point's screen px, so
+  // a scripted tap lands exactly on a sheet or a door. Null when the
+  // point is behind the camera.
+  const projectPoint = useCallback(
+    (x: number, y: number, z: number): { sx: number; sy: number } | null => {
+      const camera = cameraRef.current;
+      const canvas = canvasRef.current;
+      if (camera === null || canvas === null) return null;
+      const rect = canvas.getBoundingClientRect();
+      tapTools.hit.set(x, y, z).project(camera);
+      if (tapTools.hit.z > 1) return null;
+      return {
+        sx: rect.left + ((tapTools.hit.x + 1) / 2) * rect.width,
+        sy: rect.top + ((1 - tapTools.hit.y) / 2) * rect.height,
+      };
+    },
+    [tapTools],
+  );
+  useEffect(() => {
+    CHASE_LIVE.projectPoint = projectPoint;
+    return () => {
+      CHASE_LIVE.projectPoint = undefined;
+    };
+  }, [projectPoint]);
+
+  useFrame(({ camera, gl }, dt) => {
+    cameraRef.current = camera;
+    canvasRef.current = gl.domElement;
+    const step = Math.min(dt, MAX_DT);
+    const live = CHASE_LIVE;
+    const p = playerRef.current;
     if (STRAND_TELEPORT_CAMERA_SNAP && snapRef.current) {
       snapRef.current = false;
-      focus.current.x = playerRef.current.x;
-      focus.current.z = playerRef.current.z;
+      focus.current.x = p.x;
+      focus.current.z = p.z;
+      // A cross-hotel teleport is wrong-state for the boom too: pin the
+      // chase distance to the fresh cast this frame instead of gliding.
+      distSnapRef.current = true;
     }
-    const k = 1 - Math.exp(-CAMERA_LERP_RATE * Math.min(dt, MAX_DT));
-    focus.current.x += (playerRef.current.x - focus.current.x) * k;
-    focus.current.z += (playerRef.current.z - focus.current.z) * k;
-    const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
-    zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
-    const ortho = camera as THREE.OrthographicCamera;
-
-    // THE TRANSITION SHOT (world-transition.ts): while a world transition
-    // runs, a scripted pose takes the camera down from this follow pose to
-    // eye level in front of the anchor terminal (leaving) or back up from
-    // it (entering). The follow rig's own state keeps easing above, so
-    // the hand back is seamless — the rise ends exactly ON the live pose.
-    // Movement is frozen by GameLoop for the same window, so the follow
-    // pose is stationary underneath the shot.
     const wt = WORLD_TRANSITION;
-    if (wt.active) {
+
+    if (mode === "top") {
+      // THE LEGACY DOLLHOUSE — byte-for-byte the v0.27 rig.
+      const k = 1 - Math.exp(-CAMERA_LERP_RATE * step);
+      focus.current.x += (p.x - focus.current.x) * k;
+      focus.current.z += (p.z - focus.current.z) * k;
+      const pullback = space === null ? 1 : roomZoomPullback(space.scale.factor);
+      zoomRef.current += (CAMERA_ZOOM / pullback - zoomRef.current) * k;
+      const ortho = camera as THREE.OrthographicCamera;
+      if (wt.active && wt.mode !== "pause") {
+        const follow: FollowPose = {
+          x: focus.current.x + CAM_OFFSET.x,
+          y: CAM_OFFSET.y,
+          z: focus.current.z + CAM_OFFSET.z,
+          lookX: focus.current.x,
+          lookY: 0,
+          lookZ: focus.current.z,
+          zoom: zoomRef.current,
+        };
+        const shot = hotelShotPose(
+          wt.progress,
+          wt.from,
+          wt.to,
+          wt.reducedMotion,
+          wt.anchor,
+          follow,
+        );
+        if (shot !== null) {
+          camera.position.set(shot.x, shot.y, shot.z);
+          camera.lookAt(shot.lookX, shot.lookY, shot.lookZ);
+          ortho.zoom = shot.zoom;
+          ortho.updateProjectionMatrix();
+          live.yaw = TOPDOWN_YAW;
+          live.camX = shot.x;
+          live.camY = shot.y;
+          live.camZ = shot.z;
+          live.dist = CHASE_BOOM;
+          live.blocked = false;
+          live.fade = 1;
+          return;
+        }
+      }
+      camera.position.set(
+        focus.current.x + CAM_OFFSET.x,
+        CAM_OFFSET.y,
+        focus.current.z + CAM_OFFSET.z,
+      );
+      camera.lookAt(focus.current.x, 0, focus.current.z);
+      ortho.zoom = zoomRef.current;
+      ortho.updateProjectionMatrix();
+      live.yaw = TOPDOWN_YAW;
+      live.camX = camera.position.x;
+      live.camY = camera.position.y;
+      live.camZ = camera.position.z;
+      live.dist = CHASE_BOOM;
+      live.blocked = false;
+      live.fade = 1;
+      live.groundY = 0;
+      return;
+    }
+
+    // ── THE CHASE RIG ──
+    const k = 1 - Math.exp(-CHASE_POS_RATE * step);
+    focus.current.x += (p.x - focus.current.x) * k;
+    focus.current.z += (p.z - focus.current.z) * k;
+    const groundY = space ? groundTargetY(space, waterSide, p.x, p.z) : 0;
+    groundRef.current +=
+      (groundY - groundRef.current) * (1 - Math.exp(-GROUND_LERP_RATE * step));
+    const gy = groundRef.current;
+    // Lazy yaw: the heading pulls the camera round only while the avatar
+    // moves — standing still never swings the world.
+    const motion = motionRef.current;
+    if (motion.moving) {
+      yawRef.current = lerpAngle(
+        yawRef.current,
+        Math.atan2(motion.x, motion.z),
+        1 - Math.exp(-CHASE_YAW_RATE * step),
+      );
+    }
+    const yaw = yawRef.current;
+    const fx = Math.sin(yaw);
+    const fz = Math.cos(yaw);
+    const pivotX = focus.current.x;
+    const pivotY = gy + CHASE_PIVOT_HEIGHT;
+    const pivotZ = focus.current.z;
+    const desiredX = pivotX - fx * CHASE_BOOM;
+    const desiredY = gy + CHASE_CAM_HEIGHT;
+    const desiredZ = pivotZ - fz * CHASE_BOOM;
+    const t = castBoom(
+      pivotX, pivotY, pivotZ,
+      desiredX, desiredY, desiredZ,
+      solids,
+      CHASE_PROBE_RADIUS,
+    );
+    const target = Math.max(0.3, t * CHASE_BOOM);
+    let dist = distRef.current;
+    if (distSnapRef.current) {
+      distSnapRef.current = false;
+      dist = target;
+    } else {
+      // Pull in fast, push out slow — an occluded frame is corrected
+      // immediately; the return to full boom never pumps.
+      const rate = target < dist ? CHASE_PULL_IN_RATE : CHASE_PUSH_OUT_RATE;
+      dist += (target - dist) * (1 - Math.exp(-rate * step));
+    }
+    distRef.current = dist;
+    const along = dist / CHASE_BOOM;
+    const camX = pivotX + (desiredX - pivotX) * along;
+    const camY = pivotY + (desiredY - pivotY) * along;
+    const camZ = pivotZ + (desiredZ - pivotZ) * along;
+    // The avatar fades rather than the camera entering its head.
+    const fadeTarget = dist <= CHASE_MIN_DIST ? CHASE_AVATAR_FADE : 1;
+    fadeRef.current += (fadeTarget - fadeRef.current) * (1 - Math.exp(-10 * step));
+
+    const persp = camera as THREE.PerspectiveCamera;
+    if (wt.active && wt.mode !== "pause") {
       const follow: FollowPose = {
-        x: focus.current.x + CAM_OFFSET.x,
-        y: CAM_OFFSET.y,
-        z: focus.current.z + CAM_OFFSET.z,
-        lookX: focus.current.x,
-        lookY: 0,
-        lookZ: focus.current.z,
-        zoom: zoomRef.current,
+        x: camX,
+        y: camY,
+        z: camZ,
+        lookX: pivotX,
+        lookY: pivotY,
+        lookZ: pivotZ,
+        zoom: 1,
       };
       const shot = hotelShotPose(
         wt.progress,
@@ -1064,23 +1331,48 @@ function CameraRig({
       if (shot !== null) {
         camera.position.set(shot.x, shot.y, shot.z);
         camera.lookAt(shot.lookX, shot.lookY, shot.lookZ);
-        ortho.zoom = shot.zoom;
-        ortho.updateProjectionMatrix();
+        if (Math.abs(persp.zoom - shot.zoom) > 1e-4) {
+          persp.zoom = shot.zoom;
+          persp.updateProjectionMatrix();
+        }
+        live.yaw = yaw;
+        live.camX = shot.x;
+        live.camY = shot.y;
+        live.camZ = shot.z;
+        live.dist = dist;
+        live.blocked = t < 1;
+        live.fade = fadeRef.current;
+        live.groundY = gy;
         return;
       }
     }
-
-    camera.position.set(
-      focus.current.x + CAM_OFFSET.x,
-      CAM_OFFSET.y,
-      focus.current.z + CAM_OFFSET.z,
-    );
-    camera.lookAt(focus.current.x, 0, focus.current.z);
-    ortho.zoom = zoomRef.current;
-    ortho.updateProjectionMatrix();
+    camera.position.set(camX, camY, camZ);
+    camera.lookAt(pivotX, pivotY, pivotZ);
+    if (persp.zoom !== 1) {
+      persp.zoom = 1;
+      persp.updateProjectionMatrix();
+    }
+    live.yaw = yaw;
+    live.camX = camX;
+    live.camY = camY;
+    live.camZ = camZ;
+    live.dist = dist;
+    live.blocked = t < 1;
+    live.fade = fadeRef.current;
+    live.groundY = gy;
   });
 
-  return <OrthographicCamera makeDefault zoom={CAMERA_ZOOM} position={initialPosition} />;
+  return mode === "top" ? (
+    <OrthographicCamera makeDefault zoom={CAMERA_ZOOM} position={initialPosition} />
+  ) : (
+    <PerspectiveCamera
+      makeDefault
+      fov={CHASE_FOV}
+      position={initialPosition}
+      near={0.1}
+      far={400}
+    />
+  );
 }
 
 /**
@@ -1342,6 +1634,7 @@ function PlayerAvatar({
 }): JSX.Element {
   const rootRef = useRef<THREE.Group>(null);
   const bodyRef = useRef<THREE.Group>(null);
+  const matsRef = useRef<THREE.MeshStandardMaterial[]>([]);
   const headingRef = useRef(0);
   const bobPhaseRef = useRef(0);
   const bobRef = useRef(0);
@@ -1371,7 +1664,18 @@ function PlayerAvatar({
     }
     body.position.y = bobRef.current;
     root.rotation.y = headingRef.current;
+    // MIN-DIST FADE (v0.28): the chase rig drives CHASE_LIVE.fade — below
+    // CHASE_MIN_DIST the avatar goes translucent instead of the camera
+    // entering its head. The materials stay transparent+depthWrite from
+    // construction (no program re-key at runtime), so this is one float
+    // write per material per frame.
+    for (const mat of matsRef.current) mat.opacity = CHASE_LIVE.fade;
   });
+
+  /** Stable slot assignment for the three shared materials (mount order). */
+  const matRefAt = (i: number) => (mat: THREE.MeshStandardMaterial | null) => {
+    if (mat) matsRef.current[i] = mat;
+  };
 
   return (
     <group ref={rootRef}>
@@ -1379,16 +1683,34 @@ function PlayerAvatar({
         {/* Capsule body — total height 0.9 m. */}
         <mesh castShadow position={[0, 0.45, 0]}>
           <capsuleGeometry args={[0.26, 0.38, 4, 10]} />
-          <meshStandardMaterial color={PLAYER_BODY} roughness={1} flatShading />
+          <meshStandardMaterial
+            ref={matRefAt(0)}
+            color={PLAYER_BODY}
+            roughness={1}
+            flatShading
+            transparent
+          />
         </mesh>
         <mesh castShadow position={[0, 1.04, 0.02]}>
           <sphereGeometry args={[0.19, 12, 10]} />
-          <meshStandardMaterial color={PLAYER_HEAD} roughness={1} flatShading />
+          <meshStandardMaterial
+            ref={matRefAt(1)}
+            color={PLAYER_HEAD}
+            roughness={1}
+            flatShading
+            transparent
+          />
         </mesh>
         {/* Visor nub — marks the facing direction (+z local). */}
         <mesh castShadow position={[0, 1.04, 0.2]} rotation={[Math.PI / 2, 0, 0]}>
           <coneGeometry args={[0.06, 0.14, 6]} />
-          <meshStandardMaterial color={PLAYER_BODY} roughness={1} flatShading />
+          <meshStandardMaterial
+            ref={matRefAt(2)}
+            color={PLAYER_BODY}
+            roughness={1}
+            flatShading
+            transparent
+          />
         </mesh>
       </group>
     </group>
@@ -1420,6 +1742,8 @@ function GameLoop({
   playerRef,
   keysRef,
   motionRef,
+  walkRef,
+  onWalkArrive,
   doors,
   sliceIds,
   doorXs,
@@ -1460,6 +1784,12 @@ function GameLoop({
   playerRef: PlayerRef;
   keysRef: MutableRefObject<Set<string>>;
   motionRef: MutableRefObject<Motion>;
+  /** The tap-to-walk target (touch controls) — cancelled by manual input,
+   *  arrival, a stuck wall, a hop, or a freeze. */
+  walkRef: MutableRefObject<WalkTarget>;
+  /** Arrival on a target whose tap named the terminal: fire the same
+   *  interaction the Enter/E key fires. */
+  onWalkArrive: () => void;
   /** The CURRENT hotel's full door list (the HUD's label source) — the
    *  integrator swaps it on a hotel hop. */
   doors: readonly CorridorDoor[];
@@ -1574,19 +1904,74 @@ function GameLoop({
       // hotel the player just LEFT, and the fresh position (e.g. another
       // hotel's west end, inside the page door's gap) can read as a
       // crossing. Skip one frame's movement, triggers and clamps; the
-      // next frame runs on the committed hotel.
+      // next frame runs on the committed hotel. A tap-to-walk target from
+      // the old hotel is stale by definition — drop it.
       hopGuard.current = false;
       motionRef.current = { x: 0, z: 0, moving: false };
+      walkRef.current.active = false;
+      CHASE_LIVE.walking = false;
     } else if (
       !transitionActive &&
       !departingRef.current &&
-      !WORLD_TRANSITION.active
+      !WORLD_TRANSITION.active &&
+      !GAME_SIM_FREEZE.frozen
     ) {
-      // 1. Movement — screen-relative, dt-corrected, no acceleration. Inside
-      // a space the speed scales with the room (clamp(S,1,∞)^EXP): a colossal
-      // room should feel immense, not waste the player's time; the corridor
-      // stays exactly PLAYER_SPEED.
-      const move = moveVectorFromKeys(keysRef.current);
+      // 1. Movement — screen-relative, dt-corrected, no acceleration. The
+      // basis comes from the camera's LIVE yaw (chase-camera.ts): "left on
+      // screen is left in the world" under both rigs, and at TOPDOWN_YAW
+      // the vectors are byte-identical to the legacy fixed-camera
+      // diagonals. The floating stick adds into the same screen frame; a
+      // tap-to-walk target drives the player in world space until manual
+      // input, arrival (which may fire a tapped terminal), or a stuck
+      // wall cancels it. Inside a space the speed scales with the room
+      // (clamp(S,1,∞)^EXP): a colossal room should feel immense, not waste
+      // the player's time; the corridor stays exactly PLAYER_SPEED.
+      const keys = moveVectorFromKeys(keysRef.current);
+      let rx = keys.rx + CHASE_LIVE.stickX;
+      let up = keys.up + CHASE_LIVE.stickY;
+      const manual = rx !== 0 || up !== 0;
+      const walk = walkRef.current;
+      let move = { x: 0, z: 0 };
+      if (manual) {
+        const len = Math.hypot(rx, up);
+        if (len > 1) {
+          rx /= len;
+          up /= len;
+        }
+        const basis = moveBasisFor(CHASE_LIVE.yaw);
+        move = {
+          x: up * basis.fx + rx * basis.rx,
+          z: up * basis.fz + rx * basis.rz,
+        };
+        if (walk.active) {
+          walk.active = false;
+          CHASE_LIVE.walking = false;
+        }
+      } else if (walk.active) {
+        const dx = walk.x - p.x;
+        const dz = walk.z - p.z;
+        const d = Math.hypot(dx, dz);
+        if (d <= walk.arrive) {
+          walk.active = false;
+          CHASE_LIVE.walking = false;
+          if (walk.interact) onWalkArrive();
+        } else {
+          move = { x: dx / d, z: dz / d };
+          // Stuck: the clamp won't let the player close on the target —
+          // cancel rather than pushing a wall forever.
+          const step = Math.min(delta, MAX_DT);
+          if (Math.abs(walk.lastD - d) < 0.002) {
+            walk.still += step;
+            if (walk.still > 0.8) {
+              walk.active = false;
+              CHASE_LIVE.walking = false;
+            }
+          } else {
+            walk.still = 0;
+          }
+          walk.lastD = d;
+        }
+      }
       const moving = move.x !== 0 || move.z !== 0;
       motionRef.current = { x: move.x, z: move.z, moving };
       if (moving) {
@@ -1745,9 +2130,13 @@ function GameLoop({
         );
       }
     } else {
-      // Frozen mid-crossing: report "not moving" so the avatar settles
-      // instead of bobbing in place while its room dissolves.
+      // Frozen — mid-crossing (the strand door manager) or under the
+      // document tier (GAME_SIM_FREEZE, v0.28 step 1): report "not moving"
+      // so the avatar settles instead of bobbing in place. A tap-to-walk
+      // target from the frozen world is dropped with it.
       motionRef.current = { x: 0, z: 0, moving: false };
+      walkRef.current.active = false;
+      CHASE_LIVE.walking = false;
     }
 
     // 3b. Corridor visibility: the instant a space engages — the player has
@@ -1889,6 +2278,131 @@ function GameLoop({
     GAME_DEBUG.hotel = hotelLabel;
   });
   return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Touch controls (v0.28) — one thumb, no second hand                   */
+/* ------------------------------------------------------------------ */
+
+/** Stick knob travel (px) — the vector saturates at the rim. */
+const STICK_RADIUS_PX = 48;
+/** Finger slop (px): below this a touch is a tap candidate, not a drag. */
+const STICK_DEAD_PX = 10;
+/** Longest press that still reads as a tap. */
+const TAP_MAX_MS = 400;
+
+/**
+ * THE TOUCH LAYER — one-thumb controls. A touch anywhere in the LOWER
+ * half of the screen spawns a floating stick under that thumb (it works
+ * for either hand, and the thumb never travels to a fixed pad); drag =
+ * move, release = stop. A TAP anywhere (short, unmoved) picks what is
+ * under it through the tap-to-interact resolver — a loose sheet, the
+ * terminal, a door. No look control, no second button.
+ *
+ * Touch pointers ONLY: the desktop keeps the arrow keys with the same
+ * movement vocabulary, and mouse gestures pass to the chrome. Seating:
+ * the layer fills the game pane UNDER the chrome — the exit and gallery
+ * buttons (z-10/z-20) and the conversation pill (layout level) keep
+ * their taps by stacking order; the world gate is field chrome and never
+ * mounts over the hotel, so nothing competes for the lower half.
+ */
+function TouchControls({
+  onTap,
+}: {
+  onTap: (sx: number, sy: number) => void;
+}): JSX.Element {
+  const [stick, setStick] = useState<{
+    left: number;
+    top: number;
+    dx: number;
+    dy: number;
+  } | null>(null);
+  const touchRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    startT: number;
+    engaged: boolean;
+    lowerHalf: boolean;
+  } | null>(null);
+
+  const clearTouch = useCallback((): void => {
+    touchRef.current = null;
+    setStick(null);
+    CHASE_LIVE.stickX = 0;
+    CHASE_LIVE.stickY = 0;
+    CHASE_LIVE.stickActive = false;
+  }, []);
+
+  return (
+    <div
+      className="absolute inset-0 touch-none"
+      onPointerDown={(e) => {
+        if (e.pointerType !== "touch" || touchRef.current !== null) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        touchRef.current = {
+          pointerId: e.pointerId,
+          startX: e.clientX,
+          startY: e.clientY,
+          startT: performance.now(),
+          engaged: false,
+          lowerHalf: e.clientY > window.innerHeight / 2,
+        };
+      }}
+      onPointerMove={(e) => {
+        const t = touchRef.current;
+        if (t === null || e.pointerId !== t.pointerId) return;
+        const dx = e.clientX - t.startX;
+        const dy = e.clientY - t.startY;
+        if (!t.engaged) {
+          if (!t.lowerHalf || Math.hypot(dx, dy) < STICK_DEAD_PX) return;
+          t.engaged = true;
+        }
+        const len = Math.hypot(dx, dy);
+        const clamped = Math.min(len, STICK_RADIUS_PX);
+        const nx = len > 0 ? dx / len : 0;
+        const ny = len > 0 ? dy / len : 0;
+        CHASE_LIVE.stickX = (nx * clamped) / STICK_RADIUS_PX;
+        // Screen-down is the stick's negative up.
+        CHASE_LIVE.stickY = (-ny * clamped) / STICK_RADIUS_PX;
+        CHASE_LIVE.stickActive = true;
+        const rect = e.currentTarget.getBoundingClientRect();
+        setStick({
+          left: t.startX - rect.left,
+          top: t.startY - rect.top,
+          dx: nx * clamped,
+          dy: ny * clamped,
+        });
+      }}
+      onPointerUp={(e) => {
+        const t = touchRef.current;
+        if (t === null || e.pointerId !== t.pointerId) return;
+        const wasTap =
+          !t.engaged &&
+          performance.now() - t.startT < TAP_MAX_MS &&
+          Math.hypot(e.clientX - t.startX, e.clientY - t.startY) < STICK_DEAD_PX;
+        clearTouch();
+        if (wasTap) onTap(e.clientX, e.clientY);
+      }}
+      onPointerCancel={(e) => {
+        if (touchRef.current?.pointerId === e.pointerId) clearTouch();
+      }}
+    >
+      {stick !== null && (
+        <div
+          className="pointer-events-none absolute size-28 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/25 bg-black/20"
+          style={{ left: stick.left, top: stick.top }}
+        >
+          <div
+            className="absolute left-1/2 top-1/2 size-12 rounded-full bg-white/35"
+            style={{
+              transform: `translate(calc(-50% + ${stick.dx}px), calc(-50% + ${stick.dy}px))`,
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** Bottom-center prompt — label + localized hint, pointer-transparent.
@@ -2065,6 +2579,8 @@ export default function GameCanvas({
   onActiveSliceChange,
   focusSlice = null,
   onOpenDoc,
+  cameraMode = "chase",
+  suspended = false,
 }: {
   /** The CORE timeline's door list (newest first) — the spawn hotel. */
   doors: readonly CorridorDoor[];
@@ -2089,6 +2605,15 @@ export default function GameCanvas({
   /** A loose paper's interact (v0.25a §五 B②): open the sheet's document in
    *  the original manuscript (the shell switches the world to the desk). */
   onOpenDoc?: (ref: string) => void;
+  /** THE RIG (v0.28): "chase" is the third-person default; "top" is the
+   *  legacy fixed 45° dollhouse, kept behind `?view=game&camera=top` for
+   *  in-place comparison (game-shell parses the param). */
+  cameraMode?: GameCameraMode;
+  /** THE DOCUMENT PAUSE (v0.28 step 1): the document tier sits over the
+   *  frozen world — the in-world chrome (the door HUD, the touch layer)
+   *  stands down with the simulation. The scene itself keeps rendering
+   *  the frozen frame under the shell's blur layer. */
+  suspended?: boolean;
 }): JSX.Element {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -2111,7 +2636,9 @@ export default function GameCanvas({
   const interactRef = useRef<() => void>(() => {});
   useEffect(() => {
     interactRef.current = () => {
-      if (WORLD_TRANSITION.active) return;
+      // Frozen under the document tier: the terminal and the sheets must
+      // not answer keys aimed at the desk.
+      if (WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
       // A sheet in reach reads in the original manuscript — no flare, no
       // depart latch: the desk opens over the game and the room waits.
       const paper = paperHudRef.current;
@@ -2184,6 +2711,16 @@ export default function GameCanvas({
   };
   const keysRef = useRef<Set<string>>(new Set());
   const motionRef = useRef<Motion>({ x: 0, z: 0, moving: false });
+  /** The tap-to-walk target (touch controls) — see WalkTarget. */
+  const walkRef = useRef<WalkTarget>({
+    active: false,
+    x: 0,
+    z: 0,
+    arrive: 0.45,
+    interact: false,
+    still: 0,
+    lastD: 0,
+  });
   const hudIdRef = useRef<string | null>(null);
   const [activeSpace, setActiveSpace] = useState<ActiveSpace | null>(null);
   const [corridorHidden, setCorridorHidden] = useState(false);
@@ -2415,6 +2952,92 @@ export default function GameCanvas({
         : roomGeometryForSpace(activeSpace, activeSpace.roomDoorCount),
     [activeSpace],
   );
+
+  // THE CHASE RIG'S OCCLUSION SOLIDS (v0.28): the analytic walls the
+  // sphere cast tests — corridor/lobby while no space is active, the
+  // room's own perimeter/seams/terminal inside one. chase-camera.ts
+  // builds them from the SAME pure inputs the movement clamp consumes
+  // (one derivation, two call sites), so the camera is contained by
+  // exactly the walls the player is. Memoised per state change; the
+  // per-frame cast itself is allocation-free.
+  const cameraSolids = useMemo<readonly SolidBox[]>(() => {
+    if (activeSpace !== null && activeRoomGeometry !== null) {
+      const scaleFactor = activeSpace.scale.factor;
+      return roomSolids({
+        door: activeSpace.door,
+        plan: activeRoomGeometry.plan,
+        wallThick: ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35),
+        wallHeight: scaledWallHeight(scaleFactor),
+        seams: activeRoomGeometry.seams,
+        terminal: activeRoomGeometry.terminal,
+      });
+    }
+    return corridorSolids({
+      endX: corridorEnd.endX,
+      pageDoor: corridorEnd.pageDoor,
+      doorXs,
+      returnDoorSouthX: returnSides.south ? RETURN_DOOR_SOUTH_X : null,
+      eastArrivalDoor: returnSides.east,
+      blockers: LOBBY_SOLID_BLOCKERS,
+    });
+  }, [activeSpace, activeRoomGeometry, corridorEnd, doorXs, returnSides]);
+
+  // TAP-TO-INTERACT (touch, v0.28): a tap projects to the ground plane
+  // (the rig's projectTap) and picks what is under it — a loose sheet
+  // opens straight into the manuscript (the same call the interact key's
+  // paper branch makes); the terminal and the corridor doors start a
+  // tap-to-walk, the terminal firing its interaction on arrival. The
+  // candidates are the probe mirror's own world coordinates — the same
+  // answers the interact key already gives, one thumb, no second button.
+  const handleTap = useCallback((sx: number, sy: number): void => {
+    if (WORLD_TRANSITION.active || GAME_SIM_FREEZE.frozen) return;
+    const p = CHASE_LIVE.projectTap?.(sx, sy);
+    if (!p) return;
+    let best: {
+      d: number;
+      kind: "paper" | "anchor" | "door";
+      x: number;
+      z: number;
+      ref: string | null;
+    } | null = null;
+    for (const paper of GAME_DEBUG.papers) {
+      const d = Math.hypot(p.x - paper.x, p.z - paper.z);
+      if (d <= 1.6 && (best === null || d < best.d)) {
+        best = { d, kind: "paper", x: paper.x, z: paper.z, ref: paper.ref };
+      }
+    }
+    const anchor = GAME_DEBUG.anchor;
+    if (anchor.kind !== "") {
+      const d = Math.hypot(p.x - anchor.x, p.z - anchor.z);
+      if (d <= 2 && (best === null || d < best.d)) {
+        best = { d, kind: "anchor", x: anchor.x, z: anchor.z, ref: null };
+      }
+    }
+    for (const door of GAME_DEBUG.windowDoors) {
+      const d = Math.hypot(p.x - door.x, p.z - door.z);
+      if (d <= 1.8 && (best === null || d < best.d)) {
+        best = { d, kind: "door", x: door.x, z: door.z * 1.15, ref: null };
+      }
+    }
+    if (best === null) return;
+    const pick = best;
+    if (pick.kind === "paper" && pick.ref !== null) {
+      onOpenDocRef.current?.(pick.ref);
+      return;
+    }
+    walkRef.current = {
+      active: true,
+      x: pick.x,
+      z: pick.z,
+      arrive: pick.kind === "anchor" ? 1.3 : 0.45,
+      interact: pick.kind === "anchor",
+      still: 0,
+      lastD: Number.POSITIVE_INFINITY,
+    };
+    CHASE_LIVE.walkX = pick.x;
+    CHASE_LIVE.walkZ = pick.z;
+    CHASE_LIVE.walking = true;
+  }, []);
 
   // THE ROOM'S LOOSE PAPERS (v0.25a §五 B②): the slice's own record sheet +
   // the newest documents that stamped it. The list arrives async (one
@@ -2781,6 +3404,10 @@ export default function GameCanvas({
       );
     }
     function onKeyDown(event: KeyboardEvent): void {
+      // Frozen under the document tier: the world's keys stand down — no
+      // preventDefault either, so the desk's own arrow/Enter bindings (and
+      // the page's scroll) keep their default behaviour while reading.
+      if (GAME_SIM_FREEZE.frozen) return;
       const key = event.key.toLowerCase();
       // THE ANCHOR INTERACTION (§13.1): Enter (the same word the door
       // prompt shows) or E fires the terminal in reach. Only swallowed
@@ -2860,7 +3487,15 @@ export default function GameCanvas({
             />
           ))}
         </Environment>
-        <CameraRig playerRef={playerRef} space={activeSpace} snapRef={cameraSnapRef} />
+        <CameraRig
+          playerRef={playerRef}
+          motionRef={motionRef}
+          space={activeSpace}
+          snapRef={cameraSnapRef}
+          mode={cameraMode}
+          solids={cameraSolids}
+          waterSide={waterSide}
+        />
         {/* The corridor dissolves the moment a space engages (GameLoop above)
           and unmounts HIDE_DELAY_MS later; on return it remounts dark and
           eases back up. The wrapper group lets LightConfigCompiler stage
@@ -2933,6 +3568,8 @@ export default function GameCanvas({
           playerRef={playerRef}
           keysRef={keysRef}
           motionRef={motionRef}
+          walkRef={walkRef}
+          onWalkArrive={() => interactRef.current()}
           doors={currentDoors}
           sliceIds={windowIds}
           doorXs={doorXs}
@@ -3001,13 +3638,18 @@ export default function GameCanvas({
 
   return (
     <div className="relative h-full w-full">
-      <Hud
-        door={hudDoor}
-        anchor={hudAnchor}
-        paper={hudPaper}
-        enterHint={t("enter")}
-        readHint={t("readDoc")}
-      />
+      {!suspended && (
+        <>
+          <TouchControls onTap={handleTap} />
+          <Hud
+            door={hudDoor}
+            anchor={hudAnchor}
+            paper={hudPaper}
+            enterHint={t("enter")}
+            readHint={t("readDoc")}
+          />
+        </>
+      )}
     </div>
   );
 }

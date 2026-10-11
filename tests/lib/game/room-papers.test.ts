@@ -3,9 +3,12 @@
  * under test: the sheets' floor spots are a deterministic pure function of
  * the renderer's own inputs (A6); every spot stays inside the plan, out of
  * the doorway clearing, off the walk path's corridor, out of the water, and
- * clear of the terminal; sheets keep their spacing; and a smaller count's
- * result is a PREFIX of a larger one's (the late-arriving document list
- * never relocates a sheet already drawn).
+ * clear of the terminal; every spot is outside the composition's cluster
+ * circles (the furniture-footprint proxy) and stands where the movement
+ * clamp leaves it (the reader can stand on the sheet — clampToSpace run on
+ * the spot relocates nothing); sheets keep their spacing; and a smaller
+ * count's result is a PREFIX of a larger one's (the late-arriving document
+ * list never relocates a sheet already drawn).
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -25,6 +28,8 @@ import {
   scaledRecipeFor,
 } from "@/lib/game/room-plan";
 import { roomTerminalFor, terminalFootprint } from "@/lib/game/anchor";
+import { clampToSpace, WALL_Z } from "@/lib/game/clamps";
+import type { DoorRef } from "@/lib/game/hotel";
 import { waterRectFor } from "@/lib/game/terrain";
 import {
   COLONNADE_BAY,
@@ -133,6 +138,38 @@ describe("roomPaperSpotsFor", () => {
               Math.abs(spot.z - input.water.cz) < input.water.halfZ + 0.25;
             expect(inWater).toBe(false);
           }
+        }
+      }
+    }
+  });
+
+  it("keeps every sheet outside the cluster circles (the furniture proxy)", () => {
+    for (const sliceId of FIXTURE_SLICES) {
+      for (const doorCount of [0, 2, 5]) {
+        const { input, spots } = spotsFor(sliceId, doorCount, 4);
+        for (const spot of spots) {
+          for (const c of input.comp.clusters) {
+            expect(
+              Math.hypot(spot.x - c.x, spot.z - c.z),
+            ).toBeGreaterThanOrEqual(c.radius + PAPER_MARGIN - 1e-9);
+          }
+        }
+      }
+    }
+  });
+
+  it("places every sheet where the movement clamp leaves it (the reader can stand on it)", () => {
+    // The same synthetic door the resolver's own gate uses: the plan
+    // frame's doorway, no strand doors (the conservative box).
+    const door: DoorRef = { index: 0, side: "north", sliceId: "", x: 0, z: WALL_Z };
+    for (const sliceId of FIXTURE_SLICES) {
+      for (const doorCount of [0, 2, 5]) {
+        const { input, spots } = spotsFor(sliceId, doorCount, 4);
+        for (const spot of spots) {
+          const p = { x: spot.x, z: spot.z + WALL_Z };
+          clampToSpace(p, door, input.width, input.plan.extent, [], input.plan, []);
+          expect(p.x).toBe(spot.x);
+          expect(p.z).toBe(spot.z + WALL_Z);
         }
       }
     }

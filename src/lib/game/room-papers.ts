@@ -17,7 +17,16 @@
  *
  * WHAT A SHEET NEVER DOES: stand outside the plan, inside the doorway
  * clearing (the door swing stays free), on the walk path's cleared
- * corridor, in the water, or under the terminal. Sheets keep a finger of
+ * corridor, in the water, or under the terminal. Two more gates keep a
+ * sheet where the reader can actually use it: OUTSIDE the composition's
+ * cluster circles (the same furniture-footprint proxy the terminal
+ * resolver consumes — anchor.ts — grouped scatter and kit staging anchor
+ * around comp.clusters, so a candidate outside every circle avoids the
+ * furniture by construction), and INSIDE the movement clamp's walkable
+ * box (clamps.ts clampToSpace itself is the oracle — the module's own
+ * contract is that a sheet stands where the movement clamp believes it
+ * stands, so a candidate the clamp would relocate is rejected outright
+ * rather than guessed at with copied margins). Sheets keep a finger of
  * air between one another — the scatter reads as dropped, not stacked.
  */
 import { createRng, hashString } from "./seed";
@@ -27,6 +36,8 @@ import {
   type Composition,
   type RoomPlan,
 } from "./room-plan";
+import { clampToSpace, WALL_Z } from "./clamps";
+import type { DoorRef } from "./hotel";
 import { terminalFootprint, type TerminalAnchor } from "./anchor";
 import { ENTRANCE_CLEAR_RADIUS } from "./tuning/room";
 
@@ -68,6 +79,20 @@ export const PAPER_PATH_CLEAR = 0.2;
 /** Seeded scan budget per room. */
 const SCAN_ATTEMPTS = 64;
 
+/** The standability oracle's synthetic door: the plan frame's own — the
+ *  doorway is at the local origin by construction (terrain.ts's frame),
+ *  so door.x = 0 with a north wall reproduces the room's local clamp
+ *  exactly. The clamp's margins are symmetric across the side sign, and
+ *  passing NO strand doors makes the box the conservative superset of
+ *  every real relaxation (a door window only widens the box). */
+const STAND_PROBE_DOOR: DoorRef = {
+  index: 0,
+  side: "north",
+  sliceId: "",
+  x: 0,
+  z: WALL_Z,
+};
+
 /**
  * Resolve the sheets' floor spots. Deterministic in the input (the rng is
  * seeded from the slice id alone); the result for a smaller `count` is
@@ -104,6 +129,22 @@ export function roomPaperSpotsFor(input: RoomPaperSpotsInput): RoomPaperSpot[] {
       z < terminalBox.z1
     )
       return false;
+    // FURNITURE: outside every cluster circle by the sheet's own margin —
+    // the terminal resolver's documented footprint proxy (anchor.ts).
+    if (
+      comp.clusters.some(
+        (c) => Math.hypot(x - c.x, z - c.z) < c.radius + PAPER_MARGIN,
+      )
+    )
+      return false;
+    // STANDABLE where the sheet lies: run the movement clamp on the spot
+    // (world = door + local·dir — the integrator's own mirror) and reject
+    // any candidate the clamp would relocate (a wall margin, an l-shape
+    // step, a seam). A spot that survives stands byte-exact where it was
+    // dropped, so the reader settles on the sheet, not beside it.
+    const probe = { x, z: z + WALL_Z };
+    clampToSpace(probe, STAND_PROBE_DOOR, width, plan.extent, [], plan, []);
+    if (probe.x !== x || probe.z !== z + WALL_Z) return false;
     return true;
   };
 

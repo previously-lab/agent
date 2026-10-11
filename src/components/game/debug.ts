@@ -1,4 +1,5 @@
 import { TERMINAL_DEPART } from "@/lib/game/anchor";
+import { CHASE_LIVE } from "@/lib/game/chase-camera";
 
 /**
  * Live game-state probe shared by the integrator and the space renderer.
@@ -159,6 +160,14 @@ export const GAME_DEBUG = {
    *  every terminal's frame loop reads. Probes can stamp t0 to stage the
    *  flare (or read it to time the real one). */
   depart: TERMINAL_DEPART,
+  /** The camera rig's live state (v0.28) — this IS the rig's own record
+   *  (CHASE_LIVE, chase-camera.ts; single writer: the CameraRig frame
+   *  loop): yaw (the movement basis), live position, boom distance after
+   *  the occlusion cast, the blocked flag, the avatar fade, the touch
+   *  stick's vector, and the tap-to-walk state. Probes assert "the
+   *  camera never crosses a wall" from these without entering the scene
+   *  graph. */
+  camera: CHASE_LIVE,
 };
 
 declare global {

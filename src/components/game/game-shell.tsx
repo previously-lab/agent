@@ -14,6 +14,7 @@ import {
 } from "@/lib/game/strand-doors";
 import { readHotelData, writeHotelData, HOTEL_WINDOW_DOORS } from "@/lib/game/hotel-data";
 import { debugUnitsFor, isDebugPage } from "@/lib/game/debug-catalog";
+import { CAMERA_PARAM, cameraModeFor } from "@/lib/game/chase-camera";
 import {
   DEBUG_PAGE_PARAM,
   DEBUG_PARAM,
@@ -126,12 +127,17 @@ export function GameShell({
   onExit,
   focusSlice = null,
   onOpenDoc,
+  suspended = false,
 }: {
   onExit: () => void;
   focusSlice?: string | null;
   /** A room paper's interact (v0.25a §五 B②): open the sheet's document in
    *  the original manuscript — the app shell switches worlds (desk) there. */
   onOpenDoc?: (ref: string) => void;
+  /** THE DOCUMENT PAUSE (v0.28 step 1): the document tier sits over the
+   *  frozen world — the view's chrome (title/exit, the gallery switcher)
+   *  stands down with the simulation, exactly like the in-world HUD. */
+  suspended?: boolean;
 }) {
   const t = useTranslations("game");
   const locale = useLocale();
@@ -381,7 +387,9 @@ export function GameShell({
     <div className="relative h-full w-full">
       {/* Top-left overlay: title + exit. The container is pointer-transparent
           so it never blocks walking; only the button re-enables pointer
-          events. Exit is a WORLD SWITCH now (§14), not a navigation. */}
+          events. Exit is a WORLD SWITCH now (§14), not a navigation. Hidden
+          with the simulation while the document tier sits over the world. */}
+      {!suspended && (
       <div className="pointer-events-none absolute left-4 top-4 z-10 sm:left-6 sm:top-6">
         <p className="text-sm font-semibold tracking-tight text-neutral-100">
           {t("title")}
@@ -394,11 +402,13 @@ export function GameShell({
           {t("exit")}
         </button>
       </div>
+      )}
       {/* DEV: the gallery switcher (temporary) — bottom-left, clear of the
           conversation pill (bottom-right) and the door HUD (bottom-centre).
           It rewrites the query the gallery mode is read from, so the pages
           are one tap away instead of a typed URL, and the hotel is one tap
           back. */}
+      {!suspended && (
       <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-1 sm:right-6 sm:top-6">
         <button
           type="button"
@@ -430,6 +440,7 @@ export function GameShell({
           </div>
         )}
       </div>
+      )}
       {doors ? (
         <GameCanvas
           doors={doors}
@@ -437,6 +448,11 @@ export function GameShell({
           timelines={timelines}
           focusSlice={focusSlice}
           onOpenDoc={onOpenDoc}
+          suspended={suspended}
+          // THE RIG SWITCH (v0.28): `&camera=top` keeps the legacy fixed
+          // 45° dollhouse for in-place comparison — a debug flag on the
+          // same URL idiom as the gallery, not product UI.
+          cameraMode={cameraModeFor(searchParams.get(CAMERA_PARAM))}
         />
       ) : (
         <GameLoading />
