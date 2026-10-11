@@ -13,11 +13,7 @@ import {
   sliceIdToFilePath,
   sliceIdToAgentPath,
   sliceIdToPreviouslyPath,
-  emptyPreviouslyTemplate,
   readPreviously,
-  ensurePreviously,
-  readCurrentPreviously,
-  writeCurrentPreviously,
   closeSlice,
   tryLoadTodaySlice,
   loadSlice,
@@ -27,7 +23,6 @@ import {
   slicePartPath,
   slicePartPathCandidates,
   legacySlicePartPath,
-  indexPathCandidates,
   readSlicePart,
   RECORDS_ROOT,
   LEGACY_SLICES_ROOT,
@@ -336,10 +331,6 @@ describe("paths — dual-root constants and builders", () => {
       "memory/records/2026/07/10/1430/core.md",
       "memory/episodic/slices/2026/07/10/1430/timeline/core.md",
     ]);
-    expect(indexPathCandidates(2026, 7)).toEqual([
-      "memory/records/2026/07/_index.json",
-      "memory/episodic/slices/2026/07/_index.json",
-    ]);
     expect(RECORDS_ROOT).toBe("memory/records");
     expect(LEGACY_SLICES_ROOT).toBe("memory/episodic/slices");
   });
@@ -454,18 +445,7 @@ describe("sliceIdToPreviouslyPath", () => {
   });
 });
 
-// ─── emptyPreviouslyTemplate ────────────────────────────────────────────
-
-describe("emptyPreviouslyTemplate", () => {
-  it("is a user-card (v4) template with the active slice header", () => {
-    const tmpl = emptyPreviouslyTemplate("2026-07-24-1445");
-    expect(tmpl).toContain("# Previously On");
-    expect(tmpl).toContain("_Active slice: 2026-07-24-1445");
-    expect(tmpl).toContain("Format: user card");
-  });
-});
-
-// ─── readPreviously / ensurePreviously (v3 migration on read) ────────────
+// ─── readPreviously (v3 migration on read) ───────────────────────────────
 
 const LEGACY_V2_PREVIOUSLY = `# Previously On
 
@@ -501,65 +481,6 @@ describe("readPreviously (v3 migration on read)", () => {
   it("returns an empty string when the file does not exist", async () => {
     vi.mocked(fsReadFile).mockRejectedValue(new Error("ENOENT"));
     await expect(readPreviously("2026-07-26-1539")).resolves.toBe("");
-  });
-
-  it("persists the migration once when ensurePreviously finds a legacy file", async () => {
-    vi.mocked(fsReadFile).mockResolvedValue(LEGACY_V2_PREVIOUSLY);
-    vi.mocked(fsWriteFile).mockResolvedValue({ path: "", created: true });
-    const content = await ensurePreviously("2026-07-26-1539");
-    // Legacy v2 folds into the user-card structure (v4), keeping the identity fact.
-    expect(content).toContain("Format: user card");
-    expect(content).toContain("用户名叫 LikeDreamwalker");
-    // live card migration + the fresh per-slice copy.
-    expect(fsWriteFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not rewrite already-v3 content in ensurePreviously", async () => {
-    const v3 = emptyPreviouslyTemplate("2026-07-26-1539");
-    vi.mocked(fsReadFile).mockResolvedValue(v3);
-    vi.mocked(fsWriteFile).mockResolvedValue({ path: "", created: true });
-    await ensurePreviously("2026-07-26-1539");
-    expect(fsWriteFile).not.toHaveBeenCalled();
-  });
-});
-
-
-// ─── Live current card (v0.7 real-time) ────────────────────────────────
-
-describe("live current card (current-previously.md)", () => {
-  const CARD_A = emptyPreviouslyTemplate("2026-08-09-1000");
-  const CARD_B = emptyPreviouslyTemplate("2026-08-09-1100");
-
-  beforeEach(() => {
-    vi.mocked(fsReadFile).mockReset();
-    vi.mocked(fsWriteFile).mockReset();
-    vi.mocked(fsListFiles).mockReset();
-  });
-
-  it("returns the LIVE card and copies it to the per-slice file when they differ", async () => {
-    vi.mocked(fsReadFile)
-      .mockResolvedValueOnce(CARD_B) // readCurrentPreviously → live card
-      .mockResolvedValueOnce(CARD_A); // readPreviouslyRaw(slice) → old copy
-    vi.mocked(fsWriteFile).mockResolvedValue({ path: "", created: true });
-    const content = await ensurePreviously("2026-08-09-1000");
-    expect(content).toBe(CARD_B);
-    // The stale per-slice copy is overwritten with the fresh live card.
-    expect(fsWriteFile).toHaveBeenCalledTimes(1);
-  });
-
-  it("seeds the live card from a template when it does not exist", async () => {
-    vi.mocked(fsReadFile).mockRejectedValue(new Error("ENOENT"));
-    vi.mocked(fsWriteFile).mockResolvedValue({ path: "", created: true });
-    const content = await ensurePreviously("2026-08-09-1000");
-    expect(content).toContain("Format: user card");
-    // live card + per-slice copy (slice has none yet).
-    expect(fsWriteFile).toHaveBeenCalledTimes(2);
-  });
-
-  it("round-trips readCurrentPreviously / writeCurrentPreviously", async () => {
-    vi.mocked(fsReadFile).mockResolvedValue(CARD_A);
-    await writeCurrentPreviously(CARD_A);
-    expect(await readCurrentPreviously()).toBe(CARD_A);
   });
 });
 

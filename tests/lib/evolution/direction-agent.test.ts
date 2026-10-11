@@ -20,22 +20,11 @@
  *     hypotheses-as-unverified-guesses) and is EMPTY for template/legacy docs;
  *   - retireExpiredHypotheses is the engineering half of the pool lifecycle:
  *     a guess still unverified TTL slices after its proposed pointer is
- *     stripped from the applied doc (Portrait lines never eligible);
- *   - runner failures degrade to { outcome: "failed" }, never throw.
+ *     stripped from the applied doc (Portrait lines never eligible).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-const ai = vi.hoisted(() => ({ streamText: vi.fn() }));
-vi.mock("ai", async () => {
-  const actual = await vi.importActual("ai");
-  return { ...actual, streamText: ai.streamText };
-});
-vi.mock("@/lib/models/provider", () => ({
-  createModel: vi.fn((c: unknown) => ({ _mock: c })),
-}));
+import { describe, it, expect } from "vitest";
 
 import {
-  runDirectionAgent,
   validateDirectionProposal,
   detectDirectionMode,
   buildDirectionBlock,
@@ -45,26 +34,6 @@ import {
   DIRECTION_MAX_CHARS,
   DIRECTION_HYPOTHESES_MAX,
 } from "@/lib/evolution/direction-agent";
-import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
-import type { ModelConfig } from "@/lib/models/registry";
-
-const model: ModelConfig = {
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
-  provider: "deepseek",
-  providerName: "DeepSeek",
-  sdk: "deepseek",
-  envKey: "DEEPSEEK_API_KEY",
-  capabilities: { thinking: true, vision: false, maxTokens: 393216 },
-  defaultThinking: false,
-  defaultEffort: "low",
-};
-
-const ANALYSIS: TurnAnalysis = {
-  semanticHint: { strands: [], reason: "" },
-  memoryWorthy: true,
-  emotionalSignal: { intensity: "none", register: "neutral", note: "" },
-};
 
 const DIMENSIONS = [
   "## Traits & cognitive style",
@@ -105,32 +74,6 @@ function hypLine(
 ): string {
   return `- [proposed ${proposed}] ${guess} — falsify if: ${falsify}`;
 }
-
-function makeToolCall(input: unknown) {
-  return {
-    text: Promise.resolve(""),
-    toolCalls: Promise.resolve([{ toolName: "directionReport", input }]),
-    reasoningText: Promise.resolve(undefined),
-    sources: Promise.resolve([]),
-    warnings: Promise.resolve([]),
-  };
-}
-
-function baseInput(overrides: Record<string, unknown> = {}) {
-  return {
-    model,
-    current: null,
-    mode: "steady",
-    cardSelfModel: null,
-    analysis: ANALYSIS,
-    sliceId: "2026-08-27-1000",
-    ...overrides,
-  } as Parameters<typeof runDirectionAgent>[0];
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
-});
 
 describe("validateDirectionProposal", () => {
   it("accepts a well-formed proposal", () => {
@@ -591,211 +534,5 @@ describe("buildDirectionBlock", () => {
     const block = buildDirectionBlock(doc);
     expect(block).toContain("The user prefers concrete");
     expect(block).not.toContain("UNVERIFIED GUESSES");
-  });
-});
-
-describe("runDirectionAgent", () => {
-  it("the no-change path returns no_change and performs no writes (the module holds no write tools)", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "one loud slice is not a direction" }),
-    );
-    const res = await runDirectionAgent(baseInput());
-    expect(res).toEqual({
-      outcome: "no_change",
-      reason: "one loud slice is not a direction",
-    });
-    // The report tool is the ONLY tool — nothing to write with.
-    const opts = ai.streamText.mock.calls.at(-1)?.[0] as { tools: Record<string, unknown> };
-    expect(Object.keys(opts.tools)).toEqual(["directionReport"]);
-  });
-
-  it("accepts and returns a structurally valid ops proposal", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({
-        outcome: "propose",
-        reason: "concreteness feedback recurred across slices",
-        proposed: {
-          ops: [
-            {
-              op: "add_portrait",
-              dimension: "## Communication preferences",
-              text: "The user prefers concrete, evidence-anchored answers",
-              refs: ["2026-08-20-1430", "2026-08-22-1015"],
-            },
-            {
-              op: "add_hypothesis",
-              text: "The user may think better late at night",
-              falsify: "late-slice energy stays flat",
-            },
-          ],
-          summary: "First direction: concreteness",
-          evidence: ["2026-08-20-1430", "2026-08-22-1015"],
-          expectedBenefit: "Fewer vague answers",
-        },
-      }),
-    );
-    const res = await runDirectionAgent(baseInput());
-    expect(res.outcome).toBe("proposed");
-    if (res.outcome === "proposed") {
-      expect(res.direction).toContain("# Portrait");
-      expect(res.direction).toContain(
-        "- The user prefers concrete, evidence-anchored answers — refs: 2026-08-20-1430, 2026-08-22-1015",
-      );
-      // Engineering stamped the proposed pointer with the run's slice.
-      expect(res.direction).toContain(
-        "- [proposed 2026-08-27-1000] The user may think better late at night — falsify if: late-slice energy stays flat",
-      );
-      expect(res.summary).toBe("First direction: concreteness");
-      expect(res.evidence).toEqual(["2026-08-20-1430", "2026-08-22-1015"]);
-      expect(res.expectedBenefit).toBe("Fewer vague answers");
-    }
-  });
-
-  it("a structurally invalid op set degrades to no_change (rejections logged, nothing written)", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    ai.streamText.mockResolvedValue(
-      makeToolCall({
-        outcome: "propose",
-        reason: "episodic fact as direction",
-        proposed: {
-          ops: [
-            {
-              op: "add_portrait",
-              dimension: "## Traits & cognitive style",
-              text: "Hiked on 2026-08-20-1430", // a slice id in the text — rejected
-              refs: [],
-            },
-          ],
-          summary: "bad",
-          evidence: [],
-          expectedBenefit: "none",
-        },
-      }),
-    );
-    const res = await runDirectionAgent(baseInput());
-    expect(res.outcome).toBe("no_change");
-    if (res.outcome === "no_change") {
-      expect(res.reason).toContain("rejected");
-    }
-    expect(warn).toHaveBeenCalled();
-    warn.mockRestore();
-  });
-
-  it("outcome=propose without a proposal body is treated as no_change", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "propose", reason: "forgot the document" }),
-    );
-    const res = await runDirectionAgent(baseInput());
-    expect(res.outcome).toBe("no_change");
-  });
-
-  it("degrades to failed (never throws) when the model errors", async () => {
-    ai.streamText.mockRejectedValue(new Error("boom"));
-    const res = await runDirectionAgent(baseInput());
-    expect(res.outcome).toBe("failed");
-    if (res.outcome === "failed") expect(res.reason).toContain("boom");
-  });
-
-  it("sends a static system prompt; direction + analysis ride the user prompt", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "nothing" }),
-    );
-    await runDirectionAgent(
-      baseInput({
-        current: "# Portrait\n\nCurrent portrait text.",
-      }),
-    );
-    const arg = ai.streamText.mock.calls.at(-1)?.[0] as {
-      system: string;
-      prompt: string;
-    };
-    expect(arg.system).toContain("Direction Agent");
-    expect(arg.system).not.toContain("Current portrait text");
-    expect(arg.prompt).toContain("Current portrait text");
-    expect(arg.prompt).toContain("2026-08-27-1000");
-  });
-
-  it("the mode and the legacy Self-model migration source ride the user prompt", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "nothing" }),
-    );
-    await runDirectionAgent(
-      baseInput({
-        mode: "bootstrap",
-        cardSelfModel: "- The user vents emotions; decomposing that with thinkDeep felt cold",
-      }),
-    );
-    const arg = ai.streamText.mock.calls.at(-1)?.[0] as { prompt: string };
-    expect(arg.prompt).toContain("BOOTSTRAP");
-    expect(arg.prompt).toContain("The user vents emotions");
-  });
-
-  it("migrate mode is named on the prompt with the lowered bar", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "nothing" }),
-    );
-    await runDirectionAgent(baseInput({ mode: "migrate" }));
-    const arg = ai.streamText.mock.calls.at(-1)?.[0] as { prompt: string };
-    expect(arg.prompt).toContain("MIGRATE");
-  });
-
-  it("the recent closed-slice markings ride the user prompt (with an honest empty state)", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "nothing" }),
-    );
-    await runDirectionAgent(
-      baseInput({
-        recentMarkings: [
-          {
-            id: "2026-08-27-0915",
-            focus: "Shipped the release",
-            summary: "Cut v1.0 and tagged it.",
-            tone: "focused",
-          },
-        ],
-      }),
-    );
-    let arg = ai.streamText.mock.calls.at(-1)?.[0] as { prompt: string };
-    expect(arg.prompt).toContain("Recent closed-slice markings");
-    expect(arg.prompt).toContain("2026-08-27-0915 · Shipped the release");
-    expect(arg.prompt).toContain("tone focused");
-
-    await runDirectionAgent(baseInput({ recentMarkings: [] }));
-    arg = ai.streamText.mock.calls.at(-1)?.[0] as { prompt: string };
-    expect(arg.prompt).toContain("(no marked slices yet)");
-  });
-
-  it("runs uncapped in steps with a 240s wall-clock budget (the old 1-step/60s cap caused silent failures)", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({ outcome: "no_change", reason: "nothing" }),
-    );
-    await runDirectionAgent(baseInput());
-    const arg = ai.streamText.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(arg.stopWhen).toBeUndefined();
-    expect(arg.timeout).toBe(240_000);
-  });
-
-  it("bootstrap mode accepts a first direction anchored to a single slice", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({
-        outcome: "propose",
-        reason: "seeding the baseline",
-        proposed: {
-          ops: [
-            {
-              op: "add_portrait",
-              dimension: "## Communication preferences",
-              text: "The user prefers concrete, evidence-anchored answers",
-              refs: ["2026-08-20-1430"],
-            },
-          ],
-          summary: "First direction",
-          evidence: ["2026-08-20-1430"],
-          expectedBenefit: "A baseline to evolve from",
-        },
-      }),
-    );
-    const res = await runDirectionAgent(baseInput({ mode: "bootstrap" }));
-    expect(res.outcome).toBe("proposed");
   });
 });

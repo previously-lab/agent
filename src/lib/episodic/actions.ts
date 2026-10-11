@@ -40,7 +40,6 @@ import {
 import { loadUserConfig } from "@/lib/config/loader";
 import { sliceEntryFromDisk } from "./timeline/store";
 import { enumerateSliceIds } from "./timeline/enumerate";
-import { readStrandEntity } from "./strand-files";
 import { pageCatalog, type CatalogPage } from "./timeline/paginate";
 import type { TimelineSliceEntry } from "./timeline/types";
 import type { StrandIndex, Turn } from "./types";

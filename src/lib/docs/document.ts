@@ -37,7 +37,7 @@ import {
 } from "./types";
 import { isValidDate } from "./naming";
 
-// ─── Field coercion (same guards as episodic/strand-files.ts) ──────────────
+// ─── Field coercion (guards against gray-matter's YAML coercions) ──────────
 
 /** Coerce a value that should be a string (gray-matter can parse unquoted
  *  YAML values containing ": " as objects, and bare YYYY-MM-DD as Dates). */

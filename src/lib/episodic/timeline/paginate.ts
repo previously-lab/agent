@@ -1,10 +1,10 @@
 /**
- * Catalog pagination (Rev 7 §R7.4) — pure month-window slicing of the
- * timeline catalog. The canonical index stays a single file on disk; the
- * window exists so the CLIENT never holds/computes more history than the
- * viewport can reach: the page loads the latest N months, and scrolling
- * toward the oldest loaded entry prefetches the previous window (infinite
- * scroll's old trade, now upward).
+ * Catalog pagination (Rev 7 §R7.4) — pure month-window slicing over the
+ * timeline catalog entries the caller hands in. The window exists so the
+ * CLIENT never holds/computes more history than the viewport can reach: the
+ * page loads the latest N months, and scrolling toward the oldest loaded
+ * entry prefetches the previous window (infinite scroll's old trade, now
+ * upward).
  */
 import type { TimelineSliceEntry } from "./types";
 

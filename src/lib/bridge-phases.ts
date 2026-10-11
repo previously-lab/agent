@@ -156,7 +156,7 @@ const backfillMarkSchema = z.object({
   summary: z.string(),
 });
 
-/** Mirrors MAX_MERGES in episodic/flash/strand-consolidator.ts. */
+/** Cap on the strand_merge proposals accepted from one report. */
 const MAX_STRAND_MERGES = 30;
 
 const strandMergeSchema = z.object({
@@ -307,10 +307,11 @@ export interface HousekeepingBridgeInput {
   drySlices?: Array<{ sliceId: string; conversation: string }>;
   /**
    * Strand merge candidates — offered ONLY on a close boundary when the index
-   * is big enough to be worth a semantic dedupe pass (same gate as the old
-   * strand-consolidator sub-agent). The agent proposes from→to merges in the
-   * SAME call (strand_merges in the report); the kernel validates (both keys
-   * must exist, no no-ops) and applies through applyStrandMerges.
+   * is big enough to be worth a semantic dedupe pass. The agent proposes
+   * from→to merges in the SAME call (strand_merges in the report); the wire
+   * schema parses them leniently, but no apply path exists today (the strand
+   * layer and its consolidator are retired) — the values are accepted and
+   * dropped.
    */
   strandsForMerge?: Array<{ name: string; slices: number }>;
   /**

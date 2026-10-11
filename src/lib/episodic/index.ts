@@ -22,11 +22,6 @@ export {
   readPreviously,
   writePreviously,
   findMostRecentPreviously,
-  ensurePreviously,
-  emptyPreviouslyTemplate,
-  CURRENT_PREVIOUSLY_PATH,
-  readCurrentPreviously,
-  writeCurrentPreviously,
 } from "./manager";
 export {
   RECORDS_ROOT,
@@ -35,9 +30,6 @@ export {
   slicePartPath,
   slicePartPathCandidates,
   legacySlicePartPath,
-  recordsIndexPath,
-  legacyIndexPath,
-  indexPathCandidates,
   readSlicePart,
   readSlicePartResolved,
 } from "./paths";
@@ -86,40 +78,11 @@ export {
 export type { SliceCloseClass } from "./slicer";
 
 export {
-  normalizeStrandKey,
-  findMatchingStrand,
-  weaveTag,
-  applyStrandMerges,
-  pruneStrands,
-  slicePathToMs,
-} from "./strands";
-export {
   deterministicSliceMark,
 } from "./slice-mark";
 export type {
   SliceMark,
 } from "./slice-mark";
-export type {
-  PruneOptions,
-} from "./strands";
-
-export {
-  STRANDS_DIR,
-  TOPIC_DIR,
-  getStrandFilePath,
-  getTopicDocPath,
-  serializeStrandEntity,
-  parseStrandEntity,
-  readStrandEntity,
-  readTopicDoc,
-  strandEntityToTopicDoc,
-  topicDocToStrandEntity,
-  listStrandEntityNames,
-  resolveStrandEntityName,
-} from "./strand-files";
-export type {
-  StrandEntity,
-} from "./strand-files";
 
 export type {
   SliceStatus,

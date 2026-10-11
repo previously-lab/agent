@@ -61,12 +61,6 @@ export function slicePartPath(sliceId: string, part: SlicePart): string {
   return `${sliceDir(sliceId)}/${part}.md`;
 }
 
-/** The new-root monthly index: `memory/records/YYYY/MM/_index.json`. */
-export function recordsIndexPath(year: number, month: number): string {
-  const mm = String(month).padStart(2, "0");
-  return `${RECORDS_ROOT}/${year}/${mm}/_index.json`;
-}
-
 // ─── Legacy mapping (read-only) ──────────────────────────────────────────
 
 /** The legacy path for one slice part (the pre-v0.19 layout). */
@@ -75,12 +69,6 @@ export function legacySlicePartPath(sliceId: string, part: SlicePart): string {
   return part === "previously"
     ? `${LEGACY_SLICES_ROOT}/${rel}/previously.md`
     : `${LEGACY_SLICES_ROOT}/${rel}/timeline/${part}.md`;
-}
-
-/** The legacy monthly index: `memory/episodic/slices/YYYY/MM/_index.json`. */
-export function legacyIndexPath(year: number, month: number): string {
-  const mm = String(month).padStart(2, "0");
-  return `${LEGACY_SLICES_ROOT}/${year}/${mm}/_index.json`;
 }
 
 // ─── Dual-root reads ─────────────────────────────────────────────────────
@@ -94,14 +82,6 @@ export function slicePartPathCandidates(
   part: SlicePart,
 ): [string, string] {
   return [slicePartPath(sliceId, part), legacySlicePartPath(sliceId, part)];
-}
-
-/** Monthly index candidates in probe order (new first, legacy on a miss). */
-export function indexPathCandidates(
-  year: number,
-  month: number,
-): [string, string] {
-  return [recordsIndexPath(year, month), legacyIndexPath(year, month)];
 }
 
 /**

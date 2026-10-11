@@ -31,9 +31,7 @@ import {
   LEGACY_SLICES_ROOT,
 } from "./paths";
 import {
-  newCardTemplate,
   migrateToV3,
-  migrateV3ToCard,
   isCardFormat,
 } from "./previously-format";
 
@@ -331,10 +329,10 @@ export function parseSlice(raw: string): TimeSlice {
   const decisions = normalizeStringArray(frontmatter.decisions);
   const tags = normalizeStringArray(frontmatter.tags);
 
-  // v0.19 R2 read shim: `status` is DERIVED, never written — a `closed_by`
-  // cause means closed, its absence means active. Legacy slices carry an
-  // explicit `status`; a legacy closed slice without `closed_by` falls back
-  // to user_explicit. Consumers keep reading `status` unchanged until R3.
+  // `closed_by` is authoritative (v0.17 §3): a cause means closed, its
+  // absence means active — `status` is derived from it, never read. Legacy
+  // slices carry an explicit `status` but no `closed_by`; for those the
+  // closedBy derivation falls back to user_explicit.
   const closedBy = isSlicingSignal(frontmatter.closed_by)
     ? frontmatter.closed_by
     : frontmatter.status === "closed"
@@ -344,7 +342,7 @@ export function parseSlice(raw: string): TimeSlice {
   return {
     slice_id: frontmatter.slice_id ?? "",
     focus: normalizeString(frontmatter.focus) ?? "",
-    status: frontmatter.status ?? (closedBy ? "closed" : "active"),
+    status: closedBy ? "closed" : "active",
     start: frontmatter.start ?? "",
     end: frontmatter.end,
     timezone: frontmatter.timezone ?? "UTC",
@@ -557,15 +555,9 @@ export async function readAgentTimeline(sliceId: string): Promise<string> {
 
 // ─── Previously.md I/O ────────────────────────────────────────────────────
 
-/** Empty previously.md template for slices with no prior beliefs (v3). */
-export function emptyPreviouslyTemplate(sliceId: string): string {
-  return newCardTemplate(sliceId);
-}
-
 /**
  * Read the raw previously.md content for a slice (no migration).
- * Returns "" if it doesn't exist yet. Internal — ensurePreviously uses it so
- * it can still detect and persist legacy files.
+ * Returns "" if it doesn't exist yet.
  */
 async function readPreviouslyRaw(
   sliceId: string,
@@ -651,75 +643,6 @@ export async function findMostRecentPreviously(
   }
 
   return null;
-}
-
-/**
- * The LIVE previously card — the single source every turn injects into the
- * system prompt, maintained by evolution (slice close + explicit trigger).
- * Per-slice previously.md files remain as historical snapshots; this is the
- * current one the conversation actually reads.
- */
-export const CURRENT_PREVIOUSLY_PATH = "memory/episodic/current-previously.md";
-
-/** Read the live card. Returns "" if it doesn't exist yet. */
-export async function readCurrentPreviously(
-  batch?: WriteBatch
-): Promise<string> {
-  try {
-    return await fsReadFile(CURRENT_PREVIOUSLY_PATH, batch);
-  } catch {
-    return "";
-  }
-}
-
-/** Overwrite the live card. */
-export async function writeCurrentPreviously(
-  content: string,
-  batch?: WriteBatch
-): Promise<void> {
-  await fsWriteFile(CURRENT_PREVIOUSLY_PATH, content, batch);
-}
-
-/**
- * Ensure the LIVE card exists and return it — every turn injects this.
- *
- * v0.7b synchronous design: the boundary turn evolves the live card BEFORE the
- * new slice is created, then this copies the live card to the new slice's
- * per-slice file — so the agent uses a freshly-evolved card, never a stale one.
- * The live card is seeded once from the latest snapshot (or a template), then
- * maintained by the inline evolution via `writeCurrentPreviously`. Closed
- * slices keep the snapshot evolution wrote at close.
- */
-export async function ensurePreviously(
-  sliceId: string,
-  batch?: WriteBatch
-): Promise<string> {
-  // Live card — what the current conversation injects. Normalize a legacy
-  // (v1/v2/v3) card to the user-card structure once; seed from the latest
-  // snapshot or a template when it doesn't exist yet.
-  let current = await readCurrentPreviously(batch);
-  if (current.trim() && !isCardFormat(current)) {
-    current = migrateV3ToCard(current, sliceId);
-    await writeCurrentPreviously(current, batch);
-  } else if (!current.trim()) {
-    const source = await findMostRecentPreviously(batch);
-    current = source
-      ? isCardFormat(source)
-        ? source
-        : migrateV3ToCard(source, sliceId)
-      : newCardTemplate(sliceId);
-    await writeCurrentPreviously(current, batch);
-  }
-
-  // Copy the live card to this slice's per-slice file (the agent uses the new
-  // slice's card). Only writes when they differ — within a slice the live card
-  // is stable, so this is a single fresh write at slice creation, then silent.
-  const existing = await readPreviouslyRaw(sliceId, batch);
-  if (existing !== current) {
-    await writePreviously(sliceId, current, batch);
-  }
-
-  return current;
 }
 
 // ─── Testing utilities ───────────────────────────────────────────────────

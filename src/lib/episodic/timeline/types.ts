@@ -1,12 +1,12 @@
 /**
- * Timeline types — the first-class derived index over time slices.
+ * Timeline types — the catalog entry shape shared by the timeline readers.
  *
- * v0.8: the timeline is a PROJECTION of the slice files, never a separately
- * maintained truth. `memory/episodic/timeline/index.json` is the canonical
- * structured catalog (renderable by the UI); `memory/episodic/timeline.md` is
- * its markdown projection. v0.19 R3 retired the weave that rebuilt them — the
- * catalog is read-only legacy surface now (home recap + enumerate live-read;
- * nothing writes).
+ * The catalog is a PROJECTION of the slice files, never a separately
+ * maintained truth. v0.19 R3 retired the weave that wrote
+ * `memory/episodic/timeline/index.json` and `timeline.md`: nothing writes
+ * them anymore — readers live-enumerate the records tree (enumerate.ts) and
+ * read each slice's header on demand (store.ts). Any index.json still on
+ * disk is inert legacy data.
  */
 
 /** A single slice's catalog entry — the semantic "profile" that lets a reader
