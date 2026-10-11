@@ -187,7 +187,18 @@ export function AppShell() {
   // (GAME_SIM_FREEZE), the blur layer up, the canvas showing the frozen
   // frame. Leaving for the hotel from this state is a RESUME: no scripted
   // shot, because the camera never moved.
-  const [gameSuspended, setGameSuspended] = useState(false);
+  //
+  // v0.29: EVERY fresh load starts in this state — the hotel is mounted
+  // behind the document tier from the reader's first entry (frozen under
+  // the blur veil, exactly the pause's steady state), not built on their
+  // first visit to it. Entering the world is then always the resume beat:
+  // the blur lifts and the world is already there. A `?view=game` cold
+  // boot opts out — the hotel is the settled world, nothing suspended.
+  const [gameSuspended, setGameSuspended] = useState(() => {
+    const cold = searchParams.get("view") !== "game";
+    if (cold) GAME_SIM_FREEZE.frozen = true;
+    return cold;
+  });
   const view: WorldKind = settledView;
   const mountedWorlds: readonly WorldKind[] = transition
     ? [transition.from, transition.to]
@@ -228,8 +239,9 @@ export function AppShell() {
     mode: WorldTransitionMode;
   } | null>(null);
   /** The suspension state's synchronous mirror for the mode pick (the same
-   *  outrun-the-render-pipeline reason as getCursor below). */
-  const gameSuspendedRef = useRef(false);
+   *  outrun-the-render-pipeline reason as getCursor below). Initialised
+   *  from the cold-boot state (v0.29: a fresh load starts suspended). */
+  const gameSuspendedRef = useRef(gameSuspended);
   /** THE "WHERE WAS I" MEMORY (v0.13 §6): the cursor's value when the reader
    *  last LEFT the world for the reader — written in startMove on every
    *  game → field move. The world gate's 回到原来的房间 is the one return

@@ -29,8 +29,10 @@
  * THE HALL. The camera looks at the player from (−x, +y, +z), so the north
  * wall (z > 0) is the near wall and the south wall (z < 0) is the far
  * backdrop. Both walls run full height — the corridor reads as one tall
- * hall volume. No ceilings anywhere — open dollhouse: nothing spans the
- * hall overhead, so the top-down camera reads straight down to the floor.
+ * hall volume. v0.29 closes the dollhouse: HallCeiling spans the hall and
+ * the lobby leg at WALL_HEIGHT in the walls' own register, hiding itself
+ * whenever the camera rides above it (the top-down debug view and the
+ * transition follow poses keep reading straight down to the floor).
  * Every wall also carries a
  * cornice band at the top and a wainscot + chair-rail band at the bottom,
  * both broken around door gaps, so the wall face no longer reads as one
@@ -84,8 +86,8 @@
  * under the shade. Longer chunks thin the lit set to an even spread with a
  * proportionally longer reach, so the real-light budget stays bounded while
  * every sconce keeps its shade and decals. The south wall answers with the
- * LIGHT LINE: a continuous warm cove strip just above the baseboard (the
- * dollhouse has no ceiling, so the cove lives at ankle height), a soft wash
+ * LIGHT LINE: a continuous warm cove strip just above the baseboard (an
+ * ankle-height cove — a design line that never glares off the ceiling), a soft wash
  * up the wall, a glow along the floor's edge, and a few low real point
  * lights spread along it. FLOOR LAMPS — the lobby's fixture — stand at
  * intervals along the hall on a 24 m grid, alternating walls, skipping
@@ -1254,14 +1256,14 @@ function StripLight({
 /**
  * The baseboard light line — the south wall's own lamp (灯廊: the sconces
  * belong to the north wall; the south wall answers with a low cove line).
- * A continuous warm emissive strip just above the baseboard — the
- * dollhouse cutaway has no ceiling, so the cove lives at ankle height —
- * a soft gradient wash up the wall (brightest at the strip, dissolving
- * upward), a glow along the floor's edge, and a few low real point lights
- * spread along it. Everything is static and follows the hotel-wide
- * dimming; the fake-glow decals switch off in day mode like the sconce
- * pools, while the strip itself merely tones down — a cove line burning
- * in a bright hotel.
+ * A continuous warm emissive strip just above the baseboard — an ankle-
+ * height cove reads as a design line, and it never glares off the
+ * ceiling — a soft gradient wash up the wall (brightest at the strip,
+ * dissolving upward), a glow along the floor's edge, and a few low real
+ * point lights spread along it. Everything is static and follows the
+ * hotel-wide dimming; the fake-glow decals switch off in day mode like
+ * the sconce pools, while the strip itself merely tones down — a cove
+ * line burning in a bright hotel.
  */
 function LightLine({
   xStart,
@@ -3016,6 +3018,70 @@ function CorridorEnd({
 /* Corridor                                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * THE HALL CEILING (v0.29): the dollhouse is closed. One long slab spans
+ * the corridor from the window's far end wall to the lobby's east wall,
+ * a second caps the lobby's south leg — both at WALL_HEIGHT in the walls'
+ * own plaster register, meeting the cornices. Neither casts nor receives
+ * shadows, so the hall's light configuration (sconces, the light line,
+ * the hemisphere fill) is byte-for-byte what the open-topped hall had;
+ * the underside reads by the same fixture light, like a real ceiling.
+ *
+ * THE TOP-DOWN VIEW STAYS. The slabs hide whenever the camera rides
+ * ABOVE them — the `?camera=top` debug dollhouse and every transition's
+ * top-down follow pose read straight down to the floor exactly as before
+ * (a 0.3 m hysteresis band keeps the crossing flicker-free). Eye level
+ * (the chase rig) is always below 4 m, so the hall reads as an interior.
+ */
+function HallCeiling({
+  endX,
+  mats,
+}: {
+  /** The window's far end wall plane (chunkBounds(0, layout).xStart). */
+  endX: number;
+  mats: HotelMaterials;
+}): JSX.Element {
+  const groupRef = useRef<Group>(null);
+  const hiddenRef = useRef(false);
+  useFrame(({ camera }) => {
+    const g = groupRef.current;
+    if (!g) return;
+    const hide = hiddenRef.current
+      ? camera.position.y > WALL_HEIGHT - 0.2
+      : camera.position.y > WALL_HEIGHT + 0.1;
+    if (hide !== hiddenRef.current) {
+      hiddenRef.current = hide;
+      g.visible = !hide;
+    }
+  });
+  const t = CORRIDOR_WALL_THICKNESS;
+  // Corridor slab: endX → the east wall's far face, z wall-to-wall with a
+  // half-thickness embed so the seam never shows a crack.
+  const hallLen = LOBBY_LENGTH + t - endX;
+  // Lobby-leg slab: the junction band south to the leg's far wall.
+  const legDepth = LOBBY_SOUTH_REACH - WALL_Z + t;
+  return (
+    <group ref={groupRef}>
+      <mesh
+        position={[endX + hallLen / 2, WALL_HEIGHT + 0.06, 0]}
+        material={mats.wall}
+      >
+        <boxGeometry args={[hallLen, 0.12, CORRIDOR_WIDTH + t]} />
+      </mesh>
+      <mesh
+        position={[
+          LOBBY_LENGTH / 2,
+          WALL_HEIGHT + 0.06,
+          -(WALL_Z + legDepth / 2) + t / 2,
+        ]}
+        material={mats.wall}
+      >
+        <boxGeometry args={[LOBBY_LENGTH + t, 0.12, legDepth]} />
+      </mesh>
+    </group>
+  );
+}
+
 export function Corridor({
   playerRef,
   doors,
@@ -3191,6 +3257,10 @@ export function Corridor({
         mats={mats}
         playerRef={playerRef}
       />
+      {/* The hall's ceiling (v0.29) — hides itself above the slab, so the
+          top-down debug view and the transition's follow pose are
+          untouched. */}
+      <HallCeiling endX={endX} mats={mats} />
     </group>
   );
 }

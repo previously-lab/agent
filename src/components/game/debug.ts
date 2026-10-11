@@ -130,10 +130,12 @@ export const GAME_DEBUG = {
    *  strand read resolves. */
   doorCounts: {} as Record<string, number>,
   /** Probe/e2e mirror of the anchor terminal (§13.1) — SINGLE WRITER:
-   *  GameLoop recomputes it every frame (world position of the active
+   *  GameLoop recomputes it every frame (world position of the lobby
    *  machine's interaction point, its target slice, and the live proximity
-   *  0..1). `active` is false whenever no terminal is in reach (corridor
-   *  far from the lobby machine, a room without resolvable target, …).
+   *  0..1). `active` is false whenever no terminal is in reach (a corridor
+   *  far from the lobby machine, or any room — v0.29 retired the per-room
+   *  terminals, so `kind` never reads "room" any more; the variant stays
+   *  in the type so old probes keep parsing).
    *  Probes assert the game → catalog jump from these instead of entering
    *  the scene graph; GAME_DEBUG.interact() fires the interaction when in
    *  reach, exactly like pressing the key. */

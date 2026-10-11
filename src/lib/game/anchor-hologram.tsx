@@ -1,10 +1,11 @@
 "use client";
 
 /**
- * AnchorHologram — the §13.1 anchor's mount, shared by both mount points
- * (every room's floor, the lobby's east wall).
+ * AnchorHologram — the §13.1 anchor's mount. Since v0.29 it has exactly
+ * ONE mount point: the lobby's east-wall terminal (game-canvas.tsx). The
+ * per-room mounts are retired — rooms grow no machine.
  *
- * RETIRED (v0.11-streams): the holographic braid is gone. What the reader
+ * HISTORY (v0.11-streams): the holographic braid is gone. What the reader
  * photographed — the bright vertical beam with the white helix wound
  * around it and the ring — was the STRAND visualisation (one thread per
  * strand 线索, the retired model; strands.json lives on for graceful
@@ -16,20 +17,21 @@
  * deleted with its test file.
  *
  * WHAT REMAINS, AND WHY. The interaction is pure data — game-canvas's
- * GameLoop measures proximity to `anchor.ts`'s resolved anchor (world XZ,
+ * GameLoop measures proximity to `anchor.ts`'s lobby anchor (world XZ,
  * TERMINAL_REACH) and fires the catalog jump; nothing in the retired
  * geometry was load-bearing for it. But the reader still needs to SEE
  * where the machine stands, so two things stay:
  *
  *  - THE EMITTER DISC — the one solid of the old object, in the hotel's
  *    dark-trim register. It sits at the anchor origin and is the
- *    footprint's visible marker; without it the room would offer a
+ *    footprint's visible marker; without it the lobby would offer a
  *    proximity prompt at an empty patch of floor.
- *  - THE POINT LIGHT — it lights the room, not the object (the glow cues
- *    went with the braid). Removing it would dim the anchor area and
- *    change the scene's light configuration — a visual regression outside
- *    this removal's scope. It keeps the lamp's ×propScale² convention
- *    (compensated from the caller's group scale each frame).
+ *  - THE POINT LIGHT — it lights the lobby where the machine stands (the
+ *    glow cues went with the braid). Removing it would dim the machine's
+ *    corner and change the scene's light configuration — a visual
+ *    regression outside the braid removal's scope. It keeps the lamp's
+ *    ×propScale² convention (compensated from the caller's group scale
+ *    each frame).
  *
  * THE DEPART CLOCK. The frame loop still breathes and still writes
  * TERMINAL_DEPART.intensity (the §13.2 flare clock's live value, read by

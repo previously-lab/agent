@@ -153,7 +153,6 @@ import {
   TERMINAL_FLARE_MS,
   TERMINAL_H,
   TERMINAL_REACH_LOBBY,
-  TERMINAL_REACH_ROOM,
   type TerminalAnchor,
 } from "@/lib/game/anchor";
 import {
@@ -425,11 +424,13 @@ const LOBBY_SOLID_BLOCKERS: readonly SolidBox[] = [
 type PlayerRef = MutableRefObject<PlayerPos>;
 
 /** The anchor HUD payload (§13.1) — set while the player stands in reach
- *  of a terminal; wins over the door prompt in the Hud. `x`/`z`/`faceX`/
- *  `faceZ` are the terminal's world pose (the interaction point and the
- *  direction the terminal faces): the transition's scripted camera shot
- *  descends to it, so the thing the camera flies to is the thing the loop
- *  measured — the same A6 double-call-site discipline as the placement. */
+ *  of the lobby's terminal (the ONE live machine; v0.29 retired the
+ *  per-room terminals); wins over the door prompt in the Hud. `x`/`z`/
+ *  `faceX`/`faceZ` are the terminal's world pose (the interaction point
+ *  and the direction the terminal faces): the transition's scripted
+ *  camera shot descends to it, so the thing the camera flies to is the
+ *  thing the loop measured. `kind` keeps the retired "room" variant so
+ *  the probe mirror's contract (GAME_DEBUG.anchor) stays readable. */
 interface AnchorHud {
   kind: "room" | "lobby";
   sliceId: string;
@@ -652,7 +653,7 @@ export interface StrandDoorSpec {
    * primary first) — OPTIONAL at the type level because the spec only
    * requires the door fields; the data lane hands the full `RoomDoor`
    * through (a structural superset), so this is present at runtime and
-   * the anchor hologram braids one thread per entry.
+   * the room renderer labels one door per entry.
    */
   readonly strands?: readonly string[];
 }
@@ -942,10 +943,11 @@ function resolveSpaceForDoor(
  * + scale factor + wall thickness the renderer draws) — the clamp's
  * solid interior walls. Empty for every non-composed room.
  *
- * Also resolves the room's ANCHOR TERMINAL (§13.1) through the renderer's
- * own inputs — same comp, same plan, same prop scale — so the proximity
- * prompt and the interaction measure the exact machine space.tsx drew
- * (the A6 double-call-site discipline; lib/game/anchor.ts).
+ * The room's terminal anchor is STILL resolved here — not for the world
+ * (v0.29: the per-room machine is retired) but as the loose papers' own
+ * layout input (room-papers.ts keeps its sheets out of the footprint the
+ * resolver reports, so the rooms' paper layouts stay byte-identical to
+ * the ones the live machine produced).
  */
 function roomGeometryForSpace(
   space: ActiveSpace,
@@ -954,7 +956,6 @@ function roomGeometryForSpace(
   plan: RoomPlan;
   doors: readonly RoomDoorPlacement[];
   seams: readonly SeamWall[];
-  terminal: TerminalAnchor;
   /** The loose papers' floor spots (v0.25a §五 B②) — the MAXIMUM count
    *  (ROOM_PAPER_LIMIT); the async document list renders a prefix, and the
    *  resolver's prefix stability keeps the drawn sheets put. */
@@ -1009,7 +1010,7 @@ function roomGeometryForSpace(
     count: ROOM_PAPER_LIMIT,
   });
   if (count <= 0) {
-    return { plan, doors: [], seams, terminal, paperSpots };
+    return { plan, doors: [], seams, paperSpots };
   }
   const walls = wallSegmentsFor(plan, wallThick);
   const hostable = hostableWallsFor(plan, walls, roomOrientationFor(door).dir);
@@ -1022,15 +1023,16 @@ function roomGeometryForSpace(
     undefined,
     template ? doorAffordanceFor(template) : undefined,
   );
-  return { plan, doors, seams, terminal, paperSpots };
+  return { plan, doors, seams, paperSpots };
 }
 
 /**
- * The room terminal's anchor through the SAME pure inputs space.tsx
- * renders from: the composition over the same plan at the same scale
- * factor, the renderer's wall thickness, the prop scale (scaleFactor^
- * PROP_SCALE_EXP — the room's furniture scale), and the scaled water
- * rect. Called from roomGeometryForSpace only.
+ * The retired room terminal's anchor, resolved through the same pure
+ * inputs the room was built from: the composition over the same plan at
+ * the same scale factor, the renderer's wall thickness, the prop scale
+ * (scaleFactor^PROP_SCALE_EXP — the room's furniture scale), and the
+ * scaled water rect. Called from roomGeometryForSpace only, as the loose
+ * papers' layout input (v0.29 — nothing renders the machine any more).
  */
 function terminalForSpace(space: ActiveSpace, plan: RoomPlan): TerminalAnchor {
   const { recipe, scaledRecipe, scale } = space;
@@ -1063,10 +1065,11 @@ function terminalForSpace(space: ActiveSpace, plan: RoomPlan): TerminalAnchor {
  * meshes): on a hit the boom shortens FAST (an occluded camera is a wrong
  * state, not a smoothed one) and relaxes back SLOW; at/under
  * CHASE_MIN_DIST the avatar fades (CHASE_LIVE.fade) instead of the camera
- * entering its head. There is no ceiling anywhere in the world (audited:
- * corridor.tsx — "No ceilings anywhere — open dollhouse"), so nothing
- * above the sight line needs culling; camera-facing walls are solid to
- * the cast only up to their DRAWN sill height, which the sight line
+ * entering its head. Ceilings (v0.29 — corridor.tsx's HallCeiling and
+ * space.tsx's RoomEnvelope) hide themselves whenever the camera rides
+ * above the wall top, so they never occlude the chase rig's sight line
+ * from inside and never need a cast solid; camera-facing walls are solid
+ * to the cast only up to their DRAWN sill height, which the sight line
  * clears (see chase-camera.ts).
  *
  * `?view=game&camera=top` (mode "top") keeps the legacy fixed 45°
@@ -1771,7 +1774,6 @@ function GameLoop({
   roomDoorCountFor,
   roomPlan,
   roomSeams,
-  roomTerminal,
   roomPapers,
   paperHudRef,
   setPaperHud,
@@ -1852,10 +1854,6 @@ function GameLoop({
    *  the renderer's partitions; empty for non-composed rooms): the clamp's
    *  solid interior walls. */
   roomSeams: readonly SeamWall[];
-  /** The active room's anchor terminal (room-local frame — the same pure
-   *  resolution space.tsx rendered; null when no space is active, then the
-   *  lobby machine is the anchor candidate). */
-  roomTerminal: TerminalAnchor | null;
   /** The active room's loose papers (v0.25a §五 B② — room-local spots with
    *  their documents; empty in the corridor, and empty until the room's
    *  document list resolves). */
@@ -2151,33 +2149,19 @@ function GameLoop({
     const gone = space !== null || transitionActive;
     if (gone !== corridorHidden) setCorridorHidden(gone);
 
-    // 4. THE ANCHOR TERMINAL (§13.1): proximity of the one machine that
-    // matters right now — the room's terminal while a space is active, the
-    // lobby's index terminal otherwise. The interaction point is the world
-    // transform of the renderer's anchor (room-local → world through the
-    // same door/dir mirror the clamp and the return-door landing use),
-    // so the thing measured here IS the thing space.tsx drew.
+    // 4. THE ANCHOR TERMINAL (§13.1): proximity of the lobby's index
+    // terminal — the ONE live machine (v0.29: the per-room terminal is
+    // retired; rooms no longer grow a machine or answer its interaction).
+    // The interaction point is the anchor's own pose, so the thing
+    // measured here IS the thing the corridor drew.
     let ax = 0;
     let az = 0;
     let aFaceX = 0;
     let aFaceZ = 1;
     let aKind: "" | "room" | "lobby" = "";
     let aSlice: string | null = null;
-    let aReach = TERMINAL_REACH_LOBBY;
-    if (space !== null && roomTerminal !== null) {
-      const dir = space.door.z > 0 ? 1 : -1;
-      const front = (TERMINAL_D * roomTerminal.scale) / 2;
-      ax = space.door.x + dir * roomTerminal.x;
-      az = space.door.z + dir * (roomTerminal.z + front);
-      // The terminal's local +z front maps to world (0, dir) under the
-      // same mirror — the direction the scripted shot's eye pose stands
-      // from.
-      aFaceX = 0;
-      aFaceZ = dir;
-      aKind = "room";
-      aSlice = space.door.sliceId;
-      aReach = TERMINAL_REACH_ROOM;
-    } else if (space === null) {
+    const aReach = TERMINAL_REACH_LOBBY;
+    if (space === null) {
       const t = LOBBY_TERMINAL_ANCHOR;
       ax = t.x - (TERMINAL_D * t.scale) / 2;
       az = t.z;
@@ -2969,7 +2953,9 @@ export default function GameCanvas({
         wallThick: ROOM_WALL_THICKNESS * Math.max(scaleFactor, 0.35),
         wallHeight: scaledWallHeight(scaleFactor),
         seams: activeRoomGeometry.seams,
-        terminal: activeRoomGeometry.terminal,
+        // v0.29: the per-room terminal is retired — nothing stands in the
+        // room for the cast to keep off of.
+        terminal: null,
       });
     }
     return corridorSolids({
@@ -3512,13 +3498,11 @@ export default function GameCanvas({
             dimmed={corridorHidden}
             dark={dark}
           />
-          {/* The lobby's anchor hologram (§13.1): one size bigger, the
-              window's whole braid (every threading strand + every slice
-              as a context thread). Lives in the corridor wrapper so it
-              unmounts with the corridor (HIDE_DELAY_MS after a room
-              engages) and eases down with the same dissolve (`dimmed`).
-              Emissive-only, so the light configuration — and the compile
-              budget — never changes. */}
+          {/* The lobby's anchor (§13.1): the ONE live terminal — the
+              emitter disc marking the machine's footprint and its point
+              light. Lives in the corridor wrapper so it unmounts with the
+              corridor (HIDE_DELAY_MS after a room engages) and eases down
+              with the same dissolve (`dimmed`). */}
           {!corridorGone && (
             <group
               position={[
@@ -3597,7 +3581,6 @@ export default function GameCanvas({
           roomDoorCountFor={roomDoorCountFor}
           roomPlan={activeRoomGeometry?.plan ?? NO_ROOM_PLAN}
           roomSeams={activeRoomGeometry?.seams ?? NO_ROOM_SEAMS}
-          roomTerminal={activeRoomGeometry?.terminal ?? null}
           roomPapers={mountedPapers}
           paperHudRef={paperHudRef}
           setPaperHud={setHudPaper}

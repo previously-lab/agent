@@ -108,7 +108,7 @@ import {
 } from "react";
 import * as THREE from "three";
 import { useFrame } from "@react-three/fiber";
-import { WALL_HEIGHT, WINDOW_SLICES, type DoorRef } from "@/lib/game/hotel";
+import { WALL_HEIGHT, type DoorRef } from "@/lib/game/hotel";
 import { PLATE_BG, PLATE_INK } from "@/lib/game/tuning/hotel";
 import { GAME_DEBUG, WATER_DEBUG_MIRROR } from "./debug";
 import { RoomPapers, type RoomPaperItem } from "./room-papers";
@@ -140,8 +140,6 @@ import {
   type RoomPlan,
   type WallSegment,
 } from "@/lib/game/room-plan";
-import { AnchorHologram } from "@/lib/game/anchor-hologram";
-import { roomTerminalFor, terminalFootprint } from "@/lib/game/anchor";
 import {
   doorAffordanceFor,
   resolveRoomTemplate,
@@ -7703,7 +7701,7 @@ export interface SpaceRoomDoor {
    * group, primary first) — OPTIONAL because standalone/debug mounts
    * build bare `{key, label, lit}` doors; absent reads as no strands.
    * The mounted game passes the full `RoomDoor` through (structural
-   * superset), so the anchor hologram can braid one thread per strand.
+   * superset), so the room's own door lane can label one door per strand.
    */
   strands?: readonly string[];
 }
@@ -7761,6 +7759,137 @@ export function roomTemplateForDoorCount(
     roomDoorCount,
     WORLD_SEED,
     capacityFor,
+  );
+}
+
+/**
+ * THE ROOM ENVELOPE (v0.29): the dollhouse is closed. Two kinds of piece,
+ * both in the perimeter's own material language and both hidden whenever
+ * the camera rides ABOVE the wall top (the `?camera=top` debug dollhouse,
+ * the transition's top-down follow poses, and every miniature room viewed
+ * from its natural god's-eye height keep reading exactly as before — a
+ * 0.3 m hysteresis band keeps the crossing flicker-free):
+ *
+ *  - WALL FILLERS. The dollhouse cutaway drew camera-facing runs at
+ *    WALL_SILL_HEIGHT; at eye level those stubs read as missing walls.
+ *    Each sill run gets a filler from its drawn top to the room's full
+ *    wall height (same per-run material, same cap rail at the top), so
+ *    every perimeter wall stands full height from inside.
+ *  - THE CEILING. Interior and wonder rooms are BUILDINGS: a slab at the
+ *    wall top spans the plan (an l-shape takes two rectangles, one per
+ *    leg), in the wall's plaster a touch darkened, like a real ceiling.
+ *    It neither casts nor receives shadows, so the room's light
+ *    configuration — kits, sconces, the sun through the window — is
+ *    exactly what the open-topped room had; the underside reads by the
+ *    same fixture light. Nature and hybrid rooms keep their sky: a meadow
+ *    under a lid is a stage, not a biome.
+ */
+function RoomEnvelope({
+  wallRuns,
+  wallHeights,
+  wallMaterials,
+  capColor,
+  wallColor,
+  wallHeight,
+  plan,
+  width,
+  extent,
+  wallThick,
+  ceilinged,
+}: {
+  wallRuns: readonly SplitWall[];
+  wallHeights: readonly number[];
+  wallMaterials: readonly THREE.Material[];
+  capColor: THREE.Color;
+  wallColor: THREE.Color;
+  wallHeight: number;
+  plan: RoomPlan;
+  width: number;
+  extent: number;
+  wallThick: number;
+  /** interior/wonder rooms grow a ceiling; nature/hybrid keep the sky. */
+  ceilinged: boolean;
+}): JSX.Element {
+  const groupRef = useRef<THREE.Group>(null);
+  const scratch = useRef(new THREE.Vector3());
+  const hiddenRef = useRef(false);
+  useFrame(({ camera }) => {
+    const g = groupRef.current;
+    if (!g) return;
+    const topY = g.getWorldPosition(scratch.current).y + wallHeight;
+    const hide = hiddenRef.current
+      ? camera.position.y > topY - 0.2
+      : camera.position.y > topY + 0.1;
+    if (hide !== hiddenRef.current) {
+      hiddenRef.current = hide;
+      g.visible = !hide;
+    }
+  });
+  const ceilingMaterial = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: wallColor.clone().multiplyScalar(0.92),
+        roughness: 1,
+        metalness: 0,
+        flatShading: true,
+      }),
+    [wallColor],
+  );
+  useEffect(() => () => ceilingMaterial.dispose(), [ceilingMaterial]);
+  const ceilingY = wallHeight + 0.06;
+  return (
+    <group ref={groupRef}>
+      {wallRuns.map(({ wall }, i) => {
+        const h = wallHeights[i];
+        if (h >= wallHeight - 1e-6) return null;
+        const fill = wallHeight - h;
+        return (
+          <group key={`fill${i}`}>
+            <mesh
+              position={[wall.x, h + fill / 2, wall.z]}
+              material={wallMaterials[i]}
+            >
+              <boxGeometry args={[wall.sizeX, fill, wall.sizeZ]} />
+            </mesh>
+            <mesh position={[wall.x, wallHeight - 0.05, wall.z]}>
+              <boxGeometry args={[wall.sizeX + 0.06, 0.1, wall.sizeZ + 0.06]} />
+              <meshStandardMaterial color={capColor} roughness={1} flatShading />
+            </mesh>
+          </group>
+        );
+      })}
+      {ceilinged && plan.id === "l-shape" ? (
+        <group>
+          {/* The entrance leg: full width up to the step. */}
+          <mesh
+            position={[0, ceilingY, plan.stepZ / 2]}
+            material={ceilingMaterial}
+          >
+            <boxGeometry args={[width + wallThick, 0.12, plan.stepZ + wallThick]} />
+          </mesh>
+          {/* The kept leg beyond the step. */}
+          <mesh
+            position={[
+              (plan.lSide * width) / 4,
+              ceilingY,
+              (plan.stepZ + extent) / 2,
+            ]}
+            material={ceilingMaterial}
+          >
+            <boxGeometry
+              args={[width / 2 + wallThick, 0.12, extent - plan.stepZ + wallThick]}
+            />
+          </mesh>
+        </group>
+      ) : ceilinged ? (
+        <mesh
+          position={[0, ceilingY, extent / 2]}
+          material={ceilingMaterial}
+        >
+          <boxGeometry args={[width + wallThick, 0.12, extent + wallThick]} />
+        </mesh>
+      ) : null}
+    </group>
   );
 }
 
@@ -8052,61 +8181,12 @@ export function SpaceScene({
   });
 
   const waterRect = useMemo(() => waterRectFor(scaledRecipe), [scaledRecipe]);
-  // THE ANCHOR HOLOGRAM (§13.1): every room grows the one braid in the
-  // room's open field — lib/game/anchor.ts resolves the spot (a seeded
-  // scan of the mid-depth band, hard-clear of the doorway strip, the walk
-  // path, and the water, scored off the hero, the furniture clusters and
-  // the walls); the integrator resolves the SAME anchor through the same
-  // pure call for the proximity prompt and the interaction (A6 — two call
-  // sites, one answer). Mounted inside the room root, so the fade capture
-  // carries it through the crossfade; its glow is emissive-only (no
-  // light), so the light configuration — and the compile storm budget —
-  // is untouched.
-  const terminalAnchor = useMemo(
-    () =>
-      roomTerminalFor({
-        sliceId: seedId,
-        plan,
-        comp,
-        width,
-        wallThick,
-        propScale,
-        water: waterRect,
-      }),
-    [seedId, plan, comp, width, wallThick, propScale, waterRect],
-  );
-  // THE ANCHOR RESERVES ITS FLOOR: the machine is a fixture, and the kit
-  // staging yields to fixtures — its footprint disc joins the obstacles
-  // every staging branch passes (the pool columns' precedent), so no kit
-  // piece may land on the hologram (lib/game/kits.ts's gap machinery).
-  // A6 holds: the disc derives from the deterministic anchor.
-  const terminalObstacle = useMemo(() => {
-    const fp = terminalFootprint(terminalAnchor);
-    return {
-      x: terminalAnchor.x,
-      z: terminalAnchor.z,
-      r: Math.hypot((fp.x1 - fp.x0) / 2, (fp.z1 - fp.z0) / 2) + 0.1,
-    };
-  }, [terminalAnchor]);
-  // The braid's threads, from the data the room already holds: one per
-  // strand passing through this slice (the room-door lane's merged
-  // groups, deduped in door order — activity-desc, so the bundle's seats
-  // are data-stable), plus one context thread per NEWER slice of this
-  // corridor window. Flat door indices are dense below the newest slice,
-  // so `index % WINDOW_SLICES` is exactly the count of provably-existing
-  // newer neighbors — older slots may belong to a partial last window
-  // and are never claimed (A6: the braid only ever shows what the data
-  // can prove).
-  const terminalStrands = useMemo(() => {
-    const out: string[] = [];
-    for (const d of roomDoors ?? []) {
-      for (const s of d.strands ?? []) {
-        if (!out.includes(s)) out.push(s);
-      }
-    }
-    return out;
-  }, [roomDoors]);
-  const terminalNeighborSlots = door.index % WINDOW_SLICES;
+  // THE ROOM ANCHOR IS RETIRED (v0.29): the per-room terminal — the
+  // emitter disc that was left as its footprint marker — no longer stands
+  // in any room, and its catalog interaction is gone with it. The pure
+  // resolver (lib/game/anchor.ts) stays: the lobby's §13.1 machine is the
+  // one live terminal, and the resolver's output remains the loose
+  // papers' layout input so the sheets keep their spots.
   // The pool's wave-equation driver (materials/wave-driver.ts): created
   // HERE, not in the WaterSurface component, because the pool-floor
   // caustics patch below also samples the driver's height texture (the
@@ -8402,7 +8482,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
-        obstacles: [terminalObstacle],
+        obstacles: [],
         // v0.12 P3: the world's biome skin — §6.2 slot overrides and the
         // skin's curated decks ride in through the staging machine.
         skin,
@@ -8480,7 +8560,6 @@ export function SpaceScene({
           ? []
           : furnishInterior(rng, scaledRecipe, waterRect, plan, propScale, clearanceDoors);
         const obstacles = [
-          terminalObstacle,
           ...legacy.map((p) => ({
             x: p.x,
             z: p.z,
@@ -8502,7 +8581,7 @@ export function SpaceScene({
       return stageInteriorKits({
         ...staging,
         baseArea,
-        obstacles: [terminalObstacle, ...seamObstacles],
+        obstacles: seamObstacles,
       }).map(toPlacement);
     }
     if (recipe.worldClass === "wonder") {
@@ -8543,7 +8622,7 @@ export function SpaceScene({
         wallThick,
         water: waterRect,
         doors: clearanceDoors,
-        obstacles: [terminalObstacle],
+        obstacles: [],
         heightAt: (x: number, z: number) => terrainHeight(scaledRecipe, x, z),
       });
       return [...rugs, ...kits.map(toPlacement)];
@@ -8551,7 +8630,7 @@ export function SpaceScene({
     // Unreachable: the gate above covers every world class. Kept so the
     // memo's return type stays PropPlacement[] without a cast.
     return [];
-  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, terminalObstacle, seedId, skin]);
+  }, [recipe, scaledRecipe, waterRect, plan, comp, propScale, scaleFactor, wallThick, clearanceDoors, template, roomComposition, seamObstacles, seedId, skin]);
 
 
   // Internal structure (L/XL only, on the scaled tier): partition or
@@ -9749,6 +9828,25 @@ export function SpaceScene({
         );
       })}
 
+      {/* The room's envelope (v0.29): sill runs filled to full height and
+          a ceiling over the building rooms — hidden from above, so the
+          top-down debug view reads exactly as before. */}
+      <RoomEnvelope
+        wallRuns={wallRuns}
+        wallHeights={wallHeights}
+        wallMaterials={wallMaterials}
+        capColor={capColor}
+        wallColor={wallColor}
+        wallHeight={wallHeight}
+        plan={plan}
+        width={width}
+        extent={extent}
+        wallThick={wallThick}
+        ceilinged={
+          recipe.worldClass === "interior" || recipe.worldClass === "wonder"
+        }
+      />
+
       {/* dado-band (§3.2): baseboard + panelled wainscot on the inner face
           of every perimeter wall — the room reads as a place at its
           boundary, which is where the eye looks for craft. Breaks at the
@@ -10057,22 +10155,6 @@ export function SpaceScene({
           night={night}
         />
       )}
-
-      {/* The anchor hologram (§13.1): the room's slice of the timeline
-          braided with its strands and window, glowing by the door. Walk
-          up, interact, and the view dissolves to the 2.5D catalog focused
-          on this slice — the game → catalog half of the shared ?slice=
-          address. */}
-      <group
-        position={[terminalAnchor.x, GROUND_Y, terminalAnchor.z]}
-        rotation={[0, terminalAnchor.rotY, 0]}
-        scale={terminalAnchor.scale}
-      >
-        <AnchorHologram
-          strands={terminalStrands}
-          neighborSlots={terminalNeighborSlots}
-        />
-      </group>
 
       {/* The loose papers (v0.25a §五 B②): the slice's own record and the
           documents that stamped it, flat on the floor of the entrance's

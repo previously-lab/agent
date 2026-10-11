@@ -1,24 +1,22 @@
 /**
  * The anchor terminal (v0.11 §13.1/§14.4 step ④) — pure module.
  *
- * Every room grows ONE terminal (the 锚定物): a floor-standing machine with
- * a slowly breathing screen. Walk up, interact, and the view switches to
- * the 2.5D catalog focused on the room's slice — the game → catalog
- * direction of the shared slice address (shell-nav.ts's `focusSlice`). The
- * lobby's terminal is one size bigger and shows the whole-window index
- * (buildLobbyRegister's data, rendered as DOM per §13's 文字走 DOM rule).
+ * v0.29: THE PER-ROOM TERMINAL IS RETIRED. Rooms no longer grow a machine
+ * — the emitter disc that remained as its footprint marker is removed
+ * from the world, and the room's catalog interaction with it. The lobby's
+ * §13.1 terminal is the ONE live machine: walk up, interact, and the view
+ * switches to the 2.5D catalog focused on the window's newest slice (the
+ * game → catalog direction of the shared slice address, shell-nav.ts's
+ * `focusSlice`).
  *
- * THE OPEN FIELD. The room's machine stands in the room's open area,
- * mid-depth — a floor lamp, not a wall fixture (the placement note lives
- * with the resolver below). The seeded scan and the degenerate fallback
- * resolve deterministically (A6: same inputs, same spot).
- *
- * TWO CALL SITES, ONE ANSWER. space.tsx renders the terminal from this
- * resolver, and game-canvas.tsx resolves the SAME anchor through the same
- * pure call to drive the proximity prompt and the interaction — the same
- * A6 double-call-site discipline as roomGeometryForSpace: the thing the
- * player walks to is the thing the loop measures, with no scene-graph
- * hand-off between them.
+ * WHAT STAYS BELOW, AND WHY. The room resolver (`roomTerminalFor` and its
+ * helpers) is dormant at runtime but remains the loose papers' layout
+ * input (room-papers.ts keeps sheets out of the resolved footprint, so
+ * paper layouts stay byte-identical to the ones the live machine
+ * produced) and keeps its unit-test contract (tests/lib/game/anchor.test.ts).
+ * The lobby constants are live: corridor.tsx renders the machine from
+ * them, game-canvas measures the SAME anchor for the proximity prompt and
+ * the interaction, and clamps keep the player out of its blocker box.
  */
 import { LOBBY_CLEAR } from "./clamps";
 import { LOBBY_LENGTH } from "./hotel";

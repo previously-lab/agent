@@ -66,10 +66,14 @@ export function cameraModeFor(param: string | null): GameCameraMode {
 
 /** Perspective FOV (vertical, degrees) — the standard third-person band. */
 export const CHASE_FOV = 55;
-/** Desired boom length (m): pivot → camera along the negative heading. */
-export const CHASE_BOOM = 3.0;
-/** Camera height above the avatar's ground (m). */
-export const CHASE_CAM_HEIGHT = 1.9;
+/** Desired boom length (m): pivot → camera along the negative heading.
+ *  v0.29: 3.0 → 4.6 — at 3.0 the avatar filled ~35% of the viewport
+ *  height and read as the subject; at 4.6 it is a modest figure in the
+ *  lower third (~22%) and the room reads around it. */
+export const CHASE_BOOM = 4.6;
+/** Camera height above the avatar's ground (m). Rises with the boom so
+ *  the pitch stays a gentle down-look (≈13°), not a crane shot. */
+export const CHASE_CAM_HEIGHT = 2.4;
 /** Pivot height above the avatar's ground (m) — the look target, chest. */
 export const CHASE_PIVOT_HEIGHT = 1.35;
 /** Lazy yaw follow: the heading only pulls the camera while the avatar
