@@ -159,7 +159,13 @@ function renderFieldWorld(
       target.scissorTest = true;
       // Re-bind so the new viewport/scissor apply.
       gl.setRenderTarget(target);
+      // The braid draws OVER the main pass (the two canvases' old stacking —
+      // see the screen path below): keep the strip's colour, clear only the
+      // depth the field's scene left in it.
+      gl.autoClear = false;
+      gl.clearDepth();
       gl.render(bandScene, bandCamera);
+      gl.autoClear = true;
       target.scissorTest = false;
       target.viewport.set(0, 0, w, h);
     }
@@ -173,7 +179,16 @@ function renderFieldWorld(
     gl.setViewport(band.x, 0, band.width, size.height);
     gl.setScissor(band.x, 0, band.width, size.height);
     gl.setScissorTest(true);
+    // OVER, not INSTEAD: autoClear would clear the strip to the transparent
+    // clear colour first, erasing the main pass's surface inside the band
+    // rect and letting the DOM backdrop show through as a pale column (the
+    // v0.28 left-edge seam). Depth still clears — the braid's scene must not
+    // test against the field's depth — so the threads draw exactly as they
+    // did on their own canvas, over whatever the main pass left there.
+    gl.autoClear = false;
+    gl.clearDepth();
     gl.render(bandScene, bandCamera);
+    gl.autoClear = true;
     gl.setScissorTest(false);
   }
   gl.setViewport(0, 0, size.width, size.height);
@@ -333,7 +348,10 @@ function TransitionCompositor({
 
   useFrame(() => {
     const wt = WORLD_TRANSITION;
-    if (!wt.active) return;
+    // Pause-mode moves run no dissolve: the world freezes under the shell's
+    // DOM blur layer and the field's GL scene never paints (the desk's paper
+    // is DOM) — there is nothing for the quad to composite.
+    if (!wt.active || wt.mode === "pause") return;
     const pin = contractPinAt(wt.progress, wt.from, wt.to);
     if (gl.toneMapping !== pin.toneMapping) gl.toneMapping = pin.toneMapping;
     gl.shadowMap.enabled = pin.shadowMapEnabled;
@@ -381,6 +399,14 @@ export interface WorldCanvasProps {
   /** Freeze the frame loop while the conversation layer is fullscreen
    *  (§14.1 rule 2): pause, never unmount. */
   paused: boolean;
+  /** THE DOCUMENT PAUSE (v0.28 step 1): the steady state after a pause-mode
+   *  move — BOTH worlds stay mounted (the game frozen behind the field's
+   *  document tier) but no transition is running. The field's GL scene
+   *  never paints in this state: the desk/archive content is all DOM and
+   *  sits above the shell's blur layer, so the canvas shows exactly the
+   *  game's frozen frame. The contract follows the game (worlds[0]) — it
+   *  is the only world the GL draws. */
+  suspended: boolean;
   /** The left band's braid, mounted in the field world only (null in the
    *  game world — the hotel owns the whole viewport). */
   band: WorldBand | null;
@@ -389,6 +415,7 @@ export interface WorldCanvasProps {
 export function WorldCanvas({
   worlds,
   paused,
+  suspended,
   band,
 }: WorldCanvasProps): ReactNode {
   const { resolvedTheme } = useTheme();
@@ -398,9 +425,11 @@ export function WorldCanvas({
   // lives ABOVE both of us in the shell, see WorldSceneProvider).
   const nodes = useContext(WorldSceneNodesContext);
 
-  const transitionActive = worlds.length === 2;
+  const transitionActive = worlds.length === 2 && !suspended;
   // The settled world's contract applies before its first paint; the
-  // compositor owns the renderer for the frames in between.
+  // compositor owns the renderer for the frames in between. While SUSPENDED
+  // the game (worlds[0]) is the only world the GL draws, so the renderer
+  // wears its values for the whole pause.
   const contractWorld: WorldKind | null = transitionActive
     ? null
     : (worlds[0] ?? null);
@@ -465,7 +494,7 @@ export function WorldCanvas({
               fieldScene={fieldScene}
               bandScene={bandScene}
               bandCamera={bandCamera}
-              gated={transitionActive}
+              gated={transitionActive || suspended}
             />
           )}
           {transitionActive && (
