@@ -355,24 +355,31 @@ export function ConversationPanel({
           </Button>
         </div>
 
-        {/* THE CONVERSATION BODY — the fullscreen surface. At the pill tier
-            it folds to zero height (not `display:none` — the subtree must
-            stay mounted) and the clip hides the content. The body itself
-            must NOT be inert: the composer renders inside this subtree
-            (absolutely positioned against the BOX — outside this clip
-            visually), and inertness is a DOM-subtree property a descendant
-            cannot opt out of, so the body-level inert made the painted,
-            clipped-out pill dead to every click. The CONTENT stays inert
-            through the stream column's OWN `inert` (chat-page) — that is
-            the fold's real guard; the composer is its live sibling. At
-            fullscreen the body was never inert anyway, so this changes
-            nothing there. */}
+        {/* THE CONVERSATION BODY — the fullscreen surface. It folds away by
+            CLIPPING, never by height: `h-0` and `display:none` both land in
+            the opening frame, so the stream used to vanish before the box had
+            moved a pixel and the whole collapse read as "it just closes" —
+            and the first rise paid for the entire fullscreen layout in one
+            frame, which is the one-off jank the owner saw (the second rise is
+            cheap because that layout already exists). `max-height` IS
+            transitionable, so the content is eaten by the shrinking sheet
+            instead of vanishing under it; the percentage resolves against the
+            box, which always has a definite height. The body itself must NOT
+            be inert: the composer renders inside this subtree (absolutely
+            positioned against the BOX — outside this clip visually, since its
+            containing block is an ancestor of the clipper), and inertness is
+            a DOM-subtree property a descendant cannot opt out of, so a
+            body-level inert made the painted, clipped-out pill dead to every
+            click. The CONTENT stays inert through the stream column's OWN
+            `inert` (chat-page) — that is the fold's real guard; the composer
+            is its live sibling. At fullscreen the body was never inert
+            anyway, so this changes nothing there. */}
         <div
           id="conversation-panel"
           role="region"
           aria-label={t("title")}
-          className={`min-h-0 flex-col overflow-hidden ${
-            open ? "flex flex-1" : "flex h-0"
+          className={`flex min-h-0 flex-1 flex-col overflow-hidden transition-[max-height] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none ${
+            open ? "max-h-full" : "max-h-0"
           }`}
         >
           {/* min-h-0 so the chat's own surface — not this column — grows and
