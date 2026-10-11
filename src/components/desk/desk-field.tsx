@@ -1222,7 +1222,7 @@ export function DeskField({
         createPortal(
           <div
             data-page-controls
-            className="pointer-events-none fixed bottom-27 left-2 z-50 md:bottom-14 md:left-4"
+            className="pointer-events-none fixed bottom-27 left-2 z-30 md:bottom-14 md:left-4"
           >
             <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
               <button
@@ -1260,12 +1260,17 @@ export function DeskField({
           text only changes on a gesture, and a polite region would be
           noise; the static aria-label carries the affordance. Body portal
           for the same reason as the page bar: the pane caps its branch at
-          z-10, under the world gate. */}
+          z-10, under the world gate.
+          Z-ORDER (fixed 2026-10-15): the desk's own islands sit at z-30 —
+          above the gate's z-20 and the paper's z-10, and BELOW the expanded
+          conversation panel's z-40, which used to be covered by them; the
+          app's chrome stays at z-50, above everything. Raise neither island
+          past 30 without re-reading the panel's own contract. */}
       {ready &&
         createPortal(
           <div
             data-zoom-controls
-            className="pointer-events-none fixed bottom-37 left-2 z-50 md:bottom-24 md:left-4"
+            className="pointer-events-none fixed bottom-37 left-2 z-30 md:bottom-24 md:left-4"
           >
             <div className={`${ISLAND_BAR} pointer-events-auto gap-0.5 px-1`}>
               <button
