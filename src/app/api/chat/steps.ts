@@ -1349,13 +1349,21 @@ async function flushTurnBatch(
 export async function appendFieldReturnLine(
   sliceId: string,
   text: string,
+  date?: string,
 ): Promise<void> {
   "use step";
   try {
     const resolved = await readSlicePartResolved(sliceId, "agent").catch(() => null);
     const existing = resolved?.content ?? "";
-    const date = new Date().toISOString().slice(0, 10);
-    const line = `HQ 回程（${date}）：${text.trim()}`;
+    // The stamp rides the USER's clock, not UTC: the caller's local date when
+    // it hands one over, else the slice's own naming date (slice ids are named
+    // by the user's local calendar — createSlice), UTC only as a last resort.
+    const stamp =
+      date ??
+      (/^\d{4}-\d{2}-\d{2}-/.test(sliceId)
+        ? sliceId.slice(0, 10)
+        : new Date().toISOString().slice(0, 10));
+    const line = `HQ 回程（${stamp}）：${text.trim()}`;
     const next = existing.trimEnd()
       ? `${existing.trimEnd()}\n\n${line}\n`
       : `${line}\n`;

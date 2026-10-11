@@ -19,13 +19,14 @@
  * store) — this module invents no new write path.
  *
  * P4b wiring: the hq-run.ts shell's `handleHQBrief` (hq-steps.ts) calls
- * `handleBrief` below — one brief = one round. boundary-run.ts /
- * question-run.ts keep compiling against background-steps.ts until the last
- * P4 lane retires the old trigger chain.
+ * `handleBrief` below — one brief = one round. question-run.ts keeps
+ * compiling against background-steps.ts until the last P4 lane retires the
+ * old trigger chain.
  */
 import { tool } from "ai";
 import { z } from "zod";
 import { loadSlice, readSlicePart } from "@/lib/episodic";
+import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
@@ -155,6 +156,7 @@ function buildHqTools(date: string, model: ModelConfig) {
         "appendTail: ONE dated line (line) — the only in-place growth once the write window has closed. " +
         "addPiece: a dated piece (title + body, always allowed). " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. " +
+        "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveUserModel; writes there are rejected. " +
         DOC_WRITE_WINDOW_RULE,
       inputSchema: z.object({
         action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece"]),
@@ -172,6 +174,13 @@ function buildHqTools(date: string, model: ModelConfig) {
           ),
       }),
       execute: async (args) => {
+        // people/user/index.md is the USER MODEL — pure prose maintained by
+        // the merged card pass (evolveUserModel), every byte of it injected
+        // into each turn. Routing it through the case machinery would stamp
+        // case frontmatter into that prose; refuse mechanically instead.
+        if (args.category === "people" && args.caseName === "user") {
+          return "REJECTED: people/user is the user model, not a case — use evolveUserModel (other people/* cases stay legal).";
+        }
         // The runtime category check lives in applyCaseWriteIntent
         // (isCaseCategory throws on an unknown category) — one enforcement point.
         const base = { category: args.category as CaseCategory, caseName: args.caseName };
@@ -245,8 +254,8 @@ function buildHqTools(date: string, model: ModelConfig) {
 
     evolveUserModel: tool({
       description:
-        "Run the merged card pass (the Previously Agent) over a closed slice: updates people/user/index.md " +
-        "(card + direction halves) and may rewrite the allowlisted self/ SOPs (search, thinkdeep). " +
+        "Run the merged card pass (the Previously Agent) over a slice — closed or still open, the pass is told which: " +
+        "updates people/user/index.md (card + direction halves) and may rewrite the allowlisted self/ SOPs (search, thinkdeep). " +
         "Run it AFTER the round's case writes so the model cites the cases just written. " +
         "focus: one line telling the agent what this round is about (cite the cases you just wrote).",
       inputSchema: z.object({
@@ -264,23 +273,32 @@ function buildHqTools(date: string, model: ModelConfig) {
           memoryWorthy: true,
           emotionalSignal: { intensity: "none", register: "neutral", note: "" },
         };
-        const card = await runCardEvolution({
-          model,
-          sliceId,
-          closedSliceId: sliceId,
-          recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
-          focus,
-          signal: "slice_closed",
-          readers: buildRunCardReaders(),
-          todayDate: date,
-          directionEval: {
-            current: directionCurrent,
-            mode: detectDirectionMode(directionCurrent),
-            cardSelfModel: null,
-            analysis: minimalAnalysis,
-          },
-          allowedSopWrites: ["search", "thinkdeep"],
-        });
+        // HQ's read surface includes the LIVING slice — only a closed one
+        // earns the slice_closed signal (and the deep whole-slice review it
+        // unlocks); an open slice is reported as what it is, a field report.
+        const closed = slice.status === "closed";
+        // The same process-wide evolution lock the field's turn pipeline
+        // serializes on (steps.ts) — HQ must not interleave its
+        // read-modify-write of the user model / SOPs with a live turn's.
+        const card = await withSliceLock("evolution", () =>
+          runCardEvolution({
+            model,
+            sliceId,
+            ...(closed ? { closedSliceId: sliceId } : {}),
+            recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
+            focus,
+            signal: closed ? "slice_closed" : "field_report",
+            readers: buildRunCardReaders(),
+            todayDate: date,
+            directionEval: {
+              current: directionCurrent,
+              mode: detectDirectionMode(directionCurrent),
+              cardSelfModel: null,
+              analysis: minimalAnalysis,
+            },
+            allowedSopWrites: ["search", "thinkdeep"],
+          }),
+        );
         return (
           `changed: ${card.changed}` +
           (card.summary ? `\nsummary: ${card.summary}` : "") +
@@ -329,7 +347,9 @@ function buildHqTools(date: string, model: ModelConfig) {
         content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),
       }),
       execute: async ({ agent, content }) => {
-        await writeSelfSop(agent, content);
+        // Same evolution lock as evolveUserModel above — an SOP rewrite is a
+        // whole-file write that must not interleave with a live turn's run.
+        await withSliceLock("evolution", () => writeSelfSop(agent, content));
         return `OK: memory/self/${agent}/index.md`;
       },
     }),

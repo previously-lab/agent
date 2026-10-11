@@ -100,6 +100,7 @@ vi.mock("@/lib/evolution/store", () => ({
 
 import { handleBrief } from "@/app/api/evolution/hq-agent";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
+import { withSliceLock } from "@/lib/episodic/slice-mutex";
 
 const runSubAgentMock = vi.mocked(runSubAgent);
 type RunnerOpts = Parameters<typeof runSubAgent>[0];
@@ -312,6 +313,80 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(cardInput.signal).toBe("slice_closed");
     expect(cardInput.closedSliceId).toBe(SLICE_ID);
     expect(cardInput.allowedSopWrites).toEqual(["search", "thinkdeep"]);
+    // The merged run serializes on the process-wide evolution lock, same as
+    // the field's turn pipeline.
+    expect(vi.mocked(withSliceLock)).toHaveBeenCalledWith("evolution", expect.any(Function));
+  });
+
+  it("a LIVING slice gets the neutral field_report signal — never told the slice closed", async () => {
+    episodic.loadSlice.mockResolvedValue({
+      slice_id: SLICE_ID,
+      focus: "进行中",
+      summary: "",
+      status: "active",
+      tags: [],
+      turns: [{ timestamp: "t0", role: "user", content: "还在聊" }],
+    });
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "evolveUserModel", { sliceId: SLICE_ID, focus: "living 片复核。" });
+      return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    const cardInput = passes.runCardEvolution.mock.calls[0][0] as {
+      signal: string;
+      closedSliceId?: string;
+    };
+    expect(cardInput.signal).toBe("field_report");
+    // no closedSliceId — the agent must not enter the deep whole-slice review
+    expect(cardInput.closedSliceId).toBeUndefined();
+  });
+
+  it("writeCase refuses people/user — the user model is evolveUserModel's, other people/* stay legal", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const refused = await callTool(opts, "writeCase", {
+        action: "open",
+        category: "people",
+        caseName: "user",
+        body: "试图往用户模型里写 frontmatter。",
+      });
+      expect(refused).toContain("REJECTED:");
+      expect(refused).toContain("evolveUserModel");
+      const legal = await callTool(opts, "writeCase", {
+        action: "open",
+        category: "people",
+        caseName: "同事小林",
+        body: "2026-08-09-1300 提到的同事。",
+      });
+      expect(legal).toContain("OK:");
+      return { ok: true, report: { actions: [], note: "guard verified" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    // nothing ever landed on the user model path
+    expect(io.files.has("memory/people/user/index.md")).toBe(false);
+    expect(io.files.get("memory/people/同事小林/index.md")).toContain("提到的同事");
+  });
+
+  it("writeSelfSop rewrites under the evolution lock", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "writeSelfSop", {
+        agent: "search",
+        content: "2026-08-09：读回失败先读回再引用（证据 2026-08-09-1300）。",
+      });
+      expect(r).toContain("OK: memory/self/search/index.md");
+      return { ok: true, report: { actions: [], note: "sop rewritten" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    expect(vi.mocked(withSliceLock)).toHaveBeenCalledWith("evolution", expect.any(Function));
+    expect(io.files.get("memory/self/search/index.md")).toContain("2026-08-09");
   });
 
   it("archiveSliceCases runs the case-writer AND the scribe over the same slice", async () => {

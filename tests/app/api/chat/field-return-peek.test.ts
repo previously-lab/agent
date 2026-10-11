@@ -83,6 +83,17 @@ describe("appendFieldReturnLine — 赶上就带上", () => {
     expect(io.files.get(agentPath)).toContain("HQ 回程（");
   });
 
+  it("the date stamp rides the USER's clock: the caller's local date, else the slice's own naming date — never bare UTC", async () => {
+    await appendFieldReturnLine("2026-10-04-0131", "显式日期。", "2026-10-05");
+    const agentPath = slicePartPath("2026-10-04-0131", "agent");
+    expect(io.files.get(agentPath)).toContain("HQ 回程（2026-10-05）：显式日期。");
+
+    io.files.clear();
+    // no date handed over — the slice id is named by the user's local calendar
+    await appendFieldReturnLine("2026-10-04-0131", "切片命名日期。");
+    expect(io.files.get(agentPath)).toContain("HQ 回程（2026-10-04）：切片命名日期。");
+  });
+
   it("a write failure is swallowed — never throws into the turn", async () => {
     io.files.set(slicePartPath("2026-10-04-0131", "agent"), "x");
     // fsWriteFile mock replaced with a rejecting one for this call

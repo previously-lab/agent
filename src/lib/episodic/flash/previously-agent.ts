@@ -109,6 +109,7 @@ import {
 export type PreviouslySignal =
   | "new_observation"
   | "slice_closed"
+  | "field_report"
   | "self_reflection";
 
 /**
@@ -188,8 +189,8 @@ export interface PreviouslyAgentInput {
    */
   userProfile?: string | null;
   /**
-   * The self/ colleagues whose SOP this run may rewrite (v0.19 §C.2 — the
-   * boundary run's ③ lists them; the explicit memory_update channel passes
+   * The self/ colleagues whose SOP this run may rewrite (v0.19 §C.2 — HQ's
+   * merged card run lists them; the explicit memory_update channel passes
    * NONE, so writeSop rejects every call there). Absent/empty → all SOP
    * writes REJECTED.
    */
@@ -456,6 +457,7 @@ function buildUserPrompt(input: PreviouslyAgentInput): string {
   const signalLabels: Record<PreviouslySignal, string> = {
     new_observation: "new_observation — a new round of conversation happened; check for new information",
     slice_closed: "slice_closed — a time slice just closed; review the whole conversation",
+    field_report: "field_report — a field report arrived about a slice that is still open; review what it points to, the slice has NOT closed",
     self_reflection: "self_reflection — the core agent thinks its strategy needs adjustment",
   };
 

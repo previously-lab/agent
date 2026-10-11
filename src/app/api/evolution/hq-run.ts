@@ -20,7 +20,7 @@
  * workflow sandbox, which has no Node modules (docs/errors/
  * node-js-module-in-workflow). Everything impure therefore lives in
  * hq-steps.ts behind "use step" — this module imports only `workflow`, the
- * pure contract, and those two step functions.
+ * pure contract, and those step functions.
  *
  * P4b: each brief is handled by `handleHQBrief`, which hands it to the HQ
  * agent itself (hq-agent.ts — brief prose verbatim, a date stamp, and the
@@ -60,8 +60,16 @@ export async function hqRun(initial: HQBriefPayload): Promise<HQRunOutcome> {
     const conflict = await hook.getConflict();
     if (conflict) {
       // 转交链：先把简报交给主，再自退（不自退前转交，简报会丢——§11 ③）。
-      await handoffBriefToPrimary(initial);
-      return { kind: "dedupedTo", runId: conflict.runId };
+      if (await handoffBriefToPrimary(initial)) {
+        return { kind: "dedupedTo", runId: conflict.runId };
+      }
+      // 闭环：主 run 恰在转交窗口内收工（HookNotFoundError）——重新核对冲突
+      // （有界：仅此一次），新主已认领则再转交；仍无主则这条简报由本 run
+      // 自己认领处理，简报绝不丢。
+      const again = await hook.getConflict();
+      if (again && (await handoffBriefToPrimary(initial))) {
+        return { kind: "dedupedTo", runId: again.runId };
+      }
     }
 
     // The visibility pointer (hq-status-store.ts): "running" from the claim

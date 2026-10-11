@@ -142,6 +142,7 @@ export interface RunCardEvolutionResult {
 const VALID_SIGNALS: PreviouslySignal[] = [
   "new_observation",
   "slice_closed",
+  "field_report",
   "self_reflection",
 ];
 
@@ -161,9 +162,12 @@ export async function runCardEvolution(
     signal === "slice_closed"
       ? `Slice ${input.sliceId} closed — deep review of the whole conversation.` +
         (input.focus ? ` Focus the update on: ${input.focus}` : "")
-      : input.focus
-        ? `User explicitly requested a memory update: ${input.focus}`
-        : "Auto-review of latest conversation.";
+      : signal === "field_report"
+        ? `Field report about slice ${input.sliceId} (still open — review what the report points to, without treating the slice as closed).` +
+          (input.focus ? ` Focus the update on: ${input.focus}` : "")
+        : input.focus
+          ? `User explicitly requested a memory update: ${input.focus}`
+          : "Auto-review of latest conversation.";
 
   // "reviewing" covers the agent run itself — the phase frame must go out
   // BEFORE it starts (it used to fire after, a ~ms flash before the terminal
@@ -210,7 +214,7 @@ export async function runCardEvolution(
     const currentDir = input.directionEval.current;
     // The hypothesis TTL needs a slice-id trail to age against; the timeline
     // catalog projection is retired (v0.19 A1), so the current slice is the
-    // only certain id — the boundary run (A2) owns a richer trail.
+    // only certain id any caller has today.
     const sliceIds = [input.sliceId];
     const proposal = result.direction;
     if (!proposal) {
@@ -294,8 +298,9 @@ export async function runCardEvolution(
   // The agent's session serialized the final card; substance comparison
   // decides whether anything actually moved (stamps refresh on every pass and
   // are ignored). Skip BOTH writes on a no-op pass — writing an unchanged card
-  // would produce an empty commit entry for nothing. (The per-slice snapshot
-  // is kept fresh by ensurePreviously copying the live card forward each turn.)
+  // would produce an empty commit entry for nothing. (The live model IS
+  // people/user/index.md; the per-turn snapshots are written by the turn
+  // pipeline — see steps.ts, §B.7.)
   const changed = !sameCardSubstance(parseCard(baseCard), parseCard(result.updatedCard));
   if (changed) {
     // The folded model — the next turn's conversation reads this. The

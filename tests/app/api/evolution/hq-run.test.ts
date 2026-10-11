@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
   /** per-test hook behavior, installed by makeHook */
   behavior: null as null | {
     conflict: { runId: string } | null;
+    /** when set, getConflict() consumes this sequence instead of `conflict` */
+    conflicts?: Array<{ runId: string } | null>;
     queue: unknown[];
     pend: boolean;
   },
@@ -76,6 +78,7 @@ vi.mock("@/app/api/evolution/hq-status-store", () => ({
 }));
 
 import { hqRun, HQ_TOKEN, type HQBriefPayload } from "@/app/api/evolution/hq-run";
+import { HookNotFoundError } from "workflow/errors";
 
 interface FakeHook {
   token?: string;
@@ -87,8 +90,10 @@ interface FakeHook {
 
 function makeHook(): FakeHook {
   const behavior = h.behavior ?? { conflict: null, queue: [], pend: true };
+  const conflicts = behavior.conflicts ? [...behavior.conflicts] : null;
   return {
-    getConflict: async () => behavior.conflict,
+    getConflict: async () =>
+      conflicts && conflicts.length > 0 ? conflicts.shift()! : behavior.conflict,
     [Symbol.asyncIterator]: () => {
       let i = 0;
       return {
@@ -184,6 +189,15 @@ describe("hqRun — claim and conflict", () => {
     });
   });
 
+  it("a payload.date rides through as the round's date stamp (the field's local clock, not UTC)", async () => {
+    await hqRun({ ...BRIEF, date: "2026-10-03" });
+    expect(h.handleBrief).toHaveBeenCalledWith({
+      brief: BRIEF.brief,
+      date: "2026-10-03",
+      sliceId: "2026-10-04-0131",
+    });
+  });
+
   it("a replyToken without a slice id → sliceId omitted (the brief prose is still whole)", async () => {
     await hqRun({ brief: "没有指针的简报。", replyToken: "field::2026-10-04T01:31:00.000Z" });
     expect(h.handleBrief).toHaveBeenCalledWith({
@@ -213,6 +227,44 @@ describe("hqRun — claim and conflict", () => {
     expect(h.handleBrief).not.toHaveBeenCalled();
     expect(h.recordRunStarted).not.toHaveBeenCalled();
     expect(h.recordRunFinished).not.toHaveBeenCalled();
+  });
+
+  it("handoff lost to a finished primary (HookNotFoundError), no new primary → the run CLAIMS and processes the brief itself", async () => {
+    // The primary finished inside the handoff window: resumeHook finds no
+    // hook, and the bounded re-check finds no new conflict — the brief must
+    // NOT die silently.
+    h.behavior = {
+      conflict: { runId: "run-primary" },
+      conflicts: [{ runId: "run-primary" }, null],
+      queue: [],
+      pend: true,
+    };
+    h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(HQ_TOKEN));
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
+    expect(h.resumeHook).toHaveBeenCalledTimes(1);
+    expect(h.handleBrief).toHaveBeenCalledTimes(1);
+    expect(h.handleBrief).toHaveBeenCalledWith({
+      brief: BRIEF.brief,
+      date: expect.any(String),
+      sliceId: "2026-10-04-0131",
+    });
+    // the fallen-back run owns the status pointer like any claiming run
+    expect(h.order).toEqual(["runStarted", "handleBrief", "runFinished"]);
+  });
+
+  it("handoff lost but a NEW primary claimed meanwhile → re-handoff, then deduped exit", async () => {
+    h.behavior = {
+      conflict: { runId: "run-primary" },
+      conflicts: [{ runId: "run-primary" }, { runId: "run-primary-2" }],
+      queue: [],
+      pend: true,
+    };
+    h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(HQ_TOKEN));
+    const outcome = await hqRun(BRIEF);
+    expect(outcome).toEqual({ kind: "dedupedTo", runId: "run-primary-2" });
+    expect(h.resumeHook).toHaveBeenCalledTimes(2);
+    expect(h.handleBrief).not.toHaveBeenCalled();
   });
 });
 

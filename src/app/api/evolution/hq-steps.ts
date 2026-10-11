@@ -22,6 +22,7 @@
  */
 import { getWritable, getWorkflowMetadata } from "workflow";
 import { resumeHook } from "workflow/api";
+import { HookNotFoundError } from "workflow/errors";
 import type { UIMessageChunk } from "ai";
 import { HQ_TOKEN, type HQBriefPayload } from "./hq-contract";
 import {
@@ -78,10 +79,22 @@ export interface HQBriefRound {
  * durably writes `hook_received` and only then wakes the primary run, so a
  * duplicate HQ that loses the claim hands its brief over instead of dropping
  * it (§11 ③).
+ *
+ * Returns false when the primary is GONE (HookNotFoundError — it finished
+ * inside the handoff window): swallowing that here matters because a step's
+ * retry budget would otherwise burn out and the brief would die silently.
+ * The caller (hq-run.ts) re-checks the conflict and, with no live primary
+ * left, claims and processes the brief itself — the brief never drops.
  */
-export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<void> {
+export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<boolean> {
   "use step";
-  await resumeHook(HQ_TOKEN, payload);
+  try {
+    await resumeHook(HQ_TOKEN, payload);
+    return true;
+  } catch (e) {
+    if (HookNotFoundError.is(e)) return false;
+    throw e;
+  }
 }
 
 /**
@@ -92,9 +105,10 @@ export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<vo
  * before touching anything (§5 独立审查 — a pointer is not a fact), so the
  * shell neither parses the prose nor pre-decides an agenda.
  *
- * HQ has no user-timezone channel (the payload contract carries none), so
- * the write stamp is the UTC date — the same clock the slice ids themselves
- * are named by (createSlice). Failure never throws out of here: handleBrief
+ * HQ's write stamp rides the USER's clock: the field attaches its local
+ * calendar date as `payload.date` (the same clock the slice ids themselves
+ * are named by); older producers carry none and the UTC date is the fallback.
+ * Failure never throws out of here: handleBrief
  * returns { error } and logs it, and a failed brief simply lands nothing
  * (§5 — HQ's products are writes).
  *
@@ -119,7 +133,7 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
     at: new Date().toISOString(),
     ...(sliceId ? { sliceId } : {}),
   });
-  const date = new Date().toISOString().slice(0, 10);
+  const date = payload.date ?? new Date().toISOString().slice(0, 10);
   const { handleBrief } = await import("./hq-agent");
   const outcome = await handleBrief({
     brief: payload.brief,

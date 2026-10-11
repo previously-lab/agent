@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { TimeSlice } from "@/lib/episodic";
 import type { TurnInput, TurnOutcome } from "@/lib/chat/turn-types";
 
@@ -76,9 +76,7 @@ const episodic = vi.hoisted(() => ({
     fakeDisk.files.set(key, existing ? `${existing.trimEnd()}\n\n${content}` : content);
     return { path: key, created: !existing };
   }),
-  ensurePreviously: vi.fn(async (sliceId: string) => `# Previously On\n\n_Active slice: ${sliceId} | Updated: ..._\n`),
   readStrands: vi.fn(async () => ({})),
-  readCurrentPreviously: vi.fn(async () => ""),
   // v0.19 R4 snapshot semantics: the slice's previously.md freezes the FULL
   // folded user model. Reads hit the fake disk; fresh-deploy seeding misses.
   readPreviously: vi.fn(async (sliceId: string) => {
@@ -1593,5 +1591,153 @@ describe("turn idempotency (workflow redelivery)", () => {
       status: "done",
       turnId: "test-id",
     });
+  });
+});
+
+// ── flushTurnBatch write-conflict self-heal (T-10, steps.ts:1307-1340) ─────
+// Additive mock, appended with this describe — no existing case is affected:
+// `@/lib/tools/readFile` is only reached on the flush-conflict retry path
+// (readFileFresh) and the useGithub read helper (readFile), which no test in
+// this file drives (every makeInput runs useGithub: false; the one other
+// consumer in the graph, config/loader, swallows read failures to defaults).
+const readFileMock = vi.hoisted(() => ({
+  readFile: vi.fn(async (): Promise<string> => {
+    throw new Error("github read should not be called in these tests");
+  }),
+  readFileFresh: vi.fn(async (): Promise<string> => {
+    throw new Error("readFileFresh not stubbed");
+  }),
+  invalidateReadCache: vi.fn(),
+}));
+vi.mock("@/lib/tools/readFile", () => readFileMock);
+
+// Real serializer — the retry path's mergeTurnsWithRemote re-parses this.
+import { serializeSlice } from "@/lib/episodic/manager";
+
+describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", () => {
+  const outcome: TurnOutcome = {
+    text: "agent reply",
+    finishReason: "stop",
+    cognition: "",
+  };
+  // sliceIdToFilePath mock output for the default makeSlice id.
+  const CORE_PATH = "memory/records/2026/07/14/0900/core.md";
+
+  /** A GitHub non-fast-forward rejection (isRefConflictError: status 422). */
+  const refConflict = () =>
+    Object.assign(new Error("Update is not a fast forward"), { status: 422 });
+
+  function makeConflictedSlice(): TimeSlice {
+    return makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
+    });
+  }
+
+  let batches: Array<{ entries: Map<string, string> }>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    batches = [];
+    episodic.createBatch.mockImplementation(() => {
+      const b = { entries: new Map<string, string>() };
+      batches.push(b);
+      return b;
+    });
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    // Restore the file-level defaults — clearAllMocks keeps implementations.
+    episodic.createBatch.mockImplementation(() => ({
+      entries: new Map<string, string>(),
+    }));
+    episodic.flushBatch.mockImplementation(async () => {});
+  });
+
+  it("retries after a non-fast-forward conflict: re-reads the remote core, merges, and lands on a later attempt", async () => {
+    episodic.flushBatch
+      .mockRejectedValueOnce(refConflict())
+      .mockRejectedValueOnce(refConflict())
+      .mockResolvedValueOnce(undefined);
+    // The remote slice gained a turn our stale base does not have.
+    readFileMock.readFileFresh.mockResolvedValue(
+      serializeSlice(
+        makeSlice({
+          turns: [
+            { timestamp: "t0", role: "user", content: "hi", turnId: "test-id" },
+            { timestamp: "tx", role: "agent", content: "remote-only turn", turnId: "remote-1" },
+          ],
+        }),
+      ),
+    );
+
+    await persistAgentTurn(makeConflictedSlice(), outcome, "test-id");
+
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
+    expect(readFileMock.readFileFresh).toHaveBeenCalledTimes(2);
+    // The merged remote content was swapped into the batch before each retry.
+    const merged = batches[0].entries.get(CORE_PATH);
+    expect(merged).toBeDefined();
+    expect(merged).toContain("remote-only turn");
+  });
+
+  it("gives up after MAX_FLUSH_RETRIES and fails the step (the throw feeds the queue retry)", async () => {
+    episodic.flushBatch.mockRejectedValue(refConflict());
+    readFileMock.readFileFresh.mockResolvedValue(
+      serializeSlice(makeConflictedSlice()),
+    );
+
+    await expect(
+      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+    ).rejects.toThrow("not a fast forward");
+    // initial attempt + MAX_FLUSH_RETRIES (2) retries
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
+    expect(readFileMock.readFileFresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("a NON-conflict flush failure throws immediately — no merge, no retry", async () => {
+    episodic.flushBatch.mockRejectedValue(
+      Object.assign(new Error("boom"), { status: 500 }),
+    );
+
+    await expect(
+      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+    ).rejects.toThrow("boom");
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
+    expect(readFileMock.readFileFresh).not.toHaveBeenCalled();
+  });
+
+  it("merge-failure degradation: an unreadable remote slice retries the commit as-is and succeeds", async () => {
+    episodic.flushBatch
+      .mockRejectedValueOnce(refConflict())
+      .mockResolvedValueOnce(undefined);
+    readFileMock.readFileFresh.mockRejectedValue(new Error("Not Found"));
+
+    await persistAgentTurn(makeConflictedSlice(), outcome, "test-id");
+
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("remote re-read failed, retrying as-is:"),
+      expect.anything(),
+    );
+    // No merged content was swapped into the batch.
+    expect(batches[0].entries.has(CORE_PATH)).toBe(false);
+  });
+
+  it("merge-failure degradation: when the as-is retry ALSO conflicts, the loop keeps healing and eventually throws", async () => {
+    episodic.flushBatch.mockRejectedValue(refConflict());
+    readFileMock.readFileFresh.mockRejectedValue(new Error("Not Found"));
+
+    await expect(
+      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+    ).rejects.toThrow("not a fast forward");
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
+    // Every retry took the degradation branch (remote never readable).
+    expect(
+      warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("remote re-read failed, retrying as-is:"),
+      ),
+    ).toHaveLength(2);
   });
 });

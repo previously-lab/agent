@@ -1320,7 +1320,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
         const peek = await raceFieldPeek(iterator);
         if (peek.kind === "reply" && peek.text.trim()) {
           // 赶上就带上：一条散文行进本片 agent.md，下一轮读面自然看到。
-          await appendFieldReturnLine(hk.slice.slice_id, peek.text.trim());
+          // 日期戳走用户本地时钟（本回合开始时刻 × clientTimezone）。
+          const returnDate =
+            localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined;
+          await appendFieldReturnLine(hk.slice.slice_id, peek.text.trim(), returnDate);
         }
       } finally {
         await iterator.return?.();

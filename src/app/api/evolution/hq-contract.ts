@@ -26,6 +26,12 @@ export interface HQBriefPayload {
    * 对话轮 run 收尾那一拍用同一个 token 建回调 hook（turn-workflow.ts）。
    */
   replyToken: string;
+  /**
+   * The field's USER-LOCAL calendar date (YYYY-MM-DD), attached by the
+   * reportToHQ executor — HQ's write stamps ride the user's clock. Absent on
+   * older producers; consumers fall back to the UTC date.
+   */
+  date?: string;
 }
 
 export type HQRunOutcome =
