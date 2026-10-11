@@ -69,7 +69,7 @@ import {
   type CaseShelf,
 } from "@/lib/episodic/actions";
 import {
-  getArchiveRecords,
+  getArchiveRecordIndex,
   getDossierList,
   type ArchiveRecord,
   type DossierEntry,
@@ -146,7 +146,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
       .catch(() => {
         if (live) setDossier(null);
       });
-    getArchiveRecords(persona)
+    getArchiveRecordIndex()
       .then((list) => {
         if (live) setRecords(list);
       })

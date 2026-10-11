@@ -33,7 +33,7 @@ import { Files, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import { useShell } from "@/components/shell/shell-provider";
 import {
-  getArchiveRecords,
+  getArchiveRecordIndex,
   type ArchiveRecord,
 } from "@/lib/archive/actions";
 import { parseRecordRef } from "@/lib/archive/refs";
@@ -71,7 +71,7 @@ export function RecordSwitch({
       return;
     }
     let live = true;
-    getArchiveRecords(persona)
+    getArchiveRecordIndex()
       .then((list) => {
         if (live) setRecords(list);
       })

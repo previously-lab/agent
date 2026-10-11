@@ -638,14 +638,19 @@ export function AppShell() {
   }, [tCompanion]);
 
   // ── The catalog window the band's braid reads its RANGE from — the latest
-  //    month page, fetched once on mount (the reader is the app's opening
-  //    rung, so there is no lazier trigger left to wait for). A settled turn
-  //    appends (refreshCatalog below). The card rows this catalog once also
-  //    fed retired with the card field. ─────────────────────────────────────
+  //    month page. THE OPENING RUNG IS ONE DOCUMENT (perf pass 2026-10-12):
+  //    this fetch is NOT part of that document's load, so it waits for the
+  //    boot decision (which document opens, if any) AND for the desk to be
+  //    closed — the field and its braid range are what need it, and the
+  //    reader reaching them is the trigger. A settled turn appends
+  //    (refreshCatalog below). ───────────────────────────────────────────
   const [entries, setEntries] = useState<TimelineSliceEntry[]>([]);
   const [timelineReady, setTimelineReady] = useState(false);
+  const [bootResolved, setBootResolved] = useState(false);
   useEffect(() => {
     if (timelineReady) return;
+    if (!bootResolved) return;
+    if (deskDoc !== null) return;
     let cancelled = false;
     (async () => {
       try {
@@ -655,13 +660,13 @@ export function AppShell() {
         setTimelineReady(true);
       } catch {
         // A failed boot load leaves the band's range at today; the next
-        // mount retries.
+        // transition retries.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [timelineReady]);
+  }, [timelineReady, bootResolved, deskDoc]);
 
   const range = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -740,41 +745,61 @@ export function AppShell() {
   useEffect(() => {
     if (restoreAttempted) return;
     restoreAttempted = true;
-    if (deskDoc !== null) return;
-    if (searchParams.get("view") === "game") return;
+    if (deskDoc !== null) {
+      setBootResolved(true);
+      return;
+    }
+    if (searchParams.get("view") === "game") {
+      setBootResolved(true);
+      return;
+    }
     let remembered: string | null = null;
     try {
       remembered = window.localStorage.getItem(LAST_DOCUMENT_KEY);
     } catch {
+      setBootResolved(true);
       return; // storage denied — the archive stands.
     }
-    if (!remembered) return;
-    const kind = deskRefKind(remembered);
-    const record = kind === "record" ? parseRecordRef(remembered) : null;
-    const exists: Promise<boolean> =
-      kind === "record"
-        ? record
-          ? getSliceStart(record.sliceId).then((s) => s !== null)
-          : Promise.resolve(false)
-        : kind === "dossier"
-          ? getDossierDoc(remembered).then((d) => d !== null)
-          : getCaseDoc(remembered).then((d) => d !== null);
-    exists
-      .then((ok) => {
-        if (!ok) {
-          try {
-            window.localStorage.removeItem(LAST_DOCUMENT_KEY);
-          } catch {
-            // same denial tolerance as the write.
+    // THE RECAP DEFAULT (perf pass 2026-10-12): a cold entry opens exactly
+    // ONE document — the reader's remembered one when there is one, the
+    // 前情提要 (people/user) otherwise. The field and every list behind it
+    // load on demand, never on entry.
+    const RECAP_DOC_REF = "people/user";
+    const candidates: string[] = [];
+    if (remembered) candidates.push(remembered);
+    if (remembered !== RECAP_DOC_REF) candidates.push(RECAP_DOC_REF);
+    void (async () => {
+      try {
+        for (const ref of candidates) {
+          const kind = deskRefKind(ref);
+          const record = kind === "record" ? parseRecordRef(ref) : null;
+          const ok =
+            kind === "record"
+              ? record
+                ? (await getSliceStart(record.sliceId)) !== null
+                : false
+              : kind === "dossier"
+                ? (await getDossierDoc(ref)) !== null
+                : (await getCaseDoc(ref)) !== null;
+          if (ok) {
+            if (deskDocRef.current === null) openDesk(ref);
+            return;
           }
-          return;
+          if (ref === remembered) {
+            try {
+              window.localStorage.removeItem(LAST_DOCUMENT_KEY);
+            } catch {
+              // same denial tolerance as the write.
+            }
+          }
         }
-        if (deskDocRef.current === null) openDesk(remembered);
-      })
-      .catch(() => {
-        // A failed preflight opens nothing and keeps the key — a flaky read
-        // must not erase the memory; the next boot retries.
-      });
+      } finally {
+        setBootResolved(true);
+      }
+    })().catch(() => {
+      // A failed preflight opens nothing — a flaky read must not erase the
+      // memory; the next boot retries.
+    });
     // searchParams is read once per cold boot by contract (the URL is
     // dev-only); deskDoc/openDesk are the live gates.
     // eslint-disable-next-line react-hooks/exhaustive-deps

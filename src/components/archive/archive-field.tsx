@@ -76,7 +76,8 @@ import {
 } from "@/lib/timeline3d/camera";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
-  getArchiveField,
+  getArchiveIndex,
+  getCaseHeaders,
   type ArchiveFieldData,
   type ArchivePile,
 } from "@/lib/archive/actions";
@@ -228,10 +229,60 @@ export function ArchiveField({
   useEffect(() => {
     if (state?.key === personaKey && state.gen === dataGen) return;
     let live = true;
-    getArchiveField(persona)
-      .then((data) => {
-        fieldCache = { key: personaKey, data };
-        if (live) setState({ key: personaKey, gen: dataGen, data });
+    getArchiveIndex()
+      .then(async (index) => {
+        // The light paint: names, categories, piece-derived dates, sheet
+        // counts and the slice ids — all from ONE tree enumeration, zero
+        // file reads.
+        const data: ArchiveFieldData = {
+          piles: index.cases.map((c) => ({
+            kind: "case" as const,
+            category: c.category,
+            name: c.name,
+            ref: `${c.category}/${c.name}`,
+            opened: "",
+            updated: c.updated,
+            pages: c.pages,
+          })),
+          records: index.sliceIds.map((id) => ({
+            sliceId: id,
+            date: id.slice(0, 10),
+            turns: 1,
+          })),
+        };
+        let current = data;
+        fieldCache = { key: personaKey, data: current };
+        if (live) setState({ key: personaKey, gen: dataGen, data: current });
+        // Progressive header hydration — AFTER the light paint, never
+        // blocking it: `opened` lives only in each index.md, so it arrives
+        // in bounded chunks and the tiles fill in as it lands.
+        const refs = index.cases.map((c) => `${c.category}/${c.name}`);
+        for (let i = 0; i < refs.length; i += 16) {
+          if (!live) break;
+          const heads = await getCaseHeaders(refs.slice(i, i + 16)).catch(
+            () => [],
+          );
+          if (!live || heads.length === 0) continue;
+          const byRef = new Map(heads.map((h) => [h.ref, h.opened]));
+          current = {
+            ...current,
+            piles: current.piles.map((p) => {
+              const opened = byRef.get(p.ref);
+              if (!opened) return p;
+              return {
+                ...p,
+                opened: p.opened || opened,
+                updated: p.updated || opened,
+              };
+            }),
+          };
+          fieldCache = { key: personaKey, data: current };
+          setState((prev) =>
+            prev && prev.key === personaKey && prev.gen === dataGen
+              ? { key: personaKey, gen: dataGen, data: current }
+              : prev,
+          );
+        }
       })
       .catch(() => {
         // Quiet: see above.
@@ -239,7 +290,7 @@ export function ArchiveField({
     return () => {
       live = false;
     };
-  }, [persona, personaKey, dataGen, state]);
+  }, [personaKey, dataGen, state]);
 
   // ── The model: filter → buckets → columns → units → the offset table ──
   const piles = useMemo(

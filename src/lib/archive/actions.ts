@@ -29,7 +29,7 @@ import {
   type CaseCategory,
 } from "@/lib/docs";
 import { fsListFiles, fsReadFile, fsFileModifiedDate } from "@/lib/episodic/io-helpers";
-import { enumerateSliceIds } from "@/lib/episodic/timeline/enumerate";
+import { enumerateSliceIds, enumerateTreePaths } from "@/lib/episodic/timeline/enumerate";
 import { sliceEntryFromDisk } from "@/lib/episodic/timeline/store";
 import {
   getSliceContent,
@@ -167,6 +167,137 @@ export async function getArchiveField(
   ]);
 
   return { piles: perCategory.flat(), records };
+}
+
+// ─── THE LIGHT INDEX (perf pass 2026-10-12) ────────────────────────────────
+//
+// First paint asks a LIST question — "what exists, and how much of it" — and
+// one recursive tree enumeration answers it with ZERO file reads. Dates are
+// derived from what the paths already carry (a case's newest piece date; a
+// slice id's own date); a case that needs its index.md read for `opened` is
+// left undated here and hydrated later, in bounded chunks, by getCaseHeaders.
+
+export interface ArchiveIndexCase {
+  category: CaseCategory;
+  name: string;
+  /** Newest piece date from the pieces' file names; "" (undated) when the
+   *  case carries no pieces — the caller hydrates it via getCaseHeaders. */
+  updated: string;
+  /** The index plus its pieces — the pile's sheet count. */
+  pages: number;
+}
+
+export interface ArchiveIndex {
+  cases: ArchiveIndexCase[];
+  /** Every slice id ("YYYY-MM-DD-HHMM"), both roots merged, deduped. */
+  sliceIds: string[];
+}
+
+export async function getArchiveIndex(): Promise<ArchiveIndex> {
+  const paths = await enumerateTreePaths("memory");
+  const catSet = new Set<string>(CASE_CATEGORIES as readonly string[]);
+  const byRef = new Map<string, ArchiveIndexCase>();
+  const pieceDates = new Map<string, string>();
+  const pieceCounts = new Map<string, number>();
+  const sliceIds = new Set<string>();
+
+  for (const p of paths) {
+    const seg = p.split("/");
+    if (seg[0] !== "memory") continue;
+    const cat = seg[1] ?? "";
+    if (catSet.has(cat)) {
+      const name = seg[2] ?? "";
+      if (seg.length === 4 && seg[3] === "index.md" && isValidCaseName(name)) {
+        const ref = `${cat}/${name}`;
+        if (!byRef.has(ref)) {
+          byRef.set(ref, {
+            category: cat as CaseCategory,
+            name,
+            updated: "",
+            pages: 1,
+          });
+        }
+      } else if (
+        seg.length === 4 &&
+        isValidCaseName(name) &&
+        isValidPieceFileName(seg[3])
+      ) {
+        const ref = `${cat}/${name}`;
+        const d = parsePieceFileName(seg[3])?.date ?? "";
+        if (d && d > (pieceDates.get(ref) ?? "")) pieceDates.set(ref, d);
+        pieceCounts.set(ref, (pieceCounts.get(ref) ?? 0) + 1);
+      }
+      continue;
+    }
+    let rel = "";
+    if (cat === "records") rel = seg.slice(2, 6).join("/");
+    else if (cat === "episodic" && seg[2] === "slices") {
+      rel = seg.slice(3, 7).join("/");
+    }
+    if (/^\d{4}\/\d{2}\/\d{2}\/\d{4}$/.test(rel)) {
+      sliceIds.add(rel.replaceAll("/", "-"));
+    }
+  }
+
+  const cases = [...byRef.values()].map((c) => {
+    const ref = `${c.category}/${c.name}`;
+    return {
+      ...c,
+      updated: pieceDates.get(ref) ?? "",
+      pages: 1 + (pieceCounts.get(ref) ?? 0),
+    };
+  });
+  return { cases, sliceIds: [...sliceIds].sort() };
+}
+
+/**
+ * Bounded header hydration for the undated cases: read just the given refs'
+ * `index.md` heads (hard cap 32 per call). The caller chunks its refs so a
+ * 300-case tree hydrates progressively instead of blocking anything.
+ */
+export async function getCaseHeaders(
+  refs: string[],
+): Promise<Array<{ ref: string; opened: string }>> {
+  const heads = await Promise.all(
+    refs
+      .slice(0, 32)
+      .map(async (ref): Promise<{ ref: string; opened: string } | null> => {
+        const slash = ref.indexOf("/");
+        if (slash <= 0 || ref.indexOf("/", slash + 1) !== -1) return null;
+        const category = ref.slice(0, slash);
+        const name = ref.slice(slash + 1);
+        if (
+          !(CASE_CATEGORIES as readonly string[]).includes(category) ||
+          !isValidCaseName(name)
+        ) {
+          return null;
+        }
+        try {
+          const raw = await fsReadFile(
+            caseIndexPath(category as CaseCategory, name),
+          );
+          const doc = parseCaseDoc(raw, {
+            category: category as CaseCategory,
+            caseName: name,
+            fileName: "index.md",
+          });
+          return { ref, opened: doc.opened };
+        } catch {
+          // a missing index is not a header — the pile keeps its undated look
+          return null;
+        }
+      }),
+  );
+  return heads.filter((h): h is { ref: string; opened: string } => h !== null);
+}
+
+/** The light records list (the switch's and the library's first paint): ids
+ *  and derived dates only. `turns` is reported as 1 so the bucket thickness
+ *  reads as "sheets in the bucket" rather than a turn census — the census
+ *  cost a read per slice and was the field's largest single expense. */
+export async function getArchiveRecordIndex(): Promise<ArchiveRecord[]> {
+  const { sliceIds } = await getArchiveIndex();
+  return sliceIds.map((id) => ({ sliceId: id, date: id.slice(0, 10), turns: 1 }));
 }
 
 // ─── Records (v0.25b §三) — past conversations are papers too ─────────────
