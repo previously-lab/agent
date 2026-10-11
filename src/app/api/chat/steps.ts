@@ -1015,6 +1015,10 @@ export async function housekeeping(
         if (analysis.closedMarking.focus) closingSlice.focus = analysis.closedMarking.focus;
         if (analysis.closedMarking.summary) closingSlice.summary = analysis.closedMarking.summary;
         if (analysis.closedMarking.tone) closingSlice.emotional_tone = analysis.closedMarking.tone;
+        // The other half of the closed-slice archive quartet (v0.21 §3):
+        // inductively produced by the analyzer, empty array = none.
+        if (analysis.closedMarking.openLoops) closingSlice.open_loops = analysis.closedMarking.openLoops;
+        if (analysis.closedMarking.decisions) closingSlice.decisions = analysis.closedMarking.decisions;
       }
       // Never close a slice dry when it has content: the analyzer silently
       // returns EMPTY on any failure (worker outage, schema mismatch), which
@@ -1363,7 +1367,7 @@ export async function appendFieldReturnLine(
       (/^\d{4}-\d{2}-\d{2}-/.test(sliceId)
         ? sliceId.slice(0, 10)
         : new Date().toISOString().slice(0, 10));
-    const line = `HQ 回程（${stamp}）：${text.trim()}`;
+    const line = `Field return (${stamp}): ${text.trim()}`;
     const next = existing.trimEnd()
       ? `${existing.trimEnd()}\n\n${line}\n`
       : `${line}\n`;

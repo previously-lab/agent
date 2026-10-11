@@ -944,7 +944,13 @@ describe("entry reckoning (归纳上一页 + 闭片归档, v0.21 §3)", () => {
     fakeDisk.files.set("memory/tasks/报税/index.md", "# 报税\n\n日期锚：2026-08-01\n\n。\n");
     episodic.analyzeTurn.mockResolvedValue({
       ...baseAnalysis(),
-      closedMarking: { focus: "morning planning", summary: "planned the day", tone: "calm" },
+      closedMarking: {
+        focus: "morning planning",
+        summary: "planned the day",
+        tone: "calm",
+        openLoops: ["confirm the flight time"],
+        decisions: ["ship v0.11 first"],
+      },
     });
 
     const hk = await housekeeping(makeInput("wrapping up"));
@@ -971,6 +977,10 @@ describe("entry reckoning (归纳上一页 + 闭片归档, v0.21 §3)", () => {
     expect(closedSlice.focus).toBe("morning planning");
     expect(closedSlice.summary).toBe("planned the day");
     expect(closedSlice.emotional_tone).toBe("calm");
+    // The archive quartet's other half lands too (v0.21 §3): the analyzer's
+    // open_loops / decisions persist with the close.
+    expect(closedSlice.open_loops).toEqual(["confirm the flight time"]);
+    expect(closedSlice.decisions).toEqual(["ship v0.11 first"]);
 
     // §A.2.2: no [boundary-event] post, no mailbox write of any kind — the
     // closed slice's agent.md simply does not exist.
@@ -1298,10 +1308,6 @@ describe("entry beat — bridge (outsourced) path", () => {
         reason: "user asked",
         mutations: [{ op: "addNow", content: "prefers concrete answers" }],
       },
-      backfill_marks: [],
-      strand_merges: [],
-      direction: null,
-      playbooks: [],
       ...overrides,
     };
   }

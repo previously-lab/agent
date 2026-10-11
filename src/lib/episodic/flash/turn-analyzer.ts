@@ -3,10 +3,12 @@
  * housekeeping step.
  *
  * One pass, structured outputs (thinking on at low effort, cheap):
- *   1. closed_marking — focus / summary / tone for a slice that is
- *      about to close (only when one closed this turn).
- *   2. evolve_card    — whether the closing slice holds anything worth
- *      sedimenting onto the user card (only when one closed this turn).
+ *   closed_marking — focus / summary / tone / open_loops / decisions for a
+ *   slice that is about to close (only when one closed this turn).
+ *
+ * v0.11 F2b: the evolve_card task is RETIRED — its only consumer
+ * (shouldRunCardEvolution) had no callers left, so the judgment is gone from
+ * the schema, the prompt, and TurnAnalysis.
  *
  * v0.19 R6: the semantic_hint task is RETIRED — it picked topics from the
  * frozen strands.json vocabulary and had no live consumer left (the per-turn
@@ -51,6 +53,10 @@ export interface ClosedMarking {
   focus: string;
   summary: string;
   tone: EmotionalTone | null;
+  /** Unresolved questions/threads carried forward (empty array = none). */
+  openLoops?: string[];
+  /** Decisions made during the slice (empty array = none). */
+  decisions?: string[];
 }
 
 /** The user's intent for this turn (reconnected from the old router). */
@@ -94,14 +100,6 @@ export interface TurnAnalysis {
    * Carries the exact content to fold into the card.
    */
   memoryUpdate?: { content: string; section?: CardSection };
-  /**
-   * Present ONLY when a slice was closing this turn (closingSlice input): the
-   * worker's judgment on whether anything in the closing slice deserves
-   * sedimentation onto the user card. On analyzer failure the fallback is
-   * worth: true — a wasted worker call is cheap, a missed evolution is
-   * permanent memory loss.
-   */
-  evolveCard?: { worth: boolean; reason: string };
   closedMarking?: ClosedMarking;
 }
 
@@ -145,20 +143,6 @@ const analyzeSchema = z.object({
       "('以后别…', '下次先…', '你不要总是…', 'stop doing X', 'from now on always…'). " +
       "Extract the exact content. Omit otherwise.",
     ),
-  evolve_card: z
-    .object({
-      worth: z
-        .boolean()
-        .describe(
-          "Whether anything in the CLOSING slice deserves sedimentation onto the user card — " +
-          "a durable fact, a preference/correction, a commitment or deadline (Horizon), a " +
-          "resolvable open loop, or an operating lesson. False only for slices with zero " +
-          "card-worthy content (pure greetings, logistics, ephemeral chit-chat).",
-        ),
-      reason: z.string().describe("One line: what deserves sedimentation, or why nothing does."),
-    })
-    .optional()
-    .describe("ONLY when a slice is closing this turn — judge card-evolution worthiness."),
   emotional_signal: z
     .object({
       intensity: z
@@ -193,6 +177,12 @@ const analyzeSchema = z.object({
       focus: z.string().describe("One sentence: what this session was about."),
       summary: z.string().describe("At most 100 characters: what happened / key decisions."),
       tone: z.enum(["positive", "neutral", "negative", "mixed"]).describe("Emotional tone of the session."),
+      open_loops: z
+        .array(z.string())
+        .describe("Unresolved questions or threads to carry forward. Empty array when none."),
+      decisions: z
+        .array(z.string())
+        .describe("Decisions made during this session. Empty array when none."),
     })
     .optional()
     .describe("Only when a slice just closed."),
@@ -243,12 +233,8 @@ When a time slice just closed, summarize it so future recall can understand it a
 - focus: one sentence on what this session was about
 - summary: at most 100 characters — what happened / key decisions
 - tone: positive | neutral | negative | mixed
-
-ALSO return evolve_card — your judgment on whether anything in this closing slice deserves sedimentation onto the user card:
-- worth: true when the slice contains a durable fact about the user, a stated preference or correction, a commitment / deadline / awaited reply (a Horizon item), the resolution of an open loop, or an operating lesson for the agent
-- worth: false ONLY when the slice holds zero card-worthy content — pure greetings, logistics, ephemeral chit-chat
-- reason: one line on what deserves sedimentation, or why nothing does
-When in doubt, worth: true — a wasted review is cheap, a missed evolution is permanent memory loss.`);
+- open_loops: unresolved questions or threads to carry forward (empty array when none)
+- decisions: decisions made during this session (empty array when none)`);
 
 /** The dynamic user prompt: current message, closing slice. */
 function buildPrompt(input: AnalyzeTurnInput): string {
@@ -262,22 +248,10 @@ A time slice just closed.
 Conversation (first turn + last turns):
 ${compressSliceTurns(input.closingSlice.turns)}
 
-Return closed_marking AND evolve_card per your Task 4 instructions.`
+Return closed_marking per your Task 4 instructions.`
     : "";
 
   return `Message: "${input.userMessage.slice(0, 1000)}"${closingSection}`;
-}
-
-/**
- * Pure boundary gate: should the LLM card evolution run for this closed slice?
- * The analyzer's `evolveCard.worth` decides; when the analyzer failed (or
- * didn't answer), default to TRUE — a wasted worker call is cheap, a missed
- * evolution is permanent memory loss.
- */
-export function shouldRunCardEvolution(
-  analysis: Pick<TurnAnalysis, "evolveCard">,
-): boolean {
-  return analysis.evolveCard?.worth ?? true;
 }
 
 const EMPTY_BASE: TurnAnalysis = {
@@ -287,21 +261,12 @@ const EMPTY_BASE: TurnAnalysis = {
   emotionalSignal: { intensity: "none", register: "neutral", note: "" },
 };
 
-/**
- * The degraded analysis returned on any failure. When a slice was closing,
- * evolveCard defaults to worth: true (see shouldRunCardEvolution).
- */
-function emptyAnalysis(sliceClosing: boolean): TurnAnalysis {
-  return sliceClosing
-    ? {
-        ...EMPTY_BASE,
-        evolveCard: { worth: true, reason: "Analyzer unavailable — defaulting to evolve." },
-      }
-    : { ...EMPTY_BASE };
+/** The degraded analysis returned on any failure. */
+function emptyAnalysis(): TurnAnalysis {
+  return { ...EMPTY_BASE };
 }
 
 export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis> {
-  const sliceClosing = input.closingSlice !== undefined;
   const result = await runSubAgent({
     model: input.model,
     system: ANALYZER_SYSTEM,
@@ -324,7 +289,7 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
 
   // The runner never throws: a timeout / model failure / missing or invalid
   // report all degrade to the empty analysis (engineering fallbacks kick in).
-  if (!result.ok || !result.report) return emptyAnalysis(sliceClosing);
+  if (!result.ok || !result.report) return emptyAnalysis();
 
   const d = result.report;
   return {
@@ -351,12 +316,6 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
             section: d.memory_update.section,
           }
         : undefined,
-      // Only meaningful when a slice is closing; if the model omitted it, the
-      // caller's gate (shouldRunCardEvolution) defaults to running.
-      evolveCard:
-        sliceClosing && d.evolve_card
-          ? { worth: d.evolve_card.worth, reason: d.evolve_card.reason }
-          : undefined,
       closedMarking: d.closed_marking
         ? {
             focus: typeof d.closed_marking.focus === "string" ? d.closed_marking.focus.trim() : "",
@@ -364,6 +323,8 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
             tone: ["positive", "neutral", "negative", "mixed"].includes(d.closed_marking.tone)
               ? (d.closed_marking.tone as EmotionalTone)
               : null,
+            openLoops: d.closed_marking.open_loops ?? [],
+            decisions: d.closed_marking.decisions ?? [],
           }
         : undefined,
     };

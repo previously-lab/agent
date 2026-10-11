@@ -14,7 +14,7 @@ vi.mock("@/lib/models/provider", () => ({
   createModel: vi.fn((c: unknown) => ({ _mock: c })),
 }));
 
-import { analyzeTurn, shouldRunCardEvolution } from "@/lib/episodic/flash/turn-analyzer";
+import { analyzeTurn } from "@/lib/episodic/flash/turn-analyzer";
 import type { ModelConfig } from "@/lib/models/registry";
 
 const model: ModelConfig = {
@@ -66,6 +66,8 @@ describe("analyzeTurn", () => {
           focus: "Rust loop tests",
           summary: "Debugged failures",
           tone: "mixed",
+          open_loops: ["why does the iterator borrow fail"],
+          decisions: ["pin the toolchain to stable"],
         },
       }),
     );
@@ -94,6 +96,8 @@ describe("analyzeTurn", () => {
       focus: "Rust loop tests",
       summary: "Debugged failures",
       tone: "mixed",
+      openLoops: ["why does the iterator borrow fail"],
+      decisions: ["pin the toolchain to stable"],
     });
   });
 
@@ -240,53 +244,15 @@ describe("analyzeTurn", () => {
     expect(arg.prompt).toContain('Message: "hello world"');
   });
 
-  it("maps evolve_card when a slice is closing", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({
-        intent: { type: "chat", reason: "wrapping up" },
-        memory_worthy: false,
-        emotional_signal: { intensity: "none", register: "neutral", note: "" },
-        closed_marking: { focus: "logistics", summary: "scheduling", tone: "neutral" },
-        evolve_card: { worth: false, reason: "pure logistics, nothing durable" },
-      }),
-    );
-    const result = await analyzeTurn({
-      model,
-      userMessage: "ok",
-      closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
-    });
-    expect(result.evolveCard).toEqual({ worth: false, reason: "pure logistics, nothing durable" });
-  });
-
-  it("omits evolve_card when no slice is closing, even if the model returns it", async () => {
-    ai.streamText.mockResolvedValue(
-      makeToolCall({
-        intent: { type: "chat", reason: "chat" },
-        memory_worthy: true,
-        emotional_signal: { intensity: "none", register: "neutral", note: "" },
-        evolve_card: { worth: true, reason: "should be ignored" },
-      }),
-    );
-    const result = await analyzeTurn({ model, userMessage: "x" });
-    expect(result.evolveCard).toBeUndefined();
-  });
-
-  it("defaults evolve_card.worth to true on analyzer failure when a slice is closing", async () => {
+  it("returns an empty analysis on failure even when a slice is closing", async () => {
     ai.streamText.mockRejectedValue(new Error("boom"));
     const result = await analyzeTurn({
       model,
       userMessage: "x",
       closingSlice: { turns: [{ timestamp: "t", role: "user", content: "hi" }] },
     });
-    // A missed evolution is permanent memory loss — failure defaults to running.
-    expect(result.evolveCard?.worth).toBe(true);
+    expect(result.closedMarking).toBeUndefined();
     expect(result.memoryWorthy).toBe(true);
-  });
-
-  it("does not add evolve_card to the failure fallback when no slice is closing", async () => {
-    ai.streamText.mockRejectedValue(new Error("boom"));
-    const result = await analyzeTurn({ model, userMessage: "x" });
-    expect(result.evolveCard).toBeUndefined();
   });
 
   it("runs with the 50-step anti-loop fuse (the wall clock is the real budget)", async () => {
@@ -299,16 +265,5 @@ describe("analyzeTurn", () => {
     );
     await analyzeTurn({ model, userMessage: "x" });
     expect(ai.isStepCount).toHaveBeenCalledWith(50);
-  });
-});
-
-describe("shouldRunCardEvolution", () => {
-  it("follows the analyzer's worth judgment", () => {
-    expect(shouldRunCardEvolution({ evolveCard: { worth: false, reason: "trivial" } })).toBe(false);
-    expect(shouldRunCardEvolution({ evolveCard: { worth: true, reason: "durable fact" } })).toBe(true);
-  });
-
-  it("defaults to true when the analyzer gave no judgment (failure fallback)", () => {
-    expect(shouldRunCardEvolution({})).toBe(true);
   });
 });

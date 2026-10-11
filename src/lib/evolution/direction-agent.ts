@@ -713,11 +713,6 @@ export function renderDirectionAnalysis(analysis: TurnAnalysis): string {
   if (analysis.memoryUpdate) {
     lines.push(`memory_update: ${analysis.memoryUpdate.content}`);
   }
-  if (analysis.evolveCard) {
-    lines.push(
-      `evolve_card: worth=${analysis.evolveCard.worth} — ${analysis.evolveCard.reason}`,
-    );
-  }
   if (analysis.closedMarking) {
     lines.push(
       `closed slice marking: ${analysis.closedMarking.focus} — ${analysis.closedMarking.summary} (tone ${analysis.closedMarking.tone ?? "?"})`,

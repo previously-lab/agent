@@ -46,7 +46,6 @@ export type { SlicePart } from "./paths";
 
 export {
   analyzeTurn,
-  shouldRunCardEvolution,
 } from "./flash/turn-analyzer";
 export type {
   TurnAnalysis,
