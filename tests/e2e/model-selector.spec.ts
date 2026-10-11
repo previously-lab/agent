@@ -44,9 +44,11 @@ test.describe("Model selector — subscription bridge group", () => {
   }) => {
     await page.goto("/en/app");
 
-    // (a) No effort cycle button anywhere in the chat input area.
-    const chatInput = page.locator(".rounded-2xl", {
-      has: page.getByPlaceholder("Send a message..."),
+    // (a) No effort cycle button anywhere in the chat input area. The
+    // fullscreen composer is the .composer-bar holding the textarea (the
+    // pill tier's bar holds a one-line input instead).
+    const chatInput = page.locator(".composer-bar", {
+      has: page.locator("textarea"),
     });
     await expect(chatInput).toBeVisible();
     await expect(chatInput.locator("svg.lucide-zap")).toHaveCount(0);

@@ -1,40 +1,43 @@
 /**
- * The frosted-island shell — the app's ONE chrome surface.
+ * The instrument chrome (v0.29 §3) — the app's ONE chrome surface.
  *
  * The app is an infinite canvas with no page boundaries, so every piece of
- * chrome floats over it in the same material: a translucent background, a
- * hairline ring, a blur behind, and one soft shadow. That is the whole look,
- * and it was previously typed out four times (the header's two islands, the
- * lens switcher, the board bar, the composer's compact pill) with four chances
- * to drift a shade or a blur radius apart.
+ * chrome floats over it in the same material: a matte solid one step off
+ * the board, a hairline rule, one contact shadow — the instrument edge of
+ * a reading desk, not a frosted pill. Square throughout (round belongs to
+ * the world); the ONLY circle in the product is the game's thumb stick.
  *
- * It is a STRING and not a component on purpose. The islands are not the same
- * element — a `<header>` child, a `<nav>`, a `role="group"` div, a `<button>`'s
- * container — and wrapping them in a shared component would mean either
- * polymorphic `as` machinery or a wrapper div inside each one, which is a box
- * the layout did not ask for. What they share is the finish, so the finish is
- * what is shared.
+ * It is a STRING and not a component on purpose. The islands are not the
+ * same element — a `<header>` child, a `<nav>`, a `role="group"` div, a
+ * `<button>`'s container — and wrapping them in a shared component would
+ * mean either polymorphic `as` machinery or a wrapper div inside each one,
+ * which is a box the layout did not ask for. What they share is the
+ * finish, so the finish is what is shared: these strings name CLASSES
+ * whose material and state rules live in `src/app/instrument.css`.
  *
- * Change a value here and every island in the app moves at once. That is the
- * point.
+ * The vocabulary (v0.29-ui-redesign.md §3):
+ *   hover      = the hairline turns to ink
+ *   selected   = an ink block reversed out (the pressed type slug)
+ *   disabled   = alpha (the one hierarchy exemption — it is a state)
+ *   elevation  = `--paper-contact` and nothing else; a control SITS on the
+ *                desk, it does not float
+ *
+ * Change a value in instrument.css and every island in the app moves at
+ * once. That is the point.
  */
-export const ISLAND =
-  "rounded-full bg-background/75 ring-1 ring-border/60 backdrop-blur-md shadow-md";
+export const ISLAND = "chrome-island";
 
 /**
- * A control INSIDE an island. Round, quiet at rest, foreground on hover — the
- * same four states whether it is a link, a button or a popover trigger.
- *
- * Split from `ISLAND` because the two are answering different questions: the
- * island is the surface, this is what sits on it. A control that borrowed the
- * island's own classes would put a second blurred panel inside the first.
+ * A control INSIDE an island. Quiet at rest, ink on hover — the same two
+ * states whether it is a link, a button or a popover trigger. It owns no
+ * box: it sits on the tray's surface, so its hover is an INK change, not a
+ * fill (the tray carries the hairline).
  */
-export const ISLAND_CONTROL =
-  "flex items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground";
+export const ISLAND_CONTROL = "chrome-control";
 
 /**
- * A BAR — an island that holds controls, at the one height all three of the
- * top bars share.
+ * A BAR — an island that holds controls, at the one height all the top
+ * bars share.
  *
  * They were the same material and different SHAPES: the brand island sized
  * itself to its own text (28px), the settings island to its controls (36px),
@@ -43,10 +46,11 @@ export const ISLAND_CONTROL =
  * apart again when one of them gains a control, and every control inside is
  * `size-7`, which leaves the bars a uniform 4px of padding.
  *
- * A bar sets its own `gap` and its own horizontal padding; only the height and
- * the alignment are shared.
+ * The bar is INERT material — a tray. It has no hover state of its own;
+ * the controls on it signal theirs. A bar sets its own `gap` and its own
+ * horizontal padding; only the height and the alignment are shared.
  */
-export const ISLAND_BAR = `${ISLAND} flex h-9 items-center`;
+export const ISLAND_BAR = "chrome-bar flex h-9 items-center";
 
 /*
  * The status PILL at the end of an island bar — a badge that carries its own

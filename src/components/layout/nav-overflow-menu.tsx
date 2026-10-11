@@ -40,6 +40,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { VersionBadge } from "@/components/layout/version-badge";
 import { useTurnBusy } from "@/components/chat/turn-busy";
+import { ISLAND } from "@/components/layout/island";
+import { cn } from "@/lib/utils";
 
 const GITHUB_URL = "https://github.com/previously-lab/agent";
 const THEME_ORDER = ["light", "dark", "system"] as const;
@@ -68,7 +70,9 @@ export function NavOverflowMenu() {
       <DropdownMenuTrigger
         data-testid="nav-overflow-trigger"
         aria-label={t("overflow")}
-        className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        // The square instrument button (v0.29 §3): matte tool stock, hairline,
+        // one contact shadow; hover turns the hairline to ink.
+        className={`${ISLAND} flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
       >
         <MoreHorizontal className="h-3.5 w-3.5" />
       </DropdownMenuTrigger>
@@ -76,7 +80,10 @@ export function NavOverflowMenu() {
         align="end"
         side="bottom"
         sideOffset={8}
-        className="w-44"
+        // The panel is a tool tray: matte, square, hairline-ruled. The class
+        // overrides the primitives' rounded/glass defaults through the same
+        // tailwind-merge the primitives use.
+        className="w-44 rounded-none! bg-tool text-foreground shadow-paper-contact ring-tool-line"
       >
         <DropdownMenuGroup>
           {/* Disabled, not hidden: the entry is where the reader left it, and
@@ -85,6 +92,7 @@ export function NavOverflowMenu() {
           <DropdownMenuItem
             disabled={busy}
             render={busy ? undefined : <Link href="/settings" />}
+            className="chrome-menu-item rounded-none! focus:bg-transparent!"
           >
             <Settings />
             {t("settings")}
@@ -102,29 +110,33 @@ export function NavOverflowMenu() {
                 rel="noopener noreferrer"
               />
             }
+            className="chrome-menu-item rounded-none! focus:bg-transparent!"
           >
             <BookOpen />
             {t("docs")}
           </DropdownMenuItem>
         </DropdownMenuGroup>
 
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator className="mx-0 bg-tool-line" />
 
         <DropdownMenuGroup>
           <DropdownMenuItem
             render={
               <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" />
             }
+            className="chrome-menu-item rounded-none! focus:bg-transparent!"
           >
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
             GitHub
           </DropdownMenuItem>
         </DropdownMenuGroup>
 
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator className="mx-0 bg-tool-line" />
 
         <DropdownMenuGroup>
-          <DropdownMenuLabel>{t("themeLabel")}</DropdownMenuLabel>
+          <DropdownMenuLabel className="chrome-menu-label px-3">
+            {t("themeLabel")}
+          </DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={mounted ? currentTheme : "system"}
             onValueChange={(value) =>
@@ -132,27 +144,54 @@ export function NavOverflowMenu() {
             }
           >
             {THEME_ORDER.map((value) => (
-              <DropdownMenuRadioItem key={value} value={value}>
+              <DropdownMenuRadioItem
+                key={value}
+                value={value}
+                className="chrome-menu-item rounded-none! focus:bg-transparent!"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "chrome-radio",
+                    (mounted ? currentTheme : "system") === value && "is-on",
+                  )}
+                />
                 {tTheme(value)}
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
         </DropdownMenuGroup>
 
-        <DropdownMenuSeparator />
+        <DropdownMenuSeparator className="mx-0 bg-tool-line" />
 
         <DropdownMenuGroup>
-          <DropdownMenuLabel>{t("languageLabel")}</DropdownMenuLabel>
+          <DropdownMenuLabel className="chrome-menu-label px-3">
+            {t("languageLabel")}
+          </DropdownMenuLabel>
           <DropdownMenuRadioGroup
             value={locale}
             onValueChange={(value) =>
               router.replace(pathname, { locale: value })
             }
           >
-            <DropdownMenuRadioItem value="en">
+            <DropdownMenuRadioItem
+              value="en"
+              className="chrome-menu-item rounded-none! focus:bg-transparent!"
+            >
+              <span
+                aria-hidden
+                className={cn("chrome-radio", locale === "en" && "is-on")}
+              />
               {t("english")}
             </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="zh">
+            <DropdownMenuRadioItem
+              value="zh"
+              className="chrome-menu-item rounded-none! focus:bg-transparent!"
+            >
+              <span
+                aria-hidden
+                className={cn("chrome-radio", locale === "zh" && "is-on")}
+              />
               {t("chinese")}
             </DropdownMenuRadioItem>
           </DropdownMenuRadioGroup>

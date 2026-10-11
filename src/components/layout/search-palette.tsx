@@ -19,6 +19,7 @@ import { splitHighlight } from "@/lib/chat/highlight";
 import { requestSliceJump } from "@/lib/chat/slice-jump";
 import { formatSeamDate } from "@/components/chat/slice-seam";
 import { useRouter } from "@/i18n/navigation";
+import { ISLAND } from "@/components/layout/island";
 
 /** Input-as-you-type debounce for the search action. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -138,13 +139,14 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
         onClick={() => setOpen(true)}
         aria-label={t("title")}
         title={t("title")}
-        // GLYPH ONLY. The word and the ⌘K hint used to sit here and were the
-        // widest thing in the settings bar; that bar now has to fit beside two
-        // other islands at phone width, and a tooltip already says what this
-        // is. The shortcut still works — it is simply no longer spelled out on
-        // the button, which is the one place a reader looks AFTER they have
-        // already decided to search.
-        className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        // GLYPH ONLY, on a square instrument button (v0.29 §3): matte tool
+        // stock, hairline, one contact shadow; hover turns the hairline to
+        // ink. The word and the ⌘K hint used to sit here and were the
+        // widest thing in the settings bar; a tooltip already says what
+        // this is. The shortcut still works — it is simply no longer
+        // spelled out on the button, which is the one place a reader looks
+        // AFTER they have already decided to search.
+        className={`${ISLAND} flex size-9 items-center justify-center text-muted-foreground transition-colors hover:text-foreground`}
       >
         <SearchIcon className="h-3.5 w-3.5 shrink-0" />
       </button>
@@ -154,9 +156,13 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
         onOpenChange={setOpen}
         title={t("title")}
         description={t("title")}
+        // The palette is a tool tray: matte, square, hairline-ruled — the
+        // overrides merge over the dialog/command primitives' rounded
+        // defaults through the same tailwind-merge the primitives use.
+        className="overflow-hidden rounded-none! border border-tool-line bg-tool p-0 text-foreground shadow-paper-contact ring-0"
       >
         {/* The server does the matching — cmdk's own filter must stay off. */}
-        <Command shouldFilter={false}>
+        <Command shouldFilter={false} className="rounded-none! bg-tool text-foreground">
           <CommandInput
             value={query}
             onValueChange={setQuery}
@@ -184,7 +190,9 @@ export function SearchPalette({ disabled = false }: { disabled?: boolean }) {
                   onSelect={handleSelect}
                   // [&>svg]:hidden — CommandItem's trailing CheckIcon would
                   // occupy a row of its own in this stacked layout.
-                  className="flex-col items-start gap-0.5 py-2 [&>svg]:hidden"
+                  // chrome-menu-item: the highlighted row's hairline turns
+                  // to ink — the instrument hover, not a grey wash.
+                  className="chrome-menu-item flex-col items-start gap-0.5 rounded-none! py-2 in-data-[slot=dialog-content]:rounded-none! data-selected:bg-transparent! [&>svg]:hidden"
                 >
                   <span className="flex w-full items-baseline gap-2">
                     <span className="shrink-0 font-mono text-[0.65rem] text-muted-foreground">

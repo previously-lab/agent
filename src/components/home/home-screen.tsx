@@ -2,12 +2,14 @@ import { Link } from "@/i18n/navigation";
 import "./home-paper.css";
 
 /**
- * The home (v0.13 §3, re-ruled 2026-10-10) — plain printing: ink on paper,
- * set exactly the way the document body is set. No foil, no deboss, no
- * gleam, no relief — the card is the archive's first sheet, and everything
- * on it is print: a running head, a hairline rule, two printed labels.
+ * The home (v0.13 §3, re-ruled 2026-10-10, viewport-as-sheet 2026-10-14
+ * v0.29 §4.7) — plain printing: ink on paper, set exactly the way the
+ * document body is set. No foil, no deboss, no gleam, no relief — the
+ * VIEWPORT is the archive's first sheet, and everything on it is print:
+ * a running head, a hairline rule, two printed labels. The floating A4
+ * card is deleted: edge to edge, the whole screen is the sheet.
  *
- * Zones, top to bottom inside the card (geometry in home-paper.css):
+ * Zones, top to bottom on the sheet (geometry in home-paper.css):
  *
  *   HEAD    the running head — "Previously on {name}" at print-display
  *           size (10mm serif, the sheet's largest voice), the dateline
@@ -51,37 +53,36 @@ export function HomeScreen({
   settingsLabel,
 }: HomeScreenProps) {
   return (
-    <main className="bg-paper bg-paper-grain flex min-h-dvh flex-col items-center justify-center px-6 py-16">
-      {/* The first sheet — one paper, one colour; the lift shadow is the
-          only separation from the board. The sheet's geometry is A4 and
-          lives entirely in home-paper.css (width-driven, print scale via
-          --home-mm); the material classes are all that stays here. */}
-      <div className="home-card bg-paper bg-paper-grain-card shadow-paper-lift">
-        <header className="home-head">
-          <h1 className="home-run">
-            {eyebrowLead} {eyebrowPreposition} {name}
-          </h1>
-          {dateline && <p className="home-date">{dateline}</p>}
-          {/* The hairline closes the head — ink, not relief. */}
-          <div className="home-rule" aria-hidden="true" />
-        </header>
+    // The viewport AS the sheet (v0.29 §4.7): the floating A4 card is
+    // deleted — edge to edge, the whole screen is the archive's first
+    // page. Grain stays (this IS paper); print scale rides --home-mm
+    // (100dvh / 297 — the screen treated as one A4 height), geometry in
+    // home-paper.css.
+    <main className="home-sheet bg-paper bg-paper-grain flex min-h-dvh flex-col">
+      <header className="home-head">
+        <h1 className="home-run">
+          {eyebrowLead} {eyebrowPreposition} {name}
+        </h1>
+        {dateline && <p className="home-date">{dateline}</p>}
+        {/* The hairline closes the head — ink, not relief. */}
+        <div className="home-rule" aria-hidden="true" />
+      </header>
 
-        {/* The two printed labels — no arrows, no glow; the hover/focus
-            state changes ink and draws the hairline. 进入世界 is gone:
-            the world is reached through the conversation, not as a
-            second front door. */}
-        <nav className="home-actions">
-          <Link href="/app" className="home-action">
-            {continueLabel}
-          </Link>
-          <Link
-            href="/settings"
-            className="home-action home-action--quiet"
-          >
-            {settingsLabel}
-          </Link>
-        </nav>
-      </div>
+      {/* The two printed labels — no arrows, no glow; the hover/focus
+          state changes ink and draws the hairline. 进入世界 is gone:
+          the world is reached through the conversation, not as a
+          second front door. */}
+      <nav className="home-actions">
+        <Link href="/app" className="home-action">
+          {continueLabel}
+        </Link>
+        <Link
+          href="/settings"
+          className="home-action home-action--quiet"
+        >
+          {settingsLabel}
+        </Link>
+      </nav>
     </main>
   );
 }

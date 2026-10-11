@@ -1,26 +1,29 @@
 "use client";
 
 /**
- * Floating-island chrome (v0.12) — the app is one infinite canvas with no
- * page boundaries, so the header is no longer a full-width bar. Three
- * detached pills hover over the canvas instead:
+ * Floating-island chrome (v0.12, re-materialled v0.29) — the app is one
+ * infinite canvas with no page boundaries, so the header is no longer a
+ * full-width bar. Three detached controls hover over the canvas instead:
  *
- *   LEFT   the brand INTER TITLE ("Previously on {name}") + status badges
- *   MIDDLE the BOARD BAR — the zoom lens and the strand selector. It is
- *          rendered by the SHELL (`shell/board-bar.tsx`), not from here: the
- *          strand selection is shell state, which a layout has no access to.
- *   RIGHT  TWO controls and nothing else: the search palette and the "···"
- *          overflow, which now carries settings and docs as well (see
- *          `nav-overflow-menu.tsx`). Four icons was a toolbar; two is a
- *          corner.
+ *   LEFT   the brand INSCRIPTION ("Previously on {name}") typed on the
+ *          desk's top-left edge — no pill around it, still a link home —
+ *          plus the status badges (status, not actions)
+ *   MIDDLE the BOARD BAR — the rung dateline. It is rendered by the SHELL
+ *          (`shell/board-bar.tsx`), not from here: the strand selection is
+ *          shell state, which a layout has no access to.
+ *   RIGHT  TWO square tool buttons and nothing else: the search palette
+ *          and the "···" overflow, which carries settings and docs as well
+ *          (see `nav-overflow-menu.tsx`). Two icons was a toolbar; two is a
+ *          corner. The island CONTAINER is gone (v0.29 §4.2) — the buttons
+ *          are bare instrument squares.
  *
- * The <header> element itself is pointer-transparent; each island re-enables
- * pointer events, so canvas content underneath the gaps stays interactive
- * and scrolls beneath the frosted pills.
+ * The <header> element itself is pointer-transparent; each control
+ * re-enables pointer events, so canvas content underneath the gaps stays
+ * interactive.
  *
- * On the HOME route both islands render nothing at all: the reader has not
- * entered the app, the home says who this is in type, and its own action row
- * carries 设置. Search's Cmd/Ctrl+K shortcut is disabled there too (the
+ * On the HOME route everything renders nothing at all: the reader has not
+ * entered the app, the home says who this is in type, and its own action
+ * row carries 设置. Search's Cmd/Ctrl+K shortcut is disabled there too (the
  * palette's `disabled` prop) — hidden, not just unbuttoned.
  */
 import { Link, usePathname } from "@/i18n/navigation";
@@ -30,7 +33,6 @@ import { DemoBadge } from "@/components/layout/demo-badge";
 import { ClientBadge } from "@/components/layout/client-badge";
 import { SearchPalette } from "@/components/layout/search-palette";
 import { NavOverflowMenu } from "@/components/layout/nav-overflow-menu";
-import { ISLAND_BAR } from "./island";
 
 export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
   const t = useTranslations("nav");
@@ -72,13 +74,14 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           Hidden on the home: the home itself is the intertitle. */}
 
       {!isHome && (
-      <div className={`pointer-events-auto ${ISLAND_BAR} gap-1.5 px-3`}>
+      <div className="pointer-events-auto flex h-9 min-w-0 items-center gap-1.5">
         {/* "PREVIOUSLY ON {name}" — the same phrase the briefing card and the
-            travel clock wear, moved into the chrome. It is the product's own
-            sentence rather than a wordmark, and the WEIGHT SPLIT is the whole
-            reason it works at a glance: the lead is muted and regular, the
-            name is semibold and foreground, so the eye lands on WHO before it
-            reads what is being said about them.
+            travel clock wear, typed on the desk's top-left edge as an
+            INSCRIPTION (v0.29 §4.2): mono, not caps, no pill around it. It
+            is the product's own sentence rather than a wordmark, and the
+            WEIGHT SPLIT is the whole reason it works at a glance: the lead
+            is regular, the name is semibold and foreground, so the eye
+            lands on WHO before it reads what is being said about them.
 
             `You` IS THE ANSWER IN TWO CASES, deliberately: while the identity
             is in flight, and when the profile has no name at all (the server
@@ -88,10 +91,10 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
             placeholder that becomes "unnamed". */}
         <Link
           href="/"
-          className="min-w-0 truncate text-sm font-normal tracking-tight text-muted-foreground transition-colors hover:text-foreground/80"
+          className="chrome-inscription min-w-0 truncate transition-colors"
         >
           {t("brand")}{" "}
-          <span className="font-semibold text-foreground">
+          <span className="font-semibold">
             {identity?.name || t("brandYou")}
           </span>
         </Link>
@@ -124,7 +127,7 @@ export function AppHeader({ isDemo = false }: { isDemo?: boolean }) {
           "···" on the start screen reads as an accident. The home has its own
           设置 door in the actions row; nothing here is needed before entering. */}
       {!isHome && (
-        <nav className={`pointer-events-auto ${ISLAND_BAR} ml-auto gap-0.5 p-1 sm:ml-0`}>
+        <nav className="pointer-events-auto ml-auto flex h-9 items-center gap-2 sm:ml-0">
           <SearchPalette disabled={isHome} />
           <NavOverflowMenu />
         </nav>

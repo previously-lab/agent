@@ -123,18 +123,18 @@ export function LibraryControl({
             // Below `md` the panel's width is the viewport minus the toggle's
             // right edge (root 8 + toggle 40 + ml-3 12 = 60) minus the 8px
             // grid inset — anchored off `left-full` so it neither bleeds off
-            // the right edge nor covers its own toggle.
-            className="pointer-events-auto absolute left-full top-1/2 ml-3 w-[min(23rem,calc(100vw-2rem))] max-md:w-[min(23rem,calc(100vw-68px))] -translate-y-1/2 rounded-2xl bg-background/90 shadow-md ring-1 ring-border/60 backdrop-blur-md"
+            // the right edge nor covers its own toggle. The panel is a tool
+            // tray (v0.29 §4.8): matte, square, hairline-ruled — a second
+            // frosted pane retired.
+            className="chrome-panel pointer-events-auto absolute left-full top-1/2 ml-3 w-[min(23rem,calc(100vw-2rem))] max-md:w-[min(23rem,calc(100vw-68px))] -translate-y-1/2"
           >
             {/* The panel's own header (P6 ②, roadmap #9): a phone has no
                 Escape and the toggle is easy to miss, so the way out lives
                 here, beside the title. The panel is chrome, not paper — the
                 ISLAND_CONTROL vocabulary applies. The header stays OUTSIDE
                 the scroll area so the close is visible at any scroll depth. */}
-            <div className="flex items-center justify-between gap-2 pb-0.5 pl-4 pr-2 pt-2">
-              <h2 className="px-2 pt-1 text-xs font-medium text-muted-foreground">
-                {t("title")}
-              </h2>
+            <div className="chrome-panel-head">
+              <h2 className="chrome-engraved">{t("title")}</h2>
               <button
                 type="button"
                 data-library-close

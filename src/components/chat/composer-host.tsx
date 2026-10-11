@@ -17,11 +17,12 @@
  * `ConversationPanel`'s tier through `PanelTierContext`: at the pill tier the
  * composer IS the pill — centred a `PILL_BOTTOM_GAP_PX` above the panel
  * box's bottom edge (the box is chromeless there), at most
- * `--pill-max-width` (globals.css) wide, and carrying the pill's glass chrome
- * (rounded-full, translucent background, hairline ring, backdrop blur); at
- * fullscreen it floats over the body exactly as it always has. `ChatInput`
- * reads the same context to draw its pill form. One component instance
- * throughout: the tier only ever changes classes, never the mount.
+ * `--pill-max-width` (globals.css) wide, and wearing the pill's chrome —
+ * the square writing ledge (solid paper, hairline-ruled — see
+ * `instrument.css` `.composer-bar`); at fullscreen it floats over the body
+ * exactly as it always has. `ChatInput` reads the same context to draw its
+ * pill form. One component instance throughout: the tier only ever changes
+ * classes, never the mount.
  *
  * THE COMPOSER ITSELF IS NEVER UNMOUNTED. That is the whole reason this is a
  * component rather than a branch in `ChatPage`: the composer owns state that
@@ -121,13 +122,15 @@ export function ComposerHost({ composer, onClearanceChange }: ComposerHostProps)
       <div
         className={
           onPill
-            ? // The glass pill itself — rounded-full, translucent paper over
-              // the world, hairline ring, soft shadow, and a blur so the
-              // world reads through it. THE interactive surface at this
-              // tier: the only box on the bottom edge that takes pointer
-              // events — the row around it is transparent, so the world
-              // keeps every click outside the pill itself.
-              "pointer-events-auto pill-box h-12 min-w-0 w-full items-center overflow-hidden rounded-full bg-background/70 shadow-[0_12px_32px_-12px_rgba(15,23,42,0.4)] ring-1 ring-foreground/10 backdrop-blur-md dark:shadow-[0_12px_32px_-12px_rgba(0,0,0,0.8)]"
+            ? // The writing ledge itself (v0.29 §4.3) — a square bar of solid
+              // PAPER (paper's extension, no grain on chrome), one hairline
+              // all round, one contact shadow. THE interactive surface at
+              // this tier: the only box on the bottom edge that takes
+              // pointer events — the row around it is transparent, so the
+              // world keeps every click outside the ledge itself. The
+              // compartments and their dividers are drawn by ChatInput's
+              // pill form (`composer-cell`s).
+              "pointer-events-auto pill-box composer-bar flex h-12 min-w-0 w-full items-center overflow-hidden"
             : "w-[min(44rem,100%)]"
         }
       >

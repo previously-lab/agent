@@ -1,40 +1,24 @@
 /* The home's paper (v0.13 paper prototype, reworked pass; re-ruled
    2026-10-10 — plain printing; re-ruled 2026-10-11 — print scale, the
-   type belongs to the sheet, v0.25a §九). The MATERIAL lives in globals.css
-   as `@theme inline` tokens over the --paper-* variables (bg-paper /
-   bg-paper-grain / bg-paper-grain-card / bg-paper-line /
-   shadow-paper-lift) — this file only lays that material out on the
-   home route: the first sheet and the print on it. The composition is
-   the lab's intertitle candidate, ported verbatim: the home card is the
-   archive's first sheet, not a book cover. Pure design values live
-   here; nothing is measured or JS-driven. */
+   type belongs to the sheet, v0.25a §九; re-ruled 2026-10-14 — the
+   viewport AS the sheet, v0.29 §4.7: the A4 card is deleted). The
+   MATERIAL lives in globals.css as `@theme inline` tokens over the
+   --paper-* variables (bg-paper / bg-paper-grain / shadow-paper-lift) —
+   this file only lays that material out on the home route. The
+   composition is the lab's intertitle candidate, ported verbatim: the
+   home is the archive's first sheet, not a book cover. Pure design
+   values live here; nothing is measured or JS-driven. */
 
-/* The card — the archive's first sheet: a REAL A4 portrait, the same
-   sheet the reader's desk prints on (v0.24: height = min(86vh, (100vw
-   − 3rem) × 297/210), aspect 210/297). Here the sheet is width-driven —
-   width = that height × 210/297, clamped to the flow — so the aspect
-   holds in every context that re-renders these classes (the lab's
-   cover replica sizes it to its own board) and it never overflows a
-   narrow viewport.
-
-   PRINT SCALE (owner ruling 2026-10-06, v0.25a §九): the sheet's
-   typography is expressed in millimetres via ONE variable, --home-mm.
-   The sheet is a query container, so 100cqw is its own rendered width:
-   on A4, width/210 == height/297, hence --home-mm = 100cqw/210 IS the
-   sheet height ÷ 297 — the type-to-paper ratio is A4-true at every
-   sheet size, exactly the reader's --desk-mm rule. No Tailwind text-*
-   steps, no raw px inside the sheet. The element itself may not use
-   --home-mm (a query container cannot query itself), so the print
-   margins live on the blocks inside it. */
-.home-card {
-  --home-mm: calc(100cqw / 210);
-  container-type: inline-size;
-  display: flex;
-  flex-direction: column;
-  width: min(calc(min(86vh, calc((100vw - 3rem) * 297 / 210)) * 210 / 297), 100%);
-  max-width: calc(100vw - 3rem);
-  aspect-ratio: 210 / 297;
-  border-radius: 3px;
+/* The sheet — the viewport itself. There is no card geometry left: no
+   A4 aspect, no border-radius, no lift shadow. The screen is treated as
+   ONE A4 HEIGHT, and ONE VARIABLE carries the print scale:
+   --home-mm = 100dvh / 297 — the sheet's own millimetre (v0.29 §4.7).
+   Every length on the sheet is a multiple of it, exactly the reader's
+   --desk-mm rule; the type-to-paper ratio is A4-true at any viewport.
+   (The element itself may use the variable freely — the container-query
+   self-query problem retired with the card.) */
+.home-sheet {
+  --home-mm: calc(100dvh / 297);
 }
 
 /* The running head — the name at print-display size (10mm ≈ 28pt

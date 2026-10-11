@@ -2,6 +2,7 @@ import { Raleway, Geist_Mono, Source_Serif_4 } from "next/font/google";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
+import "./instrument.css";
 
 const raleway = Raleway({
   variable: "--font-raleway",

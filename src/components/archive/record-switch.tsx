@@ -183,14 +183,17 @@ export function RecordSwitch({
               reducedMotion ? { duration: 0 } : { duration: 0.2, ease: "easeOut" }
             }
             // The library panel's own anchoring and width law (the toggle's
-            // right edge, the viewport minus the chrome on a phone).
-            className="pointer-events-auto absolute left-full top-1/2 ml-3 w-[min(16rem,calc(100vw-2rem))] max-md:w-[min(16rem,calc(100vw-68px))] -translate-y-1/2 rounded-2xl bg-background/90 shadow-md ring-1 ring-border/60 backdrop-blur-md"
+            // right edge, the viewport minus the chrome on a phone). The
+            // panel is a tool tray (v0.29 §4.8): matte, square,
+            // hairline-ruled; the current record's row is an ink block
+            // reversed out (the pressed type slug).
+            className="chrome-panel pointer-events-auto absolute left-full top-1/2 ml-3 w-[min(16rem,calc(100vw-2rem))] max-md:w-[min(16rem,calc(100vw-68px))] -translate-y-1/2"
           >
             {/* The header stays OUTSIDE the scroll area (the library's
                 ruling: a phone has no Escape, so the way out is a control,
                 visible at any scroll depth). */}
-            <div className="flex items-center justify-between gap-2 pb-0.5 pl-4 pr-2 pt-2">
-              <h2 className="px-2 pt-1 text-xs font-medium text-muted-foreground">
+            <div className="chrome-panel-head">
+              <h2 className="chrome-engraved">
                 {t("title", { date: bucketLabel })}
               </h2>
               <button
@@ -204,7 +207,7 @@ export function RecordSwitch({
                 <X className="size-3.5" />
               </button>
             </div>
-            <div className="max-h-[min(30rem,70dvh)] overflow-y-auto p-1.5">
+            <div className="max-h-[min(30rem,70dvh)] overflow-y-auto">
               {siblings.map((record) => {
                 const current = record.sliceId === sliceId;
                 const clock = recordClock(record.sliceId);
@@ -219,14 +222,14 @@ export function RecordSwitch({
                       count: record.turns,
                     })}
                     onClick={() => openDesk(`records/${record.sliceId}`)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted/50 ${
-                      current ? "text-foreground" : "text-muted-foreground"
+                    className={`chrome-row items-baseline gap-3 py-2 pl-3.5 pr-2 text-sm ${
+                      current ? "is-active" : ""
                     }`}
                   >
                     <span className="font-mono text-xs tabular-nums">
                       {clock}
                     </span>
-                    <span className="text-xs">
+                    <span className="ml-auto shrink-0 text-xs">
                       {t("turns", { count: record.turns })}
                     </span>
                   </button>

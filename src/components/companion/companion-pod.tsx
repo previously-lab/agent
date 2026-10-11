@@ -27,13 +27,17 @@
  * Previously last said — click to read it again. That is the whole "Previously
  * is here" idea: the pod is a presence, not a notification.
  *
- * States: idle (calm, muted) / speaking (narration in flight — a slow
- * breathing pulse + the brand-blue accent) / panel open. The activity state
- * is PROP-DRIVEN (`working`), not hard-wired to narration: the evolution
- * stream is the second source — the shell subscribes to the
- * evolution-activity bus (`lib/chat/evolution-activity.ts`) and passes the
- * run's presence down, so the same button breathes while Previously evolves
- * and the panel replays the newest completion when there is no narration.
+ * States (v0.29 §4.5 — the name tab): idle (calm, ink) / working (narration
+ * or evolution in flight — the word wears the live accent and types its own
+ * ellipsis; the scale-breathing orb is retired) / unread (a narration or an
+ * evolution completion arrived while the panel was shut — a folded corner,
+ * the dog-ear) / error (the dog-ear carries an engraved exclamation — still
+ * ink, never red). The activity state is PROP-DRIVEN (`working`), not
+ * hard-wired to narration: the evolution stream is the second source — the
+ * shell subscribes to the evolution-activity bus (`lib/chat/evolution-activity.ts`)
+ * and passes the run's presence down, so the same tab works while Previously
+ * evolves and the panel replays the newest completion when there is no
+ * narration.
  *
  * DEBUG BLOCKS (dev phase): the panel's body ends with two additive,
  * read-only instrumentation sections — the HQ activity face (the field↔HQ
@@ -42,13 +46,12 @@
  * POLLED ~3s while the panel is open — plus the LIVE beat log: the running
  * run's `data-hq-activity` frames, attached from the pointer's runId through
  * GET /api/evolution/hq/[runId]/stream. The stream replays, so a reload
- * simply re-attaches; while HQ works the button breathes, discovered by a
- * slow closed-panel poll) and a memory-map summary (slice/
+ * simply re-attaches; while HQ works the tab works, discovered by a slow
+ * closed-panel poll) and a memory-map summary (slice/
  * active-slice overview fetched ONCE per panel open from the existing
- * episodic server actions, never polled, with a manual refresh). They ride
- * inside the scroll area under whatever the prose seat shows, and they are
- * why the button now always opens the panel — even with an empty seat the
- * internals are worth reaching.
+ * episodic server actions, never polled, with a manual refresh). Since
+ * v0.29 they ride behind a collapsed 「工作日志」 disclosure at the panel's
+ * foot — diagnostic value kept, debug noise off the default face.
  *
  * TWO ENTRIES, ONE PANEL: the composer's evolution-stream button asks this
  * pod to open via the companion-panel request bus
@@ -60,7 +63,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useLocale, useTranslations } from "next-intl";
-import { AudioLines, CircleAlert, RefreshCw, X } from "lucide-react";
+import { CircleAlert, ChevronRight, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
@@ -297,7 +300,7 @@ function HQStatusSection({
     <div className="space-y-1">
       <div className="flex items-center gap-1.5">
         {live && (
-          <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-[1px] bg-primary" />
+          <span aria-hidden className="chrome-live-dot size-1.5 shrink-0 animate-pulse rounded-[1px]" />
         )}
         <span className="text-muted-foreground/70">
           {live ? t("hqLive") : t("hqActLog")}
@@ -666,6 +669,22 @@ export function CompanionPod({
     target !== null && (status === "connecting" || status === "streaming");
   const active = speaking || working || hqLive;
   const hasLiveTarget = target !== null;
+  /** A cut narration — the tab's corner mark is an engraved exclamation
+      (still ink, never red). */
+  const narrationError = hasLiveTarget && status === "error";
+  /** An unread completion: a narration or an evolution event landed while
+      the panel was shut. Opening the panel clears it — the dog-ear is a
+      "there is something to read" mark, not a notification badge. */
+  const [unread, setUnread] = useState(false);
+  useEffect(() => {
+    if (status === "done" && !open) setUnread(true);
+  }, [status, open]);
+  useEffect(() => {
+    if (evolution?.latest && !evolution.working && !open) setUnread(true);
+  }, [evolution, open]);
+  useEffect(() => {
+    if (open) setUnread(false);
+  }, [open]);
   const headerTimeLabel = hasLiveTarget ? target?.timeLabel : latest?.timeLabel;
   /** An evolution run in flight or a completed one to replay — the panel's
       fallback seat when there is no narration at all. */
@@ -706,30 +725,35 @@ export function CompanionPod({
         title={t("podLabel")}
         aria-expanded={open}
         onClick={toggle}
-        className={`${ISLAND} pointer-events-auto flex size-10 items-center justify-center transition-colors ${
+        // The name tab (v0.29 §4.5): a matte square label engraved with
+        // the companion's name — the desk plaque for "Previously is here",
+        // not a breathing orb. working wears the live accent and types its
+        // own ellipsis; unread folds the corner (the dog-ear); error keeps
+        // the flap and engraves an exclamation. The scale-breathing pulse
+        // is retired — presence is print, not performance.
+        className={`${ISLAND} chrome-podtab pointer-events-auto ${
           active
-            ? "text-primary"
-            : open
-              ? "text-foreground"
-              : "text-muted-foreground hover:text-foreground"
+            ? "is-working"
+            : narrationError
+              ? "is-error"
+              : unread
+                ? "is-unread"
+                : ""
         }`}
       >
-        {/* The breathing pulse — the one accent the pod is allowed. A slow
-            scale, not a badge or a face: presence, not alarm. */}
-        <motion.span
-          aria-hidden
-          className="flex items-center justify-center"
-          animate={
-            active && !reducedMotion ? { scale: [1, 1.08, 1] } : { scale: 1 }
-          }
-          transition={
-            active && !reducedMotion
-              ? { duration: 2.4, repeat: Infinity, ease: "easeInOut" }
-              : { duration: 0.2 }
-          }
-        >
-          <AudioLines className="size-4" />
-        </motion.span>
+        {t("nameTab")}
+        {active && (
+          <span className="chrome-dots" aria-hidden="true">
+            <span>·</span>
+            <span>·</span>
+            <span>·</span>
+          </span>
+        )}
+        {narrationError && (
+          <span className="chrome-podtab-mark" aria-hidden="true">
+            !
+          </span>
+        )}
       </button>
 
       <AnimatePresence>
@@ -746,20 +770,24 @@ export function CompanionPod({
                 : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }
             }
             aria-label={t("dockLabel")}
-            className="pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(30rem,calc(100dvh-18rem))] w-[min(23rem,calc(100vw-2rem))] flex-col rounded-2xl bg-paper bg-paper-grain-card text-card-foreground shadow-paper-contact"
+            // The panel is PAPER — it keeps the grain (the no-texture ruling
+            // covers chrome; the sheet's own texture stays) — and square
+            // (v0.29 §4.5), one contact shadow.
+            className="chrome-panel-paper pointer-events-auto absolute right-0 bottom-full mb-2 flex max-h-[min(30rem,calc(100dvh-18rem))] w-[min(23rem,calc(100vw-2rem))] flex-col text-card-foreground"
           >
             {/* Chrome — sans, and it never scrolls away: the flex column caps
                 the panel's height and the prose below takes the overflow. The
-                dot is the state: pulsing while the mouth speaks, still on a
-                replay, an alert mark when it could not. */}
+                dot is the state: the paper accent while the mouth speaks (the
+                live state is the accent's meaning), still ink on a replay, an
+                alert mark when it could not. */}
             <div className="flex shrink-0 items-center gap-2 px-4 pt-3">
-              {hasLiveTarget && status === "error" ? (
+              {narrationError ? (
                 <CircleAlert aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
               ) : (
                 <span
                   aria-hidden
                   className={`size-1.5 shrink-0 rounded-[1px] ${
-                    active ? "bg-primary" : "bg-muted-foreground/50"
+                    active ? "chrome-live-dot" : "bg-muted-foreground/50"
                   } ${speaking && !reducedMotion ? "animate-pulse" : ""}`}
                 />
               )}
@@ -811,7 +839,7 @@ export function CompanionPod({
                   <p className="whitespace-pre-wrap font-serif text-[13px] font-light leading-relaxed text-foreground/90">
                     {text}
                     {speaking && (
-                      <span aria-hidden className="animate-pulse text-primary/70">
+                      <span aria-hidden className="chrome-live animate-pulse">
                         ▍
                       </span>
                     )}
@@ -858,61 +886,70 @@ export function CompanionPod({
                 </div>
               ) : null}
 
-              {/* Debug instrumentation (dev phase) — additive to whatever the
-                  prose seat above shows. Two read-only blocks: the HQ activity
-                  face (polled while open), and a memory-map summary fetched
-                  once per open. Raw values on purpose — this exists to make
-                  internal state visible, not to be pretty. */}
-              <div
-                data-companion-pod-debug
-                className="space-y-3 border-t border-foreground/10 px-4 py-3 font-sans text-[11px] leading-relaxed text-foreground/80"
-              >
-                <DebugSection
-                  id="hq"
-                  title={t("hqTitle")}
-                  action={
-                    <button
-                      type="button"
-                      onClick={() => void loadHQ()}
-                      aria-label={t("debugRefresh")}
-                      title={t("debugRefresh")}
-                      className={`${ISLAND_CONTROL} size-5`}
-                    >
-                      <RefreshCw className="size-3" />
-                    </button>
-                  }
-                >
-                  <HQStatusSection
-                    hq={hq}
-                    failed={hqFailed}
-                    t={t}
-                    locale={locale}
-                    activity={hqActivity}
-                    live={hqLive}
+              {/* Debug instrumentation (dev phase) — folded behind the
+                  work-log disclosure: diagnostic value kept, the debug
+                  console off the panel's default face (v0.29 §4.5). The
+                  data attributes stay — probes read them regardless of
+                  the disclosure's open state. */}
+              <details className="chrome-worklog">
+                <summary>
+                  {t("workLog")}
+                  <ChevronRight
+                    aria-hidden
+                    className="chrome-worklog-caret size-3"
                   />
-                </DebugSection>
-                <DebugSection
-                  id="memory"
-                  title={t("debugMemoryTitle")}
-                  action={
-                    <button
-                      type="button"
-                      onClick={() => void loadMemoryMap()}
-                      aria-label={t("debugRefresh")}
-                      title={t("debugRefresh")}
-                      className={`${ISLAND_CONTROL} size-5`}
-                    >
-                      <RefreshCw className="size-3" />
-                    </button>
-                  }
+                </summary>
+                <div
+                  data-companion-pod-debug
+                  className="chrome-worklog-body space-y-3 font-sans text-[11px] leading-relaxed text-foreground/80"
                 >
-                  <MemoryDebugSection
-                    memory={memoryMap}
-                    failed={memoryMapFailed}
-                    t={t}
-                  />
-                </DebugSection>
-              </div>
+                  <DebugSection
+                    id="hq"
+                    title={t("hqTitle")}
+                    action={
+                      <button
+                        type="button"
+                        onClick={() => void loadHQ()}
+                        aria-label={t("debugRefresh")}
+                        title={t("debugRefresh")}
+                        className={`${ISLAND_CONTROL} size-5`}
+                      >
+                        <RefreshCw className="size-3" />
+                      </button>
+                    }
+                  >
+                    <HQStatusSection
+                      hq={hq}
+                      failed={hqFailed}
+                      t={t}
+                      locale={locale}
+                      activity={hqActivity}
+                      live={hqLive}
+                    />
+                  </DebugSection>
+                  <DebugSection
+                    id="memory"
+                    title={t("debugMemoryTitle")}
+                    action={
+                      <button
+                        type="button"
+                        onClick={() => void loadMemoryMap()}
+                        aria-label={t("debugRefresh")}
+                        title={t("debugRefresh")}
+                        className={`${ISLAND_CONTROL} size-5`}
+                      >
+                        <RefreshCw className="size-3" />
+                      </button>
+                    }
+                  >
+                    <MemoryDebugSection
+                      memory={memoryMap}
+                      failed={memoryMapFailed}
+                      t={t}
+                    />
+                  </DebugSection>
+                </div>
+              </details>
             </div>
           </motion.aside>
         )}

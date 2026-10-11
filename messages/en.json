@@ -511,6 +511,8 @@
     "narrateAria": "Narrate this slice",
     "dockLabel": "Narration",
     "podLabel": "Previously is here",
+    "nameTab": "Previously",
+    "workLog": "Work log",
     "thinking": "Previously is remembering…",
     "close": "Close",
     "retry": "Tell it again",

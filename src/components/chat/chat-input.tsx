@@ -190,7 +190,7 @@ export function ChatInput({
           onFocus={() => setHovered(true)}
           onBlur={() => setHovered(false)}
           onClick={onExpand}
-          className="flex h-9 items-center gap-2 rounded-full px-2.5 text-muted-foreground transition-colors hover:text-foreground"
+          className="flex h-9 items-center gap-2 px-2.5 text-muted-foreground transition-colors hover:text-foreground"
         >
           {/* The hint leads, the arrow stays pinned to the right edge — so the
               button grows LEFTWARD and the target never moves out from under
@@ -230,22 +230,25 @@ export function ChatInput({
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        // flex-1: the row FILLS the glass host — it is a flex item of the
-        // pill container, and without a grow rule it shrank to its content
-        // width (buttons bunched left, a gutter on the right). min-w-0 lets
+        // flex-1: the row FILLS the ledge — it is a flex item of the bar,
+        // and without a grow rule it shrank to its content width (buttons
+        // bunched left, a gutter on the right). items-stretch lets each
+        // compartment's hairline run the bar's full height; min-w-0 lets
         // the input's own flex-1 take the slack and truncate honestly.
-        className="flex h-full min-w-0 flex-1 items-center gap-0.5 px-2 sm:px-3"
+        className="flex h-full min-w-0 flex-1 items-stretch"
       >
         {/* Attach — the full form's channel, nothing new: the hidden input
             below feeds the shared `handlePaste`, and the images reappear as
-            previews the moment the reader expands. */}
+            previews the moment the reader expands. A compartment of the
+            ledge: hairline divider, ink glyph, hover turns the divider to
+            ink (§3). */}
         <button
           type="button"
           data-attach
           onClick={() => fileInputRef.current?.click()}
           aria-label={t("attach")}
           title={t("attach")}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="composer-cell text-muted-foreground hover:text-foreground"
         >
           <Paperclip className="size-4" />
         </button>
@@ -260,18 +263,20 @@ export function ChatInput({
         {/* The evolution stream — the HQ panel's second entry (the pod's
             floating button is the first). One panel, two doors. */}
         <HQStreamButton
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="composer-cell text-muted-foreground hover:text-foreground"
           iconClassName="size-4"
         />
         {/* The single line — a real one-line input, not a resized textarea.
-            Enter sends, as in the full form. */}
+            Enter sends, as in the full form. Serif (the reader writes in
+            their own documents' voice); the placeholder is INK at light
+            weight — weight, not grey, says "not yet your sentence" (P3). */}
         <input
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           aria-label={t("placeholder")}
-          className="h-9 min-w-0 flex-1 bg-transparent font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-muted-foreground"
+          className="min-w-0 flex-1 bg-transparent px-3 font-serif text-sm text-foreground outline-none placeholder:font-serif placeholder:font-light placeholder:text-foreground"
         />
         {/* The model picker joins the rightward walk on md and up — on the
             phone the input keeps the width. `contents` lets the selector's
@@ -283,7 +288,7 @@ export function ChatInput({
             onModelChange={onModelChange}
           />
         </div>
-        {/* Expand — the pill's one way up, through the panel's own
+        {/* Expand — the ledge's one way up, through the panel's own
             transition table. */}
         <button
           type="button"
@@ -293,19 +298,21 @@ export function ChatInput({
           }
           aria-label={tPanel("expand")}
           title={tPanel("expand")}
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+          className="composer-cell text-muted-foreground hover:text-foreground"
         >
           <Maximize2 className="size-4" />
         </button>
         {/* Send / stop — one button, two faces, exactly like the full
-            form's, and always the RIGHTMOST control. */}
+            form's, and always the RIGHTMOST control. Armed (there is
+            something to send) the cell is an ink block reversed out — the
+            pressed type slug; the stop face keeps the destructive signal. */}
         {isLoading && onStop ? (
           <button
             type="button"
             onClick={onStop}
             aria-label={t("stopTooltip")}
             title={t("stopTooltip")}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-colors hover:bg-destructive/90"
+            className="composer-cell w-12 bg-destructive text-destructive-foreground hover:border-l-destructive hover:opacity-90"
           >
             <Square className="size-3.5 fill-current" />
           </button>
@@ -316,10 +323,10 @@ export function ChatInput({
             disabled={!hasContent}
             aria-label={t("sendTooltip")}
             title={t("sendTooltip")}
-            className={`flex size-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-30 ${
+            className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
               hasContent
-                ? "bg-brand text-white hover:bg-brand/90"
-                : "bg-primary text-primary-foreground"
+                ? "is-active hover:border-l-foreground"
+                : "text-muted-foreground hover:text-foreground"
             }`}
           >
             <ArrowUp className="size-4" />
@@ -331,22 +338,12 @@ export function ChatInput({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-2xl bg-card ring-1 transition-[box-shadow,ring-color] duration-200 shadow-[0_34px_80px_-20px_rgba(15,23,42,0.28)] dark:shadow-[0_34px_80px_-20px_rgba(0,0,0,0.8)] ${
-        isDragOver
-          ? "ring-2 ring-blue-500/50"
-          : "ring-foreground/10 focus-within:ring-foreground/30"
-      }`}
+      className={`composer-bar relative overflow-hidden ${isDragOver ? "is-dragover" : ""}`}
       onPaste={handlePaste}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
     >
-      {/* Top light falloff — the same paper treatment as the timeline's
-          frame card and the travel-clock card. */}
-      <span
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-b from-foreground/[0.05] to-35% to-transparent"
-      />
       {/* Image previews */}
       {images.length > 0 && (
         <div className="flex gap-2 px-4 pt-3 flex-wrap">
@@ -355,12 +352,12 @@ export function ChatInput({
               <img
                 src={URL.createObjectURL(file)}
                 alt={file.name}
-                className="h-16 w-16 rounded-lg object-cover border border-border"
+                className="h-16 w-16 border border-border object-cover"
               />
               <button
                 type="button"
                 onClick={() => removeImage(i)}
-                className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-muted-foreground/80 text-background flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute -top-1.5 -right-1.5 h-5 w-5 bg-muted-foreground/80 text-background flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -370,8 +367,10 @@ export function ChatInput({
       )}
 
       {/* Row 1 — the writing surface. It is the taller of the two rows on
-          purpose: at a card rung the composer is a floating card, and a card
-          whose only generous dimension is its toolbar reads as a menu. */}
+          purpose: the fullscreen composer is still a floating card, and a
+          card whose only generous dimension is its toolbar reads as a menu.
+          Same material as the pill tier — the ledge at full height: solid
+          paper, hairline, one contact shadow. */}
       <div className="px-4 pb-2 pt-3">
         <textarea
           ref={textareaRef}
@@ -380,15 +379,17 @@ export function ChatInput({
           onKeyDown={handleKeyDown}
           placeholder={t("placeholder")}
           rows={1}
-          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:text-muted-foreground placeholder:font-light focus:outline-none"
+          className="min-h-11 max-h-40 w-full resize-none overflow-y-auto bg-transparent font-serif text-sm text-foreground placeholder:font-serif placeholder:font-light placeholder:text-foreground focus:outline-none"
         />
       </div>
 
-      {/* Row 2 — everything you do AROUND the writing: what to attach, what to
-          read, which model, and send. The zoom lens is deliberately NOT here;
-          it moved to the shell's board bar, where it is mounted at every rung
-          and can be reached without opening the composer at all. */}
-      <div className="flex items-center justify-between gap-2 px-3 pb-2">
+      {/* Row 2 — everything you do AROUND the writing: what to attach, what
+          to read, which model, and send. The zoom lens is deliberately NOT
+          here; it moved to the shell's board bar, where it is mounted at
+          every rung and can be reached without opening the composer at
+          all. The row is compartmented from the writing surface by the
+          same hairline the pill tier's cells use. */}
+      <div className="flex items-center justify-between gap-2 border-t border-paper-line px-3 py-2">
         {/* Left side */}
         <div className="flex min-w-0 items-center gap-2">
           {/* Attach — always available. Present in the full form only; see the
@@ -411,7 +412,7 @@ export function ChatInput({
                   // A tooltip is not an accessible name — it is a description
                   // that appears on hover, which a screen reader never does.
                   aria-label={t("attach")}
-                  className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
+                  className="flex h-7 w-7 items-center justify-center border border-paper-line text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
                 >
                   <Paperclip className="h-3.5 w-3.5" />
                 </button>
@@ -432,7 +433,7 @@ export function ChatInput({
               field↔HQ activity face). One panel, two doors: this button and
               the pod's floating one. */}
           <HQStreamButton
-            className="h-7 w-7 rounded-full text-muted-foreground hover:text-foreground hover:bg-brand/10 transition-colors flex items-center justify-center"
+            className="flex h-7 w-7 items-center justify-center border border-paper-line text-muted-foreground transition-colors hover:border-foreground hover:text-foreground"
             iconClassName="h-3.5 w-3.5"
           />
         </div>
@@ -452,7 +453,7 @@ export function ChatInput({
             <button
               type="button"
               onClick={onStop}
-              className="h-8 w-8 rounded-full bg-destructive text-destructive-foreground hover:bg-destructive/90 flex items-center justify-center"
+              className="flex h-8 w-8 items-center justify-center bg-destructive text-destructive-foreground transition-colors hover:opacity-90"
               title={t("stopTooltip")}
             >
               <Square className="h-3 w-3 fill-current" />
@@ -462,10 +463,10 @@ export function ChatInput({
               type="submit"
               onClick={(e) => handleSubmit(e as unknown as FormEvent)}
               disabled={!hasContent}
-              className={`h-8 w-8 rounded-full flex items-center justify-center transition-colors disabled:opacity-30 ${
+              className={`flex h-8 w-8 items-center justify-center border border-paper-line transition-colors disabled:pointer-events-none disabled:opacity-30 ${
                 hasContent
-                  ? "bg-brand text-white hover:bg-brand/90"
-                  : "bg-primary text-primary-foreground"
+                  ? "border-foreground bg-foreground text-paper hover:opacity-90"
+                  : "text-muted-foreground hover:border-foreground hover:text-foreground"
               }`}
               title={t("sendTooltip")}
             >

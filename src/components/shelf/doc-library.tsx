@@ -249,7 +249,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
   }
 
   return (
-    <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+    <nav className="flex flex-1 flex-col overflow-y-auto">
       {/* THE DOSSIER (v0.25b §三 / v0.25 §3.4) — the two self-documents
           (previously / direction), pinned above the category tree. They are
           papers, not popovers: a row opens its document on the desk under
@@ -257,10 +257,10 @@ export function DocLibrary({ persona }: { persona?: string }) {
           never opens a dead paper. */}
       {dossier !== null && dossier.some((d) => d.available) && (
         <section data-dossier>
-          <h3 className="px-2 pb-0.5 pt-1 text-xs font-medium text-muted-foreground/70">
+          <h3 className="chrome-label px-3.5 pb-1 pt-2">
             {t("dossier.title")}
           </h3>
-          <ul className="pb-1">
+          <ul>
             {dossier.map((entry) => {
               const Icon = DOSSIER_ICONS[entry.name];
               const active = deskDoc === entry.ref;
@@ -271,8 +271,8 @@ export function DocLibrary({ persona }: { persona?: string }) {
                     data-dossier-doc={entry.name}
                     disabled={!entry.available}
                     onClick={() => openDesk(entry.ref)}
-                    className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-40 ${
-                      active ? "bg-muted" : ""
+                    className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
+                      active ? "is-active" : ""
                     }`}
                   >
                     <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -294,20 +294,20 @@ export function DocLibrary({ persona }: { persona?: string }) {
           gets an honest line under the heading. */}
       {records !== null && (
         <section data-records>
-          <h3 className="px-2 pb-0.5 pt-1 text-xs font-medium text-muted-foreground/70">
+          <h3 className="chrome-label px-3.5 pb-1 pt-2">
             {t("records.title")}
           </h3>
           {recordGroups.length === 0 ? (
-            <p className="px-2 pb-1 pt-0.5 text-xs text-muted-foreground italic">
+            <p className="px-3.5 pb-1 pt-0.5 text-xs text-muted-foreground italic">
               {t("records.empty")}
             </p>
           ) : (
             recordGroups.map((group) => (
               <div key={group.key} data-records-bucket={group.key}>
-                <p className="px-2 pb-0.5 pt-1.5 text-xs text-muted-foreground/70">
+                <p className="chrome-label px-3.5 pb-0.5 pt-2.5">
                   {group.label}
                 </p>
-                <ul className="pb-1">
+                <ul>
                   {group.slices.map((record) => {
                     const ref = `records/${record.sliceId}`;
                     const active = deskDoc === ref;
@@ -322,8 +322,8 @@ export function DocLibrary({ persona }: { persona?: string }) {
                             count: record.turns,
                           })}
                           onClick={() => openDesk(ref)}
-                          className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted ${
-                            active ? "bg-muted" : ""
+                          className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm ${
+                            active ? "is-active" : ""
                           }`}
                         >
                           <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
@@ -357,8 +357,8 @@ export function DocLibrary({ persona }: { persona?: string }) {
               onClick={() => selectCategory(category)}
               aria-expanded={empty ? undefined : categoryOpen}
               disabled={empty}
-              className={`w-full flex items-center gap-2 rounded px-2 py-2 text-sm transition-colors text-left hover:bg-muted disabled:pointer-events-none disabled:opacity-40 ${
-                categoryOpen ? "text-foreground" : "text-foreground/80"
+              className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
+                categoryOpen ? "is-active" : ""
               }`}
             >
               <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -419,7 +419,7 @@ function CaseRows({
   }
 
   return (
-    <ul className="pb-1">
+    <ul>
       {cases.map((item) => {
         const caseOpen = activeCaseName === item.name;
         // The case's index.md is the document while no piece of it is open.
@@ -429,8 +429,8 @@ function CaseRows({
             <button
               type="button"
               onClick={() => onOpenCase(item.name)}
-              className={`w-full rounded py-2 pl-8 pr-2 text-left transition-colors hover:bg-muted ${
-                caseDocActive ? "bg-muted" : ""
+              className={`chrome-row flex-col items-stretch gap-0.5 py-2 pl-8 pr-2 ${
+                caseDocActive ? "is-active" : ""
               }`}
             >
               <span className="flex items-center gap-2 text-sm">
@@ -515,8 +515,8 @@ function CaseDetailRows({
                 <button
                   type="button"
                   onClick={() => onOpenPiece(stem)}
-                  className={`w-full flex items-baseline gap-2 rounded py-1.5 pl-14 pr-2 text-sm transition-colors hover:bg-muted ${
-                    pieceActive ? "bg-muted" : ""
+                  className={`chrome-row items-baseline gap-2 py-1.5 pl-14 pr-2 text-sm ${
+                    pieceActive ? "is-active" : ""
                   }`}
                 >
                   {piece.date && (
@@ -555,7 +555,7 @@ function CaseDetailRows({
                   <img
                     src={img.url}
                     alt={img.name}
-                    className="max-h-24 rounded-md border border-border/40 object-contain"
+                    className="max-h-24 border border-border/40 object-contain"
                   />
                 </a>
               ))}
@@ -569,7 +569,7 @@ function CaseDetailRows({
                     href={file.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="block truncate rounded px-1 py-1 font-mono text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                    className="block truncate px-1 py-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
                   >
                     {file.name}
                   </a>
