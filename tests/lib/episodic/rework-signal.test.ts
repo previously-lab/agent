@@ -6,7 +6,11 @@
  * conversation id because the record is module-level state.
  */
 import { describe, it, expect } from "vitest";
-import { recordDocRead, checkDocRework } from "@/lib/episodic/rework-signal";
+import {
+  recordDocRead,
+  checkDocRework,
+  extractSliceIds,
+} from "@/lib/episodic/rework-signal";
 
 describe("checkDocRework", () => {
   it("returns null when no document has been read in the conversation", () => {
@@ -48,5 +52,19 @@ describe("checkDocRework", () => {
     recordDocRead("conv-order", "a.md", ["2026-09-01-1000"]);
     expect(checkDocRework("conv-order", "2026-09-01-1000")).toBe("a.md");
     expect(checkDocRework("conv-order", "2026-09-02-1000")).toBeNull();
+  });
+});
+
+// Moved in from the retired docs-query module (tests/lib/docs/docs-query.test.ts)
+// — this probe is its only consumer.
+describe("extractSliceIds", () => {
+  it("finds slice ids embedded in prose, deduplicated", () => {
+    const text =
+      "证据见 2026-09-04-2130，又见 2026-09-05-1030；重申 2026-09-04-2130。";
+    expect(extractSliceIds(text)).toEqual(["2026-09-04-2130", "2026-09-05-1030"]);
+  });
+
+  it("returns an empty array when the document cites no slices", () => {
+    expect(extractSliceIds("没有任何引用。")).toEqual([]);
   });
 });

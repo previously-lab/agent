@@ -36,11 +36,34 @@
 import type { WriteBatch } from "@/lib/episodic/io-helpers";
 import { writeAgentTimeline } from "./manager";
 
+/** Slice ids embedded in text, e.g. `2026-07-24-1500` (the L0 evidence refs). */
+const SLICE_ID_GLOBAL = /\b\d{4}-\d{2}-\d{2}-\d{4}\b/g;
+
+/** Cap the recorded set per document — bound for instrumentation state. */
+const MAX_EXTRACTED_SLICE_IDS = 100;
+
+/**
+ * Extract the slice ids a document references (design §4.1: documents cite
+ * slices by id). Used by the doc_rework probe (§4.4): if the main agent
+ * reads a document and then opens one of the slices THAT document pointed
+ * at, the document was not credited for that fact — an implicit demerit
+ * recorded against the memory-quality bucket. (Moved here from the retired
+ * docs-query module — this probe is its only consumer.)
+ */
+export function extractSliceIds(text: string): string[] {
+  const found = new Set<string>();
+  for (const match of text.matchAll(SLICE_ID_GLOBAL)) {
+    found.add(match[0]);
+    if (found.size >= MAX_EXTRACTED_SLICE_IDS) break;
+  }
+  return [...found];
+}
+
 /**
  * The documents the main agent opened this conversation, each with the slice
- * ids its text references (extracted by the readDoc executor via docs-query's
- * extractSliceIds). When a later readSlice opens one of THOSE slices, the
- * document was not credited for the fact it carried.
+ * ids its text references (extracted by the readDoc executor via this
+ * module's extractSliceIds). When a later readSlice opens one of THOSE
+ * slices, the document was not credited for the fact it carried.
  */
 const docReads = new Map<string, Map<string, Set<string>>>();
 
@@ -95,8 +118,10 @@ export function checkDocRework(
 
 /**
  * Emit a doc_rework signal: one compact audit line in the current slice's
- * agent.md plus a server-log line. Best-effort — each failure is warned and
- * swallowed; this function never throws and never fails the calling tool.
+ * agent.md plus a server-log line. The append goes through
+ * writeAgentTimeline, whose batch-less path is slice-locked and fresh-read.
+ * Best-effort — each failure is warned and swallowed; this function never
+ * throws and never fails the calling tool.
  */
 export async function logDocReworkSignal(
   conversationSliceId: string,
@@ -134,7 +159,10 @@ export type InteractionSignalType =
 /**
  * Emit an interaction signal (regenerate / interrupt): one compact audit
  * line in the slice's agent.md plus a server-log line. Same never-throws
- * discipline as logDocReworkSignal.
+ * discipline as logDocReworkSignal. The signal route calls this WITHOUT a
+ * batch, so writeAgentTimeline takes the per-slice lock itself and reads
+ * fresh — the read-modify-write can no longer be clobbered by a concurrent
+ * turn's append.
  */
 export async function logInteractionSignal(
   type: InteractionSignalType,

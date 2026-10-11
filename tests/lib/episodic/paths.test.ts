@@ -136,4 +136,13 @@ describe("readSlicePartResolved (the in-place backfill contract)", () => {
     const { readSlicePartResolved } = await importFresh();
     expect(await readSlicePartResolved(SLICE, "core")).toBeNull();
   });
+
+  it("accepts the fresh-read option (pass-through to fsReadFile; a no-op on the always-fresh local backend)", async () => {
+    writeOnDisk(NEW_CORE, "new-root content");
+    const { readSlicePartResolved } = await importFresh();
+    expect(await readSlicePartResolved(SLICE, "core", undefined, { fresh: true })).toEqual({
+      path: NEW_CORE,
+      content: "new-root content",
+    });
+  });
 });

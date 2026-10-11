@@ -26,10 +26,12 @@ import {
 import {
   dayDirForDate,
   readSlicePart,
+  readSlicePartResolved,
   slicePartPath,
   RECORDS_ROOT,
   LEGACY_SLICES_ROOT,
 } from "./paths";
+import { withSliceLock } from "./slice-mutex";
 import {
   migrateToV3,
   isCardFormat,
@@ -520,25 +522,34 @@ export async function loadSlice(
 /**
  * Write (append) a cognition entry to the agent's timeline for a slice.
  * Reads the existing agent.md (if any) and appends the new entry.
+ *
+ * The read FEEDS the write, so it is always FRESH (a cached base would
+ * silently drop lines other writers landed in between), and the whole
+ * read-modify-write is serialized per slice via `withSliceLock`. A caller
+ * that passes a `batch` is already inside the turn's slice lock
+ * (persistAgentTurn, steps.ts) — re-taking the same key would self-deadlock,
+ * so the lock is taken here only for batch-less callers (the rework-signal
+ * paths).
  */
 export async function writeAgentTimeline(
   sliceId: string,
   cognitionContent: string,
   batch?: WriteBatch,
 ): Promise<{ path: string; created: boolean }> {
-  const agentPath = sliceIdToAgentPath(sliceId);
-  let existing = "";
-  try {
+  const append = async (): Promise<{ path: string; created: boolean }> => {
+    const agentPath = sliceIdToAgentPath(sliceId);
     // Dual-root read: an agent.md created before the root move still seeds
     // the append; the write itself always lands on the new root.
-    existing = await readSlicePart(sliceId, "agent", batch);
-  } catch {
-    // File doesn't exist yet — will be created
-  }
-  const fullContent = existing.trimEnd()
-    ? existing.trimEnd() + "\n\n" + cognitionContent
-    : cognitionContent;
-  return fsWriteFile(agentPath, fullContent, batch);
+    const resolved = await readSlicePartResolved(sliceId, "agent", batch, {
+      fresh: true,
+    });
+    const existing = resolved?.content ?? "";
+    const fullContent = existing.trimEnd()
+      ? existing.trimEnd() + "\n\n" + cognitionContent
+      : cognitionContent;
+    return fsWriteFile(agentPath, fullContent, batch);
+  };
+  return batch ? append() : withSliceLock(sliceId, append);
 }
 
 /**

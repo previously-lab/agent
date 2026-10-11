@@ -111,10 +111,19 @@ export async function readSlicePartResolved(
   sliceId: string,
   part: SlicePart,
   batch?: WriteBatch,
+  /**
+   * `{ fresh: true }` is passed through to `fsReadFile` and bypasses the Data
+   * Cache — for reads that FEED A WRITE (a read-modify-append under the slice
+   * lock), where a cached base would silently drop lines other writers landed
+   * in between. Display-only reads keep the default cached path. Boundary:
+   * the flag is honored by the GitHub/demo backends; the local backend reads
+   * the disk directly on every call, so it is always fresh already.
+   */
+  opts?: { fresh?: boolean },
 ): Promise<{ path: string; content: string } | null> {
   for (const path of slicePartPathCandidates(sliceId, part)) {
     try {
-      return { path, content: await fsReadFile(path, batch) };
+      return { path, content: await fsReadFile(path, batch, opts) };
     } catch {
       // miss on this root — probe the next
     }

@@ -39,6 +39,7 @@ import {
   checkDocRework,
   recordDocRead,
   logDocReworkSignal,
+  extractSliceIds,
 } from "@/lib/episodic/rework-signal";
 import {
   HQ_TOKEN,
@@ -49,7 +50,6 @@ import { recordHQDispatch } from "@/app/api/evolution/hq-status-store";
 import { questionRun } from "@/app/api/evolution/question-run";
 import { readSelfSop, readUserModel } from "@/lib/evolution/store";
 
-import { extractSliceIds } from "@/lib/docs/docs-query";
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
   parseCaseRef,
@@ -68,6 +68,7 @@ import {
   type DocMarker,
 } from "@/lib/episodic/flash/librarian";
 import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import {
   slicePartPathCandidates,
@@ -698,6 +699,11 @@ async function appendDocMarker(
   }
 
   const agentPath = sliceIdToAgentPath(ctx.sliceId);
+  // Serialize the fresh read-modify-append per slice: the calling executors
+  // (noteForSediment, startLongTask) run as tool steps OUTSIDE the turn's
+  // slice lock, so two interleaved appends could otherwise lose a marker
+  // line. Nothing in the subtree below re-takes this key.
+  return withSliceLock(ctx.sliceId, async () => {
   let existing = "";
   try {
     // fresh: read-modify-append — a cached base would silently drop markers
@@ -721,6 +727,7 @@ async function appendDocMarker(
     : `${line}\n`;
   await fsWriteFile(agentPath, next);
   return { ok: true, marker: parsed[0], path: agentPath };
+  });
 }
 
 /**
@@ -919,7 +926,9 @@ export type ReportToHQResult =
  */
 async function startHQRun(payload: HQBriefPayload): Promise<ReportToHQResult> {
   try {
-    const run = await start(hqRun, [payload]);
+    // Same start config as the question sub-flow (startLongTask below) —
+    // background runs live in one region, not two.
+    const run = await start(hqRun, [payload], { region: "hkg1" });
     return { ok: true, delivered: "started", runId: run.runId };
   } catch (e) {
     return {
