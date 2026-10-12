@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
-import { getTimelineCatalog, getStrandPaths } from "@/lib/episodic/actions";
+import { getTimelineSkeleton, getStrandPaths } from "@/lib/episodic/actions";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import { buildStrandGraph } from "@/lib/game/strand-graph";
 import { sliceClockTime } from "@/lib/game/slice-clock";
@@ -109,7 +109,7 @@ function formatDoorLabel(date: string, isoStart: string, locale: string): string
 
 /**
  * GameShell — the game VIEW under the single route (§14 merge): it owns the
- * hotel's data lane (catalog → corridor doors, strand graph → room doors and
+ * hotel's data lane (skeleton → corridor doors, strand graph → room doors and
  * strand hotels) and the minimal overlay chrome. Two things it NO LONGER
  * owns:
  *
@@ -195,7 +195,7 @@ export function GameShell({
   // invalidation contract in hotel-data.ts: a turn settle bumps the epoch,
   // a locale change misses the key, a reload clears the module.
   const cachedLane = readHotelData(locale);
-  // null = the catalog is still in flight; the corridor mounts only once the
+  // null = the skeleton is still in flight; the corridor mounts only once the
   // doors resolve (to the timeline, or to the fallback on empty/error). The
   // gallery replaces the lot with its own door list.
   const [doors, setDoors] = useState<readonly CorridorDoor[] | null>(
@@ -239,9 +239,9 @@ export function GameShell({
     let cancelled = false;
     (async () => {
       try {
-        const catalog = await getTimelineCatalog();
+        const skeleton = await getTimelineSkeleton();
         if (cancelled) return;
-        if (catalog.length === 0) {
+        if (skeleton.length === 0) {
           setDoors(FALLBACK_DOORS);
           writeHotelData(locale, {
             doors: FALLBACK_DOORS,
@@ -250,12 +250,12 @@ export function GameShell({
           });
           return;
         }
-        // The catalog arrives oldest → newest; corridor door index 0 is the
+        // The skeleton arrives oldest → newest; corridor door index 0 is the
         // door NEAREST the lobby — the NEWEST slice — so present it reversed,
         // capped to the newest MAX_DOORS. `start` goes along: the corridor's
         // door spacing is a function of the time gaps between slices, and it
         // computes those from the timestamps without parsing ids.
-        const corridorDoors = catalog
+        const corridorDoors = skeleton
           .slice(-MAX_DOORS)
           .reverse()
           .map((entry) => ({
@@ -295,11 +295,11 @@ export function GameShell({
             });
           } else {
             const entryById = new Map(
-              catalog.map((entry) => [entry.id, entry]),
+              skeleton.map((entry) => [entry.id, entry]),
             );
             // The strand hotels (HD4): each strand's path (chronological)
             // becomes a corridor door list, newest first like the core
-            // corridor. Labels come from the catalog entry when one exists;
+            // corridor. Labels come from the skeleton entry when one exists;
             // a strand-only slice (not on the core timeline) gets its bare id.
             const strandTimelines = new Map<string, readonly CorridorDoor[]>();
             for (const [name, path] of graph.paths) {
@@ -358,7 +358,7 @@ export function GameShell({
             );
           }
           // Strand read failed: cache the corridor-only lane so a view
-          // switch still avoids re-fetching the catalog (the strand map
+          // switch still avoids re-fetching the skeleton (the strand map
           // degrades to empty, exactly as the live state does).
           writeHotelData(locale, {
             doors: corridorDoors,
@@ -371,7 +371,7 @@ export function GameShell({
         if (!warnedCatalogFailure) {
           warnedCatalogFailure = true;
           console.warn(
-            "[game] getTimelineCatalog failed; showing fallback doors",
+            "[game] getTimelineSkeleton failed; showing fallback doors",
             err,
           );
         }

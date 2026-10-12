@@ -35,7 +35,10 @@
  * `config/loader.ts`'s 60s parsed-config memo (it caches a parse, not a read)
  * and `demo-fs.ts`'s in-flight manifest promise (it dedupes concurrent
  * fetches, which `unstable_cache` does not — it has no single-flight on a
- * miss). Both read through the base utilities underneath.
+ * miss). Both read through the base utilities underneath. A third derived
+ * mechanism of the second kind joined in Wave A: `readFile.ts`'s in-flight
+ * promise over `getRepoTree`, which single-flights concurrent cold reads of
+ * the tree identity (and only that identity).
  */
 
 import { unstable_cache, revalidateTag } from "next/cache";
@@ -63,6 +66,23 @@ export const CACHE_TTLS = {
   TIMELINE_INDEX_SECONDS: 60,
   /** GitHub: strands, user card, direction doc, evolution store, config. */
   MEMORY_DEFAULT_SECONDS: 300,
+  /**
+   * GitHub: the cached `memory/` subtree listing (`getRepoTree` in
+   * readFile.ts) — the metadata spine every enumeration, directory listing
+   * and sha-resolved read is derived from. Writers revalidate the `tree:`
+   * tag on every commit, so in-app changes are exact; 60s is only the bound
+   * for changes that bypass our write path (a direct push). Same staleness
+   * class as TIMELINE_INDEX_SECONDS, a different kind of payload.
+   */
+  TREE_SECONDS: 60,
+  /**
+   * GitHub: a blob read by its content sha (`readBlobBase64` in readFile.ts).
+   * The sha IS the content hash — an entry can only ever hold the one true
+   * payload, so there is nothing to revalidate and no tag exists. 7d is an
+   * eviction horizon, not a staleness bound: a miss simply re-fetches the
+   * same bytes by the same sha.
+   */
+  BLOB_SECONDS: 604_800,
   /**
    * Demo, REMOTE transport only (`BENCHMARK_BASE_URL` — see demo-fs.ts): the
    * dataset repo (`previously-lab/you`) is read-only and published as a
@@ -181,7 +201,18 @@ export function ttlForPath(
   if (MONTHLY_INDEX.test(normalized)) {
     return CACHE_TTLS.TIMELINE_INDEX_SECONDS;
   }
-  if (normalized.startsWith("memory/episodic/slices/")) {
+  // BOTH slice roots (v0.19 R2 dual-root): the legacy `episodic/slices/`
+  // tree AND the current `records/` tree. The records root was missing from
+  // this table until Wave A (audit §3.1) — its files fell through to
+  // MEMORY_DEFAULT, so immutable closed slices were re-fetched every 300s
+  // instead of resting on the 24h staleness bound the closed-slice contract
+  // intends. The active slice's files ARE rewritten mid-turn, but every such
+  // write rides our write path and revalidates the file's tag; the TTL only
+  // ever bounds pushes that bypass us, exactly as on the legacy root.
+  if (
+    normalized.startsWith("memory/episodic/slices/") ||
+    normalized.startsWith("memory/records/")
+  ) {
     return CACHE_TTLS.CLOSED_SLICE_SECONDS;
   }
   if (normalized === "memory/episodic/timeline/index.json") {
@@ -201,6 +232,19 @@ export function ttlForPath(
  */
 export function cacheTagFor(kind: string, identity: string): string {
   return `${kind}:${identity}`;
+}
+
+/**
+ * The tag a GitHub writer revalidates when a commit moves the repo's tree —
+ * the ONLY handle writers have on the cached `memory/` subtree listing
+ * (`getRepoTree` in readFile.ts). Directory membership has no per-file tag:
+ * a commit that creates `…/1200/timeline/core.md` revalidates that file's tag
+ * AND this one, so the listing the file appeared in dies with the write.
+ * Derivable from the write's own arguments (owner/repo), same rule as
+ * `fileCacheTag`.
+ */
+export function treeCacheTag(owner: string, repo: string): string {
+  return cacheTagFor("tree", `${owner}/${repo}`);
 }
 
 // ─── The cached read ─────────────────────────────────────────────────────

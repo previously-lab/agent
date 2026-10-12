@@ -12,7 +12,7 @@
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { assertPortableRepoPath } from "@/lib/portable-path";
-import { invalidateReadCache } from "@/lib/tools/readFile";
+import { invalidateReadCache, invalidateTreeCache } from "@/lib/tools/readFile";
 import { isPathAllowed } from "@/lib/whitelist";
 
 export interface BatchEntry {
@@ -174,10 +174,13 @@ export async function commitBatchToGitHub(
 
   // All written files changed on GitHub — revalidate their Data Cache tags
   // so a later read in this turn (or the next request) never serves stale
-  // content.
+  // content. The commit also MOVED THE TREE: revalidate the cached memory/
+  //  subtree listing (readFile.ts's getRepoTree) so directory membership —
+  //  files this commit created or deleted — is exact too, not just content.
   for (const { path } of entries) {
     invalidateReadCache(path, repo, owner);
   }
+  invalidateTreeCache(repo, owner);
 
   return newCommit.sha;
 }

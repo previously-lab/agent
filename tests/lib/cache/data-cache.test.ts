@@ -62,6 +62,7 @@ import {
   cacheTagFor,
   cachedFetch,
   invalidate,
+  treeCacheTag,
   ttlForPath,
 } from "@/lib/cache/data-cache";
 import { listFilesDemo, readFileDemo, setDemoPersona } from "@/lib/demo/demo-fs";
@@ -114,6 +115,24 @@ describe("ttlForPath — github", () => {
     // for immutable closed slices — on a file rewritten every time a slice in
     // that month opens, closes or flushes.
     expect(ttlForPath("memory/episodic/slices/2026/08/_index.json", "github")).toBe(60);
+  });
+
+  it("caches the records root as closed slices (Wave A — audit §3.1)", () => {
+    // The v0.19 R2 root move left `memory/records/` falling through to the
+    // 300s default: immutable closed slices re-fetched every five minutes.
+    expect(ttlForPath("memory/records/2026/08/11/1115/core.md", "github")).toBe(
+      CACHE_TTLS.CLOSED_SLICE_SECONDS
+    );
+    expect(ttlForPath("memory/records/2026/08/11/1115/core.md", "github")).toBe(86_400);
+    expect(ttlForPath("memory/records/2026/08/11/1115/previously.md", "github")).toBe(
+      CACHE_TTLS.CLOSED_SLICE_SECONDS
+    );
+  });
+
+  it("normalizes backslashes on the records root too", () => {
+    expect(
+      ttlForPath("memory\\records\\2026\\08\\11\\1115\\core.md", "github")
+    ).toBe(CACHE_TTLS.CLOSED_SLICE_SECONDS);
   });
 
   it("uses a moderate TTL for other memory files", () => {
@@ -197,11 +216,30 @@ describe("ttlForPath — local", () => {
 
 // ─── Tags ────────────────────────────────────────────────────────────────
 
+describe("the tree/blob TTLs (Wave A)", () => {
+  it("pins the tree at the mutable-metadata bound, blobs at a week", () => {
+    // Tree: writers revalidate the `tree:` tag on every commit, so the TTL
+    // only bounds pushes that bypass our write path — same class as the
+    // timeline index.
+    expect(CACHE_TTLS.TREE_SECONDS).toBe(60);
+    // Blob: the sha IS the content hash, so the entry can never be stale —
+    // a week is an eviction horizon, not a staleness bound.
+    expect(CACHE_TTLS.BLOB_SECONDS).toBe(604_800);
+  });
+});
+
 describe("cacheTagFor", () => {
   it("is kind + identity", () => {
     expect(cacheTagFor("file", "owner/repo:memory/f.md")).toBe(
       "file:owner/repo:memory/f.md"
     );
+  });
+});
+
+describe("treeCacheTag", () => {
+  it("is the tree kind over owner/repo", () => {
+    // Writers derive it from the commit's own arguments — no lookup.
+    expect(treeCacheTag("owner", "repo")).toBe("tree:owner/repo");
   });
 });
 

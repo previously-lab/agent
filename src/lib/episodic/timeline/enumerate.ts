@@ -8,14 +8,15 @@
  * Returns the *actual* set of slice relative paths ("YYYY/MM/DD/HHMM") that
  * exist on disk / in the repo.
  *
- * - GitHub: recursive Git Trees API — ONE call returns every path under the
- *   repo, so enumeration never costs N directory round-trips.
+ * - GitHub: the cached repo tree (`getRepoTree` in tools/readFile) — one
+ *   Data-Cache entry holds every path under memory/, so enumeration costs
+ *   zero API calls within the TTL and never N directory round-trips.
+ *   Truncated trees fall back to the per-directory raw walk.
  * - Local / demo: recursive walk through the existing fsListFiles layer (which
  *   routes to local-fs or demo-fs).
  */
-import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
-import { getDefaultBranch } from "@/lib/tools/batch-write";
+import { getRepoTree } from "@/lib/tools/readFile";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { fsListFiles } from "../io-helpers";
 import { walkPathsLocal } from "@/lib/tools/local-fs";
@@ -69,8 +70,9 @@ async function enumerateSliceIdsLocal(root: string): Promise<string[]> {
  * ONE tree enumeration for the light index reads (the archive field's and the
  * library's first paint): every path under `root`, no per-file reads.
  *
- * - GitHub: the same single recursive Trees call `enumerateGithubTree` makes —
- *   the tree already carries every path, so "list everything" costs one call.
+ * - GitHub: the same cached repo tree `enumerateGithubTree` uses — the tree
+ *   already carries every path, so "list everything" costs zero API calls
+ *   within the TTL.
  * - Local: one direct walk with a single simulated-latency tick (the walk is
  *   the local equivalent of the Trees call; it must not pay per-directory).
  * - Demo: the fsListFiles walk (the demo tree is tiny).
@@ -79,26 +81,25 @@ export async function enumerateTreePaths(root = "memory"): Promise<string[]> {
   const source = resolveDataSource();
   if (source === "github") {
     const { owner, repo } = getRepoConfig();
-    const octokit = getOctokit();
-    const branch = await getDefaultBranch();
-    const { data: ref } = await octokit.rest.git.getRef({
-      owner,
-      repo,
-      ref: `heads/${branch}`,
-    });
-    const { data: tree } = await octokit.rest.git.getTree({
-      owner,
-      repo,
-      tree_sha: ref.object.sha,
-      recursive: "1",
-    });
-    const prefix = `${root}/`;
-    const paths: string[] = [];
-    for (const item of tree.tree ?? []) {
-      const p = item.path ?? "";
-      if (p === root || p.startsWith(prefix)) paths.push(p);
+    // The cached memory/ tree (Wave A): one Data-Cache entry serves every
+    // enumeration within the TTL instead of one getRef+getTree pair each.
+    const tree = await getRepoTree(repo, owner);
+    // Roots outside memory/ are not in the cached tree; a truncated tree is
+    // incomplete. Both fall back to the raw walk — completeness outranks burst.
+    if (tree.truncated || (root !== "memory" && !root.startsWith("memory/"))) {
+      console.warn(
+        `[enumerate] tree ${tree.truncated ? "truncated" : `does not cover "${root}"`}; walking via list`,
+      );
+      return walkViaList(root);
     }
-    return paths;
+    if (tree.treeSha === "") return [];
+    const prefix = `${root}/`;
+    // Root itself included for parity with the old full-tree call, whose
+    // entries carried the root's own tree object.
+    return [
+      root,
+      ...tree.entries.filter((e) => e.path.startsWith(prefix)).map((e) => e.path),
+    ];
   }
   if (source === "local") return walkPathsLocal(root);
   return walkViaList(root);
@@ -122,28 +123,23 @@ async function walkViaList(root: string, maxEntries = 50_000): Promise<string[]>
 
 async function enumerateGithubTree(root: string): Promise<string[]> {
   const { owner, repo } = getRepoConfig();
-  const octokit = getOctokit();
-  // The repo's default branch, not a hardcoded "main" (see batch-write.ts).
-  const branch = await getDefaultBranch();
-  const { data: ref } = await octokit.rest.git.getRef({
-    owner,
-    repo,
-    ref: `heads/${branch}`,
-  });
-  const { data: tree } = await octokit.rest.git.getTree({
-    owner,
-    repo,
-    tree_sha: ref.object.sha,
-    recursive: "1",
-  });
+  // The cached memory/ tree (Wave A). Both callers' roots (records + legacy
+  // slices) live under memory/, so the cached tree always covers them.
+  const tree = await getRepoTree(repo, owner);
+  if (tree.truncated) {
+    // A truncated tree is incomplete; fall back to the per-directory walk
+    // (fsListFiles itself falls back to raw listFiles under a truncated
+    // tree). Completeness outranks burst.
+    console.warn("[enumerate] repo tree truncated; enumerating via list");
+    return enumerateViaList(root);
+  }
 
   const ids: string[] = [];
   const prefix = `${root}/`;
-  for (const item of tree.tree ?? []) {
-    if (item.type !== "tree") continue;
-    const p = item.path ?? "";
-    if (!p.startsWith(prefix)) continue;
-    const rel = p.slice(prefix.length);
+  for (const e of tree.entries) {
+    if (e.type !== "tree") continue;
+    if (!e.path.startsWith(prefix)) continue;
+    const rel = e.path.slice(prefix.length);
     if (SLICE_PATH_RE.test(rel)) ids.push(rel);
   }
   return ids;

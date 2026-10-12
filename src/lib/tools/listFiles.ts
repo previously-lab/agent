@@ -6,15 +6,22 @@ import type { ReadOptions } from "@/lib/cache/data-cache";
  * List files and directories in the given path.
  * Only paths under the allowed directories are listable.
  *
- * DELIBERATELY NOT CACHED, unlike `readFile` — the one GitHub read that goes
- * straight to the API. Caching is tag-invalidated, and a tag names a FILE:
- * writing `…/1200/timeline/core.md` revalidates exactly that entry and
- * nothing revalidates the listing of `…/1200/` it just appeared in. A listing
- * is how `timeline/enumerate.ts` DISCOVERS slice directories, so a cached one
- * could miss a slice another instance created seconds ago and quietly drop it
- * from the catalog for the rest of the TTL. Directory membership has no
- * writer-revalidated tag, so it gets no cache and no TTL — there is nothing
- * to bound.
+ * RAW AND UNCACHED by design — this module is the one GitHub listing that
+ * always goes straight to the API. What changed in Wave A: most read
+ * surfaces no longer call it. Directory membership is now answered from the
+ * cached `memory/` subtree (`listRepoChildren` in readFile.ts), whose
+ * staleness IS bounded — writers revalidate the `tree:` tag on every commit
+ * (the invariant this module's old comment cited as impossible: a tag names
+ * a file, and no tag revalidated the listing a file appeared in; the tree
+ * tag is exactly that handle), and a 60s TTL bounds pushes that bypass our
+ * write path. What remains here, raw on purpose:
+ *
+ *   - the fallback when the cached tree is TRUNCATED (a partial listing
+ *     cannot truthfully answer "does this path exist");
+ *   - roots the cached tree does not cover (tasks/, sessions/ — only
+ *     `memory/` is in the subtree);
+ *   - any caller whose correctness needs the listing another instance wrote
+ *     THIS SECOND (tag revalidation is prompt, not instantaneous).
  *
  * (The demo backend's listing IS cached — see `listFilesDemo` — because the
  * demo dataset is read-only: nothing can ever appear in a published

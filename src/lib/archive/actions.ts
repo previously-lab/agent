@@ -1,13 +1,16 @@
 "use server";
 
 /**
- * The archive field's aggregation read (v0.25a §四) — ONE round trip that
- * turns the case tree into the grid's data. `getCaseShelf` (the library's
- * own read) cannot answer the field's two questions — a pile's THICKNESS
- * needs the piece count, and its TIME BUCKET needs the last write, not just
- * the birth — and `src/lib/episodic/**` is not this surface's to extend, so
- * the field's pipeline lives here, built from the same read-only primitives
- * (`fsListFiles` / `fsReadFile` / the case parsers) the shelf uses.
+ * The archive field's read surface (v0.25a §四). The field's first paint is
+ * the LIGHT INDEX below (`getArchiveIndex` — one tree enumeration, zero file
+ * reads); the old whole-read aggregation (`getArchiveField`) was retired with
+ * it and deleted in Wave B (dead since 4cfe4eb). `getCaseShelf` (the
+ * library's own read) cannot answer the field's two questions — a pile's
+ * THICKNESS needs the piece count, and its TIME BUCKET needs the last write,
+ * not just the birth — and `src/lib/episodic/**` is not this surface's to
+ * extend, so the field's pipeline lives here, built from the same read-only
+ * primitives (`fsListFiles` / `fsReadFile` / the case parsers) the shelf
+ * uses.
  *
  * WHAT A PILE IS. One pile = one case: its `index.md` plus its pieces. The
  * volume (`pages`) is the document count — the index plus its pieces — the
@@ -93,80 +96,6 @@ async function mapLimited<T, R>(
     }),
   );
   return out;
-}
-
-/** One case directory → one pile, or null when the case has no readable
- *  `index.md` (the shelf's own rule: a case without an index is not one). */
-async function readPile(
-  category: CaseCategory,
-  name: string,
-): Promise<ArchivePile | null> {
-  const raw = await fsReadFile(caseIndexPath(category, name)).catch(() => null);
-  if (raw === null) return null;
-  const doc = parseCaseDoc(raw, { category, caseName: name, fileName: "index.md" });
-
-  const dirEntries = await fsListFiles(caseDirPath(category, name)).catch(
-    () => [],
-  );
-  const pieceDates = dirEntries
-    .filter(
-      (e) =>
-        e.type === "file" &&
-        e.name !== "index.md" &&
-        e.name.endsWith(".md") &&
-        isValidPieceFileName(e.name),
-    )
-    .map((e) => parsePieceFileName(e.name)?.date ?? null)
-    .filter((d): d is string => d !== null);
-
-  const updated = [doc.opened, ...pieceDates].reduce((a, b) =>
-    b > a ? b : a,
-  );
-  return {
-    kind: "case",
-    category,
-    name,
-    ref: `${category}/${name}`,
-    opened: doc.opened,
-    updated,
-    pages: 1 + pieceDates.length,
-  };
-}
-
-/**
- * The field's whole read: every category's case directories, each point-read
- * for its header and piece list, plus the records aggregation (the slice
- * enumeration + one header read per slice, for the record piles' turn
- * counts). Missing category directories list as empty (pre-migration is a
- * normal state — the shelf's own rule).
- */
-export async function getArchiveField(
-  persona?: string,
-): Promise<ArchiveFieldData> {
-  if (persona) setDemoPersona(persona);
-
-  const [perCategory, records] = await Promise.all([
-    Promise.all(
-      CASE_CATEGORIES.map(async (category): Promise<ArchivePile[]> => {
-        let entries: Awaited<ReturnType<typeof fsListFiles>>;
-        try {
-          entries = await fsListFiles(`memory/${category}`);
-        } catch {
-          return [];
-        }
-        const names = entries
-          .filter((e) => e.type === "dir" && isValidCaseName(e.name))
-          .map((e) => e.name);
-        const piles = await mapLimited(names, ARCHIVE_READ_CONCURRENCY, (name) =>
-          readPile(category, name),
-        );
-        return piles.filter((p): p is ArchivePile => p !== null);
-      }),
-    ),
-    readArchiveRecords(),
-  ]);
-
-  return { piles: perCategory.flat(), records };
 }
 
 // ─── THE LIGHT INDEX (perf pass 2026-10-12) ────────────────────────────────
@@ -471,9 +400,12 @@ export async function getDossierDoc(
 // refs; THIS action answers the only question the paper asks of the server:
 // which of them name a document that EXISTS. Only alive refs render as
 // links — a dead one stays plain text under a dotted hairline (visible,
-// never blocking — the case-refs axiom). Reads reuse the same paths the
-// opens use: the case grammar's dual-root candidate list, the slice store,
-// the Dossier table.
+// never blocking — the case-refs axiom). Wave B: EXISTENCE IS A PATH FACT —
+// one slice of the repo's path set (the cached tree on GitHub, a walk on
+// local/demo) answers every case/piece/legacy/record ref with ZERO point
+// reads; the case grammar's dual-root candidate list collapses into the
+// tree's merged path view. The one exception is the Dossier, whose alive
+// rule is a NON-EMPTY body (unchanged) — two blob-cached reads at most.
 
 /** One candidate's verdict. `kind` is the ref's vocabulary (refs.ts routes
  *  records/dossiers before the case grammar); `door` is set for LIVE record
@@ -487,23 +419,12 @@ export interface VerifiedRef {
   door?: { date: string; inHotelWindow: boolean };
 }
 
-/** First readable path of a candidate list, or null — the same probe the
- *  shelf's reads run (episodic keeps its own private copy; a "use server"
- *  module may not export sync helpers, so the six lines live here too). */
-async function firstExisting(paths: readonly string[]): Promise<boolean> {
-  for (const path of paths) {
-    const raw = await fsReadFile(path).catch(() => null);
-    if (raw !== null) return true;
-  }
-  return false;
-}
-
 /**
  * Verify a batch of candidate refs. Bounded (the desk's tokenizer can fill
  * a long document — the cap keeps one open from fanning out unbounded
- * probes); duplicates collapse before any read. The slice enumeration runs
- * AT MOST ONCE per call, and only when a live record ref needs its window
- * rank.
+ * probes); duplicates collapse before any read. One path-set enumeration per
+ * call answers every existence question; the slice enumeration runs AT MOST
+ * ONCE more, and only when a live record ref needs its window rank.
  */
 export async function verifyRefs(
   refs: string[],
@@ -512,41 +433,60 @@ export async function verifyRefs(
   if (persona) setDemoPersona(persona);
   const unique = [...new Set(refs)].slice(0, 64);
 
-  const results = await mapLimited(unique, ARCHIVE_READ_CONCURRENCY, async (ref) => {
-    const record = parseRecordRef(ref);
-    if (record) {
-      const entry = await sliceEntryFromDisk(
-        record.sliceId.split("-").join("/"),
-      ).catch(() => null);
+  // The path set this batch resolves against. On GitHub this is the cached
+  // repo tree (zero API calls within its TTL); a dead ref therefore costs
+  // NOTHING — the old per-candidate probe reads re-paid one uncached API
+  // call per miss on EVERY document open.
+  const pathSet = new Set(
+    await enumerateTreePaths("memory").catch(() => [] as string[]),
+  );
+
+  const results = await Promise.all(
+    unique.map(async (ref): Promise<VerifiedRef> => {
+      const record = parseRecordRef(ref);
+      if (record) {
+        // Alive = the slice's core.md is in the tree, on either root — the
+        // existence question the slice store answered by reading it. The
+        // door's date is the id's own (the store derives it from the same
+        // path segments), so no header read is needed at all.
+        const rel = record.sliceId.split("-").join("/");
+        const alive =
+          pathSet.has(`memory/records/${rel}/core.md`) ||
+          pathSet.has(`memory/episodic/slices/${rel}/timeline/core.md`);
+        return {
+          ref,
+          kind: "record",
+          alive,
+          // The window rank resolves below, once, across the batch.
+          door: alive
+            ? { date: record.sliceId.slice(0, 10), inHotelWindow: false }
+            : undefined,
+        };
+      }
+      const dossier = parseDossierRef(ref);
+      if (dossier) {
+        const raw = await fsReadFile(DOSSIER_PATHS[dossier.name]).catch(() => null);
+        return {
+          ref,
+          kind: "dossier",
+          alive: raw !== null && raw.trim().length > 0,
+        };
+      }
+      const parsed = parseCaseRef(ref);
+      if (!parsed) return { ref, kind: "case", alive: false };
       return {
         ref,
-        kind: "record" as const,
-        alive: entry !== null,
-        // The window rank resolves below, once, across the batch.
-        door: entry ? { date: entry.date, inHotelWindow: false } : undefined,
+        kind: parsed.kind,
+        alive: resolveCaseRefPaths(parsed).some((p) => pathSet.has(p)),
       };
-    }
-    const dossier = parseDossierRef(ref);
-    if (dossier) {
-      const raw = await fsReadFile(DOSSIER_PATHS[dossier.name]).catch(() => null);
-      return {
-        ref,
-        kind: "dossier" as const,
-        alive: raw !== null && raw.trim().length > 0,
-      };
-    }
-    const parsed = parseCaseRef(ref);
-    if (!parsed) return { ref, kind: "case" as const, alive: false };
-    return {
-      ref,
-      kind: parsed.kind,
-      alive: await firstExisting(resolveCaseRefPaths(parsed)),
-    };
-  });
+    }),
+  );
 
   // The hotel window's membership: the newest HOTEL_WINDOW_DOORS slices have
   // doors (game-shell derives its corridor from the same constant). One
-  // enumeration per call, only when live records ask for it.
+  // enumeration per call (tree-backed since Wave A — zero extra API calls),
+  // only when live records ask for it. The newest-first ordering is the same
+  // one enumerateSliceIds callers always sorted into.
   if (results.some((r) => r.kind === "record" && r.alive)) {
     const rels = await enumerateSliceIds().catch(() => [] as string[]);
     const newestFirst = rels

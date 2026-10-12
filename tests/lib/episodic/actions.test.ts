@@ -21,6 +21,24 @@ const mocks = vi.hoisted(() => ({
   readSlicePart: vi.fn(),
   parseSlice: vi.fn(),
   readPreviously: vi.fn(),
+  // The previously.md tree guard's seams (Wave B): the backend selector and
+  // the cached-tree read. Pinned to "local" per test — the github cases set
+  // it explicitly.
+  resolveDataSource: vi.fn(() => "local"),
+  getRepoTree: vi.fn(),
+}));
+
+vi.mock("@/lib/data-source/resolve", () => ({
+  resolveDataSource: mocks.resolveDataSource,
+  isDemo: vi.fn(() => false),
+}));
+
+vi.mock("@/lib/capabilities", () => ({
+  getRepoConfig: () => ({ owner: "o", repo: "r" }),
+}));
+
+vi.mock("@/lib/tools/readFile", () => ({
+  getRepoTree: mocks.getRepoTree,
 }));
 
 vi.mock("@/lib/demo/demo-fs", () => ({
@@ -49,6 +67,18 @@ vi.mock("@/lib/episodic/paths", () => ({
   readSlicePart: mocks.readSlicePart,
   // Faithful to the real converter: "2026-08-11-1001" → "2026/08/11/1001".
   sliceIdToRelPath: (id: string) => id.split("-").slice(0, 4).join("/"),
+  // Faithful dual-root candidates (paths.ts): new root first, legacy on a
+  // miss — the legacy previously.md sits directly in the slice dir while the
+  // other parts live under timeline/.
+  slicePartPathCandidates: (id: string, part: string) => {
+    const rel = id.split("-").slice(0, 4).join("/");
+    return [
+      `memory/records/${rel}/${part}.md`,
+      part === "previously"
+        ? `memory/episodic/slices/${rel}/previously.md`
+        : `memory/episodic/slices/${rel}/timeline/${part}.md`,
+    ];
+  },
 }));
 
 vi.mock("@/lib/config/loader", () => ({
@@ -62,6 +92,7 @@ import {
   getSliceContent,
   getArrivalState,
   getTimelineCatalogPage,
+  getTimelineSkeleton,
 } from "@/lib/episodic/actions";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────
@@ -149,6 +180,10 @@ beforeEach(() => {
   mocks.loadUserConfig.mockResolvedValue({
     slicing: { maxSliceMinutes: 30, maxTurnsPerSlice: 50, idleGapMinutes: 30 },
   });
+  // clearAllMocks keeps one-time return values' base overrides, so re-pin the
+  // two Wave-B seams deterministically (a github-branch test flips them).
+  mocks.resolveDataSource.mockReturnValue("local");
+  mocks.getRepoTree.mockResolvedValue({ treeSha: "", entries: [], truncated: false });
 });
 
 // ─── getSlicePageWithContent ─────────────────────────────────────────────
@@ -480,6 +515,99 @@ describe("getSliceContent", () => {
     mocks.readSlicePart.mockRejectedValue(new Error("gone"));
 
     expect(await getSliceContent("2026-08-11-1000")).toBeNull();
+  });
+
+  // ─── The previously.md tree-existence guard (Wave B) ──────────────────
+  // On GitHub the cached tree answers "does either root hold previously.md"
+  // with zero API calls; unknown tree state means "probe as before".
+
+  function seedGithubTree(paths: string[], truncated = false): void {
+    mocks.resolveDataSource.mockReturnValue("github");
+    mocks.getRepoTree.mockResolvedValue({
+      treeSha: "t",
+      truncated,
+      entries: paths.map((p) => ({ path: p, type: "blob", sha: `sha:${p}` })),
+    });
+  }
+
+  it("skips the previously read when neither root holds the file", async () => {
+    seedRead(1);
+    seedGithubTree(["memory/records/2026/08/11/1000/core.md"]);
+
+    const content = await getSliceContent("2026-08-11-1000");
+
+    expect(content).not.toBeNull();
+    expect(content!.previously).toBeNull();
+    expect(mocks.readPreviously).not.toHaveBeenCalled();
+  });
+
+  it("reads previously.md when the tree carries it — on the LEGACY root too", async () => {
+    seedRead(1);
+    seedGithubTree([
+      "memory/records/2026/08/11/1000/core.md",
+      "memory/episodic/slices/2026/08/11/1000/previously.md",
+    ]);
+
+    const content = await getSliceContent("2026-08-11-1000");
+
+    expect(mocks.readPreviously).toHaveBeenCalledTimes(1);
+    expect(content!.previously).toBe("previously card");
+  });
+
+  it("probes as before when the tree is truncated or the fetch fails", async () => {
+    seedRead(1);
+    seedGithubTree([], true);
+
+    await getSliceContent("2026-08-11-1000");
+    expect(mocks.readPreviously).toHaveBeenCalledTimes(1);
+
+    mocks.getRepoTree.mockRejectedValue(new Error("boom"));
+    await getSliceContent("2026-08-11-1000");
+    expect(mocks.readPreviously).toHaveBeenCalledTimes(2);
+  });
+
+  it("never consults the tree on the local backend", async () => {
+    seedRead(1);
+    // resolveDataSource is pinned to "local" by the suite's beforeEach.
+    const content = await getSliceContent("2026-08-11-1000");
+
+    expect(mocks.getRepoTree).not.toHaveBeenCalled();
+    expect(content!.previously).toBe("previously card");
+  });
+});
+
+// ─── getTimelineSkeleton (Wave B: the enumeration-only catalog) ──────────
+
+describe("getTimelineSkeleton", () => {
+  it("returns one skeleton per enumerated id with ZERO header point reads", async () => {
+    const entries = seedLive(3);
+
+    const skeleton = await getTimelineSkeleton();
+
+    expect(skeleton.map((e) => e.id)).toEqual(entries.map((e) => e.id));
+    expect(mocks.sliceEntryFromDisk).not.toHaveBeenCalled();
+    // Derived from the id alone: date + UTC start to the minute; the body
+    // fields stay empty (callers that need them use the paged readers).
+    const first = skeleton[0];
+    expect(first.date).toBe(first.id.slice(0, 10));
+    expect(first.start).toBe(
+      `${first.date}T${first.id.slice(11, 13)}:${first.id.slice(13, 15)}:00.000Z`,
+    );
+    expect(first.status).toBe("closed");
+    expect(first.focus).toBe("");
+    expect(first.needs_marking).toBe(true);
+  });
+
+  it("returns an empty catalog when the enumeration finds no slices", async () => {
+    mocks.enumerateSliceIds.mockResolvedValue([]);
+    expect(await getTimelineSkeleton()).toEqual([]);
+    expect(mocks.sliceEntryFromDisk).not.toHaveBeenCalled();
+  });
+
+  it("forwards the demo persona", async () => {
+    seedLive(1);
+    await getTimelineSkeleton("alice");
+    expect(mocks.setDemoPersona).toHaveBeenCalledWith("alice");
   });
 });
 

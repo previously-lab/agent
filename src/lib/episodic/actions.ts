@@ -5,7 +5,9 @@ import { resolveDataSource } from "@/lib/data-source/resolve";
 import { getUserName } from "@/lib/identity";
 import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { parseSlice, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
-import { readSlicePart, sliceIdToRelPath } from "./paths";
+import { readSlicePart, sliceIdToRelPath, slicePartPathCandidates } from "./paths";
+import { getRepoTree } from "@/lib/tools/readFile";
+import { getRepoConfig } from "@/lib/capabilities";
 import { fsListFiles, fsReadFile } from "./io-helpers";
 import {
   DATED_DOC_KINDS,
@@ -445,6 +447,22 @@ export async function getTimelineCatalog(): Promise<TimelineSliceEntry[]> {
 }
 
 /**
+ * The enumeration-only catalog (Wave B, audit §4.4): one `skeletonEntry` per
+ * slice id — id, date, start, all derived from the id ALONE — with ZERO
+ * header point reads. The game corridor renders from exactly these fields,
+ * so its cold mount costs one tree-backed enumeration instead of the full
+ * per-slice header sweep `getTimelineCatalog` pays. Callers that need focus/
+ * summary/turn counts use the paged readers, unchanged.
+ */
+export async function getTimelineSkeleton(
+  persona?: string,
+): Promise<TimelineSliceEntry[]> {
+  if (persona) setDemoPersona(persona);
+  const ids = await listLiveSliceIds();
+  return ids.map(skeletonEntry);
+}
+
+/**
  * One slice's start time, or null when no such slice exists (or its header
  * is unreadable).
  *
@@ -569,6 +587,27 @@ export interface SliceContentOptions {
 const FRAME_TURN_COUNT = 4;
 const FRAME_TURN_CHARS = 280;
 
+/**
+ * The previously.md leg's tree-existence guard (Wave B, audit §4.3): on
+ * GitHub the cached repo tree answers "does EITHER root hold the file" with
+ * zero API calls, so a slice without a previously.md never pays the
+ * dual-root probe's misses (which errors-are-never-cached made permanent —
+ * re-paid on every open, forever). Unknown tree state (a truncated listing,
+ * a fetch failure) means "probe as before": the reads then answer for
+ * themselves. The local and demo backends always probe — a miss there is a
+ * local stat or a demo-fs lookup, not an API call.
+ */
+async function hasPreviouslyOnDisk(sliceId: string): Promise<boolean> {
+  if (resolveDataSource() !== "github") return true;
+  const { owner, repo } = getRepoConfig();
+  const tree = await getRepoTree(repo, owner).catch(() => null);
+  if (!tree || tree.truncated) return true;
+  const paths = new Set(tree.entries.map((e) => e.path));
+  return slicePartPathCandidates(sliceId, "previously").some((p) =>
+    paths.has(p),
+  );
+}
+
 /** Cut at a word boundary near the limit and strip trailing punctuation so
  *  the ellipsis doesn't land mid-word or after a comma. */
 function truncateFrameTurn(content: string): string {
@@ -600,11 +639,14 @@ export async function getSliceContent(
     // core slice body (dual-root: new records root first, legacy slices root
     // on a miss) + previously.md ride in PARALLEL — they don't depend
     // on each other, and serializing them doubled the card-open latency.
-    // A missing previously.md is normal (not every slice has one) and stays
-    // a null, exactly as before.
+    // The previously leg fires only when the tree-existence guard says the
+    // file is there (Wave B); a missing previously.md is normal (not every
+    // slice has one) and stays a null, exactly as before.
     const [raw, previously] = await Promise.all([
       readSlicePart(sliceId, "core"),
-      readPreviously(sliceId).catch(() => null),
+      hasPreviouslyOnDisk(sliceId).then((has) =>
+        has ? readPreviously(sliceId).catch(() => null) : null,
+      ),
     ]);
     const slice = parseSlice(raw);
 

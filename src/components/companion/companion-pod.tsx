@@ -77,7 +77,7 @@ import {
 } from "@/lib/chat/hq-stream";
 import {
   getEpisodicState,
-  getTimelineCatalog,
+  getTimelineSkeleton,
 } from "@/lib/episodic/actions";
 import {
   NarrateError,
@@ -643,18 +643,18 @@ export function CompanionPod({
   const memoryMapSeqRef = useRef(0);
   const loadMemoryMap = useCallback(async () => {
     const seq = ++memoryMapSeqRef.current;
-    const [episodic, catalog] = await Promise.all([
+    const [episodic, skeleton] = await Promise.all([
       getEpisodicState().catch(() => null),
-      getTimelineCatalog().catch(() => null),
+      getTimelineSkeleton().catch(() => null),
     ]);
     // A close/reopen superseded this read — its snapshot would be stale.
     if (seq !== memoryMapSeqRef.current) return;
-    setMemoryMapFailed(!episodic && !catalog);
+    setMemoryMapFailed(!episodic && !skeleton);
     setMemoryMap(
-      episodic || catalog
+      episodic || skeleton
         ? {
-            sliceCount: catalog?.length ?? 0,
-            latestSliceId: catalog?.at(-1)?.id ?? null,
+            sliceCount: skeleton?.length ?? 0,
+            latestSliceId: skeleton?.at(-1)?.id ?? null,
             activeSliceId: episodic?.active?.slice_id ?? null,
             activeStatus: episodic?.active?.status ?? null,
           }

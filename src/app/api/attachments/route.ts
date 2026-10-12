@@ -58,8 +58,12 @@ export async function GET(request: Request): Promise<Response> {
       headers: {
         "Content-Type": attachmentMediaType(fileName) || mediaType,
         "Content-Length": String(data.byteLength),
-        // Attachments are born-never-renamed — cache privately, briefly.
-        "Cache-Control": "private, max-age=300",
+        // Attachments are born-never-renamed (a same-name repeat lands under
+        // a deterministic `-<n>` suffix, never an overwrite), so the bytes
+        // behind a URL never change — cache privately for a day, immutable.
+        // Server-side the read rides the content-addressed blob cache
+        // (Wave A), so even a browser miss re-fetches nothing unchanged.
+        "Cache-Control": "private, max-age=86400, immutable",
       },
     });
   } catch {

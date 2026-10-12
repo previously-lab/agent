@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   fsReadFile: vi.fn(),
   sliceEntryFromDisk: vi.fn(),
   enumerateSliceIds: vi.fn(),
+  enumerateTreePaths: vi.fn(),
 }));
 
 vi.mock("@/lib/demo/demo-fs", () => ({
@@ -25,6 +26,7 @@ vi.mock("@/lib/episodic/timeline/store", () => ({
 
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
   enumerateSliceIds: mocks.enumerateSliceIds,
+  enumerateTreePaths: mocks.enumerateTreePaths,
 }));
 
 vi.mock("@/lib/episodic/manager", () => ({
@@ -61,25 +63,29 @@ beforeEach(() => {
   mocks.fsReadFile.mockRejectedValue(new Error("ENOENT"));
   mocks.sliceEntryFromDisk.mockResolvedValue(null);
   mocks.enumerateSliceIds.mockResolvedValue([]);
+  mocks.enumerateTreePaths.mockResolvedValue([]);
 });
 
 describe("verifyRefs", () => {
-  it("a case ref is alive when its index.md reads, dead when nothing does", async () => {
-    mocks.fsReadFile.mockImplementation(async (path: string) => {
-      if (path === "memory/research/手机调研/index.md") return INDEX_RAW("2026-09-01");
-      throw new Error("ENOENT");
-    });
+  it("a case ref is alive when its index.md is in the tree, dead when absent", async () => {
+    // Wave B: existence is membership in the enumerated path set (the cached
+    // tree on GitHub) — no per-candidate probe reads anymore.
+    mocks.enumerateTreePaths.mockResolvedValue([
+      "memory",
+      "memory/research",
+      "memory/research/手机调研",
+      "memory/research/手机调研/index.md",
+    ]);
     const [alive, dead] = await verifyRefs(["research/手机调研", "research/没有这个"]);
     expect(alive).toMatchObject({ kind: "case", alive: true });
     expect(dead).toMatchObject({ kind: "case", alive: false });
   });
 
-  it("a piece ref probes the piece path, and a legacy name the old roots", async () => {
-    mocks.fsReadFile.mockImplementation(async (path: string) => {
-      if (path === "memory/research/手机调研/2026-09-08-报价篇.md") return "x";
-      if (path === "memory/docs/topic/用户手机.md") return "x";
-      throw new Error("ENOENT");
-    });
+  it("a piece ref resolves on its piece path, and a legacy name on the old roots", async () => {
+    mocks.enumerateTreePaths.mockResolvedValue([
+      "memory/research/手机调研/2026-09-08-报价篇.md",
+      "memory/docs/topic/用户手机.md",
+    ]);
     const [piece, legacy] = await verifyRefs([
       "research/手机调研/2026-09-08-报价篇",
       "用户手机",
@@ -88,12 +94,12 @@ describe("verifyRefs", () => {
     expect(legacy).toMatchObject({ kind: "legacy", alive: true });
   });
 
-  it("a record ref reads the slice store and carries the door facts", async () => {
-    mocks.sliceEntryFromDisk.mockImplementation(async (rel: string) =>
-      rel === "2026/10/05/1430"
-        ? { id: "2026-10-05-1430", date: "2026-10-05", turn_count: 2 }
-        : null,
-    );
+  it("a record ref is alive on core.md membership — on EITHER root — and its door date is the id's own", async () => {
+    // The legacy root's core.md lives under timeline/ (paths.ts) — membership
+    // there must answer alive exactly as the new root does.
+    mocks.enumerateTreePaths.mockResolvedValue([
+      "memory/episodic/slices/2026/10/05/1430/timeline/core.md",
+    ]);
     mocks.enumerateSliceIds.mockResolvedValue([
       "2026/10/06/0900",
       "2026/10/05/1430",
@@ -111,12 +117,24 @@ describe("verifyRefs", () => {
     expect(gone.door).toBeUndefined();
   });
 
+  it("dead case/piece/record refs cost ZERO point reads", async () => {
+    // The audit's core promise: a document rich in dead refs re-pays nothing
+    // — the path set (one tree slice) answers every existence question.
+    mocks.enumerateTreePaths.mockResolvedValue(["memory"]);
+    const out = await verifyRefs([
+      "research/没有这个",
+      "research/手机调研/2026-09-08-报价篇",
+      "records/2020-01-01-0000",
+    ]);
+    expect(out.map((r) => r.alive)).toEqual([false, false, false]);
+    expect(mocks.fsReadFile).not.toHaveBeenCalled();
+    expect(mocks.sliceEntryFromDisk).not.toHaveBeenCalled();
+  });
+
   it("a slice on disk but past the window is alive without a door", async () => {
-    mocks.sliceEntryFromDisk.mockResolvedValue({
-      id: "2020-01-01-0000",
-      date: "2020-01-01",
-      turn_count: 1,
-    });
+    mocks.enumerateTreePaths.mockResolvedValue([
+      "memory/records/2020/01/01/0000/core.md",
+    ]);
     // The enumeration's newest-first rank past 200: 201 newer slices.
     mocks.enumerateSliceIds.mockResolvedValue([
       ...Array.from(
@@ -130,6 +148,8 @@ describe("verifyRefs", () => {
   });
 
   it("a dossier ref is alive when its document reads non-empty", async () => {
+    // The dossier's rule is a non-empty BODY, not mere existence — the one
+    // kind that still reads (blob-cached by sha on GitHub).
     mocks.fsReadFile.mockImplementation(async (path: string) => {
       if (path === "memory/episodic/current-previously.md") return "card";
       throw new Error("ENOENT");
@@ -137,6 +157,12 @@ describe("verifyRefs", () => {
     const [alive, dead] = await verifyRefs(["dossier/previously", "dossier/direction"]);
     expect(alive.alive).toBe(true);
     expect(dead.alive).toBe(false);
+  });
+
+  it("a failed path-set enumeration fails dead, never throws", async () => {
+    mocks.enumerateTreePaths.mockRejectedValue(new Error("boom"));
+    const [r] = await verifyRefs(["research/手机调研"]);
+    expect(r).toMatchObject({ kind: "case", alive: false });
   });
 
   it("dedupes and never throws on unparseable input", async () => {

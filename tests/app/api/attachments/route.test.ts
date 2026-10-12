@@ -101,6 +101,13 @@ describe("GET /api/attachments — the happy path", () => {
     expect(Buffer.compare(body, JPEG)).toBe(0);
   });
 
+  it("caches privately for a day, immutable — attachments are born-never-renamed (Wave B)", async () => {
+    io.files.set("memory/research/手机调研/attachments/2026-09-05-photo.jpg", JPEG);
+    const res = await route.GET(requestFor("research/手机调研/2026-09-05-photo.jpg"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("private, max-age=86400, immutable");
+  });
+
   it("URL-decodes the reference (the client sends it encoded)", async () => {
     io.files.set("memory/research/手机调研/attachments/2026-09-05-截图.png", JPEG);
     const res = await route.GET(requestFor("research/手机调研/2026-09-05-截图.png"));

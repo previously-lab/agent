@@ -24,13 +24,17 @@
  * cycle. (The writers are retired since v0.19 R3 — the note stays as the
  * reason this module exists separately.)
  */
-import { readFile as readFileGitHub } from "@/lib/tools/readFile";
+import {
+  readFile as readFileGitHub,
+  readFileViaTree,
+  listRepoChildren,
+  readBinaryFileViaTree,
+} from "@/lib/tools/readFile";
 import {
   writeFile as writeFileGitHub,
   writeBinaryFile as writeBinaryFileGitHub,
   deleteFile as deleteFileGitHub,
 } from "@/lib/tools/writeFile";
-import { listFiles as listFilesGitHub } from "@/lib/tools/listFiles";
 import { commitBatchToGitHub, type BatchEntry } from "@/lib/tools/batch-write";
 import {
   readFileLocal,
@@ -196,7 +200,16 @@ export async function fsReadFile(
   if (DEMO_MODE) return readFileDemo(path, undefined, opts);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
-    return readFileGitHub(path, repo, owner, opts);
+    // Wave B central reroute: display reads go through the content-addressed
+    // tree + blob layer — the path's sha comes from the cached tree (60s,
+    // tag-invalidated on every commit), the bytes from the permanent blob
+    // cache, and the 1MB cap is enforced from the tree entry BEFORE any blob
+    // fetch. `fresh` keeps the direct per-file read: a read that FEEDS A
+    // WRITE must see the bytes on the other side NOW, not as of the tree's
+    // TTL. Both legs raise the same error prefixes (`File not found:` …) —
+    // the agent tools' domain-error classifier matches on them.
+    if (opts?.fresh) return readFileGitHub(path, repo, owner, opts);
+    return readFileViaTree(path, repo, owner, opts);
   }
   return readFileLocal(path);
 }
@@ -311,9 +324,10 @@ export async function fsWriteBinaryFile(
  * file is missing; the caller surfaces that as a visible error.
  */
 export async function fsReadBinaryFile(path: string): Promise<Buffer> {
-  // Whitelist re-check: the GitHub branch below bypasses readFile.ts (where
-  // the text read path validates), so the check lives at the seam — same
-  // rule, same message as the single-write/single-read paths.
+  // Whitelist re-check at the seam: readBinaryFileViaTree validates again
+  // inside readFile.ts, but the check stays here so this entry point fails
+  // with the same message as the single-write/single-read paths regardless
+  // of the inner layer.
   if (!isPathAllowed(path)) {
     throw new Error(
       `Access denied: path "${path}" is outside allowed directories`,
@@ -325,12 +339,9 @@ export async function fsReadBinaryFile(path: string): Promise<Buffer> {
   }
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
-    const octokit = (await import("@/lib/github/client")).getOctokit();
-    const res = await octokit.rest.repos.getContent({ owner, repo, path });
-    if (Array.isArray(res.data) || !("content" in res.data) || typeof res.data.content !== "string") {
-      throw new Error(`Not a file: "${path}"`);
-    }
-    return Buffer.from(res.data.content.replace(/\n/g, ""), "base64");
+    // Content-addressed blob read (Wave A): the blob cache keys on the git
+    // sha, so an unchanged attachment is a zero-API-call hit for a week.
+    return readBinaryFileViaTree(path, repo, owner);
   }
   return readBinaryFileLocal(path);
 }
@@ -341,7 +352,10 @@ export async function fsListFiles(
   if (DEMO_MODE) return listFilesDemo(path);
   if (USE_GITHUB) {
     const { owner, repo } = getRepoConfig();
-    return listFilesGitHub(path, repo, owner);
+    // Tree-backed listing (Wave A): served from the cached repo tree within
+    // the TTL; falls back to the raw listFiles walk for non-memory roots or
+    // a truncated tree.
+    return listRepoChildren(path, repo, owner);
   }
   return listFilesLocal(path);
 }

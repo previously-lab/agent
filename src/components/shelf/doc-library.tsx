@@ -69,13 +69,15 @@ import {
   type CaseShelf,
 } from "@/lib/episodic/actions";
 import {
+  getArchiveIndex,
   getArchiveRecordIndex,
   getDossierList,
+  type ArchiveIndex,
   type ArchiveRecord,
   type DossierEntry,
 } from "@/lib/archive/actions";
 import type { DossierDocName } from "@/lib/archive/refs";
-import type { CaseCategory } from "@/lib/docs";
+import { CASE_CATEGORIES, type CaseCategory } from "@/lib/docs";
 import { dateTimeFormat } from "@/lib/time/formatter-cache";
 import {
   bucketKeyFor,
@@ -113,6 +115,7 @@ export function DocLibrary({ persona }: { persona?: string }) {
   const tField = useTranslations("archiveField");
   const locale = useLocale();
   const { deskDoc, openDesk, archiveCategory, setArchiveCategory } = useShell();
+  const [archiveIndex, setArchiveIndex] = useState<ArchiveIndex | null>(null);
   const [caseShelf, setCaseShelf] = useState<CaseShelf | null>(null);
   const [shelfFailed, setShelfFailed] = useState(false);
   const [dossier, setDossier] = useState<DossierEntry[] | null>(null);
@@ -126,12 +129,22 @@ export function DocLibrary({ persona }: { persona?: string }) {
 
   // The shelf loads ONCE at mount — the column is a permanent pane fixture,
   // not a dialog that refetches per open. Detail still rides one round trip
-  // per case open, exactly like the dialog did. The Dossier's availability
-  // read and the Records' records-only index ride the same mount effect
-  // (parallel, independent — a missing self-document dims its row and a
-  // failed records read hides its section, neither errors the shelf).
+  // per case open, exactly like the dialog did. Four independent reads paint
+  // four sections, each as its own read lands — there is NO whole-panel
+  // gate: the tree-only archive index (zero point reads) paints the
+  // category rows first as buttons + counts, the shelf's per-case headers
+  // then upgrade an expanded category to real rows (and a failed shelf
+  // errors ONLY the category section), a missing self-document dims its
+  // Dossier row, and a failed records read hides its section.
   useEffect(() => {
     let live = true;
+    getArchiveIndex()
+      .then((index) => {
+        if (live) setArchiveIndex(index);
+      })
+      .catch(() => {
+        if (live) setArchiveIndex(null);
+      });
     getCaseShelf(persona)
       .then((shelf) => {
         if (live) setCaseShelf(shelf);
@@ -199,6 +212,28 @@ export function DocLibrary({ persona }: { persona?: string }) {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [records, locale, tField]);
 
+  // THE CATEGORY TREE'S TWO PASSES: the index's tree-only enumeration lands
+  // first and paints the rows as buttons + counts over the fixed taxonomy
+  // (CASE_CATEGORIES — the shelf's own order, so the upgrade never
+  // reorders). The shelf's per-case headers then swap in the real rows
+  // (previews, opened stamps). Both maps stay null until their read lands:
+  // the tree shows its own loading line until one of them arrives.
+  const indexCounts = useMemo(() => {
+    if (!archiveIndex) return null;
+    const counts = new Map<CaseCategory, number>();
+    for (const entry of archiveIndex.cases) {
+      counts.set(entry.category, (counts.get(entry.category) ?? 0) + 1);
+    }
+    return counts;
+  }, [archiveIndex]);
+  const shelfByCategory = useMemo(
+    () =>
+      caseShelf
+        ? new Map(caseShelf.categories.map((c) => [c.category, c.cases]))
+        : null,
+    [caseShelf],
+  );
+
   // One category open at a time; re-clicking the open one collapses it.
   // The selection IS the archive field's filter (see the module header), so
   // it writes the provider, not a local copy. Collapsing or leaving a
@@ -236,17 +271,6 @@ export function DocLibrary({ persona }: { persona?: string }) {
     },
     [openDesk, activeCase],
   );
-
-  if (shelfFailed) {
-    return (
-      <p className="px-3 py-4 text-sm text-muted-foreground italic">
-        {t("loadError")}
-      </p>
-    );
-  }
-  if (!caseShelf) {
-    return <p className="px-3 py-4 text-sm text-muted-foreground">{t("loading")}</p>;
-  }
 
   return (
     <nav className="flex flex-1 flex-col overflow-y-auto">
@@ -342,46 +366,66 @@ export function DocLibrary({ persona }: { persona?: string }) {
           )}
         </section>
       )}
-      {caseShelf.categories.map(({ category, cases }) => {
-        const Icon = CATEGORY_ICONS[category];
-        const categoryOpen = archiveCategory === category;
-        // R3 (v0.25 §3.1): an EMPTY category dims to 40% and never expands —
-        // the taxonomy stays listed (it is the fiction's skeleton), but an
-        // empty drawer stops shouting. The disabled styling mirrors the
-        // dossier row's own unavailable-document precedent above.
-        const empty = cases.length === 0;
-        return (
-          <section key={category}>
-            <button
-              type="button"
-              onClick={() => selectCategory(category)}
-              aria-expanded={empty ? undefined : categoryOpen}
-              disabled={empty}
-              className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
-                categoryOpen ? "is-active" : ""
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{t(`category.${category}`)}</span>
-              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                {cases.length}
-              </span>
-            </button>
-            {categoryOpen && (
-              <CaseRows
-                category={category}
-                cases={cases}
-                activeCaseName={activeCase?.name ?? null}
-                activeDocRef={deskDoc}
-                detail={activeCase?.category === category ? caseDetail : null}
-                detailPending={detailPending}
-                onOpenCase={(name) => selectCase(category, name)}
-                onOpenPiece={openPiece}
-              />
-            )}
-          </section>
-        );
-      })}
+      {/* THE CATEGORY TREE paints in two passes — the tree-only archive
+          index's buttons + counts first (zero point reads), the shelf's
+          per-case rows when its headers land (an expanded category shows
+          its own loading line in between). A failed shelf errors ONLY this
+          section: the Dossier and the Records above stay up. */}
+      {shelfFailed ? (
+        <p className="px-3 py-4 text-sm text-muted-foreground italic">
+          {t("loadError")}
+        </p>
+      ) : !shelfByCategory && !indexCounts ? (
+        <p className="px-3 py-4 text-sm text-muted-foreground">{t("loading")}</p>
+      ) : (
+        CASE_CATEGORIES.map((category) => {
+          const Icon = CATEGORY_ICONS[category];
+          const categoryOpen = archiveCategory === category;
+          const cases = shelfByCategory?.get(category) ?? null;
+          const count = cases?.length ?? indexCounts?.get(category) ?? 0;
+          // R3 (v0.25 §3.1): an EMPTY category dims to 40% and never expands —
+          // the taxonomy stays listed (it is the fiction's skeleton), but an
+          // empty drawer stops shouting. The disabled styling mirrors the
+          // dossier row's own unavailable-document precedent above.
+          const empty = count === 0;
+          return (
+            <section key={category}>
+              <button
+                type="button"
+                onClick={() => selectCategory(category)}
+                aria-expanded={empty ? undefined : categoryOpen}
+                disabled={empty}
+                className={`chrome-row gap-2 py-2 pl-3.5 pr-2 text-sm disabled:pointer-events-none disabled:opacity-40 ${
+                  categoryOpen ? "is-active" : ""
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{t(`category.${category}`)}</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  {count}
+                </span>
+              </button>
+              {categoryOpen &&
+                (cases ? (
+                  <CaseRows
+                    category={category}
+                    cases={cases}
+                    activeCaseName={activeCase?.name ?? null}
+                    activeDocRef={deskDoc}
+                    detail={activeCase?.category === category ? caseDetail : null}
+                    detailPending={detailPending}
+                    onOpenCase={(name) => selectCase(category, name)}
+                    onOpenPiece={openPiece}
+                  />
+                ) : (
+                  <p className="py-2 pl-9 pr-2 text-xs text-muted-foreground">
+                    {t("loading")}
+                  </p>
+                ))}
+            </section>
+          );
+        })
+      )}
     </nav>
   );
 }
