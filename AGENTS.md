@@ -10,7 +10,7 @@ A Next.js web application with a server-side LLM agent and a GitHub-backed episo
 
 ## Commands
 
-- `pnpm dev` — Start dev server with Turbopack (port 3000)
+- `pnpm dev` — Start dev server with Turbopack (port 3000). **A dev server is normally already running on port 3000 — reuse it; never start a second one on another port.** Next dev hot-reloads edits from disk, so the running server picks up your changes without a restart. Note `src/app/layout.tsx` uses `next/font/google`, which fetches fonts at dev build time: in a shell without working outbound access to Google Fonts, a freshly booted server returns 500 on every page while an already-warm one keeps serving. That 500 looks like a code error but is not — it is the reason not to boot your own server.
 - `pnpm build` — Production build with Turbopack
 - `pnpm build:standalone` — Build + dereference all symlinks in `.next/standalone` (see Packaging below)
 - `pnpm start` — Start production server
@@ -46,8 +46,8 @@ The client deployment ships `.next/standalone`, but Next mirrors the pnpm layout
 ## Constraints
 
 - Agent tools operate on whitelisted paths only: `memory/`, `tasks/`, `sessions/`
-- The flush/episodic write path is further constrained to the active slice's timeline files (strict slice-id validation in `src/app/api/episodic/flush/route.ts`)
-- API mutation endpoints (`POST /api/chat`, `/api/chat/[runId]/cancel`, `/api/episodic/flush`, `/api/episodic/signal`, `/api/companion`) are same-origin guarded — see `src/lib/security/origin-guard.ts`; non-browser callers need `x-access-key` when `ACCESS_SECRET` is set
+- The episodic flush (now inside the chat turn pipeline — `src/app/api/chat/steps.ts`) stays constrained to the active slice's record files; paths derive server-side from the slice id (`src/lib/episodic/paths.ts`) and every write is whitelist-checked (`src/lib/whitelist`)
+- API mutation endpoints (`POST /api/chat`, `/api/chat/[runId]/cancel`, `/api/episodic/signal`, `/api/companion`, `/api/client/config`) are same-origin guarded — see `src/lib/security/origin-guard.ts`; non-browser callers need `x-access-key` when `ACCESS_SECRET` is set
 - `src/` directory is agent-read-only — no tool may modify it
 - All path validation is server-side; client is untrusted
 - Base UI is the standard shadcn/ui primitive library (not Radix UI)
