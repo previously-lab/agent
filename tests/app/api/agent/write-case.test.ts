@@ -19,6 +19,18 @@ vi.mock("@/lib/episodic/io-helpers", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/episodic/io-helpers")>();
   return {
     ...actual,
+    // flushBatch applies the call's queued entries to the fake disk — the
+    // executor coalesces each call's intents into ONE batch and ONE flush,
+    // so the tests assert against where the batch lands.
+    flushBatch: vi.fn(
+      async (batch: { entries: Map<string, string | null> }, _msg: string) => {
+        for (const [p, c] of batch.entries) {
+          if (c === null) io.files.delete(p);
+          else io.files.set(p, c);
+        }
+        batch.entries.clear();
+      },
+    ),
     fsReadFile: vi.fn(async (path: string) => {
       const content = io.files.get(path);
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
@@ -179,6 +191,34 @@ describe("writeCase — addPiece on an existing case", () => {
     const r = await call({ caseName: "旧案", body: "补充一篇。", pieceTitle: "后续篇" }, "call-9");
     expect(r.ok).toBe(true);
     expect((r as { path: string }).path).toContain("memory/research/旧案/");
+  });
+});
+
+describe("writeCase — one commit per call (open + first piece coalesced)", () => {
+  it("open WITH pieceTitle lands the index AND the first piece in ONE flush", async () => {
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    const r = await call(
+      { caseName: "合并案", body: "案件正文。", pieceTitle: "开题" },
+      "call-9",
+    );
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.action).toBe("addPiece");
+    expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(flushBatch).mock.calls[0][1]).toBe("writeCase research/合并案");
+    expect(io.files.get("memory/research/合并案/index.md")).toContain("案件正文。");
+    expect(
+      [...io.files.keys()].some((k) =>
+        /^memory\/research\/合并案\/\d{4}-\d{2}-\d{2}-开题\.md$/.test(k),
+      ),
+    ).toBe(true);
+  });
+
+  it("a bare open still lands in one flush", async () => {
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    const r = await call({ caseName: "裸开案", body: "正文。" }, "call-10");
+    expect(r).toMatchObject({ ok: true, action: "open" });
+    expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(flushBatch).mock.calls[0][1]).toBe("writeCase research/裸开案");
   });
 });
 

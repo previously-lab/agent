@@ -251,7 +251,7 @@ export interface HousekeepingResult {
 
 /**
  * What the workflow extracts (as pure serializable values) from the agent
- * stream result and hands to the persistAgentTurn step.
+ * stream result and hands to the finalizeTurn step (the turn tail).
  */
 export interface TurnOutcome {
   /** Final assistant text (empty when the model produced none). */
@@ -260,7 +260,7 @@ export interface TurnOutcome {
   finishReason: string;
   /**
    * Mechanically extracted cognition data for agent.md — reasoning traces
-   * and tool calls with success/failure status. Written by persistAgentTurn.
+   * and tool calls with success/failure status. Written by finalizeTurn.
    */
   cognition: string;
   /**

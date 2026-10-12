@@ -12,6 +12,22 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // In-memory memory root (same pattern as tests/lib/episodic/*).
 const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
+  // The run coalesces its writes into ONE batch and ONE flush — createBatch/
+  // flushBatch mirror the production shapes so the queued entries land on
+  // the fake disk at flush time.
+  createBatch: () => ({
+    entries: new Map<string, string | null>(),
+    encodings: new Map<string, "base64">(),
+  }),
+  flushBatch: vi.fn(
+    async (batch: { entries: Map<string, string | null> }, _msg: string) => {
+      for (const [p, c] of batch.entries) {
+        if (c === null) io.files.delete(p);
+        else io.files.set(p, c);
+      }
+      batch.entries.clear();
+    },
+  ),
   fsReadFile: vi.fn(async (path: string) => {
     const content = io.files.get(path);
     if (content === undefined) throw new Error(`ENOENT: ${path}`);

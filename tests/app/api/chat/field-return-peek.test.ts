@@ -1,35 +1,21 @@
 /**
  * The end-of-turn HQ-return peek (v0.21 §4 回程) — the race helper and the
- * agent.md line writer, over an in-memory memory root.
+ * line formatting, which the turn tail queues into its single finalize
+ * commit (the queueing itself is covered in steps.test.ts).
  *
  * `raceFieldPeek` covers the two acceptance states (caught → the caller
- * appends the line; missed → nothing is written) plus iterator-closed. The
- * full `createHook + race` composition lives inline in turnWorkflow and is
- * only exercisable inside a real durable run (main agent's live check).
+ * hands the text to finalizeTurn; missed → nothing is queued) plus
+ * iterator-closed. The full `createHook + race` composition lives in
+ * turnWorkflow (peekFieldReturn) and is only exercisable inside a real
+ * durable run (main agent's live check).
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
-
-vi.mock("@/lib/episodic/io-helpers", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/episodic/io-helpers")>();
-  return {
-    ...actual,
-    fsReadFile: vi.fn(async (path: string) => {
-      const content = io.files.get(path);
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
-      return content;
-    }),
-    fsWriteFile: vi.fn(async (path: string, content: string) => {
-      io.files.set(path, content);
-      return { path, created: true };
-    }),
-  };
-});
+import { describe, it, expect } from "vitest";
 
 import { raceFieldPeek } from "@/app/api/chat/turn-workflow";
-import { appendFieldReturnLine } from "@/app/api/chat/steps";
-import { slicePartPath } from "@/lib/episodic/paths";
+import {
+  fieldReturnStamp,
+  formatFieldReturnLine,
+} from "@/app/api/chat/steps";
 
 const NEVER = () => new Promise<never>(() => {});
 const FAST = () => new Promise<void>((resolve) => setTimeout(resolve, 1));
@@ -57,50 +43,28 @@ describe("raceFieldPeek — the two acceptance states", () => {
   });
 });
 
-describe("appendFieldReturnLine — 赶上就带上", () => {
-  beforeEach(() => {
-    io.files.clear();
-    vi.clearAllMocks();
+describe("fieldReturnStamp — the date stamp rides the USER's clock", () => {
+  it("the caller's explicit local date wins", () => {
+    expect(fieldReturnStamp("2026-10-04-0131", "2026-10-05")).toBe("2026-10-05");
   });
 
-  it("appends ONE dated prose line to the slice's agent.md", async () => {
-    const agentPath = slicePartPath("2026-10-04-0131", "agent");
-    io.files.set(agentPath, "既有 mailbox 内容。\n");
+  it("without a date, the slice's own naming date — never bare UTC", () => {
+    expect(fieldReturnStamp("2026-10-04-0131")).toBe("2026-10-04");
+  });
+});
 
-    await appendFieldReturnLine("2026-10-04-0131", "供应商案已归档，见 research/屏幕供应商。");
-
-    const next = io.files.get(agentPath)!;
-    expect(next.startsWith("既有 mailbox 内容。")).toBe(true);
-    expect(next).toContain("Field return (");
-    expect(next).toContain("供应商案已归档，见 research/屏幕供应商。");
-    // prose line, not a JSON marker (R4: new channels are prose)
-    expect(next).not.toContain("[doc-");
+describe("formatFieldReturnLine — ONE dated prose line (§6 R4)", () => {
+  it("formats the stamped prose line — never a JSON marker", () => {
+    const line = formatFieldReturnLine("供应商案已归档，见 research/屏幕供应商。", "2026-10-04");
+    expect(line).toBe(
+      "Field return (2026-10-04): 供应商案已归档，见 research/屏幕供应商。",
+    );
+    expect(line).not.toContain("[doc-");
   });
 
-  it("creates agent.md when the slice has none yet", async () => {
-    await appendFieldReturnLine("2026-10-04-0131", "回程内容。");
-    const agentPath = slicePartPath("2026-10-04-0131", "agent");
-    expect(io.files.get(agentPath)).toContain("Field return (");
-  });
-
-  it("the date stamp rides the USER's clock: the caller's local date, else the slice's own naming date — never bare UTC", async () => {
-    await appendFieldReturnLine("2026-10-04-0131", "显式日期。", "2026-10-05");
-    const agentPath = slicePartPath("2026-10-04-0131", "agent");
-    expect(io.files.get(agentPath)).toContain("Field return (2026-10-05): 显式日期。");
-
-    io.files.clear();
-    // no date handed over — the slice id is named by the user's local calendar
-    await appendFieldReturnLine("2026-10-04-0131", "切片命名日期。");
-    expect(io.files.get(agentPath)).toContain("Field return (2026-10-04): 切片命名日期。");
-  });
-
-  it("a write failure is swallowed — never throws into the turn", async () => {
-    io.files.set(slicePartPath("2026-10-04-0131", "agent"), "x");
-    // fsWriteFile mock replaced with a rejecting one for this call
-    const { fsWriteFile } = await import("@/lib/episodic/io-helpers");
-    vi.mocked(fsWriteFile).mockRejectedValueOnce(new Error("disk gone"));
-    await expect(
-      appendFieldReturnLine("2026-10-04-0131", "回程内容。"),
-    ).resolves.toBeUndefined();
+  it("trims surrounding whitespace from the returned text", () => {
+    expect(formatFieldReturnLine("  回程内容。\n", "2026-10-04")).toBe(
+      "Field return (2026-10-04): 回程内容。",
+    );
   });
 });

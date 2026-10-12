@@ -21,14 +21,16 @@
  *      re-summarized). Then the user-turn append, the read face (continuity /
  *      slice head / identity / direction / §A.3.3 statements), the UI stream.
  *      Zero projection writes (no timeline weave, no catalog/index upkeep).
- *   2. persistAgentTurn  — 落盘这一轮 (pure engineering). Append the agent
- *      turn + cognition to the slice and flush (write-conflict self-heal).
- *   3. explicitEvolutionSegment — 序 6, the explicit-instruction channel
- *      (post-reply, unchanged): runs ONLY when the entry beat's analysis
- *      read an explicit record/correction request in the user's message.
- *      No explicit instruction → zero LLM, zero writes (空转零写入).
- *   4. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
- *   5. appendFieldReturnLine — where a caught HQ return lands (§4 回程 peek).
+ *   2. finalizeTurn      — the turn tail in ONE slice-locked step and ONE
+ *      git commit (`Turn {turnId} — finalize`, body naming the segments that
+ *      queued writes): 落盘这一轮 (agent turn + cognition, conflict
+ *      self-heal) + 序 6 (the explicit-instruction channel — runs ONLY when
+ *      the entry beat's analysis read an explicit record/correction request;
+ *      no explicit instruction → zero LLM, zero writes 空转零写入) + the
+ *      §4 回程 line (a caught HQ return, queued — the peek itself runs in
+ *      the workflow body before this step, hooks being workflow-runtime
+ *      primitives, and hands the text over as plain serializable data).
+ *   3. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
  *
  * Retired (v0.21 §A.2.2 改写 / §9): the scribe segment's close-TRIGGERED
  * dispatch chain — due-task scan → [boundary-event] mailbox post → automatic
@@ -79,7 +81,7 @@ import { mergeTurnsWithRemote } from "@/lib/episodic/turn-merge";
 import { isRefConflictError } from "@/lib/tools/batch-write";
 import { getRepoConfig } from "@/lib/capabilities";
 import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
-import { fsListFiles, fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
 import {
   dataUrlToBuffer,
   persistEvidenceAttachments,
@@ -1291,7 +1293,7 @@ export async function housekeeping(
   }
 }
 
-// ─── Step 2: persistAgentTurn (落盘这一轮) ────────────────────────────────
+// ─── The turn tail: finalizeTurn — one slice-locked step, ONE commit ──────
 
 /**
  * How many times a conflicting flush re-reads the remote slice, merges, and
@@ -1344,83 +1346,97 @@ async function flushTurnBatch(
 }
 
 /**
- * 收尾 peek 的落点 — bring a caught HQ return into THIS slice's agent.md as
- * ONE small prose line (v0.21 §4 回程：赶上就带上，下一轮读面自然看到；
- * 赶不上不补偿、不留账). Not a mailbox marker — the new channel is prose
- * (§6 R4; the [doc-*] JSON lines are the frozen legacy exception).
- * Best-effort: a write failure never takes the turn down.
+ * The HQ-return line's date stamp (v0.21 §4): the caller's local date when
+ * handed one over, else the slice's own naming date (slice ids are named by
+ * the user's local calendar — createSlice), UTC only as the last resort for
+ * an unparseable id. Exported for the unit tests; production passes the
+ * workflow-stamped date.
  */
-export async function appendFieldReturnLine(
-  sliceId: string,
-  text: string,
-  date?: string,
-): Promise<void> {
-  "use step";
-  try {
-    const resolved = await readSlicePartResolved(sliceId, "agent").catch(() => null);
-    const existing = resolved?.content ?? "";
-    // The stamp rides the USER's clock, not UTC: the caller's local date when
-    // it hands one over, else the slice's own naming date (slice ids are named
-    // by the user's local calendar — createSlice), UTC only as a last resort.
-    const stamp =
-      date ??
-      (/^\d{4}-\d{2}-\d{2}-/.test(sliceId)
-        ? sliceId.slice(0, 10)
-        : new Date().toISOString().slice(0, 10));
-    const line = `Field return (${stamp}): ${text.trim()}`;
-    const next = existing.trimEnd()
-      ? `${existing.trimEnd()}\n\n${line}\n`
-      : `${line}\n`;
-    await fsWriteFile(resolved?.path ?? sliceIdToAgentPath(sliceId), next);
-    console.log(`[Field] HQ return line appended to ${sliceId} agent.md`);
-  } catch (e) {
-    console.warn("[Field] HQ return line append failed (ignored):", e);
-  }
+export function fieldReturnStamp(sliceId: string, date?: string): string {
+  return (
+    date ??
+    (/^\d{4}-\d{2}-\d{2}-/.test(sliceId)
+      ? sliceId.slice(0, 10)
+      : new Date().toISOString().slice(0, 10))
+  );
+}
+
+/** ONE dated prose line for the slice's agent.md — a caught HQ return (§4). */
+export function formatFieldReturnLine(text: string, stamp: string): string {
+  return `Field return (${stamp}): ${text.trim()}`;
 }
 
 /**
- * 落盘这一轮 — persist the agent turn to the episodic slice (the old
- * streamText onFinish; pure engineering, v0.21 §3 step 5). Retries are safe:
- * the agent-turn append is deduped by turnId, and the snapshot write is
- * idempotent.
+ * The turn tail — 落盘这一轮 + 序 6 + 回程 in ONE slice-locked step and ONE
+ * git commit (`Turn {turnId} — finalize`, the body naming the segments that
+ * actually queued writes). These used to be three steps committing
+ * separately (agent response / explicit evolution / the field-return
+ * append); they share the slice lock and the conflict self-heal, so merging
+ * loses nothing and the tail's writes land atomically:
+ *   - Segment 1 appends the agent turn + cognition (deduped by turnId —
+ *     the old persistAgentTurn, unchanged).
+ *   - Segment 2 is the explicit-instruction channel (序 6 — the old
+ *     explicitEvolutionSegment, unchanged): runs ONLY when the entry beat's
+ *     analysis read an explicit record/correction request; no explicit
+ *     instruction → zero LLM, zero writes.
+ *   - Segment 3 queues a caught HQ return line (the old
+ *     appendFieldReturnLine's write) — the peek itself runs in the workflow
+ *     body BEFORE this step (hooks are workflow-runtime primitives, not
+ *     step calls) and hands the text over as plain serializable data.
+ * Retries are safe: the agent-turn append is deduped by turnId, the snapshot
+ * write is idempotent, a review re-run converges, and the flush keeps the
+ * turn-merge self-heal (flushTurnBatch).
  */
-export async function persistAgentTurn(
+export async function finalizeTurn(
   slice: TimeSlice,
   outcome: TurnOutcome,
-  turnId: string,
+  input: TurnInput,
+  hk: HousekeepingResult & EntryReckoning,
+  fieldReturn?: { text: string; date?: string },
 ): Promise<void> {
   "use step";
 
-  // Serialize turns on the same slice within this process (see housekeeping).
-  return withSliceLock(slice.slice_id, async () => {
-
-  // ── Begin batch: all writes below go into ONE git commit ──────────────
+  // One reused writer for the evolution channel's frames — the same
+  // discipline the split steps had; released in `finally`.
+  const stream = createStepStream();
+  try {
+  return await withSliceLock(slice.slice_id, async () => {
+  // ── ONE batch for the whole tail: every segment below rides a single
+  //    commit. The batch is a per-call object — never module-global — so
+  //    two turns in one process can't flush each other's writes.
   const batch = createBatch();
+  /** D4: the commit body names the segments that actually queued writes. */
+  const segments: string[] = [];
+  const mark = (name: string, before: number): void => {
+    if (batch.entries.size > before) segments.push(name);
+  };
 
-  // Episodic persistence (the old onFinish branches). `outcome.text` is the
-  // agent's FULL assistant text for the turn (intermediate + final), so the
-  // stored slice keeps both ends; tool calls are not preserved.
-  // Idempotent under redelivery: when this turnId's agent turn is already in
-  // the slice (a retried run re-executing against persisted disk state), skip
-  // the append. User and agent turns share the turnId — scope by role.
+  // ── Segment 1: 落盘这一轮 — append the agent turn + cognition ─────────
+  // `outcome.text` is the agent's FULL assistant text for the turn
+  // (intermediate + final), so the stored slice keeps both ends; tool calls
+  // are not preserved. Idempotent under redelivery: when this turnId's agent
+  // turn is already in the slice (a retried run re-executing against
+  // persisted disk state), skip the append. User and agent turns share the
+  // turnId — scope by role.
+  const before1 = batch.entries.size;
   const agentTurnRecorded =
-    !!turnId &&
-    slice.turns.some((t) => t.role === "agent" && t.turnId === turnId);
+    !!input.turnId &&
+    slice.turns.some((t) => t.role === "agent" && t.turnId === input.turnId);
   if (agentTurnRecorded) {
-    console.log(`[Episodic] Agent turn ${turnId} already persisted — skipping append`);
+    console.log(`[Episodic] Agent turn ${input.turnId} already persisted — skipping append`);
   } else if (outcome.finishReason === "stop") {
     appendTurn(slice, {
       timestamp: new Date().toISOString(),
       role: "agent",
       content: outcome.text,
-      turnId,
+      turnId: input.turnId,
     });
   } else if (outcome.text) {
     appendTurn(slice, {
       timestamp: new Date().toISOString(),
       role: "agent",
       content: `[partial] ${outcome.text}`,
-      turnId,
+      turnId: input.turnId,
     });
     console.log(`[Episodic] Pro interrupted (${outcome.finishReason})`);
   } else {
@@ -1436,49 +1452,33 @@ export async function persistAgentTurn(
   // extractCognition() in the workflow body; here we prepend the header
   // (timestamp stamped in this step, where Date is allowed) and persist.
   if (outcome.cognition) {
-    const header = `## Cognition ${turnId} — ${new Date().toISOString()}\n`;
+    const header = `## Cognition ${input.turnId} — ${new Date().toISOString()}\n`;
     await writeAgentTimeline(slice.slice_id, header + outcome.cognition, batch);
   }
+  mark("agent response", before1);
 
-  // Commit all queued writes as one commit.
-  await flushTurnBatch(batch, `Turn ${turnId} — agent response`, slice);
-  });
-}
-
-// ─── Step 3: explicitEvolutionSegment (序 6 — the explicit-instruction channel) ───
-
-/**
- * The turn's ONLY surviving post-reply derivation (v0.19 §A.3.2, kept
- * unchanged by v0.21 §A.2.2): the user explicitly asked to record/evolve or
- * stated a behavioral correction — READ by the entry beat's one semantic
- * derivation (hk.analysis.memoryUpdate, carried by value so this segment
- * never re-derives it with a second LLM call), EXECUTED here after the
- * reply. Everything else the v0.19 scribe segment did is gone (v0.21 §A.2.2
- * 改写 / §9): analyze + close moved into the entry beat (归纳上一页, idempotent
- * via needs_marking), the close-triggered HQ dispatch chain (due-task scan →
- * [boundary-event] mailbox post → automatic start(boundaryRun) /
- * start(questionRun)) is retired — HQ's ONLY trigger is the field agent's
- * reportToHQ — and the marker-consuming scribe passes are HQ's job now
- * (archiveSliceCases; the [doc-*] mailbox contract itself is frozen and
- * untouched — HQ reads it as prose clues).
- *
- * No explicit instruction → zero LLM, zero writes (空转零写入 — the closing
- * flushBatch no-ops on an empty batch). Writes are idempotent under
- * redelivery (a review re-run converges); failures are reported to the
- * client as an error chunk and never take the turn down. Demo mode skips
- * the segment entirely (read-only preview).
- */
-export async function explicitEvolutionSegment(
-  input: TurnInput,
-  hk: HousekeepingResult & EntryReckoning,
-): Promise<void> {
-  "use step";
-
-  if (input.useDemo) return;
-
-  const stream = createStepStream();
-  const { slice } = hk;
+  // ── Segment 2: 序 6 — the explicit-instruction channel (post-reply) ───
+  // The turn's ONLY surviving post-reply derivation (v0.19 §A.3.2): the user
+  // explicitly asked to record/evolve or stated a behavioral correction —
+  // READ by the entry beat's one semantic derivation (hk.analysis, carried
+  // by value so this segment never re-derives it with a second LLM call),
+  // EXECUTED here. Everything else the v0.19 scribe segment did is gone
+  // (v0.21 §A.2.2 改写 / §9): analyze + close moved into the entry beat
+  // (归纳上一页, idempotent via needs_marking), the close-triggered HQ
+  // dispatch chain is retired — HQ's ONLY trigger is the field agent's
+  // reportToHQ — and the marker-consuming scribe passes are HQ's job now
+  // (the [doc-*] mailbox contract itself is frozen and untouched — HQ reads
+  // it as prose clues). Writes are idempotent under redelivery (a review
+  // re-run converges); failures are reported to the client as an error
+  // chunk and never take the turn down. Demo skips the segment entirely
+  // (read-only preview — 空转零写入).
+  const before2 = batch.entries.size;
+  if (!input.useDemo) {
   const phaseOutsource = isPhaseOutsourceActive(input.modelConfig.sdk);
+  // Ages compare against the USER's local calendar date, not UTC.
+  const todayLocal =
+    localDateKey(input.startedAtIso, input.clientTimezone) ??
+    input.startedAtIso.slice(0, 10);
 
   // Live thinking channel: the Previously Agent streams its reasoning/writing
   // through onEvolutionLine → throttled (40ms, same discipline as tool
@@ -1509,14 +1509,6 @@ export async function explicitEvolutionSegment(
     emitEvolutionProgress(stream, evolutionStep, line, stage);
   };
 
-  try {
-  return await withSliceLock(slice.slice_id, async () => {
-  const batch = createBatch();
-  // Ages compare against the USER's local calendar date, not UTC.
-  const todayLocal =
-    localDateKey(input.startedAtIso, input.clientTimezone) ??
-    input.startedAtIso.slice(0, 10);
-
   // ── 序 6. Explicit-instruction evolution (the ONLY surviving channel) ──
   // The user explicitly asked to record/evolve or stated a behavioral
   // correction — as read by the ENTRY beat's one semantic derivation
@@ -1524,9 +1516,9 @@ export async function explicitEvolutionSegment(
   // Every write runs under ONE process-wide `withSliceLock("evolution")`
   // (v0.16 S1 single-writer). A changed run's summary freezes into the slice
   // frontmatter so the L3 slice-head block replays it on every later turn of
-  // the slice. Evolution failures must never take the turn down: a
-  // write/agent error is reported to the client as an error chunk and the
-  // turn continues.
+  // the slice. Evolution failures must never take the turn down: a write/
+  // agent error is reported to the client as an error chunk and the turn
+  // continues.
   let evolutionResult: EvolutionResult | undefined;
   /** Freeze a changed evolution's summary into the slice (single line, YAML-safe). */
   const freezeEvolutionSummary = async (target: TimeSlice) => {
@@ -1539,6 +1531,7 @@ export async function explicitEvolutionSegment(
   /** Client/bridge mode: the entry beat's raw report — its mutation
    *  proposals apply through the card-session machinery (no second spawn). */
   const bridgeReport = hk.bridgeReport;
+
   try {
     if (explicitUpdate) {
       if (phaseOutsource) {
@@ -1619,11 +1612,39 @@ export async function explicitEvolutionSegment(
     });
   }
 
-  // One commit for the segment — empty (a no-op flush) when no explicit
-  // instruction fired: the channel never writes just to show it ran
-  // (空转零写入). A kill before the flush re-runs the segment from disk
-  // state; a review re-run converges, so nothing doubles.
-  await flushBatch(batch, `Turn ${input.turnId} — explicit evolution`);
+  }
+  mark("explicit evolution", before2);
+
+  // ── Segment 3: 回程 — a caught HQ return, queued on the SAME commit ───
+  // 赶上就带上 (v0.21 §4): ONE small prose line in this slice's agent.md —
+  // the next turn's read face sees it naturally; 赶不上不补偿、不留账. Not a
+  // mailbox marker — the new channel is prose (§6 R4). Best-effort: a failed
+  // resolved read still queues the bare line at the canonical path, and the
+  // whole segment QUEUES (never an immediate write), so it rides the tail's
+  // single commit under the slice lock.
+  if (fieldReturn?.text.trim()) {
+    const before3 = batch.entries.size;
+    const stamp = fieldReturnStamp(slice.slice_id, fieldReturn.date);
+    const resolved = await readSlicePartResolved(slice.slice_id, "agent", batch, {
+      fresh: true,
+    }).catch(() => null);
+    const existing = resolved?.content ?? "";
+    const line = formatFieldReturnLine(fieldReturn.text, stamp);
+    const next = existing.trimEnd()
+      ? `${existing.trimEnd()}\n\n${line}\n`
+      : `${line}\n`;
+    batch.entries.set(resolved?.path ?? sliceIdToAgentPath(slice.slice_id), next);
+    mark("field return", before3);
+    console.log(`[Field] HQ return line queued for ${slice.slice_id} agent.md`);
+  }
+
+  // ── The tail's ONE commit — an empty batch no-ops the flush (空转零写入) ──
+  const headline = `Turn ${input.turnId} — finalize`;
+  const message =
+    segments.length > 0
+      ? `${headline}\n\n${segments.map((s) => `- ${s}`).join("\n")}`
+      : headline;
+  await flushTurnBatch(batch, message, slice);
   });
   } finally {
     stream.close();

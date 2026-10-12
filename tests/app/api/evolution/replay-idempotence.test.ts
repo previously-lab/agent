@@ -13,6 +13,21 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 // In-memory memory root (same pattern as hq-agent.test.ts).
 const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
+  // HQ coalesces each round into ONE batch and ONE flush — mirror the
+  // production shapes so the queued entries land on the fake disk.
+  createBatch: () => ({
+    entries: new Map<string, string | null>(),
+    encodings: new Map<string, "base64">(),
+  }),
+  flushBatch: vi.fn(
+    async (batch: { entries: Map<string, string | null> }, _msg: string) => {
+      for (const [p, c] of batch.entries) {
+        if (c === null) io.files.delete(p);
+        else io.files.set(p, c);
+      }
+      batch.entries.clear();
+    },
+  ),
   fsReadFile: vi.fn(async (path: string) => {
     const content = io.files.get(path);
     if (content === undefined) throw new Error(`ENOENT: ${path}`);

@@ -26,6 +26,12 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
+import {
+  createBatch,
+  flushBatch,
+  type WriteBatch,
+} from "@/lib/episodic/io-helpers";
+import { isRefConflictError } from "@/lib/tools/batch-write";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -122,7 +128,7 @@ ${DOC_HOUSE_STYLE}`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
-function buildHqTools(date: string, model: ModelConfig) {
+function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
   return {
     listTree: tool({
       description:
@@ -168,7 +174,7 @@ function buildHqTools(date: string, model: ModelConfig) {
         if (slice.status !== "active" || slice.closedBy) {
           return `no-op: ${sliceId} is already closed (closed_by: ${slice.closedBy ?? "unknown"}).`;
         }
-        const closed = await closeSlice(slice, "context_lost");
+        const closed = await closeSlice(slice, "context_lost", batch);
         return `closed: ${sliceId} (closed_by: ${closed.closedBy}, end: ${closed.end})`;
       },
     }),
@@ -238,7 +244,7 @@ function buildHqTools(date: string, model: ModelConfig) {
             break;
         }
         try {
-          const applied = await applyCaseWriteIntent(intent, date);
+          const applied = await applyCaseWriteIntent(intent, date, batch);
           return `OK: ${applied.path}${applied.created ? " (created)" : ""}`;
         } catch (e) {
           return `REJECTED: ${e instanceof Error ? e.message : String(e)}`;
@@ -264,10 +270,17 @@ function buildHqTools(date: string, model: ModelConfig) {
           excerpt,
           manifest: await buildRunManifest(),
           date,
+          batch,
         });
         // The same slice's mailbox: sediment/task markers the field dropped
         // land as cases here — this is the scribe pass's production caller.
-        const scribe = await runScribePass({ model, sliceId, excerpt, date });
+        const scribe = await runScribePass({
+          model,
+          sliceId,
+          excerpt,
+          date,
+          batch,
+        });
         return (
           `written: ${result.written.join(", ") || "(none)"}\n` +
           `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}\n` +
@@ -309,6 +322,7 @@ function buildHqTools(date: string, model: ModelConfig) {
         // read-modify-write of the user model / SOPs with a live turn's.
         const card = await withSliceLock("evolution", () =>
           runCardEvolution({
+            batch,
             model,
             sliceId,
             ...(closed ? { closedSliceId: sliceId } : {}),
@@ -349,6 +363,7 @@ function buildHqTools(date: string, model: ModelConfig) {
           excerpt: buildSliceExcerpt(slice),
           manifest: await buildRunManifest(),
           date,
+          batch,
         });
         return (
           `ran: ${result.ran}\n` +
@@ -376,7 +391,9 @@ function buildHqTools(date: string, model: ModelConfig) {
       execute: async ({ agent, content }) => {
         // Same evolution lock as evolveUserModel above — an SOP rewrite is a
         // whole-file write that must not interleave with a live turn's run.
-        await withSliceLock("evolution", () => writeSelfSop(agent, content));
+        await withSliceLock("evolution", () =>
+          writeSelfSop(agent, content, batch),
+        );
         return `OK: memory/self/${agent}/index.md`;
       },
     }),
@@ -413,11 +430,18 @@ export async function handleBrief(input: HqBriefInput): Promise<HqOutcome> {
     `${brief}\n\n` +
     `Verify against the raw records before any write. When the round is done (or you decide nothing needs doing), call hqReport.`;
 
+  // ONE batch for the whole round: every write the tools queue lands as a
+  // single commit (`HQ round — {date}`); an idle round's empty batch no-ops
+  // the flush. The batch rides this step only — never module-global — and
+  // the same threading works unchanged on the local backend (flushBatch
+  // applies the entries and records one local commit).
+  const batch = createBatch();
+
   const result = await runSubAgent<HqReport>({
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,
-    tools: buildHqTools(date, model),
+    tools: buildHqTools(date, model, batch),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
@@ -426,6 +450,42 @@ export async function handleBrief(input: HqBriefInput): Promise<HqOutcome> {
     // carries 240s) — HQ must outlive any single tool call it makes.
     timeoutMs: 300_000,
   });
+
+  // Flush whatever the round queued — even a failed round keeps whatever
+  // its tools landed before the failure (HQ's products are writes). A
+  // bounded PLAIN retry covers a ref that moved under us:
+  // commitBatchToGitHub re-reads HEAD at the start of every attempt, so the
+  // retry rebases our tree onto the moved ref. Why a plain retry is enough
+  // (R6): HQ never writes the LIVE slice's core.md — markSlice seals only
+  // non-live orphans, which by definition no live turn is appending to —
+  // case intents hold the same per-case `doc:` locks as the field's
+  // writeCase, and card/SOP writes hold the same in-process "evolution"
+  // lock as the field's evolution segment. A same-file clobber is therefore
+  // unreachable in-process and, cross-process, no worse than the
+  // pre-existing per-file sha race (last writer wins either way). What the
+  // retry cannot heal is a TRUE same-file cross-process race on a merged
+  // file (people/user/index.md) — accepted: it existed with per-file writes
+  // too. Never throws: a lost flush costs the round's writes, not the run.
+  let flushAttempts = 0;
+  for (;;) {
+    try {
+      await flushBatch(batch, `HQ round — ${date}`);
+      break;
+    } catch (err) {
+      if (!isRefConflictError(err) || flushAttempts >= 2) {
+        console.warn(
+          "[HQ] round flush failed (queued writes lost):",
+          err instanceof Error ? err.message : err,
+        );
+        break;
+      }
+      flushAttempts += 1;
+      console.warn(
+        `[HQ] flush conflict — rebasing onto the moved ref (retry ${flushAttempts}/2):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   if (!result.ok || !result.report) {
     const error = result.error ?? "HQ ended without a report";

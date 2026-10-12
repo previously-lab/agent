@@ -34,6 +34,8 @@ import {
   RESEARCH_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
+import { createBatch, flushBatch } from "@/lib/episodic/io-helpers";
+import { isRefConflictError } from "@/lib/tools/batch-write";
 // A step module may export ONLY step functions — the run-shared helpers
 // therefore live in their own module (see hq-context.ts for the rule).
 import { backgroundModel, buildRunManifest } from "./hq-context";
@@ -90,12 +92,20 @@ export async function executeQuestionRun(
     return idle;
   }
 
+  // ONE batch for the whole run: the research pass's case writes, the
+  // mailbox record lines, and the completion notice all land as a SINGLE
+  // commit (`Question run — {sliceId}`); an idle run never reaches here. The
+  // batch is a per-call object — never module-global — and the same
+  // threading works unchanged on the local backend.
+  const batch = createBatch();
+
   const result = await runDocResearchPass({
     model,
     sliceId,
     excerpt: buildSliceExcerpt(slice),
     manifest: await buildRunManifest(),
     date,
+    batch,
   });
   console.log(
     `[QuestionRun] research: ${result.written.length} written, ${result.skipped.length} skipped`,
@@ -123,6 +133,7 @@ export async function executeQuestionRun(
           "结案行进尾部；下一回合的回复段读到当天的尾部行后向用户陈述。",
       },
       date,
+      batch,
     );
   } catch {
     // already exists — the notice goes to the tail below either way
@@ -136,6 +147,7 @@ export async function executeQuestionRun(
         line: statement,
       },
       date,
+      batch,
     );
     noticePath = applied.path;
   } catch (e) {
@@ -143,6 +155,32 @@ export async function executeQuestionRun(
       "[QuestionRun] completion notice failed:",
       e instanceof Error ? e.message : e,
     );
+  }
+  // The run's ONE commit. A bounded PLAIN retry covers a ref that moved
+  // under us: commitBatchToGitHub re-reads HEAD per attempt, so a retry
+  // rebases our tree onto the moved ref. The run writes only case/mailbox
+  // files — never the live slice's core.md — so no merge-on-conflict is
+  // needed (the R6 reasoning lives in hq-agent.ts). A lost flush costs the
+  // run's writes, never the run.
+  let flushAttempts = 0;
+  for (;;) {
+    try {
+      await flushBatch(batch, `Question run — ${sliceId}`);
+      break;
+    } catch (err) {
+      if (!isRefConflictError(err) || flushAttempts >= 2) {
+        console.warn(
+          "[QuestionRun] flush failed (queued writes lost):",
+          err instanceof Error ? err.message : err,
+        );
+        break;
+      }
+      flushAttempts += 1;
+      console.warn(
+        `[QuestionRun] flush conflict — rebasing onto the moved ref (retry ${flushAttempts}/2):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
   if (noticePath) {
     console.log(`[QuestionRun] completion notice → ${noticePath}`);

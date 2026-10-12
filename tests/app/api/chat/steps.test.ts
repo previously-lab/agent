@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { TimeSlice } from "@/lib/episodic";
-import type { TurnInput, TurnOutcome } from "@/lib/chat/turn-types";
+import type {
+  HousekeepingResult,
+  TurnInput,
+  TurnOutcome,
+} from "@/lib/chat/turn-types";
 
 // ── Mock the step dependencies ──────────────────────────────────────────
 
@@ -303,9 +307,9 @@ vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
 
 import {
   housekeeping,
-  persistAgentTurn,
-  explicitEvolutionSegment,
+  finalizeTurn,
   closeTurnStream,
+  type EntryReckoning,
 } from "@/app/api/chat/steps";
 
 function makeSlice(overrides: Partial<TimeSlice> = {}): TimeSlice {
@@ -400,14 +404,35 @@ function mockCreateSlice(newSliceId: string) {
   );
 }
 
-/** Run the post-reply explicit-instruction channel (序 6) the way the workflow
- *  does — the housekeeping result threads through BY VALUE (EntryReckoning). */
+/** A minimal HousekeepingResult for driving finalizeTurn without a full
+ *  housekeeping run — only the fields the turn tail reads. */
+function hkFor(slice: TimeSlice): HousekeepingResult & EntryReckoning {
+  return {
+    slice,
+    previouslyContent: "",
+    sliceHeadBlock: "",
+    identityPrompt: "",
+    analysis: null,
+    bridgeReport: null,
+  };
+}
+
+/** Run the post-reply turn tail the way the workflow does — ONE finalizeTurn
+ *  step (落盘 + 序 6 + 回程 in a single commit); the housekeeping result
+ *  threads through BY VALUE (EntryReckoning). */
 async function runExplicitEvolution(
   input: TurnInput,
   hk: Awaited<ReturnType<typeof housekeeping>>,
 ) {
-  await explicitEvolutionSegment(input, hk);
+  await finalizeTurn(hk.slice, TAIL_OUTCOME, input, hk);
 }
+
+/** The outcome the tail helper persists — a plain stop, no cognition. */
+const TAIL_OUTCOME: TurnOutcome = {
+  text: "agent reply",
+  finishReason: "stop",
+  cognition: "",
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1262,7 +1287,12 @@ describe("explicit-instruction channel (序 6)", () => {
 
   it("demo mode skips the reckoning AND the explicit channel (no analysis, no evolution, no writes)", async () => {
     const hk = await housekeeping(makeInput("记住：以后都用中文", { useDemo: true }));
-    await explicitEvolutionSegment(makeInput("记住：以后都用中文", { useDemo: true }), hk);
+    await finalizeTurn(
+      hk.slice,
+      TAIL_OUTCOME,
+      makeInput("记住：以后都用中文", { useDemo: true }),
+      hk,
+    );
 
     expect(episodic.analyzeTurn).not.toHaveBeenCalled();
     expect(evolution.runCardEvolution).not.toHaveBeenCalled();
@@ -1444,10 +1474,10 @@ describe("kill matrix (workflow redelivery)", () => {
     const input = makeInput("new topic");
 
     // ── First delivery: the entry beat lands EVERYTHING (归纳 + 闭片 + 新片
-    //    + user turn) in its one commit; persistAgentTurn appends the reply;
+    //    + user turn) in its one commit; the finalize step appends the reply;
     //    then the run DIES before the post-reply segment.
     const hk1 = await housekeeping(input);
-    await persistAgentTurn(hk1.slice, outcome, input.turnId);
+    await finalizeTurn(hk1.slice, outcome, input, hk1);
 
     // The old slice is already closed + marked on the fake disk (deterministic
     // fallback — the default analyzer verdict carries no closedMarking).
@@ -1458,7 +1488,7 @@ describe("kill matrix (workflow redelivery)", () => {
     //    derivation runs with NO closing slice (zero re-summarization).
     const hk2 = await housekeeping(input);
     expect(hk2.slice.slice_id).toBe("2026-07-14-1000");
-    await persistAgentTurn(hk2.slice, outcome, input.turnId);
+    await finalizeTurn(hk2.slice, outcome, input, hk2);
     await runExplicitEvolution(input, hk2);
 
     const finalNew = diskSlice("2026-07-14-1000");
@@ -1559,7 +1589,7 @@ describe("turn idempotency (workflow redelivery)", () => {
     expect(episodic.appendTurn).not.toHaveBeenCalled();
   });
 
-  it("does not re-append the agent turn when persistAgentTurn re-runs with the same turnId", async () => {
+  it("does not re-append the agent turn when finalizeTurn re-runs with the same turnId", async () => {
     const slice = makeSlice({
       turns: [
         { timestamp: "t0", role: "user", content: "hi", turnId: "test-id" },
@@ -1567,7 +1597,7 @@ describe("turn idempotency (workflow redelivery)", () => {
       ],
     });
 
-    await persistAgentTurn(slice, outcome, "test-id");
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice));
 
     expect(slice.turns.filter((t) => t.role === "agent")).toHaveLength(1);
     expect(episodic.appendTurn).not.toHaveBeenCalled();
@@ -1577,10 +1607,11 @@ describe("turn idempotency (workflow redelivery)", () => {
     // First delivery: fresh slice, user turn minted by createSlice.
     const { slice } = await housekeeping(makeInput("hello world"));
 
-    // Agent turn appended once, then the whole persist step is redelivered
+    // Agent turn appended once, then the whole finalize step is redelivered
     // against the same slice state (same turnId).
-    await persistAgentTurn(slice, outcome, "test-id");
-    await persistAgentTurn(slice, outcome, "test-id");
+    const input = makeInput("hello world");
+    await finalizeTurn(slice, outcome, input, hkFor(slice));
+    await finalizeTurn(slice, outcome, input, hkFor(slice));
 
     expect(slice.turns.filter((t) => t.role === "user")).toHaveLength(1);
     expect(slice.turns.filter((t) => t.role === "agent")).toHaveLength(1);
@@ -1620,7 +1651,7 @@ vi.mock("@/lib/tools/readFile", () => readFileMock);
 // Real serializer — the retry path's mergeTurnsWithRemote re-parses this.
 import { serializeSlice } from "@/lib/episodic/manager";
 
-describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", () => {
+describe("finalizeTurn — flushTurnBatch write-conflict self-heal (T-10)", () => {
   const outcome: TurnOutcome = {
     text: "agent reply",
     finishReason: "stop",
@@ -1678,7 +1709,8 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
       ),
     );
 
-    await persistAgentTurn(makeConflictedSlice(), outcome, "test-id");
+    const slice = makeConflictedSlice();
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice));
 
     expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
     expect(readFileMock.readFileFresh).toHaveBeenCalledTimes(2);
@@ -1694,8 +1726,9 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
       serializeSlice(makeConflictedSlice()),
     );
 
+    const slice = makeConflictedSlice();
     await expect(
-      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+      finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice)),
     ).rejects.toThrow("not a fast forward");
     // initial attempt + MAX_FLUSH_RETRIES (2) retries
     expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
@@ -1707,8 +1740,9 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
       Object.assign(new Error("boom"), { status: 500 }),
     );
 
+    const slice = makeConflictedSlice();
     await expect(
-      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+      finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice)),
     ).rejects.toThrow("boom");
     expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
     expect(readFileMock.readFileFresh).not.toHaveBeenCalled();
@@ -1720,7 +1754,8 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
       .mockResolvedValueOnce(undefined);
     readFileMock.readFileFresh.mockRejectedValue(new Error("Not Found"));
 
-    await persistAgentTurn(makeConflictedSlice(), outcome, "test-id");
+    const slice = makeConflictedSlice();
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice));
 
     expect(episodic.flushBatch).toHaveBeenCalledTimes(2);
     expect(warnSpy).toHaveBeenCalledWith(
@@ -1735,8 +1770,9 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
     episodic.flushBatch.mockRejectedValue(refConflict());
     readFileMock.readFileFresh.mockRejectedValue(new Error("Not Found"));
 
+    const slice = makeConflictedSlice();
     await expect(
-      persistAgentTurn(makeConflictedSlice(), outcome, "test-id"),
+      finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice)),
     ).rejects.toThrow("not a fast forward");
     expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
     // Every retry took the degradation branch (remote never readable).
@@ -1745,5 +1781,81 @@ describe("persistAgentTurn — flushTurnBatch write-conflict self-heal (T-10)", 
         String(c[0]).includes("remote re-read failed, retrying as-is:"),
       ),
     ).toHaveLength(2);
+  });
+});
+
+describe("finalizeTurn — the tail's single commit", () => {
+  const outcome: TurnOutcome = {
+    text: "agent reply",
+    finishReason: "stop",
+    cognition: "",
+  };
+
+  let batches: Array<{ entries: Map<string, string> }>;
+
+  beforeEach(() => {
+    batches = [];
+    episodic.createBatch.mockImplementation(() => {
+      const b = { entries: new Map<string, string>() };
+      batches.push(b);
+      return b;
+    });
+  });
+
+  afterEach(() => {
+    episodic.createBatch.mockImplementation(() => ({
+      entries: new Map<string, string>(),
+    }));
+    episodic.flushBatch.mockImplementation(async () => {});
+  });
+
+  it("flushes exactly ONE commit named `Turn {turnId} — finalize`, the body naming the fired segments", async () => {
+    const slice = makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
+    });
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice), {
+      text: "回程内容。",
+      date: "2026-07-14",
+    });
+
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
+    const message = episodic.flushBatch.mock.calls[0][1] as string;
+    expect(message.startsWith("Turn test-id — finalize")).toBe(true);
+    // In this mocked fs only the field-return segment grows the batch (the
+    // persist/evolution writes go through the mocked fs helpers) — the body
+    // line proves the segment accounting, not a second commit.
+    expect(message).toContain("- field return");
+  });
+
+  it("queues the HQ return line into the SAME batch the tail commits", async () => {
+    const slice = makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
+    });
+    fakeDisk.files.set("2026-07-14-0900:agent", "既有 cognition。\n");
+
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice), {
+      text: "回程内容。",
+      date: "2026-07-14",
+    });
+
+    const queued = batches[0].entries.get("2026-07-14-0900:agent");
+    expect(queued).toBeDefined();
+    expect(queued).toContain("既有 cognition。");
+    expect(queued).toContain("Field return (2026-07-14): 回程内容。");
+  });
+
+  it("an empty tail (no reply, no explicit update, no return) no-ops the flush", async () => {
+    const slice = makeSlice({
+      turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
+    });
+    // finishReason "error" with no text → segment 1 queues nothing.
+    await finalizeTurn(
+      slice,
+      { text: "", finishReason: "error", cognition: "" },
+      makeInput("hi"),
+      hkFor(slice),
+    );
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
+    expect(batches[0].entries.size).toBe(0);
   });
 });

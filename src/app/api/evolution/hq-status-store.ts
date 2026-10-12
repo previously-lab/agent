@@ -7,10 +7,21 @@
  * (`tool-executors.ts`'s reportToHQ) and the HQ run shell (`hq-run.ts` /
  * `hq-steps.ts`):
  *
- *   recordDispatch      — the field's latest brief (time + preview)
- *   recordRunStarted    — an HQ run claimed the token (runStatus: "running")
- *   recordBriefOutcome  — one brief's landed writes merge into recentWrites
+ *   recordDispatch      — the field's latest brief (time + preview); writes
+ *                         IMMEDIATELY (it is the field-side record, the only
+ *                         signal the pod gets that a run is coming)
+ *   recordRunStarted    — an HQ run claimed the token (runId + start stamp)
+ *   recordBriefOutcome  — one brief's landed writes
  *   recordRunFinished   — runStatus settles: 完成 / 空转 / 失败 + briefsHandled
+ *
+ * DEFERRED WRITE (aggregation wave, decision D2): the run's own three marks
+ * ACCUMULATE in module run-state and land as ONE overwrite at finish — ≤1
+ * hq.json commit per HQ run instead of ≤3. The trade: the pod's pointer no
+ * longer shows "running" mid-run (the live activity frames on the run's
+ * stream still carry the beat-by-beat truth). The buffer is per-process and
+ * best-effort: if a run resumes on another instance between briefs, the
+ * unflushed marks for earlier briefs are lost (never written elsewhere) —
+ * accepted for a glance pointer, consistent with the tolerances below.
  *
  * Every function is BEST-EFFORT: a status write must never break the dispatch
  * it describes or the HQ run it instruments, so all errors are swallowed with
@@ -93,45 +104,59 @@ export async function recordHQDispatch(brief: string): Promise<void> {
   }));
 }
 
-/** An HQ run claimed the token and starts work. The last run's outcome stays
- *  visible in the other fields until this one settles. `runId` is the
- *  claiming run's OWN durable id (read from the workflow metadata inside the
- *  step — never taken from a dispatch receipt, which may name a duplicate
+// ─── Deferred run marks (D2): accumulate in run-state, ONE write at finish ──
+
+/**
+ * The claiming run's unflushed marks. A single slot (not a per-run map): a
+ * run's store calls execute sequentially in one process and finish is always
+ * the last of them, so one slot per process is exact. A new claim replaces
+ * an unflushed slot (only possible if a previous run died between briefs —
+ * its marks were never promised anywhere).
+ */
+interface PendingRunMarks {
+  runId?: string;
+  runStartedAt?: string;
+  recentWrites: string[];
+}
+let pendingRun: PendingRunMarks | null = null;
+
+/** An HQ run claimed the token and starts work. ACCUMULATES ONLY — the
+ *  pointer is not touched until recordHQRunFinished (≤1 write per run). The
+ *  previous run's outcome stays visible in the file until then. `runId` is
+ *  the claiming run's OWN durable id (read from the workflow metadata inside
+ *  the step — never taken from a dispatch receipt, which may name a duplicate
  *  that loses the claim and exits): the pod attaches its activity stream to
  *  it. */
 export async function recordHQRunStarted(runId?: string): Promise<void> {
-  const at = new Date().toISOString();
-  await mergeHQStatus((s) => ({
-    ...s,
-    runStartedAt: at,
-    runStatus: "running",
+  pendingRun = {
     ...(runId ? { runId } : {}),
-  }));
+    runStartedAt: new Date().toISOString(),
+    recentWrites: [],
+  };
 }
 
 /**
- * One brief's outcome: its landed writes merge into the rolling recentWrites
- * (newest first, deduped, capped). briefsHandled is NOT incremented here —
- * the run reports its definitive count at finish.
+ * One brief's outcome: its landed writes ACCUMULATE into the pending slot
+ * (newest-first, deduped, capped at flush). briefsHandled is NOT incremented
+ * here — the run reports its definitive count at finish.
  */
 export async function recordHQBriefOutcome(outcome: {
   actions: string[];
 }): Promise<void> {
   if (outcome.actions.length === 0) return;
-  await mergeHQStatus((s) => {
-    const merged = [...outcome.actions, ...s.recentWrites];
-    return {
-      ...s,
-      recentWrites: [...new Set(merged)].slice(0, RECENT_WRITES_CAP),
-    };
-  });
+  if (!pendingRun) pendingRun = { recentWrites: [] };
+  pendingRun.recentWrites = [
+    ...new Set([...outcome.actions, ...pendingRun.recentWrites]),
+  ].slice(0, RECENT_WRITES_CAP);
 }
 
 /**
- * The run settled. `wrote` / `errored` summarize the whole run (the shell
- * accumulates them across briefs): an errored run is 失败 even when an
- * earlier brief landed something; a run that stored nothing is 空转 (idle) —
- * a legal, often correct outcome (§5), shown as such.
+ * The run settled — the pointer's SINGLE overwrite (D2). `wrote` / `errored`
+ * summarize the whole run (the shell accumulates them across briefs): an
+ * errored run is 失败 even when an earlier brief landed something; a run
+ * that stored nothing is 空转 (idle) — a legal, often correct outcome (§5),
+ * shown as such. The pending slot's runId / runStartedAt / recentWrites ride
+ * along; the slot is cleared whether or not the write lands (best-effort).
  */
 export async function recordHQRunFinished(result: {
   handled: number;
@@ -143,9 +168,16 @@ export async function recordHQRunFinished(result: {
     : result.wrote
       ? "completed"
       : "idle";
+  const marks = pendingRun;
+  pendingRun = null;
   await mergeHQStatus((s) => ({
     ...s,
     runStatus,
     briefsHandled: Math.max(0, Math.floor(result.handled)),
+    ...(marks?.runId ? { runId: marks.runId } : {}),
+    ...(marks?.runStartedAt ? { runStartedAt: marks.runStartedAt } : {}),
+    recentWrites: [
+      ...new Set([...(marks?.recentWrites ?? []), ...s.recentWrites]),
+    ].slice(0, RECENT_WRITES_CAP),
   }));
 }

@@ -527,7 +527,7 @@ export async function loadSlice(
  * silently drop lines other writers landed in between), and the whole
  * read-modify-write is serialized per slice via `withSliceLock`. A caller
  * that passes a `batch` is already inside the turn's slice lock
- * (persistAgentTurn, steps.ts) — re-taking the same key would self-deadlock,
+ * (finalizeTurn, steps.ts) — re-taking the same key would self-deadlock,
  * so the lock is taken here only for batch-less callers (the rework-signal
  * paths).
  */

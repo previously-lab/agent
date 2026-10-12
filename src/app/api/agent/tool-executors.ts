@@ -19,7 +19,7 @@ import { getHookByToken, resumeHook, start } from "workflow/api";
 // serialization-class registration for it runs before any doStreamStep
 // message is handled (see src/lib/models/step-boundary-model.ts).
 import "@/lib/models/step-boundary-model";
-import { readFile } from "@/lib/tools/readFile";
+import { readFile, getRepoTree } from "@/lib/tools/readFile";
 import { listFiles } from "@/lib/tools/listFiles";
 import {
   readFileLocal,
@@ -68,16 +68,18 @@ import {
   applyCaseWriteIntent,
   type DocMarker,
 } from "@/lib/episodic/flash/librarian";
-import { fsReadFile, fsWriteFile } from "@/lib/episodic/io-helpers";
+import {
+  createBatch,
+  flushBatch,
+  fsReadFile,
+  fsWriteFile,
+} from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
 import {
   slicePartPathCandidates,
   type SlicePart,
 } from "@/lib/episodic";
-import { getOctokit } from "@/lib/github/client";
-import { getRepoConfig } from "@/lib/capabilities";
-import { getDefaultBranch } from "@/lib/tools/batch-write";
 import { migrateToV3 } from "@/lib/episodic/previously-format";
 import {
   annotateSliceWithLocalTime,
@@ -421,9 +423,9 @@ export async function readPreviouslyExecute(
  * ranking, no relevance score — the paths themselves (category / case name /
  * date all live on the path) are the index.
  *
- * - GitHub: ONE recursive Git Trees API call returns every path under the
- *   repo (the same pattern as timeline/enumerate.ts, widened to the whole
- *   `memory/` tree); the API's own `truncated` flag passes through.
+ * - GitHub: the cached repo tree (`getRepoTree` in tools/readFile) already
+ *   carries every path under `memory/`; the API's own `truncated` flag
+ *   passes through.
  * - Local / demo: a recursive walk through the listFiles layer.
  *
  * `config/` is filtered out mechanically (engineering state, not documents).
@@ -447,34 +449,23 @@ export async function listTreeExecute(
 }
 
 async function listTreeGitHub(ctx: ToolContext): Promise<ListTreeResult> {
-  const { owner, repo } = { owner: ctx.owner, repo: ctx.repo };
-  const octokit = getOctokit();
-  const branch = await getDefaultBranch();
-  const { data: ref } = await octokit.rest.git.getRef({
-    owner,
-    repo,
-    ref: `heads/${branch}`,
-  });
-  const { data: tree } = await octokit.rest.git.getTree({
-    owner,
-    repo,
-    tree_sha: ref.object.sha,
-    recursive: "1",
-  });
+  // The cached memory/ repo tree (Wave A): within the TTL this costs zero
+  // API calls per step. `truncated` passes through to the model per the
+  // tool's contract — a step does not silently downgrade to a raw walk.
+  const tree = await getRepoTree(ctx.repo, ctx.owner);
 
   const paths: string[] = [];
-  for (const item of tree.tree ?? []) {
-    if (item.type !== "blob") continue;
-    const p = item.path ?? "";
-    if (!p.startsWith("memory/")) continue;
-    const rel = p.slice("memory/".length);
+  for (const e of tree.entries) {
+    if (e.type !== "blob") continue;
+    // Entries are the memory/ subtree by construction.
+    const rel = e.path.slice("memory/".length);
     if (rel === "" || rel.startsWith("config/")) continue; // config/ = engineering state
     // The pre-v0.19 settings file is the same engineering state under an old
     // name — still on disk as the loader's read fallback, never a case.
     if (rel === "user/config.json") continue;
     paths.push(rel);
   }
-  return { truncated: tree.truncated === true, tree: groupTreePaths(paths) };
+  return { truncated: tree.truncated, tree: groupTreePaths(paths) };
 }
 
 async function listTreeWalk(ctx: ToolContext): Promise<ListTreeResult> {
@@ -868,6 +859,17 @@ export async function writeCaseExecute(
   const date = userLocalDate(ctx.timezone);
   const indexPath = caseIndexPath(category, caseName);
 
+  // ONE batch per tool call: an open followed by an addPiece in the SAME call
+  // lands as ONE commit (coalesced per call — the queued open is visible to
+  // the in-lock fresh read that the addPiece intent re-checks, exactly like
+  // the production batch read-your-writes). A call that only refuses queues
+  // nothing; the flush no-ops on an empty batch. A flush failure surfaces to
+  // the step retry — the intents re-apply under the per-case lock and an
+  // already-landed open reads back as "already exists", converging on the
+  // same tree. Same threading on the local backend: flushBatch applies the
+  // entries and records one local commit.
+  const batch = createBatch();
+  const result = await (async (): Promise<WriteCaseResult> => {
   // Probe for existence OUTSIDE the lock (fresh read); the in-lock checks
   // inside applyCaseWriteIntent are the backstop for the open race.
   let exists = false;
@@ -883,8 +885,14 @@ export async function writeCaseExecute(
       const applied = await applyCaseWriteIntent(
         { action: "open", category, caseName, body },
         date,
+        batch,
       );
-      return { ok: true, action: "open", path: applied.path };
+      // A pieceTitle on the OPEN call adds the first piece in the SAME call:
+      // the queued open is read back by the addPiece intent (batch
+      // read-your-writes) and both files ride the call's single commit.
+      if (!pieceTitle) {
+        return { ok: true, action: "open", path: applied.path };
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (!msg.includes("already exists")) {
@@ -907,11 +915,15 @@ export async function writeCaseExecute(
     const applied = await applyCaseWriteIntent(
       { action: "addPiece", category, caseName, title: pieceTitle, body },
       date,
+      batch,
     );
     return { ok: true, action: "addPiece", path: applied.path };
   } catch (e) {
     return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}` };
   }
+  })();
+  await flushBatch(batch, `writeCase ${category}/${caseName}`);
+  return result;
 }
 
 

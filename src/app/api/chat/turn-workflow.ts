@@ -34,6 +34,7 @@ import { splitIdentityPrompt } from "@/lib/identity/assisting-block";
 import { annotateCardTimes, localDateKey } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { parseSliceId } from "@/lib/episodic/turn-parser";
+import type { TimeSlice } from "@/lib/episodic";
 import {
   classifyWorkflowError,
   errorMessage,
@@ -41,10 +42,8 @@ import {
 } from "@/lib/chat/workflow-errors";
 import {
   housekeeping,
-  persistAgentTurn,
-  explicitEvolutionSegment,
+  finalizeTurn,
   closeTurnStream,
-  appendFieldReturnLine,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -1293,55 +1292,66 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     };
   }
 
-  // ── Post-turn steps (v0.21 §3) ─────────────────────────────────────────
-  // 落盘这一轮 — the agent turn + cognition join the slice (deduped by
-  // turnId). Pure engineering.
-  await persistAgentTurn(slice, outcome, input.turnId);
-  // 序 6 — the explicit-instruction channel: runs only when the entry beat's
-  // analysis read an explicit record/correction request in the user's
-  // message; zero LLM, zero writes otherwise (空转零写入). Runs even when the
-  // reply failed (streamError); every write is idempotent under redelivery.
-  await explicitEvolutionSegment(input, hk);
+  // ── Post-turn: ONE finalize step (落盘 + 序 6 + 回程 in a single commit) ──
+  // 落盘这一轮 + the explicit-instruction channel + a caught HQ return all
+  // ride finalizeTurn's single flush. The §4 回程 peek runs HERE, in the
+  // workflow body, BEFORE the finalize step — hooks are workflow-runtime
+  // primitives (the token registers only when the run suspends on the hook),
+  // so the race cannot live inside a step — and its result crosses the step
+  // boundary as plain serializable data, queued into the same commit.
+  const fieldReturn = await peekFieldReturn(hk.slice, input);
+  await finalizeTurn(hk.slice, outcome, input, hk, fieldReturn ?? undefined);
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
 
-  // ── 收尾 peek：HQ 回程（v0.21 §4，best-effort bonus）───────────────────
-  // 注册时机（SDK create-hook 文档）：createHook() 本身不注册——registration
-  // 只在 workflow suspend 到该 hook 上时才提交。所以外勤可被 HQ 投递的时
-  // 刻只有下面这次 race 挂起之后；HQ 早喊晚喊都是 HookNotFoundError → pass。
-  // 这就是"回程是 bonus 不是通道"（§11 ②）的物理基础，也解释了为什么命
-  // 中率天然低。token 与 reportToHQ executor 附带的 replyToken 同公式
-  // （field:<sliceId>:<startedAtIso>），对话轮 run 据此预建回调点。
-  {
-    const fieldToken = `field:${hk.slice.slice_id}:${input.startedAtIso ?? ""}`;
-    const fieldHook = createHook<string>({ token: fieldToken });
-    try {
-      const iterator = fieldHook[Symbol.asyncIterator]();
-      try {
-        const peek = await raceFieldPeek(iterator);
-        if (peek.kind === "reply" && peek.text.trim()) {
-          // 赶上就带上：一条散文行进本片 agent.md，下一轮读面自然看到。
-          // 日期戳走用户本地时钟（本回合开始时刻 × clientTimezone）。
-          const returnDate =
-            localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined;
-          await appendFieldReturnLine(hk.slice.slice_id, peek.text.trim(), returnDate);
-        }
-      } finally {
-        await iterator.return?.();
-      }
-    } catch (err) {
-      // peek 是纯工程顺路：任何失败都不拖垮回合。
-      console.warn(
-        `[Turn:${input.turnId}] HQ-return peek failed (ignored):`,
-        err instanceof Error ? err.message : err,
-      );
-    } finally {
-      fieldHook.dispose();
-    }
-  }
-
   if (streamError !== null) {
     throw streamError;
+  }
+}
+
+/**
+ * 收尾 peek：HQ 回程（v0.21 §4，best-effort bonus）— the workflow-body half.
+ * 注册时机（SDK create-hook 文档）：createHook() 本身不注册——registration
+ * 只在 workflow suspend 到该 hook 上时才提交。所以外勤可被 HQ 投递的时刻
+ * 只有这次 race 挂起之后；HQ 早喊晚喊都是 HookNotFoundError → pass。这就
+ * 是"回程是 bonus 不是通道"（§11 ②）的物理基础。token 与 reportToHQ
+ * executor 附带的 replyToken 同公式（field:<sliceId>:<startedAtIso>）。
+ *
+ * Runs BEFORE finalizeTurn so a caught return rides the tail's single
+ * commit: the result crosses the step boundary as plain serializable data
+ * (the date stamp rides the USER's clock — the turn start × clientTimezone),
+ * and finalizeTurn queues the line into the same batch. 赶不上不补偿、不留账 —
+ * any failure (hook gone, race timeout) resolves to null and the turn moves
+ * on; the peek never takes the turn down.
+ */
+async function peekFieldReturn(
+  slice: TimeSlice,
+  input: TurnInput,
+): Promise<{ text: string; date?: string } | null> {
+  const fieldToken = `field:${slice.slice_id}:${input.startedAtIso ?? ""}`;
+  const fieldHook = createHook<string>({ token: fieldToken });
+  try {
+    const iterator = fieldHook[Symbol.asyncIterator]();
+    try {
+      const peek = await raceFieldPeek(iterator);
+      if (peek.kind !== "reply" || !peek.text.trim()) return null;
+      return {
+        text: peek.text.trim(),
+        date:
+          localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined,
+      };
+    } finally {
+      await iterator.return?.();
+    }
+  } catch (err) {
+    // peek 是纯工程顺路：任何失败都不拖垮回合。
+    console.warn(
+      `[Turn:${input.turnId}] HQ-return peek failed (ignored):`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  } finally {
+    fieldHook.dispose();
   }
 }
 

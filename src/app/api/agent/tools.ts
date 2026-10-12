@@ -311,11 +311,13 @@ export const chatTools = {
       "index.md (the case name is permanent; name it for the QUESTION, " +
       "specific enough that a scope change means a new case). If it ALREADY " +
       "exists, pass pieceTitle to ADD one dated piece (the date prefix is " +
-      "stamped mechanically — pass the bare title); omitting pieceTitle on an " +
-      "existing case is refused — this tool never rewrites an index. What you " +
-      "write is exactly what lands: no machine fields are added (dates and " +
-      "the updated stamp are stamped mechanically). If the piece should say " +
-      "where it came from (which conversation, when), say it in prose. " +
+      "stamped mechanically — pass the bare title); a pieceTitle on the OPEN " +
+      "call also lands that first piece in the same call (one commit). " +
+      "Omitting pieceTitle on an existing case is refused — this tool never " +
+      "rewrites an index. What you write is exactly what lands: no machine " +
+      "fields are added (dates and the updated stamp are stamped " +
+      "mechanically). If the piece should say where it came from (which " +
+      "conversation, when), say it in prose. " +
       DOC_WRITE_WINDOW_RULE +
       `\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
@@ -346,9 +348,10 @@ export const chatTools = {
         .string()
         .optional()
         .describe(
-          "Required when adding to an EXISTING case: the dated piece's " +
-          "title (the date prefix is stamped mechanically — pass the bare " +
-          "title, e.g. '报价篇'). Omit when opening a new case.",
+          "The dated piece's title (the date prefix is stamped " +
+          "mechanically — pass the bare title, e.g. '报价篇'). On an existing " +
+          "case it adds the piece; on the OPEN call it also lands that first " +
+          "piece in the same call. Omit for a bare open.",
         ),
     }),
     contextSchema: toolContextSchema,
