@@ -40,6 +40,7 @@ import {
   type CaseWriteIntent,
 } from "@/lib/episodic/flash/librarian";
 import type { CaseCategory } from "@/lib/docs";
+import { sanitizeCaseSegment } from "@/lib/docs/case-naming";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
 // (gray-matter → node:*), which the workflow bundler rejects.
@@ -207,7 +208,9 @@ function buildHqTools(date: string, model: ModelConfig) {
         }
         // The runtime category check lives in applyCaseWriteIntent
         // (isCaseCategory throws on an unknown category) — one enforcement point.
-        const base = { category: args.category as CaseCategory, caseName: args.caseName };
+        // Names come from the model — normalize before anything else touches
+        // them (2026-10-12 discipline; see sanitizeCaseSegment).
+        const base = { category: args.category as CaseCategory, caseName: sanitizeCaseSegment(args.caseName) };
         let intent: CaseWriteIntent;
         switch (args.action) {
           case "open":
@@ -231,7 +234,7 @@ function buildHqTools(date: string, model: ModelConfig) {
             break;
           case "addPiece":
             if (!args.title || !args.body) return "REJECTED: addPiece requires title and body";
-            intent = { action: "addPiece", ...base, title: args.title, body: args.body };
+            intent = { action: "addPiece", ...base, title: sanitizeCaseSegment(args.title), body: args.body };
             break;
         }
         try {

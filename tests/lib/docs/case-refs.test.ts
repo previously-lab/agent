@@ -181,13 +181,13 @@ describe("full-width names — exact identity, folded fallback (v0.24)", () => {
     expect(paths[0]).toBe(
       "memory/research/RSI 的两种形态：脚手架式自我改进 vs 权重式自我改进/index.md",
     );
-    // The folded path exists only as a trailing fallback, after every exact
-    // candidate, never replacing the identity.
-    expect(paths[paths.length - 1]).toBe(
-      "memory/episodic/strands/RSI 的两种形态:脚手架式自我改进 vs 权重式自我改进.md",
-    );
+    // 2026-10-12: this name's NFKC fold contains the Windows-forbidden ASCII
+    // ":" — a file with that name can no longer exist on disk (the write
+    // seams refuse it), so the folded fallback is skipped entirely rather
+    // than built into dead paths.
+    expect(paths.every((p) => !p.includes(":"))).toBe(true);
     expect(paths).toContain(
-      "memory/research/RSI 的两种形态:脚手架式自我改进 vs 权重式自我改进/index.md",
+      "memory/episodic/strands/RSI 的两种形态：脚手架式自我改进 vs 权重式自我改进.md",
     );
   });
 

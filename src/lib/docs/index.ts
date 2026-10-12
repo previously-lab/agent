@@ -55,6 +55,7 @@ export {
   isValidPieceFileName,
   parsePieceFileName,
   buildPieceFileName,
+  sanitizeCaseSegment,
   type ParsedPieceName,
 } from "./case-naming";
 export {

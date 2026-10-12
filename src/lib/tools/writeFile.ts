@@ -1,4 +1,5 @@
 import { getOctokit } from "@/lib/github/client";
+import { assertPortableRepoPath } from "@/lib/portable-path";
 import { isPathAllowed } from "@/lib/whitelist";
 import { invalidateReadCache } from "@/lib/tools/readFile";
 
@@ -20,6 +21,7 @@ export async function writeFile(
       `Access denied: path "${path}" is outside allowed directories`
     );
   }
+  assertPortableRepoPath(path);
 
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
     throw new Error(
@@ -131,6 +133,7 @@ export async function writeBinaryFile(
       `Access denied: path "${path}" is outside allowed directories`
     );
   }
+  assertPortableRepoPath(path);
 
   const octokit = getOctokit();
 

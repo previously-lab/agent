@@ -15,6 +15,7 @@
  * being the absence of a call here.
  */
 import { isPathAllowed, resolveLocalDataPath } from "@/lib/whitelist";
+import { assertPortableRepoPath } from "@/lib/portable-path";
 import {
   cachedFetch,
   ttlForPath,
@@ -138,6 +139,7 @@ export async function writeFileLocal(
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
+  assertPortableRepoPath(path);
 
   if (Buffer.byteLength(content, "utf-8") > MAX_FILE_SIZE_BYTES) {
     throw new Error(`Content too large. Maximum is ${MAX_FILE_SIZE_BYTES} bytes.`);
@@ -185,6 +187,7 @@ export async function writeBinaryFileLocal(
   if (!isPathAllowed(path)) {
     throw new Error(`Access denied: path "${path}" is outside allowed directories`);
   }
+  assertPortableRepoPath(path);
 
   if (data.byteLength > MAX_BINARY_FILE_SIZE_BYTES) {
     throw new Error(

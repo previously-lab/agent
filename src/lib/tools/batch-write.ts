@@ -11,6 +11,7 @@
  */
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
+import { assertPortableRepoPath } from "@/lib/portable-path";
 import { invalidateReadCache } from "@/lib/tools/readFile";
 import { isPathAllowed } from "@/lib/whitelist";
 
@@ -92,6 +93,7 @@ export async function commitBatchToGitHub(
         `Access denied: path "${path}" is outside allowed directories`,
       );
     }
+    assertPortableRepoPath(path);
   }
 
   const { owner, repo } = getRepoConfig();

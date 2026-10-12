@@ -59,6 +59,7 @@ import {
   serializeCaseDoc,
   CaseWriteRefusal,
   DOC_WRITE_WINDOW_RULE,
+  sanitizeCaseSegment,
   type CaseCategory,
 } from "@/lib/docs";
 import {
@@ -569,7 +570,12 @@ Report one decision per case as instructed.`;
   const written: string[] = [];
   for (const op of result.report.cases) {
     if (op.action === "skip") continue;
-    const identity = `${op.category}/${op.caseName}`;
+    // Names arrive from the model — normalize to a portable form BEFORE any
+    // lookup or validation (2026-10-12 discipline; sanitizeCaseSegment maps
+    // ":" to the full-width "：" and strips the other Windows-invalid set).
+    // The identity below therefore names the case as it will exist on disk.
+    const caseName = sanitizeCaseSegment(op.caseName);
+    const identity = `${op.category}/${caseName}`;
     // Read-before-write, structural: updating a case that is not in the
     // manifest means the writer never saw its current state.
     if (op.action !== "open" && !existing.has(identity)) {
@@ -585,21 +591,21 @@ Report one decision per case as instructed.`;
       switch (op.action) {
         case "open":
           if (!op.body?.trim()) throw new Error("open requires a body (the index.md body)");
-          intent = { action: "open", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
+          intent = { action: "open", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "updateIndex":
           if (!op.body?.trim()) throw new Error("updateIndex requires a body (the WHOLE new body)");
-          intent = { action: "rewriteIndex", category: op.category, caseName: op.caseName, body: stampEvidence(op.body, closedSliceId) };
+          intent = { action: "rewriteIndex", category: op.category, caseName, body: stampEvidence(op.body, closedSliceId) };
           break;
         case "appendTail":
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
-          intent = { action: "appendTail", category: op.category, caseName: op.caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
+          intent = { action: "appendTail", category: op.category, caseName, line: `${op.line.trim()} (refs: ${closedSliceId})` };
           break;
         case "addPiece":
           if (!op.title?.trim() || !op.body?.trim()) {
             throw new Error("addPiece requires a title and a body");
           }
-          intent = { action: "addPiece", category: op.category, caseName: op.caseName, title: op.title.trim(), body: stampEvidence(op.body, closedSliceId) };
+          intent = { action: "addPiece", category: op.category, caseName, title: sanitizeCaseSegment(op.title), body: stampEvidence(op.body, closedSliceId) };
           break;
       }
       const applied = await applyCaseWriteIntent(intent, date, batch);
@@ -680,8 +686,11 @@ function resolveScribeTarget(
     category: CaseCategory,
     rawName: string,
   ): { category: CaseCategory; caseName: string } | { error: string } => {
-    const caseName = rawName.trim();
-    if (!isValidCaseName(caseName)) {
+    // Markers carry model-written names; normalize before the red-line check
+    // (2026-10-12 discipline) so the portable variant gets written instead of
+    // the marker being skipped for a character Windows cannot check out.
+    const caseName = sanitizeCaseSegment(rawName.trim());
+    if (!caseName || !isValidCaseName(caseName)) {
       return { error: `illegal case name: ${JSON.stringify(rawName)}` };
     }
     return { category, caseName };

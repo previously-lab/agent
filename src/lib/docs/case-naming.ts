@@ -19,9 +19,17 @@
  * `case-doc.ts` validate through them, so an illegal name is refused
  * BEFORE it can reach the filesystem.
  */
+import { isPortablePathSegment } from "@/lib/portable-path";
 import { isValidDate } from "./naming";
 
-/** Characters/conditions that can never appear in any name component. */
+/**
+ * Characters/conditions that can never appear in any name component.
+ *
+ * The last clause is the platform-safety discipline (2026-10-12 incident):
+ * a name the GitHub API accepts happily (`16:00`) is a name Windows cannot
+ * check out, and one such name blocks `git pull` for every Windows clone.
+ * `isPortablePathSegment` holds the shared list — see portable-path.ts.
+ */
 function hasUnsafeShape(name: string): boolean {
   return (
     name.length === 0 ||
@@ -31,8 +39,37 @@ function hasUnsafeShape(name: string): boolean {
     name.includes("\0") ||
     name === "." ||
     name === ".." ||
-    name.includes("..")
+    name.includes("..") ||
+    !isPortablePathSegment(name)
   );
+}
+
+/**
+ * Purify a name component that came from outside the system (a model-written
+ * case name or piece title) into a name every platform accepts. The ASCII
+ * colon becomes the full-width `：` — the corpus's own convention (titles are
+ * full of ：、，), same reading, legal on Windows — and every other
+ * typographic member of the Windows-forbidden set (`<>"|?*`) and control
+ * character becomes `-`. `..` runs collapse, edge dots/spaces trim, the
+ * result caps at 120 chars. Path separators are NOT touched: a name is ONE
+ * segment, so `/` and `\` stay illegal and the validator refuses them loudly
+ * (silently flattening `a/b` to `a-b` would invent an identity the writer
+ * never chose). Run external names through this pass BEFORE
+ * buildPieceFileName / the write ops, which still refuse anything illegal as
+ * the backstop.
+ *
+ * Deliberately NO NFKC: the corpus is full-width-punctuation-heavy, and NFKC
+ * would fold `：`/`，` into ASCII forms this pass would then destroy. May
+ * return "" when nothing survives — the caller owns the fallback.
+ */
+export function sanitizeCaseSegment(raw: string): string {
+  return raw
+    .replace(/:/g, "：")
+    .replace(/[<>"|?*\x00-\x1f\x7f]+/g, "-")
+    .replace(/\.\.+/g, ".")
+    .replace(/^[.\s]+|[.\s]+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 120);
 }
 
 /** The red line: a 4-digit-leading TITLE could complete a slice-id shape. */

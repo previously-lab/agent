@@ -4,6 +4,7 @@ import {
   isValidPieceFileName,
   parsePieceFileName,
   buildPieceFileName,
+  sanitizeCaseSegment,
 } from "@/lib/docs";
 
 describe("isValidCaseName — the naming red line", () => {
@@ -93,5 +94,48 @@ describe("parsePieceFileName / buildPieceFileName", () => {
     );
     expect(() => buildPieceFileName("2026-09-05", "2025年的事")).toThrow();
     expect(() => buildPieceFileName("not-a-date", "标题")).toThrow();
+  });
+});
+
+describe("platform safety — the 2026-10-12 incident", () => {
+  it("sanitizeCaseSegment maps ':' to the full-width '：' (the corpus convention)", () => {
+    expect(sanitizeCaseSegment("两种情形：钱、可持续性，与 16:00 那场腾讯云")).toBe(
+      "两种情形：钱、可持续性，与 16：00 那场腾讯云",
+    );
+  });
+
+  it("sanitizeCaseSegment replaces the rest of the Windows-forbidden set with '-'", () => {
+    expect(sanitizeCaseSegment('a<b>c"d|e?f*g')).toBe("a-b-c-d-e-f-g");
+    // separators are structural, not typographic — refused by the validator,
+    // never silently rewritten into a different identity
+    expect(sanitizeCaseSegment("a/b")).toBe("a/b");
+    expect(sanitizeCaseSegment("a\\b")).toBe("a\\b");
+    expect(sanitizeCaseSegment("a--b")).toBe("a-b");
+    expect(sanitizeCaseSegment(" a...b ")).toBe("a.b");
+    expect(sanitizeCaseSegment("...")).toBe("");
+    expect(sanitizeCaseSegment("x".repeat(200))).toBe("x".repeat(120));
+  });
+
+  it("case names with Windows-forbidden characters are refused", () => {
+    expect(isValidCaseName("2026-10-12-与 16:00 那场腾讯云")).toBe(false);
+    expect(isValidCaseName("a:b")).toBe(false);
+    expect(isValidCaseName("a?b")).toBe(false);
+    expect(isValidCaseName('a"b')).toBe(false);
+    expect(isValidCaseName("a*b")).toBe(false);
+    expect(isValidCaseName("a|b")).toBe(false);
+    expect(isValidCaseName("a<b>c")).toBe(false);
+    expect(isValidCaseName("报告.")).toBe(false);
+    expect(isValidCaseName("nul")).toBe(false);
+    expect(isValidCaseName("COM1")).toBe(false);
+    expect(isValidCaseName("console")).toBe(true);
+  });
+
+  it("piece file names reject the incident title until sanitized (the regression)", () => {
+    const title = "两种情形：钱、可持续性，与 16:00 那场腾讯云";
+    expect(() => buildPieceFileName("2026-10-12", title)).toThrow();
+    const safe = sanitizeCaseSegment(title);
+    expect(safe).toBe("两种情形：钱、可持续性，与 16：00 那场腾讯云");
+    expect(buildPieceFileName("2026-10-12", safe)).toBe(`2026-10-12-${safe}.md`);
+    expect(isValidPieceFileName(`2026-10-12-${safe}.md`)).toBe(true);
   });
 });

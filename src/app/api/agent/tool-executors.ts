@@ -58,6 +58,7 @@ import {
   normalizeCaseRefText,
   caseIndexPath,
   isValidCaseName,
+  sanitizeCaseSegment,
   CASE_CATEGORY_LIST,
   type CaseRef,
 } from "@/lib/docs";
@@ -847,7 +848,7 @@ export async function writeCaseExecute(
         `allowed: "research" (an investigation) or "tasks" (a commitment).`,
     };
   }
-  const caseName = input.caseName?.trim() ?? "";
+  const caseName = sanitizeCaseSegment(input.caseName?.trim() ?? "");
   if (!caseName) return { ok: false, reason: "caseName must not be empty." };
   if (!isValidCaseName(caseName)) {
     return {
@@ -862,7 +863,7 @@ export async function writeCaseExecute(
   if (!body) {
     return { ok: false, reason: "body must not be empty — write the WHOLE content." };
   }
-  const pieceTitle = input.pieceTitle?.trim() ?? "";
+  const pieceTitle = sanitizeCaseSegment(input.pieceTitle?.trim() ?? "");
 
   const date = userLocalDate(ctx.timezone);
   const indexPath = caseIndexPath(category, caseName);

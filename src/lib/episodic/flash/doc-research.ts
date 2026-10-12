@@ -32,6 +32,7 @@ import {
   CASE_CATEGORIES,
   DOC_WRITE_WINDOW_RULE,
   isValidCaseName,
+  sanitizeCaseSegment,
   type CaseCategory,
 } from "@/lib/docs";
 import {
@@ -225,8 +226,9 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
   const written: string[] = [];
 
   for (const op of result.report.writes) {
-    const identity = `${op.category}/${op.caseName}`;
-    if (!isValidCaseName(op.caseName)) {
+    const caseName = sanitizeCaseSegment(op.caseName);
+    const identity = `${op.category}/${caseName}`;
+    if (!caseName || !isValidCaseName(caseName)) {
       skipped.push({ id: "?", reason: `illegal case name: ${JSON.stringify(op.caseName)}` });
       continue;
     }
@@ -255,7 +257,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
         case "open": {
           if (!op.body?.trim()) throw new Error("open requires a body");
           applied = await applyCaseWriteIntent(
-            { action: "open", category, caseName: op.caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
+            { action: "open", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -263,7 +265,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
         case "updateIndex": {
           if (!op.body?.trim()) throw new Error("updateIndex requires a body");
           applied = await applyCaseWriteIntent(
-            { action: "rewriteIndex", category, caseName: op.caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
+            { action: "rewriteIndex", category, caseName, body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -271,7 +273,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
         case "appendTail": {
           if (!op.line?.trim()) throw new Error("appendTail requires a line");
           applied = await applyCaseWriteIntent(
-            { action: "appendTail", category, caseName: op.caseName, line: `${op.line.trim()} (refs: ${sliceId})` },
+            { action: "appendTail", category, caseName, line: `${op.line.trim()} (refs: ${sliceId})` },
             date, batch,
           );
           break;
@@ -281,7 +283,7 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
             throw new Error("addPiece requires a title and a body");
           }
           applied = await applyCaseWriteIntent(
-            { action: "addPiece", category, caseName: op.caseName, title: op.title.trim(), body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
+            { action: "addPiece", category, caseName, title: sanitizeCaseSegment(op.title), body: `${op.body.trim()}\n\n(refs: ${sliceId})` },
             date, batch,
           );
           break;

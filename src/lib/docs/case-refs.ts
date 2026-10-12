@@ -123,12 +123,28 @@ export function parseCaseRef(ref: string): CaseRef | null {
 export function resolveCaseRefPaths(ref: CaseRef): string[] {
   const exact = exactCaseRefPaths(ref);
   const folded = foldCaseRef(ref);
-  if (!folded) return exact;
+  // A folded component is not an identity — it only ever served to reach a
+  // legacy file. When the fold produces a name the validators refuse (：→ :
+  // is the live case; 2026-10-12), no such file can exist in the repo, so
+  // the fallback is skipped instead of throwing on the way to a dead path.
+  if (!folded || !isBuildableRef(folded)) return exact;
   const seen = new Set(exact);
   return [
     ...exact,
     ...exactCaseRefPaths(folded).filter((p) => !seen.has(p)),
   ];
+}
+
+/** Can `exactCaseRefPaths` build this ref without tripping the name
+ *  validators? The exact ref is legal by construction (parseCaseRef validated
+ *  it); a FOLDED ref is not necessarily — this is the gate above. Legacy
+ *  candidates are plain string assembly and are always buildable. */
+function isBuildableRef(ref: CaseRef): boolean {
+  if (ref.kind === "case") return isValidCaseName(ref.caseName);
+  if (ref.kind === "piece") {
+    return isValidCaseName(ref.caseName) && isValidPieceFileName(ref.pieceFileName);
+  }
+  return true;
 }
 
 /** The exact-name candidates, new root first, legacy roots after (§D.1). */
