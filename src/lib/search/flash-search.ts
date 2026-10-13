@@ -42,8 +42,8 @@
  * affected. The call itself runs on the unified sub-agent runner
  * (src/lib/agents/sub-agent-runner.ts): thinking ON at effort "low" (via the
  * Anthropic-shaped effort mapping — this adapter speaks the Anthropic
- * protocol), EXPLICIT output/thinking budgets (the compat endpoint's 4096 /
- * 1024 defaults silently truncated reports — see SEARCH_MAX_OUTPUT_TOKENS),
+ * protocol), NO output/thinking budgets (the runner's default; probed
+ * 2026-10-14 — an absent max_tokens does not truncate on this endpoint),
  * a 50-step cap, and a 240s wall-clock budget (sized for the 6-page read
  * quota). The provider path is unchanged: the runner receives a PRE-BUILT
  * model instance so the custom endpoint + normalizing fetch stay exactly as
@@ -91,17 +91,6 @@ export interface WebSearchResult {
  *  Anthropic's own default max_uses and pairs with the 6-page read quota; the
  *  50-step cap and 240s budget still bound the run. */
 const MAX_SEARCHES_PER_QUERY = 5;
-
-/** Explicit generation budgets for the research run (pinned 2026-11 after a
- *  production failure): DeepSeek's Anthropic-compatible endpoint does not
- *  recognize `deepseek-v4-flash`, so an absent max_tokens falls back to 4096
- *  and thinking to a 1024-token budget — the searchReport JSON was truncated
- *  mid-call and temperature dropped with a warning. 16K output leaves ample
- *  room for the cited answer after a 4K thinking budget. This is the
- *  sanctioned exception to the runner's no-maxOutputTokens default: here the
- *  ABSENT field is the silent truncator, not the cap. */
-const SEARCH_MAX_OUTPUT_TOKENS = 16_000;
-const SEARCH_THINKING_BUDGET_TOKENS = 4_096;
 
 /** Pages the researcher may read in full per run. Reading pages is the
  *  expensive leg (fetch + context); a model that keeps "just one more page"
@@ -476,17 +465,11 @@ export async function searchViaFlash(
     // must use the Anthropic provider-options shape, not DeepSeek's.
     effortSdk: "anthropic",
     system: systemPrompt,
-    // Explicit budgets — the compat endpoint's defaults (4096 output / 1024
-    // thinking) silently truncated reports; see the constants above.
-    maxOutputTokens: SEARCH_MAX_OUTPUT_TOKENS,
-    providerOptions: {
-      anthropic: {
-        thinking: {
-          type: "enabled",
-          budgetTokens: SEARCH_THINKING_BUDGET_TOKENS,
-        },
-      },
-    },
+    // No maxOutputTokens, no thinking budget — the runner's default (effort
+    // shape only: thinking enabled at the model's own budget). Probed
+    // 2026-10-14 against this compat endpoint: an absent max_tokens does NOT
+    // truncate (end_turn after 38K output tokens); the 2026-11 truncation
+    // note that once pinned 16K/4K here no longer reproduces.
     selfSop: "search",
     prompt: `Today is ${today}.\n\nQuery: ${query}${scoutBlock}`,
     tools: {

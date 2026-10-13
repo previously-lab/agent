@@ -286,7 +286,7 @@ describe("searchViaFlash", () => {
     expect(out).toContain("Image-read quota exhausted");
   });
 
-  it("pins explicit output and thinking budgets (the compat endpoint's 4096/1024 defaults silently truncate)", async () => {
+  it("carries no token budgets — the runner's effort shape supplies thinking, nothing caps output", async () => {
     runner.runSubAgent.mockResolvedValue({
       ok: true,
       report: { answer: "a", recommendation: "r", suggested_reads: [] },
@@ -294,10 +294,10 @@ describe("searchViaFlash", () => {
     });
     await searchViaFlash("q");
     const opts = runner.runSubAgent.mock.calls[0]![0];
-    expect(opts.maxOutputTokens).toBe(16_000);
-    expect(opts.providerOptions).toEqual({
-      anthropic: { thinking: { type: "enabled", budgetTokens: 4_096 } },
-    });
+    // The 2026-10-14 probe: this compat endpoint's absent max_tokens does NOT
+    // truncate — budgets are banned project-wide, so neither key is passed.
+    expect(opts.maxOutputTokens).toBeUndefined();
+    expect(opts.providerOptions).toBeUndefined();
   });
 
   it("swaps in a report-now directive on the final step only (prepareStep)", async () => {

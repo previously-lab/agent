@@ -46,12 +46,13 @@
  * pre-built `languageModel` instead of a ModelConfig; `effortSdk` then picks
  * the SDK family used for the effort mapping.
  *
- * There is deliberately NO default `maxOutputTokens` here (project-wide ban):
- * a hard token cap is invisible to the model and silently truncates the
- * report. Callers may OPT IN (`maxOutputTokens`) when the provider's own
- * implicit default is worse — flash-search: DeepSeek's Anthropic-compatible
- * endpoint falls back to 4096 output / 1024 thinking when the fields are
- * absent, which truncated the searchReport mid-call.
+ * There is deliberately NO `maxOutputTokens` anywhere (project-wide ban): a
+ * hard token cap is invisible to the model and silently truncates the
+ * report. The one historical exception (flash-search on DeepSeek's
+ * Anthropic-compatible endpoint, pinned 16K/4K after a 2026-11 truncation)
+ * was removed 2026-10-14 — a probe that day showed the endpoint's absent
+ * max_tokens no longer falls back to a small default (a thinking-enabled
+ * call with no budgets ran to end_turn after 38K output tokens).
  * The runner never throws — every failure is a structured `{ ok: false }`.
  */
 import {
@@ -271,12 +272,6 @@ export interface RunSubAgentOptions<Report> {
   /** Reasoning effort — thinking is ON by default. Default "low". */
   effort?: "low" | "medium" | "high";
   /**
-   * Explicit output-token ceiling. Omitted by default (project-wide ban: a
-   * cap the model can't see silently truncates the report). Opt in ONLY when
-   * the provider's implicit default is worse — see the header note.
-   */
-  maxOutputTokens?: number;
-  /**
    * Provider-specific options merged OVER the effort mapping (one level deep
    * per provider namespace: a caller's `anthropic.thinking` replaces the
    * mapped `anthropic.thinking` wholesale). Applied only on thinking-ON
@@ -364,7 +359,6 @@ export async function runSubAgent<Report = unknown>(
     effort = "low",
     thinking = true,
     temperature = 0.1,
-    maxOutputTokens,
     providerOptions: providerOptionsOverride,
     progress,
     startLine,
@@ -465,8 +459,6 @@ export async function runSubAgent<Report = unknown>(
       toolChoice: callToolChoice,
       temperature,
       providerOptions,
-      // Opt-in only (project-wide ban — see the header note); absent by default.
-      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(maxSteps !== undefined ? { stopWhen: isStepCount(maxSteps) } : {}),
       ...(prepareStep ? { prepareStep } : {}),
       ...(onToolProgress

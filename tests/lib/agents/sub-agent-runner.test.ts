@@ -240,24 +240,18 @@ describe("runSubAgent", () => {
     expect("maxOutputTokens" in lastCall()).toBe(false);
   });
 
-  it("forwards an explicit maxOutputTokens opt-in (flash-search exception)", async () => {
-    fakeStream();
-    await runSubAgent(baseOpts({ maxOutputTokens: 16_000 }));
-    expect(lastCall().maxOutputTokens).toBe(16_000);
-  });
-
   it("merges caller providerOptions over the effort mapping (one level deep)", async () => {
     fakeStream();
     await runSubAgent(
       baseOpts({
         providerOptions: {
-          deepseek: { thinking: { type: "enabled", budgetTokens: 4_096 } },
+          deepseek: { thinking: { type: "disabled" } },
         },
       }),
     );
     expect(lastCall().providerOptions).toEqual({
       deepseek: {
-        thinking: { type: "enabled", budgetTokens: 4_096 },
+        thinking: { type: "disabled" },
         reasoningEffort: "low",
       },
     });
@@ -409,7 +403,7 @@ describe("runSubAgent", () => {
       baseOpts({
         toolChoice: "required",
         providerOptions: {
-          deepseek: { thinking: { type: "enabled", budgetTokens: 4_096 } },
+          deepseek: { thinking: { type: "enabled" } },
         },
       }),
     );
