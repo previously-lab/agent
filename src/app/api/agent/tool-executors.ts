@@ -862,12 +862,15 @@ export async function writeCaseExecute(
   // ONE batch per tool call: an open followed by an addPiece in the SAME call
   // lands as ONE commit (coalesced per call — the queued open is visible to
   // the in-lock fresh read that the addPiece intent re-checks, exactly like
-  // the production batch read-your-writes). A call that only refuses queues
-  // nothing; the flush no-ops on an empty batch. A flush failure surfaces to
-  // the step retry — the intents re-apply under the per-case lock and an
-  // already-landed open reads back as "already exists", converging on the
-  // same tree. Same threading on the local backend: flushBatch applies the
-  // entries and records one local commit.
+  // the production batch read-your-writes). The call is ATOMIC: the flush
+  // runs only when the call SUCCEEDED — a refused outcome drops the queued
+  // batch with the call (an open queued by an addPiece that then refuses must
+  // NOT commit: the tool reports failure and the model retries against what
+  // it believes is an empty state — the mori二面 triple commit, B5). A flush
+  // failure surfaces to the step retry — the intents re-apply under the
+  // per-case lock and an already-landed open reads back as "already exists",
+  // converging on the same tree. Same threading on the local backend:
+  // flushBatch applies the entries and records one local commit.
   const batch = createBatch();
   const result = await (async (): Promise<WriteCaseResult> => {
   // Probe for existence OUTSIDE the lock (fresh read); the in-lock checks
@@ -922,7 +925,9 @@ export async function writeCaseExecute(
     return { ok: false, reason: `addPiece refused: ${e instanceof Error ? e.message : String(e)}` };
   }
   })();
-  await flushBatch(batch, `writeCase ${category}/${caseName}`);
+  if (result.ok) {
+    await flushBatch(batch, `writeCase ${category}/${caseName}`);
+  }
   return result;
 }
 

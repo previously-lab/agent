@@ -220,6 +220,21 @@ describe("writeCase — one commit per call (open + first piece coalesced)", () 
     expect(vi.mocked(flushBatch)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(flushBatch).mock.calls[0][1]).toBe("writeCase research/裸开案");
   });
+
+  it("a refused first piece drops the queued open WITH the call — the tool reports failure, nothing commits (B5)", async () => {
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    // An illegal pieceTitle (four-digit lead) makes createDoc throw AFTER the
+    // open was queued — the old unconditional flush committed the open anyway
+    // and the model, told the call failed, retried into extra commits. (This
+    // harness's fsWriteFile writes through at queue time, so the commit
+    // boundary under test is flushBatch itself.)
+    const r = await call(
+      { caseName: "半截案", body: "正文。", pieceTitle: "2026新品" },
+      "call-11",
+    );
+    expect(r.ok).toBe(false);
+    expect(vi.mocked(flushBatch)).not.toHaveBeenCalled();
+  });
 });
 
 describe("writeCase — per-case lock mutex (same key as the pipeline writers)", () => {
