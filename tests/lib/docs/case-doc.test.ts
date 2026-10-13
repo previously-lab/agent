@@ -354,4 +354,22 @@ describe("the write ops — pure, clock-free (time guards live in the write entr
     expect(() => appendTail(living, { date: "2026-10-03", text: "  " })).toThrow();
     expect(() => appendTail(living, { date: "2026-13-40", text: "x" })).toThrow();
   });
+
+  it("appendTail strips a self-prefixed SAME-date stamp — the date rides the field, never the text", () => {
+    // The 344f9ab65 residue: a writer told the line is "dated" prefixes the
+    // date itself, and the serializer stamps it again (…：2026-10-13：…).
+    const full = appendTail(living, { date: "2026-10-03", text: "2026-10-03：正文。" });
+    expect(full.tail[0]).toEqual({ date: "2026-10-03", text: "正文。" });
+    const ascii = appendTail(living, { date: "2026-10-03", text: "2026-10-03: 正文。" });
+    expect(ascii.tail[0]).toEqual({ date: "2026-10-03", text: "正文。" });
+    // a DIFFERENT date's prefix is content, not a stamp — kept verbatim
+    const other = appendTail(living, { date: "2026-10-03", text: "2026-09-01：旧结论作废。" });
+    expect(other.tail[0]).toEqual({ date: "2026-10-03", text: "2026-09-01：旧结论作废。" });
+    // the serialized line carries the date exactly once
+    const raw = serializeCaseDoc(full);
+    expect(raw).toContain("2026-10-03：正文。");
+    expect(raw).not.toContain("2026-10-03：2026-10-03：");
+    // a line that is ONLY the date prefix is empty once normalized — refused
+    expect(() => appendTail(living, { date: "2026-10-03", text: "2026-10-03：" })).toThrow();
+  });
 });

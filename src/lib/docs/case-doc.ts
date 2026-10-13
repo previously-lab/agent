@@ -433,11 +433,18 @@ export function rewriteBody(doc: CaseDoc, body: string): CaseDoc {
 /**
  * appendTail — add one dated supplement line. Always allowed: past the
  * write window the tail is the document's only in-place growth, and inside
- * the window an extra dated line is harmless.
+ * the window an extra dated line is harmless. The date rides the STRUCTURED
+ * field, never the text: a writer told the line is "dated" sometimes prefixes
+ * the date itself, which the serializer would stamp a second time
+ * (2026-10-13：2026-10-13：… — the 344f9ab65 residue). Exactly the SAME
+ * date's prefix is stripped; a different date's prefix is content, kept.
  */
 export function appendTail(doc: CaseDoc, line: { date: string; text: string }): CaseDoc {
   assertDate(line.date, "line.date");
-  const text = line.text.trim();
+  const text = line.text
+    .trim()
+    .replace(new RegExp(`^${line.date}[:：]\\s*`), "")
+    .trim();
   if (!text) throw new Error("appendTail requires non-empty text");
   return { ...doc, tail: [...doc.tail, { date: line.date, text }] };
 }
