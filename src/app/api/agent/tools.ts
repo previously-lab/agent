@@ -224,13 +224,15 @@ export const conceptTools = {
 //   - readAgentTimeline / readPreviously: your own cognition for a slice /
 //     the user-card snapshot of that moment.
 //
-// Write surface (v0.21): TWO writes, both one-way.
-//   - writeCase: the field's own case write (every category but people/user
-//     and self/, which are HQ's alone) — the document lands immediately,
-//     written BEFORE the answer.
+// Write surface (v0.21; v0.30 §2.6): TWO writes, both one-way.
+//   - writeCase: the field's own case write, for ONE job — the user
+//     explicitly asks for something to be written down (every category but
+//     people/user and self/, which are the reflection unit's alone) — the
+//     document lands immediately, written BEFORE the answer.
 //   - noteForSediment: the sediment mailbox — one marker line into the
-//     current slice's agent.md, consumed by HQ and the scribe/research
-//     passes at slice close. A marker is a clue, not an order.
+//     current slice's agent.md, read by the reflection unit and the
+//     scribe/research passes at slice close. A marker is a clue, not an
+//     order.
 //
 // How to find things: listTree first (what cases exist), readDoc into the
 // promising ones, readSlice down to the evidence. If the question is
@@ -295,21 +297,18 @@ export const chatTools = {
   // lock). Nothing is stamped into the text — the case→slice link is semantic.
   writeCase: tool({
     description:
-      "Write a case document — one of your tools as the field agent (v0.21 " +
-      "§2), for turns that produce a DOCUMENT before the answer. Use it when " +
-      "the revisit bar trips: the content will be revisited (the user will " +
-      "re-raise it / it has a date anchor / it is an ongoing thread) OR it " +
-      "cost real effort this turn (web searches, several slice reads, " +
-      "multi-step reasoning) — a finished piece worth keeping. One-off Q&A " +
-      "that nobody will revisit stays in the slice; do NOT write it here. " +
-      "Discipline: call writeCase FIRST, then base your answer on the case " +
-      "you just wrote. The case is your own memory, not a delivery to the " +
-      "user — do not announce the write or cite its path in the reply; when " +
+      "Write a case document — for ONE job: the user explicitly asks you to " +
+      "write something down. That is a task (v0.30 §2.6): call writeCase " +
+      "FIRST, write it, then answer from what you wrote. Nothing else earns " +
+      "a write from you — the record carries the turn, and the reflection " +
+      "unit reads it. The case is your own memory, not a delivery to the " +
+      "user — never announce the write or cite its path in the reply; when " +
       "the user asks where something is recorded, answer in your own words. " +
       "Categories — what the case IS decides: people/ a person, events/ " +
       "something that happened (date-anchored), things/ an object or work, " +
       "places/ a place, orgs/ an organization, research/ an investigation, " +
-      "hypotheses/ a judgment still to be verified, tasks/ a commitment to " +
+      "hypotheses/ a judgment still to be verified (state what would " +
+      "falsify it), tasks/ a commitment to " +
       "carry out. people/user and self/ are the reflection unit's alone — " +
       "it reads the record and keeps those; your pen never lands there. Semantics: if " +
       "the case does not exist yet it is OPENED — body becomes the case's " +
@@ -414,8 +413,8 @@ export const chatTools = {
   }),
   // The sediment mailbox PRODUCER (v0.15 design §3.1/§4.3). One of the reply
   // segment's TWO writes (alongside writeCase): a single structured marker
-  // line into the current slice's agent.md, consumed by HQ and the
-  // scribe/research passes at slice close — a clue, not an order.
+  // line into the current slice's agent.md, consumed by the reflection unit
+  // and the scribe/research passes at slice close — a clue, not an order.
   noteForSediment: tool({
     description:
       "Make THIS conversation leave something behind — your one way to turn " +

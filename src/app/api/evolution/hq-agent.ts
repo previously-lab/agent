@@ -433,7 +433,8 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
     `When the round is done (or you decide nothing needs doing), call hqReport.`;
 
   // ONE batch for the whole round: every write the tools queue lands as a
-  // single commit (`HQ round — {date}`); an idle round's empty batch no-ops
+  // single commit (`Reflection round — {date}`); an idle round's empty batch
+  // no-ops
   // the flush. The batch rides this step only — never module-global — and
   // the same threading works unchanged on the local backend (flushBatch
   // applies the entries and records one local commit).
@@ -471,7 +472,7 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
   let flushAttempts = 0;
   for (;;) {
     try {
-      await flushBatch(batch, `HQ round — ${date}`);
+      await flushBatch(batch, `Reflection round — ${date}`);
       break;
     } catch (err) {
       if (!isRefConflictError(err) || flushAttempts >= 2) {

@@ -259,51 +259,57 @@ describe("appendBridgeTimeSuffix (outbound-only tail injection)", () => {
   });
 });
 
-describe("the field/HQ charter (v0.21)", () => {
-  it("frames the agent as ONE agent in two execution units — the field (with the mouth) and HQ (without one)", () => {
+describe("the field/reflection charter (v0.30)", () => {
+  it("frames the agent as ONE agent in two execution units — the field (with the mouth) and the reflection unit (without one)", () => {
     expect(CHARTER_MD).toContain("ONE agent in two execution units");
     expect(CHARTER_MD).toContain("**field unit**");
-    expect(CHARTER_MD).toContain("**HQ**");
-    expect(CHARTER_MD).toContain("it wakes only when you send it a dispatch");
+    expect(CHARTER_MD).toContain("**reflection unit**");
+    expect(CHARTER_MD).toContain("it wakes mechanically when a turn ends — you never send it anything");
   });
 
-  it("carries the revisit bar and the write-BEFORE-you-answer discipline, with no default path announcement", () => {
-    expect(CHARTER_MD).toContain("revisit bar");
-    expect(CHARTER_MD).toContain("will be revisited");
-    expect(CHARTER_MD).toContain("cost real effort this turn");
-    expect(CHARTER_MD).toContain("one-off answers nobody will revisit stay in the slice");
-    expect(CHARTER_MD).toContain("write it BEFORE you answer");
-    expect(CHARTER_MD).toContain("your own memory, not a delivery to the user");
-    expect(CHARTER_MD).toContain("do not announce the write or cite its path");
+  it("carries the v0.30 write discipline: the pen is the exception — only a user-named task earns a write, and the revisit bar is gone", () => {
+    expect(CHARTER_MD).toContain("Your pen is the exception; your voice is the rule");
+    expect(CHARTER_MD).toContain("the user explicitly asks you to write something down");
+    expect(CHARTER_MD).toContain("write it first, then answer from what you wrote");
+    expect(CHARTER_MD).toContain("you never announce a write");
+    // R6: the read-back-before-mentioning discipline stays.
+    expect(CHARTER_MD).toContain("never tell the user a document exists until you have read it back with `readDoc`");
+    // The revisit bar retired with the dispatch (v0.30 §6(d)) — the field no
+    // longer decides autonomously what deserves a document.
+    expect(CHARTER_MD).not.toContain("revisit bar");
+    expect(CHARTER_MD).not.toContain("will be revisited");
   });
 
-  it("positions writeCase as an ordinary field tool that writes every category but people/user and self/, with the tasks naming discipline", () => {
-    expect(CHARTER_MD).toContain("an ordinary member of your own tool surface");
-    expect(CHARTER_MD).toContain("every category accepts your write but two");
-    expect(CHARTER_MD).toContain("**`people/user`** and **`self/`** refuse you");
+  it("positions writeCase as the field's single-job write (a user-named task), with the tasks naming discipline", () => {
+    expect(CHARTER_MD).toContain("stays on your tool surface for one job");
+    expect(CHARTER_MD).toContain("Categories `people/user` and `self/` still refuse you");
     // The category semantics: what the case IS decides, not what it mentions.
     expect(CHARTER_MD).toContain("what the case IS, not what it mentions");
-    // The naming discipline: a task case is date-anchored, one action, never a one-off todo.
-    expect(CHARTER_MD).toContain("to be done, carrying a date anchor");
+    // §6(f): hypotheses carry their falsification condition.
+    expect(CHARTER_MD).toContain("`hypotheses/` (state what would falsify it)");
+    // The naming discipline: a task case is named specific to one action.
     expect(CHARTER_MD).toContain("named specific to one action");
-    expect(CHARTER_MD).toContain("a one-off todo never gets a case");
-    // The old "one bounded exception, research only" framing is gone.
+    // The old "one bounded exception, research only" framing is gone, and so
+    // is the v0.21 "every category but two" autonomy.
     expect(CHARTER_MD).not.toContain("ONE bounded exception");
-    expect(CHARTER_MD).not.toContain("research cases only");
+    expect(CHARTER_MD).not.toContain("every category accepts your write");
   });
 
-  it("reserves people/user and self/ writes to HQ", () => {
+  it("reserves people/user and self/ writes to the reflection unit", () => {
     expect(CHARTER_MD).toContain("**You never write it**");
-    expect(CHARTER_MD).toContain("HQ's write surface alone");
-    expect(CHARTER_MD).toContain("yours to read, HQ's to write");
+    expect(CHARTER_MD).toContain("the reflection unit's write surface alone");
+    expect(CHARTER_MD).toContain("yours to read, the reflection unit's to write");
   });
 
-  it("carries the dispatch discipline: the scene plus your own observations, no expectations, no instructions", () => {
-    expect(CHARTER_MD).toContain("### Reporting to HQ (the dispatch)");
-    expect(CHARTER_MD).toContain("**your own observations**");
-    expect(CHARTER_MD).toContain("**no expectations and no instructions**");
-    // The payload is prose — never a JSON/field template.
-    expect(CHARTER_MD).toContain("The payload is prose");
+  it("carries the reflection-unit section: woken mechanically, never messaged, a one-line note waits at the next turn", () => {
+    expect(CHARTER_MD).toContain("### The reflection unit");
+    expect(CHARTER_MD).toContain("it is woken mechanically after each turn");
+    expect(CHARTER_MD).toContain("You do not message it");
+    expect(CHARTER_MD).toContain("a one-line note waits for you at your next turn");
+    expect(CHARTER_MD).toContain("you answer now, or start the long work");
+    // The dispatch era is gone from the charter.
+    expect(CHARTER_MD).not.toContain("Reporting to HQ");
+    expect(CHARTER_MD).not.toContain("The payload is prose");
   });
 
   it("narrates ONE person to the user — the two units are never separate people", () => {

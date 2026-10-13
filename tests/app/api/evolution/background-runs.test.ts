@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
  * The background stream's question run (v0.19 §A.2.3-b, v0.21 §5) — the
- * boundary run is retired (v0.21 P4: HQ's only trigger is the field's
- * report). The doc-research pass is mocked at its module boundary — what is
+ * boundary run is retired (v0.30: the reflection unit wakes on the
+ * mechanical bell and reads the record itself). The doc-research pass is
+ * mocked at its module boundary — what is
  * under test here is the RUN's own contract: trigger discipline, empty-pass
  * legality, results-only storage (no run ledger — dedup is writer-is-reader
  * inside the passes), and the §A.3.3 completion notice.
