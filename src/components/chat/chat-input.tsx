@@ -466,6 +466,7 @@ export function ChatInput({
             type="submit"
             onClick={(e) => handleSubmit(e as unknown as FormEvent)}
             disabled={!hasContent}
+            aria-label={t("sendTooltip")}
             className={`flex h-8 w-8 items-center justify-center border border-paper-line transition-colors disabled:pointer-events-none disabled:opacity-30 ${
               hasContent
                 ? "border-foreground bg-foreground text-paper hover:opacity-90"
