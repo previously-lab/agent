@@ -267,13 +267,14 @@ describe("the field/HQ charter (v0.21)", () => {
     expect(CHARTER_MD).toContain("it wakes only when you send it a dispatch");
   });
 
-  it("carries the revisit bar and the write-BEFORE-you-answer discipline, with the citation as prose", () => {
+  it("carries the revisit bar and the write-BEFORE-you-answer discipline, with no default path announcement", () => {
     expect(CHARTER_MD).toContain("revisit bar");
     expect(CHARTER_MD).toContain("will be revisited");
     expect(CHARTER_MD).toContain("cost real effort this turn");
     expect(CHARTER_MD).toContain("one-off answers nobody will revisit stay in the slice");
     expect(CHARTER_MD).toContain("write it BEFORE you answer");
-    expect(CHARTER_MD).toContain("the citation is prose, not a stamp");
+    expect(CHARTER_MD).toContain("your own memory, not a delivery to the user");
+    expect(CHARTER_MD).toContain("do not announce the write or cite its path");
   });
 
   it("positions writeCase as an ordinary field tool with the research/ + tasks/ category enum and the tasks naming discipline", () => {

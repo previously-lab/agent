@@ -303,8 +303,10 @@ export const chatTools = {
       "multi-step reasoning) — a finished piece worth keeping. One-off Q&A " +
       "that nobody will revisit stays in the slice; do NOT write it here. " +
       "Discipline: call writeCase FIRST, then base your answer on the case " +
-      "you just wrote, and cite the case path (<category>/<caseName>[/<piece>]) " +
-      "in the reply, the way you would mention a file. Categories: research/ " +
+      "you just wrote. The case is your own memory, not a delivery to the " +
+      "user — do not announce the write or cite its path in the reply; when " +
+      "the user asks where something is recorded, answer in your own words. " +
+      "Categories: research/ " +
       "for an investigation, tasks/ for a commitment the user asked you to " +
       "carry out; people/user and self/ are not yours to write. Semantics: if " +
       "the case does not exist yet it is OPENED — body becomes the case's " +
