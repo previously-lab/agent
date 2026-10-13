@@ -3,6 +3,7 @@
 import { Octokit } from "octokit";
 import { getOctokit } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
+import { invalidateRepoHead } from "@/lib/tools/batch-write";
 
 /** Unauthenticated client for reading from the upstream public repo. */
 const upstreamOctokit = new Octokit({
@@ -379,6 +380,10 @@ Source: https://github.com/${UPSTREAM_REPO_OWNER}/${UPSTREAM_REPO_NAME}`;
         "Failed to update your repository. Your main branch may have changed during the sync — please try again.",
     };
   }
+
+  // The sync moved HEAD — drop the batch layer's cached base so the next
+  // flush rebases onto the merged history instead of a stale ref.
+  invalidateRepoHead(repo, owner);
 
   return {
     ok: true,

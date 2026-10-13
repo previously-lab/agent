@@ -54,6 +54,48 @@ export function _resetDefaultBranchCache(): void {
   defaultBranchCache = null;
 }
 
+// ─── HEAD/tree pair (cached per process) ──────────────────────────────────
+//
+// Every successful batch flush already learns the new HEAD commit SHA and its
+// tree SHA from the API responses, so the next flush can use them as its base
+// instead of paying a getRef + getCommit round trip per flush. The cache is
+// only a fast path: the ref update stays non-force, so a stale entry (another
+// instance wrote in between, or a non-batch path moved HEAD without telling
+// us) is caught by the usual conflict error and healed by the caller — at
+// which point the entry is dropped and the next flush re-reads.
+
+let headStateCache: { key: string; headSha: string; treeSha: string } | null =
+  null;
+
+/**
+ * Record that `headSha`/`treeSha` is the current HEAD — called by every code
+ * path that moves the ref (batch flushes here; the single-file contents-API
+ * writes in writeFile.ts). A null treeSha means "HEAD moved but the tree is
+ * unknown" — the entry is dropped rather than trusted with a guessed base.
+ */
+export function noteRepoHead(
+  repo: string,
+  owner: string,
+  headSha: string,
+  treeSha: string | null,
+): void {
+  if (!treeSha) {
+    headStateCache = null;
+    return;
+  }
+  headStateCache = { key: `${owner}/${repo}`, headSha, treeSha };
+}
+
+/** Drop the cached HEAD/tree pair (conflict, or a HEAD move we can't map). */
+export function invalidateRepoHead(repo: string, owner: string): void {
+  if (headStateCache?.key === `${owner}/${repo}`) headStateCache = null;
+}
+
+/** Test-only: drop the cached HEAD/tree pair. */
+export function _resetHeadStateCache(): void {
+  headStateCache = null;
+}
+
 /** The configured repo's default branch (cached per process). */
 export async function getDefaultBranch(): Promise<string> {
   const { owner, repo } = getRepoConfig();
@@ -101,21 +143,30 @@ export async function commitBatchToGitHub(
   const branch = await resolveDefaultBranch(octokit, owner, repo);
   const headRef = `heads/${branch}`;
 
-  // 1. Get current HEAD
-  const { data: ref } = await octokit.rest.git.getRef({
-    owner,
-    repo,
-    ref: headRef,
-  });
-  const headSha = ref.object.sha;
-
-  // 2. Get HEAD tree SHA (used as base_tree)
-  const { data: commit } = await octokit.rest.git.getCommit({
-    owner,
-    repo,
-    commit_sha: headSha,
-  });
-  const baseTree = commit.tree.sha;
+  // 1. Current HEAD + its tree. Served from the process cache when the last
+  //    HEAD-mover (this flush or a single-file write) recorded it — two fewer
+  //    round trips per flush. Any doubt (miss, conflict, unknown tree) falls
+  //    back to the read below, which stays the source of truth.
+  const key = `${owner}/${repo}`;
+  let headSha: string;
+  let baseTree: string;
+  if (headStateCache?.key === key) {
+    headSha = headStateCache.headSha;
+    baseTree = headStateCache.treeSha;
+  } else {
+    const { data: ref } = await octokit.rest.git.getRef({
+      owner,
+      repo,
+      ref: headRef,
+    });
+    headSha = ref.object.sha;
+    const { data: commit } = await octokit.rest.git.getCommit({
+      owner,
+      repo,
+      commit_sha: headSha,
+    });
+    baseTree = commit.tree.sha;
+  }
 
   // 3. Create blobs for each file; a null content is a DELETE (tree item
   //    with sha: null removes the path from the tree). Binary payloads
@@ -163,14 +214,26 @@ export async function commitBatchToGitHub(
     parents: [headSha],
   });
 
-  // 6. Update ref (fast-forward only — fails if someone else pushed)
-  await octokit.rest.git.updateRef({
-    owner,
-    repo,
-    ref: headRef,
-    sha: newCommit.sha,
-    force: false,
-  });
+  // 6. Update ref (fast-forward only — fails if someone else pushed). A
+  //    failure here is ambiguous (rejected, OR the response was lost after
+  //    the ref moved), so the cached HEAD is dropped either way; a rejection
+  //    additionally heals through the caller's conflict retry.
+  try {
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref: headRef,
+      sha: newCommit.sha,
+      force: false,
+    });
+  } catch (err) {
+    invalidateRepoHead(repo, owner);
+    throw err;
+  }
+
+  // This flush is now the HEAD-mover of record: the next flush can build on
+  // the pair we just created instead of re-reading the ref.
+  noteRepoHead(repo, owner, newCommit.sha, newTree.sha);
 
   // All written files changed on GitHub — revalidate their Data Cache tags
   // so a later read in this turn (or the next request) never serves stale

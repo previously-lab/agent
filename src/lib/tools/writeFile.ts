@@ -2,6 +2,7 @@ import { getOctokit } from "@/lib/github/client";
 import { assertPortableRepoPath } from "@/lib/portable-path";
 import { isPathAllowed } from "@/lib/whitelist";
 import { invalidateReadCache, invalidateTreeCache } from "@/lib/tools/readFile";
+import { noteRepoHead } from "@/lib/tools/batch-write";
 
 const MAX_FILE_SIZE_BYTES = 1_000_000; // 1MB limit for MVP
 
@@ -50,14 +51,24 @@ export async function writeFile(
 
     const commitMessage = message ?? `Update ${path}`;
 
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
+    const { data: writeResult } =
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path,
+        message: commitMessage,
+        content: Buffer.from(content, "utf-8").toString("base64"),
+        sha,
+      });
+
+    // This write moved HEAD on GitHub — tell the batch layer so its next
+    // flush rebases onto it instead of discovering a conflict the slow way.
+    noteRepoHead(
       repo,
-      path,
-      message: commitMessage,
-      content: Buffer.from(content, "utf-8").toString("base64"),
-      sha,
-    });
+      owner,
+      writeResult.commit.sha,
+      writeResult.commit.tree.sha,
+    );
 
     // The file just changed on GitHub — revalidate its Data Cache tag so a
     // subsequent read (same turn or next request) never serves stale content.
@@ -108,13 +119,21 @@ export async function deleteFile(
     return; // file doesn't exist — idempotent delete
   }
 
-  await octokit.rest.repos.deleteFile({
+  const { data: deleteResult } = await octokit.rest.repos.deleteFile({
     owner,
     repo,
     path,
     message: message ?? `Delete ${path}`,
     sha,
   });
+
+  // HEAD moved — keep the batch layer's cached base coherent.
+  noteRepoHead(
+    repo,
+    owner,
+    deleteResult.commit.sha,
+    deleteResult.commit.tree.sha,
+  );
 
   invalidateReadCache(path, repo, owner);
   invalidateTreeCache(repo, owner);
@@ -152,14 +171,23 @@ export async function writeBinaryFile(
       // File doesn't exist — that's fine, we'll create it
     }
 
-    await octokit.rest.repos.createOrUpdateFileContents({
-      owner,
+    const { data: writeResult } =
+      await octokit.rest.repos.createOrUpdateFileContents({
+        owner,
+        repo,
+        path,
+        message: message ?? `Add attachment ${path}`,
+        content: data.toString("base64"),
+        sha,
+      });
+
+    // HEAD moved — keep the batch layer's cached base coherent.
+    noteRepoHead(
       repo,
-      path,
-      message: message ?? `Add attachment ${path}`,
-      content: data.toString("base64"),
-      sha,
-    });
+      owner,
+      writeResult.commit.sha,
+      writeResult.commit.tree.sha,
+    );
 
     invalidateReadCache(path, repo, owner);
     invalidateTreeCache(repo, owner);

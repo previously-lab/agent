@@ -1292,15 +1292,19 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     };
   }
 
-  // ── Post-turn: ONE finalize step (落盘 + 序 6 + 回程 in a single commit) ──
-  // 落盘这一轮 + the explicit-instruction channel + a caught HQ return all
-  // ride finalizeTurn's single flush. The §4 回程 peek runs HERE, in the
-  // workflow body, BEFORE the finalize step — hooks are workflow-runtime
-  // primitives (the token registers only when the run suspends on the hook),
-  // so the race cannot live inside a step — and its result crosses the step
-  // boundary as plain serializable data, queued into the same commit.
-  const fieldReturn = await peekFieldReturn(hk.slice, input);
-  await finalizeTurn(hk.slice, outcome, input, hk, fieldReturn ?? undefined);
+  // ── Post-turn: ONE finalize step (落盘 + 序 6 in a single commit) ────────
+  // 落盘这一轮 + the explicit-instruction channel ride finalizeTurn's single
+  // flush. The §4 回程 peek is TEMPORARILY DISABLED — it burned a fixed 2s
+  // workflow sleep on EVERY turn (the HQ return almost never lands inside
+  // the window), which dominated the perceived end-of-turn commit latency.
+  // The machinery below (peekFieldReturn / raceFieldPeek /
+  // FIELD_RETURN_PEEK_MS) stays intact for the redesign: gate the peek on
+  // the turn having actually called reportToHQ, or race it with the reply
+  // stream instead of the tail. Until then finalizeTurn always receives
+  // undefined and its 回程 segment stays dormant.
+  //
+  // const fieldReturn = await peekFieldReturn(hk.slice, input);
+  await finalizeTurn(hk.slice, outcome, input, hk, undefined);
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
 

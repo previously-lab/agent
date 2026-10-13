@@ -1380,9 +1380,10 @@ export function formatFieldReturnLine(text: string, stamp: string): string {
  *     analysis read an explicit record/correction request; no explicit
  *     instruction → zero LLM, zero writes.
  *   - Segment 3 queues a caught HQ return line (the old
- *     appendFieldReturnLine's write) — the peek itself runs in the workflow
- *     body BEFORE this step (hooks are workflow-runtime primitives, not
- *     step calls) and hands the text over as plain serializable data.
+ *     appendFieldReturnLine's write) — fed by the §4 peek that used to run in
+ *     the workflow body BEFORE this step. The peek is currently DISABLED
+ *     (turn-workflow passes undefined — see the call site), so this segment
+ *     is dormant; it stays wired for the peek's redesign.
  * Retries are safe: the agent-turn append is deduped by turnId, the snapshot
  * write is idempotent, a review re-run converges, and the flush keeps the
  * turn-merge self-heal (flushTurnBatch).

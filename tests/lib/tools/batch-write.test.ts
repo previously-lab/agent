@@ -47,12 +47,14 @@ import {
   commitBatchToGitHub,
   isRefConflictError,
   _resetDefaultBranchCache,
+  _resetHeadStateCache,
   type BatchEntry,
 } from "@/lib/tools/batch-write";
 
 beforeEach(() => {
   vi.clearAllMocks();
   _resetDefaultBranchCache();
+  _resetHeadStateCache();
   mockOctokit.reposGet.mockResolvedValue({
     data: { default_branch: "main" },
   });
