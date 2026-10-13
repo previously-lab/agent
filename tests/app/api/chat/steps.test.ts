@@ -1930,3 +1930,95 @@ describe("ringReflection — the mechanical bell (v0.30 §2.1)", () => {
     }
   });
 });
+
+describe("finalizeTurn — the episode tail (v0.30 §3.4, D7)", () => {
+  const outcome: TurnOutcome = {
+    text: "main reply",
+    finishReason: "stop",
+    cognition: "",
+  };
+
+  /** Slice with the outer user turn plus two queued episode arrivals. */
+  function episodeSlice(): TimeSlice {
+    return makeSlice({
+      turns: [
+        { timestamp: "t0", role: "user", content: "first", turnId: "test-id" },
+        { timestamp: "t1", role: "user", content: "queued q2", turnId: "u2" },
+        { timestamp: "t2", role: "user", content: "queued q3", turnId: "u3" },
+      ],
+    });
+  }
+
+  const twoBubbles = {
+    bubbles: [
+      { turnId: "nu2", replyTo: "u2", text: "answer two", finishReason: "stop", doneAt: "t3" },
+      { turnId: "nu3", replyTo: "u3", text: "answer three", finishReason: "stop", doneAt: "t4" },
+    ],
+    mergeSummary: "Both queued questions got answered above.",
+  };
+
+  it("one agent turn per terminal bubble with replyTo, mergeSummary FOLDED into the outer turn, ONE commit", async () => {
+    const slice = episodeSlice();
+    await finalizeTurn(slice, outcome, makeInput("first"), hkFor(slice), twoBubbles);
+
+    const bubbles = slice.turns.filter((t) => t.role === "agent" && t.replyTo);
+    expect(bubbles).toEqual([
+      { timestamp: "t3", role: "agent", content: "answer two", turnId: "nu2", replyTo: "u2" },
+      { timestamp: "t4", role: "agent", content: "answer three", turnId: "nu3", replyTo: "u3" },
+    ]);
+    // the merged summary folds into the outer agent turn — NOT a second turn
+    // with the same turnId (turn-merge would drop it)
+    const outer = slice.turns.filter((t) => t.role === "agent" && t.turnId === "test-id");
+    expect(outer).toHaveLength(1);
+    expect(outer[0].content).toBe("main reply\n\nBoth queued questions got answered above.");
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a failed bubble's partial text records [partial]-style; a textless failure leaves NO turn", async () => {
+    const slice = episodeSlice();
+    await finalizeTurn(slice, outcome, makeInput("first"), hkFor(slice), {
+      bubbles: [
+        { turnId: "nu2", replyTo: "u2", text: "half an answer", finishReason: "error" },
+        { turnId: "nu3", replyTo: "u3", text: "", finishReason: "error" },
+      ],
+    });
+
+    const partial = slice.turns.find((t) => t.turnId === "nu2");
+    expect(partial).toMatchObject({
+      role: "agent",
+      content: "[partial] half an answer",
+      replyTo: "u2",
+    });
+    // the textless failure stays an unanswered user turn on disk (the honest
+    // record reflection reads) — no agent turn for nu3
+    expect(slice.turns.some((t) => t.turnId === "nu3")).toBe(false);
+  });
+
+  it("redelivery dedupes PER bubble — a retried finalize re-appends nothing", async () => {
+    const slice = episodeSlice();
+    const input = makeInput("first");
+    await finalizeTurn(slice, outcome, input, hkFor(slice), twoBubbles);
+    const turnCount = slice.turns.length;
+    episodic.appendTurn.mockClear();
+
+    await finalizeTurn(slice, outcome, input, hkFor(slice), twoBubbles);
+    expect(slice.turns).toHaveLength(turnCount);
+    expect(episodic.appendTurn).not.toHaveBeenCalled();
+  });
+
+  it("a nested tail persists even when the OUTER reply produced no text", async () => {
+    const slice = episodeSlice();
+    await finalizeTurn(
+      slice,
+      { text: "", finishReason: "error", cognition: "" },
+      makeInput("first"),
+      hkFor(slice),
+      twoBubbles,
+    );
+    // the bubbles landed (their text justifies the snapshot) though the outer
+    // turn has no agent reply
+    expect(slice.turns.filter((t) => t.replyTo)).toHaveLength(2);
+    expect(slice.turns.some((t) => t.role === "agent" && t.turnId === "test-id")).toBe(false);
+    expect(episodic.saveSliceSnapshot).toHaveBeenCalled();
+  });
+});

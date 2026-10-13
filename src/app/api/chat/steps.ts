@@ -48,7 +48,9 @@
  * finish-step → finish.
  */
 import { type UIMessageChunk, type ModelMessage } from "ai";
-import { getWritable } from "workflow";
+import { getWritable, getWorkflowMetadata } from "workflow";
+import { resumeHook } from "workflow/api";
+import { HookNotFoundError } from "workflow/errors";
 import {
   createSlice,
   closeSlice,
@@ -123,8 +125,15 @@ import type {
   HousekeepingResult,
   TurnOutcome,
   EvolutionResult,
+  NestedTurnTail,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
+import {
+  NESTED_BUBBLE_CHUNK,
+  type EpisodeInboxEvent,
+  type NestedBubbleFrame,
+} from "@/lib/chat/nested-bubble";
+import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
 import {
   buildReflectionWakePayload,
   deliverReflectionWake,
@@ -1366,7 +1375,10 @@ async function flushTurnBatch(
  * separately; they share the slice lock and the conflict self-heal, so
  * merging loses nothing and the tail's writes land atomically:
  *   - Segment 1 appends the agent turn + cognition (deduped by turnId —
- *     the old persistAgentTurn, unchanged).
+ *     the old persistAgentTurn, unchanged), plus — when the episode tail
+ *     exists (v0.30 §3.4) — one agent turn per terminal nested bubble
+ *     (deduped per bubble turnId, replyTo carried) with the merged summary
+ *     folded into the outer agent turn.
  *   - Segment 2 is the explicit-instruction channel (序 6 — the old
  *     explicitEvolutionSegment, unchanged): runs ONLY when the entry beat's
  *     analysis read an explicit record/correction request; no explicit
@@ -1380,6 +1392,12 @@ export async function finalizeTurn(
   outcome: TurnOutcome,
   input: TurnInput,
   hk: HousekeepingResult & EntryReckoning,
+  /**
+   * The episode tail (v0.30 §3.4, D7) — terminal nested bubbles + the merged
+   * summary, riding this same batch and commit. Absent on a single-message
+   * (兼任) episode, which stays byte-identical to the pre-episode turn.
+   */
+  nested?: NestedTurnTail,
 ): Promise<void> {
   "use step";
 
@@ -1406,6 +1424,48 @@ export async function finalizeTurn(
   // persisted disk state), skip the append. User and agent turns share the
   // turnId — scope by role.
   const before1 = batch.entries.size;
+
+  // Nested bubbles first (v0.30 §3.4, D7): one agent turn per terminal inner
+  // instance — turnId = the instance id, replyTo = the user turn it answered
+  // (the Turn schema's optional extension; both header regexes carry it).
+  // Deduped PER bubble: a redelivered run re-executing against persisted disk
+  // state skips each recorded bubble. A failed instance's partial text is
+  // recorded [partial]-style; with NO text it is not recorded at all — the
+  // user turn stays unanswered on disk (the honest record reflection reads),
+  // and the merged summary states the failure (§3.6).
+  for (const bubble of nested?.bubbles ?? []) {
+    if (
+      slice.turns.some((t) => t.role === "agent" && t.turnId === bubble.turnId)
+    ) {
+      continue;
+    }
+    const bubbleStamp = bubble.doneAt ?? new Date().toISOString();
+    if (bubble.finishReason === "stop" && bubble.text) {
+      appendTurn(slice, {
+        timestamp: bubbleStamp,
+        role: "agent",
+        content: bubble.text,
+        turnId: bubble.turnId,
+        replyTo: bubble.replyTo,
+      });
+    } else if (bubble.text) {
+      appendTurn(slice, {
+        timestamp: bubbleStamp,
+        role: "agent",
+        content: `[partial] ${bubble.text}`,
+        turnId: bubble.turnId,
+        replyTo: bubble.replyTo,
+      });
+      console.log(
+        `[Episodic] Nested bubble ${bubble.turnId} interrupted (${bubble.finishReason})`,
+      );
+    } else {
+      console.log(
+        `[Episodic] Nested bubble ${bubble.turnId} produced no text (${bubble.finishReason})`,
+      );
+    }
+  }
+
   const agentTurnRecorded =
     !!input.turnId &&
     slice.turns.some((t) => t.role === "agent" && t.turnId === input.turnId);
@@ -1415,7 +1475,11 @@ export async function finalizeTurn(
     appendTurn(slice, {
       timestamp: new Date().toISOString(),
       role: "agent",
-      content: outcome.text,
+      // The episode's merged summary FOLDS into the outer agent turn (one
+      // agent turn per outer turnId — see NestedTurnTail for why).
+      content: nested?.mergeSummary
+        ? `${outcome.text}\n\n${nested.mergeSummary}`
+        : outcome.text,
       turnId: input.turnId,
     });
   } else if (outcome.text) {
@@ -1430,7 +1494,11 @@ export async function finalizeTurn(
     console.log(`[Episodic] Pro produced no text (${outcome.finishReason})`);
   }
 
-  if (outcome.finishReason === "stop" || outcome.text) {
+  if (
+    outcome.finishReason === "stop" ||
+    outcome.text ||
+    (nested?.bubbles.some((b) => b.text) ?? false)
+  ) {
     await saveSliceSnapshot(slice, batch);
   }
 
@@ -1684,5 +1752,102 @@ export async function ringReflection(
       "[Reflection] wake failed (ignored):",
       err instanceof Error ? err.message : err,
     );
+  }
+}
+
+// ─── Episode machinery steps (v0.30 §3, batch B — concurrent nesting) ─────
+
+/**
+ * The outer run's own durable id — the episode inbox token derives from it
+ * (`episode:<runId>`, nested-bubble.ts). getWorkflowMetadata is only legal
+ * inside a step, so the workflow body reads its id through this one-liner
+ * (the hq-steps.ts precedent).
+ */
+export async function ownRunId(): Promise<string> {
+  "use step";
+  return getWorkflowMetadata().workflowRunId;
+}
+
+/**
+ * The drain's disk reconciliation (D1/D2): re-read the slice BYPASSING the
+ * Data Cache (a messages-route commit landed seconds ago; a cached copy could
+ * miss it — the same reasoning as finalizeTurn's conflict self-heal) and
+ * compute the episode's unanswered user turns. The hook is only a wake-up
+ * tap; THIS scan is the queue.
+ */
+export async function readEpisodeInbox(
+  sliceId: string,
+  outerTurnId: string,
+  episodeStartedAtIso: string,
+): Promise<EnvelopeUserTurn[]> {
+  "use step";
+  const { owner, repo } = getRepoConfig();
+  const raw = await readFileFresh(sliceIdToFilePath(sliceId), repo, owner);
+  return findEpisodeUnanswered(parseSlice(raw), outerTurnId, episodeStartedAtIso);
+}
+
+/**
+ * One `data-nested-bubble` frame onto the outer run's (still open — preventClose)
+ * stream. Written from a step: the hq-steps.ts precedent is that step-side
+ * getWritable writes are the legal path (the workflow body never writes
+ * frames directly). Terminal frames get their doneAt stamped here — the
+ * workflow body has no clock.
+ *
+ * Never throws: a lost frame degrades the live display only — the bubble's
+ * answer still lands on disk at finalizeTurn, and a reconnecting client
+ * replays the stream. The turn must not die for a frame.
+ */
+export async function emitNestedBubble(frame: NestedBubbleFrame): Promise<void> {
+  "use step";
+  try {
+    const writable = getWritable<UIMessageChunk>();
+    const writer = writable.getWriter();
+    try {
+      await writer.write({
+        type: NESTED_BUBBLE_CHUNK,
+        id: `nested-bubble-${frame.turnId}`,
+        data: {
+          ...frame,
+          ...(frame.status === "done" || frame.status === "failed"
+            ? { doneAt: frame.doneAt ?? new Date().toISOString() }
+            : {}),
+        },
+      } as UIMessageChunk);
+    } finally {
+      writer.releaseLock();
+    }
+  } catch (err) {
+    console.warn(
+      `[Episode] nested-bubble frame dropped (${frame.turnId}/${frame.status}):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * An inner run's terminal report → the outer run's inbox hook (D2). resumeHook
+ * is a runtime function that must be called outside a workflow function — hence
+ * this "use step" (the handoffBriefToPrimary precedent in hq-steps.ts).
+ * HookNotFoundError means the outer run is gone (cancelled — D6): swallow with
+ * a warning instead of burning the step's retry budget; the inner run is
+ * read-only, so nothing half-written exists, and the unanswered user turn on
+ * disk stays visible to reflection.
+ */
+export async function reportInnerBubble(
+  token: string,
+  payload: EpisodeInboxEvent,
+): Promise<void> {
+  "use step";
+  try {
+    await resumeHook(token, payload);
+  } catch (e) {
+    if (HookNotFoundError.is(e)) {
+      console.warn(
+        `[Inner] episode inbox gone — bubble dropped (turnId=${payload.turnId}); ` +
+          "the outer run already exited",
+      );
+      return;
+    }
+    throw e;
   }
 }

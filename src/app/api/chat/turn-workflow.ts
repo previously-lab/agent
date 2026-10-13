@@ -21,14 +21,22 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount, type ModelMessage } from "ai";
-import { getWritable, sleep } from "workflow";
+import { createHook, getWritable, sleep } from "workflow";
+import { start } from "workflow/api";
 import type { ModelCallStreamPart } from "@ai-sdk/workflow";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type {
+  InnerTurnInput,
+  NestedTurnTail,
   TurnInput,
   TurnOutcome,
 } from "@/lib/chat/turn-types";
+import {
+  episodeInboxToken,
+  normalizeEpisodeInboxEvent,
+  type EpisodeInboxEvent,
+} from "@/lib/chat/nested-bubble";
 import { DEPLOY_GUIDE_URL } from "@/lib/capabilities";
 import { splitIdentityPrompt } from "@/lib/identity/assisting-block";
 import { annotateCardTimes, localDateKey } from "@/lib/time/relative";
@@ -41,13 +49,32 @@ import {
   formatErrorDetail,
 } from "@/lib/chat/workflow-errors";
 import {
+  buildInnerEnvelope,
+  buildMergeSummaryBrief,
+  type EnvelopeUserTurn,
+  type EpisodeInstanceSnapshot,
+} from "./inner-envelope";
+import { innerTurnWorkflow } from "./inner-turn-workflow";
+import {
   housekeeping,
   finalizeTurn,
   closeTurnStream,
   ringReflection,
+  ownRunId,
+  readEpisodeInbox,
+  emitNestedBubble,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
+
+/**
+ * Episode idle grace (R4, v0.30 §3): after a clean answer the run keeps its
+ * inbox open this long for a follow-up before finalizing — the hq-run.ts
+ * race-with-sleep discipline (HQ_IDLE_GRACE_MS), shortened for conversation
+ * pace. While instances run, the same sleep is only a re-tick: the episode
+ * never packs up with work in flight.
+ */
+const EPISODE_GRACE_MS = 60_000;
 
 /** Final assistant text from the agent's message history. */
 export function extractFinalText(messages: ModelMessage[]): string {
@@ -911,6 +938,24 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // ── Pre-turn steps ─────────────────────────────────────────────────────
 
+  // Episode inbox (v0.30 §3, batch B): E is the episode — after its first
+  // answer the run keeps a hook inbox open for concurrently-arriving user
+  // messages and answers them with nested inner runs. The hook is created
+  // BEFORE housekeeping: registration commits when the run next suspends
+  // (create-hook.js: "registration only happens when the workflow suspends"),
+  // and housekeeping's step is that suspension — so by the time the client
+  // can possibly call the messages route (it needs the runId header first),
+  // the inbox is registered. A resumeHook landing before that window finds no
+  // hook (HookNotFoundError) — the route already persisted the message and
+  // the drain's disk reconciliation (readEpisodeInbox) picks it up (D2).
+  // Bridge/demo turns never nest (D10): no hook, no drain — byte-identical
+  // to the pre-episode turn.
+  const episodeEnabled = !input.useDemo && input.modelConfig.sdk !== "bridge";
+  const episodeRunId = episodeEnabled ? await ownRunId() : "";
+  const inboxHook = episodeEnabled
+    ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
+    : null;
+
   const hk = await housekeeping(input);
   const {
     slice,
@@ -1150,6 +1195,8 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   let outcome: TurnOutcome;
   let streamError: unknown = null;
+  /** The episode tail for finalizeTurn — set only when inner instances ran. */
+  let nestedTail: NestedTurnTail | undefined;
   try {
     let allCognition = "";
     let finalFinishReason = "stop";
@@ -1350,6 +1397,229 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
           (turnError ? ` error=${turnError.slice(0, 500)}` : ""),
       );
     }
+
+    // ── Episode phase (v0.30 §3, batch B): drain → spawn → consume → merge ──
+    // Only a cleanly-finished answer opens the floor (an interrupted/errored
+    // turn finalizes exactly as before). The drain's inspection point is HERE
+    // — at the top of the post-answer loop (D3 fallback): prepareStep is
+    // passthrough-capable (@ai-sdk/workflow stream() accepts it) but the drain
+    // needs awaited step/start calls, and this file's workflow transform only
+    // instruments TOP-LEVEL awaits (see the agent-loop comment above) — a
+    // callback-closure await is un-instrumented, so the loop-top is the
+    // reachable point. All awaits below stay top-level and inline.
+    if (episodeEnabled && outcome.finishReason === "stop" && inboxHook) {
+      // One row per queued user message, keyed by ITS turnId. The instance id
+      // is DERIVED (`n${turnId}`) — the deterministic body mints no random
+      // ids, so a replayed run re-derives the same ones and finalize's
+      // per-bubble dedupe holds across redeliveries.
+      interface InstanceRow {
+        turnId: string;
+        replyTo: string;
+        status: "queued" | "running" | "done" | "failed";
+        text?: string;
+        finishReason?: string;
+        question: EnvelopeUserTurn;
+      }
+      const instances = new Map<string, InstanceRow>();
+      /** The finalize tail from whatever has settled — also the degradation
+       *  path when the phase itself fails mid-way. */
+      const buildTail = (mergeSummary?: string): NestedTurnTail | undefined => {
+        const bubbles = [...instances.values()]
+          .filter((i) => i.status === "done" || i.status === "failed")
+          .map((i) => ({
+            turnId: i.turnId,
+            replyTo: i.replyTo,
+            text: i.text ?? "",
+            finishReason: i.finishReason ?? (i.status === "done" ? "stop" : "error"),
+          }));
+        if (bubbles.length === 0 && !mergeSummary) return undefined;
+        return { bubbles, ...(mergeSummary ? { mergeSummary } : {}) };
+      };
+      try {
+        const iterator = inboxHook[Symbol.asyncIterator]();
+        try {
+          for (;;) {
+            // 列队 — the disk reconciliation: the hook is only a wake-up tap,
+            // the slice on disk is the queue (D1/D2).
+            const unanswered = await readEpisodeInbox(
+              slice.slice_id,
+              input.turnId,
+              input.startedAtIso,
+            );
+            // Spawn the missing: drain = 未答复 − 在册 (D1). E is the ONLY
+            // spawner; the route never starts inner runs.
+            for (const u of unanswered) {
+              if (instances.has(u.turnId)) continue;
+              const bubbleTurnId = `n${u.turnId}`;
+              const row: InstanceRow = {
+                turnId: bubbleTurnId,
+                replyTo: u.turnId,
+                status: "queued",
+                question: u,
+              };
+              instances.set(u.turnId, row);
+              await emitNestedBubble({
+                replyTo: u.turnId,
+                turnId: bubbleTurnId,
+                status: "queued",
+              });
+              const innerInput: InnerTurnInput = {
+                inboxToken: episodeInboxToken(episodeRunId),
+                turnId: bubbleTurnId,
+                replyTo: u.turnId,
+                envelope: buildInnerEnvelope({
+                  sliceId: slice.slice_id,
+                  pending: unanswered,
+                  instances: [...instances.values()].map(
+                    (i): EpisodeInstanceSnapshot => ({
+                      replyTo: i.replyTo,
+                      turnId: i.turnId,
+                      status: i.status,
+                      ...(i.text ? { text: i.text } : {}),
+                    }),
+                  ),
+                  target: u,
+                }),
+                systemPrompt,
+                model: input.model,
+                modelConfig: input.modelConfig,
+                thinking: input.thinking,
+                reasoningEffort: input.reasoningEffort,
+                toolsContext: {
+                  repo: input.repo,
+                  owner: input.owner,
+                  useGithub: input.useGithub,
+                  useDemo: input.useDemo,
+                  sliceId: slice.slice_id,
+                  recentTurns: input.recentTurns,
+                  baseSystemPrompt: systemPrompt,
+                  mainModel: input.modelConfig,
+                  timezone: input.clientTimezone,
+                  startedAtIso: input.startedAtIso,
+                  locale: input.locale,
+                },
+              };
+              // Step-backed spawn (workflow-v5 composition, start.mdx); the
+              // region matches every other start call in the repo (D10).
+              const innerRun = await start(innerTurnWorkflow, [innerInput], {
+                region: "hkg1",
+              });
+              row.status = "running";
+              console.log(
+                `[Turn:${input.turnId}][episode] inner run ${innerRun.runId} answering ${u.turnId}`,
+              );
+              await emitNestedBubble({
+                replyTo: u.turnId,
+                turnId: bubbleTurnId,
+                status: "running",
+              });
+            }
+            const busy = [...instances.values()].some(
+              (i) => i.status === "queued" || i.status === "running",
+            );
+            // The hq-run-shaped wait: next inbox event vs the idle grace.
+            const next = await Promise.race<EpisodeInboxEvent | "idle" | "done">([
+              iterator
+                .next()
+                .then((r): EpisodeInboxEvent | "done" =>
+                  r.done ? "done" : r.value,
+                ),
+              sleep(EPISODE_GRACE_MS).then((): "idle" => "idle"),
+            ]);
+            if (next === "done") break;
+            if (next === "idle") {
+              // 宽限自退 (R4) — only with nothing in flight; a busy episode
+              // treats the tick as a re-check and loops on.
+              if (!busy) break;
+              continue;
+            }
+            const ev = normalizeEpisodeInboxEvent(next);
+            if (!ev) continue;
+            if (ev.kind === "bubble") {
+              const row = instances.get(ev.replyTo);
+              if (
+                row &&
+                row.turnId === ev.turnId &&
+                (row.status === "queued" || row.status === "running")
+              ) {
+                row.status = ev.text ? "done" : "failed";
+                row.finishReason = ev.finishReason;
+                if (ev.text) row.text = ev.text;
+                await emitNestedBubble({
+                  replyTo: ev.replyTo,
+                  turnId: ev.turnId,
+                  status: row.status,
+                  ...(ev.text ? { text: ev.text } : {}),
+                });
+              }
+              // A duplicate/unknown bubble is ignored — the loop only exits
+              // idle when nothing is in flight, so a late report cannot race
+              // a disposed hook.
+            }
+            // "arrived" needs no handling here: the disk is the queue and the
+            // loop-top re-read spawns whatever landed.
+          }
+        } finally {
+          await iterator.return?.();
+          inboxHook.dispose();
+        }
+
+        // ── Merged summary (§3.4): ONE closing assistant message, streamed
+        //    natively on the still-open (preventClose) main stream. Only when
+        //    at least one inner instance ran — otherwise this episode was the
+        //    single-message path and nothing changes. The merge pass sees the
+        //    whole episode (finalMessages) plus the mechanical results brief.
+        const settled = [...instances.values()];
+        if (settled.length > 0) {
+          const mergeMessages: ModelMessage[] = [
+            ...finalMessages.filter((m) => m.role !== "system"),
+            {
+              role: "user",
+              content: buildMergeSummaryBrief(
+                settled.map((i) => ({
+                  question: i.question,
+                  status: i.status === "failed" ? ("failed" as const) : ("done" as const),
+                  ...(i.text ? { text: i.text } : {}),
+                })),
+              ),
+            },
+          ];
+          try {
+            const mergeResult = await agent.stream({
+              messages: mergeMessages,
+              system: systemPrompt,
+              ...streamOpts,
+            });
+            allCognition += extractCognition(
+              mergeResult.messages,
+              mergeResult.steps,
+            );
+            nestedTail = buildTail(
+              extractAllAssistantText(
+                mergeResult.messages,
+                1 + mergeMessages.length,
+              ) || undefined,
+            );
+          } catch (mergeErr) {
+            // The bubbles stand on their own — a failed merge pass degrades
+            // the episode to per-message bubbles without a closing summary.
+            console.error(
+              `[Turn:${input.turnId}][episode] merge pass failed\n${formatErrorDetail(mergeErr)}`,
+            );
+            nestedTail = buildTail();
+          }
+        }
+      } catch (episodeErr) {
+        // The episode phase must never take down a finished answer: keep the
+        // bubbles that DID settle; finalize proceeds as usual either way.
+        console.error(
+          `[Turn:${input.turnId}][episode] phase failed\n${formatErrorDetail(episodeErr)}`,
+        );
+        nestedTail = buildTail();
+      }
+      // The merge pass's cognition joins the turn's timeline record.
+      outcome.cognition = allCognition;
+    }
   } catch (err) {
     streamError = err;
     // Full diagnostic trail for anything the agent loop didn't handle (step
@@ -1368,11 +1638,14 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // ── Post-turn: ONE finalize step (落盘 + 序 6 in a single commit) ────────
   // 落盘这一轮 + the explicit-instruction channel ride finalizeTurn's single
-  // flush. Then the stream tail, then the mechanical bell (v0.30 §2.1): the
-  // reflection unit is woken with a pure pointer — it reads the record
-  // itself. The bell rings even when the reply stream errored (the user turn
-  // is on disk either way), and it never throws.
-  await finalizeTurn(hk.slice, outcome, input, hk);
+  // flush — and with them the episode tail (v0.30 §3.4): every terminal nested
+  // bubble as its own agent turn (replyTo carried) + the merged summary folded
+  // into the outer agent turn, all in the SAME commit. Then the stream tail,
+  // then the mechanical bell (v0.30 §2.1): the reflection unit is woken with a
+  // pure pointer — it reads the record itself. The bell rings even when the
+  // reply stream errored (the user turn is on disk either way), and it never
+  // throws.
+  await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
   await ringReflection(hk.slice, input);
