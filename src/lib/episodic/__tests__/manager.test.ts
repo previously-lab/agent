@@ -761,3 +761,53 @@ describe("dual-root mixed storage — parse equivalence", () => {
     await expect(readSlicePart(ID, "core")).rejects.toThrow();
   });
 });
+
+// ─── replyTo — the nested-bubble header suffix (v0.30 §3.4, D7) ──────────
+
+describe("replyTo — the nested-bubble header suffix (v0.30 §3.4, D7)", () => {
+  const bubbleTurns: Turn[] = [
+    { timestamp: "2024-03-15T10:00:00.000Z", role: "user", content: "first", turnId: "a3fk2w" },
+    { timestamp: "2024-03-15T10:01:00.000Z", role: "agent", content: "main reply", turnId: "a3fk2w" },
+    { timestamp: "2024-03-15T10:02:00.000Z", role: "user", content: "queued", turnId: "b4gl3x" },
+    {
+      timestamp: "2024-03-15T10:03:00.000Z",
+      role: "agent",
+      content: "bubble answer",
+      turnId: "nb4gl3x",
+      replyTo: "b4gl3x",
+    },
+  ];
+
+  it("serializeSlice writes the optional ` [reply-to {id}]` suffix only when set", () => {
+    const md = serializeSlice({ ...sampleSlice, turns: bubbleTurns });
+    expect(md).toContain(
+      "## Turn nb4gl3x — 2024-03-15T10:03:00.000Z (agent) [reply-to b4gl3x]",
+    );
+    // the plain rounds carry no suffix
+    expect(md).toContain("## Turn a3fk2w — 2024-03-15T10:00:00.000Z (user)\n");
+    expect(md).not.toContain("[reply-to a3fk2w]");
+  });
+
+  it("parseSlice round-trips replyTo; a suffix-less header parses with replyTo undefined", () => {
+    const parsed = parseSlice(serializeSlice({ ...sampleSlice, turns: bubbleTurns }));
+    expect(parsed.turns).toHaveLength(4);
+    expect(parsed.turns[3].replyTo).toBe("b4gl3x");
+    expect(parsed.turns[3].turnId).toBe("nb4gl3x");
+    expect(parsed.turns[0].replyTo).toBeUndefined();
+    expect(parsed.turns[1].replyTo).toBeUndefined();
+  });
+
+  it("the turn-parser.ts reader (TURN_HEADER_RE) captures the same suffix — both parsers agree", async () => {
+    const { parseTurns } = await import("../turn-parser");
+    const { turns } = parseTurns(serializeSlice({ ...sampleSlice, turns: bubbleTurns }));
+    const bubble = turns.find((t) => t.turnId === "nb4gl3x");
+    expect(bubble?.replyTo).toBe("b4gl3x");
+    // no end anchor: a header with an unknown FUTURE suffix still parses
+    // (tolerance for foreign/newer cores)
+    const future = parseTurns(
+      "## Turn x1 — 2024-03-15T10:00:00.000Z (agent) [reply-to q9] [future-flag]\n\nbody\n",
+    );
+    expect(future.turns[0].replyTo).toBe("q9");
+    expect(future.turns[0].content).toContain("body");
+  });
+});

@@ -19,13 +19,15 @@ import {
   type PrepareCallResult,
   type WorkflowAgentOptions,
 } from "@ai-sdk/workflow";
-import type { ModelMessage } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { StepBoundaryLanguageModel } from "@/lib/models/step-boundary-model";
 import type { ModelConfig } from "@/lib/models/registry";
 import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import {
   getChatTools,
+  getReadonlyChatTools,
   type buildChatToolsContext,
+  type buildReadonlyChatToolsContext,
 } from "./tools";
 
 // ─── Provider-aware providerOptions ──────────────────────────────────────
@@ -57,9 +59,9 @@ const ANTHROPIC_CACHE_BREAKPOINT = {
   anthropic: { cacheControl: { type: "ephemeral" } },
 };
 
-function withAnthropicCacheBreakpoints(
-  options: PrepareCallOptions<ChatToolSet>,
-): PrepareCallResult<ChatToolSet> {
+function withAnthropicCacheBreakpoints<TTools extends ToolSet>(
+  options: PrepareCallOptions<TTools>,
+): PrepareCallResult<TTools> {
   const { instructions, messages } = options;
   return {
     // The turn workflow always passes the system prompt as a string; wrap it
@@ -153,5 +155,41 @@ export function createChatAgent(opts: {
       ? { prepareCall: withAnthropicCacheBreakpoints }
       : {}),
     ...(opts.onStepEnd ? { onStepEnd: opts.onStepEnd } : {}),
+  });
+}
+
+/**
+ * Inner (nested) episode run agent (v0.30 §3, batch B). Same brain, two
+ * differences from the outer chat agent:
+ *  - READ-ONLY tool set (getReadonlyChatTools, D8) — the inner run produces
+ *    an answer and reports it back by hook; it never persists anything.
+ *  - No onStepEnd / timeout-continuation wiring — the inner run is bounded
+ *    and disposable: a failure surfaces as a `failed` bubble and the merged
+ *    summary states it (§3.6), instead of the outer turn's 续写 machinery.
+ * Bridge never reaches here (D10: bridge/demo stay single-turn — the outer
+ * workflow gates the whole episode phase off before any inner run spawns).
+ */
+export function createInnerChatAgent(opts: {
+  model: ModelConfig;
+  thinking: boolean;
+  reasoningEffort: "low" | "medium" | "high";
+  toolsContext: ReturnType<typeof buildReadonlyChatToolsContext>;
+}): WorkflowAgent<ReturnType<typeof getReadonlyChatTools>> {
+  const model = new StepBoundaryLanguageModel(opts.model);
+  return new WorkflowAgent({
+    model,
+    instructions:
+      "You are the user's personal agent with layered episodic memory, answering one queued message as a read-only nested instance. Answer from the provided envelope; use the read tools for earlier context when needed.",
+    tools: getReadonlyChatTools(),
+    toolsContext: opts.toolsContext,
+    providerOptions: normalizeReasoningEffort(
+      opts.model.sdk,
+      opts.model.id,
+      opts.thinking,
+      opts.reasoningEffort,
+    ),
+    ...(opts.model.sdk === "anthropic"
+      ? { prepareCall: withAnthropicCacheBreakpoints }
+      : {}),
   });
 }

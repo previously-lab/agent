@@ -22,6 +22,9 @@ export interface ParsedTurn {
   /** The raw turn ID from the header ("1", "2", or base64url "a3fk2w").
    *  Absent on legacy slices whose header had no ID. */
   turnId?: string;
+  /** Nested-bubble target (v0.30 §3.4): on an agent turn, the user turnId it
+   *  answers — from the optional ` [reply-to {id}]` header suffix. */
+  replyTo?: string;
   header: string;   // "## Turn {id} — TIMESTAMP (role)"
   content: string;   // turn body text
   timestamp: string; // ISO 8601
@@ -29,8 +32,11 @@ export interface ParsedTurn {
 
 /** Regex for turn headers: "## Turn {id} — TIMESTAMP (role)".
  *  Matches both legacy numeric IDs ("1", "2") and new base64url IDs ("a3fk2w").
- *  Separator is em-dash (U+2014), consistent with manager.ts serializeSlice. */
-export const TURN_HEADER_RE = /^## Turn (\S+) — (\S+) \((\w+)\)/;
+ *  Separator is em-dash (U+2014), consistent with manager.ts serializeSlice.
+ *  An optional ` [reply-to {id}]` suffix (v0.30 §3.4, nested bubbles) is
+ *  captured when present; no end anchor, so unknown future suffixes stay
+ *  tolerated. */
+export const TURN_HEADER_RE = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?/;
 
 /**
  * Parse core.md content into frontmatter + array of parsed turns.
@@ -43,7 +49,7 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
   const lines = raw.split("\n");
   const turns: ParsedTurn[] = [];
   const frontmatterLines: string[] = [];
-  let currentTurn: { turnId?: string; header: string; timestamp: string; contentLines: string[] } | null = null;
+  let currentTurn: { turnId?: string; replyTo?: string; header: string; timestamp: string; contentLines: string[] } | null = null;
   let inFrontmatter = true;
   let turnOrdinal = 0;
 
@@ -54,6 +60,7 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
         turns.push({
           index: turnOrdinal++,
           turnId: currentTurn.turnId,
+          replyTo: currentTurn.replyTo,
           header: currentTurn.header,
           timestamp: currentTurn.timestamp,
           content: currentTurn.contentLines.join("\n").trimEnd(),
@@ -61,6 +68,7 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
       }
       currentTurn = {
         turnId: match[1],
+        ...(match[4] ? { replyTo: match[4] } : {}),
         header: line,
         timestamp: match[2],
         contentLines: [],
@@ -77,6 +85,7 @@ export function parseTurns(raw: string): { frontmatter: string; turns: ParsedTur
     turns.push({
       index: turnOrdinal,
       turnId: currentTurn.turnId,
+      replyTo: currentTurn.replyTo,
       header: currentTurn.header,
       timestamp: currentTurn.timestamp,
       content: currentTurn.contentLines.join("\n").trimEnd(),

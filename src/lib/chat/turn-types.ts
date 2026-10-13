@@ -18,6 +18,7 @@ import type { CardChangeSummary, CardMutation } from "@/lib/episodic/card-diff";
 import type { UserConfig } from "@/lib/config/types";
 import type { ModelConfig } from "@/lib/models/registry";
 import type { CurrentView } from "@/lib/chat/current-view";
+import type { ToolContext } from "@/app/api/agent/tool-executors";
 
 /**
  * Everything a turn needs, built once in `start-turn.ts` (the only place real
@@ -281,8 +282,68 @@ export interface TurnOutcome {
   error?: string;
 }
 
-// ─── Turn status / persistent turn state (Layer 2, v0.6) ───────────────────
+// ─── Inner (nested) turn — v0.30 §3, batch B ──────────────────────────────
 
+/**
+ * The by-value input of ONE inner (nested) episode run — a queued user
+ * message's read-only answerer. Built by the outer episode run at spawn time
+ * (E is the only spawner, D1); must stay JSON-serializable end to end, same
+ * discipline as TurnInput.
+ */
+export interface InnerTurnInput {
+  /** The outer run's inbox hook token (`episode:<runId>`) — the bubble
+   *  report's return address (D2). */
+  inboxToken: string;
+  /** This instance's own id — derived deterministically from the user turn
+   *  it serves (`n${replyTo}`), so a replayed outer run re-derives the same
+   *  id and the finalize dedupe holds. Becomes the bubble's slice turnId. */
+  turnId: string;
+  /** The user turn this instance answers. */
+  replyTo: string;
+  /** The envelope (inner-envelope.ts) — the inner run's first and only user
+   *  message. */
+  envelope: string;
+  /** The outer run's assembled system prompt, carried by value so the inner
+   *  answer speaks with the same agent's voice (and thinkDeep's prompt-cache
+   *  prefix reuse keeps working). */
+  systemPrompt: string;
+  /** Resolved model id (same as the outer turn's). */
+  model: string;
+  modelConfig: ModelConfig;
+  thinking: boolean;
+  reasoningEffort: "low" | "medium" | "high";
+  /** Serializable tool context for the read-only tool subset (sliceId,
+   *  owner/repo, locale/timezone…). No image attachments ride along — the
+   *  envelope is text-only. */
+  toolsContext: ToolContext;
+}
+
+/**
+ * The episode tail handed to finalizeTurn (v0.30 §3.4, D7): every terminal
+ * inner bubble plus the outer agent's merged summary, riding the SAME batch
+ * and single commit as the outer agent turn. Absent entirely on a
+ * single-message (兼任) episode — that path stays byte-identical to the
+ * pre-episode turn.
+ */
+export interface NestedTurnTail {
+  bubbles: Array<{
+    /** The instance id — becomes the bubble's agent-turn turnId. */
+    turnId: string;
+    /** The user turn answered (persisted as the turn's replyTo). */
+    replyTo: string;
+    text: string;
+    finishReason: string;
+    /** Terminal stamp (the frame-write time, stamped in a step). */
+    doneAt?: string;
+  }>;
+  /** The outer agent's merged closing message. FOLDED into the outer agent
+   *  turn's content (one agent turn per outer turnId) rather than appended as
+   *  a second turn with the same turnId — turn-merge keys turns by turnId, so
+   *  two agent turns sharing it would make the conflict self-heal drop one. */
+  mergeSummary?: string;
+}
+
+// ─── Turn status / persistent turn state (Layer 2, v0.6) ───────────────────
 /**
  * Turn-level lifecycle status, streamed to the client as `data-turn-status`
  * chunks. No persistence layer — the agent's reply is already in the time

@@ -287,7 +287,11 @@ export function serializeSlice(slice: TimeSlice): string {
   const body = slice.turns
     .map(
       (turn) =>
-        `## Turn ${turn.turnId ?? "?"} — ${turn.timestamp} (${turn.role})\n\n${turn.content}`
+        // The optional ` [reply-to {id}]` header suffix carries a nested
+        // bubble's target user turn (v0.30 §3.4, D7). Both header regexes
+        // (parseTurns here, TURN_HEADER_RE in turn-parser.ts) capture it.
+        `## Turn ${turn.turnId ?? "?"} — ${turn.timestamp} (${turn.role})` +
+        `${turn.replyTo ? ` [reply-to ${turn.replyTo}]` : ""}\n\n${turn.content}`
     )
     .join("\n\n");
 
@@ -395,13 +399,15 @@ function parseTurns(body: string): Turn[] {
   // Match both old and new formats:
   // New: ## Turn a3fk2w — ISO (role)
   // Legacy: ## Turn 1 — ISO (role)
-  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)$/gm;
+  // Optional nested-bubble suffix (v0.30 §3.4): "… (agent) [reply-to q1w2e3]"
+  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?$/gm;
 
   // Collect turn headers with the position right after the header line
   const headers: Array<{
     turnLabel: string;
     timestamp: string;
     role: "user" | "agent";
+    replyTo?: string;
     contentStart: number;
   }> = [];
   let match: RegExpExecArray | null;
@@ -416,6 +422,7 @@ function parseTurns(body: string): Turn[] {
       turnLabel: match[1],
       timestamp: match[2],
       role: match[3] as "user" | "agent",
+      ...(match[4] ? { replyTo: match[4] } : {}),
       contentStart: afterHeader,
     });
   }
@@ -439,6 +446,7 @@ function parseTurns(body: string): Turn[] {
       role: headers[i].role,
       content: turnContent,
       ...(isNumeric ? {} : { turnId: headers[i].turnLabel }),
+      ...(headers[i].replyTo ? { replyTo: headers[i].replyTo } : {}),
     });
   }
 
