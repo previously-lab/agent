@@ -63,11 +63,13 @@ export async function writeFile(
 
     // This write moved HEAD on GitHub — tell the batch layer so its next
     // flush rebases onto it instead of discovering a conflict the slow way.
+    // The contents API's embedded commit may omit the tree — a null treeSha
+    // drops the cache, which is the safe fallback (re-read on next flush).
     noteRepoHead(
       repo,
       owner,
-      writeResult.commit.sha,
-      writeResult.commit.tree.sha,
+      writeResult.commit.sha ?? null,
+      writeResult.commit.tree?.sha ?? null,
     );
 
     // The file just changed on GitHub — revalidate its Data Cache tag so a
@@ -127,12 +129,14 @@ export async function deleteFile(
     sha,
   });
 
-  // HEAD moved — keep the batch layer's cached base coherent.
+  // HEAD moved — keep the batch layer's cached base coherent. The tree may
+  // be absent from the contents-API response; null drops the cache, which
+  // is the safe fallback (re-read on next flush).
   noteRepoHead(
     repo,
     owner,
-    deleteResult.commit.sha,
-    deleteResult.commit.tree.sha,
+    deleteResult.commit.sha ?? null,
+    deleteResult.commit.tree?.sha ?? null,
   );
 
   invalidateReadCache(path, repo, owner);
@@ -181,12 +185,14 @@ export async function writeBinaryFile(
         sha,
       });
 
-    // HEAD moved — keep the batch layer's cached base coherent.
+    // HEAD moved — keep the batch layer's cached base coherent. The tree may
+    // be absent from the contents-API response; null drops the cache, which
+    // is the safe fallback (re-read on next flush).
     noteRepoHead(
       repo,
       owner,
-      writeResult.commit.sha,
-      writeResult.commit.tree.sha,
+      writeResult.commit.sha ?? null,
+      writeResult.commit.tree?.sha ?? null,
     );
 
     invalidateReadCache(path, repo, owner);

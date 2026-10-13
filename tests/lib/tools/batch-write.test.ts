@@ -46,6 +46,7 @@ vi.mock("@/lib/capabilities", () => ({
 import {
   commitBatchToGitHub,
   isRefConflictError,
+  noteRepoHead,
   _resetDefaultBranchCache,
   _resetHeadStateCache,
   type BatchEntry,
@@ -240,6 +241,81 @@ describe("default branch resolution (D8a)", () => {
       owner: "test-owner",
       repo: "test-repo",
     });
+  });
+});
+
+describe("HEAD/tree cache", () => {
+  const entries: BatchEntry[] = [
+    { path: "memory/x.md", content: "x" },
+  ];
+
+  function setupGitMocks() {
+    mockOctokit.git.getRef.mockResolvedValue({
+      data: { object: { sha: "head" } },
+    });
+    mockOctokit.git.getCommit.mockResolvedValue({
+      data: { tree: { sha: "tree" } },
+    });
+    mockOctokit.git.createBlob.mockResolvedValue({ data: { sha: "blob" } });
+    mockOctokit.git.createTree.mockResolvedValue({ data: { sha: "newtree" } });
+    mockOctokit.git.createCommit.mockResolvedValue({
+      data: { sha: "newcommit" },
+    });
+    mockOctokit.git.updateRef.mockResolvedValue({ data: {} });
+  }
+
+  it("a second flush reuses the cached HEAD/tree — no second getRef/getCommit", async () => {
+    setupGitMocks();
+    await commitBatchToGitHub(entries, "first");
+
+    await commitBatchToGitHub(entries, "second");
+
+    expect(mockOctokit.git.getRef).toHaveBeenCalledTimes(1);
+    expect(mockOctokit.git.getCommit).toHaveBeenCalledTimes(1);
+    // The second flush builds on the first flush's commit/tree.
+    expect(mockOctokit.git.createTree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ base_tree: "newtree" }),
+    );
+    expect(mockOctokit.git.createCommit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ parents: ["newcommit"] }),
+    );
+  });
+
+  it("a ref conflict drops the cache — the next flush re-reads the ref", async () => {
+    setupGitMocks();
+    await commitBatchToGitHub(entries, "first");
+    mockOctokit.git.updateRef.mockRejectedValue(
+      Object.assign(new Error("Update is not a fast forward"), { status: 422 }),
+    );
+
+    await expect(commitBatchToGitHub(entries, "second")).rejects.toThrow();
+
+    mockOctokit.git.updateRef.mockResolvedValue({ data: {} });
+    await commitBatchToGitHub(entries, "third");
+    expect(mockOctokit.git.getRef).toHaveBeenCalledTimes(2);
+  });
+
+  it("a HEAD-mover with a tree seeds the cache — the next flush skips the reads", async () => {
+    noteRepoHead("test-repo", "test-owner", "ext-head", "ext-tree");
+    setupGitMocks();
+
+    await commitBatchToGitHub(entries, "after external write");
+
+    expect(mockOctokit.git.getRef).not.toHaveBeenCalled();
+    expect(mockOctokit.git.getCommit).not.toHaveBeenCalled();
+    expect(mockOctokit.git.createCommit).toHaveBeenCalledWith(
+      expect.objectContaining({ parents: ["ext-head"] }),
+    );
+  });
+
+  it("a HEAD-mover with a null tree drops the cache — the next flush re-reads", async () => {
+    setupGitMocks();
+    await commitBatchToGitHub(entries, "first");
+    noteRepoHead("test-repo", "test-owner", "ext-head", null);
+
+    await commitBatchToGitHub(entries, "second");
+
+    expect(mockOctokit.git.getRef).toHaveBeenCalledTimes(2);
   });
 });
 

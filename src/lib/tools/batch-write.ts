@@ -70,16 +70,18 @@ let headStateCache: { key: string; headSha: string; treeSha: string } | null =
 /**
  * Record that `headSha`/`treeSha` is the current HEAD — called by every code
  * path that moves the ref (batch flushes here; the single-file contents-API
- * writes in writeFile.ts). A null treeSha means "HEAD moved but the tree is
- * unknown" — the entry is dropped rather than trusted with a guessed base.
+ * writes in writeFile.ts). The contents API embeds a trimmed commit in its
+ * response whose fields are individually optional; a null on either side
+ * means "HEAD moved but we can't map it" — the entry is dropped rather than
+ * trusted with a guessed base.
  */
 export function noteRepoHead(
   repo: string,
   owner: string,
-  headSha: string,
+  headSha: string | null,
   treeSha: string | null,
 ): void {
-  if (!treeSha) {
+  if (!headSha || !treeSha) {
     headStateCache = null;
     return;
   }

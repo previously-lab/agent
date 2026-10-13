@@ -41,7 +41,7 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
   it("complete write-read-update lifecycle on memory/", async () => {
     // Step 1: Write a file
     mockGetContent.mockRejectedValueOnce(new Error("Not Found")); // file doesn't exist yet
-    mockCreateOrUpdate.mockResolvedValueOnce({});
+    mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const writeResult = await writeFile("memory/test.md", "Hello, World!", repo, owner);
     expect(writeResult.path).toBe("memory/test.md");
@@ -67,7 +67,7 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
     mockGetContent.mockResolvedValueOnce({
       data: { type: "file", sha: "abc123" },
     });
-    mockCreateOrUpdate.mockResolvedValueOnce({});
+    mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const updateResult = await writeFile("memory/test.md", "Updated content", repo, owner);
     expect(updateResult.path).toBe("memory/test.md");
@@ -138,7 +138,7 @@ describe("Integration: Chat → Tool → GitHub cycle", () => {
 
     // Second attempt: succeeds
     mockGetContent.mockRejectedValueOnce(new Error("Not Found"));
-    mockCreateOrUpdate.mockResolvedValueOnce({});
+    mockCreateOrUpdate.mockResolvedValueOnce({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile("memory/retry.md", "content", repo, owner);
     expect(result.created).toBe(true);

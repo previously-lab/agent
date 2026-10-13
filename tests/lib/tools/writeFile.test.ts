@@ -37,7 +37,7 @@ describe("writeFile", () => {
 
   it("creates a new file in allowed path", async () => {
     mockGetContent.mockRejectedValue(new Error("Not Found"));
-    mockCreateOrUpdate.mockResolvedValue({});
+    mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile(
       "memory/new.md",
@@ -65,7 +65,7 @@ describe("writeFile", () => {
         sha: "existing-sha-123",
       },
     });
-    mockCreateOrUpdate.mockResolvedValue({});
+    mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile(
       "memory/existing.md",
@@ -84,7 +84,7 @@ describe("writeFile", () => {
 
   it("accepts empty content", async () => {
     mockGetContent.mockRejectedValue(new Error("Not Found"));
-    mockCreateOrUpdate.mockResolvedValue({});
+    mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     const result = await writeFile(
       "memory/empty.md",
@@ -105,7 +105,7 @@ describe("writeFile", () => {
 
   it("uses custom commit message when provided", async () => {
     mockGetContent.mockRejectedValue(new Error("Not Found"));
-    mockCreateOrUpdate.mockResolvedValue({});
+    mockCreateOrUpdate.mockResolvedValue({ data: { commit: { sha: "c1", tree: { sha: "t1" } } } });
 
     await writeFile(
       "memory/note.md",
