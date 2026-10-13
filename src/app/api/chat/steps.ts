@@ -1806,6 +1806,11 @@ export async function emitNestedBubble(frame: NestedBubbleFrame): Promise<void> 
       await writer.write({
         type: NESTED_BUBBLE_CHUNK,
         id: `nested-bubble-${frame.turnId}`,
+        // transient: the frame rides the stream to the client's onData ONLY —
+        // it never becomes a UIMessage part, so regenerate and the local
+        // persistence never see bubbles (§4.2). A replayed stream re-delivers
+        // it, so the side store rebuilds deterministically on reconnect.
+        transient: true,
         data: {
           ...frame,
           ...(frame.status === "done" || frame.status === "failed"

@@ -114,8 +114,8 @@ export function ChatInput({
     e?.preventDefault();
     const trimmed = value.trim();
     if (!trimmed && images.length === 0) return;
-    if (isLoading) return;
-
+    // v0.30 §4.1: sending is NOT blocked while a run streams — the page
+    // routes the message into the live episode (or starts a fresh turn).
     onSubmit(trimmed, images);
     setValue("");
     clearImages();
@@ -302,36 +302,35 @@ export function ChatInput({
         >
           <Maximize2 className="size-4" />
         </button>
-        {/* Send / stop — one button, two faces, exactly like the full
-            form's, and always the RIGHTMOST control. Armed (there is
-            something to send) the cell is an ink block reversed out — the
-            pressed type slug; the stop face keeps the destructive signal. */}
-        {isLoading && onStop ? (
+        {/* Send / stop — TWO keys while a run streams (v0.30 §4.1): send is
+            always usable (the message queues into the live episode), and the
+            stop key appears beside it only mid-run, as the secondary. Send
+            keeps the rightmost edge at every size. */}
+        {isLoading && onStop && (
           <button
             type="button"
             onClick={onStop}
             aria-label={t("stopTooltip")}
             title={t("stopTooltip")}
-            className="composer-cell w-12 bg-destructive text-destructive-foreground hover:border-l-destructive hover:opacity-90"
+            className="composer-cell text-destructive hover:border-l-destructive hover:opacity-90"
           >
             <Square className="size-3.5 fill-current" />
           </button>
-        ) : (
-          <button
-            type="submit"
-            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
-            disabled={!hasContent}
-            aria-label={t("sendTooltip")}
-            title={t("sendTooltip")}
-            className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
-              hasContent
-                ? "is-active hover:border-l-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <ArrowUp className="size-4" />
-          </button>
         )}
+        <button
+          type="submit"
+          onClick={(e) => handleSubmit(e as unknown as FormEvent)}
+          disabled={!hasContent}
+          aria-label={t("sendTooltip")}
+          title={t("sendTooltip")}
+          className={`composer-cell disabled:pointer-events-none disabled:opacity-30 ${
+            hasContent
+              ? "is-active hover:border-l-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <ArrowUp className="size-4" />
+        </button>
       </div>
     );
   }
@@ -449,30 +448,33 @@ export function ChatInput({
             currentModelId={currentModelId}
             onModelChange={onModelChange}
           />
-          {isLoading && onStop ? (
+          {/* Send / stop coexist mid-run (v0.30 §4.1): the stop key is the
+              secondary, send keeps the outer corner and stays usable — the
+              message queues into the live episode. */}
+          {isLoading && onStop && (
             <button
               type="button"
               onClick={onStop}
-              className="flex h-8 w-8 items-center justify-center bg-destructive text-destructive-foreground transition-colors hover:opacity-90"
+              aria-label={t("stopTooltip")}
+              className="flex h-8 w-8 items-center justify-center border border-paper-line text-destructive transition-colors hover:border-destructive hover:opacity-90"
               title={t("stopTooltip")}
             >
               <Square className="h-3 w-3 fill-current" />
             </button>
-          ) : (
-            <button
-              type="submit"
-              onClick={(e) => handleSubmit(e as unknown as FormEvent)}
-              disabled={!hasContent}
-              className={`flex h-8 w-8 items-center justify-center border border-paper-line transition-colors disabled:pointer-events-none disabled:opacity-30 ${
-                hasContent
-                  ? "border-foreground bg-foreground text-paper hover:opacity-90"
-                  : "text-muted-foreground hover:border-foreground hover:text-foreground"
-              }`}
-              title={t("sendTooltip")}
-            >
-              <ArrowUp className="h-4 w-4" />
-            </button>
           )}
+          <button
+            type="submit"
+            onClick={(e) => handleSubmit(e as unknown as FormEvent)}
+            disabled={!hasContent}
+            className={`flex h-8 w-8 items-center justify-center border border-paper-line transition-colors disabled:pointer-events-none disabled:opacity-30 ${
+              hasContent
+                ? "border-foreground bg-foreground text-paper hover:opacity-90"
+                : "text-muted-foreground hover:border-foreground hover:text-foreground"
+            }`}
+            title={t("sendTooltip")}
+          >
+            <ArrowUp className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

@@ -5,11 +5,15 @@
 import { describe, it, expect } from "vitest";
 import {
   buildHistoryItems,
+  interleaveNestedBubbles,
   prependPage,
   type SeamItem,
   type ResumeBannerItem,
   type HistoryStreamItem,
+  type LiveStreamItem,
+  type NestedBubbleItem,
 } from "@/lib/chat/stream-items";
+import type { NestedBubbleFrame } from "@/lib/chat/nested-bubble";
 import type { SliceWithContent } from "@/lib/episodic/actions";
 import type { Turn } from "@/lib/episodic/types";
 
@@ -213,5 +217,97 @@ describe("prependPage", () => {
     const { slices, addedItemCount } = prependPage(existing, []);
     expect(slices).toHaveLength(1);
     expect(addedItemCount).toBe(0);
+  });
+});
+
+// ─── interleaveNestedBubbles — the episode merge view (v0.30 §4.3) ───────
+
+describe("interleaveNestedBubbles (v0.30 §4.3)", () => {
+  function live(id: string, role: "user" | "assistant", text = id): LiveStreamItem {
+    return {
+      kind: "live",
+      key: `${id}-0`,
+      message: {
+        id,
+        role,
+        parts: [{ type: "text", text }],
+      } as LiveStreamItem["message"],
+      timeIso: "2026-08-11T12:00:00.000Z",
+      isStreaming: false,
+    };
+  }
+  function bubble(
+    turnId: string,
+    replyTo: string,
+    status: "queued" | "running" | "done" | "failed" = "done",
+    doneAt?: string,
+  ): NestedBubbleFrame {
+    return {
+      turnId,
+      replyTo,
+      status,
+      ...(status === "done" ? { text: `answer to ${replyTo}` } : {}),
+      ...(doneAt ? { doneAt } : {}),
+    };
+  }
+
+  it("an empty side store returns the live list untouched (兼任 path is byte-identical)", () => {
+    const live_ = [live("u1", "user"), live("a1", "assistant")];
+    expect(interleaveNestedBubbles(live_, new Map())).toEqual(live_);
+  });
+
+  it("a bubble seats directly AFTER the user message it replied to, excerpt carried", () => {
+    const items = interleaveNestedBubbles(
+      [live("u1", "user", "first question"), live("a1", "assistant"), live("u2", "user", "queued question")],
+      new Map([["nu2", bubble("nu2", "u2", "done", "2026-08-11T12:01:00.000Z")]]),
+    );
+    expect(items.map((i) => i.kind)).toEqual([
+      "live",
+      "live",
+      "live",
+      "nested-bubble",
+    ]);
+    const seat = items[3] as NestedBubbleItem;
+    expect(seat.key).toBe("nb-nu2");
+    expect(seat.frame.turnId).toBe("nu2");
+    expect(seat.excerpt).toBe("queued question");
+    expect(seat.timeIso).toBe("2026-08-11T12:01:00.000Z");
+  });
+
+  it("several bubbles on ONE message sort by doneAt; in-flight frames settle last", () => {
+    const items = interleaveNestedBubbles(
+      [live("u2", "user")],
+      new Map([
+        ["nb-late", bubble("nb-late", "u2", "done", "2026-08-11T12:03:00.000Z")],
+        ["nb-early", bubble("nb-early", "u2", "done", "2026-08-11T12:01:00.000Z")],
+        ["nb-live", bubble("nb-live", "u2", "running")],
+      ]),
+    );
+    expect(items.map((i) => i.key)).toEqual([
+      "u2-0",
+      "nb-nb-early",
+      "nb-nb-late",
+      "nb-nb-live",
+    ]);
+  });
+
+  it("a bubble whose anchor message is gone (regenerate truncated it) drops out of the view", () => {
+    const items = interleaveNestedBubbles(
+      [live("u1", "user")],
+      new Map([["nu9", bubble("nu9", "u9")]]),
+    );
+    expect(items.map((i) => i.kind)).toEqual(["live"]);
+  });
+
+  it("bubbles never anchor on assistant messages, and the excerpt flattens whitespace", () => {
+    const items = interleaveNestedBubbles(
+      [live("a1", "assistant"), live("u1", "user", "line one\n\n  line   two")],
+      new Map([
+        ["nb-orphan", bubble("nb-orphan", "a1")],
+        ["nb-ok", bubble("nb-ok", "u1", "done", "2026-08-11T12:02:00.000Z")],
+      ]),
+    );
+    expect(items.map((i) => i.key)).toEqual(["a1-0", "u1-0", "nb-nb-ok"]);
+    expect((items[2] as NestedBubbleItem).excerpt).toBe("line one line two");
   });
 });

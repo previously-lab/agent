@@ -223,6 +223,13 @@
     "history": {
       "notFound": "时间片不存在或不可用。"
     },
+    "nested": {
+      "replyTo": "回复「{excerpt}」",
+      "queued": "排队中",
+      "running": "正在作答…",
+      "failed": "这条没答成",
+      "doneAt": "完成于 {time}"
+    },
     "search": {
       "title": "搜索对话",
       "placeholder": "搜索过去的对话…",

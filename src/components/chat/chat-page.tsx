@@ -12,7 +12,7 @@ import { usePanelTier } from "./conversation-panel";
 import { ChatPageSkeleton, ChatStreamSkeleton } from "./chat-skeleton";
 import { DomChatList, type ChatStreamHandle } from "./dom-chat-list";
 import type { FieldFeed } from "@/lib/timeline3d/field-feed";
-import type { ChatStreamItem, LiveStreamItem } from "@/lib/chat/stream-items";
+import type { ChatStreamItem } from "@/lib/chat/stream-items";
 import { RelativeTimeReadout } from "./relative-time";
 import { EmptyBriefing } from "./empty-briefing";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
@@ -33,8 +33,14 @@ import {
 } from "@/lib/chat/reconnect";
 import {
   buildHistoryItems,
+  interleaveNestedBubbles,
   type ResumeBlock,
 } from "@/lib/chat/stream-items";
+import {
+  NESTED_BUBBLE_CHUNK,
+  normalizeNestedBubble,
+  type NestedBubbleFrame,
+} from "@/lib/chat/nested-bubble";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -290,6 +296,24 @@ function clearStoredMessages(): void {
   }
 }
 
+/**
+ * Mint a client-side turn id for the say-into-episode path (v0.30 §4.1): 4
+ * random bytes as 6-char base64url — the same shape start-turn mints
+ * server-side (`crypto.randomBytes(4).toString("base64url")`), validated by
+ * the messages route. The id is the dedupe key: a retried submit never
+ * writes the turn twice.
+ */
+function mintTurnId(): string {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replaceAll("=", "");
+}
+
 /** Read a File as a data URL — the transport for image file parts. */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -457,6 +481,17 @@ function Inner({
     return () => { cancelled = true; };
   }, [persona]);
 
+  // ── The episode side store (v0.30 §4.2) ─────────────────────────────────
+  // Nested-bubble frames live OUTSIDE useChat's messages: a Map keyed by the
+  // inner instance's own turnId, written only by onData below (the frames are
+  // transient — never UIMessage parts). They survive the turn's end within
+  // the session (bubbles stay seated after their user messages); a reload
+  // starts empty and rebuilds from the replayed stream — history never reads
+  // them back (R7).
+  const [nestedBubbles, setNestedBubbles] = useState<
+    Map<string, NestedBubbleFrame>
+  >(new Map());
+
   // Refresh-resume goes through the SDK's own path: `resume: true` calls
   // resumeStream() on mount, and prepareReconnectToStreamRequest redirects it
   // to the durable run (`/api/chat/<runId>/stream?startIndex=0`), which rebuilds
@@ -468,6 +503,7 @@ function Inner({
   // messages array itself trips React #185.
   const {
     messages,
+    setMessages,
     sendMessage,
     status,
     stop,
@@ -477,6 +513,23 @@ function Inner({
     // v5 SDK: initial conversation state is passed as `messages` (ChatInit).
     messages: initialMessages,
     resume: shouldResume,
+    // v0.30 §4.2 — the episode's side channel: transient `data-nested-bubble`
+    // frames never land in UIMessage parts (the server marks them transient),
+    // they arrive HERE only. The side store is keyed by the instance's turnId;
+    // a reconnect replay re-delivers every frame in order, so the map rebuilds
+    // deterministically (later frames for one instance overwrite earlier ones).
+    onData: (chunk) => {
+      if (chunk.type !== NESTED_BUBBLE_CHUNK) return;
+      const frame = normalizeNestedBubble(
+        (chunk as { data?: unknown }).data,
+      );
+      if (!frame) return;
+      setNestedBubbles((prev) => {
+        const next = new Map(prev);
+        next.set(frame.turnId, frame);
+        return next;
+      });
+    },
     // v0.8: throttle the UI updates. The resume replay (and heavy streaming)
     // delivers chunks rapidly; each write() does setStatus + replaceMessage via
     // useSyncExternalStore, and the per-chunk re-render storm trips React's
@@ -677,7 +730,7 @@ function Inner({
     [regenerate, status],
   );
 
-  const liveItems = useMemo<LiveStreamItem[]>(() => {
+  const liveItems = useMemo<ChatStreamItem[]>(() => {
     const lastMessage = messages[messages.length - 1];
     // Regenerate re-answers the last user message — only meaningful on the
     // LATEST assistant reply (and never mid-stream; ChatMessage also gates).
@@ -685,8 +738,8 @@ function Inner({
       .reverse()
       .find((m) => m.role === "assistant")?.id;
     const nowIso = new Date().toISOString();
-    return messages.map((message, index) => ({
-      kind: "live",
+    const live = messages.map((message, index) => ({
+      kind: "live" as const,
       // Index-suffixed key: if a reconnect ever delivers a duplicated message
       // id (the same turn written twice by concurrent streams), the key stays
       // unique — React's duplicate-key reconciliation can otherwise loop into
@@ -707,7 +760,11 @@ function Inner({
           ? () => handleRegenerate(message.id)
           : undefined,
     }));
-  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice]);
+    // v0.30 §4.3 — the merge view: the episode's side-store bubbles seat
+    // after the user message each one answers (orphans after a regenerate
+    // drop out rather than render unmoored).
+    return interleaveNestedBubbles(live, nestedBubbles);
+  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles]);
 
   // ── Arrival forms (v0.10 §1.2 Rev 2, re-seated with the two-rungs rewrite):
   // the PANEL is the in-memory current conversation — plus, on a briefing
@@ -823,6 +880,50 @@ function Inner({
     setSelectedSliceId("now");
     setTransition(null);
     setLastUserMessageAt(new Date().toISOString());
+
+    // ── Say-into-episode (v0.30 §4.1): a live run owns an open inbox — a
+    // text-only message goes to POST /api/chat/[runId]/messages instead of
+    // starting a new run. The user bubble is optimistic (the route persists
+    // BEFORE answering, so the record is never lost); a 409 (demo/bridge/the
+    // run ended in the status window) or a gone run (404) falls back to the
+    // standard path with the SAME text — the message is never dropped.
+    const activeRunId = readStoredRunId();
+    if (isLoading && activeRunId && images.length === 0) {
+      const turnId = mintTurnId();
+      let res: Response | null = null;
+      try {
+        res = await fetch(
+          `/api/chat/${encodeURIComponent(activeRunId)}/messages`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: message, turnId }),
+          },
+        );
+      } catch {
+        res = null; // network failure — fall through to the standard path
+      }
+      if (res?.ok) {
+        // Optimistic bubble: id = the client-minted turnId, so the nested
+        // bubbles' replyTo anchors resolve against it.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: turnId,
+            role: "user",
+            parts: [{ type: "text" as const, text: message }],
+          },
+        ]);
+        requestAnimationFrame(scrollToBottom);
+        return;
+      }
+      if (res && res.status !== 409 && res.status !== 404) {
+        // A validation-shaped rejection is OUR bug — log it, then still fall
+        // back so the message survives.
+        console.error("[chat] episode message rejected:", res.status);
+      }
+    }
+
     // Images travel as AI SDK file parts (data URLs) — convertToModelMessages
     // on the server maps them to the provider's image inputs. The files are
     // already downscaled/re-encoded by use-image-attachments.

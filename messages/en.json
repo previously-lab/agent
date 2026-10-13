@@ -223,6 +223,13 @@
     "history": {
       "notFound": "Slice not found or unavailable."
     },
+    "nested": {
+      "replyTo": "Replying to “{excerpt}”",
+      "queued": "Queued",
+      "running": "Answering…",
+      "failed": "This one didn't get answered",
+      "doneAt": "Done at {time}"
+    },
     "search": {
       "title": "Search conversations",
       "placeholder": "Search past conversations…",

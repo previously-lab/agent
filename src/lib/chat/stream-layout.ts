@@ -45,6 +45,9 @@ export function estimateHeightFor(item: ChatStreamItem): number {
       return 560;
     case "history-turn":
       return 140;
+    case "nested-bubble":
+      // Chip row + a short answer — between a history turn and a live turn.
+      return 160;
     case "live":
       return 220;
   }

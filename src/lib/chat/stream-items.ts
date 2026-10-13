@@ -21,6 +21,7 @@
 import type { UIMessage } from "ai";
 import type { SliceWithContent } from "@/lib/episodic/actions";
 import type { Turn } from "@/lib/episodic/types";
+import type { NestedBubbleFrame } from "./nested-bubble";
 import { classifySeam, type SeamKind } from "./seam";
 
 export interface SeamItem {
@@ -102,7 +103,80 @@ export interface LiveStreamItem {
 }
 
 /** Everything either renderer can be handed, oldest → newest. */
-export type ChatStreamItem = HistoryStreamItem | LiveStreamItem;
+export type ChatStreamItem = HistoryStreamItem | LiveStreamItem | NestedBubbleItem;
+
+/**
+ * A nested bubble (v0.30 §4.3): one inner instance's answer, seated directly
+ * after the user message it replied to. The data comes from the episode's
+ * side store (the stream's transient `data-nested-bubble` frames), NEVER
+ * from UIMessage — so regenerate and local persistence never see it, and a
+ * reconnect replay rebuilds it deterministically.
+ */
+export interface NestedBubbleItem {
+  kind: "nested-bubble";
+  key: string;
+  frame: NestedBubbleFrame;
+  /** Mechanical excerpt of the replied-to user message (for the chip). */
+  excerpt: string;
+  timeIso: string;
+}
+
+/**
+ * The merge view (§4.3): interleave the episode's side-store bubbles into the
+ * live items — each bubble seats directly after the live USER message whose
+ * id it replied to (`frame.replyTo`); several bubbles on one message sort by
+ * `doneAt` (in-flight frames settle last). A bubble whose anchor is gone (a
+ * regenerate truncated the message) drops out of the view rather than
+ * rendering unmoored — the answer itself is on disk.
+ */
+export function interleaveNestedBubbles(
+  live: readonly LiveStreamItem[],
+  bubbles: ReadonlyMap<string, NestedBubbleFrame>,
+): (LiveStreamItem | NestedBubbleItem)[] {
+  if (bubbles.size === 0) return [...live];
+  // replyTo → frames, ordered: terminal by doneAt first, then in-flight.
+  const byAnchor = new Map<string, NestedBubbleFrame[]>();
+  for (const frame of bubbles.values()) {
+    const list = byAnchor.get(frame.replyTo) ?? [];
+    list.push(frame);
+    byAnchor.set(frame.replyTo, list);
+  }
+  for (const list of byAnchor.values()) {
+    // Terminal frames by doneAt; in-flight ones (no doneAt yet) settle after,
+    // tie-broken by turnId so the order is deterministic on replay.
+    list.sort(
+      (a, b) =>
+        (a.doneAt ?? "￿").localeCompare(b.doneAt ?? "￿") ||
+        a.turnId.localeCompare(b.turnId),
+    );
+  }
+  const excerptOf = (message: UIMessage): string => {
+    const flat = (message.parts ?? [])
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text?: string }).text ?? "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return flat.length <= 40 ? flat : `${flat.slice(0, 40)}…`;
+  };
+  const out: (LiveStreamItem | NestedBubbleItem)[] = [];
+  for (const item of live) {
+    out.push(item);
+    if (item.message.role !== "user") continue;
+    const anchored = byAnchor.get(item.message.id);
+    if (!anchored) continue;
+    for (const frame of anchored) {
+      out.push({
+        kind: "nested-bubble",
+        key: `nb-${frame.turnId}`,
+        frame,
+        excerpt: excerptOf(item.message),
+        timeIso: frame.doneAt ?? item.timeIso,
+      });
+    }
+  }
+  return out;
+}
 
 /** The still-alive newest slice restored by getArrivalState (§2). */
 export interface ResumeBlock {

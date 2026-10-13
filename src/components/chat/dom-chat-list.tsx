@@ -58,6 +58,7 @@ import {
 } from "react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ChatMessage } from "./chat-message";
+import { NestedBubble } from "./nested-bubble";
 import { HistoryTurn } from "./history-turn";
 import { SliceSeam } from "./slice-seam";
 import { ResumeBanner } from "./resume-banner";
@@ -586,6 +587,14 @@ export function DomChatList({
               startedAt={item.startedAt}
               onRegenerate={item.onRegenerate}
             />
+          </div>
+        );
+      case "nested-bubble":
+        // An inner episode instance's answer (v0.30 §4.3) — seated by the
+        // merge view after the user message it replied to.
+        return (
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+            <NestedBubble frame={item.frame} excerpt={item.excerpt} />
           </div>
         );
     }

@@ -108,6 +108,33 @@ describe("createMixedStreamTransform", () => {
     expect(await through(chunks)).toEqual(chunks);
   });
 
+  it("passes data-nested-bubble frames through unchanged, transient flag intact (v0.30 §4.2)", async () => {
+    // The episode's side-channel frames: the transient flag is what keeps them
+    // out of UIMessage parts downstream (onData only), so the pass-through
+    // must preserve it verbatim.
+    const chunks = [
+      {
+        type: "data-nested-bubble",
+        id: "nested-bubble-nu2",
+        transient: true,
+        data: { replyTo: "u2", turnId: "nu2", status: "queued" },
+      },
+      {
+        type: "data-nested-bubble",
+        id: "nested-bubble-nu2",
+        transient: true,
+        data: {
+          replyTo: "u2",
+          turnId: "nu2",
+          status: "done",
+          text: "answer",
+          doneAt: "2026-08-11T12:01:00.000Z",
+        },
+      },
+    ];
+    expect(await through(chunks)).toEqual(chunks);
+  });
+
   it("drops a raw model finish part (our steps own the finish chunk)", async () => {
     const out = await through([
       { type: "finish", finishReason: "stop", usage: { totalTokens: 3 } },
