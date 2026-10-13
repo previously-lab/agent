@@ -50,3 +50,37 @@ export function mergeTurnsWithRemote(
 
   return serializeSlice(remote);
 }
+
+/**
+ * Merge disk-only turns into the IN-MEMORY slice (the episode-append race).
+ * The messages route appends nested-episode user turns straight to the slice
+ * file mid-reply, while the outer run keeps riding the snapshot it loaded at
+ * turn start — without this union, the run's next snapshot write is computed
+ * from that stale base and silently erases the route-appended turns. Mutates
+ * `slice`; returns the number of turns appended. Disk-only turns append at
+ * the end UNORDERED (same semantics as mergeTurnsWithRemote); the in-memory
+ * frontmatter wins — the caller may carry state (a fresh close marking) the
+ * disk does not have yet.
+ */
+export function mergeDiskTurnsIntoSlice(
+  slice: TimeSlice,
+  diskRaw: string,
+): number {
+  const disk = parseSlice(diskRaw);
+
+  const seen = new Set(slice.turns.map(turnKey));
+  let added = 0;
+  for (const turn of disk.turns) {
+    const key = turnKey(turn);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    slice.turns.push(turn);
+    added++;
+  }
+
+  for (const loopId of disk.loops) {
+    if (!slice.loops.includes(loopId)) slice.loops.push(loopId);
+  }
+
+  return added;
+}

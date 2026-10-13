@@ -3,7 +3,10 @@
  * append missing turns by turnId, union tags/loops, re-serialize.
  */
 import { describe, it, expect } from "vitest";
-import { mergeTurnsWithRemote } from "@/lib/episodic/turn-merge";
+import {
+  mergeTurnsWithRemote,
+  mergeDiskTurnsIntoSlice,
+} from "@/lib/episodic/turn-merge";
 import { serializeSlice, parseSlice } from "@/lib/episodic/manager";
 import type { TimeSlice, Turn } from "@/lib/episodic/types";
 
@@ -110,5 +113,53 @@ describe("mergeTurnsWithRemote", () => {
 
     const merged = parseSlice(mergeTurnsWithRemote(remote, local));
     expect(merged.turns).toHaveLength(1);
+  });
+});
+
+describe("mergeDiskTurnsIntoSlice", () => {
+  it("appends disk-only turns to the in-memory slice (the route-append race)", () => {
+    const shared = makeTurn("t1", "hello");
+    const inMemory = makeSlice({ turns: [shared] });
+    const diskRaw = serializeSlice(
+      makeSlice({
+        turns: [shared, makeTurn("m2", "nested question"), makeTurn("m3", "another")],
+      }),
+    );
+
+    const added = mergeDiskTurnsIntoSlice(inMemory, diskRaw);
+
+    expect(added).toBe(2);
+    expect(inMemory.turns.map((t) => t.turnId)).toEqual(["t1", "m2", "m3"]);
+  });
+
+  it("is a no-op when the disk already matches memory", () => {
+    const turns = [makeTurn("t1", "a"), makeTurn("t2", "b", "agent")];
+    const inMemory = makeSlice({ turns: [...turns] });
+    const diskRaw = serializeSlice(makeSlice({ turns }));
+
+    expect(mergeDiskTurnsIntoSlice(inMemory, diskRaw)).toBe(0);
+    expect(inMemory.turns).toHaveLength(2);
+  });
+
+  it("keeps the IN-MEMORY frontmatter (a fresh close marking wins over disk)", () => {
+    const inMemory = makeSlice({ focus: "fresh mark", turns: [makeTurn("t1", "x")] });
+    const diskRaw = serializeSlice(
+      makeSlice({ focus: "stale focus", turns: [makeTurn("t1", "x"), makeTurn("m2", "y")] }),
+    );
+
+    mergeDiskTurnsIntoSlice(inMemory, diskRaw);
+
+    expect(inMemory.focus).toBe("fresh mark");
+    expect(inMemory.turns).toHaveLength(2);
+  });
+
+  it("unions loop pointers without duplicates", () => {
+    const inMemory = makeSlice({ loops: ["loop-1"], turns: [makeTurn("t1", "x")] });
+    const diskRaw = serializeSlice(
+      makeSlice({ loops: ["loop-1", "loop-2"], turns: [makeTurn("t1", "x")] }),
+    );
+
+    expect(mergeDiskTurnsIntoSlice(inMemory, diskRaw)).toBe(0);
+    expect(inMemory.loops).toEqual(["loop-1", "loop-2"]);
   });
 });

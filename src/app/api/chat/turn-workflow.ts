@@ -1445,6 +1445,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
               slice.slice_id,
               input.turnId,
               input.startedAtIso,
+              { useDemo: input.useDemo, useGithub: input.useGithub },
             );
             // Spawn the missing: drain = 未答复 − 在册 (D1). E is the ONLY
             // spawner; the route never starts inner runs.

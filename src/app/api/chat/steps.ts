@@ -80,7 +80,10 @@ import {
 } from "@/lib/episodic";
 import { dayDirForDate } from "@/lib/episodic/paths";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
-import { mergeTurnsWithRemote } from "@/lib/episodic/turn-merge";
+import {
+  mergeTurnsWithRemote,
+  mergeDiskTurnsIntoSlice,
+} from "@/lib/episodic/turn-merge";
 import { isRefConflictError } from "@/lib/tools/batch-write";
 import { getRepoConfig } from "@/lib/capabilities";
 import { checkSliceAge, checkIdleGap } from "@/lib/episodic/slicer";
@@ -1167,6 +1170,7 @@ export async function housekeeping(
   // landing share this single commit — 闭片归档与本轮落盘原子完成. No
   // projection writes here (A1): the timeline catalog / global timeline /
   // monthly index maintenance moved out of the turn path.
+  await mergeSliceWithDiskTurns(slice, input);
   await saveSliceSnapshot(slice, batch);
   await flushBatch(batch, `Turn ${input.turnId} — user turn`);
 
@@ -1319,6 +1323,46 @@ export async function housekeeping(
 // ─── The turn tail: finalizeTurn — one slice-locked step, ONE commit ──────
 
 /**
+ * Reconcile the in-memory slice with the disk file before a snapshot write
+ * (the episode-append race): the messages route appends nested-episode user
+ * turns DIRECTLY to the slice file mid-reply, while this run still rides the
+ * snapshot it loaded at turn start. A saveSliceSnapshot computed from that
+ * stale base would silently erase the route-appended turns, so every snapshot
+ * write in the turn pipeline (the housekeeping flush, finalizeTurn) unions
+ * the disk turns in first — the same mechanical append-only merge as the
+ * commit-conflict heal, keyed by turnId. Reads through the turn's ACTIVE
+ * backend; a missing file (brand-new slice) or demo mode means nothing to
+ * merge. Returns the number of turns appended.
+ */
+async function mergeSliceWithDiskTurns(
+  slice: TimeSlice,
+  input: TurnInput,
+): Promise<number> {
+  if (input.useDemo) return 0;
+  const path = sliceIdToFilePath(slice.slice_id);
+  let raw: string;
+  try {
+    if (input.useGithub) {
+      // BYPASS the Data Cache — the route's commit landed seconds ago and our
+      // cached copy may still hold the stale base (flushTurnBatch's reasoning).
+      const { owner, repo } = getRepoConfig();
+      raw = await readFileFresh(path, repo, owner);
+    } else {
+      raw = await readFileLocal(path);
+    }
+  } catch {
+    return 0;
+  }
+  const added = mergeDiskTurnsIntoSlice(slice, raw);
+  if (added > 0) {
+    console.log(
+      `[Episodic] Merged ${added} route-appended disk turn(s) into ${slice.slice_id}`,
+    );
+  }
+  return added;
+}
+
+/**
  * How many times a conflicting flush re-reads the remote slice, merges, and
  * retries the commit before giving up (and failing the step → queue retry).
  */
@@ -1423,6 +1467,10 @@ export async function finalizeTurn(
   // turn is already in the slice (a retried run re-executing against
   // persisted disk state), skip the append. User and agent turns share the
   // turnId — scope by role.
+  //
+  // First: union any route-appended episode user turns from disk into the
+  // in-memory slice, so the snapshot below does not erase them (D-2).
+  await mergeSliceWithDiskTurns(slice, input);
   const before1 = batch.entries.size;
 
   // Nested bubbles first (v0.30 §3.4, D7): one agent turn per terminal inner
@@ -1774,15 +1822,30 @@ export async function ownRunId(): Promise<string> {
  * miss it — the same reasoning as finalizeTurn's conflict self-heal) and
  * compute the episode's unanswered user turns. The hook is only a wake-up
  * tap; THIS scan is the queue.
+ *
+ * The read goes through the turn's ACTIVE backend (the flags ride in from the
+ * workflow body — steps are plain Node, but the backend is request-scoped
+ * input, not a module global): hard-wiring getRepoConfig() here crashed every
+ * episode under STORAGE=local with "GITHUB_TOKEN environment variable is not
+ * set" (v0.30 D-1).
  */
 export async function readEpisodeInbox(
   sliceId: string,
   outerTurnId: string,
   episodeStartedAtIso: string,
+  backend: { useDemo: boolean; useGithub: boolean },
 ): Promise<EnvelopeUserTurn[]> {
   "use step";
-  const { owner, repo } = getRepoConfig();
-  const raw = await readFileFresh(sliceIdToFilePath(sliceId), repo, owner);
+  const path = sliceIdToFilePath(sliceId);
+  let raw: string;
+  if (backend.useDemo) {
+    raw = await readFileDemo(path);
+  } else if (backend.useGithub) {
+    const { owner, repo } = getRepoConfig();
+    raw = await readFileFresh(path, repo, owner);
+  } else {
+    raw = await readFileLocal(path);
+  }
   return findEpisodeUnanswered(parseSlice(raw), outerTurnId, episodeStartedAtIso);
 }
 
