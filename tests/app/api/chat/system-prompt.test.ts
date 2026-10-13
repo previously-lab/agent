@@ -277,10 +277,12 @@ describe("the field/HQ charter (v0.21)", () => {
     expect(CHARTER_MD).toContain("do not announce the write or cite its path");
   });
 
-  it("positions writeCase as an ordinary field tool with the research/ + tasks/ category enum and the tasks naming discipline", () => {
+  it("positions writeCase as an ordinary field tool that writes every category but people/user and self/, with the tasks naming discipline", () => {
     expect(CHARTER_MD).toContain("an ordinary member of your own tool surface");
-    expect(CHARTER_MD).toContain("**`research/`**");
-    expect(CHARTER_MD).toContain("**`tasks/`**");
+    expect(CHARTER_MD).toContain("every category accepts your write but two");
+    expect(CHARTER_MD).toContain("**`people/user`** and **`self/`** refuse you");
+    // The category semantics: what the case IS decides, not what it mentions.
+    expect(CHARTER_MD).toContain("what the case IS, not what it mentions");
     // The naming discipline: a task case is date-anchored, one action, never a one-off todo.
     expect(CHARTER_MD).toContain("to be done, carrying a date anchor");
     expect(CHARTER_MD).toContain("named specific to one action");

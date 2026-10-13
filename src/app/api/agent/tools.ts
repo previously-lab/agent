@@ -226,8 +226,9 @@ export const conceptTools = {
 //     the user-card snapshot of that moment.
 //
 // Write surface (v0.21): TWO writes, both one-way.
-//   - writeCase: the field's own case write (research/ + tasks/ only) — the
-//     document lands immediately, written BEFORE the answer.
+//   - writeCase: the field's own case write (every category but people/user
+//     and self/, which are HQ's alone) — the document lands immediately,
+//     written BEFORE the answer.
 //   - noteForSediment: the sediment mailbox — one marker line into the
 //     current slice's agent.md, consumed by HQ and the scribe/research
 //     passes at slice close. A marker is a clue, not an order.
@@ -287,10 +288,10 @@ export const chatTools = {
     contextSchema: toolContextSchema,
     execute: readDocExecute,
   }),
-  // The field agent's case write (v0.21 §2): open a case mid-reply so a
-  // research/task turn writes the document FIRST and answers FROM it.
-  // Categories are an enumerated set — research/ or tasks/ — validated in the
-  // executor; people/user and self/ are never writable from here. Only open +
+  // The field agent's case write (v0.21 §2): open a case mid-reply so the
+  // turn's document is written FIRST and the answer speaks FROM it. Every
+  // category is writable but two — people/user and self/ are HQ's alone and
+  // are refused in the executor with a pointer to reportToHQ. Only open +
   // addPiece reach the shared case-write entry (per-case lock, fresh read in
   // lock). Nothing is stamped into the text — the case→slice link is semantic.
   writeCase: tool({
@@ -306,9 +307,12 @@ export const chatTools = {
       "you just wrote. The case is your own memory, not a delivery to the " +
       "user — do not announce the write or cite its path in the reply; when " +
       "the user asks where something is recorded, answer in your own words. " +
-      "Categories: research/ " +
-      "for an investigation, tasks/ for a commitment the user asked you to " +
-      "carry out; people/user and self/ are not yours to write. Semantics: if " +
+      "Categories — what the case IS decides: people/ a person, events/ " +
+      "something that happened (date-anchored), things/ an object or work, " +
+      "places/ a place, orgs/ an organization, research/ an investigation, " +
+      "hypotheses/ a judgment still to be verified, tasks/ a commitment to " +
+      "carry out. people/user and self/ are HQ's alone — for those, dispatch " +
+      "the material with reportToHQ instead. Semantics: if " +
       "the case does not exist yet it is OPENED — body becomes the case's " +
       "index.md (the case name is permanent; name it for the QUESTION, " +
       "specific enough that a scope change means a new case). If it ALREADY " +
@@ -324,11 +328,20 @@ export const chatTools = {
       `\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
       category: z
-        .enum(["research", "tasks"])
+        .enum([
+          "people",
+          "events",
+          "things",
+          "places",
+          "orgs",
+          "research",
+          "hypotheses",
+          "tasks",
+        ])
         .optional()
         .describe(
-          "research/ for an investigation, tasks/ for a commitment to carry " +
-          "out. Defaults to research.",
+          "What the case IS decides the category (see the tool description). " +
+          "Defaults to research.",
         ),
       caseName: z
         .string()

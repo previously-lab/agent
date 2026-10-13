@@ -1,11 +1,12 @@
 /**
- * writeCase — the reply segment's ONE bounded write (v0.20 §2.2).
+ * writeCase — the field's bounded case write (v0.20 §2.2).
  *
  * Over an in-memory memory root (io-helpers mocked; the real per-case lock,
  * the real shared write entry `applyCaseWriteIntent`, and the real pure case
- * ops underneath). Covers the four acceptance points:
- *  1. research/-only with no free path (behavioral — the tool takes no
- *     category input and writes land only under memory/research/);
+ * ops underneath). Covers the acceptance points:
+ *  1. the category set — every category but people/user and self/ is
+ *     writable (people/ for another person included); those two plus unknown
+ *     names refuse with a pointer to reportToHQ;
  *  2. lock mutex with the per-case writer (same `doc:<分类>/<case名>` key);
  *  3. end-to-end: open → index lands verbatim → second call addPiece (index
  *     untouched) → no-pieceTitle refusal;
@@ -100,10 +101,8 @@ describe("writeCase — open", () => {
   });
 });
 
-describe("writeCase — the research/ boundary", () => {
-  it("writes never leave research/ — a same-named case in another category is untouched", async () => {
-    // The tool exposes NO category parameter; this seeds a decoy and proves
-    // the write lands under memory/research/ regardless.
+describe("writeCase — category isolation", () => {
+  it("a research/ write never touches a same-named case in another category", async () => {
     io.files.set(
       "memory/tasks/手机调研/index.md",
       serializeCaseDoc(
@@ -130,10 +129,39 @@ describe("writeCase — the category set", () => {
     expect(r).toMatchObject({ ok: true, path: "memory/research/默认案/index.md" });
   });
 
-  it("a category outside the enumerated set is refused before any write", async () => {
-    for (const category of ["people/user", "self", "events", "records"]) {
+  it("every field category opens — people (another person), events, orgs, hypotheses included", async () => {
+    const r1 = await call({ category: "people", caseName: "王老师", body: "用户的同事。" });
+    expect(r1).toMatchObject({ ok: true, path: "memory/people/王老师/index.md" });
+    const r2 = await call({ category: "events", caseName: "2026-11-05-发布会", body: "发布会纪要。" });
+    expect(r2).toMatchObject({ ok: true, path: "memory/events/2026-11-05-发布会/index.md" });
+    const r3 = await call({ category: "orgs", caseName: "某供应商", body: "供应商背景。" });
+    expect(r3).toMatchObject({ ok: true, path: "memory/orgs/某供应商/index.md" });
+    const r4 = await call({
+      category: "hypotheses",
+      caseName: "用户偏好简洁",
+      body: "待验证的判断。证伪条件：用户三次要求长篇展开则不成立。",
+    });
+    expect(r4).toMatchObject({ ok: true, path: "memory/hypotheses/用户偏好简洁/index.md" });
+  });
+
+  it("people/user is refused with a dispatch pointer — HQ's alone, evolved never written", async () => {
+    const r = await call({ category: "people", caseName: "user", body: "正文" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toContain("people/user is HQ's alone");
+      expect(r.reason).toContain("reportToHQ");
+    }
+    expect(io.files.size).toBe(0);
+  });
+
+  it("self/ and names outside the nine-category set refuse before any write", async () => {
+    for (const category of ["self", "records", "config", "nonsense"]) {
       const r = await call({ category, caseName: "越界案", body: "正文" });
       expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.reason).toContain("is not writable from here");
+        expect(r.reason).toContain("reportToHQ");
+      }
     }
     expect(io.files.size).toBe(0);
   });

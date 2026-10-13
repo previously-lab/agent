@@ -59,6 +59,7 @@ import {
   caseIndexPath,
   isValidCaseName,
   sanitizeCaseSegment,
+  isCaseCategory,
   CASE_CATEGORY_LIST,
   type CaseRef,
 } from "@/lib/docs";
@@ -801,17 +802,19 @@ function userLocalDate(timezone: string | undefined): string {
 }
 
 /**
- * writeCase — open a research case (or add a dated piece to an existing
- * one) IN THE MIDDLE of the reply, so a research turn can write the
- * document FIRST and then answer FROM it (v0.20 §2.1 选案 (a)).
+ * writeCase — open a case (or add a dated piece to an existing one) IN THE
+ * MIDDLE of the reply, so the turn writes the document FIRST and then
+ * answers FROM it (v0.20 §2.1 选案 (a)).
  *
  * Bounded exactly as §2.2 prescribes:
- * - 分类界: the input's category enum admits only research/ + tasks/
- *   (tools.ts — no free path to any other category exists);
+ * - 分类界: every category is writable but two — people/user and self/ are
+ *   HQ's write surface (the user model is evolved, never written
+ *   mid-conversation); both refuse here with a pointer to reportToHQ, as do
+ *   names outside the nine-category set;
  * - 操作界: only `open` and `addPiece` reach `applyCaseWriteIntent`
  *   (rewriteIndex / appendTail / close are never issued);
  * - 冲突界: the shared `applyCaseWriteIntent` entry — per-case lock
- *   `doc:research/<case名>`, fresh read inside the lock — so a concurrent
+ *   `doc:<category>/<case名>`, fresh read inside the lock — so a concurrent
  *   background run on the same case serializes visibly instead of
  *   interleaving bytes.
  *
@@ -831,12 +834,13 @@ export async function writeCaseExecute(
     };
   }
   const category = input.category?.trim() || "research";
-  if (category !== "research" && category !== "tasks") {
+  if (!isCaseCategory(category) || category === "self") {
     return {
       ok: false,
       reason:
         `category ${JSON.stringify(input.category)} is not writable from here — ` +
-        `allowed: "research" (an investigation) or "tasks" (a commitment).`,
+        "allowed: people / events / things / places / orgs / research / hypotheses / tasks. " +
+        "people/user and self belong to HQ: dispatch the material with reportToHQ and HQ writes them.",
     };
   }
   const caseName = sanitizeCaseSegment(input.caseName?.trim() ?? "");
@@ -848,6 +852,14 @@ export async function writeCaseExecute(
         `illegal case name ${JSON.stringify(caseName)} — no path separators / ` +
         `traversal / surrounding whitespace; a dated name needs a real date ` +
         `with a title not starting with four digits.`,
+    };
+  }
+  if (category === "people" && caseName === "user") {
+    return {
+      ok: false,
+      reason:
+        "people/user is HQ's alone — the model of the user is evolved, never " +
+        "written mid-conversation. Dispatch what you learned with reportToHQ instead of writing it.",
     };
   }
   const body = input.body?.trim() ?? "";
