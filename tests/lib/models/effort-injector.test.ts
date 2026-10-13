@@ -78,26 +78,11 @@ describe("normalizeReasoningEffort — DeepSeek thinking ON", () => {
 // ─── Anthropic ────────────────────────────────────────────────────────────
 
 describe("normalizeReasoningEffort — Anthropic thinking ON", () => {
-  it("low: thinking stays enabled with the model's default budget", () => {
-    expect(
-      normalizeReasoningEffort("anthropic", "claude-sonnet-5", true, "low"),
-    ).toEqual({ anthropic: { thinking: { type: "enabled" } } });
-  });
-
-  it("medium: enabled with a 12k token budget", () => {
-    expect(
-      normalizeReasoningEffort("anthropic", "claude-sonnet-5", true, "medium"),
-    ).toEqual({
-      anthropic: { thinking: { type: "enabled", budgetTokens: 12_000 } },
-    });
-  });
-
-  it("high: enabled with a 32k token budget", () => {
-    expect(
-      normalizeReasoningEffort("anthropic", "claude-opus-4-8", true, "high"),
-    ).toEqual({
-      anthropic: { thinking: { type: "enabled", budgetTokens: 32_000 } },
-    });
+  it("every effort: thinking enabled with the model's default budget — no budgetTokens anywhere", () => {
+    const shape = { anthropic: { thinking: { type: "enabled" } } };
+    expect(normalizeReasoningEffort("anthropic", "claude-sonnet-5", true, "low")).toEqual(shape);
+    expect(normalizeReasoningEffort("anthropic", "claude-sonnet-5", true, "medium")).toEqual(shape);
+    expect(normalizeReasoningEffort("anthropic", "claude-opus-4-8", true, "high")).toEqual(shape);
   });
 });
 

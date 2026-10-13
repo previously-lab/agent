@@ -20,8 +20,10 @@
  *     low/medium server-side regardless (out of our control). Thinking stays
  *     ENABLED across every effort tier — disabling is the thinking toggle's
  *     job (`thinking: false` → `{ type: "disabled" }`), not an effort tier.
- *   - anthropic: `thinking.type` always enabled; `budgetTokens` scales for
- *     medium/high, low uses the model's default budget.
+ *   - anthropic: `thinking.type` always enabled, with the model's own
+ *     default budget — no `budgetTokens` is ever sent (the 2026-10-14
+ *     mandate: no token/thinking budget parameters in code), so effort does
+ *     not differentiate thinking depth on this SDK.
  *   - openai (and OpenAI-compatible: Kimi, Qwen, ...): `reasoningEffort`.
  */
 import type { ProviderSdk } from "./providers";
@@ -72,19 +74,11 @@ export function normalizeReasoningEffort(
 
   switch (sdk) {
     case "anthropic":
-      // Thinking stays ON for every effort. `low` uses the model's default
-      // budget (no explicit budgetTokens); medium/high scale the budget.
-      if (effort === "low") {
-        return { anthropic: { thinking: { type: "enabled" } } };
-      }
-      return {
-        anthropic: {
-          thinking: {
-            type: "enabled",
-            budgetTokens: effort === "high" ? 32_000 : 12_000,
-          },
-        },
-      };
+      // Thinking stays ON for every effort, with the model's own default
+      // budget — no budgetTokens anywhere: the mandate (2026-10-14) is that
+      // the code carries NO token/thinking budget parameters, so on the
+      // Anthropic side effort no longer differentiates thinking depth.
+      return { anthropic: { thinking: { type: "enabled" } } };
     case "openai":
       return { openai: { reasoningEffort: effort } };
     case "bridge":
