@@ -21,7 +21,7 @@
  * default) picks up the `"use workflow"` directive.
  */
 import { isStepCount, type ModelMessage } from "ai";
-import { getWritable, sleep, createHook } from "workflow";
+import { getWritable, sleep } from "workflow";
 import type { ModelCallStreamPart } from "@ai-sdk/workflow";
 import { createChatAgent, type ChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
@@ -44,6 +44,7 @@ import {
   housekeeping,
   finalizeTurn,
   closeTurnStream,
+  ringReflection,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -1294,95 +1295,16 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // ── Post-turn: ONE finalize step (落盘 + 序 6 in a single commit) ────────
   // 落盘这一轮 + the explicit-instruction channel ride finalizeTurn's single
-  // flush. The §4 回程 peek is TEMPORARILY DISABLED — it burned a fixed 2s
-  // workflow sleep on EVERY turn (the HQ return almost never lands inside
-  // the window), which dominated the perceived end-of-turn commit latency.
-  // The machinery below (peekFieldReturn / raceFieldPeek /
-  // FIELD_RETURN_PEEK_MS) stays intact for the redesign: gate the peek on
-  // the turn having actually called reportToHQ, or race it with the reply
-  // stream instead of the tail. Until then finalizeTurn always receives
-  // undefined and its 回程 segment stays dormant.
-  //
-  // const fieldReturn = await peekFieldReturn(hk.slice, input);
-  await finalizeTurn(hk.slice, outcome, input, hk, undefined);
+  // flush. Then the stream tail, then the mechanical bell (v0.30 §2.1): the
+  // reflection unit is woken with a pure pointer — it reads the record
+  // itself. The bell rings even when the reply stream errored (the user turn
+  // is on disk either way), and it never throws.
+  await finalizeTurn(hk.slice, outcome, input, hk);
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
+  await ringReflection(hk.slice, input);
 
   if (streamError !== null) {
     throw streamError;
   }
 }
-
-/**
- * 收尾 peek：HQ 回程（v0.21 §4，best-effort bonus）— the workflow-body half.
- * 注册时机（SDK create-hook 文档）：createHook() 本身不注册——registration
- * 只在 workflow suspend 到该 hook 上时才提交。所以外勤可被 HQ 投递的时刻
- * 只有这次 race 挂起之后；HQ 早喊晚喊都是 HookNotFoundError → pass。这就
- * 是"回程是 bonus 不是通道"（§11 ②）的物理基础。token 与 reportToHQ
- * executor 附带的 replyToken 同公式（field:<sliceId>:<startedAtIso>）。
- *
- * Runs BEFORE finalizeTurn so a caught return rides the tail's single
- * commit: the result crosses the step boundary as plain serializable data
- * (the date stamp rides the USER's clock — the turn start × clientTimezone),
- * and finalizeTurn queues the line into the same batch. 赶不上不补偿、不留账 —
- * any failure (hook gone, race timeout) resolves to null and the turn moves
- * on; the peek never takes the turn down.
- */
-async function peekFieldReturn(
-  slice: TimeSlice,
-  input: TurnInput,
-): Promise<{ text: string; date?: string } | null> {
-  const fieldToken = `field:${slice.slice_id}:${input.startedAtIso ?? ""}`;
-  const fieldHook = createHook<string>({ token: fieldToken });
-  try {
-    const iterator = fieldHook[Symbol.asyncIterator]();
-    try {
-      const peek = await raceFieldPeek(iterator);
-      if (peek.kind !== "reply" || !peek.text.trim()) return null;
-      return {
-        text: peek.text.trim(),
-        date:
-          localDateKey(input.startedAtIso, input.clientTimezone) ?? undefined,
-      };
-    } finally {
-      await iterator.return?.();
-    }
-  } catch (err) {
-    // peek 是纯工程顺路：任何失败都不拖垮回合。
-    console.warn(
-      `[Turn:${input.turnId}] HQ-return peek failed (ignored):`,
-      err instanceof Error ? err.message : err,
-    );
-    return null;
-  } finally {
-    fieldHook.dispose();
-  }
-}
-
-/**
- * The peek race itself: the hook's async iterator has no non-blocking read,
- * so "look once with a short timeout" is expressed as a race between the
- * next payload and `sleep` (§4 — this shape is the implementation; the
- * semantics are peek). Exported for the unit tests; production passes the
- * workflow-runtime `sleep` (second parameter) so the suspension is the
- * runtime's own.
- */
-export async function raceFieldPeek(
-  iterator: AsyncIterator<string>,
-  sleepImpl: (ms: number) => Promise<unknown> = (ms) => sleep(ms),
-  timeoutMs: number = FIELD_RETURN_PEEK_MS,
-): Promise<{ kind: "reply"; text: string } | { kind: "closed" } | { kind: "timeout" }> {
-  return Promise.race([
-    iterator.next().then((r) =>
-      r.done ? { kind: "closed" as const } : { kind: "reply" as const, text: String(r.value ?? "") },
-    ),
-    sleepImpl(timeoutMs).then(() => ({ kind: "timeout" as const })),
-  ]);
-}
-
-/**
- * How long the end-of-turn peek waits for an HQ return before moving on —
- * a short grace, not a channel. The reply has already been streamed in full;
- * this only gates the bonus.
- */
-export const FIELD_RETURN_PEEK_MS = 2_000;

@@ -24,7 +24,7 @@ import { getWritable, getWorkflowMetadata } from "workflow";
 import { resumeHook } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 import type { UIMessageChunk } from "ai";
-import { HQ_TOKEN, type HQBriefPayload } from "./hq-contract";
+import { HQ_TOKEN, type ReflectionWakePayload } from "./hq-contract";
 import {
   HQ_ACTIVITY_CHUNK,
   type HQActivityFrame,
@@ -40,7 +40,7 @@ let frameSeq = 0;
  * (client disconnected, or no run context when a unit test drives the step
  * directly) must never break the beat the frame describes. The writer is
  * acquired per frame and released immediately — never held across the
- * brief's await, where runSubAgent's own tool-progress writer takes the
+ * round's await, where runSubAgent's own tool-progress writer takes the
  * same stream's lock.
  */
 async function emitHQActivity(frame: HQActivityFrame): Promise<void> {
@@ -61,7 +61,7 @@ async function emitHQActivity(frame: HQActivityFrame): Promise<void> {
 }
 
 /**
- * One brief's round summary, returned to the run shell so IT can accumulate
+ * One wake's round summary, returned to the run shell so IT can accumulate
  * the run-level facts (did anything land, did anything fail) it reports to
  * the status pointer at finish. Type export only — the step-module rule
  * (step files export step functions + types).
@@ -77,16 +77,16 @@ export interface HQBriefRound {
  * Conflict handoff. `resumeHook` is a runtime function that MUST be called
  * outside a workflow function (SDK contract) — hence this "use step". It
  * durably writes `hook_received` and only then wakes the primary run, so a
- * duplicate HQ that loses the claim hands its brief over instead of dropping
+ * duplicate run that loses the claim hands its wake over instead of dropping
  * it (§11 ③).
  *
  * Returns false when the primary is GONE (HookNotFoundError — it finished
  * inside the handoff window): swallowing that here matters because a step's
- * retry budget would otherwise burn out and the brief would die silently.
+ * retry budget would otherwise burn out and the wake would die silently.
  * The caller (hq-run.ts) re-checks the conflict and, with no live primary
- * left, claims and processes the brief itself — the brief never drops.
+ * left, claims and handles the wake itself — the wake never drops.
  */
-export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<boolean> {
+export async function handoffBriefToPrimary(payload: ReflectionWakePayload): Promise<boolean> {
   "use step";
   try {
     await resumeHook(HQ_TOKEN, payload);
@@ -98,19 +98,19 @@ export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<bo
 }
 
 /**
- * Handle ONE brief ("use step"): hand it to the HQ agent (hq-agent.ts) —
- * the verbatim prose, a date stamp, and the slice pointer the mechanical
- * replyToken carries. There is NO pointer extraction here anymore (P4b):
- * the brief's pointers are CLUES, and HQ re-reads the raw records itself
- * before touching anything (§5 独立审查 — a pointer is not a fact), so the
- * shell neither parses the prose nor pre-decides an agenda.
+ * Handle ONE wake ("use step"): hand the pointer to the reflection unit
+ * (hq-agent.ts) — the slice/turn it names, verbatim, plus a date stamp.
+ * There is NO semantic payload at all (v0.30 §2.2): the record is the
+ * channel, and the unit re-reads the raw records itself before touching
+ * anything (§5 独立审查 — a pointer is not a fact), so the shell neither
+ * interprets nor pre-decides an agenda.
  *
- * HQ's write stamp rides the USER's clock: the field attaches its local
- * calendar date as `payload.date` (the same clock the slice ids themselves
- * are named by); older producers carry none and the UTC date is the fallback.
- * Failure never throws out of here: handleBrief
- * returns { error } and logs it, and a failed brief simply lands nothing
- * (§5 — HQ's products are writes).
+ * The unit's write stamp rides the USER's clock: the field attaches its
+ * local calendar date as `payload.date` (the same clock the slice ids
+ * themselves are named by); bare wakes (the cancel route holds only a
+ * runId) carry none and the UTC date is the fallback. Failure never throws
+ * out of here: handleBrief returns { error } and logs it, and a failed
+ * round simply lands nothing (§5 — the unit's products are writes).
  *
  * The round's outcome is ALSO recorded into the hq.json status pointer
  * (hq-status-store.ts — the pod panel's visibility layer) and returned to
@@ -118,35 +118,29 @@ export async function handoffBriefToPrimary(payload: HQBriefPayload): Promise<bo
  * The status store is imported dynamically for the same reason `./hq-agent`
  * is (see the module header).
  */
-export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRound> {
+export async function handleHQBrief(payload: ReflectionWakePayload): Promise<HQBriefRound> {
   "use step";
-  // replyToken is `field:<sliceId>:<startedAtIso>` (attached mechanically by
-  // the reportToHQ executor) — the slice id is the one pointer the shell
-  // legitimately owns; the ISO tail carries colons, so index, not split-all.
-  const sliceId = payload.replyToken.startsWith("field:")
-    ? payload.replyToken.split(":")[1] || undefined
-    : undefined;
   // 开始核对 — the pod sees the round begin before the (possibly minutes-long)
   // agent work below.
   await emitHQActivity({
     kind: "reading",
     at: new Date().toISOString(),
-    ...(sliceId ? { sliceId } : {}),
+    ...(payload.sliceId ? { sliceId: payload.sliceId } : {}),
   });
   const date = payload.date ?? new Date().toISOString().slice(0, 10);
   const { handleBrief } = await import("./hq-agent");
   const outcome = await handleBrief({
-    brief: payload.brief,
     date,
-    ...(sliceId ? { sliceId } : {}),
+    ...(payload.sliceId ? { sliceId: payload.sliceId } : {}),
+    ...(payload.turnId ? { turnId: payload.turnId } : {}),
   });
   const { recordHQBriefOutcome } = await import("./hq-status-store");
   await recordHQBriefOutcome({ actions: outcome.actions });
   // The round's beat: landed writes ("wrote research/X"), a deliberate
   // no-write ("idle — nothing to write" — a veto that produced no write is
   // mechanically an empty round, its short reason riding the note), or the
-  // failure line. HQ's own one-paragraph account (outcome.note) rides the
-  // wrote/idle frames so the panel can show WHY, not only WHAT.
+  // failure line. The unit's own one-paragraph account (outcome.note) rides
+  // the wrote/idle frames so the panel can show WHY, not only WHAT.
   if (outcome.error) {
     await emitHQActivity({
       kind: "failed",
@@ -166,24 +160,6 @@ export async function handleHQBrief(payload: HQBriefPayload): Promise<HQBriefRou
       at: new Date().toISOString(),
       ...(outcome.note ? { note: outcome.note } : {}),
     });
-  }
-  // 回程（v0.21 §4）：结果帧落盘之后，把 HQ 这一轮的散文陈述
-  // (outcome.note — its own account of the round) 喊回外勤的回调 hook。
-  // Best-effort bonus, never a channel: the field's hook is registered only
-  // once its turn run suspends on the closing peek (turn-workflow.ts), so an
-  // early or late call alike lands HookNotFoundError — swallowed silently, no
-  // compensation, no ledger (§11 ②). And no failure here may take the HQ
-  // round down: the whole beat is wrapped, lesser errors logged and eaten.
-  if (payload.replyToken && !outcome.error && outcome.note.trim()) {
-    try {
-      await resumeHook(payload.replyToken, outcome.note);
-    } catch (e) {
-      if (HookNotFoundError.is(e)) {
-        console.debug(`[HQ] field return missed (hook gone): ${payload.replyToken}`);
-      } else {
-        console.warn("[HQ] field return failed (ignored):", e);
-      }
-    }
   }
   return {
     actions: outcome.actions,
@@ -215,9 +191,9 @@ export async function markHQRunStarted(): Promise<void> {
 
 /**
  * Run-finish mark ("use step"): the shell's loop ended (idle grace, hook
- * done, or a failure that escaped a brief). `wrote` / `errored` are the
- * RUN-level accumulation across all of its briefs; the store maps them to
- * the terminal status (完成 / 空转 / 失败) and the definitive brief count,
+ * done, or a failure that escaped a round). `wrote` / `errored` are the
+ * RUN-level accumulation across all of its wakes; the store maps them to
+ * the terminal status (完成 / 空转 / 失败) and the definitive round count,
  * and a failed run's real error line rides along to the pointer's lastError.
  * The "finished" frame closes the activity feed with the same mapping —
  * pointer first, frame second, so a lost frame never costs the settlement.
@@ -226,7 +202,7 @@ export async function markHQRunFinished(result: {
   handled: number;
   wrote: boolean;
   errored: boolean;
-  /** The run's failure line (a brief's error or the exception that escaped
+  /** The run's failure line (a round's error or the exception that escaped
    *  the loop) — carried to the pointer so a 失败 says why. */
   error?: string;
 }): Promise<void> {

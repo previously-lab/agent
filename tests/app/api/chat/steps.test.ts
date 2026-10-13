@@ -202,6 +202,25 @@ const evolution = vi.hoisted(() => ({
 }));
 vi.mock("@/app/api/evolution/run-card-evolution", () => evolution);
 
+// The mechanical bell (v0.30 §2.1) is mocked at its module boundary: the
+// engine's three delivery paths are pinned in reflection-wake.test.ts, so
+// here only the step's threading (payload in, warn-not-throw out) matters.
+const reflectionWake = vi.hoisted(() => ({
+  deliverReflectionWake: vi.fn(
+    async (): Promise<
+      | { ok: true; delivered: "resumed" | "started"; runId: string }
+      | { ok: false; reason: string }
+    > => ({ ok: true, delivered: "resumed", runId: "hq-1" }),
+  ),
+  buildReflectionWakePayload: vi.fn(
+    (slice: { slice_id: string }, input: { turnId?: string }) => ({
+      sliceId: slice.slice_id,
+      ...(input.turnId ? { turnId: input.turnId } : {}),
+    }),
+  ),
+}));
+vi.mock("@/app/api/evolution/reflection-wake", () => reflectionWake);
+
 // Phase-level bridge outsourcing — runHousekeepingBridge /
 // applyBridgeCardEvolution are replaced with fakes (the report under test is
 // injected verbatim); the report adapter stays REAL.
@@ -309,6 +328,7 @@ import {
   housekeeping,
   finalizeTurn,
   closeTurnStream,
+  ringReflection,
   type EntryReckoning,
 } from "@/app/api/chat/steps";
 
@@ -1809,42 +1829,21 @@ describe("finalizeTurn — the tail's single commit", () => {
     episodic.flushBatch.mockImplementation(async () => {});
   });
 
-  it("flushes exactly ONE commit named `Turn {turnId} — finalize`, the body naming the fired segments", async () => {
+  it("flushes exactly ONE commit named `Turn {turnId} — finalize`", async () => {
     const slice = makeSlice({
       turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
     });
-    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice), {
-      text: "回程内容。",
-      date: "2026-07-14",
-    });
+    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice));
 
     expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
     const message = episodic.flushBatch.mock.calls[0][1] as string;
-    expect(message.startsWith("Turn test-id — finalize")).toBe(true);
-    // In this mocked fs only the field-return segment grows the batch (the
-    // persist/evolution writes go through the mocked fs helpers) — the body
-    // line proves the segment accounting, not a second commit.
-    expect(message).toContain("- field return");
+    // In this mocked fs no segment grows the batch (the persist/evolution
+    // writes go through the mocked fs helpers) — the bare headline proves
+    // the single commit.
+    expect(message).toBe("Turn test-id — finalize");
   });
 
-  it("queues the HQ return line into the SAME batch the tail commits", async () => {
-    const slice = makeSlice({
-      turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
-    });
-    fakeDisk.files.set("2026-07-14-0900:agent", "既有 cognition。\n");
-
-    await finalizeTurn(slice, outcome, makeInput("hi"), hkFor(slice), {
-      text: "回程内容。",
-      date: "2026-07-14",
-    });
-
-    const queued = batches[0].entries.get("2026-07-14-0900:agent");
-    expect(queued).toBeDefined();
-    expect(queued).toContain("既有 cognition。");
-    expect(queued).toContain("Field return (2026-07-14): 回程内容。");
-  });
-
-  it("an empty tail (no reply, no explicit update, no return) no-ops the flush", async () => {
+  it("an empty tail (no reply, no explicit update) no-ops the flush", async () => {
     const slice = makeSlice({
       turns: [{ timestamp: "t0", role: "user", content: "hi", turnId: "test-id" }],
     });
@@ -1857,5 +1856,52 @@ describe("finalizeTurn — the tail's single commit", () => {
     );
     expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
     expect(batches[0].entries.size).toBe(0);
+  });
+});
+
+describe("ringReflection — the mechanical bell (v0.30 §2.1)", () => {
+  it("delivers the wake built from the slice and the turn", async () => {
+    const slice = makeSlice();
+    const input = makeInput("hi");
+    await ringReflection(slice, input);
+    expect(reflectionWake.buildReflectionWakePayload).toHaveBeenCalledWith(slice, input);
+    expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledTimes(1);
+    expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledWith({
+      sliceId: slice.slice_id,
+      turnId: input.turnId,
+    });
+  });
+
+  it("a failed delivery only warns — the turn never fails on the bell", async () => {
+    reflectionWake.deliverReflectionWake.mockResolvedValueOnce({
+      ok: false,
+      reason: "no reflection hook",
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(ringReflection(makeSlice(), makeInput("hi"))).resolves.toBeUndefined();
+      expect(
+        warnSpy.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake not delivered"),
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("a thrown engine error only warns — the turn never fails on the bell", async () => {
+    reflectionWake.deliverReflectionWake.mockRejectedValueOnce(new Error("boom"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(ringReflection(makeSlice(), makeInput("hi"))).resolves.toBeUndefined();
+      expect(
+        warnSpy.mock.calls.some(
+          (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake failed"),
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

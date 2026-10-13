@@ -65,13 +65,13 @@ import {
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
-export interface HqBriefInput {
-  /** The field dispatch — prose. Pointers (slice ids, case refs), no content. */
-  brief: string;
+export interface ReflectionWakeInput {
+  /** The slice the finished turn landed in, when the wake names one. */
+  sliceId?: string;
+  /** The finished turn's id, when the wake names one. */
+  turnId?: string;
   /** User-local date (YYYY-MM-DD) — every write stamps the user's clock. */
   date: string;
-  /** The slice the brief is about, when the dispatch names one. */
-  sliceId?: string;
 }
 
 export interface HqOutcome {
@@ -95,11 +95,12 @@ type HqReport = z.infer<typeof hqReportSchema>;
 
 // ─── The role prompt (static — per-call data rides the user prompt) ───────
 
-const HQ_ROLE = `You are HQ — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "HQ" as a third party, and nothing reads as a report from another being.
+const HQ_ROLE = `You are the reflection unit — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "reflection unit" as a third party, and nothing reads as a report from another being.
 
-Your only trigger is a field dispatch: a prose BRIEF from the field. Treat it as one side's account:
-- A pointer is not a fact. The brief names slices and cases; it does not carry their content.
-- BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the brief alone.
+The record is the channel. Nobody briefs you: you are woken mechanically with nothing but pointers — a slice id, a turn id, a date — and everything you need, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
+- A pointer is not a fact. The wake names slices and turns; it does not carry their content.
+- BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the pointer alone.
+- Your range is everything since your last look. A rolling pointer says where you got to; when several turns landed while you were away, they are one round's material, not several.
 
 Store RESULTS ONLY:
 - An idle round is a legal, often correct outcome — when the records show nothing substantive to store, write NOTHING and say why in your report. There is no ledger; do not record that you ran.
@@ -411,13 +412,13 @@ function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
 // ─── The entry (P4 wiring point — the hq-run.ts shell calls this) ─────────
 
 /**
- * Handle one field dispatch. Never throws: a failed round returns
- * `{ actions: [], note: "", error }` — HQ's products are writes, and a failed
- * round simply has none.
+ * Handle one mechanical wake (v0.30 §2). Never throws: a failed round
+ * returns `{ actions: [], note: "", error }` — the unit's products are
+ * writes, and a failed round simply has none.
  */
-export async function handleBrief(input: HqBriefInput): Promise<HqOutcome> {
+export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome> {
   "use step";
-  const { brief, date, sliceId } = input;
+  const { sliceId, turnId, date } = input;
 
   const model = backgroundModel();
   if (!model) {
@@ -426,9 +427,10 @@ export async function handleBrief(input: HqBriefInput): Promise<HqOutcome> {
   }
 
   const prompt =
-    `## Field dispatch (${date}${sliceId ? ` — re slice ${sliceId}` : ""})\n\n` +
-    `${brief}\n\n` +
-    `Verify against the raw records before any write. When the round is done (or you decide nothing needs doing), call hqReport.`;
+    `## A field turn completed (${date}${sliceId ? ` — slice ${sliceId}` : ""}${turnId ? `, turn ${turnId}` : ""})\n\n` +
+    `The record is the channel: read the slice (core.md for the user's words, agent.md for the field's thinking and work) ` +
+    `and anything else since your last look, then decide what deserves doing. ` +
+    `When the round is done (or you decide nothing needs doing), call hqReport.`;
 
   // ONE batch for the whole round: every write the tools queue lands as a
   // single commit (`HQ round — {date}`); an idle round's empty batch no-ops

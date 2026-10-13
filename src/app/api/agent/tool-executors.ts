@@ -13,7 +13,7 @@
 
 import { streamText, type UIMessageChunk } from "ai";
 import { getWritable } from "workflow";
-import { getHookByToken, resumeHook, start } from "workflow/api";
+import { start } from "workflow/api";
 // Side effect: keep the step-bundle copy of StepBoundaryLanguageModel
 // evaluated in the step runtime so the Workflow 5 SWC plugin's inlined
 // serialization-class registration for it runs before any doStreamStep
@@ -41,12 +41,6 @@ import {
   logDocReworkSignal,
   extractSliceIds,
 } from "@/lib/episodic/rework-signal";
-import {
-  HQ_TOKEN,
-  hqRun,
-  type HQBriefPayload,
-} from "@/app/api/evolution/hq-run";
-import { recordHQDispatch } from "@/app/api/evolution/hq-status-store";
 import { questionRun } from "@/app/api/evolution/question-run";
 import { readSelfSop, readUserModel } from "@/lib/evolution/store";
 
@@ -808,8 +802,8 @@ function userLocalDate(timezone: string | undefined): string {
  *
  * Bounded exactly as §2.2 prescribes:
  * - 分类界: every category is writable but two — people/user and self/ are
- *   HQ's write surface (the user model is evolved, never written
- *   mid-conversation); both refuse here with a pointer to reportToHQ, as do
+ *   the reflection unit's write surface (the user model is evolved, never
+ *   written mid-conversation); both refuse here, as do
  *   names outside the nine-category set;
  * - 操作界: only `open` and `addPiece` reach `applyCaseWriteIntent`
  *   (rewriteIndex / appendTail / close are never issued);
@@ -840,7 +834,7 @@ export async function writeCaseExecute(
       reason:
         `category ${JSON.stringify(input.category)} is not writable from here — ` +
         "allowed: people / events / things / places / orgs / research / hypotheses / tasks. " +
-        "people/user and self belong to HQ: dispatch the material with reportToHQ and HQ writes them.",
+        "people/user and self belong to the reflection unit: it reads the record and writes them — never your pen.",
     };
   }
   const caseName = sanitizeCaseSegment(input.caseName?.trim() ?? "");
@@ -858,8 +852,8 @@ export async function writeCaseExecute(
     return {
       ok: false,
       reason:
-        "people/user is HQ's alone — the model of the user is evolved, never " +
-        "written mid-conversation. Dispatch what you learned with reportToHQ instead of writing it.",
+        "people/user is the reflection unit's alone — the model of the user is evolved, never " +
+        "written mid-conversation. It reads the record and keeps those — you never write it.",
     };
   }
   const body = input.body?.trim() ?? "";
@@ -940,101 +934,6 @@ export async function writeCaseExecute(
   if (result.ok) {
     await flushBatch(batch, `writeCase ${category}/${caseName}`);
   }
-  return result;
-}
-
-
-// ─── reportToHQ — the field's one-way report to HQ (v0.21 §4) ──────────────
-
-export type ReportToHQResult =
-  | { ok: true; delivered: "resumed" | "started"; runId: string }
-  | { ok: false; reason: string };
-
-/**
- * Start a fresh HQ run carrying this brief as its first payload. Shared by
- * the "no HQ alive" and "resume raced with HQ exit" fallbacks.
- */
-async function startHQRun(payload: HQBriefPayload): Promise<ReportToHQResult> {
-  try {
-    // Same start config as the question sub-flow (startLongTask below) —
-    // background runs live in one region, not two.
-    const run = await start(hqRun, [payload], { region: "hkg1" });
-    return { ok: true, delivered: "started", runId: run.runId };
-  } catch (e) {
-    return {
-      ok: false,
-      reason: `HQ could not be reached: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  }
-}
-
-/**
- * Deliver the brief to HQ (private helper — the step below stays thin).
- * Step order (§4): the advisory `getHookByToken` first; a live hook →
- * `resumeHook` (durable `hook_received` first, then the wake). Any failure
- * — hook absent (HookNotFoundError), or a race where HQ exited right after
- * the advisory — falls back to `start(hqRun, [payload])`. A resumeHook
- * failure can leave the event durable while the wake failed; re-delivering
- * to a fresh run only appends a duplicate `hook_received`, which HQ absorbs
- * writer-is-reader style (§11 ③).
- */
-async function deliverHQBrief(payload: HQBriefPayload): Promise<ReportToHQResult> {
-  try {
-    // Advisory only (SDK): a hit does not guarantee the hook survives until
-    // resumeHook — the race is closed by the fallback below.
-    await getHookByToken(HQ_TOKEN);
-  } catch {
-    return startHQRun(payload);
-  }
-  try {
-    const resumed = await resumeHook(HQ_TOKEN, payload);
-    return { ok: true, delivered: "resumed", runId: resumed.runId };
-  } catch (e) {
-    console.warn(
-      "[reportToHQ] resumeHook failed — starting a fresh HQ run:",
-      e instanceof Error ? e.message : e,
-    );
-    return startHQRun(payload);
-  }
-}
-
-/**
- * reportToHQ — hand the scene over to HQ (§4). The payload is ONE piece of
- * prose (`brief`: what the field sees + its own observations — no
- * expectations, no instructions) plus the mechanically-attached
- * `replyToken` (`field:<sliceId>:<startedAtIso>`, same formula the turn
- * workflow uses for its end-of-turn callback hook — the model never writes
- * it). The result only says DELIVERED or not — it promises nothing about
- * what HQ does, and HQ may or may not speak back later.
- *
- * A confirmed delivery also lands in the hq.json status pointer
- * (hq-status-store.ts) — the companion pod's "last dispatch" line. The
- * record is best-effort (the store swallows its own errors) and never
- * changes what this tool answers.
- */
-export async function reportToHQExecute(
-  input: { brief: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<ReportToHQResult> {
-  "use step";
-  if (ctx.useDemo) {
-    return {
-      ok: false,
-      reason:
-        "Demo mode runs on read-only benchmark data — reports are not dispatched.",
-    };
-  }
-  const brief = input.brief?.trim() ?? "";
-  if (!brief) return { ok: false, reason: "brief must not be empty." };
-  const payload: HQBriefPayload = {
-    brief,
-    // The write-window date anchor: the USER-LOCAL date (same helper as
-    // startLongTask), not the HQ runtime's UTC date.
-    date: userLocalDate(ctx.timezone),
-    replyToken: `field:${ctx.sliceId}:${ctx.startedAtIso ?? ""}`,
-  };
-  const result = await deliverHQBrief(payload);
-  if (result.ok) await recordHQDispatch(brief);
   return result;
 }
 

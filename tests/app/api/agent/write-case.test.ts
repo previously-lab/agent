@@ -6,7 +6,7 @@
  * ops underneath). Covers the acceptance points:
  *  1. the category set — every category but people/user and self/ is
  *     writable (people/ for another person included); those two plus unknown
- *     names refuse with a pointer to reportToHQ;
+ *     names refuse with a pointer to the reflection unit;
  *  2. lock mutex with the per-case writer (same `doc:<分类>/<case名>` key);
  *  3. end-to-end: open → index lands verbatim → second call addPiece (index
  *     untouched) → no-pieceTitle refusal;
@@ -144,12 +144,12 @@ describe("writeCase — the category set", () => {
     expect(r4).toMatchObject({ ok: true, path: "memory/hypotheses/用户偏好简洁/index.md" });
   });
 
-  it("people/user is refused with a dispatch pointer — HQ's alone, evolved never written", async () => {
+  it("people/user is refused — the reflection unit's alone, evolved never written", async () => {
     const r = await call({ category: "people", caseName: "user", body: "正文" });
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.reason).toContain("people/user is HQ's alone");
-      expect(r.reason).toContain("reportToHQ");
+      expect(r.reason).toContain("people/user is the reflection unit's alone");
+      expect(r.reason).toContain("you never write it");
     }
     expect(io.files.size).toBe(0);
   });
@@ -160,7 +160,7 @@ describe("writeCase — the category set", () => {
       expect(r.ok).toBe(false);
       if (!r.ok) {
         expect(r.reason).toContain("is not writable from here");
-        expect(r.reason).toContain("reportToHQ");
+        expect(r.reason).toContain("reflection unit");
       }
     }
     expect(io.files.size).toBe(0);

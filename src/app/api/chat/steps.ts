@@ -26,19 +26,22 @@
  *      queued writes): 落盘这一轮 (agent turn + cognition, conflict
  *      self-heal) + 序 6 (the explicit-instruction channel — runs ONLY when
  *      the entry beat's analysis read an explicit record/correction request;
- *      no explicit instruction → zero LLM, zero writes 空转零写入) + the
- *      §4 回程 line (a caught HQ return, queued — the peek itself runs in
- *      the workflow body before this step, hooks being workflow-runtime
- *      primitives, and hands the text over as plain serializable data).
+ *      no explicit instruction → zero LLM, zero writes 空转零写入).
  *   3. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
+ *   4. ringReflection    — the mechanical bell (v0.30 §2.1): after the turn
+ *      lands, hand the reflection unit a pure pointer ({sliceId, turnId,
+ *      date}) — a live run gets a resumeHook, otherwise a fresh run starts.
+ *      Best-effort: a failed bell only warns (the unit's range is everything
+ *      since its last look, so the next turn's bell covers the gap).
  *
- * Retired (v0.21 §A.2.2 改写 / §9): the scribe segment's close-TRIGGERED
- * dispatch chain — due-task scan → [boundary-event] mailbox post → automatic
- * start(boundaryRun)/start(questionRun) — and the scribe passes that
- * consumed [doc-marker] lines into cases. HQ is an agent whose ONLY trigger
- * is the field agent's reportToHQ; it reads the field itself (the mailbox
- * markers are prose clues, not triggers). The [doc-*] mailbox line contract
- * itself is frozen and untouched.
+ * Retired (v0.21 §A.2.2 改写 / §9; v0.30 §2): the scribe segment's
+ * close-TRIGGERED dispatch chain — due-task scan → [boundary-event] mailbox
+ * post → automatic start(boundaryRun)/start(questionRun) — and the scribe
+ * passes that consumed [doc-marker] lines into cases; and, in v0.30, the
+ * field's reportToHQ tool plus the §4 回程 (field-return peek). The
+ * reflection unit's ONLY trigger is the mechanical bell; it reads the
+ * record itself (the mailbox markers are prose clues, not triggers). The
+ * [doc-*] mailbox line contract itself is frozen and untouched.
  *
  * Chunk order for the UI: data-phase(slice/analyze/slice-closed?/context) →
  * start → start-step → (reply) → data-evolution? → data-turn-status →
@@ -61,10 +64,8 @@ import {
   flushBatch,
   analyzeTurn,
   sliceIdToFilePath,
-  sliceIdToAgentPath,
   slicePartPathCandidates,
   readSlicePart,
-  readSlicePartResolved,
   parseSlice,
   loadSlice,
   RECORDS_ROOT,
@@ -124,6 +125,10 @@ import type {
   EvolutionResult,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
+import {
+  buildReflectionWakePayload,
+  deliverReflectionWake,
+} from "@/app/api/evolution/reflection-wake";
 import {
   runCardEvolution,
   type CardEvolutionReaders,
@@ -1346,44 +1351,17 @@ async function flushTurnBatch(
 }
 
 /**
- * The HQ-return line's date stamp (v0.21 §4): the caller's local date when
- * handed one over, else the slice's own naming date (slice ids are named by
- * the user's local calendar — createSlice), UTC only as the last resort for
- * an unparseable id. Exported for the unit tests; production passes the
- * workflow-stamped date.
- */
-export function fieldReturnStamp(sliceId: string, date?: string): string {
-  return (
-    date ??
-    (/^\d{4}-\d{2}-\d{2}-/.test(sliceId)
-      ? sliceId.slice(0, 10)
-      : new Date().toISOString().slice(0, 10))
-  );
-}
-
-/** ONE dated prose line for the slice's agent.md — a caught HQ return (§4). */
-export function formatFieldReturnLine(text: string, stamp: string): string {
-  return `Field return (${stamp}): ${text.trim()}`;
-}
-
-/**
- * The turn tail — 落盘这一轮 + 序 6 + 回程 in ONE slice-locked step and ONE
+ * The turn tail — 落盘这一轮 + 序 6 in ONE slice-locked step and ONE
  * git commit (`Turn {turnId} — finalize`, the body naming the segments that
- * actually queued writes). These used to be three steps committing
- * separately (agent response / explicit evolution / the field-return
- * append); they share the slice lock and the conflict self-heal, so merging
- * loses nothing and the tail's writes land atomically:
+ * actually queued writes). These used to be separate steps committing
+ * separately; they share the slice lock and the conflict self-heal, so
+ * merging loses nothing and the tail's writes land atomically:
  *   - Segment 1 appends the agent turn + cognition (deduped by turnId —
  *     the old persistAgentTurn, unchanged).
  *   - Segment 2 is the explicit-instruction channel (序 6 — the old
  *     explicitEvolutionSegment, unchanged): runs ONLY when the entry beat's
  *     analysis read an explicit record/correction request; no explicit
  *     instruction → zero LLM, zero writes.
- *   - Segment 3 queues a caught HQ return line (the old
- *     appendFieldReturnLine's write) — fed by the §4 peek that used to run in
- *     the workflow body BEFORE this step. The peek is currently DISABLED
- *     (turn-workflow passes undefined — see the call site), so this segment
- *     is dormant; it stays wired for the peek's redesign.
  * Retries are safe: the agent-turn append is deduped by turnId, the snapshot
  * write is idempotent, a review re-run converges, and the flush keeps the
  * turn-merge self-heal (flushTurnBatch).
@@ -1393,7 +1371,6 @@ export async function finalizeTurn(
   outcome: TurnOutcome,
   input: TurnInput,
   hk: HousekeepingResult & EntryReckoning,
-  fieldReturn?: { text: string; date?: string },
 ): Promise<void> {
   "use step";
 
@@ -1466,10 +1443,11 @@ export async function finalizeTurn(
   // EXECUTED here. Everything else the v0.19 scribe segment did is gone
   // (v0.21 §A.2.2 改写 / §9): analyze + close moved into the entry beat
   // (归纳上一页, idempotent via needs_marking), the close-triggered HQ
-  // dispatch chain is retired — HQ's ONLY trigger is the field agent's
-  // reportToHQ — and the marker-consuming scribe passes are HQ's job now
-  // (the [doc-*] mailbox contract itself is frozen and untouched — HQ reads
-  // it as prose clues). Writes are idempotent under redelivery (a review
+  // dispatch chain is retired — the reflection unit's ONLY trigger is the
+  // mechanical bell (ringReflection, v0.30 §2.1) — and the marker-consuming
+  // scribe passes are the unit's job now
+  // (the [doc-*] mailbox contract itself is frozen and untouched — the unit
+  // reads it as prose clues). Writes are idempotent under redelivery (a review
   // re-run converges); failures are reported to the client as an error
   // chunk and never take the turn down. Demo skips the segment entirely
   // (read-only preview — 空转零写入).
@@ -1616,29 +1594,6 @@ export async function finalizeTurn(
   }
   mark("explicit evolution", before2);
 
-  // ── Segment 3: 回程 — a caught HQ return, queued on the SAME commit ───
-  // 赶上就带上 (v0.21 §4): ONE small prose line in this slice's agent.md —
-  // the next turn's read face sees it naturally; 赶不上不补偿、不留账. Not a
-  // mailbox marker — the new channel is prose (§6 R4). Best-effort: a failed
-  // resolved read still queues the bare line at the canonical path, and the
-  // whole segment QUEUES (never an immediate write), so it rides the tail's
-  // single commit under the slice lock.
-  if (fieldReturn?.text.trim()) {
-    const before3 = batch.entries.size;
-    const stamp = fieldReturnStamp(slice.slice_id, fieldReturn.date);
-    const resolved = await readSlicePartResolved(slice.slice_id, "agent", batch, {
-      fresh: true,
-    }).catch(() => null);
-    const existing = resolved?.content ?? "";
-    const line = formatFieldReturnLine(fieldReturn.text, stamp);
-    const next = existing.trimEnd()
-      ? `${existing.trimEnd()}\n\n${line}\n`
-      : `${line}\n`;
-    batch.entries.set(resolved?.path ?? sliceIdToAgentPath(slice.slice_id), next);
-    mark("field return", before3);
-    console.log(`[Field] HQ return line queued for ${slice.slice_id} agent.md`);
-  }
-
   // ── The tail's ONE commit — an empty batch no-ops the flush (空转零写入) ──
   const headline = `Turn ${input.turnId} — finalize`;
   const message =
@@ -1688,4 +1643,37 @@ export async function closeTurnStream(
   await writer.write({ type: "finish" } as UIMessageChunk);
   writer.releaseLock();
   await writable.close();
+}
+
+// ─── Step 5: ringReflection — the mechanical bell (v0.30 §2.1) ─────────────
+
+/**
+ * The reflection unit's ONLY trigger. The turn is fully persisted by now
+ * (finalizeTurn above), so the bell hands over a PURE POINTER — slice id,
+ * turn id, the user-local date — and nothing else: nobody briefs the unit,
+ * it reads the record itself. The engine (reflection-wake.ts) is what the
+ * retired reportToHQ executor used: a live run gets a resumeHook push,
+ * otherwise a fresh run starts (the claim/handoff chain in hq-run.ts covers
+ * races). Best-effort by design — a failed bell only warns: the unit's
+ * range is everything since its last look, so the next turn's bell covers
+ * the gap. Never throws; the turn must not be taken down by its doorbell.
+ */
+export async function ringReflection(
+  slice: TimeSlice,
+  input: TurnInput,
+): Promise<void> {
+  "use step";
+  try {
+    const result = await deliverReflectionWake(
+      buildReflectionWakePayload(slice, input),
+    );
+    if (!result.ok) {
+      console.warn(`[Reflection] wake not delivered (ignored): ${result.reason}`);
+    }
+  } catch (err) {
+    console.warn(
+      "[Reflection] wake failed (ignored):",
+      err instanceof Error ? err.message : err,
+    );
+  }
 }

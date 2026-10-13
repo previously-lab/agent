@@ -12,9 +12,15 @@
  * Terminal runs (completed/failed/cancelled) and unknown run ids are no-ops —
  * the client fires this alongside the local abort and must never be punished
  * for a race with the run's own completion.
+ *
+ * A REAL cancel also rings the reflection bell (v0.30 §2.1): the turn's own
+ * tail never ran, so without this wake the orphaned user message would go
+ * unseen until the next turn. The route holds no slice/turn pointer — a
+ * bare wake is legal (the unit's range is everything since its last look).
  */
 import { getRun } from "workflow/api";
 import { guardRequest } from "@/lib/security/origin-guard";
+import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
 
 export async function POST(
   request: Request,
@@ -28,6 +34,11 @@ export async function POST(
     const status = await run.status;
     if (status === "pending" || status === "running") {
       await run.cancel();
+      // The bell never delays or breaks the cancel response.
+      const wake = await deliverReflectionWake({});
+      if (!wake.ok) {
+        console.warn(`[chat/cancel] reflection wake not delivered (ignored): ${wake.reason}`);
+      }
       return Response.json({ ok: true, cancelled: true });
     }
     return Response.json({ ok: true, cancelled: false, status });

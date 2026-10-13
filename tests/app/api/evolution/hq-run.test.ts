@@ -1,15 +1,15 @@
 /**
- * HQ run — the field↔HQ communication shell (v0.21 §4, P4b).
+ * HQ run — the reflection unit's shell (v0.21 §4, P4b; v0.30 §2 机械铃).
  *
  * The workflow runtime primitives (createHook / sleep) and the runtime API
- * (resumeHook) are mocked; the HQ agent (hq-agent.ts's handleBrief) is
+ * (resumeHook) are mocked; the reflection unit (hq-agent.ts's handleBrief) is
  * stubbed. No real durable run is executed — that is the main agent's live
  * verification.
  *
- * Pins: conflict → handoff-then-exit (order), idle-grace exit, multi-brief
- * loop, and the P4b handoff shape — the brief prose goes to the HQ agent
- * VERBATIM (no pointer extraction in the shell), with the date stamp and the
- * replyToken's slice pointer as the only shell-owned facts.
+ * Pins: conflict → handoff-then-exit (order), idle-grace exit, multi-wake
+ * loop, and the v0.30 handoff shape — the wake's pointer goes to the unit
+ * VERBATIM ({sliceId?, turnId?}; there is NO semantic payload), with the date
+ * stamp as the only shell-owned fact (the record is the channel, §2.2).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -18,16 +18,9 @@ const h = vi.hoisted(() => ({
   order: [] as string[],
   /** the data-hq-activity chunks written into the run's stream */
   frames: [] as Array<{ type: string; id: string; data: unknown }>,
-  /** field returns (回程): resumeHook calls whose token is NOT HQ_TOKEN */
-  fieldReturns: [] as Array<{ token: string; value: unknown }>,
-  resumeHook: vi.fn(async (token: string, value?: unknown) => {
-    // Claim/handoff calls (HQ_TOKEN) join the order log; the field return
-    // rides after the round and is tracked apart from that ordering.
-    if (token === HQ_TOKEN) {
-      h.order.push("handoff");
-    } else {
-      h.fieldReturns.push({ token, value });
-    }
+  resumeHook: vi.fn(async () => {
+    // Conflict handoffs (HQ_TOKEN) join the order log.
+    h.order.push("handoff");
     return { runId: "run-primary" };
   }),
   handleBrief: vi.fn(
@@ -85,7 +78,7 @@ vi.mock("@/app/api/evolution/hq-status-store", () => ({
   recordHQRunFinished: h.recordRunFinished,
 }));
 
-import { hqRun, HQ_TOKEN, type HQBriefPayload } from "@/app/api/evolution/hq-run";
+import { hqRun, HQ_TOKEN, type ReflectionWakePayload } from "@/app/api/evolution/hq-run";
 import { HookNotFoundError } from "workflow/errors";
 
 interface FakeHook {
@@ -123,42 +116,36 @@ function makeHook(): FakeHook {
   };
 }
 
-const BRIEF: HQBriefPayload = {
-  brief: "现场：用户提到 2026-10-04-0131 里谈过的屏幕供应商，观察：值得跟进。",
-  replyToken: "field:2026-10-04-0131:2026-10-04T01:31:00.000Z",
+const WAKE: ReflectionWakePayload = {
+  sliceId: "2026-10-04-0131",
+  turnId: "turn-1",
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
   h.order.length = 0;
   h.frames.length = 0;
-  h.fieldReturns.length = 0;
   h.behavior = { conflict: null, queue: [], pend: true };
 });
 
 describe("hqRun — claim and conflict", () => {
-  it("no conflict → claims the token and hands the initial brief to the HQ agent verbatim", async () => {
-    const outcome = await hqRun(BRIEF);
+  it("no conflict → claims the token and hands the wake's pointer to the unit verbatim", async () => {
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    // P4b: NO pointer extraction in the shell — the prose rides verbatim;
-    // the slice pointer comes from the mechanical replyToken, the date is
-    // the UTC stamp (the same clock slice ids are named by).
+    // v0.30 §2.2: NO semantic payload at all — the pointer rides verbatim;
+    // the date is the UTC-stamp fallback (this wake carried no payload.date).
     expect(h.handleBrief).toHaveBeenCalledTimes(1);
     expect(h.handleBrief).toHaveBeenCalledWith({
-      brief: BRIEF.brief,
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       sliceId: "2026-10-04-0131",
+      turnId: "turn-1",
     });
-    // No HQ_TOKEN handoff — but the round's note rode back on the brief's
-    // replyToken (§4 回程, best-effort: this mock's hook is always there).
+    // No HQ_TOKEN handoff — a claiming run works its own wake.
     expect(h.order).not.toContain("handoff");
-    expect(h.fieldReturns).toEqual([
-      { token: BRIEF.replyToken, value: "idle — nothing substantive" },
-    ]);
   });
 
   it("the status pointer follows the claim: running at start, settled at finish", async () => {
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(h.recordRunStarted).toHaveBeenCalledTimes(1);
     // the run's OWN durable id rides the start mark (never a dispatch's say-so)
     expect(h.recordRunStarted).toHaveBeenCalledWith("run-1");
@@ -173,12 +160,12 @@ describe("hqRun — claim and conflict", () => {
     expect(h.order).toEqual(["runStarted", "handleBrief", "runFinished"]);
   });
 
-  it("a brief that landed writes settles the run as wrote; a failed brief as errored", async () => {
+  it("a wake whose round wrote settles the run as wrote; a failed round as errored", async () => {
     h.handleBrief.mockResolvedValueOnce({
       actions: ["memory/people/user/index.md"],
       note: "wrote the user model",
     });
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(h.recordBriefOutcome).toHaveBeenCalledWith({
       actions: ["memory/people/user/index.md"],
     });
@@ -187,33 +174,26 @@ describe("hqRun — claim and conflict", () => {
       wrote: true,
       errored: false,
     });
-    // a successful round's note rides back to the field
-    expect(h.fieldReturns).toEqual([
-      { token: BRIEF.replyToken, value: "wrote the user model" },
-    ]);
 
     vi.clearAllMocks();
     h.order.length = 0;
-    h.fieldReturns.length = 0;
     h.handleBrief.mockResolvedValueOnce({
       actions: [],
       note: "",
       error: "no default model configured",
     });
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 1,
       wrote: false,
       errored: true,
       error: "no default model configured",
     });
-    // a failed round has nothing to say — no field return
-    expect(h.fieldReturns).toEqual([]);
   });
 
   it("an exception escaping the loop still settles the pointer — failed, with the exception's own message", async () => {
     h.handleBrief.mockRejectedValueOnce(new Error("sub-agent blew up"));
-    await expect(hqRun(BRIEF)).rejects.toThrow("sub-agent blew up");
+    await expect(hqRun(WAKE)).rejects.toThrow("sub-agent blew up");
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 0,
       wrote: false,
@@ -223,37 +203,37 @@ describe("hqRun — claim and conflict", () => {
   });
 
   it("a payload.date rides through as the round's date stamp (the field's local clock, not UTC)", async () => {
-    await hqRun({ ...BRIEF, date: "2026-10-03" });
+    await hqRun({ ...WAKE, date: "2026-10-03" });
     expect(h.handleBrief).toHaveBeenCalledWith({
-      brief: BRIEF.brief,
       date: "2026-10-03",
       sliceId: "2026-10-04-0131",
+      turnId: "turn-1",
     });
   });
 
-  it("a replyToken without a slice id → sliceId omitted (the brief prose is still whole)", async () => {
-    await hqRun({ brief: "没有指针的简报。", replyToken: "field::2026-10-04T01:31:00.000Z" });
+  it("a bare wake ({}) hands over only the date stamp — the unit re-reads from its own pointers", async () => {
+    // The cancel route holds only a runId, so its wake names nothing (§2.1).
+    await hqRun({});
     expect(h.handleBrief).toHaveBeenCalledWith({
-      brief: "没有指针的简报。",
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
     });
   });
 
-  it("a non-field replyToken → no slice pointer, brief still handed over", async () => {
-    await hqRun({ brief: "外来 token。", replyToken: "something-else" });
+  it("a wake naming only a turn still rides verbatim — no sliceId is invented", async () => {
+    await hqRun({ turnId: "turn-9" });
     expect(h.handleBrief).toHaveBeenCalledWith({
-      brief: "外来 token。",
       date: expect.any(String),
+      turnId: "turn-9",
     });
   });
 
-  it("conflict → hands the brief to the PRIMARY first, then exits deduped", async () => {
+  it("conflict → hands the wake to the PRIMARY first, then exits deduped", async () => {
     h.behavior = { conflict: { runId: "run-primary" }, queue: [], pend: true };
-    const outcome = await hqRun(BRIEF);
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "dedupedTo", runId: "run-primary" });
-    // the brief was forwarded BEFORE the run resolved (handoff-then-exit)
+    // the wake was forwarded BEFORE the run resolved (handoff-then-exit)
     expect(h.resumeHook).toHaveBeenCalledTimes(1);
-    expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, BRIEF);
+    expect(h.resumeHook).toHaveBeenCalledWith(HQ_TOKEN, WAKE);
     expect(h.order).toEqual(["handoff"]);
     // a deduped rival does no HQ work itself — and never touches the status
     // pointer, which the PRIMARY's run owns
@@ -262,9 +242,9 @@ describe("hqRun — claim and conflict", () => {
     expect(h.recordRunFinished).not.toHaveBeenCalled();
   });
 
-  it("handoff lost to a finished primary (HookNotFoundError), no new primary → the run CLAIMS and processes the brief itself", async () => {
+  it("handoff lost to a finished primary (HookNotFoundError), no new primary → the run CLAIMS and processes the wake itself", async () => {
     // The primary finished inside the handoff window: resumeHook finds no
-    // hook, and the bounded re-check finds no new conflict — the brief must
+    // hook, and the bounded re-check finds no new conflict — the wake must
     // NOT die silently.
     h.behavior = {
       conflict: { runId: "run-primary" },
@@ -273,15 +253,15 @@ describe("hqRun — claim and conflict", () => {
       pend: true,
     };
     h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(HQ_TOKEN));
-    const outcome = await hqRun(BRIEF);
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    // two resumeHook calls: the lost handoff, then the round's field return
-    expect(h.resumeHook).toHaveBeenCalledTimes(2);
+    // one resumeHook call: the lost handoff (there is no field return anymore)
+    expect(h.resumeHook).toHaveBeenCalledTimes(1);
     expect(h.handleBrief).toHaveBeenCalledTimes(1);
     expect(h.handleBrief).toHaveBeenCalledWith({
-      brief: BRIEF.brief,
       date: expect.any(String),
       sliceId: "2026-10-04-0131",
+      turnId: "turn-1",
     });
     // the fallen-back run owns the status pointer like any claiming run
     expect(h.order).toEqual(["runStarted", "handleBrief", "runFinished"]);
@@ -295,85 +275,32 @@ describe("hqRun — claim and conflict", () => {
       pend: true,
     };
     h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(HQ_TOKEN));
-    const outcome = await hqRun(BRIEF);
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "dedupedTo", runId: "run-primary-2" });
     expect(h.resumeHook).toHaveBeenCalledTimes(2);
     expect(h.handleBrief).not.toHaveBeenCalled();
   });
 });
 
-describe("hqRun — the field return (v0.21 §4 回程, bonus not channel)", () => {
-  it("a gone field hook (HookNotFoundError) passes silently — the round still settles", async () => {
-    // The field's hook registers only when its turn run suspends on the
-    // closing peek — an early/late HQ shout misses it, and that is normal.
-    h.resumeHook.mockRejectedValueOnce(new HookNotFoundError(BRIEF.replyToken));
-    const outcome = await hqRun(BRIEF);
-    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    expect(h.resumeHook).toHaveBeenCalledTimes(1);
-    expect(h.resumeHook).toHaveBeenCalledWith(BRIEF.replyToken, "idle — nothing substantive");
-    // the run was not dragged down by the missed return
-    expect(h.recordRunFinished).toHaveBeenCalledWith({
-      handled: 1,
-      wrote: false,
-      errored: false,
-    });
-  });
-
-  it("any OTHER return failure is warned and swallowed, never thrown", async () => {
-    h.resumeHook.mockRejectedValueOnce(new Error("world store down"));
-    const outcome = await hqRun(BRIEF);
-    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    expect(h.recordRunFinished).toHaveBeenCalledWith({
-      handled: 1,
-      wrote: false,
-      errored: false,
-    });
-  });
-
-  it("an empty note (a veto with nothing to say) does NOT call back", async () => {
-    h.handleBrief.mockResolvedValueOnce({ actions: [], note: "" });
-    const outcome = await hqRun(BRIEF);
-    expect(outcome).toEqual({ kind: "claimed", handled: 1 });
-    expect(h.resumeHook).not.toHaveBeenCalled();
-  });
-
-  it("a multi-brief run returns each round's note on its OWN replyToken", async () => {
-    const second: HQBriefPayload = {
-      brief: "又一条，同片 2026-10-04-0131。",
-      replyToken: "field:2026-10-04-0131:2026-10-04T01:35:00.000Z",
-    };
-    h.behavior = { conflict: null, queue: [second], pend: true };
-    h.handleBrief
-      .mockResolvedValueOnce({ actions: [], note: "第一轮陈述。" })
-      .mockResolvedValueOnce({ actions: [], note: "第二轮陈述。" });
-    const outcome = await hqRun(BRIEF);
-    expect(outcome).toEqual({ kind: "claimed", handled: 2 });
-    expect(h.fieldReturns).toEqual([
-      { token: BRIEF.replyToken, value: "第一轮陈述。" },
-      { token: second.replyToken, value: "第二轮陈述。" },
-    ]);
-  });
-});
-
 describe("hqRun — the work loop", () => {
   it("idle grace expiring ends the run (sleep arm wins the race)", async () => {
-    const outcome = await hqRun(BRIEF);
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "claimed", handled: 1 });
   });
 
-  it("a queued brief arrives before the grace → handled, then idle exit", async () => {
-    const second: HQBriefPayload = { brief: "又一条，同片 2026-10-04-0131。", replyToken: BRIEF.replyToken };
+  it("a queued wake arrives before the grace → handled, then idle exit", async () => {
+    const second: ReflectionWakePayload = { sliceId: "2026-10-04-0131", turnId: "turn-2" };
     h.behavior = { conflict: null, queue: [second], pend: true };
-    const outcome = await hqRun(BRIEF);
+    const outcome = await hqRun(WAKE);
     expect(outcome).toEqual({ kind: "claimed", handled: 2 });
     expect(h.handleBrief).toHaveBeenCalledTimes(2);
-    // each brief keeps its OWN prose and token-derived pointer
+    // each wake keeps its OWN pointer
     expect(h.handleBrief).toHaveBeenNthCalledWith(2, {
-      brief: second.brief,
       date: expect.any(String),
       sliceId: "2026-10-04-0131",
+      turnId: "turn-2",
     });
-    // the finish mark carries the run's definitive count across BOTH briefs
+    // the finish mark carries the run's definitive count across BOTH wakes
     expect(h.recordBriefOutcome).toHaveBeenCalledTimes(2);
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 2,
@@ -388,14 +315,14 @@ describe("hqRun — the activity frames (the pod's live feed)", () => {
   const kinds = () => h.frames.map((f) => (f.data as { kind: string }).kind);
 
   it("every chunk is a data-hq-activity frame with a unique id", async () => {
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(h.frames.length).toBeGreaterThan(0);
     for (const f of h.frames) expect(f.type).toBe("data-hq-activity");
     expect(new Set(h.frames.map((f) => f.id)).size).toBe(h.frames.length);
   });
 
   it("an idle run beats: started → reading → idle(note) → finished(idle)", async () => {
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(kinds()).toEqual(["started", "reading", "idle", "finished"]);
     const reading = h.frames[1].data as { sliceId?: string };
     expect(reading.sliceId).toBe("2026-10-04-0131");
@@ -411,7 +338,7 @@ describe("hqRun — the activity frames (the pod's live feed)", () => {
       actions: ["memory/research/screen-vendor/index.md"],
       note: "核对切片后写下一个案件。",
     });
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(kinds()).toEqual(["started", "reading", "wrote", "finished"]);
     expect(h.frames[2].data).toMatchObject({
       paths: ["memory/research/screen-vendor/index.md"],
@@ -420,13 +347,13 @@ describe("hqRun — the activity frames (the pod's live feed)", () => {
     expect(h.frames[3].data).toMatchObject({ status: "completed", handled: 1 });
   });
 
-  it("a failed brief beats failed(error) and the run settles failed", async () => {
+  it("a failed round beats failed(error) and the run settles failed", async () => {
     h.handleBrief.mockResolvedValueOnce({
       actions: [],
       note: "",
       error: "no default model configured",
     });
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(kinds()).toEqual(["started", "reading", "failed", "finished"]);
     expect(h.frames[2].data).toMatchObject({
       error: "no default model configured",
@@ -434,10 +361,10 @@ describe("hqRun — the activity frames (the pod's live feed)", () => {
     expect(h.frames[3].data).toMatchObject({ status: "failed", handled: 1 });
   });
 
-  it("a multi-brief run repeats the round beats; a deduped rival emits NOTHING", async () => {
-    const second: HQBriefPayload = { brief: "又一条。", replyToken: BRIEF.replyToken };
+  it("a multi-wake run repeats the round beats; a deduped rival emits NOTHING", async () => {
+    const second: ReflectionWakePayload = { sliceId: "2026-10-04-0131", turnId: "turn-2" };
     h.behavior = { conflict: null, queue: [second], pend: true };
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     expect(kinds()).toEqual([
       "started",
       "reading", "idle",
@@ -448,7 +375,7 @@ describe("hqRun — the activity frames (the pod's live feed)", () => {
     vi.clearAllMocks();
     h.frames.length = 0;
     h.behavior = { conflict: { runId: "run-primary" }, queue: [], pend: true };
-    await hqRun(BRIEF);
+    await hqRun(WAKE);
     // the rival's stream is dead on arrival — nobody attaches to it
     expect(h.frames).toEqual([]);
   });

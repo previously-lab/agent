@@ -1,5 +1,5 @@
 /**
- * HQ contract — what both sides of the field↔HQ channel share (v0.21 §4).
+ * HQ contract — what the wake channel's two sides share (v0.30 §2).
  *
  * Pure by construction: one token constant and two payload/outcome types.
  * `hq-run.ts` is a WORKFLOW file, and the Workflow SDK bundles a workflow
@@ -14,22 +14,23 @@
  */
 export const HQ_TOKEN = "hq:main";
 
-/** One field report: prose + the mechanically-attached return address. */
-export interface HQBriefPayload {
+/**
+ * The mechanical wake (v0.30 §2.1 机械铃): a PURE POINTER, nothing else.
+ * Nobody briefs the reflection unit — the turn tail rings this after the
+ * turn lands on disk, and the unit reads the record itself. Every field is
+ * optional: the pointer is a hint (the unit's range is everything since its
+ * last look), and a bare wake is legal — the cancel route holds only a runId
+ * and rings with `{}` so a "question without an answer" still gets seen.
+ */
+export interface ReflectionWakePayload {
+  /** The slice the finished turn landed in. */
+  sliceId?: string;
+  /** The finished turn's id. */
+  turnId?: string;
   /**
-   * 散文简报：现场描述 + 外勤自己的观察。不含期待、不含指令、不做模板
-   * （§4 裁决 10）——载荷本质就是 prompt，语义化的 prompt。
-   */
-  brief: string;
-  /**
-   * 机械层自动附带（模型不写它）：`field:<sliceId>:<startedAtIso>`——
-   * 对话轮 run 收尾那一拍用同一个 token 建回调 hook（turn-workflow.ts）。
-   */
-  replyToken: string;
-  /**
-   * The field's USER-LOCAL calendar date (YYYY-MM-DD), attached by the
-   * reportToHQ executor — HQ's write stamps ride the user's clock. Absent on
-   * older producers; consumers fall back to the UTC date.
+   * The field's USER-LOCAL calendar date (YYYY-MM-DD) — the unit's write
+   * stamps ride the user's clock. Absent on bare wakes; consumers fall back
+   * to the UTC date.
    */
   date?: string;
 }
