@@ -217,7 +217,8 @@ export async function markHQRunStarted(): Promise<void> {
  * Run-finish mark ("use step"): the shell's loop ended (idle grace, hook
  * done, or a failure that escaped a brief). `wrote` / `errored` are the
  * RUN-level accumulation across all of its briefs; the store maps them to
- * the terminal status (完成 / 空转 / 失败) and the definitive brief count.
+ * the terminal status (完成 / 空转 / 失败) and the definitive brief count,
+ * and a failed run's real error line rides along to the pointer's lastError.
  * The "finished" frame closes the activity feed with the same mapping —
  * pointer first, frame second, so a lost frame never costs the settlement.
  */
@@ -225,6 +226,9 @@ export async function markHQRunFinished(result: {
   handled: number;
   wrote: boolean;
   errored: boolean;
+  /** The run's failure line (a brief's error or the exception that escaped
+   *  the loop) — carried to the pointer so a 失败 says why. */
+  error?: string;
 }): Promise<void> {
   "use step";
   const { recordHQRunFinished } = await import("./hq-status-store");

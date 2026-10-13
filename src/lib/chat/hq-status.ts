@@ -34,6 +34,10 @@ export interface HQStatus {
   runStatus: HQRunStatus | null;
   /** Briefs the LAST run handled (written at run finish). */
   briefsHandled: number;
+  /** Why the last failed run failed — the error's first line, capped at the
+   *  store; a clean finish clears it. Null when the last run did not fail
+   *  (or the file predates the field). */
+  lastError: string | null;
   /** ISO time of the field's most recent dispatch (reportToHQ). */
   lastDispatchAt: string | null;
   /** The last brief's first line, truncated — a preview, never the whole prose. */
@@ -47,6 +51,7 @@ export const HQ_STATUS_EMPTY: HQStatus = {
   runStartedAt: null,
   runStatus: null,
   briefsHandled: 0,
+  lastError: null,
   lastDispatchAt: null,
   lastBriefPreview: null,
   recentWrites: [],
@@ -79,6 +84,7 @@ export function normalizeHQStatus(raw: unknown): HQStatus {
       typeof o.briefsHandled === "number" && Number.isFinite(o.briefsHandled)
         ? Math.max(0, Math.floor(o.briefsHandled))
         : 0,
+    lastError: typeof o.lastError === "string" ? o.lastError : null,
     lastDispatchAt: typeof o.lastDispatchAt === "string" ? o.lastDispatchAt : null,
     lastBriefPreview:
       typeof o.lastBriefPreview === "string" ? o.lastBriefPreview : null,

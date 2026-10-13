@@ -6,9 +6,10 @@
  * STORAGE=local + vi.resetModules, real filesystem all the way down — the
  * pointer lands at <tmp>/memory/config/hq.json and NEVER touches the repo's
  * real memory/. Pins the overwrite-in-place contract (no history), the
- * merge rules (recentWrites newest-first, deduped, capped), the terminal
- * status mapping (完成 / 空转 / 失败), and the tolerate-everything read
- * (missing or corrupt file → the empty pointer).
+ * merge rules (recentWrites newest-first, deduped, capped; timestamps never
+ * move backwards), the terminal status mapping (完成 / 空转 / 失败) with its
+ * lastError line, the immediate started mark (D2 reversed for it), and the
+ * tolerate-everything read (missing or corrupt file → the empty pointer).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -64,6 +65,7 @@ describe("readHQStatus", () => {
       runStartedAt: null,
       runStatus: null,
       briefsHandled: 0,
+      lastError: null,
       lastDispatchAt: null,
       lastBriefPreview: null,
       recentWrites: [],
@@ -95,6 +97,7 @@ describe("readHQStatus", () => {
       runStartedAt: null,
       runStatus: null,
       briefsHandled: 0,
+      lastError: null,
       lastDispatchAt: "2026-10-04T01:31:00.000Z",
       lastBriefPreview: null,
       recentWrites: ["memory/self/search/index.md"],
@@ -126,7 +129,7 @@ describe("recordHQDispatch", () => {
 });
 
 describe("the run lifecycle marks", () => {
-  it("start accumulates only — the pointer is untouched until finish (D2: one write per run)", async () => {
+  it("start lands immediately — running + the start stamp on disk before any finish (D2 reversed for this mark)", async () => {
     const {
       recordHQDispatch,
       recordHQRunStarted,
@@ -136,11 +139,12 @@ describe("the run lifecycle marks", () => {
     await recordHQDispatch("现场：一条简报。");
     await recordHQRunStarted();
 
-    // Deferred: the run's marks live in module run-state; the only file
-    // content so far is the field-side dispatch record.
+    // Immediate: the pointer already reads running with its start stamp —
+    // a run that hangs or dies here is no longer invisible behind the
+    // previous run's terminal status.
     const onDisk = readOnDisk();
-    expect(onDisk?.runStatus ?? null).toBeNull();
-    expect(onDisk?.runStartedAt ?? null).toBeNull();
+    expect(onDisk?.runStatus).toBe("running");
+    expect(typeof onDisk?.runStartedAt).toBe("string");
     expect(onDisk?.lastBriefPreview).toBe("现场：一条简报。");
 
     await recordHQRunFinished({ handled: 1, wrote: true, errored: false });
@@ -150,22 +154,27 @@ describe("the run lifecycle marks", () => {
     expect(s.lastBriefPreview).toBe("现场：一条简报。");
   });
 
-  it("the claiming run's OWN id lands at finish (the pod's attach target); the next run's finish overwrites it", async () => {
+  it("the claiming run's OWN id lands at start (the pod's attach target); the next run's marks overwrite it", async () => {
     const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
       await importStore();
     await recordHQRunStarted("run-abc");
-    // deferred: nothing on disk until the run settles
-    expect((await readHQStatus()).runId).toBeNull();
-
-    // finishing settles status + id in the ONE write — a finished run's
-    // stream stays replayable, so the attach target outlives the run
-    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    // immediate: the attach target is on disk from the claim, not the finish
     let s = await readHQStatus();
+    expect(s.runId).toBe("run-abc");
+    expect(s.runStatus).toBe("running");
+
+    // finishing settles the status; a finished run's stream stays replayable,
+    // so the attach target outlives the run
+    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    s = await readHQStatus();
     expect(s.runId).toBe("run-abc");
     expect(s.runStatus).toBe("idle");
 
-    // the next claim's finish overwrites it
+    // the next claim's marks overwrite it
     await recordHQRunStarted("run-def");
+    s = await readHQStatus();
+    expect(s.runId).toBe("run-def");
+    expect(s.runStatus).toBe("running");
     await recordHQRunFinished({ handled: 0, wrote: false, errored: false });
     s = await readHQStatus();
     expect(s.runId).toBe("run-def");
@@ -190,6 +199,70 @@ describe("the run lifecycle marks", () => {
     const s = await readHQStatus();
     expect(s.runStatus).toBe("failed");
     expect(s.briefsHandled).toBe(3);
+  });
+
+  it("a failed finish lands the real error's first line (capped); a clean finish clears it", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted();
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: false,
+      errored: true,
+      error: "runSubAgent timed out after 300s\nstack line two\nstack line three",
+    });
+    let s = await readHQStatus();
+    expect(s.runStatus).toBe("failed");
+    expect(s.lastError).toBe("runSubAgent timed out after 300s");
+
+    // a single over-long line caps at 200 + the ellipsis
+    await recordHQRunStarted();
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: false,
+      errored: true,
+      error: "x".repeat(400),
+    });
+    s = await readHQStatus();
+    expect(s.lastError).toHaveLength(201);
+
+    await recordHQRunStarted();
+    await recordHQRunFinished({ handled: 2, wrote: true, errored: false });
+    s = await readHQStatus();
+    expect(s.runStatus).toBe("completed");
+    expect(s.lastError).toBeNull();
+  });
+
+  it("a settle write never moves a timestamp backwards (the 2759674fe class)", async () => {
+    const {
+      recordHQDispatch,
+      recordHQRunStarted,
+      recordHQRunFinished,
+      readHQStatus,
+    } = await importStore();
+
+    // An older run's pending slot carries its (older) start stamp…
+    await recordHQRunStarted("run-old");
+    // …but the file has since learned NEWER marks (another instance's run, a
+    // fresher dispatch): the settle write must not drag them back.
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    const newer = "2099-01-01T00:00:00.000Z";
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({ runStartedAt: newer, lastDispatchAt: newer }),
+      "utf-8",
+    );
+
+    await recordHQRunFinished({ handled: 1, wrote: true, errored: false });
+    let s = await readHQStatus();
+    expect(s.runStartedAt).toBe(newer);
+    expect(s.lastDispatchAt).toBe(newer);
+
+    // and a dispatch patch against a far-future stamp keeps it too
+    await recordHQDispatch("现场：一条时间更旧的简报。");
+    s = await readHQStatus();
+    expect(s.lastDispatchAt).toBe(newer);
   });
 });
 

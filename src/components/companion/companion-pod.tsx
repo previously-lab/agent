@@ -367,6 +367,9 @@ function HQStatusSection({
             : statusLabel
         }
       />
+      {hq.lastError && (
+        <p className="break-words text-foreground/70">{hq.lastError}</p>
+      )}
       <DebugRow label={t("hqBriefs")} value={String(hq.briefsHandled)} />
       {hq.recentWrites.length > 0 && (
         <div className="space-y-0.5">

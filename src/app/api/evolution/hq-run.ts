@@ -82,6 +82,7 @@ export async function hqRun(initial: HQBriefPayload): Promise<HQRunOutcome> {
     let handled = 0;
     let wrote = false;
     let errored = false;
+    let lastError: string | undefined;
     let pending: HQBriefPayload | null = initial;
     try {
       const iterator = hook[Symbol.asyncIterator]();
@@ -90,7 +91,10 @@ export async function hqRun(initial: HQBriefPayload): Promise<HQRunOutcome> {
           const round = await handleHQBrief(pending);
           handled += 1;
           if (round.actions.length > 0) wrote = true;
-          if (round.error) errored = true;
+          if (round.error) {
+            errored = true;
+            lastError = round.error;
+          }
           pending = null;
           const next = await Promise.race<
             HQBriefPayload | "idle" | "done"
@@ -108,9 +112,15 @@ export async function hqRun(initial: HQBriefPayload): Promise<HQRunOutcome> {
       }
     } catch (e) {
       errored = true;
+      lastError = e instanceof Error ? e.message : String(e);
       throw e;
     } finally {
-      await markHQRunFinished({ handled, wrote, errored });
+      await markHQRunFinished({
+        handled,
+        wrote,
+        errored,
+        ...(lastError ? { error: lastError } : {}),
+      });
     }
     return { kind: "claimed", handled };
   } finally {

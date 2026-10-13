@@ -205,9 +205,21 @@ describe("hqRun — claim and conflict", () => {
       handled: 1,
       wrote: false,
       errored: true,
+      error: "no default model configured",
     });
     // a failed round has nothing to say — no field return
     expect(h.fieldReturns).toEqual([]);
+  });
+
+  it("an exception escaping the loop still settles the pointer — failed, with the exception's own message", async () => {
+    h.handleBrief.mockRejectedValueOnce(new Error("sub-agent blew up"));
+    await expect(hqRun(BRIEF)).rejects.toThrow("sub-agent blew up");
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 0,
+      wrote: false,
+      errored: true,
+      error: "sub-agent blew up",
+    });
   });
 
   it("a payload.date rides through as the round's date stamp (the field's local clock, not UTC)", async () => {
