@@ -296,18 +296,22 @@ describe("§8-a spike — E drains two queued messages into nested bubbles", () 
     h.inboxReads.push([U2]);
     // This inner run reports back with NO text — a failed instance.
     const { start } = await import("workflow/api");
-    vi.mocked(start).mockImplementationOnce(async (_fn, args: [InnerTurnInput]) => {
-      const inner = args[0];
-      h.startedInner.push(inner);
-      h.inboxQueue.push({
-        kind: "bubble",
-        turnId: inner.turnId,
-        replyTo: inner.replyTo,
-        text: "",
-        finishReason: "error",
-      });
-      return { runId: "inner-nu2" };
-    });
+    // start is an overloaded NormalizedProcedure — the one-off impl is cast
+    // back to its type rather than re-declaring the overload set.
+    vi.mocked(start).mockImplementationOnce(
+      (async (_fn: unknown, args: unknown[]) => {
+        const inner = args[0] as InnerTurnInput;
+        h.startedInner.push(inner);
+        h.inboxQueue.push({
+          kind: "bubble",
+          turnId: inner.turnId,
+          replyTo: inner.replyTo,
+          text: "",
+          finishReason: "error",
+        });
+        return { runId: "inner-nu2" };
+      }) as typeof start,
+    );
 
     await turnWorkflow(makeInput());
 

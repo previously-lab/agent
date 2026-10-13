@@ -149,7 +149,6 @@ async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
-const BRIEF = "切片 2026-08-09-1300 刚关闭，聊了换手机；mailbox 里有一条问题标记。";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -184,7 +183,7 @@ describe("handleBrief (v0.21 §5)", () => {
       text: "",
     }));
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome).toEqual({
       actions: [],
@@ -215,7 +214,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.actions).toEqual(["research/手机购买调研/index.md"]);
     expect(outcome.error).toBeUndefined();
@@ -278,7 +277,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     expect(io.files.get("memory/research/手机购买调研/index.md")).toContain("基于新读的重写。");
@@ -309,7 +308,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     const raw = io.files.get("memory/self/evolution/index.md") ?? "";
@@ -332,7 +331,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     // The case-writer and research passes were never invoked — order and
@@ -367,7 +366,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     const cardInput = passes.runCardEvolution.mock.calls[0][0] as {
@@ -399,7 +398,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "guard verified" }, text: "" };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     // nothing ever landed on the user model path
@@ -417,7 +416,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "sop rewritten" }, text: "" };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     expect(vi.mocked(withSliceLock)).toHaveBeenCalledWith("evolution", expect.any(Function));
@@ -442,7 +441,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     // Both passes ran, over the SAME slice — the scribe consumes the slice's
@@ -502,7 +501,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     // the capability is announced on the tool surface and in the role prompt
@@ -529,7 +528,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "already closed" }, text: "" };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
@@ -543,7 +542,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "nothing marked" }, text: "" };
     });
 
-    const outcome = await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     expect(outcome.error).toBeUndefined();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
@@ -556,7 +555,7 @@ describe("handleBrief (v0.21 §5)", () => {
       text: "",
     }));
 
-    await handleBrief({ brief: BRIEF, date: DATE, sliceId: SLICE_ID });
+    await handleBrief({ date: DATE, sliceId: SLICE_ID });
 
     const opts = runSubAgentMock.mock.calls[0][0];
     // The investigator's-account discipline lives in the static role prompt…
