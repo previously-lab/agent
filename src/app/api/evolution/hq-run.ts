@@ -79,11 +79,16 @@ export async function hqRun(initial: ReflectionWakePayload): Promise<HQRunOutcom
     await markHQRunStarted();
 
     // 收工前的循环：每次唤醒 = 一轮独立工作；下一次与宽限 race。Run-level
-    // facts accumulate across wakes for the finish mark.
+    // facts accumulate across wakes for the finish mark. R1 (v0.30 §2.4): a
+    // round stages its note as the 暂存 ONLY when it wrote something (空转
+    // 不留痕) — the last substantive round's note wins; the rolling read
+    // pointer (lastSeen) advances with EVERY wake that named one.
     let handled = 0;
     let wrote = false;
     let errored = false;
     let lastError: string | undefined;
+    let stagedNote: string | undefined;
+    let furthestSeen: { sliceId?: string; turnId?: string } | undefined;
     let pending: ReflectionWakePayload | null = initial;
     try {
       const iterator = hook[Symbol.asyncIterator]();
@@ -91,7 +96,11 @@ export async function hqRun(initial: ReflectionWakePayload): Promise<HQRunOutcom
         while (pending) {
           const round = await handleHQBrief(pending);
           handled += 1;
-          if (round.actions.length > 0) wrote = true;
+          if (round.actions.length > 0) {
+            wrote = true;
+            if (round.note) stagedNote = round.note;
+          }
+          if (round.seen) furthestSeen = round.seen;
           if (round.error) {
             errored = true;
             lastError = round.error;
@@ -121,6 +130,8 @@ export async function hqRun(initial: ReflectionWakePayload): Promise<HQRunOutcom
         wrote,
         errored,
         ...(lastError ? { error: lastError } : {}),
+        ...(stagedNote ? { note: stagedNote } : {}),
+        ...(furthestSeen ? { seen: furthestSeen } : {}),
       });
     }
     return { kind: "claimed", handled };

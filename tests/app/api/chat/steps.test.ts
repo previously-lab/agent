@@ -591,6 +591,31 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     expect(hk.dueTasksBlock).not.toContain("旧账");
   });
 
+  it("v0.30 §2.4: a staged reflection note in hq.json rides the result (reflectionNote)", async () => {
+    fakeDisk.files.set(
+      "memory/config/hq.json",
+      JSON.stringify({
+        lastNote: {
+          note: "核对了屏幕供应商案，把跟进写进了 research/。",
+          at: "2026-07-14T09:30:00.000Z",
+        },
+      }),
+    );
+
+    const hk = await housekeeping(makeInput("hi"));
+
+    expect(hk.reflectionNote).toEqual({
+      note: "核对了屏幕供应商案，把跟进写进了 research/。",
+      at: "2026-07-14T09:30:00.000Z",
+    });
+  });
+
+  it("no hq.json (or no staged note) → reflectionNote is omitted entirely", async () => {
+    const hk = await housekeeping(makeInput("hi"));
+    expect(hk.reflectionNote).toBeUndefined();
+    expect("reflectionNote" in hk).toBe(false);
+  });
+
   it("creates a fresh slice when none is on disk and returns it by value", async () => {
     const { slice } = await housekeeping(makeInput("hello world"));
 

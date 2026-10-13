@@ -533,6 +533,7 @@
     "hqSince": "since {time}",
     "hqBriefs": "Briefs handled",
     "hqWrites": "Recent writes",
+    "hqNote": "Latest note",
     "hqEmpty": "No HQ activity yet — the field has not dispatched anything.",
     "hqLoading": "Reading…",
     "hqFailedToLoad": "Couldn't read HQ status.",

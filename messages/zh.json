@@ -533,6 +533,7 @@
     "hqSince": "自 {time}",
     "hqBriefs": "处理简报",
     "hqWrites": "最近写入",
+    "hqNote": "最近暂存",
     "hqEmpty": "还没有 HQ 记录——外勤还没有发过报。",
     "hqLoading": "读取中…",
     "hqFailedToLoad": "读不到 HQ 状态。",

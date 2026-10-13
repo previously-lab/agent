@@ -5,9 +5,11 @@
  * enter the deterministic workflow sandbox — the same split as chat's
  * turn-workflow.ts / steps.ts.
  *
- * v0.21 P4: the boundary run is RETIRED — HQ's only trigger is the field's
- * report (reportToHQ → hq-run.ts), and closing a slice no longer starts any
- * background run. What remains here is the conversation's question
+ * v0.21 P4 retired the boundary run, and v0.30 retired the field's dispatch
+ * with it: the reflection unit is woken by the mechanical bell
+ * (reflection-wake.ts → hq-run.ts) and reads the record itself, and closing
+ * a slice no longer starts any background run. What remains here is the
+ * conversation's question
  * sub-stream body; the capabilities the HQ agent's tools reuse live in lib/
  * (the writer passes) and hq-context.ts (buildRunManifest /
  * buildRunCardReaders / backgroundModel).

@@ -151,10 +151,13 @@ describe("hqRun — claim and conflict", () => {
     expect(h.recordRunStarted).toHaveBeenCalledWith("run-1");
     expect(h.recordBriefOutcome).toHaveBeenCalledWith({ actions: [] });
     expect(h.recordRunFinished).toHaveBeenCalledTimes(1);
+    // the idle round stages NO note (R1); the wake's pointer still advances
+    // lastSeen (every round pushes it forward)
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 1,
       wrote: false,
       errored: false,
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
     });
     // started precedes finished
     expect(h.order).toEqual(["runStarted", "handleBrief", "runFinished"]);
@@ -169,10 +172,13 @@ describe("hqRun — claim and conflict", () => {
     expect(h.recordBriefOutcome).toHaveBeenCalledWith({
       actions: ["memory/people/user/index.md"],
     });
+    // a substantive round stages its note as the 暂存; the pointer advances
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 1,
       wrote: true,
       errored: false,
+      note: "wrote the user model",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
     });
 
     vi.clearAllMocks();
@@ -188,6 +194,7 @@ describe("hqRun — claim and conflict", () => {
       wrote: false,
       errored: true,
       error: "no default model configured",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
     });
   });
 
@@ -216,6 +223,12 @@ describe("hqRun — claim and conflict", () => {
     await hqRun({});
     expect(h.handleBrief).toHaveBeenCalledWith({
       date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    });
+    // nothing named → lastSeen does not move, and the idle round stages no note
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: false,
+      errored: false,
     });
   });
 
@@ -300,12 +313,68 @@ describe("hqRun — the work loop", () => {
       sliceId: "2026-10-04-0131",
       turnId: "turn-2",
     });
-    // the finish mark carries the run's definitive count across BOTH wakes
+    // the finish mark carries the run's definitive count across BOTH wakes,
+    // and lastSeen lands at the FURTHEST pointer (the second wake's)
     expect(h.recordBriefOutcome).toHaveBeenCalledTimes(2);
     expect(h.recordRunFinished).toHaveBeenCalledWith({
       handled: 2,
       wrote: false,
       errored: false,
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-2" },
+    });
+  });
+});
+
+describe("hqRun — the 暂存 discipline (v0.30 R1: 空转不留痕)", () => {
+  it("an idle round's note never stages; the last SUBSTANTIVE round's note rides the finish", async () => {
+    const second: ReflectionWakePayload = { sliceId: "2026-10-04-0131", turnId: "turn-2" };
+    h.behavior = { conflict: null, queue: [second], pend: true };
+    h.handleBrief
+      .mockResolvedValueOnce({ actions: [], note: "空转——没什么可写。" })
+      .mockResolvedValueOnce({
+        actions: ["memory/research/screen-vendor/index.md"],
+        note: "核对切片后写下一个案件。",
+      });
+    await hqRun(WAKE);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 2,
+      wrote: true,
+      errored: false,
+      note: "核对切片后写下一个案件。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-2" },
+    });
+  });
+
+  it("an idle round AFTER a substantive one does not overwrite its staged note", async () => {
+    const second: ReflectionWakePayload = { sliceId: "2026-10-04-0131", turnId: "turn-2" };
+    h.behavior = { conflict: null, queue: [second], pend: true };
+    h.handleBrief
+      .mockResolvedValueOnce({
+        actions: ["memory/people/user/index.md"],
+        note: "更新了用户模型。",
+      })
+      .mockResolvedValueOnce({ actions: [], note: "看过，无需动作。" });
+    await hqRun(WAKE);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 2,
+      wrote: true,
+      errored: false,
+      note: "更新了用户模型。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-2" },
+    });
+  });
+
+  it("a substantive round with an EMPTY note stages nothing", async () => {
+    h.handleBrief.mockResolvedValueOnce({
+      actions: ["memory/research/x/index.md"],
+      note: "",
+    });
+    await hqRun(WAKE);
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: true,
+      errored: false,
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
     });
   });
 });

@@ -8,8 +8,10 @@
  * real memory/. Pins the overwrite-in-place contract (no history), the
  * merge rules (recentWrites newest-first, deduped, capped; timestamps never
  * move backwards), the terminal status mapping (完成 / 空转 / 失败) with its
- * lastError line, the immediate started mark (D2 reversed for it), and the
- * tolerate-everything read (missing or corrupt file → the empty pointer).
+ * lastError line, the immediate started mark (D2 reversed for it), the v0.30
+ * 暂存/rolling-pointer landing (lastNote only from a substantive round — R1;
+ * lastSeen advancing), and the tolerate-everything read (missing or corrupt
+ * file → the empty pointer).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -69,6 +71,8 @@ describe("readHQStatus", () => {
       lastDispatchAt: null,
       lastBriefPreview: null,
       recentWrites: [],
+      lastNote: null,
+      lastSeen: null,
     });
   });
 
@@ -88,6 +92,8 @@ describe("readHQStatus", () => {
         briefsHandled: "many",
         recentWrites: ["memory/self/search/index.md", 42],
         lastDispatchAt: "2026-10-04T01:31:00.000Z",
+        lastNote: { note: 42 },
+        lastSeen: "2026-10-04-0131",
       }),
       "utf-8",
     );
@@ -101,42 +107,42 @@ describe("readHQStatus", () => {
       lastDispatchAt: "2026-10-04T01:31:00.000Z",
       lastBriefPreview: null,
       recentWrites: ["memory/self/search/index.md"],
+      lastNote: null,
+      lastSeen: null,
     });
   });
-});
 
-describe("recordHQDispatch", () => {
-  it("writes the dispatch time and the brief's first line, truncated", async () => {
-    const { recordHQDispatch } = await importStore();
-    const long = `现场：${"很长".repeat(80)}\n第二行不进预览`;
-    await recordHQDispatch(long);
-
-    const onDisk = readOnDisk();
-    expect(typeof onDisk?.lastDispatchAt).toBe("string");
-    const preview = onDisk?.lastBriefPreview as string;
-    expect(preview.length).toBeLessThanOrEqual(121); // 120 + the ellipsis
-    expect(preview.endsWith("…")).toBe(true);
-    expect(preview).not.toContain("第二行");
-    // overwrite-in-place: still exactly ONE pointer file, no history
-    expect(onDisk?.recentWrites).toEqual([]);
-  });
-
-  it("a short brief rides whole, ellipsis-free", async () => {
-    const { recordHQDispatch } = await importStore();
-    await recordHQDispatch("现场：用户问起屏幕供应商。");
-    expect(readOnDisk()?.lastBriefPreview).toBe("现场：用户问起屏幕供应商。");
+  it("a staged note and the rolling pointer normalize through", async () => {
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({
+        lastNote: { note: "核对了屏幕供应商案。", at: "2026-10-04T02:00:00.000Z" },
+        lastSeen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
+      }),
+      "utf-8",
+    );
+    const { readHQStatus } = await importStore();
+    const s = await readHQStatus();
+    expect(s.lastNote).toEqual({
+      note: "核对了屏幕供应商案。",
+      at: "2026-10-04T02:00:00.000Z",
+    });
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
   });
 });
 
 describe("the run lifecycle marks", () => {
   it("start lands immediately — running + the start stamp on disk before any finish (D2 reversed for this mark)", async () => {
-    const {
-      recordHQDispatch,
-      recordHQRunStarted,
-      recordHQRunFinished,
-      readHQStatus,
-    } = await importStore();
-    await recordHQDispatch("现场：一条简报。");
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+    // A legacy field from the dispatch era survives both marks untouched.
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({ lastBriefPreview: "现场：一条简报。" }),
+      "utf-8",
+    );
     await recordHQRunStarted();
 
     // Immediate: the pointer already reads running with its start stamp —
@@ -235,17 +241,13 @@ describe("the run lifecycle marks", () => {
   });
 
   it("a settle write never moves a timestamp backwards (the 2759674fe class)", async () => {
-    const {
-      recordHQDispatch,
-      recordHQRunStarted,
-      recordHQRunFinished,
-      readHQStatus,
-    } = await importStore();
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
 
     // An older run's pending slot carries its (older) start stamp…
     await recordHQRunStarted("run-old");
-    // …but the file has since learned NEWER marks (another instance's run, a
-    // fresher dispatch): the settle write must not drag them back.
+    // …but the file has since learned NEWER marks (another instance's run):
+    // the settle write must not drag them back.
     fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
     const newer = "2099-01-01T00:00:00.000Z";
     fs.writeFileSync(
@@ -255,13 +257,9 @@ describe("the run lifecycle marks", () => {
     );
 
     await recordHQRunFinished({ handled: 1, wrote: true, errored: false });
-    let s = await readHQStatus();
+    const s = await readHQStatus();
     expect(s.runStartedAt).toBe(newer);
-    expect(s.lastDispatchAt).toBe(newer);
-
-    // and a dispatch patch against a far-future stamp keeps it too
-    await recordHQDispatch("现场：一条时间更旧的简报。");
-    s = await readHQStatus();
+    // a legacy dispatch-era stamp the settle never touches rides through
     expect(s.lastDispatchAt).toBe(newer);
   });
 });
@@ -299,10 +297,83 @@ describe("recordHQBriefOutcome", () => {
   });
 
   it("an idle round (no actions) does not touch the file at all", async () => {
-    const { recordHQDispatch, recordHQBriefOutcome } = await importStore();
-    await recordHQDispatch("现场：一条简报。");
+    const { recordHQBriefOutcome } = await importStore();
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({ runStatus: "running" }),
+      "utf-8",
+    );
     const before = readOnDisk();
     await recordHQBriefOutcome({ actions: [] });
     expect(readOnDisk()).toEqual(before);
+  });
+});
+
+describe("recordHQRunFinished — the 暂存 and the rolling pointer (v0.30 §2.3/§2.4)", () => {
+  it("a finish carrying a note lands lastNote {note, at}; the seen pointer lands as lastSeen", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+    await recordHQRunStarted("run-1");
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: true,
+      errored: false,
+      note: "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
+    });
+    const s = await readHQStatus();
+    expect(s.runStatus).toBe("completed");
+    expect(s.lastNote?.note).toBe(
+      "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
+    );
+    expect(typeof s.lastNote?.at).toBe("string");
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
+  });
+
+  it("a finish WITHOUT a note never overwrites the staged note (R1: 空转不留痕); without a seen the pointer holds", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+    await recordHQRunStarted("run-1");
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: true,
+      errored: false,
+      note: "第一轮写下了一个案件。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
+    });
+    const staged = (await readHQStatus()).lastNote;
+
+    // the next run goes idle: no note rides its finish — the staged one stays
+    await recordHQRunStarted("run-2");
+    await recordHQRunFinished({ handled: 2, wrote: false, errored: false });
+    const s = await readHQStatus();
+    expect(s.runStatus).toBe("idle");
+    expect(s.lastNote).toEqual(staged);
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
+  });
+
+  it("a later substantive note overwrites; a later seen advances the pointer", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+      await importStore();
+    await recordHQRunStarted("run-1");
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: true,
+      errored: false,
+      note: "旧暂存。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
+    });
+    await recordHQRunStarted("run-2");
+    await recordHQRunFinished({
+      handled: 1,
+      wrote: true,
+      errored: false,
+      note: "新暂存。",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-2" },
+    });
+    const s = await readHQStatus();
+    expect(s.lastNote?.note).toBe("新暂存。");
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-2" });
   });
 });

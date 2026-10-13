@@ -71,6 +71,17 @@ export interface HQBriefRound {
   actions: string[];
   /** Set when the round failed (HQ never throws — a failure rides here). */
   error?: string;
+  /**
+   * The unit's own one-line account of the round (its hqReport note), when
+   * non-empty. The shell decides whether it is staged as `lastNote` (R1:
+   * only a round that WROTE something stages — 空转不留痕).
+   */
+  note?: string;
+  /**
+   * The wake's pointer, echoed back when it named anything — the shell
+   * advances the rolling `lastSeen` with it (every round pushes it forward).
+   */
+  seen?: { sliceId?: string; turnId?: string };
 }
 
 /**
@@ -164,6 +175,15 @@ export async function handleHQBrief(payload: ReflectionWakePayload): Promise<HQB
   return {
     actions: outcome.actions,
     ...(outcome.error ? { error: outcome.error } : {}),
+    ...(outcome.note ? { note: outcome.note } : {}),
+    ...(payload.sliceId || payload.turnId
+      ? {
+          seen: {
+            ...(payload.sliceId ? { sliceId: payload.sliceId } : {}),
+            ...(payload.turnId ? { turnId: payload.turnId } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -205,6 +225,11 @@ export async function markHQRunFinished(result: {
   /** The run's failure line (a round's error or the exception that escaped
    *  the loop) — carried to the pointer so a 失败 says why. */
   error?: string;
+  /** The last SUBSTANTIVE round's note (R1 — idle rounds never stage one);
+   *  lands as the 暂存 `lastNote` the panel shows and the next turn carries. */
+  note?: string;
+  /** The furthest wake pointer the run handled — advances `lastSeen`. */
+  seen?: { sliceId?: string; turnId?: string };
 }): Promise<void> {
   "use step";
   const { recordHQRunFinished } = await import("./hq-status-store");

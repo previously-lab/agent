@@ -268,12 +268,13 @@ function HQActivityLine({
 }
 
 /**
- * The HQ activity face — the field↔HQ channel made visible (v0.21 §5). HQ
- * works in its OWN durable run, so the session-local evolution bus can never
- * see it; this section reads the hq.json pointer instead: the field's last
- * dispatch (time + the brief's first line), whether HQ is running and how
- * its last run settled with how many briefs it handled, and the documents it
- * wrote most recently. Labels localized, values raw.
+ * The HQ activity face — the reflection unit made visible (v0.21 §5; v0.30
+ * §2.4). The unit works in its OWN durable run, so the session-local
+ * evolution bus can never see it; this section reads the hq.json pointer
+ * instead: when its last run started, whether it is running and how its last
+ * run settled with how many rounds it handled, the documents it wrote most
+ * recently, and the last substantive round's staged one-line note (the 暂存
+ * the next turn carries). Labels localized, values raw.
  *
  * On top of the pointer face sits the LIVE beat log (`activity`): the
  * run's own `data-hq-activity` frames, streamed from the durable run while
@@ -355,9 +356,12 @@ function HQStatusSection({
   return (
     <div className="space-y-1.5">
       {beats}
-      <DebugRow label={t("hqDispatch")} value={fmtTime(hq.lastDispatchAt)} mono />
-      {hq.lastBriefPreview && (
-        <p className="break-words text-foreground/70">{hq.lastBriefPreview}</p>
+      <DebugRow label={t("hqDispatch")} value={fmtTime(hq.runStartedAt)} mono />
+      {hq.lastNote && (
+        <div className="space-y-0.5">
+          <DebugRow label={t("hqNote")} value={fmtTime(hq.lastNote.at)} mono />
+          <p className="break-words text-foreground/70">{hq.lastNote.note}</p>
+        </div>
       )}
       <DebugRow
         label={t("hqStatus")}

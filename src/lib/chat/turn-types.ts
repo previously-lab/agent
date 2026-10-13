@@ -247,6 +247,15 @@ export interface HousekeepingResult {
    * (findStaleActiveSlice) instead.
    */
   pendingClose?: { slice: TimeSlice; signal: SlicingSignal };
+  /**
+   * The reflection unit's 暂存 (v0.30 §2.4): the last SUBSTANTIVE reflection
+   * round's one-line note + when it landed, read from hq.json at the entry
+   * beat. The workflow carries it on the OUTBOUND tail of the last user
+   * message exactly once (R1: only when the note is newer than the previous
+   * user turn) — never persisted, never in the system prompt. Absent when
+   * no note is staged.
+   */
+  reflectionNote?: { note: string; at: string };
 }
 
 /**

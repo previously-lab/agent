@@ -1,15 +1,18 @@
 /**
  * HQ status — the client-safe shape of `memory/config/hq.json` and the pod
- * panel's fetch helper (v0.21 §5 visibility layer).
+ * panel's fetch helper (v0.21 §5 visibility layer; v0.30 §2.3/§2.4).
  *
- * hq.json is the ONE rolling pointer for "what HQ is doing" — engineering
- * state under `memory/config/` (design v0.19 §B.1: config/ is engineering
- * state, NOT documents), overwritten in place, never appended. It exists so
- * the companion pod can answer three questions without a session-local bus:
- * when the field last dispatched, whether HQ is running and how its last run
- * ended, and which documents it wrote most recently. HQ's own "store results
- * only, no run ledger" discipline (裁决 12) is a DOCUMENT-layer rule; this is
- * the debug/visibility layer, and it stays a pointer, not a ledger.
+ * hq.json is the ONE rolling pointer for "what the reflection unit is doing"
+ * — engineering state under `memory/config/` (design v0.19 §B.1: config/ is
+ * engineering state, NOT documents), overwritten in place, never appended. It
+ * exists so the companion pod can answer three questions without a
+ * session-local bus: whether the unit is running and how its last run ended,
+ * which documents it wrote most recently, and what its last substantive
+ * round's one-line note said (the 暂存 the next turn carries). It also holds
+ * `lastSeen`, the unit's rolling read pointer (how far it has read — range
+ * semantics, §2.3). The unit's own "store results only, no run ledger"
+ * discipline (裁决 12) is a DOCUMENT-layer rule; this is the debug/visibility
+ * layer, and it stays a pointer, not a ledger.
  *
  * This module is PURE (no fs, no next) — the server store
  * (`app/api/evolution/hq-status-store.ts`) and the route both build on it,
@@ -32,18 +35,38 @@ export interface HQStatus {
   runStartedAt: string | null;
   /** Null before the first run ever claims the token. */
   runStatus: HQRunStatus | null;
-  /** Briefs the LAST run handled (written at run finish). */
+  /** Rounds the LAST run handled (written at run finish). */
   briefsHandled: number;
   /** Why the last failed run failed — the error's first line, capped at the
    *  store; a clean finish clears it. Null when the last run did not fail
    *  (or the file predates the field). */
   lastError: string | null;
-  /** ISO time of the field's most recent dispatch (reportToHQ). */
+  /**
+   * LEGACY (v0.21 dispatch era): ISO time of the field's last reportToHQ
+   * dispatch. The dispatch retired in v0.30 — nothing writes this anymore;
+   * the field survives only in older hq.json files.
+   */
   lastDispatchAt: string | null;
-  /** The last brief's first line, truncated — a preview, never the whole prose. */
+  /**
+   * LEGACY (v0.21): the last brief's first line. Retired with the dispatch;
+   * kept so old files still normalize.
+   */
   lastBriefPreview: string | null;
   /** Memory-relative paths HQ wrote most recently, newest first (capped). */
   recentWrites: string[];
+  /**
+   * The 暂存 (v0.30 §2.4): the LAST SUBSTANTIVE round's one-line account
+   * (from its hqReport note) and when it landed. An idle round never
+   * overwrites it (R1 — 空转不留痕); the next turn carries it (once) and
+   * the panel shows it.
+   */
+  lastNote: { note: string; at: string } | null;
+  /**
+   * The rolling read pointer (v0.30 §2.3): how far the unit has read,
+   * advanced with EVERY round whose wake named a slice/turn. Range
+   * semantics, not a ledger — the next round reads everything after it.
+   */
+  lastSeen: { sliceId?: string; turnId?: string } | null;
 }
 
 export const HQ_STATUS_EMPTY: HQStatus = {
@@ -55,6 +78,8 @@ export const HQ_STATUS_EMPTY: HQStatus = {
   lastDispatchAt: null,
   lastBriefPreview: null,
   recentWrites: [],
+  lastNote: null,
+  lastSeen: null,
 };
 
 /** The GET /api/evolution/hq-status payload. */
@@ -91,7 +116,27 @@ export function normalizeHQStatus(raw: unknown): HQStatus {
     recentWrites: Array.isArray(o.recentWrites)
       ? o.recentWrites.filter((p): p is string => typeof p === "string")
       : [],
+    lastNote: normalizeLastNote(o.lastNote),
+    lastSeen: normalizeLastSeen(o.lastSeen),
   };
+}
+
+/** Tolerant field decode for the 暂存 — a shaped-wrong note degrades to null. */
+function normalizeLastNote(raw: unknown): HQStatus["lastNote"] {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.note !== "string" || typeof o.at !== "string") return null;
+  return { note: o.note, at: o.at };
+}
+
+/** Tolerant field decode for the rolling read pointer. */
+function normalizeLastSeen(raw: unknown): HQStatus["lastSeen"] {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const sliceId = typeof o.sliceId === "string" ? o.sliceId : undefined;
+  const turnId = typeof o.turnId === "string" ? o.turnId : undefined;
+  if (sliceId === undefined && turnId === undefined) return null;
+  return { ...(sliceId ? { sliceId } : {}), ...(turnId ? { turnId } : {}) };
 }
 
 /**

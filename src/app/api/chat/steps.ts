@@ -129,6 +129,7 @@ import {
   buildReflectionWakePayload,
   deliverReflectionWake,
 } from "@/app/api/evolution/reflection-wake";
+import { readHQStatus } from "@/app/api/evolution/hq-status-store";
 import {
   runCardEvolution,
   type CardEvolutionReaders,
@@ -1271,6 +1272,13 @@ export async function housekeeping(
         ].join("\n")
       : undefined;
 
+  // ── v0.30 §2.4 暂存 — the reflection unit's staged note ────────────────
+  // Read at the entry beat so the workflow can carry it on the OUTBOUND tail
+  // of this turn's last user message — exactly once (R1: the workflow compares
+  // the note's stamp against the previous user turn's). Tolerant: an absent
+  // or corrupt hq.json reads as the empty pointer, and the note is omitted.
+  const reflectionNote = (await readHQStatus()).lastNote ?? undefined;
+
   await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 
   // ── 7. Open UI stream ────────────────────────────────────────────────
@@ -1287,6 +1295,7 @@ export async function housekeeping(
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
     ...(dueTasksBlock ? { dueTasksBlock } : {}),
+    ...(reflectionNote ? { reflectionNote } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
   };
