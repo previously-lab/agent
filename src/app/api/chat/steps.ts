@@ -2251,11 +2251,15 @@ export async function runBatchSummary(
       model: createModel(input.modelConfig),
       system,
       prompt: windowText,
-      maxOutputTokens: 300,
-      // Thinking OFF: the closing is a mechanical wrap-up, and a reasoning
-      // model can burn the whole 300-token cap on invisible thinking —
-      // observed in phase 3: the call succeeded, streamed ZERO deltas, and
-      // the empty text silently skipped the persist. The turn's modelConfig
+      // NO maxOutputTokens — the project-wide ban on hard token caps (the cap
+      // is invisible to the model and truncates silently). The phase-3
+      // failure this replaces: `maxOutputTokens: 300` plus V4's default
+      // thinking — the call succeeded, streamed ZERO deltas, and the empty
+      // text silently skipped the persist.
+      //
+      // Thinking OFF: the closing is a mechanical wrap-up — with no cap,
+      // thinking can no longer truncate, but a reasoning pass would only add
+      // latency ahead of the first visible delta. The turn's modelConfig
       // carries no providerOptions of its own; V4 defaults to thinking ON.
       providerOptions: normalizeReasoningEffort(
         input.modelConfig.sdk,

@@ -10,7 +10,7 @@
  * NestedBubble child-stream precedent), and persists it as one agent turn.
  *
  * Discipline:
- *  - ONE model call, small and cheap (maxOutputTokens capped in the step);
+ *  - ONE model call, small and cheap (no token cap — project-wide ban);
  *    no tools, no identity prompt — a closing voice, not the agent.
  *  - The opening dedupe absorbs the double-fire race (two sibling tails
  *    checking in the same registry window): the YOUNGER of two live
