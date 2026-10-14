@@ -649,7 +649,27 @@ function Inner({
    */
   const wasLoadingRef = useRef(false);
   useEffect(() => {
-    if (wasLoadingRef.current && !isLoading) onTurnSettled?.();
+    if (wasLoadingRef.current && !isLoading) {
+      onTurnSettled?.();
+      // v0.31 — settle stranded bubbles on the episode stream's falling edge
+      // (stop / error / transport death): the orchestrator is dead then, no
+      // terminal frame will ever arrive, and a queued/running chip would spin
+      // forever (the bubble's `active` flip also aborts its child-stream
+      // reader). A clean end has every bubble terminal already — a no-op. A
+      // same-session reconnect that bounced the status self-heals: the replay
+      // re-delivers the running frames and the map flips back.
+      setNestedBubbles((prev) => {
+        let dirty = false;
+        const next = new Map(prev);
+        for (const [id, frame] of next) {
+          if (frame.status === "queued" || frame.status === "running") {
+            next.set(id, { ...frame, status: "failed" });
+            dirty = true;
+          }
+        }
+        return dirty ? next : prev;
+      });
+    }
     wasLoadingRef.current = isLoading;
   }, [isLoading, onTurnSettled]);
 
@@ -738,28 +758,57 @@ function Inner({
       .reverse()
       .find((m) => m.role === "assistant")?.id;
     const nowIso = new Date().toISOString();
-    const live = messages.map((message, index) => ({
-      kind: "live" as const,
-      // Index-suffixed key: if a reconnect ever delivers a duplicated message
-      // id (the same turn written twice by concurrent streams), the key stays
-      // unique — React's duplicate-key reconciliation can otherwise loop into
-      // "Maximum update depth exceeded" (#185).
-      key: `${message.id}-${index}`,
-      message,
-      // The live turns continue the active slice — its strands tint the user
-      // bubbles (same source as the history turns' tint).
-      strands: activeSlice?.strands,
-      timeIso: nowIso,
-      isStreaming: message.id === lastMessage?.id && isStreaming,
-      startedAt:
-        message.id === lastMessage?.id
-          ? (lastUserMessageAt ?? undefined)
-          : undefined,
-      onRegenerate:
-        message.id === lastAssistantId
-          ? () => handleRegenerate(message.id)
-          : undefined,
-    }));
+    const live = messages
+      .map((message, index) => ({
+        kind: "live" as const,
+        // Index-suffixed key: if a reconnect ever delivers a duplicated message
+        // id (the same turn written twice by concurrent streams), the key stays
+        // unique — React's duplicate-key reconciliation can otherwise loop into
+        // "Maximum update depth exceeded" (#185).
+        key: `${message.id}-${index}`,
+        message,
+        // The live turns continue the active slice — its strands tint the user
+        // bubbles (same source as the history turns' tint).
+        strands: activeSlice?.strands,
+        timeIso: nowIso,
+        isStreaming: message.id === lastMessage?.id && isStreaming,
+        startedAt:
+          message.id === lastMessage?.id
+            ? (lastUserMessageAt ?? undefined)
+            : undefined,
+        onRegenerate:
+          message.id === lastAssistantId
+            ? () => handleRegenerate(message.id)
+            : undefined,
+      }))
+      .filter((item) => {
+        if (item.message.role !== "assistant") return true;
+        const parts = (item.message.parts ?? []) as Array<{
+          type: string;
+          text?: string;
+          data?: unknown;
+        }>;
+        const hasText = parts.some(
+          (p) => p.type === "text" && typeof p.text === "string" && p.text.trim(),
+        );
+        if (hasText) return true;
+        // A terminal error/interruption must stay visible — it IS the content.
+        const statusData = parts.find((p) => p.type === "data-turn-status")?.data as
+          | { status?: string }
+          | undefined;
+        if (statusData?.status === "error" || statusData?.status === "interrupted") {
+          return true;
+        }
+        // v0.31 — an empty assistant shell earns a seat ONLY while it is the
+        // live streaming message of a turn with no bubbles yet (the classic
+        // path's stage-pill affordance). The orchestrator's outer message
+        // carries no text of its own (the answers are the bubbles; only the
+        // optional closing summary streams there), so once a bubble frame
+        // exists the shell would render as a blank beat — and a finished or
+        // reloaded husk (housekeeping's `start` chunk materializes one either
+        // way) has no content at all.
+        return item.isStreaming && nestedBubbles.size === 0;
+      });
     // v0.30 §4.3 — the merge view: the episode's side-store bubbles seat
     // after the user message each one answers (orphans after a regenerate
     // drop out rather than render unmoored).

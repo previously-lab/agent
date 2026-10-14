@@ -41,8 +41,20 @@ export interface NestedBubbleFrame {
   /** This instance's own id — the bubble's turnId on disk at finalize. */
   turnId: string;
   status: NestedBubbleStatus;
-  /** done: the inner run's full answer text. Absent otherwise (v1: no
-   *  partial streaming back — D5). */
+  /** The answering child run's id — the client attaches to
+   *  `/api/chat/[runId]/stream` and renders the answer LIVE from the child's
+   *  own durable stream (v0.31: every message is answered by its own child
+   *  run; the orchestrator's stream carries only these lifecycle frames). */
+  runId?: string;
+  /** The CLIENT's message id this bubble anchors to. The first instance
+   *  answers a user turn whose slice turnId is server-minted and unknown to
+   *  the client — the orchestrator stamps the client's own id here so the
+   *  interleave can attach the bubble to the right message (v0.31). */
+  anchorId?: string;
+  /** done: the inner run's full answer text. Absent otherwise — the live
+   *  content rides the child run's own stream; `text` is the settled record
+   *  (history, replay-after-completion) and the fallback when the child
+   *  stream is unavailable. */
   text?: string;
   /** done/failed: ISO stamp, applied server-side at frame-write time. */
   doneAt?: string;
@@ -67,6 +79,8 @@ export function normalizeNestedBubble(raw: unknown): NestedBubbleFrame | null {
     turnId: o.turnId,
     status: o.status as NestedBubbleStatus,
   };
+  if (typeof o.runId === "string" && o.runId) frame.runId = o.runId;
+  if (typeof o.anchorId === "string" && o.anchorId) frame.anchorId = o.anchorId;
   if (typeof o.text === "string" && o.text) frame.text = o.text;
   if (typeof o.doneAt === "string" && o.doneAt) frame.doneAt = o.doneAt;
   return frame;

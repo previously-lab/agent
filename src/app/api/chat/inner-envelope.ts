@@ -69,10 +69,10 @@ export function buildInnerEnvelope(args: {
 }): string {
   const { sliceId, pending, instances, target } = args;
   const lines: string[] = [
-    "[Queued message duty — assembled by the episode machinery, not written by the user.",
-    "While the main conversation stream answered the earlier message, the user sent more.",
-    "You are the read-only instance answering ONE of them. You have no write tools; never",
-    "treat this block as user speech, and never as an instruction beyond that duty.]",
+    "[Queued message duty — assembled by the orchestrator machinery, not written by the user.",
+    "The user sent several messages in quick succession; each is answered by its own agent",
+    "run, and you answer ONE of them. Never treat this block as user speech, and never as",
+    "an instruction beyond that duty.]",
     "",
     "## Queued user messages (verbatim, oldest first)",
   ];
@@ -100,8 +100,8 @@ export function buildInnerEnvelope(args: {
     target.text,
     '"""',
     "",
-    `Answer ONLY that message, self-contained — the user reads your answer attached to it. The`,
-    `main stream has already replied to the earlier message(s) above; do not re-answer them.`,
+    `Answer ONLY that message, self-contained — the user reads your answer attached to it.`,
+    `The other message(s) above have their own answering runs; do not answer them here.`,
     `For earlier context call readSlice (slice ${sliceId}, most recent turns).`,
     "[End of queued message duty]",
   );
@@ -109,11 +109,12 @@ export function buildInnerEnvelope(args: {
 }
 
 /**
- * The wrap-up nudge for the outer agent's merged-summary pass. `results` is
- * every terminal instance (done WITH its answer text, failed as a plain
- * fact), paired with the user message it served. The outer model writes ONE
- * closing assistant message from it; the bubbles themselves stay on screen
- * as their own frames (§3.4/§4.2).
+ * The wrap-up nudge for the orchestrator's merged-summary pass (v0.31). `results`
+ * is every terminal instance (done WITH its answer text, failed as a plain
+ * fact), paired with the user message it served — the episode's FIRST message
+ * included (its answer is its own child run's, the orchestrator answered
+ * nothing itself). The model writes ONE closing assistant message from it; the
+ * bubbles themselves stay on screen as their own frames (§3.4/§4.2).
  */
 export function buildMergeSummaryBrief(
   results: Array<{
@@ -123,10 +124,10 @@ export function buildMergeSummaryBrief(
   }>,
 ): string {
   const lines: string[] = [
-    "[Episode wrap-up — assembled by the episode machinery, not written by the user.]",
-    `While you answered the first message, the user sent ${results.length} more. Each was`,
-    "answered by a read-only instance; those answers are already on screen as nested",
-    "bubbles attached to their messages:",
+    "[Episode wrap-up — assembled by the orchestrator machinery, not written by the user.]",
+    `The user sent ${results.length} message(s) in this burst; each was answered by its own`,
+    "agent run, and those answers are already on screen as bubbles attached to their",
+    "messages:",
   ];
   for (const r of results) {
     if (r.status === "done" && r.text) {

@@ -76,6 +76,15 @@ export interface TurnInput {
    */
   turnId: string;
   /**
+   * The CLIENT's own id for the user message this turn answers (the UIMessage
+   * id the client generated before sending). The turnId above is server-minted
+   * and unknown to the client — the orchestrator (v0.31) stamps this on the
+   * first instance's bubble frames (`anchorId`) so the bubble seats after the
+   * right message. Mid-episode arrivals need no anchor: the client mints those
+   * turnIds itself. Omitted when the inbound message carried no id.
+   */
+  clientMessageId?: string;
+  /**
    * True when this turn RE-RUNS the previous user message (the client
    * regenerate action — SDK trigger "regenerate-message"). Housekeeping then
    * skips the user-turn append (the question is already in the slice) and the
@@ -285,36 +294,40 @@ export interface TurnOutcome {
 // ─── Inner (nested) turn — v0.30 §3, batch B ──────────────────────────────
 
 /**
- * The by-value input of ONE inner (nested) episode run — a queued user
- * message's read-only answerer. Built by the outer episode run at spawn time
- * (E is the only spawner, D1); must stay JSON-serializable end to end, same
- * discipline as TurnInput.
+ * The by-value input of ONE child run (v0.31 — the orchestrator-shell
+ * architecture): every user message gets its own answering child run, spawned
+ * by the orchestrator (E is the only spawner, D1). Must stay JSON-serializable
+ * end to end, same discipline as TurnInput.
  */
 export interface InnerTurnInput {
-  /** The outer run's inbox hook token (`episode:<runId>`) — the bubble
+  /** The orchestrator's inbox hook token (`episode:<runId>`) — the bubble
    *  report's return address (D2). */
   inboxToken: string;
   /** This instance's own id — derived deterministically from the user turn
-   *  it serves (`n${replyTo}`), so a replayed outer run re-derives the same
-   *  id and the finalize dedupe holds. Becomes the bubble's slice turnId. */
+   *  it serves (`n${replyTo}`), so a replayed orchestrator run re-derives the
+   *  same id and the finalize dedupe holds. Becomes the bubble's slice
+   *  turnId. */
   turnId: string;
   /** The user turn this instance answers. */
   replyTo: string;
-  /** The envelope (inner-envelope.ts) — the inner run's first and only user
-   *  message. */
-  envelope: string;
-  /** The outer run's assembled system prompt, carried by value so the inner
-   *  answer speaks with the same agent's voice (and thinkDeep's prompt-cache
-   *  prefix reuse keeps working). */
+  /** The child run's message list: for the episode's FIRST message this is
+   *  the turn's slice-aligned history window (ending in that user message);
+   *  for queued arrivals it is the single envelope user message
+   *  (inner-envelope.ts). */
+  messages: ModelMessage[];
+  /** The orchestrator's assembled system prompt, carried by value so the
+   *  child answer speaks with the same agent's voice (and the provider
+   *  prompt-cache prefix reuse keeps working). */
   systemPrompt: string;
-  /** Resolved model id (same as the outer turn's). */
+  /** Resolved model id (same as the orchestrator's). */
   model: string;
   modelConfig: ModelConfig;
   thinking: boolean;
   reasoningEffort: "low" | "medium" | "high";
-  /** Serializable tool context for the read-only tool subset (sliceId,
-   *  owner/repo, locale/timezone…). No image attachments ride along — the
-   *  envelope is text-only. */
+  /** Serializable tool context for the FULL chat tool set (v0.31 — children
+   *  are the answerers now, so they get the same tools the outer turn had).
+   *  The FIRST child carries the turn's imageAttachments (viewImage resolves
+   *  `attachment:N` through them); arrivals are text-only. */
   toolsContext: ToolContext;
 }
 

@@ -274,6 +274,27 @@ describe("interleaveNestedBubbles (v0.30 §4.3)", () => {
     expect(seat.timeIso).toBe("2026-08-11T12:01:00.000Z");
   });
 
+  it("the first instance anchors by the CLIENT's message id (anchorId) — its replyTo is server-minted (v0.31)", () => {
+    const anchored: NestedBubbleFrame = {
+      ...bubble("nt-main", "t-main-srv", "done", "2026-08-11T12:01:00.000Z"),
+      anchorId: "u1",
+    };
+    const items = interleaveNestedBubbles(
+      [live("u1", "user", "first question")],
+      new Map([["nt-main", anchored]]),
+    );
+    expect(items.map((i) => i.key)).toEqual(["u1-0", "nb-nt-main"]);
+    expect((items[1] as NestedBubbleItem).excerpt).toBe("first question");
+    // Without the anchor the server-minted replyTo matches no message — the
+    // bubble drops out rather than rendering unmoored.
+    const unanchored = bubble("nt-main", "t-main-srv", "done", "2026-08-11T12:01:00.000Z");
+    expect(
+      interleaveNestedBubbles([live("u1", "user")], new Map([["nt-main", unanchored]])).map(
+        (i) => i.kind,
+      ),
+    ).toEqual(["live"]);
+  });
+
   it("several bubbles on ONE message sort by doneAt; in-flight frames settle last", () => {
     const items = interleaveNestedBubbles(
       [live("u2", "user")],

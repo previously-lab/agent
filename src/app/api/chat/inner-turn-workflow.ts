@@ -1,37 +1,49 @@
 /**
- * Inner turn workflow — one queued user message, one read-only answer
- * (v0.30 §3.1/§3.3, batch B).
+ * Child turn workflow — one user message, one answering agent run
+ * (v0.31 — the orchestrator-shell architecture).
  *
- * Spawned ONLY by the outer episode run (turn-workflow.ts) via
- * `start(innerTurnWorkflow, [input], { region: "hkg1" })` — the route never
- * starts these (D1). The inner run is the outer loop's read-only silhouette:
- * the same brain (createInnerChatAgent) with the read-only tool subset, NO
- * housekeeping, NO finalize, NO bell (D8). Its whole context is the envelope
- * — its first and only user message (§3.2) — plus the outer run's assembled
- * system prompt, carried by value so the voice stays the same agent's.
+ * Spawned ONLY by the orchestrator run (turn-workflow.ts) via
+ * `start(innerTurnWorkflow, [input], { region })` — the route never starts
+ * these (D1). Every user message gets its own child run, including the
+ * episode's first: the orchestrator is a pure dispatch/persistence shell and
+ * does no answering itself.
  *
- * The answer returns to the outer run by HOOK, not returnValue (the polling
- * step would hold a worker slot for the whole answer — start.mdx): the tail
- * step resumeHooks the episode inbox with the bubble payload. If the outer
- * run is already gone (cancelled — D6), HookNotFoundError is swallowed with a
- * warning: the inner run is read-only, so nothing half-written exists, and
- * the orphaned user turn stays visible to reflection via the disk record.
+ * The child is the FULL agent (same tool set the outer turn had — children
+ * are the answerers now), and it answers onto its OWN durable stream
+ * (`writable` below): the client attaches to `/api/chat/[runId]/stream` and
+ * watches the reply live, so a slow sibling never blocks anyone else's
+ * pixels. The orchestrator learns only the terminal outcome — the bubble
+ * report rides the episode inbox hook (reportInnerBubble), not the stream.
+ *
+ * No housekeeping, NO finalize, NO bell (D8): persistence is centralized in
+ * the orchestrator, which records every terminal bubble at finalizeTurn.
+ * If the child dies WITHOUT reporting (platform kill mid-step — the watchdog
+ * in the orchestrator's drain loop is the bound on that), the instance is
+ * marked failed there; a child that regains control always reports, even on
+ * failure.
  *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */
 import { isStepCount, type ModelMessage } from "ai";
-import { createInnerChatAgent } from "@/app/api/agent/agent";
-import { buildReadonlyChatToolsContext } from "@/app/api/agent/tools";
-import { errorMessage } from "@/lib/chat/workflow-errors";
+import { getWritable } from "workflow";
+import type { ModelCallStreamPart } from "@ai-sdk/workflow";
+import { createChatAgent } from "@/app/api/agent/agent";
+import { buildChatToolsContext } from "@/app/api/agent/tools";
 import type { InnerTurnInput } from "@/lib/chat/turn-types";
-import { reportInnerBubble } from "./steps";
+import { closeChildStream, reportInnerBubble } from "./steps";
 
-/** The instance's answer = all assistant text after the envelope message. */
-function extractInnerAnswer(messages: ModelMessage[]): string {
-  const envelopeIdx = messages.findIndex((m) => m.role === "user");
-  const start = envelopeIdx === -1 ? messages.length : envelopeIdx + 1;
+/**
+ * The instance's answer = all assistant text the RUN produced (everything
+ * after the input messages; index 0 is the SDK-prepended system message, so
+ * the slice point is 1 + input length — the same discipline as the outer
+ * turn's extractAllAssistantText).
+ */
+function extractChildAnswer(
+  messages: ModelMessage[],
+  inputCount: number,
+): string {
   const parts: string[] = [];
-  for (let i = start; i < messages.length; i++) {
+  for (let i = 1 + inputCount; i < messages.length; i++) {
     const m = messages[i];
     if (m.role !== "assistant") continue;
     if (typeof m.content === "string") {
@@ -43,7 +55,7 @@ function extractInnerAnswer(messages: ModelMessage[]): string {
         if (
           p &&
           typeof p === "object" &&
-          (p as { type?: string }).type === "text" &&
+          (p as { type?: unknown }).type === "text" &&
           typeof (p as { text?: unknown }).text === "string" &&
           (p as { text: string }).text.trim()
         ) {
@@ -58,29 +70,33 @@ function extractInnerAnswer(messages: ModelMessage[]): string {
 export async function innerTurnWorkflow(input: InnerTurnInput): Promise<void> {
   "use workflow";
 
-  const agent = createInnerChatAgent({
+  const agent = createChatAgent({
     model: input.modelConfig,
     thinking: input.thinking,
     reasoningEffort: input.reasoningEffort,
-    toolsContext: buildReadonlyChatToolsContext(input.toolsContext),
+    toolsContext: buildChatToolsContext(input.toolsContext),
   });
 
   let text = "";
   let finishReason = "error";
   try {
-    // No writable: the inner run has no client stream of its own — the outer
-    // run reports the answer as a nested-bubble frame on ITS stream (§4.2).
+    // The child's own stream — sendFinish:false + preventClose keep it open
+    // until closeChildStream writes the lifecycle tail below, so the client's
+    // bubble reader settles on a real finish chunk, not a connection drop.
     const result = await agent.stream({
-      messages: [{ role: "user", content: input.envelope }],
+      messages: input.messages,
       system: input.systemPrompt,
+      writable: getWritable<ModelCallStreamPart>(),
       stopWhen: isStepCount(20),
+      sendFinish: false,
+      preventClose: true,
     });
-    text = extractInnerAnswer(result.messages);
+    text = extractChildAnswer(result.messages, input.messages.length);
     finishReason = result.finishReason;
   } catch (err) {
-    // The inner run never throws its way out of existence silently: the outer
-    // run learns the failure as a `failed` bubble (finishReason "error") and
-    // the merged summary states it plainly (§3.6).
+    // The child never throws its way out of existence silently: the
+    // orchestrator learns the failure as a `failed` bubble (finishReason
+    // "error") and the merged summary states it plainly (§3.6).
     console.error(
       `[Inner:${input.turnId}] answer failed\n`,
       err instanceof Error ? (err.stack ?? err.message) : err,
@@ -89,6 +105,10 @@ export async function innerTurnWorkflow(input: InnerTurnInput): Promise<void> {
     finishReason = "error";
   }
 
+  // Stream tail first, then the report: a client reading the child stream
+  // settles on the finish chunk; the orchestrator's done frame carries the
+  // settled text for history/replay.
+  await closeChildStream();
   await reportInnerBubble(input.inboxToken, {
     kind: "bubble",
     turnId: input.turnId,

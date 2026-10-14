@@ -1520,16 +1520,26 @@ export async function finalizeTurn(
   if (agentTurnRecorded) {
     console.log(`[Episodic] Agent turn ${input.turnId} already persisted — skipping append`);
   } else if (outcome.finishReason === "stop") {
-    appendTurn(slice, {
-      timestamp: new Date().toISOString(),
-      role: "agent",
-      // The episode's merged summary FOLDS into the outer agent turn (one
-      // agent turn per outer turnId — see NestedTurnTail for why).
-      content: nested?.mergeSummary
-        ? `${outcome.text}\n\n${nested.mergeSummary}`
-        : outcome.text,
-      turnId: input.turnId,
-    });
+    // The episode's merged summary FOLDS into the outer agent turn (one
+    // agent turn per outer turnId — see NestedTurnTail for why). Under the
+    // orchestrator shell (v0.31) the outer run answers nothing itself — when
+    // there is no summary either, the answers are the bubbles' own turns and
+    // an empty outer agent turn is skipped, not stored.
+    const body = nested?.mergeSummary
+      ? [outcome.text, nested.mergeSummary].filter(Boolean).join("\n\n")
+      : outcome.text;
+    if (body) {
+      appendTurn(slice, {
+        timestamp: new Date().toISOString(),
+        role: "agent",
+        content: body,
+        turnId: input.turnId,
+      });
+    } else {
+      console.log(
+        `[Episodic] Outer turn ${input.turnId} has no text of its own (orchestrator shell) — answers live on the bubble turns`,
+      );
+    }
   } else if (outcome.text) {
     appendTurn(slice, {
       timestamp: new Date().toISOString(),
@@ -1770,6 +1780,31 @@ export async function closeTurnStream(
   await writable.close();
 }
 
+/**
+ * A child run's stream tail (v0.31): finish-step / finish, then close. No
+ * `data-turn-status` — the child's terminal STATE reaches the client as a
+ * nested-bubble frame on the ORCHESTRATOR's stream; the child stream only
+ * carries the answer's live content. Never throws: a lost tail degrades the
+ * bubble to its fallback (the done frame's settled text), the report still
+ * lands by hook.
+ */
+export async function closeChildStream(): Promise<void> {
+  "use step";
+  try {
+    const writable = getWritable<UIMessageChunk>();
+    const writer = writable.getWriter();
+    await writer.write({ type: "finish-step" } as UIMessageChunk);
+    await writer.write({ type: "finish" } as UIMessageChunk);
+    writer.releaseLock();
+    await writable.close();
+  } catch (err) {
+    console.warn(
+      "[Episode] child stream tail dropped:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 // ─── Step 5: ringReflection — the mechanical bell (v0.30 §2.1) ─────────────
 
 /**
@@ -1814,6 +1849,18 @@ export async function ringReflection(
 export async function ownRunId(): Promise<string> {
   "use step";
   return getWorkflowMetadata().workflowRunId;
+}
+
+/**
+ * The drain loop's clock (v0.31 — the instance watchdog): the workflow body
+ * has no Date (the sandbox provisions no clock — timestamps are stamped inside
+ * steps, the ownRunId precedent), so one call per drain lap feeds the spawn
+ * stamps and the watchdog's age check. The value replays from the event log
+ * like every other step result.
+ */
+export async function episodeClockMs(): Promise<number> {
+  "use step";
+  return Date.now();
 }
 
 /**
@@ -1893,13 +1940,13 @@ export async function emitNestedBubble(frame: NestedBubbleFrame): Promise<void> 
 }
 
 /**
- * An inner run's terminal report → the outer run's inbox hook (D2). resumeHook
- * is a runtime function that must be called outside a workflow function — hence
- * this "use step" (the handoffBriefToPrimary precedent in hq-steps.ts).
- * HookNotFoundError means the outer run is gone (cancelled — D6): swallow with
- * a warning instead of burning the step's retry budget; the inner run is
- * read-only, so nothing half-written exists, and the unanswered user turn on
- * disk stays visible to reflection.
+ * A child run's terminal report → the orchestrator's inbox hook (D2).
+ * resumeHook is a runtime function that must be called outside a workflow
+ * function — hence this "use step" (the handoffBriefToPrimary precedent in
+ * hq-steps.ts). HookNotFoundError means the outer run is gone (cancelled —
+ * D6, or finalized): swallow with a warning instead of burning the step's
+ * retry budget; the child's own stream keeps the answer, and the unanswered
+ * user turn on disk stays visible to reflection.
  */
 export async function reportInnerBubble(
   token: string,

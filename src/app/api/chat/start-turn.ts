@@ -285,7 +285,14 @@ export async function startTurn(
   }));
 
   const userMessages = inbound.filter((m) => m.role === "user");
-  const lastUserMessage = extractLastUserText(userMessages[userMessages.length - 1]);
+  const lastUser = userMessages[userMessages.length - 1];
+  const lastUserMessage = extractLastUserText(lastUser);
+  // The client's own UIMessage id for the answered message — the orchestrator
+  // (v0.31) stamps it as the first bubble's anchorId (see TurnInput).
+  const clientMessageId =
+    lastUser && typeof lastUser.id === "string" && lastUser.id
+      ? lastUser.id
+      : undefined;
 
   // Optional machine context block (v0.11 §13) — sanitized once here so the
   // field is OMITTED from TurnInput when the client sent none (a plain chat
@@ -315,6 +322,7 @@ export async function startTurn(
     startedAtIso: new Date().toISOString(),
     turnId,
     imageAttachments,
+    ...(clientMessageId ? { clientMessageId } : {}),
     ...(args.regenerate === true ? { regenerate: true } : {}),
     ...(machineContext ? { machineContext } : {}),
     ...(view ? { view } : {}),

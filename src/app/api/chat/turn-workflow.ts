@@ -6,7 +6,13 @@
  * re-binding it after each mutating step (the module-global `activeSlice` is
  * unusable here — steps run in separate invocations).
  *
- * The Pro agent loop runs HERE, in the workflow body, via WorkflowAgent
+ * The agent loop runs in TWO shapes (v0.31): on episode-capable deployments
+ * the outer run is a pure ORCHESTRATOR SHELL — it spawns one child run per
+ * user message (inner-turn-workflow.ts, each a full WorkflowAgent with its own
+ * durable stream), watches the inbox hook, and persists everything at
+ * finalize; the only model call it makes itself is the closing merge summary.
+ * Bridge/demo turns keep the classic shape: the outer run IS the answerer and
+ * its Pro agent loop runs HERE, in the workflow body, via WorkflowAgent
  * (AI SDK 7 `@ai-sdk/workflow`): each LLM call and each tool call becomes its
  * own durable step (tool executors are standalone `"use step"` functions in
  * src/app/api/agent/tool-executors.ts). Everything else — slice housekeeping,
@@ -61,6 +67,7 @@ import {
   closeTurnStream,
   ringReflection,
   ownRunId,
+  episodeClockMs,
   readEpisodeInbox,
   emitNestedBubble,
 } from "./steps";
@@ -75,6 +82,17 @@ import {
  * never packs up with work in flight.
  */
 const EPISODE_GRACE_MS = 60_000;
+
+/**
+ * 看门狗 (v0.31): a child run that never reports back (platform kill mid-step —
+ * the agent step runs with maxRetries:0 and the 300s wall can kill silently)
+ * would leave its bubble spinning "running" forever, and with it the whole
+ * episode (the drain never goes idle while an instance is in flight). Past
+ * this age without a report, the orchestrator marks the instance failed and
+ * says so on the wire. Ages are measured on the step-stamped clock
+ * (episodeClockMs) — the workflow body has no Date.
+ */
+const INSTANCE_WATCHDOG_MS = 10 * 60_000;
 
 /** Final assistant text from the agent's message history. */
 export function extractFinalText(messages: ModelMessage[]): string {
@@ -938,9 +956,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
 
   // ── Pre-turn steps ─────────────────────────────────────────────────────
 
-  // Episode inbox (v0.30 §3, batch B): E is the episode — after its first
-  // answer the run keeps a hook inbox open for concurrently-arriving user
-  // messages and answers them with nested inner runs. The hook is created
+  // Episode inbox (v0.31 — the orchestrator shell): E is the episode — it
+  // answers NOTHING itself; every user message (the first included) gets its
+  // own child run, and concurrently-arriving messages land in this hook inbox
+  // for the drain to spawn. The hook is created
   // BEFORE housekeeping: registration commits when the run next suspends
   // (create-hook.js: "registration only happens when the workflow suspends"),
   // and housekeeping's step is that suspension — so by the time the client
@@ -1199,8 +1218,6 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   let nestedTail: NestedTurnTail | undefined;
   try {
     let allCognition = "";
-    let finalFinishReason = "stop";
-    let finalMessages: ModelMessage[] = [];
     // Bridge main model: no kernel tools means no currentTime tool, and the
     // system prompt must stay slice-frozen — so the fresh clock read rides
     // the tail of the LAST user message on the OUTBOUND copy only (the client
@@ -1242,182 +1259,35 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     if (reflectionSection) {
       currentMessages = appendBridgeTimeSuffix(currentMessages, reflectionSection);
     }
-    let continuations = 0;
-    let timeoutContinuations = 0;
-    /** Client-visible explanation when the turn ends as a terminal error. */
-    let turnError: string | undefined;
-
-    // ── The agent loop ────────────────────────────────────────────────────
-    // Inline loop — NOT a nested closure: the workflow transform instruments
-    // awaits at the top level of the "use workflow" body, so `agent.stream`
-    // (self-managed steps) must stay here, exactly as the loop engine does.
-    //
-    // Tool calls (recall / webSearch / thinkDeep) are handled inline by the
-    // WorkflowAgent loop: the executor runs in its own step and the result
-    // (e.g. a sub-agent report) is fed straight back to the model on the next
-    // step. No separate dispatch / polling / integration pass exists.
-    while (true) {
-      let result: Awaited<ReturnType<ChatAgent["stream"]>>;
-      try {
-        result = await agent.stream({
-          messages: currentMessages,
-          system: systemPrompt,
-          ...streamOpts,
-        });
-      } catch (err) {
-        // ── Workflow-error classification → what to do ────────────────────
-        const classified = classifyWorkflowError(err);
-        // v0.8: log the FULL error on every agent.stream failure. The classify
-        // branches below reduce it to a short message (or rethrow it without a
-        // word), which leaves transient/timeout/model failures invisible in the
-        // function log — this line is the diagnostic trail for the test env.
-        console.error(
-          `[Turn:${input.turnId}][agent.stream] classified=${classified.kind}\n${formatErrorDetail(err)}`,
-        );
-        if (classified.kind === "transient") {
-          // Infrastructure blip — let the workflow queue retry the run.
-          throw err;
-        }
-        if (classified.kind === "terminal" || classified.kind === "model") {
-          // Genuinely terminal — surface an explanation, end the turn.
-          finalFinishReason = "error";
-          turnError =
-            classified.userMessage ?? errorMessage(err, "The workflow run failed.");
-          break;
-        }
-        if (classified.kind === "abort") {
-          // Client cancelled (or the SDK aborted) — stop, don't re-invoke.
-          finalFinishReason = "interrupted";
-          break;
-        }
-        // timeout (a step was platform-killed / a deadline exceeded) — the
-        // dominant failure mode. Bounded CONTINUATION: rebuild the messages
-        // from the interrupted run's COMPLETED steps — every finished tool
-        // call + its result, then the partial assistant text (segments joined
-        // with a blank line) and the nudge — so the model picks up exactly
-        // where it left off and re-derives nothing.
-        if (++timeoutContinuations > MAX_TIMEOUT_CONTINUATIONS) {
-          finalFinishReason = "interrupted";
-          turnError =
-            "The response was interrupted repeatedly by step timeouts. You can send a new message or click continue to try again.";
-          break;
-        }
-        currentMessages = buildTimeoutContinuation({
-          history: currentMessages,
-          steps: interruptedSteps,
-          partialText: interruptedSteps
-            .map((s) => s.text.trim())
-            .filter(Boolean)
-            .join("\n\n"),
-          nudge: TIMEOUT_CONTINUE_NUDGE,
-        });
-        // The snapshots are now committed into currentMessages — clear them so
-        // a LATER timeout carries only THAT run's completed steps.
-        interruptedSteps = [];
-        // Durable backoff before the re-invocation: `sleep` writes a timer
-        // event into the run's log — it replays correctly and holds no
-        // compute while waiting, unlike an immediate re-invocation that would
-        // ram a still-recovering provider.
-        await sleep(
-          TIMEOUT_BACKOFF_MS[
-            Math.min(timeoutContinuations, TIMEOUT_BACKOFF_MS.length) - 1
-          ],
-        );
-        // Loop back to re-invoke agent.stream() with the continuation.
-        continue;
-      }
-
-      allCognition += extractCognition(result.messages, result.steps);
-      finalMessages = result.messages;
-      finalFinishReason = result.finishReason;
-
-      // This iteration's completed steps are now committed into currentMessages
-      // (via the continuation feed below) — reset the snapshots so a LATER
-      // timeout only carries the partial from THAT failing call, not the whole
-      // turn's earlier output (which would be redundant in the continuation).
-      interruptedSteps = [];
-
-      // Only loop when the model hit the token cap before it was done.
-      if (result.finishReason !== "length") break;
-      if (++continuations >= MAX_CONTINUATIONS) break;
-
-      // Feed the model's output back with a continuation nudge. Strip the
-      // old system message (it's embedded at index 0) and pass the system
-      // prompt fresh so `standardizePrompt` doesn't see a duplicate.
-      currentMessages = [
-        ...result.messages.filter((m) => m.role !== "system"),
-        {
-          role: "user" as const,
-          content:
-            "You were cut off mid-response. Continue exactly where you left off — do not repeat anything you already said.",
-        },
-      ];
-    }
-
-    // ── Sub-agent reports (thinkDeep) — keep the full research in the timeline ──
-    // Extracted ONCE from the final messages (not inside extractCognition, which
-    // runs per continuation over the full message history — that would duplicate
-    // the reports across token-cap continuations).
-    const thinkDeepReports = extractThinkDeepReports(finalMessages);
-    if (thinkDeepReports.length > 0) {
-      allCognition += "\n### Reasoning fragments";
-      for (const { question, answer, reasoning } of thinkDeepReports) {
-        allCognition += `\n\n**Q**: ${question}`;
-        if (answer) allCognition += `\n\n${answer.slice(0, 2000)}`;
-        if (reasoning)
-          allCognition += `\n\n<reasoning>\n${reasoning.slice(0, 1000)}\n</reasoning>`;
-      }
-      allCognition += "\n";
-    }
-
-    // The stored agent turn is ALL assistant text across the turn (intermediate
-    // text + final answer), in order. Tool calls are not preserved — see
-    // extractAllAssistantText.
-    //
-    // `1 + historyWindow.length` skips the system message the SDK
-    // prepends (index 0) plus the slice-aligned history window handed to the
-    // first agent.stream() call — so only THIS run's assistant text is stored,
-    // never the whole conversation (the v0.7 storage-accumulation bug).
-    // Continuations are covered: the final result.messages is
-    // [system, history, ...contN], and slicing at the original window count
-    // captures every continuation's output while excluding prior turns.
-    outcome = {
-      text: extractAllAssistantText(finalMessages, 1 + historyWindow.length),
-      finishReason: finalFinishReason,
-      cognition: allCognition,
-      error: turnError,
-    };
-
-    // v0.8: make a non-stop end visible in the log. Model errors, timeouts and
-    // interruptions otherwise terminate silently — this line records why the
-    // turn ended so the test env can trace it against the detail logs above.
-    if (finalFinishReason !== "stop") {
-      console.error(
-        `[Turn:${input.turnId}][turn] ended=${finalFinishReason} text=${outcome.text.length} chars` +
-          (turnError ? ` error=${turnError.slice(0, 500)}` : ""),
-      );
-    }
-
-    // ── Episode phase (v0.30 §3, batch B): drain → spawn → consume → merge ──
-    // Only a cleanly-finished answer opens the floor (an interrupted/errored
-    // turn finalizes exactly as before). The drain's inspection point is HERE
-    // — at the top of the post-answer loop (D3 fallback): prepareStep is
-    // passthrough-capable (@ai-sdk/workflow stream() accepts it) but the drain
-    // needs awaited step/start calls, and this file's workflow transform only
-    // instruments TOP-LEVEL awaits (see the agent-loop comment above) — a
-    // callback-closure await is un-instrumented, so the loop-top is the
-    // reachable point. All awaits below stay top-level and inline.
-    if (episodeEnabled && outcome.finishReason === "stop" && inboxHook) {
-      // One row per queued user message, keyed by ITS turnId. The instance id
-      // is DERIVED (`n${turnId}`) — the deterministic body mints no random
-      // ids, so a replayed run re-derives the same ones and finalize's
-      // per-bubble dedupe holds across redeliveries.
+    // ── The answer phase ─────────────────────────────────────────────────
+    // v0.31 — the orchestrator shell: on an episode-capable deployment the
+    // outer run NEVER answers. EVERY user message of this episode — the first
+    // one included — gets its own child run: the full agent, streaming onto
+    // its own durable stream, which the client's bubble attaches to directly
+    // (a slow sibling never blocks anyone else's pixels). E's jobs: spawn
+    // mechanically (no model judgment — a message must always get an answer),
+    // watch the inbox, record everything at finalizeTurn. The only model call
+    // E makes itself is the closing merge summary. Bridge/demo turns keep the
+    // classic shape (D10): the outer run IS the answerer.
+    if (episodeEnabled && inboxHook) {
+      // One row per user message, keyed by ITS turnId. The instance id is
+      // DERIVED (`n${turnId}`) — the deterministic body mints no random ids,
+      // so a replayed run re-derives the same ones and finalize's per-bubble
+      // dedupe holds across redeliveries.
       interface InstanceRow {
         turnId: string;
         replyTo: string;
         status: "queued" | "running" | "done" | "failed";
         text?: string;
         finishReason?: string;
+        /** The answering child run — the client attaches to its stream. */
+        runId?: string;
+        /** The first instance's frames carry the client message id, so the
+         *  bubble seats after it (the server-minted outer turnId is unknown
+         *  to the client). */
+        anchorId?: string;
+        /** Step-stamped spawn time — the watchdog's age base. */
+        spawnedAtMs: number;
         question: EnvelopeUserTurn;
       }
       const instances = new Map<string, InstanceRow>();
@@ -1430,57 +1300,105 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
             turnId: i.turnId,
             replyTo: i.replyTo,
             text: i.text ?? "",
-            finishReason: i.finishReason ?? (i.status === "done" ? "stop" : "error"),
+            finishReason:
+              i.finishReason ?? (i.status === "done" ? "stop" : "error"),
           }));
         if (bubbles.length === 0 && !mergeSummary) return undefined;
         return { bubbles, ...(mergeSummary ? { mergeSummary } : {}) };
       };
       try {
         const iterator = inboxHook[Symbol.asyncIterator]();
+        // THE wait-discipline fix (v0.31): exactly ONE pending next() for the
+        // drain's whole life, re-armed only AFTER it resolves. The old
+        // per-lap re-arm abandoned an in-flight next() inside Promise.race —
+        // the hook's single-slot resolver then resolved the ABANDONED promise
+        // when the next event landed, the bubble report vanished, and the
+        // instance spun "running" forever (the render deadlock: B's answer
+        // never surfaced).
+        let pendingNext = iterator.next();
         try {
           for (;;) {
             // 列队 — the disk reconciliation: the hook is only a wake-up tap,
-            // the slice on disk is the queue (D1/D2).
+            // the slice on disk is the queue (D1/D2). The episode's first
+            // message is seeded mechanically — findEpisodeUnanswered excludes
+            // the outer turn by design.
             const unanswered = await readEpisodeInbox(
               slice.slice_id,
               input.turnId,
               input.startedAtIso,
               { useDemo: input.useDemo, useGithub: input.useGithub },
             );
-            // Spawn the missing: drain = 未答复 − 在册 (D1). E is the ONLY
-            // spawner; the route never starts inner runs.
+            // The lap's clock, stamped in a step — the workflow body has no
+            // Date (the sandbox provisions no clock).
+            const nowMs = await episodeClockMs();
+            const spawnList: Array<{
+              question: EnvelopeUserTurn;
+              first: boolean;
+            }> = [];
+            if (!instances.has(input.turnId)) {
+              spawnList.push({
+                first: true,
+                question: {
+                  turnId: input.turnId,
+                  timestamp: input.startedAtIso,
+                  text: input.lastUserMessage,
+                },
+              });
+            }
             for (const u of unanswered) {
-              if (instances.has(u.turnId)) continue;
+              if (!instances.has(u.turnId)) {
+                spawnList.push({ first: false, question: u });
+              }
+            }
+            // Spawn the missing: drain = 未答复 − 在册 (D1). E is the ONLY
+            // spawner; the route never starts child runs.
+            for (const { question: u, first } of spawnList) {
               const bubbleTurnId = `n${u.turnId}`;
               const row: InstanceRow = {
                 turnId: bubbleTurnId,
                 replyTo: u.turnId,
                 status: "queued",
+                spawnedAtMs: nowMs,
                 question: u,
+                ...(first && input.clientMessageId
+                  ? { anchorId: input.clientMessageId }
+                  : {}),
               };
               instances.set(u.turnId, row);
               await emitNestedBubble({
                 replyTo: u.turnId,
                 turnId: bubbleTurnId,
                 status: "queued",
+                ...(row.anchorId ? { anchorId: row.anchorId } : {}),
               });
               const innerInput: InnerTurnInput = {
                 inboxToken: episodeInboxToken(episodeRunId),
                 turnId: bubbleTurnId,
                 replyTo: u.turnId,
-                envelope: buildInnerEnvelope({
-                  sliceId: slice.slice_id,
-                  pending: unanswered,
-                  instances: [...instances.values()].map(
-                    (i): EpisodeInstanceSnapshot => ({
-                      replyTo: i.replyTo,
-                      turnId: i.turnId,
-                      status: i.status,
-                      ...(i.text ? { text: i.text } : {}),
-                    }),
-                  ),
-                  target: u,
-                }),
+                // The first message rides the turn's full slice-aligned
+                // window (it IS this turn's question); an arrival gets the
+                // mechanical envelope — the queue, the instance table, its
+                // target.
+                messages: first
+                  ? currentMessages
+                  : [
+                      {
+                        role: "user" as const,
+                        content: buildInnerEnvelope({
+                          sliceId: slice.slice_id,
+                          pending: unanswered,
+                          instances: [...instances.values()].map(
+                            (i): EpisodeInstanceSnapshot => ({
+                              replyTo: i.replyTo,
+                              turnId: i.turnId,
+                              status: i.status,
+                              ...(i.text ? { text: i.text } : {}),
+                            }),
+                          ),
+                          target: u,
+                        }),
+                      },
+                    ],
                 systemPrompt,
                 model: input.model,
                 modelConfig: input.modelConfig,
@@ -1498,6 +1416,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
                   timezone: input.clientTimezone,
                   startedAtIso: input.startedAtIso,
                   locale: input.locale,
+                  // The FIRST child inherits the turn's image attachments so
+                  // viewImage resolves `attachment:N` for non-vision models;
+                  // arrivals are text-only (the messages route takes no files).
+                  ...(first ? { imageAttachments: input.imageAttachments } : {}),
                 },
               };
               // Step-backed spawn (workflow-v5 composition, start.mdx); the
@@ -1506,34 +1428,81 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
                 region: "hkg1",
               });
               row.status = "running";
+              row.runId = innerRun.runId;
               console.log(
-                `[Turn:${input.turnId}][episode] inner run ${innerRun.runId} answering ${u.turnId}`,
+                `[Turn:${input.turnId}][episode] child run ${innerRun.runId} answering ${u.turnId}`,
               );
               await emitNestedBubble({
                 replyTo: u.turnId,
                 turnId: bubbleTurnId,
                 status: "running",
+                runId: innerRun.runId,
+                ...(row.anchorId ? { anchorId: row.anchorId } : {}),
               });
             }
+
+            // 看门狗 (v0.31): a child that never reports (platform kill
+            // mid-step — the agent step runs maxRetries:0 and the 300s wall
+            // can kill silently) would spin its bubble forever, and with it
+            // the episode (the drain never goes idle with work in flight).
+            for (const row of instances.values()) {
+              if (
+                (row.status === "queued" || row.status === "running") &&
+                nowMs - row.spawnedAtMs > INSTANCE_WATCHDOG_MS
+              ) {
+                row.status = "failed";
+                row.finishReason = "timeout";
+                console.error(
+                  `[Turn:${input.turnId}][episode] child ${row.runId ?? row.turnId} watchdog timeout — marking failed`,
+                );
+                await emitNestedBubble({
+                  replyTo: row.replyTo,
+                  turnId: row.turnId,
+                  status: "failed",
+                  ...(row.runId ? { runId: row.runId } : {}),
+                  ...(row.anchorId ? { anchorId: row.anchorId } : {}),
+                });
+              }
+            }
+
             const busy = [...instances.values()].some(
               (i) => i.status === "queued" || i.status === "running",
             );
             // The hq-run-shaped wait: next inbox event vs the idle grace.
-            const next = await Promise.race<EpisodeInboxEvent | "idle" | "done">([
-              iterator
-                .next()
-                .then((r): EpisodeInboxEvent | "done" =>
-                  r.done ? "done" : r.value,
-                ),
+            // Whatever loses this race is never re-armed — pendingNext stays
+            // THE pending wait into the next lap (the fix above); the sleep
+            // is one-shot and a fresh one is created next lap.
+            const next = await Promise.race<
+              EpisodeInboxEvent | "idle" | "done"
+            >([
+              pendingNext.then((r): EpisodeInboxEvent | "done" =>
+                r.done ? "done" : r.value,
+              ),
               sleep(EPISODE_GRACE_MS).then((): "idle" => "idle"),
             ]);
             if (next === "done") break;
             if (next === "idle") {
-              // 宽限自退 (R4) — only with nothing in flight; a busy episode
-              // treats the tick as a re-check and loops on.
-              if (!busy) break;
-              continue;
+              if (busy) {
+                // A busy episode treats the tick as a re-check and loops on.
+                continue;
+              }
+              // 宽限自退 (R4) — but confirm the disk is truly drained first:
+              // a message whose wake-up tap lost this race (or never arrived)
+              // still gets its instance. The residual gap — a message landing
+              // between this sweep and the hook's disposal below — is the
+              // route's orphan case (the reflection bell, D2).
+              const finalSweep = await readEpisodeInbox(
+                slice.slice_id,
+                input.turnId,
+                input.startedAtIso,
+                { useDemo: input.useDemo, useGithub: input.useGithub },
+              );
+              if (finalSweep.some((u) => !instances.has(u.turnId))) continue;
+              break;
             }
+            // An event landed: pendingNext RESOLVED (the race took it) —
+            // re-arm here, only here, never speculatively.
+            pendingNext = iterator.next();
             const ev = normalizeEpisodeInboxEvent(next);
             if (!ev) continue;
             if (ev.kind === "bubble") {
@@ -1550,6 +1519,8 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
                   replyTo: ev.replyTo,
                   turnId: ev.turnId,
                   status: row.status,
+                  ...(row.runId ? { runId: row.runId } : {}),
+                  ...(row.anchorId ? { anchorId: row.anchorId } : {}),
                   ...(ev.text ? { text: ev.text } : {}),
                 });
               }
@@ -1565,21 +1536,27 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
           inboxHook.dispose();
         }
 
-        // ── Merged summary (§3.4): ONE closing assistant message, streamed
-        //    natively on the still-open (preventClose) main stream. Only when
-        //    at least one inner instance ran — otherwise this episode was the
-        //    single-message path and nothing changes. The merge pass sees the
-        //    whole episode (finalMessages) plus the mechanical results brief.
+        // ── Closing summary (§3.4): the orchestrator speaks ONCE, after every
+        //    instance is terminal — the only model call E makes itself,
+        //    streamed natively on the still-open (preventClose) main stream.
+        //    Worth it when the episode held more than one message or a failure
+        //    needs stating; a single clean answer stands on its own bubble.
         const settled = [...instances.values()];
-        if (settled.length > 0) {
+        const hasFailed = settled.some((i) => i.status === "failed");
+        if (settled.length > 1 || hasFailed) {
+          // The brief is self-contained: every question + its answer (or the
+          // plain failure fact) — the episode's FIRST message included (its
+          // answer is a child run's too; the orchestrator answered nothing).
           const mergeMessages: ModelMessage[] = [
-            ...finalMessages.filter((m) => m.role !== "system"),
             {
-              role: "user",
+              role: "user" as const,
               content: buildMergeSummaryBrief(
                 settled.map((i) => ({
                   question: i.question,
-                  status: i.status === "failed" ? ("failed" as const) : ("done" as const),
+                  status:
+                    i.status === "failed"
+                      ? ("failed" as const)
+                      : ("done" as const),
                   ...(i.text ? { text: i.text } : {}),
                 })),
               ),
@@ -1609,17 +1586,199 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
             );
             nestedTail = buildTail();
           }
+        } else {
+          nestedTail = buildTail();
         }
       } catch (episodeErr) {
-        // The episode phase must never take down a finished answer: keep the
-        // bubbles that DID settle; finalize proceeds as usual either way.
+        // The orchestrator must never strand an in-flight instance silently:
+        // every non-terminal row is marked failed and SAID so on the wire — a
+        // queued/running bubble whose frames stop coming would spin forever.
+        // Finalize proceeds with whatever settled.
         console.error(
-          `[Turn:${input.turnId}][episode] phase failed\n${formatErrorDetail(episodeErr)}`,
+          `[Turn:${input.turnId}][episode] orchestrator failed\n${formatErrorDetail(episodeErr)}`,
         );
+        for (const row of instances.values()) {
+          // Terminal rows keep their verdict (and their already-sent frame);
+          // only the in-flight ones are stranded by the orchestrator's death.
+          if (row.status === "done" || row.status === "failed") continue;
+          row.status = "failed";
+          row.finishReason = "error";
+          await emitNestedBubble({
+            replyTo: row.replyTo,
+            turnId: row.turnId,
+            status: "failed",
+            ...(row.runId ? { runId: row.runId } : {}),
+            ...(row.anchorId ? { anchorId: row.anchorId } : {}),
+          });
+        }
         nestedTail = buildTail();
       }
-      // The merge pass's cognition joins the turn's timeline record.
-      outcome.cognition = allCognition;
+      // The orchestrator's own turn carries no answer text — the answers are
+      // the bubble turns; a merge summary, when present, folds into the outer
+      // agent turn at finalize (see finalizeTurn's stop branch).
+      outcome = {
+        text: "",
+        finishReason: "stop",
+        cognition: allCognition,
+      };
+    } else {
+      let continuations = 0;
+      let timeoutContinuations = 0;
+      /** Client-visible explanation when the turn ends as a terminal error. */
+      let turnError: string | undefined;
+      let finalFinishReason = "stop";
+      let finalMessages: ModelMessage[] = [];
+
+      // ── The agent loop (bridge/demo — D10: those turns never nest) ──────
+      // Inline loop — NOT a nested closure: the workflow transform instruments
+      // awaits at the top level of the "use workflow" body, so `agent.stream`
+      // (self-managed steps) must stay here, exactly as the loop engine does.
+      //
+      // Tool calls (recall / webSearch / thinkDeep) are handled inline by the
+      // WorkflowAgent loop: the executor runs in its own step and the result
+      // (e.g. a sub-agent report) is fed straight back to the model on the next
+      // step. No separate dispatch / polling / integration pass exists.
+      while (true) {
+        let result: Awaited<ReturnType<ChatAgent["stream"]>>;
+        try {
+          result = await agent.stream({
+            messages: currentMessages,
+            system: systemPrompt,
+            ...streamOpts,
+          });
+        } catch (err) {
+          // ── Workflow-error classification → what to do ──────────────────
+          const classified = classifyWorkflowError(err);
+          // v0.8: log the FULL error on every agent.stream failure. The classify
+          // branches below reduce it to a short message (or rethrow it without a
+          // word), which leaves transient/timeout/model failures invisible in the
+          // function log — this line is the diagnostic trail for the test env.
+          console.error(
+            `[Turn:${input.turnId}][agent.stream] classified=${classified.kind}\n${formatErrorDetail(err)}`,
+          );
+          if (classified.kind === "transient") {
+            // Infrastructure blip — let the workflow queue retry the run.
+            throw err;
+          }
+          if (classified.kind === "terminal" || classified.kind === "model") {
+            // Genuinely terminal — surface an explanation, end the turn.
+            finalFinishReason = "error";
+            turnError =
+              classified.userMessage ?? errorMessage(err, "The workflow run failed.");
+            break;
+          }
+          if (classified.kind === "abort") {
+            // Client cancelled (or the SDK aborted) — stop, don't re-invoke.
+            finalFinishReason = "interrupted";
+            break;
+          }
+          // timeout (a step was platform-killed / a deadline exceeded) — the
+          // dominant failure mode. Bounded CONTINUATION: rebuild the messages
+          // from the interrupted run's COMPLETED steps — every finished tool
+          // call + its result, then the partial assistant text (segments joined
+          // with a blank line) and the nudge — so the model picks up exactly
+          // where it left off and re-derives nothing.
+          if (++timeoutContinuations > MAX_TIMEOUT_CONTINUATIONS) {
+            finalFinishReason = "interrupted";
+            turnError =
+              "The response was interrupted repeatedly by step timeouts. You can send a new message or click continue to try again.";
+            break;
+          }
+          currentMessages = buildTimeoutContinuation({
+            history: currentMessages,
+            steps: interruptedSteps,
+            partialText: interruptedSteps
+              .map((s) => s.text.trim())
+              .filter(Boolean)
+              .join("\n\n"),
+            nudge: TIMEOUT_CONTINUE_NUDGE,
+          });
+          // The snapshots are now committed into currentMessages — clear them so
+          // a LATER timeout carries only THAT run's completed steps.
+          interruptedSteps = [];
+          // Durable backoff before the re-invocation: `sleep` writes a timer
+          // event into the run's log — it replays correctly and holds no
+          // compute while waiting, unlike an immediate re-invocation that would
+          // ram a still-recovering provider.
+          await sleep(
+            TIMEOUT_BACKOFF_MS[
+              Math.min(timeoutContinuations, TIMEOUT_BACKOFF_MS.length) - 1
+            ],
+          );
+          // Loop back to re-invoke agent.stream() with the continuation.
+          continue;
+        }
+
+        allCognition += extractCognition(result.messages, result.steps);
+        finalMessages = result.messages;
+        finalFinishReason = result.finishReason;
+
+        // This iteration's completed steps are now committed into currentMessages
+        // (via the continuation feed below) — reset the snapshots so a LATER
+        // timeout only carries the partial from THAT failing call, not the whole
+        // turn's earlier output (which would be redundant in the continuation).
+        interruptedSteps = [];
+
+        // Only loop when the model hit the token cap before it was done.
+        if (result.finishReason !== "length") break;
+        if (++continuations >= MAX_CONTINUATIONS) break;
+
+        // Feed the model's output back with a continuation nudge. Strip the
+        // old system message (it's embedded at index 0) and pass the system
+        // prompt fresh so `standardizePrompt` doesn't see a duplicate.
+        currentMessages = [
+          ...result.messages.filter((m) => m.role !== "system"),
+          {
+            role: "user" as const,
+            content:
+              "You were cut off mid-response. Continue exactly where you left off — do not repeat anything you already said.",
+          },
+        ];
+      }
+
+      // ── Sub-agent reports (thinkDeep) — keep the full research in the timeline ──
+      // Extracted ONCE from the final messages (not inside extractCognition, which
+      // runs per continuation over the full message history — that would duplicate
+      // the reports across token-cap continuations).
+      const thinkDeepReports = extractThinkDeepReports(finalMessages);
+      if (thinkDeepReports.length > 0) {
+        allCognition += "\n### Reasoning fragments";
+        for (const { question, answer, reasoning } of thinkDeepReports) {
+          allCognition += `\n\n**Q**: ${question}`;
+          if (answer) allCognition += `\n\n${answer.slice(0, 2000)}`;
+          if (reasoning)
+            allCognition += `\n\n<reasoning>\n${reasoning.slice(0, 1000)}\n</reasoning>`;
+        }
+        allCognition += "\n";
+      }
+
+      // The stored agent turn is ALL assistant text across the turn (intermediate
+      // text + final answer), in order. Tool calls are not preserved — see
+      // extractAllAssistantText.
+      //
+      // `1 + historyWindow.length` skips the system message the SDK
+      // prepends (index 0) plus the slice-aligned history window handed to the
+      // first agent.stream() call — so only THIS run's assistant text is stored,
+      // never the whole conversation (the v0.7 storage-accumulation bug).
+      // Continuations are covered: the final result.messages is
+      // [system, history, ...contN], and slicing at the original window count
+      // captures every continuation's output while excluding prior turns.
+      outcome = {
+        text: extractAllAssistantText(finalMessages, 1 + historyWindow.length),
+        finishReason: finalFinishReason,
+        cognition: allCognition,
+        error: turnError,
+      };
+
+      // v0.8: make a non-stop end visible in the log. Model errors, timeouts and
+      // interruptions otherwise terminate silently — this line records why the
+      // turn ended so the test env can trace it against the detail logs above.
+      if (finalFinishReason !== "stop") {
+        console.error(
+          `[Turn:${input.turnId}][turn] ended=${finalFinishReason} text=${outcome.text.length} chars` +
+            (turnError ? ` error=${turnError.slice(0, 500)}` : ""),
+        );
+      }
     }
   } catch (err) {
     streamError = err;

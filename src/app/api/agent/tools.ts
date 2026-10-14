@@ -741,55 +741,6 @@ export function getChatTools():
   return isClientMode() ? { ...chatTools, delegateTask: delegateTaskTool } : chatTools;
 }
 
-/**
- * The READ-ONLY subset for inner (nested) episode runs (v0.30 §3.3, D8): an
- * inner run only PRODUCES (its answer returns to the outer run by hook) and
- * never persists, so the field's two writes (writeCase / noteForSediment) and
- * the long-task spout (startLongTask) stay OFF — the pen belongs to the outer
- * run's finalize. describeRoom (game view) and the client-mode delegateTask
- * bridge tool are outside the keep list too: the keep list is exhaustive.
- * The pick destructures the single chatTools source so the variants can never
- * drift apart.
- */
-export function getReadonlyChatTools(): Pick<
-  typeof chatTools,
-  | "readSlice"
-  | "readAgentTimeline"
-  | "readPreviously"
-  | "listTree"
-  | "readDoc"
-  | "currentTime"
-  | "webSearch"
-  | "webFetch"
-  | "viewImage"
-  | "thinkDeep"
-> {
-  const {
-    readSlice,
-    readAgentTimeline,
-    readPreviously,
-    listTree,
-    readDoc,
-    currentTime,
-    webSearch,
-    webFetch,
-    viewImage,
-    thinkDeep,
-  } = chatTools;
-  return {
-    readSlice,
-    readAgentTimeline,
-    readPreviously,
-    listTree,
-    readDoc,
-    currentTime,
-    webSearch,
-    webFetch,
-    viewImage,
-    thinkDeep,
-  };
-}
-
 // ─── toolsContext builders ───────────────────────────────────────────────
 
 /** Same serializable chat context, fanned out to every chat tool by name. */
@@ -815,23 +766,5 @@ export function buildChatToolsContext(
   // Keep the context map in lockstep with getChatTools(): a registered tool
   // must never lack its context entry.
   return isClientMode() ? { ...contexts, delegateTask: ctx } : contexts;
-}
-
-/** The read-only variant's context fan-out — same ctx, subset keys. */
-export function buildReadonlyChatToolsContext(
-  ctx: ToolContext,
-): Record<keyof ReturnType<typeof getReadonlyChatTools>, ToolContext> {
-  return {
-    readSlice: ctx,
-    readAgentTimeline: ctx,
-    readPreviously: ctx,
-    listTree: ctx,
-    readDoc: ctx,
-    currentTime: ctx,
-    webSearch: ctx,
-    webFetch: ctx,
-    viewImage: ctx,
-    thinkDeep: ctx,
-  };
 }
 

@@ -124,22 +124,26 @@ export interface NestedBubbleItem {
 /**
  * The merge view (§4.3): interleave the episode's side-store bubbles into the
  * live items — each bubble seats directly after the live USER message whose
- * id it replied to (`frame.replyTo`); several bubbles on one message sort by
- * `doneAt` (in-flight frames settle last). A bubble whose anchor is gone (a
- * regenerate truncated the message) drops out of the view rather than
- * rendering unmoored — the answer itself is on disk.
+ * id it answered. The anchor is `frame.anchorId ?? frame.replyTo` (v0.31):
+ * mid-episode arrivals carry client-minted turnIds, so replyTo IS the message
+ * id; the episode's FIRST message has a server-minted turnId the client never
+ * saw, so its frames carry the client's own id as anchorId. Several bubbles
+ * on one message sort by `doneAt` (in-flight frames settle last). A bubble
+ * whose anchor is gone (a regenerate truncated the message) drops out of the
+ * view rather than rendering unmoored — the answer itself is on disk.
  */
 export function interleaveNestedBubbles(
   live: readonly LiveStreamItem[],
   bubbles: ReadonlyMap<string, NestedBubbleFrame>,
 ): (LiveStreamItem | NestedBubbleItem)[] {
   if (bubbles.size === 0) return [...live];
-  // replyTo → frames, ordered: terminal by doneAt first, then in-flight.
+  // anchor → frames, ordered: terminal by doneAt first, then in-flight.
   const byAnchor = new Map<string, NestedBubbleFrame[]>();
   for (const frame of bubbles.values()) {
-    const list = byAnchor.get(frame.replyTo) ?? [];
+    const anchor = frame.anchorId ?? frame.replyTo;
+    const list = byAnchor.get(anchor) ?? [];
     list.push(frame);
-    byAnchor.set(frame.replyTo, list);
+    byAnchor.set(anchor, list);
   }
   for (const list of byAnchor.values()) {
     // Terminal frames by doneAt; in-flight ones (no doneAt yet) settle after,

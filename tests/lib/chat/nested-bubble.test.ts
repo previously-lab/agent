@@ -44,6 +44,33 @@ describe("normalizeNestedBubble — the E→client lifecycle frame", () => {
     ).toEqual({ replyTo: "u1", turnId: "nu1", status: "queued" });
   });
 
+  it("carries runId and anchorId when present (v0.31), drops empty strings", () => {
+    expect(
+      normalizeNestedBubble({
+        replyTo: "u1",
+        turnId: "nu1",
+        status: "running",
+        runId: "run-child-1",
+        anchorId: "msg-client-1",
+      }),
+    ).toEqual({
+      replyTo: "u1",
+      turnId: "nu1",
+      status: "running",
+      runId: "run-child-1",
+      anchorId: "msg-client-1",
+    });
+    expect(
+      normalizeNestedBubble({
+        replyTo: "u1",
+        turnId: "nu1",
+        status: "queued",
+        runId: "",
+        anchorId: "",
+      }),
+    ).toEqual({ replyTo: "u1", turnId: "nu1", status: "queued" });
+  });
+
   it("degrades malformed input to null, never throws", () => {
     expect(normalizeNestedBubble(null)).toBeNull();
     expect(normalizeNestedBubble(undefined)).toBeNull();
