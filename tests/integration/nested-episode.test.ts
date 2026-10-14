@@ -279,7 +279,11 @@ beforeEach(() => {
   h.silentInner.clear();
 });
 
-describe("v0.31 orchestrator shell — E spawns one child per message, never answers itself", () => {
+// TEMP (2026-10-14): nested-episode answering is hard-OFF in
+// turn-workflow.ts (episodeEnabled = false) — this suite drives the episode
+// branch, so it is skipped until the architecture is reworked and the branch
+// is re-enabled. Restore by removing `.skip`.
+describe.skip("v0.31 orchestrator shell — E spawns one child per message, never answers itself", () => {
   it("first message + two arrivals → three child runs, one merge, finalize lands ONE tail", async () => {
     h.streamAnswers.push("merged closing");
     // The drain's first disk read sees the two arrivals; every re-read after
