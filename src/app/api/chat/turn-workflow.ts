@@ -982,7 +982,17 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // the drain's disk reconciliation (readEpisodeInbox) picks it up (D2).
   // Bridge/demo turns never nest (D10): no hook, no drain — byte-identical
   // to the pre-episode turn.
-  const episodeEnabled = !input.useDemo && input.modelConfig.sdk !== "bridge";
+  // TEMP kill switch (2026-10-14): nested-episode answering OFF in production.
+  // The child-run report channel plus the platform's lost-wake exposure left
+  // turns "running" after the answer landed (a turn parked ~90s in
+  // grace/finalize; an hqRun sat 1h+ on a lost timer wake). Classic single-run
+  // answering — the branch below, byte-identical to bridge/demo turns — serves
+  // every turn until the episode architecture is reworked (sub-agent steps or
+  // close-stream-at-settle). Set PREVIOUSLY_EPISODES=off in the deployment
+  // env; delete the variable to restore episodes.
+  const episodesOff = process.env.PREVIOUSLY_EPISODES === "off";
+  const episodeEnabled =
+    !episodesOff && !input.useDemo && input.modelConfig.sdk !== "bridge";
   const episodeRunId = episodeEnabled ? await ownRunId() : "";
   const inboxHook = episodeEnabled
     ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
