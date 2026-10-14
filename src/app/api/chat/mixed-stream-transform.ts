@@ -14,6 +14,7 @@
 
 import { toUIMessageChunk } from "@ai-sdk/workflow";
 import type { UIMessageChunk } from "ai";
+import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
 
 /**
  * Chunks OUR code writes into the run stream — the only chunks allowed to
@@ -24,6 +25,10 @@ import type { UIMessageChunk } from "ai";
  *
  * Everything else must go through `toUIMessageChunk()`. The `finish` type is
  * ambiguous (ours vs. raw model finish part), so it's discriminated by shape.
+ *
+ * A chunk type missing HERE is dead on both the POST path and the reconnect
+ * path at once (toUIMessageChunk drops it silently) — v0.33's summary chunk
+ * shipped exactly that way, so add the constant, never the string.
  */
 const OUR_CHUNK_TYPES = new Set([
   "start",
@@ -39,6 +44,8 @@ const OUR_CHUNK_TYPES = new Set([
   // v0.30 §4.2 — the episode's nested-bubble lifecycle frames (transient:
   // they feed the client's side store via onData, never UIMessage parts).
   "data-nested-bubble",
+  // v0.33 §3 — the batch summary's runId on the last finisher's stream.
+  PARALLEL_SUMMARY_CHUNK,
 ]);
 
 function isOurs(c: Record<string, unknown>, chunkType: string): boolean {

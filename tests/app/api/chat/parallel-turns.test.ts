@@ -22,6 +22,7 @@ import {
   isLiveRunStatus,
   isParallelTurnRun,
   isBlockingParallelSibling,
+  hasOverlappingParallelSibling,
   isLiveParallelSummary,
   buildParallelNoteSection,
   buildSummaryWindow,
@@ -177,6 +178,90 @@ describe("isLiveParallelSummary — the double-fire absorber", () => {
         OWN,
       ),
     ).toBe(false);
+  });
+});
+
+describe("hasOverlappingParallelSibling — the burst gate", () => {
+  const T0 = Date.parse("2026-10-14T18:00:00.000Z");
+  const at = (ms: number) => new Date(ms).toISOString();
+  const timed = (
+    runId: string,
+    status: string,
+    createdMs: number,
+    completedMs: number | null,
+    attributes?: Record<string, string> | null,
+  ): ParallelRunEntry => ({
+    runId,
+    status,
+    createdAt: at(createdMs),
+    completedAt: completedMs == null ? null : at(completedMs),
+    attributes: attributes ?? null,
+  });
+  // Me: created at T0, tail-checking at NOW — my lifetime is [T0, NOW].
+  const NOW = T0 + 10_000;
+  const me = () => timed(OWN, "running", T0, null, { slice: SLICE, turn: "me" });
+
+  it("a solo turn (no other runs at all) does not fire", () => {
+    expect(hasOverlappingParallelSibling([me()], SLICE, OWN, NOW)).toBe(false);
+  });
+
+  it("a SEQUENTIAL pair does not overlap — the earlier run finished before I was created", () => {
+    const earlier = timed("wrun_a", "completed", T0 - 9_000, T0 - 1_000, {
+      slice: SLICE,
+      turn: "t0",
+    });
+    expect(hasOverlappingParallelSibling([me(), earlier], SLICE, OWN, NOW)).toBe(
+      false,
+    );
+  });
+
+  it("a sibling created after me that already completed overlaps by construction", () => {
+    const later = timed("wrun_b", "completed", T0 + 2_000, T0 + 6_000, {
+      slice: SLICE,
+      turn: "t2",
+    });
+    expect(hasOverlappingParallelSibling([me(), later], SLICE, OWN, NOW)).toBe(true);
+  });
+
+  it("a sibling created before me that outlived my arrival overlaps", () => {
+    const earlier = timed("wrun_a", "completed", T0 - 5_000, T0 + 3_000, {
+      slice: SLICE,
+      turn: "t1",
+    });
+    expect(hasOverlappingParallelSibling([me(), earlier], SLICE, OWN, NOW)).toBe(
+      true,
+    );
+  });
+
+  it("a failed sibling still counts — the burst happened even though it errored", () => {
+    const failed = timed("wrun_b", "failed", T0 + 1_000, T0 + 4_000, {
+      slice: SLICE,
+      turn: "t2",
+    });
+    expect(hasOverlappingParallelSibling([me(), failed], SLICE, OWN, NOW)).toBe(true);
+  });
+
+  it("other slices, summary runs and attribute-less runs never count", () => {
+    const otherSlice = timed("wrun_x", "completed", T0 + 1_000, T0 + 5_000, {
+      slice: "other",
+      turn: "t9",
+    });
+    const summary = timed("wrun_s", "completed", T0 + 1_000, T0 + 5_000, {
+      slice: SLICE,
+      role: "summary",
+    });
+    const plain = timed("wrun_p", "completed", T0 + 1_000, T0 + 5_000);
+    expect(
+      hasOverlappingParallelSibling([me(), otherSlice, summary, plain], SLICE, OWN, NOW),
+    ).toBe(false);
+  });
+
+  it("a registry hiccup (my own entry missing from the page) degrades to silence", () => {
+    const later = timed("wrun_b", "completed", T0 + 2_000, T0 + 6_000, {
+      slice: SLICE,
+      turn: "t2",
+    });
+    expect(hasOverlappingParallelSibling([later], SLICE, OWN, NOW)).toBe(false);
   });
 });
 

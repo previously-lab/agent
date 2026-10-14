@@ -28,12 +28,20 @@ export const PARALLEL_SUMMARY_CHUNK = "data-parallel-summary";
 export interface ParallelRunEntry {
   runId: string;
   status: string;
+  createdAt?: Date | string | null;
+  completedAt?: Date | string | null;
   attributes?: Record<string, string> | null;
 }
 
 /** A run that still has work ahead of it (the local world's live statuses). */
 export function isLiveRunStatus(status: string): boolean {
   return status === "pending" || status === "running";
+}
+
+function toEpochMs(v: Date | string | null | undefined): number | null {
+  if (v == null) return null;
+  const ms = v instanceof Date ? v.getTime() : Date.parse(v);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 /**
@@ -69,6 +77,39 @@ export function isBlockingParallelSibling(
   if (!isLiveRunStatus(run.status)) return false;
   if (!isParallelTurnRun(run, sliceId)) return false;
   return run.attributes?.phase !== "tail";
+}
+
+/**
+ * Was I ever part of a parallel BURST? True when another same-slice turn
+ * run's lifetime overlapped mine: it was created before my tail check AND
+ * (still live OR completed after I was created). This is the summary's
+ * existence gate — without it every SOLO turn would spawn a closing run
+ * (observed in the phase-3 real-machine test: four single sends, four
+ * summaries, one extra model call each). Two sequential sends do NOT
+ * overlap (the second is created after the first completed) and correctly
+ * get no summary; a failed/cancelled sibling still counts — the burst
+ * happened even if one answer errored. A live sibling always overlaps, but
+ * the blocking check upstream has already yielded to it by the time this
+ * runs.
+ */
+export function hasOverlappingParallelSibling(
+  runs: ParallelRunEntry[],
+  sliceId: string,
+  ownRunId: string,
+  nowMs: number,
+): boolean {
+  const ownCreated = toEpochMs(
+    runs.find((r) => r.runId === ownRunId)?.createdAt,
+  );
+  if (ownCreated == null) return false; // registry hiccup — degrade to silence
+  return runs.some((r) => {
+    if (r.runId === ownRunId) return false;
+    if (!isParallelTurnRun(r, sliceId)) return false;
+    const created = toEpochMs(r.createdAt);
+    if (created == null || created >= nowMs) return false;
+    const completed = toEpochMs(r.completedAt);
+    return completed == null || completed > ownCreated;
+  });
 }
 
 /**

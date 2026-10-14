@@ -143,8 +143,10 @@ import {
 } from "@/lib/chat/nested-bubble";
 import {
   PARALLEL_SUMMARY_CHUNK,
+  hasOverlappingParallelSibling,
   isBlockingParallelSibling,
   isLiveParallelSummary,
+  isLiveRunStatus,
   type ParallelRunEntry,
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
@@ -2079,32 +2081,33 @@ export async function pollInnerRunReports(
 // ─── Parallel turns steps (v0.33 — 连发并行: registry + batch summary) ─────
 
 /**
- * The live half of the run registry (pending + running) as plain predicate
- * input. The local world's `runs.list` supports the (undocumented) status
- * filter — spike-verified (world-local 5.0.0-beta.44) — so each live status
- * is one query, and entities carry attributes even under `resolveData:
- * "none"`. Step-context only (getWorld needs the runtime).
+ * The run registry as plain predicate input — one unfiltered page (no status
+ * filter returns every run, newest first — the dev-spike GET's shape, verified
+ * against world-local 5.0.0-beta.44). Entities carry attributes AND
+ * createdAt/completedAt even under `resolveData: "none"`. Step-context only
+ * (getWorld needs the runtime). The tail's burst gate needs TERMINAL siblings
+ * too, not just live ones — a completed sibling is what proves the burst.
  */
-async function listLiveRuns(): Promise<ParallelRunEntry[]> {
+async function listRegistryRuns(): Promise<ParallelRunEntry[]> {
   const world = await getWorld();
-  const out: ParallelRunEntry[] = [];
-  for (const status of ["running", "pending"] as const) {
-    const page = await world.runs.list({
-      status,
-      pagination: { limit: 100 },
-      resolveData: "none",
-    } as Parameters<typeof world.runs.list>[0]);
-    for (const r of page.data) {
-      out.push({
-        runId: r.runId,
-        status: r.status,
-        attributes:
-          (r as { attributes?: Record<string, string> | null }).attributes ??
-          null,
-      });
-    }
-  }
-  return out;
+  const page = await world.runs.list({
+    pagination: { limit: 100 },
+    resolveData: "none",
+  } as Parameters<typeof world.runs.list>[0]);
+  return page.data.map((r) => ({
+    runId: r.runId,
+    status: r.status,
+    createdAt: r.createdAt ?? null,
+    completedAt: r.completedAt ?? null,
+    attributes:
+      (r as { attributes?: Record<string, string> | null }).attributes ?? null,
+  }));
+}
+
+/** Live half of the registry (pending + running) — the housekeeping sibling
+ *  count and the summary dedupe only ever care about those. */
+async function listLiveRuns(): Promise<ParallelRunEntry[]> {
+  return (await listRegistryRuns()).filter((r) => isLiveRunStatus(r.status));
 }
 
 /**
@@ -2117,8 +2120,10 @@ async function listLiveRuns(): Promise<ParallelRunEntry[]> {
  * Order inside: stamp THIS run `phase: "tail"` FIRST — a sibling checking
  * right now then yields instead of mutual-skipping (the window where both
  * see each other as running and nobody fires) — then count. No blocking
- * sibling and no live summary for the slice → start the summary run, its
- * `role: "summary"` seed visible at creation (the double-fire absorber).
+ * sibling, no live summary for the slice, AND at least one OVERLAPPING
+ * sibling (the burst gate — a solo turn never spawns a summary) → start the
+ * summary run, its `role: "summary"` seed visible at creation (the
+ * double-fire absorber).
  *
  * Never throws and never blocks the turn: a registry hiccup or a start
  * failure degrades to "no summary" — every answer is on disk either way.
@@ -2132,11 +2137,18 @@ export async function startSummaryIfLastTurn(
   try {
     await setAttributes({ phase: "tail" });
     const ownId = getWorkflowMetadata().workflowRunId;
-    const live = await listLiveRuns();
-    if (live.some((r) => isBlockingParallelSibling(r, sliceId, ownId))) {
+    const runs = await listRegistryRuns();
+    if (runs.some((r) => isBlockingParallelSibling(r, sliceId, ownId))) {
       return null;
     }
-    if (live.some((r) => isLiveParallelSummary(r, sliceId, ownId))) {
+    if (runs.some((r) => isLiveParallelSummary(r, sliceId, ownId))) {
+      return null;
+    }
+    // The burst gate: only a turn that truly RAN ALONGSIDE a sibling closes
+    // the batch. A solo turn — the common case — has no overlapping sibling
+    // and must not spend a summary run (one extra model call) on itself;
+    // two SEQUENTIAL sends never overlap either and get no summary.
+    if (!hasOverlappingParallelSibling(runs, sliceId, ownId, Date.now())) {
       return null;
     }
     // Dynamic import: steps.ts → summary-workflow.ts → steps.ts is a static

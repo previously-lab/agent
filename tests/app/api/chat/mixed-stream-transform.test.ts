@@ -135,6 +135,22 @@ describe("createMixedStreamTransform", () => {
     expect(await through(chunks)).toEqual(chunks);
   });
 
+  it("passes the batch-summary spawn chunk through unchanged (v0.33 §3)", async () => {
+    // Regression: the chunk shipped WITHOUT this allowlist entry and was
+    // silently dropped on both the POST and reconnect paths — the summary
+    // lane could never mount. It rides the last finisher's stream to the
+    // client's onData / lane readers only, never UIMessage parts.
+    const chunks = [
+      {
+        type: "data-parallel-summary",
+        id: "parallel-summary-2026-10-14-1913",
+        transient: true,
+        data: { runId: "wrun_summary", sliceId: "2026-10-14-1913" },
+      },
+    ];
+    expect(await through(chunks)).toEqual(chunks);
+  });
+
   it("drops a raw model finish part (our steps own the finish chunk)", async () => {
     const out = await through([
       { type: "finish", finishReason: "stop", usage: { totalTokens: 3 } },
