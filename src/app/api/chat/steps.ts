@@ -49,7 +49,7 @@
  */
 import { type UIMessageChunk, type ModelMessage } from "ai";
 import { getWritable, getWorkflowMetadata } from "workflow";
-import { resumeHook } from "workflow/api";
+import { getRun, resumeHook } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 import {
   createSlice,
@@ -129,6 +129,7 @@ import type {
   TurnOutcome,
   EvolutionResult,
   NestedTurnTail,
+  InnerTurnReport,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
 import {
@@ -1965,4 +1966,76 @@ export async function reportInnerBubble(
     }
     throw e;
   }
+}
+
+/**
+ * One in-flight child run's registry state, as the drain's reconciliation
+ * sees it (v0.32): "inflight" (still pending/running — or unreadable: a
+ * transient registry error must not fail an instance, the watchdog bounds
+ * those), "done" (completed, carrying the child's returned report), or
+ * "failed" (terminal — failed/cancelled — or completed with an unusable
+ * report).
+ */
+export type InnerRunPoll =
+  | { runId: string; state: "inflight" }
+  | { runId: string; state: "done"; report: InnerTurnReport }
+  | { runId: string; state: "failed" };
+
+/**
+ * The drain's registry reconciliation (v0.32 — D2 applied to REPORTS): the
+ * inbox hook is only a wake-up tap, and production showed the tap
+ * unreliable as a wake mechanism (a child's report sat undelivered until the
+ * drain's 60s sleep boundary). The run registry is the queue of record: each
+ * busy lap polls every in-flight child's status; a completed run's report is
+ * its RETURN VALUE (innerTurnWorkflow returns what reportInnerBubble taps),
+ * read exactly once — status is terminal by then, so returnValue's
+ * long-poll resolves on the first read. Per-row errors degrade to
+ * "inflight", never throw: the drain must not die for a registry blip.
+ */
+export async function pollInnerRunReports(
+  runIds: string[],
+): Promise<InnerRunPoll[]> {
+  "use step";
+  return Promise.all(
+    runIds.map(async (runId): Promise<InnerRunPoll> => {
+      try {
+        const run = getRun<InnerTurnReport>(runId);
+        const status = await run.status;
+        if (status === "completed") {
+          const rv = await run.returnValue;
+          if (
+            rv &&
+            typeof rv === "object" &&
+            typeof rv.turnId === "string" &&
+            typeof rv.replyTo === "string" &&
+            typeof rv.text === "string" &&
+            typeof rv.finishReason === "string"
+          ) {
+            return {
+              runId,
+              state: "done",
+              report: {
+                turnId: rv.turnId,
+                replyTo: rv.replyTo,
+                text: rv.text,
+                finishReason: rv.finishReason,
+              },
+            };
+          }
+          // Completed without a usable report — an honest failure.
+          return { runId, state: "failed" };
+        }
+        if (status === "failed" || status === "cancelled") {
+          return { runId, state: "failed" };
+        }
+        return { runId, state: "inflight" };
+      } catch (err) {
+        console.warn(
+          `[Episode] child run ${runId} poll failed (treated as in-flight):`,
+          err instanceof Error ? err.message : err,
+        );
+        return { runId, state: "inflight" };
+      }
+    }),
+  );
 }

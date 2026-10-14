@@ -332,6 +332,27 @@ export interface InnerTurnInput {
 }
 
 /**
+ * The child run's terminal report (v0.32). Carried on TWO channels:
+ *  1. the inbox hook tap (reportInnerBubble) — low latency when it works;
+ *  2. the child workflow's RETURN VALUE — the durable channel the
+ *     orchestrator's drain reconciles from (pollInnerRunReports). Production
+ *     showed the hook tap unreliable as a wake mechanism (a report sat in the
+ *     event log until the drain's 60s sleep boundary), so the registry, like
+ *     the disk for arrivals (D1/D2), is the queue of record.
+ * Must stay JSON-serializable (it is a workflow return value).
+ */
+export interface InnerTurnReport {
+  /** The inner instance's own id (= the bubble frame's turnId). */
+  turnId: string;
+  /** The user turn the instance answered. */
+  replyTo: string;
+  /** The full answer text ("" on failure). */
+  text: string;
+  /** Mirrors the agent stream's finishReason ("stop" clean, "error" failed). */
+  finishReason: string;
+}
+
+/**
  * The episode tail handed to finalizeTurn (v0.30 §3.4, D7): every terminal
  * inner bubble plus the outer agent's merged summary, riding the SAME batch
  * and single commit as the outer agent turn. Absent entirely on a

@@ -22,6 +22,11 @@
  * marked failed there; a child that regains control always reports, even on
  * failure.
  *
+ * The report rides TWO channels (v0.32): the inbox hook tap (fast path) AND
+ * the run's return value (the channel of record — the orchestrator's drain
+ * reconciles terminal runs from the registry every busy lap, so a lost or
+ * undelivered hook wake costs one short tick, never the episode).
+ *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */
 import { isStepCount, type ModelMessage } from "ai";
@@ -29,7 +34,7 @@ import { getWritable } from "workflow";
 import type { ModelCallStreamPart } from "@ai-sdk/workflow";
 import { createChatAgent } from "@/app/api/agent/agent";
 import { buildChatToolsContext } from "@/app/api/agent/tools";
-import type { InnerTurnInput } from "@/lib/chat/turn-types";
+import type { InnerTurnInput, InnerTurnReport } from "@/lib/chat/turn-types";
 import { closeChildStream, reportInnerBubble } from "./steps";
 
 /**
@@ -67,7 +72,9 @@ function extractChildAnswer(
   return parts.join("\n\n");
 }
 
-export async function innerTurnWorkflow(input: InnerTurnInput): Promise<void> {
+export async function innerTurnWorkflow(
+  input: InnerTurnInput,
+): Promise<InnerTurnReport> {
   "use workflow";
 
   const agent = createChatAgent({
@@ -109,11 +116,15 @@ export async function innerTurnWorkflow(input: InnerTurnInput): Promise<void> {
   // settles on the finish chunk; the orchestrator's done frame carries the
   // settled text for history/replay.
   await closeChildStream();
-  await reportInnerBubble(input.inboxToken, {
-    kind: "bubble",
+  const report: InnerTurnReport = {
     turnId: input.turnId,
     replyTo: input.replyTo,
     text,
     finishReason,
-  });
+  };
+  await reportInnerBubble(input.inboxToken, { kind: "bubble", ...report });
+  // The return value is the report's channel of record (v0.32): the
+  // orchestrator's registry poll folds it in even when the hook tap above
+  // never wakes the drain.
+  return report;
 }

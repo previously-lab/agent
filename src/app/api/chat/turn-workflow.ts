@@ -9,8 +9,10 @@
  * The agent loop runs in TWO shapes (v0.31): on episode-capable deployments
  * the outer run is a pure ORCHESTRATOR SHELL — it spawns one child run per
  * user message (inner-turn-workflow.ts, each a full WorkflowAgent with its own
- * durable stream), watches the inbox hook, and persists everything at
- * finalize; the only model call it makes itself is the closing merge summary.
+ * durable stream), watches the inbox hook, reconciles child reports from the
+ * run registry every busy lap (v0.32 — the hook is only a wake-up tap), and
+ * persists everything at finalize; the only model call it makes itself is the
+ * closing merge summary.
  * Bridge/demo turns keep the classic shape: the outer run IS the answerer and
  * its Pro agent loop runs HERE, in the workflow body, via WorkflowAgent
  * (AI SDK 7 `@ai-sdk/workflow`): each LLM call and each tool call becomes its
@@ -70,6 +72,7 @@ import {
   episodeClockMs,
   readEpisodeInbox,
   emitNestedBubble,
+  pollInnerRunReports,
 } from "./steps";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
@@ -82,6 +85,16 @@ import {
  * never packs up with work in flight.
  */
 const EPISODE_GRACE_MS = 60_000;
+
+/**
+ * Busy-lap re-tick (v0.32): while a child run is in flight the drain re-checks
+ * on this cadence instead of the idle grace. The inbox hook is only a wake-up
+ * tap and production showed it unreliable (a child's report sat undelivered
+ * until the 60s boundary — the episode looked dead); with the registry poll
+ * folding reports in every lap, this tick bounds how late a missed tap can
+ * make an answer. Arrivals ride the same lap (the disk is their queue, D2).
+ */
+const BUSY_TICK_MS = 8_000;
 
 /**
  * 看门狗 (v0.31): a child run that never reports back (platform kill mid-step —
@@ -1306,6 +1319,30 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
         if (bubbles.length === 0 && !mergeSummary) return undefined;
         return { bubbles, ...(mergeSummary ? { mergeSummary } : {}) };
       };
+      /**
+       * Fold a terminal report into the row and say it on the wire — ONE path
+       * for both report channels (v0.32: the hook bubble and the registry
+       * poll). A row already settled by the other channel is left alone, so a
+       * duplicate report is a no-op.
+       */
+      const settleInstance = async (
+        row: InstanceRow,
+        text: string,
+        finishReason: string,
+      ): Promise<void> => {
+        if (row.status !== "queued" && row.status !== "running") return;
+        row.status = text ? "done" : "failed";
+        row.finishReason = finishReason;
+        if (text) row.text = text;
+        await emitNestedBubble({
+          replyTo: row.replyTo,
+          turnId: row.turnId,
+          status: row.status,
+          ...(row.runId ? { runId: row.runId } : {}),
+          ...(row.anchorId ? { anchorId: row.anchorId } : {}),
+          ...(text ? { text } : {}),
+        });
+      };
       try {
         const iterator = inboxHook[Symbol.asyncIterator]();
         // THE wait-discipline fix (v0.31): exactly ONE pending next() for the
@@ -1465,20 +1502,61 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
               }
             }
 
+            // 回报对账 (v0.32 — D2 applied to REPORTS): the registry is the
+            // report queue of record. The hook is only a wake-up tap, and
+            // production showed the tap unreliable as a wake mechanism (a
+            // child's report sat undelivered until the 60s sleep boundary —
+            // the episode looked dead although the child had completed).
+            // Every busy lap folds each terminal child's RETURN VALUE in
+            // through the same settle path the hook bubble uses.
+            const inFlight = [...instances.values()].filter(
+              (i) => (i.status === "queued" || i.status === "running") && i.runId,
+            );
+            if (inFlight.length > 0) {
+              const polls = await pollInnerRunReports(
+                inFlight.map((i) => i.runId as string),
+              );
+              for (const poll of polls) {
+                if (poll.state === "inflight") continue;
+                const row = inFlight.find((i) => i.runId === poll.runId);
+                if (!row) continue;
+                if (
+                  poll.state === "done" &&
+                  poll.report.turnId === row.turnId &&
+                  poll.report.replyTo === row.replyTo
+                ) {
+                  await settleInstance(
+                    row,
+                    poll.report.text,
+                    poll.report.finishReason,
+                  );
+                } else {
+                  // Terminal without a usable report (failed/cancelled run, or
+                  // a report that doesn't name this instance) — fail loudly.
+                  await settleInstance(row, "", "error");
+                }
+              }
+            }
+
             const busy = [...instances.values()].some(
               (i) => i.status === "queued" || i.status === "running",
             );
-            // The hq-run-shaped wait: next inbox event vs the idle grace.
-            // Whatever loses this race is never re-armed — pendingNext stays
-            // THE pending wait into the next lap (the fix above); the sleep
-            // is one-shot and a fresh one is created next lap.
+            // The hq-run-shaped wait: next inbox event vs the re-tick. A BUSY
+            // episode ticks fast (the registry poll above is then the report
+            // channel that actually settles rows — the hook tap only wakes);
+            // an idle one waits out the full grace (R4). Whatever loses this
+            // race is never re-armed — pendingNext stays THE pending wait
+            // into the next lap (the fix above); the sleep is one-shot and a
+            // fresh one is created next lap.
             const next = await Promise.race<
               EpisodeInboxEvent | "idle" | "done"
             >([
               pendingNext.then((r): EpisodeInboxEvent | "done" =>
                 r.done ? "done" : r.value,
               ),
-              sleep(EPISODE_GRACE_MS).then((): "idle" => "idle"),
+              sleep(busy ? BUSY_TICK_MS : EPISODE_GRACE_MS).then(
+                (): "idle" => "idle",
+              ),
             ]);
             if (next === "done") break;
             if (next === "idle") {
@@ -1507,26 +1585,13 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
             if (!ev) continue;
             if (ev.kind === "bubble") {
               const row = instances.get(ev.replyTo);
-              if (
-                row &&
-                row.turnId === ev.turnId &&
-                (row.status === "queued" || row.status === "running")
-              ) {
-                row.status = ev.text ? "done" : "failed";
-                row.finishReason = ev.finishReason;
-                if (ev.text) row.text = ev.text;
-                await emitNestedBubble({
-                  replyTo: ev.replyTo,
-                  turnId: ev.turnId,
-                  status: row.status,
-                  ...(row.runId ? { runId: row.runId } : {}),
-                  ...(row.anchorId ? { anchorId: row.anchorId } : {}),
-                  ...(ev.text ? { text: ev.text } : {}),
-                });
+              if (row && row.turnId === ev.turnId) {
+                await settleInstance(row, ev.text, ev.finishReason);
               }
               // A duplicate/unknown bubble is ignored — the loop only exits
               // idle when nothing is in flight, so a late report cannot race
-              // a disposed hook.
+              // a disposed hook. A bubble for a row the registry poll already
+              // settled is a no-op inside settleInstance.
             }
             // "arrived" needs no handling here: the disk is the queue and the
             // loop-top re-read spawns whatever landed.

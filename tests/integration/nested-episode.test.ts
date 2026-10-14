@@ -62,6 +62,13 @@ const h = vi.hoisted(() => {
     silentInner: new Set<string>(),
     /** episodeClockMs script: shifted per call; real Date.now() when empty. */
     clockValues: [] as number[],
+    /** pollInnerRunReports script: shifted per call; default = every polled
+     *  child still in flight (the hook path then drives the drain). Push
+     *  `undefined` to spend one lap on the default. */
+    pollScripts: [] as Array<
+      | undefined
+      | Array<{ runId: string; state: "inflight" | "done" | "failed"; report?: unknown }>
+    >,
     closeStream: vi.fn(async () => {}),
     ring: vi.fn(async () => {}),
   };
@@ -178,6 +185,11 @@ vi.mock("@/app/api/chat/steps", () => ({
     if (err) throw new Error(err);
     return h.inboxReads.shift() ?? [];
   }),
+  pollInnerRunReports: vi.fn(async (runIds: string[]) => {
+    const scripted = h.pollScripts.shift();
+    if (scripted) return scripted;
+    return runIds.map((runId) => ({ runId, state: "inflight" as const }));
+  }),
   emitNestedBubble: vi.fn(async (frame: NestedBubbleFrame) => {
     h.frames.push(frame);
   }),
@@ -262,6 +274,7 @@ beforeEach(() => {
   h.inboxReads.length = 0;
   h.inboxReadErrors.length = 0;
   h.clockValues.length = 0;
+  h.pollScripts.length = 0;
   h.failInner.clear();
   h.silentInner.clear();
 });
@@ -471,5 +484,73 @@ describe("v0.31 orchestrator shell — E spawns one child per message, never ans
     ]);
     expect(h.closeStream).toHaveBeenCalledTimes(1);
     expect(h.ring).toHaveBeenCalledTimes(1);
+  });
+
+  it("注册表回收: the hook tap never delivers — the registry poll still settles the child (v0.32)", async () => {
+    // The production deadlock: the child's report sat in the event log
+    // undelivered until a sleep boundary. Here the hook never fires at all —
+    // the drain must settle the instance from the run's RETURN VALUE.
+    h.silentInner.add("nt-main");
+    // Lap 1 polls right after the spawn (still in flight); lap 2 finds the
+    // run completed and folds its return value in.
+    h.pollScripts.push(undefined); // lap 1: default (inflight)
+    h.pollScripts.push([
+      {
+        runId: "inner-nt-main",
+        state: "done",
+        report: {
+          turnId: "nt-main",
+          replyTo: "t-main",
+          text: "answer via registry",
+          finishReason: "stop",
+        },
+      },
+    ]);
+
+    await turnWorkflow(makeInput());
+
+    expect(h.frames.map((f) => `${f.status}:${f.turnId}`)).toEqual([
+      "queued:nt-main",
+      "running:nt-main",
+      "done:nt-main",
+    ]);
+    expect(h.frames[2]).toMatchObject({
+      replyTo: "t-main",
+      text: "answer via registry",
+      runId: "inner-nt-main",
+    });
+    expect(h.streamCalls).toHaveLength(0); // single clean instance — no merge
+    const { nested } = h.finalizeCalls[0];
+    expect(nested?.bubbles).toEqual([
+      {
+        turnId: "nt-main",
+        replyTo: "t-main",
+        text: "answer via registry",
+        finishReason: "stop",
+      },
+    ]);
+  });
+
+  it("注册表回收: a terminally FAILED child run fails the instance loudly (no waiting for the watchdog)", async () => {
+    h.streamAnswers.push("closing notes the failure");
+    h.silentInner.add("nt-main");
+    h.pollScripts.push([{ runId: "inner-nt-main", state: "failed" }]);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await turnWorkflow(makeInput());
+    } finally {
+      errSpy.mockRestore();
+    }
+
+    expect(h.frames.map((f) => `${f.status}:${f.turnId}`)).toEqual([
+      "queued:nt-main",
+      "running:nt-main",
+      "failed:nt-main",
+    ]);
+    const { nested } = h.finalizeCalls[0];
+    expect(nested?.bubbles).toEqual([
+      { turnId: "nt-main", replyTo: "t-main", text: "", finishReason: "error" },
+    ]);
+    expect(nested?.mergeSummary).toBe("closing notes the failure");
   });
 });
