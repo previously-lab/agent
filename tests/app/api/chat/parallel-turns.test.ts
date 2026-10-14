@@ -11,7 +11,9 @@
  *    blocks, and a `phase: "tail"` sibling yields (its reply is already on
  *    disk — treating it as blocking would create the mutual-skip window
  *    where nobody fires the summary);
- *  - the summary's opening dedupe sees only LIVE summaries for the slice;
+ *  - the summary's opening dedupe sees only LIVE summaries for the slice,
+ *    and yields only to an OLDER one (the double-fire tiebreak — a bare
+ *    "any live sibling exits" check kills both racers);
  *  - buildParallelNoteSection: null without siblings, a fenced block
  *    otherwise (never user speech, never an instruction);
  *  - buildSummaryWindow: the slice's trailing turns as a numbered script,
@@ -24,6 +26,7 @@ import {
   isBlockingParallelSibling,
   hasOverlappingParallelSibling,
   isLiveParallelSummary,
+  shouldYieldToLiveSummary,
   buildParallelNoteSection,
   buildSummaryWindow,
   type ParallelRunEntry,
@@ -178,6 +181,73 @@ describe("isLiveParallelSummary — the double-fire absorber", () => {
         OWN,
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldYieldToLiveSummary — the double-fire tiebreak", () => {
+  const T0 = Date.parse("2026-10-14T18:00:00.000Z");
+  const summaryAt = (runId: string, createdMs: number | null): ParallelRunEntry => ({
+    runId,
+    status: "running",
+    createdAt: createdMs == null ? null : new Date(createdMs).toISOString(),
+    attributes: { slice: SLICE, role: "summary" },
+  });
+
+  it("two live summaries 62ms apart: exactly one survives (the mutual-kill regression)", () => {
+    const older = summaryAt("wrun_older", T0);
+    const younger = summaryAt("wrun_younger", T0 + 62);
+    // The younger yields to the older…
+    expect(
+      shouldYieldToLiveSummary(older, SLICE, younger.runId, younger.createdAt),
+    ).toBe(true);
+    // …and the older does NOT yield to the younger — both checking in the
+    // same registry window must not kill both.
+    expect(
+      shouldYieldToLiveSummary(younger, SLICE, older.runId, older.createdAt),
+    ).toBe(false);
+  });
+
+  it("a createdAt tie (same millisecond) falls back to runId order", () => {
+    const a = summaryAt("wrun_a", T0);
+    const b = summaryAt("wrun_b", T0);
+    expect(shouldYieldToLiveSummary(a, SLICE, b.runId, b.createdAt)).toBe(true);
+    expect(shouldYieldToLiveSummary(b, SLICE, a.runId, a.createdAt)).toBe(false);
+  });
+
+  it("a missing timestamp on either side falls back to runId order", () => {
+    const undated = summaryAt("wrun_a", null);
+    const dated = summaryAt("wrun_b", T0);
+    expect(shouldYieldToLiveSummary(undated, SLICE, dated.runId, dated.createdAt)).toBe(
+      true,
+    );
+    expect(shouldYieldToLiveSummary(dated, SLICE, undated.runId, undated.createdAt)).toBe(
+      false,
+    );
+    expect(shouldYieldToLiveSummary(undated, SLICE, "wrun_zzz", null)).toBe(true);
+  });
+
+  it("terminal summaries, other slices and self never cause a yield", () => {
+    const me = summaryAt(OWN, T0);
+    expect(
+      shouldYieldToLiveSummary(
+        { ...summaryAt("wrun_s", T0 - 1_000), status: "completed" },
+        SLICE,
+        OWN,
+        me.createdAt,
+      ),
+    ).toBe(false);
+    expect(
+      shouldYieldToLiveSummary(
+        {
+          ...summaryAt("wrun_s", T0 - 1_000),
+          attributes: { slice: "other", role: "summary" },
+        },
+        SLICE,
+        OWN,
+        me.createdAt,
+      ),
+    ).toBe(false);
+    expect(shouldYieldToLiveSummary(me, SLICE, OWN, me.createdAt)).toBe(false);
   });
 });
 

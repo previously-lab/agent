@@ -151,6 +151,24 @@ describe("createMixedStreamTransform", () => {
     expect(await through(chunks)).toEqual(chunks);
   });
 
+  it("passes step-written text-delta chunks (delta field) through unchanged (v0.33 §4)", async () => {
+    // The batch summary's step writes UIMessageChunk-shaped deltas straight
+    // into its run stream. The converter only understands the RAW model-part
+    // shape (text field) and would re-map these to `delta: undefined` — an
+    // empty lane. Shape discrimination mirrors the `finish` rule.
+    const chunks = [
+      { type: "text-start", id: "summary" },
+      { type: "text-delta", id: "summary", delta: "这一轮连发" },
+      { type: "text-end", id: "summary" },
+    ];
+    expect(await through(chunks)).toEqual(chunks);
+  });
+
+  it("still converts RAW text-delta parts (text field) — the discrimination does not misfire", async () => {
+    const out = await through([{ type: "text-delta", id: "1", text: "Hi" }]);
+    expect(out).toEqual([{ type: "text-delta", id: "1", delta: "Hi" }]);
+  });
+
   it("drops a raw model finish part (our steps own the finish chunk)", async () => {
     const out = await through([
       { type: "finish", finishReason: "stop", usage: { totalTokens: 3 } },

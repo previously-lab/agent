@@ -116,6 +116,7 @@ import {
   type BridgePhaseData,
 } from "@/lib/models/bridge-model";
 import { createModel } from "@/lib/models/provider";
+import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import type { HousekeepingStep } from "@/lib/chat/build-stream";
 import {
   buildAgentIdentityPrompt,
@@ -147,6 +148,7 @@ import {
   isBlockingParallelSibling,
   isLiveParallelSummary,
   isLiveRunStatus,
+  shouldYieldToLiveSummary,
   type ParallelRunEntry,
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
@@ -2185,16 +2187,21 @@ export async function startSummaryIfLastTurn(
 }
 
 /**
- * The summary run's opening dedupe: TRUE when ANOTHER live summary already
+ * The summary run's opening dedupe: TRUE when an OLDER live summary already
  * covers this slice (two tails fired within the same registry window) — the
- * caller exits silently. Seeded attributes make a concurrently-started
- * sibling visible at creation, so the race window is the check itself.
+ * caller exits silently and the older run closes the batch. Seeded
+ * attributes make a concurrently-started sibling visible at creation, and
+ * the createdAt tiebreak keeps the absorption one-sided: a bare "any live
+ * sibling exits" check kills BOTH racers (each sees the other).
  */
 export async function summaryDedupeCheck(sliceId: string): Promise<boolean> {
   "use step";
   const ownId = getWorkflowMetadata().workflowRunId;
   const live = await listLiveRuns();
-  return live.some((r) => isLiveParallelSummary(r, sliceId, ownId));
+  const own = live.find((r) => r.runId === ownId);
+  return live.some((r) =>
+    shouldYieldToLiveSummary(r, sliceId, ownId, own?.createdAt),
+  );
 }
 
 /**
@@ -2245,6 +2252,17 @@ export async function runBatchSummary(
       system,
       prompt: windowText,
       maxOutputTokens: 300,
+      // Thinking OFF: the closing is a mechanical wrap-up, and a reasoning
+      // model can burn the whole 300-token cap on invisible thinking —
+      // observed in phase 3: the call succeeded, streamed ZERO deltas, and
+      // the empty text silently skipped the persist. The turn's modelConfig
+      // carries no providerOptions of its own; V4 defaults to thinking ON.
+      providerOptions: normalizeReasoningEffort(
+        input.modelConfig.sdk,
+        input.modelConfig.id,
+        false,
+        "low",
+      ),
     });
     await stream.write({ type: "text-start", id: "summary" } as UIMessageChunk);
     let text = "";
@@ -2328,14 +2346,19 @@ export async function persistBatchSummary(
  * closeTurnStream in miniature, so the client's lane ends cleanly and a
  * replayed stream is a well-formed UI message. Written whether or not the
  * closing text landed (an empty summary is a clean empty beat, not a hang).
+ *
+ * The writable is CLOSED, not just lock-released: createStepStream().close()
+ * only releases the writer (the turn's stream must survive across steps), so
+ * without `writable.close()` the run completes with its stream unsealed and a
+ * live-attached lane reader never sees the end — the lane stays "streaming"
+ * forever and the post-burst fold never fires (retest v2: lane hung 240s).
  */
 export async function closeSummaryStream(): Promise<void> {
   "use step";
-  const stream = createStepStream();
-  try {
-    await stream.write({ type: "finish-step" } as UIMessageChunk);
-    await stream.write({ type: "finish" } as UIMessageChunk);
-  } finally {
-    stream.close();
-  }
+  const writable = getWritable<UIMessageChunk>();
+  const writer = writable.getWriter();
+  await writer.write({ type: "finish-step" } as UIMessageChunk);
+  await writer.write({ type: "finish" } as UIMessageChunk);
+  writer.releaseLock();
+  await writable.close();
 }

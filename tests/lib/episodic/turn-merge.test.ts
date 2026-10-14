@@ -114,6 +114,22 @@ describe("mergeTurnsWithRemote", () => {
     const merged = parseSlice(mergeTurnsWithRemote(remote, local));
     expect(merged.turns).toHaveLength(1);
   });
+
+  it("keeps a turn's AGENT answer distinct from its USER entry (shared turnId)", () => {
+    // The identity key carries the role: a turn's user entry and its agent
+    // answer share one turnId. A turnId-only key makes the heal drop the
+    // answer when the remote already holds the user entry.
+    const u1 = makeTurn("T1", "q");
+    const a1 = makeTurn("T1", "a", "agent");
+    const remote = serializeSlice(makeSlice({ turns: [u1] }));
+    const local = makeSlice({ turns: [u1, a1] });
+
+    const merged = parseSlice(mergeTurnsWithRemote(remote, local));
+    expect(merged.turns.map((t) => `${t.role}:${t.turnId}`)).toEqual([
+      "user:T1",
+      "agent:T1",
+    ]);
+  });
 });
 
 describe("mergeDiskTurnsIntoSlice", () => {
@@ -161,5 +177,42 @@ describe("mergeDiskTurnsIntoSlice", () => {
 
     expect(mergeDiskTurnsIntoSlice(inMemory, diskRaw)).toBe(0);
     expect(inMemory.loops).toEqual(["loop-1", "loop-2"]);
+  });
+
+  it("the parallel-burst race: a sibling's agent answer survives the merge (v0.33 regression)", () => {
+    // Deterministic replay of the phase-3 real-machine loss. Two runs share
+    // one slice; each finalizes from the snapshot it loaded at housekeeping:
+    //   turn1 hk loads [u1]; turn2 hk appends u2 to disk;
+    //   turn1 finalizes: merges u2, appends a1, writes [u1,u2,a1];
+    //   turn2 finalizes from ITS stale base [u1,u2]: the disk merge must
+    //   union a1 in — with a turnId-only key, a1 collides with u1's key and
+    //   the snapshot write silently erases turn1's answer.
+    const u1 = makeTurn("T1", "我中午吃了包子");
+    const u2 = makeTurn("T2", "更正：吃的是饺子");
+    const a1 = makeTurn("T1", "包子的历史长答…", "agent");
+    const a2 = makeTurn("T2", "收到，是饺子…", "agent");
+
+    // turn1's finalize: base [u1], disk already holds u2.
+    const turn1Slice = makeSlice({ turns: [u1] });
+    mergeDiskTurnsIntoSlice(
+      turn1Slice,
+      serializeSlice(makeSlice({ turns: [u1, u2] })),
+    );
+    turn1Slice.turns.push(a1);
+    const diskAfterTurn1 = serializeSlice(turn1Slice);
+    expect(parseSlice(diskAfterTurn1).turns).toHaveLength(3);
+
+    // turn2's finalize from its stale base [u1,u2] — the moment that lost a1.
+    const turn2Slice = makeSlice({ turns: [u1, u2] });
+    const added = mergeDiskTurnsIntoSlice(turn2Slice, diskAfterTurn1);
+    turn2Slice.turns.push(a2);
+
+    expect(added).toBe(1); // a1 merged in, not eaten by the u1 key collision
+    expect(turn2Slice.turns.map((t) => `${t.role}:${t.turnId}`)).toEqual([
+      "user:T1",
+      "user:T2",
+      "agent:T1",
+      "agent:T2",
+    ]);
   });
 });

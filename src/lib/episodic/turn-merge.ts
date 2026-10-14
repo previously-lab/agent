@@ -16,11 +16,19 @@ import type { TimeSlice, Turn } from "./types";
 /**
  * Identity key for a turn. New turns carry a turnId; legacy numeric-labeled
  * turns parsed from old files have none, so fall back to a content fingerprint.
+ *
+ * The key carries the ROLE in both branches: a turn's user entry and its
+ * agent answer share one turnId, so a turnId-only key makes the merge eat a
+ * sibling's answer whenever the snapshot already holds that turn's user
+ * entry — the v0.33 parallel-burst race (two runs finalize from stale
+ * housekeeping snapshots; the later merge skipped the earlier run's agent
+ * turn, and the whole-file snapshot write then erased it from disk).
  */
 function turnKey(turn: Turn): string {
   return (
-    turn.turnId ??
-    `${turn.timestamp}|${turn.role}|${turn.content.slice(0, 64)}`
+    turn.turnId !== undefined
+      ? `${turn.role}|${turn.turnId}`
+      : `${turn.timestamp}|${turn.role}|${turn.content.slice(0, 64)}`
   );
 }
 

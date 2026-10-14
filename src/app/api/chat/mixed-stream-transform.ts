@@ -51,6 +51,11 @@ const OUR_CHUNK_TYPES = new Set([
 function isOurs(c: Record<string, unknown>, chunkType: string): boolean {
   if (OUR_CHUNK_TYPES.has(chunkType)) return true;
   if (chunkType === "finish") return !("finishReason" in c);
+  // Same discrimination as `finish`: a RAW model part's delta rides the
+  // `text` field, while a step-written UIMessageChunk already has `delta`
+  // (v0.33's batch summary writes these straight into its run stream — the
+  // converter would re-map them to `delta: undefined`, an empty lane).
+  if (chunkType === "text-delta") return "delta" in c;
   return false;
 }
 

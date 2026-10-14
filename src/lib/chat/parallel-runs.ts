@@ -129,6 +129,34 @@ export function isLiveParallelSummary(
 }
 
 /**
+ * Should THIS summary run yield to another live one? The deterministic
+ * tiebreak for the double-fire race: two tails can pass the last-one check
+ * in the same registry window (each sees the other tail-phase sibling
+ * yield, neither sees a live summary yet) and both start a summary run.
+ * "Any other live summary exits" then kills BOTH — each sees the other and
+ * returns before streaming a single token (observed in the v0.33 fix-batch
+ * retest: two summaries 62ms apart, both completed empty in ~200ms, no
+ * text, no fold, nothing persisted). Yield only to an OLDER summary — both
+ * runs read both createdAts from the same registry, so exactly one
+ * survives. A createdAt tie (same millisecond) or a missing timestamp on
+ * either side falls back to the runId's ULID ordering.
+ */
+export function shouldYieldToLiveSummary(
+  run: ParallelRunEntry,
+  sliceId: string,
+  ownRunId: string,
+  ownCreatedAt: Date | string | null | undefined,
+): boolean {
+  if (!isLiveParallelSummary(run, sliceId, ownRunId)) return false;
+  const created = toEpochMs(run.createdAt);
+  const ownCreatedMs = toEpochMs(ownCreatedAt);
+  if (created != null && ownCreatedMs != null && created !== ownCreatedMs) {
+    return created < ownCreatedMs;
+  }
+  return run.runId < ownRunId;
+}
+
+/**
  * The outbound-tail section telling the model about in-flight parallel
  * siblings (v0.33 §5) — same mechanics as buildReflectionNoteSection: its own
  * fenced block on the LAST user message's outbound copy, never persisted,
