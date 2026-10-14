@@ -266,6 +266,37 @@ export interface HousekeepingResult {
    * no note is staged.
    */
   reflectionNote?: { note: string; at: string };
+  /**
+   * Parallel sends (v0.33): how many OTHER turn runs on this same slice were
+   * alive when housekeeping stamped this run into the run registry. The
+   * workflow carries it as a fenced outbound-tail section (buildParallelNoteSection)
+   * so the model answers THIS message without waiting for the burst's rest.
+   * Absent when there were no live siblings (the common single-send case) and
+   * on bridge/demo deployments (D10 — no registry participation there).
+   */
+  parallelSiblings?: number;
+}
+
+/**
+ * What the LAST surviving parallel turn hands to the batch summary run
+ * (v0.33 §4). All serializable, resolved by the spawning turn so the summary
+ * never re-derives deployment state: the model to write with, the backend
+ * flags for reading the slice (the readEpisodeInbox pattern — getRepoConfig
+ * only runs in the github branch), and the locale the closing lines follow.
+ */
+export interface SummaryRunInput {
+  /** The slice the parallel batch landed on (summary reads + appends it). */
+  sliceId: string;
+  /** UI locale — the closing follows the reader's language. */
+  locale: string;
+  /** Resolved model id + config of the spawning turn (createModel input). */
+  model: string;
+  modelConfig: TurnInput["modelConfig"];
+  /** Backend flags, exactly as TurnInput carries them. */
+  useGithub: boolean;
+  useDemo: boolean;
+  owner: string;
+  repo: string;
 }
 
 /**

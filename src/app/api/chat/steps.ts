@@ -47,9 +47,11 @@
  * start → start-step → (reply) → data-evolution? → data-turn-status →
  * finish-step → finish.
  */
-import { type UIMessageChunk, type ModelMessage } from "ai";
-import { getWritable, getWorkflowMetadata } from "workflow";
-import { getRun, resumeHook } from "workflow/api";
+import { type UIMessageChunk, type ModelMessage, streamText } from "ai";
+import crypto from "crypto";
+import { getWritable, getWorkflowMetadata, setAttributes } from "workflow";
+import { getRun, resumeHook, start } from "workflow/api";
+import { getWorld } from "workflow/runtime";
 import { HookNotFoundError } from "workflow/errors";
 import {
   createSlice,
@@ -113,6 +115,7 @@ import {
   createBridgeEventEmitter,
   type BridgePhaseData,
 } from "@/lib/models/bridge-model";
+import { createModel } from "@/lib/models/provider";
 import type { HousekeepingStep } from "@/lib/chat/build-stream";
 import {
   buildAgentIdentityPrompt,
@@ -130,6 +133,7 @@ import type {
   EvolutionResult,
   NestedTurnTail,
   InnerTurnReport,
+  SummaryRunInput,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
 import {
@@ -137,6 +141,12 @@ import {
   type EpisodeInboxEvent,
   type NestedBubbleFrame,
 } from "@/lib/chat/nested-bubble";
+import {
+  PARALLEL_SUMMARY_CHUNK,
+  isBlockingParallelSibling,
+  isLiveParallelSummary,
+  type ParallelRunEntry,
+} from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
 import {
   buildReflectionWakePayload,
@@ -899,6 +909,31 @@ export async function housekeeping(
     console.log(`[Episodic] Created new slice: ${slice.slice_id}`);
   }
 
+  // ── v0.33 连发并行 — registry stamp + live-sibling count ────────────────
+  // Stamp THIS run into the Workflow run registry the moment the slice is
+  // known (`slice` + `turn` attributes), so parallel siblings and the tail's
+  // last-one check can find it; then count the slice's other live turn runs
+  // for the outbound-tail parallel note. Bridge/demo turns never participate
+  // (D10). The registry is an ENHANCER, never a blocker: a world without
+  // native attributes or a transient list failure just means no note.
+  let parallelSiblings: number | undefined;
+  if (!input.useDemo && input.modelConfig.sdk !== "bridge") {
+    try {
+      const ownId = getWorkflowMetadata().workflowRunId;
+      await setAttributes({ slice: slice.slice_id, turn: input.turnId });
+      const live = await listLiveRuns();
+      const count = live.filter((r) =>
+        isBlockingParallelSibling(r, slice.slice_id, ownId),
+      ).length;
+      if (count > 0) parallelSiblings = count;
+    } catch (err) {
+      console.warn(
+        "[Parallel] registry stamp/count failed (ignored):",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   // Ages/due-dates compare against the USER's local calendar date, not UTC.
   const todayLocal =
     localDateKey(input.startedAtIso, clientTimezone) ??
@@ -1310,6 +1345,7 @@ export async function housekeeping(
     ...(userProfileBlock ? { userProfileBlock } : {}),
     ...(dueTasksBlock ? { dueTasksBlock } : {}),
     ...(reflectionNote ? { reflectionNote } : {}),
+    ...(parallelSiblings ? { parallelSiblings } : {}),
     ...(contextPrefix ? { contextPrefix } : {}),
     ...(rebuiltHistory ? { rebuiltHistory } : {}),
   };
@@ -2038,4 +2074,256 @@ export async function pollInnerRunReports(
       }
     }),
   );
+}
+
+// ─── Parallel turns steps (v0.33 — 连发并行: registry + batch summary) ─────
+
+/**
+ * The live half of the run registry (pending + running) as plain predicate
+ * input. The local world's `runs.list` supports the (undocumented) status
+ * filter — spike-verified (world-local 5.0.0-beta.44) — so each live status
+ * is one query, and entities carry attributes even under `resolveData:
+ * "none"`. Step-context only (getWorld needs the runtime).
+ */
+async function listLiveRuns(): Promise<ParallelRunEntry[]> {
+  const world = await getWorld();
+  const out: ParallelRunEntry[] = [];
+  for (const status of ["running", "pending"] as const) {
+    const page = await world.runs.list({
+      status,
+      pagination: { limit: 100 },
+      resolveData: "none",
+    } as Parameters<typeof world.runs.list>[0]);
+    for (const r of page.data) {
+      out.push({
+        runId: r.runId,
+        status: r.status,
+        attributes:
+          (r as { attributes?: Record<string, string> | null }).attributes ??
+          null,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * The last-one check (v0.33 §3) — the turn workflow's FINAL say before its
+ * stream closes. Runs AFTER finalizeTurn (this turn's reply is already on
+ * disk, so a summary spawned now reads a complete record) and BEFORE
+ * closeTurnStream (the stream is still open, so the summary's runId rides a
+ * transient chunk to the client).
+ *
+ * Order inside: stamp THIS run `phase: "tail"` FIRST — a sibling checking
+ * right now then yields instead of mutual-skipping (the window where both
+ * see each other as running and nobody fires) — then count. No blocking
+ * sibling and no live summary for the slice → start the summary run, its
+ * `role: "summary"` seed visible at creation (the double-fire absorber).
+ *
+ * Never throws and never blocks the turn: a registry hiccup or a start
+ * failure degrades to "no summary" — every answer is on disk either way.
+ * Returns the summary runId (or null) for logging/tests.
+ */
+export async function startSummaryIfLastTurn(
+  sliceId: string,
+  summary: SummaryRunInput,
+): Promise<string | null> {
+  "use step";
+  try {
+    await setAttributes({ phase: "tail" });
+    const ownId = getWorkflowMetadata().workflowRunId;
+    const live = await listLiveRuns();
+    if (live.some((r) => isBlockingParallelSibling(r, sliceId, ownId))) {
+      return null;
+    }
+    if (live.some((r) => isLiveParallelSummary(r, sliceId, ownId))) {
+      return null;
+    }
+    // Dynamic import: steps.ts → summary-workflow.ts → steps.ts is a static
+    // cycle otherwise (the spike's proven shape for step-side start()).
+    const { summaryWorkflow } = await import("./summary-workflow");
+    const run = await start(summaryWorkflow, [summary], {
+      attributes: { role: "summary", slice: sliceId },
+    });
+    // Tell the client where the closing bubble streams from — transient: the
+    // frame rides to onData only, never a UIMessage part; a reconnect replay
+    // re-delivers it (deduped by the stable per-slice id).
+    const stream = createStepStream();
+    try {
+      await stream.write({
+        type: PARALLEL_SUMMARY_CHUNK,
+        id: `parallel-summary-${sliceId}`,
+        transient: true,
+        data: { runId: run.runId, sliceId },
+      } as UIMessageChunk);
+    } finally {
+      stream.close();
+    }
+    console.log(
+      `[Parallel] batch summary started: ${run.runId} (slice ${sliceId})`,
+    );
+    return run.runId;
+  } catch (err) {
+    console.warn(
+      "[Parallel] summary check failed (ignored):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+/**
+ * The summary run's opening dedupe: TRUE when ANOTHER live summary already
+ * covers this slice (two tails fired within the same registry window) — the
+ * caller exits silently. Seeded attributes make a concurrently-started
+ * sibling visible at creation, so the race window is the check itself.
+ */
+export async function summaryDedupeCheck(sliceId: string): Promise<boolean> {
+  "use step";
+  const ownId = getWorkflowMetadata().workflowRunId;
+  const live = await listLiveRuns();
+  return live.some((r) => isLiveParallelSummary(r, sliceId, ownId));
+}
+
+/**
+ * The slice's turns for the summary's window, read through the turn's ACTIVE
+ * backend (the readEpisodeInbox pattern: the flags ride in the input —
+ * getRepoConfig only runs in the github branch, so STORAGE=local never asks
+ * for a token). Returns plain {role, content} pairs, oldest first.
+ */
+export async function readSliceTurnsForSummary(
+  input: SummaryRunInput,
+): Promise<Array<{ role: string; content: string }>> {
+  "use step";
+  const path = sliceIdToFilePath(input.sliceId);
+  let raw: string;
+  if (input.useDemo) {
+    raw = await readFileDemo(path);
+  } else if (input.useGithub) {
+    raw = await readFileFresh(path, input.repo, input.owner);
+  } else {
+    raw = await readFileLocal(path);
+  }
+  return parseSlice(raw).turns.map((t) => ({ role: t.role, content: t.content }));
+}
+
+/**
+ * The summary's one model call, streamed onto the summary run's OWN stream
+ * (the client's lane reads text-start/text-delta exactly like the
+ * NestedBubble child-stream precedent). Emits the stream's opening chunks
+ * (start / start-step), then the text block. Returns the full settled text;
+ * a model failure returns "" (the caller skips persistence and still closes
+ * the stream cleanly) — the summary degrades silently, never fails the batch.
+ */
+export async function runBatchSummary(
+  input: SummaryRunInput,
+  windowText: string,
+): Promise<string> {
+  "use step";
+  const stream = createStepStream();
+  try {
+    await stream.write({ type: "start" } as UIMessageChunk);
+    await stream.write({ type: "start-step" } as UIMessageChunk);
+    const system =
+      input.locale === "zh"
+        ? "你是 Previously 的收尾员。用户在同一时间窗里连发了数条消息，每条已由一个并行实例各自作答（下面按顺序给出这一轮的用户消息与回答）。请用 1–3 句话给这一轮连发一个总体收尾：像同一声音的自然收束，不逐条复述、不用列表、不道歉。若后面的消息更正了前面的内容（例如「不是包子，是饺子」），一律以最新陈述为准。若各回答已经完整、无需补充，只输出一句简短的收束。"
+        : "You are Previously's closer. The user fired several messages in one burst; each was answered by a parallel instance (the user messages and their answers follow, in order). Write a 1–3 sentence closing for the burst as a whole: one voice wrapping up naturally — no per-message recap, no lists, no apologies. When a later message corrects an earlier one (\"not buns — dumplings\"), the latest statement wins. If the answers are already complete, one short closing line is enough.";
+    const result = streamText({
+      model: createModel(input.modelConfig),
+      system,
+      prompt: windowText,
+      maxOutputTokens: 300,
+    });
+    await stream.write({ type: "text-start", id: "summary" } as UIMessageChunk);
+    let text = "";
+    for await (const delta of result.textStream) {
+      text += delta;
+      await stream.write({
+        type: "text-delta",
+        id: "summary",
+        delta,
+      } as UIMessageChunk);
+    }
+    await stream.write({ type: "text-end", id: "summary" } as UIMessageChunk);
+    return text.trim();
+  } catch (err) {
+    console.warn(
+      "[Parallel] summary call failed (degraded to no closing):",
+      err instanceof Error ? err.message : err,
+    );
+    return "";
+  } finally {
+    stream.close();
+  }
+}
+
+/**
+ * Persist the closing as ONE agent turn on the slice (slice-locked, one
+ * commit — the messages-route persistence precedent). Read fresh past the
+ * Data Cache: the last turn's finalize commit landed moments ago. A slice
+ * that closed in the meantime (its 30-minute cap hit mid-burst) is left
+ * alone — appending to a closed page would falsify the record; the bubble
+ * still streamed live, the closing just isn't recorded. Never throws.
+ */
+export async function persistBatchSummary(
+  input: SummaryRunInput,
+  text: string,
+): Promise<void> {
+  "use step";
+  try {
+    await withSliceLock(input.sliceId, async () => {
+      const path = sliceIdToFilePath(input.sliceId);
+      let raw: string;
+      if (input.useDemo) {
+        return; // demo never persists — defensive (the turn gate already excludes it)
+      } else if (input.useGithub) {
+        raw = await readFileFresh(path, input.repo, input.owner);
+      } else {
+        raw = await readFileLocal(path);
+      }
+      const slice = parseSlice(raw);
+      if (slice.status !== "active") {
+        console.warn(
+          `[Parallel] summary persist skipped — slice ${input.sliceId} already closed`,
+        );
+        return;
+      }
+      appendTurn(slice, {
+        timestamp: new Date().toISOString(),
+        role: "agent",
+        content: text,
+        // Distinct `s`-prefixed namespace: never collides with a client- or
+        // server-minted turn id, so turn-merge dedupe can't eat the closing.
+        turnId: `s${crypto.randomBytes(4).toString("base64url")}`,
+      });
+      const batch = createBatch();
+      await saveSliceSnapshot(slice, batch);
+      await flushBatch(
+        batch,
+        `Parallel summary — batch close (slice ${input.sliceId})`,
+      );
+    });
+  } catch (err) {
+    console.warn(
+      "[Parallel] summary persist failed (ignored):",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+/**
+ * The summary run's stream tail (finish-step / finish) — the turn's
+ * closeTurnStream in miniature, so the client's lane ends cleanly and a
+ * replayed stream is a well-formed UI message. Written whether or not the
+ * closing text landed (an empty summary is a clean empty beat, not a hang).
+ */
+export async function closeSummaryStream(): Promise<void> {
+  "use step";
+  const stream = createStepStream();
+  try {
+    await stream.write({ type: "finish-step" } as UIMessageChunk);
+    await stream.write({ type: "finish" } as UIMessageChunk);
+  } finally {
+    stream.close();
+  }
 }

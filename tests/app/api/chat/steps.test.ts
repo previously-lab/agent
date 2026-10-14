@@ -322,7 +322,19 @@ const workflowMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("workflow", () => ({ getWritable: workflowMock.getWritable }));
+vi.mock("workflow", () => ({
+  getWritable: workflowMock.getWritable,
+  // v0.33 连发并行: housekeeping stamps the run registry (slice/turn) and
+  // counts live siblings — the step-context API is mocked through, and the
+  // runtime world below lists zero live runs (no siblings in these tests).
+  getWorkflowMetadata: vi.fn(() => ({ workflowRunId: "wrun_test" })),
+  setAttributes: vi.fn(async () => {}),
+}));
+vi.mock("workflow/runtime", () => ({
+  getWorld: vi.fn(async () => ({
+    runs: { list: vi.fn(async () => ({ data: [], cursor: null })) },
+  })),
+}));
 
 import {
   housekeeping,

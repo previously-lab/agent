@@ -64,7 +64,6 @@ vi.mock("@/app/api/evolution/reflection-wake", () => ({
   buildReflectionWakePayload: vi.fn(() => ({})),
 }));
 
-import { POST } from "@/app/api/chat/[runId]/messages/route";
 import { readEpisodeInbox, finalizeTurn } from "@/app/api/chat/steps";
 import {
   appendTurn,
@@ -237,55 +236,10 @@ describe("readEpisodeInbox (D-1)", () => {
   });
 });
 
-// ─── B. messages route — real disk persistence (D-2, route side) ─────────
-
-describe("messages route against real local storage (D-2)", () => {
-  function call(runId: string, body: unknown) {
-    return POST(
-      new Request(`http://localhost/api/chat/${runId}/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-      }),
-      { params: Promise.resolve({ runId }) },
-    );
-  }
-
-  it("persists the user turn into the real core.md and dedupes a re-POST", async () => {
-    const sliceId = todaySliceId();
-    seedSliceOnDisk(
-      makeSlice({
-        slice_id: sliceId,
-        turns: [
-          makeTurn("m1aaaa", "user", "first message"),
-          makeTurn("m1aaaa", "agent", "first reply"),
-        ],
-      }),
-    );
-
-    const res = await call("run-1", { text: "nested question", turnId: "m2xxxx" });
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toEqual({
-      ok: true,
-      turnId: "m2xxxx",
-      deduped: false,
-    });
-
-    // Read the REAL file back — header AND body must have landed (the V-batch
-    // probe saw the 200 yet a missing turn; a header-only husk is a fail too).
-    const onDisk = readDiskSlice(sliceId);
-    const landed = onDisk.turns.filter((t) => t.turnId === "m2xxxx");
-    expect(landed).toHaveLength(1);
-    expect(landed[0].role).toBe("user");
-    expect(landed[0].content).toBe("nested question");
-
-    const res2 = await call("run-1", { text: "nested question", turnId: "m2xxxx" });
-    await expect(res2.json()).resolves.toMatchObject({ deduped: true });
-    expect(
-      readDiskSlice(sliceId).turns.filter((t) => t.turnId === "m2xxxx"),
-    ).toHaveLength(1);
-  });
-});
+// ─── B. messages route — RETIRED (v0.33 连发并行) ────────────────────────
+// The say-into-episode route was deleted with the parallel-turns batch: with
+// episodeEnabled hard-off it persisted a user turn nobody answered ("一直等待").
+// Mid-stream sends now start a fresh parallel turn run via POST /api/chat.
 
 // ─── C. finalizeTurn — route-append survives the turn tail (D-2, pipeline) ─
 

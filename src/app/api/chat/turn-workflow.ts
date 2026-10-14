@@ -73,7 +73,9 @@ import {
   readEpisodeInbox,
   emitNestedBubble,
   pollInnerRunReports,
+  startSummaryIfLastTurn,
 } from "./steps";
+import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 
 // ─── Pure helpers (serializable data in, serializable data out) ──────────
 
@@ -989,6 +991,12 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // reworked. Restore by reverting this line to:
   //   !input.useDemo && input.modelConfig.sdk !== "bridge"
   const episodeEnabled = false;
+  // Parallel sends (v0.33): while a turn streams, sending again starts another
+  // STANDARD turn run — every run stamps itself into the run registry at
+  // housekeeping, and the last survivor spawns the batch's summary run (the
+  // tail below). Bridge/demo deployments stay out of the registry (D10):
+  // their turns keep the classic shape with no marking, no note, no summary.
+  const parallelEnabled = !input.useDemo && input.modelConfig.sdk !== "bridge";
   const episodeRunId = episodeEnabled ? await ownRunId() : "";
   const inboxHook = episodeEnabled
     ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
@@ -1277,6 +1285,14 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     );
     if (reflectionSection) {
       currentMessages = appendBridgeTimeSuffix(currentMessages, reflectionSection);
+    }
+    // v0.33 连发并行: when the user fired a burst, the same OUTBOUND-tail
+    // mechanics tell this run about its in-flight siblings — answer THIS
+    // message, don't wait for the rest. Never persisted, never in the
+    // slice-frozen system prompt.
+    const parallelSection = buildParallelNoteSection(hk.parallelSiblings ?? null);
+    if (parallelSection) {
+      currentMessages = appendBridgeTimeSuffix(currentMessages, parallelSection);
     }
     // ── The answer phase ─────────────────────────────────────────────────
     // v0.31 — the orchestrator shell: on an episode-capable deployment the
@@ -1877,6 +1893,26 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // reply stream errored (the user turn is on disk either way), and it never
   // throws.
   await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
+  // v0.33 连发并行 — the LAST surviving turn of a parallel burst spawns the
+  // batch's summary run. Placed BETWEEN finalize (this turn's reply is on
+  // disk, so the summary reads a complete record) and closeTurnStream (the
+  // spawning run's stream is still open, so the summary's runId rides a
+  // transient chunk to the client — its live lane attaches there). The step
+  // stamps this run `phase: "tail"` first, so a sibling checking right now
+  // yields instead of mutual-skipping. Runs even when the reply errored: the
+  // batch still deserves its closing beat.
+  if (parallelEnabled) {
+    await startSummaryIfLastTurn(hk.slice.slice_id, {
+      sliceId: hk.slice.slice_id,
+      locale: input.locale,
+      model: input.model,
+      modelConfig: input.modelConfig,
+      useGithub: input.useGithub,
+      useDemo: input.useDemo,
+      owner: input.owner,
+      repo: input.repo,
+    });
+  }
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
   await ringReflection(hk.slice, input);
