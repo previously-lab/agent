@@ -103,7 +103,47 @@ export interface LiveStreamItem {
 }
 
 /** Everything either renderer can be handed, oldest → newest. */
-export type ChatStreamItem = HistoryStreamItem | LiveStreamItem | NestedBubbleItem;
+export type ChatStreamItem =
+  | HistoryStreamItem
+  | LiveStreamItem
+  | NestedBubbleItem
+  | ParallelLaneItem;
+
+/**
+ * A parallel lane (v0.33 §6): one bypass run's seat in the stream, or the
+ * collapsed MAIN lane while a burst is in flight. The lane's data comes from
+ * the chat page's lane side store (never from UIMessage — a bypass turn's
+ * stream belongs to its own durable run), folded into `messages` once the
+ * whole burst settles. `collapsed` is the page's auto verdict (the newest
+ * lane reads expanded, the rest fold to mini-blocks); the view may override
+ * it locally until the verdict changes.
+ */
+export interface ParallelLaneItem {
+  kind: "parallel-lane";
+  key: string;
+  lane: ParallelLaneSeat;
+  timeIso: string;
+}
+
+/** The renderable state of one parallel lane — rebuilt by the page on every
+ *  delta batch, so the seat carries everything the view needs. */
+export interface ParallelLaneSeat {
+  /** Stable identity: the client-minted message id for bypass lanes,
+   *  "main" for the collapsed useChat lane, the runId for the summary lane. */
+  laneId: string;
+  /** The durable run to read (bypass/summary lanes); absent for "main". */
+  runId?: string;
+  /** The echoed user message ("" for the summary lane and "main"). */
+  userText: string;
+  /** The batch-closing lane — renders with the summary label. */
+  summary?: boolean;
+  /** The page's collapse verdict: every lane but the newest folds. */
+  collapsed: boolean;
+  /** The answer text so far (live while streaming, settled at the end). */
+  text: string;
+  /** Stream ended (or the lane degraded) — the fold gate reads this. */
+  settled: boolean;
+}
 
 /**
  * A nested bubble (v0.30 §4.3): one inner instance's answer, seated directly

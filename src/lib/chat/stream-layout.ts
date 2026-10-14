@@ -48,6 +48,11 @@ export function estimateHeightFor(item: ChatStreamItem): number {
     case "nested-bubble":
       // Chip row + a short answer — between a history turn and a live turn.
       return 160;
+    case "parallel-lane":
+      // A collapsed mini-block is one chip row (~28px); an expanded lane
+      // approximates a nested bubble. The estimate only ever applies to
+      // offscreen rows and is replaced by the real measurement on mount.
+      return item.lane.collapsed ? 28 : 160;
     case "live":
       return 220;
   }

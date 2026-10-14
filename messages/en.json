@@ -230,6 +230,14 @@
       "failed": "This one didn't get answered",
       "doneAt": "Done at {time}"
     },
+    "parallel": {
+      "laneLabel": "Parallel answer",
+      "summaryLabel": "Batch closing",
+      "running": "Answering…",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "sendFailed": "The parallel send didn't go through — send it again"
+    },
     "search": {
       "title": "Search conversations",
       "placeholder": "Search past conversations…",

@@ -41,6 +41,12 @@ import {
   normalizeNestedBubble,
   type NestedBubbleFrame,
 } from "@/lib/chat/nested-bubble";
+import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
+import {
+  ParallelLaneView,
+  useParallelLaneReaders,
+  type ParallelLane,
+} from "./parallel-lane";
 import { isChatRunActive } from "@/lib/chat/actions";
 import { saveUserConfig } from "@/lib/config/actions";
 import type { UserConfig } from "@/lib/config/types";
@@ -492,6 +498,46 @@ function Inner({
     Map<string, NestedBubbleFrame>
   >(new Map());
 
+  // ── Parallel lanes (v0.33 §6) ────────────────────────────────────────────
+  // A send while a turn streams starts ANOTHER standard run on a bypass lane
+  // (one useChat instance cannot carry two concurrent streams — ai@7 replaces
+  // activeResponse mid-flight and the old stream's write-back double-pushes).
+  // Lanes live OUTSIDE `messages` while the burst is in flight; when every
+  // lane has settled and the main stream is idle, the fold below appends the
+  // bypass user/answer pairs and the batch summary as ordinary messages, so
+  // the next send's client history lines up with the slice again.
+  const [parallelLanes, setParallelLanes] = useState<ParallelLane[]>([]);
+  const patchParallelLane = useCallback(
+    (
+      laneId: string,
+      patch: Partial<Pick<ParallelLane, "text" | "settled" | "runId">>,
+    ) => {
+      setParallelLanes((prev) =>
+        prev.map((l) => (l.laneId === laneId ? { ...l, ...patch } : l)),
+      );
+    },
+    [],
+  );
+  // The summary run's id arrives as a transient chunk on the LAST finisher's
+  // stream — the useChat lane's onData below, or a bypass lane's reader.
+  const spawnSummaryLane = useCallback((runId: string) => {
+    setParallelLanes((prev) => {
+      if (prev.some((l) => l.runId === runId)) return prev; // replay dedupe
+      return [
+        ...prev,
+        {
+          laneId: `summary-${runId}`,
+          runId,
+          userText: "",
+          summary: true,
+          text: "",
+          settled: false,
+        },
+      ];
+    });
+  }, []);
+  useParallelLaneReaders(parallelLanes, patchParallelLane, spawnSummaryLane);
+
   // Refresh-resume goes through the SDK's own path: `resume: true` calls
   // resumeStream() on mount, and prepareReconnectToStreamRequest redirects it
   // to the durable run (`/api/chat/<runId>/stream?startIndex=0`), which rebuilds
@@ -519,6 +565,14 @@ function Inner({
     // a reconnect replay re-delivers every frame in order, so the map rebuilds
     // deterministically (later frames for one instance overwrite earlier ones).
     onData: (chunk) => {
+      // v0.33 — the batch summary's runId, emitted by the last finisher's
+      // tail check when THAT finisher is this useChat lane (a bypass lane's
+      // reader forwards the same chunk instead).
+      if (chunk.type === PARALLEL_SUMMARY_CHUNK) {
+        const runId = (chunk as { data?: { runId?: unknown } }).data?.runId;
+        if (typeof runId === "string") spawnSummaryLane(runId);
+        return;
+      }
       if (chunk.type !== NESTED_BUBBLE_CHUNK) return;
       const frame = normalizeNestedBubble(
         (chunk as { data?: unknown }).data,
@@ -636,6 +690,50 @@ function Inner({
   const isStreaming = status === "streaming";
   const isLoading = status === "submitted" || isStreaming;
 
+  // ── The post-burst fold (v0.33 §6) ───────────────────────────────────────
+  // Once every lane has settled AND the main stream is idle, the burst's
+  // lanes become ordinary messages — the bypass user/answer pairs and the
+  // batch summary, in send order — and the lane blocks retire. From here the
+  // slice and the client tell the same story again (no history-mismatch
+  // rebuild on the next send), and a reload restores everything from the
+  // slice. The "main" seat carries no content (its message never left the
+  // list); it just retires. Idempotent via the known-id guard.
+  useEffect(() => {
+    if (parallelLanes.length === 0 || status !== "ready") return;
+    if (!parallelLanes.every((l) => l.laneId === "main" || l.settled)) return;
+    const additions: UIMessage[] = [];
+    for (const lane of parallelLanes) {
+      if (lane.laneId === "main") continue;
+      if (!lane.summary) {
+        additions.push({
+          id: lane.laneId,
+          role: "user",
+          parts: [{ type: "text" as const, text: lane.userText }],
+        });
+      }
+      if (lane.text) {
+        additions.push({
+          id: lane.summary
+            ? `sum-${lane.runId ?? lane.laneId}`
+            : `ans-${lane.runId ?? lane.laneId}`,
+          role: "assistant",
+          parts: [{ type: "text" as const, text: lane.text }],
+        });
+      }
+    }
+    if (additions.length > 0) {
+      setMessages((prev) => {
+        const known = new Set(prev.map((m) => m.id));
+        const fresh = additions.filter((m) => !known.has(m.id));
+        if (fresh.length === 0) return prev;
+        const next = [...prev, ...fresh];
+        writeStoredMessages(next.slice(-PERSIST_MESSAGE_CAP));
+        return next;
+      });
+    }
+    setParallelLanes([]);
+  }, [parallelLanes, status, setMessages]);
+
   /**
    * A turn just SETTLED — the stream is done and the slice is now persisted.
    *
@@ -752,6 +850,10 @@ function Inner({
 
   const liveItems = useMemo<ChatStreamItem[]>(() => {
     const lastMessage = messages[messages.length - 1];
+    // v0.33: while the main lane's answer streams collapsed (a burst is in
+    // flight), its streaming shell leaves the list — the lane block renders
+    // it instead.
+    const mainSeated = parallelLanes.some((l) => l.laneId === "main");
     // Regenerate re-answers the last user message — only meaningful on the
     // LATEST assistant reply (and never mid-stream; ChatMessage also gates).
     const lastAssistantId = [...messages]
@@ -782,6 +884,11 @@ function Inner({
             : undefined,
       }))
       .filter((item) => {
+        // v0.33 — the collapsed main lane's streaming shell renders as its
+        // lane mini-block, not here (it returns the moment the turn ends).
+        if (mainSeated && item.isStreaming && item.message.role === "assistant") {
+          return false;
+        }
         if (item.message.role !== "assistant") return true;
         const parts = (item.message.parts ?? []) as Array<{
           type: string;
@@ -812,8 +919,39 @@ function Inner({
     // v0.30 §4.3 — the merge view: the episode's side-store bubbles seat
     // after the user message each one answers (orphans after a regenerate
     // drop out rather than render unmoored).
-    return interleaveNestedBubbles(live, nestedBubbles);
-  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles]);
+    const merged = interleaveNestedBubbles(live, nestedBubbles);
+    // v0.33 §6 — the parallel lanes seat AFTER the live thread (the burst is
+    // the newest activity). The newest lane reads expanded, the rest fold to
+    // mini-blocks. The main lane's seat retires the moment its stream
+    // settles — the message itself renders again from then on.
+    if (parallelLanes.length === 0) return merged;
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant");
+    const mainText = (lastAssistant?.parts ?? [])
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text?: string }).text ?? "")
+      .join("");
+    const laneItems: ChatStreamItem[] = [];
+    parallelLanes.forEach((lane, i) => {
+      if (lane.laneId === "main" && !isStreaming) return;
+      laneItems.push({
+        kind: "parallel-lane",
+        key: `pl-${lane.laneId}`,
+        timeIso: nowIso,
+        lane: {
+          laneId: lane.laneId,
+          runId: lane.runId,
+          userText: lane.userText,
+          summary: lane.summary,
+          collapsed: i < parallelLanes.length - 1,
+          text: lane.laneId === "main" ? mainText : lane.text,
+          settled: lane.laneId === "main" ? !isStreaming : lane.settled,
+        },
+      });
+    });
+    return [...merged, ...laneItems];
+  }, [messages, isStreaming, lastUserMessageAt, handleRegenerate, activeSlice, nestedBubbles, parallelLanes]);
 
   // ── Arrival forms (v0.10 §1.2 Rev 2, re-seated with the two-rungs rewrite):
   // the PANEL is the in-memory current conversation — plus, on a briefing
@@ -930,47 +1068,74 @@ function Inner({
     setTransition(null);
     setLastUserMessageAt(new Date().toISOString());
 
-    // ── Say-into-episode (v0.30 §4.1): a live run owns an open inbox — a
-    // text-only message goes to POST /api/chat/[runId]/messages instead of
-    // starting a new run. The user bubble is optimistic (the route persists
-    // BEFORE answering, so the record is never lost); a 409 (demo/bridge/the
-    // run ended in the status window) or a gone run (404) falls back to the
-    // standard path with the SAME text — the message is never dropped.
-    const activeRunId = readStoredRunId();
-    if (isLoading && activeRunId && images.length === 0) {
-      const turnId = mintTurnId();
-      let res: Response | null = null;
+    // ── Parallel sends (v0.33 §6): a send while a turn streams starts
+    // ANOTHER standard run on a bypass lane — one useChat instance cannot
+    // carry two concurrent streams (ai@7's makeRequest replaces
+    // activeResponse mid-flight and the old stream's write-back double-pushes
+    // the same message). The lane echoes the user text immediately, the new
+    // run's runId arrives in the response header, and the lane reader streams
+    // the answer off the durable stream. The say-into-episode route this
+    // replaces never answered (episodeEnabled is off) — the red line is "no
+    // send lands unanswered", and a fresh run always answers.
+    if (isLoading) {
+      const fileParts = await Promise.all(
+        images.map(async (file) => ({
+          type: "file" as const,
+          mediaType: file.type,
+          filename: file.name,
+          url: await fileToDataUrl(file),
+        })),
+      );
+      const parts: UIMessage["parts"] = [
+        ...fileParts,
+        ...(message ? [{ type: "text" as const, text: message }] : []),
+      ];
+      const clientId = mintTurnId();
+      const userMsg: UIMessage = { id: clientId, role: "user", parts };
+      // Seat the collapsed main lane first (the in-flight answer folds into a
+      // mini-block — nothing is lost: it re-seats as a normal message when
+      // its turn ends), then the new bypass lane.
+      setParallelLanes((prev) => [
+        ...(prev.some((l) => l.laneId === "main")
+          ? []
+          : ([{ laneId: "main", userText: "", text: "", settled: false }] as ParallelLane[])),
+        ...prev,
+        { laneId: clientId, userText: message, text: "", settled: false },
+      ]);
+      const view = getView?.();
       try {
-        res = await fetch(
-          `/api/chat/${encodeURIComponent(activeRunId)}/messages`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: message, turnId }),
-          },
-        );
-      } catch {
-        res = null; // network failure — fall through to the standard path
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            // Same window + fields the transport sends (see
+            // prepareSendMessagesRequest) plus the new message.
+            messages: [...messages.slice(-SEND_MESSAGE_WINDOW), userMsg],
+            model: selectedModel,
+            timezone:
+              typeof Intl !== "undefined"
+                ? Intl.DateTimeFormat().resolvedOptions().timeZone
+                : "UTC",
+            locale,
+            loadedSliceIds: timelineSlices.map((s) => s.slice_id),
+            ...(view ? { view } : {}),
+          }),
+        });
+        const runId = res.headers.get("x-workflow-run-id");
+        if (!res.ok || !runId) {
+          throw new Error(`parallel send HTTP ${res.status}`);
+        }
+        // The lane reads via the reconnect route — this response's body is
+        // only the first attachment onto the same durable stream.
+        await res.body?.cancel().catch(() => {});
+        patchParallelLane(clientId, { runId });
+      } catch (err) {
+        console.error("[chat] parallel send failed:", err);
+        setParallelLanes((prev) => prev.filter((l) => l.laneId !== clientId));
+        toast.error(t("parallel.sendFailed"));
       }
-      if (res?.ok) {
-        // Optimistic bubble: id = the client-minted turnId, so the nested
-        // bubbles' replyTo anchors resolve against it.
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: turnId,
-            role: "user",
-            parts: [{ type: "text" as const, text: message }],
-          },
-        ]);
-        requestAnimationFrame(scrollToBottom);
-        return;
-      }
-      if (res && res.status !== 409 && res.status !== 404) {
-        // A validation-shaped rejection is OUR bug — log it, then still fall
-        // back so the message survives.
-        console.error("[chat] episode message rejected:", res.status);
-      }
+      requestAnimationFrame(scrollToBottom);
+      return;
     }
 
     // Images travel as AI SDK file parts (data URLs) — convertToModelMessages

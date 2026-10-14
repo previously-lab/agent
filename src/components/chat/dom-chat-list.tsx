@@ -59,6 +59,7 @@ import {
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { ChatMessage } from "./chat-message";
 import { NestedBubble } from "./nested-bubble";
+import { ParallelLaneView } from "./parallel-lane";
 import { HistoryTurn } from "./history-turn";
 import { SliceSeam } from "./slice-seam";
 import { ResumeBanner } from "./resume-banner";
@@ -595,6 +596,14 @@ export function DomChatList({
         return (
           <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
             <NestedBubble frame={item.frame} excerpt={item.excerpt} />
+          </div>
+        );
+      case "parallel-lane":
+        // A parallel burst lane (v0.33 §6) — bypass run or the collapsed
+        // main lane; the seat carries everything the view renders.
+        return (
+          <div className="px-3 sm:pr-6 md:pl-0 lg:pr-8">
+            <ParallelLaneView lane={item.lane} />
           </div>
         );
     }

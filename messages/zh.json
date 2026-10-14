@@ -230,6 +230,14 @@
       "failed": "这条没答成",
       "doneAt": "完成于 {time}"
     },
+    "parallel": {
+      "laneLabel": "并行回答",
+      "summaryLabel": "本轮收尾",
+      "running": "正在作答…",
+      "expand": "展开",
+      "collapse": "收起",
+      "sendFailed": "这条并行发送没发出去——请再发一次"
+    },
     "search": {
       "title": "搜索对话",
       "placeholder": "搜索过去的对话…",
