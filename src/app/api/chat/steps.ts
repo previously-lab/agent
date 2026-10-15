@@ -1219,7 +1219,11 @@ export async function housekeeping(
   // monthly index maintenance moved out of the turn path.
   await mergeSliceWithDiskTurns(slice, input);
   await saveSliceSnapshot(slice, batch);
-  await flushBatch(batch, `Turn ${input.turnId} — user turn`);
+  // The entry beat's commit carries the turn tail's conflict self-heal
+  // (flushTurnBatch — bounded merge-retry, MAX_FLUSH_RETRIES): a moved ref
+  // re-reads the remote slice and merge-appends by turnId instead of
+  // throwing this step into a platform retry that re-runs the analysis.
+  await flushTurnBatch(batch, `Turn ${input.turnId} — user turn`, slice);
 
   // ── 6. Continuity + slice-head snapshot + identity (the read face) ────
   // v0.9 slice-level prompt freeze: the continuity stance is computed at the
@@ -1368,6 +1372,18 @@ export async function housekeeping(
     stream.close();
   }
 }
+
+// Platform step retries re-run the WHOLE beat — the LLM analysis included
+// — and re-emit every phase chunk (the production incident's flip-flopping
+// phase card): the SDK default is maxRetries=3 → 4 total attempts
+// (docs/foundations/errors-and-retries.mdx:136-140; the runtime reads the
+// property live at failure time — @workflow/core step-executor.js:238,
+// runtime.js:1354). Flush conflicts now self-heal inside flushTurnBatch
+// and typed rate limits fast-fail via the circuit breaker (immediate
+// whole-step retries can only burn LLM quota against them), so ONE retry
+// is kept for genuine transients (network blip, provider 5xx).
+// Ruled: doc/reviews/housekeeping-and-page-hang.md §8 (user to confirm).
+(housekeeping as { maxRetries?: number }).maxRetries = 1;
 
 // ─── The turn tail: finalizeTurn — one slice-locked step, ONE commit ──────
 

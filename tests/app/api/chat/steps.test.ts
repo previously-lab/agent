@@ -1838,6 +1838,93 @@ describe("finalizeTurn — flushTurnBatch write-conflict self-heal (T-10)", () =
   });
 });
 
+// ── housekeeping's own flush self-heal (D 批) ────────────────────────────
+// The entry beat's one commit (steps.ts — `Turn {turnId} — user turn`) now
+// rides flushTurnBatch, the same merge-retry the tail has. These cases mirror
+// the T-10 describe above but drive the FULL housekeeping step, so the
+// platform-retry storm the production incident showed is pinned down at the
+// layer that used to cause it.
+describe("housekeeping — entry-beat flush write-conflict self-heal (D)", () => {
+  // sliceIdToFilePath mock output for the default makeSlice id.
+  const CORE_PATH = "memory/records/2026/07/14/0900/core.md";
+
+  /** A GitHub non-fast-forward rejection (isRefConflictError: status 422). */
+  const refConflict = () =>
+    Object.assign(new Error("Update is not a fast forward"), { status: 422 });
+
+  let batches: Array<{ entries: Map<string, string> }>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    batches = [];
+    episodic.createBatch.mockImplementation(() => {
+      const b = { entries: new Map<string, string>() };
+      batches.push(b);
+      return b;
+    });
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+    // Restore the file-level defaults — clearAllMocks keeps implementations.
+    episodic.createBatch.mockImplementation(() => ({
+      entries: new Map<string, string>(),
+    }));
+    episodic.flushBatch.mockImplementation(async () => {});
+  });
+
+  it("a persistent 422 storm retries BOUNDED (3 flushes), then throws — the step fails instead of storming", async () => {
+    episodic.flushBatch.mockRejectedValue(refConflict());
+    readFileMock.readFileFresh.mockResolvedValue(
+      serializeSlice(makeSlice()),
+    );
+
+    await expect(housekeeping(makeInput("hi"))).rejects.toThrow(
+      "not a fast forward",
+    );
+    // initial attempt + MAX_FLUSH_RETRIES (2) — never more.
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(3);
+    expect(readFileMock.readFileFresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("heals on the second attempt: the remote turn is merged in and the user turn lands — no error escapes", async () => {
+    episodic.flushBatch
+      .mockRejectedValueOnce(refConflict())
+      .mockResolvedValueOnce(undefined);
+    // The remote slice gained a turn our stale base does not have.
+    readFileMock.readFileFresh.mockResolvedValue(
+      serializeSlice(
+        makeSlice({
+          turns: [
+            { timestamp: "tx", role: "agent", content: "remote-only turn", turnId: "remote-1" },
+          ],
+        }),
+      ),
+    );
+
+    const hk = await housekeeping(makeInput("hi"));
+
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(2);
+    expect(readFileMock.readFileFresh).toHaveBeenCalledTimes(1);
+    // The merged remote content was swapped into the batch before the retry.
+    expect(batches[0].entries.get(CORE_PATH)).toContain("remote-only turn");
+    // The user turn landed in the slice that the snapshot persisted.
+    const userTurn = hk.slice.turns.find((t) => t.role === "user");
+    expect(userTurn?.content).toContain("hi");
+  });
+
+  it("a NON-conflict flush failure throws immediately — no merge, no retry", async () => {
+    episodic.flushBatch.mockRejectedValue(
+      Object.assign(new Error("boom"), { status: 500 }),
+    );
+
+    await expect(housekeeping(makeInput("hi"))).rejects.toThrow("boom");
+    expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
+    expect(readFileMock.readFileFresh).not.toHaveBeenCalled();
+  });
+});
+
 describe("finalizeTurn — the tail's single commit", () => {
   const outcome: TurnOutcome = {
     text: "agent reply",

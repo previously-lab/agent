@@ -1002,7 +1002,37 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
     ? createHook<EpisodeInboxEvent>({ token: episodeInboxToken(episodeRunId) })
     : null;
 
-  const hk = await housekeeping(input);
+  // Housekeeping failure → degrade to an error terminal (D-batch; semantics
+  // "end with an error" registered for user confirmation in
+  // doc/reviews/housekeeping-and-page-hang.md §8): emit the terminal
+  // turn-status frame (closeTurnStream's own shape — the client renders it as
+  // a visible failure instead of a bare finish), then rethrow so the run
+  // still records the failure for observability.
+  let hk: Awaited<ReturnType<typeof housekeeping>>;
+  try {
+    hk = await housekeeping(input);
+  } catch (hkErr) {
+    const detail = hkErr instanceof Error ? hkErr.message : String(hkErr);
+    console.warn(
+      "[Turn] housekeeping failed — ending the turn with an error frame:",
+      detail,
+    );
+    try {
+      await closeTurnStream(
+        {
+          text: "",
+          finishReason: "error",
+          cognition: "",
+          error: `The turn failed before it could finish. Your message was not saved — please send it again.${detail ? ` (${detail.slice(0, 300)})` : ""}`,
+        },
+        input.turnId,
+      );
+    } catch {
+      // The stream is gone too — nothing left to degrade into; the rethrow
+      // below still marks the run failed.
+    }
+    throw hkErr;
+  }
   const {
     slice,
     previouslyContent,
