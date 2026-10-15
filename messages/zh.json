@@ -62,6 +62,8 @@
     "dialogTitle": "选择角色"
   },
   "chat": {
+    "arrivalError": "加载对话状态超时——记忆服务可能暂时不可用（限流或离线）。",
+    "arrivalRetry": "重试",
     "input": {
       "placeholder": "发送消息…",
       "attach": "附件",

@@ -1,4 +1,8 @@
-import { getOctokit } from "@/lib/github/client";
+import {
+  getOctokit,
+  isGitHubRateLimitError,
+  isGitHubReadTimeoutError,
+} from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
 import type { ReadOptions } from "@/lib/cache/data-cache";
 
@@ -74,6 +78,10 @@ export async function listFiles(
     );
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Access denied")) {
+      throw error;
+    }
+    // Guardrail failures (rate limit / read deadline) keep their type.
+    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
       throw error;
     }
     if (

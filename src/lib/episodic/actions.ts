@@ -7,6 +7,7 @@ import { formatErrorDetail } from "@/lib/chat/workflow-errors";
 import { parseSlice, readPreviously, readAgentTimeline, loadSlice, readStrands } from "./manager";
 import { readSlicePart, sliceIdToRelPath, slicePartPathCandidates } from "./paths";
 import { getRepoTree } from "@/lib/tools/readFile";
+import { withGitHubReadBudget } from "@/lib/github/client";
 import { getRepoConfig } from "@/lib/capabilities";
 import { fsListFiles, fsReadFile } from "./io-helpers";
 import {
@@ -129,38 +130,43 @@ function skeletonEntry(id: string): TimelineSliceEntry {
 
 export async function getEpisodicState(persona?: string): Promise<EpisodicState & { hasMore: boolean }> {
   if (persona) setDemoPersona(persona);
-  const PAGE_SIZE = 3;
+  // Bounded by the shared GitHub read budget: a degraded API (throttle
+  // sleeps, stale connections) fails fast with a typed error instead of
+  // hanging this mount gate to the platform's wall-clock limit.
+  return withGitHubReadBudget(async () => {
+    const PAGE_SIZE = 3;
 
-  // One enumeration answers "what are the newest three slices" — the question
-  // the catalog used to answer by definition. Only those three headers are
-  // point-read. This runs on every chat mount and is one of the two legs
-  // gating the arrival skeleton.
-  const ids = await listLiveSliceIds();
-  if (ids.length === 0) {
-    return { hasActiveSlice: false, hasMore: false, active: null, recent: [] };
-  }
+    // One enumeration answers "what are the newest three slices" — the question
+    // the catalog used to answer by definition. Only those three headers are
+    // point-read. This runs on every chat mount and is one of the two legs
+    // gating the arrival skeleton.
+    const ids = await listLiveSliceIds();
+    if (ids.length === 0) {
+      return { hasActiveSlice: false, hasMore: false, active: null, recent: [] };
+    }
 
-  const entries = await readLiveEntries(ids.slice(-PAGE_SIZE));
-  const recent = [...entries].sort((a, b) => b.start.localeCompare(a.start));
-  const first = recent[0];
+    const entries = await readLiveEntries(ids.slice(-PAGE_SIZE));
+    const recent = [...entries].sort((a, b) => b.start.localeCompare(a.start));
+    const first = recent[0];
 
-  const summary = (e: (typeof recent)[number]): SliceSummary => ({
-    slice_id: e.id,
-    focus: e.focus,
-    summary: e.summary,
-    start: e.start,
-    status: e.status,
-    open_loops: e.open_loops,
-    decisions: e.decisions,
-    strands: e.strands,
+    const summary = (e: (typeof recent)[number]): SliceSummary => ({
+      slice_id: e.id,
+      focus: e.focus,
+      summary: e.summary,
+      start: e.start,
+      status: e.status,
+      open_loops: e.open_loops,
+      decisions: e.decisions,
+      strands: e.strands,
+    });
+
+    return {
+      hasActiveSlice: recent.length > 0,
+      hasMore: ids.length > PAGE_SIZE,
+      active: first ? summary(first) : null,
+      recent: recent.map(summary),
+    };
   });
-
-  return {
-    hasActiveSlice: recent.length > 0,
-    hasMore: ids.length > PAGE_SIZE,
-    active: first ? summary(first) : null,
-    recent: recent.map(summary),
-  };
 }
 
 export interface SliceWithContent {
@@ -393,40 +399,42 @@ const ARRIVAL_BOUNDARY_SIGNALS: ReadonlySet<string> = new Set([
 
 export async function getArrivalState(persona?: string): Promise<ArrivalState> {
   if (persona) setDemoPersona(persona);
-  const ids = await listLiveSliceIds();
-  const lastId = ids[ids.length - 1];
-  if (!lastId) return { mode: "briefing" };
+  return withGitHubReadBudget(async () => {
+    const ids = await listLiveSliceIds();
+    const lastId = ids[ids.length - 1];
+    if (!lastId) return { mode: "briefing" };
 
-  const slice = await loadSlice(lastId);
-  if (!slice) return { mode: "briefing" };
+    const slice = await loadSlice(lastId);
+    if (!slice) return { mode: "briefing" };
 
-  // The boundary verdict reads the slice's OWN header (status is derived from
-  // closed_by, v0.19 R2) — no catalog entry exists anymore.
-  if (
-    slice.status !== "active" &&
-    slice.closedBy &&
-    ARRIVAL_BOUNDARY_SIGNALS.has(slice.closedBy)
-  ) {
+    // The boundary verdict reads the slice's OWN header (status is derived from
+    // closed_by, v0.19 R2) — no catalog entry exists anymore.
+    if (
+      slice.status !== "active" &&
+      slice.closedBy &&
+      ARRIVAL_BOUNDARY_SIGNALS.has(slice.closedBy)
+    ) {
+      return { mode: "briefing" };
+    }
+
+    const lastActivity =
+      slice.turns[slice.turns.length - 1]?.timestamp ?? slice.end ?? slice.start;
+    const { slicing } = await loadUserConfig();
+    if (Date.now() - new Date(lastActivity).getTime() < slicing.idleGapMinutes * 60_000) {
+      return {
+        mode: "resume",
+        sliceId: slice.slice_id,
+        turns: slice.turns,
+        focus: slice.focus,
+        start: slice.start,
+        // Strands were a weave-resolved projection field (strands.json) — with
+        // the projection gone there is no live source; the restored turns
+        // render untinted.
+        strands: [],
+      };
+    }
     return { mode: "briefing" };
-  }
-
-  const lastActivity =
-    slice.turns[slice.turns.length - 1]?.timestamp ?? slice.end ?? slice.start;
-  const { slicing } = await loadUserConfig();
-  if (Date.now() - new Date(lastActivity).getTime() < slicing.idleGapMinutes * 60_000) {
-    return {
-      mode: "resume",
-      sliceId: slice.slice_id,
-      turns: slice.turns,
-      focus: slice.focus,
-      start: slice.start,
-      // Strands were a weave-resolved projection field (strands.json) — with
-      // the projection gone there is no live source; the restored turns
-      // render untinted.
-      strands: [],
-    };
-  }
-  return { mode: "briefing" };
+  });
 }
 
 /**
@@ -490,11 +498,13 @@ export async function getTimelineCatalogPage(
   before: string | null,
   months = 2,
 ): Promise<CatalogPage> {
-  const ids = await listLiveSliceIds();
-  const skeletons = ids.map(skeletonEntry);
-  const page = pageCatalog(skeletons, before, months);
-  const entries = await readLiveEntries(page.entries.map((e) => e.id));
-  return { ...page, entries };
+  return withGitHubReadBudget(async () => {
+    const ids = await listLiveSliceIds();
+    const skeletons = ids.map(skeletonEntry);
+    const page = pageCatalog(skeletons, before, months);
+    const entries = await readLiveEntries(page.entries.map((e) => e.id));
+    return { ...page, entries };
+  });
 }
 
 /**

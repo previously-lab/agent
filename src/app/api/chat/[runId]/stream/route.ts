@@ -32,17 +32,44 @@ export async function GET(
     const run = getRun(runId);
     const status = await run.status;
 
-    // failed / cancelled runs have nothing valid to recover — emit a clean
-    // terminal so the client ends cleanly instead of retrying a stream that
-    // will never deliver a finish chunk. A COMPLETED run, however, must return
-    // its actual stream: the client may have dropped before receiving the
-    // finish chunk, and the durable stream still carries the full reply. A bare
-    // terminal here would leave the client with an empty assistant turn (the
-    // mount-resume path strips the partial turn before replaying — see
-    // chat-page.tsx — so the rebuild must come from the stream, not a terminal).
+    // failed / cancelled runs have nothing valid to recover — emit an ERROR
+    // terminal frame (data-turn-status, the same shape closeTurnStream ends
+    // with) so the client shows a visible "failed, resend" state instead of
+    // silently ending on a bare finish. The failure detail is read off
+    // run.returnValue — terminal, so it settles immediately, no hang risk.
+    // A COMPLETED run, however, must return its actual stream: the client may
+    // have dropped before receiving the finish chunk, and the durable stream
+    // still carries the full reply. A bare terminal there would leave the
+    // client with an empty assistant turn (the mount-resume path strips the
+    // partial turn before replaying — see chat-page.tsx — so the rebuild must
+    // come from the stream, not a terminal).
     if (status === "failed" || status === "cancelled") {
+      let detail = "";
+      try {
+        await run.returnValue;
+      } catch (err) {
+        const cause = (err as { cause?: unknown })?.cause;
+        detail =
+          cause instanceof Error
+            ? cause.message
+            : err instanceof Error
+              ? err.message
+              : "";
+      }
       const terminalStream = new ReadableStream<UIMessageChunk>({
         start(controller) {
+          controller.enqueue({
+            type: "data-turn-status",
+            id: "turn-status-terminal",
+            data: {
+              status: "error",
+              updatedAt: new Date().toISOString(),
+              error:
+                status === "cancelled"
+                  ? "The turn was cancelled before it could finish."
+                  : `The turn failed before it could finish. Your message was not saved — please send it again.${detail ? ` (${detail.slice(0, 300)})` : ""}`,
+            },
+          } as UIMessageChunk);
           controller.enqueue({ type: "finish-step" } as UIMessageChunk);
           controller.enqueue({ type: "finish" } as UIMessageChunk);
           controller.close();

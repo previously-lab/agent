@@ -61,3 +61,43 @@ export function decideArrival(
   }
   return { shouldResume: false, initialMessages: [] };
 }
+
+// ─── Arrival gate timeout ─────────────────────────────────────────────────
+
+/**
+ * Hard cap on the mount-time arrival verdict (run-status check + arrival
+ * state). The reads underneath carry their own GitHub budget; this gate is
+ * the UI-level backstop so a degraded network/server surfaces the retry card
+ * instead of an endless skeleton.
+ */
+export const ARRIVAL_GATE_TIMEOUT_MS = 15_000;
+
+export type ArrivalGateResult<T> =
+  | { kind: "ok"; verdict: T }
+  | { kind: "failed" };
+
+/**
+ * Race the arrival verdict against the gate timeout. ANY outcome that isn't a
+ * timely success — timeout or rejection — collapses to `{ kind: "failed" }`
+ * so the caller can render its failure card. A late-settling loser promise
+ * stays handled by the race (no unhandled rejection); its side effects are
+ * idempotent localStorage/cache reads.
+ */
+export async function raceArrivalVerdict<T>(
+  verdict: Promise<T>,
+  timeoutMs: number = ARRIVAL_GATE_TIMEOUT_MS,
+): Promise<ArrivalGateResult<T>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      verdict.then((v): ArrivalGateResult<T> => ({ kind: "ok", verdict: v })),
+      new Promise<ArrivalGateResult<T>>((resolve) => {
+        timer = setTimeout(() => resolve({ kind: "failed" }), timeoutMs);
+      }),
+    ]);
+  } catch {
+    return { kind: "failed" };
+  } finally {
+    clearTimeout(timer);
+  }
+}

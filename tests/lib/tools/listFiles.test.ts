@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockGetContent = vi.fn();
-vi.mock("@/lib/github/client", () => ({
+vi.mock("@/lib/github/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/github/client")>()),
   getOctokit: () => ({
     rest: {
       repos: {

@@ -62,6 +62,8 @@
     "dialogTitle": "Choose a Persona"
   },
   "chat": {
+    "arrivalError": "Loading the conversation state timed out — the memory service may be temporarily unavailable (rate-limited or offline).",
+    "arrivalRetry": "Retry",
     "input": {
       "placeholder": "Send a message...",
       "attach": "Attach files",

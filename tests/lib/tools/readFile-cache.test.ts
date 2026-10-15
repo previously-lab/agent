@@ -12,9 +12,10 @@ vi.mock("next/cache", () => ({
   revalidateTag: (...args: unknown[]) => mockRevalidateTag(...args),
 }));
 
-// Mock octokit
+// Mock octokit (the type guards stay real — readFile.ts rethrows on them)
 const mockGetContent = vi.fn();
-vi.mock("@/lib/github/client", () => ({
+vi.mock("@/lib/github/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/github/client")>()),
   getOctokit: () => ({
     rest: {
       repos: {

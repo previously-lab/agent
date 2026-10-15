@@ -1,4 +1,8 @@
-import { getOctokit } from "@/lib/github/client";
+import {
+  getOctokit,
+  isGitHubRateLimitError,
+  isGitHubReadTimeoutError,
+} from "@/lib/github/client";
 import { isPathAllowed } from "@/lib/whitelist";
 import {
   CACHE_TTLS,
@@ -106,6 +110,11 @@ async function fetchFromGitHub(
       : "";
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("Access denied")) {
+      throw error;
+    }
+    // Guardrail failures (rate limit / read deadline) keep their type so
+    // callers can degrade instead of retrying a generic failure.
+    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
       throw error;
     }
     if (
@@ -328,6 +337,10 @@ async function fetchBlobBase64(
     });
     return data.content.replace(/\n/g, "");
   } catch (error) {
+    // Guardrail failures (rate limit / read deadline) keep their type.
+    if (isGitHubRateLimitError(error) || isGitHubReadTimeoutError(error)) {
+      throw error;
+    }
     if (
       error instanceof Error &&
       "status" in error &&

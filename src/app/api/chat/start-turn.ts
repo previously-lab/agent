@@ -29,6 +29,7 @@ import { resolveAvailableModels } from "@/lib/models/catalog";
 import { getRepoConfig } from "@/lib/capabilities";
 import { resolveDataSource } from "@/lib/data-source/resolve";
 import { demoModelLock } from "@/lib/demo/model-lock";
+import { withGitHubReadBudget } from "@/lib/github/client";
 
 export interface StartTurnArgs {
   /** Raw UI messages from the client. */
@@ -220,7 +221,9 @@ export function summarizeModelContent(
 export async function startTurn(
   args: StartTurnArgs
 ): Promise<Awaited<ReturnType<typeof start>>> {
-  const config = await loadUserConfig();
+  // Bounded by the shared GitHub read budget: a degraded API fails the POST
+  // fast instead of hanging it to the platform's wall-clock limit.
+  const config = await withGitHubReadBudget(() => loadUserConfig());
   // Demo mode: model + thinking intensity are pinned server-side (the demo
   // runs on the maintainer's key) — client/config preferences are ignored.
   const lock = demoModelLock();
@@ -228,7 +231,9 @@ export async function startTurn(
   // migrated by mergeConfig) to a full ModelConfig, falling back to the
   // deployment default when the id is unknown/unavailable.
   const requested = lock?.model ?? (args.model || config.model.provider);
-  const { model, modelConfig } = await resolveModelConfig(requested);
+  const { model, modelConfig } = await withGitHubReadBudget(() =>
+    resolveModelConfig(requested),
+  );
   // Thinking is pinned ON at LOW effort for every turn — fast responses are the
   // product rule; deep thinking is thinkDeep's job (it keeps its own
   // model-chosen effort). Client-sent thinking/effort and the stored config

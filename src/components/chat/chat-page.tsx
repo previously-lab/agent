@@ -29,6 +29,7 @@ import { SLICE_PAGE_SIZE } from "@/hooks/use-slice-stream";
 import { useBriefingIdentity } from "@/hooks/use-briefing-identity";
 import {
   decideArrival,
+  raceArrivalVerdict,
   type ArrivalDecision,
 } from "@/lib/chat/reconnect";
 import {
@@ -132,20 +133,46 @@ export function ChatPage({
   // this verdict is async — Inner (and therefore useChat) mounts only after it
   // lands, keeping useChat's init a synchronous, once-only snapshot. Until
   // then nothing renders (the header is outside this tree, so the page chrome
-  // still shows).
+  // still shows). The verdict is gated by raceArrivalVerdict: a timeout or
+  // failure shows a retry card instead of an endless skeleton.
+  const t = useTranslations("chat");
   const [verdict, setVerdict] = useState<MountVerdict | null>(null);
+  const [arrivalFailed, setArrivalFailed] = useState(false);
+  const [arrivalAttempt, setArrivalAttempt] = useState(0);
   useEffect(() => {
     // Persona comes from the URL — server actions can't read searchParams.
     const persona =
       new URLSearchParams(window.location.search).get("persona") || "user";
     let cancelled = false;
-    resolveArrival(persona).then((d) => {
-      if (!cancelled) setVerdict({ ...d, persona });
+    raceArrivalVerdict(resolveArrival(persona)).then((r) => {
+      if (cancelled) return;
+      if (r.kind === "ok") {
+        setVerdict({ ...r.verdict, persona });
+      } else {
+        setArrivalFailed(true);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [arrivalAttempt]);
+  if (arrivalFailed) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <p className="text-sm text-muted-foreground">{t("arrivalError")}</p>
+        <button
+          type="button"
+          className="rounded-md border border-border px-4 py-2 text-sm"
+          onClick={() => {
+            setArrivalFailed(false);
+            setArrivalAttempt((n) => n + 1);
+          }}
+        >
+          {t("arrivalRetry")}
+        </button>
+      </div>
+    );
+  }
   if (!verdict) return <ChatPageSkeleton />;
   return (
     <Inner

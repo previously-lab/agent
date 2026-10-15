@@ -43,7 +43,8 @@ vi.mock("next/cache", () => ({
   revalidateTag: hoisted.mockRevalidateTag,
 }));
 
-vi.mock("@/lib/github/client", () => ({
+vi.mock("@/lib/github/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/github/client")>()),
   getOctokit: () => ({
     rest: {
       git: {
