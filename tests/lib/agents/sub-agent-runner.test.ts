@@ -26,6 +26,20 @@ const workflow = vi.hoisted(() => {
 });
 vi.mock("workflow", () => ({ getWritable: workflow.getWritable }));
 
+// Passthrough spy on the backstop wrapper so tests can pin WHEN it is
+// installed (explicit budget) vs skipped (omitted — v0.34 修订 A).
+const stepTimeout = vi.hoisted(() => ({
+  withStepTimeout: vi.fn(async (work: () => Promise<unknown>) => ({
+    ok: true,
+    timedOut: false,
+    result: await work(),
+    elapsedMs: 0,
+  })),
+}));
+vi.mock("@/lib/chat/step-timeout", () => ({
+  withStepTimeout: stepTimeout.withStepTimeout,
+}));
+
 import {
   runSubAgent,
   extractToolReport,
@@ -228,10 +242,22 @@ describe("runSubAgent", () => {
     });
   });
 
-  it("passes the wall-clock budget to the SDK timeout hook", async () => {
+  it("an explicit timeoutMs installs BOTH hooks: SDK timeout + withStepTimeout backstop (budget + grace)", async () => {
     fakeStream();
     await runSubAgent(baseOpts({ timeoutMs: 12_000 }));
     expect(lastCall().timeout).toBe(12_000);
+    expect(stepTimeout.withStepTimeout).toHaveBeenCalledWith(
+      expect.any(Function),
+      15_000,
+    );
+  });
+
+  it("omitting timeoutMs installs NEITHER hook — the SDK timeout key is absent and the backstop is skipped (v0.34 修订 A)", async () => {
+    fakeStream();
+    const res = await runSubAgent(baseOpts());
+    expect(res.ok).toBe(true);
+    expect("timeout" in lastCall()).toBe(false);
+    expect(stepTimeout.withStepTimeout).not.toHaveBeenCalled();
   });
 
   it("omits maxOutputTokens by default (project-wide ban)", async () => {

@@ -202,7 +202,7 @@ const evolution = vi.hoisted(() => ({
 }));
 vi.mock("@/app/api/evolution/run-card-evolution", () => evolution);
 
-// The mechanical bell (v0.30 §2.1) is mocked at its module boundary: the
+// The mechanical bell (v0.34 R1) is mocked at its module boundary: the
 // engine's three delivery paths are pinned in reflection-wake.test.ts, so
 // here only the step's threading (payload in, warn-not-throw out) matters.
 const reflectionWake = vi.hoisted(() => ({
@@ -212,12 +212,9 @@ const reflectionWake = vi.hoisted(() => ({
       | { ok: false; reason: string }
     > => ({ ok: true, delivered: "resumed", runId: "hq-1" }),
   ),
-  buildReflectionWakePayload: vi.fn(
-    (slice: { slice_id: string }, input: { turnId?: string }) => ({
-      sliceId: slice.slice_id,
-      ...(input.turnId ? { turnId: input.turnId } : {}),
-    }),
-  ),
+  buildReflectionWakePayload: vi.fn((closedSliceId: string) => ({
+    sliceId: closedSliceId,
+  })),
 }));
 vi.mock("@/app/api/evolution/reflection-wake", () => reflectionWake);
 
@@ -1896,16 +1893,15 @@ describe("finalizeTurn — the tail's single commit", () => {
   });
 });
 
-describe("ringReflection — the mechanical bell (v0.30 §2.1)", () => {
-  it("delivers the wake built from the slice and the turn", async () => {
+describe("ringReflection — the mechanical bell (v0.34 R1)", () => {
+  it("delivers the wake built from the sealed slice's pointer", async () => {
     const slice = makeSlice();
     const input = makeInput("hi");
-    await ringReflection(slice, input);
-    expect(reflectionWake.buildReflectionWakePayload).toHaveBeenCalledWith(slice, input);
+    await ringReflection(slice.slice_id, input);
+    expect(reflectionWake.buildReflectionWakePayload).toHaveBeenCalledWith(slice.slice_id, input);
     expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledTimes(1);
     expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledWith({
       sliceId: slice.slice_id,
-      turnId: input.turnId,
     });
   });
 
@@ -1916,7 +1912,7 @@ describe("ringReflection — the mechanical bell (v0.30 §2.1)", () => {
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await expect(ringReflection(makeSlice(), makeInput("hi"))).resolves.toBeUndefined();
+      await expect(ringReflection(makeSlice().slice_id, makeInput("hi"))).resolves.toBeUndefined();
       expect(
         warnSpy.mock.calls.some(
           (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake not delivered"),
@@ -1931,7 +1927,7 @@ describe("ringReflection — the mechanical bell (v0.30 §2.1)", () => {
     reflectionWake.deliverReflectionWake.mockRejectedValueOnce(new Error("boom"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await expect(ringReflection(makeSlice(), makeInput("hi"))).resolves.toBeUndefined();
+      await expect(ringReflection(makeSlice().slice_id, makeInput("hi"))).resolves.toBeUndefined();
       expect(
         warnSpy.mock.calls.some(
           (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake failed"),

@@ -18,10 +18,10 @@
  * doc-research pass, the merged card run, the case write machinery, the SOP
  * store) — this module invents no new write path.
  *
- * P4b wiring: the hq-run.ts shell's `handleHQBrief` (hq-steps.ts) calls
- * `handleBrief` below — one brief = one round. question-run.ts keeps
- * compiling against background-steps.ts until the last P4 lane retires the
- * old trigger chain.
+ * Shell wiring (P4b → v0.34 R1): the reflection-run.ts resident loop's
+ * `handleReflectionRound` (reflection-steps.ts) calls `handleBrief` below —
+ * one wake = one round. question-run.ts keeps compiling against
+ * background-steps.ts until the last P4 lane retires the old trigger chain.
  */
 import { tool } from "ai";
 import { z } from "zod";
@@ -409,7 +409,7 @@ function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
   };
 }
 
-// ─── The entry (P4 wiring point — the hq-run.ts shell calls this) ─────────
+// ─── The entry (the reflection-run.ts shell calls this) ───────────────────
 
 /**
  * Handle one mechanical wake (v0.30 §2). Never throws: a failed round
@@ -449,9 +449,9 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
     maxSteps: 50,
-    // Above the internal composite passes' budgets (the merged card pass
-    // carries 240s) — HQ must outlive any single tool call it makes.
-    timeoutMs: 300_000,
+    // No wall-clock budget (v0.34 修订 A — execution budgets are deleted
+    // repo-wide): the round's bounds are the step cap above and the
+    // platform wall.
   });
 
   // Flush whatever the round queued — even a failed round keeps whatever

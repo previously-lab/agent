@@ -1,17 +1,20 @@
 /**
  * HQ status store (src/app/api/evolution/hq-status-store.ts) — the rolling
- * pointer behind memory/config/hq.json (v0.21 visibility layer).
+ * pointer behind memory/config/hq.json (v0.21 visibility layer; v0.34 R1).
  *
  * Harness mirrors tests/lib/episodic/batch-mode.test.ts: a temp cwd +
  * STORAGE=local + vi.resetModules, real filesystem all the way down — the
  * pointer lands at <tmp>/memory/config/hq.json and NEVER touches the repo's
  * real memory/. Pins the overwrite-in-place contract (no history), the
  * merge rules (recentWrites newest-first, deduped, capped; timestamps never
- * move backwards), the terminal status mapping (完成 / 空转 / 失败) with its
- * lastError line, the immediate started mark (D2 reversed for it), the v0.30
- * 暂存/rolling-pointer landing (lastNote only from a substantive round — R1;
- * lastSeen advancing), and the tolerate-everything read (missing or corrupt
- * file → the empty pointer).
+ * move backwards), the v0.34 R1 PER-ROUND immediate settlement
+ * (recordReflectionRoundSettled — the D2 accumulate-and-flush-at-finish
+ * batching retired with the resident run: briefsHandled ticks every round,
+ * lastError lands a failure's first line and clears on a clean round,
+ * lastNote stages only from a substantive round (空转不留痕), the cursor
+ * advances only on a clean round), the retirement terminal
+ * (recordReflectionRunRetired → "retired"), the immediate started mark, and
+ * the tolerate-everything read (missing or corrupt file → the empty pointer).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -112,7 +115,7 @@ describe("readHQStatus", () => {
     });
   });
 
-  it("a staged note and the rolling pointer normalize through", async () => {
+  it("a staged note and the rolling pointer normalize through (a legacy turnId rides along)", async () => {
     fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, POINTER_DISK_PATH),
@@ -130,11 +133,24 @@ describe("readHQStatus", () => {
     });
     expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
   });
+
+  it("the new terminal \"retired\" (v0.34 修订 B) normalizes through", async () => {
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({ runStatus: "retired", briefsHandled: 7 }),
+      "utf-8",
+    );
+    const { readHQStatus } = await importStore();
+    const s = await readHQStatus();
+    expect(s.runStatus).toBe("retired");
+    expect(s.briefsHandled).toBe(7);
+  });
 });
 
-describe("the run lifecycle marks", () => {
-  it("start lands immediately — running + the start stamp on disk before any finish (D2 reversed for this mark)", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+describe("the generation lifecycle marks", () => {
+  it("start lands immediately — running + the start stamp on disk before any round (the resident run's finish may be days away)", async () => {
+    const { recordHQRunStarted, recordReflectionRunRetired, readHQStatus } =
       await importStore();
     // A legacy field from the dispatch era survives both marks untouched.
     fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
@@ -147,21 +163,21 @@ describe("the run lifecycle marks", () => {
 
     // Immediate: the pointer already reads running with its start stamp —
     // a run that hangs or dies here is no longer invisible behind the
-    // previous run's terminal status.
+    // previous generation's terminal status.
     const onDisk = readOnDisk();
     expect(onDisk?.runStatus).toBe("running");
     expect(typeof onDisk?.runStartedAt).toBe("string");
     expect(onDisk?.lastBriefPreview).toBe("现场：一条简报。");
 
-    await recordHQRunFinished({ handled: 1, wrote: true, errored: false });
+    await recordReflectionRunRetired({ rounds: 1 });
     const s = await readHQStatus();
-    expect(s.runStatus).toBe("completed");
+    expect(s.runStatus).toBe("retired");
     expect(typeof s.runStartedAt).toBe("string");
     expect(s.lastBriefPreview).toBe("现场：一条简报。");
   });
 
-  it("the claiming run's OWN id lands at start (the pod's attach target); the next run's marks overwrite it", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+  it("the claiming run's OWN id lands at start (the pod's attach target); the next generation's marks overwrite it", async () => {
+    const { recordHQRunStarted, recordReflectionRunRetired, readHQStatus } =
       await importStore();
     await recordHQRunStarted("run-abc");
     // immediate: the attach target is on disk from the claim, not the finish
@@ -169,82 +185,26 @@ describe("the run lifecycle marks", () => {
     expect(s.runId).toBe("run-abc");
     expect(s.runStatus).toBe("running");
 
-    // finishing settles the status; a finished run's stream stays replayable,
-    // so the attach target outlives the run
-    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    // retiring settles the status; a retired run's stream stays replayable,
+    // so the attach target outlives the generation
+    await recordReflectionRunRetired({ rounds: 2 });
     s = await readHQStatus();
     expect(s.runId).toBe("run-abc");
-    expect(s.runStatus).toBe("idle");
+    expect(s.runStatus).toBe("retired");
 
-    // the next claim's marks overwrite it
+    // the successor's claim overwrites it (and resets the round count)
     await recordHQRunStarted("run-def");
     s = await readHQStatus();
     expect(s.runId).toBe("run-def");
     expect(s.runStatus).toBe("running");
-    await recordHQRunFinished({ handled: 0, wrote: false, errored: false });
-    s = await readHQStatus();
-    expect(s.runId).toBe("run-def");
-    expect(s.runStatus).toBe("idle");
-  });
-
-  it("finish maps wrote/errored to 完成 / 空转 / 失败 and the definitive count", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
-      await importStore();
-
-    await recordHQRunStarted();
-    await recordHQRunFinished({ handled: 2, wrote: true, errored: false });
-    expect((await readHQStatus()).runStatus).toBe("completed");
-    expect((await readHQStatus()).briefsHandled).toBe(2);
-
-    await recordHQRunStarted();
-    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
-    expect((await readHQStatus()).runStatus).toBe("idle");
-
-    await recordHQRunStarted();
-    await recordHQRunFinished({ handled: 3, wrote: true, errored: true });
-    const s = await readHQStatus();
-    expect(s.runStatus).toBe("failed");
-    expect(s.briefsHandled).toBe(3);
-  });
-
-  it("a failed finish lands the real error's first line (capped); a clean finish clears it", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
-      await importStore();
-
-    await recordHQRunStarted();
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: false,
-      errored: true,
-      error: "runSubAgent timed out after 300s\nstack line two\nstack line three",
-    });
-    let s = await readHQStatus();
-    expect(s.runStatus).toBe("failed");
-    expect(s.lastError).toBe("runSubAgent timed out after 300s");
-
-    // a single over-long line caps at 200 + the ellipsis
-    await recordHQRunStarted();
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: false,
-      errored: true,
-      error: "x".repeat(400),
-    });
-    s = await readHQStatus();
-    expect(s.lastError).toHaveLength(201);
-
-    await recordHQRunStarted();
-    await recordHQRunFinished({ handled: 2, wrote: true, errored: false });
-    s = await readHQStatus();
-    expect(s.runStatus).toBe("completed");
-    expect(s.lastError).toBeNull();
+    expect(s.briefsHandled).toBe(0);
   });
 
   it("a settle write never moves a timestamp backwards (the 2759674fe class)", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
       await importStore();
 
-    // An older run's pending slot carries its (older) start stamp…
+    // An older generation claimed the mailbox…
     await recordHQRunStarted("run-old");
     // …but the file has since learned NEWER marks (another instance's run):
     // the settle write must not drag them back.
@@ -256,7 +216,7 @@ describe("the run lifecycle marks", () => {
       "utf-8",
     );
 
-    await recordHQRunFinished({ handled: 1, wrote: true, errored: false });
+    await recordReflectionRoundSettled({ actions: ["memory/research/x/index.md"] });
     const s = await readHQStatus();
     expect(s.runStartedAt).toBe(newer);
     // a legacy dispatch-era stamp the settle never touches rides through
@@ -264,26 +224,35 @@ describe("the run lifecycle marks", () => {
   });
 });
 
-describe("recordHQBriefOutcome", () => {
-  it("accumulates each brief's landed writes and flushes them newest-first, deduped, capped at 8, in the ONE finish write", async () => {
-    const { recordHQBriefOutcome, recordHQRunFinished, readHQStatus } =
+describe("recordReflectionRoundSettled — per-round immediate settlement (v0.34 R1)", () => {
+  it("every round writes IMMEDIATELY and ticks the count — no finish wait (the resident run may never finish within a read's lifetime)", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
       await importStore();
 
-    await recordHQBriefOutcome({ actions: ["memory/tasks/a/index.md"] });
-    await recordHQBriefOutcome({
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({ actions: ["memory/tasks/a/index.md"] });
+    // immediate: readable NOW, not at the run's finish (D2 batching retired)
+    let s = await readHQStatus();
+    expect(s.recentWrites).toEqual(["memory/tasks/a/index.md"]);
+    expect(s.briefsHandled).toBe(1);
+
+    await recordReflectionRoundSettled({
       actions: ["memory/people/user/index.md", "memory/tasks/a/index.md"],
     });
-    // deferred: nothing readable until the run settles
-    expect((await readHQStatus()).recentWrites).toEqual([]);
+    s = await readHQStatus();
+    expect(s.recentWrites).toEqual([
+      "memory/people/user/index.md",
+      "memory/tasks/a/index.md",
+    ]);
+    expect(s.briefsHandled).toBe(2);
 
     for (let i = 0; i < 10; i += 1) {
-      await recordHQBriefOutcome({ actions: [`memory/tasks/case-${i}/index.md`] });
+      await recordReflectionRoundSettled({
+        actions: [`memory/tasks/case-${i}/index.md`],
+      });
     }
-    await recordHQRunFinished({ handled: 12, wrote: true, errored: false });
-    const s = await readHQStatus();
-    // Newest-first, deduped, capped at 8: the 10 case writes plus the two
-    // earlier actions collapse to 11 uniques, and the cap keeps the newest 8
-    // — exactly the old immediate-merge semantics, now in the one finish write.
+    s = await readHQStatus();
+    // Newest-first, deduped, capped at 8.
     expect(s.recentWrites).toEqual([
       "memory/tasks/case-9/index.md",
       "memory/tasks/case-8/index.md",
@@ -294,96 +263,147 @@ describe("recordHQBriefOutcome", () => {
       "memory/tasks/case-3/index.md",
       "memory/tasks/case-2/index.md",
     ]);
+    expect(s.briefsHandled).toBe(12);
   });
 
-  it("an idle round (no actions) does not touch the file at all", async () => {
-    const { recordHQBriefOutcome } = await importStore();
-    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, POINTER_DISK_PATH),
-      JSON.stringify({ runStatus: "running" }),
-      "utf-8",
+  it("a failed round lands the real error's first line (capped); a clean round clears it", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({
+      actions: [],
+      error: "runSubAgent timed out\nstack line two\nstack line three",
+    });
+    let s = await readHQStatus();
+    expect(s.lastError).toBe("runSubAgent timed out");
+
+    // a single over-long line caps at 200 + the ellipsis
+    await recordReflectionRoundSettled({ actions: [], error: "x".repeat(400) });
+    s = await readHQStatus();
+    expect(s.lastError).toHaveLength(201);
+
+    await recordReflectionRoundSettled({ actions: [] });
+    s = await readHQStatus();
+    expect(s.lastError).toBeNull();
+  });
+
+  it("lastNote stages only from a SUBSTANTIVE round (空转不留痕); a later substantive note overwrites", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({
+      actions: ["memory/research/x/index.md"],
+      note: "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
+    });
+    const staged = (await readHQStatus()).lastNote;
+    expect(staged?.note).toBe(
+      "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
     );
-    const before = readOnDisk();
-    await recordHQBriefOutcome({ actions: [] });
-    expect(readOnDisk()).toEqual(before);
+    expect(typeof staged?.at).toBe("string");
+
+    // an idle round (no writes) never overwrites the staged note
+    await recordReflectionRoundSettled({ actions: [] });
+    expect((await readHQStatus()).lastNote).toEqual(staged);
+
+    // a round that wrote but said nothing never overwrites it either
+    await recordReflectionRoundSettled({ actions: ["memory/research/y/index.md"] });
+    expect((await readHQStatus()).lastNote).toEqual(staged);
+
+    // the next substantive round overwrites
+    await recordReflectionRoundSettled({
+      actions: ["memory/research/w/index.md"],
+      note: "新暂存。",
+    });
+    expect((await readHQStatus()).lastNote?.note).toBe("新暂存。");
+  });
+
+  it("the cursor (lastSeen) advances ONLY on a clean round — a failed round leaves it so the next lap re-reads from the same edge", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({
+      actions: [],
+      seen: { sliceId: "2026-10-04-0131" },
+    });
+    let s = await readHQStatus();
+    // a deliberate idle (no error) DOES advance the cursor
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131" });
+
+    await recordReflectionRoundSettled({
+      actions: [],
+      error: "boom",
+      seen: { sliceId: "2026-10-04-0200" },
+    });
+    s = await readHQStatus();
+    expect(s.lastError).toBe("boom");
+    // failed round: the cursor holds — content past it is NOT silently skipped
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131" });
+
+    await recordReflectionRoundSettled({
+      actions: ["memory/research/x/index.md"],
+      seen: { sliceId: "2026-10-04-0200" },
+    });
+    s = await readHQStatus();
+    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0200" });
+    expect(s.lastError).toBeNull();
+  });
+
+  it("the generation's started mark resets the round count (briefsHandled is per-generation)", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({ actions: [] });
+    await recordReflectionRoundSettled({ actions: [] });
+    expect((await readHQStatus()).briefsHandled).toBe(2);
+
+    await recordHQRunStarted("run-2");
+    expect((await readHQStatus()).briefsHandled).toBe(0);
   });
 });
 
-describe("recordHQRunFinished — the 暂存 and the rolling pointer (v0.30 §2.3/§2.4)", () => {
-  it("a finish carrying a note lands lastNote {note, at}; the seen pointer lands as lastSeen", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
-      await importStore();
+describe("recordReflectionRunRetired — the generation's ONLY clean terminal (修订 B)", () => {
+  it("settles \"retired\" with the definitive count; lastError is NOT touched (retirement is not a failure)", async () => {
+    const {
+      recordHQRunStarted,
+      recordReflectionRoundSettled,
+      recordReflectionRunRetired,
+      readHQStatus,
+    } = await importStore();
+
     await recordHQRunStarted("run-1");
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: true,
-      errored: false,
-      note: "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
-      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
-    });
+    await recordReflectionRoundSettled({ actions: [], error: "boom" });
+    expect((await readHQStatus()).lastError).toBe("boom");
+
+    await recordReflectionRunRetired({ rounds: 1 });
     const s = await readHQStatus();
-    expect(s.runStatus).toBe("completed");
-    expect(s.lastNote?.note).toBe(
-      "核对了 2026-10-04-0131，把屏幕供应商跟进写进了 research/。",
-    );
-    expect(typeof s.lastNote?.at).toBe("string");
-    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
-  });
+    expect(s.runStatus).toBe("retired");
+    expect(s.briefsHandled).toBe(1);
+    // the failure line survives retirement — the NEW generation's first clean
+    // round is what clears it
+    expect(s.lastError).toBe("boom");
 
-  it("a finish WITHOUT a note never overwrites the staged note (R1: 空转不留痕); without a seen the pointer holds", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
-      await importStore();
-    await recordHQRunStarted("run-1");
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: true,
-      errored: false,
-      note: "第一轮写下了一个案件。",
-      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
-    });
-    const staged = (await readHQStatus()).lastNote;
-
-    // the next run goes idle: no note rides its finish — the staged one stays
+    // the successor's started mark lands seconds later
     await recordHQRunStarted("run-2");
-    await recordHQRunFinished({ handled: 2, wrote: false, errored: false });
-    const s = await readHQStatus();
-    expect(s.runStatus).toBe("idle");
-    expect(s.lastNote).toEqual(staged);
-    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
-  });
-
-  it("a later substantive note overwrites; a later seen advances the pointer", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, readHQStatus } =
-      await importStore();
-    await recordHQRunStarted("run-1");
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: true,
-      errored: false,
-      note: "旧暂存。",
-      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
-    });
-    await recordHQRunStarted("run-2");
-    await recordHQRunFinished({
-      handled: 1,
-      wrote: true,
-      errored: false,
-      note: "新暂存。",
-      seen: { sliceId: "2026-10-04-0131", turnId: "turn-2" },
-    });
-    const s = await readHQStatus();
-    expect(s.lastNote?.note).toBe("新暂存。");
-    expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-2" });
+    const next = await readHQStatus();
+    expect(next.runStatus).toBe("running");
+    expect(next.runId).toBe("run-2");
   });
 });
 
 describe("settleHQRunIfStale (the cancelled-run hole)", () => {
   it("settles a pointer whose running run is TERMINAL in the registry — failed, with the registry's verdict", async () => {
-    const { recordHQRunStarted, recordHQBriefOutcome, settleHQRunIfStale, readHQStatus } =
-      await importStore();
+    const {
+      recordHQRunStarted,
+      recordReflectionRoundSettled,
+      settleHQRunIfStale,
+      readHQStatus,
+    } = await importStore();
     await recordHQRunStarted("run-cancelled");
-    await recordHQBriefOutcome({ actions: ["memory/research/x/index.md"] });
+    await recordReflectionRoundSettled({ actions: ["memory/research/x/index.md"] });
 
     const settled = await settleHQRunIfStale("run-cancelled", "cancelled");
 
@@ -395,21 +415,20 @@ describe("settleHQRunIfStale (the cancelled-run hole)", () => {
     expect(onDisk?.runStatus).toBe("failed");
     expect(onDisk?.runId).toBe("run-cancelled");
     expect(typeof onDisk?.runStartedAt).toBe("string");
-    // a run that had only started shows no round count…
     const s = await readHQStatus();
     expect(s.runStatus).toBe("failed");
     expect(s.runId).toBe("run-cancelled");
   });
 
-  it("never clobbers a pointer that moved on — a settled run or a NEW claim stay untouched", async () => {
-    const { recordHQRunStarted, recordHQRunFinished, settleHQRunIfStale } =
+  it("never clobbers a pointer that moved on — a retired generation or a NEW claim stay untouched", async () => {
+    const { recordHQRunStarted, recordReflectionRunRetired, settleHQRunIfStale } =
       await importStore();
 
     // already settled: the stale check names a run the pointer no longer runs
     await recordHQRunStarted("run-a");
-    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    await recordReflectionRunRetired({ rounds: 1 });
     const settled = await settleHQRunIfStale("run-a", "cancelled");
-    expect(settled.runStatus).toBe("idle");
+    expect(settled.runStatus).toBe("retired");
     expect(settled.lastError).toBeNull();
 
     // a NEW claim in between: the route's verdict names the OLD run's id —

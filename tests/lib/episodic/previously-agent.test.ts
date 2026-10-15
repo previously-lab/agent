@@ -80,7 +80,8 @@ describe("runner wiring", () => {
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.model).toBe(MODEL);
     expect(opts.maxSteps).toBe(50);
-    expect(opts.timeoutMs).toBe(240_000);
+    // v0.34 修订 A: no execution budget — the runner installs no timeout hooks.
+    expect("timeoutMs" in opts).toBe(false);
     expect(opts.effort).toBe("low");
     expect(opts.temperature).toBe(0.1);
     expect(opts.reportToolName).toBe("finish");

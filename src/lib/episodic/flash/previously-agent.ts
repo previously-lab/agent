@@ -868,11 +868,9 @@ function buildTools(
 // ─── Runner call ──────────────────────────────────────────────────────────
 
 /** The run does BOTH domains (direction + card/SOPs) — the cap is an
- *  anti-loop fuse, not the budget (the wall clock is): generous by design. */
+ *  anti-loop fuse, generous by design (there is no wall-clock budget:
+ *  v0.34 修订 A deleted execution budgets repo-wide). */
 const MAX_STEPS = 50;
-/** Wall-clock budget per attempt (unified runner: SDK timeout + backstop) —
- *  aligned with the old direction-agent budget. */
-const TIMEOUT_MS = 240_000;
 
 const finishReportSchema = z.object({
   reasoning: z.string(),
@@ -910,7 +908,6 @@ async function attemptCall(
     reportToolName: "finish",
     reportSchema: finishReportSchema,
     maxSteps: MAX_STEPS,
-    timeoutMs: TIMEOUT_MS,
     effort: "low",
     temperature,
     onLine: input.onLine,

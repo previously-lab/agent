@@ -25,14 +25,13 @@
  * the client fires this alongside the local abort and must never be punished
  * for a race with the run's own completion.
  *
- * A REAL cancel also rings the reflection bell (v0.30 §2.1): the turn's own
- * tail never ran, so without this wake the orphaned user message would go
- * unseen until the next turn. The route holds no slice/turn pointer — a
- * bare wake is legal (the unit's range is everything since its last look).
+ * A REAL cancel does NOT ring the reflection bell (v0.34 R1 retired the
+ * bare wake this route used to send): an open slice is not reflection
+ * material — the orphaned user message is covered when its slice seals,
+ * and that seal is what rings the unit.
  */
 import { getRun } from "workflow/api";
 import { guardRequest } from "@/lib/security/origin-guard";
-import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
 import {
   NESTED_BUBBLE_CHUNK,
   normalizeNestedBubble,
@@ -112,11 +111,6 @@ export async function POST(
           );
         }
       });
-      // The bell never delays or breaks the cancel response.
-      const wake = await deliverReflectionWake({});
-      if (!wake.ok) {
-        console.warn(`[chat/cancel] reflection wake not delivered (ignored): ${wake.reason}`);
-      }
       return Response.json({ ok: true, cancelled: true });
     }
     return Response.json({ ok: true, cancelled: false, status });

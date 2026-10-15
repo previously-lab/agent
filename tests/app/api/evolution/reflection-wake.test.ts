@@ -1,11 +1,14 @@
 /**
- * The mechanical bell (v0.30 §2.1) — the reflection unit's ONLY trigger.
+ * The mechanical bell (v0.34 R1) — the reflection unit's ONLY trigger, and
+ * it rings ONLY on a real seal (the per-turn tail bell and the cancel-route
+ * bare bell retired).
  *
- * `workflow/api` is mocked (no real hook/start); `@/app/api/evolution/hq-run`
- * is stubbed so the workflow shell's graph stays out of this test. Pins the
- * three delivery paths (resume / start fallback / raced resume) and the
- * payload shape: a PURE POINTER ({sliceId, turnId, date}) built from the
- * finished turn — nobody briefs the unit anymore.
+ * `workflow/api` is mocked (no real hook/start);
+ * `@/app/api/evolution/reflection-run` is stubbed so the workflow shell's
+ * graph stays out of this test. Pins the three delivery paths (resume /
+ * start fallback / raced resume) and the payload shape: a PURE POINTER
+ * ({sliceId, date}) built off the SEALED slice — nobody briefs the unit
+ * anymore (and the pointer no longer carries a turnId).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -13,7 +16,7 @@ const h = vi.hoisted(() => ({
   getHookByToken: vi.fn(),
   resumeHook: vi.fn(),
   start: vi.fn(),
-  hqRun: vi.fn(),
+  reflectionRun: vi.fn(),
 }));
 
 vi.mock("workflow/api", () => ({
@@ -22,61 +25,60 @@ vi.mock("workflow/api", () => ({
   start: h.start,
 }));
 
-vi.mock("@/app/api/evolution/hq-run", () => ({
-  HQ_TOKEN: "hq:main",
-  hqRun: h.hqRun,
+vi.mock("@/app/api/evolution/reflection-run", () => ({
+  REFLECTION_TOKEN: "reflection:main",
+  reflectionRun: h.reflectionRun,
 }));
 
 import {
   buildReflectionWakePayload,
   deliverReflectionWake,
 } from "@/app/api/evolution/reflection-wake";
-import type { TimeSlice } from "@/lib/episodic";
 import type { TurnInput } from "@/lib/chat/turn-types";
 
-const WAKE = { sliceId: "2026-10-04-0131", turnId: "turn-1", date: "2026-10-04" };
+const WAKE = { sliceId: "2026-10-04-0131", date: "2026-10-04" };
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("deliverReflectionWake — the three delivery paths", () => {
-  it("a live run (advisory hit) → resumeHook(HQ_TOKEN, payload); start never called", async () => {
-    h.getHookByToken.mockResolvedValue({ runId: "hq-live" });
-    h.resumeHook.mockResolvedValue({ runId: "hq-live" });
+  it("a live run (advisory hit) → resumeHook(REFLECTION_TOKEN, payload); start never called", async () => {
+    h.getHookByToken.mockResolvedValue({ runId: "reflection-live" });
+    h.resumeHook.mockResolvedValue({ runId: "reflection-live" });
 
     const r = await deliverReflectionWake(WAKE);
 
-    expect(r).toEqual({ ok: true, delivered: "resumed", runId: "hq-live" });
-    expect(h.getHookByToken).toHaveBeenCalledWith("hq:main");
+    expect(r).toEqual({ ok: true, delivered: "resumed", runId: "reflection-live" });
+    expect(h.getHookByToken).toHaveBeenCalledWith("reflection:main");
     expect(h.resumeHook).toHaveBeenCalledTimes(1);
-    expect(h.resumeHook).toHaveBeenCalledWith("hq:main", WAKE);
+    expect(h.resumeHook).toHaveBeenCalledWith("reflection:main", WAKE);
     expect(h.start).not.toHaveBeenCalled();
   });
 
-  it("no live run (advisory miss) → start(hqRun, [payload], hkg1) fallback", async () => {
+  it("no live run (advisory miss) → start(reflectionRun, [payload], hkg1) — the resident unit's resurrection path", async () => {
     h.getHookByToken.mockRejectedValue(new Error("HookNotFoundError: no hook"));
-    h.start.mockResolvedValue({ runId: "hq-fresh" });
+    h.start.mockResolvedValue({ runId: "reflection-fresh" });
 
     const r = await deliverReflectionWake(WAKE);
 
-    expect(r).toEqual({ ok: true, delivered: "started", runId: "hq-fresh" });
+    expect(r).toEqual({ ok: true, delivered: "started", runId: "reflection-fresh" });
     expect(h.start).toHaveBeenCalledTimes(1);
     const [workflowFn, args, opts] = h.start.mock.calls[0];
-    expect(workflowFn).toBe(h.hqRun);
+    expect(workflowFn).toBe(h.reflectionRun);
     expect(args).toEqual([WAKE]);
     expect(opts).toEqual({ region: "hkg1" });
     expect(h.resumeHook).not.toHaveBeenCalled();
   });
 
   it("a resume raced with the run's exit → fresh start fallback", async () => {
-    h.getHookByToken.mockResolvedValue({ runId: "hq-dying" });
+    h.getHookByToken.mockResolvedValue({ runId: "reflection-dying" });
     h.resumeHook.mockRejectedValue(new Error("HookNotFoundError"));
-    h.start.mockResolvedValue({ runId: "hq-fresh" });
+    h.start.mockResolvedValue({ runId: "reflection-fresh" });
 
     const r = await deliverReflectionWake(WAKE);
 
-    expect(r).toEqual({ ok: true, delivered: "started", runId: "hq-fresh" });
+    expect(r).toEqual({ ok: true, delivered: "started", runId: "reflection-fresh" });
     expect(h.resumeHook).toHaveBeenCalledTimes(1);
     expect(h.start).toHaveBeenCalledTimes(1);
   });
@@ -91,21 +93,19 @@ describe("deliverReflectionWake — the three delivery paths", () => {
     if (!r.ok) expect(r.reason).toContain("could not be reached");
   });
 
-  it("a bare wake ({}) is legal — the cancel route holds only a runId", async () => {
-    h.getHookByToken.mockResolvedValue({ runId: "hq-live" });
-    h.resumeHook.mockResolvedValue({ runId: "hq-live" });
+  it("the engine never inspects the payload — an empty one delivers the same way", async () => {
+    h.getHookByToken.mockResolvedValue({ runId: "reflection-live" });
+    h.resumeHook.mockResolvedValue({ runId: "reflection-live" });
 
     const r = await deliverReflectionWake({});
 
     expect(r.ok).toBe(true);
-    expect(h.resumeHook).toHaveBeenCalledWith("hq:main", {});
+    expect(h.resumeHook).toHaveBeenCalledWith("reflection:main", {});
   });
 });
 
-describe("buildReflectionWakePayload — a pure pointer off the finished turn", () => {
-  const slice = { slice_id: "2026-10-04-0131" } as unknown as TimeSlice;
-
-  it("carries sliceId + turnId + the USER-LOCAL date", () => {
+describe("buildReflectionWakePayload — a pure pointer off the SEALED slice", () => {
+  it("carries the sealed slice's id + the USER-LOCAL date (no turnId — v0.34 R1 narrowed the pointer)", () => {
     // 2026-03-02 16:30 UTC = 2026-03-03 00:30 in Asia/Shanghai.
     const input = {
       turnId: "turn-1",
@@ -113,9 +113,8 @@ describe("buildReflectionWakePayload — a pure pointer off the finished turn", 
       clientTimezone: "Asia/Shanghai",
     } as unknown as TurnInput;
 
-    expect(buildReflectionWakePayload(slice, input)).toEqual({
+    expect(buildReflectionWakePayload("2026-10-04-0131", input)).toEqual({
       sliceId: "2026-10-04-0131",
-      turnId: "turn-1",
       date: "2026-03-03",
     });
   });
@@ -123,9 +122,9 @@ describe("buildReflectionWakePayload — a pure pointer off the finished turn", 
   it("omits the date when the turn carries no start timestamp", () => {
     const input = { turnId: "turn-1" } as unknown as TurnInput;
 
-    const payload = buildReflectionWakePayload(slice, input);
+    const payload = buildReflectionWakePayload("2026-10-04-0131", input);
 
-    expect(payload).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
+    expect(payload).toEqual({ sliceId: "2026-10-04-0131" });
     expect("date" in payload).toBe(false);
   });
 });

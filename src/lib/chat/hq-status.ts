@@ -19,8 +19,16 @@
  * and the pod imports it client-side.
  */
 
-/** How the last HQ run ended — 完成 / 空转 / 失败, plus the live "running". */
-export type HQRunStatus = "running" | "completed" | "idle" | "failed";
+/**
+ * How the reflection unit's run stands — v0.34 常驻形态: "running" is the
+ * resident常态 (a generation lives for days, blocked on its mailbox or its
+ * clocks), "retired" is the ONLY clean terminal (the generation relayed to
+ * its successor, 修订 B), "failed" is the self-heal verdict for a run that
+ * died without its mark. "completed"/"idle" are LEGACY terminals from the
+ * pre-resident shell — old files still carry them, new runs never settle to
+ * them.
+ */
+export type HQRunStatus = "running" | "completed" | "idle" | "failed" | "retired";
 
 export interface HQStatus {
   /**
@@ -33,9 +41,14 @@ export interface HQStatus {
   runId: string | null;
   /** ISO time the current/last HQ run started (claimed the token). */
   runStartedAt: string | null;
-  /** Null before the first run ever claims the token. */
+  /** Null before the first run ever claims the mailbox. */
   runStatus: HQRunStatus | null;
-  /** Rounds the LAST run handled (written at run finish). */
+  /**
+   * Rounds the CURRENT/last generation settled (v0.34 R1: per-round
+   * immediate settlement ticks this +1 each round; the generation's started
+   * mark resets it to 0 — pre-resident files carry the old run-total
+   * semantics, same wire field).
+   */
   briefsHandled: number;
   /** Why the last failed run failed — the error's first line, capped at the
    *  store; a clean finish clears it. Null when the last run did not fail
@@ -63,8 +76,12 @@ export interface HQStatus {
   lastNote: { note: string; at: string } | null;
   /**
    * The rolling read pointer (v0.30 §2.3): how far the unit has read,
-   * advanced with EVERY round whose wake named a slice/turn. Range
-   * semantics, not a ledger — the next round reads everything after it.
+   * advanced ONLY by a round that settled clean (success or deliberate idle
+   * — v0.34 §4.2; a failed/superseded round leaves it so the next lap
+   * re-reads from the same edge). Range semantics, not a ledger — the next
+   * round reads everything after it. v0.34 R1 narrowed the payload to
+   * slice-granularity: `turnId` is no longer written (the field stays
+   * tolerated for older files; the type narrows in R2).
    */
   lastSeen: { sliceId?: string; turnId?: string } | null;
 }
@@ -89,7 +106,13 @@ export interface HQStatusResponse {
   asOf: string;
 }
 
-const RUN_STATUSES: readonly HQRunStatus[] = ["running", "completed", "idle", "failed"];
+const RUN_STATUSES: readonly HQRunStatus[] = [
+  "running",
+  "completed",
+  "idle",
+  "failed",
+  "retired",
+];
 
 /**
  * Tolerant normalize: anything that is not the expected shape degrades

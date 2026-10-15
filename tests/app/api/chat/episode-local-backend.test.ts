@@ -18,8 +18,8 @@
  *
  * Only boundaries are mocked: the workflow runtime API (getRun/resumeHook —
  * no durable runtime in a test process), the origin guard (exercised in its
- * own tests), and the reflection-wake module (keeps the hq-run import chain
- * out; its delivery is never on these paths).
+ * own tests), and the reflection-wake module (keeps the reflection-run import
+ * chain out; its delivery is never on these paths).
  */
 import {
   describe,

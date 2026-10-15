@@ -275,6 +275,16 @@ export interface HousekeepingResult {
    * on bridge/demo deployments (D10 — no registry participation there).
    */
   parallelSiblings?: number;
+  /**
+   * The slice THIS beat sealed, when it did (v0.34 R1 — the reflection
+   * bell's only trigger): the entry beat's close decision target OR an
+   * orphaned active slice recovered from disk, closed atomically in this
+   * step. The turn tail rings the reflection bell ONLY when this is set (the
+   * per-turn tail bell retired — an open slice is not reflection material).
+   * Absent on turns that sealed nothing (and in demo mode, which never
+   * closes).
+   */
+  closedSliceId?: string;
 }
 
 /**

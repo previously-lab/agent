@@ -545,7 +545,6 @@ Report one decision per case as instructed.`;
     prompt,
     temperature: 0,
     maxSteps: 50,
-    timeoutMs: 30_000,
     tools: {
       readCase: makeCaseReadTool(batch),
       caseWriterOutput: tool({
@@ -816,7 +815,6 @@ Report one entry per marker as instructed.`;
     prompt,
     temperature: 0,
     maxSteps: 50,
-    timeoutMs: 30_000,
     tools: {
       scribeOutput: tool({
         description: "Report the per-marker case entries.",

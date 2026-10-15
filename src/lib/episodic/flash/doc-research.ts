@@ -208,7 +208,6 @@ Gather evidence with readCase / readSlice, then report the writes as instructed.
     prompt,
     temperature: 0,
     maxSteps: 15,
-    timeoutMs: 120_000,
     tools,
     toolChoice: "auto",
     reportToolName: "docResearchOutput",

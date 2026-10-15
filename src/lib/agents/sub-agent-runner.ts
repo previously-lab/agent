@@ -27,11 +27,18 @@
  *                 `data-tool-progress` channel (throttled, single reused writer,
  *                 lock released on settle). Degrades to a noop when there is no
  *                 `toolCallId` or no workflow step writable.
- *   - timeout:    the SDK's `timeout` option is the PRIMARY hook (it runs
- *                 `AbortSignal.timeout()` in real Node and aborts cleanly);
+ *   - timeout:    NO budget by default (v0.34 修订 A) — a wall-clock budget
+ *                 exists only when the caller explicitly passes `timeoutMs`;
+ *                 then the SDK's `timeout` option is the PRIMARY hook (it runs
+ *                 `AbortSignal.timeout()` in real Node and aborts cleanly) and
  *                 `withStepTimeout` is the backstop so a step NEVER dies
  *                 silently. Timeouts return a structured partial result
- *                 (`timedOut: true`) instead of throwing.
+ *                 (`timedOut: true`) instead of throwing. The old
+ *                 `DEFAULT_TIMEOUT_MS = 30_000` was deleted: a timeout's
+ *                 purpose is "end early so a continuation can resume"
+ *                 (the turn workflow's timeout continuation), never
+ *                 "cut the work off at the wall" — a default that cuts EVERY
+ *                 agent at 30s is wrong for every agent.
  *   - steps:      `stopWhen: isStepCount(maxSteps)` when a cap is given.
  *   - output:     the report-tool pattern — the model reports through a
  *                 designated tool whose input is zod-validated into `report`.
@@ -267,7 +274,12 @@ export interface RunSubAgentOptions<Report> {
     toolName: string;
     input: unknown;
   }) => ProgressLine | undefined;
-  /** Wall-clock budget in ms (SDK timeout hook + withStepTimeout backstop). */
+  /**
+   * Wall-clock budget in ms — ONLY installed when explicitly passed (v0.34
+   * 修订 A: there is no default; an omitted budget means NO `timeout` hook
+   * and NO `withStepTimeout` backstop). When set: SDK timeout hook +
+   * withStepTimeout backstop, partial content survives the abort.
+   */
   timeoutMs?: number;
   /** Reasoning effort — thinking is ON by default. Default "low". */
   effort?: "low" | "medium" | "high";
@@ -317,8 +329,6 @@ export interface SubAgentResult<Report> {
 
 /** Backstop grace after the SDK timeout hook should have fired. */
 const BACKSTOP_GRACE_MS = 3_000;
-/** Default wall-clock budget for the cheap structured sub-agents. */
-const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** Merge caller provider options OVER the effort mapping — one level deep per
  *  provider namespace (the caller's `anthropic.thinking` replaces the mapped
@@ -355,7 +365,7 @@ export async function runSubAgent<Report = unknown>(
     maxSteps,
     prepareStep,
     onToolProgress,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     effort = "low",
     thinking = true,
     temperature = 0.1,
@@ -472,9 +482,10 @@ export async function runSubAgent<Report = unknown>(
             },
           }
         : {}),
-      // The SDK timeout hook — PRIMARY: aborts the stream cleanly at the
-      // deadline (AbortSignal.timeout), surfacing as AbortError.
-      timeout: timeoutMs,
+      // The SDK timeout hook — installed ONLY for an explicit budget (修订 A):
+      // when set, it is PRIMARY: aborts the stream cleanly at the deadline
+      // (AbortSignal.timeout), surfacing as AbortError.
+      ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
       onChunk({ chunk }) {
         if (chunk.type === "text-delta") {
           text += chunk.text;
@@ -512,20 +523,27 @@ export async function runSubAgent<Report = unknown>(
   };
 
   try {
-    // withStepTimeout — BACKSTOP: if the SDK abort somehow doesn't surface,
-    // the step still returns a structured result before the platform wall.
-    const res = await withStepTimeout(
-      () => run(firstChoice, thinking),
-      timeoutMs + BACKSTOP_GRACE_MS,
-    );
+    // withStepTimeout — BACKSTOP, installed ONLY with an explicit budget
+    // (修订 A): if the SDK abort somehow doesn't surface, the step still
+    // returns a structured result before the platform wall. With no budget
+    // the run goes to its natural end — the step cap and the platform wall
+    // are the bounds.
+    const res =
+      timeoutMs === undefined
+        ? { ok: true as const, result: await run(firstChoice, thinking) }
+        : await withStepTimeout(
+            () => run(firstChoice, thinking),
+            timeoutMs + BACKSTOP_GRACE_MS,
+          );
     if (!res.ok) {
       // Backstop fired — return whatever was accumulated before the cutoff.
+      // Reachable only on the wrapped path, where timeoutMs is defined.
       return {
         ok: false,
         timedOut: true,
         text,
         ...(reasoning ? { reasoning } : {}),
-        error: `Sub-agent did not finish within ${Math.round(timeoutMs / 1000)}s.`,
+        error: `Sub-agent did not finish within ${Math.round(timeoutMs! / 1000)}s.`,
       };
     }
     let result = res.result!;
@@ -546,10 +564,13 @@ export async function runSubAgent<Report = unknown>(
       console.warn(
         `[sub-agent] no ${reportToolName} report on DeepSeek auto choice — retrying with thinking off + required`,
       );
-      const retry = await withStepTimeout(
-        () => run("required", false),
-        timeoutMs + BACKSTOP_GRACE_MS,
-      );
+      const retry =
+        timeoutMs === undefined
+          ? { ok: true as const, result: await run("required", false) }
+          : await withStepTimeout(
+              () => run("required", false),
+              timeoutMs + BACKSTOP_GRACE_MS,
+            );
       if (retry.ok) {
         result = retry.result!;
         report = extractToolReport(result.toolCalls, reportToolName, reportSchema);
@@ -566,14 +587,19 @@ export async function runSubAgent<Report = unknown>(
     };
   } catch (err) {
     if (isTimeoutAbort(err)) {
-      // The SDK timeout hook aborted the stream — return the partial content
-      // accumulated before the abort (thinkDeep partial semantics).
+      // An abort surfaced. With a budget this is the SDK timeout hook —
+      // return the partial content accumulated before the abort (thinkDeep
+      // partial semantics). Without one it is a provider-side abort — still
+      // a timeout-shaped partial, never a throw.
       return {
         ok: false,
         timedOut: true,
         text,
         ...(reasoning ? { reasoning } : {}),
-        error: `Sub-agent did not finish within ${Math.round(timeoutMs / 1000)}s.`,
+        error:
+          timeoutMs !== undefined
+            ? `Sub-agent did not finish within ${Math.round(timeoutMs / 1000)}s.`
+            : "Sub-agent aborted mid-stream.",
       };
     }
     return {

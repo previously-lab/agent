@@ -280,10 +280,9 @@ export async function analyzeTurn(input: AnalyzeTurnInput): Promise<TurnAnalysis
     toolChoice: "required",
     reportToolName: "analyzeOutput",
     reportSchema: analyzeSchema,
-    // Step caps are anti-loop fuses, not budgets — the wall clock (timeoutMs)
-    // is the real bound, so the cap is generous.
+    // Step caps are anti-loop fuses, generous by design — there is no
+    // wall-clock budget (v0.34 修订 A deleted execution budgets repo-wide).
     maxSteps: 50,
-    timeoutMs: 30_000,
     progress: { toolName: "turn-analyzer" },
   });
 

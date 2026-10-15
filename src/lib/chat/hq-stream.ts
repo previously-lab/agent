@@ -63,8 +63,9 @@ export interface HQActivityFrame {
   note?: string;
   /** failed: the round's error line. */
   error?: string;
-  /** finished: how the run settled — mirrors HQRunStatus minus "running". */
-  status?: "completed" | "idle" | "failed";
+  /** finished: how the run settled — mirrors HQRunStatus minus "running"
+   *  ("retired" joined in v0.34: the resident unit's only clean terminal). */
+  status?: "completed" | "idle" | "failed" | "retired";
   /** finished: briefs the run handled. */
   handled?: number;
 }
@@ -97,7 +98,12 @@ export function normalizeHQActivity(raw: unknown): HQActivityFrame | null {
   }
   if (typeof o.note === "string" && o.note) frame.note = o.note;
   if (typeof o.error === "string" && o.error) frame.error = o.error;
-  if (o.status === "completed" || o.status === "idle" || o.status === "failed") {
+  if (
+    o.status === "completed" ||
+    o.status === "idle" ||
+    o.status === "failed" ||
+    o.status === "retired"
+  ) {
     frame.status = o.status;
   }
   if (typeof o.handled === "number" && Number.isFinite(o.handled)) {

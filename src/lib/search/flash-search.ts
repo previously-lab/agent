@@ -394,9 +394,10 @@ searchReport is the ONLY channel your work reaches the main agent through — a 
 Distinguish what the sources SAY from what YOU know — never blend the two silently. If the search found nothing usable, say so plainly in the answer instead of papering over it.`;
 }
 
-/** Wall-clock budget for one research run (runner SDK timeout + backstop).
- *  Sized for the page quota: 6 reads (MAX_PAGE_READS) at the 30s fetch cap
- *  alone can burn 180s, so the budget matches recall's 240s. */
+/** The OUTER webSearch tool wall: tool-executors wraps the whole search call
+ *  in withStepTimeout (the run itself carries no budget since v0.34 修订 A —
+ *  execution budgets are deleted repo-wide). Sized for the page quota: 6
+ *  reads (MAX_PAGE_READS) at the 30s fetch cap alone can burn 180s. */
 export const SEARCH_TIMEOUT_MS = 240_000;
 
 /**
@@ -569,7 +570,6 @@ export async function searchViaFlash(
     // A run that burns its whole step budget on research must still file its
     // report — the final step's instructions become a report-now directive.
     prepareStep: finalStepReportDirective(systemPrompt),
-    timeoutMs: SEARCH_TIMEOUT_MS,
     progress,
     onToolProgress: ({ toolName, input: toolInput }) => {
       if (toolName === "web_search") {

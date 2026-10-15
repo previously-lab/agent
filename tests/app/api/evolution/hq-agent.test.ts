@@ -202,12 +202,14 @@ describe("handleBrief (v0.21 §5)", () => {
       note: "Checked the slice; nothing worth storing.",
     });
     expect(io.files.size).toBe(0);
-    // Runner wiring: forced report through hqReport, HQ outlives its passes.
+    // Runner wiring: forced report through hqReport; NO wall-clock budget
+    // (v0.34 修订 A — execution budgets are deleted repo-wide; the round's
+    // bounds are the step cap and the platform wall).
     const opts = runSubAgentMock.mock.calls[0][0];
     expect(opts.toolChoice).toBe("required");
     expect(opts.reportToolName).toBe("hqReport");
     expect(opts.maxSteps).toBe(50);
-    expect(opts.timeoutMs).toBe(300_000);
+    expect("timeoutMs" in opts).toBe(false);
   });
 
   it("a substantive write lands through the real case machinery", async () => {

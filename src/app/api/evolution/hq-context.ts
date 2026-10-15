@@ -11,8 +11,9 @@
  * `export` keywords to `background-steps.ts` broke the dev server; see
  * node_modules/workflow/docs/errors/node-js-module-in-workflow).
  *
- * So these three helpers live here, reached only through steps: `hq-steps.ts`
- * → `background-steps.ts` (private use) and the HQ agent's tools.
+ * So these three helpers live here, reached only through steps:
+ * `reflection-steps.ts` → `background-steps.ts` (private use) and the HQ
+ * agent's tools.
  */
 import {
   slicePartPathCandidates,

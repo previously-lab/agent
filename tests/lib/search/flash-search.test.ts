@@ -49,7 +49,9 @@ describe("searchViaFlash", () => {
     expect(opts.model).toBeUndefined();
     expect(opts.effortSdk).toBe("anthropic");
     expect(opts.maxSteps).toBe(50);
-    expect(opts.timeoutMs).toBe(240_000);
+    // v0.34 修订 A: no execution budget on the run itself — the outer
+    // webSearch tool wall (SEARCH_TIMEOUT_MS) lives in tool-executors.
+    expect("timeoutMs" in opts).toBe(false);
     expect(opts.reportToolName).toBe("searchReport");
     // Static role in system; the date anchor and query moved to the user prompt.
     expect(opts.system).toContain("sub-agent of the Previously memory system");

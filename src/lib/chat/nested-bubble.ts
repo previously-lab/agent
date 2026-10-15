@@ -6,8 +6,8 @@
  *  1. `data-nested-bubble` frames — E (the outer episode run) → the client,
  *     reporting one inner instance's lifecycle (queued → running → done |
  *     failed). E's steps write them onto the run's single durable stream via
- *     getWritable (the hq-steps.ts precedent: frame writes happen INSIDE
- *     steps). The client keeps them in a side store keyed by turnId — they
+ *     getWritable (the reflection-steps.ts precedent: frame writes happen
+ *     INSIDE steps). The client keeps them in a side store keyed by turnId — they
  *     never enter UIMessage (§4.2), so a replayed stream rebuilds the bubbles
  *     deterministically. UI consumption lands in batch C; this file is the
  *     contract both sides code against.

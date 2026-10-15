@@ -878,6 +878,10 @@ export async function housekeeping(
   /** The page THIS entry judged ended (the close decision's target). It is
    *  summarized + closed in the reckoning below — same beat, same commit. */
   let closingDecision: { slice: TimeSlice; signal: SlicingSignal } | undefined;
+  /** The slice THIS beat sealed (set after the closeSlice below) — surfaced
+   *  on the result as `closedSliceId`, the reflection bell's ONLY trigger
+   *  (v0.34 R1: the per-turn tail bell retired). */
+  let closedSliceId: string | undefined;
   /** The slice we came from — set from the just-closed page (AFTER its
    *  marking, so the continuity brief carries the fresh focus), or resolved
    *  from disk when today has none. Drives the continuity brief. */
@@ -1093,6 +1097,9 @@ export async function housekeeping(
         );
       }
       await closeSlice(closingSlice, closingSignal, batch);
+      // The reflection bell's ONLY trigger (v0.34 R1) — the seal is surfaced
+      // on the result, and the turn tail rings the unit with this pointer.
+      closedSliceId = closingSlice.slice_id;
       console.log(`[Episodic] Closed slice: ${closingSlice.slice_id} (${closingSignal})`);
       // Signal the client that a slice closed (rendered as a housekeeping
       // checklist row).
@@ -1345,6 +1352,7 @@ export async function housekeeping(
     identityPrompt,
     analysis,
     bridgeReport,
+    ...(closedSliceId ? { closedSliceId } : {}),
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
     ...(dueTasksBlock ? { dueTasksBlock } : {}),
@@ -1846,27 +1854,31 @@ export async function closeChildStream(): Promise<void> {
   }
 }
 
-// ─── Step 5: ringReflection — the mechanical bell (v0.30 §2.1) ─────────────
+// ─── Step 5: ringReflection — the mechanical bell (v0.34 R1) ───────────────
 
 /**
- * The reflection unit's ONLY trigger. The turn is fully persisted by now
- * (finalizeTurn above), so the bell hands over a PURE POINTER — slice id,
- * turn id, the user-local date — and nothing else: nobody briefs the unit,
- * it reads the record itself. The engine (reflection-wake.ts) is what the
- * retired reportToHQ executor used: a live run gets a resumeHook push,
- * otherwise a fresh run starts (the claim/handoff chain in hq-run.ts covers
- * races). Best-effort by design — a failed bell only warns: the unit's
- * range is everything since its last look, so the next turn's bell covers
- * the gap. Never throws; the turn must not be taken down by its doorbell.
+ * The reflection unit's ONLY trigger — and it rings ONLY on a real seal
+ * (v0.34 R1 retired the per-turn tail bell and the cancel-route bare bell:
+ * an open slice is not reflection material, and an unanswered question is
+ * covered when its slice seals). The slice is fully persisted by now
+ * (closeSlice above), so the bell hands over a PURE POINTER — the sealed
+ * slice's id and the user-local date — and nothing else: nobody briefs the
+ * unit, it reads the record itself. The engine (reflection-wake.ts) is what
+ * the retired reportToHQ executor used: a live run gets a resumeHook push,
+ * otherwise a fresh run starts (the claim/handoff chain in reflection-run.ts
+ * covers races). Best-effort by design — a failed bell only warns: the
+ * unit's range is everything since its last look, so the next seal's bell
+ * covers the gap. Never throws; the turn must not be taken down by its
+ * doorbell.
  */
 export async function ringReflection(
-  slice: TimeSlice,
+  closedSliceId: string,
   input: TurnInput,
 ): Promise<void> {
   "use step";
   try {
     const result = await deliverReflectionWake(
-      buildReflectionWakePayload(slice, input),
+      buildReflectionWakePayload(closedSliceId, input),
     );
     if (!result.ok) {
       console.warn(`[Reflection] wake not delivered (ignored): ${result.reason}`);
@@ -1885,7 +1897,7 @@ export async function ringReflection(
  * The outer run's own durable id — the episode inbox token derives from it
  * (`episode:<runId>`, nested-bubble.ts). getWorkflowMetadata is only legal
  * inside a step, so the workflow body reads its id through this one-liner
- * (the hq-steps.ts precedent).
+ * (the reflection-steps.ts precedent).
  */
 export async function ownRunId(): Promise<string> {
   "use step";
@@ -1939,10 +1951,10 @@ export async function readEpisodeInbox(
 
 /**
  * One `data-nested-bubble` frame onto the outer run's (still open — preventClose)
- * stream. Written from a step: the hq-steps.ts precedent is that step-side
- * getWritable writes are the legal path (the workflow body never writes
- * frames directly). Terminal frames get their doneAt stamped here — the
- * workflow body has no clock.
+ * stream. Written from a step: the reflection-steps.ts precedent is that
+ * step-side getWritable writes are the legal path (the workflow body never
+ * writes frames directly). Terminal frames get their doneAt stamped here —
+ * the workflow body has no clock.
  *
  * Never throws: a lost frame degrades the live display only — the bubble's
  * answer still lands on disk at finalizeTurn, and a reconnecting client
@@ -1984,10 +1996,10 @@ export async function emitNestedBubble(frame: NestedBubbleFrame): Promise<void> 
  * A child run's terminal report → the orchestrator's inbox hook (D2).
  * resumeHook is a runtime function that must be called outside a workflow
  * function — hence this "use step" (the handoffBriefToPrimary precedent in
- * hq-steps.ts). HookNotFoundError means the outer run is gone (cancelled —
- * D6, or finalized): swallow with a warning instead of burning the step's
- * retry budget; the child's own stream keeps the answer, and the unanswered
- * user turn on disk stays visible to reflection.
+ * reflection-steps.ts). HookNotFoundError means the outer run is gone
+ * (cancelled — D6, or finalized): swallow with a warning instead of burning
+ * the step's retry budget; the child's own stream keeps the answer, and the
+ * unanswered user turn on disk stays visible to reflection.
  */
 export async function reportInnerBubble(
   token: string,

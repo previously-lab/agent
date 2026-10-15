@@ -81,10 +81,10 @@ import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 
 /**
  * Episode idle grace (R4, v0.30 §3): after a clean answer the run keeps its
- * inbox open this long for a follow-up before finalizing — the hq-run.ts
- * race-with-sleep discipline (HQ_IDLE_GRACE_MS), shortened for conversation
- * pace. While instances run, the same sleep is only a re-tick: the episode
- * never packs up with work in flight.
+ * inbox open this long for a follow-up before finalizing — the
+ * reflection-run.ts race-with-sleep discipline (REFLECTION_IDLE_CAP_MS),
+ * shortened for conversation pace. While instances run, the same sleep is
+ * only a re-tick: the episode never packs up with work in flight.
  */
 const EPISODE_GRACE_MS = 60_000;
 
@@ -1563,7 +1563,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
             const busy = [...instances.values()].some(
               (i) => i.status === "queued" || i.status === "running",
             );
-            // The hq-run-shaped wait: next inbox event vs the re-tick. A BUSY
+            // The reflection-run wait: next inbox event vs the re-tick. A BUSY
             // episode ticks fast (the registry poll above is then the report
             // channel that actually settles rows — the hook tap only wakes);
             // an idle one waits out the full grace (R4). Whatever loses this
@@ -1888,10 +1888,10 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // flush — and with them the episode tail (v0.30 §3.4): every terminal nested
   // bubble as its own agent turn (replyTo carried) + the merged summary folded
   // into the outer agent turn, all in the SAME commit. Then the stream tail,
-  // then the mechanical bell (v0.30 §2.1): the reflection unit is woken with a
-  // pure pointer — it reads the record itself. The bell rings even when the
-  // reply stream errored (the user turn is on disk either way), and it never
-  // throws.
+  // then — ONLY when this beat sealed a slice — the mechanical bell (v0.34
+  // R1): the reflection unit is woken with a pure pointer (the sealed slice's
+  // id + user-local date) and reads the record itself. A reply-stream error
+  // does not silence it (a seal is on disk either way), and it never throws.
   await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
   // v0.33 连发并行 — the LAST surviving turn of a parallel burst spawns the
   // batch's summary run. Placed BETWEEN finalize (this turn's reply is on
@@ -1915,7 +1915,7 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   }
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
-  await ringReflection(hk.slice, input);
+  if (hk.closedSliceId) await ringReflection(hk.closedSliceId, input);
 
   if (streamError !== null) {
     throw streamError;
