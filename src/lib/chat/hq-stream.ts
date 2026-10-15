@@ -55,7 +55,9 @@ export interface HQActivityFrame {
   at: string;
   /** reading: the slice the brief points at, when it names one. */
   sliceId?: string;
-  /** wrote: memory-relative paths the round landed. */
+  /** wrote: memory-relative paths the round landed. A FAILED round carries
+   *  them too when the flush survived the failure (a timeout cuts the
+   *  report, not the writes that preceded it). */
   paths?: string[];
   /** idle/wrote: HQ's own one-paragraph account of the round (its note). */
   note?: string;

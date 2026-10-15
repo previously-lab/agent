@@ -30,8 +30,10 @@
  * rounds, the unflushed marks for earlier rounds are lost (never written
  * elsewhere) — accepted for a glance pointer, consistent with the tolerances
  * below. A run that dies between start and finish leaves the pointer reading
- * "running" with its start stamp — stale but dated and honest, and the next
- * run heals it.
+ * "running" with its start stamp — stale but dated and honest; the status
+ * route heals it against the run registry (settleHQRunIfStale — a CANCELLED
+ * run's finish mark never executes, so the next run's start alone is not the
+ * only repair).
  *
  * Every function is BEST-EFFORT: a status write must never break the
  * reflection run it instruments, so all errors are swallowed with a
@@ -218,4 +220,41 @@ export async function recordHQRunFinished(result: {
     ...(result.note ? { lastNote: { note: result.note, at } } : {}),
     ...(result.seen ? { lastSeen: result.seen } : {}),
   }));
+}
+
+// ─── Stale-"running" settle (the cancelled-run hole) ───────────────────────
+
+/**
+ * Settle a pointer whose "running" run is TERMINAL in the workflow registry
+ * (cancelled/failed/completed without a finish mark). Run cancellation stops
+ * the workflow at its next suspension point — a cancelled run's
+ * markHQRunFinished is a step that is never scheduled, so without this the
+ * pointer reads "running" forever (observed 2026-10-14: a run cancelled at
+ * 1h24m left the pointer running; Workflow docs, foundations/cancellation).
+ * The status route calls this when its read finds the pointer claiming a run
+ * the registry says is over. The merge's fresh read re-checks BOTH the
+ * runStatus and the runId, so a run that settled (or a new run that claimed
+ * the pointer) between the route's read and this write is never clobbered.
+ * Returns the settled (or untouched) status for the route's response.
+ */
+export async function settleHQRunIfStale(
+  runId: string,
+  registryStatus: string,
+): Promise<HQStatus> {
+  let settled: HQStatus = HQ_STATUS_EMPTY;
+  await mergeHQStatus((s) => {
+    if (s.runStatus !== "running" || s.runId !== runId) {
+      settled = s;
+      return s;
+    }
+    settled = {
+      ...s,
+      runStatus: "failed",
+      lastError: errorPreviewOf(
+        `run ended as "${registryStatus}" in the registry without a finish mark — cancelled or died mid-run`,
+      ),
+    };
+    return settled;
+  });
+  return settled;
 }

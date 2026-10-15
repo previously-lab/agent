@@ -32,10 +32,22 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
     if (content === undefined) throw new Error(`ENOENT: ${path}`);
     return content;
   }),
-  fsWriteFile: vi.fn(async (path: string, content: string) => {
-    io.files.set(path, content);
-    return { path, created: true };
-  }),
+  fsWriteFile: vi.fn(
+    async (
+      path: string,
+      content: string,
+      batch?: { entries: Map<string, string | null> },
+    ) => {
+      // Mirror the real fsWriteFile: a batched write QUEUES, never lands
+      // directly — the flush applies the queue.
+      if (batch) {
+        batch.entries.set(path, content);
+        return { path, created: true };
+      }
+      io.files.set(path, content);
+      return { path, created: true };
+    },
+  ),
   fsListFiles: vi.fn(async (path: string) => {
     const prefix = `${path}/`;
     return [...io.files.keys()]
@@ -568,5 +580,57 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(sopTool.description).toContain("工程侧");
     expect(sopTool.description).toContain("short guidance, not an archive");
     expect(sopTool.description).not.toContain("Write-window discipline");
+  });
+
+  it("a TIMED-OUT round still reports the writes it landed — the flush survives the failure", async () => {
+    // The observed production shape (2026-10-14): the sub-agent hits the
+    // step-timeout AFTER its tools queued writes; the flush lands them, and
+    // the round must not report actions:[] — a failed round with landed
+    // writes is not an empty round.
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "writeCase", {
+        action: "open",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "超时前落的一笔。",
+      });
+      expect(r).toContain("OK:");
+      return {
+        ok: false,
+        timedOut: true,
+        text: "partial",
+        error: "Sub-agent did not finish within 300s.",
+      };
+    });
+
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBe("Sub-agent did not finish within 300s.");
+    // the landed write rides as actions (memory/-stripped, report style)…
+    expect(outcome.actions).toEqual(["research/手机购买调研/index.md"]);
+    // …the note stays empty (lastNote is the unit's OWN account — R1)…
+    expect(outcome.note).toBe("");
+    // …and the write genuinely landed (the flush ran before the error return).
+    expect(io.files.get("memory/research/手机购买调研/index.md")).toContain("超时前落的一笔");
+  });
+
+  it("a failed round whose FLUSH failed reports NO writes — nothing landed, nothing claimed", async () => {
+    const { flushBatch } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(flushBatch).mockRejectedValueOnce(new Error("disk full"));
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "writeCase", {
+        action: "open",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "丢掉的写。",
+      });
+      return { ok: false, timedOut: true, text: "", error: "boom" };
+    });
+
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBe("boom");
+    expect(outcome.actions).toEqual([]);
+    expect(io.files.size).toBe(0);
   });
 });

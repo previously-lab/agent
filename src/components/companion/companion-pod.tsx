@@ -248,7 +248,9 @@ function HQActivityLine({
       <div className="flex gap-2">
         <span className="min-w-0 break-words text-foreground/80">{label}</span>
       </div>
-      {frame.kind === "wrote" && frame.paths && frame.paths.length > 0 && (
+      {(frame.kind === "wrote" || frame.kind === "failed") &&
+        frame.paths &&
+        frame.paths.length > 0 && (
         <ul className="space-y-0.5">
           {frame.paths.slice(0, 4).map((path) => (
             <li key={path} className="break-all font-mono text-[10px]">

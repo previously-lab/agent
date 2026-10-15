@@ -157,6 +157,10 @@ export async function handleHQBrief(payload: ReflectionWakePayload): Promise<HQB
       kind: "failed",
       at: new Date().toISOString(),
       error: outcome.error,
+      // A failed round may still have LANDED writes (the flush survives the
+      // sub-agent's failure — e.g. a timeout cuts the report, not the
+      // writes that preceded it) — carry them so the feed says so.
+      ...(outcome.actions.length > 0 ? { paths: outcome.actions } : {}),
     });
   } else if (outcome.actions.length > 0) {
     await emitHQActivity({

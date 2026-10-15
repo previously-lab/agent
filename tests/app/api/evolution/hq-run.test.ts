@@ -198,6 +198,36 @@ describe("hqRun — claim and conflict", () => {
     });
   });
 
+  it("a FAILED round with landed writes settles the run failed AND wrote — the writes stay visible", async () => {
+    // The 2026-10-14 production shape: a timeout cut the report but the
+    // round's flush had landed — handleBrief reports the landed paths with
+    // the error, and the run must not look like an empty failure.
+    h.handleBrief.mockResolvedValueOnce({
+      actions: ["research/x/index.md"],
+      note: "",
+      error: "Sub-agent did not finish within 300s.",
+    });
+    await hqRun(WAKE);
+    expect(h.recordBriefOutcome).toHaveBeenCalledWith({
+      actions: ["research/x/index.md"],
+    });
+    expect(h.recordRunFinished).toHaveBeenCalledWith({
+      handled: 1,
+      wrote: true,
+      errored: true,
+      error: "Sub-agent did not finish within 300s.",
+      seen: { sliceId: "2026-10-04-0131", turnId: "turn-1" },
+    });
+    // the failed beat carries the landed paths too
+    const failed = h.frames.find(
+      (f) => (f.data as { kind: string }).kind === "failed",
+    );
+    expect(failed?.data).toMatchObject({
+      error: "Sub-agent did not finish within 300s.",
+      paths: ["research/x/index.md"],
+    });
+  });
+
   it("an exception escaping the loop still settles the pointer — failed, with the exception's own message", async () => {
     h.handleBrief.mockRejectedValueOnce(new Error("sub-agent blew up"));
     await expect(hqRun(WAKE)).rejects.toThrow("sub-agent blew up");

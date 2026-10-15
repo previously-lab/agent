@@ -469,10 +469,20 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
   // retry cannot heal is a TRUE same-file cross-process race on a merged
   // file (people/user/index.md) — accepted: it existed with per-file writes
   // too. Never throws: a lost flush costs the round's writes, not the run.
+  //
+  // Snapshot the queue BEFORE the flush: a successful flush empties the
+  // batch, and a FAILED round still needs the list — the round's landed
+  // writes are its visible product even when the sub-agent never reported
+  // (a timeout cuts the hqReport call, not the writes that preceded it).
+  const queuedPaths = [...batch.entries.keys()]
+    .filter((p) => batch.entries.get(p) !== null)
+    .sort();
+  let flushed = false;
   let flushAttempts = 0;
   for (;;) {
     try {
       await flushBatch(batch, `Reflection round — ${date}`);
+      flushed = true;
       break;
     } catch (err) {
       if (!isRefConflictError(err) || flushAttempts >= 2) {
@@ -493,7 +503,14 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
   if (!result.ok || !result.report) {
     const error = result.error ?? "HQ ended without a report";
     console.warn(`[HQ] round failed: ${error}`);
-    return { actions: [], note: "", error };
+    // The writes that DID land ride as actions (memory/-stripped, matching
+    // the report's own path style) — a failed round with landed writes is
+    // not an empty round. The note stays empty: lastNote is the unit's OWN
+    // account (R1), and an interrupted round never wrote one.
+    const landed = flushed
+      ? queuedPaths.map((p) => p.replace(/^memory\//, ""))
+      : [];
+    return { actions: landed, note: "", error };
   }
   console.log(`[HQ] round done: ${result.report.actions.length} action(s)`);
   return { actions: result.report.actions, note: result.report.note };

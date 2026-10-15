@@ -377,3 +377,47 @@ describe("recordHQRunFinished — the 暂存 and the rolling pointer (v0.30 §2.
     expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-2" });
   });
 });
+
+describe("settleHQRunIfStale (the cancelled-run hole)", () => {
+  it("settles a pointer whose running run is TERMINAL in the registry — failed, with the registry's verdict", async () => {
+    const { recordHQRunStarted, recordHQBriefOutcome, settleHQRunIfStale, readHQStatus } =
+      await importStore();
+    await recordHQRunStarted("run-cancelled");
+    await recordHQBriefOutcome({ actions: ["memory/research/x/index.md"] });
+
+    const settled = await settleHQRunIfStale("run-cancelled", "cancelled");
+
+    expect(settled.runStatus).toBe("failed");
+    expect(settled.lastError).toContain('"cancelled"');
+    expect(settled.lastError).toContain("without a finish mark");
+    // on disk too, with the run's identity and start stamp preserved
+    const onDisk = readOnDisk();
+    expect(onDisk?.runStatus).toBe("failed");
+    expect(onDisk?.runId).toBe("run-cancelled");
+    expect(typeof onDisk?.runStartedAt).toBe("string");
+    // a run that had only started shows no round count…
+    const s = await readHQStatus();
+    expect(s.runStatus).toBe("failed");
+    expect(s.runId).toBe("run-cancelled");
+  });
+
+  it("never clobbers a pointer that moved on — a settled run or a NEW claim stay untouched", async () => {
+    const { recordHQRunStarted, recordHQRunFinished, settleHQRunIfStale } =
+      await importStore();
+
+    // already settled: the stale check names a run the pointer no longer runs
+    await recordHQRunStarted("run-a");
+    await recordHQRunFinished({ handled: 1, wrote: false, errored: false });
+    const settled = await settleHQRunIfStale("run-a", "cancelled");
+    expect(settled.runStatus).toBe("idle");
+    expect(settled.lastError).toBeNull();
+
+    // a NEW claim in between: the route's verdict names the OLD run's id —
+    // the merge's fresh read sees run-b's pointer and does not touch it
+    await recordHQRunStarted("run-b");
+    const still = await settleHQRunIfStale("run-a", "cancelled");
+    expect(still.runStatus).toBe("running");
+    expect(still.runId).toBe("run-b");
+    expect(readOnDisk()?.runId).toBe("run-b");
+  });
+});
