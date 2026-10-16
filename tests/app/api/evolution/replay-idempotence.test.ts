@@ -129,6 +129,15 @@ async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
 const CASE_PATH = "memory/research/手机购买调研/index.md";
+/** The v0.34 R2 docket input (§5.3) — one sealed boundary slice in scope. */
+const DOCKET = {
+  date: DATE,
+  cursor: null,
+  scope: [{ sliceId: SLICE_ID, closedBy: "idle_gap" as const }],
+  evolutionDue: false,
+  evolutionReasons: [],
+  agendaDue: [],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -181,12 +190,12 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
 
-    const first = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const first = await handleBrief(DOCKET);
     expect(first.error).toBeUndefined();
     const afterFirst = io.files.get(CASE_PATH);
     expect(afterFirst).toBeDefined();
 
-    const second = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const second = await handleBrief(DOCKET);
     expect(second.error).toBeUndefined();
     // The replay's product report is readable and shows the dedup skip.
     expect(second.note).toContain("written: (none)");
@@ -207,13 +216,13 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
 
-    const first = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const first = await handleBrief(DOCKET);
     expect(first.error).toBeUndefined();
     expect(first.note).toContain("OK:");
     const afterFirst = io.files.get(CASE_PATH);
     expect(afterFirst).toContain("想换手机");
 
-    const second = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const second = await handleBrief(DOCKET);
     expect(second.error).toBeUndefined();
     expect(second.note).toContain("REJECTED:");
     expect(second.note).toContain("already exists");
@@ -240,8 +249,8 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
 
-    await handleBrief({ date: DATE, sliceId: SLICE_ID });
-    await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    await handleBrief(DOCKET);
+    await handleBrief(DOCKET);
 
     // Same date + same title resolve to the same file name — the replay
     // overwrites in place instead of piling up a duplicate entry.

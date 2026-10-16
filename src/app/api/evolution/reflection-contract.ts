@@ -42,13 +42,14 @@ export interface ReflectionWakePayload {
 
 /**
  * How a reflection run ended (its return value). A claiming run ends ONLY by
- * retiring (v0.34: the unit is resident — there is no idle-grace exit; death
- * by cancel/crash/platform produces no outcome at all, and the next bell's
- * delivery fallback revives the unit).
+ * retiring (v0.34 修订 D: the unit's lifetime is ONE visit — the idle grace
+ * winning the blocking race at a lap boundary IS the retirement; death by
+ * cancel/crash/platform produces no outcome at all, and the next bell's
+ * delivery fallback starts the next generation off the on-disk cursor).
  */
 export type ReflectionRunOutcome =
   | { kind: "dedupedTo"; runId: string }
-  | { kind: "retired"; rounds: number; successorId?: string };
+  | { kind: "retired"; rounds: number };
 
 /**
  * Collapse a drained mailbox into ONE lap pointer (v0.34 §3.1/§3.2: the bell

@@ -13,9 +13,10 @@
  *
  * Plain Node module, no "use step": the chat tail wraps it in a thin step
  * (steps.ts ringReflection). Importing reflectionRun statically is safe from
- * here: reflection-run → reflection-steps never reaches back (the successor
- * step imports this run's module DYNAMICALLY — see the cycle warning in
- * reflection-steps.ts's header).
+ * here: reflection-run → reflection-steps never reaches back (the steps'
+ * impure edges — the unit, the status store, the world-read legs — are all
+ * DYNAMIC imports, precisely so this graph stays acyclic; see the cycle
+ * warning in reflection-steps.ts's header).
  */
 import { getHookByToken, resumeHook, start } from "workflow/api";
 import {

@@ -7,9 +7,13 @@
  * shell (`reflection-run.ts` / `reflection-steps.ts`):
  *
  *   recordHQRunStarted            — a generation claimed the mailbox (runId +
- *                                   start stamp + 本代轮数清零); writes
- *                                   IMMEDIATELY (a run that hangs or dies
- *                                   mid-flight must still read "running")
+ *                                   start stamp + 本代轮数清零 + the round
+ *                                   latch cleared); writes IMMEDIATELY (a
+ *                                   run that hangs or dies mid-flight must
+ *                                   still read "running")
+ *   recordReflectionRoundBegan    — R2 (§4.1): the round latch closes
+ *                                   (roundActive {since}) — the pod's
+ *                                   breathing source; cleared by the settle
  *   recordReflectionRoundSettled  — ONE ROUND settled (v0.34 R1: per-round
  *                                   immediate — the run's finish comes only
  *                                   when the visit ends, so the D2
@@ -21,11 +25,17 @@
  *                                   SUBSTANTIVE round (R1: 空转不留痕);
  *                                   lastError lands a failed round's real
  *                                   first line and CLEARS on a clean one;
- *                                   the cursor (lastSeen) advances ONLY on
- *                                   success or deliberate idle — a failed
- *                                   round leaves it (§4.2 行为变更: the old
- *                                   shell advanced furthestSeen on failed
- *                                   rounds too, silently skipping content)
+ *                                   the round latch clears; the cursor
+ *                                   (lastSeen) advances ONLY on success or
+ *                                   deliberate idle — a failed round leaves
+ *                                   it (§4.2 行为变更: the old shell advanced
+ *                                   furthestSeen on failed rounds too,
+ *                                   silently skipping content); a SUPERSEDED
+ *                                   round (修订 C) holds the cursor like a
+ *                                   failure, reports its landed writes
+ *                                   honestly, and registers lastSuperseded;
+ *                                   an evolution pass that truly ran stamps
+ *                                   lastEvolution (§4.2)
  *   recordReflectionRunIdleExit   — the visit's ONLY clean terminal:
  *                                   runStatus "idle" (the mailbox stayed
  *                                   quiet for the whole 60-minute visit
@@ -136,25 +146,49 @@ export async function recordHQRunStarted(runId?: string): Promise<void> {
     ...(runId ? { runId } : {}),
     runStartedAt: at,
     briefsHandled: 0,
+    // a fresh generation begins with no round in flight (§4.1)
+    roundActive: null,
   }));
+}
+
+/**
+ * A round BEGAN (§4.1): the round latch closes — `roundActive: {since}`.
+ * This is the pod's breathing source (§4.3): a resident unit hanging on its
+ * stream is the in-visit NORMAL state, so "running" alone never means
+ * "working"; the latch does. The settle clears it. Best-effort like every
+ * pointer write — a lost latch costs one breath, never a round.
+ */
+export async function recordReflectionRoundBegan(): Promise<void> {
+  const at = new Date().toISOString();
+  await mergeHQStatus((s) => ({ ...s, roundActive: { since: at } }));
 }
 
 /**
  * ONE round's settlement, written IMMEDIATELY (v0.34 R1 — see the module
  * header). The rules (§4.2):
  *  - the generation's round count ticks +1 (every round that ran counts —
- *    wrote, idle, or failed alike);
+ *    wrote, idle, failed, or superseded alike);
+ *  - the round latch clears (§4.1) — the round is no longer in flight;
  *  - landed writes merge into recentWrites at once (newest-first, deduped,
  *    capped);
  *  - a failed round's real error line lands in `lastError` (7f1afc1
- *    honesty); a clean round CLEARS it — the pointer answers "how is the
- *    unit NOW", not a ledger of past failures;
+ *    honesty); any round that did NOT fail clears it — the pointer answers
+ *    "how is the unit NOW", not a ledger of past failures;
  *  - `lastNote` stages only from a SUBSTANTIVE round (wrote something and
  *    said why — R1: 空转不留痕);
- *  - the cursor (`lastSeen`) advances ONLY when the round did NOT fail —
- *    success or deliberate idle. A failed round leaves the cursor so the
- *    next lap re-reads from the same edge (writer-is-reader converges the
- *    redo).
+ *  - the cursor (`lastSeen`) advances ONLY when the round did NOT fail and
+ *    was NOT superseded — success or deliberate idle. A failed round leaves
+ *    the cursor so the next lap re-reads from the same edge
+ *    (writer-is-reader converges the redo); a superseded round (§5.4) holds
+ *    it the same way — superseded ≠ settled, the round's reviewed range
+ *    does not count;
+ *  - a superseded round registers `lastSuperseded: {at, note?}` — honestly,
+ *    neither dressed as a failure nor as an idle. The note rides only when
+ *    the round actually wrote one (never fabricated); other rounds never
+ *    touch the stamp;
+ *  - an evolution pass that truly ran this round stamps `lastEvolution`
+ *    with the round's user-clock date (§4.2: changed or not — the stamp
+ *    means "this date's beat has been seen").
  */
 export async function recordReflectionRoundSettled(round: {
   actions: string[];
@@ -162,13 +196,21 @@ export async function recordReflectionRoundSettled(round: {
   error?: string;
   /** The round's own one-line account; stages only from a substantive round. */
   note?: string;
-  /** The lap's furthest sealed slice — the cursor target. */
+  /** The round's scope's furthest sealed slice — the cursor target. */
   seen?: { sliceId?: string };
+  /** 修订 C (§5.4): "superseded" = the world moved, the round closed out early. */
+  disposition?: "completed" | "superseded";
+  /** The round's docket date (user clock) — the lastEvolution stamp. */
+  date?: string;
+  /** True when an evolution pass truly ran this round. */
+  evolved?: boolean;
 }): Promise<void> {
   const at = new Date().toISOString();
+  const superseded = round.disposition === "superseded";
   await mergeHQStatus((s) => ({
     ...s,
     briefsHandled: s.briefsHandled + 1,
+    roundActive: null,
     ...(round.actions.length > 0
       ? {
           recentWrites: [
@@ -180,7 +222,18 @@ export async function recordReflectionRoundSettled(round: {
     ...(round.actions.length > 0 && round.note
       ? { lastNote: { note: round.note, at } }
       : {}),
-    ...(!round.error && round.seen ? { lastSeen: round.seen } : {}),
+    ...(!round.error && !superseded && round.seen ? { lastSeen: round.seen } : {}),
+    ...(superseded
+      ? {
+          lastSuperseded: {
+            at,
+            ...(round.note ? { note: round.note } : {}),
+          },
+        }
+      : {}),
+    ...(round.evolved && round.date
+      ? { lastEvolution: { date: round.date, at } }
+      : {}),
   }));
 }
 
@@ -204,6 +257,9 @@ export async function recordReflectionRunIdleExit(result: {
     ...s,
     runStatus: "idle",
     briefsHandled: Math.max(0, Math.floor(result.rounds)),
+    // the exit lands at a lap boundary, never mid-round (§2.2) — the latch
+    // is clear by construction; belt and braces
+    roundActive: null,
   }));
 }
 
@@ -235,6 +291,8 @@ export async function settleHQRunIfStale(
     settled = {
       ...s,
       runStatus: "failed",
+      // a dead run has no round in flight either
+      roundActive: null,
       lastError: errorPreviewOf(
         `run ended as "${registryStatus}" in the registry without a finish mark — cancelled or died mid-run`,
       ),

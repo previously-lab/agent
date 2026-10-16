@@ -1,20 +1,23 @@
 /**
  * Reflection run — the reflection unit's shell (v0.21 §4 P2; v0.30 §2
- * 机械铃; v0.34 常驻形态 R1).
+ * 机械铃; v0.34 常驻形态 R1 + R2 的 world/gate).
  *
  * There is ONE agent with two execution units: the field (the conversation
  * workflow, user-facing) and the reflection unit (archives/evolution, no
  * mouth). v0.34 makes the unit RESIDENT for ONE VISIT (用户裁决：不追求一
  * 条永远存在的线): one durable run that spends almost all of its life
- * suspended on its mailbox or its idle clock (zero compute while waiting —
+ * suspended on its mailbox or its clocks (zero compute while waiting —
  * sleep.mdx:12, child-workflows.mdx:149-153), and exits when the visit is
  * over — an hour without a bell or a round. Nobody briefs it: the field
  * rings the bell ONLY when a slice is sealed on disk (v0.34 R1 — the
  * per-turn tail bell retired), and the bell is a doorbell, not a work
- * order: N bells ≠ N rounds. The unit wakes, drains the mailbox (a bounded
- * race against a short sleep — the doorbell count resets, nothing merges),
- * runs ONE round off the furthest pointer, settles the pointer EVERY round
- * (the D2 batching retired), and goes back to sleep.
+ * order: N bells ≠ N rounds. What a lap DOES is decided by the world read,
+ * not by the queue (§3.1): the loop is 取世界 → lapHasWork 判 → 有活才跑
+ * 一轮 → 立即再查（积压由循环本身消化）→ 无活才阻塞。R2's
+ * `loadReflectionWorld` (cursor-based scope + the two beats + the agenda)
+ * is the world; the drained mailbox contributes only the lap's user-clock
+ * date. A round's settlement is immediate (per-round, the D2 batching
+ * retired), and a failed round does NOT kill the unit.
  *
  * Lifecycle (寿命 = 一次访问 + 60 分钟空闲宽限):
  *   createHook({ token: REFLECTION_TOKEN }) → await hook.getConflict()
@@ -32,16 +35,12 @@
  *   (cancel/crash/platform) runs no sequence either — same fallback, and
  *   the status route's self-heal settles the stale "running" pointer.
  *
- * R1 scope: the loop is world→gate→round→settle with the world MINIMAL (no
- * gate) — a round's material is the drained mailbox's furthest pointer, fed
- * to the unchanged hq-agent. R2's `loadReflectionWorld` (cursor-based scope
- * + the two beats + the agenda arm) plugs into the same loop position.
- *
  * This is a WORKFLOW file: its static import graph is bundled into the
  * workflow sandbox, which has no Node modules (docs/errors/
  * node-js-module-in-workflow). Everything impure therefore lives in
  * reflection-steps.ts behind "use step" — this module imports only
- * `workflow`, the pure contract, and those step functions.
+ * `workflow`, the pure contract, the pure lap-plan module (sandbox-safe —
+ * judgment only), and those step functions.
  *
  * Lives under src/app so the withWorkflow loader picks up the directives.
  */
@@ -52,9 +51,11 @@ import {
   type ReflectionWakePayload,
   type ReflectionRunOutcome,
 } from "./reflection-contract";
+import { lapHasWork } from "./reflection-plan";
 import {
   handoffBriefToPrimary,
   handleReflectionRound,
+  loadReflectionWorld,
   markHQRunStarted,
   markReflectionRunIdleExit,
   settleReflectionRound,
@@ -173,44 +174,59 @@ export async function reflectionRun(
     try {
       let inbox: ReflectionWakePayload[] = initial ? [initial] : [];
       for (;;) {
-        if (inbox.length === 0) {
-          // Block: the bell vs the visit's idle grace (whichever first).
-          // R2 adds the third arm here: sleep(下一议程到期点).
-          const woke = await Promise.race<
-            ReflectionWakePayload | "done" | "exit"
+        // R2 (§3.1): the lap's work is whatever the WORLD says — the bell
+        // is only a wake-up tap. The lap's user-clock date rides the drained
+        // mailbox's furthest dated wake (the field's clock, §3.3); a clock
+        // lap carries nothing and the step falls back to the UTC date (the
+        // agenda is day-granular, §6.2).
+        const lapDate = furthestWakePointer(inbox).date;
+        inbox = [];
+        const docket = await loadReflectionWorld(lapDate);
+        if (lapHasWork(docket)) {
+          // ONE round per lap off the docket (§5.1). A failed round does
+          // NOT kill the unit (§3.1 行为变更): the round step never throws,
+          // the settle below records the failure honestly (the cursor holds
+          // — §4.2), and the loop continues. The immediate re-check after
+          // the settle is the backlog drain: the next docket sees whatever
+          // is still past the cursor, lap by lap, until nothing is due.
+          const round = await handleReflectionRound(docket);
+          rounds += 1;
+          await settleReflectionRound(round, docket);
+          continue;
+        }
+        // No work: block — the bell vs the agenda clock vs the visit's
+        // idle grace (§3.1 的 R2 三路). The agenda arm exists only when the
+        // docket named a future due point; the arms are ordered bell →
+        // agenda → idle (production resolves by real ms, so order is
+        // semantics-free there).
+        const arms: Array<Promise<ReflectionWakePayload | "done" | "agenda" | "exit">> =
+          [nextBell()];
+        if (docket.agendaWakeMs !== null) {
+          arms.push(sleep(docket.agendaWakeMs).then((): "agenda" => "agenda"));
+        }
+        arms.push(sleep(REFLECTION_IDLE_EXIT_MS).then((): "exit" => "exit"));
+        const woke = await Promise.race(arms);
+        if (woke === "exit" || woke === "done") {
+          return await exitIdle();
+        }
+        if (woke === "agenda") {
+          continue; // clock lap — the loop top re-reads the world
+        }
+        pendingNext = null; // the bell arm resolved — consume the slot
+        inbox = [woke];
+        // 排空（§3.2）：清零门铃计数，封顶防病态。排不净无所谓——遗留铃
+        // 只会让后续 lap 空转一次机械检查。
+        for (let drained = 0; drained < MAILBOX_DRAIN_CAP; drained += 1) {
+          const more = await Promise.race<
+            ReflectionWakePayload | "done" | "quiet"
           >([
             nextBell(),
-            sleep(REFLECTION_IDLE_EXIT_MS).then((): "exit" => "exit"),
+            sleep(MAILBOX_DRAIN_PROBE_MS).then((): "quiet" => "quiet"),
           ]);
-          if (woke === "exit" || woke === "done") {
-            return await exitIdle();
-          }
-          pendingNext = null; // the bell arm resolved — consume the slot
-          inbox = [woke];
-          // 排空（§3.2）：清零门铃计数，封顶防病态。排不净无所谓——遗留铃
-          // 只会让后续 lap 空转一次机械检查。
-          for (let drained = 0; drained < MAILBOX_DRAIN_CAP; drained += 1) {
-            const more = await Promise.race<
-              ReflectionWakePayload | "done" | "quiet"
-            >([
-              nextBell(),
-              sleep(MAILBOX_DRAIN_PROBE_MS).then((): "quiet" => "quiet"),
-            ]);
-            if (more === "quiet" || more === "done") break;
-            pendingNext = null;
-            inbox.push(more);
-          }
+          if (more === "quiet" || more === "done") break;
+          pendingNext = null;
+          inbox.push(more);
         }
-        // ONE round per lap off the furthest pointer (N 铃 ≠ N 轮 — R1's
-        // minimal world: no gate; R2's loadReflectionWorld plugs in here).
-        // A failed round does NOT kill the unit (§3.1 行为变更): the round
-        // step never throws, the settle below records the failure honestly,
-        // and the loop continues.
-        const pointer = furthestWakePointer(inbox);
-        inbox = [];
-        const round = await handleReflectionRound(pointer);
-        rounds += 1;
-        await settleReflectionRound(round, pointer);
       }
     } finally {
       await iterator.return?.();

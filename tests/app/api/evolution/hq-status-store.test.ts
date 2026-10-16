@@ -12,9 +12,13 @@
  * batching retired with the resident run: briefsHandled ticks every round,
  * lastError lands a failure's first line and clears on a clean round,
  * lastNote stages only from a substantive round (空转不留痕), the cursor
- * advances only on a clean round), the idle-exit terminal
+ * advances only on a clean round), the v0.34 R2 round latch (§4.1) and
+ * stamps (a superseded round holds the cursor and registers
+ * lastSuperseded, §5.4; an evolution pass that ran stamps lastEvolution
+ * with the round's date, §4.2), the idle-exit terminal
  * (recordReflectionRunIdleExit → "idle"), the immediate started mark, and
- * the tolerate-everything read (missing or corrupt file → the empty pointer).
+ * the tolerate-everything read (missing or corrupt file → the empty
+ * pointer).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
@@ -76,6 +80,9 @@ describe("readHQStatus", () => {
       recentWrites: [],
       lastNote: null,
       lastSeen: null,
+      roundActive: null,
+      lastEvolution: null,
+      lastSuperseded: null,
     });
   });
 
@@ -112,6 +119,9 @@ describe("readHQStatus", () => {
       recentWrites: ["memory/self/search/index.md"],
       lastNote: null,
       lastSeen: null,
+      roundActive: null,
+      lastEvolution: null,
+      lastSuperseded: null,
     });
   });
 
@@ -372,6 +382,139 @@ describe("recordReflectionRoundSettled — per-round immediate settlement (v0.34
 
     await recordHQRunStarted("run-2");
     expect((await readHQStatus()).briefsHandled).toBe(0);
+  });
+});
+
+describe("recordReflectionRoundBegan / the round latch (v0.34 R2, §4.1)", () => {
+  it("a round's begin/settle closes and clears roundActive; a fresh generation and the idle exit are clear by construction", async () => {
+    const {
+      recordHQRunStarted,
+      recordReflectionRoundBegan,
+      recordReflectionRoundSettled,
+      recordReflectionRunIdleExit,
+      readHQStatus,
+    } = await importStore();
+
+    await recordHQRunStarted("run-1");
+    expect((await readHQStatus()).roundActive).toBeNull();
+
+    await recordReflectionRoundBegan();
+    const during = await readHQStatus();
+    expect(during.roundActive).not.toBeNull();
+    expect(typeof during.roundActive?.since).toBe("string");
+
+    await recordReflectionRoundSettled({ actions: [] });
+    expect((await readHQStatus()).roundActive).toBeNull();
+
+    // a new generation claims the pointer with no round in flight…
+    await recordReflectionRoundBegan();
+    await recordHQRunStarted("run-2");
+    expect((await readHQStatus()).roundActive).toBeNull();
+
+    // …and the visit's exit lands at a lap boundary — clear by construction,
+    // cleared again belt-and-braces
+    await recordReflectionRoundBegan();
+    await recordReflectionRunIdleExit({ rounds: 0 });
+    expect((await readHQStatus()).roundActive).toBeNull();
+  });
+});
+
+describe("recordReflectionRoundSettled — superseded + evolution stamps (v0.34 R2, §4.2/§5.4)", () => {
+  it("a SUPERSEDED round: the cursor holds like a failure, landed writes report honestly, lastSuperseded registers with the note — and the round still counts", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({
+      actions: ["memory/research/y/index.md"],
+      note: "superseded: 又封了一片，本轮前提作废；这笔已落盘。",
+      seen: { sliceId: "2026-10-04-0131" },
+      disposition: "superseded",
+      date: "2026-10-04",
+    });
+    let s = await readHQStatus();
+    // the cursor HOLDS — superseded ≠ settled (§5.4)
+    expect(s.lastSeen).toBeNull();
+    // the landed write reports honestly (7f1afc1)
+    expect(s.recentWrites).toEqual(["memory/research/y/index.md"]);
+    // the note stages (the round wrote something and said why)
+    expect(s.lastNote?.note).toContain("superseded");
+    // registered honestly — not dressed as a failure
+    expect(s.lastSuperseded?.at).toMatch(/^\d{4}-/);
+    expect(s.lastSuperseded?.note).toContain("本轮前提作废");
+    expect(s.lastError).toBeNull();
+    // the round really ran — it counts
+    expect(s.briefsHandled).toBe(1);
+
+    // a note-less superseded round registers {at} alone — never fabricated
+    await recordReflectionRoundSettled({
+      actions: [],
+      seen: { sliceId: "2026-10-04-0200" },
+      disposition: "superseded",
+      date: "2026-10-04",
+    });
+    s = await readHQStatus();
+    expect(s.lastSuperseded?.note).toBeUndefined();
+    expect(s.lastSeen).toBeNull(); // still holding
+  });
+
+  it("an evolution pass that truly ran stamps lastEvolution with the round's user-clock date — changed or not; a round without one leaves it", async () => {
+    const { recordHQRunStarted, recordReflectionRoundSettled, readHQStatus } =
+      await importStore();
+
+    await recordHQRunStarted("run-1");
+    await recordReflectionRoundSettled({ actions: [], date: "2026-10-04" });
+    expect((await readHQStatus()).lastEvolution).toBeNull();
+
+    // the pass ran (changed:false still counts — the stamp means "seen")
+    await recordReflectionRoundSettled({
+      actions: [],
+      evolved: true,
+      date: "2026-10-04",
+    });
+    let s = await readHQStatus();
+    expect(s.lastEvolution).toEqual({ date: "2026-10-04", at: expect.any(String) });
+
+    // a later round without a pass leaves the stamp standing
+    await recordReflectionRoundSettled({ actions: [], date: "2026-10-05" });
+    s = await readHQStatus();
+    expect(s.lastEvolution?.date).toBe("2026-10-04");
+  });
+
+  it("the R2 pointer fields normalize tolerantly — pre-R2 files degrade to null, shaped-wrong fields never break the read", async () => {
+    fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({
+        roundActive: "yes",
+        lastEvolution: { date: "2026-10-04" }, // missing at
+        lastSuperseded: { note: "no at" },
+      }),
+      "utf-8",
+    );
+    const { readHQStatus } = await importStore();
+    const s = await readHQStatus();
+    expect(s.roundActive).toBeNull();
+    expect(s.lastEvolution).toBeNull();
+    expect(s.lastSuperseded).toBeNull();
+
+    // a well-formed file round-trips
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({
+        roundActive: { since: "2026-10-04T01:00:00.000Z" },
+        lastEvolution: { date: "2026-10-04", at: "2026-10-04T02:00:00.000Z" },
+        lastSuperseded: { at: "2026-10-04T03:00:00.000Z" },
+      }),
+      "utf-8",
+    );
+    const s2 = await readHQStatus();
+    expect(s2.roundActive).toEqual({ since: "2026-10-04T01:00:00.000Z" });
+    expect(s2.lastEvolution).toEqual({
+      date: "2026-10-04",
+      at: "2026-10-04T02:00:00.000Z",
+    });
+    expect(s2.lastSuperseded).toEqual({ at: "2026-10-04T03:00:00.000Z" });
   });
 });
 

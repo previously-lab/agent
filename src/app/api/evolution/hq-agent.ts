@@ -1,12 +1,14 @@
 /**
- * The HQ agent (v0.21 §2/§4/§5) — ONE agent + a tool set, no mouth.
+ * The HQ agent (v0.21 §2/§4/§5; v0.34 R2 — the docket-driven round) — ONE
+ * agent + a tool set, no mouth.
  *
  * HQ is the memory system's archival/evolution unit. Its ONLY trigger is a
- * field dispatch: a prose brief whose pointers name slices and cases but
- * carry no content. HQ reads the raw records itself before touching anything
- * (the brief is one side's account — a pointer is not a fact), decides what
- * to do and in what order (the discipline lives in this prompt, not in a
- * fixed pipeline), and stores RESULTS ONLY:
+ * mechanical wake from the reflection shell: a DOCKET (this round's sealed
+ * slices, the gate's beat verdicts, the due agenda items) that names slices
+ * and cases but carries no content. HQ reads the raw records itself before
+ * touching anything (the docket is one side's plan — not a fact), decides
+ * what to do and in what order (the discipline lives in this prompt, not in
+ * a fixed pipeline), and stores RESULTS ONLY:
  *
  *   - an idle round writes NOTHING — there is no run ledger;
  *   - dedup is writer-is-reader (a re-run reads current case state and goes
@@ -55,10 +57,11 @@ import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import { readUserModel, writeSelfSop } from "@/lib/evolution/store";
-import { AGENDA_PATH } from "@/lib/evolution/agenda";
+import { AGENDA_PATH, type AgendaItem } from "@/lib/evolution/agenda";
 import { detectDirectionMode } from "@/lib/evolution/direction-agent";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import type { ModelConfig } from "@/lib/models/registry";
+import type { EvolutionReason, ScopedSlice } from "./reflection-plan";
 import {
   backgroundModel,
   buildRunCardReaders,
@@ -67,13 +70,30 @@ import {
 
 // ─── The run contract ─────────────────────────────────────────────────────
 
-export interface ReflectionWakeInput {
-  /** The slice the finished turn landed in, when the wake names one. */
-  sliceId?: string;
-  /** The finished turn's id, when the wake names one. */
-  turnId?: string;
-  /** User-local date (YYYY-MM-DD) — every write stamps the user's clock. */
+/**
+ * The round's docket input (v0.34 R2, §5.3) — what the lap's world read
+ * decided to offer. A plan, not a fact: the unit re-reads the raw records
+ * itself before touching anything (§5 独立审查). `turnId` retired with the
+ * per-turn bell; `sliceId`-as-input retired with it — the SCOPE (every
+ * sealed slice newer than the cursor, capped) is the round's material now.
+ */
+export interface ReflectionRoundInput {
+  /** User-clock date (YYYY-MM-DD) — every write stamps the user's clock. */
   date: string;
+  /** lastSeen.sliceId — the unit's range starts right after this (null = a
+   *  fresh deployment: everything qualifies). */
+  cursor: string | null;
+  /** This round's material: the sealed slices newer than the cursor,
+   *  oldest first (at most REFLECTION_SCOPE_MAX). */
+  scope: ScopedSlice[];
+  /** The mechanical gate's evolution verdict (§3.4) — the unit keeps the
+   *  veto: an evolutionDue round may still go idle. */
+  evolutionDue: boolean;
+  /** Why the beat fired — the enumerated §3.4 reasons, never free text. */
+  evolutionReasons: EvolutionReason[];
+  /** Agenda items due by this round's date (§6.2) — delivery really
+   *  happens: these ride WITH this round. */
+  agendaDue: AgendaItem[];
 }
 
 export interface HqOutcome {
@@ -82,13 +102,19 @@ export interface HqOutcome {
   /** HQ's one-paragraph account of the round (idle rounds say why). */
   note: string;
   /**
-   * v0.34 修订 C: how the round ended, when the unit reported one —
-   * "superseded" means the round's premise was voided mid-round (absent =
-   * "completed", the backward-compatible default). The shell's settlement
-   * semantics (cursor stays put, lastSuperseded registration) are R2a's;
-   * this only makes the verdict reportable and visible.
+   * v0.34 修订 C (§5.4): how the round ended, when the unit reported one —
+   * "superseded" means the round's premise was voided mid-round (a fresh
+   * read showed the world had moved). The shell's settlement: the cursor
+   * holds (like a failed round), landed writes report honestly, and the
+   * pointer registers lastSuperseded. Absent = "completed".
    */
   disposition?: "completed" | "superseded";
+  /**
+   * v0.34 R2 (§4.2): true when an evolution pass truly RAN this round (the
+   * evolveUserModel tool executed, changed or not) — the shell's settle
+   * stamps `lastEvolution` with the round's date. Absent = no pass ran.
+   */
+  evolved?: boolean;
   /** Present when the run itself failed (never thrown — HQ never throws). */
   error?: string;
 }
@@ -116,10 +142,10 @@ type HqReport = z.infer<typeof hqReportSchema>;
 
 const HQ_ROLE = `You are the reflection unit — the archival and evolution unit of the ONE agent. You have no mouth: nothing you produce is ever shown to the user as conversation. Your products land in the memory tree (cases, the user model, self/ SOPs), where the field side reads them later. You and the field unit are one agent — the same "I" at two posts. Every line you write is that one person's hand: inside the documents there is no "the agent" and no "reflection unit" as a third party, and nothing reads as a report from another being.
 
-The record is the channel. Nobody briefs you: you are woken mechanically with nothing but pointers — a slice id, a turn id, a date — and everything you need, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
-- A pointer is not a fact. The wake names slices and turns; it does not carry their content.
-- BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the pointer alone.
-- Your range is everything since your last look. A rolling pointer says where you got to; when several turns landed while you were away, they are one round's material, not several.
+The record is the channel. Nobody briefs you: you are woken mechanically with nothing but a docket — a date, the sealed slice(s) named as this round's material, what the mechanical gate noticed, and your own due agenda items — and everything you need beyond it, you read yourself: the user's own words (core.md), the field's thinking and work (agent.md), the tree's products.
+- A docket is a plan, not a fact. It names slices and beats; it does not carry their content.
+- BEFORE writing anything, verify against the raw records: readSlice / readCase / listTree. Never write from the docket alone.
+- This round's material is the sealed page(s) named below; the cursor advances only when the round settles. When several slices are named, they are one round's material, not several.
 
 Store RESULTS ONLY:
 - An idle round is a legal, often correct outcome — when the records show nothing substantive to store, write NOTHING and say why in your report. There is no ledger; do not record that you ran.
@@ -143,8 +169,7 @@ Craft notes:
 
 Your agenda — notes to yourself:
 - memory/self/agenda.md is your own work pad: hypotheses to re-check, judgments to revisit, questions you left for yourself. One line per item: \`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）\` — the [due:] prefix is the only mechanical contract, and every item carries its source (the slice id that motivated it).
-- An item whose date has come WILL be handed back to you with a later round — until then it simply waits on the page.
-- Work an item when it comes back, reschedule it (rewrite its due date), or consume it (drop its line) — every change is a full rewrite through setAgenda.
+- Due items ride WITH the round: any item whose due date has arrived is listed in your docket. Work it, reschedule it (rewrite its due date), or consume it (drop its line) — every change is a full rewrite through setAgenda.
 - The agenda is a work pad, not a ledger — keep it short.
 
 How your prose reads — the investigator's account, never the work order:
@@ -156,7 +181,12 @@ ${DOC_HOUSE_STYLE}`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
-function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
+function buildHqTools(
+  date: string,
+  model: ModelConfig,
+  batch: WriteBatch,
+  flags: { evolutionRan: boolean },
+) {
   return {
     listTree: tool({
       description:
@@ -345,6 +375,10 @@ function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
         // earns the slice_closed signal (and the deep whole-slice review it
         // unlocks); an open slice is reported as what it is, a field report.
         const closed = slice.status === "closed";
+        // The pass truly RUNS from here — flag it so the round's outcome
+        // reports the evolution beat (§4.2: lastEvolution stamps whenever
+        // the pass ran, changed or not).
+        flags.evolutionRan = true;
         // The same process-wide evolution lock the field's turn pipeline
         // serializes on (steps.ts) — HQ must not interleave its
         // read-modify-write of the user model / SOPs with a live turn's.
@@ -464,13 +498,14 @@ function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
 // ─── The entry (the reflection-run.ts shell calls this) ───────────────────
 
 /**
- * Handle one mechanical wake (v0.30 §2). Never throws: a failed round
- * returns `{ actions: [], note: "", error }` — the unit's products are
- * writes, and a failed round simply has none.
+ * Handle ONE round off the lap's docket (v0.34 R2, §5.3). Never throws: a
+ * failed round returns `{ actions: [], note: "", error }` — the unit's
+ * products are writes, and a failed round simply has none (whatever its
+ * tools landed before the failure rides as actions — 7f1afc1 honesty).
  */
-export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome> {
+export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcome> {
   "use step";
-  const { sliceId, turnId, date } = input;
+  const { date, cursor, scope, evolutionDue, evolutionReasons, agendaDue } = input;
 
   const model = backgroundModel();
   if (!model) {
@@ -478,10 +513,30 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
     return { actions: [], note: "", error: "no default model configured" };
   }
 
+  // The round's user prompt is built from the DOCKET (§5.3): the material
+  // (this round's sealed slices), the gate's verdicts, and the agenda items
+  // due by this round's date — delivery really happens now.
+  const scopeLines =
+    scope.length > 0
+      ? scope.map((s) => `- ${s.sliceId} (closed by ${s.closedBy})`).join("\n")
+      : "(none — no sealed slice is newer than your cursor)";
+  const agendaLines =
+    agendaDue.length > 0
+      ? agendaDue.map((a) => `- [due: ${a.due}] ${a.text}`).join("\n")
+      : null;
+
   const prompt =
-    `## A field turn completed (${date}${sliceId ? ` — slice ${sliceId}` : ""}${turnId ? `, turn ${turnId}` : ""})\n\n` +
-    `The record is the channel: read the slice (core.md for the user's words, agent.md for the field's thinking and work) ` +
-    `and anything else since your last look, then decide what deserves doing. ` +
+    `## Round docket (${date}) — your cursor: ${cursor ?? "(none — a fresh start)"}\n\n` +
+    `This round's material — the sealed slice(s) named below; the cursor advances only when the round settles:\n` +
+    `${scopeLines}\n\n` +
+    (evolutionDue
+      ? `The evolution beat is DUE this round (${evolutionReasons.join(", ")}): run the merged card pass (evolveUserModel) over this material.\n\n`
+      : "") +
+    (agendaLines !== null
+      ? `Your agenda — due items ride WITH this round (work each, reschedule it, or consume it via setAgenda):\n${agendaLines}\n\n`
+      : "") +
+    `Read the named slice(s) (core.md for the user's words, agent.md for the field's thinking and work) ` +
+    `and anything else the docket implies, then decide what deserves doing. ` +
     `When the round is done (or you decide nothing needs doing), call hqReport.`;
 
   // ONE batch for the whole round: every write the tools queue lands as a
@@ -491,12 +546,13 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
   // the same threading works unchanged on the local backend (flushBatch
   // applies the entries and records one local commit).
   const batch = createBatch();
+  const flags = { evolutionRan: false };
 
   const result = await runSubAgent<HqReport>({
     model,
     system: buildSubAgentSystem(HQ_ROLE),
     prompt,
-    tools: buildHqTools(date, model, batch),
+    tools: buildHqTools(date, model, batch, flags),
     toolChoice: "required",
     reportToolName: "hqReport",
     reportSchema: hqReportSchema,
@@ -562,16 +618,23 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
     const landed = flushed
       ? queuedPaths.map((p) => p.replace(/^memory\//, ""))
       : [];
-    return { actions: landed, note: "", error };
+    return {
+      actions: landed,
+      note: "",
+      error,
+      // an evolution pass that ran before the cut still counts (§4.2)
+      ...(flags.evolutionRan ? { evolved: true } : {}),
+    };
   }
   console.log(`[HQ] round done: ${result.report.actions.length} action(s)`);
   return {
     actions: result.report.actions,
     note: result.report.note,
-    // 修订 C: verbatim passthrough — absent means "completed" (backward
-    // compatible); the shell's settlement semantics land with R2a.
+    // 修订 C: verbatim passthrough — absent means "completed".
     ...(result.report.disposition !== undefined
       ? { disposition: result.report.disposition }
       : {}),
+    // §4.2: the evolution beat stamps whenever the pass truly ran.
+    ...(flags.evolutionRan ? { evolved: true } : {}),
   };
 }

@@ -161,6 +161,16 @@ async function callTool(opts: RunnerOpts, name: string, args: unknown): Promise<
 
 const DATE = "2026-08-09";
 const SLICE_ID = "2026-08-09-1300";
+/** The v0.34 R2 docket input (§5.3) — one sealed boundary slice in scope,
+ *  no beat due, no agenda. The tests vary the tools, not the docket. */
+const DOCKET = {
+  date: DATE,
+  cursor: null,
+  scope: [{ sliceId: SLICE_ID, closedBy: "idle_gap" as const }],
+  evolutionDue: false,
+  evolutionReasons: [],
+  agendaDue: [],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -195,7 +205,7 @@ describe("handleBrief (v0.21 §5)", () => {
       text: "",
     }));
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome).toEqual({
       actions: [],
@@ -228,7 +238,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.actions).toEqual(["research/手机购买调研/index.md"]);
     expect(outcome.error).toBeUndefined();
@@ -291,7 +301,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     expect(io.files.get("memory/research/手机购买调研/index.md")).toContain("基于新读的重写。");
@@ -322,7 +332,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     const raw = io.files.get("memory/self/evolution/index.md") ?? "";
@@ -345,7 +355,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     // The case-writer and research passes were never invoked — order and
@@ -380,7 +390,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     const cardInput = passes.runCardEvolution.mock.calls[0][0] as {
@@ -412,7 +422,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "guard verified" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     // nothing ever landed on the user model path
@@ -430,7 +440,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "sop rewritten" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     expect(vi.mocked(withSliceLock)).toHaveBeenCalledWith("evolution", expect.any(Function));
@@ -449,7 +459,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "agenda rewritten" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     // the writeSelfSop discipline, copied: the process-wide evolution lock…
@@ -495,7 +505,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     expect(outcome.disposition).toBe("superseded");
@@ -515,11 +525,68 @@ describe("handleBrief (v0.21 §5)", () => {
       text: "",
     }));
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     // Exact shape: no disposition key at all — old consumers read it as completed.
     expect(outcome).toEqual({ actions: [], note: "a normal round" });
     expect("disposition" in outcome).toBe(false);
+    // no evolution pass ran → no evolved flag either
+    expect("evolved" in outcome).toBe(false);
+  });
+
+  it("v0.34 R2 (§5.3): the DOCKET builds the user prompt — material, cursor, evolution verdict, and due agenda items delivered with the round", async () => {
+    runSubAgentMock.mockImplementation(async () => ({
+      ok: true,
+      report: { actions: [], note: "checked" },
+      text: "",
+    }));
+
+    await handleBrief({
+      date: DATE,
+      cursor: "2026-08-09-1200",
+      scope: [
+        { sliceId: SLICE_ID, closedBy: "idle_gap" },
+        { sliceId: "2026-08-09-1400", closedBy: "time_cap" },
+      ],
+      evolutionDue: true,
+      evolutionReasons: ["conversation_boundary", "daily_rollover"],
+      agendaDue: [
+        { due: "2026-08-09", text: "复查 hypotheses/手机调研假设（据片 2026-08-09-1300）" },
+      ],
+    });
+
+    const prompt = runSubAgentMock.mock.calls[0][0].prompt as string;
+    // the material: every scoped slice named with its close cause…
+    expect(prompt).toContain("2026-08-09-1300 (closed by idle_gap)");
+    expect(prompt).toContain("2026-08-09-1400 (closed by time_cap)");
+    // …the cursor the range starts after…
+    expect(prompt).toContain("2026-08-09-1200");
+    // …the evolution verdict with its enumerated reasons…
+    expect(prompt).toContain("evolution beat is DUE this round");
+    expect(prompt).toContain("conversation_boundary, daily_rollover");
+    // …and the due agenda item RIDING this round (delivery really happens)
+    expect(prompt).toContain("due items ride WITH this round");
+    expect(prompt).toContain("[due: 2026-08-09] 复查 hypotheses/手机调研假设");
+  });
+
+  it("v0.34 R2 (§4.2): an evolution pass that TRULY ran flags the outcome `evolved` — even when the model changed nothing; an unreadable slice never counts", async () => {
+    // changed:false — the pass still RAN, the beat still stamps
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "evolveUserModel", { sliceId: SLICE_ID, focus: "复核。" });
+      return { ok: true, report: { actions: [], note: "reviewed" }, text: "" };
+    });
+    let outcome = await handleBrief(DOCKET);
+    expect(outcome.evolved).toBe(true);
+
+    // the slice unreadable — the pass never ran: no flag
+    episodic.loadSlice.mockRejectedValue(new Error("missing"));
+    runSubAgentMock.mockImplementation(async () => ({
+      ok: true,
+      report: { actions: [], note: "nothing to do" },
+      text: "",
+    }));
+    outcome = await handleBrief(DOCKET);
+    expect("evolved" in outcome).toBe(false);
   });
 
   it("archiveSliceCases runs the case-writer AND the scribe over the same slice", async () => {
@@ -540,7 +607,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     // Both passes ran, over the SAME slice — the scribe consumes the slice's
@@ -600,7 +667,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     // the capability is announced on the tool surface and in the role prompt
@@ -627,7 +694,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "already closed" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
@@ -641,7 +708,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: true, report: { actions: [], note: "nothing marked" }, text: "" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBeUndefined();
     expect(episodic.closeSlice).not.toHaveBeenCalled();
@@ -654,7 +721,7 @@ describe("handleBrief (v0.21 §5)", () => {
       text: "",
     }));
 
-    await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    await handleBrief(DOCKET);
 
     const opts = runSubAgentMock.mock.calls[0][0];
     // The investigator's-account discipline lives in the static role prompt…
@@ -690,7 +757,7 @@ describe("handleBrief (v0.21 §5)", () => {
       };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBe("Sub-agent did not finish within 300s.");
     // the landed write rides as actions (memory/-stripped, report style)…
@@ -714,7 +781,7 @@ describe("handleBrief (v0.21 §5)", () => {
       return { ok: false, timedOut: true, text: "", error: "boom" };
     });
 
-    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+    const outcome = await handleBrief(DOCKET);
 
     expect(outcome.error).toBe("boom");
     expect(outcome.actions).toEqual([]);

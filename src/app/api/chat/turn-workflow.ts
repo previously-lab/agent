@@ -82,7 +82,7 @@ import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 /**
  * Episode idle grace (R4, v0.30 §3): after a clean answer the run keeps its
  * inbox open this long for a follow-up before finalizing — the
- * reflection-run.ts race-with-sleep discipline (REFLECTION_IDLE_CAP_MS),
+ * reflection-run.ts race-with-sleep discipline (REFLECTION_IDLE_EXIT_MS),
  * shortened for conversation pace. While instances run, the same sleep is
  * only a re-tick: the episode never packs up with work in flight.
  */

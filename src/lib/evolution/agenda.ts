@@ -16,9 +16,10 @@
  * hand-edited or half-written agenda must never take a round down.
  *
  * Due judgment (§6.2): an item is due when `due <= the round's date`
- * (string compare — YYYY-MM-DD sorts lexicographically). Delivery of due
- * items into the round's docket (`agendaDue`) is a later batch's job; this
- * module is the shared pure half both sides build on.
+ * (string compare — YYYY-MM-DD sorts lexicographically). Delivery into the
+ * round's docket (`agendaDue`, via reflection-steps' loadReflectionWorld)
+ * rides this module's pure half — the shell's agenda clock arm and the
+ * docket's due list both call into it.
  */
 
 /** Where the agenda lives — self/ is the unit's own way of working (§6.1). */

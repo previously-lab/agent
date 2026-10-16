@@ -21,12 +21,12 @@
 
 /**
  * How the reflection unit's run stands — v0.34 常驻形态: "running" is the
- * resident常态 (a generation lives for days, blocked on its mailbox or its
- * clocks), "retired" is the ONLY clean terminal (the generation relayed to
- * its successor, 修订 B), "failed" is the self-heal verdict for a run that
- * died without its mark. "completed"/"idle" are LEGACY terminals from the
- * pre-resident shell — old files still carry them, new runs never settle to
- * them.
+ * in-visit 常态 (a generation lives for ONE visit, blocked on its mailbox or
+ * its clocks), "idle" is the clean terminal (the visit's 60-minute grace
+ * elapsed at a lap boundary — 修订 D, the idle-exit mark settles it),
+ * "failed" is the self-heal verdict for a run that died without its mark.
+ * "completed"/"retired" are LEGACY terminals from earlier shells — old files
+ * still carry them, new runs never settle to them.
  */
 export type HQRunStatus = "running" | "completed" | "idle" | "failed" | "retired";
 
@@ -84,6 +84,28 @@ export interface HQStatus {
    * tolerated for older files; the type narrows in R2).
    */
   lastSeen: { sliceId?: string; turnId?: string } | null;
+  /**
+   * v0.34 R2 (§4.1) — the round latch: set when a round BEGINS, cleared when
+   * the round settles. The pod's breathing source (§4.3): a resident unit
+   * hanging on its stream is the NORMAL state — "attached" is not "working",
+   * a non-null latch is.
+   */
+  roundActive: { since: string } | null;
+  /**
+   * v0.34 R2 (§4.1/§4.2) — the evolution beat's stamp: the user-clock DATE
+   * the last evolution pass RAN (stamped whenever the pass truly ran,
+   * changed or not — the stamp means "this date's beat has been seen", not
+   * "the model moved"), plus when. Drives the daily-rollover judgment
+   * (§3.4-2).
+   */
+  lastEvolution: { date: string; at: string } | null;
+  /**
+   * v0.34 R2 (§5.4) — when the last round ended SUPERSEDED: a fresh read
+   * showed the world had moved so the round's premise was void, and the unit
+   * closed out early. Registered honestly — not dressed as a failure or an
+   * idle. The note rides only when the round wrote one, never fabricated.
+   */
+  lastSuperseded: { at: string; note?: string } | null;
 }
 
 export const HQ_STATUS_EMPTY: HQStatus = {
@@ -97,6 +119,9 @@ export const HQ_STATUS_EMPTY: HQStatus = {
   recentWrites: [],
   lastNote: null,
   lastSeen: null,
+  roundActive: null,
+  lastEvolution: null,
+  lastSuperseded: null,
 };
 
 /** The GET /api/evolution/hq-status payload. */
@@ -141,6 +166,9 @@ export function normalizeHQStatus(raw: unknown): HQStatus {
       : [],
     lastNote: normalizeLastNote(o.lastNote),
     lastSeen: normalizeLastSeen(o.lastSeen),
+    roundActive: normalizeRoundActive(o.roundActive),
+    lastEvolution: normalizeLastEvolution(o.lastEvolution),
+    lastSuperseded: normalizeLastSuperseded(o.lastSuperseded),
   };
 }
 
@@ -160,6 +188,31 @@ function normalizeLastSeen(raw: unknown): HQStatus["lastSeen"] {
   const turnId = typeof o.turnId === "string" ? o.turnId : undefined;
   if (sliceId === undefined && turnId === undefined) return null;
   return { ...(sliceId ? { sliceId } : {}), ...(turnId ? { turnId } : {}) };
+}
+
+/** Tolerant field decode for the round latch (§4.1) — a file from before
+ *  R2 simply has no latch, and a shaped-wrong one degrades to "no round". */
+function normalizeRoundActive(raw: unknown): HQStatus["roundActive"] {
+  if (!raw || typeof raw !== "object") return null;
+  const since = (raw as Record<string, unknown>).since;
+  return typeof since === "string" && since ? { since } : null;
+}
+
+/** Tolerant field decode for the evolution-beat stamp (§4.1). */
+function normalizeLastEvolution(raw: unknown): HQStatus["lastEvolution"] {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.date !== "string" || typeof o.at !== "string") return null;
+  return { date: o.date, at: o.at };
+}
+
+/** Tolerant field decode for the superseded stamp (§5.4) — the note is
+ *  optional there by design (a cut-short round never wrote one). */
+function normalizeLastSuperseded(raw: unknown): HQStatus["lastSuperseded"] {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.at !== "string") return null;
+  return typeof o.note === "string" ? { at: o.at, note: o.note } : { at: o.at };
 }
 
 /**
