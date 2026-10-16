@@ -36,6 +36,29 @@ describe("GET /api/chat/[runId]/stream — terminal runs", () => {
     );
   });
 
+  it("a failed run unwraps error.cause — the client sees the rate-limit detail, not the wrapper", async () => {
+    workflowApi.getRun.mockReturnValue({
+      status: Promise.resolve("failed"),
+      // turn-workflow's degraded path rethrows with the typed guardrail error
+      // (GitHubRateLimitError) as the cause — the frame must surface THAT.
+      returnValue: Promise.reject(
+        new Error("run failed: flushTurnBatch exhausted", {
+          cause: new Error(
+            "GitHub rate limit (secondary): You have exceeded a secondary rate limit",
+          ),
+        }),
+      ),
+    });
+    const res = await call("r1c");
+    const text = await res.text();
+    expect(text).toContain('"status":"error"');
+    expect(text).toContain("secondary rate limit");
+    expect(text).not.toContain("flushTurnBatch exhausted");
+    expect(text.indexOf("data-turn-status")).toBeLessThan(
+      text.indexOf('"type":"finish"'),
+    );
+  });
+
   it("a cancelled run says the turn was cancelled", async () => {
     workflowApi.getRun.mockReturnValue({
       status: Promise.resolve("cancelled"),
