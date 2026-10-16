@@ -16,7 +16,7 @@
  *
  * Every tool here WRAPS an existing capability (the case-writer pass, the
  * doc-research pass, the merged card run, the case write machinery, the SOP
- * store) — this module invents no new write path.
+ * store, the agenda line contract) — this module invents no new write path.
  *
  * Shell wiring (P4b → v0.34 R1): the reflection-run.ts resident loop's
  * `handleReflectionRound` (reflection-steps.ts) calls `handleBrief` below —
@@ -29,6 +29,7 @@ import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
 import {
   createBatch,
   flushBatch,
+  fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { isRefConflictError } from "@/lib/tools/batch-write";
@@ -54,6 +55,7 @@ import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import { readUserModel, writeSelfSop } from "@/lib/evolution/store";
+import { AGENDA_PATH } from "@/lib/evolution/agenda";
 import { detectDirectionMode } from "@/lib/evolution/direction-agent";
 import { runCardEvolution } from "@/app/api/evolution/run-card-evolution";
 import type { ModelConfig } from "@/lib/models/registry";
@@ -79,6 +81,14 @@ export interface HqOutcome {
   actions: string[];
   /** HQ's one-paragraph account of the round (idle rounds say why). */
   note: string;
+  /**
+   * v0.34 修订 C: how the round ended, when the unit reported one —
+   * "superseded" means the round's premise was voided mid-round (absent =
+   * "completed", the backward-compatible default). The shell's settlement
+   * semantics (cursor stays put, lastSuperseded registration) are R2a's;
+   * this only makes the verdict reportable and visible.
+   */
+  disposition?: "completed" | "superseded";
   /** Present when the run itself failed (never thrown — HQ never throws). */
   error?: string;
 }
@@ -90,6 +100,15 @@ const hqReportSchema = z.object({
   note: z
     .string()
     .describe("One short paragraph: what you checked, what you did or deliberately did NOT do, and why."),
+  disposition: z
+    .enum(["completed", "superseded"])
+    .optional()
+    .describe(
+      "How the round ended — omit it for the normal 'completed'. Report 'superseded' ONLY when the world " +
+      "moved under you so this round's plan is void: a fresh read showed another slice sealed, your agenda " +
+      "changed, or the slice you were checking is no longer the latest edge. Close out early, and the note " +
+      "MUST say why you are abandoning and what you had already landed before abandoning.",
+    ),
 });
 type HqReport = z.infer<typeof hqReportSchema>;
 
@@ -112,6 +131,8 @@ You decide what to do and in what order. The natural order, when several things 
 2. Cases usually before people/user — the user model should cite the cases the round just wrote, not speak in generalities.
 3. self/ comes last — craft reflections are informed by everything else the round did.
 
+A round can end SUPERSEDED — rarely. You read the world fresh as you work; when a read shows the world moved so this round's plan is void (another slice sealed, your agenda changed under you, the slice you were checking is no longer the latest edge), close out early: report disposition "superseded" and let the next round re-plan from the same edge. The note then says why you abandoned and what you had already landed. This is a premise overturned, never "tired, start over" — when in doubt, finish the round.
+
 Housekeeping you own: an ACTIVE slice past the date window is an orphan — the conversation long ended but the close never fired, and the field's stale-scan only looks back two days. When a read shows you one, seal it with markSlice (closed_by: context_lost); a capability, not a per-round obligation.
 
 Craft notes:
@@ -119,6 +140,12 @@ Craft notes:
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
 - research/ hypotheses must carry a falsification condition (the write tooling enforces it).
 - ${DOC_LANGUAGE_RULE}
+
+Your agenda — notes to yourself:
+- memory/self/agenda.md is your own work pad: hypotheses to re-check, judgments to revisit, questions you left for yourself. One line per item: \`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）\` — the [due:] prefix is the only mechanical contract, and every item carries its source (the slice id that motivated it).
+- An item whose date has come WILL be handed back to you with a later round — until then it simply waits on the page.
+- Work an item when it comes back, reschedule it (rewrite its due date), or consume it (drop its line) — every change is a full rewrite through setAgenda.
+- The agenda is a work pad, not a ledger — keep it short.
 
 How your prose reads — the investigator's account, never the work order:
 - A self/ entry (an SOP rule, a veto reason, a self-assessment) records ONE thing that happened: the date and the slice, what observably happened (a fact anyone can re-check against the record), the working rule adopted because of it, and where the evidence lives. It reads like a case note in an investigation file — never like a change request or an incident ticket.
@@ -399,10 +426,35 @@ function buildHqTools(date: string, model: ModelConfig, batch: WriteBatch) {
       },
     }),
 
+    setAgenda: tool({
+      description:
+        "Rewrite your agenda — memory/self/agenda.md, your own work pad of what to re-check and when. " +
+        "A FULL rewrite every time: consume an item by dropping its line, reschedule it by changing its due date, add one by adding a line. " +
+        "Line format (the ONLY mechanical contract — a line that breaks it is never handed back to you): " +
+        "`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）` — every item carries its source (the slice id that motivated it). " +
+        "The agenda is a work pad, not a ledger — keep it short.",
+      inputSchema: z.object({
+        content: z
+          .string()
+          .describe("The FULL new agenda text — one `- [due: YYYY-MM-DD] …（据片 …）` line per item."),
+      }),
+      execute: async ({ content }) => {
+        // Same discipline as writeSelfSop above (the pattern this copies):
+        // the process-wide evolution lock + the round's batch — a whole-file
+        // write that must not interleave with a live turn's run.
+        await withSliceLock("evolution", () =>
+          fsWriteFile(AGENDA_PATH, content, batch),
+        );
+        return `OK: ${AGENDA_PATH}`;
+      },
+    }),
+
     hqReport: tool({
       description:
         "Report the round's outcome. actions: what you landed (empty when idle — an idle round is legal). " +
-        "note: one short paragraph — what you checked, what you did or deliberately did NOT do, and why.",
+        "note: one short paragraph — what you checked, what you did or deliberately did NOT do, and why. " +
+        "disposition: omit for a normal round; 'superseded' only when the world moved under you and voided " +
+        "this round's plan (the note then says why you abandoned and what you had landed).",
       inputSchema: hqReportSchema,
       execute: async (args) => args,
     }),
@@ -513,5 +565,13 @@ export async function handleBrief(input: ReflectionWakeInput): Promise<HqOutcome
     return { actions: landed, note: "", error };
   }
   console.log(`[HQ] round done: ${result.report.actions.length} action(s)`);
-  return { actions: result.report.actions, note: result.report.note };
+  return {
+    actions: result.report.actions,
+    note: result.report.note,
+    // 修订 C: verbatim passthrough — absent means "completed" (backward
+    // compatible); the shell's settlement semantics land with R2a.
+    ...(result.report.disposition !== undefined
+      ? { disposition: result.report.disposition }
+      : {}),
+  };
 }

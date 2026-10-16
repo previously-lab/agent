@@ -437,6 +437,91 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(io.files.get("memory/self/search/index.md")).toContain("2026-08-09");
   });
 
+  it("setAgenda rewrites self/agenda.md under the evolution lock, riding the round batch", async () => {
+    const agenda =
+      "- [due: 2026-08-12] 复查 hypotheses/手机调研假设（据片 2026-08-09-1300）\n";
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "setAgenda", { content: agenda });
+      expect(r).toContain("OK: memory/self/agenda.md");
+      // Inside the tool the write is QUEUED, not landed — the round's one
+      // flush applies it (the same batch discipline as every write tool).
+      expect(io.files.has("memory/self/agenda.md")).toBe(false);
+      return { ok: true, report: { actions: [], note: "agenda rewritten" }, text: "" };
+    });
+
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    // the writeSelfSop discipline, copied: the process-wide evolution lock…
+    expect(vi.mocked(withSliceLock)).toHaveBeenCalledWith("evolution", expect.any(Function));
+    // …and the flush landed the queued rewrite at the agenda's own path.
+    expect(io.files.get("memory/self/agenda.md")).toBe(agenda);
+    // The format contract rides the tool surface itself.
+    const agendaTool = runSubAgentMock.mock.calls[0][0].tools.setAgenda as unknown as {
+      description: string;
+    };
+    expect(agendaTool.description).toContain("[due: YYYY-MM-DD]");
+    expect(agendaTool.description).toContain("据片");
+    expect(agendaTool.description).toContain("work pad, not a ledger");
+    // …and the role prompt announces the agenda next to the craft notes.
+    expect(runSubAgentMock.mock.calls[0][0].system).toContain("Your agenda — notes to yourself");
+  });
+
+  it("修订 C: disposition is reportable (schema-gated) and surfaces on the outcome", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      // The schema accepts the enum and the omitted default…
+      const reportTool = opts.tools.hqReport as unknown as {
+        inputSchema: { parse: (v: unknown) => unknown };
+      };
+      expect(() => reportTool.inputSchema.parse({ actions: [], note: "x" })).not.toThrow();
+      expect(() =>
+        reportTool.inputSchema.parse({ actions: [], note: "x", disposition: "superseded" }),
+      ).not.toThrow();
+      expect(() =>
+        reportTool.inputSchema.parse({ actions: [], note: "x", disposition: "completed" }),
+      ).not.toThrow();
+      // …and rejects anything outside it — the vocabulary is enumerated.
+      expect(() =>
+        reportTool.inputSchema.parse({ actions: [], note: "x", disposition: "tired" }),
+      ).toThrow();
+      return {
+        ok: true,
+        report: {
+          actions: [],
+          note: "superseded: 又封了一片，本轮前提作废；放弃前未落盘。",
+          disposition: "superseded" as const,
+        },
+        text: "",
+      };
+    });
+
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+
+    expect(outcome.error).toBeUndefined();
+    expect(outcome.disposition).toBe("superseded");
+    // The role prompt states when superseded is legitimate — a premise
+    // overturned, never "tired, start over" (宁少勿滥).
+    const opts = runSubAgentMock.mock.calls[0][0];
+    expect(opts.system).toContain("SUPERSEDED");
+    expect(opts.system).toContain("premise overturned");
+    const reportTool = opts.tools.hqReport as unknown as { description: string };
+    expect(reportTool.description).toContain("superseded");
+  });
+
+  it("a report WITHOUT disposition surfaces none — the backward-compatible default is completed", async () => {
+    runSubAgentMock.mockImplementation(async () => ({
+      ok: true,
+      report: { actions: [], note: "a normal round" },
+      text: "",
+    }));
+
+    const outcome = await handleBrief({ date: DATE, sliceId: SLICE_ID });
+
+    // Exact shape: no disposition key at all — old consumers read it as completed.
+    expect(outcome).toEqual({ actions: [], note: "a normal round" });
+    expect("disposition" in outcome).toBe(false);
+  });
+
   it("archiveSliceCases runs the case-writer AND the scribe over the same slice", async () => {
     passes.runScribePass.mockResolvedValue({
       ran: true,

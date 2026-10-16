@@ -186,6 +186,8 @@ function hqRunStatusLabel(status: HQStatus, t: CompanionT): string {
       return t("hqIdle");
     case "failed":
       return t("hqFailed");
+    case "retired":
+      return t("hqRetired");
     default:
       return "—";
   }
@@ -193,6 +195,19 @@ function hqRunStatusLabel(status: HQStatus, t: CompanionT): string {
 
 /** HQ's own one-paragraph account rides wrote/idle frames — shown as a glance, capped. */
 const HQ_NOTE_CAP = 160;
+
+/**
+ * v0.34 §4.3 — the pointer's evolution beat (`lastEvolution.date`). The
+ * field may not exist yet: R2a owns the pointer write AND the normalize
+ * passthrough in hq-status.ts (not this file). Read defensively — a missing
+ * or malformed field is a placeholder in the row, never a crash.
+ */
+function hqLastEvolutionDate(hq: HQStatus): string | null {
+  const le = (hq as { lastEvolution?: unknown }).lastEvolution;
+  if (!le || typeof le !== "object") return null;
+  const date = (le as { date?: unknown }).date;
+  return typeof date === "string" && date ? date : null;
+}
 
 function capNote(note: string): string {
   const oneLine = note.trim().replace(/\s+/g, " ");
@@ -239,7 +254,9 @@ function HQActivityLine({
             ? t("hqCompleted")
             : frame.status === "failed"
               ? t("hqFailed")
-              : t("hqIdle"),
+              : frame.status === "retired"
+                ? t("hqRetired")
+                : t("hqIdle"),
       });
       break;
   }
@@ -377,6 +394,10 @@ function HQStatusSection({
         <p className="break-words text-foreground/70">{hq.lastError}</p>
       )}
       <DebugRow label={t("hqBriefs")} value={String(hq.briefsHandled)} />
+      {/* v0.34 §4.3 — the rolling read edge (cursor) and the evolution beat;
+          both tolerate a pointer that predates the fields (placeholder "—"). */}
+      <DebugRow label={t("hqCursor")} value={hq.lastSeen?.sliceId ?? "—"} mono />
+      <DebugRow label={t("hqEvolutionBeat")} value={hqLastEvolutionDate(hq) ?? "—"} />
       {hq.recentWrites.length > 0 && (
         <div className="space-y-0.5">
           <span className="text-muted-foreground/70">{t("hqWrites")}</span>
@@ -676,7 +697,15 @@ export function CompanionPod({
 
   const speaking =
     target !== null && (status === "connecting" || status === "streaming");
-  const active = speaking || working || hqLive;
+  // v0.34 §4.3 — breathing follows the pointer's roundActive: a resident
+  // unit hangs on its stream as the NORMAL state, so "attached" (hqLive) is
+  // not "working". The field may not exist yet (R2a owns the pointer write
+  // and the normalize passthrough): undefined → fall back to the legacy
+  // live-stream signal (never worse than today); an explicit null → quiet.
+  const hqRoundActive = (hq as { roundActive?: unknown } | null)?.roundActive;
+  const hqBreathing =
+    hqRoundActive === undefined ? hqLive : hqRoundActive !== null;
+  const active = speaking || working || hqBreathing;
   const hasLiveTarget = target !== null;
   /** A cut narration — the tab's corner mark is an engraved exclamation
       (still ink, never red). */

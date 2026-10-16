@@ -33,6 +33,9 @@ export const HQ_ACTIVITY_CHUNK = "data-hq-activity";
  * What HQ is doing, one kind per beat. Third-person activity, not speech:
  *  - started  — a run claimed the token ("checking in")
  *  - reading  — a brief's round began: HQ reads the raw records first
+ *               (v0.34 §4.3: MAY carry `slices` — the round's scope, the
+ *               sealed slice ids it answers for; emitters pre-R2a never
+ *               send it, readers must treat it as optional)
  *  - wrote    — the round landed writes (paths)
  *  - idle     — the round deliberately wrote nothing (note says why — a
  *               substantive veto's short reason rides here, since a veto
@@ -55,6 +58,9 @@ export interface HQActivityFrame {
   at: string;
   /** reading: the slice the brief points at, when it names one. */
   sliceId?: string;
+  /** reading (v0.34 §4.3): the round's SCOPE — the sealed slice ids this
+   *  round answers for. Optional; the emitter side lands with R2a. */
+  slices?: string[];
   /** wrote: memory-relative paths the round landed. A FAILED round carries
    *  them too when the flush survived the failure (a timeout cuts the
    *  report, not the writes that preceded it). */
@@ -93,6 +99,9 @@ export function normalizeHQActivity(raw: unknown): HQActivityFrame | null {
     at: typeof o.at === "string" ? o.at : "",
   };
   if (typeof o.sliceId === "string" && o.sliceId) frame.sliceId = o.sliceId;
+  if (Array.isArray(o.slices)) {
+    frame.slices = o.slices.filter((p): p is string => typeof p === "string");
+  }
   if (Array.isArray(o.paths)) {
     frame.paths = o.paths.filter((p): p is string => typeof p === "string");
   }
