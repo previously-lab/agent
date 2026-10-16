@@ -12,8 +12,8 @@
  * batching retired with the resident run: briefsHandled ticks every round,
  * lastError lands a failure's first line and clears on a clean round,
  * lastNote stages only from a substantive round (空转不留痕), the cursor
- * advances only on a clean round), the retirement terminal
- * (recordReflectionRunRetired → "retired"), the immediate started mark, and
+ * advances only on a clean round), the idle-exit terminal
+ * (recordReflectionRunIdleExit → "idle"), the immediate started mark, and
  * the tolerate-everything read (missing or corrupt file → the empty pointer).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -134,23 +134,33 @@ describe("readHQStatus", () => {
     expect(s.lastSeen).toEqual({ sliceId: "2026-10-04-0131", turnId: "turn-1" });
   });
 
-  it("the new terminal \"retired\" (v0.34 修订 B) normalizes through", async () => {
+  it("the visit's terminal \"idle\" normalizes through — and a legacy \"retired\" (the relay era) still does", async () => {
     fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
     fs.writeFileSync(
       path.join(tmpDir, POINTER_DISK_PATH),
-      JSON.stringify({ runStatus: "retired", briefsHandled: 7 }),
+      JSON.stringify({ runStatus: "idle", briefsHandled: 7 }),
       "utf-8",
     );
     const { readHQStatus } = await importStore();
-    const s = await readHQStatus();
-    expect(s.runStatus).toBe("retired");
+    let s = await readHQStatus();
+    expect(s.runStatus).toBe("idle");
     expect(s.briefsHandled).toBe(7);
+
+    // relay-era files still carry "retired" — the union keeps it, so old
+    // pointers (and old clients) read safely both ways
+    fs.writeFileSync(
+      path.join(tmpDir, POINTER_DISK_PATH),
+      JSON.stringify({ runStatus: "retired" }),
+      "utf-8",
+    );
+    s = await readHQStatus();
+    expect(s.runStatus).toBe("retired");
   });
 });
 
 describe("the generation lifecycle marks", () => {
-  it("start lands immediately — running + the start stamp on disk before any round (the resident run's finish may be days away)", async () => {
-    const { recordHQRunStarted, recordReflectionRunRetired, readHQStatus } =
+  it("start lands immediately — running + the start stamp on disk before any round (the run's finish comes only when the visit ends)", async () => {
+    const { recordHQRunStarted, recordReflectionRunIdleExit, readHQStatus } =
       await importStore();
     // A legacy field from the dispatch era survives both marks untouched.
     fs.mkdirSync(path.join(tmpDir, "memory", "config"), { recursive: true });
@@ -169,15 +179,15 @@ describe("the generation lifecycle marks", () => {
     expect(typeof onDisk?.runStartedAt).toBe("string");
     expect(onDisk?.lastBriefPreview).toBe("现场：一条简报。");
 
-    await recordReflectionRunRetired({ rounds: 1 });
+    await recordReflectionRunIdleExit({ rounds: 1 });
     const s = await readHQStatus();
-    expect(s.runStatus).toBe("retired");
+    expect(s.runStatus).toBe("idle");
     expect(typeof s.runStartedAt).toBe("string");
     expect(s.lastBriefPreview).toBe("现场：一条简报。");
   });
 
-  it("the claiming run's OWN id lands at start (the pod's attach target); the next generation's marks overwrite it", async () => {
-    const { recordHQRunStarted, recordReflectionRunRetired, readHQStatus } =
+  it("the claiming run's OWN id lands at start (the pod's attach target); the next visit's marks overwrite it", async () => {
+    const { recordHQRunStarted, recordReflectionRunIdleExit, readHQStatus } =
       await importStore();
     await recordHQRunStarted("run-abc");
     // immediate: the attach target is on disk from the claim, not the finish
@@ -185,14 +195,14 @@ describe("the generation lifecycle marks", () => {
     expect(s.runId).toBe("run-abc");
     expect(s.runStatus).toBe("running");
 
-    // retiring settles the status; a retired run's stream stays replayable,
-    // so the attach target outlives the generation
-    await recordReflectionRunRetired({ rounds: 2 });
+    // the idle exit settles the status; an exited run's stream stays
+    // replayable, so the attach target outlives the visit
+    await recordReflectionRunIdleExit({ rounds: 2 });
     s = await readHQStatus();
     expect(s.runId).toBe("run-abc");
-    expect(s.runStatus).toBe("retired");
+    expect(s.runStatus).toBe("idle");
 
-    // the successor's claim overwrites it (and resets the round count)
+    // the next visit's claim overwrites it (and resets the round count)
     await recordHQRunStarted("run-def");
     s = await readHQStatus();
     expect(s.runId).toBe("run-def");
@@ -365,12 +375,12 @@ describe("recordReflectionRoundSettled — per-round immediate settlement (v0.34
   });
 });
 
-describe("recordReflectionRunRetired — the generation's ONLY clean terminal (修订 B)", () => {
-  it("settles \"retired\" with the definitive count; lastError is NOT touched (retirement is not a failure)", async () => {
+describe("recordReflectionRunIdleExit — the visit's ONLY clean terminal", () => {
+  it("settles \"idle\" with the definitive count; lastError is NOT touched (an idle exit is not a failure)", async () => {
     const {
       recordHQRunStarted,
       recordReflectionRoundSettled,
-      recordReflectionRunRetired,
+      recordReflectionRunIdleExit,
       readHQStatus,
     } = await importStore();
 
@@ -378,15 +388,16 @@ describe("recordReflectionRunRetired — the generation's ONLY clean terminal (�
     await recordReflectionRoundSettled({ actions: [], error: "boom" });
     expect((await readHQStatus()).lastError).toBe("boom");
 
-    await recordReflectionRunRetired({ rounds: 1 });
+    await recordReflectionRunIdleExit({ rounds: 1 });
     const s = await readHQStatus();
-    expect(s.runStatus).toBe("retired");
+    expect(s.runStatus).toBe("idle");
     expect(s.briefsHandled).toBe(1);
-    // the failure line survives retirement — the NEW generation's first clean
-    // round is what clears it
+    // the failure line survives the exit — the NEXT visit generation's first
+    // clean round is what clears it
     expect(s.lastError).toBe("boom");
 
-    // the successor's started mark lands seconds later
+    // no successor: the pointer reads "idle" until the next visit's started
+    // mark lands (whenever the user returns)
     await recordHQRunStarted("run-2");
     const next = await readHQStatus();
     expect(next.runStatus).toBe("running");
@@ -420,15 +431,15 @@ describe("settleHQRunIfStale (the cancelled-run hole)", () => {
     expect(s.runId).toBe("run-cancelled");
   });
 
-  it("never clobbers a pointer that moved on — a retired generation or a NEW claim stay untouched", async () => {
-    const { recordHQRunStarted, recordReflectionRunRetired, settleHQRunIfStale } =
+  it("never clobbers a pointer that moved on — an idle-exited generation or a NEW claim stay untouched", async () => {
+    const { recordHQRunStarted, recordReflectionRunIdleExit, settleHQRunIfStale } =
       await importStore();
 
     // already settled: the stale check names a run the pointer no longer runs
     await recordHQRunStarted("run-a");
-    await recordReflectionRunRetired({ rounds: 1 });
+    await recordReflectionRunIdleExit({ rounds: 1 });
     const settled = await settleHQRunIfStale("run-a", "cancelled");
-    expect(settled.runStatus).toBe("retired");
+    expect(settled.runStatus).toBe("idle");
     expect(settled.lastError).toBeNull();
 
     // a NEW claim in between: the route's verdict names the OLD run's id —

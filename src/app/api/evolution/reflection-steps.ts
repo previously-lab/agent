@@ -4,15 +4,15 @@
  *
  * `reflection-run.ts` (the workflow file) imports this module, and the SDK
  * splits "use step" bodies out of the workflow bundle — so the impure work
- * below stays on the Node side. The `./hq-agent` and `./reflection-run`
- * imports are dynamic on purpose: the workflow plugin still traces a *static*
- * edge out of a workflow-reachable module, and the HQ agent statically pulls
- * the episodic / sub-agent / card-evolution machinery, which reaches `fs` /
- * `next` — that is exactly what broke the dev server with
- * node-js-module-in-workflow errors in P2. A static edge would also close a
- * module cycle (tool-executors → reflection-run → reflection-steps →
- * hq-agent → sub-agent-runner → models/provider → … → turn-workflow → tools
- * → tool-executors).
+ * below stays on the Node side. The `./hq-agent` import is dynamic on
+ * purpose: the workflow plugin still traces a *static* edge out of a
+ * workflow-reachable module, and the HQ agent statically pulls the episodic
+ * / sub-agent / card-evolution machinery, which reaches `fs` / `next` —
+ * that is exactly what broke the dev server with node-js-module-in-workflow
+ * errors in P2. A static edge would also close a module cycle
+ * (tool-executors → reflection-run → reflection-steps → hq-agent →
+ * sub-agent-runner → models/provider → … → turn-workflow → tools →
+ * tool-executors).
  * (docs/errors/node-js-module-in-workflow)
  *
  * The static imports stay sandbox-safe: `workflow` / `workflow/api`
@@ -24,7 +24,7 @@
  * unit has no mouth, §9).
  */
 import { getWritable, getWorkflowMetadata } from "workflow";
-import { resumeHook, start } from "workflow/api";
+import { resumeHook } from "workflow/api";
 import { HookNotFoundError } from "workflow/errors";
 import type { UIMessageChunk } from "ai";
 import {
@@ -181,22 +181,22 @@ export async function handleReflectionRound(payload: ReflectionWakePayload): Pro
 
 /**
  * Per-round settlement ("use step") — v0.34 R1: the pointer settles EVERY
- * round, immediately (the resident run's finish may be days away, so the D2
- * accumulate-and-flush-at-finish batching retired). The store owns the rules
- * (§4.2): recentWrites merge at once, the generation's round count ticks,
- * `lastNote` stages only from a substantive round (空转不留痕), `lastError`
- * lands a failed round's real line and clears on a clean one, and the cursor
- * (`lastSeen`) advances ONLY on success or a deliberate idle — a failed
- * round leaves it so the next lap re-reads from the same edge.
+ * round, immediately (the run's finish comes only when the visit ends, so
+ * the D2 accumulate-and-flush-at-finish batching retired). The store owns
+ * the rules (§4.2): recentWrites merge at once, the generation's round
+ * count ticks, `lastNote` stages only from a substantive round
+ * (空转不留痕), `lastError` lands a failed round's real line and clears on
+ * a clean one, and the cursor (`lastSeen`) advances ONLY on success or a
+ * deliberate idle — a failed round leaves it so the next lap re-reads from
+ * the same edge.
  *
  * `pointer` is the lap's drained-mailbox pointer (the shell owns it — the
- * round no longer echoes it). Returns the settle clock stamp (ms): the
- * workflow body has no Date, and the shell feeds this to the age clock.
+ * round no longer echoes it).
  */
 export async function settleReflectionRound(
   round: ReflectionRound,
   pointer: ReflectionWakePayload,
-): Promise<number> {
+): Promise<void> {
   "use step";
   const { recordReflectionRoundSettled } = await import("./hq-status-store");
   await recordReflectionRoundSettled({
@@ -205,23 +205,18 @@ export async function settleReflectionRound(
     ...(round.note ? { note: round.note } : {}),
     ...(pointer.sliceId ? { seen: { sliceId: pointer.sliceId } } : {}),
   });
-  return Date.now();
 }
 
 /**
  * Run-start mark ("use step"): a reflection run claimed the mailbox — the
- * pointer's runStatus goes "running" (the resident常态) until the retired
+ * pointer's runStatus goes "running" (the in-visit常态) until the idle-exit
  * mark settles it, and the generation's round count resets. The run's OWN
  * durable id rides along (read from the workflow metadata HERE, inside the
  * claiming run — a dispatch receipt can name a duplicate that loses the
  * claim, so the pointer never trusts it): that id is the pod's stream-attach
  * target. The "started" frame opens the run's activity feed.
- *
- * Returns the birth clock stamp (ms — the workflow body has no Date; the
- * shell derives the age-clock deadline from it, the episodeClockMs
- * precedent).
  */
-export async function markHQRunStarted(): Promise<number> {
+export async function markHQRunStarted(): Promise<void> {
   "use step";
   const { recordHQRunStarted } = await import("./hq-status-store");
   let runId: string | undefined;
@@ -233,59 +228,31 @@ export async function markHQRunStarted(): Promise<number> {
   }
   await recordHQRunStarted(runId);
   await emitHQActivity({ kind: "started", at: new Date().toISOString() });
-  return Date.now();
 }
 
 /**
- * Retirement mark ("use step"): the generation's terminal beat (修订 B —
- * the idle clock (24h) or the age clock (7d) won the blocking race at a lap
- * boundary, never mid-round). The pointer settles `runStatus: "retired"`
- * and the "finished" frame closes the activity feed with the same verdict —
- * pointer first, frame second, so a lost frame never costs the settlement.
- * The successor's started mark lands seconds later, so the pointer never
- * leaves the "running 系" for longer than the relay takes.
+ * Idle-exit mark ("use step"): the visit's terminal beat — the mailbox has
+ * been quiet for the whole visit grace (60 minutes) at a lap boundary,
+ * never mid-round. The pointer settles `runStatus: "idle"` and the
+ * "finished" frame closes the activity feed with the same verdict — pointer
+ * first, frame second, so a lost frame never costs the settlement. NO
+ * successor follows (用户裁决：寿命 = 一次访问): the pointer honestly reads
+ * "idle" until the next visit's first bell starts a fresh generation via
+ * the delivery fallback and its started mark overwrites — the on-disk
+ * cursor (lastSeen) carries the continuity, so the seam is invisible.
  */
-export async function markReflectionRunRetired(result: {
+export async function markReflectionRunIdleExit(result: {
   /** Rounds this generation settled (the definitive count). */
   rounds: number;
 }): Promise<void> {
   "use step";
-  const { recordReflectionRunRetired } = await import("./hq-status-store");
-  await recordReflectionRunRetired(result);
+  const { recordReflectionRunIdleExit } = await import("./hq-status-store");
+  await recordReflectionRunIdleExit(result);
   await emitHQActivity({
     kind: "finished",
     at: new Date().toISOString(),
-    status: "retired",
+    status: "idle",
     handled: Math.max(0, Math.floor(result.rounds)),
   });
 }
 
-/**
- * Start the successor generation ("use step") — the relay half of the
- * retirement sequence (v0.34 §2.2, versioning.mdx §Self-upgrading
- * sequence-of-runs). The shell disposes the mailbox BEFORE calling this
- * (dispose → start ordering closes the handoff window, §2.3); a wake that
- * lands in the window falls to the delivery fallback's `start`, whose
- * getConflict then dedupes against the official successor.
- *
- * `deploymentId: "latest"` is the upgrade knob: the successor runs on the
- * CURRENT deployment, not this run's pinned one (a run is pinned to the
- * deployment that started it — versioning.mdx:14/37). In non-Vercel worlds
- * (client/standalone) the option degrades to a logged warning and the
- * current deployment — safe. `start` is a runtime API, legal in a step (the
- * resumeHook precedent above). A throw here fails the run AFTER the retired
- * mark landed: the next bell's delivery fallback revives the unit, and the
- * registry honestly shows the relay failure.
- */
-export async function startReflectionSuccessor(): Promise<string | undefined> {
-  "use step";
-  // Dynamic import: reflection-run is a WORKFLOW file and this module is
-  // workflow-reachable — a static edge would bundle it into the sandbox and
-  // close a module cycle (the ./hq-agent precedent in the header).
-  const { reflectionRun } = await import("./reflection-run");
-  const run = await start(reflectionRun, [], {
-    deploymentId: "latest",
-    region: "hkg1",
-  });
-  return run.runId;
-}

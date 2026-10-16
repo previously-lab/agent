@@ -10,16 +10,17 @@
  *
  * Pins: conflict → handoff-then-exit (order), the resident loop (ONE round
  * per lap off the drained mailbox's FURTHEST pointer — N bells ≠ N rounds),
- * per-round immediate settlement (the D2 finish-time batching retired),
- * retirement at a lap boundary (idle clock wins the blocking race → settle
- * {retired} → dispose → successor on deploymentId:"latest"), and the wake's
- * pointer going to the unit VERBATIM ({sliceId?} + the date stamp — no
- * semantic payload, no turnId, §2.2).
+ * per-round immediate settlement (the D2 finish-time batching retired), the
+ * idle exit at a lap boundary (the 60-minute visit grace wins the blocking
+ * race → settle {idle} → dispose → return; NO successor — the next bell's
+ * delivery fallback starts the next generation off the on-disk cursor), and
+ * the wake's pointer going to the unit VERBATIM ({sliceId?} + the date
+ * stamp — no semantic payload, no turnId, §2.2).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  /** call-order log: handoff/retire/dispose/successor ordering matters */
+  /** call-order log: handoff/idle-exit/dispose ordering matters */
   order: [] as string[],
   /** the data-hq-activity chunks written into the run's stream */
   frames: [] as Array<{ type: string; id: string; data: unknown }>,
@@ -28,13 +29,9 @@ const h = vi.hoisted(() => ({
     h.order.push("handoff");
     return { runId: "run-primary" };
   }),
-  /** the retirement relay's start() — the successor generation */
-  start: vi.fn(
-    async (_fn: unknown, _args: unknown[], _opts: Record<string, unknown>) => {
-      h.order.push("successor");
-      return { runId: "successor-1" };
-    },
-  ),
+  /** workflow/api start() — the RUN itself must never call it (no successor
+   *  relay; fresh generations belong to the delivery path's fallback) */
+  start: vi.fn(async () => ({ runId: "start-must-not-be-called" })),
   handleBrief: vi.fn(
     async (): Promise<{ actions: string[]; note: string; error?: string }> => {
       h.order.push("handleBrief");
@@ -48,8 +45,8 @@ const h = vi.hoisted(() => ({
   recordRoundSettled: vi.fn(async (_round: Record<string, unknown>) => {
     h.order.push("settle");
   }),
-  recordRunRetired: vi.fn(async (_result: { rounds: number }) => {
-    h.order.push("runRetired");
+  recordIdleExit: vi.fn(async (_result: { rounds: number }) => {
+    h.order.push("idleExit");
   }),
   /** per-test hook behavior, installed by makeHook */
   behavior: null as null | {
@@ -89,7 +86,7 @@ vi.mock("@/app/api/evolution/hq-agent", () => ({
 vi.mock("@/app/api/evolution/hq-status-store", () => ({
   recordHQRunStarted: h.recordRunStarted,
   recordReflectionRoundSettled: h.recordRoundSettled,
-  recordReflectionRunRetired: h.recordRunRetired,
+  recordReflectionRunIdleExit: h.recordIdleExit,
 }));
 
 import {
@@ -160,7 +157,7 @@ describe("reflectionRun — claim and conflict", () => {
     // status pointer, which the PRIMARY's run owns
     expect(h.handleBrief).not.toHaveBeenCalled();
     expect(h.recordRunStarted).not.toHaveBeenCalled();
-    expect(h.recordRunRetired).not.toHaveBeenCalled();
+    expect(h.recordIdleExit).not.toHaveBeenCalled();
     // its stream is dead on arrival — nobody attaches to it
     expect(h.frames).toEqual([]);
   });
@@ -216,13 +213,9 @@ describe("reflectionRun — claim and conflict", () => {
 });
 
 describe("reflectionRun — the resident loop", () => {
-  it("claims, runs ONE round off the wake's pointer verbatim, then retires when the idle clock wins (mailbox quiet)", async () => {
+  it("claims, runs ONE round off the wake's pointer verbatim, then EXITS when the visit's idle grace elapses (mailbox quiet)", async () => {
     const outcome = await reflectionRun(WAKE);
-    expect(outcome).toEqual({
-      kind: "retired",
-      rounds: 1,
-      successorId: "successor-1",
-    });
+    expect(outcome).toEqual({ kind: "retired", rounds: 1 });
     // §2.2: NO semantic payload at all — the pointer rides verbatim (no
     // turnId anymore); the date is the UTC-stamp fallback (no payload.date).
     expect(h.handleBrief).toHaveBeenCalledTimes(1);
@@ -234,25 +227,21 @@ describe("reflectionRun — the resident loop", () => {
     expect(h.order).not.toContain("handoff");
   });
 
-  it("the retirement sequence is settle → dispose → successor-on-latest, in that order (§2.3)", async () => {
+  it("the idle exit is settle → dispose → return, in that order — and NO successor is started (寿命 = 一次访问)", async () => {
     await reflectionRun(WAKE);
     expect(h.order).toEqual([
       "runStarted",
       "handleBrief",
       "settle",
-      "runRetired",
+      "idleExit",
       "dispose",
-      "successor",
     ]);
-    // the successor runs on the CURRENT deployment, not this run's pinned one
-    expect(h.start).toHaveBeenCalledTimes(1);
-    const [workflowFn, args, opts] = h.start.mock.calls[0];
-    expect(workflowFn).toBe(reflectionRun);
-    expect(args).toEqual([]);
-    expect(opts).toEqual({ deploymentId: "latest", region: "hkg1" });
+    // no successor relay: fresh generations belong to the delivery path's
+    // start-fallback (reflection-wake.ts), never to the exiting run
+    expect(h.start).not.toHaveBeenCalled();
     // the claiming run's OWN durable id rode the start mark (never a dispatch's)
     expect(h.recordRunStarted).toHaveBeenCalledWith("run-1");
-    expect(h.recordRunRetired).toHaveBeenCalledWith({ rounds: 1 });
+    expect(h.recordIdleExit).toHaveBeenCalledWith({ rounds: 1 });
   });
 
   it("N bells ≠ N rounds: a lap drains the mailbox and runs ONE round off the FURTHEST pointer", async () => {
@@ -281,7 +270,7 @@ describe("reflectionRun — the resident loop", () => {
       note: "idle — nothing substantive",
       seen: { sliceId: "2026-10-04-0205" },
     });
-    expect(h.recordRunRetired).toHaveBeenCalledWith({ rounds: 2 });
+    expect(h.recordIdleExit).toHaveBeenCalledWith({ rounds: 2 });
   });
 
   it("a bare wake ({}) hands over only the date stamp — nothing named, so no cursor rides the settle", async () => {
@@ -348,7 +337,7 @@ describe("reflectionRun — the activity frames (the pod's live feed)", () => {
     expect(new Set(h.frames.map((f) => f.id)).size).toBe(h.frames.length);
   });
 
-  it("an idle lap beats: started → reading → idle(note) → finished(retired)", async () => {
+  it("an idle lap beats: started → reading → idle(note) → finished(idle)", async () => {
     await reflectionRun(WAKE);
     expect(kinds()).toEqual(["started", "reading", "idle", "finished"]);
     const reading = h.frames[1].data as { sliceId?: string };
@@ -357,7 +346,7 @@ describe("reflectionRun — the activity frames (the pod's live feed)", () => {
     const idle = h.frames[2].data as { note?: string };
     expect(idle.note).toBe("idle — nothing substantive");
     const finished = h.frames[3].data as { status?: string; handled?: number };
-    expect(finished).toMatchObject({ status: "retired", handled: 1 });
+    expect(finished).toMatchObject({ status: "idle", handled: 1 });
   });
 
   it("a writing lap beats wrote(paths + note)", async () => {
@@ -371,10 +360,10 @@ describe("reflectionRun — the activity frames (the pod's live feed)", () => {
       paths: ["memory/research/screen-vendor/index.md"],
       note: "核对切片后写下一个案件。",
     });
-    expect(h.frames[3].data).toMatchObject({ status: "retired", handled: 1 });
+    expect(h.frames[3].data).toMatchObject({ status: "idle", handled: 1 });
   });
 
-  it("a multi-lap generation repeats the round beats before the retired finish", async () => {
+  it("a multi-lap generation repeats the round beats before the idle-exit finish", async () => {
     const second: ReflectionWakePayload = { sliceId: "2026-10-04-0205" };
     h.behavior = { conflict: null, queue: [second] };
     await reflectionRun(WAKE);

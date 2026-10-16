@@ -4,28 +4,32 @@
  *
  * There is ONE agent with two execution units: the field (the conversation
  * workflow, user-facing) and the reflection unit (archives/evolution, no
- * mouth). v0.34 makes the unit RESIDENT: one durable run that spends almost
- * all of its life suspended on its mailbox or its own clocks (zero compute
- * while waiting — sleep.mdx:12, child-workflows.mdx:149-153), and NEVER
- * exits on idle. Nobody briefs it: the field rings the bell ONLY when a
- * slice is sealed on disk (v0.34 R1 — the per-turn tail bell retired), and
- * the bell is a doorbell, not a work order: N bells ≠ N rounds. The unit
- * wakes, drains the mailbox (a bounded race against a short sleep — the
- * doorbell count resets, nothing merges), runs ONE round off the furthest
- * pointer, settles the pointer EVERY round (the D2 batching retired), and
- * goes back to sleep.
+ * mouth). v0.34 makes the unit RESIDENT for ONE VISIT (用户裁决：不追求一
+ * 条永远存在的线): one durable run that spends almost all of its life
+ * suspended on its mailbox or its idle clock (zero compute while waiting —
+ * sleep.mdx:12, child-workflows.mdx:149-153), and exits when the visit is
+ * over — an hour without a bell or a round. Nobody briefs it: the field
+ * rings the bell ONLY when a slice is sealed on disk (v0.34 R1 — the
+ * per-turn tail bell retired), and the bell is a doorbell, not a work
+ * order: N bells ≠ N rounds. The unit wakes, drains the mailbox (a bounded
+ * race against a short sleep — the doorbell count resets, nothing merges),
+ * runs ONE round off the furthest pointer, settles the pointer EVERY round
+ * (the D2 batching retired), and goes back to sleep.
  *
- * Lifecycle (代际接力, versioning.mdx §Self-upgrading sequence-of-runs):
+ * Lifecycle (寿命 = 一次访问 + 60 分钟空闲宽限):
  *   createHook({ token: REFLECTION_TOKEN }) → await hook.getConflict()
  *     conflict → hand the wake to the primary run, then exit { dedupedTo };
  *       the wake is never dropped (§11 ③).
- *     no conflict → claim the token, then loop the laps above. Retirement
- *       comes ONLY at a lap boundary (never mid-round, 修订 B) when one of
- *       the two clocks wins the blocking race — idle 24h ∨ age 7d, whichever
- *       first: settle the pointer { retired } → dispose the mailbox →
- *       start the successor on `deploymentId: "latest"` → return.
- *   Death (cancel/crash/platform) runs no sequence: the next bell's
- *   delivery fallback (reflection-wake.ts) starts a fresh generation, and
+ *     no conflict → claim the token, then loop the laps above. The exit
+ *       comes ONLY at a lap boundary (never mid-round) when the idle grace
+ *       wins the blocking race: settle the pointer { idle } → dispose the
+ *       mailbox → return. NO successor is started — the generation simply
+ *       ends with the visit.
+ *   The next visit's first bell revives the unit through the delivery
+ *   path's existing fallback (no live hook → start, reflection-wake.ts):
+ *   the cursor lives on disk (hq.json lastSeen), so the fresh generation
+ *   continues seamlessly from where the last one stopped reading. Death
+ *   (cancel/crash/platform) runs no sequence either — same fallback, and
  *   the status route's self-heal settles the stale "running" pointer.
  *
  * R1 scope: the loop is world→gate→round→settle with the world MINIMAL (no
@@ -52,9 +56,8 @@ import {
   handoffBriefToPrimary,
   handleReflectionRound,
   markHQRunStarted,
-  markReflectionRunRetired,
+  markReflectionRunIdleExit,
   settleReflectionRound,
-  startReflectionSuccessor,
 } from "./reflection-steps";
 
 export { REFLECTION_TOKEN, furthestWakePointer } from "./reflection-contract";
@@ -64,20 +67,15 @@ export type {
 } from "./reflection-contract";
 
 /**
- * Retirement clocks (修订 B — whichever fires FIRST, at a lap boundary only):
- *  - IDLE: 24h without a bell or a round. An implementation parameter, not a
- *    semantic judgment (the HQ_IDLE_GRACE_MS precedent) — an idle generation
- *    still pins its deployment and drags its event log, so it retires and
- *    relays. Configurable constant.
- *  - AGE: 7d since this generation's birth — the platform's run retention
- *    window ("Expiry in 7d") is the hard outer bound on how long a run's
- *    state stays inspectable/replayable, and the two standing reasons ride
- *    it: deployment pinning (versioning.mdx:14/37 — a suspended run resumes
- *    on its ORIGINAL deployment forever) and event-log length (the log
- *    grows per step/hook event; replay cost grows with it).
+ * The visit's lifetime grace (一次访问的寿命宽限): the unit exits when no
+ * bell and no round has happened for this long, at a lap boundary only.
+ * An implementation parameter, not a semantic judgment (the
+ * HQ_IDLE_GRACE_MS precedent). 用户裁决：单元不永生——它只需在用户这一
+ * 次访问期间在；用户走了（一小时无铃无轮）它自然退场，下次开口时由投
+ * 递路径的既有 fallback 叫起新一代（游标在盘上，无缝续上——见文件头
+ * Lifecycle）。Configurable constant.
  */
-const REFLECTION_IDLE_CAP_MS = 24 * 60 * 60 * 1000;
-const REFLECTION_AGE_CAP_MS = 7 * 24 * 60 * 60 * 1000;
+const REFLECTION_IDLE_EXIT_MS = 60 * 60 * 1000;
 
 /**
  * Mailbox drain (§3.2): the hook has no queue length to inspect ("the queue
@@ -95,10 +93,10 @@ export async function reflectionRun(
 ): Promise<ReflectionRunOutcome> {
   "use workflow";
   const hook = createHook<ReflectionWakePayload>({ token: REFLECTION_TOKEN });
-  // dispose() is idempotent-guarded: the retirement sequence releases the
-  // mailbox BEFORE starting the successor (§2.3 ordering), and the finally
-  // below covers every other exit — without the guard the second call would
-  // fire after the successor may already hold the token.
+  // dispose() is idempotent-guarded: the idle exit releases the mailbox
+  // explicitly (so the very next bell finds no live hook and the delivery
+  // fallback starts a fresh generation at once), and the finally below
+  // covers every other exit path.
   let disposed = false;
   const dispose = (): void => {
     if (!disposed) {
@@ -112,7 +110,7 @@ export async function reflectionRun(
     const conflict = await hook.getConflict();
     if (conflict) {
       if (!initial) {
-        // A successor/rival carrying no wake has nothing to hand over — it
+        // A rival carrying no wake has nothing to hand over — it
         // simply yields to the mailbox holder.
         return { kind: "dedupedTo", runId: conflict.runId };
       }
@@ -130,14 +128,9 @@ export async function reflectionRun(
     }
 
     // The visibility pointer (hq-status-store.ts): "running" from the claim
-    // until the retirement mark settles it. A deduped rival exits BEFORE
-    // this mark — the mailbox holder's run owns the pointer. The step
-    // returns the birth clock stamp (the workflow body has no Date — clocks
-    // live in steps, the ownRunId/episodeClockMs precedent); the age clock
-    // derives from it.
-    const birthMs = await markHQRunStarted();
-    const retireAtMs = birthMs + REFLECTION_AGE_CAP_MS;
-    let clockMs = birthMs;
+    // until the idle-exit mark settles it. A deduped rival exits BEFORE
+    // this mark — the mailbox holder's run owns the pointer.
+    await markHQRunStarted();
     let rounds = 0;
 
     const iterator = hook[Symbol.asyncIterator]();
@@ -148,7 +141,8 @@ export async function reflectionRun(
     // second next() while one is in flight: a race loser is REUSED on the
     // next lap, and only a resolved bell arm clears the slot. The losing
     // sleep arms are harmless — their timer events land in the log
-    // unobserved (≤3 per lap, and the log resets with each generation).
+    // unobserved (≤1 per lap from the blocking race; drain probes bounded by
+    // the cap — the log resets with each generation).
     let pendingNext: Promise<ReflectionWakePayload | "done"> | null = null;
     const nextBell = (): Promise<ReflectionWakePayload | "done"> => {
       if (!pendingNext) {
@@ -161,40 +155,35 @@ export async function reflectionRun(
       return pendingNext;
     };
 
-    const retire = async (): Promise<ReflectionRunOutcome> => {
-      // 退休序列（§2.2 — 只在 lap 边界，此刻天然无在跑轮）: settle the
-      // pointer → release the mailbox → start the successor on the latest
-      // deployment → exit. A bell arriving in the dispose→start window is
-      // caught by the delivery path's start-fallback, which then dedupes
-      // against the official successor (§2.3) — the handoff is lossless
-      // because bells carry no work, only the doorbell semantics.
-      await markReflectionRunRetired({ rounds });
+    const exitIdle = async (): Promise<ReflectionRunOutcome> => {
+      // 空闲退场（只在 lap 边界，此刻天然无在跑轮）: settle the pointer →
+      // release the mailbox → return. NO successor is started — the unit's
+      // lifetime is ONE visit, not a relay (用户裁决：不追求永生). A bell
+      // arriving any time later finds no live hook, so the delivery path's
+      // start-fallback (reflection-wake.ts) spins up a FRESH generation,
+      // which continues from the on-disk cursor (hq.json lastSeen) — the
+      // handoff is lossless because bells carry no work, only the doorbell
+      // semantics, and the truth is on disk. The outcome kind stays
+      // "retired" for wire compatibility (reflection-contract.ts).
+      await markReflectionRunIdleExit({ rounds });
       dispose();
-      const successorId = await startReflectionSuccessor();
-      return {
-        kind: "retired",
-        rounds,
-        ...(successorId ? { successorId } : {}),
-      };
+      return { kind: "retired", rounds };
     };
 
     try {
       let inbox: ReflectionWakePayload[] = initial ? [initial] : [];
       for (;;) {
         if (inbox.length === 0) {
-          // Block: the bell vs the two retirement clocks (修订 B — whichever
-          // first). R2 adds the fourth arm here: sleep(下一议程到期点).
+          // Block: the bell vs the visit's idle grace (whichever first).
+          // R2 adds the third arm here: sleep(下一议程到期点).
           const woke = await Promise.race<
-            ReflectionWakePayload | "done" | "retire"
+            ReflectionWakePayload | "done" | "exit"
           >([
             nextBell(),
-            sleep(REFLECTION_IDLE_CAP_MS).then((): "retire" => "retire"),
-            sleep(Math.max(1, retireAtMs - clockMs)).then(
-              (): "retire" => "retire",
-            ),
+            sleep(REFLECTION_IDLE_EXIT_MS).then((): "exit" => "exit"),
           ]);
-          if (woke === "retire" || woke === "done") {
-            return await retire();
+          if (woke === "exit" || woke === "done") {
+            return await exitIdle();
           }
           pendingNext = null; // the bell arm resolved — consume the slot
           inbox = [woke];
@@ -221,7 +210,7 @@ export async function reflectionRun(
         inbox = [];
         const round = await handleReflectionRound(pointer);
         rounds += 1;
-        clockMs = await settleReflectionRound(round, pointer);
+        await settleReflectionRound(round, pointer);
       }
     } finally {
       await iterator.return?.();

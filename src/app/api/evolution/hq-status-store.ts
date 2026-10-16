@@ -11,8 +11,8 @@
  *                                   IMMEDIATELY (a run that hangs or dies
  *                                   mid-flight must still read "running")
  *   recordReflectionRoundSettled  — ONE ROUND settled (v0.34 R1: per-round
- *                                   immediate — the resident run's finish may
- *                                   be days away, so the D2
+ *                                   immediate — the run's finish comes only
+ *                                   when the visit ends, so the D2
  *                                   accumulate-in-module-and-flush-at-finish
  *                                   batching is RETIRED, pendingRun slot and
  *                                   recordHQBriefOutcome with it). Rules:
@@ -26,11 +26,14 @@
  *                                   round leaves it (§4.2 行为变更: the old
  *                                   shell advanced furthestSeen on failed
  *                                   rounds too, silently skipping content)
- *   recordReflectionRunRetired    — the generation's ONLY clean terminal:
- *                                   runStatus "retired" (修订 B: idle-24h ∨
- *                                   age-7d at a lap boundary), then the
- *                                   successor's started mark overwrites
- *                                   within seconds
+ *   recordReflectionRunIdleExit   — the visit's ONLY clean terminal:
+ *                                   runStatus "idle" (the mailbox stayed
+ *                                   quiet for the whole 60-minute visit
+ *                                   grace, at a lap boundary). NO successor
+ *                                   follows (寿命 = 一次访问): the pointer
+ *                                   honestly reads "idle" until the next
+ *                                   visit's bell starts a fresh generation
+ *                                   whose started mark overwrites
  *
  * A run that dies between marks (cancel/crash/platform) leaves the pointer
  * reading "running" with its start stamp — stale but dated and honest; the
@@ -182,22 +185,24 @@ export async function recordReflectionRoundSettled(round: {
 }
 
 /**
- * The generation retired (修订 B — the unit's ONLY clean terminal): the idle
- * clock (24h) or the age clock (7d) won the blocking race at a lap boundary.
- * The pointer settles `runStatus: "retired"` with the definitive round count
- * (belt and braces — the per-round settle already ticks it). `lastError` is
- * NOT touched: retirement is not a failure, and a previous failure line
- * stays until a clean round of the NEW generation clears it. The successor's
- * started mark lands seconds later — the pointer never leaves the
- * "running 系" for longer than the relay takes.
+ * The visit ended with a quiet mailbox (the unit's ONLY clean terminal): the
+ * 60-minute idle grace elapsed at a lap boundary, never mid-round. The
+ * pointer settles `runStatus: "idle"` with the definitive round count (belt
+ * and braces — the per-round settle already ticks it). `lastError` is NOT
+ * touched: an idle exit is not a failure, and a previous failure line stays
+ * until a clean round of the NEXT generation clears it. NO successor is
+ * started (用户裁决：寿命 = 一次访问) — the pointer honestly reads "idle"
+ * (nobody home) until the next visit's first bell starts a fresh generation
+ * via the delivery fallback, whose started mark overwrites this; the on-disk
+ * cursor (lastSeen) carries the continuity, so the seam is invisible.
  */
-export async function recordReflectionRunRetired(result: {
+export async function recordReflectionRunIdleExit(result: {
   /** Rounds this generation settled (the definitive count). */
   rounds: number;
 }): Promise<void> {
   await mergeHQStatus((s) => ({
     ...s,
-    runStatus: "retired",
+    runStatus: "idle",
     briefsHandled: Math.max(0, Math.floor(result.rounds)),
   }));
 }
