@@ -9,10 +9,13 @@
  * write-back double-pushes the message), so the second-and-later sends live
  * here as BYPASS lanes: a direct POST /api/chat, then the lane reads the new
  * run's durable stream (`/api/chat/<runId>/stream?startIndex=0`) itself —
- * the NestedBubble child-stream precedent. The batch summary lane works the
- * same way; its runId arrives on the last finisher's stream as a transient
- * `data-parallel-summary` chunk (forwarded by both the useChat onData and
- * every lane reader, since the last finisher may itself be a bypass lane).
+ * the NestedBubble child-stream precedent. The batch's closing beat
+ * (v0.38 §3.2) is no longer a separate run: the LAST finisher's tail
+ * generates the merge line itself and announces it as a transient
+ * `data-parallel-summary` chunk CARRYING THE TEXT ({sliceId, text} —
+ * forwarded by both the useChat onData and every lane reader, since the last
+ * finisher may itself be a bypass lane). The client seats it as the summary
+ * lane directly — 收合句独立泡, 可空 = 没有这个泡 (v0.40 §2.1).
  *
  * The lane readers are owned by ONE effect in the page (useParallelLaneReaders),
  * not by the views: the virtualized list unmounts scrolled-out rows, and a
@@ -49,7 +52,9 @@ export interface ParallelLane {
 interface LaneStreamHandlers {
   signal: AbortSignal;
   onText: (text: string) => void;
-  onSummarySpawned: (runId: string) => void;
+  /** The last finisher's merge line (v0.40 §2.1) — the chunk carries the
+   *  TEXT itself; absent when the batch needed no closing (可空). */
+  onMergeLine: (sliceId: string, text: string) => void;
 }
 
 /**
@@ -59,9 +64,9 @@ interface LaneStreamHandlers {
  * corrupt chunk is skipped, never fatal. Throws only on transport failure
  * (the caller settles the lane with whatever text accumulated).
  */
-async function readLaneStream(
+export async function readLaneStream(
   runId: string,
-  { signal, onText, onSummarySpawned }: LaneStreamHandlers,
+  { signal, onText, onMergeLine }: LaneStreamHandlers,
 ): Promise<string> {
   const res = await fetch(
     `/api/chat/${encodeURIComponent(runId)}/stream?startIndex=0`,
@@ -101,11 +106,17 @@ async function readLaneStream(
             delta?: unknown;
             data?: unknown;
           };
-          // The summary-spawn frame can ride ANY lane's stream (the last
-          // finisher may be a bypass lane) — forward it to the page.
+          // The merge-line frame can ride ANY lane's stream (the last
+          // finisher may be a bypass lane) — forward the TEXT to the page.
+          // No chunk = 可空: the batch needed no closing, no bubble appears.
           if (c.type === PARALLEL_SUMMARY_CHUNK) {
-            const runId = (c.data as { runId?: unknown } | undefined)?.runId;
-            if (typeof runId === "string") onSummarySpawned(runId);
+            const data = c.data as { sliceId?: unknown; text?: unknown } | undefined;
+            if (typeof data?.text === "string" && data.text.trim()) {
+              onMergeLine(
+                typeof data.sliceId === "string" ? data.sliceId : "",
+                data.text,
+              );
+            }
             continue;
           }
           if (
@@ -155,9 +166,34 @@ async function readLaneStream(
 }
 
 /**
+ * Seat the last finisher's merge line as the batch's summary lane
+ * (v0.40 §2.1 — 收合句独立泡). PURE and idempotent: a reconnect replay
+ * re-delivers the chunk and must never double-seat. 可空 is expressed by
+ * NEVER calling this — no chunk, no lane, no bubble, no placeholder.
+ */
+export function upsertMergeLane(
+  lanes: readonly ParallelLane[],
+  sliceId: string,
+  text: string,
+): ParallelLane[] {
+  const laneId = `merge-${sliceId || "batch"}`;
+  if (lanes.some((l) => l.laneId === laneId)) return [...lanes];
+  return [
+    ...lanes,
+    {
+      laneId,
+      userText: "",
+      summary: true,
+      text,
+      settled: true, // the text ARRIVES whole — nothing streams
+    },
+  ];
+}
+
+/**
  * Own every lane's reader in ONE effect — started once per runId, aborted
  * when the lane disappears (the post-settle fold) or the page unmounts.
- * `patchLane`/`onSummarySpawned` ride refs so a delta's state write (which
+ * `patchLane`/`onMergeLine` ride refs so a delta's state write (which
  * rebuilds `lanes` and re-runs the effect) never restarts a live reader.
  */
 export function useParallelLaneReaders(
@@ -166,13 +202,13 @@ export function useParallelLaneReaders(
     laneId: string,
     patch: Partial<Pick<ParallelLane, "text" | "settled" | "runId">>,
   ) => void,
-  onSummarySpawned: (runId: string) => void,
+  onMergeLine: (sliceId: string, text: string) => void,
 ): void {
   const activeRef = useRef<Map<string, AbortController>>(new Map());
   const patchRef = useRef(patchLane);
   patchRef.current = patchLane;
-  const spawnRef = useRef(onSummarySpawned);
-  spawnRef.current = onSummarySpawned;
+  const mergeRef = useRef(onMergeLine);
+  mergeRef.current = onMergeLine;
 
   useEffect(() => {
     const active = activeRef.current;
@@ -183,7 +219,7 @@ export function useParallelLaneReaders(
       readLaneStream(lane.runId, {
         signal: ac.signal,
         onText: (text) => patchRef.current(lane.laneId, { text }),
-        onSummarySpawned: (runId) => spawnRef.current(runId),
+        onMergeLine: (sliceId, text) => mergeRef.current(sliceId, text),
       })
         .then((text) => {
           activeRef.current.delete(lane.laneId);

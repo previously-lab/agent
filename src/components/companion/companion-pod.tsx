@@ -73,6 +73,13 @@ import {
   type HQStatusResponse,
 } from "@/lib/chat/hq-status";
 import {
+  layerDegradationNote,
+  reflectionStopTier,
+  resolveStopTargets,
+  stopTiersFor,
+  type StopTier,
+} from "@/lib/chat/hq-panel";
+import {
   clearStoredHQRunId,
   HQStreamError,
   streamHQActivity,
@@ -274,6 +281,61 @@ function HQActivityLine({
  * marks the section so the reader knows the beats are arriving in real
  * time; after the run packs up the frames stay as its account of itself.
  */
+/**
+ * 一键停分档 (v0.40 §2.3): ONE click opens the tier menu — 停本轮 / 停这一批 /
+ * 停后台反思 — each line naming its consequence. The tier with a real
+ * consequence (interrupting an answer) asks for confirmation; the
+ * consequence-free tiers (archiving / tidy-up) act on click, the tooltip
+ * sentence carrying the cost. Execution rides the EXISTING cancel path
+ * (POST /api/evolution/hq-status/cancel) — no new cancellation machinery.
+ */
+function StopMenu({
+  tiers,
+  onTier,
+  t,
+}: {
+  tiers: StopTier[];
+  onTier: (tier: StopTier) => void;
+  t: CompanionT;
+}) {
+  const [open, setOpen] = useState(false);
+  if (tiers.length === 0) return null;
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="shrink-0 text-muted-foreground/80 underline underline-offset-2"
+      >
+        {t("hqStop")}
+      </button>
+      {open && (
+        <span className="absolute right-0 z-10 mt-1 block w-64 space-y-1 border border-paper-line bg-background p-2 shadow-sm">
+          {tiers.map((tier) => (
+            <span key={tier.tier} className="block">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onTier(tier);
+                }}
+                title={t(tier.consequenceKey)}
+                className="block w-full text-left text-foreground/90 underline-offset-2 hover:underline"
+              >
+                {t(tier.labelKey)}
+              </button>
+              <span className="block text-[10px] leading-snug text-muted-foreground/70">
+                {t(tier.consequenceKey)}
+              </span>
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function HQStatusSection({
   data,
   failed,
@@ -281,7 +343,7 @@ function HQStatusSection({
   locale,
   activity,
   live,
-  onStop,
+  requestCancel,
 }: {
   /** The three-layer aggregate (v0.39 §4.1) — null while loading. */
   data: HQStatusResponse | null;
@@ -290,8 +352,8 @@ function HQStatusSection({
   locale: string;
   activity: HQActivityFrame[];
   live: boolean;
-  /** 一键停 — cancels ONE live run (the panel's only write, §4.3). */
-  onStop: (runId: string, role: string | null) => void;
+  /** Executes a tier's cancels through the existing endpoint, then re-reads. */
+  requestCancel: (targets: string[]) => void;
 }) {
   const beats = activity.length > 0 && (
     <div className="space-y-1">
@@ -347,6 +409,10 @@ function HQStatusSection({
 
   const { reflection, runs, log } = data;
   const newestRound = log.state === "live" ? log.recentRounds[0] : undefined;
+  // §6 旁注: one 人话 line per layer whose READ failed — 事实空 earns none.
+  const reflectionNoteKey = layerDegradationNote("reflection", data);
+  const runsNoteKey = layerDegradationNote("runs", data);
+  const logNoteKey = layerDegradationNote("log", data);
 
   return (
     <div className="space-y-1.5">
@@ -367,19 +433,32 @@ function HQStatusSection({
           {reflection.attributes.tookOver && (
             <DebugRow label="⚠" value={t("hqTookOver")} />
           )}
-          <button
-            type="button"
-            onClick={() => onStop(reflection.runId, "reflection")}
-            className="text-left text-muted-foreground/80 underline underline-offset-2"
-          >
-            {t("hqStop")}
-          </button>
+          <StopMenu
+            tiers={[reflectionStopTier()]}
+            t={t}
+            onTier={(tier) => {
+              // §2.3 — 停反思不确认: no live consequence; the tooltip said it.
+              const targets = resolveStopTargets(
+                tier.tier,
+                { runId: reflection.runId, status: reflection.status, role: "reflection", slice: null, turn: null, burst: null, ageMs: reflection.ageMs },
+                [],
+                reflection.runId,
+              );
+              requestCancel(targets);
+            }}
+          />
         </>
       ) : reflection.state === "none" ? (
         <p className="text-muted-foreground/80">{t("hqNobodyHome")}</p>
       ) : (
         <p className="break-words text-muted-foreground/80">
           {t("hqUnreachable", { reason: reflection.reason })}
+          {/* §6 — 看不到 ≠ 没有: name the failed READ, never the empty fact */}
+          {reflectionNoteKey && (
+            <span className="block text-[10px] text-muted-foreground/60">
+              {t(reflectionNoteKey)}
+            </span>
+          )}
         </p>
       )}
       {/* ── 日志层: the water level + the newest round's note (降级显式) ── */}
@@ -406,6 +485,11 @@ function HQStatusSection({
       ) : (
         <p className="break-words text-muted-foreground/80">
           {t("hqLogUnavailable", { reason: log.reason })}
+          {logNoteKey && (
+            <span className="block text-[10px] text-muted-foreground/60">
+              {t(logNoteKey)}
+            </span>
+          )}
         </p>
       )}
       {/* ── 运行时层: the live-runs table (增强层 — 缺席显式降级) ── */}
@@ -418,24 +502,47 @@ function HQStatusSection({
                 <span className="min-w-0 break-all font-mono text-[10px]">
                   {t("hqRunRow", {
                     role: r.role ?? "?",
-                    slice: r.slice ?? "—",
+                    page: r.slice ?? "—",
                     turn: r.turn ? ` · turn ${r.turn}` : "",
                     burst: r.burst ? ` · burst ${r.burst.slice(0, 8)}` : "",
                     age: fmtAge(r.ageMs),
                   })}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => onStop(r.runId, r.role)}
-                  className="shrink-0 text-muted-foreground/80 underline underline-offset-2"
-                >
-                  {t("hqStop")}
-                </button>
+                <StopMenu
+                  tiers={stopTiersFor(r)}
+                  t={t}
+                  onTier={(tier) => {
+                    // §2.3 — only interrupting an ANSWER confirms; the cost
+                    // rides the consequence sentence.
+                    if (
+                      tier.confirm &&
+                      typeof window !== "undefined" &&
+                      !window.confirm(t(tier.consequenceKey))
+                    ) {
+                      return;
+                    }
+                    requestCancel(
+                      resolveStopTargets(
+                        tier.tier,
+                        r,
+                        runs.live,
+                        reflection.state === "live" ? reflection.runId : null,
+                      ),
+                    );
+                  }}
+                />
               </li>
             ))}
           </ul>
         ) : (
-          <p className="break-words text-muted-foreground/70">{t("hqRunsUnavailable")}</p>
+          <p className="break-words text-muted-foreground/70">
+            {t("hqRunsUnavailable")}
+            {runsNoteKey && (
+              <span className="block text-[10px] text-muted-foreground/60">
+                {t(runsNoteKey)}
+              </span>
+            )}
+          </p>
         )}
       </div>
     </div>
@@ -991,14 +1098,13 @@ export function CompanionPod({
                       locale={locale}
                       activity={hqActivity}
                       live={hqLive}
-                      onStop={(runId, role) => {
-                        // 分档确认 (v0.41 #28 的批 4 半): the consequence is
-                        // stated in the confirm text; the thinner lanes get
-                        // their polish in batch 5.
-                        if (typeof window !== "undefined" && !window.confirm(t("hqStopConfirm", { role: role ?? "?" }))) {
-                          return;
+                      requestCancel={(targets) => {
+                        // §4.3/§2.3 — the panel's ONLY write, through the
+                        // existing cancel endpoint; then re-read.
+                        for (const runId of targets) {
+                          void cancelPanelRun(runId);
                         }
-                        void cancelPanelRun(runId).then(() => loadHQ());
+                        void loadHQ();
                       }}
                     />
                   </DebugSection>

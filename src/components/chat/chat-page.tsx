@@ -45,6 +45,7 @@ import {
 import { PARALLEL_SUMMARY_CHUNK } from "@/lib/chat/parallel-runs";
 import {
   ParallelLaneView,
+  upsertMergeLane,
   useParallelLaneReaders,
   type ParallelLane,
 } from "./parallel-lane";
@@ -545,25 +546,14 @@ function Inner({
     },
     [],
   );
-  // The summary run's id arrives as a transient chunk on the LAST finisher's
-  // stream — the useChat lane's onData below, or a bypass lane's reader.
-  const spawnSummaryLane = useCallback((runId: string) => {
-    setParallelLanes((prev) => {
-      if (prev.some((l) => l.runId === runId)) return prev; // replay dedupe
-      return [
-        ...prev,
-        {
-          laneId: `summary-${runId}`,
-          runId,
-          userText: "",
-          summary: true,
-          text: "",
-          settled: false,
-        },
-      ];
-    });
+  // The merge line rides the LAST finisher's stream as a transient chunk
+  // CARRYING THE TEXT (v0.38 §3.2, v0.40 §2.1) — no summary run exists
+  // anymore. It seats the batch's closing bubble directly: 可空 = no chunk =
+  // no lane = no bubble. Replay-deduped inside the pure upsert.
+  const seatMergeLine = useCallback((sliceId: string, text: string) => {
+    setParallelLanes((prev) => upsertMergeLane(prev, sliceId, text));
   }, []);
-  useParallelLaneReaders(parallelLanes, patchParallelLane, spawnSummaryLane);
+  useParallelLaneReaders(parallelLanes, patchParallelLane, seatMergeLine);
 
   // Refresh-resume goes through the SDK's own path: `resume: true` calls
   // resumeStream() on mount, and prepareReconnectToStreamRequest redirects it
@@ -592,12 +582,17 @@ function Inner({
     // a reconnect replay re-delivers every frame in order, so the map rebuilds
     // deterministically (later frames for one instance overwrite earlier ones).
     onData: (chunk) => {
-      // v0.33 — the batch summary's runId, emitted by the last finisher's
-      // tail check when THAT finisher is this useChat lane (a bypass lane's
-      // reader forwards the same chunk instead).
+      // v0.40 §2.1 — the merge line's TEXT, emitted by the last finisher's
+      // tail when THAT finisher is this useChat lane (a bypass lane's reader
+      // forwards the same chunk instead). 可空: no chunk → no closing bubble.
       if (chunk.type === PARALLEL_SUMMARY_CHUNK) {
-        const runId = (chunk as { data?: { runId?: unknown } }).data?.runId;
-        if (typeof runId === "string") spawnSummaryLane(runId);
+        const data = (chunk as { data?: { sliceId?: unknown; text?: unknown } }).data;
+        if (typeof data?.text === "string" && data.text.trim()) {
+          seatMergeLine(
+            typeof data.sliceId === "string" ? data.sliceId : "",
+            data.text,
+          );
+        }
         return;
       }
       if (chunk.type !== NESTED_BUBBLE_CHUNK) return;
