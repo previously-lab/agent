@@ -48,9 +48,6 @@ const deps = vi.hoisted(() => ({
   readStrands: vi.fn(async () => ({})),
   readPlaybook: vi.fn(async () => null),
   readSelfSop: vi.fn(async () => null),
-  readUserModel: vi.fn(
-    async (): Promise<{ card: string; direction: string | null; full: string } | null> => null,
-  ),
   resolveSubAgentModel: vi.fn(async () => ({ id: "test-model" })),
 }));
 vi.mock("@/lib/episodic", async (importOriginal) => {
@@ -64,12 +61,12 @@ vi.mock("@/lib/evolution/store", () => ({
   readPlaybook: deps.readPlaybook,
   capPlaybook: (s: string) => s,
   readSelfSop: deps.readSelfSop,
-  readUserModel: deps.readUserModel,
 }));
 vi.mock("@/lib/episodic/rework-signal", () => ({
   checkDocRework: vi.fn(),
   recordDocRead: vi.fn(),
   logDocReworkSignal: vi.fn(),
+  extractSliceIds: vi.fn(() => []),
 }));
 vi.mock("@/lib/agents/sub-agent-runner", () => ({
   resolveSubAgentModel: deps.resolveSubAgentModel,
@@ -125,7 +122,7 @@ vi.mock("@/lib/vision/describe-image", () => ({
 import {
   currentTimeExecute,
   describeRoomExecute,
-  readPreviouslyExecute,
+  recallReadExecute,
   webSearchExecute,
   viewImageExecute,
   type ToolContext,
@@ -153,59 +150,50 @@ function opts(overrides: Partial<ToolContext> = {}): {
 }
 
 
-describe("readPreviouslyExecute", () => {
+describe("recallReadExecute — the user card and historical snapshots", () => {
   beforeEach(() => {
-    deps.readUserModel.mockReset();
-    deps.readUserModel.mockResolvedValue(null);
     local.files.clear();
   });
 
-  it("no sliceId → the LIVE user model's card half (readUserModel), never the frozen current-previously.md", async () => {
-    deps.readUserModel.mockResolvedValue({
-      card: "## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.",
-      direction: null,
-      full: "## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.",
-    });
+  it("people/user → the LIVE user model's card (people/user/index.md)", async () => {
+    local.files.set(
+      "memory/people/user/index.md",
+      "## User profile\n\n- 自称 Dream\n\n## Self-model\n\nlive card.",
+    );
     // The frozen legacy file exists on disk — the executor must NOT read it.
     local.files.set("memory/episodic/current-previously.md", "FROZEN legacy card");
-    const reads: string[] = [];
-    const original = local.readFileLocal;
-    local.readFileLocal = async (p: string) => {
-      reads.push(p);
-      return original(p);
-    };
-    try {
-      const out = await readPreviouslyExecute({}, opts());
-      expect(out).toBe("## Identity\n\n- 自称 Dream\n\n## Profile\n\nlive card.");
-      expect(deps.readUserModel).toHaveBeenCalledTimes(1);
-      expect(reads).toEqual([]);
-    } finally {
-      local.readFileLocal = original;
-    }
+    const out = await recallReadExecute({ ref: "people/user" }, opts());
+    expect(out).toBe(
+      "## User profile\n\n- 自称 Dream\n\n## Self-model\n\nlive card.",
+    );
   });
 
-  it("no sliceId and no user model yet → an empty string (fresh deployment)", async () => {
-    deps.readUserModel.mockResolvedValue(null);
-    const out = await readPreviouslyExecute({}, opts());
-    expect(out).toBe("");
+  it("people/user with no card yet → the fixed not-found sentence (fresh deployment)", async () => {
+    const out = await recallReadExecute({ ref: "people/user" }, opts());
+    expect(out).toBe(
+      'Nothing named "people/user" exists in memory — and nothing similar.',
+    );
   });
 
-  it("explicit sliceId → that slice's historical snapshot (dual-root read), with the local-time banner", async () => {
-    // v0.19 R2 records-root layout; card-format content passes migrateToV3
-    // through unchanged.
+  it("records/<slice id> part 'previously' → that slice's historical snapshot, with the local-time banner", async () => {
+    // v3 format passes migrateToV3 through unchanged.
     local.files.set(
       "memory/records/2026/08/11/1115/previously.md",
-      "## Identity\n\n- snapshot line\n\n## Profile\n\nsnapshot body.",
+      "## User profile\n\n- snapshot line\n\n## Self-model\n\nsnapshot body.",
     );
-    const out = await readPreviouslyExecute({ sliceId: "2026-08-11-1115" }, opts());
+    const out = await recallReadExecute(
+      { ref: "records/2026-08-11-1115", part: "previously" },
+      opts(),
+    );
     expect(out).toContain("snapshot body.");
-    expect(out).not.toBe("## Identity\n\n- snapshot line\n\n## Profile\n\nsnapshot body.");
-    expect(deps.readUserModel).not.toHaveBeenCalled();
+    expect(out).not.toBe("## User profile\n\n- snapshot line\n\n## Self-model\n\nsnapshot body.");
   });
 
-  it("explicit sliceId with an invalid id → a visible domain error", async () => {
-    const out = await readPreviouslyExecute({ sliceId: "bogus" }, opts());
-    expect(out).toMatch(/^ERROR: Invalid slice ID/);
+  it("an invalid records ref → the fixed not-found sentence (never a throw)", async () => {
+    const out = await recallReadExecute({ ref: "records/bogus" }, opts());
+    expect(out).toBe(
+      'Nothing named "records/bogus" exists in memory — and nothing similar.',
+    );
   });
 });
 

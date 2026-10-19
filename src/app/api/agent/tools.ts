@@ -16,14 +16,16 @@ import { tool } from "ai";
 import { z } from "zod";
 import { isClientMode } from "@/lib/mode";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { RECALL_CATEGORIES } from "@/lib/memory/categories";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
 // (gray-matter → node:*), which the workflow bundler rejects.
 import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
 import {
-  readSliceExecute,
-  readAgentTimelineExecute,
-  readPreviouslyExecute,
+  recallRecentExecute,
+  recallFindExecute,
+  recallSearchExecute,
+  recallReadExecute,
   webSearchExecute,
   webFetchExecute,
   thinkDeepExecute,
@@ -31,8 +33,6 @@ import {
   describeRoomExecute,
   delegateTaskExecute,
   viewImageExecute,
-  listTreeExecute,
-  readDocExecute,
   writeCaseExecute,
   startLongTaskExecute,
   noteForSedimentExecute,
@@ -104,36 +104,193 @@ export const toolContextSchema = z.object({
   imageAttachments: z.array(z.string()).optional(),
 });
 
-// ─── Concept tools ───────────────────────────────────────────────────────
-
-export const conceptTools = {
-  readSlice: tool({
+// ─── The memory-read verbs (v0.36) + the rest of the chat tool set ─────────
+//
+// The reply segment's read surface is FOUR verbs sharing one entry shape and
+// one result envelope (src/lib/memory/facade.ts). The agent sees entries —
+// ref / title / date / excerpt — never the tree, never raw listings.
+export const chatTools = {
+  // ① What has been happening — the recent-N view. Omitting `category` gives
+  // one cross-category timeline (the "I can't recall which world it lives
+  // in" answer); a category narrows to one world.
+  recallRecent: tool({
     description:
-      "Open a time slice's original conversation record (core timeline) — " +
-      "the ONLY source for specific facts (numbers, dates, quotes, promises): " +
-      "read FIRST, then answer. Use it to answer from a slice you located via " +
-      "listTree, to follow a document's " +
-      "evidence chain down to the original text, or whenever you need the " +
-      "verbatim original of anything the user or a document claims about the " +
-      "past. " +
-      "Use the optional `range` parameter to fetch only specific turns instead " +
-      "of the entire slice — a full slice is the most expensive option. " +
-      "`search` matches keywords across the slice (misses return the full slice " +
-      "with a note); `lines` reads a 1-indexed line range like a code file.",
+      "See what has been happening in memory — the N most recent ENTRIES " +
+      "(ref / title / date / one-line excerpt), never raw files, newest " +
+      "activity first. Use this FIRST whenever the user asks about the past " +
+      "and you are not sure WHERE it lives: omit `category` and you get one " +
+      "cross-category timeline (conversation slices + cases interleaved by " +
+      "activity date). Pass a category to look inside one world — events / " +
+      "people / things / tasks / research / places / orgs / self / timeline " +
+      "(slice heads) / records (slices). `n` defaults to 10 (hard cap 30); " +
+      "`after` / `before` (YYYY-MM-DD, inclusive) bound the window. Use " +
+      "recallFind when the thing is NAMED, recallSearch for a keyword hunt. " +
+      "FIXED result wording (recognize it, do not paraphrase): entries open " +
+      "with `The {n} most recent {category} entries:`; an empty scope opens " +
+      "with `There is nothing here yet — no {category} entries exist in this " +
+      "scope.` — report THAT, not your own guess about what the user remembers.",
     inputSchema: z.object({
-      sliceId: z
+      category: z
+        .enum(RECALL_CATEGORIES)
+        .optional()
+        .describe(
+          "One world to look inside. Omit for the cross-category timeline " +
+          "(use when you cannot tell which category something lives in).",
+        ),
+      n: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("How many entries (default 10, hard cap 30)."),
+      after: z
         .string()
-        .describe("Slice ID in YYYY-MM-DD-HHMM format, e.g. '2026-07-24-1500'."),
+        .optional()
+        .describe("Inclusive lower day bound, YYYY-MM-DD (user calendar)."),
+      before: z
+        .string()
+        .optional()
+        .describe("Inclusive upper day bound, YYYY-MM-DD (user calendar)."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recallRecentExecute,
+  }),
+  // ② Locate ONE named thing — the point-lookup verb.
+  recallFind: tool({
+    description:
+      "Locate ONE thing in memory by its name. Use this when the user (or a " +
+      "document) NAMES the thing: a case by name (category + the bare case " +
+      "name, e.g. category 'events', name '换手机'), a self document " +
+      "(category 'self': 'search', 'thinkdeep', … or the reserved bare file " +
+      "'agenda'), a slice by id (category 'records' or 'timeline', " +
+      "'2026-10-14-1836' — or a day '2026-10-14' for timeline). " +
+      "FIXED result wording: a hit opens `The 1 most recent {category} " +
+      "entries:`; a miss opens `Nothing named \"{name}\" exists in " +
+      "{category}. Closest matches: …` (or `…and nothing similar.`) — a " +
+      "miss is NOT proof of absence; check the near misses before telling " +
+      "the user anything is missing. Then recallRead(ref) for the content.",
+    inputSchema: z.object({
+      category: z
+        .enum(RECALL_CATEGORIES)
+        .describe("Which world the named thing lives in."),
+      name: z
+        .string()
+        .min(1)
+        .describe(
+          "Case name / self document name ('agenda' included) / slice id " +
+          "(YYYY-MM-DD-HHMM) or day (YYYY-MM-DD for timeline).",
+        ),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recallFindExecute,
+  }),
+  // ③ Keyword hunt — with the scan-surface discipline: organized layer
+  // first, raw conversation only on explicit request.
+  recallSearch: tool({
+    description:
+      "Keyword-search memory. The DEFAULT scan surface is the organized " +
+      "layer ONLY: case documents, self SOPs + agenda, the user profile, and " +
+      "slice HEADS (focus/summary lines). Raw conversation bodies " +
+      "(category 'records') are scanned ONLY when you pass category " +
+      "'records' or includeRecords:true — reach for the organized layer " +
+      "first; go to the raw record as the second layer, when the answer is " +
+      "not in any document. Keywords AND within a segment (pass synonyms as " +
+      "separate calls). Hits return entries whose excerpt is the matching " +
+      "snippet, newest activity first, up to `limit` (default 20), scanning " +
+      "at most 50 files per call; `since` / `until` (YYYY-MM-DD) bound by " +
+      "activity date. FIXED result wording: hits open `{n} match(es) for " +
+      "\"{query}\":`; ZERO hits on a non-empty scope open `Nothing matches " +
+      "\"{query}\". Here are the {n} most recent entries instead:` — that is " +
+      "a FALLBACK, not absence, and you must not quote it as 'the user never " +
+      "recorded this'; an empty scope opens `There is nothing here yet — no " +
+      "{category} entries exist in this scope.`; a capped scan appends " +
+      "`Showing the newest {limit} of {scanned} scanned — narrow by date or " +
+      "add keywords for the older ones.` Continue with recallRead(ref) on " +
+      "anything promising.",
+    inputSchema: z.object({
+      query: z
+        .union([z.string(), z.array(z.string())])
+        .describe(
+          "One keyword or several — within one segment every keyword must " +
+          "match (case-insensitive).",
+        ),
+      category: z
+        .enum(RECALL_CATEGORIES)
+        .optional()
+        .describe(
+          "Scope the search to one world. Omit for all structured documents " +
+          "(records excluded unless includeRecords).",
+        ),
+      includeRecords: z
+        .boolean()
+        .optional()
+        .describe(
+          "Also scan raw conversation bodies (default false — the " +
+          "structured layer only).",
+        ),
+      since: z
+        .string()
+        .optional()
+        .describe("Inclusive lower day bound, YYYY-MM-DD."),
+      until: z
+        .string()
+        .optional()
+        .describe("Inclusive upper day bound, YYYY-MM-DD."),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Max hits returned (default 20, hard cap 30)."),
+    }),
+    contextSchema: toolContextSchema,
+    execute: recallSearchExecute,
+  }),
+  // ④ Continue reading — the "出处" verb: entries cite refs, refs read here.
+  recallRead: tool({
+    description:
+      "Continue reading an entry — pass the `ref` from any recall result, " +
+      "exactly as given (e.g. 'events/换手机', 'research/手机调研/" +
+      "2026-09-08-报价篇', 'self/agenda', 'people/user/profile', " +
+      "'records/2026-10-14-1836'). Case refs return the whole document; the " +
+      "records ref returns that conversation's core record — the ONLY " +
+      "source for specific facts (numbers, dates, quotes, promises): read " +
+      "it BEFORE answering from memory, and prefer a `range` over a full " +
+      "slice (a full slice is the most expensive read). For records: " +
+      "`part` selects 'core' (default) / 'agent' (your cognition for that " +
+      "slice) / 'previously' (the user-card snapshot of that moment); on " +
+      "core, `range` narrows the read — 'last' the most recent N turns, " +
+      "'turns' by 0-based index, 'date' turns after an ISO timestamp, " +
+      "'search' keywords (matched turns + one turn of context; a miss " +
+      "returns the full slice with a note), 'lines' a 1-indexed line range " +
+      "like a code file. FIXED result wording: an unresolvable ref returns " +
+      "`Nothing named \"{ref}\" exists in memory — and nothing similar.`; a " +
+      "read failure returns `This could not be read right now (…). That is " +
+      "a read failure, not absence — it may still exist.` — never report " +
+      "either as the user not having remembered something.",
+    inputSchema: z.object({
+      ref: z
+        .string()
+        .min(1)
+        .describe(
+          "The entry ref, copied verbatim from a recall result.",
+        ),
+      part: z
+        .enum(["core", "agent", "previously"])
+        .optional()
+        .describe(
+          "records refs only: which slice part to read (default 'core').",
+        ),
       range: z
         .object({
           type: z
             .enum(["turns", "last", "date", "search", "lines"])
             .describe(
               "turns = specific turn indices. last = most recent N turns. " +
-              "date = turns after a given timestamp. " +
-              "search = keyword match, returns matching turns (+ context); " +
-              "if nothing matches, returns the full slice with a note. " +
-              "lines = 1-indexed line range of the raw file.",
+              "date = turns after a given timestamp. search = keyword match, " +
+              "returns matching turns (+ context); if nothing matches, " +
+              "returns the full slice with a note. lines = 1-indexed line " +
+              "range of the raw file.",
             ),
           indices: z
             .array(z.number())
@@ -166,129 +323,14 @@ export const conceptTools = {
         })
         .optional()
         .describe(
-          "Optional range filter. When omitted, returns the full slice content.",
+          "records core only: an optional range filter. When omitted, " +
+          "returns the full slice content.",
         ),
     }),
     contextSchema: toolContextSchema,
-    execute: readSliceExecute,
+    execute: recallReadExecute,
   }),
-  readAgentTimeline: tool({
-    description:
-      "Read your own cognitive record (Agent timeline) for a slice — " +
-      "what you were thinking, which tools you called, and why. " +
-      "Use this for self-reflection: to understand your past reasoning.",
-    inputSchema: z.object({
-      sliceId: z
-        .string()
-        .describe("Slice ID in YYYY-MM-DD-HHMM format."),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readAgentTimelineExecute,
-  }),
-  readPreviously: tool({
-    description:
-      "Read the previously.md (previously.md) for a specific slice — the agent's " +
-      "impressions and understanding of the user at that moment in time. " +
-      "The current slice's previously.md is already in your context; use this " +
-      "only to read historical versions for comparison.",
-    inputSchema: z.object({
-      sliceId: z
-        .string()
-        .optional()
-        .describe(
-          "Slice ID in YYYY-MM-DD-HHMM format. Defaults to the current slice.",
-        ),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readPreviouslyExecute,
-  }),
-};
 
-// ─── Chat tool set ───────────────────────────────────────────────────────
-//
-// The reply segment's tool surface. There is NO memory colleague:
-// past-memory questions are YOURS.
-//
-// Read surface:
-//   - listTree: the WHOLE memory tree in one call, grouped by top-level
-//     category (people/ events/ things/ … records/). A TRANSITIONAL
-//     PLACEHOLDER — a dedicated retrieval tool will replace it. The paths
-//     themselves are the index: category / case name / date all live on the
-//     path. No ranking, no relevance score — read the list.
-//   - readDoc: point-read a case document by reference — `<category>/<case>`
-//     → the case's index.md; `<category>/<case>/<piece>` → one dated piece.
-//     Judge freshness from the opened date and the updated stamp in the header.
-//   - readSlice: point-read the original conversation record — the ONLY
-//     source for specific facts (numbers, dates, quotes, promises): read
-//     FIRST, then answer. `range` fetches only the turns you need.
-//   - readAgentTimeline / readPreviously: your own cognition for a slice /
-//     the user-card snapshot of that moment.
-//
-// Write surface (v0.21; v0.30 §2.6): TWO writes, both one-way.
-//   - writeCase: the field's own case write, for ONE job — the user
-//     explicitly asks for something to be written down (every category but
-//     people/user and self/, which are the reflection unit's alone) — the
-//     document lands immediately, written BEFORE the answer.
-//   - noteForSediment: the sediment mailbox — one marker line into the
-//     current slice's agent.md, read by the reflection unit and the
-//     scribe/research passes at slice close. A marker is a clue, not an
-//     order.
-//
-// How to find things: listTree first (what cases exist), readDoc into the
-// promising ones, readSlice down to the evidence. If the question is
-// genuinely fuzzy archaeology with no anchor at all, say what you found
-// honestly or note it for a background task — no synchronous deep-search
-// detour on the reply path.
-export const chatTools = {
-  readSlice: conceptTools.readSlice,
-  readAgentTimeline: conceptTools.readAgentTimeline,
-  readPreviously: conceptTools.readPreviously,
-  // Case-tree readers (v0.19 §A.2.1): the filesystem IS the index.
-  listTree: tool({
-    description:
-      "List the ENTIRE memory tree in one call — a transitional placeholder " +
-      "until a dedicated retrieval tool exists. Returns every path under " +
-      "memory/, GROUPED by top-level category (people / events / things / " +
-      "places / orgs / research / hypotheses / tasks / self / records), with " +
-      "config/ filtered out (engineering state, not documents). records/ " +
-      "collapses to one line per conversation (YYYY/MM/DD/HHMM). " +
-      "`truncated: true` means the listing may be incomplete (GitHub's tree " +
-      "API cut it off) — trust the shape, re-ask narrowly if something is " +
-      "missing. There is NO ranking and NO relevance score: the paths " +
-      "themselves — category, case name, birth date — ARE the index; read " +
-      "them yourself. Use this FIRST whenever the answer might already live " +
-      "in memory: it is one call to see what cases exist, then readDoc into " +
-      "the promising ones.",
-    inputSchema: z.object({}),
-    contextSchema: toolContextSchema,
-    execute: listTreeExecute,
-  }),
-  readDoc: tool({
-    description:
-      "Read a case document by its TWO-SEGMENT reference (v0.19 §B.2): " +
-      "`<category>/<case>` (e.g. 'research/手机调研') → that case's index.md — what " +
-      "it is, where it stands, which pieces hang in it; `<category>/<case>/<piece>` → " +
-      "one dated piece. Case docs are small files — the whole file is " +
-      "returned: the opened date and the updated stamp (the last write — " +
-      "historical docs may still carry a retired closed date, inert), the " +
-      "body, and the dated tail lines. Judge freshness yourself from those " +
-      "dates — contradictions between documents are time, read them " +
-      "newest-first. Grounding rule applies: a document may summarize, but " +
-      "specific facts (numbers, dates, quotes, promises) enter your answers " +
-      "only from the original slice text — the document's job is to point " +
-      "you at the right slice fast. If the reference resolves nowhere you " +
-      "get a dead-link error saying so — not blocking; run listTree to see " +
-      "what exists.",
-    inputSchema: z.object({
-      ref: z
-        .string()
-        .describe(
-          "Two-segment reference: '<category>/<case>' or '<category>/<case>/<piece>', e.g. 'research/手机调研' or 'tasks/8号on-site' (《》 marks and a .md suffix tolerated).",
-        ),
-    }),
-    contextSchema: toolContextSchema,
-    execute: readDocExecute,
-  }),
   // The field agent's case write (v0.21 §2): open a case mid-reply so the
   // turn's document is written FIRST and the answer speaks FROM it. Every
   // category is writable but two — people/user and self/ are the reflection
@@ -748,11 +790,10 @@ export function buildChatToolsContext(
   ctx: ToolContext,
 ): Record<keyof typeof chatTools, ToolContext> & { delegateTask?: ToolContext } {
   const contexts: Record<keyof typeof chatTools, ToolContext> = {
-    readSlice: ctx,
-    readAgentTimeline: ctx,
-    readPreviously: ctx,
-    listTree: ctx,
-    readDoc: ctx,
+    recallRecent: ctx,
+    recallFind: ctx,
+    recallSearch: ctx,
+    recallRead: ctx,
     writeCase: ctx,
     startLongTask: ctx,
     noteForSediment: ctx,

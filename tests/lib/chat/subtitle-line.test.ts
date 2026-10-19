@@ -37,10 +37,10 @@ describe("foldSubtitleActivity — the activity ladder", () => {
     // One memory read lights "recalling" — the user-facing （正在回忆）.
     // The live read surface is the read* family (v0.19 three-action set).
     for (const toolName of [
-      "readSlice",
-      "readDoc",
-      "readAgentTimeline",
-      "readPreviously",
+      "recallRecent",
+      "recallFind",
+      "recallSearch",
+      "recallRead",
     ]) {
       const line = foldSubtitleActivity([
         part({ type: `tool-${toolName}`, toolCallId: "t1", toolName, state: "running" }),
@@ -118,7 +118,7 @@ describe("foldSubtitleActivity — blocks REPLACE each other", () => {
   it("lets the latest signal win across a whole turn", () => {
     const stream = [
       part({ type: "reasoning", text: "hmm…" }),
-      part({ type: "tool-readSlice", toolCallId: "t1", toolName: "readSlice", state: "running" }),
+      part({ type: "tool-recallRead", toolCallId: "t1", toolName: "recallRead", state: "running" }),
       part({ type: "tool-webSearch", toolCallId: "t2", toolName: "webSearch", state: "running" }),
       part({ type: "text", text: "Here's what I found." }),
     ];
@@ -131,7 +131,7 @@ describe("foldSubtitleActivity — blocks REPLACE each other", () => {
   it("is a pure fold: the same stream folds to the same block, every time", () => {
     const parts = [
       part({ type: "reasoning", text: "r" }),
-      part({ type: "tool-readDoc", toolCallId: "t1", toolName: "readDoc", state: "running" }),
+      part({ type: "tool-recallSearch", toolCallId: "t1", toolName: "recallSearch", state: "running" }),
     ];
     const a = foldSubtitleActivity(parts);
     const b = foldSubtitleActivity(parts.map((p) => ({ ...p })));
@@ -142,7 +142,7 @@ describe("foldSubtitleActivity — blocks REPLACE each other", () => {
 describe("foldSubtitleActivity — silence and closing", () => {
   it("ignores data-tool-progress narration entirely", () => {
     const line = foldSubtitleActivity([
-      part({ type: "tool-readSlice", toolCallId: "t1", toolName: "readSlice", state: "running" }),
+      part({ type: "tool-recallRead", toolCallId: "t1", toolName: "recallRead", state: "running" }),
       part({
         type: "data-tool-progress",
         data: { toolCallId: "t1", text: "Searching slice 2024-11-02…", stage: "running" },
@@ -166,7 +166,7 @@ describe("foldSubtitleActivity — silence and closing", () => {
 
   it("keeps the last activity on a non-done terminal status (the caller's gate owns that)", () => {
     const line = foldSubtitleActivity([
-      part({ type: "tool-readDoc", toolCallId: "t1", toolName: "readDoc", state: "running" }),
+      part({ type: "tool-recallSearch", toolCallId: "t1", toolName: "recallSearch", state: "running" }),
       part({ type: "data-turn-status", data: { status: "interrupted", error: "boom" } }),
     ]);
     expect(line?.activity).toBe("recalling");

@@ -1,11 +1,13 @@
 /**
- * Case-tree tools (v0.19 §A.2.1/§B.2) — listTree / two-segment readDoc
- * executors and the doc_rework probe, end to end over an in-memory local fs.
+ * The memory-read facade executors (v0.36) — recallRecent / recallFind /
+ * recallSearch / recallRead over an in-memory local fs, including the
+ * doc_rework probe chain (recordDocRead → checkDocRework → logDocReworkSignal)
+ * which now rides on recallRead.
  *
  * rework-signal itself is REAL; only its two sinks are mocked (the fitness
  * store append and the agent.md timeline write), so the classification chain
- * recordDocRead → checkDocRework → logDocReworkSignal is exercised
- * for real. No memory/ directory is touched — all paths are map keys.
+ * is exercised for real. No memory/ directory is touched — all paths are
+ * map keys.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -65,9 +67,10 @@ vi.mock("@/lib/episodic/manager", async (importOriginal) => {
 });
 
 import {
-  listTreeExecute,
-  readDocExecute,
-  readSliceExecute,
+  recallRecentExecute,
+  recallFindExecute,
+  recallSearchExecute,
+  recallReadExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
 
@@ -83,158 +86,197 @@ function makeCtx(sliceId: string): ToolContext {
 }
 
 function opts(ctx: ToolContext) {
-  return { context: ctx, toolCallId: "tc-docs" };
+  return { context: ctx, toolCallId: "tc-recall" };
 }
 
 const INDEX_RAW = `---
 opened: 2026-09-05
+updated: 2026-09-05T13:22:10.000Z
 ---
 
 手机调研 case 的正文：倾向小屏旗舰。证据见切片 2026-09-04-2130。
 `;
 
-const CORE_PATH =
-  "memory/records/2026/09/04/2130/core.md";
+const CORE_PATH = "memory/records/2026/09/04/2130/core.md";
+const DEEP_CORE_PATH = "memory/records/2026/09/05/0900/core.md";
+
+const CORE_RAW = `---
+focus: 手机选购闲聊
+start: 2026-09-04T21:30:00.000Z
+---
+
+## Turn 1 — 2026-09-04T21:30:00.000Z (user)
+
+我想换手机，预算 5000。
+`;
+
+const DEEP_CORE_RAW = `---
+focus: 别的焦点
+start: 2026-09-05T09:00:00.000Z
+---
+
+## Turn 1 — 2026-09-05T09:00:00.000Z (user)
+
+开场白。
+
+## Turn 2 — 2026-09-05T09:01:00.000Z (agent)
+
+${Array.from({ length: 40 }, (_, i) => `填充行 ${i + 1}`).join("\n")}
+深埋关键词-企鹅在很后面的正文里。
+`;
+
+/** Register the tree dirs the facade's listing walk traverses. */
+function seedDirs() {
+  io.dirs.set("memory", ["research", "records"]);
+  io.dirs.set("memory/research", ["手机调研"]);
+  io.dirs.set("memory/research/手机调研", ["index.md"]);
+  io.dirs.set("memory/records", ["2026"]);
+  io.dirs.set("memory/records/2026", ["09"]);
+  io.dirs.set("memory/records/2026/09", ["04", "05"]);
+  io.dirs.set("memory/records/2026/09/04", ["2130"]);
+  io.dirs.set("memory/records/2026/09/04/2130", ["core.md"]);
+  io.dirs.set("memory/records/2026/09/05", ["0900"]);
+  io.dirs.set("memory/records/2026/09/05/0900", ["core.md"]);
+}
 
 beforeEach(() => {
   io.files.clear();
   io.dirs.clear();
   sinks.appendSignal.mockClear();
   sinks.writeAgentTimeline.mockClear();
+  seedDirs();
+  io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
+  io.files.set(CORE_PATH, CORE_RAW);
+  io.files.set(DEEP_CORE_PATH, DEEP_CORE_RAW);
 });
 
-describe("listTreeExecute", () => {
-  it("lists the whole memory tree grouped by top-level category (local walk)", async () => {
-    io.dirs.set("memory", ["research", "records", "config", "tasks"]);
-    io.dirs.set("memory/research", ["手机调研"]);
-    io.dirs.set("memory/research/手机调研", ["index.md", "2026-09-08-报价篇.md"]);
-    io.dirs.set("memory/tasks", ["8号on-site"]);
-    io.dirs.set("memory/tasks/8号on-site", ["index.md"]);
-    io.dirs.set("memory/config", ["settings.json"]);
-    io.dirs.set("memory/records", ["2026"]);
-    io.dirs.set("memory/records/2026", ["09"]);
-    io.dirs.set("memory/records/2026/09", ["04"]);
-    io.dirs.set("memory/records/2026/09/04", ["2130"]);
-    io.dirs.set("memory/records/2026/09/04/2130", ["core.md", "agent.md", "previously.md"]);
-
-    const r = await listTreeExecute({}, opts(makeCtx("2026-09-10-1000")));
-    expect(r.truncated).toBe(false);
-    // Grouped by top level; doc paths verbatim, ascending.
-    expect(r.tree["research"]).toEqual([
-      "research/手机调研/2026-09-08-报价篇.md",
-      "research/手机调研/index.md",
-    ]);
-    expect(r.tree["tasks"]).toEqual(["tasks/8号on-site/index.md"]);
-    // records collapses to slice dirs — the three files inside are machinery.
-    expect(r.tree["records"]).toEqual(["records/2026/09/04/2130"]);
+describe("recallRecentExecute", () => {
+  it("renders the fixed recent template with entry lines (local walk)", async () => {
+    const out = await recallRecentExecute({}, opts(makeCtx("2026-09-10-1000")));
+    expect(out).toMatch(/^The \d+ most recent memory entries:/);
+    expect(out).toContain("research/手机调研");
+    expect(out).toContain("records/2026-09-04-2130");
   });
 
-  it("mechanically filters config/ — new root and the legacy settings file — out of every group", async () => {
-    io.dirs.set("memory", ["config", "research", "user"]);
-    io.dirs.set("memory/config", ["settings.json", "nested"]);
-    io.dirs.set("memory/config/nested", ["deep.json"]);
-    io.dirs.set("memory/research", ["手机调研"]);
-    io.dirs.set("memory/research/手机调研", ["index.md"]);
-    io.dirs.set("memory/user", ["config.json", "profile.md"]);
-
-    const r = await listTreeExecute({}, opts(makeCtx("2026-09-10-1000")));
-    expect(r.tree["config"]).toBeUndefined();
-    expect(Object.keys(r.tree)).not.toContain("config");
-    const all = Object.values(r.tree).flat();
-    expect(all.every((p) => !p.startsWith("config/"))).toBe(true);
-    // The pre-v0.19 settings file is the same engineering state under an old
-    // name — filtered too. The user's own profile.md beside it stays listed.
-    expect(all).not.toContain("user/config.json");
-    expect(all).toContain("user/profile.md");
+  it("an empty category renders the fixed nothing-here sentence", async () => {
+    const out = await recallRecentExecute(
+      { category: "orgs" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toBe(
+      "There is nothing here yet — no orgs entries exist in this scope.",
+    );
   });
 
-  it("returns an empty tree when memory/ does not exist yet", async () => {
-    const r = await listTreeExecute({}, opts(makeCtx("2026-09-10-1000")));
-    expect(r).toEqual({ truncated: false, tree: {} });
+  it("an unknown category renders the unavailable sentence, never throws", async () => {
+    const out = await recallRecentExecute(
+      { category: "bogus" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(/^This could not be read right now \(unknown category/);
+    expect(out).toContain("not absence");
   });
 });
 
-describe("readDocExecute (two-segment)", () => {
-  it("分类/case名 → the case's index.md, with opened/closed parsed", async () => {
-    io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
-    const r = await readDocExecute(
+describe("recallFindExecute", () => {
+  it("finds a case by name and renders the single-entry template", async () => {
+    const out = await recallFindExecute(
+      { category: "research", name: "手机调研" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(/^The 1 most recent research entries:/);
+    expect(out).toContain("research/手机调研");
+  });
+
+  it("a miss renders the fixed not-found sentence with near misses", async () => {
+    const out = await recallFindExecute(
+      { category: "research", name: "手机" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(
+      /^Nothing named "手机" exists in research\. Closest matches: research\/手机调研\./,
+    );
+  });
+});
+
+describe("recallSearchExecute", () => {
+  it("finds a structured document by keyword and renders the match template", async () => {
+    const out = await recallSearchExecute(
+      { query: "小屏旗舰" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(/^1 match\(es\) for "小屏旗舰":/);
+    expect(out).toContain("research/手机调研");
+  });
+
+  it("zero hits on a non-empty scope render the fixed fallback sentence", async () => {
+    const out = await recallSearchExecute(
+      { query: "绝对不存在的关键词" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(out).toMatch(
+      /^Nothing matches "绝对不存在的关键词"\. Here are the \d+ most recent entries instead:/,
+    );
+  });
+
+  it("records bodies are scanned only when asked (scan-surface discipline)", async () => {
+    // The deep keyword is absent from every structured document and slice head.
+    const scoped = await recallSearchExecute(
+      { query: "深埋关键词" },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(scoped).toMatch(/^Nothing matches "深埋关键词"/);
+    const withRecords = await recallSearchExecute(
+      { query: "深埋关键词", includeRecords: true },
+      opts(makeCtx("2026-09-10-1000")),
+    );
+    expect(withRecords).toMatch(/^1 match\(es\) for "深埋关键词":/);
+    expect(withRecords).toContain("records/2026-09-05-0900");
+  });
+});
+
+describe("recallReadExecute", () => {
+  it("分类/case名 → the case's index.md, whole file", async () => {
+    const out = await recallReadExecute(
       { ref: "research/手机调研" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(r).not.toHaveProperty("error");
-    if ("error" in r) return;
-    expect(r.path).toBe("memory/research/手机调研/index.md");
-    expect(r.opened).toBe("2026-09-05");
-    expect(r.closed).toBeNull();
-    expect(r.content).toBe(INDEX_RAW);
-  });
-
-  it("分类/case名/篇名 → the dated piece", async () => {
-    const piece = "---\nopened: 2026-09-08\n---\n\n报价篇正文。\n";
-    io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
-    io.files.set("memory/research/手机调研/2026-09-08-报价篇.md", piece);
-    const r = await readDocExecute(
-      { ref: "research/手机调研/2026-09-08-报价篇" },
-      opts(makeCtx("2026-09-10-1000")),
-    );
-    if ("error" in r) throw new Error(r.error);
-    expect(r.path).toBe("memory/research/手机调研/2026-09-08-报价篇.md");
-    expect(r.opened).toBe("2026-09-08");
-    expect(r.content).toBe(piece);
+    expect(out).toBe(INDEX_RAW);
   });
 
   it("《》 marks and a .md suffix are tolerated", async () => {
-    io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
-    const r = await readDocExecute(
+    const out = await recallReadExecute(
       { ref: "《research/手机调研.md》" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(r).not.toHaveProperty("error");
+    expect(out).toBe(INDEX_RAW);
   });
 
-  it("falls back to the legacy roots for a bare pre-case name (§D.1 双根)", async () => {
-    const legacy = "---\nstatus: active\nopened: 2026-08-01\nupdated: 2026-08-02\n---\n\n旧主题之家。\n";
-    io.files.set("memory/docs/topic/用户手机.md", legacy);
-    const r = await readDocExecute(
-      { ref: "用户手机" },
+  it("records/<slice id> → the slice core; an unknown ref renders the fixed sentence", async () => {
+    const out = await recallReadExecute(
+      { ref: "records/2026-09-04-2130" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    if ("error" in r) throw new Error(r.error);
-    expect(r.path).toBe("memory/docs/topic/用户手机.md");
-    expect(r.content).toBe(legacy);
-    // Legacy three-field headers are tolerated with a warning, never a crash.
-    expect(r.warnings.length).toBeGreaterThan(0);
-  });
-
-  it("returns a visible dead-link error when nothing resolves — never throws", async () => {
-    const r = await readDocExecute(
+    expect(out).toContain("我想换手机，预算 5000。");
+    const miss = await recallReadExecute(
       { ref: "research/不存在" },
       opts(makeCtx("2026-09-10-1000")),
     );
-    expect(r).toHaveProperty("error");
-    if ("error" in r) {
-      expect(r.error).toContain("dead link");
-      expect(r.error).toContain("listTree");
-    }
-  });
-
-  it("rejects an unparseable reference as a visible error", async () => {
-    const r = await readDocExecute({ ref: "research/1234-数字开头" }, opts(makeCtx("2026-09-10-1000")));
-    expect(r).toHaveProperty("error");
+    expect(miss).toBe(
+      'Nothing named "research/不存在" exists in memory — and nothing similar.',
+    );
   });
 });
 
 describe("doc_rework probe (§4.4)", () => {
-  it("logs doc_rework when readSlice opens a slice a readDoc referenced", async () => {
-    io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
-    io.files.set(CORE_PATH, "slice 2026-09-04-2130 core\n\nturn content\n");
+  it("logs doc_rework when recallRead opens a slice a case read referenced", async () => {
     const ctx = makeCtx("2026-09-10-1000");
 
-    await readDocExecute({ ref: "research/手机调研" }, opts(ctx));
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
     expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
 
-    const out = await readSliceExecute({ sliceId: "2026-09-04-2130" }, opts(ctx));
-    expect(out).toContain("turn content");
+    const out = await recallReadExecute({ ref: "records/2026-09-04-2130" }, opts(ctx));
+    expect(out).toContain("我想换手机");
     // v0.19 R4/R5: signals land as the agent.md audit line (+ run log), not
     // the retired fitness store.
     expect(sinks.writeAgentTimeline).toHaveBeenCalledTimes(1);
@@ -244,20 +286,24 @@ describe("doc_rework probe (§4.4)", () => {
     expect(line).toContain("memory/research/手机调研/index.md");
   });
 
-  it("stays silent when the read slice is not referenced by any read doc", async () => {
-    io.files.set("memory/research/手机调研/index.md", INDEX_RAW);
-    io.files.set("memory/records/2026/09/06/0900/core.md", "unrelated slice\n");
+  it("stays silent when the read slice is not referenced by any read case", async () => {
+    io.files.set(
+      "memory/records/2026/09/06/0900/core.md",
+      "unrelated slice\n",
+    );
+    io.dirs.set("memory/records/2026/09", ["04", "05", "06"]);
+    io.dirs.set("memory/records/2026/09/06", ["0900"]);
+    io.dirs.set("memory/records/2026/09/06/0900", ["core.md"]);
     const ctx = makeCtx("2026-09-10-1001");
 
-    await readDocExecute({ ref: "research/手机调研" }, opts(ctx));
-    await readSliceExecute({ sliceId: "2026-09-06-0900" }, opts(ctx));
+    await recallReadExecute({ ref: "research/手机调研" }, opts(ctx));
+    await recallReadExecute({ ref: "records/2026-09-06-0900" }, opts(ctx));
     expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
   });
 
-  it("stays silent when readSlice runs before any readDoc", async () => {
-    io.files.set(CORE_PATH, "slice core\n");
+  it("stays silent when the slice is read before any case read", async () => {
     const ctx = makeCtx("2026-09-10-1002");
-    await readSliceExecute({ sliceId: "2026-09-04-2130" }, opts(ctx));
+    await recallReadExecute({ ref: "records/2026-09-04-2130" }, opts(ctx));
     expect(sinks.writeAgentTimeline).not.toHaveBeenCalled();
   });
 });

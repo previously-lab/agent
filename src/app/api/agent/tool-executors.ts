@@ -42,21 +42,28 @@ import {
   extractSliceIds,
 } from "@/lib/episodic/rework-signal";
 import { questionRun } from "@/app/api/evolution/question-run";
-import { readSelfSop, readUserModel } from "@/lib/evolution/store";
+import { readSelfSop } from "@/lib/evolution/store";
 
 import { readCaseAttachment } from "@/lib/tools/attachments";
 import {
-  parseCaseRef,
-  resolveCaseRefPaths,
-  parseCaseDoc,
   normalizeCaseRefText,
   caseIndexPath,
   isValidCaseName,
   sanitizeCaseSegment,
   isCaseCategory,
-  CASE_CATEGORY_LIST,
-  type CaseRef,
 } from "@/lib/docs";
+import {
+  recallRecent,
+  recallFind,
+  recallSearch,
+  recallRead,
+  renderRecallResult,
+  renderRecallReadResult,
+  isRecallCategory,
+  type RecallBackend,
+  type RecallCategory,
+  type RecallReadRange,
+} from "@/lib/memory/facade";
 import {
   DOC_MARKER_PREFIX,
   extractDocMarkers,
@@ -71,21 +78,12 @@ import {
 } from "@/lib/episodic/io-helpers";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { sliceIdToAgentPath } from "@/lib/episodic/manager";
-import {
-  slicePartPathCandidates,
-  type SlicePart,
-} from "@/lib/episodic";
-import { migrateToV3 } from "@/lib/episodic/previously-format";
-import {
-  annotateSliceWithLocalTime,
-  sliceLocalBanner,
-} from "@/lib/episodic/time-localize";
+import { slicePartPathCandidates } from "@/lib/episodic";
 import { buildDateAnchors } from "@/lib/time/relative";
 import { formatLocalTime } from "@/lib/turn-priming";
 import { loadUserConfig } from "@/lib/config/loader";
 import { DEFAULTS } from "@/lib/config/defaults";
 import {
-  splitTurns,
   splitParagraphs,
   segmentSearch,
   textLines,
@@ -106,6 +104,7 @@ import { normalizeReasoningEffort } from "@/lib/models/effort-injector";
 import type { ModelConfig } from "@/lib/models/registry";
 import { withStepTimeout } from "@/lib/chat/step-timeout";
 import { isTransientError, triageErrorMessage } from "@/lib/chat/tool-triage";
+import { parseSliceId } from "@/lib/episodic/turn-parser";
 import {
   describeRoom,
   formatRoomDescription,
@@ -114,13 +113,6 @@ import {
   shouldEmitProgress,
   type ProgressWriteState,
 } from "@/lib/chat/progress-throttle";
-import {
-  parseSliceId,
-  parseTurns,
-  applyRange,
-  reassembleSlice,
-  type ParsedTurn,
-} from "@/lib/episodic/turn-parser";
 
 // ─── Shared tool contexts ────────────────────────────────────────────────
 
@@ -215,25 +207,11 @@ function emitToolProgress(
   }
 }
 
-// ─── Concept tool executors ────────────────────────────────
+// ─── Shared read helpers ───────────────────────────────────────────────────
 
 /**
- * Deterministic domain outcomes ("file not found", etc.) must reach the MODEL
- * as tool results, not throw. A thrown error causes workflow retries on errors
- * that can never succeed.
- */
-const DOMAIN_ERROR_RE =
-  /^(File not found|Directory not found|Access denied)|is (a directory, not a file|not a regular file)|too large/;
-
-function domainError(e: unknown): string | null {
-  return e instanceof Error && DOMAIN_ERROR_RE.test(e.message)
-    ? e.message
-    : null;
-}
-
-/**
- * Backend-dispatched raw read (demo / GitHub / local) — the dispatch every
- * slice read below shares.
+ * Backend-dispatched raw read (demo / GitHub / local) — the dispatch the
+ * facade backend below shares.
  */
 async function readRawBackend(ctx: ToolContext, path: string): Promise<string> {
   if (ctx.useDemo) return readFileDemo(path);
@@ -241,382 +219,200 @@ async function readRawBackend(ctx: ToolContext, path: string): Promise<string> {
   return readFileLocal(path);
 }
 
-/**
- * Dual-root slice-part read (v0.19 R2): the new records root first, the
- * legacy slices root on a miss — slices created before the root move stay
- * readable.
- */
-async function readSliceRawDual(
-  ctx: ToolContext,
-  sliceId: string,
-  part: SlicePart,
-): Promise<string> {
-  const [primary, fallback] = slicePartPathCandidates(sliceId, part);
-  try {
-    return await readRawBackend(ctx, primary);
-  } catch {
-    return readRawBackend(ctx, fallback);
-  }
-}
 
+// ─── The memory-read facade executors (v0.36) ─────────────────────────────
+//
+// The field agent's read surface is FOUR verbs over one entry shape and one
+// result envelope (see src/lib/memory/facade.ts): recallRecent / recallFind /
+// recallSearch return ENTRIES (ref/title/date/excerpt), never files; recallRead
+// continues reading through an entry's ref. The model never sees the tree.
+// These executors are thin wrappers: they build a backend from the tool
+// context (demo / GitHub / local), call the facade, and render the result with
+// the FIXED per-kind templates (v0.36 §3.2).
 
-// ── readSlice — read a time slice's core conversation ─────────────────
-
-/** Range filter for readSlice. Extends the classic turn filters (turns / last /
- *  date) with the shared Document Segment Read protocol: keyword search
- *  (`search`, hits degrade to the full slice) and line ranges (`lines`). */
-export type ReadSliceRange = {
-  type: "turns" | "last" | "date" | "search" | "lines";
-  indices?: number[];
-  count?: number;
-  after?: string;
-  keywords?: string[];
-  context?: number;
-  start?: number;
-  end?: number;
-};
-
-export async function readSliceExecute(
-  { sliceId, range }: { sliceId: string; range?: ReadSliceRange },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  const parsed = parseSliceId(sliceId);
-  if (!parsed) {
-    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM (e.g. 2026-07-24-1500).";
-  }
-  try {
-    const raw = await readSliceRawDual(ctx, sliceId, "core");
-
-    // Apply range filter if requested
-    let content: string;
-    if (range) {
-      // Keyword search — the Document Segment Read protocol. Matches return
-      // only the relevant turns; a miss degrades to the full slice with a note.
-      if (range.type === "search") {
-        const keywords = range.keywords ?? [];
-        const context = range.context ?? 1;
-        const segments = splitTurns(raw);
-        const hits = segmentSearch(segments, keywords, context, context);
-        content = searchResultToString(sliceId, keywords, hits, raw);
-      } else if (range.type === "lines") {
-        // Line range — read the file like a code file, 1-indexed inclusive.
-        const { content: lineContent, clamped } = textLines(raw, range.start ?? 1, range.end ?? 1);
-        if (lineContent === "" && (range.start ?? 1) > (range.end ?? 1)) {
-          return `ERROR: Invalid line range ${range.start}-${range.end} in ${sliceId}.`;
-        }
-        const header = `Lines ${range.start}-${range.end} of ${sliceId}${clamped ? " (clamped)" : ""}:\n\n`;
-        content = lineContent === "" ? `${header}(empty range)` : header + lineContent;
-      } else if (
-        range.type === "turns" ||
-        range.type === "last" ||
-        range.type === "date"
-      ) {
-        // Classic turn filters.
-        const { frontmatter, turns } = parseTurns(raw);
-        const filtered = applyRange(turns, range as { type: "turns" | "last" | "date" });
-        content =
-          filtered.length === 0
-            ? `${frontmatter}\n\n_(No turns matched the requested range.)_`
-            : reassembleSlice(frontmatter, filtered);
-      } else {
-        return `ERROR: Unknown range type "${range.type}" in ${sliceId}.`;
-      }
-    } else {
-      content = raw;
-    }
-
-    // Pre-render the user's local time so the agent never converts UTC itself.
-    const result = ctx.timezone
-      ? annotateSliceWithLocalTime(content, ctx.timezone, sliceId)
-      : content;
-
-    // doc_rework probe (design v0.15 §4.4): the read slice is one a readDoc
-    // earlier this conversation referenced — the document was not credited
-    // for the fact it carried. Logged as an audit line on the slice's
-    // agent.md (v0.19 R4/R5: the fitness bucket it used to feed is retired).
-    const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
-    if (docReworkFile) {
-      await logDocReworkSignal(ctx.sliceId, sliceId, docReworkFile);
-    }
-
-    return result;
-  } catch (e) {
-    const msg = domainError(e);
-    if (msg === null) throw e;
-    return `ERROR: ${msg}. This time slice does not exist.`;
-  }
-}
-
-// ── readAgentTimeline �?read the agent's cognition for a slice ──────────
-
-export async function readAgentTimelineExecute(
-  { sliceId }: { sliceId: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-  const parsed = parseSliceId(sliceId);
-  if (!parsed) {
-    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
-  }
-  try {
-    return await readSliceRawDual(ctx, sliceId, "agent");
-  } catch (e) {
-    const msg = domainError(e);
-    if (msg === null) throw e;
-    return `ERROR: ${msg}. Agent timeline not available for this slice.`;
-  }
-}
-
-// ── readPreviously �?read the 前情提要 for a slice ─────────────────────
-
-export async function readPreviouslyExecute(
-  { sliceId }: { sliceId?: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<string> {
-  "use step";
-
-  // No sliceId → the LIVE user model's card half (people/user/index.md via
-  // readUserModel — the same source the turn workflow injects every turn,
-  // steps.ts). The pre-R4 current-previously.md file is FROZEN (no production
-  // writer since v0.19 R4); readUserModel still tolerates it as the legacy
-  // root, so old deployments keep reading their card. A per-slice arg reads
-  // that slice's historical snapshot.
-  if (!sliceId) {
-    const model = await readUserModel().catch(() => null);
-    return model?.card ?? "";
-  }
-
-  const sid = sliceId;
-  const parsed = parseSliceId(sid);
-  if (!parsed) {
-    return "ERROR: Invalid slice ID. Expected format: YYYY-MM-DD-HHMM.";
-  }
-  try {
-    // Dual-root read (v0.19 R2). Legacy (v1/v2) files are migrated on the
-    // fly; the v4 user card is read as-is. Never exposes the old
-    // 长期记忆/短期记忆 headers.
-    const raw = await readSliceRawDual(ctx, sid, "previously");
-    const content = raw.trim() ? migrateToV3(raw, sid) : raw;
-    if (!ctx.timezone || content === "") return content;
-    // Prepend the user-local time banner so the model knows when the snapshot
-    // was taken without converting the UTC Updated stamp itself.
-    return `${sliceLocalBanner(sid, ctx.timezone)}\n\n${content}`;
-  } catch (e) {
-    const msg = domainError(e);
-    if (msg === null) throw e;
-    return `ERROR: ${msg}. previously.md not available for this slice.`;
-  }
-}
-
-// ─── Case-tree readers (v0.19 §A.2.1 — the reply segment's read surface) ──
-
-/**
- * listTree — list the memory tree ONCE, grouped by top-level category
- * (v0.19 §A.2.1). A TRANSITIONAL PLACEHOLDER: a dedicated retrieval tool
- * will replace it later (user decision). Purely mechanical: no LLM, no
- * ranking, no relevance score — the paths themselves (category / case name /
- * date all live on the path) are the index.
- *
- * - GitHub: the cached repo tree (`getRepoTree` in tools/readFile) already
- *   carries every path under `memory/`; the API's own `truncated` flag
- *   passes through.
- * - Local / demo: a recursive walk through the listFiles layer.
- *
- * `config/` is filtered out mechanically (engineering state, not documents).
- * records/ collapses to slice directories (YYYY/MM/DD/HHMM) — the three
- * files inside a record are fixed machinery, the slice dir is its identity.
- */
-export interface ListTreeResult {
-  /** True when the GitHub tree API truncated the listing (list may be incomplete). */
-  truncated: boolean;
-  /** Paths relative to `memory/`, grouped by top-level category, each ascending. */
-  tree: Record<string, string[]>;
-}
-
-export async function listTreeExecute(
-  _input: Record<string, never>,
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<ListTreeResult> {
-  "use step";
-  if (ctx.useGithub) return listTreeGitHub(ctx);
-  return listTreeWalk(ctx);
-}
-
-async function listTreeGitHub(ctx: ToolContext): Promise<ListTreeResult> {
-  // The cached memory/ repo tree (Wave A): within the TTL this costs zero
-  // API calls per step. `truncated` passes through to the model per the
-  // tool's contract — a step does not silently downgrade to a raw walk.
-  const tree = await getRepoTree(ctx.repo, ctx.owner);
-
-  const paths: string[] = [];
-  for (const e of tree.entries) {
-    if (e.type !== "blob") continue;
-    // Entries are the memory/ subtree by construction.
-    const rel = e.path.slice("memory/".length);
-    if (rel === "" || rel.startsWith("config/")) continue; // config/ = engineering state
-    // The pre-v0.19 settings file is the same engineering state under an old
-    // name — still on disk as the loader's read fallback, never a case.
-    if (rel === "user/config.json") continue;
-    paths.push(rel);
-  }
-  return { truncated: tree.truncated, tree: groupTreePaths(paths) };
-}
-
-async function listTreeWalk(ctx: ToolContext): Promise<ListTreeResult> {
-  const paths: string[] = [];
-  const listDir = (path: string) =>
-    ctx.useDemo ? listFilesDemo(path) : listFilesLocal(path);
-
-  async function walk(dir: string): Promise<void> {
-    let entries: Array<{ name: string; type: string }>;
-    try {
-      entries = await listDir(dir);
-    } catch {
-      return; // missing dir — a fresh memory root, fine
-    }
-    for (const e of entries) {
-      const p = `${dir}/${e.name}`;
-      if (e.type === "dir") {
-        await walk(p);
-      } else if (
-        p.startsWith("memory/") &&
-        !p.startsWith("memory/config/") &&
-        p !== "memory/user/config.json" // legacy settings — same state (see listTreeGitHub)
-      ) {
-        paths.push(p.slice("memory/".length));
-      }
-    }
-  }
-  await walk("memory");
-  return { truncated: false, tree: groupTreePaths(paths) };
-}
-
-/**
- * Group flat memory-relative paths by their top-level category. records/
- * collapses to slice dirs (`YYYY/MM/DD/HHMM`); every other path is kept
- * verbatim. Group order: the nine case categories canonically, then records,
- * then anything else (legacy leftovers) alphabetically. Paths ascending.
- */
-function groupTreePaths(paths: string[]): Record<string, string[]> {
-  const groups = new Map<string, Set<string>>();
-  for (const rel of paths) {
-    const top = rel.split("/")[0] ?? rel;
-    if (!groups.has(top)) groups.set(top, new Set());
-    if (top === "records") {
-      const segs = rel.split("/");
-      // records/YYYY/MM/DD/HHMM/<file> → the slice dir is the record's identity
-      groups.get(top)!.add(segs.slice(0, 5).join("/"));
-    } else {
-      groups.get(top)!.add(rel);
-    }
-  }
-  const order = (a: string, b: string): number => {
-    const rank = (k: string): number => {
-      const i = CASE_CATEGORY_LIST.indexOf(k as (typeof CASE_CATEGORY_LIST)[number]);
-      return i >= 0 ? i : k === "records" ? 100 : 101;
-    };
-    return rank(a) - rank(b) || a.localeCompare(b);
-  };
-  const tree: Record<string, string[]> = {};
-  for (const key of [...groups.keys()].sort(order)) {
-    tree[key] = [...groups.get(key)!].sort((a, b) => a.localeCompare(b));
-  }
-  return tree;
-}
-
-/** Successful two-segment readDoc result — the whole file, header parsed. */
-export interface ReadCaseDocSuccess {
-  /** The identity that was read (as parsed). */
-  ref: CaseRef;
-  /** The resolved repo-relative path. */
-  path: string;
-  /** Birth date (piece: from the name, same-source rule). */
-  opened: string;
-  /** Last-write stamp (ISO, UTC) — the write window's anchor and the
-   *  reader's freshness material; a pre-window file resolves to its birth. */
-  updated: string;
-  /** RETIRED (v0.21) — a historical seal date on old files, inert: kept so
-   *  the reader sees what the file says, never consulted for state. */
-  closed: string | null;
-  /** The full raw file text — case docs are small files, read whole. */
-  content: string;
-  /** Tolerant-parse problems; never fatal. */
-  warnings: string[];
-}
-
-/** Dead link / illegal reference — a visible error result, never thrown. */
-export interface ReadCaseDocFailure {
-  error: string;
-}
-
-/**
- * readDoc — point-read a case document by TWO-SEGMENT reference
- * (v0.19 §B.2): `分类/case名` → the case's `index.md`; `分类/case名/篇名`
- * → one dated piece. Resolution runs through case-refs.ts (parse → ordered
- * candidates, new root first, legacy fallback roots after, §D.1 双根). A
- * reference that resolves nowhere is a DEAD LINK — a visible error result,
- * never thrown, never blocking.
- *
- * On success the executor records the document + the slice ids its text
- * references (recordDocRead) so the doc_rework probe can later classify
- * readSlice calls against it. Best-effort, never fails the read.
- */
-export async function readDocExecute(
-  { ref }: { ref: string },
-  { context: ctx }: ExecuteOpts<ToolContext>,
-): Promise<ReadCaseDocSuccess | ReadCaseDocFailure> {
-  "use step";
-  const parsed = parseCaseRef(ref);
-  if (!parsed) {
-    return {
-      error:
-        `unparseable ref "${ref}" — expected <category>/<caseName>[/<pieceTitle>]`,
-    };
-  }
-
-  const readText = (path: string): Promise<string> =>
-    ctx.useDemo
-      ? readFileDemo(path)
-      : ctx.useGithub
-        ? readFile(path, ctx.repo, ctx.owner)
-        : readFileLocal(path);
-
-  const candidates = resolveCaseRefPaths(parsed);
-  for (const path of candidates) {
-    let raw: string;
-    try {
-      raw = await readText(path);
-    } catch {
-      continue; // not at this candidate — try the next
-    }
-    const location =
-      parsed.kind === "piece"
-        ? { category: parsed.category, caseName: parsed.caseName, fileName: parsed.pieceFileName }
-        : parsed.kind === "case"
-          ? { category: parsed.category, caseName: parsed.caseName, fileName: "index.md" }
-          : // legacy root fallback: a bare pre-case name — read as a name-only doc
-            { category: "research" as const, caseName: parsed.name, fileName: `${parsed.name}.md` };
-    const doc = parseCaseDoc(raw, location);
-    const result: ReadCaseDocSuccess = {
-      ref: parsed,
-      path,
-      opened: doc.opened,
-      updated: doc.updated,
-      closed: doc.closed,
-      content: raw,
-      warnings: doc.warnings,
-    };
-    recordDocRead(ctx.sliceId, path, extractSliceIds(raw));
-    return result;
-  }
-
+/** Build the facade's read backend from the tool context's storage flags. */
+function createRecallBackend(ctx: ToolContext): RecallBackend {
+  const readFile = (path: string): Promise<string> => readRawBackend(ctx, path);
   return {
-    error:
-      `dead link: no document named "${normalizeCaseRefText(ref)}" ` +
-      "(checked the new and legacy roots) — run listTree for the current manifest",
+    readFile,
+    listMemoryFiles: async (): Promise<string[]> => {
+      if (ctx.useGithub) {
+        const tree = await getRepoTree(ctx.repo, ctx.owner);
+        if (!tree.truncated) {
+          // The cached memory/ tree: within the TTL this costs zero API calls.
+          return tree.entries
+            .filter((e) => e.type === "blob" && e.path.startsWith("memory/"))
+            .map((e) => e.path);
+        }
+        // A truncated listing cannot truthfully answer "what exists" — fall
+        // back to the per-directory walk (completeness outranks burst).
+      }
+      const listDir = (path: string) =>
+        ctx.useDemo
+          ? listFilesDemo(path)
+          : ctx.useGithub
+            ? listFiles(path, ctx.repo, ctx.owner)
+            : listFilesLocal(path);
+      const paths: string[] = [];
+      const walk = async (dir: string): Promise<void> => {
+        let entries: Array<{ name: string; type: string }>;
+        try {
+          entries = await listDir(dir);
+        } catch {
+          return; // missing dir — a fresh memory root, fine
+        }
+        for (const e of entries) {
+          const p = `${dir}/${e.name}`;
+          if (e.type === "dir") await walk(p);
+          else if (p.startsWith("memory/")) paths.push(p);
+        }
+      };
+      await walk("memory");
+      return paths;
+    },
   };
 }
+
+export async function recallRecentExecute(
+  input: { category?: string; n?: number; before?: string; after?: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const rawCategory = input.category?.trim();
+  if (rawCategory && !isRecallCategory(rawCategory)) {
+    return renderRecallResult(
+      { kind: "unavailable", note: `unknown category ${JSON.stringify(input.category)}` },
+      {},
+    );
+  }
+  const category: RecallCategory | undefined = rawCategory
+    ? (rawCategory as RecallCategory)
+    : undefined;
+  const result = await recallRecent(createRecallBackend(ctx), {
+    ...(category ? { category } : {}),
+    ...(input.n !== undefined ? { n: input.n } : {}),
+    ...(input.before ? { before: input.before } : {}),
+    ...(input.after ? { after: input.after } : {}),
+  });
+  return renderRecallResult(result, { ...(category ? { category } : {}) });
+}
+
+export async function recallFindExecute(
+  input: { category: string; name: string },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const rawCategory = input.category?.trim();
+  if (!rawCategory || !isRecallCategory(rawCategory)) {
+    return renderRecallResult(
+      { kind: "unavailable", note: `unknown category ${JSON.stringify(input.category)}` },
+      {},
+    );
+  }
+  const category: RecallCategory = rawCategory;
+  const name = input.name?.trim();
+  if (!name) {
+    return renderRecallResult(
+      { kind: "unavailable", note: "name must not be empty" },
+      { category },
+    );
+  }
+  const result = await recallFind(createRecallBackend(ctx), { category, name });
+  return renderRecallResult(result, { category, name });
+}
+
+export async function recallSearchExecute(
+  input: {
+    query: string | string[];
+    category?: string;
+    includeRecords?: boolean;
+    since?: string;
+    until?: string;
+    limit?: number;
+  },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const rawCategory = input.category?.trim();
+  if (rawCategory && !isRecallCategory(rawCategory)) {
+    return renderRecallResult(
+      { kind: "unavailable", note: `unknown category ${JSON.stringify(input.category)}` },
+      {},
+    );
+  }
+  const category: RecallCategory | undefined = rawCategory
+    ? (rawCategory as RecallCategory)
+    : undefined;
+  const keywords = (Array.isArray(input.query) ? input.query : [input.query])
+    .map((q) => q?.trim() ?? "")
+    .filter((q) => q.length > 0);
+  if (keywords.length === 0) {
+    return renderRecallResult({ kind: "unavailable", note: "query must not be empty" }, {});
+  }
+  const result = await recallSearch(createRecallBackend(ctx), {
+    query: keywords,
+    ...(category ? { category } : {}),
+    ...(input.includeRecords !== undefined ? { includeRecords: input.includeRecords } : {}),
+    ...(input.since ? { since: input.since } : {}),
+    ...(input.until ? { until: input.until } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  });
+  return renderRecallResult(result, {
+    query: keywords.join(" "),
+    ...(category ? { category } : {}),
+    ...(input.limit !== undefined ? { limit: input.limit } : {}),
+  });
+}
+
+/**
+ * recallRead — continue reading through an entry's ref. Also the carrier of
+ * the doc_rework probe (design v0.15 §4.4): a successful case read records
+ * the document + the slice ids its text references (recordDocRead); a
+ * successful slice read then classifies against it, logging an audit line on
+ * the current slice's agent.md when the document was not credited for the
+ * fact it carried. Best-effort, never fails the read.
+ */
+export async function recallReadExecute(
+  input: {
+    ref: string;
+    part?: "core" | "agent" | "previously";
+    range?: RecallReadRange;
+  },
+  { context: ctx }: ExecuteOpts<ToolContext>,
+): Promise<string> {
+  "use step";
+  const ref = input.ref?.trim();
+  if (!ref) {
+    return renderRecallReadResult({ kind: "not_found" }, "");
+  }
+  if (input.part && !["core", "agent", "previously"].includes(input.part)) {
+    return renderRecallReadResult(
+      { kind: "unavailable", note: `unknown part ${JSON.stringify(input.part)}` },
+      ref,
+    );
+  }
+  const result = await recallRead(createRecallBackend(ctx), {
+    ref,
+    ...(input.part ? { part: input.part } : {}),
+    ...(input.range ? { range: input.range } : {}),
+    ...(ctx.timezone ? { timezone: ctx.timezone } : {}),
+  });
+
+  if (result.kind === "content") {
+    const recordsMatch = /^records\/(\d{4}-\d{2}-\d{2}-\d{4})$/.exec(normalizeCaseRefText(ref));
+    if (recordsMatch && (!input.part || input.part === "core")) {
+      const sliceId = recordsMatch[1]!;
+      const docReworkFile = checkDocRework(ctx.sliceId, sliceId);
+      if (docReworkFile) {
+        await logDocReworkSignal(ctx.sliceId, sliceId, docReworkFile);
+      }
+    } else if (!recordsMatch && result.path.startsWith("memory/")) {
+      recordDocRead(ctx.sliceId, result.path, extractSliceIds(result.content));
+    }
+  }
+  return renderRecallReadResult(result, ref);
+}
+
 
 // ─── noteForSediment — the sediment mailbox producer (v0.15 design §3.1/§4.3) ──
 

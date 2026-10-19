@@ -95,10 +95,12 @@
     "tool": {
       "denied": "已拒绝",
       "interrupted": "已中断",
-      "readSliceRunning": "正在查看 {date} 的对话…",
-      "readSliceDone": "查看了 {date} 的对话",
-      "readPreviously": "查看前情提要…",
-      "readAgentTimeline": "查看思考过程…",
+      "recall": {
+        "recallRecent": "正在回忆最近的事…",
+        "recallFind": "正在记忆里定位…",
+        "recallSearch": "正在搜索记忆…",
+        "recallRead": "正在读取记忆…"
+      },
       "currentTime": "看了看表",
       "webSearchRunning": "正在搜索「{query}」…",
       "webSearchDone": "搜索了「{query}」· {count} 个来源",
@@ -110,11 +112,6 @@
       "viewImageDone": "已查看图片",
       "listRunning": "正在浏览…",
       "listDone": "找到 {count} 项",
-      "readDocRunning": "正在阅读《{name}》…",
-      "readDocDone": "阅读了《{name}》",
-      "listTreeRunning": "正在列出记忆树…",
-      "listTreeDone": "列出了记忆树 · {count} 条路径",
-      "listTreeTruncated": "清单可能不完整（GitHub 树上限）。",
       "sources": "{count} 个来源",
       "thinkDeep": "推理片段",
       "thinkDeepRunning": "正在推理「{question}」…",

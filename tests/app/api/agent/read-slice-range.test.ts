@@ -1,8 +1,9 @@
 /**
- * readSlice range matrix (acceptance X-08): the five range types
- * (turns / last / date / search / lines), the unknown-range ERROR contract,
- * and the dual-root fallback — executor level, over an in-memory local fs
- * (the docs-tools.test.ts harness pattern). No memory/ directory is touched.
+ * recallRead range matrix (acceptance X-08, migrated with v0.36): the five
+ * range types (turns / last / date / search / lines), the unknown-range ERROR
+ * contract, and the dual-root fallback — executor level, over an in-memory
+ * local fs (the docs-tools.test.ts harness pattern). No memory/ directory is
+ * touched.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -54,10 +55,10 @@ vi.mock("@/lib/episodic/manager", async (importOriginal) => {
 });
 
 import {
-  readSliceExecute,
-  type ReadSliceRange,
+  recallReadExecute,
   type ToolContext,
 } from "@/app/api/agent/tool-executors";
+import type { RecallReadRange } from "@/lib/memory/facade";
 
 function makeCtx(sliceId: string): ToolContext {
   return {
@@ -77,6 +78,7 @@ function opts(ctx: ToolContext) {
 }
 
 const SLICE_ID = "2026-09-04-2130";
+const REF = `records/${SLICE_ID}`;
 const NEW_CORE = "memory/records/2026/09/04/2130/core.md";
 const LEGACY_CORE = "memory/episodic/slices/2026/09/04/2130/timeline/core.md";
 
@@ -104,17 +106,17 @@ beforeEach(() => {
   io.files.set(NEW_CORE, CORE_RAW);
 });
 
-describe("readSliceExecute range matrix (X-08)", () => {
+describe("recallReadExecute range matrix (X-08)", () => {
   it("no range returns the full slice", async () => {
-    const out = await readSliceExecute({ sliceId: SLICE_ID }, opts(makeCtx(SLICE_ID)));
+    const out = await recallReadExecute({ ref: REF }, opts(makeCtx(SLICE_ID)));
     expect(out).toContain("我想换手机");
     expect(out).toContain("小屏旗舰");
     expect(out).toContain("续航优先");
   });
 
   it("range turns: only the requested 0-based turn indices come back", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "turns", indices: [0, 2] } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "turns", indices: [0, 2] } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain("我想换手机");
@@ -123,8 +125,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range last: only the most recent N turns come back", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "last", count: 1 } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "last", count: 1 } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain("续航优先");
@@ -133,8 +135,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range date: only turns at/after the given timestamp come back", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "date", after: "2026-09-04T21:33:00.000Z" } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "date", after: "2026-09-04T21:33:00.000Z" } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain("续航优先");
@@ -143,8 +145,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range search: a keyword hit returns the matching turn with context", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "search", keywords: ["续航"], context: 0 } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "search", keywords: ["续航"], context: 0 } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain("Matched");
@@ -153,8 +155,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range search: a miss degrades to the full slice with an explanatory note", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "search", keywords: ["不存在的关键词"] } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "search", keywords: ["不存在的关键词"] } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain("No segments matched");
@@ -163,8 +165,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range lines: a 1-indexed inclusive line range of the raw file", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "lines", start: 1, end: 2 } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "lines", start: 1, end: 2 } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toContain(`Lines 1-2 of ${SLICE_ID}:`);
@@ -173,8 +175,8 @@ describe("readSliceExecute range matrix (X-08)", () => {
   });
 
   it("range lines: an inverted range returns a visible ERROR", async () => {
-    const out = await readSliceExecute(
-      { sliceId: SLICE_ID, range: { type: "lines", start: 5, end: 2 } },
+    const out = await recallReadExecute(
+      { ref: REF, range: { type: "lines", start: 5, end: 2 } },
       opts(makeCtx(SLICE_ID)),
     );
     expect(out).toBe(`ERROR: Invalid line range 5-2 in ${SLICE_ID}.`);
@@ -185,10 +187,10 @@ describe("readSliceExecute range matrix (X-08)", () => {
   // classic-filter fallback. The zod enum in tools.ts guards the LLM-facing
   // boundary; this covers direct/legacy callers that bypass it.
   it("an unknown range type returns a visible ERROR instead of silently serving the full slice", async () => {
-    const out = await readSliceExecute(
+    const out = await recallReadExecute(
       {
-        sliceId: SLICE_ID,
-        range: { type: "bogus" } as unknown as ReadSliceRange,
+        ref: REF,
+        range: { type: "bogus" } as unknown as RecallReadRange,
       },
       opts(makeCtx(SLICE_ID)),
     );
@@ -198,22 +200,25 @@ describe("readSliceExecute range matrix (X-08)", () => {
   it("dual-root fallback: a slice that exists only under the legacy root still reads", async () => {
     io.files.delete(NEW_CORE);
     io.files.set(LEGACY_CORE, CORE_RAW);
-    const out = await readSliceExecute({ sliceId: SLICE_ID }, opts(makeCtx(SLICE_ID)));
+    const out = await recallReadExecute({ ref: REF }, opts(makeCtx(SLICE_ID)));
     expect(out).toContain("我想换手机");
   });
 
-  it("a slice under neither root returns a visible ERROR (not a throw)", async () => {
+  it("a slice under neither root returns the fixed not-found sentence (not a throw)", async () => {
     io.files.delete(NEW_CORE);
-    const out = await readSliceExecute({ sliceId: SLICE_ID }, opts(makeCtx(SLICE_ID)));
-    expect(out).toMatch(/^ERROR: File not found/);
-    expect(out).toContain("This time slice does not exist.");
+    const out = await recallReadExecute({ ref: REF }, opts(makeCtx(SLICE_ID)));
+    expect(out).toBe(
+      `Nothing named "${REF}" exists in memory — and nothing similar.`,
+    );
   });
 
-  it("a malformed slice id returns a visible ERROR", async () => {
-    const out = await readSliceExecute(
-      { sliceId: "not-a-slice" },
+  it("a malformed slice id returns the fixed not-found sentence", async () => {
+    const out = await recallReadExecute(
+      { ref: "records/not-a-slice" },
       opts(makeCtx(SLICE_ID)),
     );
-    expect(out).toMatch(/^ERROR: Invalid slice ID/);
+    expect(out).toBe(
+      'Nothing named "records/not-a-slice" exists in memory — and nothing similar.',
+    );
   });
 });

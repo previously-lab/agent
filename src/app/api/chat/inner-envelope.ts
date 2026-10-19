@@ -102,7 +102,7 @@ export function buildInnerEnvelope(args: {
     "",
     `Answer ONLY that message, self-contained — the user reads your answer attached to it.`,
     `The other message(s) above have their own answering runs; do not answer them here.`,
-    `For earlier context call readSlice (slice ${sliceId}, most recent turns).`,
+    `For earlier context recallRead (ref "records/${sliceId}", range last turns).`,
     "[End of queued message duty]",
   );
   return lines.join("\n");

@@ -273,7 +273,7 @@ describe("the field/reflection charter (v0.30)", () => {
     expect(CHARTER_MD).toContain("write it first, then answer from what you wrote");
     expect(CHARTER_MD).toContain("you never announce a write");
     // R6: the read-back-before-mentioning discipline stays.
-    expect(CHARTER_MD).toContain("never tell the user a document exists until you have read it back with `readDoc`");
+    expect(CHARTER_MD).toContain("never tell the user a document exists until you have read it back with `recallRead`");
     // The revisit bar retired with the dispatch (v0.30 §6(d)) — the field no
     // longer decides autonomously what deserves a document.
     expect(CHARTER_MD).not.toContain("revisit bar");

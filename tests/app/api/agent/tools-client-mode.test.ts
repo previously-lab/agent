@@ -93,12 +93,16 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("mode");
   });
 
-  it("exposes the case-tree readers with context entries (v0.19 §A.2.1)", () => {
-    expect(chatTools).toHaveProperty("listTree");
-    expect(chatTools).toHaveProperty("readDoc");
-    const contexts = buildChatToolsContext(ctx);
-    expect(contexts.listTree).toBe(ctx);
-    expect(contexts.readDoc).toBe(ctx);
+  it("exposes the four memory-read verbs with context entries (v0.36)", () => {
+    for (const name of [
+      "recallRecent",
+      "recallFind",
+      "recallSearch",
+      "recallRead",
+    ] as const) {
+      expect(chatTools).toHaveProperty(name);
+      expect(buildChatToolsContext(ctx)[name]).toBe(ctx);
+    }
   });
 
   it("exposes noteForSediment (the sediment mailbox writer) with a context entry", () => {
@@ -122,25 +126,13 @@ describe("chat tool surface", () => {
     expect(schema.shape).toHaveProperty("note");
   });
 
-  it("readDoc input: the two-segment ref (分类/case名[/篇名])", async () => {
-    const { chatTools } = await import("@/app/api/agent/tools");
-    const schema = chatTools.readDoc.inputSchema as unknown as {
-      shape: Record<string, unknown>;
-    };
-    expect(schema.shape).toHaveProperty("ref");
-    expect(schema.shape).not.toHaveProperty("fileName");
-  });
-
-  it("listTree takes no input", async () => {
-    const { chatTools } = await import("@/app/api/agent/tools");
-    const schema = chatTools.listTree.inputSchema as unknown as {
-      shape: Record<string, unknown>;
-    };
-    expect(Object.keys(schema.shape)).toHaveLength(0);
-  });
-
-  it("the retired read tools are gone from the chat surface (v0.19 §A.2.1)", () => {
+  it("the retired read tools are gone from the chat surface", () => {
     for (const name of [
+      "listTree",
+      "readDoc",
+      "readSlice",
+      "readAgentTimeline",
+      "readPreviously",
       "listDocs",
       "listSlices",
       "readTimeline",
@@ -151,11 +143,40 @@ describe("chat tool surface", () => {
     ] as const) {
       expect(chatTools).not.toHaveProperty(name);
     }
-    // The surviving memory surface:
-    for (const name of ["readSlice", "readAgentTimeline", "readPreviously"] as const) {
-      expect(chatTools).toHaveProperty(name);
-      expect(buildChatToolsContext(ctx)[name]).toBe(ctx);
-    }
+  });
+
+  it("recallRecent: optional category/n/before/after; recallFind: category + name", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const recent = chatTools.recallRecent.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(recent.shape).toHaveProperty("category");
+    expect(recent.shape).toHaveProperty("n");
+    expect(recent.shape).toHaveProperty("before");
+    expect(recent.shape).toHaveProperty("after");
+    const find = chatTools.recallFind.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(find.shape).toHaveProperty("category");
+    expect(find.shape).toHaveProperty("name");
+  });
+
+  it("recallSearch: query + scan-surface inputs; recallRead: ref + part + range", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const search = chatTools.recallSearch.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(search.shape).toHaveProperty("query");
+    expect(search.shape).toHaveProperty("includeRecords");
+    expect(search.shape).toHaveProperty("since");
+    expect(search.shape).toHaveProperty("until");
+    expect(search.shape).toHaveProperty("limit");
+    const read = chatTools.recallRead.inputSchema as unknown as {
+      shape: Record<string, unknown>;
+    };
+    expect(read.shape).toHaveProperty("ref");
+    expect(read.shape).toHaveProperty("part");
+    expect(read.shape).toHaveProperty("range");
   });
 });
 

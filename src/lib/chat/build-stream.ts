@@ -203,12 +203,11 @@ export function progressStageTone(stage?: string): "thinking" | "answer" {
  *  THE one truth table for "this tool reads the memory": shared by
  *  `deriveAgentStage` here and by the pill subtitle's activity fold
  *  (`lib/chat/subtitle-line.ts`) — a second copy is how the caption and the
- *  stage pill drift apart. The read surface is the v0.19 three-action set
- *  (readSlice / readDoc / readAgentTimeline / readPreviously) — every live
- *  one starts with "read"; retired names (recall / listSlices / listStrands /
- *  listDocs) no longer appear here. */
+ *  stage pill drift apart. The read surface is the v0.36 four-verb set
+ *  (recallRecent / recallFind / recallSearch / recallRead — every live one
+ *  starts with "recall"; the retired read* family no longer appears here). */
 export function isMemoryReadTool(toolName: string): boolean {
-  return toolName.startsWith("read");
+  return toolName.startsWith("recall");
 }
 
 /**

@@ -46,7 +46,7 @@ describe("buildInnerEnvelope — the inner run's single user message (§3.2)", (
       target,
     });
     expect(env).toContain('## Your target\nMessage u2 (arrived 2026-07-14T10:00:00.000Z):\n"""\nwhat about the deploy?\n"""');
-    expect(env).toContain("readSlice (slice 2026-07-14-1000");
+    expect(env).toContain('recallRead (ref "records/2026-07-14-1000"');
     expect(env).toContain("Answer ONLY that message");
   });
 

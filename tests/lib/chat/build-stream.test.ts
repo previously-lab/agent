@@ -350,11 +350,11 @@ describe("deriveAgentStage", () => {
 
   it("reads memory tools as recalling", () => {
     const parts = [
-      part({ type: "tool-input-available", toolCallId: "t1", toolName: "readSlice", state: "input-available" }),
+      part({ type: "tool-input-available", toolCallId: "t1", toolName: "recallSearch", state: "input-available" }),
     ];
     expect(deriveAgentStage(parts)).toBe("recalling");
     expect(
-      deriveAgentStage([part({ type: "data-tool-progress", data: { toolCallId: "t1", toolName: "readDoc", text: "x" } })]),
+      deriveAgentStage([part({ type: "data-tool-progress", data: { toolCallId: "t1", toolName: "recallRead", text: "x" } })]),
     ).toBe("recalling");
   });
 

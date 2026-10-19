@@ -95,10 +95,12 @@
     "tool": {
       "denied": "Denied",
       "interrupted": "interrupted",
-      "readSliceRunning": "Viewing {date}…",
-      "readSliceDone": "Viewed {date}",
-      "readPreviously": "Reading 前情提要…",
-      "readAgentTimeline": "Viewing cognition…",
+      "recall": {
+        "recallRecent": "Recalling recent memory…",
+        "recallFind": "Locating in memory…",
+        "recallSearch": "Searching memory…",
+        "recallRead": "Reading from memory…"
+      },
       "currentTime": "Checked the time",
       "listRunning": "Browsing…",
       "webSearchRunning": "Searching \"{query}\"…",
@@ -110,11 +112,6 @@
       "viewImageRunning": "Looking at image…",
       "viewImageDone": "Looked at image",
       "listDone": "Found {count} items",
-      "readDocRunning": "Reading “{name}”…",
-      "readDocDone": "Read “{name}”",
-      "listTreeRunning": "Listing the memory tree…",
-      "listTreeDone": "Listed the memory tree · {count} paths",
-      "listTreeTruncated": "The listing may be incomplete (GitHub tree limit).",
       "sources": "{count} sources",
       "thinkDeep": "Reasoning fragment",
       "thinkDeepRunning": "Reasoning about \"{question}\"…",

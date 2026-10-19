@@ -1,9 +1,7 @@
 "use client";
 
 import { extractRenderState } from "@/lib/chat/tool-state";
-import { ListTreeRenderer } from "./tool-renderers/list-tree";
-import { ReadDocRenderer } from "./tool-renderers/read-doc";
-import { MemoryToolRenderer } from "./tool-renderers/memory-tool";
+import { RecallToolRenderer } from "./tool-renderers/recall";
 import { WebSearchRenderer } from "./tool-renderers/web-search";
 import { WebFetchRenderer } from "./tool-renderers/web-fetch";
 import { ViewImageRenderer } from "./tool-renderers/view-image";
@@ -34,46 +32,15 @@ export function ToolRenderer({ toolName, state, input, output, streamingText, st
   const renderState = extractRenderState({ state }, null, isStreaming);
 
   switch (toolName) {
-    case "readSlice":
-    case "readAgentTimeline":
-    case "readPreviously":
+    case "recallRecent":
+    case "recallFind":
+    case "recallSearch":
+    case "recallRead":
       return (
-        <MemoryToolRenderer
+        <RecallToolRenderer
           toolName={toolName}
           input={input}
           output={output}
-          state={renderState}
-        />
-      );
-    case "listTree":
-      return (
-        <ListTreeRenderer
-          toolName={toolName}
-          output={
-            output as
-              | { truncated?: boolean; tree?: Record<string, string[]> }
-              | undefined
-          }
-          state={renderState}
-        />
-      );
-    case "readDoc":
-      return (
-        <ReadDocRenderer
-          toolName={toolName}
-          input={input as { ref?: string } | undefined}
-          output={
-            output as
-              | {
-                  path?: string;
-                  opened?: string;
-                  closed?: string | null;
-                  content?: string;
-                  warnings?: string[];
-                  error?: string;
-                }
-              | undefined
-          }
           state={renderState}
         />
       );
