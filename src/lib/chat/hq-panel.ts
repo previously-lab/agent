@@ -50,12 +50,12 @@ export function stopTiersFor(row: PanelRunRow): StopTier[] {
     }
     return tiers;
   }
-  if (row.role === "writer") {
+  if (row.role === "summary") {
     return [
       {
         tier: "turn",
-        labelKey: "hqStopTierWriter",
-        consequenceKey: "hqStopWriterTip",
+        labelKey: "hqStopTierSummary",
+        consequenceKey: "hqStopSummaryTip",
         confirm: false,
       },
     ];

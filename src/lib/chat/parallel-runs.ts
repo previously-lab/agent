@@ -157,22 +157,6 @@ export function shouldYieldToLiveSummary(
 }
 
 /**
- * A writer run for a turn (v0.38 §4) — `role: "writer"` + the turn id. Writer
- * 单飞 is DEDUPE by turnId, not mutual exclusion: a live writer for the same
- * turnId means the reply's persistence intent is already durable, so a
- * duplicate (redelivery/retry) exits instead of double-committing.
- */
-export function isParallelWriterRun(
-  run: ParallelRunEntry,
-  turnId: string,
-): boolean {
-  const attrs = run.attributes;
-  return (
-    !!attrs && attrs.role === "writer" && attrs.turn === turnId
-  );
-}
-
-/**
  * A same-slice, same-burst sibling TURN run (v0.38 §2) — the registry-exact
  * burst enumeration: `burst` attributes equal, no timestamp inference. Absent
  * burst ids never match (the caller falls back to the overlap heuristic).
@@ -196,9 +180,10 @@ export function isBurstSibling(
 /**
  * Should THIS turn generate the burst's merge line (v0.38 §3.2)? The last-one
  * discipline, burst-exact: no LIVE non-tail sibling may remain (it might still
- * change the picture), at least one burst sibling must exist (a solo turn
- * never merges), and no live writer already carries this turnId (the dedupe
- * backstop). Pure — the registry read stays in the step.
+ * change the picture), and at least one burst sibling must exist (a solo turn
+ * never merges). (The v0.38 writer-dedupe leg retired with the writer —
+ * v0.42: a double-fired summary is absorbed by the summary run's own opening
+ * dedupe, isLiveParallelSummary.) Pure — the registry read stays in the step.
  */
 export function isLastBurstTurn(
   runs: ParallelRunEntry[],
@@ -207,6 +192,7 @@ export function isLastBurstTurn(
   ownRunId: string,
   ownTurnId: string,
 ): boolean {
+  void ownTurnId; // kept in the signature — the writer-dedupe leg is retired
   if (
     runs.some(
       (r) =>
@@ -220,13 +206,6 @@ export function isLastBurstTurn(
   }
   if (!runs.some((r) => isBurstSibling(r, sliceId, burstId, ownRunId))) {
     return false; // solo burst (or registry hiccup) — nobody to merge with
-  }
-  if (
-    runs.some(
-      (r) => r.runId !== ownRunId && isLiveRunStatus(r.status) && isParallelWriterRun(r, ownTurnId),
-    )
-  ) {
-    return false; // a live writer for MY turnId already owns the commit
   }
   return true;
 }
@@ -262,14 +241,14 @@ const SUMMARY_WINDOW_TURN_CHARS = 600;
 const SUMMARY_WINDOW_MAX_TURNS = 12;
 
 /**
- * The merge line's window (v0.38 §3.2 ②) — the burst's USER messages (read
- * from the slice: they landed synchronously in housekeeping — the red line)
- * interleaved with the COMPLETED siblings' replies (from their runs'
- * returnValues — their writers may not have committed yet) and THIS turn's
- * own reply, formatted as a numbered script for the closer's one call. The
- * correction that justifies the closing lives in the user messages (「不是
- * 包子，是饺子」), so a replies-only window would blind the closer. Pure —
- * extracted for unit tests.
+ * The merge line's window (v0.38 §3.2 ②; v0.42 §1 — the source moved) — the
+ * burst's USER messages (they ride the siblings' TurnRunResult returnValues;
+ * the legacy disk read is the fallback) interleaved with the COMPLETED
+ * siblings' replies (from their runs' returnValues — the summary run may not
+ * have committed yet) and THIS turn's own reply, formatted as a numbered
+ * script for the closer's one call. The correction that justifies the
+ * closing lives in the user messages (「不是包子，是饺子」), so a replies-only
+ * window would blind the closer. Pure — extracted for unit tests.
  */
 export function buildMergeWindow(
   userTexts: string[],

@@ -45,10 +45,10 @@ beforeEach(() => {
   h.runsList.mockResolvedValue({
     data: [
       {
-        runId: "wrun-writer",
+        runId: "wrun-summary",
         status: "running",
         createdAt: new Date(Date.now() - 30_000).toISOString(),
-        attributes: { role: "writer", slice: "2026-10-02-1000", turn: "a1b2c3", burst: "burst-1" },
+        attributes: { role: "summary", slice: "2026-10-02-1000", burst: "burst-1" },
       },
       {
         runId: "wrun-turn",
@@ -88,14 +88,13 @@ describe("GET /api/evolution/hq-status — the three layers (v0.39 §4.1)", () =
     expect(body.reflection.runId).toBe("wrun-hq");
     expect(body.runs.state).toBe("live");
     expect(body.runs.live).toHaveLength(2);
-    const writer = body.runs.live.find((r: { runId: string }) => r.runId === "wrun-writer");
-    expect(writer).toMatchObject({
-      role: "writer",
+    const summary = body.runs.live.find((r: { runId: string }) => r.runId === "wrun-summary");
+    expect(summary).toMatchObject({
+      role: "summary",
       slice: "2026-10-02-1000",
-      turn: "a1b2c3",
       burst: "burst-1",
     });
-    expect(typeof writer.ageMs).toBe("number");
+    expect(typeof summary.ageMs).toBe("number");
     expect(body.log.state).toBe("live");
     expect(body.log.cursor).toEqual({ sliceId: "2026-10-01-0900", sha: "abc123", at: "2026-10-02T10:00:00.000Z" });
     // behind: only ids STRICTLY past the cursor count (the cursor slice itself

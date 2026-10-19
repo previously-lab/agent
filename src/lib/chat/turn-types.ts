@@ -460,44 +460,97 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
 
 
 /**
- * The turn → writer handoff (v0.38 §3.2) — a DURABLE start() CARRYING WORK:
- * the reply exists only in the turn's memory/stream, so the payload IS the
- * persistence intent. The writer (writer-run.ts) appends the reply turn +
- * the optional merge turn + the slice snapshot in ONE batch/commit
- * (`Turn {turnId} — reply`), then rings the reflection bell on a seal.
+ * What a turn run RETURNS (v0.42 §1/§2) — the burst's persistence record. The
+ * turn answers in its stream and returns THIS; it persists NOTHING passively
+ * (用户那句话不由 turn 侧同步提交 — v0.42 §0). The burst's last survivor's
+ * summary run reads completed siblings' returnValues and lands the whole
+ * burst's 被动存盘 in ONE commit. Legacy runs returned the bare reply text —
+ * readers tolerate that (replyText = the string, the rest empty).
  */
-export interface WriterRunPayload {
-  /** The slice the reply landed on. */
-  sliceId: string;
-  /** This turn's id — the reply/agent turn carry it; the writer dedupes by it. */
+export interface TurnRunResult {
+  /** This turn's id (the turn headers + dedupe keys carry it). */
   turnId: string;
-  /** The reply's full assistant text ("" on a failed turn — nothing to append). */
+  /** The slice this turn attached to. */
+  sliceId: string;
+  /** The user-clock/UTC stamp of this turn's start (the appended turns' time). */
+  at: string;
+  /** The user's message THIS turn answered (persisted by the summary run). */
+  userText: string;
+  /** The full assistant reply ("" when the turn failed — nothing to persist). */
   replyText: string;
-  /** The turn's cognition body for agent.md ("" when none). */
+  /** The cognition body for agent.md ("" when none). */
   cognition: string;
-  /** Set ONLY when this run is the burst's last survivor AND corrections need a closing. */
+  /** The burst's closing line when THIS turn generated one (可空 — v0.42 §2). */
   mergeLine?: string;
   /** The burst id (rides the [burst {id}] turn-header segment). */
   burstId?: string;
-  /** Present when THIS turn sealed the slice — the writer rings the bell. */
-  closedSliceId?: string;
+  /** The page THIS beat sealed — the summary run persists the seal (v0.42 §2). */
+  sealed?: SealedSliceRecord;
+  /** The slice born THIS beat — first persisted by the summary run. */
+  birth?: SliceBirthRecord;
+}
+
+/**
+ * The page-seal record (v0.42 §2 — 落盘归总结流): everything closeSlice would
+ * have written, carried BY VALUE from the sealing beat to the summary run.
+ * Plain serializable data — safe across the run boundary.
+ */
+export interface SealedSliceRecord {
+  sliceId: string;
+  signal: SlicingSignal;
+  /** The analyzer's (or deterministic fallback's) closing marks. */
+  focus: string;
+  summary: string;
+  tone?: string;
+  openLoops: string[];
+  decisions: string[];
+  /** The conversation's real end = the sealed page's last turn's timestamp. */
+  end: string;
+}
+
+/** The slice-birth record (v0.42 §2): lets the summary run materialize a slice
+ *  whose core.md does not exist yet (the entry beat no longer flushes it). */
+export interface SliceBirthRecord {
+  sliceId: string;
+  start: string;
+  timezone: string;
+  continuesFrom?: string;
+  /** createSlice's turn 0 — the birth user turn, never re-appended. */
+  turn: { turnId: string; timestamp: string; content: string };
+  /** The people/user snapshot at birth (§B.7 — the summary run writes
+   *  previously.md alongside the first core.md). */
+  previously?: string;
+}
+
+/**
+ * The summary run's durable payload (v0.42 §1 — 总结流由最后一个对话流唤起,
+ * 唤起即完成). The burst's LAST turn carries its OWN record here (its
+ * returnValue may not be readable yet — the turn run completes after starting
+ * the summary); the other members are enumerated from the run registry inside
+ * the step.
+ */
+export interface SummaryRunPayload {
+  /** The slice the burst attached to. */
+  sliceId: string;
+  /** The burst id (registry-exact member enumeration); absent → same-slice
+   *  terminal turn runs are the members. */
+  burstId?: string;
   /** User-local date (YYYY-MM-DD), the stamping convention. */
   date: string;
+  /** The last turn's own record. */
+  own: TurnRunResult;
   /** Backend flags, exactly as TurnInput carries them. */
   useGithub: boolean;
   useDemo: boolean;
   owner: string;
   repo: string;
-  /** UI locale — the merge line's generation follows it. */
+  /** UI locale — the honest-failure record follows it. */
   locale: string;
-  /** The spawning turn's model config (merge-line generation input). */
-  model: string;
-  modelConfig: TurnInput["modelConfig"];
 }
 
-/** What the writer run reports back (observability; the turn never waits on it). */
-export interface WriterRunOutcome {
-  /** "deduped" = a live writer for this turnId already owned the commit. */
+/** What the summary run reports back (observability; the turn never waits). */
+export interface SummaryRunOutcome {
+  /** "deduped" = a live summary for this slice already owns the burst. */
   kind: "committed" | "deduped" | "nothing" | "failed";
   /** commit segments, for the log. */
   segments?: string[];

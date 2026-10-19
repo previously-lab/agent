@@ -28,11 +28,12 @@
  *      the entry beat's analysis read an explicit record/correction request;
  *      no explicit instruction → zero LLM, zero writes 空转零写入).
  *   3. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
- *   4. ringReflection    — the mechanical bell (v0.38 §3.3): after EVERY
- *      successful turn commit, ring the unit's pure doorbell (no payload,
- *      seal or no seal) — a live run gets the ring, otherwise a fresh run
- *      starts. Best-effort: a failed bell only warns (the unit's range is
- *      everything since its cursor, so the next turn's bell covers the gap).
+ *   4. ringReflection    — the mechanical bell (v0.38 §3.3 / v0.42 §4):
+ *      the SUMMARY stream rings it after landing the burst's 被动存盘,
+ *      carrying {sliceId, turnRange} — a live run gets the ring, otherwise
+ *      a fresh unit starts. Best-effort: a failed bell only warns (the
+ *      unit's range is everything since its cursor, so the next bell
+ *      covers the gap).
  *
  * Retired (v0.21 §A.2.2 改写 / §9; v0.30 §2): the scribe segment's
  * close-TRIGGERED dispatch chain — due-task scan → [boundary-event] mailbox
@@ -134,8 +135,11 @@ import type {
   EvolutionResult,
   NestedTurnTail,
   InnerTurnReport,
-  WriterRunPayload,
-  WriterRunOutcome,
+  SealedSliceRecord,
+  SliceBirthRecord,
+  SummaryRunOutcome,
+  SummaryRunPayload,
+  TurnRunResult,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
 import {
@@ -152,11 +156,15 @@ import {
   isLastBurstTurn,
   isLiveRunStatus,
   isParallelTurnRun,
-  isParallelWriterRun,
+  isLiveParallelSummary,
   type ParallelRunEntry,
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
-import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
+import {
+  deliverReflectionWake,
+  type ReflectionWakeRange,
+} from "@/app/api/evolution/reflection-wake";
+import { COMMIT_PREFIX } from "@/lib/chat/commit-contract";
 import { readLatestReflectionNote } from "@/lib/chat/hq-log";
 import {
   runCardEvolution,
@@ -720,6 +728,12 @@ export interface EntryReckoning {
   /** Client/bridge mode only: the raw bridge report — 序 6 applies its card
    *  mutations through the card-session machinery (applyBridgeCardEvolution). */
   bridgeReport: HousekeepingPhaseReport | null;
+  /** The page THIS beat sealed — carried BY VALUE to the burst's summary
+   *  run, which persists the seal (v0.42 §2 — 落盘归总结流; the beat no
+   *  longer flushes the close). null when nothing was sealed. */
+  sealed: SealedSliceRecord | null;
+  /** The slice born THIS beat — first persisted by the summary run. */
+  birth: SliceBirthRecord | null;
 }
 
 /**
@@ -884,6 +898,9 @@ export async function housekeeping(
    *  the reflection bell rings after EVERY successful turn commit, seal or
    *  not — v0.38 §3.3). */
   let closedSliceId: string | undefined;
+  /** The v0.42 seal record — captured when the close executes, ridden to
+   *  the summary run on this turn's structured result. */
+  let sealed: SealedSliceRecord | null = null;
   /** The slice we came from — set from the just-closed page (AFTER its
    *  marking, so the continuity brief carries the fresh focus), or resolved
    *  from disk when today has none. Drives the continuity brief. */
@@ -1106,6 +1123,20 @@ export async function housekeeping(
       // Surface the seal on the result (housekeeping context only — the
       // reflection bell rings after every successful commit, seal or not).
       closedSliceId = closingSlice.slice_id;
+      // v0.42 §2 — 落盘归总结流: the seal rides THIS turn's structured
+      // result to the burst's summary run; the beat no longer flushes it.
+      sealed = {
+        sliceId: closingSlice.slice_id,
+        signal: closingSignal,
+        focus: closingSlice.focus,
+        summary: closingSlice.summary,
+        ...(closingSlice.emotional_tone
+          ? { tone: String(closingSlice.emotional_tone) }
+          : {}),
+        openLoops: closingSlice.open_loops ?? [],
+        decisions: closingSlice.decisions ?? [],
+        end: closingSlice.end ?? new Date().toISOString(),
+      };
       console.log(`[Episodic] Closed slice: ${closingSlice.slice_id} (${closingSignal})`);
       // Signal the client that a slice closed (rendered as a housekeeping
       // checklist row).
@@ -1218,18 +1249,14 @@ export async function housekeeping(
     }
   }
 
-  // ── 5. Durable snapshot, then THE entry beat's one commit ────────────
-  // The ended page's close (with its fresh marks) and this turn's user-turn
-  // landing share this single commit — 闭片归档与本轮落盘原子完成. No
-  // projection writes here (A1): the timeline catalog / global timeline /
-  // monthly index maintenance moved out of the turn path.
+  // ── 5. NO commit in the entry beat (v0.42 §0/§2) — 被动存盘 belongs to
+  // the summary stream: the user turn, the ended page's seal (`sealed` on
+  // this beat's result) and the slice snapshot all ride THIS turn's
+  // structured result; the burst's last survivor's summary run lands them
+  // in ONE `Summary — {sliceId}` commit. The batch below is NEVER flushed
+  // — its queued entries serve this beat's read-your-writes only.
   await mergeSliceWithDiskTurns(slice, input);
   await saveSliceSnapshot(slice, batch);
-  // The entry beat's commit carries the turn tail's conflict self-heal
-  // (flushTurnBatch — bounded merge-retry, MAX_FLUSH_RETRIES): a moved ref
-  // re-reads the remote slice and merge-appends by turnId instead of
-  // throwing this step into a platform retry that re-runs the analysis.
-  await flushTurnBatch(batch, `Turn ${input.turnId} — user turn`, slice);
 
   // ── 6. Continuity + slice-head snapshot + identity (the read face) ────
   // v0.9 slice-level prompt freeze: the continuity stance is computed at the
@@ -1360,6 +1387,23 @@ export async function housekeeping(
   await stream.write({ type: "start" } as UIMessageChunk);
   await stream.write({ type: "start-step" } as UIMessageChunk);
 
+  // v0.42 §2 — the birth record lets the summary run materialize a slice
+  // whose core.md does not exist yet (the beat no longer flushes it).
+  const birth: SliceBirthRecord | null = sliceBornThisCall
+    ? {
+        sliceId: slice.slice_id,
+        start: slice.start,
+        timezone: slice.timezone,
+        ...(slice.continuesFrom ? { continuesFrom: slice.continuesFrom } : {}),
+        turn: {
+          turnId: input.turnId,
+          timestamp: slice.start,
+          content: lastUserMessage,
+        },
+        ...(modelSnapshot.trim() ? { previously: modelSnapshot } : {}),
+      }
+    : null;
+
   return {
     slice,
     previouslyContent,
@@ -1367,6 +1411,8 @@ export async function housekeeping(
     identityPrompt,
     analysis,
     bridgeReport,
+    sealed,
+    birth,
     ...(closedSliceId ? { closedSliceId } : {}),
     ...(directionBlock ? { directionBlock } : {}),
     ...(userProfileBlock ? { userProfileBlock } : {}),
@@ -1493,10 +1539,11 @@ async function flushTurnBatch(
  * step, riding the turn's batch (v0.38 §6: the turn's commits are the ENTRY
  * beat's — the user turn landed synchronously in housekeeping; what remains
  * here is the evolution拍 only). The REPLY side is ZERO-batch: the reply
- * turn + cognition + snapshot moved to the writer (writer-run.ts), which the
- * turn tail starts BEFORE closeTurnStream — the writer carries the reply in
- * its payload, so the persistence intent is durable the moment the start
- * succeeds. `Turn {turnId} — finalize` therefore names the evolution拍 (and
+ * turn + cognition + snapshot moved to the SUMMARY stream (v0.42 §2 —
+ * 被动存盘归总结流): the burst's last turn starts the summary run BEFORE
+ * closeTurnStream, carrying its own record — the persistence intent is
+ * durable the moment the start succeeds. `Turn {turnId} — finalize`
+ * therefore names the evolution拍 (and
  * the episode-residual bubbles) only; on a plain turn the batch is empty and
  * the flush no-ops. Idempotent under redelivery; the flush keeps the
  * turn-merge self-heal (flushTurnBatch).
@@ -1530,8 +1577,8 @@ export async function finalizeTurn(
     if (batch.entries.size > before) segments.push(name);
   };
 
-  // ── Segment 1 (v0.38 §6): the reply turn + cognition + snapshot moved
-  //    to the WRITER (writer-run.ts) — 回复侧零批. What stays here is the
+  // ── Segment 1 (v0.38 §6 / v0.42 §2): the reply turn + cognition +
+  //    snapshot moved to the SUMMARY stream — 回复侧零批. What stays here is the
   //    episode-residual nested bubbles (the hard-off orchestrator path,
   //    retiring with that machinery) and nothing else.
   const before1 = batch.entries.size;
@@ -1813,18 +1860,22 @@ export async function closeChildStream(): Promise<void> {
 /**
  * The reflection unit's mechanical bell (v0.38 §3.3 — PURE doorbell: the wake
  * carries NO payload at all; sealing the slice is NOT its trigger). The
- * writer rings it after EVERY successful turn commit — `label` (this turn's
- * sliceId) is a log aid only. The
+ * SUMMARY stream rings it after landing the burst's 被动存盘 — `label`
+ * (the slice's id) is a log aid only, `range` (v0.42 §4) is the persisted
+ * turn set handed to the unit. The
  * engine (reflection-wake.ts) is getHookByToken → a live run means the unit
  * is up and the ring is DONE (触发即完成); no live run → start a fresh
  * short-lived unit. Best-effort by design — a lost bell only warns: the
  * unit's range is everything since its on-disk cursor, so the next turn's
  * bell covers the gap. Never throws.
  */
-export async function ringReflection(label: string): Promise<void> {
+export async function ringReflection(
+  label: string,
+  range?: ReflectionWakeRange,
+): Promise<void> {
   "use step";
   try {
-    const result = await deliverReflectionWake();
+    const result = await deliverReflectionWake(range);
     if (!result.ok) {
       console.warn(`[Reflection] wake not delivered for ${label} (ignored): ${result.reason}`);
     }
@@ -2068,7 +2119,7 @@ async function listRegistryRuns(): Promise<ParallelRunEntry[]> {
 async function listLiveRuns(): Promise<ParallelRunEntry[]> {
   return (await listRegistryRuns()).filter((r) => isLiveRunStatus(r.status));
 }
-// ─── The writer handoff (v0.38 §3.2/§4 — writer-per-turn) ─────────────────
+// ─── The summary handoff (v0.42 §1/§2 — the last turn wakes the summary) ───
 
 /**
  * What the tail hands the merge decision (v0.38 §3.2 ②) — the burst's
@@ -2082,6 +2133,10 @@ export interface BurstMergeParams {
   burstId?: string;
   /** THIS turn's reply text — the window's last entry. */
   ownReplyText: string;
+  /** THIS turn's user message — the window's last user entry (v0.42 §1: the
+   *  burst's user turns ride the returnValues, never the not-yet-written
+   *  disk). */
+  ownUserText: string;
   locale: string;
   model: string;
   modelConfig: TurnInput["modelConfig"];
@@ -2094,23 +2149,24 @@ export interface BurstMergeParams {
 /**
  * The last turn's merge-line decision (v0.38 §3.2 ②) — runs in the turn's
  * tail AFTER finalizeTurn (this turn's evolution拍 is committed) and BEFORE
- * startWriterTurn (the generated line rides THIS turn's writer payload).
+ * the summary stream's start — the generated line rides the LAST turn's
+ * summary payload as its mergeLine (v0.42 §2).
  *
  * Lastness is burst-exact when the client sent a burstId (registry attribute
  * equality — no timestamp inference), else the legacy overlap heuristic
- * (v0.38 §2 退化). Sibling replies are read ONLY from COMPLETED runs'
- * returnValues (a turn run's return value IS its reply text; failed or
- * cancelled siblings are skipped — nothing to reconcile with), never from
- * the disk (a sibling's writer may not have committed yet) and never from a
- * non-terminal run (reading a live run's returnValue long-polls and burns a
- * worker slot). The line itself is generated ONLY when reconciliation is
- * needed — the model outputs EMPTY when no answer corrects or contradicts
- * another, and an empty output means NO mergeLine (收合永远可空).
+ * (v0.38 §2 退化). Sibling replies AND user messages are read ONLY from
+ * COMPLETED runs' returnValues (a turn run's return value IS its
+ * TurnRunResult; failed or cancelled siblings are skipped — nothing to
+ * reconcile with), never from a non-terminal run (reading a live run's
+ * returnValue long-polls and burns a worker slot). The line itself is
+ * generated ONLY when reconciliation is needed — the model outputs EMPTY
+ * when no answer corrects or contradicts another, and an empty output means
+ * NO mergeLine (收合永远可空).
  *
  * Returns the merge line (announced to the client as a transient chunk —
  * presentation proper is Part 5) or undefined. Never throws and never blocks
  * the turn: a registry hiccup or a model failure degrades to "no closing" —
- * every answer is carried by a writer either way.
+ * the burst's record is carried by the summary run either way (v0.42 §2).
  */
 export async function decideBurstMergeLine(
   params: BurstMergeParams,
@@ -2150,13 +2206,20 @@ export async function decideBurstMergeLine(
     // to reconcile with); a live run's returnValue is never read (it
     // long-polls and burns a worker slot).
     const replies: Array<{ turn: string; text: string }> = [];
+    const siblingUserTexts: string[] = [];
     for (const runId of siblingRunIds) {
       const entry = runs.find((r) => r.runId === runId);
       if (!entry || entry.status !== "completed") continue;
       try {
-        const rv = await getRun<string>(runId).returnValue;
-        if (typeof rv === "string" && rv.trim()) {
-          replies.push({ turn: entry.attributes?.turn ?? runId, text: rv });
+        // v0.42 §1 — a turn's returnValue IS its TurnRunResult (legacy runs
+        // returned the bare reply text; both shapes read).
+        const rv = await getRun<TurnRunResult | string>(runId).returnValue;
+        const text = typeof rv === "string" ? rv : (rv?.replyText ?? "");
+        if (typeof rv !== "string" && rv?.userText?.trim()) {
+          siblingUserTexts.push(rv.userText);
+        }
+        if (text.trim()) {
+          replies.push({ turn: entry.attributes?.turn ?? runId, text });
         }
       } catch {
         // registry blip on one sibling — reconcile with the rest
@@ -2171,28 +2234,33 @@ export async function decideBurstMergeLine(
       );
       return undefined;
     }
-    // The burst's USER messages: read from the slice (they landed
-    // synchronously in housekeeping — 红线), capped to the tail. The
-    // corrections that justify a closing live THERE (「不是包子，是饺子」),
-    // never in the replies alone.
-    let userTexts: string[] = [];
-    try {
-      const path = sliceIdToFilePath(params.sliceId);
-      let raw: string;
-      if (params.useDemo) {
-        raw = await readFileDemo(path);
-      } else if (params.useGithub) {
-        raw = await readFileFresh(path, params.repo, params.owner);
-      } else {
-        raw = await readFileLocal(path);
+    // The burst's USER messages: they ride the siblings' returnValues
+    // (v0.42 §1 — the entry beat no longer lands them on disk before this
+    // tail runs); the disk read survives as the legacy fallback (pre-v0.42
+    // runs carried no userText), and THIS turn's own message closes the
+    // list. The corrections that justify a closing live THERE (「不是包子，
+    // 是饺子」), never in the replies alone.
+    let userTexts = [...siblingUserTexts];
+    if (userTexts.length === 0) {
+      try {
+        const path = sliceIdToFilePath(params.sliceId);
+        let raw: string;
+        if (params.useDemo) {
+          raw = await readFileDemo(path);
+        } else if (params.useGithub) {
+          raw = await readFileFresh(path, params.repo, params.owner);
+        } else {
+          raw = await readFileLocal(path);
+        }
+        userTexts = parseSlice(raw)
+          .turns.filter((t) => t.role === "user")
+          .slice(-6)
+          .map((t) => t.content);
+      } catch {
+        userTexts = []; // an unreadable slice degrades to a replies-only window
       }
-      userTexts = parseSlice(raw)
-        .turns.filter((t) => t.role === "user")
-        .slice(-6)
-        .map((t) => t.content);
-    } catch {
-      userTexts = []; // an unreadable slice degrades to a replies-only window
     }
+    if (params.ownUserText.trim()) userTexts.push(params.ownUserText);
     const windowText = buildMergeWindow(userTexts, replies, params.ownReplyText, params.locale);
     const line = await runMergeLineCall(params, windowText);
     if (!line) {
@@ -2270,35 +2338,75 @@ async function runMergeLineCall(
 }
 
 /**
- * Start THIS turn's writer (v0.38 §3.2 顺序纪律): a durable start() CARRYING
- * the reply payload — called AFTER finalizeTurn (the evolution拍 is on disk)
- * and BEFORE closeTurnStream (the persistence intent must be durable before
- * the stream closes: reverse the order and a turn dying between the two
- * leaves "stream closed, writer never started"). The turn does NOT wait on
- * the writer (前提③ — 回复侧流完即走); the writer's run id rides the log.
- * Never throws — a start failure logs: the reply stays alive in the stream
- * for reconnects, and a redelivery re-runs the tail.
+ * Should THIS turn start the burst's summary run (v0.42 §1 — 对话流完成后
+ * 查自己是不是最后一个)? True when no other same-burst turn is still
+ * answering AND no live summary run already owns the slice's persistence.
+ * The merge decision (decideBurstMergeLine, above) stamps `phase: "tail"`
+ * first, so a sibling mid-check yields instead of mutual-skipping (the
+ * v0.33 window, unchanged). A last-one check failure degrades to TRUE — a
+ * missed summary starves the burst's 被动存盘, the expensive miss by far.
+ * Never throws.
  */
-export async function startWriterTurn(
-  payload: WriterRunPayload,
+export async function shouldStartSummary(params: {
+  sliceId: string;
+  turnId: string;
+  burstId?: string;
+}): Promise<boolean> {
+  "use step";
+  try {
+    const ownId = getWorkflowMetadata().workflowRunId;
+    const runs = await listRegistryRuns();
+    if (runs.some((r) => isLiveParallelSummary(r, params.sliceId, ownId))) {
+      console.log(
+        `[Summary] skipped (turn ${params.turnId}): a live summary already owns ${params.sliceId}`,
+      );
+      return false;
+    }
+    if (params.burstId) {
+      return isLastBurstTurn(runs, params.sliceId, params.burstId, ownId, params.turnId);
+    }
+    if (runs.some((r) => isBlockingParallelSibling(r, params.sliceId, ownId))) {
+      return false; // a sibling is still answering — not the last yet
+    }
+    return true; // solo (or the overlap window's last survivor): I persist
+  } catch (err) {
+    console.warn(
+      `[Summary] last-one check failed (turn ${params.turnId}) — starting anyway:`,
+      err instanceof Error ? err.message : err,
+    );
+    return true;
+  }
+}
+
+/**
+ * Start the burst's summary run (v0.42 §1 — 唤起即完成): a durable start()
+ * CARRYING the last turn's record, BEFORE closeTurnStream (the persistence
+ * intent must be durable before the stream closes: reverse the order and a
+ * turn dying between the two leaves "stream closed, summary never started").
+ * The turn does NOT wait on the summary run. Never throws — a start failure
+ * logs; the burst's records stay alive in the siblings' streams, and the
+ * next turn's summary re-collects whatever never landed (turnId-deduped).
+ */
+export async function startSummaryRun(
+  payload: SummaryRunPayload,
 ): Promise<string | null> {
   "use step";
   try {
-    // Dynamic import: steps.ts → writer-run.ts → steps.ts is a static cycle
-    // otherwise (the summary-workflow precedent).
-    const { writerRun } = await import("./writer-run");
-    const run = await start(writerRun, [payload], {
+    // Dynamic import: steps.ts → summary-run.ts → steps.ts is a static cycle
+    // otherwise (the retired writer-run's precedent).
+    const { summaryRun } = await import("./summary-run");
+    const run = await start(summaryRun, [payload], {
       attributes: {
-        role: "writer",
+        role: "summary",
         slice: payload.sliceId,
-        turn: payload.turnId,
+        ...(payload.burstId ? { burst: payload.burstId } : {}),
       },
     });
-    console.log(`[Writer] started for turn ${payload.turnId}: ${run.runId}`);
+    console.log(`[Summary] started for ${payload.sliceId}: ${run.runId}`);
     return run.runId;
   } catch (err) {
     console.warn(
-      `[Writer] could not start for turn ${payload.turnId}:`,
+      `[Summary] could not start for ${payload.sliceId}:`,
       err instanceof Error ? err.message : err,
     );
     return null;
@@ -2306,118 +2414,276 @@ export async function startWriterTurn(
 }
 
 /**
- * The writer's whole job (v0.38 §3.2/§4) — ONE step, ONE batch, ONE commit:
- * the reply turn (+ the optional merge turn, both carrying the burst header
- * segment) + the cognition timeline + the slice snapshot, flushed as
- * `Turn {turnId} — reply`, then the reflection bell when this turn sealed
- * the slice. Single-flight is DEDUPE by turnId, not mutual exclusion (§9-1:
- * a live writer for the same turnId means the reply's persistence intent is
- * already durable — a duplicate exits instead of double-committing; writers
- * for DIFFERENT turnIds run concurrently and their conflicts are absorbed by
- * the flush's key-controlled merge + bounded self-heal, exactly the shape
- * those mechanisms were built for).
+ * The summary run's whole job (v0.42 §1/§2) — ONE step, ONE batch, ONE
+ * commit: the burst's whole 被动存盘. Members: THIS (the last) turn's record
+ * rides the payload; the other same-slice turn runs whose turn is NOT yet
+ * on disk are the remaining members — completed ones contribute their
+ * returnValue records, non-completed ones are recorded honestly in the
+ * commit message (第 k 条没答成 — v0.42 §5; the not-yet-on-disk scoping makes
+ * re-runs idempotent and lets a later burst pick up a leaked member). The
+ * batch:
  *
- * Reads the slice FRESH past the Data Cache (the finalize commit landed
- * moments ago); the reply append is deduped by turnId so redeliveries
- * converge. On flush exhaustion (bounded ≤2 inside flushTurnBatch) the
- * outcome reports `failed` honestly — the reply does not land, the failure
- * is logged, and the next same-turnId retry re-runs this step (幂等).
- * Never throws.
+ *   1. the page seals — each member's `sealed` record applied to the old
+ *      slice on disk (the entry beat no longer flushes the close);
+ *   2. the slice — materialized from `birth` when core.md does not exist
+ *      yet, then every member's user turn + reply turn + merge turn appended
+ *      (turnId-deduped; the merge turn's id is deterministic `m{turnId}` so
+ *      redeliveries converge), the snapshot riding along;
+ *   3. every member's cognition → the slice's agent.md (a
+ *      `## Cognition {turnId}` header guard keeps redeliveries from
+ *      double-appending).
+ *
+ * Flushed as `Summary — {sliceId}` (COMMIT_PREFIX.summary), then the
+ * reflection bell with the range {sliceId, turnIds} (v0.42 §4 — 触发携带
+ * 范围; a hint, not the only truth — §3.5). Deduped when a live summary
+ * already owns the slice (the double-fire race). When there is NOTHING to
+ * write (everything already landed — the losing racer), reports "nothing"
+ * without a commit or a bell: the winner already rang. On flush exhaustion
+ * the outcome reports `failed` honestly — the log shows the gap and the
+ * next unit re-covers the range (§3.5). Never throws.
  */
-export async function commitWriterTurn(
-  payload: WriterRunPayload,
-): Promise<WriterRunOutcome> {
+export async function persistTurnSummary(
+  payload: SummaryRunPayload,
+): Promise<SummaryRunOutcome> {
   "use step";
-  const fail = (err: unknown): WriterRunOutcome => {
+  const fail = (err: unknown): SummaryRunOutcome => {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[Writer] turn ${payload.turnId} commit failed: ${msg}`);
+    console.warn(`[Summary] ${payload.sliceId} commit failed: ${msg}`);
     return { kind: "failed", error: msg };
+  };
+  const readCore = async (sliceId: string): Promise<string> => {
+    const path = sliceIdToFilePath(sliceId);
+    if (payload.useDemo) return await readFileDemo(path);
+    if (payload.useGithub) return await readFileFresh(path, payload.repo, payload.owner);
+    return await readFileLocal(path);
   };
   try {
     const ownId = getWorkflowMetadata().workflowRunId;
     const runs = await listRegistryRuns();
-    if (
-      runs.some(
-        (r) =>
-          r.runId !== ownId &&
-          isLiveRunStatus(r.status) &&
-          isParallelWriterRun(r, payload.turnId),
-      )
-    ) {
-      console.log(`[Writer] turn ${payload.turnId} deduped — a live writer owns it`);
+    if (runs.some((r) => isLiveParallelSummary(r, payload.sliceId, ownId))) {
+      console.log(`[Summary] ${payload.sliceId} deduped — a live summary owns it`);
       return { kind: "deduped" };
     }
-    const hasReply = payload.replyText.trim().length > 0;
-    const merge = payload.mergeLine?.trim() ?? "";
-    if (!hasReply && !merge) return { kind: "nothing" };
-
-    const path = sliceIdToFilePath(payload.sliceId);
-    let raw: string;
-    if (payload.useDemo) {
-      raw = await readFileDemo(path);
-    } else if (payload.useGithub) {
-      raw = await readFileFresh(path, payload.repo, payload.owner);
-    } else {
-      raw = await readFileLocal(path);
-    }
-    const slice = parseSlice(raw);
-
     const batch = createBatch();
-    /** The commit body names the segments that actually queued writes. */
-    const segments: string[] = [];
 
-    if (
-      hasReply &&
-      !slice.turns.some((t) => t.role === "agent" && t.turnId === payload.turnId)
-    ) {
-      appendTurn(slice, {
-        timestamp: new Date().toISOString(),
-        role: "agent",
-        content: payload.replyText,
-        turnId: payload.turnId,
-        ...(payload.burstId ? { burst: payload.burstId } : {}),
-      });
-      segments.push("reply");
+    // ── The slice: fresh from disk, or materialized from a member's birth
+    //    record (the entry beat no longer flushes a birth).
+    let slice: TimeSlice;
+    try {
+      slice = parseSlice(await readCore(payload.sliceId));
+    } catch {
+      const birth = payload.own.birth;
+      if (!birth) {
+        return fail(
+          new Error(`slice ${payload.sliceId} unreadable and no birth record carried`),
+        );
+      }
+      slice = {
+        slice_id: birth.sliceId,
+        focus: "",
+        status: "active",
+        start: birth.start,
+        timezone: birth.timezone,
+        summary: "",
+        open_loops: [],
+        decisions: [],
+        tags: [],
+        related_slices: [],
+        loops: [],
+        turns: [
+          {
+            timestamp: birth.turn.timestamp,
+            role: "user",
+            content: birth.turn.content,
+            turnId: birth.turn.turnId,
+          },
+        ],
+        estimatedTokens: Math.ceil(birth.turn.content.length / 4) + 8,
+        ...(birth.continuesFrom ? { continuesFrom: birth.continuesFrom } : {}),
+      };
+      if (birth.previously?.trim()) {
+        await writePreviously(birth.sliceId, birth.previously, batch);
+      }
     }
-    if (payload.cognition) {
-      const header = `## Cognition ${payload.turnId} — ${new Date().toISOString()}\n`;
-      await writeAgentTimeline(payload.sliceId, header + payload.cognition, batch);
-      segments.push("cognition");
+    const turnOnDisk = (turnId: string): boolean =>
+      slice.turns.some((t) => t.turnId === turnId);
+
+    // ── Members: own record + the same-slice turn runs whose turn is not
+    //    yet persisted; failed/cancelled ones recorded honestly (v0.42 §5).
+    //    Own's test is the REPLY's presence, not the user turn's — a slice
+    //    just materialized from a birth record already carries turn 0 (the
+    //    birth user turn IS own's user message).
+    const members: TurnRunResult[] = [];
+    const ownReplyOnDisk = slice.turns.some(
+      (t) => t.role === "agent" && t.turnId === payload.own.turnId,
+    );
+    if (!ownReplyOnDisk) members.push(payload.own);
+    const failedTurns: Array<{ turn: string; note: string }> = [];
+    const noAnswerNote = (turn: string, status: string): string =>
+      payload.locale === "zh"
+        ? `第 ${turn} 条没答成（${status}）`
+        : `turn ${turn} produced no answer (${status})`;
+    for (const r of runs) {
+      if (r.runId === ownId) continue;
+      if (!isParallelTurnRun(r, payload.sliceId)) continue;
+      if (payload.burstId && r.attributes?.burst !== payload.burstId) continue;
+      const turn = r.attributes?.turn ?? r.runId;
+      if (turnOnDisk(turn)) continue; // already persisted — nobody's member
+      if (r.status !== "completed") {
+        failedTurns.push({ turn, note: noAnswerNote(turn, r.status) });
+        continue;
+      }
+      try {
+        const rv = await getRun<TurnRunResult | string>(r.runId).returnValue;
+        const record: TurnRunResult | null =
+          typeof rv === "string"
+            ? {
+                turnId: turn,
+                sliceId: payload.sliceId,
+                at: r.createdAt ? new Date(Date.parse(String(r.createdAt)) || Date.now()).toISOString() : new Date().toISOString(),
+                userText: "",
+                replyText: rv,
+                cognition: "",
+              }
+            : rv;
+        if (record && typeof record.replyText === "string") {
+          members.push({ ...record, turnId: record.turnId ?? turn });
+        } else {
+          failedTurns.push({ turn, note: noAnswerNote(turn, "unreadable result") });
+        }
+      } catch {
+        failedTurns.push({ turn, note: noAnswerNote(turn, "unreadable result") });
+      }
     }
-    if (merge) {
-      appendTurn(slice, {
-        timestamp: new Date().toISOString(),
-        role: "agent",
-        content: merge,
-        turnId: `m${crypto.randomBytes(4).toString("base64url")}`,
-        merge: true,
-        ...(payload.burstId ? { burst: payload.burstId } : {}),
-      });
-      segments.push("merge");
+    // Burst chronology: the appended turns follow each member's turn-start
+    // stamp (own — the last survivor — sorts last).
+    members.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+
+    /** The commit body names what actually queued (v0.37 §7-1 wording). */
+    const bodyLines: string[] = [];
+
+    // ── 1. The page seals (v0.42 §2 — 落盘归总结流).
+    const sealedIds = new Set<string>();
+    for (const m of [payload.own, ...members]) {
+      const seal = m.sealed;
+      if (!seal || seal.sliceId === payload.sliceId || sealedIds.has(seal.sliceId)) {
+        continue;
+      }
+      sealedIds.add(seal.sliceId);
+      try {
+        const target = parseSlice(await readCore(seal.sliceId));
+        if (target.status === "active" && !target.closedBy) {
+          target.status = "closed";
+          target.closedBy = seal.signal;
+          target.end = seal.end;
+          if (seal.focus) target.focus = seal.focus;
+          if (seal.summary) target.summary = seal.summary;
+          if (seal.tone) target.emotional_tone = seal.tone as TimeSlice["emotional_tone"];
+          target.open_loops = seal.openLoops;
+          target.decisions = seal.decisions;
+          await saveSliceSnapshot(target, batch);
+          bodyLines.push(`sealed ${seal.sliceId} (${seal.signal})`);
+        }
+      } catch (err) {
+        console.warn(
+          `[Summary] seal of ${seal.sliceId} could not be applied (ignored):`,
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
-    if (segments.includes("reply") || segments.includes("merge")) {
+
+    // ── 2. The turns: user + reply + merge per member (turnId-deduped).
+    for (const m of members) {
+      const burst = m.burstId ?? payload.burstId;
+      if (m.userText && !turnOnDisk(m.turnId)) {
+        appendTurn(slice, {
+          timestamp: m.at,
+          role: "user",
+          content: m.userText,
+          turnId: m.turnId,
+          ...(burst ? { burst } : {}),
+        });
+        bodyLines.push(`user turn ${m.turnId}`);
+      }
+      if (m.replyText && !slice.turns.some((t) => t.role === "agent" && t.turnId === m.turnId)) {
+        appendTurn(slice, {
+          timestamp: m.at,
+          role: "agent",
+          content: m.replyText,
+          turnId: m.turnId,
+          ...(burst ? { burst } : {}),
+        });
+        bodyLines.push(`reply ${m.turnId}`);
+      }
+      if (m.mergeLine?.trim()) {
+        const mergeTurnId = `m${m.turnId}`;
+        if (!slice.turns.some((t) => t.turnId === mergeTurnId)) {
+          appendTurn(slice, {
+            timestamp: m.at,
+            role: "agent",
+            content: m.mergeLine.trim(),
+            turnId: mergeTurnId,
+            merge: true,
+            ...(burst ? { burst } : {}),
+          });
+          bodyLines.push(`merge ${m.turnId}`);
+        }
+      }
+    }
+
+    // ── 3. The cognitions → agent.md (a `## Cognition {turnId}` header guard
+    //    keeps redeliveries from double-appending).
+    let agentKnown = await readSlicePart(payload.sliceId, "agent", batch).catch(
+      () => "",
+    );
+    for (const m of members) {
+      if (!m.cognition || agentKnown.includes(`## Cognition ${m.turnId} `)) {
+        continue;
+      }
+      const block = `## Cognition ${m.turnId} — ${new Date().toISOString()}\n${m.cognition}`;
+      await writeAgentTimeline(payload.sliceId, block, batch);
+      agentKnown += `\n\n${block}`;
+      bodyLines.push(`cognition ${m.turnId}`);
+    }
+
+    // ── 4. The snapshot + the ONE commit.
+    let wrote = false;
+    for (const line of bodyLines) {
+      if (line.startsWith("user turn") || line.startsWith("reply") || line.startsWith("merge")) {
+        wrote = true;
+        break;
+      }
+    }
+    if (wrote) {
       await saveSliceSnapshot(slice, batch);
-      segments.push("snapshot");
+      bodyLines.push("snapshot");
     }
-
+    for (const f of failedTurns) bodyLines.push(f.note);
+    if (batch.entries.size === 0 && failedTurns.length === 0) {
+      console.log(`[Summary] ${payload.sliceId}: nothing to persist — the owner already landed it`);
+      return { kind: "nothing" };
+    }
     const message =
-      `Turn ${payload.turnId} — reply` +
-      (segments.length > 0
-        ? `\n\n${segments.map((s) => `- ${s}`).join("\n")}`
+      COMMIT_PREFIX.summary(payload.sliceId) +
+      (bodyLines.length > 0
+        ? `\n\n${bodyLines.map((s) => `- ${s}`).join("\n")}`
         : "");
     await flushTurnBatch(batch, message, slice);
 
-    // v0.38 §3.3: the bell is a PURE doorbell rung after EVERY successful
-    // commit — seal or no seal (a lost ring is covered by the cursor). A
-    // failed commit never rings: the turn stays uncommitted, and its bell
-    // belongs to the next successful one.
-    await ringReflection(payload.sliceId);
+    // ── 5. The reflection bell with the range (v0.42 §4 — 触发携带范围;
+    //    a hint, not the only truth — the unit re-reads the log, §3.5).
+    const persistedTurnIds = members
+      .filter((m) => m.replyText.trim() || m.userText.trim())
+      .map((m) => m.turnId);
+    await ringReflection(payload.sliceId, {
+      sliceId: payload.sliceId,
+      turnIds: persistedTurnIds,
+    });
     console.log(
-      `[Writer] turn ${payload.turnId} committed: ${segments.join(", ") || "no-op"}`,
+      `[Summary] ${payload.sliceId} committed: ${bodyLines.join(", ") || "failure notes only"}`,
     );
-    return { kind: "committed", segments };
+    return { kind: "committed", segments: bodyLines };
   } catch (err) {
     return fail(err);
   }
 }
-

@@ -20,17 +20,19 @@
 // ─── The frozen prefixes ──────────────────────────────────────────────────
 
 export const COMMIT_PREFIX = {
-  /** The turn's ENTRY beat: user turn + slice bookkeeping (housekeeping). */
-  userTurn: (turnId: string) => `Turn ${turnId} — user turn`,
   /** The turn tail's narrowed beat: 序6 evolution拍 only (v0.38 §6). */
   finalize: (turnId: string) => `Turn ${turnId} — finalize`,
-  /** The writer's one commit: reply + merge + cognition + snapshot. */
-  reply: (turnId: string) => `Turn ${turnId} — reply`,
+  /** The summary stream's ONE commit: the burst's whole 被动存盘
+   *  (user turns + replies + cognitions + merge + seals + snapshot —
+   *  v0.42 §2; `Turn {id} — user turn` / `Turn {id} — reply` retired with
+   *  the per-turn writer). */
+  summary: (sliceId: string) => `Summary — ${sliceId}`,
   /** The reflection unit's per-round commit — the cursor/log plane. */
   reflectionRound: (date: string) => `Reflection round — ${date}`,
   /** The question sub-stream's commit. */
   questionRun: (sliceId: string) => `Question run — ${sliceId}`,
-  /** The field's immediate case write. */
+  /** The field's immediate case write (主动写入 — lands the moment the tool
+   *  call returns, one call one commit, v0.42 §2 [11279]). */
   writeCase: (ref: string) => `writeCase ${ref}`,
 } as const;
 

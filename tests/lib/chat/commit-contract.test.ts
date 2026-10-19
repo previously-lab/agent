@@ -11,11 +11,12 @@ import {
   parseReflectionRoundMessage,
 } from "@/lib/chat/commit-contract";
 
-describe("the frozen prefixes (v0.39 §2.5)", () => {
-  it("the six registered prefixes, verbatim", () => {
-    expect(COMMIT_PREFIX.userTurn("a1b2c3")).toBe("Turn a1b2c3 — user turn");
+describe("the frozen prefixes (v0.39 §2.5; v0.42 §6-15 — user turn / reply retired)", () => {
+  it("the five registered prefixes, verbatim", () => {
     expect(COMMIT_PREFIX.finalize("a1b2c3")).toBe("Turn a1b2c3 — finalize");
-    expect(COMMIT_PREFIX.reply("a1b2c3")).toBe("Turn a1b2c3 — reply");
+    expect(COMMIT_PREFIX.summary("2026-10-20-1836")).toBe(
+      "Summary — 2026-10-20-1836",
+    );
     expect(COMMIT_PREFIX.reflectionRound("2026-10-19")).toBe(
       "Reflection round — 2026-10-19",
     );
@@ -27,15 +28,16 @@ describe("the frozen prefixes (v0.39 §2.5)", () => {
     );
   });
 
-  it("the six call sites use the contract builders (source audit — 前缀漂移即红)", async () => {
+  it("the call sites use the contract builders (source audit — 前缀漂移即红)", async () => {
     const { readFileSync } = await import("node:fs");
     const { fileURLToPath } = await import("node:url");
     const read = (rel: string) =>
       readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
     const steps = read("../../../src/app/api/chat/steps.ts");
-    expect(steps).toContain("Turn ${input.turnId} — user turn");
+    expect(steps).toContain("COMMIT_PREFIX.summary(payload.sliceId)");
     expect(steps).toContain("Turn ${input.turnId} — finalize");
-    expect(steps).toContain("Turn ${payload.turnId} — reply");
+    expect(steps).not.toContain("Turn ${input.turnId} — user turn");
+    expect(steps).not.toContain("Turn ${payload.turnId} — reply");
     const hq = read("../../../src/app/api/evolution/hq-agent.ts");
     expect(hq).toContain("buildReflectionRoundMessage");
     const bg = read("../../../src/app/api/evolution/background-steps.ts");

@@ -54,12 +54,12 @@ describe("stopTiersFor — the 分档 (v0.40 §2.3)", () => {
     expect(stopTiersFor(row()).map((t) => t.tier)).toEqual(["turn"]);
   });
 
-  it("a WRITER row offers only 停止归档 — NO confirm (the answer is already delivered)", () => {
-    const tiers = stopTiersFor(row({ role: "writer" }));
+  it("a SUMMARY row offers only 停止归档 — NO confirm (the answers are already delivered)", () => {
+    const tiers = stopTiersFor(row({ role: "summary" }));
     expect(tiers).toHaveLength(1);
     expect(tiers[0]).toMatchObject({
       tier: "turn",
-      labelKey: "hqStopTierWriter",
+      labelKey: "hqStopTierSummary",
       confirm: false,
     });
   });
@@ -78,15 +78,15 @@ describe("resolveStopTargets — 每档的调用目标 (走既有取消路径)",
     expect(resolveStopTargets("turn", row(), [], null)).toEqual(["wrun-1"]);
   });
 
-  it("停这一批 cancels EVERY live row sharing the burst (turns + writers of the batch)", () => {
+  it("停这一批 cancels EVERY live row sharing the burst (turns + summaries of the batch)", () => {
     const rows = [
       row({ runId: "wrun-turn-1", burst: "b1" }),
-      row({ runId: "wrun-writer-1", role: "writer", burst: "b1" }),
+      row({ runId: "wrun-summary-1", role: "summary", burst: "b1" }),
       row({ runId: "wrun-turn-2", burst: "b2" }),
     ];
     expect(resolveStopTargets("burst", rows[0]!, rows, null).sort()).toEqual([
+      "wrun-summary-1",
       "wrun-turn-1",
-      "wrun-writer-1",
     ]);
   });
 

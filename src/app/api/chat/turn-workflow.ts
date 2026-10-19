@@ -39,6 +39,7 @@ import type {
   NestedTurnTail,
   TurnInput,
   TurnOutcome,
+  TurnRunResult,
 } from "@/lib/chat/turn-types";
 import {
   episodeInboxToken,
@@ -68,7 +69,8 @@ import {
   finalizeTurn,
   closeTurnStream,
   decideBurstMergeLine,
-  startWriterTurn,
+  shouldStartSummary,
+  startSummaryRun,
   ownRunId,
   episodeClockMs,
   readEpisodeInbox,
@@ -966,7 +968,7 @@ export function assembleSystemPrompt(opts: {
 
 // ─── The workflow ────────────────────────────────────────────────────────
 
-export async function turnWorkflow(input: TurnInput): Promise<string> {
+export async function turnWorkflow(input: TurnInput): Promise<TurnRunResult> {
   "use workflow";
 
   // ── Pre-turn steps ─────────────────────────────────────────────────────
@@ -1913,21 +1915,22 @@ export async function turnWorkflow(input: TurnInput): Promise<string> {
     };
   }
 
-  // ── Post-turn: ONE finalize step (落盘 + 序 6 in a single commit) ────────
-  // 落盘这一轮 + the explicit-instruction channel ride finalizeTurn's single
-  // flush — and with them the episode tail (v0.30 §3.4): every terminal nested
-  // bubble as its own agent turn (replyTo carried) + the merged summary folded
-  // into the outer agent turn, all in the SAME commit. Then the stream tail,
-  // then — ONLY when this beat sealed a slice — the mechanical bell (v0.34
-  // R1): the reflection unit is woken with a pure pointer (the sealed slice's
-  // id + user-local date) and reads the record itself. A reply-stream error
-  // does not silence it (a seal is on disk either way), and it never throws.
+  // ── Post-turn: ONE finalize step (序 6 主动写入 in a single commit) ──────
+  // The explicit-instruction channel rides finalizeTurn's single flush — and
+  // with it the episode tail (v0.30 §3.4): every terminal nested bubble as
+  // its own agent turn (replyTo carried) + the merged summary folded into
+  // the outer agent turn, all in the SAME commit. 被动存盘 is NOT here —
+  // the user turn never lands in the turn's commits (v0.42 §0); the summary
+  // stream owns it. Then the stream tail. A reply-stream error does not
+  // silence the tail, and the tail never throws.
   await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
   // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
   // run retired with its collector): the last survivor judges lastness
   // (burst-exact when the client sent a burstId, else the legacy overlap
   // window), reads COMPLETED siblings' returnValues only, and generates the
   // merge line ONLY when reconciliation is needed (有更正/矛盾才说一句).
+  // v0.42 §2 — the generated line rides THIS turn's record into the summary
+  // run's batch (落盘归总结流).
   let mergeLine: string | undefined;
   if (parallelEnabled && outcome.text.trim()) {
     mergeLine = await decideBurstMergeLine({
@@ -1935,6 +1938,7 @@ export async function turnWorkflow(input: TurnInput): Promise<string> {
       turnId: input.turnId,
       ...(input.burstId ? { burstId: input.burstId } : {}),
       ownReplyText: outcome.text,
+      ownUserText: input.lastUserMessage,
       locale: input.locale,
       model: input.model,
       modelConfig: input.modelConfig,
@@ -1944,31 +1948,44 @@ export async function turnWorkflow(input: TurnInput): Promise<string> {
       repo: input.repo,
     });
   }
-  // v0.38 §3.2 顺序纪律 — durable start CARRYING the reply, BEFORE the
-  // stream closes: the persistence intent is durable the moment the start
-  // succeeds (reverse the order and a turn dying between the two leaves
-  // "stream closed, writer never started"). The turn does NOT wait on the
-  // writer (前提③ — 回复侧流完即走); the writer rings the reflection bell
-  // itself once its commit lands. A failed turn carries no reply — nothing
-  // to hand over, so no writer is started.
+  // v0.42 §1/§2 — 被动存盘 belongs to the summary stream: this turn persists
+  // NOTHING; its structured result (user text + reply + cognition + the
+  // beat's seal/birth records) is the run's returnValue, read by the burst's
+  // last survivor. The last conversation flow starts the summary run DURABLY
+  // CARRYING its own record, BEFORE closeTurnStream (the persistence intent
+  // must be durable before the stream closes); 唤起即完成 — the turn does NOT
+  // wait on the summary run. Not the last → nothing (the last one collects).
+  const turnResult: TurnRunResult = {
+    turnId: input.turnId,
+    sliceId: hk.slice.slice_id,
+    at: input.startedAtIso,
+    userText: input.lastUserMessage,
+    replyText: outcome.text,
+    cognition: outcome.cognition,
+    ...(mergeLine ? { mergeLine } : {}),
+    ...(input.burstId ? { burstId: input.burstId } : {}),
+    ...(hk.sealed ? { sealed: hk.sealed } : {}),
+    ...(hk.birth ? { birth: hk.birth } : {}),
+  };
   if (outcome.text.trim() || mergeLine) {
-    await startWriterTurn({
+    const last = await shouldStartSummary({
       sliceId: hk.slice.slice_id,
       turnId: input.turnId,
-      replyText: outcome.text,
-      cognition: outcome.cognition,
-      ...(mergeLine ? { mergeLine } : {}),
       ...(input.burstId ? { burstId: input.burstId } : {}),
-      ...(hk.closedSliceId ? { closedSliceId: hk.closedSliceId } : {}),
-      date: dateAnchor,
-      useGithub: input.useGithub,
-      useDemo: input.useDemo,
-      owner: input.owner,
-      repo: input.repo,
-      locale: input.locale,
-      model: input.model,
-      modelConfig: input.modelConfig,
     });
+    if (last) {
+      await startSummaryRun({
+        sliceId: hk.slice.slice_id,
+        ...(input.burstId ? { burstId: input.burstId } : {}),
+        date: dateAnchor,
+        own: turnResult,
+        useGithub: input.useGithub,
+        useDemo: input.useDemo,
+        owner: input.owner,
+        repo: input.repo,
+        locale: input.locale,
+      });
+    }
   }
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
@@ -1976,7 +1993,9 @@ export async function turnWorkflow(input: TurnInput): Promise<string> {
   if (streamError !== null) {
     throw streamError;
   }
-  // v0.38 §3.2 ①: the run's return value IS its reply text — the burst's
-  // last survivor reads completed siblings' returnValues from the registry.
-  return outcome.text;
+  // v0.42 §1 — the run's return value IS the turn's persistence record; the
+  // burst's last survivor's summary run reads completed siblings'
+  // returnValues from the registry (legacy runs returned the bare reply
+  // text — readers tolerate both shapes).
+  return turnResult;
 }

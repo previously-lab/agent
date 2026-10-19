@@ -41,6 +41,18 @@ export type ReflectionWakeResult =
   | { ok: true; delivered: "rung" | "started" | "tookOver"; runId: string }
   | { ok: false; reason: string };
 
+/**
+ * The range a summary stream hands the reflection unit (v0.42 §4 — 触发携带
+ * 范围): the slice + the turn ids the summary just persisted. A HINT, not the
+ * only truth — the unit re-checks the commit log itself (§3.5). Carried by
+ * the bell from v0.42 on; the reflection side consumes it in a later phase
+ * (this phase threads the parameter through only).
+ */
+export interface ReflectionWakeRange {
+  sliceId: string;
+  turnIds: string[];
+}
+
 /** Start a fresh short-lived reflection unit (a dead/absent token is free). */
 async function startReflectionRun(): Promise<ReflectionWakeResult> {
   try {
@@ -102,9 +114,17 @@ async function readHolderAgeMs(runId: string): Promise<number | null> {
  * never blocks between laps, so any bell landing while it lives is
  * redundant by construction). A holder that has outlived the threshold
  * while STILL holding the token is a zombie — the ring that finds it IS
- * the challenger (cancel → start, `tookOver`). Never throws.
+ * the challenger (cancel → start, `tookOver`). `range` (v0.42 §4) is the
+ * summary stream's hint of what it just persisted (the slice + the turn
+ * ids) — a hint, not the only truth (the unit re-reads the commit log
+ * itself, §3.5). Never throws.
  */
-export async function deliverReflectionWake(): Promise<ReflectionWakeResult> {
+export async function deliverReflectionWake(
+  range?: ReflectionWakeRange,
+): Promise<ReflectionWakeResult> {
+  // v0.42 §4 — the range is threaded through this phase only; the reflection
+  // side starts consuming it in the next phase.
+  void range;
   let hook: Awaited<ReturnType<typeof getHookByToken>>;
   try {
     hook = await getHookByToken(REFLECTION_TOKEN);
