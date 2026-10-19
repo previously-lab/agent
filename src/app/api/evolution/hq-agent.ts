@@ -28,6 +28,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
+import { parseSliceId } from "@/lib/episodic/turn-parser";
 import {
   commitReflectionRound,
   createBatch,
@@ -183,6 +184,28 @@ ${DOC_HOUSE_STYLE}`;
 
 // ─── The tools (every one a wrapper over an existing capability) ──────────
 
+/**
+ * Gate every model-supplied slice id BEFORE any read, write, or lock. A
+ * malformed id used to survive all the way to the round-end flush: loadSlice
+ * degrades to null for ids that resolve to nothing (harmless string), but an
+ * id that happens to READ (e.g. a legacy dir whose name carries a space or a
+ * colon) lets markSlice queue a closeSlice write whose path is derived from
+ * the id unchecked — and fsWriteFile validates NOTHING at queue time. The
+ * whitelist / portable-name refusal then fires inside commitReflectionRound
+ * and fails the WHOLE round's commit: the trailer never lands, the cursor
+ * holds, and the next round retries the same scope forever (live-lock,
+ * observed 2026-10-16). Validating here keeps the refusal recoverable — a
+ * string the model can act on, no throw, no queued write, no round state.
+ */
+function refuseMalformedSliceId(sliceId: string): string | null {
+  if (parseSliceId(sliceId) !== null) return null;
+  return (
+    `(rejected: "${sliceId}" is not a slice id — ids look like 2026-10-04-0131 ` +
+    `(YYYY-MM-DD-HHMM). Copy the FULL id from listTree or this round's docket; ` +
+    `nothing was read, written, or closed.)`
+  );
+}
+
 function buildHqTools(
   date: string,
   model: ModelConfig,
@@ -210,6 +233,8 @@ function buildHqTools(
         part: z.enum(["core", "agent", "previously"]).default("core"),
       }),
       execute: async ({ sliceId, part }) => {
+        const refusal = refuseMalformedSliceId(sliceId);
+        if (refusal) return refusal;
         try {
           return await readSlicePart(sliceId, part, batch);
         } catch {
@@ -230,7 +255,17 @@ function buildHqTools(
         sliceId: z.string().describe("e.g. 2026-10-04-0131"),
       }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId, batch).catch(() => null);
+        const refusal = refuseMalformedSliceId(sliceId);
+        if (refusal) return refusal;
+        // ONE explicit judgment for "can this slice be loaded at all": a null
+        // OR a throw both mean report-and-write-nothing — the tool never
+        // rejects, so the round keeps moving.
+        let slice: Awaited<ReturnType<typeof loadSlice>> = null;
+        try {
+          slice = await loadSlice(sliceId, batch);
+        } catch {
+          slice = null;
+        }
         if (!slice) return `(slice ${sliceId} unreadable — nothing marked.)`;
         // Idempotent: closed_by is authoritative — a slice already sealed
         // (by anyone, for any cause) is never rewritten.
@@ -329,7 +364,14 @@ function buildHqTools(
         "An empty result is legal — writer-is-reader dedup lives inside the passes.",
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId, batch).catch(() => null);
+        const refusal = refuseMalformedSliceId(sliceId);
+        if (refusal) return refusal;
+        let slice: Awaited<ReturnType<typeof loadSlice>> = null;
+        try {
+          slice = await loadSlice(sliceId, batch);
+        } catch {
+          slice = null;
+        }
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
         const excerpt = buildSliceExcerpt(slice);
         const result = await runLibrarianPass({
@@ -373,7 +415,14 @@ function buildHqTools(
         focus: z.string().describe("What this round is about — cite the cases just written, if any."),
       }),
       execute: async ({ sliceId, focus }) => {
-        const slice = await loadSlice(sliceId, batch).catch(() => null);
+        const refusal = refuseMalformedSliceId(sliceId);
+        if (refusal) return refusal;
+        let slice: Awaited<ReturnType<typeof loadSlice>> = null;
+        try {
+          slice = await loadSlice(sliceId, batch);
+        } catch {
+          slice = null;
+        }
         if (!slice) return `(slice ${sliceId} unreadable — evolve skipped.)`;
         // The round's batch rides the read (v0.37 §5): the direction half may
         // have been queued by an earlier evolveUserModel THIS round.
@@ -431,7 +480,14 @@ function buildHqTools(
         "Marker scanning, dedup and recording happen INSIDE the pass.",
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId, batch).catch(() => null);
+        const refusal = refuseMalformedSliceId(sliceId);
+        if (refusal) return refusal;
+        let slice: Awaited<ReturnType<typeof loadSlice>> = null;
+        try {
+          slice = await loadSlice(sliceId, batch);
+        } catch {
+          slice = null;
+        }
         if (!slice) return `(slice ${sliceId} unreadable — research skipped.)`;
         const result = await runDocResearchPass({
           model,

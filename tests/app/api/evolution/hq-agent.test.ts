@@ -775,6 +775,89 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(episodic.closeSlice).not.toHaveBeenCalled();
   });
 
+  // The 2026-10-16 live-lock: a malformed slice id rode to the round-end
+  // flush and poisoned the whole commit (the trailer never landed, the
+  // cursor held, the next round retried the same scope). The gate must
+  // refuse BEFORE any read, write, or lock — a string, never a throw.
+  // ("2026-13-99-9999" is range-nonsense but SHAPE-valid — parseSliceId's
+  // contract is the four-segment shape; that id passes the gate and degrades
+  // through the unreadable path below, still without a write.)
+  const MALFORMED_IDS = [
+    "2026-10-16 01:31",
+    "2026-10-16-0131/core.md",
+    "../escape",
+    "2026-10-16",
+    "",
+  ];
+
+  it("markSlice / readSlice refuse a malformed slice id at the gate — no throw, no read, no queued write", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      for (const id of MALFORMED_IDS) {
+        const m = await callTool(opts, "markSlice", { sliceId: id });
+        expect(m).toContain("rejected");
+        expect(m).toContain("YYYY-MM-DD-HHMM");
+        expect(m).toContain("listTree");
+        if (id) expect(m).toContain(id); // the refusal echoes what was passed
+        const r = await callTool(opts, "readSlice", { sliceId: id });
+        expect(r).toContain("rejected");
+        expect(r).not.toContain("cannot read");
+      }
+      // The gate fires BEFORE the load: nothing was read, closed, or queued.
+      expect(episodic.loadSlice).not.toHaveBeenCalled();
+      expect(episodic.readSlicePart).not.toHaveBeenCalled();
+      expect(io.batchRef.current!.entries.size).toBe(0);
+      return { ok: true, report: { actions: [], note: "all refused" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    // an idle round: nothing queued, nothing on the fake disk
+    expect(io.files.size).toBe(0);
+  });
+
+  it("a shape-valid but nonexistent id (2026-13-99-9999) degrades unreadable — the pre-gate load judgment, never a throw or a write", async () => {
+    episodic.loadSlice.mockResolvedValue(null);
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const m = await callTool(opts, "markSlice", { sliceId: "2026-13-99-9999" });
+      expect(m).toContain("unreadable");
+      const r = await callTool(opts, "readSlice", { sliceId: "2026-13-99-9999" });
+      expect(r).toContain("cannot read");
+      expect(io.batchRef.current!.entries.size).toBe(0);
+      return { ok: true, report: { actions: [], note: "degraded" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+    expect(episodic.closeSlice).not.toHaveBeenCalled();
+    expect(io.files.size).toBe(0);
+  });
+
+  it("the three slice passes (archive / evolve / research) refuse a malformed id the same way", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const archive = await callTool(opts, "archiveSliceCases", { sliceId: "../escape" });
+      expect(archive).toContain("rejected");
+      const evolve = await callTool(opts, "evolveUserModel", { sliceId: "../escape", focus: "x" });
+      expect(evolve).toContain("rejected");
+      const research = await callTool(opts, "researchSliceQuestions", { sliceId: "../escape" });
+      expect(research).toContain("rejected");
+      // The passes (and the evolution lock) never ran — no evolution beat.
+      expect(passes.runLibrarianPass).not.toHaveBeenCalled();
+      expect(passes.runScribePass).not.toHaveBeenCalled();
+      expect(passes.runDocResearchPass).not.toHaveBeenCalled();
+      expect(passes.runCardEvolution).not.toHaveBeenCalled();
+      expect(io.batchRef.current!.entries.size).toBe(0);
+      return { ok: true, report: { actions: [], note: "passes refused" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+    expect("evolved" in outcome).toBe(false);
+  });
+
   it("the role prompt bans the builder's vantage point from self/ writes", async () => {
     runSubAgentMock.mockImplementation(async () => ({
       ok: true,
