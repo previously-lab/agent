@@ -85,6 +85,14 @@ export interface TurnInput {
    */
   clientMessageId?: string;
   /**
+   * The parallel-burst id (v0.38 §2) — the client mints ONE ULID per burst
+   * (every message of a 连发 carries it; a first/solo message omits it).
+   * Rides the run's start attributes (`burst`) and the writer's turn header
+   * so batch membership is decidable from the record; absent = the legacy
+   * time-window overlap heuristic at the merge decision.
+   */
+  burstId?: string;
+  /**
    * True when this turn RE-RUNS the previous user message (the client
    * regenerate action — SDK trigger "regenerate-message"). Housekeeping then
    * skips the user-turn append (the question is already in the slice) and the
@@ -448,4 +456,50 @@ export function deriveTurnStatus(outcome: TurnOutcome): TurnStatus {
   if (outcome.finishReason === "interrupted") return "interrupted";
   if (outcome.text) return "interrupted";
   return "error";
+}
+
+
+/**
+ * The turn → writer handoff (v0.38 §3.2) — a DURABLE start() CARRYING WORK:
+ * the reply exists only in the turn's memory/stream, so the payload IS the
+ * persistence intent. The writer (writer-run.ts) appends the reply turn +
+ * the optional merge turn + the slice snapshot in ONE batch/commit
+ * (`Turn {turnId} — reply`), then rings the reflection bell on a seal.
+ */
+export interface WriterRunPayload {
+  /** The slice the reply landed on. */
+  sliceId: string;
+  /** This turn's id — the reply/agent turn carry it; the writer dedupes by it. */
+  turnId: string;
+  /** The reply's full assistant text ("" on a failed turn — nothing to append). */
+  replyText: string;
+  /** The turn's cognition body for agent.md ("" when none). */
+  cognition: string;
+  /** Set ONLY when this run is the burst's last survivor AND corrections need a closing. */
+  mergeLine?: string;
+  /** The burst id (rides the [burst {id}] turn-header segment). */
+  burstId?: string;
+  /** Present when THIS turn sealed the slice — the writer rings the bell. */
+  closedSliceId?: string;
+  /** User-local date (YYYY-MM-DD), the stamping convention. */
+  date: string;
+  /** Backend flags, exactly as TurnInput carries them. */
+  useGithub: boolean;
+  useDemo: boolean;
+  owner: string;
+  repo: string;
+  /** UI locale — the merge line's generation follows it. */
+  locale: string;
+  /** The spawning turn's model config (merge-line generation input). */
+  model: string;
+  modelConfig: TurnInput["modelConfig"];
+}
+
+/** What the writer run reports back (observability; the turn never waits on it). */
+export interface WriterRunOutcome {
+  /** "deduped" = a live writer for this turnId already owned the commit. */
+  kind: "committed" | "deduped" | "nothing" | "failed";
+  /** commit segments, for the log. */
+  segments?: string[];
+  error?: string;
 }

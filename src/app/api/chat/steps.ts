@@ -134,7 +134,8 @@ import type {
   EvolutionResult,
   NestedTurnTail,
   InnerTurnReport,
-  SummaryRunInput,
+  WriterRunPayload,
+  WriterRunOutcome,
 } from "@/lib/chat/turn-types";
 import { deriveTurnStatus } from "@/lib/chat/turn-types";
 import {
@@ -144,18 +145,18 @@ import {
 } from "@/lib/chat/nested-bubble";
 import {
   PARALLEL_SUMMARY_CHUNK,
+  buildMergeWindow,
   hasOverlappingParallelSibling,
   isBlockingParallelSibling,
-  isLiveParallelSummary,
+  isBurstSibling,
+  isLastBurstTurn,
   isLiveRunStatus,
-  shouldYieldToLiveSummary,
+  isParallelTurnRun,
+  isParallelWriterRun,
   type ParallelRunEntry,
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
-import {
-  buildReflectionWakePayload,
-  deliverReflectionWake,
-} from "@/app/api/evolution/reflection-wake";
+import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
 import { readHQStatus } from "@/app/api/evolution/hq-status-store";
 import {
   runCardEvolution,
@@ -928,7 +929,11 @@ export async function housekeeping(
   if (!input.useDemo && input.modelConfig.sdk !== "bridge") {
     try {
       const ownId = getWorkflowMetadata().workflowRunId;
-      await setAttributes({ slice: slice.slice_id, turn: input.turnId });
+      await setAttributes({
+        slice: slice.slice_id,
+        turn: input.turnId,
+        ...(input.burstId ? { burst: input.burstId } : {}),
+      });
       const live = await listLiveRuns();
       const count = live.filter((r) =>
         isBlockingParallelSibling(r, slice.slice_id, ownId),
@@ -1478,22 +1483,16 @@ async function flushTurnBatch(
 }
 
 /**
- * The turn tail — 落盘这一轮 + 序 6 in ONE slice-locked step and ONE
- * git commit (`Turn {turnId} — finalize`, the body naming the segments that
- * actually queued writes). These used to be separate steps committing
- * separately; they share the slice lock and the conflict self-heal, so
- * merging loses nothing and the tail's writes land atomically:
- *   - Segment 1 appends the agent turn + cognition (deduped by turnId —
- *     the old persistAgentTurn, unchanged), plus — when the episode tail
- *     exists (v0.30 §3.4) — one agent turn per terminal nested bubble
- *     (deduped per bubble turnId, replyTo carried) with the merged summary
- *     folded into the outer agent turn.
- *   - Segment 2 is the explicit-instruction channel (序 6 — the old
- *     explicitEvolutionSegment, unchanged): runs ONLY when the entry beat's
- *     analysis read an explicit record/correction request; no explicit
- *     instruction → zero LLM, zero writes.
- * Retries are safe: the agent-turn append is deduped by turnId, the snapshot
- * write is idempotent, a review re-run converges, and the flush keeps the
+ * The turn tail — 序 6 (explicit-instruction evolution) in ONE slice-locked
+ * step, riding the turn's batch (v0.38 §6: the turn's commits are the ENTRY
+ * beat's — the user turn landed synchronously in housekeeping; what remains
+ * here is the evolution拍 only). The REPLY side is ZERO-batch: the reply
+ * turn + cognition + snapshot moved to the writer (writer-run.ts), which the
+ * turn tail starts BEFORE closeTurnStream — the writer carries the reply in
+ * its payload, so the persistence intent is durable the moment the start
+ * succeeds. `Turn {turnId} — finalize` therefore names the evolution拍 (and
+ * the episode-residual bubbles) only; on a plain turn the batch is empty and
+ * the flush no-ops. Idempotent under redelivery; the flush keeps the
  * turn-merge self-heal (flushTurnBatch).
  */
 export async function finalizeTurn(
@@ -1525,27 +1524,12 @@ export async function finalizeTurn(
     if (batch.entries.size > before) segments.push(name);
   };
 
-  // ── Segment 1: 落盘这一轮 — append the agent turn + cognition ─────────
-  // `outcome.text` is the agent's FULL assistant text for the turn
-  // (intermediate + final), so the stored slice keeps both ends; tool calls
-  // are not preserved. Idempotent under redelivery: when this turnId's agent
-  // turn is already in the slice (a retried run re-executing against
-  // persisted disk state), skip the append. User and agent turns share the
-  // turnId — scope by role.
-  //
-  // First: union any route-appended episode user turns from disk into the
-  // in-memory slice, so the snapshot below does not erase them (D-2).
-  await mergeSliceWithDiskTurns(slice, input);
+  // ── Segment 1 (v0.38 §6): the reply turn + cognition + snapshot moved
+  //    to the WRITER (writer-run.ts) — 回复侧零批. What stays here is the
+  //    episode-residual nested bubbles (the hard-off orchestrator path,
+  //    retiring with that machinery) and nothing else.
   const before1 = batch.entries.size;
-
-  // Nested bubbles first (v0.30 §3.4, D7): one agent turn per terminal inner
-  // instance — turnId = the instance id, replyTo = the user turn it answered
-  // (the Turn schema's optional extension; both header regexes carry it).
-  // Deduped PER bubble: a redelivered run re-executing against persisted disk
-  // state skips each recorded bubble. A failed instance's partial text is
-  // recorded [partial]-style; with NO text it is not recorded at all — the
-  // user turn stays unanswered on disk (the honest record reflection reads),
-  // and the merged summary states the failure (§3.6).
+  await mergeSliceWithDiskTurns(slice, input);
   for (const bubble of nested?.bubbles ?? []) {
     if (
       slice.turns.some((t) => t.role === "agent" && t.turnId === bubble.turnId)
@@ -1578,62 +1562,10 @@ export async function finalizeTurn(
       );
     }
   }
-
-  const agentTurnRecorded =
-    !!input.turnId &&
-    slice.turns.some((t) => t.role === "agent" && t.turnId === input.turnId);
-  if (agentTurnRecorded) {
-    console.log(`[Episodic] Agent turn ${input.turnId} already persisted — skipping append`);
-  } else if (outcome.finishReason === "stop") {
-    // The episode's merged summary FOLDS into the outer agent turn (one
-    // agent turn per outer turnId — see NestedTurnTail for why). Under the
-    // orchestrator shell (v0.31) the outer run answers nothing itself — when
-    // there is no summary either, the answers are the bubbles' own turns and
-    // an empty outer agent turn is skipped, not stored.
-    const body = nested?.mergeSummary
-      ? [outcome.text, nested.mergeSummary].filter(Boolean).join("\n\n")
-      : outcome.text;
-    if (body) {
-      appendTurn(slice, {
-        timestamp: new Date().toISOString(),
-        role: "agent",
-        content: body,
-        turnId: input.turnId,
-      });
-    } else {
-      console.log(
-        `[Episodic] Outer turn ${input.turnId} has no text of its own (orchestrator shell) — answers live on the bubble turns`,
-      );
-    }
-  } else if (outcome.text) {
-    appendTurn(slice, {
-      timestamp: new Date().toISOString(),
-      role: "agent",
-      content: `[partial] ${outcome.text}`,
-      turnId: input.turnId,
-    });
-    console.log(`[Episodic] Pro interrupted (${outcome.finishReason})`);
-  } else {
-    console.log(`[Episodic] Pro produced no text (${outcome.finishReason})`);
-  }
-
-  if (
-    outcome.finishReason === "stop" ||
-    outcome.text ||
-    (nested?.bubbles.some((b) => b.text) ?? false)
-  ) {
+  if (nested?.bubbles.some((b) => b.text)) {
     await saveSliceSnapshot(slice, batch);
   }
-
-  // Write agent timeline — mechanical extraction from the model's own
-  // reasoning traces and tool calls. The cognition body is produced by
-  // extractCognition() in the workflow body; here we prepend the header
-  // (timestamp stamped in this step, where Date is allowed) and persist.
-  if (outcome.cognition) {
-    const header = `## Cognition ${input.turnId} — ${new Date().toISOString()}\n`;
-    await writeAgentTimeline(slice.slice_id, header + outcome.cognition, batch);
-  }
-  mark("agent response", before1);
+  mark("episode bubbles", before1);
 
   // ── Segment 2: 序 6 — the explicit-instruction channel (post-reply) ───
   // The turn's ONLY surviving post-reply derivation (v0.19 §A.3.2): the user
@@ -1873,31 +1805,21 @@ export async function closeChildStream(): Promise<void> {
 // ─── Step 5: ringReflection — the mechanical bell (v0.34 R1) ───────────────
 
 /**
- * The reflection unit's ONLY trigger — and it rings ONLY on a real seal
- * (v0.34 R1 retired the per-turn tail bell and the cancel-route bare bell:
- * an open slice is not reflection material, and an unanswered question is
- * covered when its slice seals). The slice is fully persisted by now
- * (closeSlice above), so the bell hands over a PURE POINTER — the sealed
- * slice's id and the user-local date — and nothing else: nobody briefs the
- * unit, it reads the record itself. The engine (reflection-wake.ts) is what
- * the retired reportToHQ executor used: a live run gets a resumeHook push,
- * otherwise a fresh run starts (the claim/handoff chain in reflection-run.ts
- * covers races). Best-effort by design — a failed bell only warns: the
- * unit's range is everything since its last look, so the next seal's bell
- * covers the gap. Never throws; the turn must not be taken down by its
- * doorbell.
+ * The reflection unit's ONLY trigger (v0.38 §3.3 — the bell is now PURE: the
+ * mailbox retired to a mutex, so the wake carries NO payload at all). The
+ * writer rings it after its commit when its turn sealed the slice; the
+ * engine (reflection-wake.ts) is getHookByToken → a live run means the unit
+ * is up and the ring is DONE (触发即完成); no live run → start a fresh
+ * short-lived unit. Best-effort by design — a lost bell only warns: the
+ * unit's range is everything since its on-disk cursor, so the next seal's
+ * bell covers the gap. Never throws.
  */
-export async function ringReflection(
-  closedSliceId: string,
-  input: TurnInput,
-): Promise<void> {
+export async function ringReflection(closedSliceId: string): Promise<void> {
   "use step";
   try {
-    const result = await deliverReflectionWake(
-      buildReflectionWakePayload(closedSliceId, input),
-    );
+    const result = await deliverReflectionWake();
     if (!result.ok) {
-      console.warn(`[Reflection] wake not delivered (ignored): ${result.reason}`);
+      console.warn(`[Reflection] wake not delivered for ${closedSliceId} (ignored): ${result.reason}`);
     }
   } catch (err) {
     console.warn(
@@ -2139,75 +2061,237 @@ async function listRegistryRuns(): Promise<ParallelRunEntry[]> {
 async function listLiveRuns(): Promise<ParallelRunEntry[]> {
   return (await listRegistryRuns()).filter((r) => isLiveRunStatus(r.status));
 }
+// ─── The writer handoff (v0.38 §3.2/§4 — writer-per-turn) ─────────────────
 
 /**
- * The last-one check (v0.33 §3) — the turn workflow's FINAL say before its
- * stream closes. Runs AFTER finalizeTurn (this turn's reply is already on
- * disk, so a summary spawned now reads a complete record) and BEFORE
- * closeTurnStream (the stream is still open, so the summary's runId rides a
- * transient chunk to the client).
- *
- * Order inside: stamp THIS run `phase: "tail"` FIRST — a sibling checking
- * right now then yields instead of mutual-skipping (the window where both
- * see each other as running and nobody fires) — then count. No blocking
- * sibling, no live summary for the slice, AND at least one OVERLAPPING
- * sibling (the burst gate — a solo turn never spawns a summary) → start the
- * summary run, its `role: "summary"` seed visible at creation (the
- * double-fire absorber).
- *
- * Never throws and never blocks the turn: a registry hiccup or a start
- * failure degrades to "no summary" — every answer is on disk either way.
- * Returns the summary runId (or null) for logging/tests.
+ * What the tail hands the merge decision (v0.38 §3.2 ②) — the burst's
+ * identity, this turn's own reply, and the merge-line generation inputs.
+ * All serializable; the registry reads stay in the step.
  */
-export async function startSummaryIfLastTurn(
-  sliceId: string,
-  summary: SummaryRunInput,
-): Promise<string | null> {
+export interface BurstMergeParams {
+  sliceId: string;
+  turnId: string;
+  /** The burst id (registry-exact enumeration); absent → overlap heuristic. */
+  burstId?: string;
+  /** THIS turn's reply text — the window's last entry. */
+  ownReplyText: string;
+  locale: string;
+  model: string;
+  modelConfig: TurnInput["modelConfig"];
+  useGithub: boolean;
+  useDemo: boolean;
+  owner: string;
+  repo: string;
+}
+
+/**
+ * The last turn's merge-line decision (v0.38 §3.2 ②) — runs in the turn's
+ * tail AFTER finalizeTurn (this turn's evolution拍 is committed) and BEFORE
+ * startWriterTurn (the generated line rides THIS turn's writer payload).
+ *
+ * Lastness is burst-exact when the client sent a burstId (registry attribute
+ * equality — no timestamp inference), else the legacy overlap heuristic
+ * (v0.38 §2 退化). Sibling replies are read ONLY from COMPLETED runs'
+ * returnValues (a turn run's return value IS its reply text; failed or
+ * cancelled siblings are skipped — nothing to reconcile with), never from
+ * the disk (a sibling's writer may not have committed yet) and never from a
+ * non-terminal run (reading a live run's returnValue long-polls and burns a
+ * worker slot). The line itself is generated ONLY when reconciliation is
+ * needed — the model outputs EMPTY when no answer corrects or contradicts
+ * another, and an empty output means NO mergeLine (收合永远可空).
+ *
+ * Returns the merge line (announced to the client as a transient chunk —
+ * presentation proper is Part 5) or undefined. Never throws and never blocks
+ * the turn: a registry hiccup or a model failure degrades to "no closing" —
+ * every answer is carried by a writer either way.
+ */
+export async function decideBurstMergeLine(
+  params: BurstMergeParams,
+): Promise<string | undefined> {
   "use step";
   try {
+    // Stamp THIS run `phase: "tail"` FIRST — a sibling checking right now
+    // then yields instead of mutual-skipping (the v0.33 window, unchanged).
     await setAttributes({ phase: "tail" });
     const ownId = getWorkflowMetadata().workflowRunId;
     const runs = await listRegistryRuns();
-    if (runs.some((r) => isBlockingParallelSibling(r, sliceId, ownId))) {
-      return null;
+    let siblingRunIds: string[];
+    if (params.burstId) {
+      if (
+        !isLastBurstTurn(runs, params.sliceId, params.burstId, ownId, params.turnId)
+      ) {
+        console.log(`[Parallel] merge skipped (turn ${params.turnId}): not the burst's last survivor`);
+        return undefined;
+      }
+      siblingRunIds = runs
+        .filter((r) => isBurstSibling(r, params.sliceId, params.burstId!, ownId))
+        .map((r) => r.runId);
+    } else {
+      if (runs.some((r) => isBlockingParallelSibling(r, params.sliceId, ownId))) {
+        return undefined; // a sibling is still answering — not the last yet
+      }
+      if (
+        !hasOverlappingParallelSibling(runs, params.sliceId, ownId, Date.now())
+      ) {
+        return undefined; // solo turn / sequential sends — nobody to merge with
+      }
+      siblingRunIds = runs
+        .filter((r) => r.runId !== ownId && isParallelTurnRun(r, params.sliceId))
+        .map((r) => r.runId);
     }
-    if (runs.some((r) => isLiveParallelSummary(r, sliceId, ownId))) {
-      return null;
+    // COMPLETED siblings only — failed/cancelled runs are skipped (nothing
+    // to reconcile with); a live run's returnValue is never read (it
+    // long-polls and burns a worker slot).
+    const replies: Array<{ turn: string; text: string }> = [];
+    for (const runId of siblingRunIds) {
+      const entry = runs.find((r) => r.runId === runId);
+      if (!entry || entry.status !== "completed") continue;
+      try {
+        const rv = await getRun<string>(runId).returnValue;
+        if (typeof rv === "string" && rv.trim()) {
+          replies.push({ turn: entry.attributes?.turn ?? runId, text: rv });
+        }
+      } catch {
+        // registry blip on one sibling — reconcile with the rest
+      }
     }
-    // The burst gate: only a turn that truly RAN ALONGSIDE a sibling closes
-    // the batch. A solo turn — the common case — has no overlapping sibling
-    // and must not spend a summary run (one extra model call) on itself;
-    // two SEQUENTIAL sends never overlap either and get no summary.
-    if (!hasOverlappingParallelSibling(runs, sliceId, ownId, Date.now())) {
-      return null;
+    if (replies.length === 0) {
+      console.log(
+        `[Parallel] merge skipped (turn ${params.turnId}): no completed sibling replies ` +
+        `(siblings: ${siblingRunIds
+          .map((id) => `${id}:${runs.find((r) => r.runId === id)?.status ?? "?"}`)
+          .join(", ") || "none"})`,
+      );
+      return undefined;
     }
-    // Dynamic import: steps.ts → summary-workflow.ts → steps.ts is a static
-    // cycle otherwise (the spike's proven shape for step-side start()).
-    const { summaryWorkflow } = await import("./summary-workflow");
-    const run = await start(summaryWorkflow, [summary], {
-      attributes: { role: "summary", slice: sliceId },
-    });
-    // Tell the client where the closing bubble streams from — transient: the
-    // frame rides to onData only, never a UIMessage part; a reconnect replay
-    // re-delivers it (deduped by the stable per-slice id).
-    const stream = createStepStream();
+    // The burst's USER messages: read from the slice (they landed
+    // synchronously in housekeeping — 红线), capped to the tail. The
+    // corrections that justify a closing live THERE (「不是包子，是饺子」),
+    // never in the replies alone.
+    let userTexts: string[] = [];
     try {
-      await stream.write({
-        type: PARALLEL_SUMMARY_CHUNK,
-        id: `parallel-summary-${sliceId}`,
-        transient: true,
-        data: { runId: run.runId, sliceId },
-      } as UIMessageChunk);
-    } finally {
-      stream.close();
+      const path = sliceIdToFilePath(params.sliceId);
+      let raw: string;
+      if (params.useDemo) {
+        raw = await readFileDemo(path);
+      } else if (params.useGithub) {
+        raw = await readFileFresh(path, params.repo, params.owner);
+      } else {
+        raw = await readFileLocal(path);
+      }
+      userTexts = parseSlice(raw)
+        .turns.filter((t) => t.role === "user")
+        .slice(-6)
+        .map((t) => t.content);
+    } catch {
+      userTexts = []; // an unreadable slice degrades to a replies-only window
     }
-    console.log(
-      `[Parallel] batch summary started: ${run.runId} (slice ${sliceId})`,
+    const windowText = buildMergeWindow(userTexts, replies, params.ownReplyText, params.locale);
+    const line = await runMergeLineCall(params, windowText);
+    if (!line) {
+      console.log(`[Parallel] merge skipped (turn ${params.turnId}): the closer said EMPTY`);
+      return undefined;
+    }
+    // Announce the closing to the client as a transient chunk (the
+    // PARALLEL_SUMMARY_CHUNK precedent) — how it renders is Part 5.
+    try {
+      const stream = createStepStream();
+      try {
+        await stream.write({
+          type: PARALLEL_SUMMARY_CHUNK,
+          id: `parallel-summary-${params.sliceId}`,
+          transient: true,
+          data: { sliceId: params.sliceId, text: line },
+        } as UIMessageChunk);
+      } finally {
+        stream.close();
+      }
+    } catch {
+      /* the chunk is advisory — the line rides the writer payload regardless */
+    }
+    return line;
+  } catch (err) {
+    console.warn(
+      "[Parallel] merge decision failed (no closing):",
+      err instanceof Error ? err.message : err,
     );
+    return undefined;
+  }
+}
+
+/**
+ * The merge line's ONE model call (v0.38 §3.2 ②) — no stream writes (the
+ * turn's message is already complete; the line rides a transient chunk), no
+ * token cap (project-wide ban), thinking OFF (a mechanical reconciliation).
+ * The prompt's contract: output EMPTY when no answer corrects or contradicts
+ * another — 收合只在需要时存在. A model failure returns "" (the caller
+ * skips the merge line; the turn is never blocked by its closer).
+ */
+async function runMergeLineCall(
+  params: BurstMergeParams,
+  windowText: string,
+): Promise<string> {
+  try {
+    const system =
+      params.locale === "zh"
+        ? "你是 Previously 的收尾员。用户在同一时间窗里连发了数条消息，每条已由一个并行实例各自作答（下面按顺序给出这一轮的用户消息与回答）。若后面的消息更正或矛盾于前面的内容（例如「不是包子，是饺子」），用 1–2 句话给出收束，一律以最新陈述为准。若各回答互不矛盾、已经完整，输出 EMPTY（不需要收尾）。不要逐条复述、不用列表、不道歉。"
+        : "You are Previously's closer. The user fired several messages in one burst; each was answered by a parallel instance (the user messages and their answers follow, in order). When a later message corrects or contradicts an earlier one (\"not buns — dumplings\"), write a 1–2 sentence closing, the latest statement wins. When the answers do not conflict and are complete, output EMPTY (no closing needed). No per-message recap, no lists, no apologies.";
+    const result = streamText({
+      model: createModel(params.modelConfig),
+      system,
+      prompt: windowText,
+      providerOptions: normalizeReasoningEffort(
+        params.modelConfig.sdk,
+        params.modelConfig.id,
+        false,
+        "low",
+      ),
+    });
+    let text = "";
+    for await (const delta of result.textStream) {
+      text += delta;
+    }
+    const trimmed = text.trim();
+    return trimmed && !/^empty$/i.test(trimmed) ? trimmed : "";
+  } catch (err) {
+    console.warn(
+      "[Parallel] merge line call failed (degraded to no closing):",
+      err instanceof Error ? err.message : err,
+    );
+    return "";
+  }
+}
+
+/**
+ * Start THIS turn's writer (v0.38 §3.2 顺序纪律): a durable start() CARRYING
+ * the reply payload — called AFTER finalizeTurn (the evolution拍 is on disk)
+ * and BEFORE closeTurnStream (the persistence intent must be durable before
+ * the stream closes: reverse the order and a turn dying between the two
+ * leaves "stream closed, writer never started"). The turn does NOT wait on
+ * the writer (前提③ — 回复侧流完即走); the writer's run id rides the log.
+ * Never throws — a start failure logs: the reply stays alive in the stream
+ * for reconnects, and a redelivery re-runs the tail.
+ */
+export async function startWriterTurn(
+  payload: WriterRunPayload,
+): Promise<string | null> {
+  "use step";
+  try {
+    // Dynamic import: steps.ts → writer-run.ts → steps.ts is a static cycle
+    // otherwise (the summary-workflow precedent).
+    const { writerRun } = await import("./writer-run");
+    const run = await start(writerRun, [payload], {
+      attributes: {
+        role: "writer",
+        slice: payload.sliceId,
+        turn: payload.turnId,
+      },
+    });
+    console.log(`[Writer] started for turn ${payload.turnId}: ${run.runId}`);
     return run.runId;
   } catch (err) {
     console.warn(
-      "[Parallel] summary check failed (ignored):",
+      `[Writer] could not start for turn ${payload.turnId}:`,
       err instanceof Error ? err.message : err,
     );
     return null;
@@ -2215,182 +2299,116 @@ export async function startSummaryIfLastTurn(
 }
 
 /**
- * The summary run's opening dedupe: TRUE when an OLDER live summary already
- * covers this slice (two tails fired within the same registry window) — the
- * caller exits silently and the older run closes the batch. Seeded
- * attributes make a concurrently-started sibling visible at creation, and
- * the createdAt tiebreak keeps the absorption one-sided: a bare "any live
- * sibling exits" check kills BOTH racers (each sees the other).
+ * The writer's whole job (v0.38 §3.2/§4) — ONE step, ONE batch, ONE commit:
+ * the reply turn (+ the optional merge turn, both carrying the burst header
+ * segment) + the cognition timeline + the slice snapshot, flushed as
+ * `Turn {turnId} — reply`, then the reflection bell when this turn sealed
+ * the slice. Single-flight is DEDUPE by turnId, not mutual exclusion (§9-1:
+ * a live writer for the same turnId means the reply's persistence intent is
+ * already durable — a duplicate exits instead of double-committing; writers
+ * for DIFFERENT turnIds run concurrently and their conflicts are absorbed by
+ * the flush's key-controlled merge + bounded self-heal, exactly the shape
+ * those mechanisms were built for).
+ *
+ * Reads the slice FRESH past the Data Cache (the finalize commit landed
+ * moments ago); the reply append is deduped by turnId so redeliveries
+ * converge. On flush exhaustion (bounded ≤2 inside flushTurnBatch) the
+ * outcome reports `failed` honestly — the reply does not land, the failure
+ * is logged, and the next same-turnId retry re-runs this step (幂等).
+ * Never throws.
  */
-export async function summaryDedupeCheck(sliceId: string): Promise<boolean> {
+export async function commitWriterTurn(
+  payload: WriterRunPayload,
+): Promise<WriterRunOutcome> {
   "use step";
-  const ownId = getWorkflowMetadata().workflowRunId;
-  const live = await listLiveRuns();
-  const own = live.find((r) => r.runId === ownId);
-  return live.some((r) =>
-    shouldYieldToLiveSummary(r, sliceId, ownId, own?.createdAt),
-  );
-}
-
-/**
- * The slice's turns for the summary's window, read through the turn's ACTIVE
- * backend (the readEpisodeInbox pattern: the flags ride in the input —
- * getRepoConfig only runs in the github branch, so STORAGE=local never asks
- * for a token). Returns plain {role, content} pairs, oldest first.
- */
-export async function readSliceTurnsForSummary(
-  input: SummaryRunInput,
-): Promise<Array<{ role: string; content: string }>> {
-  "use step";
-  const path = sliceIdToFilePath(input.sliceId);
-  let raw: string;
-  if (input.useDemo) {
-    raw = await readFileDemo(path);
-  } else if (input.useGithub) {
-    raw = await readFileFresh(path, input.repo, input.owner);
-  } else {
-    raw = await readFileLocal(path);
-  }
-  return parseSlice(raw).turns.map((t) => ({ role: t.role, content: t.content }));
-}
-
-/**
- * The summary's one model call, streamed onto the summary run's OWN stream
- * (the client's lane reads text-start/text-delta exactly like the
- * NestedBubble child-stream precedent). Emits the stream's opening chunks
- * (start / start-step), then the text block. Returns the full settled text;
- * a model failure returns "" (the caller skips persistence and still closes
- * the stream cleanly) — the summary degrades silently, never fails the batch.
- */
-export async function runBatchSummary(
-  input: SummaryRunInput,
-  windowText: string,
-): Promise<string> {
-  "use step";
-  const stream = createStepStream();
+  const fail = (err: unknown): WriterRunOutcome => {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[Writer] turn ${payload.turnId} commit failed: ${msg}`);
+    return { kind: "failed", error: msg };
+  };
   try {
-    await stream.write({ type: "start" } as UIMessageChunk);
-    await stream.write({ type: "start-step" } as UIMessageChunk);
-    const system =
-      input.locale === "zh"
-        ? "你是 Previously 的收尾员。用户在同一时间窗里连发了数条消息，每条已由一个并行实例各自作答（下面按顺序给出这一轮的用户消息与回答）。请用 1–3 句话给这一轮连发一个总体收尾：像同一声音的自然收束，不逐条复述、不用列表、不道歉。若后面的消息更正了前面的内容（例如「不是包子，是饺子」），一律以最新陈述为准。若各回答已经完整、无需补充，只输出一句简短的收束。"
-        : "You are Previously's closer. The user fired several messages in one burst; each was answered by a parallel instance (the user messages and their answers follow, in order). Write a 1–3 sentence closing for the burst as a whole: one voice wrapping up naturally — no per-message recap, no lists, no apologies. When a later message corrects an earlier one (\"not buns — dumplings\"), the latest statement wins. If the answers are already complete, one short closing line is enough.";
-    const result = streamText({
-      model: createModel(input.modelConfig),
-      system,
-      prompt: windowText,
-      // NO maxOutputTokens — the project-wide ban on hard token caps (the cap
-      // is invisible to the model and truncates silently). The phase-3
-      // failure this replaces: `maxOutputTokens: 300` plus V4's default
-      // thinking — the call succeeded, streamed ZERO deltas, and the empty
-      // text silently skipped the persist.
-      //
-      // Thinking OFF: the closing is a mechanical wrap-up — with no cap,
-      // thinking can no longer truncate, but a reasoning pass would only add
-      // latency ahead of the first visible delta. The turn's modelConfig
-      // carries no providerOptions of its own; V4 defaults to thinking ON.
-      providerOptions: normalizeReasoningEffort(
-        input.modelConfig.sdk,
-        input.modelConfig.id,
-        false,
-        "low",
-      ),
-    });
-    await stream.write({ type: "text-start", id: "summary" } as UIMessageChunk);
-    let text = "";
-    for await (const delta of result.textStream) {
-      text += delta;
-      await stream.write({
-        type: "text-delta",
-        id: "summary",
-        delta,
-      } as UIMessageChunk);
+    const ownId = getWorkflowMetadata().workflowRunId;
+    const runs = await listRegistryRuns();
+    if (
+      runs.some(
+        (r) =>
+          r.runId !== ownId &&
+          isLiveRunStatus(r.status) &&
+          isParallelWriterRun(r, payload.turnId),
+      )
+    ) {
+      console.log(`[Writer] turn ${payload.turnId} deduped — a live writer owns it`);
+      return { kind: "deduped" };
     }
-    await stream.write({ type: "text-end", id: "summary" } as UIMessageChunk);
-    return text.trim();
-  } catch (err) {
-    console.warn(
-      "[Parallel] summary call failed (degraded to no closing):",
-      err instanceof Error ? err.message : err,
-    );
-    return "";
-  } finally {
-    stream.close();
-  }
-}
+    const hasReply = payload.replyText.trim().length > 0;
+    const merge = payload.mergeLine?.trim() ?? "";
+    if (!hasReply && !merge) return { kind: "nothing" };
 
-/**
- * Persist the closing as ONE agent turn on the slice (slice-locked, one
- * commit — the messages-route persistence precedent). Read fresh past the
- * Data Cache: the last turn's finalize commit landed moments ago. A slice
- * that closed in the meantime (its 30-minute cap hit mid-burst) is left
- * alone — appending to a closed page would falsify the record; the bubble
- * still streamed live, the closing just isn't recorded. Never throws.
- */
-export async function persistBatchSummary(
-  input: SummaryRunInput,
-  text: string,
-): Promise<void> {
-  "use step";
-  try {
-    await withSliceLock(input.sliceId, async () => {
-      const path = sliceIdToFilePath(input.sliceId);
-      let raw: string;
-      if (input.useDemo) {
-        return; // demo never persists — defensive (the turn gate already excludes it)
-      } else if (input.useGithub) {
-        raw = await readFileFresh(path, input.repo, input.owner);
-      } else {
-        raw = await readFileLocal(path);
-      }
-      const slice = parseSlice(raw);
-      if (slice.status !== "active") {
-        console.warn(
-          `[Parallel] summary persist skipped — slice ${input.sliceId} already closed`,
-        );
-        return;
-      }
+    const path = sliceIdToFilePath(payload.sliceId);
+    let raw: string;
+    if (payload.useDemo) {
+      raw = await readFileDemo(path);
+    } else if (payload.useGithub) {
+      raw = await readFileFresh(path, payload.repo, payload.owner);
+    } else {
+      raw = await readFileLocal(path);
+    }
+    const slice = parseSlice(raw);
+
+    const batch = createBatch();
+    /** The commit body names the segments that actually queued writes. */
+    const segments: string[] = [];
+
+    if (
+      hasReply &&
+      !slice.turns.some((t) => t.role === "agent" && t.turnId === payload.turnId)
+    ) {
       appendTurn(slice, {
         timestamp: new Date().toISOString(),
         role: "agent",
-        content: text,
-        // Distinct `s`-prefixed namespace: never collides with a client- or
-        // server-minted turn id, so turn-merge dedupe can't eat the closing.
-        turnId: `s${crypto.randomBytes(4).toString("base64url")}`,
+        content: payload.replyText,
+        turnId: payload.turnId,
+        ...(payload.burstId ? { burst: payload.burstId } : {}),
       });
-      const batch = createBatch();
+      segments.push("reply");
+    }
+    if (payload.cognition) {
+      const header = `## Cognition ${payload.turnId} — ${new Date().toISOString()}\n`;
+      await writeAgentTimeline(payload.sliceId, header + payload.cognition, batch);
+      segments.push("cognition");
+    }
+    if (merge) {
+      appendTurn(slice, {
+        timestamp: new Date().toISOString(),
+        role: "agent",
+        content: merge,
+        turnId: `m${crypto.randomBytes(4).toString("base64url")}`,
+        merge: true,
+        ...(payload.burstId ? { burst: payload.burstId } : {}),
+      });
+      segments.push("merge");
+    }
+    if (segments.includes("reply") || segments.includes("merge")) {
       await saveSliceSnapshot(slice, batch);
-      await flushBatch(
-        batch,
-        `Parallel summary — batch close (slice ${input.sliceId})`,
-      );
-    });
-  } catch (err) {
-    console.warn(
-      "[Parallel] summary persist failed (ignored):",
-      err instanceof Error ? err.message : err,
+      segments.push("snapshot");
+    }
+
+    const message =
+      `Turn ${payload.turnId} — reply` +
+      (segments.length > 0
+        ? `\n\n${segments.map((s) => `- ${s}`).join("\n")}`
+        : "");
+    await flushTurnBatch(batch, message, slice);
+
+    if (payload.closedSliceId) {
+      await ringReflection(payload.closedSliceId);
+    }
+    console.log(
+      `[Writer] turn ${payload.turnId} committed: ${segments.join(", ") || "no-op"}`,
     );
+    return { kind: "committed", segments };
+  } catch (err) {
+    return fail(err);
   }
 }
 
-/**
- * The summary run's stream tail (finish-step / finish) — the turn's
- * closeTurnStream in miniature, so the client's lane ends cleanly and a
- * replayed stream is a well-formed UI message. Written whether or not the
- * closing text landed (an empty summary is a clean empty beat, not a hang).
- *
- * The writable is CLOSED, not just lock-released: createStepStream().close()
- * only releases the writer (the turn's stream must survive across steps), so
- * without `writable.close()` the run completes with its stream unsealed and a
- * live-attached lane reader never sees the end — the lane stays "streaming"
- * forever and the post-burst fold never fires (retest v2: lane hung 240s).
- */
-export async function closeSummaryStream(): Promise<void> {
-  "use step";
-  const writable = getWritable<UIMessageChunk>();
-  const writer = writable.getWriter();
-  await writer.write({ type: "finish-step" } as UIMessageChunk);
-  await writer.write({ type: "finish" } as UIMessageChunk);
-  writer.releaseLock();
-  await writable.close();
-}

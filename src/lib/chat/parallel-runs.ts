@@ -157,6 +157,81 @@ export function shouldYieldToLiveSummary(
 }
 
 /**
+ * A writer run for a turn (v0.38 §4) — `role: "writer"` + the turn id. Writer
+ * 单飞 is DEDUPE by turnId, not mutual exclusion: a live writer for the same
+ * turnId means the reply's persistence intent is already durable, so a
+ * duplicate (redelivery/retry) exits instead of double-committing.
+ */
+export function isParallelWriterRun(
+  run: ParallelRunEntry,
+  turnId: string,
+): boolean {
+  const attrs = run.attributes;
+  return (
+    !!attrs && attrs.role === "writer" && attrs.turn === turnId
+  );
+}
+
+/**
+ * A same-slice, same-burst sibling TURN run (v0.38 §2) — the registry-exact
+ * burst enumeration: `burst` attributes equal, no timestamp inference. Absent
+ * burst ids never match (the caller falls back to the overlap heuristic).
+ */
+export function isBurstSibling(
+  run: ParallelRunEntry,
+  sliceId: string,
+  burstId: string,
+  ownRunId: string,
+): boolean {
+  if (run.runId === ownRunId) return false;
+  const attrs = run.attributes;
+  return (
+    !!attrs &&
+    attrs.slice === sliceId &&
+    typeof attrs.turn === "string" &&
+    attrs.burst === burstId
+  );
+}
+
+/**
+ * Should THIS turn generate the burst's merge line (v0.38 §3.2)? The last-one
+ * discipline, burst-exact: no LIVE non-tail sibling may remain (it might still
+ * change the picture), at least one burst sibling must exist (a solo turn
+ * never merges), and no live writer already carries this turnId (the dedupe
+ * backstop). Pure — the registry read stays in the step.
+ */
+export function isLastBurstTurn(
+  runs: ParallelRunEntry[],
+  sliceId: string,
+  burstId: string,
+  ownRunId: string,
+  ownTurnId: string,
+): boolean {
+  if (
+    runs.some(
+      (r) =>
+        r.runId !== ownRunId &&
+        isLiveRunStatus(r.status) &&
+        isBurstSibling(r, sliceId, burstId, ownRunId) &&
+        r.attributes?.phase !== "tail",
+    )
+  ) {
+    return false; // a sibling is still answering — not the last yet
+  }
+  if (!runs.some((r) => isBurstSibling(r, sliceId, burstId, ownRunId))) {
+    return false; // solo burst (or registry hiccup) — nobody to merge with
+  }
+  if (
+    runs.some(
+      (r) => r.runId !== ownRunId && isLiveRunStatus(r.status) && isParallelWriterRun(r, ownTurnId),
+    )
+  ) {
+    return false; // a live writer for MY turnId already owns the commit
+  }
+  return true;
+}
+
+/**
  * The outbound-tail section telling the model about in-flight parallel
  * siblings (v0.33 §5) — same mechanics as buildReflectionNoteSection: its own
  * fenced block on the LAST user message's outbound copy, never persisted,
@@ -182,9 +257,40 @@ export function buildParallelNoteSection(
 /** Per-turn content cap inside the summary window — one burst turn can be a
  *  pasted page; the closing needs its gist, not its bytes. */
 const SUMMARY_WINDOW_TURN_CHARS = 600;
-/** Trailing-turn cap for the summary window: the burst is the slice's TAIL;
- *  older turns are earlier conversation, not this batch. */
+/** Trailing-turn cap for the legacy slice-tail window (kept for the disk-read
+ *  fallback paths; the v0.38 merge window is registry-driven). */
 const SUMMARY_WINDOW_MAX_TURNS = 12;
+
+/**
+ * The merge line's window (v0.38 §3.2 ②) — the burst's USER messages (read
+ * from the slice: they landed synchronously in housekeeping — the red line)
+ * interleaved with the COMPLETED siblings' replies (from their runs'
+ * returnValues — their writers may not have committed yet) and THIS turn's
+ * own reply, formatted as a numbered script for the closer's one call. The
+ * correction that justifies the closing lives in the user messages (「不是
+ * 包子，是饺子」), so a replies-only window would blind the closer. Pure —
+ * extracted for unit tests.
+ */
+export function buildMergeWindow(
+  userTexts: string[],
+  replies: Array<{ turn: string; text: string }>,
+  ownText: string,
+  locale: string,
+): string {
+  const userLabel = locale === "zh" ? "用户" : "User";
+  const answerLabel = locale === "zh" ? "回答" : "Answer";
+  const ownLabel = locale === "zh" ? "本回答（最后一条）" : "This answer (the last one)";
+  const cap = (s: string) =>
+    s.length > SUMMARY_WINDOW_TURN_CHARS
+      ? s.slice(0, SUMMARY_WINDOW_TURN_CHARS) + "…"
+      : s;
+  const lines: string[] = userTexts.map((t, i) => `${i + 1}. ${userLabel}: ${cap(t)}`);
+  for (const r of replies) {
+    lines.push(`${lines.length + 1}. ${answerLabel} (${r.turn}): ${cap(r.text)}`);
+  }
+  lines.push(`${lines.length + 1}. ${ownLabel}: ${cap(ownText)}`);
+  return lines.join("\n");
+}
 
 /**
  * The batch summary's window (v0.33 §4): the slice's trailing turns formatted

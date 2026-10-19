@@ -27,6 +27,7 @@ export async function POST(request: Request): Promise<Response> {
       regenerate?: unknown;
       machineContext?: unknown;
       view?: unknown;
+      burstId?: unknown;
     };
 
     const { messages } = body;
@@ -59,6 +60,10 @@ export async function POST(request: Request): Promise<Response> {
       // chat transport sends when a slice is selected; shape-validated in
       // startTurn, omitted when absent (the lobby default).
       view: body.view,
+      // Optional parallel-burst id (v0.38 §2) — the client's ULID for a
+      // 连发; becomes a start attribute (`burst`) and the writer's
+      // [burst {id}] turn header. Absent = overlap-heuristic fallback.
+      burstId: typeof body.burstId === "string" ? body.burstId : undefined,
     });
 
     return createUIMessageStreamResponse({

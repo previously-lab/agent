@@ -55,6 +55,13 @@ export interface StartTurnArgs {
    *  the chat transport; shape-validated + sliceId-checked server-side,
    *  omitted from TurnInput when absent (the lobby default). */
   view?: unknown;
+  /**
+   * The parallel-burst id (v0.38 §2) — the client mints ONE ULID per 连发
+   * and stamps every message of the burst with it. Optional: absent
+   * (legacy clients, regenerate) falls back to the time-window overlap
+   * heuristic at the merge decision. Attribute values: strings ≤256B.
+   */
+  burstId?: string;
 }
 
 /** Extract the latest user message text from raw UI messages. */
@@ -331,6 +338,7 @@ export async function startTurn(
     ...(args.regenerate === true ? { regenerate: true } : {}),
     ...(machineContext ? { machineContext } : {}),
     ...(view ? { view } : {}),
+    ...(args.burstId ? { burstId: args.burstId } : {}),
   };
 
   // Pin the run to Hong Kong. The run's state, queue dispatch and streams live
@@ -343,7 +351,14 @@ export async function startTurn(
   // This is the whole reason for the Workflow 5 upgrade: 4.x had no such
   // option and always stored runs in iad1, which is exactly the cross-region
   // layout the maintainers list as slow.
-  const run = await start(turnWorkflow, [input], { region: "hkg1" });
+  const run = await start(turnWorkflow, [input], {
+    region: "hkg1",
+    // v0.38 §2 — the burst id is a START attribute (registry-visible at
+    // creation, the spike-verified shape): batch membership is enumerable
+    // from the registry while the burst lives, and from the record (the
+    // writer's [burst {id}] turn header) ever after.
+    ...(input.burstId ? { attributes: { burst: input.burstId } } : {}),
+  });
 
   return run;
 }

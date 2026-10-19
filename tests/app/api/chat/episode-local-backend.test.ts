@@ -282,14 +282,17 @@ describe("finalizeTurn disk-merge (D-2)", () => {
     );
 
     const disk = readDiskSlice(sliceId);
+    // v0.38 §6 — finalize is now ZERO-batch on the reply side: it writes
+    // NOTHING to the core, so the route-appended nested turn survives
+    // untouched by definition. The reply's persistence (read FRESH, append,
+    // snapshot — the same union discipline) is the WRITER's job, pinned in
+    // writer-run.test.ts.
     expect(disk.turns.map((t) => `${t.role}:${t.turnId}`)).toEqual([
       "user:outT01",
       "user:m2xxxx",
-      "agent:outT01",
     ]);
     // The nested turn survives with its BODY — a header-only husk is a fail.
     expect(disk.turns[1].content).toBe("nested question body");
-    expect(disk.turns[2].content).toBe("final answer");
 
     // Redelivery: the same finalize re-runs against persisted state — no dupes.
     await finalizeTurn(
@@ -299,10 +302,10 @@ describe("finalizeTurn disk-merge (D-2)", () => {
       hkFor(inFlight),
     );
     const disk2 = readDiskSlice(sliceId);
+    // still untouched — finalize is zero-batch on the reply side (v0.38 §6)
     expect(disk2.turns.map((t) => `${t.role}:${t.turnId}`)).toEqual([
       "user:outT01",
       "user:m2xxxx",
-      "agent:outT01",
     ]);
   });
 });

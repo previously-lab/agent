@@ -67,13 +67,13 @@ import {
   housekeeping,
   finalizeTurn,
   closeTurnStream,
-  ringReflection,
+  decideBurstMergeLine,
+  startWriterTurn,
   ownRunId,
   episodeClockMs,
   readEpisodeInbox,
   emitNestedBubble,
   pollInnerRunReports,
-  startSummaryIfLastTurn,
 } from "./steps";
 import { buildParallelNoteSection } from "@/lib/chat/parallel-runs";
 
@@ -966,7 +966,7 @@ export function assembleSystemPrompt(opts: {
 
 // ─── The workflow ────────────────────────────────────────────────────────
 
-export async function turnWorkflow(input: TurnInput): Promise<void> {
+export async function turnWorkflow(input: TurnInput): Promise<string> {
   "use workflow";
 
   // ── Pre-turn steps ─────────────────────────────────────────────────────
@@ -1923,17 +1923,18 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
   // id + user-local date) and reads the record itself. A reply-stream error
   // does not silence it (a seal is on disk either way), and it never throws.
   await finalizeTurn(hk.slice, outcome, input, hk, nestedTail);
-  // v0.33 连发并行 — the LAST surviving turn of a parallel burst spawns the
-  // batch's summary run. Placed BETWEEN finalize (this turn's reply is on
-  // disk, so the summary reads a complete record) and closeTurnStream (the
-  // spawning run's stream is still open, so the summary's runId rides a
-  // transient chunk to the client — its live lane attaches there). The step
-  // stamps this run `phase: "tail"` first, so a sibling checking right now
-  // yields instead of mutual-skipping. Runs even when the reply errored: the
-  // batch still deserves its closing beat.
-  if (parallelEnabled) {
-    await startSummaryIfLastTurn(hk.slice.slice_id, {
+  // v0.38 §3.2 — the burst's closing beat, IN this tail (the v0.33 summary
+  // run retired with its collector): the last survivor judges lastness
+  // (burst-exact when the client sent a burstId, else the legacy overlap
+  // window), reads COMPLETED siblings' returnValues only, and generates the
+  // merge line ONLY when reconciliation is needed (有更正/矛盾才说一句).
+  let mergeLine: string | undefined;
+  if (parallelEnabled && outcome.text.trim()) {
+    mergeLine = await decideBurstMergeLine({
       sliceId: hk.slice.slice_id,
+      turnId: input.turnId,
+      ...(input.burstId ? { burstId: input.burstId } : {}),
+      ownReplyText: outcome.text,
       locale: input.locale,
       model: input.model,
       modelConfig: input.modelConfig,
@@ -1943,11 +1944,39 @@ export async function turnWorkflow(input: TurnInput): Promise<void> {
       repo: input.repo,
     });
   }
+  // v0.38 §3.2 顺序纪律 — durable start CARRYING the reply, BEFORE the
+  // stream closes: the persistence intent is durable the moment the start
+  // succeeds (reverse the order and a turn dying between the two leaves
+  // "stream closed, writer never started"). The turn does NOT wait on the
+  // writer (前提③ — 回复侧流完即走); the writer rings the reflection bell
+  // itself once its commit lands. A failed turn carries no reply — nothing
+  // to hand over, so no writer is started.
+  if (outcome.text.trim() || mergeLine) {
+    await startWriterTurn({
+      sliceId: hk.slice.slice_id,
+      turnId: input.turnId,
+      replyText: outcome.text,
+      cognition: outcome.cognition,
+      ...(mergeLine ? { mergeLine } : {}),
+      ...(input.burstId ? { burstId: input.burstId } : {}),
+      ...(hk.closedSliceId ? { closedSliceId: hk.closedSliceId } : {}),
+      date: dateAnchor,
+      useGithub: input.useGithub,
+      useDemo: input.useDemo,
+      owner: input.owner,
+      repo: input.repo,
+      locale: input.locale,
+      model: input.model,
+      modelConfig: input.modelConfig,
+    });
+  }
   // Terminal chunks + stream tail.
   await closeTurnStream(outcome, input.turnId);
-  if (hk.closedSliceId) await ringReflection(hk.closedSliceId, input);
 
   if (streamError !== null) {
     throw streamError;
   }
+  // v0.38 §3.2 ①: the run's return value IS its reply text — the burst's
+  // last survivor reads completed siblings' returnValues from the registry.
+  return outcome.text;
 }

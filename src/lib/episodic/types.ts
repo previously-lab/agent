@@ -48,6 +48,20 @@ export interface Turn {
    * turn header; both header regexes tolerate and capture it.
    */
   replyTo?: string;
+  /**
+   * The parallel-burst id (v0.38 §2, v0.39 #21): the client-minted ULID every
+   * turn of one 连发 carries, stamped as a ` [burst {id}]` header segment so
+   * batch membership is decidable FROM THE RECORD (the registry is only a
+   * liveness hint). Absent on non-burst turns.
+   */
+  burst?: string;
+  /**
+   * The burst's merge line (v0.38 §3.2): on the ONE closing agent turn the
+   * last survivor generated, stamped as a ` [merge]` header segment — the
+   * 收合句's debt is decidable from the record (burst turns without a merge
+   * turn = an unpaid, 可空的 debt).
+   */
+  merge?: boolean;
 }
 
 // ─── Frontmatter ─────────────────────────────────────────────────────

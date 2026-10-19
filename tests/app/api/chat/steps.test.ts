@@ -208,13 +208,10 @@ vi.mock("@/app/api/evolution/run-card-evolution", () => evolution);
 const reflectionWake = vi.hoisted(() => ({
   deliverReflectionWake: vi.fn(
     async (): Promise<
-      | { ok: true; delivered: "resumed" | "started"; runId: string }
+      | { ok: true; delivered: "rung" | "started"; runId: string }
       | { ok: false; reason: string }
-    > => ({ ok: true, delivered: "resumed", runId: "hq-1" }),
+    > => ({ ok: true, delivered: "rung", runId: "hq-1" }),
   ),
-  buildReflectionWakePayload: vi.fn((closedSliceId: string) => ({
-    sliceId: closedSliceId,
-  })),
 }));
 vi.mock("@/app/api/evolution/reflection-wake", () => reflectionWake);
 
@@ -1547,8 +1544,10 @@ describe("kill matrix (workflow redelivery)", () => {
 
     const finalNew = diskSlice("2026-07-14-1000");
     expect(finalNew.turns.filter((t) => t.role === "user" && t.turnId === "test-id")).toHaveLength(1);
-    expect(finalNew.turns.filter((t) => t.role === "agent" && t.turnId === "test-id")).toHaveLength(1);
-    expect(episodic.appendTurn).toHaveBeenCalledTimes(1); // the agent turn, once
+    // v0.38 §6 — finalize no longer appends the reply (回复侧零批): the agent
+    // turn is the WRITER's job (writer-run.test.ts owns its kill matrix).
+    expect(finalNew.turns.filter((t) => t.role === "agent" && t.turnId === "test-id")).toHaveLength(0);
+    expect(episodic.appendTurn).not.toHaveBeenCalled();
     // Exactly ONE close across both deliveries — the redelivery found the old
     // slice already closed and never re-decided it.
     expect(episodic.closeSlice).toHaveBeenCalledOnce();
@@ -1657,18 +1656,20 @@ describe("turn idempotency (workflow redelivery)", () => {
     expect(episodic.appendTurn).not.toHaveBeenCalled();
   });
 
-  it("stores exactly one user turn and one agent turn even when both steps are redelivered", async () => {
+  it("a redelivered finalizeTurn adds NOTHING (v0.38 §6 — 回复侧零批; the reply moved to the writer)", async () => {
     // First delivery: fresh slice, user turn minted by createSlice.
     const { slice } = await housekeeping(makeInput("hello world"));
 
-    // Agent turn appended once, then the whole finalize step is redelivered
-    // against the same slice state (same turnId).
+    // The whole finalize step is redelivered against the same slice state
+    // (same turnId): zero appends, zero snapshot — the tail only carries the
+    // evolution拍, and this turn has no explicit instruction.
     const input = makeInput("hello world");
     await finalizeTurn(slice, outcome, input, hkFor(slice));
     await finalizeTurn(slice, outcome, input, hkFor(slice));
 
     expect(slice.turns.filter((t) => t.role === "user")).toHaveLength(1);
-    expect(slice.turns.filter((t) => t.role === "agent")).toHaveLength(1);
+    expect(slice.turns.filter((t) => t.role === "agent")).toHaveLength(0);
+    expect(episodic.appendTurn).not.toHaveBeenCalled();
   });
 
   it("closeTurnStream emits the terminal status + lifecycle tail", async () => {
@@ -1983,13 +1984,10 @@ describe("finalizeTurn — the tail's single commit", () => {
 describe("ringReflection — the mechanical bell (v0.34 R1)", () => {
   it("delivers the wake built from the sealed slice's pointer", async () => {
     const slice = makeSlice();
-    const input = makeInput("hi");
-    await ringReflection(slice.slice_id, input);
-    expect(reflectionWake.buildReflectionWakePayload).toHaveBeenCalledWith(slice.slice_id, input);
+    await ringReflection(slice.slice_id);
+    // v0.38 §3.3 — the bell is PURE: no payload is built or delivered.
     expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledTimes(1);
-    expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledWith({
-      sliceId: slice.slice_id,
-    });
+    expect(reflectionWake.deliverReflectionWake).toHaveBeenCalledWith();
   });
 
   it("a failed delivery only warns — the turn never fails on the bell", async () => {
@@ -1999,7 +1997,7 @@ describe("ringReflection — the mechanical bell (v0.34 R1)", () => {
     });
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await expect(ringReflection(makeSlice().slice_id, makeInput("hi"))).resolves.toBeUndefined();
+      await expect(ringReflection(makeSlice().slice_id)).resolves.toBeUndefined();
       expect(
         warnSpy.mock.calls.some(
           (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake not delivered"),
@@ -2014,7 +2012,7 @@ describe("ringReflection — the mechanical bell (v0.34 R1)", () => {
     reflectionWake.deliverReflectionWake.mockRejectedValueOnce(new Error("boom"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await expect(ringReflection(makeSlice().slice_id, makeInput("hi"))).resolves.toBeUndefined();
+      await expect(ringReflection(makeSlice().slice_id)).resolves.toBeUndefined();
       expect(
         warnSpy.mock.calls.some(
           (c) => typeof c[0] === "string" && c[0].includes("[Reflection] wake failed"),
@@ -2061,11 +2059,10 @@ describe("finalizeTurn — the episode tail (v0.30 §3.4, D7)", () => {
       { timestamp: "t3", role: "agent", content: "answer two", turnId: "nu2", replyTo: "u2" },
       { timestamp: "t4", role: "agent", content: "answer three", turnId: "nu3", replyTo: "u3" },
     ]);
-    // the merged summary folds into the outer agent turn — NOT a second turn
-    // with the same turnId (turn-merge would drop it)
+    // v0.38 §6 — the outer reply turn (and the mergeSummary fold) moved to
+    // the WRITER; finalize's episode-residual handles the BUBBLES only.
     const outer = slice.turns.filter((t) => t.role === "agent" && t.turnId === "test-id");
-    expect(outer).toHaveLength(1);
-    expect(outer[0].content).toBe("main reply\n\nBoth queued questions got answered above.");
+    expect(outer).toHaveLength(0);
     expect(episodic.flushBatch).toHaveBeenCalledTimes(1);
   });
 

@@ -27,13 +27,9 @@
  * mouth, §9).
  */
 import { getWritable, getWorkflowMetadata } from "workflow";
-import { resumeHook } from "workflow/api";
-import { HookNotFoundError } from "workflow/errors";
+import { getRun } from "workflow/api";
+import { getWorld } from "workflow/runtime";
 import type { UIMessageChunk } from "ai";
-import {
-  REFLECTION_TOKEN,
-  type ReflectionWakePayload,
-} from "./reflection-contract";
 import {
   assembleLapPlan,
   REFLECTION_SCOPE_MAX,
@@ -112,26 +108,91 @@ export interface ReflectionDocket extends LapPlan {
 }
 
 /**
- * Conflict handoff. `resumeHook` is a runtime function that MUST be called
- * outside a workflow function (SDK contract) — hence this "use step". It
- * durably writes `hook_received` and only then wakes the primary run, so a
- * duplicate run that loses the claim hands its wake over instead of dropping
- * it (§11 ③).
- *
- * Returns false when the primary is GONE (HookNotFoundError — it finished
- * inside the handoff window): swallowing that here matters because a step's
- * retry budget would otherwise burn out and the wake would die silently.
- * The caller (reflection-run.ts) re-checks the conflict and, with no live
- * primary left, claims and handles the wake itself — the wake never drops.
+ * Read the CLAIM conflict's holder's liveness (v0.38 §5 — "use step"; the
+ * workflow body has no registry access). Returns the holder's registry
+ * status and its age (from the `startedAt` attribute the holder stamped at
+ * claim time), or null when the holder is unreadable (treated as unowned —
+ * the challenger re-claims; a lost holder read never kills the challenger).
  */
-export async function handoffBriefToPrimary(payload: ReflectionWakePayload): Promise<boolean> {
+export async function readRunClaim(runId: string): Promise<{
+  status: string;
+  ageMs: number | null;
+} | null> {
   "use step";
   try {
-    await resumeHook(REFLECTION_TOKEN, payload);
+    const world = await getWorld();
+    const page = await world.runs.list({
+      pagination: { limit: 100 },
+      resolveData: "none",
+    } as Parameters<typeof world.runs.list>[0]);
+    const holder = page.data.find((r) => r.runId === runId);
+    if (!holder) return null;
+    const startedAt = (holder as { attributes?: Record<string, string> | null })
+      .attributes?.startedAt;
+    const startedMs = startedAt ? Date.parse(startedAt) : NaN;
+    return {
+      status: holder.status,
+      ageMs:
+        Number.isNaN(startedMs) || startedMs <= 0
+          ? null
+          : Math.max(0, Date.now() - startedMs),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cancel a zombie holder (v0.38 §5 接管 — the same action as the
+ * observability UI's Cancel button: `run_cancelled`, hooks disposed, token
+ * freed by the platform). The challenger then RE-CLAIMS in a bounded retry
+ * loop (the Supersede paradigm's cleanup-propagation window). Never throws:
+ * a failed cancel is treated as "holder unmanageable" and the challenger
+ * exits — the next bell retries.
+ */
+export async function cancelReflectionHolder(runId: string): Promise<boolean> {
+  "use step";
+  try {
+    await getRun(runId).cancel();
     return true;
-  } catch (e) {
-    if (HookNotFoundError.is(e)) return false;
-    throw e;
+  } catch (err) {
+    console.warn(
+      `[Reflection] takeover cancel of ${runId} failed:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
+/**
+ * Stamp THIS run's claim (v0.38 §5 — the age base): `startedAt` on the run's
+ * own attributes, read back by any challenger through the registry. One
+ * line of liveness, best-effort (a missing stamp reads as age null = never
+ * taken over — the conservative direction).
+ */
+export async function stampReflectionClaim(): Promise<void> {
+  "use step";
+  try {
+    const { setAttributes } = await import("workflow");
+    await setAttributes({ startedAt: new Date().toISOString() });
+  } catch {
+    /* best-effort liveness stamp */
+  }
+}
+
+/**
+ * Takeover 留痕 (v0.38 §5 — 不许静默): one server-log line plus the
+ * `tookOver` attribute on THIS run naming the cancelled holder. What rides
+ * the hq pointer is Part 4's shape decision.
+ */
+export async function stampReflectionTakeover(holderRunId: string): Promise<void> {
+  "use step";
+  console.warn(`[Reflection] zombie takeover — cancelling stuck holder ${holderRunId}`);
+  try {
+    const { setAttributes } = await import("workflow");
+    await setAttributes({ tookOver: holderRunId });
+  } catch {
+    /* the log line above is the minimum留痕 */
   }
 }
 

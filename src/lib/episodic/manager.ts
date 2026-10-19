@@ -291,7 +291,9 @@ export function serializeSlice(slice: TimeSlice): string {
         // bubble's target user turn (v0.30 §3.4, D7). Both header regexes
         // (parseTurns here, TURN_HEADER_RE in turn-parser.ts) capture it.
         `## Turn ${turn.turnId ?? "?"} — ${turn.timestamp} (${turn.role})` +
-        `${turn.replyTo ? ` [reply-to ${turn.replyTo}]` : ""}\n\n${turn.content}`
+        `${turn.replyTo ? ` [reply-to ${turn.replyTo}]` : ""}` +
+        `${turn.burst ? ` [burst ${turn.burst}]` : ""}` +
+        `${turn.merge ? " [merge]" : ""}\n\n${turn.content}`
     )
     .join("\n\n");
 
@@ -400,7 +402,7 @@ function parseTurns(body: string): Turn[] {
   // New: ## Turn a3fk2w — ISO (role)
   // Legacy: ## Turn 1 — ISO (role)
   // Optional nested-bubble suffix (v0.30 §3.4): "… (agent) [reply-to q1w2e3]"
-  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?$/gm;
+  const turnHeaderRegex = /^## Turn (\S+) — (\S+) \((\w+)\)(?: \[reply-to (\S+)\])?(?: \[burst (\S+)\])?(?: \[merge\])?$/gm;
 
   // Collect turn headers with the position right after the header line
   const headers: Array<{
@@ -408,6 +410,8 @@ function parseTurns(body: string): Turn[] {
     timestamp: string;
     role: "user" | "agent";
     replyTo?: string;
+    burst?: string;
+    merge?: boolean;
     contentStart: number;
   }> = [];
   let match: RegExpExecArray | null;
@@ -423,6 +427,8 @@ function parseTurns(body: string): Turn[] {
       timestamp: match[2],
       role: match[3] as "user" | "agent",
       ...(match[4] ? { replyTo: match[4] } : {}),
+      ...(match[5] ? { burst: match[5] } : {}),
+      ...(match[6] ? { merge: true } : {}),
       contentStart: afterHeader,
     });
   }
@@ -447,6 +453,8 @@ function parseTurns(body: string): Turn[] {
       content: turnContent,
       ...(isNumeric ? {} : { turnId: headers[i].turnLabel }),
       ...(headers[i].replyTo ? { replyTo: headers[i].replyTo } : {}),
+      ...(headers[i].burst ? { burst: headers[i].burst } : {}),
+      ...(headers[i].merge ? { merge: true } : {}),
     });
   }
 
