@@ -31,6 +31,7 @@ import type { ModelConfig } from "@/lib/models/registry";
 import {
   CASE_CATEGORIES,
   DOC_WRITE_WINDOW_RULE,
+  MEMORY_IS_GIT_RULE,
   isValidCaseName,
   sanitizeCaseSegment,
   type CaseCategory,
@@ -81,6 +82,8 @@ const researchSchema = z.object({
 });
 
 const RESEARCH_SYSTEM = buildSubAgentSystem(`You are the question-run researcher of a personal memory system (v0.19). The user asked questions a quick answer could not settle; you investigate ACROSS the record and leave durable CASES (research/ = answered questions, hypotheses/ = guesses with falsification conditions).
+
+${MEMORY_IS_GIT_RULE}
 
 You are shown: the triggering question markers, the slice they came from, and the case manifest (the whole memory tree, paths only). Read what you need with readCase (case documents) and readSlice (the L0 evidence — concrete facts live ONLY there).
 

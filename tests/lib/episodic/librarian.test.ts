@@ -14,15 +14,33 @@ const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
 }));
 vi.mock("@/lib/episodic/io-helpers", () => ({
-  fsReadFile: vi.fn(async (path: string) => {
-    const content = io.files.get(path);
-    if (content === undefined) throw new Error(`ENOENT: ${path}`);
-    return content;
-  }),
-  fsWriteFile: vi.fn(async (path: string, content: string) => {
-    io.files.set(path, content);
-    return { path, created: true };
-  }),
+  fsReadFile: vi.fn(
+    async (path: string, batch?: { entries: Map<string, string | null> }) => {
+      // Mirror the real contract: the pending queue is consulted first.
+      const pending = batch?.entries.get(path);
+      if (pending !== undefined) {
+        if (pending === null) throw new Error(`File not found: "${path}" (deleted in this batch)`);
+        return pending;
+      }
+      const content = io.files.get(path);
+      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      return content;
+    },
+  ),
+  fsWriteFile: vi.fn(
+    async (
+      path: string,
+      content: string,
+      batch?: { entries: Map<string, string | null> },
+    ) => {
+      if (batch) {
+        batch.entries.set(path, content);
+        return { path, created: true };
+      }
+      io.files.set(path, content);
+      return { path, created: true };
+    },
+  ),
   fsListFiles: vi.fn(async () => {
     throw new Error("not used in librarian tests");
   }),
@@ -38,7 +56,7 @@ import {
   DOC_MARKER_PREFIX,
   SCRIBE_RECORD_PREFIX,
 } from "@/lib/episodic/flash/librarian";
-import { CaseWriteRefusal, parseCaseDoc } from "@/lib/docs";
+import { CaseWriteRefusal, WriteRefusal, parseCaseDoc } from "@/lib/docs";
 import type { ModelConfig } from "@/lib/models/registry";
 
 function streamWith(toolCalls: Array<{ toolName: string; input: unknown }>) {
@@ -707,5 +725,112 @@ describe("runScribePass — case model, no strands", () => {
     // the FULL text is carried verbatim — not the one-line note
     expect(raw).toContain("第二行原文，很长——用户粘贴的全部内容都在这里，逐字保留。");
     expect(raw).toContain(`(refs: ${SLICE_ID})`);
+  });
+});
+
+
+describe("WriteRefusal — the unified refusal codes (v0.37 §3)", () => {
+  it("open on an existing case → already_exists, with the recovery path in the message", async () => {
+    io.files.set(
+      "memory/research/旧案/index.md",
+      `---\nopened: '2026-08-01'\nupdated: '${new Date().toISOString()}'\n---\n\n正文。\n`,
+    );
+    const refusal = await applyCaseWriteIntent(
+      { action: "open", category: "research", caseName: "旧案", body: "x" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(WriteRefusal);
+    expect(refusal.code).toBe("already_exists");
+    expect(refusal.message).toContain("already exists");
+    // The recovery path rides the message: re-read, then update/tail/piece.
+    expect(refusal.message).toContain("readCase");
+    expect(refusal.message).toContain("appendTail");
+  });
+
+  it("a hypotheses open without a falsification condition → falsification_missing", async () => {
+    const refusal = await applyCaseWriteIntent(
+      { action: "open", category: "hypotheses", caseName: "无据假设", body: "只有判断。" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(WriteRefusal);
+    expect(refusal.code).toBe("falsification_missing");
+    expect(refusal.message).toContain("falsify if");
+  });
+
+  it("update/tail/piece on a missing case → not_found_on_update (open first)", async () => {
+    const refusal = await applyCaseWriteIntent(
+      { action: "appendTail", category: "research", caseName: "不存在的案", line: "x" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(WriteRefusal);
+    expect(refusal.code).toBe("not_found_on_update");
+    expect(refusal.message).toContain("open it first");
+  });
+
+  it("an unknown category → invalid_category, naming the legal set", async () => {
+    const refusal = await applyCaseWriteIntent(
+      { action: "open", category: "bogus" as never, caseName: "x", body: "y" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(WriteRefusal);
+    expect(refusal.code).toBe("invalid_category");
+    expect(refusal.message).toContain("research");
+  });
+
+  it("the window/conflict refusals stay CaseWriteRefusal — a WriteRefusal subclass (backward compatible)", async () => {
+    io.files.set(
+      "memory/research/旧案/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n沉淀的正文。\n",
+    );
+    const refusal = await applyCaseWriteIntent(
+      { action: "rewriteIndex", category: "research", caseName: "旧案", body: "x" },
+      DATE,
+    ).catch((e) => e);
+    expect(refusal).toBeInstanceOf(CaseWriteRefusal);
+    expect(refusal).toBeInstanceOf(WriteRefusal);
+    expect(refusal.code).toBe("rewrite_window_closed");
+  });
+});
+
+describe("the manifest gate sees this round's batch (v0.37 §5 — S4 fix)", () => {
+  it("a case QUEUED earlier this round passes the updateIndex gate (was: skipped as 'not in the manifest')", async () => {
+    // The manifest predates the round (no such case); the batch holds the
+    // case opened moments ago. The writer read it via readCase(batch) — the
+    // gate must not contradict the tool.
+    const batch = {
+      entries: new Map<string, string | null>([
+        [
+          "memory/research/本轮新案/index.md",
+          `---\nopened: '${DATE}'\nupdated: '${new Date().toISOString()}'\n---\n\n本轮新建的正文。\n`,
+        ],
+      ]),
+      encodings: new Map<string, "base64">(),
+    };
+    ai.streamText.mockResolvedValue(
+      streamWith([
+        writerCall([
+          {
+            action: "updateIndex",
+            category: "research",
+            caseName: "本轮新案",
+            body: "本轮新建的正文 + 这片的新结论。",
+          },
+        ]),
+      ]),
+    );
+    const result = await runLibrarianPass({
+      model,
+      closedSliceId: SLICE_ID,
+      excerpt: EXCERPT,
+      manifest: MANIFEST,
+      date: DATE,
+      batch,
+    });
+    expect(result.written).toEqual(["research/本轮新案/index.md"]);
+    // The rewrite landed in the SAME batch (queued, not on the fake disk).
+    expect(batch.entries.get("memory/research/本轮新案/index.md")).toContain(
+      "这片的新结论。",
+    );
+    expect(io.files.size).toBe(0);
   });
 });

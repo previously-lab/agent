@@ -161,6 +161,12 @@ describe("chat tool surface", () => {
     expect(find.shape).toHaveProperty("name");
   });
 
+  it("the field writeCase description carries the memory-is-git contract sentence (single source, v0.37 §2.3)", async () => {
+    const { chatTools } = await import("@/app/api/agent/tools");
+    const d = (chatTools.writeCase as unknown as { description: string }).description;
+    expect(d).toContain("Memory is a git tree, not a database");
+  });
+
   it("recallSearch: query + scan-surface inputs; recallRead: ref + part + range", async () => {
     const { chatTools } = await import("@/app/api/agent/tools");
     const search = chatTools.recallSearch.inputSchema as unknown as {

@@ -66,6 +66,7 @@ import type { ModelConfig } from "@/lib/models/registry";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
 import { DOC_HOUSE_STYLE, DOC_LANGUAGE_RULE } from "@/lib/agents/doc-style";
+import { MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import type { SelfAgent } from "@/lib/evolution/paths";
 import {
   renderDirectionAnalysis,
@@ -266,6 +267,8 @@ export interface PreviouslyAgentOutput {
 // prompt.
 
 const PREVIOUSLY_ROLE = `You are the Previously Agent — the merged SELF-EVOLUTION agent. You do NOT talk to users. You work autonomously. ONE run, two domains, IN THIS ORDER:
+
+${MEMORY_IS_GIT_RULE}
 
 1. **Direction first** (when the task carries a "Direction evaluation" section): evaluate direction.md — the loop's USER PORTRAIT + HYPOTHESIS POOL — and, if it should move, edit it through the direction MUTATION tools (addPortraitEntry / updatePortraitEntry / removePortraitEntry / addHypothesis / promoteHypothesis / removeHypothesis), then note what moved on \`finish\`'s \`directionSummary\`.
 2. **Then the card** (+ allowed self/ SOPs) — evolved UNDER the direction as it stands AFTER your proposal (your own accepted changes apply).

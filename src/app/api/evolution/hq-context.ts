@@ -20,7 +20,7 @@ import {
   type SlicePart,
 } from "@/lib/episodic";
 import { parseSliceId, parseTurns } from "@/lib/episodic/turn-parser";
-import { fsListFiles, fsReadFile } from "@/lib/episodic/io-helpers";
+import { fsListFiles, fsReadFile, type WriteBatch } from "@/lib/episodic/io-helpers";
 import type { CaseWriterManifest } from "@/lib/episodic/flash/librarian";
 import { getModel, getDefaultModelId } from "@/lib/models/registry";
 import type { CardEvolutionReaders } from "@/app/api/evolution/run-card-evolution";
@@ -73,14 +73,18 @@ export async function buildRunManifest(): Promise<CaseWriterManifest> {
  * Card-evolution readers for a background run — the same dual-root probes
  * the turn path's buildCardReaders does, but on the env-driven io layer
  * (a background run carries no TurnInput backend flags).
+ *
+ * The round's batch rides every read (v0.37 §5 — read-your-writes): a slice
+ * sealed earlier in the same round (markSlice) reads back as sealed here,
+ * and any queued write is visible to the card agent.
  */
-export function buildRunCardReaders(): CardEvolutionReaders {
+export function buildRunCardReaders(batch?: WriteBatch): CardEvolutionReaders {
   const readDual = async (sliceId: string, part: SlicePart): Promise<string> => {
     const [primary, fallback] = slicePartPathCandidates(sliceId, part);
     try {
-      return await fsReadFile(primary);
+      return await fsReadFile(primary, batch);
     } catch {
-      return fsReadFile(fallback);
+      return fsReadFile(fallback, batch);
     }
   };
   return {

@@ -34,22 +34,52 @@ export function isWithinWriteWindow(updatedIso: string, nowMs: number): boolean 
   return nowMs - t <= DOC_WRITE_WINDOW_MS;
 }
 
-/** The refusal codes the write entry can raise — structured, never silent. */
+/**
+ * The refusal codes the write entry can raise — structured, never silent.
+ *
+ * v0.37: the full write surface shares ONE refusal vocabulary (the
+ * WriteRefusalCode enum). `CaseWriteRefusal` remains the class the case-write
+ * entry raises — it extends WriteRefusal so callers can catch either level.
+ * Every code's message MUST carry the recovery path for the model (re-read,
+ * then appendTail / addPiece; open first; add the falsification condition; …)
+ * — a refusal is a normal flow, not a failure.
+ */
+export type WriteRefusalCode =
+  | "rewrite_conflict"
+  | "rewrite_window_closed"
+  | "already_exists"
+  | "invalid_category"
+  | "falsification_missing"
+  | "not_found_on_update"
+  | "commit_failed";
+
 export type CaseWriteRefusalCode = "rewrite_window_closed" | "rewrite_conflict";
 
 /**
- * A loud, STRUCTURED write refusal: the write entry raises it when a whole-
- * body rewrite is not allowed to land. `code` is machine-readable so the
- * caller (a pass, a tool executor) can tell "settled document" apart from
- * "the document moved under you"; the message carries the recovery path
- * (re-read, then append a dated line or add a piece) for the model.
+ * A loud, STRUCTURED write refusal: the write entry raises it when a write
+ * may not land. `code` is machine-readable so the caller (a pass, a tool
+ * executor) can tell "settled document" apart from "the document moved under
+ * you"; the message carries the recovery path (re-read, then append a dated
+ * line or add a piece) for the model.
  */
-export class CaseWriteRefusal extends Error {
-  readonly code: CaseWriteRefusalCode;
-  constructor(code: CaseWriteRefusalCode, message: string) {
+export class WriteRefusal extends Error {
+  readonly code: WriteRefusalCode;
+  constructor(code: WriteRefusalCode, message: string) {
     super(message);
-    this.name = "CaseWriteRefusal";
+    this.name = "WriteRefusal";
     this.code = code;
+  }
+}
+
+/**
+ * The case-write entry's refusal — the v0.21 precedent, kept as the class
+ * name the case machinery raises. A WriteRefusal with the two codes the
+ * case entry can hit.
+ */
+export class CaseWriteRefusal extends WriteRefusal {
+  constructor(code: CaseWriteRefusalCode, message: string) {
+    super(code, message);
+    this.name = "CaseWriteRefusal";
   }
 }
 
@@ -67,3 +97,17 @@ export const DOC_WRITE_WINDOW_RULE =
   `While the write window is open (continuous editing — each write within ${DOC_WRITE_WINDOW_MINUTES} minutes of the last) the document may be rewritten whole; ` +
   "once the window has closed, it grows only by dated corrections or supplements appended at the tail. " +
   "When the content outgrows the length cap, open a NEW document and leave one line in the original pointing at it.";
+
+/**
+ * The "memory is a git tree" contract sentence — the SINGLE SOURCE every
+ * writer surface interpolates (the field's writeCase, HQ's writeCase /
+ * writeSelfSop / setAgenda, the case-writer / scribe pass prompts, the HQ
+ * role prompt). It tells the agent the world's shape — every write is a
+ * commit, read the latest before writing, a refusal means re-read and decide
+ * again — NOT a license to lecture the user about git (the translation
+ * discipline owns the user boundary). Prompt-facing: English, no backticks.
+ */
+export const MEMORY_IS_GIT_RULE =
+  "Memory is a git tree, not a database: every write is a commit. " +
+  "Before writing you always read the latest; if a write is refused, " +
+  "re-read fresh and decide again — never force it.";

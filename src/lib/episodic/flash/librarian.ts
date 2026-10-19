@@ -58,7 +58,9 @@ import {
   rewriteBody,
   serializeCaseDoc,
   CaseWriteRefusal,
+  WriteRefusal,
   DOC_WRITE_WINDOW_RULE,
+  MEMORY_IS_GIT_RULE,
   sanitizeCaseSegment,
   type CaseCategory,
 } from "@/lib/docs";
@@ -278,7 +280,10 @@ export async function applyCaseWriteIntent(
 ): Promise<CaseWriteOutcome> {
   const { category, caseName } = intent;
   if (!isCaseCategory(category)) {
-    throw new Error(`unknown category: ${JSON.stringify(category)}`);
+    throw new WriteRefusal(
+      "invalid_category",
+      `unknown category: ${JSON.stringify(category)} — pick one of: people / events / things / places / orgs / research / hypotheses / tasks / self.`,
+    );
   }
   if (!isValidCaseName(caseName)) {
     throw new Error(`illegal case name: ${JSON.stringify(caseName)}`);
@@ -303,12 +308,16 @@ export async function applyCaseWriteIntent(
     switch (intent.action) {
       case "open": {
         if (current) {
-          throw new Error(`case ${identity} already exists — use rewriteIndex / appendTail / addPiece`);
+          throw new WriteRefusal(
+            "already_exists",
+            `case ${identity} already exists — re-read it (readCase) and use rewriteIndex (inside the write window) / appendTail / addPiece instead of open.`,
+          );
         }
         if (category === "hypotheses" && !hasFalsificationCondition(intent.body)) {
-          throw new Error(
+          throw new WriteRefusal(
+            "falsification_missing",
             `hypotheses case refused: ${identity} carries no falsification condition — ` +
-              "state it in the body as 'falsify if: …'",
+              "state it in the body as 'falsify if: …' / a 证伪 condition, then retry the open.",
           );
         }
         const doc = createCase({ category, caseName, opened: date, body: intent.body });
@@ -316,7 +325,12 @@ export async function applyCaseWriteIntent(
         return { path: indexPath, created: true };
       }
       case "rewriteIndex": {
-        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        if (!current) {
+          throw new WriteRefusal(
+            "not_found_on_update",
+            `case ${identity} does not exist — open it first (action: open) with the full body.`,
+          );
+        }
         // Optimistic concurrency (ETag on the resolved stamp — surrounding
         // quotes tolerated: callers copy the value out of a raw header).
         if (intent.expectedUpdated !== undefined) {
@@ -345,7 +359,12 @@ export async function applyCaseWriteIntent(
         return { path: indexPath, created: false };
       }
       case "appendTail": {
-        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        if (!current) {
+          throw new WriteRefusal(
+            "not_found_on_update",
+            `case ${identity} does not exist — open it first (action: open) with the full body.`,
+          );
+        }
         // Always allowed — past the window the tail is the only in-place
         // growth; inside the window a dated line is harmless. The line is
         // normalized to ONE line: a multi-line line would corrupt the
@@ -365,7 +384,12 @@ export async function applyCaseWriteIntent(
         };
       }
       case "addPiece": {
-        if (!current) throw new Error(`case ${identity} does not exist — open it first`);
+        if (!current) {
+          throw new WriteRefusal(
+            "not_found_on_update",
+            `case ${identity} does not exist — open it first (action: open) with the full body.`,
+          );
+        }
         // Always allowed (a NEW file). buildPieceFileName inside createDoc
         // throws on an illegal title.
         const doc = createDoc({ category, caseName, date, title: intent.title, body: intent.body });
@@ -381,6 +405,9 @@ export async function applyCaseWriteIntent(
  * The readCase read-tool every case writer gets: two-segment reference →
  * the current full text, or a visible dead-link line. Writer-is-reader is
  * structural — a writer reads a case before naming it in a write intent.
+ * With the round's batch, the read sees this round's QUEUED writes first
+ * (read-your-writes) — a case opened earlier this round reads back, and a
+ * case queued for deletion reports itself as gone.
  */
 export function makeCaseReadTool(batch?: WriteBatch) {
   return tool({
@@ -394,7 +421,12 @@ export function makeCaseReadTool(batch?: WriteBatch) {
       for (const path of resolveCaseRefPaths(parsed)) {
         try {
           return await fsReadFile(path, batch);
-        } catch {
+        } catch (e) {
+          // A queued DELETE shadows the file for this round — say so plainly
+          // (a dead link would send the model hunting for a rename).
+          if (e instanceof Error && e.message.includes("deleted in this batch")) {
+            return `(deleted in this round: ${ref} was queued for deletion — treat it as gone; do not cite or update it.)`;
+          }
           continue;
         }
       }
@@ -411,6 +443,33 @@ export function caseIdentsOfManifest(tree: Record<string, string[]>): Set<string
     for (const p of paths) {
       const segs = p.split("/");
       if (segs.length >= 2 && segs[1]) idents.add(`${top}/${segs[1]}`);
+    }
+  }
+  return idents;
+}
+
+/**
+ * The set of case identities (`分类/case名`) this round's batch has queued
+ * (writes, not deletes). The manifest is a round-START snapshot; a case
+ * opened earlier in the same round exists in the queue before it exists on
+ * disk — the writer's readCase sees it, so the updateIndex/appendTail/addPiece
+ * gate must see it too (v0.37 §5, S4 fix).
+ */
+export function caseIdentsOfBatch(batch?: WriteBatch): Set<string> {
+  const idents = new Set<string>();
+  if (!batch) return idents;
+  for (const [path, content] of batch.entries) {
+    if (content === null) continue; // a queued delete is not an existing case
+    const segs = path.split("/");
+    // memory/<cat>/<case>/index.md or memory/<cat>/<case>/<piece>.md
+    if (
+      segs.length === 4 &&
+      segs[0] === "memory" &&
+      isCaseCategory(segs[1]!) &&
+      segs[2] &&
+      segs[3]!.endsWith(".md")
+    ) {
+      idents.add(`${segs[1]}/${segs[2]}`);
     }
   }
   return idents;
@@ -454,6 +513,8 @@ const caseWriterSchema = z.object({
 });
 
 const CASE_WRITER_SYSTEM = buildSubAgentSystem(`You are the case writer of a personal memory system (v0.19). Memory is a tree of CASES — one directory per case under a closed category (people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/), each with an index.md (what it is, where it stands) and dated pieces.
+
+${MEMORY_IS_GIT_RULE}
 
 A conversation slice just closed. You are shown its content (excerpt) and the case manifest (the whole memory tree, paths only). Judge for yourself WHICH cases this slice touched — read the current text of the ones you consider via readCase BEFORE naming them in a write. You have no write tools: you return write-intents that engineering validates and applies.
 
@@ -524,7 +585,13 @@ export async function runLibrarianPass(
   const { model, closedSliceId, excerpt, date, batch } = input;
   const manifest = input.manifest ?? { truncated: false, tree: {} };
   const skipped: Array<{ name: string; reason: string }> = [];
-  const existing = caseIdentsOfManifest(manifest.tree);
+  // The update gate sees BOTH the round-start manifest AND this round's queued
+  // writes — a case opened earlier this round is updateable in the same round
+  // (readCase(batch) already reads it back; the gate must not contradict it).
+  const existing = new Set([
+    ...caseIdentsOfManifest(manifest.tree),
+    ...caseIdentsOfBatch(batch),
+  ]);
 
   const prompt = `## Just-closed slice ${closedSliceId}
 
@@ -633,6 +700,8 @@ const scribeSchema = z.object({
 });
 
 const SCRIBE_SYSTEM = buildSubAgentSystem(`You are the scribe of a personal memory system. A conversation slice left MARKERS — one-line notes the reply segment dropped when it judged something worth sedimenting (something to keep, a task the user stated). Your job: write each marker into its CASE.
+
+${MEMORY_IS_GIT_RULE}
 
 You are shown: the slice excerpt, and per marker the marker itself plus the CURRENT index.md of its target case when one exists. You have already read everything you may write about.
 

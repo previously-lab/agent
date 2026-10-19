@@ -20,7 +20,10 @@ import { RECALL_CATEGORIES } from "@/lib/memory/categories";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
 // (gray-matter → node:*), which the workflow bundler rejects.
-import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
+import {
+  DOC_WRITE_WINDOW_RULE,
+  MEMORY_IS_GIT_RULE,
+} from "@/lib/docs/write-window";
 import {
   recallRecentExecute,
   recallFindExecute,
@@ -365,7 +368,7 @@ export const chatTools = {
       "mechanically). If the piece should say where it came from (which " +
       "conversation, when), say it in prose. " +
       DOC_WRITE_WINDOW_RULE +
-      `\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
+      `\n\n${MEMORY_IS_GIT_RULE}\n\n${DOC_LANGUAGE_RULE}\n\n${DOC_HOUSE_STYLE}`,
     inputSchema: z.object({
       category: z
         .enum([

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 /**
  * The HQ agent (v0.21 §2/§4/§5). runSubAgent is mocked — the tests DRIVE the
@@ -10,14 +12,23 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  */
 
 // In-memory memory root (same pattern as background-runs.test.ts).
-const io = vi.hoisted(() => ({ files: new Map<string, string>() }));
+const io = vi.hoisted(() => ({
+  files: new Map<string, string>(),
+  /** The batch the in-flight round created — the read-your-writes tests
+   *  reach into the queue directly (e.g. to queue a delete). */
+  batchRef: { current: null as null | { entries: Map<string, string | null> } },
+}));
 vi.mock("@/lib/episodic/io-helpers", () => ({
   // HQ coalesces each round into ONE batch and ONE flush — mirror the
   // production shapes so the queued entries land on the fake disk.
-  createBatch: () => ({
-    entries: new Map<string, string | null>(),
-    encodings: new Map<string, "base64">(),
-  }),
+  createBatch: () => {
+    const batch = {
+      entries: new Map<string, string | null>(),
+      encodings: new Map<string, "base64">(),
+    };
+    io.batchRef.current = batch;
+    return batch;
+  },
   flushBatch: vi.fn(
     async (batch: { entries: Map<string, string | null> }, _msg: string) => {
       for (const [p, c] of batch.entries) {
@@ -27,11 +38,24 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
       batch.entries.clear();
     },
   ),
-  fsReadFile: vi.fn(async (path: string) => {
-    const content = io.files.get(path);
-    if (content === undefined) throw new Error(`ENOENT: ${path}`);
-    return content;
-  }),
+  fsReadFile: vi.fn(
+    async (path: string, batch?: { entries: Map<string, string | null> }) => {
+      // Mirror the real fsReadFile contract (io-helpers.ts): the pending
+      // queue is consulted FIRST — a queued write reads back, a queued
+      // delete throws the "deleted in this batch" error. The read-your-writes
+      // tests below depend on this fidelity.
+      const pending = batch?.entries.get(path);
+      if (pending !== undefined) {
+        if (pending === null) {
+          throw new Error(`File not found: "${path}" (deleted in this batch)`);
+        }
+        return pending;
+      }
+      const content = io.files.get(path);
+      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+      return content;
+    },
+  ),
   fsWriteFile: vi.fn(
     async (
       path: string,
@@ -89,11 +113,29 @@ const episodic = vi.hoisted(() => ({
       return slice;
     },
   ),
-  readSlicePart: vi.fn(async (sliceId: string, part: string) => {
-    const v = io.files.get(`${sliceId}:${part}`);
-    if (v === undefined) throw new Error(`missing ${sliceId}:${part}`);
-    return v;
-  }),
+  readSlicePart: vi.fn(
+    async (
+      sliceId: string,
+      part: string,
+      batch?: { entries: Map<string, string | null> },
+    ) => {
+      // Mirror the real dual-root read with the batch threaded (paths from
+      // the slicePartPathCandidates mock below).
+      for (const p of [
+        `memory/records/${sliceId}/${part}.md`,
+        `legacy/${sliceId}/${part}.md`,
+      ]) {
+        const pending = batch?.entries.get(p);
+        if (pending !== undefined) {
+          if (pending === null) throw new Error(`missing ${sliceId}:${part}`);
+          return pending;
+        }
+      }
+      const v = io.files.get(`${sliceId}:${part}`);
+      if (v === undefined) throw new Error(`missing ${sliceId}:${part}`);
+      return v;
+    },
+  ),
   slicePartPathCandidates: vi.fn(
     (sliceId: string, part: string) =>
       [`memory/records/${sliceId}/${part}.md`, `legacy/${sliceId}/${part}.md`] as [
@@ -230,7 +272,7 @@ describe("handleBrief (v0.21 §5)", () => {
         caseName: "手机购买调研",
         body: "用户在 2026-08-09-1300 提到想换手机，预算未定。",
       });
-      expect(r).toContain("OK:");
+      expect(r).toContain("OK — 已记录，随本轮一次落盘");
       return {
         ok: true,
         report: { actions: ["research/手机购买调研/index.md"], note: "Opened the research case." },
@@ -285,7 +327,7 @@ describe("handleBrief (v0.21 §5)", () => {
         body: "基于新读的重写。",
         expectedUpdated: fresh,
       });
-      expect(r3).toContain("OK:");
+      expect(r3).toContain("OK — 已记录，随本轮一次落盘");
       // …and the out-of-window case still grows by dated tail lines.
       const r4 = await callTool(opts, "writeCase", {
         action: "appendTail",
@@ -293,7 +335,7 @@ describe("handleBrief (v0.21 §5)", () => {
         caseName: "旧案",
         line: "价格已过时。",
       });
-      expect(r4).toContain("OK:");
+      expect(r4).toContain("OK — 已记录，随本轮一次落盘");
       return {
         ok: true,
         report: { actions: ["research/手机购买调研/index.md"], note: "Window guards verified." },
@@ -324,7 +366,7 @@ describe("handleBrief (v0.21 §5)", () => {
         caseName: "evolution",
         body: reason,
       });
-      expect(r).toContain("OK:");
+      expect(r).toContain("OK — 已记录，随本轮一次落盘");
       return {
         ok: true,
         report: { actions: ["self/evolution/index.md"], note: "Vetoed the implied write; reason in self/." },
@@ -418,7 +460,7 @@ describe("handleBrief (v0.21 §5)", () => {
         caseName: "同事小林",
         body: "2026-08-09-1300 提到的同事。",
       });
-      expect(legal).toContain("OK:");
+      expect(legal).toContain("OK — 已记录，随本轮一次落盘");
       return { ok: true, report: { actions: [], note: "guard verified" }, text: "" };
     });
 
@@ -436,7 +478,7 @@ describe("handleBrief (v0.21 §5)", () => {
         agent: "search",
         content: "2026-08-09：读回失败先读回再引用（证据 2026-08-09-1300）。",
       });
-      expect(r).toContain("OK: memory/self/search/index.md");
+      expect(r).toContain("OK — 已记录，随本轮一次落盘: memory/self/search/index.md");
       return { ok: true, report: { actions: [], note: "sop rewritten" }, text: "" };
     });
 
@@ -452,7 +494,7 @@ describe("handleBrief (v0.21 §5)", () => {
       "- [due: 2026-08-12] 复查 hypotheses/手机调研假设（据片 2026-08-09-1300）\n";
     runSubAgentMock.mockImplementation(async (opts) => {
       const r = await callTool(opts, "setAgenda", { content: agenda });
-      expect(r).toContain("OK: memory/self/agenda.md");
+      expect(r).toContain("OK — 已记录，随本轮一次落盘: memory/self/agenda.md");
       // Inside the tool the write is QUEUED, not landed — the round's one
       // flush applies it (the same batch discipline as every write tool).
       expect(io.files.has("memory/self/agenda.md")).toBe(false);
@@ -597,8 +639,8 @@ describe("handleBrief (v0.21 §5)", () => {
     });
     runSubAgentMock.mockImplementation(async (opts) => {
       const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
-      expect(r).toContain("written: (none)");
-      expect(r).toContain("scribe written: tasks/团队on-site/index.md");
+      expect(r).toContain("queued (lands when this round commits): (none)");
+      expect(r).toContain("scribe queued (lands when this round commits): tasks/团队on-site/index.md");
       expect(r).toContain("scribe skipped: t1-2 (illegal case name)");
       return {
         ok: true,
@@ -748,7 +790,7 @@ describe("handleBrief (v0.21 §5)", () => {
         caseName: "手机购买调研",
         body: "超时前落的一笔。",
       });
-      expect(r).toContain("OK:");
+      expect(r).toContain("OK — 已记录，随本轮一次落盘");
       return {
         ok: false,
         timedOut: true,
@@ -786,5 +828,158 @@ describe("handleBrief (v0.21 §5)", () => {
     expect(outcome.error).toBe("boom");
     expect(outcome.actions).toEqual([]);
     expect(io.files.size).toBe(0);
+  });
+});
+
+
+describe("read-your-writes — the round's batch rides every read (v0.37 §5)", () => {
+  it("writeCase(open) → readCase reads the QUEUED case back — no dead link on a case this round created", async () => {
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const ok = await callTool(opts, "writeCase", {
+        action: "open",
+        category: "research",
+        caseName: "手机购买调研",
+        body: "队列里的正文。",
+      });
+      expect(ok).toContain("已记录，随本轮一次落盘");
+      // Before the fix this was a dead link: the case is neither on disk nor
+      // in any cache — only the queue knows it.
+      const read = await callTool(opts, "readCase", { ref: "research/手机购买调研" });
+      expect(read).toContain("队列里的正文。");
+      expect(read).not.toContain("dead link");
+      // Inside the round the write is queued, not landed…
+      expect(io.files.has("memory/research/手机购买调研/index.md")).toBe(false);
+      return { ok: true, report: { actions: [], note: "ryw" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+    // …and the round's flush committed it.
+    expect(io.files.get("memory/research/手机购买调研/index.md")).toContain("队列里的正文。");
+  });
+
+  it("writeCase(appendTail) → readCase sees the tail line IN THE SAME ROUND (was: stale body)", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n旧正文。\n",
+    );
+    runSubAgentMock.mockImplementation(async (opts) => {
+      await callTool(opts, "writeCase", {
+        action: "appendTail",
+        category: "research",
+        caseName: "手机调研",
+        line: "本轮回补的尾行。",
+      });
+      const read = await callTool(opts, "readCase", { ref: "research/手机调研" });
+      expect(read).toContain("旧正文。");
+      expect(read).toContain("本轮回补的尾行。");
+      return { ok: true, report: { actions: [], note: "ryw" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+  });
+
+  it("a queued DELETE reads back as 「deleted in this round」 — not a dead link, not stale bytes", async () => {
+    io.files.set(
+      "memory/research/手机调研/index.md",
+      "---\nopened: '2026-08-01'\nupdated: '2026-08-01T00:00:00.000Z'\n---\n\n旧正文。\n",
+    );
+    runSubAgentMock.mockImplementation(async (opts) => {
+      io.batchRef.current!.entries.set("memory/research/手机调研/index.md", null);
+      const read = await callTool(opts, "readCase", { ref: "research/手机调研" });
+      expect(read).toContain("deleted in this round");
+      expect(read).not.toContain("dead link");
+      expect(read).not.toContain("旧正文。");
+      return { ok: true, report: { actions: [], note: "ryw" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+    // the queued delete rode the round's flush — the file is gone
+    expect(io.files.has("memory/research/手机调研/index.md")).toBe(false);
+  });
+
+  it("readSlice reads this round's QUEUED slice bytes before the disk", async () => {
+    io.files.set(`${SLICE_ID}:core`, "盘上旧文。");
+    runSubAgentMock.mockImplementation(async (opts) => {
+      io.batchRef.current!.entries.set(
+        `memory/records/${SLICE_ID}/core.md`,
+        "本轮队列里的新文。",
+      );
+      const r = await callTool(opts, "readSlice", { sliceId: SLICE_ID, part: "core" });
+      expect(r).toBe("本轮队列里的新文。");
+      return { ok: true, report: { actions: [], note: "ryw" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
+  });
+});
+
+describe("the batch-threading mechanical audit (v0.37 §5 — 漏接即红)", () => {
+  const readSrc = (rel: string) =>
+    readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+  const hqSrc = readSrc("../../../../src/app/api/evolution/hq-agent.ts");
+  const ctxSrc = readSrc("../../../../src/app/api/evolution/hq-context.ts");
+
+  it("every HQ read assembly point threads the round's batch", () => {
+    // readSlice → readSlicePart; readCase → makeCaseReadTool; the four
+    // loadSlice pre-reads (markSlice / archiveSliceCases / evolveUserModel /
+    // researchSliceQuestions); the user-model read; the card readers.
+    expect(hqSrc).toContain("readSlicePart(sliceId, part, batch)");
+    expect(hqSrc).toContain("makeCaseReadTool(batch)");
+    expect(hqSrc).toContain("readUserModel(batch)");
+    expect(hqSrc).toContain("buildRunCardReaders(batch)");
+    expect(hqSrc.match(/loadSlice\(sliceId, batch\)/g)?.length).toBe(4);
+  });
+
+  it("the card readers pass the batch to BOTH dual-root probes", () => {
+    expect(ctxSrc).toContain("fsReadFile(primary, batch)");
+    expect(ctxSrc).toContain("fsReadFile(fallback, batch)");
+  });
+});
+
+
+describe("queued vs committed wording + the memory-is-git contract (v0.37 §7-1, §2.3)", () => {
+  it("every HQ writer surface carries the contract sentence; the role prompt does too", async () => {
+    runSubAgentMock.mockImplementation(async () => ({
+      ok: true,
+      report: { actions: [], note: "idle" },
+      text: "",
+    }));
+
+    await handleBrief(DOCKET);
+
+    const opts = runSubAgentMock.mock.calls[0][0];
+    expect(opts.system).toContain("Memory is a git tree, not a database");
+    for (const name of ["writeCase", "writeSelfSop", "setAgenda"] as const) {
+      const t = opts.tools[name] as unknown as { description: string };
+      expect(t.description).toContain("Memory is a git tree, not a database");
+    }
+  });
+
+  it("the pass summaries say queued, not written — 'written' is claimed only after a commit", async () => {
+    passes.runLibrarianPass.mockResolvedValue({
+      voided: [],
+      llmRan: true,
+      written: ["research/手机话题/index.md"],
+      skipped: [],
+    });
+    passes.runScribePass.mockResolvedValue({ ran: true, written: [], skipped: [] });
+    runSubAgentMock.mockImplementation(async (opts) => {
+      const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
+      expect(r).toContain("queued (lands when this round commits): research/手机话题/index.md");
+      expect(r).not.toMatch(/^written:/m);
+      return { ok: true, report: { actions: [], note: "x" }, text: "" };
+    });
+
+    const outcome = await handleBrief(DOCKET);
+
+    expect(outcome.error).toBeUndefined();
   });
 });

@@ -53,7 +53,7 @@ import { sanitizeCaseSegment } from "@/lib/docs/case-naming";
 // Direct module path, not the "@/lib/docs" barrel: this file is reachable
 // from the "use workflow" bundle, and the barrel re-exports case-doc.ts
 // (gray-matter → node:*), which the workflow bundler rejects.
-import { DOC_WRITE_WINDOW_RULE } from "@/lib/docs/write-window";
+import { DOC_WRITE_WINDOW_RULE, MEMORY_IS_GIT_RULE } from "@/lib/docs/write-window";
 import { runDocResearchPass } from "@/lib/episodic/flash/doc-research";
 import type { TurnAnalysis } from "@/lib/episodic/flash/turn-analyzer";
 import { readUserModel, writeSelfSop } from "@/lib/evolution/store";
@@ -162,6 +162,7 @@ A round can end SUPERSEDED — rarely. You read the world fresh as you work; whe
 Housekeeping you own: an ACTIVE slice past the date window is an orphan — the conversation long ended but the close never fired, and the field's stale-scan only looks back two days. When a read shows you one, seal it with markSlice (closed_by: context_lost); a capability, not a per-round obligation.
 
 Craft notes:
+- ${MEMORY_IS_GIT_RULE}
 - Mailbox marker lines in a slice's agent.md are prose CLUES, not triggers — read them, judge them, ignore them when stale.
 - self/ SOP rewrites must cite their evidence (records slice ids) inside the prose — an SOP line without evidence is dead paper.
 - research/ hypotheses must carry a falsification condition (the write tooling enforces it).
@@ -191,7 +192,9 @@ function buildHqTools(
     listTree: tool({
       description:
         "The whole memory tree as a manifest (memory/ minus config/, records/ collapsed to slice dirs). " +
-        "Your discovery surface — call it first when the brief does not name exact cases.",
+        "Your discovery surface — call it first when the brief does not name exact cases. " +
+        "The manifest is a snapshot of the round's START: cases queued (written or deleted) this " +
+        "round may not appear in it — readCase sees the queue, the manifest does not.",
       inputSchema: z.object({}),
       execute: async () => renderManifest((await buildRunManifest()).tree),
     }),
@@ -199,21 +202,22 @@ function buildHqTools(
     readSlice: tool({
       description:
         "Read one slice's raw record: part 'core' (the conversation, default), 'agent' (the mailbox / agent timeline), " +
-        "or 'previously' (the card snapshot at that slice). Dual-root — older slices are found under the legacy root.",
+        "or 'previously' (the card snapshot at that slice). Dual-root — older slices are found under the legacy root. " +
+        "Sees this round's queued writes (read-your-writes): a slice you sealed earlier this round reads back sealed.",
       inputSchema: z.object({
         sliceId: z.string().describe("e.g. 2026-10-04-0131"),
         part: z.enum(["core", "agent", "previously"]).default("core"),
       }),
       execute: async ({ sliceId, part }) => {
         try {
-          return await readSlicePart(sliceId, part);
+          return await readSlicePart(sliceId, part, batch);
         } catch {
           return `(cannot read ${sliceId} part ${part} — the slice or the part is missing; check listTree first.)`;
         }
       },
     }),
 
-    readCase: makeCaseReadTool(),
+    readCase: makeCaseReadTool(batch),
 
     markSlice: tool({
       description:
@@ -225,7 +229,7 @@ function buildHqTools(
         sliceId: z.string().describe("e.g. 2026-10-04-0131"),
       }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId).catch(() => null);
+        const slice = await loadSlice(sliceId, batch).catch(() => null);
         if (!slice) return `(slice ${sliceId} unreadable — nothing marked.)`;
         // Idempotent: closed_by is authoritative — a slice already sealed
         // (by anyone, for any cause) is never rewritten.
@@ -246,7 +250,9 @@ function buildHqTools(
         "addPiece: a dated piece (title + body, always allowed). " +
         "Categories: people/ events/ things/ places/ orgs/ research/ hypotheses/ tasks/ self/. " +
         "Exception: people/user is NOT a case — it is the user model, pure prose owned by evolveUserModel; writes there are rejected. " +
-        DOC_WRITE_WINDOW_RULE,
+        "Your writes QUEUE in this round's batch and land as ONE commit when the round ends — the OK line means 已记录，随本轮一次落盘, not yet on disk. " +
+        DOC_WRITE_WINDOW_RULE +
+        `\n\n${MEMORY_IS_GIT_RULE}`,
       inputSchema: z.object({
         action: z.enum(["open", "rewriteIndex", "appendTail", "addPiece"]),
         category: z.string(),
@@ -303,7 +309,10 @@ function buildHqTools(
         }
         try {
           const applied = await applyCaseWriteIntent(intent, date, batch);
-          return `OK: ${applied.path}${applied.created ? " (created)" : ""}`;
+          // Queued, NOT committed — the round's single end-of-round flush is
+          // the commit. "written" is claimed only after a commit succeeds
+          // (v0.37 §7-1): the honest word here is 「已记录，随本轮一次落盘」.
+          return `OK — 已记录，随本轮一次落盘: ${applied.path}${applied.created ? " (created)" : ""}`;
         } catch (e) {
           return `REJECTED: ${e instanceof Error ? e.message : String(e)}`;
         }
@@ -319,7 +328,7 @@ function buildHqTools(
         "An empty result is legal — writer-is-reader dedup lives inside the passes.",
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId).catch(() => null);
+        const slice = await loadSlice(sliceId, batch).catch(() => null);
         if (!slice) return `(slice ${sliceId} unreadable — archive skipped.)`;
         const excerpt = buildSliceExcerpt(slice);
         const result = await runLibrarianPass({
@@ -340,9 +349,11 @@ function buildHqTools(
           batch,
         });
         return (
-          `written: ${result.written.join(", ") || "(none)"}\n` +
+          // Queued, not committed — "written" is claimed only after the
+          // round's flush lands (v0.37 §7-1).
+          `queued (lands when this round commits): ${result.written.join(", ") || "(none)"}\n` +
           `skipped: ${result.skipped.map((s) => `${s.name} (${s.reason})`).join(", ") || "(none)"}\n` +
-          `scribe written: ${scribe.written.join(", ") || "(none)"}` +
+          `scribe queued (lands when this round commits): ${scribe.written.join(", ") || "(none)"}` +
           (scribe.skipped.length > 0
             ? `\nscribe skipped: ${scribe.skipped.map((s) => `${s.id} (${s.reason})`).join(", ")}`
             : "")
@@ -361,9 +372,11 @@ function buildHqTools(
         focus: z.string().describe("What this round is about — cite the cases just written, if any."),
       }),
       execute: async ({ sliceId, focus }) => {
-        const slice = await loadSlice(sliceId).catch(() => null);
+        const slice = await loadSlice(sliceId, batch).catch(() => null);
         if (!slice) return `(slice ${sliceId} unreadable — evolve skipped.)`;
-        const userModel = await readUserModel().catch(() => null);
+        // The round's batch rides the read (v0.37 §5): the direction half may
+        // have been queued by an earlier evolveUserModel THIS round.
+        const userModel = await readUserModel(batch).catch(() => null);
         const directionCurrent = userModel?.direction ?? null;
         // HQ owns no turn analysis — the direction half gets the minimal one
         // (the freshest evidence is the closed slice itself, read through the readers).
@@ -391,7 +404,7 @@ function buildHqTools(
             recentTurns: slice.turns.map((t) => ({ role: t.role, content: t.content })),
             focus,
             signal: closed ? "slice_closed" : "field_report",
-            readers: buildRunCardReaders(),
+            readers: buildRunCardReaders(batch),
             todayDate: date,
             directionEval: {
               current: directionCurrent,
@@ -417,7 +430,7 @@ function buildHqTools(
         "Marker scanning, dedup and recording happen INSIDE the pass.",
       inputSchema: z.object({ sliceId: z.string() }),
       execute: async ({ sliceId }) => {
-        const slice = await loadSlice(sliceId).catch(() => null);
+        const slice = await loadSlice(sliceId, batch).catch(() => null);
         if (!slice) return `(slice ${sliceId} unreadable — research skipped.)`;
         const result = await runDocResearchPass({
           model,
@@ -429,7 +442,9 @@ function buildHqTools(
         });
         return (
           `ran: ${result.ran}\n` +
-          `written: ${result.written.join(", ") || "(none)"}\n` +
+          // Queued, not committed — "written" is claimed only after the
+          // round's flush lands (v0.37 §7-1).
+          `queued (lands when this round commits): ${result.written.join(", ") || "(none)"}\n` +
           `skipped: ${result.skipped.map((s) => `${s.id} (${s.reason})`).join(", ") || "(none)"}`
         );
       },
@@ -445,7 +460,8 @@ function buildHqTools(
         "House style: one sentence one meaning, active voice, no filler — the full rules sit in your role prompt. " +
         "A substantive veto's REASON also lands here as prose (or in the relevant case body) — never as a counter. " +
         "An SOP is short guidance, not an archive — rewrite it in place; it is loaded verbatim " +
-        "into the colleague's prompt at spawn, so keep it tight.",
+        "into the colleague's prompt at spawn, so keep it tight. " +
+        MEMORY_IS_GIT_RULE,
       inputSchema: z.object({
         agent: z.enum(["search", "thinkdeep"]),
         content: z.string().describe("The FULL new SOP text — dated factual accounts with the rules they motivated, evidence (slice ids) cited in the prose, no builder vocabulary."),
@@ -456,7 +472,7 @@ function buildHqTools(
         await withSliceLock("evolution", () =>
           writeSelfSop(agent, content, batch),
         );
-        return `OK: memory/self/${agent}/index.md`;
+        return `OK — 已记录，随本轮一次落盘: memory/self/${agent}/index.md`;
       },
     }),
 
@@ -466,7 +482,8 @@ function buildHqTools(
         "A FULL rewrite every time: consume an item by dropping its line, reschedule it by changing its due date, add one by adding a line. " +
         "Line format (the ONLY mechanical contract — a line that breaks it is never handed back to you): " +
         "`- [due: YYYY-MM-DD] <one line>（据片 <sliceId>）` — every item carries its source (the slice id that motivated it). " +
-        "The agenda is a work pad, not a ledger — keep it short.",
+        "The agenda is a work pad, not a ledger — keep it short. " +
+        MEMORY_IS_GIT_RULE,
       inputSchema: z.object({
         content: z
           .string()
@@ -479,7 +496,7 @@ function buildHqTools(
         await withSliceLock("evolution", () =>
           fsWriteFile(AGENDA_PATH, content, batch),
         );
-        return `OK: ${AGENDA_PATH}`;
+        return `OK — 已记录，随本轮一次落盘: ${AGENDA_PATH}`;
       },
     }),
 

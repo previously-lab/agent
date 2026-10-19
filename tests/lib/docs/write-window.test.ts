@@ -3,7 +3,9 @@ import {
   DOC_WRITE_WINDOW_MINUTES,
   DOC_WRITE_WINDOW_MS,
   DOC_WRITE_WINDOW_RULE,
+  MEMORY_IS_GIT_RULE,
   isWithinWriteWindow,
+  WriteRefusal,
   CaseWriteRefusal,
 } from "@/lib/docs";
 import { DEFAULTS } from "@/lib/config/defaults";
@@ -51,5 +53,42 @@ describe("CaseWriteRefusal — the structured refusal", () => {
     expect(refusal.message).toContain("append");
     const conflict = new CaseWriteRefusal("rewrite_conflict", "moved — re-read");
     expect(conflict.code).toBe("rewrite_conflict");
+  });
+});
+
+
+describe("WriteRefusal — the unified write-surface refusal (v0.37 §3)", () => {
+  it("enumerates the seven codes; the message carries the recovery path by contract", () => {
+    const codes = [
+      "rewrite_conflict",
+      "rewrite_window_closed",
+      "already_exists",
+      "invalid_category",
+      "falsification_missing",
+      "not_found_on_update",
+      "commit_failed",
+    ] as const;
+    for (const code of codes) {
+      const refusal = new WriteRefusal(code, `recovery for ${code}`);
+      expect(refusal).toBeInstanceOf(Error);
+      expect(refusal.name).toBe("WriteRefusal");
+      expect(refusal.code).toBe(code);
+    }
+  });
+
+  it("CaseWriteRefusal stays backward compatible — a WriteRefusal subclass, name preserved", () => {
+    const legacy = new CaseWriteRefusal("rewrite_conflict", "moved — re-read");
+    expect(legacy).toBeInstanceOf(WriteRefusal);
+    expect(legacy.name).toBe("CaseWriteRefusal");
+    expect(legacy.code).toBe("rewrite_conflict");
+  });
+});
+
+describe("MEMORY_IS_GIT_RULE — the single-source contract sentence (v0.37 §2.3)", () => {
+  it("states the world's shape in one English sentence, no backticks (prompt-facing)", () => {
+    expect(MEMORY_IS_GIT_RULE).toContain("Memory is a git tree, not a database");
+    expect(MEMORY_IS_GIT_RULE).toContain("every write is a commit");
+    expect(MEMORY_IS_GIT_RULE).toContain("re-read fresh and decide again");
+    expect(MEMORY_IS_GIT_RULE).not.toContain("`");
   });
 });

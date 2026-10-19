@@ -73,8 +73,11 @@ export {
   DOC_WRITE_WINDOW_MINUTES,
   DOC_WRITE_WINDOW_MS,
   DOC_WRITE_WINDOW_RULE,
+  MEMORY_IS_GIT_RULE,
   isWithinWriteWindow,
+  WriteRefusal,
   CaseWriteRefusal,
+  type WriteRefusalCode,
   type CaseWriteRefusalCode,
 } from "./write-window";
 export {

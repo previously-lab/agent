@@ -186,7 +186,7 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
 
     runSubAgentMock.mockImplementation(async (opts) => {
       const r = await callTool(opts, "archiveSliceCases", { sliceId: SLICE_ID });
-      expect(r).toContain("written:");
+      expect(r).toContain("queued (lands when this round commits):");
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
 
@@ -198,7 +198,7 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
     const second = await handleBrief(DOCKET);
     expect(second.error).toBeUndefined();
     // The replay's product report is readable and shows the dedup skip.
-    expect(second.note).toContain("written: (none)");
+    expect(second.note).toContain("queued (lands when this round commits): (none)");
     expect(second.note).toContain("already covered");
     // The first round's write is untouched by the replay.
     expect(io.files.get(CASE_PATH)).toBe(afterFirst);
@@ -218,7 +218,7 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
 
     const first = await handleBrief(DOCKET);
     expect(first.error).toBeUndefined();
-    expect(first.note).toContain("OK:");
+    expect(first.note).toContain("OK — 已记录，随本轮一次落盘");
     const afterFirst = io.files.get(CASE_PATH);
     expect(afterFirst).toContain("想换手机");
 
@@ -244,7 +244,7 @@ describe("HQ replay idempotence — same closed slice processed twice (D-10)", (
     const piecePaths: string[] = [];
     runSubAgentMock.mockImplementation(async (opts) => {
       const r = await callTool(opts, "writeCase", pieceArgs);
-      const m = r.match(/^OK: (\S+)/);
+      const m = r.match(/^OK — 已记录，随本轮一次落盘: (\S+)/);
       if (m) piecePaths.push(m[1]);
       return { ok: true, report: { actions: [], note: r }, text: "" };
     });
