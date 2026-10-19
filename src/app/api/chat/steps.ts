@@ -157,7 +157,7 @@ import {
 } from "@/lib/chat/parallel-runs";
 import { findEpisodeUnanswered, type EnvelopeUserTurn } from "./inner-envelope";
 import { deliverReflectionWake } from "@/app/api/evolution/reflection-wake";
-import { readHQStatus } from "@/app/api/evolution/hq-status-store";
+import { readLatestReflectionNote } from "@/lib/chat/hq-log";
 import {
   runCardEvolution,
   type CardEvolutionReaders,
@@ -1346,7 +1346,12 @@ export async function housekeeping(
   // of this turn's last user message — exactly once (R1: the workflow compares
   // the note's stamp against the previous user turn's). Tolerant: an absent
   // or corrupt hq.json reads as the empty pointer, and the note is omitted.
-  const reflectionNote = (await readHQStatus()).lastNote ?? undefined;
+  // v0.39 §1/待裁决 3 — the 暂存 moved to the COMMIT LOG: the newest
+  // `Reflection round —` commit's note paragraph + its commit timestamp.
+  // The exactly-once discipline downstream (buildReflectionNoteSection's
+  // newer-than-previous-user-turn check on `at`) is unchanged — `at` is
+  // now the commit time, which postdates the turn it answers by construction.
+  const reflectionNote = (await readLatestReflectionNote()) ?? undefined;
 
   await emitPhase(stream, "context", false, [`continuity: ${continuity.tier}`]);
 

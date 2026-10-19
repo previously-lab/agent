@@ -35,7 +35,11 @@ import {
   writeBinaryFile as writeBinaryFileGitHub,
   deleteFile as deleteFileGitHub,
 } from "@/lib/tools/writeFile";
-import { commitBatchToGitHub, type BatchEntry } from "@/lib/tools/batch-write";
+import {
+  commitBatchToGitHub,
+  commitEmptyToGitHub,
+  type BatchEntry,
+} from "@/lib/tools/batch-write";
 import {
   readFileLocal,
   writeFileLocal,
@@ -54,7 +58,7 @@ import {
 import { resolveDataSource, isDemo } from "@/lib/data-source/resolve";
 import { getRepoConfig } from "@/lib/capabilities";
 import { getMemoryRoot, isPathAllowed } from "@/lib/whitelist";
-import { commitPaths, isGitRepo } from "./local-git";
+import { commitEmpty, commitPaths, isGitRepo } from "./local-git";
 
 // ─── Environment detection ───────────────────────────────────────────────
 
@@ -358,4 +362,40 @@ export async function fsListFiles(
     return listRepoChildren(path, repo, owner);
   }
   return listFilesLocal(path);
+}
+
+/**
+ * The reflection round's commit (v0.39 §2.2 — 恰好 1 次提交/轮). A round
+ * WITH queued writes flushes them as usual; a CLEAN round with an EMPTY
+ * queue still lands ONE commit carrying only its message (the trailer =
+ * the water level — 空轮空提交). A FAILED round with nothing queued must
+ * NOT call this (no碑 for zero change). GitHub: an empty commit on the
+ * current tree; local: isomorphic-git (disallowEmpty defaults false);
+ * demo: no-op (read-only). Throws on backend failure — the round reports
+ * it honestly, the water level does not move.
+ */
+export async function commitReflectionRound(
+  batch: WriteBatch,
+  message: string,
+): Promise<void> {
+  if (batch.entries.size > 0) {
+    await flushBatch(batch, message);
+    return;
+  }
+  if (DEMO_MODE) return; // demo never persists — nothing to ledger
+  if (USE_GITHUB) {
+    const { owner, repo } = getRepoConfig();
+    await commitEmptyToGitHub(message, repo, owner);
+    return;
+  }
+  const root = getMemoryRoot();
+  if (!isGitRepo(root)) {
+    // v0.39 待裁决 2 — fail-safe, not fail-busy: without a git ledger
+    // there is no log plane to carry the level. The caller degrades to
+    // an empty docket + warn (and the deployment should git init).
+    throw new Error(
+      "memory root is not a git repository — the reflection cursor has no log plane (run `git init` in the memory root)",
+    );
+  }
+  await commitEmpty(root, message);
 }

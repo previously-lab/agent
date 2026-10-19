@@ -215,6 +215,15 @@ const reflectionWake = vi.hoisted(() => ({
 }));
 vi.mock("@/app/api/evolution/reflection-wake", () => reflectionWake);
 
+// v0.39 — the 暂存 read goes through the commit-log reader (mocked here).
+const hqLog = vi.hoisted(() => ({ note: null as { note: string; at: string } | null }));
+vi.mock("@/lib/chat/hq-log", () => ({
+  readLatestReflectionNote: async () => hqLog.note,
+  readReflectionCursor: async () => ({ sliceId: null, sha: null, at: null, degraded: false }),
+  readReflectionLog: async () => ({ entries: [], available: true }),
+}));
+
+
 // Phase-level bridge outsourcing — runHousekeepingBridge /
 // applyBridgeCardEvolution are replaced with fakes (the report under test is
 // injected verbatim); the report adapter stays REAL.
@@ -479,6 +488,7 @@ beforeEach(() => {
   episodic.analyzeTurn.mockResolvedValue(baseAnalysis());
   enumerate.enumerateSliceIds.mockResolvedValue([]);
   evolutionStore.readDirection.mockResolvedValue(null);
+  hqLog.note = null;
 });
 
 describe("housekeeping step (进场那一拍 — the entry beat)", () => {
@@ -597,16 +607,14 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     expect(hk.dueTasksBlock).not.toContain("旧账");
   });
 
-  it("v0.30 §2.4: a staged reflection note in hq.json rides the result (reflectionNote)", async () => {
-    fakeDisk.files.set(
-      "memory/config/hq.json",
-      JSON.stringify({
-        lastNote: {
-          note: "核对了屏幕供应商案，把跟进写进了 research/。",
-          at: "2026-07-14T09:30:00.000Z",
-        },
-      }),
-    );
+  it("v0.39 待裁决 3: the 暂存 rides the result, now read from the COMMIT LOG (reflectionNote)", async () => {
+    // The log reader is mocked at the module boundary (the real one's
+    // isomorphic-git leg has no place in this harness): the newest
+    // `Reflection round —` commit's note paragraph + its commit timestamp.
+    hqLog.note = {
+      note: "核对了屏幕供应商案，把跟进写进了 research/。",
+      at: "2026-07-14T09:30:00.000Z",
+    };
 
     const hk = await housekeeping(makeInput("hi"));
 
@@ -616,7 +624,8 @@ describe("housekeeping step (进场那一拍 — the entry beat)", () => {
     });
   });
 
-  it("no hq.json (or no staged note) → reflectionNote is omitted entirely", async () => {
+  it("no note in the log → reflectionNote is omitted entirely (exactly-once discipline unchanged)", async () => {
+    hqLog.note = null;
     const hk = await housekeeping(makeInput("hi"));
     expect(hk.reflectionNote).toBeUndefined();
     expect("reflectionNote" in hk).toBe(false);

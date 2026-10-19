@@ -29,6 +29,18 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
     io.batchRef.current = batch;
     return batch;
   },
+  commitReflectionRound: vi.fn(
+    async (batch: { entries: Map<string, string | null> }, _message: string) => {
+      // mirror the real contract (io-helpers): a round WITH queued writes
+      // applies them; a clean EMPTY round lands a no-op empty commit (the
+      // local fake disk has no git ledger).
+      for (const [p, c] of batch.entries) {
+        if (c === null) io.files.delete(p);
+        else io.files.set(p, c);
+      }
+      batch.entries.clear();
+    },
+  ),
   flushBatch: vi.fn(
     async (batch: { entries: Map<string, string | null> }, _msg: string) => {
       for (const [p, c] of batch.entries) {
@@ -254,6 +266,13 @@ describe("handleBrief (v0.21 §5)", () => {
       note: "Checked the slice; nothing worth storing.",
     });
     expect(io.files.size).toBe(0);
+    // v0.39 #19 — 空轮也是恰好 1 次提交: the empty batch still lands ONE
+    // commit carrying ONLY the trailer (空转零文件写入、日志留一行).
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    expect(vi.mocked(commitReflectionRound)).toHaveBeenCalledTimes(1);
+    const message = vi.mocked(commitReflectionRound).mock.calls[0][1];
+    expect(message).toContain("Reflection round — 2026-08-09");
+    expect(message).toContain("seen: 2026-08-09-1300");
     // Runner wiring: forced report through hqReport; NO wall-clock budget
     // (v0.34 修订 A — execution budgets are deleted repo-wide; the round's
     // bounds are the step cap and the platform wall).
@@ -811,8 +830,8 @@ describe("handleBrief (v0.21 §5)", () => {
   });
 
   it("a failed round whose FLUSH failed reports NO writes — nothing landed, nothing claimed", async () => {
-    const { flushBatch } = await import("@/lib/episodic/io-helpers");
-    vi.mocked(flushBatch).mockRejectedValueOnce(new Error("disk full"));
+    const { commitReflectionRound } = await import("@/lib/episodic/io-helpers");
+    vi.mocked(commitReflectionRound).mockRejectedValueOnce(new Error("disk full"));
     runSubAgentMock.mockImplementation(async (opts) => {
       await callTool(opts, "writeCase", {
         action: "open",

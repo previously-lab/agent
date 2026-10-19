@@ -29,12 +29,13 @@ import { tool } from "ai";
 import { z } from "zod";
 import { closeSlice, loadSlice, readSlicePart } from "@/lib/episodic";
 import {
+  commitReflectionRound,
   createBatch,
-  flushBatch,
   fsWriteFile,
   type WriteBatch,
 } from "@/lib/episodic/io-helpers";
 import { isRefConflictError } from "@/lib/tools/batch-write";
+import { buildReflectionRoundMessage } from "@/lib/chat/commit-contract";
 import { withSliceLock } from "@/lib/episodic/slice-mutex";
 import { runSubAgent } from "@/lib/agents/sub-agent-runner";
 import { buildSubAgentSystem } from "@/lib/agents/prompts";
@@ -580,20 +581,15 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   });
 
   // Flush whatever the round queued — even a failed round keeps whatever
-  // its tools landed before the failure (HQ's products are writes). A
-  // bounded PLAIN retry covers a ref that moved under us:
-  // commitBatchToGitHub re-reads HEAD at the start of every attempt, so the
-  // retry rebases our tree onto the moved ref. Why a plain retry is enough
-  // (R6): HQ never writes the LIVE slice's core.md — markSlice seals only
-  // non-live orphans, which by definition no live turn is appending to —
-  // case intents hold the same per-case `doc:` locks as the field's
-  // writeCase, and card/SOP writes hold the same in-process "evolution"
-  // lock as the field's evolution segment. A same-file clobber is therefore
-  // unreachable in-process and, cross-process, no worse than the
-  // pre-existing per-file sha race (last writer wins either way). What the
-  // retry cannot heal is a TRUE same-file cross-process race on a merged
-  // file (people/user/index.md) — accepted: it existed with per-file writes
-  // too. Never throws: a lost flush costs the round's writes, not the run.
+  // its tools landed before the failure (HQ's products are writes). The
+  // commit message IS the settlement (v0.39 §2.3): a CLEAN round's trailer
+  // carries the water level (`seen:`), the evolution beat (`evolved:`) or
+  // the superseded verdict — 恰好 1 次提交/轮, and a clean round with an
+  // EMPTY queue still lands one commit carrying only the trailer (空轮空
+  // 提交 — the vetoed slice must not plug the scope's head, §7-2). A FAILED
+  // round's commit (when it has writes) carries NO trailer section: the
+  // level not advancing is the absence of a line, not a flag (§2.6). A
+  // bounded PLAIN retry covers a ref that moved under us.
   //
   // Snapshot the queue BEFORE the flush: a successful flush empties the
   // batch, and a FAILED round still needs the list — the round's landed
@@ -602,11 +598,32 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
   const queuedPaths = [...batch.entries.keys()]
     .filter((p) => batch.entries.get(p) !== null)
     .sort();
+  const rep = result.ok && result.report ? result.report : null;
+  const roundFailed = rep === null;
+  const superseded = rep?.disposition === "superseded";
+  const furthestScopeSlice = scope.length > 0 ? scope[scope.length - 1].sliceId : undefined;
+  const note = rep && queuedPaths.length > 0 ? rep.note : undefined;
+  const message = buildReflectionRoundMessage({
+    date,
+    ...(note?.trim() ? { note } : {}),
+    // 失败轮不载 trailer（有写也如此）；superseded 与 seen 互斥
+    ...(roundFailed
+      ? {}
+      : {
+          trailer: {
+            ...(!superseded && furthestScopeSlice
+              ? { seen: { sliceId: furthestScopeSlice } }
+              : {}),
+            ...(flags.evolutionRan ? { evolved: { date } } : {}),
+            ...(superseded ? { superseded: true as const } : {}),
+          },
+        }),
+  });
   let flushed = false;
   let flushAttempts = 0;
   for (;;) {
     try {
-      await flushBatch(batch, `Reflection round — ${date}`);
+      await commitReflectionRound(batch, message);
       flushed = true;
       break;
     } catch (err) {
@@ -625,7 +642,7 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
     }
   }
 
-  if (!result.ok || !result.report) {
+  if (roundFailed || !rep) {
     const error = result.error ?? "HQ ended without a report";
     console.warn(`[HQ] round failed: ${error}`);
     // The writes that DID land ride as actions (memory/-stripped, matching
@@ -643,13 +660,13 @@ export async function handleBrief(input: ReflectionRoundInput): Promise<HqOutcom
       ...(flags.evolutionRan ? { evolved: true } : {}),
     };
   }
-  console.log(`[HQ] round done: ${result.report.actions.length} action(s)`);
+  console.log(`[HQ] round done: ${rep.actions.length} action(s)`);
   return {
-    actions: result.report.actions,
-    note: result.report.note,
+    actions: rep.actions,
+    note: rep.note,
     // 修订 C: verbatim passthrough — absent means "completed".
-    ...(result.report.disposition !== undefined
-      ? { disposition: result.report.disposition }
+    ...(rep.disposition !== undefined
+      ? { disposition: rep.disposition }
       : {}),
     // §4.2: the evolution beat stamps whenever the pass truly ran.
     ...(flags.evolutionRan ? { evolved: true } : {}),

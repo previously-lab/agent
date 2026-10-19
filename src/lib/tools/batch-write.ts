@@ -118,6 +118,48 @@ export function isRefConflictError(err: unknown): boolean {
 }
 
 /**
+ * An EMPTY commit on the current tree (v0.39 §2.2 — an idle reflection
+ * round's water level rides the commit MESSAGE; no file changes). Same
+ * fast-forward ref discipline as the batch commit. Throws on failure —
+ * the caller (the round flush) treats it like a failed flush.
+ */
+export async function commitEmptyToGitHub(
+  message: string,
+  repo: string,
+  owner: string,
+): Promise<void> {
+  const octokit = getOctokit();
+  const branch = await getDefaultBranch();
+  const headRef = `heads/${branch}`;
+  const { data: ref } = await octokit.rest.git.getRef({ owner, repo, ref: headRef });
+  const headSha = ref.object.sha;
+  const { data: headCommit } = await octokit.rest.git.getCommit({
+    owner,
+    repo,
+    commit_sha: headSha,
+  });
+  const { data: newCommit } = await octokit.rest.git.createCommit({
+    owner,
+    repo,
+    message,
+    tree: headCommit.tree.sha,
+    parents: [headSha],
+  });
+  try {
+    await octokit.rest.git.updateRef({
+      owner,
+      repo,
+      ref: headRef,
+      sha: newCommit.sha,
+      force: false,
+    });
+  } catch (err) {
+    invalidateRepoHead(repo, owner);
+    throw err;
+  }
+}
+
+/**
  * Commit multiple file changes as a SINGLE git commit via the Git Data API.
  * Uses `base_tree` so only the changed files are included — the new tree
  * inherits everything else from the current HEAD.

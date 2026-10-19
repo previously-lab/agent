@@ -236,25 +236,39 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
     agendaWakeMs: null,
   });
   try {
-    const [{ readHQStatus }, { enumerateSliceIds }, { sliceEntryFromDisk }, { fsReadFile }, { AGENDA_PATH, parseAgenda }] =
+    const [{ enumerateSliceIds }, { sliceEntryFromDisk }, { fsReadFile }, { AGENDA_PATH, parseAgenda }] =
       await Promise.all([
-        import("./hq-status-store"),
         import("@/lib/episodic/timeline/enumerate"),
         import("@/lib/episodic/timeline/store"),
         import("@/lib/episodic/io-helpers"),
         import("@/lib/evolution/agenda"),
       ]);
 
-    // The cursor + the last evolution stamp — a corrupt pointer reads as
-    // "fresh deployment" (cursor null = everything qualifies, §3.3).
+    // The water level + the evolution beat — read from the COMMIT LOG
+    // (v0.39 §2.4): the newest clean round's `seen:` trailer is the cursor;
+    // the newest round's `evolved:` trailer is the beat. A missing/unreadable
+    // log degrades to cursor null (fresh-deployment semantics — 全量重读,
+    // never a silent skip) and is already warned inside the reader.
     let cursor: string | null = null;
     let lastEvolutionDate: string | null = null;
     try {
-      const status = await readHQStatus();
-      cursor = status.lastSeen?.sliceId ?? null;
-      lastEvolutionDate = status.lastEvolution?.date ?? null;
+      const [{ readReflectionCursor, readReflectionLog }] = await Promise.all([
+        import("@/lib/chat/hq-log"),
+      ]);
+      const level = await readReflectionCursor();
+      cursor = level.sliceId;
+      const log = await readReflectionLog();
+      if (log.available) {
+        for (const entry of log.entries) {
+          const evolved = entry.parsed.trailer?.evolved;
+          if (evolved?.date) {
+            lastEvolutionDate = evolved.date;
+            break;
+          }
+        }
+      }
     } catch {
-      /* pointer unreadable — fresh-deployment semantics, never a throw */
+      /* log unreadable — fresh-deployment semantics, never a throw */
     }
 
     // Scope: the first REFLECTION_SCOPE_MAX slice ids past the cursor, each
@@ -343,14 +357,9 @@ export async function loadReflectionWorld(date?: string): Promise<ReflectionDock
  */
 export async function handleReflectionRound(docket: ReflectionDocket): Promise<ReflectionRound> {
   "use step";
-  // The round latch (§4.1) — set before the (possibly minutes-long) agent
-  // work below so the panel breathes for the WHOLE round.
-  try {
-    const { recordReflectionRoundBegan } = await import("./hq-status-store");
-    await recordReflectionRoundBegan();
-  } catch {
-    /* the latch is best-effort like every pointer write */
-  }
+  // v0.39 §1 — the round latch (roundActive) RETIRED with hq.json: round
+  // liveness is a STREAM-side signal (the `reading` frame below), not a
+  // state-plane field. Nothing writes here.
   // 开始核对 — the pod sees the round begin before the agent work below;
   // the reading frame carries this round's scope (§4.3-4).
   await emitHQActivity({
@@ -416,22 +425,27 @@ export async function handleReflectionRound(docket: ReflectionDocket): Promise<R
 export async function settleReflectionRound(
   round: ReflectionRound,
   docket: ReflectionDocket,
+  /** This generation's settled round count — the run attribute `rounds`. */
+  rounds: number,
 ): Promise<void> {
   "use step";
-  const { recordReflectionRoundSettled } = await import("./hq-status-store");
-  const furthestScopeSlice =
-    docket.scope.length > 0
-      ? docket.scope[docket.scope.length - 1].sliceId
-      : undefined;
-  await recordReflectionRoundSettled({
-    actions: round.actions,
-    ...(round.error ? { error: round.error } : {}),
-    ...(round.note ? { note: round.note } : {}),
-    ...(furthestScopeSlice ? { seen: { sliceId: furthestScopeSlice } } : {}),
-    ...(round.disposition ? { disposition: round.disposition } : {}),
-    ...(round.evolved ? { evolved: true } : {}),
-    date: docket.date,
-  });
+  // v0.39 §1 — the settlement's durable plane is the round's OWN commit
+  // (the trailer: seen/evolved/note, built in hq-agent at flush time — 与
+  // 写入同生同死). What remains for the run attributes is the LIVE plane
+  // only: this generation's round count and the current error line (a clean
+  // round clears it — `undefined` deletes the key).
+  void docket;
+  try {
+    const { setAttributes } = await import("workflow");
+    await setAttributes({
+      rounds: String(Math.max(0, Math.floor(rounds))),
+      lastError: round.error
+        ? (round.error.trim().split("\n", 1)[0]?.slice(0, 200) ?? "round failed")
+        : undefined,
+    });
+  } catch {
+    /* run attributes are best-effort like every liveness stamp */
+  }
 }
 
 /**
@@ -445,15 +459,11 @@ export async function settleReflectionRound(
  */
 export async function markHQRunStarted(): Promise<void> {
   "use step";
-  const { recordHQRunStarted } = await import("./hq-status-store");
-  let runId: string | undefined;
-  try {
-    runId = getWorkflowMetadata().workflowRunId;
-  } catch {
-    // No workflow context (a unit test driving the step directly) — the
-    // pointer keeps its previous runId rather than learning a false one.
-  }
-  await recordHQRunStarted(runId);
+  // v0.39 §1 — hq.json's runId/runStartedAt/runStatus RETIRED: the run IS
+  // the status plane (the panel reads it through the public hook channel).
+  // The stampReflectionClaim step already carries `startedAt` (the takeover
+  // age base). What remains here is the activity frame only.
+  void getWorkflowMetadata;
   await emitHQActivity({ kind: "started", at: new Date().toISOString() });
 }
 
@@ -473,8 +483,9 @@ export async function markReflectionRunIdleExit(result: {
   rounds: number;
 }): Promise<void> {
   "use step";
-  const { recordReflectionRunIdleExit } = await import("./hq-status-store");
-  await recordReflectionRunIdleExit(result);
+  // v0.39 §1 — no "idle" pointer to settle: 无活即退 is the run's NORMAL
+  // terminal; the panel reads "nobody home" from the public hook channel.
+  // The activity frame closes the feed.
   await emitHQActivity({
     kind: "finished",
     at: new Date().toISOString(),

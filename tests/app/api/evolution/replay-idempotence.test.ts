@@ -19,6 +19,18 @@ vi.mock("@/lib/episodic/io-helpers", () => ({
     entries: new Map<string, string | null>(),
     encodings: new Map<string, "base64">(),
   }),
+  commitReflectionRound: vi.fn(
+    async (batch: { entries: Map<string, string | null> }, _message: string) => {
+      // mirror the real contract (io-helpers): a round WITH queued writes
+      // applies them; a clean EMPTY round lands a no-op empty commit (the
+      // local fake disk has no git ledger).
+      for (const [p, c] of batch.entries) {
+        if (c === null) io.files.delete(p);
+        else io.files.set(p, c);
+      }
+      batch.entries.clear();
+    },
+  ),
   flushBatch: vi.fn(
     async (batch: { entries: Map<string, string | null> }, _msg: string) => {
       for (const [p, c] of batch.entries) {

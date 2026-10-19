@@ -53,42 +53,6 @@ const h = vi.hoisted(() => ({
     slices: [] as Array<{ rel: string; closedBy?: string }>,
     agenda: "",
   },
-  recordRunStarted: vi.fn(async (_runId?: string) => {
-    h.order.push("runStarted");
-  }),
-  recordRoundBegan: vi.fn(async () => {
-    h.order.push("roundBegan");
-  }),
-  /** Simulates the REAL store's §4.2 rule: a clean, non-superseded round
-   *  advances the cursor to `seen`; failed and superseded rounds hold it. */
-  recordRoundSettled: vi.fn(async (round: Record<string, unknown>) => {
-    h.order.push("settle");
-    const seen = round.seen as { sliceId?: string } | undefined;
-    const err = typeof round.error === "string" ? round.error : undefined;
-    if (!err && round.disposition !== "superseded" && seen?.sliceId) {
-      h.world.cursor = seen.sliceId;
-    }
-  }),
-  recordIdleExit: vi.fn(async (_result: { rounds: number }) => {
-    h.order.push("idleExit");
-  }),
-  readHQStatus: vi.fn(async () => ({
-    runId: null,
-    runStartedAt: null,
-    runStatus: null,
-    briefsHandled: 0,
-    lastError: null,
-    lastDispatchAt: null,
-    lastBriefPreview: null,
-    recentWrites: [],
-    lastNote: null,
-    lastSeen: h.world.cursor ? { sliceId: h.world.cursor } : null,
-    roundActive: null,
-    lastEvolution: h.world.lastEvolution
-      ? { date: h.world.lastEvolution, at: "t" }
-      : null,
-    lastSuperseded: null,
-  })),
 }));
 
 vi.mock("workflow", () => ({
@@ -147,12 +111,17 @@ vi.mock("@/app/api/evolution/hq-agent", () => ({
   handleBrief: h.handleBrief,
 }));
 
-vi.mock("@/app/api/evolution/hq-status-store", () => ({
-  recordHQRunStarted: h.recordRunStarted,
-  recordReflectionRoundBegan: h.recordRoundBegan,
-  recordReflectionRoundSettled: h.recordRoundSettled,
-  recordReflectionRunIdleExit: h.recordIdleExit,
-  readHQStatus: h.readHQStatus,
+// v0.39 — the cursor/note moved to the COMMIT LOG; the store is gone. The
+// mock simulates the water level: a clean round advances it to the scope's
+// furthest slice (the trailer rule, §2.3), a failed round holds it.
+vi.mock("@/lib/chat/hq-log", () => ({
+  readReflectionCursor: async () => ({
+    sliceId: h.world.cursor,
+    sha: null,
+    at: null,
+    degraded: h.world.cursor === null,
+  }),
+  readReflectionLog: async () => ({ entries: [], available: true }),
 }));
 
 vi.mock("@/lib/episodic/timeline/enumerate", () => ({
@@ -186,8 +155,12 @@ beforeEach(() => {
   h.world.lastEvolution = null;
   h.world.slices = [];
   h.world.agenda = "";
-  h.handleBrief.mockImplementation(async () => {
+  h.handleBrief.mockImplementation(async (_docket: unknown) => {
+    const docket = _docket as { scope?: Array<{ sliceId: string }> };
     h.order.push("handleBrief");
+    // simulate the trailer: a clean round advances the water level (§2.3)
+    const furthest = docket.scope?.at(-1)?.sliceId;
+    if (furthest) h.world.cursor = furthest;
     return { actions: [], note: "idle — nothing substantive" };
   });
 });
@@ -197,7 +170,9 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
     const outcome = await reflectionRun();
 
     expect(outcome).toEqual({ kind: "retired", rounds: 0 });
-    expect(h.order).toEqual(["attrs:startedAt", "runStarted", "idleExit", "dispose"]);
+    // started/idle are activity FRAMES now (hq.json's marks retired);
+    // the claim stamp + the token dispose are the only order-logged beats
+    expect(h.order).toEqual(["attrs:startedAt", "dispose"]);
     // NO clock, NO mailbox wait — the run exited off the world read alone.
   });
 
@@ -208,15 +183,12 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
 
     expect(outcome).toEqual({ kind: "retired", rounds: 1 });
     expect(h.order.filter((o) => o === "handleBrief")).toHaveLength(1);
-    expect(h.order.filter((o) => o === "settle")).toHaveLength(1);
+    expect(h.order.filter((o) => o === "attrs:rounds,lastError")).toHaveLength(1);
     // the second (empty) lap re-read the world and retired — backlog drained
     expect(h.order).toEqual([
       "attrs:startedAt",
-      "runStarted",
-      "roundBegan",
       "handleBrief",
-      "settle",
-      "idleExit",
+      "attrs:rounds,lastError",
       "dispose",
     ]);
     expect(h.world.cursor).toBe("2026-10-04-0131");
@@ -228,13 +200,18 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
       { rel: "2026/10/04/0200", closedBy: "idle_gap" },
     ];
     let calls = 0;
-    h.handleBrief.mockImplementation(async () => {
+    h.handleBrief.mockImplementation(async (_docket: unknown) => {
+    const docket = _docket as { scope?: Array<{ sliceId: string }> };
       h.order.push("handleBrief");
       calls += 1;
-      // first round fails (cursor holds); second round succeeds
-      return calls === 1
-        ? { actions: [], note: "", error: "model exploded" }
-        : { actions: ["research/x/index.md"], note: "recovered" };
+      // first round fails (the level HOLDS — its commit carries no trailer);
+      // second round succeeds and advances to the furthest scope slice
+      if (calls === 1) {
+        return { actions: [], note: "", error: "model exploded" };
+      }
+      const furthest = docket.scope?.at(-1)?.sliceId;
+      if (furthest) h.world.cursor = furthest;
+      return { actions: ["research/x/index.md"], note: "recovered" };
     });
 
     const outcome = await reflectionRun();
@@ -269,8 +246,6 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
       "cancel:zombie-1",
       "attrs:tookOver",
       "attrs:startedAt",
-      "runStarted",
-      "idleExit",
       "dispose",
     ]);
   });
@@ -283,6 +258,6 @@ describe("reflectionRun — the short-lived unit (v0.38 §5)", () => {
 
     expect(outcome).toEqual({ kind: "retired", rounds: 0 });
     expect(h.cancel).not.toHaveBeenCalled(); // dead holders are never cancelled
-    expect(h.order).toEqual(["attrs:startedAt", "runStarted", "idleExit", "dispose"]);
+    expect(h.order).toEqual(["attrs:startedAt", "dispose"]);
   });
 });

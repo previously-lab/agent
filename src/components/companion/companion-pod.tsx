@@ -67,7 +67,11 @@ import { CircleAlert, ChevronRight, RefreshCw, X } from "lucide-react";
 import { ISLAND, ISLAND_CONTROL } from "@/components/layout/island";
 import type { EvolutionPresence } from "@/lib/chat/evolution-activity";
 import { subscribeCompanionPanelRequests } from "@/lib/chat/companion-panel";
-import { fetchHQStatus, type HQStatus } from "@/lib/chat/hq-status";
+import {
+  cancelPanelRun,
+  fetchHQStatus,
+  type HQStatusResponse,
+} from "@/lib/chat/hq-status";
 import {
   clearStoredHQRunId,
   HQStreamError,
@@ -175,39 +179,8 @@ function DebugSection({
   );
 }
 
-/** How the last HQ run settled — the label row's value, localized. */
-function hqRunStatusLabel(status: HQStatus, t: CompanionT): string {
-  switch (status.runStatus) {
-    case "running":
-      return t("hqRunning");
-    case "completed":
-      return t("hqCompleted");
-    case "idle":
-      return t("hqIdle");
-    case "failed":
-      return t("hqFailed");
-    case "retired":
-      return t("hqRetired");
-    default:
-      return "—";
-  }
-}
-
 /** HQ's own one-paragraph account rides wrote/idle frames — shown as a glance, capped. */
 const HQ_NOTE_CAP = 160;
-
-/**
- * v0.34 §4.3 — the pointer's evolution beat (`lastEvolution.date`). The
- * field may not exist yet: R2a owns the pointer write AND the normalize
- * passthrough in hq-status.ts (not this file). Read defensively — a missing
- * or malformed field is a placeholder in the row, never a crash.
- */
-function hqLastEvolutionDate(hq: HQStatus): string | null {
-  const le = (hq as { lastEvolution?: unknown }).lastEvolution;
-  if (!le || typeof le !== "object") return null;
-  const date = (le as { date?: unknown }).date;
-  return typeof date === "string" && date ? date : null;
-}
 
 function capNote(note: string): string {
   const oneLine = note.trim().replace(/\s+/g, " ");
@@ -302,19 +275,23 @@ function HQActivityLine({
  * time; after the run packs up the frames stay as its account of itself.
  */
 function HQStatusSection({
-  hq,
+  data,
   failed,
   t,
   locale,
   activity,
   live,
+  onStop,
 }: {
-  hq: HQStatus | null;
+  /** The three-layer aggregate (v0.39 §4.1) — null while loading. */
+  data: HQStatusResponse | null;
   failed: boolean;
   t: CompanionT;
   locale: string;
   activity: HQActivityFrame[];
   live: boolean;
+  /** 一键停 — cancels ONE live run (the panel's only write, §4.3). */
+  onStop: (runId: string, role: string | null) => void;
 }) {
   const beats = activity.length > 0 && (
     <div className="space-y-1">
@@ -334,7 +311,7 @@ function HQStatusSection({
     </div>
   );
 
-  if (!hq && !failed) {
+  if (!data && !failed) {
     return (
       <div className="space-y-1.5">
         {beats}
@@ -342,19 +319,11 @@ function HQStatusSection({
       </div>
     );
   }
-  if (!hq) {
+  if (!data) {
     return (
       <div className="space-y-1.5">
         {beats}
         <p className="text-muted-foreground/80">{t("hqFailedToLoad")}</p>
-      </div>
-    );
-  }
-  if (!hq.lastDispatchAt && !hq.runStatus) {
-    return (
-      <div className="space-y-1.5">
-        {beats}
-        <p className="text-muted-foreground/80">{t("hqEmpty")}</p>
       </div>
     );
   }
@@ -370,46 +339,105 @@ function HQStatusSection({
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? "—" : timeFmt.format(d);
   };
-  const statusLabel = hqRunStatusLabel(hq, t);
+  const fmtAge = (ms: number | null): string => {
+    if (ms === null) return "—";
+    const min = Math.floor(ms / 60_000);
+    return min < 1 ? "<1m" : min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${min % 60}m`;
+  };
+
+  const { reflection, runs, log } = data;
+  const newestRound = log.state === "live" ? log.recentRounds[0] : undefined;
 
   return (
     <div className="space-y-1.5">
       {beats}
-      <DebugRow label={t("hqDispatch")} value={fmtTime(hq.runStartedAt)} mono />
-      {hq.lastNote && (
-        <div className="space-y-0.5">
-          <DebugRow label={t("hqNote")} value={fmtTime(hq.lastNote.at)} mono />
-          <p className="break-words text-foreground/70">{hq.lastNote.note}</p>
-        </div>
+      {/* ── 公开层: the reflection unit through the hook channel ── */}
+      {reflection.state === "live" ? (
+        <>
+          <DebugRow
+            label={t("hqStatus")}
+            value={`${reflection.status} · ${t("hqSince", { time: fmtTime(reflection.startedAt) })} · ${fmtAge(reflection.ageMs)}`}
+          />
+          {reflection.attributes.rounds !== undefined && (
+            <DebugRow label={t("hqBriefs")} value={reflection.attributes.rounds} />
+          )}
+          {reflection.attributes.lastError && (
+            <p className="break-words text-foreground/70">{reflection.attributes.lastError}</p>
+          )}
+          {reflection.attributes.tookOver && (
+            <DebugRow label="⚠" value={t("hqTookOver")} />
+          )}
+          <button
+            type="button"
+            onClick={() => onStop(reflection.runId, "reflection")}
+            className="text-left text-muted-foreground/80 underline underline-offset-2"
+          >
+            {t("hqStop")}
+          </button>
+        </>
+      ) : reflection.state === "none" ? (
+        <p className="text-muted-foreground/80">{t("hqNobodyHome")}</p>
+      ) : (
+        <p className="break-words text-muted-foreground/80">
+          {t("hqUnreachable", { reason: reflection.reason })}
+        </p>
       )}
-      <DebugRow
-        label={t("hqStatus")}
-        value={
-          hq.runStatus === "running"
-            ? `${statusLabel} · ${t("hqSince", { time: fmtTime(hq.runStartedAt) })}`
-            : statusLabel
-        }
-      />
-      {hq.lastError && (
-        <p className="break-words text-foreground/70">{hq.lastError}</p>
+      {/* ── 日志层: the water level + the newest round's note (降级显式) ── */}
+      {log.state === "live" ? (
+        <>
+          <DebugRow
+            label={t("hqCursor")}
+            value={log.cursor?.sliceId ?? t("hqCursorNone")}
+            mono
+          />
+          {log.behind !== null && (
+            <DebugRow label="…" value={t("hqBehind", { count: log.behind })} />
+          )}
+          {newestRound?.note && (
+            <div className="space-y-0.5">
+              <DebugRow label={t("hqNote")} value={fmtTime(newestRound.at)} mono />
+              <p className="break-words text-foreground/70">{newestRound.note}</p>
+            </div>
+          )}
+          {newestRound?.evolved && (
+            <DebugRow label={t("hqEvolutionBeat")} value={newestRound.evolved} />
+          )}
+        </>
+      ) : (
+        <p className="break-words text-muted-foreground/80">
+          {t("hqLogUnavailable", { reason: log.reason })}
+        </p>
       )}
-      <DebugRow label={t("hqBriefs")} value={String(hq.briefsHandled)} />
-      {/* v0.34 §4.3 — the rolling read edge (cursor) and the evolution beat;
-          both tolerate a pointer that predates the fields (placeholder "—"). */}
-      <DebugRow label={t("hqCursor")} value={hq.lastSeen?.sliceId ?? "—"} mono />
-      <DebugRow label={t("hqEvolutionBeat")} value={hqLastEvolutionDate(hq) ?? "—"} />
-      {hq.recentWrites.length > 0 && (
-        <div className="space-y-0.5">
-          <span className="text-muted-foreground/70">{t("hqWrites")}</span>
+      {/* ── 运行时层: the live-runs table (增强层 — 缺席显式降级) ── */}
+      <div className="space-y-0.5">
+        <span className="text-muted-foreground/70">{t("hqRuns")}</span>
+        {runs.state === "live" ? (
           <ul className="space-y-0.5">
-            {hq.recentWrites.slice(0, 5).map((path) => (
-              <li key={path} className="break-all font-mono text-[10px]">
-                {path}
+            {runs.live.map((r) => (
+              <li key={r.runId} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 break-all font-mono text-[10px]">
+                  {t("hqRunRow", {
+                    role: r.role ?? "?",
+                    slice: r.slice ?? "—",
+                    turn: r.turn ? ` · turn ${r.turn}` : "",
+                    burst: r.burst ? ` · burst ${r.burst.slice(0, 8)}` : "",
+                    age: fmtAge(r.ageMs),
+                  })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onStop(r.runId, r.role)}
+                  className="shrink-0 text-muted-foreground/80 underline underline-offset-2"
+                >
+                  {t("hqStop")}
+                </button>
               </li>
             ))}
           </ul>
-        </div>
-      )}
+        ) : (
+          <p className="break-words text-muted-foreground/70">{t("hqRunsUnavailable")}</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -555,17 +583,17 @@ export function CompanionPod({
   // POLLED every 3s while the panel is open (a debug surface gets a poll, not
   // an SSE channel); closing the panel stops the clock. The seq guard drops
   // responses that land after a newer fetch started.
-  const [hq, setHq] = useState<HQStatus | null>(null);
+  const [hq, setHq] = useState<HQStatusResponse | null>(null);
   const [hqFailed, setHqFailed] = useState(false);
   const hqSeqRef = useRef(0);
-  const loadHQ = useCallback(async (): Promise<HQStatus | null> => {
+  const loadHQ = useCallback(async (): Promise<HQStatusResponse | null> => {
     const seq = ++hqSeqRef.current;
     try {
       const res = await fetchHQStatus();
       if (seq !== hqSeqRef.current) return null;
-      setHq(res.status);
+      setHq(res);
       setHqFailed(false);
-      return res.status;
+      return res;
     } catch {
       if (seq === hqSeqRef.current) setHqFailed(true);
       return null;
@@ -642,8 +670,13 @@ export function CompanionPod({
       if (stopped || hqAttachRef.current) return; // attached — frames drive
       const status = await loadHQ();
       if (stopped || !status) return;
-      if (status.runStatus === "running" && status.runId) {
-        attachHQ(status.runId);
+      // v0.39 §4.1 — the PUBLIC layer (hook channel) is the verdict: a live
+      // reflection run's id attaches; "none" is 无人在家, not an error.
+      if (
+        status.reflection.state === "live" &&
+        (status.reflection.status === "running" || status.reflection.status === "pending")
+      ) {
+        attachHQ(status.reflection.runId);
       }
     };
     void discover();
@@ -697,14 +730,9 @@ export function CompanionPod({
 
   const speaking =
     target !== null && (status === "connecting" || status === "streaming");
-  // v0.34 §4.3 — breathing follows the pointer's roundActive: a resident
-  // unit hangs on its stream as the NORMAL state, so "attached" (hqLive) is
-  // not "working". The field may not exist yet (R2a owns the pointer write
-  // and the normalize passthrough): undefined → fall back to the legacy
-  // live-stream signal (never worse than today); an explicit null → quiet.
-  const hqRoundActive = (hq as { roundActive?: unknown } | null)?.roundActive;
-  const hqBreathing =
-    hqRoundActive === undefined ? hqLive : hqRoundActive !== null;
+  // v0.39 §1 — roundActive retired with hq.json: round liveness is a
+  // STREAM-side signal, so breathing follows the live attachment itself.
+  const hqBreathing = hqLive;
   const active = speaking || working || hqBreathing;
   const hasLiveTarget = target !== null;
   /** A cut narration — the tab's corner mark is an engraved exclamation
@@ -957,12 +985,21 @@ export function CompanionPod({
                     }
                   >
                     <HQStatusSection
-                      hq={hq}
+                      data={hq}
                       failed={hqFailed}
                       t={t}
                       locale={locale}
                       activity={hqActivity}
                       live={hqLive}
+                      onStop={(runId, role) => {
+                        // 分档确认 (v0.41 #28 的批 4 半): the consequence is
+                        // stated in the confirm text; the thinner lanes get
+                        // their polish in batch 5.
+                        if (typeof window !== "undefined" && !window.confirm(t("hqStopConfirm", { role: role ?? "?" }))) {
+                          return;
+                        }
+                        void cancelPanelRun(runId).then(() => loadHQ());
+                      }}
                     />
                   </DebugSection>
                   <DebugSection

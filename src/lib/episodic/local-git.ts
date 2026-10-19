@@ -80,3 +80,52 @@ export async function commitPaths(
     return false;
   }
 }
+
+/**
+ * An EMPTY commit (the ledger line with no file writes — v0.39 §2.2: an idle
+ * reflection round still advances the water level, and the level rides the
+ * commit message). isomorphic-git's `disallowEmpty` defaults to false, so a
+ * commit with nothing staged is legal. Same best-effort discipline: never
+ * throws, false on failure.
+ */
+export async function commitEmpty(root: string, message: string): Promise<boolean> {
+  try {
+    await git.commit({ fs, dir: root, message, author: {
+      name: process.env.PREVIOUSLY_GIT_AUTHOR_NAME || DEFAULT_AUTHOR_NAME,
+      email: process.env.PREVIOUSLY_GIT_AUTHOR_EMAIL || DEFAULT_AUTHOR_EMAIL,
+    } });
+    return true;
+  } catch (err) {
+    console.warn(
+      "[local-git] empty commit failed (ledger is best-effort):",
+      err,
+    );
+    return false;
+  }
+}
+
+/** One ledger entry — the log reader's shape (v0.39 §2.4). */
+export interface LocalCommitEntry {
+  oid: string;
+  message: string;
+  /** Committer timestamp, ms since epoch (null when unknown). */
+  committedAtMs: number | null;
+}
+
+/**
+ * Read the ledger newest-first (v0.39 §2.4 — the cursor/log plane's local
+ * leg). `max` bounds the scan; throws on a real backend failure (the caller
+ * degrades to cursor null + warn per §2.5). A non-git root throws — the
+ * caller maps that to the fail-safe (empty docket + `git init` advice).
+ */
+export async function logCommits(root: string, max: number): Promise<LocalCommitEntry[]> {
+  const commits = await git.log({ fs, dir: root, ref: "HEAD" });
+  return commits.slice(0, max).map((c) => ({
+    oid: c.oid,
+    message: c.commit.message,
+    committedAtMs:
+      typeof c.commit.committer?.timestamp === "number"
+        ? c.commit.committer.timestamp * 1000
+        : null,
+  }));
+}

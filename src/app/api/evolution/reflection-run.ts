@@ -144,7 +144,7 @@ export async function reflectionRun(): Promise<ReflectionRunOutcome> {
       }
       const round = await handleReflectionRound(docket);
       rounds += 1;
-      await settleReflectionRound(round, docket);
+      await settleReflectionRound(round, docket, rounds);
       // 立即再 loop — the backlog drains lap by lap, work-driven (§7).
     }
   } finally {
