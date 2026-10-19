@@ -102,6 +102,27 @@ describe("readReflectionCursor — the water level (v0.39 §2.4)", () => {
     expect(cursor.sliceId).toBeNull();
     expect(cursor.degraded).toBe(true);
   });
+
+  it("空仓库 (unborn branch): a ref-resolution log error reads as 'no commits yet', NOT a generic log read failure", async () => {
+    // isomorphic-git on a repo with zero commits: git.log cannot resolve HEAD.
+    h.logCommits.mockRejectedValue(new Error("Could not find refs/heads/master"));
+    const log = await readReflectionLog();
+    expect(log.available).toBe(false);
+    expect(log.reason).toContain("no commits yet");
+    expect(log.reason).not.toContain("log read failed");
+    // the degradation contract is unchanged: cursor null, degraded flag set
+    const cursor = await readReflectionCursor();
+    expect(cursor.sliceId).toBeNull();
+    expect(cursor.degraded).toBe(true);
+  });
+
+  it("a REAL log read failure keeps the generic wording (distinguishable from unborn)", async () => {
+    h.logCommits.mockRejectedValue(new Error("corrupt object store"));
+    const log = await readReflectionLog();
+    expect(log.available).toBe(false);
+    expect(log.reason).toContain("log read failed");
+    expect(log.reason).toContain("corrupt object store");
+  });
 });
 
 describe("readLatestReflectionNote — the 暂存's log shape (待裁决 3)", () => {

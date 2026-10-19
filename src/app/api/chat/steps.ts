@@ -28,11 +28,11 @@
  *      the entry beat's analysis read an explicit record/correction request;
  *      no explicit instruction → zero LLM, zero writes 空转零写入).
  *   3. closeTurnStream   — terminal turn-status chunk + finish-step/finish.
- *   4. ringReflection    — the mechanical bell (v0.30 §2.1): after the turn
- *      lands, hand the reflection unit a pure pointer ({sliceId, turnId,
- *      date}) — a live run gets a resumeHook, otherwise a fresh run starts.
- *      Best-effort: a failed bell only warns (the unit's range is everything
- *      since its last look, so the next turn's bell covers the gap).
+ *   4. ringReflection    — the mechanical bell (v0.38 §3.3): after EVERY
+ *      successful turn commit, ring the unit's pure doorbell (no payload,
+ *      seal or no seal) — a live run gets the ring, otherwise a fresh run
+ *      starts. Best-effort: a failed bell only warns (the unit's range is
+ *      everything since its cursor, so the next turn's bell covers the gap).
  *
  * Retired (v0.21 §A.2.2 改写 / §9; v0.30 §2): the scribe segment's
  * close-TRIGGERED dispatch chain — due-task scan → [boundary-event] mailbox
@@ -880,8 +880,9 @@ export async function housekeeping(
    *  summarized + closed in the reckoning below — same beat, same commit. */
   let closingDecision: { slice: TimeSlice; signal: SlicingSignal } | undefined;
   /** The slice THIS beat sealed (set after the closeSlice below) — surfaced
-   *  on the result as `closedSliceId`, the reflection bell's ONLY trigger
-   *  (v0.34 R1: the per-turn tail bell retired). */
+   *  on the result as `closedSliceId` (housekeeping context for the caller;
+   *  the reflection bell rings after EVERY successful turn commit, seal or
+   *  not — v0.38 §3.3). */
   let closedSliceId: string | undefined;
   /** The slice we came from — set from the just-closed page (AFTER its
    *  marking, so the continuity brief carries the fresh focus), or resolved
@@ -1102,8 +1103,8 @@ export async function housekeeping(
         );
       }
       await closeSlice(closingSlice, closingSignal, batch);
-      // The reflection bell's ONLY trigger (v0.34 R1) — the seal is surfaced
-      // on the result, and the turn tail rings the unit with this pointer.
+      // Surface the seal on the result (housekeeping context only — the
+      // reflection bell rings after every successful commit, seal or not).
       closedSliceId = closingSlice.slice_id;
       console.log(`[Episodic] Closed slice: ${closingSlice.slice_id} (${closingSignal})`);
       // Signal the client that a slice closed (rendered as a housekeeping
@@ -1810,21 +1811,22 @@ export async function closeChildStream(): Promise<void> {
 // ─── Step 5: ringReflection — the mechanical bell (v0.34 R1) ───────────────
 
 /**
- * The reflection unit's ONLY trigger (v0.38 §3.3 — the bell is now PURE: the
- * mailbox retired to a mutex, so the wake carries NO payload at all). The
- * writer rings it after its commit when its turn sealed the slice; the
+ * The reflection unit's mechanical bell (v0.38 §3.3 — PURE doorbell: the wake
+ * carries NO payload at all; sealing the slice is NOT its trigger). The
+ * writer rings it after EVERY successful turn commit — `label` (this turn's
+ * sliceId) is a log aid only. The
  * engine (reflection-wake.ts) is getHookByToken → a live run means the unit
  * is up and the ring is DONE (触发即完成); no live run → start a fresh
  * short-lived unit. Best-effort by design — a lost bell only warns: the
- * unit's range is everything since its on-disk cursor, so the next seal's
+ * unit's range is everything since its on-disk cursor, so the next turn's
  * bell covers the gap. Never throws.
  */
-export async function ringReflection(closedSliceId: string): Promise<void> {
+export async function ringReflection(label: string): Promise<void> {
   "use step";
   try {
     const result = await deliverReflectionWake();
     if (!result.ok) {
-      console.warn(`[Reflection] wake not delivered for ${closedSliceId} (ignored): ${result.reason}`);
+      console.warn(`[Reflection] wake not delivered for ${label} (ignored): ${result.reason}`);
     }
   } catch (err) {
     console.warn(
@@ -2405,9 +2407,11 @@ export async function commitWriterTurn(
         : "");
     await flushTurnBatch(batch, message, slice);
 
-    if (payload.closedSliceId) {
-      await ringReflection(payload.closedSliceId);
-    }
+    // v0.38 §3.3: the bell is a PURE doorbell rung after EVERY successful
+    // commit — seal or no seal (a lost ring is covered by the cursor). A
+    // failed commit never rings: the turn stays uncommitted, and its bell
+    // belongs to the next successful one.
+    await ringReflection(payload.sliceId);
     console.log(
       `[Writer] turn ${payload.turnId} committed: ${segments.join(", ") || "no-op"}`,
     );

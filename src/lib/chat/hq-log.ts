@@ -154,10 +154,22 @@ export async function readReflectionLog(): Promise<ReflectionLogRead> {
     if (source === "local") return await readLocalLog();
     return { entries: [], available: false, reason: "demo mode has no commit log" };
   } catch (e) {
+    // An unborn branch (the repo EXISTS but holds no commits yet) fails the
+    // log read with a ref-resolution error ("Could not find refs/heads/…") —
+    // say THAT ("no commits yet"), not a generic "read failed".
+    const message = e instanceof Error ? e.message : String(e);
+    if (/Could not find refs\/heads|Could not find HEAD/i.test(message)) {
+      return {
+        entries: [],
+        available: false,
+        reason:
+          "the memory repository has no commits yet (unborn branch) — there is no cursor to read; the reflection range starts from the beginning (fresh-deployment semantics, nothing skipped)",
+      };
+    }
     return {
       entries: [],
       available: false,
-      reason: `log read failed: ${e instanceof Error ? e.message : String(e)}`,
+      reason: `log read failed: ${message}`,
     };
   }
 }

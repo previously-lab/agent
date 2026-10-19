@@ -1,7 +1,8 @@
 /**
  * The writer run (v0.38 §3.2/§4) — writer-per-turn over an in-memory local
  * fs: ONE step, ONE batch, ONE commit; single-flight = dedupe by turnId;
- * the bell rings after the commit when the turn sealed the slice.
+ * the bell rings after EVERY successful commit (pure doorbell, v0.38 §3.3 —
+ * sealing the slice is NOT the trigger).
  *
  * The episodic io layer is mocked to the in-memory map (the same pattern as
  * steps.test.ts); the workflow runtime (registry / metadata / stream) and
@@ -99,7 +100,12 @@ vi.mock("workflow/api", () => ({
 }));
 
 const wake = vi.hoisted(() => ({
-  deliverReflectionWake: vi.fn(async () => ({ ok: true, delivered: "rung" as const, runId: "hq-1" })),
+  deliverReflectionWake: vi.fn(
+    async (): Promise<
+      | { ok: true; delivered: "rung" | "started"; runId: string }
+      | { ok: false; reason: string }
+    > => ({ ok: true, delivered: "rung", runId: "hq-1" }),
+  ),
 }));
 vi.mock("@/app/api/evolution/reflection-wake", () => wake);
 
@@ -248,7 +254,7 @@ describe("commitWriterTurn — one step, one batch, one commit (v0.38 §4)", () 
     expect(core).toContain("[burst burst-ulid-1]");
   });
 
-  it("a flush failure after the bounded self-heal → { kind: \"failed\" }, honestly", async () => {
+  it("a flush failure after the bounded self-heal → { kind: \"failed\" }, honestly — and NO bell (the turn stays uncommitted; its bell belongs to the next successful one)", async () => {
     const { flushBatch } = await import("@/lib/episodic");
     // non-ref error: no self-heal possible, one attempt, honest failure
     vi.mocked(flushBatch).mockRejectedValueOnce(new Error("disk full"));
@@ -257,6 +263,7 @@ describe("commitWriterTurn — one step, one batch, one commit (v0.38 §4)", () 
       const outcome = await commitWriterTurn(payload());
       expect(outcome.kind).toBe("failed");
       expect(outcome.error).toContain("disk full");
+      expect(wake.deliverReflectionWake).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
     }
@@ -277,14 +284,33 @@ describe("commitWriterTurn — one step, one batch, one commit (v0.38 §4)", () 
     }
   });
 
-  it("rings the reflection bell AFTER the commit when the turn sealed the slice", async () => {
+  it("rings the reflection bell after EVERY successful commit — a sealed slice is NOT the trigger (v0.38 §3.3)", async () => {
+    await commitWriterTurn(payload());
+    expect(wake.deliverReflectionWake).toHaveBeenCalledTimes(1);
+  });
+
+  it("a sealed slice still rings exactly ONCE (not twice)", async () => {
     await commitWriterTurn(payload({ closedSliceId: SLICE_ID }));
     expect(wake.deliverReflectionWake).toHaveBeenCalledTimes(1);
   });
 
-  it("no sealed slice → no bell", async () => {
-    await commitWriterTurn(payload());
-    expect(wake.deliverReflectionWake).not.toHaveBeenCalled();
+  it("the bell's log label is the turn's own sliceId", async () => {
+    wake.deliverReflectionWake.mockResolvedValueOnce({
+      ok: false,
+      reason: "no live run hook",
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await commitWriterTurn(payload());
+      expect(wake.deliverReflectionWake).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls
+        .map((c) => String(c[0]))
+        .find((m) => m.includes("wake not delivered"));
+      expect(message).toBeDefined();
+      expect(message).toContain(SLICE_ID);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("an empty reply with no merge line → nothing to commit", async () => {
